@@ -443,6 +443,41 @@ GaussianSplat3d::renderImpl(const torch::Tensor &worldToCameraMatrices,
         state, settings.tileSize, settings.imageWidth, settings.imageHeight, 0, 0);
 }
 
+std::tuple<torch::Tensor, torch::Tensor>
+GaussianSplat3d::renderTopContributingGaussianIdsImpl(
+    const torch::Tensor &worldToCameraMatrices,
+    const torch::Tensor &projectionMatrices,
+    const fvdb::detail::ops::RenderSettings &settings) {
+    const ProjectedGaussianSplats &state =
+        projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settings);
+    // TODO: Currently projection only performs spherical harmonics evaluation on input SH/features,
+    //       whereas we'd really like rendering to be more generic to be able to supply some
+    //       other render quantity directly, such as an integer ID as we need in this case.  So, to
+    //       just test the ID rendering we need, we'll pass the IDs we want to render here rather
+    //       than have a 'render deep samples of any quantity or evaluated shading' function.
+    //
+    //       It would be more reusable here to render any 'features' we want by being able to
+    //       provide a tensor of any type/value without any shading evaluation (or maybe in the
+    //       future support other shading models/quantities). This would add complexity to support
+    //       more 'shading models' during projection, i.e. not evaluating SH and passing through the
+    //       'raw' features.  Secondly, this would require carrying around a separate 'feature'
+    //       tensor from the sh0/shN ones to support a different 'shading model' and there's
+    //       currently quite a lot of logic that assumes the primacy of the sh0/shN tensors, so we
+    //       leave this all to a further refactor and just render 'deep IDs' as a fixed function.
+    //       Currently, this function uses the existing 'projectGuassiansImpl' which performs SH
+    //       evaluation which creates some wasted computation because we don't use the SH values.
+
+    return FVDB_DISPATCH_KERNEL_DEVICE(state.perGaussian2dMean.device(), [&]() {
+        return fvdb::detail::ops::dispatchGaussianRasterizeTopContributingGaussianIds<DeviceTag>(
+            state.perGaussian2dMean,
+            state.perGaussianConic,
+            state.perGaussianOpacity,
+            state.tileOffsets,
+            state.tileGaussianIds,
+            settings);
+    });
+}
+
 GaussianSplat3d::ProjectedGaussianSplats
 GaussianSplat3d::projectGaussiansForImages(const torch::Tensor &worldToCameraMatrices,
                                            const torch::Tensor &projectionMatrices,
@@ -631,6 +666,95 @@ GaussianSplat3d::savePly(const std::string &filename) const {
     plyf.write(outstream, true);
 }
 
+void
+GaussianSplat3d::loadPly(const std::string &filename, torch::Device device) {
+    using namespace tinyply;
+
+    std::ifstream instream(filename, std::ios::binary);
+
+    PlyFile plyf;
+    plyf.parse_header(instream);
+
+    std::vector<PlyElement> elements = plyf.get_elements();
+    // Find the vertex element
+    auto vertex_element_iter = std::find_if(
+        elements.begin(), elements.end(), [](const PlyElement &e) { return e.name == "vertex"; });
+
+    if (vertex_element_iter == elements.end()) {
+        throw std::runtime_error("No vertex element found in PLY file");
+    }
+
+    // Request position data (x, y, z)
+    std::shared_ptr<PlyData> position_data =
+        plyf.request_properties_from_element("vertex", {"x", "y", "z"});
+    std::shared_ptr<PlyData> opacity_data =
+        plyf.request_properties_from_element("vertex", {"opacity"});
+    std::shared_ptr<PlyData> scale_data =
+        plyf.request_properties_from_element("vertex", {"scale_0", "scale_1", "scale_2"});
+    std::shared_ptr<PlyData> rotation_data =
+        plyf.request_properties_from_element("vertex", {"rot_0", "rot_1", "rot_2", "rot_3"});
+
+    // Find all SH coefficient properties
+    std::vector<std::string> dc_properties;
+    std::vector<std::string> rest_properties;
+
+    for (const auto &prop: vertex_element_iter->properties) {
+        if (prop.name.substr(0, 5) == "f_dc_") {
+            dc_properties.push_back(prop.name);
+        } else if (prop.name.substr(0, 7) == "f_rest_") {
+            rest_properties.push_back(prop.name);
+        }
+    }
+
+    // Request SH coefficient data
+    std::shared_ptr<PlyData> sh_dc_data =
+        plyf.request_properties_from_element("vertex", dc_properties);
+    std::shared_ptr<PlyData> sh_rest_data =
+        plyf.request_properties_from_element("vertex", rest_properties);
+
+    // Read the file
+    plyf.read(instream);
+
+    // Get the number of vertices
+    size_t vertex_count = position_data->count;
+
+    // Create tensors to hold the data
+    torch::Tensor means = torch::from_blob(
+        position_data->buffer.get(), {static_cast<int64_t>(vertex_count), 3}, torch::kFloat32);
+    torch::Tensor opacities = torch::from_blob(
+        opacity_data->buffer.get(), {static_cast<int64_t>(vertex_count)}, torch::kFloat32);
+    torch::Tensor scales = torch::from_blob(
+        scale_data->buffer.get(), {static_cast<int64_t>(vertex_count), 3}, torch::kFloat32);
+    torch::Tensor quats = torch::from_blob(
+        rotation_data->buffer.get(), {static_cast<int64_t>(vertex_count), 4}, torch::kFloat32);
+
+    // Create tensor to hold SH coefficients
+    int sh_dc_channels   = static_cast<int>(dc_properties.size());
+    int sh_rest_channels = static_cast<int>(rest_properties.size());
+    int sh_degree        = static_cast<int>(std::sqrt(sh_rest_channels / 3 + 1)) - 1;
+
+    torch::Tensor sh_0_coeffs; // (N, 1, D)
+    if (sh_dc_data && sh_dc_data->count > 0) {
+        sh_0_coeffs = torch::from_blob(sh_dc_data->buffer.get(),
+                                       {static_cast<int64_t>(vertex_count), 1, sh_dc_channels},
+                                       torch::kFloat32);
+    }
+    torch::Tensor sh_N_coeffs; // (N, K-1, D)
+    if (sh_rest_data && sh_rest_data->count > 0) {
+        sh_N_coeffs =
+            torch::from_blob(sh_rest_data->buffer.get(),
+                             {static_cast<int64_t>(vertex_count), sh_degree - 1, sh_dc_channels},
+                             torch::kFloat32);
+    }
+
+    mMeans          = means.to(device);
+    mQuats          = quats.to(device);
+    mLogScales      = scales.to(device);
+    mLogitOpacities = opacities.to(device);
+    mSh0            = sh_0_coeffs.to(device);
+    mShN            = sh_N_coeffs.to(device);
+}
+
 std::tuple<torch::Tensor, torch::Tensor>
 GaussianSplat3d::renderFromProjectedGaussians(
     const GaussianSplat3d::ProjectedGaussianSplats &projectedGaussians,
@@ -697,6 +821,36 @@ GaussianSplat3d::renderDepths(const torch::Tensor &worldToCameraMatrices,
     settings.renderMode     = RenderSettings::RenderMode::DEPTH;
 
     return renderImpl(worldToCameraMatrices, projectionMatrices, settings);
+}
+
+std::tuple<torch::Tensor, torch::Tensor>
+GaussianSplat3d::renderTopContributingGaussianIds(const int numSamples,
+                                                  const torch::Tensor &worldToCameraMatrices,
+                                                  const torch::Tensor &projectionMatrices,
+                                                  const size_t imageWidth,
+                                                  const size_t imageHeight,
+                                                  const float near,
+                                                  const float far,
+                                                  const ProjectionType projectionType,
+                                                  const size_t tileSize,
+                                                  const float minRadius2d,
+                                                  const float eps2d,
+                                                  const bool antialias) {
+    RenderSettings settings;
+    settings.imageWidth      = imageWidth;
+    settings.imageHeight     = imageHeight;
+    settings.nearPlane       = near;
+    settings.farPlane        = far;
+    settings.projectionType  = projectionType;
+    settings.shDegreeToUse   = 0;
+    settings.tileSize        = tileSize;
+    settings.radiusClip      = minRadius2d;
+    settings.eps2d           = eps2d;
+    settings.renderMode      = RenderSettings::RenderMode::DEPTH;
+    settings.numDepthSamples = numSamples;
+
+    return renderTopContributingGaussianIdsImpl(
+        worldToCameraMatrices, projectionMatrices, settings);
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
@@ -926,4 +1080,5 @@ gaussianRenderJagged(const JaggedTensor &means,     // [N1 + N2 + ..., 3]
 
     return {renderedImages, renderedAlphaImages, debug_info};
 }
-}; // namespace fvdb
+
+} // namespace fvdb

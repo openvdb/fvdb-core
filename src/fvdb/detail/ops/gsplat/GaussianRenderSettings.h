@@ -20,6 +20,8 @@ struct RenderSettings {
 
     std::uint32_t imageWidth;
     std::uint32_t imageHeight;
+    std::uint32_t imageOriginW    = 0;
+    std::uint32_t imageOriginH    = 0;
     ProjectionType projectionType = ProjectionType::PERSPECTIVE;
     RenderMode renderMode         = RenderMode::RGB;
     float nearPlane               = 0.01;

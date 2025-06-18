@@ -28,6 +28,8 @@ Vec3iBatchOrScalar = Vec3iBatch | float | int
 
 Vec4i = List[int] | Tuple[int, int, int, int] | torch.Tensor | np.ndarray
 
+import torch
+
 CUTLASS: ConvPackBackend
 GATHER_SCATTER: ConvPackBackend
 IGEMM: ConvPackBackend
@@ -167,8 +169,24 @@ class GaussianSplat3d:
         eps_2d: float = ...,
         antialias: bool = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
+    def render_top_contributing_gaussian_ids(
+        self,
+        num_samples: int,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        image_width: int,
+        image_height: int,
+        near: float,
+        far: float,
+        projection_type=...,
+        tile_size: int = ...,
+        min_radius_2d: float = ...,
+        eps_2d: float = ...,
+        antialias: bool = ...,
+    ) -> tuple[torch.Tensor, torch.Tensor]: ...
     def reset_grad_state(self) -> None: ...
     def save_ply(self, filename: str) -> None: ...
+    def load_ply(self, filename: str, device: torch.device = ...) -> None: ...
     def set_state(
         self,
         means: torch.Tensor,

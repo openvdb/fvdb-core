@@ -501,6 +501,11 @@ class GaussianSplat3d {
 
     /// Save this scene to a PLY file with the given filename
     void savePly(const std::string &filename) const;
+    /// @brief Load a PLY file's means, quats, scales, opacities, and SH coefficients as the state
+    /// of this GaussianSplat3d object
+    /// @param filename Filename of the PLY file
+    /// @param device Device to transfer the loaded tensors to
+    void loadPly(const std::string &filename, torch::Device device = torch::kCPU);
 
     /// @brief Render using precomputed projected Gaussians (see
     /// @ref projectGaussiansForImages, @ref projectGaussiansForDepths,
@@ -517,9 +522,9 @@ class GaussianSplat3d {
     /// cropping)
     /// @param tileSize Size of the tiles used for rendering
     /// @return Tuple of two tensors:
-    ///     images: A [C, W, H, D|1|D+1] tensor containing the the rendered image
+    ///     images: A [C, H, W, D|1|D+1] tensor containing the the rendered image
     ///             (or depth or image and depth) for each camera
-    ///     alphas: A [C, W, H, 1] tensor containing the alpha values of the rendered images
+    ///     alphas: A [C, H, W, 1] tensor containing the alpha values of the rendered images
     std::tuple<torch::Tensor, torch::Tensor>
     renderFromProjectedGaussians(const GaussianSplat3d::ProjectedGaussianSplats &projectedGaussians,
                                  const ssize_t cropWidth   = -1,
@@ -543,8 +548,8 @@ class GaussianSplat3d {
     /// @param eps2d Blur factor for antialiasing (only used if antialias is true)
     /// @param antialias Whether to antialias the image
     /// @return Tuple of two tensors:
-    ///     images: A [C, W, H, D] tensor containing the the rendered image for each camera
-    ///     alphas: A [C, W, H, 1] tensor containing the alpha values of the rendered images
+    ///     images: A [C, H, W, D] tensor containing the the rendered image for each camera
+    ///     alphas: A [C, H, W, 1] tensor containing the alpha values of the rendered images
     std::tuple<torch::Tensor, torch::Tensor>
     renderImages(const torch::Tensor &worldToCameraMatrices,
                  const torch::Tensor &projectionMatrices,
@@ -573,8 +578,8 @@ class GaussianSplat3d {
     /// @param eps2d Blur factor for antialiasing (only used if antialias is true)
     /// @param antialias Whether to antialias the image
     /// @return Tuple of two tensors:
-    ///     images: A [C, W, H, 1] tensor containing the the rendered depths for each camera
-    ///     alphas: A [C, W, H, 1] tensor containing the alpha values of the rendered depths
+    ///     images: A [C, H, W, 1] tensor containing the the rendered depths for each camera
+    ///     alphas: A [C, H, W, 1] tensor containing the alpha values of the rendered depths
     std::tuple<torch::Tensor, torch::Tensor>
     renderDepths(const torch::Tensor &worldToCameraMatrices,
                  const torch::Tensor &projectionMatrices,
@@ -601,6 +606,42 @@ class GaussianSplat3d {
                           const float minRadius2d             = 0.0,
                           const float eps2d                   = 0.3,
                           const bool antialias                = false);
+
+    /// @brief Render the IDs of the gaussians that are the top K contributors to the rendered
+    /// pixels and the value of the weighted contribution to the rendered pixels.  If the size of
+    /// `numSamples`(i.e. K) is greater than the number of contributing samples for a pixel, the
+    /// remaining samples' weights are filled with zeros and the IDs are filled with -1.
+    /// @param numSamples Requested number of top K contributing samples per pixel
+    /// @param worldToCameraMatrices [C, 4, 4] Camera-to-world matrices
+    /// @param projectionMatrices [C, 4, 4] Projection matrices
+    /// @param imageWidth Width of the image
+    /// @param imageHeight Height of the image
+    /// @param near Near plane
+    /// @param far Far plane
+    /// @param projectionType Type of projection (PERSPECTIVE or ORTHOGRAPHIC)
+    /// @param tileSize Size of the tiles used for rendering
+    /// @param minRadius2d Minimum radius in pixels below which projected Gaussians are ignored
+    /// @param eps2d Blur factor for antialiasing (only used if antialias is true)
+    /// @param antialias Whether to antialias the image
+    /// @return Tuple of two tensors:
+    ///     ids: A [C, H, W, K] tensor containing the the IDs of the top K contributors to the
+    ///          rendered pixel for each camera
+    ///     weights: A [C, H, W, K] tensor containing the weights of the top K contributors to the
+    ///              rendered pixel for each camera. The weights are normalized to sum to 1 if the
+    ///              list is exahustive of all contributing samples.
+    std::tuple<torch::Tensor, torch::Tensor> renderTopContributingGaussianIds(
+        const int numSamples,
+        const torch::Tensor &worldToCameraMatrices,
+        const torch::Tensor &projectionMatrices,
+        const size_t imageWidth,
+        const size_t imageHeight,
+        const float near,
+        const float far,
+        const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
+        const size_t tileSize               = 16,
+        const float minRadius2d             = 0.0,
+        const float eps2d                   = 0.3,
+        const bool antialias                = false);
 
   private:
     torch::Tensor mMeans;          // [N, 3]
@@ -636,10 +677,40 @@ class GaussianSplat3d {
                                          const ssize_t cropOriginW,
                                          const ssize_t cropOriginH);
 
+    /// @brief Render the gaussian splatting scene
+    ///         This function returns a single render quantity (RGB, depth, RGB+D) and
+    ///         single alpha value per pixel.
+    /// @param worldToCameraMatrices [B, 4, 4]
+    /// @param projectionMatrices [B, 3, 3]
+    /// @param settings
+    /// @return Tuple of (render quantity, alpha value)
     std::tuple<torch::Tensor, torch::Tensor>
     renderImpl(const torch::Tensor &worldToCameraMatrices,
                const torch::Tensor &projectionMatrices,
                const fvdb::detail::ops::RenderSettings &settings);
+
+    /// @brief Render the gaussian splatting scene
+    ///         For every pixel being rendered, this function returns multiple samples in depth of
+    ///         the gaussian IDs and multiple samples of the weighted alpha values. The number of
+    ///         samples per pixel is determined by the sampling parameters in the settings. If
+    ///         the size of the requested number of samples is greater than the number of
+    ///         contributing samples for a pixel, the remaining samples' weights are filled with
+    ///         zeros and the IDs are filled with -1.  The samples are ordered front to back in
+    ///         their depth ordering from camera.
+    /// @param worldToCameraMatrices [B, 4, 4]
+    /// @param projectionMatrices [B, 3, 3]
+    /// @param settings
+    /// @return Tuple of two tensors:
+    ///     ids: A [B, H, W, K] tensor containing the the IDs of the top K contributors to the
+    ///          rendered pixel for each camera
+    ///     weights: A [B, H, W, K] tensor containing the weights of the top K contributors to the
+    ///              rendered pixel for each camera. The weights are normalized to sum to the alpha
+    ///              value of the final rendered pixel if the list is exahustive of all contributing
+    ///              samples.
+    std::tuple<torch::Tensor, torch::Tensor>
+    renderTopContributingGaussianIdsImpl(const torch::Tensor &worldToCameraMatrices,
+                                         const torch::Tensor &projectionMatrices,
+                                         const fvdb::detail::ops::RenderSettings &settings);
 
     torch::Tensor evalSphericalHarmonicsImpl(const int64_t shDegreeToUse,
                                              const torch::Tensor &worldToCameraMatrices,

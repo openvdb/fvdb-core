@@ -10,9 +10,14 @@ import numpy as np
 import OpenImageIO as oiio
 import point_cloud_utils as pcu
 import torch
+from fvdb.utils.tests import (
+    create_uniform_grid_points_at_depth,
+    generate_center_frame_point_at_depth,
+    generate_random_4x4_xform,
+    get_fvdb_test_data_path,
+)
 
 from fvdb import GaussianSplat3d, JaggedTensor, gaussian_render_jagged
-from fvdb.utils.tests import get_fvdb_test_data_path
 
 
 def compare_images(pixels_or_path_a, pixels_or_path_b):
@@ -226,7 +231,7 @@ class TestGaussianRender(unittest.TestCase):
             torch.from_numpy(np.stack([attribs[f"f_dc_{i}"] for i in range(3)], axis=1)).to(self.device).unsqueeze(1)
         )
         self.assertTrue(torch.allclose(sh0_loaded, self.gs3d.sh0))
-        print(sorted(attribs.keys()))
+
         shN_loaded = torch.from_numpy(np.stack([attribs[f"f_rest_{i}"] for i in range(45)], axis=1)).to(self.device)
         shN_loaded = shN_loaded.view(self.gs3d.num_gaussians, 15, 3)
         self.assertTrue(torch.allclose(shN_loaded, self.gs3d.shN))
@@ -318,6 +323,245 @@ class TestGaussianRender(unittest.TestCase):
             differ,
             f"Gaussian renders for jagged tensors differ from reference image at {cmp.nfail} pixels",
         )
+
+
+class TestTopGaussianContributionsRender(unittest.TestCase):
+    data_path = get_fvdb_test_data_path() / "gsplat"
+    save_image_data = False
+    # NB: The files for regression data are saved at pwd to prevent accidental overwrites
+    save_regression_data = False
+
+    def setUp(self):
+        self.device = "cuda:0"
+
+        data_path = self.data_path / "test_garden_cropped.npz"
+
+        data = np.load(data_path)
+        means = torch.from_numpy(data["means3d"]).float().to(self.device)
+        quats = torch.from_numpy(data["quats"]).float().to(self.device)
+        scales = torch.from_numpy(data["scales"]).float().to(self.device)
+        opacities = torch.from_numpy(data["opacities"]).float().to(self.device)
+        colors = torch.from_numpy(data["colors"]).float().to(self.device)
+        self.cam_to_world_mats = torch.from_numpy(data["viewmats"]).float().to(self.device)
+        self.projection_mats = torch.from_numpy(data["Ks"]).float().to(self.device)
+        self.width = data["width"].item()
+        self.height = data["height"].item()
+
+        self.sh_degree = 3
+        sh_coeffs = torch.zeros((means.shape[0], (self.sh_degree + 1) ** 2, 3), device=self.device)
+        sh_coeffs[:, 0, :] = rgb_to_sh(colors)
+        sh_0 = sh_coeffs[:, 0, :].unsqueeze(1).clone()
+        sh_n = sh_coeffs[:, 1:, :].clone()
+
+        self.gs3d = GaussianSplat3d(
+            means=means,
+            quats=quats,
+            log_scales=torch.log(scales),
+            logit_opacities=torch.logit(opacities),
+            sh0=sh_0,
+            shN=sh_n,
+            requires_grad=True,
+        )
+
+    def test_gaussians_center_render(self):
+        h = 1024
+        w = 512
+
+        num_gaussian_layers = 10
+        num_samples = 16
+
+        cam_to_world_xform = torch.from_numpy(generate_random_4x4_xform()).to(self.device)
+        world_to_cam_xform = torch.linalg.inv(cam_to_world_xform).float()
+
+        # Fix intrinsics to match the actual image size
+        # For image size 1024x512, principal point should be around (512, 256)
+        focal_length = 18.0  # Reasonable focal length for this image size
+        intrinsics = torch.tensor(
+            [[focal_length, 0.0, w / 2.0], [0.0, focal_length, h / 2.0], [0.0, 0.0, 1.0]], device=self.device
+        )
+
+        means3d = torch.cat(
+            [
+                generate_center_frame_point_at_depth(h, w, (i + 1) * 8, intrinsics, cam_to_world_xform).reshape(-1, 3)
+                for i in range(num_gaussian_layers)
+            ],
+            dim=0,
+        )
+
+        opacities = torch.cat(
+            [
+                torch.full((means3d.shape[0] // num_gaussian_layers,), 0.4, device=means3d.device)
+                for _ in range(num_gaussian_layers)
+            ],
+            dim=0,
+        )
+        logit_opacities = torch.logit(opacities)
+
+        # Generate identity quaternions (no rotation)
+        # Identity quaternion is [x=0, y=0, z=0, w=1] representing no rotation
+        quats = torch.zeros(means3d.shape[0], 4, device=means3d.device)
+        quats[:, 3] = 1.0  # Set w component to 1, others remain 0
+
+        scales = torch.full((means3d.shape[0], 3), 1e-30, device=means3d.device)
+        log_scales = torch.log(scales)
+
+        sh0 = torch.randn(means3d.shape[0], 1, 3, device=means3d.device)
+        shN = torch.randn(means3d.shape[0], 1, 3, device=means3d.device)
+
+        gs3d = GaussianSplat3d(means3d, quats, log_scales, logit_opacities, sh0, shN)
+
+        ids, weights = gs3d.render_top_contributing_gaussian_ids(
+            num_samples,
+            world_to_cam_xform.unsqueeze(0).contiguous(),
+            intrinsics.unsqueeze(0).contiguous(),
+            w,
+            h,
+            0.1,
+            10000.0,
+        )
+
+        self.assertTrue(
+            torch.equal(
+                ids[0, h // 2 - 1, w // 2 - 1, :num_gaussian_layers],
+                torch.arange(num_gaussian_layers, device=self.device),
+            )
+        )
+        self.assertTrue(
+            torch.equal(
+                ids[0, h // 2 - 1, w // 2 - 1, num_gaussian_layers:],
+                torch.full((ids.shape[3] - num_gaussian_layers,), -1, device=self.device, dtype=torch.int32),
+            )
+        )
+
+        expected_weights = torch.zeros(num_samples, device=self.device)
+        accumulated_transparency = 1.0
+        for i in range(num_gaussian_layers):
+            expected_weights[i] = accumulated_transparency * opacities[0]
+            accumulated_transparency *= 1.0 - opacities[0]
+
+        self.assertTrue(torch.allclose(weights[0][h // 2 - 1][w // 2 - 1], expected_weights))
+
+    def test_gaussians_grid_render(self):
+        h = 1024
+        w = 512
+
+        num_gaussian_layers = 12
+        num_samples = 16
+
+        cam_to_world_xform = torch.from_numpy(generate_random_4x4_xform()).to(self.device)
+        world_to_cam_xform = torch.linalg.inv(cam_to_world_xform).float()
+
+        # Fix intrinsics to match the actual image size
+        # For image size 1024x512, principal point should be around (512, 256)
+        focal_length = 18.0  # Reasonable focal length for this image size
+        intrinsics = torch.tensor(
+            [[focal_length, 0.0, w / 2.0], [0.0, focal_length, h / 2.0], [0.0, 0.0, 1.0]], device=self.device
+        )
+
+        means3d = torch.cat(
+            [
+                create_uniform_grid_points_at_depth(
+                    h, w, (i + 1) * 8, intrinsics, cam_to_world_xform, spacing=2
+                ).reshape(-1, 3)
+                for i in range(num_gaussian_layers)
+            ],
+            dim=0,
+        )
+
+        opacities = torch.cat(
+            [
+                torch.full((means3d.shape[0] // num_gaussian_layers,), 0.4, device=means3d.device)
+                for _ in range(num_gaussian_layers)
+            ],
+            dim=0,
+        )
+        logit_opacities = torch.logit(opacities)
+
+        # Generate identity quaternions (no rotation)
+        # Identity quaternion is [x=0, y=0, z=0, w=1] representing no rotation
+        quats = torch.zeros(means3d.shape[0], 4, device=means3d.device)
+        quats[:, 3] = 1.0  # Set w component to 1, others remain 0
+
+        scales = torch.full((means3d.shape[0], 3), 1e-30, device=means3d.device)
+        log_scales = torch.log(scales)
+
+        sh0 = torch.randn(means3d.shape[0], 1, 3, device=means3d.device)
+        shN = torch.randn(means3d.shape[0], 1, 3, device=means3d.device)
+
+        gs3d = GaussianSplat3d(means3d, quats, log_scales, logit_opacities, sh0, shN)
+
+        ids, weights = gs3d.render_top_contributing_gaussian_ids(
+            num_samples,
+            world_to_cam_xform.unsqueeze(0).contiguous(),
+            intrinsics.unsqueeze(0).contiguous(),
+            w,
+            h,
+            0.1,
+            10000.0,
+        )
+
+        id_centers = ids[0][::2, ::2]
+
+        # assert that the ids are -1 for samples beyond the number of gaussian layers
+        self.assertTrue(
+            torch.equal(
+                id_centers[:, :, num_gaussian_layers:],
+                torch.full(
+                    (id_centers.shape[0], id_centers.shape[1], num_samples - num_gaussian_layers),
+                    -1,
+                    device=self.device,
+                    dtype=torch.int32,
+                ),
+            )
+        )
+
+        # assert that the ids are the correct gaussian layer for each sample
+        for i in range(num_gaussian_layers):
+            self.assertTrue(
+                torch.equal(
+                    id_centers[:, :, i].flatten(),
+                    torch.arange(
+                        i * means3d.shape[0] // num_gaussian_layers,
+                        (i + 1) * means3d.shape[0] // num_gaussian_layers,
+                        device=self.device,
+                        dtype=torch.int32,
+                    ),
+                )
+            )
+
+        # assert that the weights are the correct for each sample
+        expected_weights = torch.zeros(num_samples, device=self.device, dtype=torch.float32)
+        accumulated_transparency = torch.ones(1, device=self.device, dtype=torch.float32)
+        for i in range(num_gaussian_layers):
+            expected_weights[i] = accumulated_transparency * opacities[0]
+            accumulated_transparency *= 1.0 - opacities[0]
+
+        weight_centers = weights[0][::2, ::2]
+        expected_weight_centers = torch.broadcast_to(expected_weights, weight_centers.shape)
+
+        self.assertTrue(torch.allclose(weight_centers, expected_weight_centers, atol=1e-5, rtol=1e-8))
+
+    def test_gaussians_scene_render(self):
+        ids, weights = self.gs3d.render_top_contributing_gaussian_ids(
+            6,
+            self.cam_to_world_mats,
+            self.projection_mats,
+            self.width,
+            self.height,
+            0.01,
+            10000.0,
+        )
+
+        if self.save_regression_data:
+            torch.save(ids, "regression_top_contributors_ids.pt")
+            torch.save(weights, "regression_top_contributors_weights.pt")
+
+        # load the regression data
+        ids_regression = torch.load(self.data_path / "regression_top_contributors_ids.pt", weights_only=True)
+        weights_regression = torch.load(self.data_path / "regression_top_contributors_weights.pt", weights_only=True)
+
+        self.assertTrue(torch.equal(ids, ids_regression))
+        self.assertTrue(torch.equal(weights, weights_regression))
 
 
 if __name__ == "__main__":
