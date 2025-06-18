@@ -579,6 +579,8 @@ dispatchGaussianRasterizeForward<torch::kCUDA>(
         __CALL_FWD_(65)
         __CALL_FWD_(128)
         __CALL_FWD_(129)
+        __CALL_FWD_(192)
+        __CALL_FWD_(193)
         __CALL_FWD_(256)
         __CALL_FWD_(257)
         __CALL_FWD_(512)

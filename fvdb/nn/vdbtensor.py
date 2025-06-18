@@ -48,7 +48,7 @@ class VDBTensor:
                 raise ValueError("kmap should operate on the same grid as this tensor")
 
     def __getitem__(self, idx):
-        return VDBTensor(self.grid, self.data[idx])
+        return VDBTensor(self.grid[idx], self.data[idx])
 
     def __len__(self):
         return self.grid.grid_count

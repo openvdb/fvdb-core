@@ -18,6 +18,11 @@ from .grid_utils import (
     make_dense_grid_and_point_data,
     make_gridbatch_and_point_data,
 )
+from .gsplat_utils import (
+    create_uniform_grid_points_at_depth,
+    generate_center_frame_point_at_depth,
+    generate_random_4x4_xform,
+)
 
 git_tag_for_data = "main"
 
@@ -148,6 +153,9 @@ __all__ = [
     "gridbatch_from_dense_cube",
     "make_dense_grid_and_point_data",
     "make_gridbatch_and_point_data",
+    "generate_random_4x4_xform",
+    "create_uniform_grid_points_at_depth",
+    "generate_center_frame_point_at_depth",
     "dtype_to_atol",
     "expand_tests",
 ]

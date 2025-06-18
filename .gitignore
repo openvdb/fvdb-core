@@ -31,6 +31,7 @@ external
 imgui.ini
 datasets/lib/external
 datasets/lib/build
+*.jpg
 *.png
 !docs/imgs/**/*.png
 !notebooks/img/**/*.png
@@ -57,4 +58,5 @@ releases/
 !tests/data
 .vscode/launch.json
 lightning_logs
+logs
 tests/data/

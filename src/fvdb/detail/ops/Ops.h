@@ -8,6 +8,7 @@
 
 #include <fvdb/Types.h>
 #include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <torch/extension.h>
@@ -716,6 +717,58 @@ dispatchGaussianRasterizeBackward(
     const torch::Tensor &dLossDRenderedAlphas,   // [C, imageHeight, imageWidth, 1]
     const bool absgrad,
     const int64_t numSharedChannelsOverride = -1);
+
+/// @brief Performs deep image rasterization to render the IDs and weighted alpha values of the
+/// top-K most visible Gaussians for each pixel
+///
+/// This function rasterizes 2D Gaussians into an image using a tile-based approach for efficiency,
+/// with support for multiple samples per pixel along the depth dimension.  The samples are chosen
+/// by determining the top-K most visible Gaussians for each pixel where K is specified in the
+/// rendering settings.  Each Gaussian is represented by its 2D projected center, covariance matrix
+/// in conic form, rendering attributes (such as RGB colors, depth, etc.), and opacity. The function
+/// returns the Gaussians' IDs and alpha/weight values for each sample.  These samples are ordered
+/// front to back in their depth ordering from camera.
+/// @note By 'deep image rendering', we refer to the process of rendering multiple samples per-pixel
+/// with respect to their depth from the image plane in order to use this 'deep image data' after
+/// rendering to be able to do things like accurately combine rendered data from multiple images to
+/// produce correctly composited objects/samples with respect to their depth and transparency or use
+/// the ID values for additional lookups or masking (see
+/// https://en.wikipedia.org/wiki/Deep_image_compositing).
+///
+/// @tparam DeviceType Device type template parameter (torch::kCUDA or torch::kCPU)
+///
+/// @param[in] means2d 2D projected Gaussian centers [C, N, 2] where C is number of cameras and N is
+/// number of Gaussians
+/// @param[in] conics Gaussian covariance matrices in conic form [C, N, 3] representing (a, b, c) in
+/// ax² + 2bxy + cy²
+/// @param[in] opacities Opacity values for each Gaussian [N]
+/// @param[in] tile_offsets Offsets for tiles [C, tile_height, tile_width] indicating for each tile
+/// where its Gaussians start
+/// @param[in] tile_gaussian_ids Gaussian IDs for tile intersection [n_isects] indicating which
+/// Gaussians affect each tile
+/// @param[in] settings Rendering settings containing image dimensions, number of depth samples, and
+/// other parameters
+///
+/// @return std::tuple containing:
+///         - Rendered quantities [C, image_height, image_width, n_depth_samples, D] where D matches
+/// input attribute dimension
+///         - Alpha/weight values [C, image_height, image_width, n_depth_samples]
+///         - Last Gaussian ID rendered at each pixel [C, image_height, image_width]
+///
+/// @note Unlike standard rasterization, this function can output multiple samples per pixel in the
+/// depth dimension.
+/// @note The alpha/weight values represent the contribution of each sample to the final rendered
+/// quantity.  Note the sum of these values is not necessarily 1 but cannot exceed 1.
+/// @note If the number of intersections is less than the number of depth samples, the remaining
+/// sample values are set to 0.
+template <c10::DeviceType>
+std::tuple<torch::Tensor, torch::Tensor> dispatchGaussianRasterizeTopContributingGaussianIds(
+    const torch::Tensor &means2d,           // [C, N, 2]
+    const torch::Tensor &conics,            // [C, N, 3]
+    const torch::Tensor &opacities,         // [N]
+    const torch::Tensor &tile_offsets,      // [C, tile_height, tile_width]
+    const torch::Tensor &tile_gaussian_ids, // [n_isects]
+    const RenderSettings &settings);
 
 /// @brief Project 3D Gaussians to 2D screen space using jagged tensors for batched processing
 ///

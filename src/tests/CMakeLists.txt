@@ -141,3 +141,4 @@ ConfigureTest(GaussianSphericalHarmonicsForwardTest "GaussianSphericalHarmonicsF
 ConfigureTest(GaussianSphericalHarmonicsBackwardTest "GaussianSphericalHarmonicsBackwardTest.cpp")
 ConfigureTest(GaussianProjectionForwardTest "GaussianProjectionForwardTest.cpp")
 ConfigureTest(GaussianProjectionBackwardTest "GaussianProjectionBackwardTest.cpp")
+ConfigureTest(GaussianTopContributorsTest "GaussianTopContributorsTest.cpp")

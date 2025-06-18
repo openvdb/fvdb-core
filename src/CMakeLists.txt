@@ -95,6 +95,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/gsplat/GaussianRasterizeBackward.cu
     fvdb/detail/ops/gsplat/GaussianProjectionBackward.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeForward.cu
+    fvdb/detail/ops/gsplat/GaussianRasterizeTopContributingGaussianIds.cu
     fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.cu
     fvdb/detail/ops/gsplat/GaussianTileIntersection.cu
     fvdb/detail/ops/UpsampleGridNearest.cu

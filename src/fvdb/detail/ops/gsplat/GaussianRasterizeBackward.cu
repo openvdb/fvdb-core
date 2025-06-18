@@ -1102,6 +1102,8 @@ dispatchGaussianRasterizeBackward<torch::kCUDA>(
         __GS__CALL_BWD_(65)
         __GS__CALL_BWD_(128)
         __GS__CALL_BWD_(129)
+        __GS__CALL_BWD_(192)
+        __GS__CALL_BWD_(193)
         __GS__CALL_BWD_(256)
         __GS__CALL_BWD_(257)
         __GS__CALL_BWD_(512)
