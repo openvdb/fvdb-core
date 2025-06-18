@@ -4,6 +4,8 @@
 #ifndef FVDB_DETAIL_OPS_OPS_H
 #define FVDB_DETAIL_OPS_OPS_H
 
+#include "fvdb/JaggedTensor.h"
+
 #include <fvdb/Types.h>
 #include <fvdb/detail/GridBatchImpl.h>
 #include <fvdb/detail/utils/Utils.h>
@@ -52,6 +54,14 @@ nanovdb::GridHandle<TorchDeviceBuffer> dispatchDilateGrid(const GridBatchImpl &g
 template <c10::DeviceType>
 nanovdb::GridHandle<TorchDeviceBuffer> dispatchMergeGrids(const GridBatchImpl &gridBatch1,
                                                           const GridBatchImpl &gridBatch2);
+template <c10::DeviceType>
+nanovdb::GridHandle<TorchDeviceBuffer> dispatchPruneGrid(const GridBatchImpl &gridBatch,
+                                                         const JaggedTensor &mask);
+template <c10::DeviceType>
+void dispatchInject(const GridBatchImpl &dstGridBatch,
+                    const GridBatchImpl &srcGridBatch,
+                    JaggedTensor &dst,
+                    const JaggedTensor &src);
 
 template <c10::DeviceType>
 nanovdb::GridHandle<TorchDeviceBuffer>

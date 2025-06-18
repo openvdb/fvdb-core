@@ -1743,6 +1743,85 @@ GridBatchImpl::merge(c10::intrusive_ptr<GridBatchImpl> other) {
 }
 
 c10::intrusive_ptr<GridBatchImpl>
+GridBatchImpl::prune(const JaggedTensor &mask) {
+    c10::DeviceGuard guard(device());
+    TORCH_CHECK_VALUE(mask.ldim() == 1, "Mask should be a list of tensors");
+    TORCH_CHECK_VALUE(this->batchSize() == mask.num_tensors(),
+                      "Cardinality of masks should match gridbatch size");
+    TORCH_CHECK_VALUE(this->device() == mask.device(),
+                      "GridBatch and mask should be on same device/host");
+    if (batchSize() == 0) {
+        return c10::make_intrusive<detail::GridBatchImpl>(device());
+    }
+
+    std::vector<nanovdb::Vec3d> voxS, voxO;
+    gridVoxelSizesAndOrigins(voxS, voxO);
+    auto prunedGridBatchHdl = FVDB_DISPATCH_KERNEL_DEVICE(
+        device(), [&]() { return detail::ops::dispatchPruneGrid<DeviceTag>(*this, mask); });
+    return c10::make_intrusive<detail::GridBatchImpl>(std::move(prunedGridBatchHdl), voxS, voxO);
+}
+
+void
+GridBatchImpl::injectTo(c10::intrusive_ptr<GridBatchImpl> dstGridBatch,
+                        const JaggedTensor &src,
+                        JaggedTensor &dst) {
+    c10::DeviceGuard guard(device());
+
+    TORCH_CHECK_VALUE(this->batchSize() == dstGridBatch->batchSize(),
+                      "Source/destination gridBatches should have same size");
+    TORCH_CHECK_VALUE(this->batchSize() == src.num_tensors(),
+                      "Source gridBatch should match number of tensors");
+    TORCH_CHECK_VALUE(dstGridBatch->batchSize() == dst.num_tensors(),
+                      "Destination gridBatch should match number of tensors");
+    TORCH_CHECK_VALUE(this->device() == dstGridBatch->device(),
+                      "Source/destination gridBatches should be on the same device");
+    TORCH_CHECK_VALUE(this->device() == src.device(),
+                      "Source gridBatch should be on the same device");
+    TORCH_CHECK_VALUE(dstGridBatch->device() == dst.device(),
+                      "Destination gridBatch should be on the same device");
+    TORCH_CHECK_VALUE(src.ldim() == 1, "Source should be a list of tensors");
+    TORCH_CHECK_VALUE(dst.ldim() == 1, "Destination should be a list of tensors");
+
+    if (batchSize() == 0) {
+        return;
+    }
+
+    FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
+        detail::ops::dispatchInject<DeviceTag>(*dstGridBatch, *this, dst, src);
+    });
+}
+
+void
+GridBatchImpl::injectFrom(c10::intrusive_ptr<GridBatchImpl> srcGridBatch,
+                          const JaggedTensor &src,
+                          JaggedTensor &dst) {
+    c10::DeviceGuard guard(device());
+
+    TORCH_CHECK_VALUE(this->batchSize() == srcGridBatch->batchSize(),
+                      "Source/destination gridBatches should have same size");
+    TORCH_CHECK_VALUE(this->batchSize() == src.num_tensors(),
+                      "Source gridBatch should match number of tensors");
+    TORCH_CHECK_VALUE(srcGridBatch->batchSize() == dst.num_tensors(),
+                      "Destination gridBatch should match number of tensors");
+    TORCH_CHECK_VALUE(this->device() == srcGridBatch->device(),
+                      "Source/destination gridBatches should be on the same device");
+    TORCH_CHECK_VALUE(this->device() == src.device(),
+                      "Source gridBatch should be on the same device");
+    TORCH_CHECK_VALUE(srcGridBatch->device() == dst.device(),
+                      "Destination gridBatch should be on the same device");
+    TORCH_CHECK_VALUE(src.ldim() == 1, "Source should be a list of tensors");
+    TORCH_CHECK_VALUE(dst.ldim() == 1, "Destination should be a list of tensors");
+
+    if (batchSize() == 0) {
+        return;
+    }
+
+    FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
+        detail::ops::dispatchInject<DeviceTag>(*this, *srcGridBatch, dst, src);
+    });
+}
+
+c10::intrusive_ptr<GridBatchImpl>
 GridBatchImpl::convolutionOutput(const nanovdb::Coord kernelSize, const nanovdb::Coord stride) {
     c10::DeviceGuard guard(device());
     TORCH_CHECK_VALUE(nanovdb::Coord(0) < kernelSize, "kernel_size must be strictly positive.");
