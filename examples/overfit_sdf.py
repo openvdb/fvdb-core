@@ -76,7 +76,7 @@ def main():
 
     grid = GridBatch(device=device)
 
-    grid.set_from_points(p, [-vox_pad] * 3, [vox_pad] * 3, vox_size, vox_origin)
+    grid.set_from_points(p, vox_size, vox_origin)
     dual_index = grid.dual_grid()
 
     mask = grid.points_in_active_voxel(torch.from_numpy(gpts).to(dtype).to(device)).jdata.cpu().numpy()

@@ -44,7 +44,7 @@ SampleGridTrilinear::forward(SampleGridTrilinear::AutogradContext *ctx,
                              bool returnGrad) {
     checkForwardInputs(grid, points, data, returnGrad);
 
-    auto ret = FVDB_DISPATCH_KERNEL_DEVICE(points.device(), [&]() {
+    auto ret = FVDB_DISPATCH_KERNEL(points.device(), [&]() {
         if (returnGrad) {
             return ops::dispatchSampleGridTrilinearWithGrad<DeviceTag>(*grid, points, data);
         } else {
@@ -74,7 +74,7 @@ SampleGridTrilinear::backward(SampleGridTrilinear::AutogradContext *ctx,
     bool returnGrad  = ctx->saved_data["return_grad"].toBool();
     Variable gradOut = grad_output.at(0); // [B*M, *]
 
-    torch::Tensor outGrad = FVDB_DISPATCH_KERNEL_DEVICE(gradOut.device(), [&]() {
+    torch::Tensor outGrad = FVDB_DISPATCH_KERNEL(gradOut.device(), [&]() {
         if (returnGrad) {
             Variable gradPtsGrad = grad_output.at(1); // [B*M, -1, 3]
             return ops::dispatchSampleGridTrilinearWithGradBackward<DeviceTag>(

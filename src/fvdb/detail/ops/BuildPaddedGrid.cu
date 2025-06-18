@@ -5,6 +5,7 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
+#include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <nanovdb/NanoVDB.h>
@@ -184,9 +185,11 @@ ijkForGridVoxelCallbackWithoutBorderCount(
     }
 }
 
+template <c10::DeviceType DeviceTag>
 JaggedTensor
 paddedIJKForGrid(const GridBatchImpl &batchHdl, const nanovdb::CoordBBox &bbox) {
-    TORCH_CHECK(batchHdl.device().is_cuda(), "GridBatchImpl must be on CUDA device");
+    TORCH_CHECK(batchHdl.device().is_cuda() || batchHdl.device().is_privateuseone(),
+                "GridBatchImpl must be on CUDA or PrivateUse1 device");
     TORCH_CHECK(batchHdl.device().has_index(), "GridBatchImpl must have a valid index");
 
     const int32_t totalPadAmount = static_cast<int32_t>(bbox.volume());
@@ -210,7 +213,12 @@ paddedIJKForGrid(const GridBatchImpl &batchHdl, const nanovdb::CoordBBox &bbox) 
                              GridBatchImpl::Accessor<nanovdb::ValueOnIndex> bacc) {
         ijkForGridVoxelCallback(bidx, lidx, vidx, cidx, bacc, bbox, outIJKAcc, outIJKBIdxAcc);
     };
-    forEachVoxelCUDA<nanovdb::ValueOnIndex>(1024, 1, batchHdl, cb);
+
+    if constexpr (DeviceTag == torch::kCUDA) {
+        forEachVoxelCUDA<nanovdb::ValueOnIndex>(DEFAULT_BLOCK_DIM, 1, batchHdl, cb);
+    } else if constexpr (DeviceTag == torch::kPrivateUse1) {
+        forEachVoxelPrivateUse1<nanovdb::ValueOnIndex>(1, batchHdl, cb);
+    }
 
     return JaggedTensor::from_data_offsets_and_list_ids(
         outIJK, batchHdl.voxelOffsets() * totalPadAmount, batchHdl.jlidx());
@@ -379,14 +387,29 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchImpl &baseBatchHdl,
                                       int bmax,
                                       bool excludeBorder) {
     JaggedTensor coords;
+    nanovdb::CoordBBox bbox = nanovdb::CoordBBox::createCube(bmin, bmax);
     if (excludeBorder) {
-        coords = paddedIJKForGridWithoutBorder(
-            baseBatchHdl, nanovdb::CoordBBox(nanovdb::Coord(bmin), nanovdb::Coord(bmax)));
+        coords = paddedIJKForGridWithoutBorder(baseBatchHdl, bbox);
     } else {
-        coords = paddedIJKForGrid(baseBatchHdl,
-                                  nanovdb::CoordBBox(nanovdb::Coord(bmin), nanovdb::Coord(bmax)));
+        coords = paddedIJKForGrid<torch::kCUDA>(baseBatchHdl, bbox);
     }
     return ops::dispatchCreateNanoGridFromIJK<torch::kCUDA>(coords);
+}
+
+template <>
+nanovdb::GridHandle<TorchDeviceBuffer>
+dispatchBuildPaddedGrid<torch::kPrivateUse1>(const GridBatchImpl &baseBatchHdl,
+                                             int bmin,
+                                             int bmax,
+                                             bool excludeBorder) {
+    JaggedTensor coords;
+    nanovdb::CoordBBox bbox = nanovdb::CoordBBox::createCube(bmin, bmax);
+    if (excludeBorder) {
+        coords = paddedIJKForGridWithoutBorder(baseBatchHdl, bbox);
+    } else {
+        coords = paddedIJKForGrid<torch::kPrivateUse1>(baseBatchHdl, bbox);
+    }
+    return ops::dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(coords);
 }
 
 template <>
