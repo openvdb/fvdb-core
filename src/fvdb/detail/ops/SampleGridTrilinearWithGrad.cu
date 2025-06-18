@@ -5,6 +5,7 @@
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/TrilinearInterpolationWithGradIterator.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
+#include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
 #include <ATen/OpMathType.h>
 #include <c10/cuda/CUDAException.h>
@@ -60,7 +61,7 @@ sampleTrilinearWithGradCallback(int32_t bidx,
     }
 }
 
-template <c10::DeviceType DeviceTag>
+template <c10::DeviceType DeviceTag, typename scalar_t>
 std::vector<torch::Tensor>
 SampleGridTrilinearWithGrad(const GridBatchImpl &batchHdl,
                             const JaggedTensor &points,
@@ -78,68 +79,61 @@ SampleGridTrilinearWithGrad(const GridBatchImpl &batchHdl,
     std::vector<int64_t> outGradShape = outShape;
     outGradShape.push_back(3);
 
-    AT_DISPATCH_V2(
-        points.scalar_type(),
-        "SampleGridTrilinearWithGrad",
-        AT_WRAP([&] {
-            auto batchAcc           = gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(batchHdl);
-            auto gridDataAcc        = tensorAccessor<DeviceTag, scalar_t, 2>(gridDataReshape);
-            auto outFeaturesAcc     = tensorAccessor<DeviceTag, scalar_t, 2>(outFeatures);
-            auto outGradFeaturesAcc = tensorAccessor<DeviceTag, scalar_t, 3>(outGradFeatures);
+    auto batchAcc           = gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(batchHdl);
+    auto gridDataAcc        = tensorAccessor<DeviceTag, scalar_t, 2>(gridDataReshape);
+    auto outFeaturesAcc     = tensorAccessor<DeviceTag, scalar_t, 2>(outFeatures);
+    auto outGradFeaturesAcc = tensorAccessor<DeviceTag, scalar_t, 3>(outGradFeatures);
 
-            if constexpr (DeviceTag == torch::kCUDA) {
-                auto cb = [=] __device__(int32_t bidx,
-                                         int32_t eidx,
-                                         int32_t cidx,
-                                         JaggedRAcc32<scalar_t, 2> pts) {
-                    sampleTrilinearWithGradCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
-                        bidx,
-                        eidx,
-                        cidx,
-                        pts,
-                        gridDataAcc,
-                        batchAcc,
-                        outFeaturesAcc,
-                        outGradFeaturesAcc);
-                };
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(256, gridData.size(1), points, cb);
-            } else {
-                auto cb =
-                    [=](int32_t bidx, int32_t eidx, int32_t cidx, JaggedAcc<scalar_t, 2> pts) {
-                        sampleTrilinearWithGradCallback<scalar_t, JaggedAcc, TorchAcc>(
-                            bidx,
-                            eidx,
-                            cidx,
-                            pts,
-                            gridDataAcc,
-                            batchAcc,
-                            outFeaturesAcc,
-                            outGradFeaturesAcc);
-                    };
-                forEachJaggedElementChannelCPU<scalar_t, 2>(gridData.size(1), points, cb);
-            }
-        }),
-        AT_EXPAND(AT_FLOATING_TYPES),
-        c10::kHalf);
+    if constexpr (DeviceTag == torch::kCUDA) {
+        auto cb = [=] __device__(int32_t bidx,
+                                 int32_t eidx,
+                                 int32_t cidx,
+                                 JaggedRAcc32<scalar_t, 2> pts) {
+            sampleTrilinearWithGradCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+                bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc, outGradFeaturesAcc);
+        };
+        forEachJaggedElementChannelCUDA<scalar_t, 2>(256, gridData.size(1), points, cb);
+    } else if constexpr (DeviceTag == torch::kPrivateUse1) {
+        auto cb = [=] __device__(int32_t bidx,
+                                 int32_t eidx,
+                                 int32_t cidx,
+                                 JaggedRAcc32<scalar_t, 2> pts) {
+            sampleTrilinearWithGradCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+                bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc, outGradFeaturesAcc);
+        };
+        forEachJaggedElementChannelPrivateUse1<scalar_t, 2>(gridData.size(1), points, cb);
+    } else {
+        auto cb = [=](int32_t bidx, int32_t eidx, int32_t cidx, JaggedAcc<scalar_t, 2> pts) {
+            sampleTrilinearWithGradCallback<scalar_t, JaggedAcc, TorchAcc>(
+                bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc, outGradFeaturesAcc);
+        };
+        forEachJaggedElementChannelCPU<scalar_t, 2>(gridData.size(1), points, cb);
+    }
 
     return {outFeatures.reshape(outShape), outGradFeatures.reshape(outGradShape)};
 }
 
-template <>
+template <c10::DeviceType DeviceTag>
 std::vector<torch::Tensor>
-dispatchSampleGridTrilinearWithGrad<torch::kCUDA>(const GridBatchImpl &batchHdl,
-                                                  const JaggedTensor &points,
-                                                  const torch::Tensor &gridData) {
-    return SampleGridTrilinearWithGrad<torch::kCUDA>(batchHdl, points, gridData);
+dispatchSampleGridTrilinearWithGrad(const GridBatchImpl &batchHdl,
+                                    const JaggedTensor &points,
+                                    const torch::Tensor &gridData) {
+    return AT_DISPATCH_V2(points.scalar_type(),
+                          "SampleGridTrilinearWithGrad",
+                          AT_WRAP([&] {
+                              return SampleGridTrilinearWithGrad<DeviceTag, scalar_t>(
+                                  batchHdl, points, gridData);
+                          }),
+                          AT_EXPAND(AT_FLOATING_TYPES),
+                          c10::kHalf);
 }
 
-template <>
-std::vector<torch::Tensor>
-dispatchSampleGridTrilinearWithGrad<torch::kCPU>(const GridBatchImpl &batchHdl,
-                                                 const JaggedTensor &points,
-                                                 const torch::Tensor &gridData) {
-    return SampleGridTrilinearWithGrad<torch::kCPU>(batchHdl, points, gridData);
-}
+template std::vector<torch::Tensor> dispatchSampleGridTrilinearWithGrad<torch::kCPU>(
+    const GridBatchImpl &, const JaggedTensor &, const torch::Tensor &);
+template std::vector<torch::Tensor> dispatchSampleGridTrilinearWithGrad<torch::kCUDA>(
+    const GridBatchImpl &, const JaggedTensor &, const torch::Tensor &);
+template std::vector<torch::Tensor> dispatchSampleGridTrilinearWithGrad<torch::kPrivateUse1>(
+    const GridBatchImpl &, const JaggedTensor &, const torch::Tensor &);
 
 } // namespace ops
 } // namespace detail

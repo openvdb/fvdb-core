@@ -5,6 +5,7 @@
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/TrilinearInterpolationWithGradIterator.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
+#include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
 #include <ATen/OpMathType.h>
 #include <THC/THCAtomics.cuh>
@@ -65,7 +66,7 @@ sampleTrilinearWithGradBackwardCallback(int32_t bidx,
     }
 }
 
-template <c10::DeviceType DeviceTag>
+template <c10::DeviceType DeviceTag, typename scalar_t>
 torch::Tensor
 SampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
                                     const JaggedTensor &points,
@@ -78,79 +79,100 @@ SampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
     torch::Tensor outGrad = torch::zeros_like(dataReshape);          // [N, -1]
     auto outShape         = spliceShape({outGrad.size(0)}, data, 1); // [B*M, *]
 
-    AT_DISPATCH_V2(
-        points.scalar_type(),
-        "SampleGridTrilinearWithGradBackward",
-        AT_WRAP([&] {
-            auto batchAcc           = gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(batchHdl);
-            auto gradOutFeaturesAcc = tensorAccessor<DeviceTag, scalar_t, 2>(gradOutFeatures);
-            auto gradOutGradFeaturesAcc =
-                tensorAccessor<DeviceTag, scalar_t, 3>(gradOutGradFeatures);
-            auto outGradAcc = tensorAccessor<DeviceTag, scalar_t, 2>(outGrad);
+    auto batchAcc               = gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(batchHdl);
+    auto gradOutFeaturesAcc     = tensorAccessor<DeviceTag, scalar_t, 2>(gradOutFeatures);
+    auto gradOutGradFeaturesAcc = tensorAccessor<DeviceTag, scalar_t, 3>(gradOutGradFeatures);
+    auto outGradAcc             = tensorAccessor<DeviceTag, scalar_t, 2>(outGrad);
 
-            if constexpr (DeviceTag == torch::kCUDA) {
-                auto cb = [=] __device__(int32_t bidx,
-                                         int32_t eidx,
-                                         int32_t cidx,
-                                         JaggedRAcc32<scalar_t, 2> pts) {
-                    sampleTrilinearWithGradBackwardCallback<DeviceTag,
-                                                            scalar_t,
-                                                            JaggedRAcc32,
-                                                            TorchRAcc32>(bidx,
-                                                                         eidx,
-                                                                         cidx,
-                                                                         pts,
-                                                                         gradOutFeaturesAcc,
-                                                                         gradOutGradFeaturesAcc,
-                                                                         batchAcc,
-                                                                         outGradAcc);
-                };
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(256, outGrad.size(1), points, cb);
-            } else {
-                auto cb =
-                    [=](int32_t bidx, int32_t eidx, int32_t cidx, JaggedAcc<scalar_t, 2> pts) {
-                        sampleTrilinearWithGradBackwardCallback<DeviceTag,
-                                                                scalar_t,
-                                                                JaggedAcc,
-                                                                TorchAcc>(bidx,
-                                                                          eidx,
-                                                                          cidx,
-                                                                          pts,
-                                                                          gradOutFeaturesAcc,
-                                                                          gradOutGradFeaturesAcc,
-                                                                          batchAcc,
-                                                                          outGradAcc);
-                    };
-                forEachJaggedElementChannelCPU<scalar_t, 2>(outGrad.size(1), points, cb);
-            }
-        }),
-        AT_EXPAND(AT_FLOATING_TYPES),
-        c10::kHalf);
+    if constexpr (DeviceTag == torch::kCUDA) {
+        auto cb = [=] __device__(int32_t bidx,
+                                 int32_t eidx,
+                                 int32_t cidx,
+                                 JaggedRAcc32<scalar_t, 2> pts) {
+            sampleTrilinearWithGradBackwardCallback<DeviceTag, scalar_t, JaggedRAcc32, TorchRAcc32>(
+                bidx,
+                eidx,
+                cidx,
+                pts,
+                gradOutFeaturesAcc,
+                gradOutGradFeaturesAcc,
+                batchAcc,
+                outGradAcc);
+        };
+        forEachJaggedElementChannelCUDA<scalar_t, 2>(256, outGrad.size(1), points, cb);
+    }
+
+    else if constexpr (DeviceTag == torch::kPrivateUse1) {
+        auto cb = [=] __device__(int32_t bidx,
+                                 int32_t eidx,
+                                 int32_t cidx,
+                                 JaggedRAcc32<scalar_t, 2> pts) {
+            sampleTrilinearWithGradBackwardCallback<DeviceTag, scalar_t, JaggedRAcc32, TorchRAcc32>(
+                bidx,
+                eidx,
+                cidx,
+                pts,
+                gradOutFeaturesAcc,
+                gradOutGradFeaturesAcc,
+                batchAcc,
+                outGradAcc);
+        };
+        forEachJaggedElementChannelPrivateUse1<scalar_t, 2>(outGrad.size(1), points, cb);
+    } else {
+        auto cb = [=](int32_t bidx, int32_t eidx, int32_t cidx, JaggedAcc<scalar_t, 2> pts) {
+            sampleTrilinearWithGradBackwardCallback<DeviceTag, scalar_t, JaggedAcc, TorchAcc>(
+                bidx,
+                eidx,
+                cidx,
+                pts,
+                gradOutFeaturesAcc,
+                gradOutGradFeaturesAcc,
+                batchAcc,
+                outGradAcc);
+        };
+        forEachJaggedElementChannelCPU<scalar_t, 2>(outGrad.size(1), points, cb);
+    }
+
     return outGrad.reshape(outShape);
 }
 
-template <>
+template <c10::DeviceType DeviceTag>
 torch::Tensor
-dispatchSampleGridTrilinearWithGradBackward<torch::kCUDA>(
-    const GridBatchImpl &batchHdl,
-    const JaggedTensor &points,
-    const torch::Tensor &data,
-    const torch::Tensor &gradOutFeatures,
-    const torch::Tensor &gradOutGradFeatures) {
-    return SampleGridTrilinearWithGradBackward<torch::kCUDA>(
-        batchHdl, points, data, gradOutFeatures, gradOutGradFeatures);
+dispatchSampleGridTrilinearWithGradBackward<DeviceTag>(const GridBatchImpl &batchHdl,
+                                                       const JaggedTensor &points,
+                                                       const torch::Tensor &data,
+                                                       const torch::Tensor &gradOutFeatures,
+                                                       const torch::Tensor &gradOutGradFeatures) {
+    return AT_DISPATCH_V2(points.scalar_type(),
+                          "SampleGridTrilinearWithGradBackward",
+                          AT_WRAP([&] {
+                              return SampleGridTrilinearWithGradBackward<DeviceTag, scalar_t>(
+                                  batchHdl, points, data, gradOutFeatures, gradOutGradFeatures);
+                          }),
+                          AT_EXPAND(AT_FLOATING_TYPES),
+                          c10::kHalf);
 }
 
-template <>
-torch::Tensor
-dispatchSampleGridTrilinearWithGradBackward<torch::kCPU>(const GridBatchImpl &batchHdl,
-                                                         const JaggedTensor &points,
-                                                         const torch::Tensor &data,
-                                                         const torch::Tensor &gradOutFeatures,
-                                                         const torch::Tensor &gradOutGradFeatures) {
-    return SampleGridTrilinearWithGradBackward<torch::kCPU>(
-        batchHdl, points, data, gradOutFeatures, gradOutGradFeatures);
-}
+template torch::Tensor
+dispatchSampleGridTrilinearWithGradBackward<torch::kCPU>(const GridBatchImpl &,
+                                                         const JaggedTensor &,
+                                                         const torch::Tensor &,
+                                                         const torch::Tensor &,
+                                                         const torch::Tensor &);
+
+template torch::Tensor
+dispatchSampleGridTrilinearWithGradBackward<torch::kCUDA>(const GridBatchImpl &,
+                                                          const JaggedTensor &,
+                                                          const torch::Tensor &,
+                                                          const torch::Tensor &,
+                                                          const torch::Tensor &);
+
+template torch::Tensor
+dispatchSampleGridTrilinearWithGradBackward<torch::kPrivateUse1>(const GridBatchImpl &,
+                                                                 const JaggedTensor &,
+                                                                 const torch::Tensor &,
+                                                                 const torch::Tensor &,
+                                                                 const torch::Tensor &);
 
 } // namespace ops
 } // namespace detail

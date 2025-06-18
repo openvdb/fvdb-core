@@ -1667,7 +1667,7 @@ GridBatchImpl::dual(const bool excludeBorder) {
     std::vector<nanovdb::Vec3d> voxS, voxO;
     gridVoxelSizesAndOrigins(voxS, voxO);
 
-    auto dualGridBatchHdl = FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
+    auto dualGridBatchHdl = FVDB_DISPATCH_KERNEL(device(), [&]() {
         return detail::ops::dispatchBuildPaddedGrid<DeviceTag>(*this, 0, 1, excludeBorder);
     });
 
