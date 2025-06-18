@@ -111,6 +111,254 @@ class TestBasicOps(unittest.TestCase):
 
         self.assertTrue(torch.equal(merged_grid_batch.ijk.jdata, expected_grid.ijk.jdata))
 
+    @parameterized.expand(["cpu", "cuda"])
+    def test_prune_grids(self, device):
+        def get_point_list(npc: list, device: torch.device | str) -> list[torch.Tensor]:
+            batch_size = len(npc)
+            plist = []
+            for i in range(batch_size):
+                ni = npc[i]
+                plist.append(torch.randn((ni, 3), dtype=torch.float32, device=device, requires_grad=False))
+            return plist
+
+        batch_size = 2
+        vxl_size = 0.4
+        npc = torch.randint(low=0, high=1000, size=(batch_size,), device=device).tolist()
+        plist = get_point_list(npc, device)
+        pc_jagged = fvdb.JaggedTensor(plist)
+        grid_batch = fvdb.gridbatch_from_points(pc_jagged, voxel_sizes=[[vxl_size] * 3] * batch_size)
+
+        mask = grid_batch.jagged_like(torch.rand(grid_batch.total_voxels, device=device) > 0.5)
+
+        pruned_grid_batch = grid_batch.pruned_grid(mask)
+        expected_ijk = []
+        for i in range(batch_size):
+            ijk_i = grid_batch.ijk[i].jdata
+            ijk_pruned = ijk_i[mask[i].jdata]
+            expected_ijk.append(ijk_pruned)
+        expected_ijk = fvdb.JaggedTensor(expected_ijk)
+
+        expected_grid = gridbatch_from_ijk(expected_ijk, voxel_sizes=grid_batch.voxel_sizes, origins=grid_batch.origins)
+
+        self.assertTrue(torch.equal(pruned_grid_batch.ijk.jdata, expected_grid.ijk.jdata))
+
+    @parameterized.expand(["cpu", "cuda"])
+    def test_prune_grids_empty(self, device):
+        def get_point_list(npc: list, device: torch.device | str) -> list[torch.Tensor]:
+            batch_size = len(npc)
+            plist = []
+            for i in range(batch_size):
+                ni = npc[i]
+                plist.append(torch.randn((ni, 3), dtype=torch.float32, device=device, requires_grad=False))
+            return plist
+
+        batch_size = 2
+        vxl_size = 0.4
+        npc = torch.randint(low=0, high=1000, size=(batch_size,), device=device).tolist()
+        plist = get_point_list(npc, device)
+        pc_jagged = fvdb.JaggedTensor(plist)
+        grid_batch = fvdb.gridbatch_from_points(pc_jagged, voxel_sizes=[[vxl_size] * 3] * batch_size)
+
+        # Case 1: one tensor is empty
+        mask = grid_batch.jagged_like(torch.rand(grid_batch.total_voxels, device=device) > 0.5)
+        mask[0].jdata = torch.zeros_like(mask[0].jdata, dtype=torch.bool)
+        pruned_grid_batch = grid_batch.pruned_grid(mask)
+        expected_ijk = []
+        for i in range(batch_size):
+            ijk_i = grid_batch.ijk[i].jdata
+            ijk_pruned = ijk_i[mask[i].jdata]
+            expected_ijk.append(ijk_pruned)
+        expected_ijk = fvdb.JaggedTensor(expected_ijk)
+        expected_grid = gridbatch_from_ijk(expected_ijk, voxel_sizes=grid_batch.voxel_sizes, origins=grid_batch.origins)
+        self.assertTrue(torch.equal(pruned_grid_batch.ijk.jdata, expected_grid.ijk.jdata))
+
+        # Case 2: the other tensor is empty
+        mask = grid_batch.jagged_like(torch.rand(grid_batch.total_voxels, device=device) > 0.5)
+        mask[1].jdata = torch.zeros_like(mask[1].jdata, dtype=torch.bool)
+        pruned_grid_batch = grid_batch.pruned_grid(mask)
+        expected_ijk = []
+        for i in range(batch_size):
+            ijk_i = grid_batch.ijk[i].jdata
+            ijk_pruned = ijk_i[mask[i].jdata]
+            expected_ijk.append(ijk_pruned)
+        expected_ijk = fvdb.JaggedTensor(expected_ijk)
+        expected_grid = gridbatch_from_ijk(expected_ijk, voxel_sizes=grid_batch.voxel_sizes, origins=grid_batch.origins)
+        self.assertTrue(torch.equal(pruned_grid_batch.ijk.jdata, expected_grid.ijk.jdata))
+
+        # Case 3: both tensors are empty
+        mask = grid_batch.jagged_like(torch.zeros(grid_batch.total_voxels, device=device, dtype=torch.bool))
+        pruned_grid_batch = grid_batch.pruned_grid(mask)
+        expected_ijk = []
+        for i in range(batch_size):
+            ijk_i = grid_batch.ijk[i].jdata
+            ijk_pruned = ijk_i[mask[i].jdata]
+            expected_ijk.append(ijk_pruned)
+        expected_ijk = fvdb.JaggedTensor(expected_ijk)
+        expected_grid = gridbatch_from_ijk(expected_ijk, voxel_sizes=grid_batch.voxel_sizes, origins=grid_batch.origins)
+        self.assertTrue(torch.equal(pruned_grid_batch.ijk.jdata, expected_grid.ijk.jdata))
+
+    @parameterized.expand(["cpu", "cuda"])
+    def test_inject_grids(self, device):
+        def get_point_list(npc: list, device: torch.device | str) -> list[torch.Tensor]:
+            batch_size = len(npc)
+            plist = []
+            for i in range(batch_size):
+                ni = npc[i]
+                plist.append(torch.randn((ni, 3), dtype=torch.float32, device=device, requires_grad=False))
+            return plist
+
+        def build_random_gridbatch(batch_size, voxel_size):
+            npc = torch.randint(low=0, high=1000, size=(batch_size,), device=device).tolist()
+            plist = get_point_list(npc, device)
+            pc_jagged = fvdb.JaggedTensor(plist)
+            return fvdb.gridbatch_from_points(pc_jagged, voxel_sizes=[[voxel_size] * 3] * batch_size)
+
+        batch_size = 2
+        vxl_size = 0.4
+
+        grid_batch1 = build_random_gridbatch(batch_size, vxl_size)
+        grid_batch2 = build_random_gridbatch(batch_size, vxl_size)
+        grid_batch3 = build_random_gridbatch(batch_size, vxl_size)
+        grid_batch12 = grid_batch1.merged_grid(grid_batch2)
+        grid_batch23 = grid_batch2.merged_grid(grid_batch3)
+
+        sidecar1 = grid_batch1.jagged_like(torch.rand(grid_batch1.total_voxels, device=device))
+        sidecar2 = grid_batch2.jagged_like(torch.rand(grid_batch2.total_voxels, device=device))
+        sidecar3 = grid_batch3.jagged_like(torch.rand(grid_batch3.total_voxels, device=device))
+
+        sidecar12 = grid_batch12.jagged_like(torch.zeros(grid_batch12.total_voxels, device=device))
+        sidecar23 = grid_batch23.jagged_like(torch.zeros(grid_batch23.total_voxels, device=device))
+        sidecar23_ref = grid_batch23.jagged_like(torch.zeros(grid_batch23.total_voxels, device=device))
+
+        # def inject_legacy(src_grid: GridBatch, dst_grid: GridBatch, src: JaggedTensor, dst: JaggedTensor):
+        #     src_ijk = src_grid.ijk
+        #     dst_idx = dst_grid.ijk_to_index(src_ijk)
+        #     mask = dst_idx.jagged_like(dst_idx.jdata >= 0)
+        #     dst_idx.jdata = dst_idx.jdata[mask.jdata]
+        #     dst_ijk = src_ijk.jagged_like(src_ijk.jdata[mask.jdata])
+        #     src_idx = src_grid.ijk_to_index(dst_ijk)
+        #     dst.jdata[dst_idx.jdata] = src.jdata[src_idx.jdata]
+
+        grid_batch2.inject_to(grid_batch23, sidecar2, sidecar23_ref)
+        # inject_legacy(grid_batch2, grid_batch23, sidecar2, sidecar23_ref)
+        grid_batch23.inject_from(grid_batch3, sidecar3, sidecar23_ref)
+        # inject_legacy(grid_batch3, grid_batch23, sidecar3, sidecar23_ref)
+
+        grid_batch1.inject_to(grid_batch12, sidecar1, sidecar12)
+        grid_batch12.inject_from(grid_batch2, sidecar2, sidecar12)
+        grid_batch12.inject_to(grid_batch23, sidecar12, sidecar23)
+        self.assertFalse(torch.equal(sidecar23.jdata, sidecar23_ref.jdata))
+        grid_batch23.inject_from(grid_batch3, sidecar3, sidecar23)
+        self.assertTrue(torch.equal(sidecar23.jdata, sidecar23_ref.jdata))
+
+    @parameterized.expand(["cpu", "cuda"])
+    def test_inject_grids_multidim(self, device):
+        def get_point_list(npc: list, device: torch.device | str) -> list[torch.Tensor]:
+            batch_size = len(npc)
+            plist = []
+            for i in range(batch_size):
+                ni = npc[i]
+                plist.append(torch.randn((ni, 3), dtype=torch.float32, device=device, requires_grad=False))
+            return plist
+
+        def build_random_gridbatch(batch_size, voxel_size):
+            npc = torch.randint(low=0, high=1000, size=(batch_size,), device=device).tolist()
+            plist = get_point_list(npc, device)
+            pc_jagged = fvdb.JaggedTensor(plist)
+            return fvdb.gridbatch_from_points(pc_jagged, voxel_sizes=[[voxel_size] * 3] * batch_size)
+
+        batch_size = 2
+        vxl_size = 0.4
+
+        grid_batch1 = build_random_gridbatch(batch_size, vxl_size)
+        grid_batch2 = build_random_gridbatch(batch_size, vxl_size)
+        grid_batch3 = build_random_gridbatch(batch_size, vxl_size)
+        grid_batch12 = grid_batch1.merged_grid(grid_batch2)
+        grid_batch23 = grid_batch2.merged_grid(grid_batch3)
+
+        sidecar1 = grid_batch1.jagged_like(torch.rand(grid_batch1.total_voxels, 3, device=device))
+        sidecar2 = grid_batch2.jagged_like(torch.rand(grid_batch2.total_voxels, 3, device=device))
+        sidecar3 = grid_batch3.jagged_like(torch.rand(grid_batch3.total_voxels, 3, device=device))
+
+        sidecar12 = grid_batch12.jagged_like(torch.zeros(grid_batch12.total_voxels, 3, device=device))
+        sidecar23 = grid_batch23.jagged_like(torch.zeros(grid_batch23.total_voxels, 3, device=device))
+        sidecar23_ref = grid_batch23.jagged_like(torch.zeros(grid_batch23.total_voxels, 3, device=device))
+
+        # def inject_legacy(src_grid: GridBatch, dst_grid: GridBatch, src: JaggedTensor, dst: JaggedTensor):
+        #     src_ijk = src_grid.ijk
+        #     dst_idx = dst_grid.ijk_to_index(src_ijk)
+        #     mask = dst_idx.jagged_like(dst_idx.jdata >= 0)
+        #     dst_idx.jdata = dst_idx.jdata[mask.jdata]
+        #     dst_ijk = src_ijk.jagged_like(src_ijk.jdata[mask.jdata])
+        #     src_idx = src_grid.ijk_to_index(dst_ijk)
+        #     dst.jdata[dst_idx.jdata] = src.jdata[src_idx.jdata]
+
+        grid_batch2.inject_to(grid_batch23, sidecar2, sidecar23_ref)
+        # inject_legacy(grid_batch2, grid_batch23, sidecar2, sidecar23_ref)
+        grid_batch23.inject_from(grid_batch3, sidecar3, sidecar23_ref)
+        # inject_legacy(grid_batch3, grid_batch23, sidecar3, sidecar23_ref)
+
+        grid_batch1.inject_to(grid_batch12, sidecar1, sidecar12)
+        grid_batch12.inject_from(grid_batch2, sidecar2, sidecar12)
+        grid_batch12.inject_to(grid_batch23, sidecar12, sidecar23)
+        self.assertFalse(torch.equal(sidecar23.jdata, sidecar23_ref.jdata))
+        grid_batch23.inject_from(grid_batch3, sidecar3, sidecar23)
+        self.assertTrue(torch.equal(sidecar23.jdata, sidecar23_ref.jdata))
+
+    @parameterized.expand(["cpu", "cuda"])
+    def test_inject_grids_multidim2(self, device):
+        def get_point_list(npc: list, device: torch.device | str) -> list[torch.Tensor]:
+            batch_size = len(npc)
+            plist = []
+            for i in range(batch_size):
+                ni = npc[i]
+                plist.append(torch.randn((ni, 3), dtype=torch.float32, device=device, requires_grad=False))
+            return plist
+
+        def build_random_gridbatch(batch_size, voxel_size):
+            npc = torch.randint(low=0, high=1000, size=(batch_size,), device=device).tolist()
+            plist = get_point_list(npc, device)
+            pc_jagged = fvdb.JaggedTensor(plist)
+            return fvdb.gridbatch_from_points(pc_jagged, voxel_sizes=[[voxel_size] * 3] * batch_size)
+
+        batch_size = 2
+        vxl_size = 0.4
+
+        grid_batch1 = build_random_gridbatch(batch_size, vxl_size)
+        grid_batch2 = build_random_gridbatch(batch_size, vxl_size)
+        grid_batch3 = build_random_gridbatch(batch_size, vxl_size)
+        grid_batch12 = grid_batch1.merged_grid(grid_batch2)
+        grid_batch23 = grid_batch2.merged_grid(grid_batch3)
+
+        sidecar1 = grid_batch1.jagged_like(torch.rand(grid_batch1.total_voxels, 3, 2, device=device))
+        sidecar2 = grid_batch2.jagged_like(torch.rand(grid_batch2.total_voxels, 3, 2, device=device))
+        sidecar3 = grid_batch3.jagged_like(torch.rand(grid_batch3.total_voxels, 3, 2, device=device))
+
+        sidecar12 = grid_batch12.jagged_like(torch.zeros(grid_batch12.total_voxels, 3, 2, device=device))
+        sidecar23 = grid_batch23.jagged_like(torch.zeros(grid_batch23.total_voxels, 3, 2, device=device))
+        sidecar23_ref = grid_batch23.jagged_like(torch.zeros(grid_batch23.total_voxels, 3, 2, device=device))
+
+        # def inject_legacy(src_grid: GridBatch, dst_grid: GridBatch, src: JaggedTensor, dst: JaggedTensor):
+        #     src_ijk = src_grid.ijk
+        #     dst_idx = dst_grid.ijk_to_index(src_ijk)
+        #     mask = dst_idx.jagged_like(dst_idx.jdata >= 0)
+        #     dst_idx.jdata = dst_idx.jdata[mask.jdata]
+        #     dst_ijk = src_ijk.jagged_like(src_ijk.jdata[mask.jdata])
+        #     src_idx = src_grid.ijk_to_index(dst_ijk)
+        #     dst.jdata[dst_idx.jdata] = src.jdata[src_idx.jdata]
+
+        grid_batch2.inject_to(grid_batch23, sidecar2, sidecar23_ref)
+        # inject_legacy(grid_batch2, grid_batch23, sidecar2, sidecar23_ref)
+        grid_batch23.inject_from(grid_batch3, sidecar3, sidecar23_ref)
+        # inject_legacy(grid_batch3, grid_batch23, sidecar3, sidecar23_ref)
+
+        grid_batch1.inject_to(grid_batch12, sidecar1, sidecar12)
+        grid_batch12.inject_from(grid_batch2, sidecar2, sidecar12)
+        grid_batch12.inject_to(grid_batch23, sidecar12, sidecar23)
+        self.assertFalse(torch.equal(sidecar23.jdata, sidecar23_ref.jdata))
+        grid_batch23.inject_from(grid_batch3, sidecar3, sidecar23)
+        self.assertTrue(torch.equal(sidecar23.jdata, sidecar23_ref.jdata))
+
     @parameterized.expand(all_device_dtype_combos)
     def test_subdivide_1x_with_mask(self, device, dtype):
         def get_point_list(npc: list, device: torch.device | str) -> list[torch.Tensor]:
@@ -393,7 +641,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertTrue(torch.allclose(grid_pts.grad, pred_grad, atol=dtype_to_atol(dtype)))
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_aaaadual_of_dual_is_primal(self, device, dtype):
+    def test_dual_of_dual_is_primal(self, device, dtype):
         torch.random.manual_seed(0)
         vox_size = np.random.rand() * 0.1 + 0.05
         vox_origin = torch.rand(3).to(dtype).to(device)

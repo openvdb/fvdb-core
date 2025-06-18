@@ -569,6 +569,16 @@ class GridBatchImpl : public torch::CustomClassHolder {
 
     c10::intrusive_ptr<GridBatchImpl> merge(c10::intrusive_ptr<GridBatchImpl> other);
 
+    c10::intrusive_ptr<GridBatchImpl> prune(const JaggedTensor &mask);
+
+    void injectTo(c10::intrusive_ptr<GridBatchImpl> dstGridBatch,
+                  const JaggedTensor &src,
+                  JaggedTensor &dst);
+
+    void injectFrom(c10::intrusive_ptr<GridBatchImpl> srcGridBatch,
+                    const JaggedTensor &src,
+                    JaggedTensor &dst);
+
     c10::intrusive_ptr<GridBatchImpl> convolutionOutput(const nanovdb::Coord kernelSize,
                                                         const nanovdb::Coord stride);
 

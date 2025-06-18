@@ -606,6 +606,24 @@ struct GridBatch : torch::CustomClassHolder {
     /// @return A GridBatch representing the union of both grid batches
     GridBatch merged_grid(const GridBatch &other) const;
 
+    /// @brief Return a batch of grids representing the pruned version of this batch of grids with a
+    /// mask
+    /// @param mask Boolean mask of voxels to retain
+    /// @return A GridBatch representing pruning of the grids down to the retained voxels
+    GridBatch pruned_grid(const JaggedTensor &mask) const;
+
+    /// @brief Injects sidecar data from this gridbatch to the sidecar of a destination gridbatch
+    /// @param dstGrid Gridbatch to inject to
+    /// @param src Sidecar (of this gridbatch) to inject from
+    /// @param dst Sidecar (of the desination gridbatch) to inject into
+    void inject_to(const GridBatch &dstGrid, const JaggedTensor &src, JaggedTensor &dst) const;
+
+    /// @brief Injects sidecar data from the sidecar of the provided gridbatch, into this gridbatch
+    /// @param srcGrid Gridbatch to inject from
+    /// @param src Sidecar (of the source gridbatch) to inject from
+    /// @param dst Sidecar (of this gridbatch) to inject into
+    void inject_from(const GridBatch &srcGrid, const JaggedTensor &src, JaggedTensor &dst) const;
+
     /// @brief Return a batch of grids representing the clipped version of this batch of grids and
     /// corresponding features.
     /// @param features A JaggedTensor of shape [B, -1, *] containing features associated with this

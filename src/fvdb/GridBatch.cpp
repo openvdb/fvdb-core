@@ -713,6 +713,23 @@ GridBatch::merged_grid(const GridBatch &other) const {
     return result;
 }
 
+GridBatch
+GridBatch::pruned_grid(const JaggedTensor &mask) const {
+    GridBatch result;
+    result.mImpl = mImpl->prune(mask);
+    return result;
+}
+
+void
+GridBatch::inject_to(const GridBatch &dstGrid, const JaggedTensor &src, JaggedTensor &dst) const {
+    mImpl->injectTo(dstGrid.mImpl, src, dst);
+}
+
+void
+GridBatch::inject_from(const GridBatch &srcGrid, const JaggedTensor &src, JaggedTensor &dst) const {
+    mImpl->injectFrom(srcGrid.mImpl, src, dst);
+}
+
 std::vector<JaggedTensor>
 GridBatch::voxels_along_rays(const JaggedTensor &ray_origins,
                              const JaggedTensor &ray_directions,
