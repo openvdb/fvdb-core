@@ -1,31 +1,45 @@
-// File location: openvdb/fvdb/.devcontainer/devcontainer.json
 {
-    // A friendly name for the container configuration shown in VS Code
     "name": "FVDB Development Environment",
-
-    // Tells VS Code to use Docker Compose to define and run the environment.
-    // The path is relative to this devcontainer.json file.
     "dockerComposeFile": [
-        "../docker-compose.yml" // Points to openvdb/fvdb/docker-compose.yml
+        "../docker-compose.yml"
     ],
-
-    // The name of the specific service within the docker-compose.yml file
-    // that VS Code should connect to.
     "service": "fvdb-dev",
-
-    // Specifies the default directory VS Code should open *inside* the container.
-    // Since the docker-compose.yml mounts the host's `openvdb/` directory to `/openvdb`
-    // in the container, the fvdb code resides at `/openvdb/fvdb`.
     "workspaceFolder": "/openvdb/fvdb",
+
+    "remoteUser": "coder",
+
+    "features": {
+        "ghcr.io/devcontainers/features/common-utils:2": {
+            "username": "coder",
+            "uid": "1001",
+            "gid": "1001",
+            "installSudo": true,
+            "upgradePackages": true
+        }
+    },
+
+    // Single source of truth for creating the dev environment.
+    // We use 'bash -i -c' to ensure the shell is interactive, which properly
+    // sources the .bashrc and activates conda before running the command.
+    "postCreateCommand": "bash -i -c 'conda init bash && conda env create -f /openvdb/fvdb/env/dev_environment.yml && conda clean -afy && echo \"conda activate fvdb\" >> ~/.bashrc'",
+
+    // This runs after you connect, good for user-specific setup like SSH.
+    "postAttachCommand": "rm -rf ~/.ssh && ln -sfn /tmp/.ssh-localhost ~/.ssh",
+
+    // This mounts the host's .ssh directory to a generic location inside the container.
+    // We will then symlink it in the postCreateCommand.
+    "mounts": [
+        "source=${localEnv:HOME}/.ssh,target=/tmp/.ssh-localhost,type=bind,readonly"
+    ],
 
     // Extensions to install inside the container's VS Code server
     "customizations": {
         "vscode": {
             "extensions": [
-                "ms-python.python", // Python language support
-                "ms-vscode.cpptools", // C/C++ language support
-                "ms-vscode.cmake-tools", // CMake integration
-                "ms-azuretools.vscode-docker" // Docker integration (useful for managing containers)
+                "ms-python.python",
+                "ms-vscode.cpptools",
+                "ms-vscode.cmake-tools",
+                "ms-azuretools.vscode-docker"
             ],
             "settings": {
                 "python.defaultInterpreterPath": "/opt/conda/envs/fvdb/bin/python"
@@ -33,9 +47,6 @@
         }
     },
 
-    // Optional: What to do when the VS Code window is closed.
-    // "stopCompose" will stop the container(s) defined in the compose file.
-    // "none" would leave them running.
     "shutdownAction": "stopCompose"
 }
 

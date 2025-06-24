@@ -1,19 +1,35 @@
-FROM condaforge/miniforge3:24.11.3-2
+# Start from the official NVIDIA CUDA development image.
+# This matches fvdb's requirement for CUDA 12.0 and provides a full Ubuntu 22.04 OS.
+FROM nvidia/cuda:12.0.1-devel-ubuntu22.04
 
-ARG MODE=dev
-RUN echo "Building fVDB container in $MODE mode"
+# Set environment variables to prevent interactive prompts during installation.
+ENV DEBIAN_FRONTEND=noninteractive
 
-# used for cross-compilation in docker build
-ENV FORCE_CUDA=1
+# Install basic system dependencies and developer tools.
+# sudo is critical for the devcontainer common-utils feature to work.
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    git \
+    sudo \
+    && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /openvdb
+# Delete the non-root user created by the base image.
+RUN if grep ubuntu:x:1000:1000 /etc/passwd >/dev/null; then userdel -f -r ubuntu; fi
 
-# force this CUDA version to be used to build the docker container because `docker build` does not
-# expose the GPU to the docker build process for it to be detected
-ENV CONDA_OVERRIDE_CUDA=12.0
-# copy env/dev_environment.yml to /tmp/
-COPY fvdb/env/dev_environment.yml /tmp/
-RUN  conda env create -f /tmp/dev_environment.yml
+# Download and install Miniforge (Conda).
+# This installs Conda into a standard location.
+RUN wget \
+    "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh" \
+    -O /tmp/miniforge.sh && \
+    bash /tmp/miniforge.sh -b -p /opt/conda && \
+    rm /tmp/miniforge.sh
 
-RUN conda init
-RUN echo "conda activate fvdb" >> ~/.bashrc
+# Add Conda to the system's PATH for all users and initialize it.
+# This ensures that 'conda' is available in shells
+ENV PATH="/opt/conda/bin:${PATH}"
+#RUN conda init bash
+
+# IMPORTANT: We do NOT add a USER, CMD, or ENTRYPOINT here.
+# User creation will be handled by the 'common-utils' feature.
+# The container lifecycle (CMD/ENTRYPOINT) will be handled by Docker Compose.
