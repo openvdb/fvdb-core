@@ -83,7 +83,8 @@ function(ConfigureTest CMAKE_TEST_NAME)
     "--extended-lambda"
     "-Xfatbin=-compress-all"
     "-Werror=all-warnings"
-    "Xcompiler=-Wall,-Werror"
+    "-Xcompiler=-Wall,-Werror"
+    "-diag-suppress=3189" # Suppress warnings about module keyword in PyTorch code
     >)
 
   target_compile_definitions(${CMAKE_TEST_NAME}_obj PRIVATE
@@ -131,6 +132,8 @@ endfunction()
 ConfigureTest(ExampleTest "ExampleTest.cpp")
 
 # Configure unit tests
+ConfigureTest(JaggedTensorTest "JaggedTensorTest.cpp")
+ConfigureTest(PackedJaggedAccessorTest "PackedJaggedAccessorTest.cu")
 ConfigureTest(GaussianComputeSparseInfoTest "GaussianComputeSparseInfoTest.cpp")
 ConfigureTest(GaussianTileIntersectionTest "GaussianTileIntersectionTest.cpp")
 ConfigureTest(GaussianComputeNanInfMaskTest "GaussianComputeNanInfMaskTest.cpp")

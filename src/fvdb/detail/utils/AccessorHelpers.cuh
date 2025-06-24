@@ -36,6 +36,12 @@ using TorchAcc = torch::TensorAccessor<ScalarType, DIMS>;
 template <typename ScalarType, int32_t DIMS>
 using JaggedRAcc32 = fvdb::PackedJaggedAccessor32<ScalarType, DIMS, torch::RestrictPtrTraits>;
 
+/// @brief Shorthand for fvdb::PackedJaggedAccessor64 with RestrictPtrTraits
+/// @tparam ScalarType The type of the tensor
+/// @tparam DIMS The number of dimensions of the tensor
+template <typename ScalarType, int32_t DIMS>
+using JaggedRAcc64 = fvdb::PackedJaggedAccessor64<ScalarType, DIMS, torch::RestrictPtrTraits>;
+
 /// @brief Shorthand for fvdb::JaggedAccessor
 /// @tparam ScalarType The type of the tensor
 /// @tparam DIMS The number of dimensions of the tensor
