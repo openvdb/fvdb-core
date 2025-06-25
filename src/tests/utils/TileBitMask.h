@@ -54,32 +54,32 @@ template <typename T = std::uint64_t> class TileBitMask {
         mBitMask[word(bit)] |= (T{1} << bitInWord(bit));
     }
 
-    /// @brief Set the bit of the tile containig the given linear pixel index within an image
-    /// numTilesU tiles wide. (nonatomic)
+    /// @brief Set the bit of the tile containing the given linear pixel index within an image
+    /// numTilesW tiles wide. (nonatomic)
     /// @param linearPixel The linear index of the pixel within the image.
-    /// @param numTilesU The number of tiles in the U direction.
+    /// @param numTilesW The number of tiles in the U direction.
     void
-    setBit(std::size_t linearPixel, std::size_t numTilesU) {
-        auto pixelU     = linearPixel % (mTileSize * numTilesU);
-        auto pixelV     = linearPixel / (mTileSize * numTilesU);
-        auto tilePixelU = pixelU % mTileSize;
-        auto tilePixelV = pixelV % mTileSize;
-        auto tilePixel  = tilePixelV * mTileSize + tilePixelU;
+    setBit(std::size_t linearPixel, std::size_t numTilesW) {
+        auto pixelRow     = linearPixel / (mTileSize * numTilesW);
+        auto pixelCol     = linearPixel % (mTileSize * numTilesW);
+        auto tilePixelRow = pixelRow % mTileSize;
+        auto tilePixelCol = pixelCol % mTileSize;
+        auto tilePixel    = tilePixelRow * mTileSize + tilePixelCol;
         setBit(tilePixel);
     }
 
-    /// @brief Get a vector of the UV coordinates of the set bits in the bitmask.
-    /// @return A vector of pairs of UV coordinates of the set bits.
+    /// @brief Get a vector of the (row, col) coordinates of the set bits in the bitmask.
+    /// @return A vector of pairs of (row, col) coordinates of the set bits.
     std::vector<std::pair<std::size_t, std::size_t>>
-    getUVs() const {
-        std::vector<std::pair<std::size_t, std::size_t>> uvs;
+    getSetBitCoordinates() const {
+        std::vector<std::pair<std::size_t, std::size_t>> coordinates;
         for (int i = 0; i < mTileSize * mTileSize; ++i) {
             if (isBitSet(i)) {
-                uvs.emplace_back(
-                    std::pair<std::size_t, std::size_t>({i % mTileSize, i / mTileSize}));
+                coordinates.emplace_back(
+                    std::pair<std::size_t, std::size_t>({i / mTileSize, i % mTileSize}));
             }
         }
-        return uvs;
+        return coordinates;
     }
 
     /// @brief Const iterator to the beginning of the bitmask.

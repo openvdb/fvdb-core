@@ -67,7 +67,6 @@ function(ConfigureTest CMAKE_TEST_NAME)
   target_include_directories(${CMAKE_TEST_NAME}_obj PRIVATE
     ${CMAKE_SOURCE_DIR}/src # Include src for finding <tests/utils/...>
     $<TARGET_PROPERTY:fvdb,INTERFACE_INCLUDE_DIRECTORIES> # Get includes exposed by fvdb
-    # $<TARGET_PROPERTY:fvdb_test_utils,INTERFACE_INCLUDE_DIRECTORIES> # No longer needed with PRIVATE includes
     $<TARGET_PROPERTY:GTest::gtest,INTERFACE_INCLUDE_DIRECTORIES> # Get includes exposed by GTest::gtest
     $<TARGET_PROPERTY:GTest::gtest_main,INTERFACE_INCLUDE_DIRECTORIES> # Get includes exposed by GTest::gtest_main
   )
@@ -104,7 +103,6 @@ function(ConfigureTest CMAKE_TEST_NAME)
     ${CMAKE_TEST_NAME}
     fvdb
     fvdb_test_utils # Link test executable against test utils library
-    # Dependencies like Torch and PNG are now linked transitively via fvdb_test_utils
     GTest::gtest
     GTest::gtest_main
     $<TARGET_NAME_IF_EXISTS:conda_env>
@@ -138,7 +136,6 @@ ConfigureTest(GaussianComputeSparseInfoTest "GaussianComputeSparseInfoTest.cpp")
 ConfigureTest(GaussianTileIntersectionTest "GaussianTileIntersectionTest.cpp")
 ConfigureTest(GaussianComputeNanInfMaskTest "GaussianComputeNanInfMaskTest.cpp")
 ConfigureTest(GaussianRasterizeBackwardTest "GaussianRasterizeBackwardTest.cpp")
-# Removed utils/ImageUtils.cpp from this call
 ConfigureTest(GaussianRasterizeForwardTest "GaussianRasterizeForwardTest.cpp")
 ConfigureTest(GaussianSphericalHarmonicsForwardTest "GaussianSphericalHarmonicsForwardTest.cpp")
 ConfigureTest(GaussianSphericalHarmonicsBackwardTest "GaussianSphericalHarmonicsBackwardTest.cpp")
