@@ -49,17 +49,17 @@ expectedTensors(fvdb::JaggedTensor const &uvsCPU,
         for (int pixelOrdinal = uvsCPU.joffsets()[image].item<std::int64_t>();
              pixelOrdinal < uvsCPU.joffsets()[image + 1].item<std::int64_t>();
              pixelOrdinal++) {
-            auto pixelU = uvsCPUAccessor[pixelOrdinal][0];
-            auto pixelV = uvsCPUAccessor[pixelOrdinal][1];
+            auto pixelRow = uvsCPUAccessor[pixelOrdinal][0];
+            auto pixelCol = uvsCPUAccessor[pixelOrdinal][1];
 
-            auto tileU = pixelU / tileSize;
-            auto tileV = pixelV / tileSize;
+            auto tileRow = pixelRow / tileSize;
+            auto tileCol = pixelCol / tileSize;
 
-            auto tileId  = image * numTiles + tileV * numTilesPerAxis + tileU;
-            auto pixelId = image * numPixels + pixelV * numPixelsPerAxis + pixelU;
+            auto tileId  = image * numTiles + tileRow * numTilesPerAxis + tileCol;
+            auto pixelId = image * numPixels + pixelRow * numPixelsPerAxis + pixelCol;
 
             activeTiles.insert(tileId);
-            activeTileMaskAccessor[image][tileV][tileU] = true;
+            activeTileMaskAccessor[image][tileRow][tileCol] = true;
             tilePixelIds[tileId].push_back(pixelOrdinal);
             tilePixelKeys[tileId].push_back(pixelId);
         }
@@ -140,9 +140,7 @@ template <typename CoordType> struct ComputeSparseInfo : public ::testing::Test 
     ComputeSparseInfo()
         : mNumImages(0), mTileSize(0), mNumTilesPerAxis(0), mNumTiles(0), mNumPixelsPerAxis(0),
           mNumActivePixels(0), mNumWordsPerTile(0) {
-        // seed torch random number generator so we get consistent results
-        //
-        torch::manual_seed(0);
+        torch::manual_seed(0); // seed torch random number generator so we get consistent results
     }
 
     void
@@ -173,8 +171,8 @@ template <typename CoordType> struct ComputeSparseInfo : public ::testing::Test 
         auto uvsCPUAccessor  = uvsCPU.accessor<CoordType, 2>();
 
         for (std::int64_t i = 0; i < numPixels; i += pixelStride) {
-            uvsCPUAccessor[i / pixelStride][0] = i % mNumPixelsPerAxis;
-            uvsCPUAccessor[i / pixelStride][1] = i / mNumPixelsPerAxis;
+            uvsCPUAccessor[i / pixelStride][0] = i / mNumPixelsPerAxis;
+            uvsCPUAccessor[i / pixelStride][1] = i % mNumPixelsPerAxis;
         }
 
         std::vector<torch::Tensor> uvs(mNumImages, uvsCPU.clone());
@@ -342,8 +340,6 @@ TYPED_TEST(ComputeSparseInfo, StridedUVs) {
     for (auto const &[name, config]: configs) {
         fvdb::test::printSubtestPrefix(name);
         this->testStridedUVs(config[0], config[1], config[2], config[3], config[4]);
-        if (not testing::Test::HasFailure()) {
-            fvdb::test::printGreenOK();
-        }
+        fvdb::test::printStatus();
     }
 }

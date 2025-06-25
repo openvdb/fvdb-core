@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
@@ -112,22 +113,20 @@ computeTileMask(const fvdb::JaggedRAcc32<CoordType, 2> pixelCoords,
         auto const batchId = pixelCoords.batchIdx(pixelId);
 
         // Can't guarantee contiguity so can't do vectorized loads in general here
-        const CoordType pixelCoordU = pixelCoords.data()[pixelId][0];
-        const CoordType pixelCoordV = pixelCoords.data()[pixelId][1];
+        const CoordType pixelRow = pixelCoords.data()[pixelId][0];
+        const CoordType pixelCol = pixelCoords.data()[pixelId][1];
 
-        const int32_t tileCoordU = pixelCoordU / tileSideLength;
-        const int32_t tileCoordV = pixelCoordV / tileSideLength;
+        const int32_t tileRow = pixelRow / tileSideLength;
+        const int32_t tileCol = pixelCol / tileSideLength;
 
         // Note this assumes all images are the same size
-        const int64_t tileId =
-            tileCoordU + tileCoordV * numTilesW + batchId * numTilesW * numTilesH;
+        const int64_t tileId = batchId * numTilesW * numTilesH + tileRow * numTilesW + tileCol;
 
         // Assume contiguous because we're allocating this tensor
         outTileMask[tileId] = true;
 
-        // Note we could fit this into a 32-bit int if we wanted to save memory
         const int32_t pixelIdInTile =
-            (pixelCoordU % tileSideLength) + (pixelCoordV % tileSideLength) * tileSideLength;
+            (pixelRow % tileSideLength) * tileSideLength + (pixelCol % tileSideLength);
         outTileIds[pixelId] = tileId << 32 | pixelIdInTile;
     }
 }
@@ -167,24 +166,25 @@ computePerTileBitMask(
         const int tileStart = tileOrdinal > 0 ? cumPixelsPerTile[tileOrdinal - 1] : 0;
         const int tileEnd   = cumPixelsPerTile[tileOrdinal];
 
-        // tileId = batch * numTilesW * numTilesH + tileU * numTilesW + tileV
-        const int32_t batchId         = tileId / (numTilesW * numTilesH);
-        const int32_t tileU           = (tileId - batchId * numTilesW * numTilesH) % numTilesW;
-        const int32_t tileV           = (tileId - batchId * numTilesW * numTilesH) / numTilesW;
-        const int32_t tileStartPixelU = tileU * tileSideLength;
-        const int32_t tileStartPixelV = tileV * tileSideLength;
+        // tileId = batch * numTilesW * numTilesH + tileRow * numTilesW + tileCol
+        const int32_t batchId           = tileId / (numTilesW * numTilesH);
+        const int32_t tileIdInBatch     = tileId - batchId * numTilesW * numTilesH;
+        const int32_t tileRow           = tileIdInBatch / numTilesW;
+        const int32_t tileCol           = tileIdInBatch % numTilesW;
+        const int32_t tileStartPixelRow = tileRow * tileSideLength;
+        const int32_t tileStartPixelCol = tileCol * tileSideLength;
 
         // Note, we could use a warp per tile and do more in parallel.
         for (int i = tileStart; i < tileEnd; ++i) {
-            const int32_t pixelId  = unsortPerPixelTileIds[i];
-            const CoordType pixelU = pixelCoords.data()[pixelId][0];
-            const CoordType pixelV = pixelCoords.data()[pixelId][1];
+            const int32_t pixelId    = unsortPerPixelTileIds[i];
+            const CoordType pixelRow = pixelCoords.data()[pixelId][0];
+            const CoordType pixelCol = pixelCoords.data()[pixelId][1];
 
-            const int32_t pixelUInTile = pixelU - tileStartPixelU;
-            const int32_t pixelVInTile = pixelV - tileStartPixelV;
-            const int32_t bitId        = pixelUInTile + pixelVInTile * tileSideLength;
-            const int32_t wordId       = bitId / 64;
-            const int32_t bitInWord    = bitId % 64;
+            const int32_t pixelRowInTile = pixelRow - tileStartPixelRow;
+            const int32_t pixelColInTile = pixelCol - tileStartPixelCol;
+            const int32_t bitId          = pixelRowInTile * tileSideLength + pixelColInTile;
+            const int32_t wordId         = bitId / 64;
+            const int32_t bitInWord      = bitId % 64;
 
             sharedMemBitmask[threadIdx.x * numWordsPerTile + wordId] |= 1ull << bitInWord;
         }
@@ -222,9 +222,8 @@ computeSparseInfo(const int32_t tileSideLength,
                          pixelsToRender.scalar_type() == torch::kInt64,
                      "pixelsToRender must be of type int32 or int64");
 
-    auto const numImages                 = pixelsToRender.num_outer_lists();
-    auto const numPixels                 = pixelsToRender.rsize(0);
-    const int32_t numWordsPerTileBitmask = (tileSideLength * tileSideLength + 63) / 64;
+    auto const numImages = pixelsToRender.num_outer_lists();
+    auto const numPixels = pixelsToRender.rsize(0);
 
     const torch::Device device = pixelsToRender.device();
 
@@ -238,7 +237,7 @@ computeSparseInfo(const int32_t tileSideLength,
     if (numImages == 0 || numPixels == 0) {
         return {empty({0}, torch::kInt, device),
                 zeros({numImages, numTilesW, numTilesH}, torch::kBool, device),
-                empty({0, numWordsPerTileBitmask}, torch::kLong, device),
+                empty({0, numWordsPerTileBitmask(tileSideLength)}, torch::kLong, device),
                 zeros({1}, torch::kLong, device),
                 empty({0}, torch::kLong, device)};
     }
@@ -310,7 +309,7 @@ computeSparseInfo(const int32_t tileSideLength,
 
     // Compute a bitmask for each tile indicating which pixels are active in that tile
     torch::Tensor tileBitMask =
-        torch::zeros({numUniqueTiles, numWordsPerTileBitmask},
+        torch::zeros({numUniqueTiles, numWordsPerTileBitmask(tileSideLength)},
                      torch::TensorOptions().device(device).dtype(torch::kUInt64));
 
     // TODO: Check available shared memory and adjust block size accordingly
@@ -319,10 +318,10 @@ computeSparseInfo(const int32_t tileSideLength,
         computePerTileBitMask<index_t>
             <<<NUM_BLOCKS,
                DEFAULT_BLOCK_DIM,
-               DEFAULT_BLOCK_DIM * numWordsPerTileBitmask * sizeof(uint64_t),
+               DEFAULT_BLOCK_DIM * numWordsPerTileBitmask(tileSideLength) * sizeof(uint64_t),
                stream>>>(
                 numUniqueTiles,
-                numWordsPerTileBitmask,
+                numWordsPerTileBitmask(tileSideLength),
                 numTilesW,
                 numTilesH,
                 tileSideLength,

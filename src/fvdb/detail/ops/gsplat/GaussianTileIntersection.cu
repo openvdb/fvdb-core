@@ -204,7 +204,7 @@ compute_gaussian_tile_intersections(
             const int64_t depth_enc = encode_depth(depth);
 
             // For each tile this Gaussian intersects, write out an intersection tuple
-            // (camera_id, tile_id, depth, gaussian_id) packed as a uint3
+            // {(camera_id | tile_id | depth), gaussian_id} (int64_t, int32_t)
             int64_t cur_isect = (idx == 0) ? 0 : cum_tiles_per_gaussian[idx - 1];
             for (int32_t i = tile_min.y; i < tile_max.y; ++i) {
                 for (int32_t j = tile_min.x; j < tile_max.x; ++j) {

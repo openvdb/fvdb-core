@@ -4,6 +4,8 @@
 #ifndef TESTS_UTILS_TESTUTILITIES_H
 #define TESTS_UTILS_TESTUTILITIES_H
 
+#include <gtest/gtest.h>
+
 #include <iostream>
 
 namespace fvdb::test {
@@ -18,6 +20,20 @@ printSubtestPrefix(std::string const &name) {
 inline void
 printGreenOK() {
     std::cout << "\033[32mOK\033[0m" << std::endl;
+}
+
+inline void
+printRedFail() {
+    std::cout << "\033[31mFAIL\033[0m" << std::endl;
+}
+
+inline void
+printStatus() {
+    if (testing::Test::HasFailure()) {
+        printRedFail();
+    } else {
+        printGreenOK();
+    }
 }
 
 } // namespace fvdb::test

@@ -17,7 +17,7 @@ namespace fvdb::detail::ops {
 /// @details This function computes four Tensors needed for sparse gaussian splatting:
 ///   For the following, let AP be the number of active pixels and AT be the number of active tiles.
 ///   1. active_tiles: An integer Tensor with shape [AT] indicating the tile_ids
-///      corresponding to tiles which contain active pixels.
+///      corresponding to tiles (across all cameras) which contain active pixels.
 ///   2. active_tile_mask: A Boolean Tensor of shape [C, TW, TH] indicating which tiles are active,
 ///      where C is the number of cameras, TW is the number of tiles along the width dimension, and
 ///      TH is the number of tiles along the height dimension.

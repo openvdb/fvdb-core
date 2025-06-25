@@ -659,6 +659,48 @@ dispatchGaussianRasterizeForward(const torch::Tensor &means2d,   // [C, N, 2]
                                  const torch::Tensor &tileGaussianIds // [n_isects]
 );
 
+/// @brief Dispatches the sparse Gaussian rasterization forward pass to the specified device.
+/// Renders only specified pixels.
+/// @tparam Device The device type (e.g., torch::kCPU or torch::kCUDA).
+/// @param pixelsToRender Tensor containing the indices of pixels to render [C, NumPixels, 2].
+/// @param means2d Tensor of 2D means.
+/// @param conics Tensor of conic parameters.
+/// @param features Tensor of features (colors, etc).
+/// @param opacities Tensor of opacities.
+/// @param imageWidth Width of the full image (for coordinate calculations).
+/// @param imageHeight Height of the full image (for coordinate calculations).
+/// @param imageOriginW Horizontal origin of the image grid.
+/// @param imageOriginH Vertical origin of the image grid.
+/// @param tileSize Size of the tiles used for processing.
+/// @param tileOffsets Tensor containing offsets for each tile.
+/// @param tileGaussianIds Tensor mapping tiles to Gaussian IDs.
+/// @param activeTiles Tensor containing the indices of active tiles.
+/// @param tilePixelMask Tensor containing the mask for each tile pixel.
+/// @param tilePixelCumsum Tensor containing the cumulative sum of tile pixels.
+/// @param pixelMap Tensor containing the mapping of pixels to output indices.
+/// @return A tuple containing:
+///         - Output colors JaggedTensor for the specified pixels.
+///         - Output alphas JaggedTensor for the specified pixels.
+///         - Output last Gaussian IDs JaggedTensor for the specified pixels.
+template <torch::DeviceType Device>
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor, fvdb::JaggedTensor>
+dispatchGaussianSparseRasterizeForward(const fvdb::JaggedTensor &pixelsToRender,
+                                       const torch::Tensor &means2d,
+                                       const torch::Tensor &conics,
+                                       const torch::Tensor &features,
+                                       const torch::Tensor &opacities,
+                                       const uint32_t imageWidth,
+                                       const uint32_t imageHeight,
+                                       const uint32_t imageOriginW,
+                                       const uint32_t imageOriginH,
+                                       const uint32_t tileSize,
+                                       const torch::Tensor &tileOffsets,
+                                       const torch::Tensor &tileGaussianIds,
+                                       const torch::Tensor &activeTiles,
+                                       const torch::Tensor &tilePixelMask,
+                                       const torch::Tensor &tilePixelCumsum,
+                                       const torch::Tensor &pixelMap);
+
 /// @brief Calculate gradients for the Gaussian rasterization process (backward pass)
 ///
 /// This function computes the gradients of the Gaussian splatting rendering with respect to

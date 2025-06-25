@@ -5,6 +5,7 @@
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANUTILS_CUH
 
 #include <fvdb/detail/ops/gsplat/GaussianCameraProjections.cuh>
+#include <fvdb/detail/utils/AccessorHelpers.cuh>
 
 #include <nanovdb/math/Math.h>
 
@@ -429,6 +430,34 @@ inverseVectorJacobianProduct(const T &MInv, const T &dLossDMInv) {
     // P = M^-1
     // df/dM = -P * df/dP * P
     return -MInv * dLossDMInv * MInv;
+}
+
+using tilePixelMaskAccessor                       = fvdb::TorchRAcc64<uint64_t, 2>;
+static constexpr uint32_t sTileBitmaskBitsPerWord = 64;
+
+inline uint32_t
+numWordsPerTileBitmask(const uint32_t tileSideLength) {
+    return (tileSideLength * tileSideLength + sTileBitmaskBitsPerWord - 1) /
+           sTileBitmaskBitsPerWord;
+}
+
+inline __device__ uint32_t
+bitmaskWordIndex(const uint32_t bitIndex) {
+    return bitIndex / sTileBitmaskBitsPerWord;
+}
+inline __device__ uint32_t
+bitmaskBitIndex(const uint32_t bitIndex) {
+    return bitIndex % sTileBitmaskBitsPerWord;
+}
+
+inline __device__ bool
+tilePixelActive(tilePixelMaskAccessor const &tilePixelMask,
+                const uint32_t tileSideLength,
+                const uint32_t tileId,
+                const uint32_t iInTile,
+                const uint32_t jInTile) {
+    const uint32_t bitIndex = iInTile * tileSideLength + jInTile;
+    return tilePixelMask[tileId][bitmaskWordIndex(bitIndex)] & (1ull << bitmaskBitIndex(bitIndex));
 }
 
 } // namespace ops
