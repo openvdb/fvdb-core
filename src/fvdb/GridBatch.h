@@ -795,6 +795,24 @@ struct GridBatch : torch::CustomClassHolder {
 
     std::vector<torch::Tensor> computeBrickHaloBuffer(bool benchmark) const;
 
+    std::tuple<GridBatch, JaggedTensor, JaggedTensor, JaggedTensor>
+    integrate_tsdf_with_features(const JaggedTensor &tsdf,
+                                 const JaggedTensor &weights,
+                                 const JaggedTensor &features,
+                                 const torch::Tensor &depthImages,
+                                 const torch::Tensor &featureImages,
+                                 const torch::Tensor &projectionMatrices,
+                                 const torch::Tensor &camToWorldMatrices,
+                                 const double epsilon) const;
+
+    std::tuple<GridBatch, JaggedTensor, JaggedTensor>
+    integrate_tsdf(const JaggedTensor &tsdf,
+                   const JaggedTensor &weights,
+                   const torch::Tensor &depthImages,
+                   const torch::Tensor &projectionMatrices,
+                   const torch::Tensor &camToWorldMatrices,
+                   const double epsilon) const;
+
   private:
     c10::intrusive_ptr<detail::GridBatchImpl> mImpl;
 };

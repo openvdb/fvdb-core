@@ -43,6 +43,7 @@ dispatchInject<torch::kCUDA>(const GridBatchImpl &dstGridBatch,
                       "Source/Destination tensors should have matching dimensions");
     TORCH_CHECK_VALUE(dst.scalar_type() == src.scalar_type(),
                       "Source/Destination tensors should have matching scalar types");
+
     for (auto i = 1; i < dst.rdim(); i++) {
         TORCH_CHECK_VALUE(dst.rsize(i) == src.rsize(i),
                           "Source/Destination tensors should have matching feature dimensions");
@@ -82,7 +83,8 @@ dispatchInject<torch::kCUDA>(const GridBatchImpl &dstGridBatch,
                                    featureDim);
                            C10_CUDA_KERNEL_LAUNCH_CHECK();
                        }),
-                       AT_EXPAND(AT_ALL_TYPES));
+                       AT_EXPAND(AT_ALL_TYPES),
+                       torch::kFloat16);
     }
 }
 
@@ -98,6 +100,7 @@ dispatchInject<torch::kCPU>(const GridBatchImpl &dstGridBatch,
                       "Source/Destination tensors should have matching dimensions");
     TORCH_CHECK_VALUE(dst.scalar_type() == src.scalar_type(),
                       "Source/Destination tensors should have matching scalar types");
+
     for (auto i = 1; i < dst.rdim(); i++) {
         TORCH_CHECK_VALUE(dst.rsize(i) == src.rsize(i),
                           "Source/Destination tensors should have matching feature dimensions");
@@ -145,7 +148,8 @@ dispatchInject<torch::kCPU>(const GridBatchImpl &dstGridBatch,
                            }
                        }
                    }),
-                   AT_EXPAND(AT_ALL_TYPES));
+                   AT_EXPAND(AT_ALL_TYPES),
+                   torch::kFloat16);
 }
 
 } // namespace fvdb::detail::ops

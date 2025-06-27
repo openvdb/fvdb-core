@@ -12,6 +12,8 @@
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
 
+#include <algorithm>
+
 namespace {
 
 __global__ void
@@ -1712,16 +1714,32 @@ GridBatchImpl::clip(const std::vector<nanovdb::Coord> &ijkMin,
 }
 
 c10::intrusive_ptr<GridBatchImpl>
-GridBatchImpl::dilate(const int dilationAmt) {
+GridBatchImpl::dilate(const int64_t dilationAmount) {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(dilationAmt > 0, "dilation must be strictly positive. Got ", dilationAmt);
+    std::vector<int64_t> dilationAmountVec(batchSize(), dilationAmount);
+    return dilate(dilationAmountVec);
+}
+
+c10::intrusive_ptr<GridBatchImpl>
+GridBatchImpl::dilate(const std::vector<int64_t> dilationAmount) {
+    c10::DeviceGuard guard(device());
+    TORCH_CHECK_VALUE(dilationAmount.size() == batchSize(),
+                      "dilationAmount should have same size as batch size, got ",
+                      dilationAmount.size(),
+                      " != ",
+                      batchSize());
+    TORCH_CHECK_VALUE(std::all_of(dilationAmount.begin(),
+                                  dilationAmount.end(),
+                                  [](int64_t amount) { return amount > 0; }),
+                      "dilation amount must be strictly positive.");
     if (batchSize() == 0) {
         return c10::make_intrusive<detail::GridBatchImpl>(device());
     }
     std::vector<nanovdb::Vec3d> voxS, voxO;
     gridVoxelSizesAndOrigins(voxS, voxO);
-    auto dilatedGridBatchHdl = FVDB_DISPATCH_KERNEL_DEVICE(
-        device(), [&]() { return detail::ops::dispatchDilateGrid<DeviceTag>(*this, dilationAmt); });
+    auto dilatedGridBatchHdl = FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
+        return detail::ops::dispatchDilateGrid<DeviceTag>(*this, dilationAmount);
+    });
     return c10::make_intrusive<detail::GridBatchImpl>(std::move(dilatedGridBatchHdl), voxS, voxO);
 }
 
