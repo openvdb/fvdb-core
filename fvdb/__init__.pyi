@@ -15,7 +15,6 @@ if torch.cuda.is_available():
 from . import nn
 from ._Cpp import (
     ConvPackBackend,
-    GaussianSplat3d,
     GridBatch,
     JaggedTensor,
     SparseConvPackInfo,
@@ -36,6 +35,7 @@ from ._Cpp import (
     scaled_dot_product_attention,
     volume_render,
 )
+from .gaussian_splatting import GaussianSplat3d
 
 JaggedTensorOrTensor = Union[torch.Tensor, JaggedTensor]
 

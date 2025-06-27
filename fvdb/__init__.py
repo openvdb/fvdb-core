@@ -9,7 +9,7 @@ if torch.cuda.is_available():
     torch.cuda.init()
 
 # isort: off
-from ._Cpp import JaggedTensor, GridBatch, SparseConvPackInfo, ConvPackBackend, GaussianSplat3d
+from ._Cpp import JaggedTensor, GridBatch, SparseConvPackInfo, ConvPackBackend
 from ._Cpp import (
     gridbatch_from_ijk,
     gridbatch_from_points,
@@ -28,6 +28,8 @@ from ._Cpp import (
     volume_render,
     gaussian_render_jagged,
 )
+
+from .gaussian_splatting import GaussianSplat3d
 
 # The following import needs to come after the GridBatch and JaggedTensor imports
 # immediately above in order to avoid a circular dependency error.

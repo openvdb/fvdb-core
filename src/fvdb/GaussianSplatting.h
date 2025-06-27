@@ -170,7 +170,7 @@ class GaussianSplat3d {
     }
 
     /// @brief Return the diffuse SH coefficients of the Gaussians in this scene
-    /// @return An [1, N, D]-shaped tensor representing the diffuse SH coefficients of the
+    /// @return An [N, 1, D]-shaped tensor representing the diffuse SH coefficients of the
     /// Gaussians in this scene.
     torch::Tensor
     sh0() const {
@@ -178,7 +178,7 @@ class GaussianSplat3d {
     }
 
     /// @brief Return the directionally-dependent SH coefficients of the Gaussians in this scene
-    /// @return A [K-1, N, D]-shaped tensor representing the directionally-dependent SH
+    /// @return A [N, K-1, D]-shaped tensor representing the directionally-dependent SH
     ///         coefficients of the Gaussians in this scene.
     torch::Tensor
     shN() const {
@@ -270,7 +270,7 @@ class GaussianSplat3d {
     }
 
     /// @brief Set the diffuse SH coefficients of the Gaussians in this scene.
-    /// @param sh0 An [1, N, D]-shaped tensor representing the diffuse SH coefficients of the
+    /// @param sh0 An [N, 1, D]-shaped tensor representing the diffuse SH coefficients of the
     ///            Gaussians in this scene.
     void
     setSh0(const torch::Tensor &sh0) {
@@ -282,7 +282,7 @@ class GaussianSplat3d {
     }
 
     /// @brief Set the directionally-dependent SH coefficients of the Gaussians in this scene.
-    /// @param shN A [K-1, N, D]-shaped tensor representing the directionally-dependent SH
+    /// @param shN A [N, K-1, D]-shaped tensor representing the directionally-dependent SH
     ///            coefficients of the Gaussians in this scene.
     void
     setShN(const torch::Tensor &shN) {
@@ -320,9 +320,9 @@ class GaussianSplat3d {
     ///                  Gaussians in this scene.
     /// @param logitOpacities An [N]-shaped tensor representing the logit of the opacities of the
     ///                     Gaussians in this scene.
-    /// @param sh0 An [1, N, D]-shaped tensor representing the diffuse SH coefficients of the
+    /// @param sh0 An [N, 1, D]-shaped tensor representing the diffuse SH coefficients of the
     ///            Gaussians in this scene.
-    /// @param shN A [K-1, N, D]-shaped tensor representing the directionally-dependent SH
+    /// @param shN A [N, K-1, D]-shaped tensor representing the directionally-dependent SH
     ///            coefficients of the Gaussians in this scene.
     /// @param requiresGrad Whether to track gradients and accumulated projection statisitics used
     ///                     for splitting/deleting/duplicating Gaussians during optimization.
@@ -648,8 +648,8 @@ class GaussianSplat3d {
     torch::Tensor mQuats;          // [N, 4]
     torch::Tensor mLogScales;      // [N, 3]
     torch::Tensor mLogitOpacities; // [N]
-    torch::Tensor mSh0;            // [1, N, D]
-    torch::Tensor mShN;            // [K-1, N, D]
+    torch::Tensor mSh0;            // [N, 1, D]
+    torch::Tensor mShN;            // [N, K-1, D]
 
     // Used for subdivision during optimization
     torch::Tensor mAccumulatedNormalized2dMeansGradientNormsForGrad; // [N]
