@@ -18,6 +18,27 @@ namespace detail {
 namespace ops {
 
 template <c10::DeviceType>
+std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor>
+dispatchIntegrateTSDF(const c10::intrusive_ptr<GridBatchImpl> grid,
+                      const JaggedTensor &tsdf,
+                      const JaggedTensor &weights,
+                      const torch::Tensor &depthImages,
+                      const torch::Tensor &projectionMatrices,
+                      const torch::Tensor &camToWorldMatrices,
+                      const double voxelTruncationDistance);
+
+template <c10::DeviceType>
+std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor, JaggedTensor>
+dispatchIntegrateTSDFWithFeatures(const c10::intrusive_ptr<GridBatchImpl> grid,
+                                  const JaggedTensor &tsdf,
+                                  const JaggedTensor &weights,
+                                  const JaggedTensor &features,
+                                  const torch::Tensor &depthImages,
+                                  const torch::Tensor &featureImages,
+                                  const torch::Tensor &projectionMatrices,
+                                  const torch::Tensor &camToWorldMatrices,
+                                  const double epsilon);
+template <c10::DeviceType>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildPaddedGrid(const GridBatchImpl &baseBatchHdl, int bmin, int bmax, bool excludeBorder);
 
@@ -49,8 +70,8 @@ dispatchBuildFineGridFromCoarse(const GridBatchImpl &coarseBatchHdl,
                                 const std::optional<JaggedTensor> &subdivMask);
 
 template <c10::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer> dispatchDilateGrid(const GridBatchImpl &gridBatch,
-                                                          const int dilation);
+nanovdb::GridHandle<TorchDeviceBuffer>
+dispatchDilateGrid(const GridBatchImpl &gridBatch, const std::vector<int64_t> &dilationAmount);
 
 template <c10::DeviceType>
 nanovdb::GridHandle<TorchDeviceBuffer> dispatchMergeGrids(const GridBatchImpl &gridBatch1,

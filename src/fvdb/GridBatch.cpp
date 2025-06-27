@@ -673,6 +673,49 @@ GridBatch::marching_cubes(const JaggedTensor &field, double level) const {
     });
 }
 
+std::tuple<GridBatch, JaggedTensor, JaggedTensor, JaggedTensor>
+GridBatch::integrate_tsdf_with_features(const JaggedTensor &tsdf,
+                                        const JaggedTensor &weights,
+                                        const JaggedTensor &features,
+                                        const torch::Tensor &depthImages,
+                                        const torch::Tensor &featureImages,
+                                        const torch::Tensor &projectionMatrices,
+                                        const torch::Tensor &camToWorldMatrices,
+                                        const double epsilon) const {
+    const auto [newGrid, outTSDF, outWeights, outFeatures] =
+        FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
+            return fvdb::detail::ops::dispatchIntegrateTSDFWithFeatures<DeviceTag>(
+                mImpl,
+                tsdf,
+                weights,
+                features,
+                depthImages,
+                featureImages,
+                projectionMatrices,
+                camToWorldMatrices,
+                epsilon);
+        });
+    GridBatch ret;
+    ret.mImpl = newGrid;
+    return {ret, outTSDF, outWeights, outFeatures};
+}
+
+std::tuple<GridBatch, JaggedTensor, JaggedTensor>
+GridBatch::integrate_tsdf(const JaggedTensor &tsdf,
+                          const JaggedTensor &weights,
+                          const torch::Tensor &depthImages,
+                          const torch::Tensor &projectionMatrices,
+                          const torch::Tensor &camToWorldMatrices,
+                          const double epsilon) const {
+    const auto [newGrid, outTSDF, outWeights] = FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
+        return fvdb::detail::ops::dispatchIntegrateTSDF<DeviceTag>(
+            mImpl, tsdf, weights, depthImages, projectionMatrices, camToWorldMatrices, epsilon);
+    });
+    GridBatch ret;
+    ret.mImpl = newGrid;
+    return {ret, outTSDF, outWeights};
+}
+
 JaggedTensor
 GridBatch::sparse_conv_halo(const JaggedTensor &input,
                             const torch::Tensor &weight,

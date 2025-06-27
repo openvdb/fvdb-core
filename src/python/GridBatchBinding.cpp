@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include "TypeCasters.h"
+#include "fvdb/GridBatch.h"
 
 #include <fvdb/FVDB.h>
 
 #include <torch/extension.h>
 
+#include <pybind11/cast.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
@@ -807,6 +809,24 @@ bind_grid_batch(py::module &m) {
             py::arg("kernel_size"),
             py::arg("stride"),
             py::arg("target_grid") = nullptr)
+        .def("integrate_tsdf",
+             &fvdb::GridBatch::integrate_tsdf,
+             py::arg("tsdf"),
+             py::arg("weights"),
+             py::arg("depth_images"),
+             py::arg("projection_matrices"),
+             py::arg("cam_to_world_matrices"),
+             py::arg("voxel_truncation_distance"))
+        .def("integrate_tsdf_with_features",
+             &fvdb::GridBatch::integrate_tsdf_with_features,
+             py::arg("tsdf"),
+             py::arg("weights"),
+             py::arg("features"),
+             py::arg("depth_images"),
+             py::arg("feature_images"),
+             py::arg("projection_matrices"),
+             py::arg("cam_to_world_matrices"),
+             py::arg("voxel_truncation_distance"))
         .def(py::pickle(
             [](const fvdb::GridBatch &batchHdl) {
                 return batchHdl.serialize().to(batchHdl.device());

@@ -22,6 +22,8 @@ dispatchMergeGrids<torch::kCUDA>(const GridBatchImpl &gridBatch1, const GridBatc
     TORCH_CHECK_VALUE(gridBatch1.batchSize() == gridBatch2.batchSize(),
                       "GridBatches to merge should have the same batch size");
 
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(gridBatch1.device().index());
+
     // This guide buffer is a hack to pass in a device with an index to the cudaCreateNanoGrid
     // function. We can't pass in a device directly but we can pass in a buffer which gets
     // passed to TorchDeviceBuffer::create. The guide buffer holds the device and effectively
@@ -38,7 +40,7 @@ dispatchMergeGrids<torch::kCUDA>(const GridBatchImpl &gridBatch1, const GridBatc
             gridBatch2.nanoGridHandleMut().deviceGrid<nanovdb::ValueOnIndex>(i);
         TORCH_CHECK(grid2, "Second Grid is null");
 
-        nanovdb::tools::cuda::MergeGrids<nanovdb::ValueOnIndex> mergeOp(grid1, grid2);
+        nanovdb::tools::cuda::MergeGrids<nanovdb::ValueOnIndex> mergeOp(grid1, grid2, stream);
         mergeOp.setChecksum(nanovdb::CheckMode::Default);
         mergeOp.setVerbose(0);
 

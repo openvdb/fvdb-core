@@ -57,6 +57,7 @@ set(FVDB_CPP_FILES
     fvdb/detail/TorchDeviceBuffer.cpp)
 
 set(FVDB_CU_FILES
+    fvdb/detail/ops/IntegrateTSDF.cu
     fvdb/detail/ops/BuildPaddedGrid.cu
     fvdb/detail/ops/BuildGridFromNearestVoxelsToPoints.cu
     fvdb/detail/ops/BuildGridForConv.cu
