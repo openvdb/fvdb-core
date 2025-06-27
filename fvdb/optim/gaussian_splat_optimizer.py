@@ -3,7 +3,7 @@
 #
 import math
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Tuple, Union, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
@@ -14,7 +14,8 @@ from .. import GaussianSplat3d
 
 @dataclass
 class GaussianSplatOptimizer:
-    """Optimzier for training Gaussian Splat radiance fields over a collection of posed images.
+    """
+    Optimzier for training Gaussian Splat radiance fields over a collection of posed images.
 
     This optimizer uses Adam with a fixed learning rate for each parameter in a Gaussian Radiance field
     (i.e. means, covariances, opacities, spherical harmonics).
@@ -22,19 +23,19 @@ class GaussianSplatOptimizer:
     algorithm in the original Gaussian Splatting paper (https://arxiv.org/abs/2308.04079).
 
     Args:
-        module: The module representing the Gaussian Splatting scene (e.g. fvdb.nn.GaussianSplat3D).
-        mean_lr_decay_exponent: The exponent to decay the learning rate for the means. Default: 1.0.
+        module (GaussianSplat3d): The module representing the Gaussian Splatting scene (e.g. fvdb.nn.GaussianSplat3D).
+        mean_lr_decay_exponent (float): The exponent to decay the learning rate for the means. Default: 1.0.
 
-        prune_opacity_threshold: The opacity threshold below which to prune a Gaussian. Default: 0.005.
-        prune_scale3d_threshold: The 3D scale threshold above which to prune a Gaussian. Default: 0.1.
-        prune_scale2d_threshold: The 2D scale threshold above which to prune a Gaussian. Default: 0.15.
+        prune_opacity_threshold (float): The opacity threshold below which to prune a Gaussian. Default: 0.005.
+        prune_scale3d_threshold (float): The 3D scale threshold above which to prune a Gaussian. Default: 0.1.
+        prune_scale2d_threshold (float): The 2D scale threshold above which to prune a Gaussian. Default: 0.15.
 
-        grow_grad2d_threshold: The 2D gradient threshold above which to grow a Gaussian. Default: 0.0002.
-        grow_scale3d_threshold: The 3D scale threshold below which to grow a Gaussian. Default: 0.01.
-        grow_scale2d_threshold: The 2D scale threshold below which to grow a Gaussian. Default: 0.05.
+        grow_grad2d_threshold (float): The 2D gradient threshold above which to grow a Gaussian. Default: 0.0002.
+        grow_scale3d_threshold (float): The 3D scale threshold below which to grow a Gaussian. Default: 0.01.
+        grow_scale2d_threshold (float): The 2D scale threshold below which to grow a Gaussian. Default: 0.05.
 
-        absgrad: Whether to use the absolute value of the gradients for refinement. Default: False.
-        revised_opacity: Whether to use the revised opacity formulation from https://arxiv.org/abs/2404.06109. Default: False.
+        absgrad (bool): Whether to use the absolute value of the gradients for refinement. Default: False.
+        revised_opacity (bool): Whether to use the revised opacity formulation from https://arxiv.org/abs/2404.06109. Default: False.
     """
 
     module: GaussianSplat3d
