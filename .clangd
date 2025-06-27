@@ -69,3 +69,4 @@ CompileFlags:
     - "-forward-unknown-to-host-compiler"
     - "-Werror=cross-execution-space-call"
     - "-Werror=all-warnings"
+    - "-G"
