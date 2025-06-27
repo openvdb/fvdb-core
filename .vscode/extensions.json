@@ -6,7 +6,14 @@
     "recommendations": [
         "llvm-vs-code-extensions.vscode-clangd",
         "ms-vscode.cpptools-extension-pack",
-        "Seaube.clangformat"
+        "Seaube.clangformat",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.debugpy",
+        "ms-python.isort",
+        "ms-python.black-formatter",
+        "ms-toolsai.tensorboard",
+        "rodolphebarbanneau.python-docstring-highlighter",
     ],
     // List of extensions recommended by VS Code that should not be recommended for users of this workspace.
     "unwantedRecommendations": [
