@@ -8,6 +8,8 @@
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 
+#include <c10/util/Exception.h>
+
 #include <cub/block/block_scan.cuh>
 #include <cuda/std/tuple>
 
@@ -44,39 +46,29 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Dev
     // Default tensors used to initialize optional and output tensors in constructor
     torch::Tensor mDefaultBackground;
     torch::Tensor mDefaultMasks;
-    torch::Tensor mDefaultOutDenseFeatures;
-    torch::Tensor mDefaultOutDenseAlphas;
-    torch::Tensor mDefaultOutDenseLastIds;
-    torch::Tensor mDefaultOutSparseFeatures;
-    torch::Tensor mDefaultOutSparseAlphas;
-    torch::Tensor mDefaultOutSparseLastIds;
     torch::Tensor mDefaultActiveTiles;
-
     torch::Tensor mDefaultTilePixelMask;
     torch::Tensor mDefaultTilePixelCumsum;
     torch::Tensor mDefaultPixelMap;
 
-    VectorAccessor mFeatures;                       // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
-    VectorAccessor mMeans2d;                        // [C, N, 2] or [nnz, 2]
-    VectorAccessor mConics;                         // [C, N, 3] or [nnz, 3]
-    ScalarAccessor mOpacities;                      // [C, N] or [nnz]
-    TorchRAcc64<ScalarType, 2> mBackgrounds;        // [C, NUM_CHANNELS]
+    VectorAccessor mFeatures;                 // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
+    VectorAccessor mMeans2d;                  // [C, N, 2] or [nnz, 2]
+    VectorAccessor mConics;                   // [C, N, 3] or [nnz, 3]
+    ScalarAccessor mOpacities;                // [C, N] or [nnz]
+    TorchRAcc64<ScalarType, 2> mBackgrounds;  // [C, NUM_CHANNELS]
     bool mHasBackgrounds;
-    TorchRAcc64<bool, 3> mMasks;                    // [C, nTilesH, nTilesW]
+    TorchRAcc64<bool, 3> mMasks;              // [C, nTilesH, nTilesW]
     bool mHasMasks;
-    TorchRAcc64<int32_t, 3> mTileOffsets;           // [C, nTilesH, nTilesW]
-    TorchRAcc64<int32_t, 1> mTileGaussianIds;       // [totalIntersections]
-    TorchRAcc64<ScalarType, 4> mOutDenseFeatures;   // [C, imgH, imgW, NUM_CHANNELS]
-    TorchRAcc64<ScalarType, 4> mOutDenseAlphas;     // [C, imgH, imgW, 1]
-    TorchRAcc64<int32_t, 3> mOutDenseLastIds;       // [C, imgH, imgW]
-    JaggedRAcc32<ScalarType, 2> mOutSparseFeatures; // [[nPixels, NUM_CHANNELS]_0..._C]
-    JaggedRAcc32<ScalarType, 2> mOutSparseAlphas;   // [[nPixels, 1]_0..._C]
-    JaggedRAcc32<int32_t, 1> mOutSparseLastIds;     // [[nPixels]_0..._C]
+    TorchRAcc64<int32_t, 3> mTileOffsets;     // [C, nTilesH, nTilesW]
+    TorchRAcc64<int32_t, 1> mTileGaussianIds; // [totalIntersections]
+    JaggedRAcc64<ScalarType, 2> mOutFeatures; // [[nPixels, NUM_CHANNELS]_0..._C]
+    JaggedRAcc64<ScalarType, 2> mOutAlphas;   // [[nPixels, 1]_0..._C]
+    JaggedRAcc64<int32_t, 1> mOutLastIds;     // [[nPixels]_0..._C]
     bool mIsSparse;
-    TorchRAcc64<int32_t, 1> mActiveTiles;           // [AT]
-    TorchRAcc64<uint64_t, 2> mTilePixelMask;        // [AT, wordsPerTile] e.g. [AT, 4]
-    TorchRAcc64<int64_t, 1> mTilePixelCumsum;       // [AT]
-    TorchRAcc64<int64_t, 1> mPixelMap;              // [AP]
+    TorchRAcc64<int32_t, 1> mActiveTiles;     // [AT]
+    TorchRAcc64<uint64_t, 2> mTilePixelMask;  // [AT, wordsPerTile] e.g. [AT, 4]
+    TorchRAcc64<int64_t, 1> mTilePixelCumsum; // [AT]
+    TorchRAcc64<int64_t, 1> mPixelMap;        // [AP]
 
     // Check that the input tensor is a CUDA tensor and is contiguous
     inline void
@@ -109,7 +101,7 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Dev
     template <typename T, int N>
     inline auto
     initJaggedAccessor(const fvdb::JaggedTensor &tensor) {
-        return tensor.packed_accessor32<T, N, torch::RestrictPtrTraits>();
+        return tensor.packed_accessor64<T, N, torch::RestrictPtrTraits>();
     }
 
     DeviceArgs(const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]
@@ -125,43 +117,39 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Dev
                const uint32_t tileSize,
                const torch::Tensor &tileOffsets,     // [C, numTilesH, numTilesW]
                const torch::Tensor &tileGaussianIds, // [totalIntersections]
-               const std::optional<fvdb::JaggedTensor> &pixelsToRender = std::nullopt,
-               const std::optional<torch::Tensor> &activeTiles         = std::nullopt, // [AT]
+               // output JaggedTensors:
+               // In Dense mode, first dimension X = C * imageHeight * imageWidth
+               // In Sparse mode, first dimension X = C
+               const fvdb::JaggedTensor &outFeatures,                          // [X, NUM_CHANNELS]
+               const fvdb::JaggedTensor &outAlphas,                            // [X, 1]
+               const fvdb::JaggedTensor &outLastIds,                           // [X]
+               const std::optional<torch::Tensor> &activeTiles = std::nullopt, // [AT]
                const std::optional<torch::Tensor> &tilePixelMask =
-                   std::nullopt, // [AT, wordsPerTile] e.g. [AT, 4]
+                   std::nullopt, // [AT, wordsPerTileBitmask] e.g. [AT, 4]
                const std::optional<torch::Tensor> &tilePixelCumsum = std::nullopt, // [AT]
                const std::optional<torch::Tensor> &pixelMap        = std::nullopt)        // [AP]
         : mImageWidth(imageWidth), mImageHeight(imageHeight), mImageOriginW(imageOriginW),
           mImageOriginH(imageOriginH), mTileOriginW(imageOriginW / tileSize),
           mTileOriginH(imageOriginH / tileSize), mTileSize(tileSize),
-          mFeatures(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(features, "features")),
-          mMeans2d(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(means2d, "means2d")),
-          mConics(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(conics, "conics")),
-          mOpacities(initAccessor<ScalarType, NUM_OUTER_DIMS>(opacities, "opacities")),
           mDefaultBackground(torch::empty({0, 0}, means2d.options())),
           mDefaultMasks(torch::empty({0, 0, 0}, means2d.options().dtype(torch::kBool))),
-          mDefaultOutDenseFeatures(torch::empty({0, 0, 0, 0}, features.options())),
-          mDefaultOutDenseAlphas(torch::empty({0, 0, 0, 0}, opacities.options())),
-          mDefaultOutDenseLastIds(torch::empty({0, 0, 0}, tileOffsets.options())),
-          mDefaultOutSparseFeatures(torch::empty({0, 0}, features.options())),
-          mDefaultOutSparseAlphas(torch::empty({0, 0}, opacities.options())),
-          mDefaultOutSparseLastIds(torch::empty({0}, tileOffsets.options())),
           mDefaultActiveTiles(torch::empty({0}, tileOffsets.options())),
           mDefaultTilePixelMask(torch::empty({0, 0}, means2d.options().dtype(torch::kUInt64))),
           mDefaultTilePixelCumsum(torch::empty({0}, tileOffsets.options().dtype(torch::kInt64))),
           mDefaultPixelMap(torch::empty({0}, tileOffsets.options().dtype(torch::kInt64))),
+          mFeatures(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(features, "features")),
+          mMeans2d(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(means2d, "means2d")),
+          mConics(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(conics, "conics")),
+          mOpacities(initAccessor<ScalarType, NUM_OUTER_DIMS>(opacities, "opacities")),
           mBackgrounds(initAccessor<ScalarType, 2>(backgrounds, mDefaultBackground, "backgrounds")),
           mHasBackgrounds(backgrounds.has_value()),
           mMasks(initAccessor<bool, 3>(masks, mDefaultMasks, "masks")),
           mHasMasks(masks.has_value()),
           mTileOffsets(initAccessor<int32_t, 3>(tileOffsets, "tileOffsets")),
           mTileGaussianIds(initAccessor<int32_t, 1>(tileGaussianIds, "tileGaussianIds")),
-          mOutDenseFeatures(initAccessor<ScalarType, 4>(mDefaultOutDenseFeatures, "outFeatures")),
-          mOutDenseAlphas(initAccessor<ScalarType, 4>(mDefaultOutDenseAlphas, "outAlphas")),
-          mOutDenseLastIds(initAccessor<int32_t, 3>(mDefaultOutDenseLastIds, "outLastGaussianIds")),
-          mOutSparseFeatures(initJaggedAccessor<ScalarType, 2>(mDefaultOutSparseFeatures)),
-          mOutSparseAlphas(initJaggedAccessor<ScalarType, 2>(mDefaultOutSparseAlphas)),
-          mOutSparseLastIds(initJaggedAccessor<int32_t, 1>(mDefaultOutSparseLastIds)),
+          mOutFeatures(initJaggedAccessor<ScalarType, 2>(outFeatures)),
+          mOutAlphas(initJaggedAccessor<ScalarType, 2>(outAlphas)),
+          mOutLastIds(initJaggedAccessor<int32_t, 1>(outLastIds)),
           mIsSparse(activeTiles.has_value()),
           mActiveTiles(initAccessor<int32_t, 1>(activeTiles, mDefaultActiveTiles, "activeTiles")),
           mTilePixelMask(
@@ -177,12 +165,6 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Dev
         mNumTilesH             = mTileOffsets.size(1);
 
         checkInputShapes();
-
-        // have to check this here because we don't store pixelsToRender in the DeviceArgs
-        if (mIsSparse) {
-            TORCH_CHECK_VALUE(pixelMap.value().size(0) == pixelsToRender.value().numel() / 2,
-                              "Bad size for pixelMap");
-        }
     }
 
     void
@@ -237,34 +219,6 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Dev
         }
     }
 
-    // TODO: once we improve JaggedTensorAccessor, we can make the rasterization always operate
-    // on JaggedTensors and remove the split in the type of the output arguments. Also switch to
-    // 64-bit indexed JaggedAccessor.
-
-    // Set the output arguments for the dense output
-    void
-    setDenseOutputArguments(const torch::Tensor &outFeatures,
-                            const torch::Tensor &outAlphas,
-                            const torch::Tensor &outLastGaussianIds) {
-        mOutDenseFeatures =
-            outFeatures.packed_accessor64<ScalarType, 4, torch::RestrictPtrTraits>();
-        mOutDenseAlphas = outAlphas.packed_accessor64<ScalarType, 4, torch::RestrictPtrTraits>();
-        mOutDenseLastIds =
-            outLastGaussianIds.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>();
-    }
-
-    // Set the output arguments for the sparse output
-    void
-    setSparseOutputArguments(const fvdb::JaggedTensor &outFeatures,
-                             const fvdb::JaggedTensor &outAlphas,
-                             const fvdb::JaggedTensor &outLastGaussianIds) {
-        mOutSparseFeatures =
-            outFeatures.packed_accessor32<ScalarType, 2, torch::RestrictPtrTraits>();
-        mOutSparseAlphas = outAlphas.packed_accessor32<ScalarType, 2, torch::RestrictPtrTraits>();
-        mOutSparseLastIds =
-            outLastGaussianIds.packed_accessor32<int32_t, 1, torch::RestrictPtrTraits>();
-    }
-
     // Construct a Gaussian2D object from the input tensors at the given index
     inline __device__ Gaussian2D<ScalarType>
     getGaussian(const uint32_t index) {
@@ -293,6 +247,15 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Dev
         // the output. The -1 is because the cumsum is inclusive
         const auto tilePixelCumsumValue = tileOrdinal > 0 ? mTilePixelCumsum[tileOrdinal - 1] : 0;
         return mPixelMap[tilePixelCumsumValue + k];
+    }
+
+    inline __device__ uint64_t
+    pixelIndex(const uint64_t cameraId,
+               const uint64_t row,
+               const uint64_t col,
+               const uint32_t activePixelIndex) {
+        return mIsSparse ? sparsePixelIndex(blockIdx.x, activePixelIndex)
+                         : cameraId * mImageWidth * mImageHeight + row * mImageWidth + col;
     }
 
     // Check if the current thread is rendering an active sparse pixel in the current tile
@@ -345,6 +308,25 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Dev
         const uint32_t row = tileRow * mTileSize + threadIdx.y;
         const uint32_t col = tileCol * mTileSize + threadIdx.x;
         return {cameraId, tileRow, tileCol, row, col};
+    }
+
+    __device__ void
+    writeAlpha(uint64_t pixelIndex, ScalarType alpha) {
+        mOutAlphas.data()[pixelIndex][0] = alpha;
+    }
+
+    __device__ void
+    writeLastId(uint64_t pixelIndex, int32_t lastId) {
+        mOutLastIds.data()[pixelIndex] = lastId;
+    }
+
+    template <typename F>
+    __device__ void
+    writeFeatures(uint64_t pixelIndex, F &&f) {
+        PRAGMA_UNROLL
+        for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
+            mOutFeatures.data()[pixelIndex][k] = f(k);
+        }
     }
 
     __device__ void
@@ -454,33 +436,13 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Dev
         }
 
         if (pixelIsActive) {
-            if (mIsSparse) {
-                auto pixelIndex = sparsePixelIndex(blockIdx.x, activePixelIndex);
-                mOutSparseAlphas.data()[pixelIndex][0] = 1.0f - accumTransmittance;
-                PRAGMA_UNROLL
-                for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                    mOutSparseFeatures.data()[pixelIndex][k] =
-                        mHasBackgrounds ? pixOut[k] + accumTransmittance * mBackgrounds[cameraId][k]
-                                        : pixOut[k];
-                }
-                mOutSparseLastIds.data()[pixelIndex] = curIdx;
-
-            } else {
-                // Here T is the transmittance AFTER the last gaussian in this pixel.
-                // We (should) store double precision as T would be used in backward
-                // pass and it can be very small and causing large diff in gradients
-                // with float32. However, double precision makes the backward pass 1.5x
-                // slower so we stick with float for now.
-                mOutDenseAlphas[cameraId][row][col][0] = 1.0f - accumTransmittance;
-                PRAGMA_UNROLL
-                for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                    mOutDenseFeatures[cameraId][row][col][k] =
-                        mHasBackgrounds ? pixOut[k] + accumTransmittance * mBackgrounds[cameraId][k]
-                                        : pixOut[k];
-                }
-                // index in bin of last gaussian in this pixel
-                mOutDenseLastIds[cameraId][row][col] = curIdx;
-            }
+            auto pixIdx = pixelIndex(cameraId, row, col, activePixelIndex);
+            writeAlpha(pixIdx, 1.0f - accumTransmittance);
+            writeLastId(pixIdx, curIdx);
+            writeFeatures(pixIdx, [&](uint32_t k) {
+                return mHasBackgrounds ? pixOut[k] + accumTransmittance * mBackgrounds[cameraId][k]
+                                       : pixOut[k];
+            });
         }
     }
 };
@@ -522,23 +484,11 @@ rasterizeGaussiansForward(DeviceArgs<ScalarType, NUM_CHANNELS, IS_PACKED> args) 
         __syncthreads();
     }
 
-    // when the mask is provided, render the background feature/color and return
-    // if this tile is labeled as False
     if (args.mHasMasks && pixelInImage && !args.mMasks[cameraId][tileRow][tileCol]) {
-        if (args.mIsSparse) {
-            auto pixelIndex = args.sparsePixelIndex(blockIdx.x, activePixelIndex);
-            PRAGMA_UNROLL
-            for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                args.mOutSparseFeatures.data()[pixelIndex][k] =
-                    args.mHasBackgrounds ? args.mBackgrounds[cameraId][k] : 0.0f;
-            }
-        } else {
-            PRAGMA_UNROLL
-            for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                args.mOutDenseFeatures[cameraId][row][col][k] =
-                    args.mHasBackgrounds ? args.mBackgrounds[cameraId][k] : 0.0f;
-            }
-        }
+        auto pixIdx = args.pixelIndex(cameraId, row, col, activePixelIndex);
+        args.writeFeatures(pixIdx, [&](uint32_t k) {
+            return args.mHasBackgrounds ? args.mBackgrounds[cameraId][k] : 0.0f;
+        });
         return;
     }
 
@@ -610,6 +560,32 @@ launchRasterizeForwardKernel(
     const uint32_t tileExtentH = tileOffsets.size(1);
     const uint32_t tileExtentW = tileOffsets.size(2);
 
+    TORCH_CHECK_VALUE(pixelMap.has_value() == pixelsToRender.has_value(),
+                      "pixelMap and pixelsToRender must be provided together");
+    if (pixelMap.has_value()) {
+        TORCH_CHECK_VALUE(pixelMap.value().size(0) == pixelsToRender.value().numel() / 2,
+                          "pixelMap must have the same number of elements as pixelsToRender");
+    }
+
+    const auto sizes = pixelsToRender.has_value()
+                           ? pixelsToRender.value().lsizes1()
+                           : std::vector<int64_t>{C * imageHeight * imageWidth};
+    std::vector<torch::Tensor> featuresToRenderVec;
+    std::vector<torch::Tensor> alphasToRenderVec;
+    std::vector<torch::Tensor> lastIdsToRenderVec;
+
+    for (const auto &size: sizes) {
+        featuresToRenderVec.push_back(
+            torch::empty({size, channels}, features.options().dtype(torch::kFloat32)));
+        alphasToRenderVec.push_back(
+            torch::empty({size, 1}, features.options().dtype(torch::kFloat32)));
+        lastIdsToRenderVec.push_back(torch::empty({size}, features.options().dtype(torch::kInt32)));
+    }
+
+    auto outFeatures = fvdb::JaggedTensor(featuresToRenderVec);
+    auto outAlphas   = fvdb::JaggedTensor(alphasToRenderVec);
+    auto outLastIds  = fvdb::JaggedTensor(lastIdsToRenderVec);
+
     auto args = DeviceArgs<ScalarType, NUM_CHANNELS, IS_PACKED>(means2d,
                                                                 conics,
                                                                 features,
@@ -623,44 +599,13 @@ launchRasterizeForwardKernel(
                                                                 tileSize,
                                                                 tileOffsets,
                                                                 tileGaussianIds,
-                                                                pixelsToRender,
+                                                                outFeatures,
+                                                                outAlphas,
+                                                                outLastIds,
                                                                 activeTiles,
                                                                 tilePixelMask,
                                                                 tilePixelCumsum,
                                                                 pixelMap);
-
-    const auto sizes = args.mIsSparse ? pixelsToRender.value().lsizes1() : std::vector<int64_t>{1};
-    std::vector<torch::Tensor> featuresToRenderVec;
-    std::vector<torch::Tensor> alphasToRenderVec;
-    std::vector<torch::Tensor> lastIdsToRenderVec;
-
-    if (args.mIsSparse) {
-        for (const auto &size: sizes) {
-            featuresToRenderVec.push_back(
-                torch::empty({size, channels}, features.options().dtype(torch::kFloat32)));
-            alphasToRenderVec.push_back(
-                torch::empty({size, 1}, features.options().dtype(torch::kFloat32)));
-            lastIdsToRenderVec.push_back(
-                torch::empty({size}, features.options().dtype(torch::kInt32)));
-        }
-    } else {
-        featuresToRenderVec.push_back(torch::empty({C, imageHeight, imageWidth, channels},
-                                                   means2d.options().dtype(torch::kFloat32)));
-        alphasToRenderVec.push_back(torch::empty({C, imageHeight, imageWidth, 1},
-                                                 means2d.options().dtype(torch::kFloat32)));
-        lastIdsToRenderVec.push_back(
-            torch::empty({C, imageHeight, imageWidth}, means2d.options().dtype(torch::kInt32)));
-    }
-
-    auto outFeatures = fvdb::JaggedTensor(featuresToRenderVec);
-    auto outAlphas   = fvdb::JaggedTensor(alphasToRenderVec);
-    auto outLastIds  = fvdb::JaggedTensor(lastIdsToRenderVec);
-
-    if (pixelsToRender.has_value()) {
-        args.setSparseOutputArguments(outFeatures, outAlphas, outLastIds);
-    } else {
-        args.setDenseOutputArguments(outFeatures.jdata(), outAlphas.jdata(), outLastIds.jdata());
-    }
 
     const at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
@@ -687,6 +632,16 @@ launchRasterizeForwardKernel(
 
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     C10_CUDA_CHECK(cudaDeviceSynchronize());
+
+    // In dense mode, we need to reshape the output tensors to the original image size
+    // because they are packed into a single JaggedTensor so that the output code is the same
+    // for dense and sparse modes.
+    if (!args.mIsSparse) {
+        outFeatures =
+            fvdb::JaggedTensor(outFeatures.jdata().reshape({C, imageHeight, imageWidth, channels}));
+        outAlphas  = fvdb::JaggedTensor(outAlphas.jdata().reshape({C, imageHeight, imageWidth, 1}));
+        outLastIds = fvdb::JaggedTensor(outLastIds.jdata().reshape({C, imageHeight, imageWidth}));
+    }
 
     return std::make_tuple(outFeatures, outAlphas, outLastIds);
 }
