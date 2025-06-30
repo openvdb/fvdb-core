@@ -11,6 +11,8 @@
 #include <c10/util/Half.h>
 #include <c10/util/intrusive_ptr.h>
 
+#include <cuda_fp16.h>
+
 #include <optional>
 
 namespace fvdb::detail::ops {
@@ -82,26 +84,41 @@ unprojectDepthmapKernel(int64_t imageWidth,
     }
 }
 
-template <typename ScalarType, typename FeatureScalarType = ScalarType>
+template <typename T> struct OpType {
+    using type = T;
+};
+
+template <> struct OpType<c10::Half> {
+    using type = float;
+};
+
+template <> struct OpType<nv_half> {
+    using type = float;
+};
+
+template <typename ScalarDataType, typename FeatureScalarDataType = ScalarDataType>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
-integrateTSDFKernel(const ScalarType truncationMargin,
+integrateTSDFKernel(const ScalarDataType truncationMargin,
                     const int64_t imageWidth,
                     const int64_t imageHeight,
                     const bool hasFeatures,
-                    const fvdb::TorchRAcc64<ScalarType, 3> projMats,
-                    const fvdb::TorchRAcc64<ScalarType, 3> invProjMats,
-                    const fvdb::TorchRAcc64<ScalarType, 3> worldToCamMats,
-                    const fvdb::TorchRAcc64<ScalarType, 3> camToWorldMats,
-                    const fvdb::TorchRAcc64<ScalarType, 3> depthImages,
-                    const fvdb::TorchRAcc64<FeatureScalarType, 4> featureImages,
+                    const fvdb::TorchRAcc64<ScalarDataType, 3> projMats,
+                    const fvdb::TorchRAcc64<ScalarDataType, 3> invProjMats,
+                    const fvdb::TorchRAcc64<ScalarDataType, 3> worldToCamMats,
+                    const fvdb::TorchRAcc64<ScalarDataType, 3> camToWorldMats,
+                    const fvdb::TorchRAcc64<ScalarDataType, 3> depthImages,
+                    const fvdb::TorchRAcc64<FeatureScalarDataType, 4> featureImages,
                     const fvdb::detail::BatchGridAccessor<nanovdb::ValueOnIndex> baseGridAcc,
                     const fvdb::detail::BatchGridAccessor<nanovdb::ValueOnIndex> unionGridAcc,
-                    const fvdb::JaggedRAcc32<ScalarType, 1> tsdfAcc,
-                    const fvdb::JaggedRAcc32<ScalarType, 1> weightsAcc,
-                    const fvdb::JaggedRAcc32<FeatureScalarType, 2> featuresAcc,
-                    fvdb::TorchRAcc64<ScalarType, 1> outTsdfAcc,
-                    fvdb::TorchRAcc64<ScalarType, 1> outWeightsAcc,
-                    fvdb::TorchRAcc64<FeatureScalarType, 2> outFeaturesAcc) {
+                    const fvdb::JaggedRAcc32<ScalarDataType, 1> tsdfAcc,
+                    const fvdb::JaggedRAcc32<ScalarDataType, 1> weightsAcc,
+                    const fvdb::JaggedRAcc32<FeatureScalarDataType, 2> featuresAcc,
+                    fvdb::TorchRAcc64<ScalarDataType, 1> outTsdfAcc,
+                    fvdb::TorchRAcc64<ScalarDataType, 1> outWeightsAcc,
+                    fvdb::TorchRAcc64<FeatureScalarDataType, 2> outFeaturesAcc) {
+    using ScalarType        = OpType<ScalarDataType>::type;
+    using FeatureScalarType = OpType<FeatureScalarDataType>::type;
+
     using GridType     = nanovdb::ValueOnIndex;
     using LeafNodeType = nanovdb::NanoGrid<GridType>::LeafNodeType;
     using Vec3T        = nanovdb::math::Vec3<ScalarType>;
@@ -130,19 +147,21 @@ integrateTSDFKernel(const ScalarType truncationMargin,
         const auto batchIdx                      = threadIdx.x / 9;
         const auto rowIdx                        = (threadIdx.x % 9) / 3;
         const auto colIdx                        = threadIdx.x % 3;
-        sharedProjMats[batchIdx][rowIdx][colIdx] = projMats[batchIdx][rowIdx][colIdx];
+        sharedProjMats[batchIdx][rowIdx][colIdx] = ScalarType(projMats[batchIdx][rowIdx][colIdx]);
     } else if (threadIdx.x < sharedMat3x3NumElements + sharedMat4x4NumElements) {
-        const auto baseIdx                             = threadIdx.x - sharedMat3x3NumElements;
-        const auto batchIdx                            = baseIdx / 16;
-        const auto rowIdx                              = (baseIdx % 16) / 4;
-        const auto colIdx                              = baseIdx % 4;
-        sharedWorldToCamMats[batchIdx][rowIdx][colIdx] = worldToCamMats[batchIdx][rowIdx][colIdx];
+        const auto baseIdx  = threadIdx.x - sharedMat3x3NumElements;
+        const auto batchIdx = baseIdx / 16;
+        const auto rowIdx   = (baseIdx % 16) / 4;
+        const auto colIdx   = baseIdx % 4;
+        sharedWorldToCamMats[batchIdx][rowIdx][colIdx] =
+            ScalarType(worldToCamMats[batchIdx][rowIdx][colIdx]);
     } else if (threadIdx.x < 2 * sharedMat3x3NumElements + sharedMat4x4NumElements) {
         const auto baseIdx  = threadIdx.x - sharedMat3x3NumElements - sharedMat4x4NumElements;
         const auto batchIdx = baseIdx / 9;
         const auto rowIdx   = (baseIdx % 9) / 3;
         const auto colIdx   = baseIdx % 3;
-        sharedInvProjMats[batchIdx][rowIdx][colIdx] = invProjMats[batchIdx][rowIdx][colIdx];
+        sharedInvProjMats[batchIdx][rowIdx][colIdx] =
+            ScalarType(invProjMats[batchIdx][rowIdx][colIdx]);
     }
 
     __syncthreads();
@@ -218,11 +237,11 @@ integrateTSDFKernel(const ScalarType truncationMargin,
                     }
                 }
             } else {
-                outWeightsAcc[unionWriteOffset] = ScalarType(0);
-                outTsdfAcc[unionWriteOffset]    = ScalarType(0);
+                outWeightsAcc[unionWriteOffset] = ScalarDataType(0);
+                outTsdfAcc[unionWriteOffset]    = ScalarDataType(0);
                 if (hasFeatures) {
                     for (auto i = 0; i < outFeaturesAcc.size(1); ++i) {
-                        outFeaturesAcc[unionWriteOffset][i] = ScalarType(0);
+                        outFeaturesAcc[unionWriteOffset][i] = ScalarDataType(0);
                     }
                 }
             }
@@ -239,7 +258,7 @@ integrateTSDFKernel(const ScalarType truncationMargin,
         }
 
         const ScalarType pixelDepth =
-            depthImages[batchIdx][voxelPosScreenSpaceY][voxelPosScreenSpaceX];
+            ScalarType(depthImages[batchIdx][voxelPosScreenSpaceY][voxelPosScreenSpaceX]);
         const ScalarType voxelDepth                = voxelPosCamSpace3d.length();
         const Vec3T voxelScreenSpacePosHomogeneous = {
             ScalarType(voxelPosScreenSpaceX), ScalarType(voxelPosScreenSpaceY), ScalarType(1.0)};
@@ -251,17 +270,18 @@ integrateTSDFKernel(const ScalarType truncationMargin,
 
         // If the voxel is too far behind the point, then it's not visible and we don't know
         // what the value is, so we copy teh value from the base grid
-        if (zDiff > -truncationMargin) {
+        if (zDiff > -ScalarType(truncationMargin)) {
             const ScalarType oldWeight =
-                voxelInBaseGrid ? weightsAcc.data()[baseGridOffset] : ScalarType(0);
+                voxelInBaseGrid ? ScalarType(weightsAcc.data()[baseGridOffset]) : ScalarType(0);
             const ScalarType oldTsdf =
-                voxelInBaseGrid ? tsdfAcc.data()[baseGridOffset] : ScalarType(0);
-            const ScalarType tsdf = nanovdb::math::Min(ScalarType(1), zDiff / truncationMargin);
+                voxelInBaseGrid ? ScalarType(tsdfAcc.data()[baseGridOffset]) : ScalarType(0);
+            const ScalarType tsdf =
+                nanovdb::math::Min(ScalarType(1), zDiff / ScalarType(truncationMargin));
 
             const ScalarType newWeight      = ScalarType(1) + oldWeight;
             const ScalarType newTsdf        = (oldWeight * oldTsdf + tsdf) / newWeight;
-            outTsdfAcc[unionWriteOffset]    = newTsdf;
-            outWeightsAcc[unionWriteOffset] = newWeight;
+            outTsdfAcc[unionWriteOffset]    = ScalarDataType(newTsdf);
+            outWeightsAcc[unionWriteOffset] = ScalarDataType(newWeight);
             if (hasFeatures) {
                 for (auto i = 0; i < outFeaturesAcc.size(1); ++i) {
                     const ScalarType pixelFeatureI = ScalarType(
@@ -269,8 +289,8 @@ integrateTSDFKernel(const ScalarType truncationMargin,
                     const ScalarType oldFeatureI =
                         voxelInBaseGrid ? ScalarType(featuresAcc.data()[baseGridOffset][i])
                                         : ScalarType(0);
-                    outFeaturesAcc[unionWriteOffset][i] =
-                        FeatureScalarType((oldWeight * oldFeatureI + pixelFeatureI) / newWeight);
+                    outFeaturesAcc[unionWriteOffset][i] = FeatureScalarDataType(
+                        (oldWeight * oldFeatureI + pixelFeatureI) / newWeight);
                 }
             }
         } else {
