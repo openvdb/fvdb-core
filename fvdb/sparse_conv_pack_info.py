@@ -46,7 +46,19 @@ class SparseConvPackInfo:
         stride: Vec3iOrScalar,
         source_grid: GridBatch,
         target_grid: GridBatch | None = None,
-    ) -> None: ...
+    ) -> None:
+        """
+        Initialize sparse convolution information.
+
+        Args:
+            kernel_size (int or 3-tuple): Size of the convolution kernel.
+            stride (int or 3-tuple): Stride of the convolution.
+            source_grid (GridBatch): The input grid for convolution.
+            target_grid (GridBatch|None): The optional output grid for convolution.
+                If None, it will be computed based on kernel_size and stride.
+        """
+        ...
+
     @overload
     def __init__(self, *, impl: SparseConvPackInfoCpp) -> None: ...
 
@@ -62,26 +74,6 @@ class SparseConvPackInfo:
         # This is a PRIVATE API, only used internally by this class, should not be used by users.
         impl: SparseConvPackInfoCpp | None = None,
     ):
-        """
-        Initialize sparse convolution information.
-
-        This can be initialized either by providing convolution parameters or by
-        wrapping an existing C++ implementation.
-
-        Args:
-            kernel_size (int or 3-tuple): Size of the convolution kernel.
-                REQUIRED for non-private API.
-            stride (int or 3-tuple): Stride of the convolution.
-                REQUIRED for non-private API.
-            source_grid (GridBatch): The input grid for convolution.
-                REQUIRED for non-private API.
-            target_grid (GridBatch): The output grid for convolution.
-                OPTIONAL If None, it will be computed based on kernel_size and stride.
-
-        PRIVATE API:
-            impl (SparseConvPackInfoCpp): Existing C++ implementation to wrap.
-                REQUIRED for private API.
-        """
         if impl is not None:
             if not (kernel_size is None and stride is None and source_grid is None and target_grid is None):
                 raise ValueError("kernel_size, stride, source_grid, and target_grid must be None when impl is provided")
