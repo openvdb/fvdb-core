@@ -67,7 +67,7 @@ colors = fvdb.JaggedTensor([clrs1, clrs2])
 grid = fvdb.gridbatch_from_points(points, voxel_sizes=1.0)
 
 # Splat the normals into the grid with trilinear interpolation
-# vox_normals is a JaggedTensor of per-voxel normas
+# vox_normals is a JaggedTensor of per-voxel normals
 # NOTE: You can use grid.splat_bezier to splat using bezier interpolation
 vox_colors = grid.splat_trilinear(points, colors)
 ```
@@ -242,7 +242,7 @@ grid = fvdb.gridbatch_from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=0.025)
 
 rand_pts = fvdb.JaggedTensor([generate_random_points(bbox, 1000) for bbox in grid.bbox]).cuda()
 
-rand_pts_indices= grid.ijk_to_index(rand_pts)
+rand_pts_indices = grid.ijk_to_index(rand_pts)
 
 print(rand_pts_indices.jdata)
 ```
@@ -329,7 +329,7 @@ mesh_f_jagged = fvdb.JaggedTensor([f1, f2]).cuda()
 reference_grid = fvdb.gridbatch_from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=0.025)
 
 # 7 random feature values for each voxel in the grid
-features = reference_grid.jagged_like(torch.rand(grid.total_voxels, 7).to(grid.device))
+features = reference_grid.jagged_like(torch.rand(reference_grid.total_voxels, 7).to(reference_grid.device))
 
 # Create a set of randomly shuffled corresponding ijk/features from our original grid/features
 shuffled_ijks = []
@@ -337,7 +337,7 @@ shuffled_features = []
 
 for i in range(reference_grid.grid_count):
     perm = torch.randperm(reference_grid.num_voxels_at(i))
-    shuffled_ijks.append(reference_grid.ijk.jdata[grid.ijk.jidx==i][perm])
+    shuffled_ijks.append(reference_grid.ijk.jdata[reference_grid.ijk.jidx==i][perm])
     shuffled_features.append(features.jdata[features.jidx==i][perm])
 
 shuffled_ijks = fvdb.JaggedTensor(shuffled_ijks)
@@ -639,7 +639,7 @@ pts = fvdb.JaggedTensor([torch.rand(10_000*(i+1),3) for i in range(batch_size)])
 grid = fvdb.GridBatch()
 grid.set_from_points(pts,
                     voxel_sizes=[[0.02, 0.02, 0.02], [0.03, 0.03, 0.03], [0.04, 0.04, 0.04], [0.05, 0.05, 0.05]],
-                    origins=[[-.1,-.1,-.1], [0,0,0], [.1,.1,.1], [.2,-.2,.2]])
+                    origins=[[-.1,-.1,-.1], [0.0,0.0,0.0], [.1,.1,.1], [.2,-.2,.2]])
 ```
 
 When `voxel_sizes` and `origins` are not defined, it is assumed all grids have a unit scale voxel_size and an origin at `[0.0, 0.0, 0.0]`.
@@ -680,7 +680,7 @@ While `grid_to_world` and `world_to_grid` are convenient functions for these pur
 
 ```python continuation
 print(f"Grid to world matrices:\n{grid.grid_to_world_matrices}")
-print(f"World to grid matrices:\n{grid.grid_to_world_matrices}")
+print(f"World to grid matrices:\n{grid.world_to_grid_matrices}")
 ```
 ```bash
 Grid to world matrices:

@@ -2,15 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 from dataclasses import dataclass
-from typing import Any, Optional, Tuple, Union
+from typing import Any
 
 import torch
+from fvdb.types import (
+    JaggedTensorOrTensor,
+    Vec3dBatch,
+    Vec3dBatchOrScalar,
+    Vec3i,
+    is_JaggedTensorOrTensor,
+)
 
-import fvdb
-from fvdb import GridBatch, JaggedTensor, SparseConvPackInfo
-from fvdb.types import Vec3dBatch, Vec3dBatchOrScalar, Vec3i
-
-JaggedTensorOrTensor = Union[torch.Tensor, JaggedTensor]
+from fvdb import GridBatch, JaggedTensor, SparseConvPackInfo, gridbatch_from_dense
 
 
 @dataclass
@@ -28,7 +31,7 @@ class VDBTensor:
     # Only stores the kernel map that operates on this grid, reasons being:
     #   1) A usual network seldom re-uses computation for down-up-sampling. This saves memory.
     #   2) This keeps the implementation simple and the kmap transparent.
-    kmap: Optional[SparseConvPackInfo] = None
+    kmap: SparseConvPackInfo | None = None
 
     def __post_init__(self):
         if not isinstance(self.grid, GridBatch):
@@ -40,6 +43,8 @@ class VDBTensor:
         if self.grid.total_voxels != self.data.jdata.size(0):
             raise ValueError("grid and feature should have the same total voxel count")
         if self.kmap is not None:
+            if not isinstance(self.kmap, SparseConvPackInfo):
+                raise TypeError("kmap should be of type SparseConvPackInfo")
             if not (
                 self.is_same(self.kmap.source_grid)
                 and self.is_same(self.kmap.target_grid)
@@ -60,15 +65,12 @@ class VDBTensor:
     def clear_cache(self):
         self.kmap = None
 
-    def is_same(self, other: Union["VDBTensor", GridBatch]):
+    def is_same(self, other: Any):
         if isinstance(other, VDBTensor):
             return self.grid.address == other.grid.address and self.grid_count == other.grid_count
-        elif isinstance(other, GridBatch):
-            return self.grid.address == other.address and self.grid_count == other.grid_count
         else:
-            raise TypeError(
-                f"Invalid argument 'other' to is_same, must " + f"be a VDBTensor or GridBatch but got {type(other)}"
-            )
+            # This will catch the case where other is a GridBatch or a GridBatchCpp
+            return self.grid.has_same_address_and_grid_count(other)
 
     # -----------------------------
     # Arithmetic and math functions
@@ -211,16 +213,24 @@ class VDBTensor:
     # -----------------------
 
     def sample_bezier(self, points: JaggedTensorOrTensor) -> JaggedTensor:
-        return self.grid.sample_bezier(points, self.data)
+        if not is_JaggedTensorOrTensor(points):
+            raise TypeError(f"points should be a JaggedTensor or a torch.Tensor, but got {type(points)}")
+        return self.grid.sample_bezier(points, self.data)  # type: ignore
 
-    def sample_bezier_with_grad(self, points: JaggedTensorOrTensor) -> Tuple[JaggedTensor, JaggedTensor]:
-        return self.grid.sample_bezier_with_grad(points, self.data)
+    def sample_bezier_with_grad(self, points: JaggedTensorOrTensor) -> tuple[JaggedTensor, JaggedTensor]:
+        if not is_JaggedTensorOrTensor(points):
+            raise TypeError(f"points should be a JaggedTensor or a torch.Tensor, but got {type(points)}")
+        return self.grid.sample_bezier_with_grad(points, self.data)  # type: ignore
 
     def sample_trilinear(self, points: JaggedTensorOrTensor) -> JaggedTensor:
-        return self.grid.sample_trilinear(points, self.data)
+        if not is_JaggedTensorOrTensor(points):
+            raise TypeError(f"points should be a JaggedTensor or a torch.Tensor, but got {type(points)}")
+        return self.grid.sample_trilinear(points, self.data)  # type: ignore
 
-    def sample_trilinear_with_grad(self, points: JaggedTensorOrTensor) -> Tuple[JaggedTensor, JaggedTensor]:
-        return self.grid.sample_trilinear_with_grad(points, self.data)
+    def sample_trilinear_with_grad(self, points: JaggedTensorOrTensor) -> tuple[JaggedTensor, JaggedTensor]:
+        if not is_JaggedTensorOrTensor(points):
+            raise TypeError(f"points should be a JaggedTensor or a torch.Tensor, but got {type(points)}")
+        return self.grid.sample_trilinear_with_grad(points, self.data)  # type: ignore
 
     def cpu(self):
         return VDBTensor(self.grid.to("cpu"), self.data.cpu(), self.kmap.cpu() if self.kmap is not None else None)
@@ -309,12 +319,11 @@ class VDBTensor:
         return self.data.requires_grad
 
     @property
-    def cum_enabled_voxels(self) -> torch.LongTensor:
-        return self.grid.cum_enabled_voxels
-
-    @property
     def cum_voxels(self) -> torch.LongTensor:
-        return self.grid.cum_voxels
+        cv = self.grid.cum_voxels
+        if not isinstance(cv, torch.LongTensor):
+            raise TypeError(f"cum_voxels should be a torch.LongTensor, but got {type(cv)}")
+        return cv
 
     @property
     def grid_count(self) -> int:
@@ -326,11 +335,17 @@ class VDBTensor:
 
     @property
     def num_voxels(self) -> torch.LongTensor:
-        return self.grid.num_voxels
+        nv = self.grid.num_voxels
+        if not isinstance(nv, torch.LongTensor):
+            raise TypeError(f"num_voxels should be a torch.LongTensor, but got {type(nv)}")
+        return nv
 
     @property
     def origins(self) -> torch.FloatTensor:
-        return self.grid.origins
+        o = self.grid.origins
+        if not isinstance(o, torch.FloatTensor):
+            raise TypeError(f"origins should be a torch.FloatTensor, but got {type(o)}")
+        return o
 
     @property
     def total_voxels(self) -> int:
@@ -338,7 +353,10 @@ class VDBTensor:
 
     @property
     def voxel_sizes(self) -> torch.FloatTensor:
-        return self.grid.voxel_sizes
+        vs = self.grid.voxel_sizes
+        if not isinstance(vs, torch.FloatTensor):
+            raise TypeError(f"voxel_sizes should be a torch.FloatTensor, but got {type(vs)}")
+        return vs
 
     @property
     def total_leaf_nodes(self) -> int:
@@ -346,34 +364,52 @@ class VDBTensor:
 
     @property
     def num_leaf_nodes(self) -> torch.LongTensor:
-        return self.grid.num_leaf_nodes
+        nl = self.grid.num_leaf_nodes
+        if not isinstance(nl, torch.LongTensor):
+            raise TypeError(f"num_leaf_nodes should be a torch.LongTensor, but got {type(nl)}")
+        return nl
 
     @property
     def grid_to_world_matrices(self) -> torch.FloatTensor:
-        return self.grid.grid_to_world_matrices
+        gtwm = self.grid.grid_to_world_matrices
+        if not isinstance(gtwm, torch.FloatTensor):
+            raise TypeError(f"grid_to_world_matrices should be a torch.FloatTensor, but got {type(gtwm)}")
+        return gtwm
 
     @property
     def world_to_grid_matrices(self) -> torch.FloatTensor:
-        return self.grid.world_to_grid_matrices
+        wtg = self.grid.world_to_grid_matrices
+        if not isinstance(wtg, torch.FloatTensor):
+            raise TypeError(f"world_to_grid_matrices should be a torch.FloatTensor, but got {type(wtg)}")
+        return wtg
 
     @property
     def bbox(self) -> torch.IntTensor:
-        return self.grid.bbox
+        b = self.grid.bbox
+        if not isinstance(b, torch.IntTensor):
+            raise TypeError(f"bbox should be a torch.IntTensor, but got {type(b)}")
+        return b
 
     @property
     def dual_bbox(self) -> torch.IntTensor:
-        return self.grid.dual_bbox
+        db = self.grid.dual_bbox
+        if not isinstance(db, torch.IntTensor):
+            raise TypeError(f"dual_bbox should be a torch.IntTensor, but got {type(db)}")
+        return db
 
     @property
     def total_bbox(self) -> torch.IntTensor:
-        return self.grid.total_bbox
+        tb = self.grid.total_bbox
+        if not isinstance(tb, torch.IntTensor):
+            raise TypeError(f"total_bbox should be a torch.IntTensor, but got {type(tb)}")
+        return tb
 
 
 def vdbtensor_from_dense(
     dense_data: torch.Tensor,
-    ijk_min: Optional[Vec3i] = None,
-    voxel_sizes: Optional[Vec3dBatchOrScalar] = None,
-    origins: Optional[Vec3dBatch] = None,
+    ijk_min: Vec3i | None = None,
+    voxel_sizes: Vec3dBatchOrScalar | None = None,
+    origins: Vec3dBatch | None = None,
 ) -> VDBTensor:
     if origins is None:
         origins = [0.0] * 3
@@ -382,7 +418,7 @@ def vdbtensor_from_dense(
     if ijk_min is None:
         ijk_min = [0, 0, 0]
     assert ijk_min is not None
-    grid = fvdb.gridbatch_from_dense(
+    grid = gridbatch_from_dense(
         dense_data.size(0),
         dense_data.size()[1:4],
         ijk_min=ijk_min,

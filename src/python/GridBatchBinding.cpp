@@ -172,6 +172,33 @@ bind_grid_batch(py::module &m) {
 
         // Array indexing
         .def(
+            "index_int",
+            [](const fvdb::GridBatch &self, int64_t bi) { return self.index(bi); },
+            py::arg("index"))
+        .def(
+            "index_slice",
+            [](const fvdb::GridBatch &self, pybind11::slice slice) {
+                ssize_t start, stop, step, len;
+                if (!slice.compute(self.grid_count(), &start, &stop, &step, &len)) {
+                    TORCH_CHECK_INDEX(false, "Invalid slice ", py::repr(slice).cast<std::string>());
+                }
+                TORCH_CHECK_INDEX(step != 0, "step cannot be 0");
+                return self.index(start, stop, step);
+            },
+            py::arg("index"))
+        .def(
+            "index_list",
+            [](const fvdb::GridBatch &self, std::vector<bool> bi) { return self.index(bi); },
+            py::arg("index"))
+        .def(
+            "index_list",
+            [](const fvdb::GridBatch &self, std::vector<int64_t> bi) { return self.index(bi); },
+            py::arg("index"))
+        .def(
+            "index_tensor",
+            [](const fvdb::GridBatch &self, torch::Tensor bi) { return self.index(bi); },
+            py::arg("index"))
+        .def(
             "__getitem__",
             [](const fvdb::GridBatch &self, int64_t bi) { return self.index(bi); },
             R"_FVDB_(

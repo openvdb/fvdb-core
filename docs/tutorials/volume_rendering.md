@@ -369,7 +369,7 @@ def render(primal_grid: GridBatch, dual_grid: GridBatch,
            tmin: torch.Tensor, tmax: torch.Tensor, step_size: float,
            t_threshold: float = 0.0, chunk: bool = False) -> TensorTriple:
 
-    pack_info, ray_idx, ray_intervals = \
+    pack_info, ray_idx, ray_intervals, _ = \
         primal_grid.uniform_ray_samples(ray_o, ray_d, tmin, tmax, step_size)
 
     ray_t = ray_intervals.jdata.mean(1)
@@ -420,7 +420,7 @@ def tv_loss(dual_grid: GridBatch, ijk: torch.Tensor, sh_features: torch.Tensor, 
     diff_front_sh = (sh_features[n_front_mask] - sh_features[n_center_mask]) / (256.0 / res)
 
     diff_up_o = (o_features[n_up] * fmask - o_features[n_center]) / (256.0 / res)
-    diff_right_o = (o_features[n_right] * fmask- o_features[n_center]) / (256.0 / res)
+    diff_right_o = (o_features[n_right] * fmask - o_features[n_center]) / (256.0 / res)
     diff_front_o = (o_features[n_front] * fmask - o_features[n_center]) / (256.0 / res)
 
     tv_reg_sh = (diff_up_sh ** 2.0 + diff_right_sh ** 2.0 + diff_front_sh ** 2.0).sum(-1).sum(-1)
@@ -463,7 +463,7 @@ def main():
     # Create a sparse grid used to support features and do ray queries
     print("Building grid...")
     primal_grid = GridBatch(device=device)
-    primal_grid.set_from_dense_grid(1, [resolution]*3, [-resolution//2]*3, voxel_sizes=vox_size, voxel_origins=vox_origin)
+    primal_grid.set_from_dense_grid(1, [resolution]*3, [-resolution//2]*3, voxel_sizes=vox_size, origins=vox_origin)
     dual_grid = primal_grid # primal_grid.dual_grid()
 
     print("Done bulding the grid!")

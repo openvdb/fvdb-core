@@ -1722,7 +1722,9 @@ class TestBasicOps(unittest.TestCase):
         assert torch.equal(ijks[inv_idx].jdata, gridbatch.ijk.jdata)
 
         # Test whether when the ijks > grid.ijks, and duplicate entries appear in the ijks, result is still valid
-        double_ijks = fvdb.JaggedTensor([torch.cat([i, i]) for i in ijks.unbind()])
+        ijks_unbound = ijks.unbind()
+        assert all(isinstance(i, torch.Tensor) for i in ijks_unbound)
+        double_ijks = fvdb.JaggedTensor([torch.cat([i, i]) for i in ijks_unbound])  # type: ignore
         d_inv_idx = gridbatch.ijk_to_inv_index(double_ijks, cumulative=False)
         assert torch.equal(double_ijks[d_inv_idx].jdata, gridbatch.ijk.jdata)
 
@@ -1740,7 +1742,9 @@ class TestBasicOps(unittest.TestCase):
         assert torch.equal(ijks.jdata, gridbatch.ijk[idx].jdata)
 
         # Test whether when the ijks > grid.ijks, and duplicate entries appear in the ijks, result is still valid
-        double_ijks = fvdb.JaggedTensor([torch.cat([i, i]) for i in ijks.unbind()])
+        ijks_unbound = ijks.unbind()
+        assert all(isinstance(i, torch.Tensor) for i in ijks_unbound)
+        double_ijks = fvdb.JaggedTensor([torch.cat([i, i]) for i in ijks_unbound])  # type: ignore
         d_idx = gridbatch.ijk_to_index(double_ijks, cumulative=False)
         assert torch.equal(double_ijks.jdata, gridbatch.ijk[d_idx].jdata)
 

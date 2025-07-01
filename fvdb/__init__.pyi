@@ -3,41 +3,46 @@
 #
 from __future__ import annotations
 
-from typing import List, Sequence, Union, overload
+from collections.abc import Sequence
+from typing import overload
 
 import torch
 
+from .types import JaggedTensorOrTensor
+
 if torch.cuda.is_available():
     torch.cuda.init()
+
+def _parse_device_string(device_string: str) -> torch.device: ...
 
 # The following import needs to come after the GridBatch and JaggedTensor imports
 # immediately above in order to avoid a circular dependency error.
 from . import nn
 from ._Cpp import (
     ConvPackBackend,
-    GridBatch,
     JaggedTensor,
-    SparseConvPackInfo,
     config,
     gaussian_render_jagged,
-    gridbatch_from_dense,
-    gridbatch_from_ijk,
-    gridbatch_from_mesh,
-    gridbatch_from_nearest_voxels_to_points,
-    gridbatch_from_points,
     jempty,
     jones,
     jrand,
     jrandn,
     jzeros,
-    load,
-    save,
     scaled_dot_product_attention,
     volume_render,
 )
 from .gaussian_splatting import GaussianSplat3d
-
-JaggedTensorOrTensor = Union[torch.Tensor, JaggedTensor]
+from .grid_batch import (
+    GridBatch,
+    gridbatch_from_dense,
+    gridbatch_from_ijk,
+    gridbatch_from_mesh,
+    gridbatch_from_nearest_voxels_to_points,
+    gridbatch_from_points,
+    load,
+    save,
+)
+from .sparse_conv_pack_info import SparseConvPackInfo
 
 @overload
 def jcat(grid_batches: Sequence[GridBatch]) -> GridBatch: ...
