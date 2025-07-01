@@ -78,33 +78,23 @@ class GridBatch:
     max_grids_per_batch: int = GridBatchCpp.max_grids_per_batch
 
     @overload
-    def __init__(self, device: str = ...) -> None: ...
-    @overload
-    def __init__(self, device: torch.device = ...) -> None: ...
-    @overload
-    def __init__(self, *, impl: GridBatchCpp) -> None: ...
-
-    def __init__(self, device: torch.device | str | None = None, impl: GridBatchCpp | None = None):
+    def __init__(self, device: torch.device | str | None = ...) -> None:
         """
-        Initialize a GridBatch.
-
-        This method supports two different initialization patterns:
-
-        1. Create a new GridBatch on a specific device:
-           >>> grid = GridBatch("cuda")
-           >>> grid = GridBatch(torch.device("cuda:0"))
-           >>> grid = GridBatch()  # defaults to CPU
-
-        2. Wrap an existing GridBatchCpp implementation: This is for internal use only, and is
-           considered private API.
-           >>> grid = GridBatch(impl=existing_cpp_gridbatch)
+        Create a new GridBatch on a specific device:
+        >>> grid = GridBatch("cuda")  # string
+        >>> grid = GridBatch(torch.device("cuda:0")) # device directly
+        >>> grid = GridBatch()  # defaults to CPU
 
         Args:
             device: The device to create the GridBatch on. Can be a string (e.g., "cuda", "cpu")
                 or a torch.device object. If None, defaults to CPU.
-            impl: An existing GridBatchCpp implementation to wrap. If provided, the device
-                parameter is ignored.
         """
+        ...
+
+    @overload
+    def __init__(self, *, impl: GridBatchCpp) -> None: ...
+
+    def __init__(self, device: torch.device | str | None = None, impl: GridBatchCpp | None = None):
         if impl is not None:
             self._impl = impl
         else:
