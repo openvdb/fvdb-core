@@ -67,7 +67,7 @@ Next, we splat the colors at the points to the constructed grid, yielding per-vo
 
 ```python continuation
 # Splat the colors into the grid with trilinear interpolation
-# vox_colors is a JaggedTensor of per-voxel normas
+# vox_colors is a JaggedTensor of per-voxel colors
 vox_colors = grid.splat_trilinear(points, colors)
 ```
 
