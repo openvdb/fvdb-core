@@ -49,6 +49,8 @@ splatIntoGridTrilinearCallback(int32_t bidx,
             const MathType addValue = it->second * static_cast<MathType>(pointsData[eidx][cidx]);
             if constexpr (DeviceTag == torch::kCUDA) {
                 gpuAtomicAddNoReturn(&outGridData[indexIjk][cidx], addValue);
+            } else if constexpr (DeviceTag == torch::kPrivateUse1) {
+                atomicAdd_system(&outGridData[indexIjk][cidx], addValue);
             } else {
                 outGridData[indexIjk][cidx] += addValue;
             }
