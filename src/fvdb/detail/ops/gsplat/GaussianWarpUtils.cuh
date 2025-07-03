@@ -67,10 +67,25 @@ warpSumMut(typename Vec2Type<ScalarT>::type &val, WarpT &warp) {
 
 template <typename WarpT, typename ScalarT>
 inline __device__ void
+warpSumMut(nanovdb::math::Vec2<ScalarT> &val, WarpT &warp) {
+    val[0] = cooperative_groups::reduce(warp, val[0], cooperative_groups::plus<ScalarT>());
+    val[1] = cooperative_groups::reduce(warp, val[1], cooperative_groups::plus<ScalarT>());
+}
+
+template <typename WarpT, typename ScalarT>
+inline __device__ void
 warpSumMut(typename Vec3Type<ScalarT>::type &val, WarpT &warp) {
     val.x = cooperative_groups::reduce(warp, val.x, cooperative_groups::plus<ScalarT>());
     val.y = cooperative_groups::reduce(warp, val.y, cooperative_groups::plus<ScalarT>());
     val.z = cooperative_groups::reduce(warp, val.z, cooperative_groups::plus<ScalarT>());
+}
+
+template <typename WarpT, typename ScalarT>
+inline __device__ void
+warpSumMut(nanovdb::math::Vec3<ScalarT> &val, WarpT &warp) {
+    val[0] = cooperative_groups::reduce(warp, val[0], cooperative_groups::plus<ScalarT>());
+    val[1] = cooperative_groups::reduce(warp, val[1], cooperative_groups::plus<ScalarT>());
+    val[2] = cooperative_groups::reduce(warp, val[2], cooperative_groups::plus<ScalarT>());
 }
 
 template <size_t DIM, typename WarpT, typename ScalarT>
