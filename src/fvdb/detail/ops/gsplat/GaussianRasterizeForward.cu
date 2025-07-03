@@ -4,9 +4,12 @@
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/ops/Ops.h>
 #include <fvdb/detail/ops/gsplat/Gaussian2D.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianRasterize.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
+
+#include <nanovdb/math/Math.h>
 
 #include <c10/util/Exception.h>
 
@@ -22,304 +25,79 @@ namespace fvdb::detail::ops {
 namespace {
 
 // Structure to hold arguments and methods for the rasterize forward kernel
-template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct DeviceArgs {
-    constexpr static std::size_t NUM_OUTER_DIMS    = IS_PACKED ? 1 : 2;
-    using vec2t                                    = typename Vec2Type<ScalarType>::type;
-    using vec3t                                    = typename Vec3Type<ScalarType>::type;
-    template <typename T, int N> using TorchRAcc64 = fvdb::TorchRAcc64<T, N>;
-    using ScalarAccessor                           = TorchRAcc64<ScalarType, NUM_OUTER_DIMS>;
-    using VectorAccessor                           = TorchRAcc64<ScalarType, NUM_OUTER_DIMS + 1>;
+template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct RasterizeForwardArgs {
+    using CommonArgs = RasterizeCommonArgs<ScalarType, NUM_CHANNELS, IS_PACKED>;
+    CommonArgs commonArgs;
 
-    uint32_t mNumCameras;
-    uint32_t mNumGaussiansPerCamera;
-    uint32_t mTotalIntersections;
-    uint32_t mImageWidth;
-    uint32_t mImageHeight;
-    uint32_t mImageOriginW;
-    uint32_t mImageOriginH;
-    uint32_t mTileOriginW;
-    uint32_t mTileOriginH;
-    uint32_t mTileSize;
-    uint32_t mNumTilesW;
-    uint32_t mNumTilesH;
-
-    // Default tensors used to initialize optional and output tensors in constructor
-    torch::Tensor mDefaultBackground;
-    torch::Tensor mDefaultMasks;
-    torch::Tensor mDefaultActiveTiles;
-    torch::Tensor mDefaultTilePixelMask;
-    torch::Tensor mDefaultTilePixelCumsum;
-    torch::Tensor mDefaultPixelMap;
-
-    VectorAccessor mFeatures;                 // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
-    VectorAccessor mMeans2d;                  // [C, N, 2] or [nnz, 2]
-    VectorAccessor mConics;                   // [C, N, 3] or [nnz, 3]
-    ScalarAccessor mOpacities;                // [C, N] or [nnz]
-    TorchRAcc64<ScalarType, 2> mBackgrounds;  // [C, NUM_CHANNELS]
-    bool mHasBackgrounds;
-    TorchRAcc64<bool, 3> mMasks;              // [C, nTilesH, nTilesW]
-    bool mHasMasks;
-    TorchRAcc64<int32_t, 3> mTileOffsets;     // [C, nTilesH, nTilesW]
-    TorchRAcc64<int32_t, 1> mTileGaussianIds; // [totalIntersections]
     JaggedRAcc64<ScalarType, 2> mOutFeatures; // [[nPixels, NUM_CHANNELS]_0..._C]
     JaggedRAcc64<ScalarType, 2> mOutAlphas;   // [[nPixels, 1]_0..._C]
     JaggedRAcc64<int32_t, 1> mOutLastIds;     // [[nPixels]_0..._C]
-    bool mIsSparse;
-    TorchRAcc64<int32_t, 1> mActiveTiles;     // [AT]
-    TorchRAcc64<uint64_t, 2> mTilePixelMask;  // [AT, wordsPerTile] e.g. [AT, 4]
-    TorchRAcc64<int64_t, 1> mTilePixelCumsum; // [AT]
-    TorchRAcc64<int64_t, 1> mPixelMap;        // [AP]
 
-    // Check that the input tensor is a CUDA tensor and is contiguous
-    inline void
-    checkInputTensor(const torch::Tensor &x, const std::string &name) {
-        TORCH_CHECK(x.is_cuda(), "Input ", name, " must be a CUDA tensor");
-        TORCH_CHECK(x.is_contiguous(), "Input ", name, " must be contiguous");
-    }
+    RasterizeForwardArgs(
+        const torch::Tensor &means2d,         // [C, N, 2] or [nnz, 2]
+        const torch::Tensor &conics,          // [C, N, 3] or [nnz, 3]
+        const torch::Tensor &features,        // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
+        const torch::Tensor &opacities,       // [C, N] or [nnz]
+        const std::optional<torch::Tensor> &backgrounds, // [C, NUM_CHANNELS]
+        const std::optional<torch::Tensor> &masks,       // [C, numTilesH, numTilesW]
+        const uint32_t imageWidth,
+        const uint32_t imageHeight,
+        const uint32_t imageOriginW,
+        const uint32_t imageOriginH,
+        const uint32_t tileSize,
+        const torch::Tensor &tileOffsets,     // [C, numTilesH, numTilesW]
+        const torch::Tensor &tileGaussianIds, // [totalIntersections]
+        // output JaggedTensors:
+        // In Dense mode, first dimension X = C * imageHeight * imageWidth
+        // In Sparse mode, first dimension X = C
+        const fvdb::JaggedTensor &outFeatures,                          // [X, NUM_CHANNELS]
+        const fvdb::JaggedTensor &outAlphas,                            // [X, 1]
+        const fvdb::JaggedTensor &outLastIds,                           // [X]
+        const std::optional<torch::Tensor> &activeTiles = std::nullopt, // [AT]
+        const std::optional<torch::Tensor> &tilePixelMask =
+            std::nullopt, // [AT, wordsPerTileBitmask] e.g. [AT, 4]
+        const std::optional<torch::Tensor> &tilePixelCumsum = std::nullopt, // [AT]
+        const std::optional<torch::Tensor> &pixelMap        = std::nullopt)        // [AP]
+        : commonArgs(means2d,
+                     conics,
+                     features,
+                     opacities,
+                     backgrounds,
+                     masks,
+                     imageWidth,
+                     imageHeight,
+                     imageOriginW,
+                     imageOriginH,
+                     tileSize,
+                     tileOffsets,
+                     tileGaussianIds,
+                     activeTiles,
+                     tilePixelMask,
+                     tilePixelCumsum,
+                     pixelMap),
+          mOutFeatures(initJaggedAccessor<ScalarType, 2>(outFeatures, "outFeatures")),
+          mOutAlphas(initJaggedAccessor<ScalarType, 2>(outAlphas, "outAlphas")),
+          mOutLastIds(initJaggedAccessor<int32_t, 1>(outLastIds, "outLastIds")) {}
 
-    template <typename T, int N>
-    inline auto
-    initAccessor(const std::optional<torch::Tensor> &tensor,
-                 const torch::Tensor &defaultTensor,
-                 const std::string &name) {
-        if (tensor.has_value()) {
-            checkInputTensor(tensor.value(), name);
-            return tensor.value().packed_accessor64<T, N, torch::RestrictPtrTraits>();
-        } else {
-            checkInputTensor(defaultTensor, name + " (default)");
-            return defaultTensor.packed_accessor64<T, N, torch::RestrictPtrTraits>();
-        }
-    }
-
-    template <typename T, int N>
-    inline auto
-    initAccessor(const torch::Tensor &tensor, const std::string &name) {
-        checkInputTensor(tensor, name);
-        return tensor.packed_accessor64<T, N, torch::RestrictPtrTraits>();
-    }
-
-    template <typename T, int N>
-    inline auto
-    initJaggedAccessor(const fvdb::JaggedTensor &tensor) {
-        return tensor.packed_accessor64<T, N, torch::RestrictPtrTraits>();
-    }
-
-    DeviceArgs(const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]
-               const torch::Tensor &conics,    // [C, N, 3] or [nnz, 3]
-               const torch::Tensor &features,  // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
-               const torch::Tensor &opacities, // [C, N] or [nnz]
-               const std::optional<torch::Tensor> &backgrounds, // [C, NUM_CHANNELS]
-               const std::optional<torch::Tensor> &masks,       // [C, numTilesH, numTilesW]
-               const uint32_t imageWidth,
-               const uint32_t imageHeight,
-               const uint32_t imageOriginW,
-               const uint32_t imageOriginH,
-               const uint32_t tileSize,
-               const torch::Tensor &tileOffsets,     // [C, numTilesH, numTilesW]
-               const torch::Tensor &tileGaussianIds, // [totalIntersections]
-               // output JaggedTensors:
-               // In Dense mode, first dimension X = C * imageHeight * imageWidth
-               // In Sparse mode, first dimension X = C
-               const fvdb::JaggedTensor &outFeatures,                          // [X, NUM_CHANNELS]
-               const fvdb::JaggedTensor &outAlphas,                            // [X, 1]
-               const fvdb::JaggedTensor &outLastIds,                           // [X]
-               const std::optional<torch::Tensor> &activeTiles = std::nullopt, // [AT]
-               const std::optional<torch::Tensor> &tilePixelMask =
-                   std::nullopt, // [AT, wordsPerTileBitmask] e.g. [AT, 4]
-               const std::optional<torch::Tensor> &tilePixelCumsum = std::nullopt, // [AT]
-               const std::optional<torch::Tensor> &pixelMap        = std::nullopt)        // [AP]
-        : mImageWidth(imageWidth), mImageHeight(imageHeight), mImageOriginW(imageOriginW),
-          mImageOriginH(imageOriginH), mTileOriginW(imageOriginW / tileSize),
-          mTileOriginH(imageOriginH / tileSize), mTileSize(tileSize),
-          mDefaultBackground(torch::empty({0, 0}, means2d.options())),
-          mDefaultMasks(torch::empty({0, 0, 0}, means2d.options().dtype(torch::kBool))),
-          mDefaultActiveTiles(torch::empty({0}, tileOffsets.options())),
-          mDefaultTilePixelMask(torch::empty({0, 0}, means2d.options().dtype(torch::kUInt64))),
-          mDefaultTilePixelCumsum(torch::empty({0}, tileOffsets.options().dtype(torch::kInt64))),
-          mDefaultPixelMap(torch::empty({0}, tileOffsets.options().dtype(torch::kInt64))),
-          mFeatures(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(features, "features")),
-          mMeans2d(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(means2d, "means2d")),
-          mConics(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(conics, "conics")),
-          mOpacities(initAccessor<ScalarType, NUM_OUTER_DIMS>(opacities, "opacities")),
-          mBackgrounds(initAccessor<ScalarType, 2>(backgrounds, mDefaultBackground, "backgrounds")),
-          mHasBackgrounds(backgrounds.has_value()),
-          mMasks(initAccessor<bool, 3>(masks, mDefaultMasks, "masks")),
-          mHasMasks(masks.has_value()),
-          mTileOffsets(initAccessor<int32_t, 3>(tileOffsets, "tileOffsets")),
-          mTileGaussianIds(initAccessor<int32_t, 1>(tileGaussianIds, "tileGaussianIds")),
-          mOutFeatures(initJaggedAccessor<ScalarType, 2>(outFeatures)),
-          mOutAlphas(initJaggedAccessor<ScalarType, 2>(outAlphas)),
-          mOutLastIds(initJaggedAccessor<int32_t, 1>(outLastIds)),
-          mIsSparse(activeTiles.has_value()),
-          mActiveTiles(initAccessor<int32_t, 1>(activeTiles, mDefaultActiveTiles, "activeTiles")),
-          mTilePixelMask(
-              initAccessor<uint64_t, 2>(tilePixelMask, mDefaultTilePixelMask, "tilePixelMask")),
-          mTilePixelCumsum(initAccessor<int64_t, 1>(
-              tilePixelCumsum, mDefaultTilePixelCumsum, "tilePixelCumsum")),
-          mPixelMap(initAccessor<int64_t, 1>(pixelMap, mDefaultPixelMap, "pixelMap")) {
-        static_assert(NUM_OUTER_DIMS == 1 || NUM_OUTER_DIMS == 2, "NUM_OUTER_DIMS must be 1 or 2");
-        mNumCameras            = mTileOffsets.size(0);
-        mNumGaussiansPerCamera = IS_PACKED ? 0 : mMeans2d.size(1);
-        mTotalIntersections    = mTileGaussianIds.size(0);
-        mNumTilesW             = mTileOffsets.size(2);
-        mNumTilesH             = mTileOffsets.size(1);
-
-        checkInputShapes();
-    }
-
-    void
-    checkInputShapes() {
-        const int64_t totalGaussians = IS_PACKED ? mMeans2d.size(0) : 0;
-
-        if constexpr (IS_PACKED) {
-            TORCH_CHECK_VALUE(totalGaussians == mMeans2d.size(0), "Bad size for means2d");
-            TORCH_CHECK_VALUE(2 == mMeans2d.size(1), "Bad size for means2d");
-            TORCH_CHECK_VALUE(totalGaussians == mConics.size(0), "Bad size for conics");
-            TORCH_CHECK_VALUE(3 == mConics.size(1), "Bad size for conics");
-            TORCH_CHECK_VALUE(totalGaussians == mFeatures.size(0), "Bad size for features");
-            TORCH_CHECK_VALUE(NUM_CHANNELS == mFeatures.size(1), "Bad size for features");
-
-            TORCH_CHECK_VALUE(totalGaussians == mOpacities.size(0), "Bad size for opacities");
-        } else {
-            TORCH_CHECK_VALUE(mNumCameras == mMeans2d.size(0), "Bad size for means2d");
-            TORCH_CHECK_VALUE(mNumGaussiansPerCamera == mMeans2d.size(1), "Bad size for means2d");
-            TORCH_CHECK_VALUE(2 == mMeans2d.size(2), "Bad size for means2d");
-            TORCH_CHECK_VALUE(mNumCameras == mConics.size(0), "Bad size for conics");
-            TORCH_CHECK_VALUE(mNumGaussiansPerCamera == mConics.size(1), "Bad size for conics");
-            TORCH_CHECK_VALUE(3 == mConics.size(2), "Bad size for conics");
-            TORCH_CHECK_VALUE(mNumCameras == mFeatures.size(0), "Bad size for features");
-            TORCH_CHECK_VALUE(mNumGaussiansPerCamera == mFeatures.size(1), "Bad size for features");
-            TORCH_CHECK_VALUE(NUM_CHANNELS == mFeatures.size(2), "Bad size for features");
-            TORCH_CHECK_VALUE(mNumCameras == mOpacities.size(0), "Bad size for opacities");
-            TORCH_CHECK_VALUE(mNumGaussiansPerCamera == mOpacities.size(1),
-                              "Bad size for opacities");
-        }
-
-        if (mHasBackgrounds) {
-            TORCH_CHECK_VALUE(mNumCameras == mBackgrounds.size(0), "Bad size for backgrounds");
-            TORCH_CHECK_VALUE(NUM_CHANNELS == mBackgrounds.size(1), "Bad size for backgrounds");
-        }
-        if (mHasMasks) {
-            TORCH_CHECK_VALUE(mNumCameras == mMasks.size(0), "Bad size for masks");
-            TORCH_CHECK_VALUE(mNumTilesH == mMasks.size(1), "Bad size for masks");
-            TORCH_CHECK_VALUE(mNumTilesW == mMasks.size(2), "Bad size for masks");
-        }
-
-        TORCH_CHECK_VALUE(mNumCameras == mTileOffsets.size(0), "Bad size for tileOffsets");
-        TORCH_CHECK_VALUE(mNumTilesH == mTileOffsets.size(1), "Bad size for tileOffsets");
-        TORCH_CHECK_VALUE(mNumTilesW == mTileOffsets.size(2), "Bad size for tileOffsets");
-
-        if (mIsSparse) {
-            TORCH_CHECK_VALUE(mTilePixelMask.size(0) == mActiveTiles.size(0),
-                              "Bad size for tilePixelMask");
-            TORCH_CHECK_VALUE(mTilePixelMask.size(1) == numWordsPerTileBitmask(mTileSize),
-                              "Bad size for tilePixelMask");
-            TORCH_CHECK_VALUE(mTilePixelCumsum.size(0) == mActiveTiles.size(0),
-                              "Bad size for tilePixelCumsum");
-        }
-    }
-
-    // Construct a Gaussian2D object from the input tensors at the given index
-    inline __device__ Gaussian2D<ScalarType>
-    getGaussian(const uint32_t index) {
-        if constexpr (IS_PACKED) {
-            return Gaussian2D<ScalarType>(
-                index,
-                vec2t(mMeans2d[index][0], mMeans2d[index][1]),
-                mOpacities[index],
-                vec3t(mConics[index][0], mConics[index][1], mConics[index][2]));
-        } else {
-            auto cid = index / mNumGaussiansPerCamera;
-            auto gid = index % mNumGaussiansPerCamera;
-            return Gaussian2D<ScalarType>(
-                index,
-                vec2t(mMeans2d[cid][gid][0], mMeans2d[cid][gid][1]),
-                mOpacities[cid][gid],
-                vec3t(mConics[cid][gid][0], mConics[cid][gid][1], mConics[cid][gid][2]));
-        }
-    }
-
-    // Get the pixel index for a sparse pixel in the output tensor
-    inline __device__ uint64_t
-    sparsePixelIndex(const int32_t tileOrdinal, const uint32_t k) {
-        // Suppose we're rendering the k^th active pixel in tile_id = active_tiles[t],
-        // we write its rendered value to index pixel_map[tile_pixel_cumsum[tile_id - 1] + k] in
-        // the output. The -1 is because the cumsum is inclusive
-        const auto tilePixelCumsumValue = tileOrdinal > 0 ? mTilePixelCumsum[tileOrdinal - 1] : 0;
-        return mPixelMap[tilePixelCumsumValue + k];
-    }
-
-    inline __device__ uint64_t
-    pixelIndex(const uint64_t cameraId,
-               const uint64_t row,
-               const uint64_t col,
-               const uint32_t activePixelIndex) {
-        return mIsSparse ? sparsePixelIndex(blockIdx.x, activePixelIndex)
-                         : cameraId * mImageWidth * mImageHeight + row * mImageWidth + col;
-    }
-
-    // Check if the current thread is rendering an active sparse pixel in the current tile
-    inline __device__ bool
-    tilePixelActive() {
-        return fvdb::detail::ops::tilePixelActive(
-            mTilePixelMask, mTileSize, blockIdx.x, threadIdx.y, threadIdx.x);
-    }
-
-    // Get the camera id and tile id from a sparse tile index. Assumes a 1D grid
-    // of blocks, where blockIdx.x is the tile ordinal
-    inline __device__ std::pair<int32_t, int32_t>
-    sparseCameraTileId() {
-        const int32_t globalTile = mActiveTiles[blockIdx.x];
-        const int32_t cameraId   = globalTile / (mNumTilesW * mNumTilesH);
-        const int32_t tileId     = globalTile % (mNumTilesW * mNumTilesH);
-        return {cameraId, tileId};
-    }
-
-    // Get the camera id, tile coordinates, and pixel coordinates from a sparse
-    // tile index. Assumes a 1D grid of blocks, where blockIdx.x is the tile ordinal
-    // @return tuple of camera id, tile row, tile col, pixel i, pixel j
-    __device__ cuda::std::tuple<int32_t, int32_t, int32_t, uint32_t, uint32_t>
-    sparseCoordinates() {
-        const auto [cameraId, tileId] = sparseCameraTileId();
-
-        const int32_t tileRow = tileId / mNumTilesW;
-        const int32_t tileCol = tileId % mNumTilesW;
-        const uint32_t row    = tileRow * mTileSize + threadIdx.y;
-        const uint32_t col    = tileCol * mTileSize + threadIdx.x;
-        return {cameraId, tileRow, tileCol, row, col};
-    }
-
-    // Get the camera id, tile coordinates, and pixel coordinates from a dense block index.
-    // Assumes a 3D grid of blocks, where blockIdx.x is the camera id, blockIdx.y is the tile
-    // row, and blockIdx.z is the tile column.
-    // @return tuple of camera id, tile row, tile col, pixel i, pixel j
-    __device__ cuda::std::tuple<int32_t, int32_t, int32_t, uint32_t, uint32_t>
-    denseCoordinates() {
-        const int32_t cameraId = blockIdx.x;
-
-        // blockIdx.yz runs from [0, numTilesH] x [0, numTilesW]
-        const int32_t tileRow = blockIdx.y + mTileOriginH;
-        const int32_t tileCol = blockIdx.z + mTileOriginW;
-
-        // Pixel coordinates run from [0, height] x [0, width]
-        // i.e. they are in the local coordinates of the crop starting from pixel
-        //      [image_origin_h, image_origin_w] with size [image_height,
-        //      image_width]
-        const uint32_t row = tileRow * mTileSize + threadIdx.y;
-        const uint32_t col = tileCol * mTileSize + threadIdx.x;
-        return {cameraId, tileRow, tileCol, row, col};
-    }
-
+    /// @brief Write the alpha value for a pixel
+    /// @param pixelIndex The index of the pixel
+    /// @param alpha The alpha value to write
     __device__ void
     writeAlpha(uint64_t pixelIndex, ScalarType alpha) {
         mOutAlphas.data()[pixelIndex][0] = alpha;
     }
 
+    /// @brief Write the last ID for a pixel
+    /// @param pixelIndex The index of the pixel
+    /// @param lastId The last ID to write
     __device__ void
     writeLastId(uint64_t pixelIndex, int32_t lastId) {
         mOutLastIds.data()[pixelIndex] = lastId;
     }
 
+    /// @brief Write the features for a pixel
+    /// @param pixelIndex The index of the pixel
+    /// @param f The function to write the features
     template <typename F>
     __device__ void
     writeFeatures(uint64_t pixelIndex, F &&f) {
@@ -329,30 +107,31 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Dev
         }
     }
 
+    /// @brief Volume render a tile of Gaussians
+    /// @param cameraId The ID of the camera
+    /// @param firstGaussianIdInBlock The first Gaussian ID in the block
+    /// @param lastGaussianIdInBlock The last Gaussian ID in the block
+    /// @param blockSize The size of the block
+    /// @param pixelIsActive Whether the pixel is active
+    /// @param activePixelIndex The index of the active pixel
+    /// @param row The row of the pixel
+    /// @param col The column of the pixel
     __device__ void
     volumeRenderTileForward(const uint32_t cameraId,
-                            const uint32_t tileStart,
-                            const uint32_t tileEnd,
-                            const uint32_t blockSize,
-                            const uint32_t tileSize,
-                            const bool pixelIsActive,
-                            const uint32_t activePixelIndex,
                             const uint32_t row,
-                            const uint32_t col) {
-        using coord2t = typename Vec2Type<int32_t>::type;
-
-        const uint32_t numBatches = (tileEnd - tileStart + blockSize - 1) / blockSize;
-
-        // Ordinal of this thread in the block
-        const uint32_t tidx = threadIdx.y * blockDim.x + threadIdx.x;
+                            const uint32_t col,
+                            const uint32_t firstGaussianIdInBlock,
+                            const uint32_t lastGaussianIdInBlock,
+                            const uint32_t blockSize,
+                            const bool pixelIsActive,
+                            const uint32_t activePixelIndex) {
+        extern __shared__ int s[];
+        Gaussian2D<ScalarType> *sharedGaussians =
+            reinterpret_cast<Gaussian2D<ScalarType> *>(s); // [blockSize]
 
         // We don't return right away if the pixel is not in the image since we want
         // to use this thread to load gaussians into shared memory
         bool done = !pixelIsActive;
-
-        extern __shared__ int s[];
-        Gaussian2D<ScalarType> *sharedGaussians =
-            reinterpret_cast<Gaussian2D<ScalarType> *>(s); // [blockSize]
 
         // NOTE: The accumulated transmittance is used in the backward pass, and
         // since it's a
@@ -363,6 +142,11 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Dev
         ScalarType accumTransmittance = 1.0f;
         // index of most recent gaussian to write to this thread's pixel
         int32_t curIdx = -1;
+
+        // Process Gaussians in batches of block size (i.e. one Gaussian per thread in the block)
+        const uint32_t tidx = threadIdx.y * blockDim.x + threadIdx.x;
+        const uint32_t numBatches =
+            (lastGaussianIdInBlock - firstGaussianIdInBlock + blockSize - 1) / blockSize;
 
         // collect and process batches of gaussians
         // each thread loads one gaussian at a time before rasterizing its
@@ -377,11 +161,12 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Dev
 
             // Each thread fetches one gaussian from front to back (mTileGaussianIds is depth
             // sorted)
-            const uint32_t batchStart = tileStart + blockSize * b;
+            const uint32_t batchStart = firstGaussianIdInBlock + blockSize * b;
             const uint32_t idx        = batchStart + tidx;
-            if (idx < tileEnd) {
-                const int32_t g       = mTileGaussianIds[idx]; // which gaussian we're rendering
-                sharedGaussians[tidx] = getGaussian(g);
+            if (idx < lastGaussianIdInBlock) {
+                const int32_t g =
+                    commonArgs.mTileGaussianIds[idx]; // which gaussian we're rendering
+                sharedGaussians[tidx] = commonArgs.getGaussian(g);
             }
 
             // Sync threads so all gaussians for this batch are loaded in shared
@@ -390,15 +175,16 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Dev
 
             // Volume render Gaussians in this batch
             if (pixelIsActive) { // skip inactive sparse pixels
-                const uint32_t batchSize = min(blockSize, tileEnd - batchStart);
+                const uint32_t batchSize = min(blockSize, lastGaussianIdInBlock - batchStart);
                 for (uint32_t t = 0; (t < batchSize) && !done; ++t) {
                     const Gaussian2D<ScalarType> gaussian = sharedGaussians[t];
 
-                    const ScalarType px = ScalarType(col) + 0.5f;
-                    const ScalarType py = ScalarType(row) + 0.5f;
+                    // (row, col) coordinates are relative to the specified image origin which may
+                    // be a crop so we need to add the origin to get the absolute pixel coordinates
+                    const ScalarType px = col + commonArgs.mImageOriginW + ScalarType{0.5f};
+                    const ScalarType py = row + commonArgs.mImageOriginH + ScalarType{0.5f};
 
-                    const vec2t delta      = gaussian.delta(px, py);
-                    const ScalarType sigma = gaussian.sigma(delta);
+                    const ScalarType sigma = gaussian.sigma(px, py);
                     const ScalarType alpha = min(0.999f, gaussian.opacity * __expf(-sigma));
 
                     // TODO: are we quantizing the alpha too early? They could add up to
@@ -407,9 +193,8 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Dev
                         continue;
                     }
 
-                    const ScalarType nextTransmittance =
-                        accumTransmittance * (ScalarType(1.0) - alpha);
-                    if (nextTransmittance <= ScalarType(1e-4)) { // this pixel is done: exclusive
+                    const ScalarType nextTransmittance = accumTransmittance * (1.0f - alpha);
+                    if (nextTransmittance <= 1e-4f) { // this pixel is done: exclusive
                         done = true;
                         break;
                     }
@@ -417,11 +202,11 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Dev
                     const ScalarType vis       = alpha * accumTransmittance;
                     const auto featureAccessor = [&]() {
                         if constexpr (IS_PACKED) {
-                            return mFeatures[gaussian.id];
+                            return commonArgs.mFeatures[gaussian.id];
                         } else {
-                            const int32_t cid = gaussian.id / mNumGaussiansPerCamera;
-                            const int32_t gid = gaussian.id % mNumGaussiansPerCamera;
-                            return mFeatures[cid][gid];
+                            const int32_t cid = gaussian.id / commonArgs.mNumGaussiansPerCamera;
+                            const int32_t gid = gaussian.id % commonArgs.mNumGaussiansPerCamera;
+                            return commonArgs.mFeatures[cid][gid];
                         }
                     }();
                     PRAGMA_UNROLL
@@ -436,26 +221,23 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Dev
         }
 
         if (pixelIsActive) {
-            auto pixIdx = pixelIndex(cameraId, row, col, activePixelIndex);
+            auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
             writeAlpha(pixIdx, 1.0f - accumTransmittance);
             writeLastId(pixIdx, curIdx);
             writeFeatures(pixIdx, [&](uint32_t k) {
-                return mHasBackgrounds ? pixOut[k] + accumTransmittance * mBackgrounds[cameraId][k]
-                                       : pixOut[k];
+                return commonArgs.mHasBackgrounds
+                           ? pixOut[k] + accumTransmittance * commonArgs.mBackgrounds[cameraId][k]
+                           : pixOut[k];
             });
         }
     }
 };
 
-/****************************************************************************
- * Rasterization to Pixels Forward Pass
- ****************************************************************************/
-
-// takes an index from the activeTiles tensor and returns the corresponding tile
-// index in the specified camera image
+/// @brief Rasterize Gaussians to pixels
+/// @param args The arguments for the rasterization
 template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED>
 __global__ void
-rasterizeGaussiansForward(DeviceArgs<ScalarType, NUM_CHANNELS, IS_PACKED> args) {
+rasterizeGaussiansForward(RasterizeForwardArgs<ScalarType, NUM_CHANNELS, IS_PACKED> forwardArgs) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
     int32_t cameraId;
@@ -463,58 +245,60 @@ rasterizeGaussiansForward(DeviceArgs<ScalarType, NUM_CHANNELS, IS_PACKED> args) 
     int32_t tileCol;
     uint32_t row, col;
 
-    cuda::std::tie(cameraId, tileRow, tileCol, row, col) =
-        args.mIsSparse ? args.sparseCoordinates() : args.denseCoordinates();
+    auto &commonArgs = forwardArgs.commonArgs;
 
-    // return if out of bounds
-    // keep not rasterizing threads around for reading data
-    bool pixelInImage = (row < args.mImageHeight && col < args.mImageWidth);
+    cuda::std::tie(cameraId, tileRow, tileCol, row, col) =
+        commonArgs.mIsSparse ? commonArgs.sparseCoordinates() : commonArgs.denseCoordinates();
+
+    // Whether this pixel is inside the image bounds.
+    // NOTE: We keep threads which correspond to pixels outside the image bounds around
+    //       to load gaussians from global memory, but they do not contribute to the output.
+    bool pixelInImage = (row < commonArgs.mImageHeight && col < commonArgs.mImageWidth);
 
     // Index of this pixel in the output for the block if it is active
     // Only used in sparse mode, computed using CUB BlockScan
     uint32_t activePixelIndex = 0;
 
-    if (args.mIsSparse) {
+    if (commonArgs.mIsSparse) {
         // Use CUB BlockScan to compute the index of each active pixel in the block
         __shared__
         typename cub::BlockScan<uint32_t, 16, cub::BLOCK_SCAN_RAKING, 16>::TempStorage tempStorage;
-        pixelInImage = args.tilePixelActive();
+        pixelInImage = commonArgs.tilePixelActive();
         cub::BlockScan<uint32_t, 16, cub::BLOCK_SCAN_RAKING, 16>(tempStorage)
             .ExclusiveSum(pixelInImage, activePixelIndex);
         __syncthreads();
     }
 
-    if (args.mHasMasks && pixelInImage && !args.mMasks[cameraId][tileRow][tileCol]) {
-        auto pixIdx = args.pixelIndex(cameraId, row, col, activePixelIndex);
-        args.writeFeatures(pixIdx, [&](uint32_t k) {
-            return args.mHasBackgrounds ? args.mBackgrounds[cameraId][k] : 0.0f;
+    if (commonArgs.mHasMasks && pixelInImage && !commonArgs.mMasks[cameraId][tileRow][tileCol]) {
+        auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
+        forwardArgs.writeFeatures(pixIdx, [&](uint32_t k) {
+            return commonArgs.mHasBackgrounds ? commonArgs.mBackgrounds[cameraId][k] : 0.0f;
         });
         return;
     }
 
-    // Figure out the first and (one past the) last Gaussian ID in this block/tile
-    const int32_t firstGaussianIdInBlock = args.mTileOffsets[cameraId][tileRow][tileCol];
-    auto [nextTileRow, nextTileCol]      = (tileCol < args.mNumTilesW - 1)
-                                               ? std::make_tuple(tileRow, tileCol + 1)
-                                               : std::make_tuple(tileRow + 1, 0); // wrap around
-    const int32_t lastGaussianIdInBlock =
-        ((cameraId == args.mNumCameras - 1) && (nextTileRow == args.mNumTilesH))
-            ? args.mTotalIntersections
-            : args.mTileOffsets[cameraId][nextTileRow][nextTileCol];
-    const uint32_t blockSize = blockDim.x * blockDim.y;
+    int32_t firstGaussianIdInBlock;
+    int32_t lastGaussianIdInBlock;
+    cuda::std::tie(firstGaussianIdInBlock, lastGaussianIdInBlock) =
+        commonArgs.tileGaussianRange(cameraId, tileRow, tileCol);
 
-    // Pixel coordinates in the global image (not just the local crop)
-    const uint32_t globalRow = row + args.mImageOriginH;
-    const uint32_t globalCol = col + args.mImageOriginW;
-    args.volumeRenderTileForward(cameraId,
-                                 firstGaussianIdInBlock,
-                                 lastGaussianIdInBlock,
-                                 blockSize,
-                                 args.mTileSize,
-                                 pixelInImage,
-                                 activePixelIndex,
-                                 globalRow,
-                                 globalCol);
+    forwardArgs.volumeRenderTileForward(cameraId,
+                                        row,
+                                        col,
+                                        firstGaussianIdInBlock,
+                                        lastGaussianIdInBlock,
+                                        blockDim.x * blockDim.y,
+                                        pixelInImage,
+                                        activePixelIndex);
+}
+
+/// @brief Get the shared memory requirements for the forward pass kernel
+/// @param tileSize The size of the tile
+/// @return The shared memory required in bytes
+template <typename ScalarType>
+size_t
+getSharedMemRequirements(const size_t tileSize) {
+    return tileSize * tileSize * sizeof(Gaussian2D<ScalarType>);
 }
 
 template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED>
@@ -541,9 +325,6 @@ launchRasterizeForwardKernel(
     const std::optional<torch::Tensor> &tilePixelMask       = std::nullopt,
     const std::optional<torch::Tensor> &tilePixelCumsum     = std::nullopt,
     const std::optional<torch::Tensor> &pixelMap            = std::nullopt) {
-    using vec3t = typename Vec3Type<ScalarType>::type;
-    using vec2t = typename Vec2Type<ScalarType>::type;
-
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means2d));
 
     TORCH_CHECK_VALUE(tileOffsets.size(2) == (imageWidth + tileSize - 1) / tileSize,
@@ -586,31 +367,31 @@ launchRasterizeForwardKernel(
     auto outAlphas   = fvdb::JaggedTensor(alphasToRenderVec);
     auto outLastIds  = fvdb::JaggedTensor(lastIdsToRenderVec);
 
-    auto args = DeviceArgs<ScalarType, NUM_CHANNELS, IS_PACKED>(means2d,
-                                                                conics,
-                                                                features,
-                                                                opacities,
-                                                                backgrounds,
-                                                                masks,
-                                                                imageWidth,
-                                                                imageHeight,
-                                                                imageOriginW,
-                                                                imageOriginH,
-                                                                tileSize,
-                                                                tileOffsets,
-                                                                tileGaussianIds,
-                                                                outFeatures,
-                                                                outAlphas,
-                                                                outLastIds,
-                                                                activeTiles,
-                                                                tilePixelMask,
-                                                                tilePixelCumsum,
-                                                                pixelMap);
+    auto args = RasterizeForwardArgs<ScalarType, NUM_CHANNELS, IS_PACKED>(means2d,
+                                                                          conics,
+                                                                          features,
+                                                                          opacities,
+                                                                          backgrounds,
+                                                                          masks,
+                                                                          imageWidth,
+                                                                          imageHeight,
+                                                                          imageOriginW,
+                                                                          imageOriginH,
+                                                                          tileSize,
+                                                                          tileOffsets,
+                                                                          tileGaussianIds,
+                                                                          outFeatures,
+                                                                          outAlphas,
+                                                                          outLastIds,
+                                                                          activeTiles,
+                                                                          tilePixelMask,
+                                                                          tilePixelCumsum,
+                                                                          pixelMap);
 
     const at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
     // Thread blocks cooperatively cache a tile of Gaussians in shared memory
-    const uint32_t sharedMem = tileSize * tileSize * sizeof(Gaussian2D<ScalarType>);
+    const uint32_t sharedMem = getSharedMemRequirements<ScalarType>(tileSize);
 
     // TODO: an optimization can be done by passing the actual number of
     // channels into the kernel functions and avoid necessary global memory
@@ -636,7 +417,7 @@ launchRasterizeForwardKernel(
     // In dense mode, we need to reshape the output tensors to the original image size
     // because they are packed into a single JaggedTensor so that the output code is the same
     // for dense and sparse modes.
-    if (!args.mIsSparse) {
+    if (!args.commonArgs.mIsSparse) {
         outFeatures =
             fvdb::JaggedTensor(outFeatures.jdata().reshape({C, imageHeight, imageWidth, channels}));
         outAlphas  = fvdb::JaggedTensor(outAlphas.jdata().reshape({C, imageHeight, imageWidth, 1}));

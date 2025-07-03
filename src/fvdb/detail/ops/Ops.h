@@ -754,7 +754,7 @@ dispatchGaussianSparseRasterizeForward(const fvdb::JaggedTensor &pixelsToRender,
 ///
 /// @return std::tuple containing gradients of the loss function with respect to the input
 /// parameters:
-///         - (empty tensor placeholder for compatibility with forward pass)
+///         - Absolute value of 2D means [C, N, 2] - gradients ∂L/∂|means2d|
 ///         - 2D means [C, N, 2] - gradients ∂L/∂means2d
 ///         - conics [C, N, 3] - gradients ∂L/∂conics
 ///         - features [C, N, D] - gradients ∂L/∂features

@@ -70,8 +70,8 @@ bubbleSortByDepth(uint32_t *depthIndices,
 }
 
 template <bool IS_PACKED> struct DeviceArgs {
-    using vec2t = typename Vec2Type<float>::type;
-    using vec3t = typename Vec3Type<float>::type;
+    using vec2t = nanovdb::math::Vec2<float>;
+    using vec3t = nanovdb::math::Vec3<float>;
 
     uint32_t mNumCameras;
     uint32_t mTotalIntersections;
@@ -310,8 +310,7 @@ template <bool IS_PACKED> struct DeviceArgs {
             for (uint32_t t = 0; t < batchSize; ++t) {
                 const Gaussian2D<float> &gaussian = sharedGaussians[t];
 
-                const vec2t delta = gaussian.delta(px, py);
-                const float sigma = gaussian.sigma(delta);
+                const float sigma = gaussian.sigma(px, py);
                 const float alpha = min(0.999f, gaussian.opacity * __expf(-sigma));
 
                 if (sigma < 0.f || alpha < 1.f / 255.f) {

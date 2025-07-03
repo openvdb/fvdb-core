@@ -6,11 +6,13 @@
 
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
 
+#include <nanovdb/math/Math.h>
+
 namespace fvdb::detail::ops {
 
 template <typename ScalarType> struct alignas(32) Gaussian2D { // 28 bytes
-    using vec2t = typename Vec2Type<ScalarType>::type;
-    using vec3t = typename Vec3Type<ScalarType>::type;
+    using vec2t = nanovdb::math::Vec2<ScalarType>;
+    using vec3t = nanovdb::math::Vec3<ScalarType>;
 
     int32_t id;         // 4 bytes
     vec2t xy;           // 8 bytes
@@ -19,13 +21,18 @@ template <typename ScalarType> struct alignas(32) Gaussian2D { // 28 bytes
 
     inline __device__ vec2t
     delta(const ScalarType px, const ScalarType py) const {
-        return {xy.x - px, xy.y - py};
+        return {xy[0] - px, xy[1] - py};
     }
 
     inline __device__ ScalarType
     sigma(const vec2t delta) const {
-        return ScalarType{0.5} * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
-               conic.y * delta.x * delta.y;
+        return ScalarType{0.5} * (conic[0] * delta[0] * delta[0] + conic[2] * delta[1] * delta[1]) +
+               conic[1] * delta[0] * delta[1];
+    }
+
+    inline __device__ ScalarType
+    sigma(const ScalarType px, const ScalarType py) const {
+        return sigma(delta(px, py));
     }
 };
 
