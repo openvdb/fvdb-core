@@ -260,7 +260,7 @@ MarchingCubes(const GridBatchImpl &batchHdl, const torch::Tensor &sdf, double le
                                                                  static_cast<scalar_t>(level),
                                                                  nVerticesAcc);
                 };
-                forEachVoxelCUDA<nanovdb::ValueOnIndex>(128, 1, batchHdl, cb);
+                forEachVoxelCUDA(128, 1, batchHdl, cb);
             } else {
                 auto cb = [=](int32_t bidx,
                               int32_t lidx,
@@ -276,7 +276,7 @@ MarchingCubes(const GridBatchImpl &batchHdl, const torch::Tensor &sdf, double le
                                                               static_cast<scalar_t>(level),
                                                               nVerticesAcc);
                 };
-                forEachVoxelCPU<nanovdb::ValueOnIndex>(1, batchHdl, cb);
+                forEachVoxelCPU(1, batchHdl, cb);
             }
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
@@ -319,7 +319,7 @@ MarchingCubes(const GridBatchImpl &batchHdl, const torch::Tensor &sdf, double le
                                                                    trianglesAcc,
                                                                    vertIdsAcc);
                     };
-                    forEachVoxelCUDA<nanovdb::ValueOnIndex>(128, 1, batchHdl, cb);
+                    forEachVoxelCUDA(128, 1, batchHdl, cb);
                 } else {
                     auto cb = [=](int32_t bidx,
                                   int32_t lidx,
@@ -337,7 +337,7 @@ MarchingCubes(const GridBatchImpl &batchHdl, const torch::Tensor &sdf, double le
                                                                 trianglesAcc,
                                                                 vertIdsAcc);
                     };
-                    forEachVoxelCPU<nanovdb::ValueOnIndex>(1, batchHdl, cb);
+                    forEachVoxelCPU(1, batchHdl, cb);
                 }
             }),
             AT_EXPAND(AT_FLOATING_TYPES),

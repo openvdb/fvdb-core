@@ -63,7 +63,7 @@ GetActiveVoxelsInBoundsMask(const GridBatchImpl &gridBatch,
             activeGridVoxelInBoundsMaskCallback<TorchRAcc32>(
                 batchIdx, leafIdx, voxelIdx, gridAccessor, bboxAcc, outMaskAcc);
         };
-        forEachVoxelCUDA<nanovdb::ValueOnIndex>(1024, 1, gridBatch, cb);
+        forEachVoxelCUDA(1024, 1, gridBatch, cb);
     } else {
         auto cb = [=](int32_t batchIdx,
                       int32_t leafIdx,
@@ -73,7 +73,7 @@ GetActiveVoxelsInBoundsMask(const GridBatchImpl &gridBatch,
             activeGridVoxelInBoundsMaskCallback<TorchAcc>(
                 batchIdx, leafIdx, voxelIdx, gridAccessor, bboxAcc, outMaskAcc);
         };
-        forEachVoxelCPU<nanovdb::ValueOnIndex>(1, gridBatch, cb);
+        forEachVoxelCPU(1, gridBatch, cb);
     }
 }
 

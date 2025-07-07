@@ -111,7 +111,7 @@ dispatchReadIntoDense<torch::kCUDA>(const GridBatchImpl &batchHdl,
                 readIntoDenseVoxelCallback<scalar_t>(
                     bidx, lidx, vidx, cidx, batchAcc, denseOriginsAcc, inGridDataAcc, outDenseAcc);
             };
-            forEachVoxelCUDA<nanovdb::ValueOnIndex>(1024, inGridData.size(1), batchHdl, callback);
+            forEachVoxelCUDA(1024, inGridData.size(1), batchHdl, callback);
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
         c10::kHalf,

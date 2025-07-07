@@ -17,11 +17,11 @@ namespace fvdb {
 
 namespace _private {
 
-template <typename GridType, typename Func, typename... Args>
+template <typename Func, typename... Args>
 __global__ void
 forEachLeafPrivateUse1Kernel(int64_t leafChannelCount,
                              int64_t leafChannelOffset,
-                             fvdb::detail::GridBatchImpl::Accessor<GridType> grid,
+                             fvdb::detail::GridBatchImpl::Accessor<nanovdb::ValueOnIndex> grid,
                              const int32_t channelsPerLeaf,
                              Func func,
                              Args... args) {
@@ -39,11 +39,11 @@ forEachLeafPrivateUse1Kernel(int64_t leafChannelCount,
     }
 }
 
-template <typename GridType, typename Func, typename... Args>
+template <typename Func, typename... Args>
 __global__ void
 forEachVoxelPrivateUse1Kernel(int64_t leafVoxelChannelCount,
                               int64_t leafVoxelChannelOffset,
-                              fvdb::detail::GridBatchImpl::Accessor<GridType> grid,
+                              fvdb::detail::GridBatchImpl::Accessor<nanovdb::ValueOnIndex> grid,
                               int64_t channelsPerVoxel,
                               Func func,
                               Args... args) {
@@ -90,7 +90,7 @@ forEachJaggedElementChannelPrivateUse1Kernel(int64_t numel,
 
 } // namespace _private
 
-template <typename GridType, typename Func, typename... Args>
+template <typename Func, typename... Args>
 void
 forEachLeafPrivateUse1(int64_t numChannels,
                        const fvdb::detail::GridBatchImpl &batchHdl,
@@ -100,7 +100,7 @@ forEachLeafPrivateUse1(int64_t numChannels,
 
     const int64_t leafCount = batchHdl.totalLeaves();
 
-    auto batchAccessor = batchHdl.deviceAccessor<GridType>();
+    auto batchAccessor = batchHdl.deviceAccessor<nanovdb::ValueOnIndex>();
 
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
@@ -136,7 +136,7 @@ forEachLeafPrivateUse1(int64_t numChannels,
     }
 }
 
-template <typename GridType, typename Func, typename... Args>
+template <typename Func, typename... Args>
 void
 forEachVoxelPrivateUse1(int64_t numChannels,
                         const fvdb::detail::GridBatchImpl &batchHdl,
@@ -149,7 +149,7 @@ forEachVoxelPrivateUse1(int64_t numChannels,
         nanovdb::NanoTree<nanovdb::ValueOnIndex>::LeafNodeType::NUM_VALUES;
     const int64_t leafCount = batchHdl.totalLeaves();
 
-    auto batchAccessor = batchHdl.deviceAccessor<GridType>();
+    auto batchAccessor = batchHdl.deviceAccessor<nanovdb::ValueOnIndex>();
 
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));

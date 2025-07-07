@@ -112,7 +112,7 @@ fineIJKForCoarseGrid(const GridBatchImpl &batchHdl,
             bidx, lidx, vidx, cidx, bacc, upsamplingFactor, outIJKAcc, outIJKBIdxAcc);
     };
 
-    forEachVoxelCUDA<nanovdb::ValueOnIndex>(1024, 1, batchHdl, cb);
+    forEachVoxelCUDA(1024, 1, batchHdl, cb);
 
     // FIXME: (Francis) this uses a bunch of extra memory. Maybe we can avoid it in the future by
     // allowing for invalid values in the nanovdb GPU grid building process

@@ -126,7 +126,7 @@ GridEdgeNetwork(const GridBatchImpl &batchHdl, bool returnVoxelCoordinates) {
                                                  outEBidxAcc,
                                                  returnVoxelCoordinates);
         };
-        forEachVoxelCUDA<nanovdb::ValueOnIndex>(1024, 1, batchHdl, cb);
+        forEachVoxelCUDA(1024, 1, batchHdl, cb);
     } else {
         auto cb = [=](int32_t batchIdx,
                       int32_t leafIdx,
@@ -143,7 +143,7 @@ GridEdgeNetwork(const GridBatchImpl &batchHdl, bool returnVoxelCoordinates) {
                                               outEBidxAcc,
                                               returnVoxelCoordinates);
         };
-        forEachVoxelCPU<nanovdb::ValueOnIndex>(1, batchHdl, cb);
+        forEachVoxelCPU(1, batchHdl, cb);
     }
 
     // FIXME: (@fwilliams) Be smarter about this

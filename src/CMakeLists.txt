@@ -138,6 +138,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/convolution/backend/SparseConvolutionHaloGrad.cu
     fvdb/detail/ops/jagged/JaggedSort.cu
     fvdb/detail/ops/jagged/JaggedReduce.cu
+    fvdb/detail/utils/cuda/ForEachCUDA.cu
     fvdb/detail/GridBatchImpl.cu)
 
 # Build library
