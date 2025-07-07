@@ -224,23 +224,25 @@ class GridBatch:
     def contiguous(self) -> GridBatch: ...
     def integrate_tsdf(
         self,
+        voxel_truncation_distance: float,
+        projection_matrices: torch.Tensor,
+        cam_to_world_matrices: torch.Tensor,
         tsdf: JaggedTensor,
         weights: JaggedTensor,
         depth_images: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        cam_to_world_matrices: torch.Tensor,
-        voxel_truncation_distance: float,
+        weight_images: torch.Tensor | None = None,
     ) -> tuple[GridBatch, JaggedTensor, JaggedTensor]: ...
     def integrate_tsdf_with_features(
         self,
-        tsdf: JaggedTensor,
-        weights: JaggedTensor,
-        features: JaggedTensor,
-        depth_images: torch.Tensor,
-        feature_images: torch.Tensor,
+        voxel_truncation_distance: float,
         projection_matrices: torch.Tensor,
         cam_to_world_matrices: torch.Tensor,
-        voxel_truncation_distance: float,
+        tsdf: JaggedTensor,
+        features: JaggedTensor,
+        weights: JaggedTensor,
+        depth_images: torch.Tensor,
+        feature_images: torch.Tensor,
+        weight_images: torch.Tensor | None = None,
     ) -> tuple[GridBatch, JaggedTensor, JaggedTensor, JaggedTensor]: ...
     def conv_grid(self, kernel_size: Vec3iOrScalar, stride: Vec3iOrScalar) -> GridBatch: ...
     def coords_in_active_voxel(self, ijk: JaggedTensor) -> JaggedTensor: ...

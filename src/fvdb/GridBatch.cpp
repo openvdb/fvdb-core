@@ -674,26 +674,28 @@ GridBatch::marching_cubes(const JaggedTensor &field, double level) const {
 }
 
 std::tuple<GridBatch, JaggedTensor, JaggedTensor, JaggedTensor>
-GridBatch::integrate_tsdf_with_features(const JaggedTensor &tsdf,
-                                        const JaggedTensor &weights,
-                                        const JaggedTensor &features,
-                                        const torch::Tensor &depthImages,
-                                        const torch::Tensor &featureImages,
+GridBatch::integrate_tsdf_with_features(const double truncationMargin,
                                         const torch::Tensor &projectionMatrices,
                                         const torch::Tensor &camToWorldMatrices,
-                                        const double epsilon) const {
+                                        const JaggedTensor &tsdf,
+                                        const JaggedTensor &features,
+                                        const JaggedTensor &weights,
+                                        const torch::Tensor &depthImages,
+                                        const torch::Tensor &featureImages,
+                                        const std::optional<torch::Tensor> &weightImages) const {
     const auto [newGrid, outTSDF, outWeights, outFeatures] =
         FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
             return fvdb::detail::ops::dispatchIntegrateTSDFWithFeatures<DeviceTag>(
                 mImpl,
-                tsdf,
-                weights,
-                features,
-                depthImages,
-                featureImages,
+                truncationMargin,
                 projectionMatrices,
                 camToWorldMatrices,
-                epsilon);
+                tsdf,
+                features,
+                weights,
+                depthImages,
+                featureImages,
+                weightImages);
         });
     GridBatch ret;
     ret.mImpl = newGrid;
@@ -701,15 +703,22 @@ GridBatch::integrate_tsdf_with_features(const JaggedTensor &tsdf,
 }
 
 std::tuple<GridBatch, JaggedTensor, JaggedTensor>
-GridBatch::integrate_tsdf(const JaggedTensor &tsdf,
-                          const JaggedTensor &weights,
-                          const torch::Tensor &depthImages,
+GridBatch::integrate_tsdf(const double truncationMargin,
                           const torch::Tensor &projectionMatrices,
                           const torch::Tensor &camToWorldMatrices,
-                          const double epsilon) const {
+                          const JaggedTensor &tsdf,
+                          const JaggedTensor &weights,
+                          const torch::Tensor &depthImages,
+                          const std::optional<torch::Tensor> &weightImages) const {
     const auto [newGrid, outTSDF, outWeights] = FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
-        return fvdb::detail::ops::dispatchIntegrateTSDF<DeviceTag>(
-            mImpl, tsdf, weights, depthImages, projectionMatrices, camToWorldMatrices, epsilon);
+        return fvdb::detail::ops::dispatchIntegrateTSDF<DeviceTag>(mImpl,
+                                                                   truncationMargin,
+                                                                   projectionMatrices,
+                                                                   camToWorldMatrices,
+                                                                   tsdf,
+                                                                   weights,
+                                                                   depthImages,
+                                                                   weightImages);
     });
     GridBatch ret;
     ret.mImpl = newGrid;

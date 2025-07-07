@@ -105,12 +105,14 @@ integrateTSDFKernel(const ScalarDataType truncationMargin,
                     const int64_t imageWidth,
                     const int64_t imageHeight,
                     const bool hasFeatures,
+                    const bool hasWeights,
                     const fvdb::TorchRAcc64<ScalarDataType, 3> projMats,
                     const fvdb::TorchRAcc64<ScalarDataType, 3> invProjMats,
                     const fvdb::TorchRAcc64<ScalarDataType, 3> worldToCamMats,
                     const fvdb::TorchRAcc64<ScalarDataType, 3> camToWorldMats,
                     const fvdb::TorchRAcc64<ScalarDataType, 3> depthImages,
                     const fvdb::TorchRAcc64<FeatureScalarDataType, 4> featureImages,
+                    const fvdb::TorchRAcc64<ScalarDataType, 3> weightImages,
                     const fvdb::detail::BatchGridAccessor<nanovdb::ValueOnIndex> baseGridAcc,
                     const fvdb::detail::BatchGridAccessor<nanovdb::ValueOnIndex> unionGridAcc,
                     const fvdb::JaggedRAcc32<ScalarDataType, 1> tsdfAcc,
@@ -281,7 +283,22 @@ integrateTSDFKernel(const ScalarDataType truncationMargin,
             const ScalarType tsdf =
                 nanovdb::math::Min(ScalarType(1), zDiff / ScalarType(truncationMargin));
 
-            const ScalarType newWeight      = ScalarType(1) + oldWeight;
+            const ScalarType pixelWeight = [&]() {
+                if (hasWeights) {
+                    return ScalarType(
+                        weightImages[batchIdx][voxelPosScreenSpaceY][voxelPosScreenSpaceX]);
+                } else {
+                    return ScalarType{1};
+                }
+            }();
+
+            if (pixelWeight <= ScalarType(0)) {
+                // If the new weight is zero, we don't update the TSDF or features
+                copyOldToNew();
+                continue;
+            }
+            const ScalarType newWeight =
+                oldWeight + pixelWeight; // ScalarType(1) + oldWeight * pixelWeight;
             const ScalarType newTsdf        = (oldWeight * oldTsdf + tsdf) / newWeight;
             outTsdfAcc[unionWriteOffset]    = ScalarDataType(newTsdf);
             outWeightsAcc[unionWriteOffset] = ScalarDataType(newWeight);
@@ -401,6 +418,7 @@ std::tuple<JaggedTensor, JaggedTensor, JaggedTensor>
 doIntegrate(const float truncationMargin,
             const torch::Tensor &depthImages,
             const torch::Tensor &featureImages,
+            const torch::Tensor &weightImages,
             const torch::Tensor &projectionMatrices,
             const torch::Tensor &invProjectionMatrices,
             const torch::Tensor &camToWorldMatrices,
@@ -416,6 +434,7 @@ doIntegrate(const float truncationMargin,
     const int64_t totalOutVoxels = unionGrid.totalVoxels();
     const int64_t featureDim     = features.rsize(-1);
     const bool hasFeatures       = featureDim > 0;
+    const bool hasWeights        = weightImages.size(0) > 0;
 
     torch::Tensor outWeights = torch::zeros({totalOutVoxels}, weights.jdata().options());
     torch::Tensor outTsdf    = torch::zeros({totalOutVoxels}, tsdf.jdata().options());
@@ -462,12 +481,14 @@ doIntegrate(const float truncationMargin,
                     imageWidth,
                     imageHeight,
                     hasFeatures,
+                    hasWeights,
                     projMatsCasted.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
                     invProjMatsCasted.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
                     worldToCamMatsCasted.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
                     camToWorldMatsCasted.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
                     depthImages.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
                     featureImages.packed_accessor64<feature_t, 4, torch::RestrictPtrTraits>(),
+                    weightImages.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
                     baseGrid.deviceAccessor<nanovdb::ValueOnIndex>(),
                     unionGrid.deviceAccessor<nanovdb::ValueOnIndex>(),
                     tsdf.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
@@ -518,6 +539,7 @@ checkInputTypes(const JaggedTensor &tsdf,
                 const std::optional<JaggedTensor> &features,
                 const torch::Tensor &depthImages,
                 const std::optional<torch::Tensor> &featureImages,
+                const std::optional<torch::Tensor> &weightImages,
                 const torch::Tensor &projectionMatrices,
                 const torch::Tensor &camToWorldMatrices) {
     // We support a few different scalar types for the TSDF, weights, and depth images, and
@@ -565,6 +587,14 @@ checkInputTypes(const JaggedTensor &tsdf,
                          " and features.dtype = ",
                          features.value().scalar_type());
     }
+    if (weightImages.has_value()) {
+        TORCH_CHECK_TYPE(weightImages.value().scalar_type() == dtype,
+                         "Weight images must be of the same type as TSDF values, but got "
+                         "weight_images.dtype = ",
+                         weightImages.value().scalar_type(),
+                         " and tsdf.dtype = ",
+                         dtype);
+    }
 
     // Step 3. Check that the projection matrices and camera-to-world matrices
     //         have the same scalar type as the TSDF values
@@ -589,6 +619,7 @@ checkInputSizes(const GridBatchImpl &grid,
                 const std::optional<JaggedTensor> &features,
                 const torch::Tensor &depthImages,
                 const std::optional<torch::Tensor> &featureImages,
+                const std::optional<torch::Tensor> &weightImages,
                 const torch::Tensor &projectionMatrices,
                 const torch::Tensor &camToWorldMatrices) {
     // Step 0. Check that the input tensors have the correct dimensions
@@ -622,6 +653,30 @@ checkInputSizes(const GridBatchImpl &grid,
                           featureImages.value().sizes());
     }
 
+    if (weightImages.has_value()) {
+        TORCH_CHECK_VALUE(weightImages.value().dim() == 3,
+                          "Weight images must be of shape (batch_size, image_height, "
+                          "image_width), but got ",
+                          weightImages.value().sizes());
+        TORCH_CHECK_VALUE(weightImages.value().size(0) == depthImages.size(0),
+                          "Weight images must have the same batch size as depth images, but got "
+                          "weight_images.size(0) = ",
+                          weightImages.value().size(0),
+                          " and depth_images.size(0) = ",
+                          depthImages.size(0));
+        TORCH_CHECK_VALUE(weightImages.value().size(1) == depthImages.size(1),
+                          "Weight images must have the same height as depth images, but got "
+                          "weight_images.size(1) = ",
+                          weightImages.value().size(1),
+                          " and depth_images.size(1) = ",
+                          depthImages.size(1));
+        TORCH_CHECK_VALUE(weightImages.value().size(2) == depthImages.size(2),
+                          "Weight images must have the same width as depth images, but got "
+                          "weight_images.size(2) = ",
+                          weightImages.value().size(2),
+                          " and depth_images.size(2) = ",
+                          depthImages.size(2));
+    }
     // Step 1. Check that the batch size of the grid matches the batch size of the other tensors
     const int64_t batchSize = grid.batchSize();
     TORCH_CHECK(batchSize == tsdf.num_tensors(),
@@ -735,14 +790,15 @@ checkInputSizes(const GridBatchImpl &grid,
 
 std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor, JaggedTensor>
 integrateTSDFImpl(const c10::intrusive_ptr<GridBatchImpl> grid,
+                  const double truncationMargin,
+                  const torch::Tensor &projectionMatrices,
+                  const torch::Tensor &camToWorldMatrices,
                   const JaggedTensor &tsdf,
                   const JaggedTensor &weights,
                   const std::optional<JaggedTensor> &features,
                   const torch::Tensor &depthImages,
                   const std::optional<torch::Tensor> &featureImages,
-                  const torch::Tensor &projectionMatrices,
-                  const torch::Tensor &camToWorldMatrices,
-                  const double truncationMargin) {
+                  const std::optional<torch::Tensor> &weightImages) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(tsdf.jdata()));
     // Check that the input tensors have the correct dimensions and types
     checkInputTypes(tsdf,
@@ -750,6 +806,7 @@ integrateTSDFImpl(const c10::intrusive_ptr<GridBatchImpl> grid,
                     features,
                     depthImages,
                     featureImages,
+                    weightImages,
                     projectionMatrices,
                     camToWorldMatrices);
     checkInputSizes(*grid,
@@ -758,6 +815,7 @@ integrateTSDFImpl(const c10::intrusive_ptr<GridBatchImpl> grid,
                     features,
                     depthImages,
                     featureImages,
+                    weightImages,
                     projectionMatrices,
                     camToWorldMatrices);
 
@@ -795,10 +853,15 @@ integrateTSDFImpl(const c10::intrusive_ptr<GridBatchImpl> grid,
         }
     }();
 
+    const auto weightImagesValue = weightImages.has_value()
+                                       ? weightImages.value()
+                                       : torch::empty({0, 0, 0}, squeezedDepthImages.options());
+
     // Step 3: Integrate weights, tsdf values, and feautures into the output tensor
     const auto [outTsdf, outWeights, outFeatures] = doIntegrate(truncationMargin,
                                                                 squeezedDepthImages,
                                                                 featureImagesValue,
+                                                                weightImagesValue,
                                                                 projectionMats,
                                                                 invProjectionMats,
                                                                 camToWorldMats,
@@ -815,69 +878,75 @@ integrateTSDFImpl(const c10::intrusive_ptr<GridBatchImpl> grid,
 template <>
 std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor>
 dispatchIntegrateTSDF<torch::kCUDA>(const c10::intrusive_ptr<GridBatchImpl> grid,
+                                    const double truncationMargin,
+                                    const torch::Tensor &projectionMatrices,
+                                    const torch::Tensor &camToWorldMatrices,
                                     const JaggedTensor &tsdf,
                                     const JaggedTensor &weights,
                                     const torch::Tensor &depthImages,
-                                    const torch::Tensor &projectionMatrices,
-                                    const torch::Tensor &camToWorldMatrices,
-                                    const double truncationMargin) {
+                                    const std::optional<torch::Tensor> &weightImages) {
     const auto [unionGrid, outTsdf, outWeights, outFeatures] = integrateTSDFImpl(grid,
+                                                                                 truncationMargin,
+                                                                                 projectionMatrices,
+                                                                                 camToWorldMatrices,
                                                                                  tsdf,
                                                                                  weights,
                                                                                  std::nullopt,
                                                                                  depthImages,
                                                                                  std::nullopt,
-                                                                                 projectionMatrices,
-                                                                                 camToWorldMatrices,
-                                                                                 truncationMargin);
+                                                                                 weightImages);
     return {unionGrid, outTsdf, outWeights};
 }
 
 template <>
 std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor>
 dispatchIntegrateTSDF<torch::kCPU>(const c10::intrusive_ptr<GridBatchImpl> grid,
+                                   const double truncationMargin,
+                                   const torch::Tensor &projectionMatrices,
+                                   const torch::Tensor &camToWorldMatrices,
                                    const JaggedTensor &tsdf,
                                    const JaggedTensor &weights,
                                    const torch::Tensor &depthImages,
-                                   const torch::Tensor &projectionMatrices,
-                                   const torch::Tensor &camToWorldMatrices,
-                                   const double truncationMargin) {
+                                   const std::optional<torch::Tensor> &weightImages) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "TSDF integration not implemented on the CPU.");
 }
 
 template <>
 std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor, JaggedTensor>
 dispatchIntegrateTSDFWithFeatures<torch::kCUDA>(const c10::intrusive_ptr<GridBatchImpl> grid,
-                                                const JaggedTensor &tsdf,
-                                                const JaggedTensor &weights,
-                                                const JaggedTensor &features,
-                                                const torch::Tensor &depthImages,
-                                                const torch::Tensor &featureImages,
+                                                const double truncationMargin,
                                                 const torch::Tensor &projectionMatrices,
                                                 const torch::Tensor &camToWorldMatrices,
-                                                const double truncationMargin) {
+                                                const JaggedTensor &tsdf,
+                                                const JaggedTensor &features,
+                                                const JaggedTensor &weights,
+                                                const torch::Tensor &depthImages,
+                                                const torch::Tensor &featureImages,
+                                                const std::optional<torch::Tensor> &weightImages) {
     return integrateTSDFImpl(grid,
+                             truncationMargin,
+                             projectionMatrices,
+                             camToWorldMatrices,
                              tsdf,
                              weights,
                              features,
                              depthImages,
                              featureImages,
-                             projectionMatrices,
-                             camToWorldMatrices,
-                             truncationMargin);
+                             weightImages);
 }
 
 template <>
 std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor, JaggedTensor>
 dispatchIntegrateTSDFWithFeatures<torch::kCPU>(const c10::intrusive_ptr<GridBatchImpl> grid,
-                                               const JaggedTensor &tsdf,
-                                               const JaggedTensor &weights,
-                                               const JaggedTensor &features,
-                                               const torch::Tensor &depthImages,
-                                               const torch::Tensor &featureImages,
+                                               const double truncationMargin,
                                                const torch::Tensor &projectionMatrices,
                                                const torch::Tensor &camToWorldMatrices,
-                                               const double truncationMargin) {
+                                               const JaggedTensor &tsdf,
+                                               const JaggedTensor &features,
+                                               const JaggedTensor &weights,
+                                               const torch::Tensor &depthImages,
+                                               const torch::Tensor &featureImages,
+                                               const std::optional<torch::Tensor> &weightImages) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "TSDF integration not implemented on the CPU.");
 }
 } // namespace fvdb::detail::ops

@@ -20,24 +20,26 @@ namespace ops {
 template <c10::DeviceType>
 std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor>
 dispatchIntegrateTSDF(const c10::intrusive_ptr<GridBatchImpl> grid,
+                      const double truncationMargin,
+                      const torch::Tensor &projectionMatrices,
+                      const torch::Tensor &camToWorldMatrices,
                       const JaggedTensor &tsdf,
                       const JaggedTensor &weights,
                       const torch::Tensor &depthImages,
-                      const torch::Tensor &projectionMatrices,
-                      const torch::Tensor &camToWorldMatrices,
-                      const double voxelTruncationDistance);
+                      const std::optional<torch::Tensor> &weightImages);
 
 template <c10::DeviceType>
 std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor, JaggedTensor>
 dispatchIntegrateTSDFWithFeatures(const c10::intrusive_ptr<GridBatchImpl> grid,
-                                  const JaggedTensor &tsdf,
-                                  const JaggedTensor &weights,
-                                  const JaggedTensor &features,
-                                  const torch::Tensor &depthImages,
-                                  const torch::Tensor &featureImages,
+                                  const double truncationMargin,
                                   const torch::Tensor &projectionMatrices,
                                   const torch::Tensor &camToWorldMatrices,
-                                  const double epsilon);
+                                  const JaggedTensor &tsdf,
+                                  const JaggedTensor &features,
+                                  const JaggedTensor &weights,
+                                  const torch::Tensor &depthImages,
+                                  const torch::Tensor &featureImages,
+                                  const std::optional<torch::Tensor> &weightImages);
 template <c10::DeviceType>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildPaddedGrid(const GridBatchImpl &baseBatchHdl, int bmin, int bmax, bool excludeBorder);

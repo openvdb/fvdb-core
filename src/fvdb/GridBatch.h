@@ -795,23 +795,81 @@ struct GridBatch : torch::CustomClassHolder {
 
     std::vector<torch::Tensor> computeBrickHaloBuffer(bool benchmark) const;
 
+    /// @brief Perform one integration step of the TSDF fusion algorithm on a batch of sparse grids.
+    ///        The TSDF fusion algorithm integrates depth and feature images (e.g. colors)
+    ///        from multiple views into a single volume containing a truncated signed distance
+    ///        field (TSDF), features, and unnormalized confidence values (weights).
+    /// @param truncationMargin The truncation margin to use for the TSDF integration. This is the
+    ///                         distance from the surface at which the TSDF is truncated.
+    /// @param projectionMatrices A tensor of shape [B, 4, 4] containing the projection matrices
+    ///                           for each view in the batch. Each matrix transforms points from
+    ///                           camera space to world space.
+    /// @param camToWorldMatrices A tensor of shape [B, 4, 4] containing the camera to world
+    ///                           transformation matrices for each view in the batch.
+    /// @param tsdf A JaggedTensor of shape [B, -1] containing the TSDF values for each voxel in the
+    /// batch.
+    /// @param features A JaggedTensor of shape [B, -1, C] containing the features for each voxel in
+    /// the batch.
+    /// @param weights A JaggedTensor of shape [B, -1] containing the weights for each voxel in the
+    /// batch.
+    /// @param depthImages A tensor of shape [B, H, W] containing the depth images for each view in
+    /// the batch.
+    /// @param featureImages A tensor of shape [B, H, W, C] containing the feature images for each
+    /// view in the batch.
+    /// @param weightImages An optional tensor of shape [B, H, W] containing the weight images for
+    /// each view in the batch.
+    ///                    If provided, it will be used to update the weights during integration.
+    /// @return A tuple containing:
+    ///         - A GridBatch representing the updated grid batch after integration.
+    ///         - A JaggedTensor of shape [B, -1] containing the updated TSDF values for each voxel
+    ///         in the batch.
+    ///         - A JaggedTensor of shape [B, -1, C] containing the updated features for each voxel
+    ///         in the batch.
+    ///         - A JaggedTensor of shape [B, -1] containing the updated weights for each voxel in
+    ///         the batch. The JaggedTensors are indexed by the grid batch's joffsets and jidx.
     std::tuple<GridBatch, JaggedTensor, JaggedTensor, JaggedTensor>
-    integrate_tsdf_with_features(const JaggedTensor &tsdf,
-                                 const JaggedTensor &weights,
-                                 const JaggedTensor &features,
-                                 const torch::Tensor &depthImages,
-                                 const torch::Tensor &featureImages,
+    integrate_tsdf_with_features(const double truncationMargin,
                                  const torch::Tensor &projectionMatrices,
                                  const torch::Tensor &camToWorldMatrices,
-                                 const double epsilon) const;
+                                 const JaggedTensor &tsdf,
+                                 const JaggedTensor &features,
+                                 const JaggedTensor &weights,
+                                 const torch::Tensor &depthImages,
+                                 const torch::Tensor &featureImages,
+                                 const std::optional<torch::Tensor> &weightImages) const;
 
+    /// @brief Perform one integration step of the TSDF fusion algorithm on a batch of sparse grids
+    ///        without additional features. See @ref integrate_tsdf_with_features for
+    ///        more details on the TSDF fusion algorithm.
+    /// @param truncationMargin The truncation margin to use for the TSDF integration.
+    /// @param projectionMatrices A tensor of shape [B, 4, 4] containing the projection matrices
+    ///                           for each view in the batch. Each matrix transforms points from
+    ///                           camera space to world space.
+    /// @param camToWorldMatrices A tensor of shape [B, 4, 4] containing the camera to world
+    ///                           transformation matrices for each view in the batch.
+    /// @param tsdf A JaggedTensor of shape [B, -1] containing the TSDF values for each voxel in the
+    /// batch.
+    /// @param weights A JaggedTensor of shape [B, -1] containing the weights for each voxel in the
+    /// batch.
+    /// @param depthImages A tensor of shape [B, H, W] containing the depth images for each view in
+    /// the batch.
+    /// @param weightImages An optional tensor of shape [B, H, W] containing the weight images for
+    /// each view in the batch.
+    /// @return A tuple containing:
+    ///         - A GridBatch representing the updated grid batch after integration.
+    ///         - A JaggedTensor of shape [B, -1] containing the updated TSDF values for each voxel
+    ///         in the batch.
+    ///         - A JaggedTensor of shape [B, -1] containing the updated weights for each voxel
+    ///         in the batch. The JaggedTensors are indexed by the grid batch's joffsets and jidx.
+    ///         This method does not return features, only TSDF and weights.
     std::tuple<GridBatch, JaggedTensor, JaggedTensor>
-    integrate_tsdf(const JaggedTensor &tsdf,
-                   const JaggedTensor &weights,
-                   const torch::Tensor &depthImages,
+    integrate_tsdf(const double truncationMargin,
                    const torch::Tensor &projectionMatrices,
                    const torch::Tensor &camToWorldMatrices,
-                   const double epsilon) const;
+                   const JaggedTensor &tsdf,
+                   const JaggedTensor &weights,
+                   const torch::Tensor &depthImages,
+                   const std::optional<torch::Tensor> &weightImages) const;
 
   private:
     c10::intrusive_ptr<detail::GridBatchImpl> mImpl;
