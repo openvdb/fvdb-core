@@ -16,6 +16,14 @@ GridBatch::GridBatch() : mImpl() {}
 GridBatch::GridBatch(const torch::Device &device)
     : mImpl(c10::make_intrusive<detail::GridBatchImpl>(device)) {}
 
+GridBatch::GridBatch(const torch::Device &device,
+                     const std::vector<nanovdb::Vec3d> &voxelSizes,
+                     const std::vector<nanovdb::Vec3d> &voxelOrigins) {
+    c10::intrusive_ptr<detail::GridBatchImpl> result =
+        c10::make_intrusive<detail::GridBatchImpl>(device, voxelSizes, voxelOrigins);
+    mImpl = result;
+}
+
 GridBatch::GridBatch(nanovdb::GridHandle<detail::TorchDeviceBuffer> &&gridHdl,
                      const std::vector<nanovdb::Vec3d> &voxelSizes,
                      const std::vector<nanovdb::Vec3d> &voxelOrigins) {

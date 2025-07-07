@@ -111,6 +111,11 @@ GridBatchImpl::GridBatchImpl(const torch::Device &device,
                              const nanovdb::Vec3d &origin)
     : GridBatchImpl(createEmptyGridHandle(device), {voxelSize}, {origin}) {}
 
+GridBatchImpl::GridBatchImpl(const torch::Device &device,
+                             const std::vector<nanovdb::Vec3d> &voxelSizes,
+                             const std::vector<nanovdb::Vec3d> &origins)
+    : GridBatchImpl(createEmptyGridHandle(device, voxelSizes.size()), voxelSizes, origins) {}
+
 GridBatchImpl::GridBatchImpl(nanovdb::GridHandle<TorchDeviceBuffer> &&gridHdl,
                              const std::vector<nanovdb::Vec3d> &voxelSizes,
                              const std::vector<nanovdb::Vec3d> &voxelOrigins) {

@@ -13,7 +13,8 @@ from .types import JaggedTensorOrTensor
 if torch.cuda.is_available():
     torch.cuda.init()
 
-def _parse_device_string(device_string: str) -> torch.device: ...
+def _parse_tensor_or_sequence(tensor_or_sequence: torch.Tensor | Sequence, name: str = "") -> torch.Tensor: ...
+def _parse_device_string(device_string: str | torch.device) -> torch.device: ...
 
 # The following import needs to come after the GridBatch and JaggedTensor imports
 # immediately above in order to avoid a circular dependency error.
