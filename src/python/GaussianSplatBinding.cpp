@@ -1,10 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include "TypeCasters.h"
-
 #include <fvdb/FVDB.h>
-#include <fvdb/GaussianSplatting.h>
+#include <fvdb/GaussianSplat3d.h>
 
 #include <torch/extension.h>
 

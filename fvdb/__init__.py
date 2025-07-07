@@ -13,18 +13,18 @@ if torch.cuda.is_available():
 
 def _parse_device_string(device_or_device_string: str | torch.device) -> torch.device:
     """
-   Parses a device string and returns a torch.device object. For CUDA devices
-   without an explicit index, uses the current CUDA device. If the input is a torch.device
-   object, it is returned unmodified.
+    Parses a device string and returns a torch.device object. For CUDA devices
+    without an explicit index, uses the current CUDA device. If the input is a torch.device
+    object, it is returned unmodified.
 
-    Args:
-        device_string (str | torch.device):
-            A device string (e.g., "cpu", "cuda", "cuda:0") or a torch.device object.
-            If a string is provided, it should be a valid device identifier.
+     Args:
+         device_string (str | torch.device):
+             A device string (e.g., "cpu", "cuda", "cuda:0") or a torch.device object.
+             If a string is provided, it should be a valid device identifier.
 
-    Returns:
-        torch.device: The parsed device object with proper device index set if a string is passed
-        in otherwise returns the input torch.device object.
+     Returns:
+         torch.device: The parsed device object with proper device index set if a string is passed
+         in otherwise returns the input torch.device object.
     """
     if isinstance(device_or_device_string, torch.device):
         return device_or_device_string

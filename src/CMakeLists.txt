@@ -35,7 +35,7 @@ execute_process(
 set(FVDB_CPP_FILES
     fvdb/Config.cpp
     fvdb/FVDB.cpp
-    fvdb/GaussianSplatting.cpp
+    fvdb/GaussianSplat3d.cpp
     fvdb/GridBatch.cpp
     fvdb/JaggedTensor.cpp
     fvdb/SparseConvPackInfo.cpp
