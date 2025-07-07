@@ -266,6 +266,10 @@ class GridBatchImpl : public torch::CustomClassHolder {
                   const nanovdb::Vec3d &voxelSize,
                   const nanovdb::Vec3d &origin);
 
+    GridBatchImpl(const torch::Device &device,
+                  const std::vector<nanovdb::Vec3d> &voxelSizes,
+                  const std::vector<nanovdb::Vec3d> &origins);
+
     GridBatchImpl(nanovdb::GridHandle<TorchDeviceBuffer> &&gridHdl,
                   const std::vector<nanovdb::Vec3d> &voxelSizes,
                   const std::vector<nanovdb::Vec3d> &voxelOrigins);

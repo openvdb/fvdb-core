@@ -3,29 +3,59 @@
 #
 from __future__ import annotations
 
+from typing import Sequence
+
 import torch
 
 if torch.cuda.is_available():
     torch.cuda.init()
 
 
-def _parse_device_string(device_string: str) -> torch.device:
+def _parse_device_string(device_or_device_string: str | torch.device) -> torch.device:
     """
-    Python equivalent of the C++ parseDeviceString function.
-
-    Parses a device string and returns a torch.device object. For CUDA devices
-    without an explicit index, uses the current CUDA device.
+   Parses a device string and returns a torch.device object. For CUDA devices
+   without an explicit index, uses the current CUDA device. If the input is a torch.device
+   object, it is returned unmodified.
 
     Args:
-        device_string (str): A device string (e.g., "cpu", "cuda", "cuda:0").
+        device_string (str | torch.device):
+            A device string (e.g., "cpu", "cuda", "cuda:0") or a torch.device object.
+            If a string is provided, it should be a valid device identifier.
 
     Returns:
-        torch.device: The parsed device object with proper device index set.
+        torch.device: The parsed device object with proper device index set if a string is passed
+        in otherwise returns the input torch.device object.
     """
-    device = torch.device(device_string)
+    if isinstance(device_or_device_string, torch.device):
+        return device_or_device_string
+    if not isinstance(device_or_device_string, str):
+        raise TypeError(f"Expected a string or torch.device, but got {type(device_or_device_string)}")
+    device = torch.device(device_or_device_string)
     if device.type == "cuda" and device.index is None:
         device = torch.device("cuda", torch.cuda.current_device())
     return device
+
+
+def _parse_tensor_or_sequence(tensor_or_sequence: torch.Tensor | Sequence, name: str = "") -> torch.Tensor:
+    """
+    Convert a sequence into a torch.Tensor. If the input is already a torch.Tensor, then simply return it.
+    E.g. if the input is [1, 2, 3], it will be converted to a torch.Tensor([1, 2, 3]).
+    E.g. if the input is [[1, 2, 3], [4, 5, 6]], it will be converted to a torch.Tensor([[1, 2, 3], [4, 5, 6]]).
+    If the input is not a torch.Tensor or Sequence, it raises a TypeError.
+
+    Args:
+        tensor_or_sequence (torch.Tensor | Sequence): The input to convert to a torch.Tensor.
+        name (str): Optional name for the input, used in error messages.
+
+    Returns:
+        torch.Tensor: The converted tensor.
+    """
+    if not isinstance(tensor_or_sequence, (torch.Tensor, Sequence)):
+        raise TypeError(f"{name} must be a torch.Tensor or Sequence, but got {type(tensor_or_sequence)}")
+    try:
+        return torch.as_tensor(tensor_or_sequence, dtype=torch.float64)
+    except Exception as e:
+        raise TypeError(f"{name} must be convertible to a torch.Tensor, but got {type(tensor_or_sequence)}") from e
 
 
 # isort: off

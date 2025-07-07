@@ -22,6 +22,9 @@ struct GridBatch : torch::CustomClassHolder {
 
     explicit GridBatch();
     explicit GridBatch(const torch::Device &device);
+    GridBatch(const torch::Device &device,
+              const std::vector<nanovdb::Vec3d> &voxelSizes,
+              const std::vector<nanovdb::Vec3d> &voxelOrigins);
     GridBatch(nanovdb::GridHandle<detail::TorchDeviceBuffer> &&gridHdl,
               const std::vector<nanovdb::Vec3d> &voxelSizes,
               const std::vector<nanovdb::Vec3d> &voxelOrigins);

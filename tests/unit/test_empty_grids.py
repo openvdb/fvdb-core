@@ -11,7 +11,7 @@ import torch
 from parameterized import parameterized
 
 import fvdb
-from fvdb import GridBatch, JaggedTensor, gridbatch_from_ijk, volume_render
+from fvdb import GridBatch
 
 all_device_dtype_combos = [
     ["cuda", torch.float16],
@@ -37,6 +37,43 @@ class TestBasicOps(unittest.TestCase):
         # self.test_path = os.path.join(os.path.dirname(
         #     os.path.realpath(__file__)), "..", "data")
         pass
+
+    @parameterized.expand(["cuda", "cpu"])
+    def test_building_empty_grids_constructor(self, device):
+        grids = GridBatch(device=device, voxel_sizes=[[1.0, 1.0, 1.0]], grid_origins=[[0.0, 0.0, 0.0]])
+        self.assertEqual(len(grids), 1)
+        self.assertEqual(grids.total_voxels, 0)
+        self.assertEqual(grids.device.type, device)
+
+        grids = GridBatch(device=device, voxel_sizes=[[1.0, 1.0, 1.0]])
+        self.assertEqual(len(grids), 1)
+        self.assertEqual(grids.total_voxels, 0)
+        self.assertEqual(grids.device.type, device)
+
+        grids = GridBatch(voxel_sizes=[[1.0, 1.0, 1.0]])
+        self.assertEqual(len(grids), 1)
+        self.assertEqual(grids.total_voxels, 0)
+        self.assertEqual(grids.device.type, "cpu")
+
+        grids = GridBatch([[1.0, 1.0, 1.0]], [[0.0, 0.0, 0.0]], device)
+        self.assertEqual(len(grids), 1)
+        self.assertEqual(grids.total_voxels, 0)
+        self.assertEqual(grids.device.type, device)
+
+        grids = GridBatch(voxel_sizes=[[1.0, 1.0, 1.0]], grid_origins=None)
+        self.assertEqual(len(grids), 1)
+        self.assertEqual(grids.total_voxels, 0)
+        self.assertEqual(grids.device.type, "cpu")
+
+        grids = GridBatch([[1.0, 1.0, 1.0]], device=device)
+        self.assertEqual(len(grids), 1)
+        self.assertEqual(grids.total_voxels, 0)
+        self.assertEqual(grids.device.type, device)
+
+        grids = GridBatch([[1.0, 1.0, 1.0]] * 5, device=device)
+        self.assertEqual(len(grids), 5)
+        self.assertEqual(grids.total_voxels, 0)
+        self.assertEqual(grids.device.type, device)
 
     @parameterized.expand(all_device_dtype_combos)
     def test_building_empty_grids_from_ijk(self, device, dtype):

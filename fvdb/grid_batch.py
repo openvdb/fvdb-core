@@ -21,20 +21,20 @@ GridBatch supports operations like convolution, pooling, interpolation, ray cast
 mesh extraction, and coordinate transformations on sparse voxel data.
 """
 
-import typing
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, cast, overload
+from typing import TYPE_CHECKING, Sequence, cast, overload
 
 import numpy as np
 import torch
 
-from . import _parse_device_string
+from . import _parse_device_string, _parse_tensor_or_sequence
 from ._Cpp import ConvPackBackend
 from ._Cpp import GridBatch as GridBatchCpp
 from ._Cpp import JaggedTensor
 from .types import (
     GridBatchIndex,
     JaggedTensorOrTensor,
+    Numeric,
     Vec3d,
     Vec3dBatch,
     Vec3dBatchOrScalar,
@@ -52,6 +52,8 @@ from .types import (
     is_Vec3iBatch,
     is_Vec3iOrScalar,
 )
+
+Vec3List = Sequence[torch.Tensor] | Sequence[Sequence[Numeric]] | torch.Tensor
 
 if TYPE_CHECKING:
     from .sparse_conv_pack_info import SparseConvPackInfo
@@ -78,31 +80,107 @@ class GridBatch:
     max_grids_per_batch: int = GridBatchCpp.max_grids_per_batch
 
     @overload
-    def __init__(self, device: torch.device | str | None = ...) -> None:
+    def __init__(self, device: torch.device | str = "cpu") -> None:
         """
-        Create a new GridBatch on a specific device:
+        Create a new empty (no grids) GridBatch on a specific device. _e.g._
         >>> grid = GridBatch("cuda")  # string
         >>> grid = GridBatch(torch.device("cuda:0")) # device directly
         >>> grid = GridBatch()  # defaults to CPU
 
         Args:
-            device: The device to create the GridBatch on. Can be a string (e.g., "cuda", "cpu")
-                or a torch.device object. If None, defaults to CPU.
+            device (torch.device | str): The device to create the GridBatch on. Can be a string (e.g., "cuda", "cpu")
+                or a torch.device object. Defaults to "cpu".
+        """
+        ...
+
+    @overload
+    def __init__(
+        self,
+        voxel_sizes: torch.Tensor | Sequence[Sequence[Numeric]],
+        grid_origins: torch.Tensor | Sequence[Sequence[Numeric]] | None = None,
+        device: torch.device | str = "cpu",
+    ) -> None:
+        """
+        Create a new GridBatch with a specified number of empty grids, each of which have the
+        specified voxel sizes and origins. The number of grids is determined by the length
+        of `voxel_sizes` and `grid_origins`.
+
+        Args:
+            voxel_sizes (torch.Tensor | Sequence[Sequence[Numeric]]):
+                A tensor of shape (N, 3) where N is the number of grids.
+                Each row specifies the voxel size in each dimension (x, y, z).
+            grid_origins (torch.Tensor | Sequence[Sequence[Numeric]] | None):
+                An optional tensor of shape (N, 3) where N is the number of grids.
+                If none, each grid will have it's origin at [0, 0, 0]. Otherwise, each row
+                specifies the origin of the grid in world coordinates.
+            device (torch.device | str): The device to create the GridBatch on. Can be a string (e.g., "cuda", "cpu")
+                or a torch.device object. Defaults to "cpu".
         """
         ...
 
     @overload
     def __init__(self, *, impl: GridBatchCpp) -> None: ...
 
-    def __init__(self, device: torch.device | str | None = None, impl: GridBatchCpp | None = None):
-        if impl is not None:
-            self._impl = impl
+    def __init__(self, *args, **kwargs):
+        if kwargs.get("impl") is not None:
+            # If impl is provided, use it directly
+            assert len(args) == 0, "Cannot provide both args and impl"
+            assert isinstance(kwargs["impl"], GridBatchCpp), "impl must be an instance of GridBatchCpp"
+            assert len(kwargs) == 1, "Only impl can be provided as a keyword argument"
+            self._impl = kwargs["impl"]
         else:
-            if device is None:
-                device = torch.device("cpu")
-            elif isinstance(device, str):
-                device = _parse_device_string(device)
-            self._impl = GridBatchCpp(device)
+
+            if len(args) == 0 and len(kwargs) == 0:
+                # No arguments, create an empty GridBatch on CPU
+                self._impl = GridBatchCpp(_parse_device_string("cpu"))
+                return
+
+            if len(args) == 1 and isinstance(args[0], (torch.device, str)):
+                # Single device argument
+                self._impl = GridBatchCpp(_parse_device_string(args[0]))
+                return
+
+            cpp_args = {
+                "voxel_sizes": None,
+                "grid_origins": None,
+                "device": _parse_device_string("cpu"),  # Default to CPU
+            }
+
+            parameter_names = ["voxel_sizes", "grid_origins", "device"]
+            arg_parameters = parameter_names[: len(args)]
+
+            for kw, arg in zip(arg_parameters, args):
+                cpp_args[kw] = arg
+
+            for kwargname in kwargs:
+                if kwargname in parameter_names:
+                    cpp_args[kwargname] = kwargs[kwargname]
+                else:
+                    raise ValueError(f"Unexpected keyword argument '{kwargname}' for GridBatch constructor.")
+
+            if cpp_args["voxel_sizes"] is None and cpp_args["grid_origins"] is None:
+                # If both are None, create an empty GridBatch
+                self._impl = GridBatchCpp(_parse_device_string(cpp_args["device"]))
+                return
+
+            # Validate and convert arguments
+            cpp_args["voxel_sizes"] = _parse_tensor_or_sequence(cpp_args["voxel_sizes"], name="voxel_sizes")
+
+            if cpp_args["grid_origins"] is not None:
+                cpp_args["grid_origins"] = _parse_tensor_or_sequence(cpp_args["grid_origins"], name="grid_origins")
+            else:
+                # If grid_origins is None, set it to a tensor of zeros with the same shape as voxel_sizes
+                cpp_args["grid_origins"] = torch.zeros_like(cpp_args["voxel_sizes"])
+
+            if not isinstance(cpp_args["device"], (torch.device, str)):
+                raise TypeError(f"device must be a torch.device or str, but got {type(cpp_args['device'])}")
+            cpp_args["device"] = _parse_device_string(cpp_args["device"])
+
+            self._impl = GridBatchCpp(
+                voxel_sizes=cpp_args["voxel_sizes"],
+                grid_origins=cpp_args["grid_origins"],
+                device=cpp_args["device"],
+            )
 
     def avg_pool(
         self,

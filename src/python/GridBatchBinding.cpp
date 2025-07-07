@@ -21,6 +21,35 @@ bind_grid_batch(py::module &m) {
              }),
              py::arg("device") = "cpu")
 
+        .def(py::init([](const torch::Device &device,
+                         const torch::Tensor &voxelSizes,
+                         const torch::Tensor &gridOrigins) {
+                 TORCH_CHECK_VALUE(voxelSizes.dim() == 2 && voxelSizes.size(0) > 0 &&
+                                       voxelSizes.size(1) == 3,
+                                   "voxel_sizes must be a [num_grids, 3] tensor");
+                 TORCH_CHECK_VALUE(gridOrigins.dim() == 2 && gridOrigins.size(0) > 0 &&
+                                       gridOrigins.size(1) == 3,
+                                   "grid_origins must be a [num_grids, 3] tensor");
+                 TORCH_CHECK_VALUE(
+                     voxelSizes.size(0) == gridOrigins.size(0),
+                     "voxel_sizes and grid_origins must have the same number of grids");
+                 TORCH_CHECK_VALUE(voxelSizes.size(1) == 3 && gridOrigins.size(1) == 3,
+                                   "voxel_sizes and grid_origins must have shape [num_grids, 3]");
+                 std::vector<nanovdb::Vec3d> voxelSizesVec;
+                 std::vector<nanovdb::Vec3d> gridOriginsVec;
+                 for (int64_t i = 0; i < voxelSizes.size(0); ++i) {
+                     voxelSizesVec.emplace_back(voxelSizes[i][0].item<double>(),
+                                                voxelSizes[i][1].item<double>(),
+                                                voxelSizes[i][2].item<double>());
+                     gridOriginsVec.emplace_back(gridOrigins[i][0].item<double>(),
+                                                 gridOrigins[i][1].item<double>(),
+                                                 gridOrigins[i][2].item<double>());
+                 }
+                 return fvdb::GridBatch(device, voxelSizesVec, gridOriginsVec);
+             }),
+             py::arg("device"),
+             py::arg("voxel_sizes"),
+             py::arg("grid_origins"))
         // Properties
         .def_property_readonly("total_voxels",
                                &fvdb::GridBatch::total_voxels,
