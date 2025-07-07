@@ -77,7 +77,8 @@ SampleGridTrilinear(const GridBatchImpl &batchHdl,
                 sampleTrilinearCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
                     bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc);
             };
-        forEachJaggedElementChannelCUDA<scalar_t, 2>(DEFAULT_BLOCK_DIM, gridData.size(1), points, cb);
+        forEachJaggedElementChannelCUDA<scalar_t, 2>(
+            DEFAULT_BLOCK_DIM, gridData.size(1), points, cb);
     } else if constexpr (DeviceTag == torch::kPrivateUse1) {
         auto cb = [=]
             __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc32<scalar_t, 2> pts) {
