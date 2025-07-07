@@ -170,8 +170,7 @@ DownsampleGridAvgPool(const GridBatchImpl &fineBatchHdl,
                             stride,
                             static_cast<scalar_t>(avgFactor));
                     };
-                forEachVoxelCUDA<nanovdb::ValueOnIndex>(
-                    384, outCoarseData.size(1), coarseBatchHdl, avgPoolPerVoxel);
+                forEachVoxelCUDA(384, outCoarseData.size(1), coarseBatchHdl, avgPoolPerVoxel);
             } else {
                 auto avgPoolPerVoxel =
                     [=](int32_t batchIdx,
@@ -191,8 +190,7 @@ DownsampleGridAvgPool(const GridBatchImpl &fineBatchHdl,
                                                                  stride,
                                                                  static_cast<scalar_t>(avgFactor));
                     };
-                forEachVoxelCPU<nanovdb::ValueOnIndex>(
-                    outCoarseData.size(1), coarseBatchHdl, avgPoolPerVoxel);
+                forEachVoxelCPU(outCoarseData.size(1), coarseBatchHdl, avgPoolPerVoxel);
             }
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
@@ -255,7 +253,7 @@ DownsampleGridAvgPoolBackward(const GridBatchImpl &coarseBatchHdl,
                             stride,
                             static_cast<scalar_t>(avgFactor));
                     };
-                forEachVoxelCUDA<nanovdb::ValueOnIndex>(384, fineData.size(1), coarseBatchHdl, cb);
+                forEachVoxelCUDA(384, fineData.size(1), coarseBatchHdl, cb);
             } else {
                 auto cb = [=](int32_t batchIdx,
                               int32_t leafIdx,
@@ -276,7 +274,7 @@ DownsampleGridAvgPoolBackward(const GridBatchImpl &coarseBatchHdl,
                         stride,
                         static_cast<scalar_t>(avgFactor));
                 };
-                forEachVoxelCPU<nanovdb::ValueOnIndex>(fineData.size(1), coarseBatchHdl, cb);
+                forEachVoxelCPU(fineData.size(1), coarseBatchHdl, cb);
             }
         }),
         AT_EXPAND(AT_FLOATING_TYPES),

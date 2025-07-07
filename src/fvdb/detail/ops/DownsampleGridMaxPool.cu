@@ -180,8 +180,7 @@ DownsampleGridMaxPool(const GridBatchImpl &fineBatchHdl,
                                                                     poolingFactor,
                                                                     stride);
                     };
-                forEachVoxelCUDA<nanovdb::ValueOnIndex>(
-                    384, outCoarseData.size(1), coarseBatchHdl, maxPoolPerVoxel);
+                forEachVoxelCUDA(384, outCoarseData.size(1), coarseBatchHdl, maxPoolPerVoxel);
             } else {
                 auto maxPoolPerVoxel =
                     [=](int32_t batchIdx,
@@ -200,8 +199,7 @@ DownsampleGridMaxPool(const GridBatchImpl &fineBatchHdl,
                                                                  poolingFactor,
                                                                  stride);
                     };
-                forEachVoxelCPU<nanovdb::ValueOnIndex>(
-                    outCoarseData.size(1), coarseBatchHdl, maxPoolPerVoxel);
+                forEachVoxelCPU(outCoarseData.size(1), coarseBatchHdl, maxPoolPerVoxel);
             }
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
@@ -260,7 +258,7 @@ DownsampleGridMaxPoolBackward(const GridBatchImpl &coarseBatchHdl,
                                                                            poolingFactor,
                                                                            stride);
                     };
-                forEachVoxelCUDA<nanovdb::ValueOnIndex>(384, fineData.size(1), coarseBatchHdl, cb);
+                forEachVoxelCUDA(384, fineData.size(1), coarseBatchHdl, cb);
             } else {
                 auto cb = [=](int32_t batchIdx,
                               int32_t leafIdx,
@@ -279,7 +277,7 @@ DownsampleGridMaxPoolBackward(const GridBatchImpl &coarseBatchHdl,
                                                                     poolingFactor,
                                                                     stride);
                 };
-                forEachVoxelCPU<nanovdb::ValueOnIndex>(fineData.size(1), coarseBatchHdl, cb);
+                forEachVoxelCPU(fineData.size(1), coarseBatchHdl, cb);
             }
         }),
         AT_EXPAND(AT_FLOATING_TYPES),

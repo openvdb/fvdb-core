@@ -159,8 +159,7 @@ UpsampleGridNearest(const GridBatchImpl &coarseBatchAccessor,
                                                                             outFineDataAcc,
                                                                             upsamplingFactor);
                     };
-                forEachVoxelCUDA<nanovdb::ValueOnIndex>(
-                    640, outFineData.size(1), fineBatchAccessor, callback);
+                forEachVoxelCUDA(640, outFineData.size(1), fineBatchAccessor, callback);
             } else {
                 auto callback =
                     [=](int32_t batchIdx,
@@ -178,8 +177,7 @@ UpsampleGridNearest(const GridBatchImpl &coarseBatchAccessor,
                                                                          outFineDataAcc,
                                                                          upsamplingFactor);
                     };
-                forEachVoxelCPU<nanovdb::ValueOnIndex>(
-                    outFineData.size(1), fineBatchAccessor, callback);
+                forEachVoxelCPU(outFineData.size(1), fineBatchAccessor, callback);
             }
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
@@ -232,8 +230,7 @@ UpsampleGridNearestBackward(const GridBatchImpl &fineBatchAccessor,
                             outCoarseDataAcc,
                             upsamplingFactor);
                     };
-                forEachVoxelCUDA<nanovdb::ValueOnIndex>(
-                    640, outGradInReshape.size(1), fineBatchAccessor, callback);
+                forEachVoxelCUDA(640, outGradInReshape.size(1), fineBatchAccessor, callback);
             } else {
                 auto callback =
                     [=](int32_t batchIdx,
@@ -252,8 +249,7 @@ UpsampleGridNearestBackward(const GridBatchImpl &fineBatchAccessor,
                             outCoarseDataAcc,
                             upsamplingFactor);
                     };
-                forEachVoxelCPU<nanovdb::ValueOnIndex>(
-                    outGradInReshape.size(1), fineBatchAccessor, callback);
+                forEachVoxelCPU(outGradInReshape.size(1), fineBatchAccessor, callback);
             }
         }),
         AT_EXPAND(AT_FLOATING_TYPES),

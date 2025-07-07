@@ -132,7 +132,7 @@ dispatchConvolutionKernelMap<torch::kCUDA>(const GridBatchImpl &sourceBatchHdl,
                                           kernelSizeCoord,
                                           strideCoord);
     };
-    forEachVoxelCUDA<nanovdb::ValueOnIndex>(
+    forEachVoxelCUDA(
         128, kernelSizeCoord.x() * kernelSizeCoord.y() * kernelSizeCoord.z(), targetBatchHdl, cb);
 }
 

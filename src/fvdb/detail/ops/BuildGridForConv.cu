@@ -165,7 +165,7 @@ convIJKForGrid(const GridBatchImpl &batchHdl,
                                outIJKBIdxAcc,
                                outMaskAcc);
     };
-    forEachVoxelCUDA<nanovdb::ValueOnIndex>(256, 1, batchHdl, cb);
+    forEachVoxelCUDA(256, 1, batchHdl, cb);
 
     outIJK     = outIJK.index({outMask});
     outIJKBIdx = outIJKBIdx.index({outMask});

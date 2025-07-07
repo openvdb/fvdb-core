@@ -56,7 +56,7 @@ GetActiveGridCoords(const GridBatchImpl &gridBatch, torch::Tensor &outGridCoords
             activeGridCoordsVoxelCallback<TorchRAcc32>(
                 batchIdx, leafIdx, voxelIdx, gridAccessor, outCoordsAcc);
         };
-        forEachVoxelCUDA<nanovdb::ValueOnIndex>(1024, 1, gridBatch, cb);
+        forEachVoxelCUDA(1024, 1, gridBatch, cb);
     } else if constexpr (DeviceTag == torch::kPrivateUse1) {
         auto cb = [=] __device__(int64_t batchIdx,
                                  int64_t leafIdx,
@@ -66,7 +66,7 @@ GetActiveGridCoords(const GridBatchImpl &gridBatch, torch::Tensor &outGridCoords
             activeGridCoordsVoxelCallback<TorchRAcc32>(
                 batchIdx, leafIdx, voxelIdx, gridAccessor, outCoordsAcc);
         };
-        forEachVoxelPrivateUse1<nanovdb::ValueOnIndex>(1, gridBatch, cb);
+        forEachVoxelPrivateUse1(1, gridBatch, cb);
     } else {
         auto cb = [=](int64_t batchIdx,
                       int64_t leafIdx,
@@ -76,7 +76,7 @@ GetActiveGridCoords(const GridBatchImpl &gridBatch, torch::Tensor &outGridCoords
             activeGridCoordsVoxelCallback<TorchAcc>(
                 batchIdx, leafIdx, voxelIdx, gridAccessor, outCoordsAcc);
         };
-        forEachVoxelCPU<nanovdb::ValueOnIndex>(1, gridBatch, cb);
+        forEachVoxelCPU(1, gridBatch, cb);
     }
 }
 
