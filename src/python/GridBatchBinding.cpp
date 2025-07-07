@@ -838,22 +838,24 @@ bind_grid_batch(py::module &m) {
             py::arg("target_grid") = nullptr)
         .def("integrate_tsdf",
              &fvdb::GridBatch::integrate_tsdf,
+             py::arg("voxel_truncation_distance"),
+             py::arg("projection_matrices"),
+             py::arg("cam_to_world_matrices"),
              py::arg("tsdf"),
              py::arg("weights"),
              py::arg("depth_images"),
-             py::arg("projection_matrices"),
-             py::arg("cam_to_world_matrices"),
-             py::arg("voxel_truncation_distance"))
+             py::arg("weight_images") = py::none())
         .def("integrate_tsdf_with_features",
              &fvdb::GridBatch::integrate_tsdf_with_features,
+             py::arg("voxel_truncation_distance"),
+             py::arg("cam_to_world_matrices"),
+             py::arg("projection_matrices"),
              py::arg("tsdf"),
-             py::arg("weights"),
              py::arg("features"),
+             py::arg("weights"),
              py::arg("depth_images"),
              py::arg("feature_images"),
-             py::arg("projection_matrices"),
-             py::arg("cam_to_world_matrices"),
-             py::arg("voxel_truncation_distance"))
+             py::arg("weight_images") = py::none())
         .def(py::pickle(
             [](const fvdb::GridBatch &batchHdl) {
                 return batchHdl.serialize().to(batchHdl.device());

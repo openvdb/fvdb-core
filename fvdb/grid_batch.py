@@ -255,12 +255,13 @@ class GridBatch:
 
     def integrate_tsdf(
         self,
+        voxel_truncation_distance: float,
+        projection_matrices: torch.Tensor,
+        cam_to_world_matrices: torch.Tensor,
         tsdf: JaggedTensorOrTensor,
         weights: JaggedTensorOrTensor,
         depth_images: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        cam_to_world_matrices: torch.Tensor,
-        voxel_truncation_distance: float,
+        weight_images: torch.Tensor | None = None,
     ) -> tuple["GridBatch", JaggedTensor, JaggedTensor]:
         """
         Integrate depth images into a Truncated Signed Distance Function (TSDF) volume.
@@ -270,17 +271,19 @@ class GridBatch:
         reconstruction from RGB-D sensors.
 
         Args:
+            voxel_truncation_distance (float): Maximum distance to truncate TSDF values.
+            projection_matrices (torch.Tensor): Camera projection matrices.
+                Shape: (batch_size, 4, 4).
+            cam_to_world_matrices (torch.Tensor): Camera to world transformation matrices.
+                Shape: (batch_size, 4, 4).
             tsdf (JaggedTensor or torch.Tensor): Current TSDF values for each voxel.
                 Shape: (total_voxels, 1).
             weights (JaggedTensor or torch.Tensor): Current integration weights for each voxel.
                 Shape: (total_voxels, 1).
             depth_images (torch.Tensor): Depth images from cameras.
-                Shape: (batch_size, num_views, height, width).
-            projection_matrices (torch.Tensor): Camera projection matrices.
-                Shape: (batch_size, num_views, 4, 4).
-            cam_to_world_matrices (torch.Tensor): Camera to world transformation matrices.
-                Shape: (batch_size, num_views, 4, 4).
-            voxel_truncation_distance (float): Maximum distance to truncate TSDF values.
+                Shape: (batch_size, height, width).
+            weight_images (torch.Tensor, optional): Weight of each depth sample in the images.
+                Shape: (batch_size, height, width). If None, defaults to uniform weights.
 
         Returns:
             tuple[GridBatch, JaggedTensor, JaggedTensor]: A tuple containing:
@@ -303,6 +306,8 @@ class GridBatch:
                 f"cam_to_world_matrices must be a torch.Tensor, but got {type(cam_to_world_matrices)}"
             )
 
+        if weight_images is not None and not isinstance(weight_images, torch.Tensor):
+            raise TypeError(f"weight_images must be a torch.Tensor or None, but got {type(weight_images)}")
         if isinstance(tsdf, torch.Tensor):
             tsdf = JaggedTensor(tsdf)
 
@@ -310,26 +315,28 @@ class GridBatch:
             weights = JaggedTensor(weights)
 
         result_grid_impl, result_jagged_1, result_jagged_2 = self._impl.integrate_tsdf(
+            voxel_truncation_distance,
+            projection_matrices,
+            cam_to_world_matrices,
             tsdf,
             weights,
             depth_images,
-            projection_matrices,
-            cam_to_world_matrices,
-            voxel_truncation_distance,
+            weight_images,
         )
 
         return GridBatch(impl=result_grid_impl), result_jagged_1, result_jagged_2
 
     def integrate_tsdf_with_features(
         self,
-        tsdf: JaggedTensorOrTensor,
-        weights: JaggedTensorOrTensor,
-        features: JaggedTensorOrTensor,
-        depth_images: torch.Tensor,
-        feature_images: torch.Tensor,
+        voxel_truncation_distance: float,
         projection_matrices: torch.Tensor,
         cam_to_world_matrices: torch.Tensor,
-        voxel_truncation_distance: float,
+        tsdf: JaggedTensorOrTensor,
+        features: JaggedTensorOrTensor,
+        weights: JaggedTensorOrTensor,
+        depth_images: torch.Tensor,
+        feature_images: torch.Tensor,
+        weight_images: torch.Tensor | None = None,
     ) -> tuple["GridBatch", JaggedTensor, JaggedTensor, JaggedTensor]:
         """
         Integrate depth and feature images into TSDF volume with features.
@@ -338,21 +345,23 @@ class GridBatch:
         along with the depth information. This is useful for colored 3D reconstruction.
 
         Args:
+            voxel_truncation_distance (float): Maximum distance to truncate TSDF values.
+            projection_matrices (torch.Tensor): Camera projection matrices.
+                Shape: (batch_size, 4, 4).
+            cam_to_world_matrices (torch.Tensor): Camera to world transformation matrices.
+                Shape: (batch_size, 4, 4).
             tsdf (JaggedTensor or torch.Tensor): Current TSDF values for each voxel.
-                Shape: (total_voxels, 1).
-            weights (JaggedTensor or torch.Tensor): Current integration weights for each voxel.
                 Shape: (total_voxels, 1).
             features (JaggedTensor or torch.Tensor): Current feature values for each voxel.
                 Shape: (total_voxels, feature_dim).
+            weights (JaggedTensor or torch.Tensor): Current integration weights for each voxel.
+                Shape: (total_voxels, 1).
             depth_images (torch.Tensor): Depth images from cameras.
-                Shape: (batch_size, num_views, height, width).
+                Shape: (batch_size, height, width).
             feature_images (torch.Tensor): Feature images (e.g., RGB) from cameras.
-                Shape: (batch_size, num_views, height, width, feature_dim).
-            projection_matrices (torch.Tensor): Camera projection matrices.
-                Shape: (batch_size, num_views, 4, 4).
-            cam_to_world_matrices (torch.Tensor): Camera to world transformation matrices.
-                Shape: (batch_size, num_views, 4, 4).
-            voxel_truncation_distance (float): Maximum distance to truncate TSDF values.
+                Shape: (batch_size, height, width, feature_dim).
+            weight_images (torch.Tensor, optional): Weight of each depth sample in the images.
+                Shape: (batch_size, height, width). If None, defaults to uniform weights.
 
         Returns:
             tuple[GridBatch, JaggedTensor, JaggedTensor, JaggedTensor]: A tuple containing:
@@ -380,6 +389,9 @@ class GridBatch:
                 f"cam_to_world_matrices must be a torch.Tensor, but got {type(cam_to_world_matrices)}"
             )
 
+        if weight_images is not None and not isinstance(weight_images, torch.Tensor):
+            raise TypeError(f"weight_images must be a torch.Tensor or None, but got {type(weight_images)}")
+
         if isinstance(tsdf, torch.Tensor):
             tsdf = JaggedTensor(tsdf)
 
@@ -390,14 +402,15 @@ class GridBatch:
             features = JaggedTensor(features)
 
         result_grid_impl, result_jagged_1, result_jagged_2, result_jagged_3 = self._impl.integrate_tsdf_with_features(
-            tsdf,
-            weights,
-            features,
-            depth_images,
-            feature_images,
+            voxel_truncation_distance,
             projection_matrices,
             cam_to_world_matrices,
-            voxel_truncation_distance,
+            tsdf,
+            features,
+            weights,
+            depth_images,
+            feature_images,
+            weight_images,
         )
 
         return GridBatch(impl=result_grid_impl), result_jagged_1, result_jagged_2, result_jagged_3
