@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef FVDB_GAUSSIANSPLATTING_H
-#define FVDB_GAUSSIANSPLATTING_H
+#ifndef FVDB_GAUSSIANSPLAT3D_H
+#define FVDB_GAUSSIANSPLAT3D_H
 
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
@@ -741,4 +741,4 @@ gaussianRenderJagged(const JaggedTensor &means,     // [N1 + N2 + ..., 3]
 
 } // namespace fvdb
 
-#endif // FVDB_GAUSSIANSPLATTING_H
+#endif // FVDB_GAUSSIANSPLAT3D_H
