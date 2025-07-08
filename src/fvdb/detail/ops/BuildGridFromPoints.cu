@@ -122,7 +122,7 @@ template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildGridFromPoints<torch::kCPU>(const JaggedTensor &pointsJagged,
                                          const std::vector<VoxelCoordTransform> &txs) {
-    using GridType = nanovdb::ValueOnIndex;
+    using GridT = nanovdb::ValueOnIndex;
     return AT_DISPATCH_V2(
         pointsJagged.scalar_type(),
         "buildPaddedGridFromPoints",
@@ -160,7 +160,7 @@ dispatchBuildGridFromPoints<torch::kCPU>(const JaggedTensor &pointsJagged,
                 }
 
                 proxyGridAccessor.merge();
-                auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridType, TorchDeviceBuffer>(
+                auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
                     *proxyGrid, 0u, false, false);
                 ret.buffer().to(torch::kCPU);
                 batchHandles.push_back(std::move(ret));

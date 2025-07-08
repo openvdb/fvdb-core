@@ -119,7 +119,7 @@ countVerticesCallback(int32_t batchIdx,
                       int32_t leafIdx,
                       int32_t voxelIdx,
                       int32_t channelIdx,
-                      BatchGridAccessor<nanovdb::ValueOnIndex> batchAccessor,
+                      BatchGridAccessor batchAccessor,
                       TensorAccessor<ScalarType, 1> sdf,
                       ScalarType level,
                       TensorAccessor<int64_t, 1> nVertices) {
@@ -156,7 +156,7 @@ meshingCubeCallback(int32_t batchIdx,
                     int32_t leafIdx,
                     int32_t voxelIdx,
                     int32_t channelIdx,
-                    BatchGridAccessor<nanovdb::ValueOnIndex> batchAccessor,
+                    BatchGridAccessor batchAccessor,
                     TensorAccessor<ScalarType, 1> sdf,
                     ScalarType level,
                     TensorAccessor<int64_t, 1> countCsum,
@@ -242,7 +242,7 @@ MarchingCubes(const GridBatchImpl &batchHdl, const torch::Tensor &sdf, double le
         sdf.scalar_type(),
         "countVertices",
         AT_WRAP([&] {
-            // auto batchAcc     = gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(batchHdl);
+            // auto batchAcc     = gridBatchAccessor<DeviceTag>(batchHdl);
             auto sdfAcc       = tensorAccessor<DeviceTag, scalar_t, 1>(sdf);
             auto nVerticesAcc = tensorAccessor<DeviceTag, int64_t, 1>(nVertices);
             if constexpr (DeviceTag == torch::kCUDA) {
@@ -250,7 +250,7 @@ MarchingCubes(const GridBatchImpl &batchHdl, const torch::Tensor &sdf, double le
                                          int32_t lidx,
                                          int32_t vidx,
                                          int32_t cidx,
-                                         BatchGridAccessor<nanovdb::ValueOnIndex> batchAcc) {
+                                         BatchGridAccessor batchAcc) {
                     countVerticesCallback<scalar_t, TorchRAcc32>(bidx,
                                                                  lidx,
                                                                  vidx,
@@ -266,7 +266,7 @@ MarchingCubes(const GridBatchImpl &batchHdl, const torch::Tensor &sdf, double le
                               int32_t lidx,
                               int32_t vidx,
                               int32_t cidx,
-                              BatchGridAccessor<nanovdb::ValueOnIndex> batchAcc) {
+                              BatchGridAccessor batchAcc) {
                     countVerticesCallback<scalar_t, TorchAcc>(bidx,
                                                               lidx,
                                                               vidx,
@@ -307,7 +307,7 @@ MarchingCubes(const GridBatchImpl &batchHdl, const torch::Tensor &sdf, double le
                                              int32_t lidx,
                                              int32_t vidx,
                                              int32_t cidx,
-                                             BatchGridAccessor<nanovdb::ValueOnIndex> batchAcc) {
+                                             BatchGridAccessor batchAcc) {
                         meshingCubeCallback<scalar_t, TorchRAcc32>(bidx,
                                                                    lidx,
                                                                    vidx,
@@ -325,7 +325,7 @@ MarchingCubes(const GridBatchImpl &batchHdl, const torch::Tensor &sdf, double le
                                   int32_t lidx,
                                   int32_t vidx,
                                   int32_t cidx,
-                                  BatchGridAccessor<nanovdb::ValueOnIndex> batchAcc) {
+                                  BatchGridAccessor batchAcc) {
                         meshingCubeCallback<scalar_t, TorchAcc>(bidx,
                                                                 lidx,
                                                                 vidx,

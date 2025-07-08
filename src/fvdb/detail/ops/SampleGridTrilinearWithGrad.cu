@@ -25,7 +25,7 @@ sampleTrilinearWithGradCallback(int32_t bidx,
                                 int32_t cidx,
                                 JaggedAccessor<ScalarType, 2> points,
                                 TensorAccessor<ScalarType, 2> gridData,
-                                BatchGridAccessor<nanovdb::ValueOnIndex> batchAccessor,
+                                BatchGridAccessor batchAccessor,
                                 TensorAccessor<ScalarType, 2> outFeatures,
                                 TensorAccessor<ScalarType, 3> outGradFeatures) {
     using MathType = at::opmath_type<ScalarType>;
@@ -79,7 +79,7 @@ SampleGridTrilinearWithGrad(const GridBatchImpl &batchHdl,
     std::vector<int64_t> outGradShape = outShape;
     outGradShape.push_back(3);
 
-    auto batchAcc           = gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(batchHdl);
+    auto batchAcc           = gridBatchAccessor<DeviceTag>(batchHdl);
     auto gridDataAcc        = tensorAccessor<DeviceTag, scalar_t, 2>(gridDataReshape);
     auto outFeaturesAcc     = tensorAccessor<DeviceTag, scalar_t, 2>(outFeatures);
     auto outGradFeaturesAcc = tensorAccessor<DeviceTag, scalar_t, 3>(outGradFeatures);

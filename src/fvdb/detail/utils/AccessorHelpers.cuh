@@ -70,16 +70,15 @@ tensorAccessor(const torch::Tensor &tensor) {
 
 /// @brief Get an accessor for the given batched grid handle with scalar type T
 /// @tparam DeviceTag The device tag to use for the accessor (either torch::kCUDA or torch::kCPU)
-/// @tparam GridT The type of grid (either nanovdb::ValueOnIndex or nanovdb::ValueOnIndexMask)
 /// @param batchHdl The batched grid handle to get an accessor for
 /// @return A fvdb::detail::GridBatchImpl::Accessor of the given type on the appropriate device
-template <c10::DeviceType DeviceTag, typename GridT>
-typename fvdb::detail::GridBatchImpl::Accessor<GridT>
+template <c10::DeviceType DeviceTag>
+typename fvdb::detail::GridBatchImpl::Accessor
 gridBatchAccessor(const fvdb::detail::GridBatchImpl &batchHdl) {
     if constexpr (DeviceTag == torch::kCUDA || DeviceTag == torch::kPrivateUse1) {
-        return batchHdl.deviceAccessor<GridT>();
+        return batchHdl.deviceAccessor();
     } else {
-        return batchHdl.hostAccessor<GridT>();
+        return batchHdl.hostAccessor();
     }
 }
 

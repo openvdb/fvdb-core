@@ -18,8 +18,8 @@ fillToGridVoxelCallback(
     int32_t leafIdx,
     int32_t voxelIdx,
     int32_t channelIdx,
-    GridBatchImpl::Accessor<nanovdb::ValueOnIndex> fromGridHdl,
-    GridBatchImpl::Accessor<nanovdb::ValueOnIndex> toGridHdl,
+    GridBatchImpl::Accessor fromGridHdl,
+    GridBatchImpl::Accessor toGridHdl,
     torch::PackedTensorAccessor64<ScalarType, 2, torch::RestrictPtrTraits> fromFeatures,
     torch::PackedTensorAccessor64<ScalarType, 2, torch::RestrictPtrTraits> toFeatures) {
     using LeafNodeT = typename nanovdb::OnIndexGrid::LeafNodeType;
@@ -50,8 +50,8 @@ fillToGridVoxelCallback(
 
 template <typename ScalarType>
 void
-fillToGridCPU(const GridBatchImpl::Accessor<nanovdb::ValueOnIndex> &fromGridHandle,
-              const GridBatchImpl::Accessor<nanovdb::ValueOnIndex> &toGridHandle,
+fillToGridCPU(const GridBatchImpl::Accessor &fromGridHandle,
+              const GridBatchImpl::Accessor &toGridHandle,
               const torch::TensorAccessor<ScalarType, 2> fromFeatures,
               torch::TensorAccessor<ScalarType, 2> toFeatures,
               bool isContiguous) {
@@ -90,33 +90,27 @@ dispatchFillFromGrid<torch::kCUDA>(const GridBatchImpl &fromGrid,
                                    const GridBatchImpl &toGrid,
                                    const torch::Tensor &fromFeatures,
                                    torch::Tensor &toFeatures) {
-    AT_DISPATCH_V2(fromFeatures.scalar_type(),
-                   "fillToGrid",
-                   AT_WRAP([&]() {
-                       auto fromFeaturesAcc =
-                           fromFeatures.packed_accessor64<scalar_t, 2, torch::RestrictPtrTraits>();
-                       auto toFeaturesAcc =
-                           toFeatures.packed_accessor64<scalar_t, 2, torch::RestrictPtrTraits>();
-                       auto toGridAcc = toGrid.deviceAccessor<nanovdb::ValueOnIndex>();
-                       auto callback  = [=]
-                           __device__(int64_t bidx,
-                                      int64_t lidx,
-                                      int64_t vidx,
-                                      int64_t cidx,
-                                      GridBatchImpl::Accessor<nanovdb::ValueOnIndex> fromGridAcc) {
-                               fillToGridVoxelCallback<scalar_t>(bidx,
-                                                                 lidx,
-                                                                 vidx,
-                                                                 cidx,
-                                                                 fromGridAcc,
-                                                                 toGridAcc,
-                                                                 fromFeaturesAcc,
-                                                                 toFeaturesAcc);
-                           };
-                       forEachVoxelCUDA(512, fromFeatures.size(1), fromGrid, callback);
-                   }),
-                   AT_EXPAND(AT_FLOATING_TYPES),
-                   c10::kHalf);
+    AT_DISPATCH_V2(
+        fromFeatures.scalar_type(),
+        "fillToGrid",
+        AT_WRAP([&]() {
+            auto fromFeaturesAcc =
+                fromFeatures.packed_accessor64<scalar_t, 2, torch::RestrictPtrTraits>();
+            auto toFeaturesAcc =
+                toFeatures.packed_accessor64<scalar_t, 2, torch::RestrictPtrTraits>();
+            auto toGridAcc = toGrid.deviceAccessor();
+            auto callback  = [=] __device__(int64_t bidx,
+                                           int64_t lidx,
+                                           int64_t vidx,
+                                           int64_t cidx,
+                                           GridBatchImpl::Accessor fromGridAcc) {
+                fillToGridVoxelCallback<scalar_t>(
+                    bidx, lidx, vidx, cidx, fromGridAcc, toGridAcc, fromFeaturesAcc, toFeaturesAcc);
+            };
+            forEachVoxelCUDA(512, fromFeatures.size(1), fromGrid, callback);
+        }),
+        AT_EXPAND(AT_FLOATING_TYPES),
+        c10::kHalf);
 }
 
 template <>
@@ -130,8 +124,8 @@ dispatchFillFromGrid<torch::kCPU>(const GridBatchImpl &fromGrid,
     AT_DISPATCH_V2(fromFeatures.scalar_type(),
                    "fillToGrid",
                    AT_WRAP([&]() {
-                       fillToGridCPU<scalar_t>(fromGrid.hostAccessor<nanovdb::ValueOnIndex>(),
-                                               toGrid.hostAccessor<nanovdb::ValueOnIndex>(),
+                       fillToGridCPU<scalar_t>(fromGrid.hostAccessor(),
+                                               toGrid.hostAccessor(),
                                                fromFeatures.accessor<scalar_t, 2>(),
                                                toFeatures.accessor<scalar_t, 2>(),
                                                isContiguous);

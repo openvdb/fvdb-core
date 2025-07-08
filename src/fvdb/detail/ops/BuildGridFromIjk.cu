@@ -25,7 +25,7 @@ namespace ops {
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchCreateNanoGridFromIJK<torch::kCUDA>(const JaggedTensor &ijk) {
-    using GridType = nanovdb::ValueOnIndex;
+    using GridT = nanovdb::ValueOnIndex;
 
     TORCH_CHECK(ijk.is_contiguous(), "ijk must be contiguous");
     TORCH_CHECK(ijk.device().is_cuda(), "device must be cuda");
@@ -66,7 +66,7 @@ dispatchCreateNanoGridFromIJK<torch::kCUDA>(const JaggedTensor &ijk) {
         handles.push_back(
             nVoxels == 0
                 ? createEmptyGridHandle(guide.device())
-                : nanovdb::tools::cuda::voxelsToGrid<GridType, nanovdb::Coord *, TorchDeviceBuffer>(
+                : nanovdb::tools::cuda::voxelsToGrid<GridT, nanovdb::Coord *, TorchDeviceBuffer>(
                       (nanovdb::Coord *)dataPtr, nVoxels, 1.0, guide));
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
@@ -84,7 +84,7 @@ dispatchCreateNanoGridFromIJK<torch::kCUDA>(const JaggedTensor &ijk) {
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(const JaggedTensor &ijk) {
-    using GridType = nanovdb::ValueOnIndex;
+    using GridT = nanovdb::ValueOnIndex;
 
 #if CCCL_INCLUSIVE_SUM_INIT_SUPPORTED
     TORCH_CHECK(ijk.is_contiguous(), "ijk must be contiguous");
@@ -127,7 +127,7 @@ dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(const JaggedTensor &ijk) {
             auto coordPtr    = reinterpret_cast<nanovdb::Coord *>(dataPtr);
 
             nanovdb::cuda::DeviceMesh mesh;
-            nanovdb::tools::cuda::DistributedPointsToGrid<GridType> converter(mesh);
+            nanovdb::tools::cuda::DistributedPointsToGrid<GridT> converter(mesh);
             auto handle =
                 converter.getHandle<nanovdb::Coord *, TorchDeviceBuffer>(coordPtr, nVoxels, guide);
             handles.emplace_back(std::move(handle));
@@ -156,7 +156,7 @@ dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(const JaggedTensor &ijk) {
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchCreateNanoGridFromIJK<torch::kCPU>(const JaggedTensor &jaggedCoords) {
-    using GridType = nanovdb::ValueOnIndex;
+    using GridT = nanovdb::ValueOnIndex;
 
     return AT_DISPATCH_V2(
         jaggedCoords.scalar_type(),
@@ -190,7 +190,7 @@ dispatchCreateNanoGridFromIJK<torch::kCPU>(const JaggedTensor &jaggedCoords) {
                 }
 
                 proxyGridAccessor.merge();
-                auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridType, TorchDeviceBuffer>(
+                auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
                     *proxyGrid, 0u, false, false);
                 ret.buffer().to(torch::kCPU);
                 batchHandles.push_back(std::move(ret));

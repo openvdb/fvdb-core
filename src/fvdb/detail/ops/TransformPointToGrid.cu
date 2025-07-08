@@ -22,7 +22,7 @@ transformPointsToGridCallback(int32_t bidx,
                               int32_t eidx,
                               JaggedAccessor<ScalarType, 2> pts,
                               TensorAccessor<ScalarType, 2> outPts,
-                              BatchGridAccessor<nanovdb::ValueOnIndex> batchAccessor,
+                              BatchGridAccessor batchAccessor,
                               bool primal) {
     const auto tx =
         primal ? batchAccessor.primalTransform(bidx) : batchAccessor.dualTransform(bidx);
@@ -44,7 +44,7 @@ transformPointsToGridBackwardCallback(int32_t bidx,
                                       int32_t eidx,
                                       JaggedAccessor<ScalarType, 2> gradOut,
                                       TensorAccessor<ScalarType, 2> outGradIn,
-                                      BatchGridAccessor<nanovdb::ValueOnIndex> batchAccessor,
+                                      BatchGridAccessor batchAccessor,
                                       bool primal) {
     const auto tx =
         primal ? batchAccessor.primalTransform(bidx) : batchAccessor.dualTransform(bidx);
@@ -65,7 +65,7 @@ invTransformPointsToGridCallback(int32_t bidx,
                                  int32_t eidx,
                                  JaggedAccessor<ScalarType, 2> pts,
                                  TensorAccessor<ScalarType, 2> outPts,
-                                 BatchGridAccessor<nanovdb::ValueOnIndex> batchAccessor,
+                                 BatchGridAccessor batchAccessor,
                                  bool primal) {
     const auto tx =
         primal ? batchAccessor.primalTransform(bidx) : batchAccessor.dualTransform(bidx);
@@ -86,7 +86,7 @@ invTransformPointsToGridBackwardCallback(int32_t bidx,
                                          int32_t eidx,
                                          JaggedAccessor<ScalarType, 2> gradOut,
                                          TensorAccessor<ScalarType, 2> outGradIn,
-                                         BatchGridAccessor<nanovdb::ValueOnIndex> batchAccessor,
+                                         BatchGridAccessor batchAccessor,
                                          bool primal) {
     const auto tx =
         primal ? batchAccessor.primalTransform(bidx) : batchAccessor.dualTransform(bidx);
@@ -110,7 +110,7 @@ TransformPointsToGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points,
     auto opts               = torch::TensorOptions().dtype(points.dtype()).device(points.device());
     torch::Tensor outCoords = torch::empty({points.rsize(0), points.rsize(1)}, opts);
 
-    auto batchAcc     = gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(batchHdl);
+    auto batchAcc     = gridBatchAccessor<DeviceTag>(batchHdl);
     auto outCoordsAcc = tensorAccessor<DeviceTag, scalar_t, 2>(outCoords);
     if constexpr (DeviceTag == torch::kCUDA) {
         auto cb = [=]
@@ -149,7 +149,7 @@ InvTransformPointsToGrid(const GridBatchImpl &batchHdl, const JaggedTensor &poin
     auto opts               = torch::TensorOptions().dtype(points.dtype()).device(points.device());
     torch::Tensor outCoords = torch::empty({points.rsize(0), points.rsize(1)}, opts);
 
-    auto batchAcc     = gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(batchHdl);
+    auto batchAcc     = gridBatchAccessor<DeviceTag>(batchHdl);
     auto outCoordsAcc = tensorAccessor<DeviceTag, scalar_t, 2>(outCoords);
     if constexpr (DeviceTag == torch::kCUDA) {
         auto cb = [=]
@@ -183,7 +183,7 @@ TransformPointsToGridBackward(const GridBatchImpl &batchHdl,
                               bool isPrimal) {
     torch::Tensor outGradIn = torch::empty_like(gradOut.jdata());
 
-    auto batchAcc     = gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(batchHdl);
+    auto batchAcc     = gridBatchAccessor<DeviceTag>(batchHdl);
     auto outGradInAcc = tensorAccessor<DeviceTag, scalar_t, 2>(outGradIn);
     if constexpr (DeviceTag == torch::kCUDA) {
         auto cb = [=]
@@ -217,7 +217,7 @@ InvTransformPointsToGridBackward(const GridBatchImpl &batchHdl,
                                  bool isPrimal) {
     torch::Tensor outGradIn = torch::empty_like(gradOut.jdata());
 
-    auto batchAcc     = gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(batchHdl);
+    auto batchAcc     = gridBatchAccessor<DeviceTag>(batchHdl);
     auto outGradInAcc = tensorAccessor<DeviceTag, scalar_t, 2>(outGradIn);
     if constexpr (DeviceTag == torch::kCUDA) {
         auto cb = [=]

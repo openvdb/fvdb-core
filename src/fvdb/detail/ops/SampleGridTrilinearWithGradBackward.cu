@@ -28,7 +28,7 @@ sampleTrilinearWithGradBackwardCallback(int32_t bidx,
                                         JaggedAccessor<ScalarType, 2> points,
                                         TensorAccessor<ScalarType, 2> gradOutFeatures,
                                         TensorAccessor<ScalarType, 3> gradOutGradFeatures,
-                                        BatchGridAccessor<nanovdb::ValueOnIndex> batchAccessor,
+                                        BatchGridAccessor batchAccessor,
                                         TensorAccessor<ScalarType, 2> outGridData) {
     using MathType = at::opmath_type<ScalarType>;
 
@@ -79,7 +79,7 @@ SampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
     torch::Tensor outGrad = torch::zeros_like(dataReshape);          // [N, -1]
     auto outShape         = spliceShape({outGrad.size(0)}, data, 1); // [B*M, *]
 
-    auto batchAcc               = gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(batchHdl);
+    auto batchAcc               = gridBatchAccessor<DeviceTag>(batchHdl);
     auto gradOutFeaturesAcc     = tensorAccessor<DeviceTag, scalar_t, 2>(gradOutFeatures);
     auto gradOutGradFeaturesAcc = tensorAccessor<DeviceTag, scalar_t, 3>(gradOutGradFeatures);
     auto outGradAcc             = tensorAccessor<DeviceTag, scalar_t, 2>(outGrad);

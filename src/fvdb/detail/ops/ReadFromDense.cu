@@ -18,7 +18,7 @@ readFromDenseVoxelCallback(
     int32_t leafIdx,
     int32_t voxelIdx,
     int32_t channelIdx,
-    GridBatchImpl::Accessor<nanovdb::ValueOnIndex> batchHandle,
+    GridBatchImpl::Accessor batchHandle,
     torch::PackedTensorAccessor64<ScalarType, 5, torch::RestrictPtrTraits>
         inDenseTensor, // [B, W, H, D, C]
     torch::PackedTensorAccessor64<int32_t, 2, torch::RestrictPtrTraits> denseOrigins, // [B, 3]
@@ -51,7 +51,7 @@ readFromDenseVoxelCallback(
 
 template <typename ScalarType>
 void
-readFromDenseCPU(const GridBatchImpl::Accessor<nanovdb::ValueOnIndex> &gridHandle,
+readFromDenseCPU(const GridBatchImpl::Accessor &gridHandle,
                  const torch::TensorAccessor<ScalarType, 5> inDenseTensor,
                  const torch::TensorAccessor<int32_t, 2> denseOrigins,
                  torch::TensorAccessor<ScalarType, 2> outSparseTensor,
@@ -105,8 +105,7 @@ dispatchReadFromDense<torch::kCUDA>(const GridBatchImpl &batchHdl,
                                            int32_t lidx,
                                            int32_t vidx,
                                            int32_t cidx,
-                                           GridBatchImpl::Accessor<nanovdb::ValueOnIndex>
-                                               batchAcc) {
+                                           GridBatchImpl::Accessor batchAcc) {
                 readFromDenseVoxelCallback<scalar_t>(
                     bidx, lidx, vidx, cidx, batchAcc, inDenseAcc, denseOriginsAcc, outSparseAcc);
             };
@@ -128,7 +127,7 @@ dispatchReadFromDense<torch::kCPU>(const GridBatchImpl &gridHdl,
     AT_DISPATCH_V2(inDenseTensor.scalar_type(),
                    "readFromDense",
                    AT_WRAP([&]() {
-                       readFromDenseCPU(gridHdl.hostAccessor<nanovdb::ValueOnIndex>(),
+                       readFromDenseCPU(gridHdl.hostAccessor(),
                                         inDenseTensor.accessor<scalar_t, 5>(),
                                         denseOrigins.accessor<int32_t, 2>(),
                                         outSparseTensor.accessor<scalar_t, 2>(),

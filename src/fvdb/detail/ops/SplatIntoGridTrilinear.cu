@@ -26,7 +26,7 @@ splatIntoGridTrilinearCallback(int32_t bidx,
                                int32_t cidx,
                                JaggedAccessor<ScalarType, 2> points,
                                TensorAccessor<ScalarType, 2> pointsData,
-                               BatchGridAccessor<nanovdb::ValueOnIndex> batchAccessor,
+                               BatchGridAccessor batchAccessor,
                                TensorAccessor<at::opmath_type<ScalarType>, 2> outGridData) {
     using MathType = at::opmath_type<ScalarType>;
 
@@ -78,7 +78,7 @@ SplatIntoGridTrilinear(const GridBatchImpl &batchHdl,
         _outGridData = outGridData;
     }
 
-    auto batchAcc       = gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(batchHdl);
+    auto batchAcc       = gridBatchAccessor<DeviceTag>(batchHdl);
     auto pointsDataAcc  = tensorAccessor<DeviceTag, scalar_t, 2>(pointsData);
     auto outGridDataAcc = tensorAccessor<DeviceTag, at::opmath_type<scalar_t>, 2>(_outGridData);
 

@@ -19,7 +19,7 @@ template <typename ScalarType,
 __hostdev__ inline void
 ijkToInvIndexCallback(fvdb::JIdxType bidx,
                       int64_t eidx,
-                      BatchGridAccessor<nanovdb::ValueOnIndex> batchAccessor,
+                      BatchGridAccessor batchAccessor,
                       const JaggedAccessor<ScalarType, 2> ijk,
                       TensorAccessor<int64_t, 1> outInvIndex,
                       bool cumulative) {
@@ -55,8 +55,7 @@ IjkToInvIndex(const GridBatchImpl &batchHdl, const JaggedTensor &ijk, bool cumul
     AT_DISPATCH_V2(ijk.scalar_type(),
                    "IjkToInvIndex",
                    AT_WRAP([&]() {
-                       auto batchAcc =
-                           gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(batchHdl);
+                       auto batchAcc       = gridBatchAccessor<DeviceTag>(batchHdl);
                        auto outInvIndexAcc = tensorAccessor<DeviceTag, int64_t, 1>(outInvIndex);
 
                        if constexpr (DeviceTag == torch::kCUDA) {

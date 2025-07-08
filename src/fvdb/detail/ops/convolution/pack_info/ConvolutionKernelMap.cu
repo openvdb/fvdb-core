@@ -17,13 +17,13 @@ convolutionKernelMapVoxelCallback(int32_t batchIdx,
                                   int32_t leafIdx,
                                   int32_t voxelIdx,
                                   int32_t channelIdx,
-                                  BatchGridAccessor<nanovdb::ValueOnIndex> targetBatchAcc,
-                                  BatchGridAccessor<nanovdb::ValueOnIndex> sourceBatchAcc,
+                                  BatchGridAccessor targetBatchAcc,
+                                  BatchGridAccessor sourceBatchAcc,
                                   TorchRAcc32<int32_t, 2> kmap,
                                   const nanovdb::Coord &kernelStart,
                                   const nanovdb::Coord &kernelSize,
                                   const nanovdb::Coord &stride) {
-    using LeafNodeType = typename nanovdb::NanoTree<nanovdb::ValueOnIndex>::LeafNodeType;
+    using LeafNodeType = typename nanovdb::OnIndexTree::LeafNodeType;
 
     const nanovdb::OnIndexGrid *source = sourceBatchAcc.grid(batchIdx);
     const nanovdb::OnIndexGrid *target = targetBatchAcc.grid(batchIdx);
@@ -56,8 +56,8 @@ convolutionKernelMapVoxelCallback(int32_t batchIdx,
 }
 
 void
-convolutionKernelMapCPU(const GridBatchImpl::Accessor<nanovdb::ValueOnIndex> &sourceGridBatchAcc,
-                        const GridBatchImpl::Accessor<nanovdb::ValueOnIndex> &targetGridBatchAcc,
+convolutionKernelMapCPU(const GridBatchImpl::Accessor &sourceGridBatchAcc,
+                        const GridBatchImpl::Accessor &targetGridBatchAcc,
                         const nanovdb::Coord &kernelSize,
                         const nanovdb::Coord &stride,
                         torch::TensorAccessor<int, 2> outKernelMap) {
@@ -113,14 +113,14 @@ dispatchConvolutionKernelMap<torch::kCUDA>(const GridBatchImpl &sourceBatchHdl,
                                       (int)std::floor(-kernelSizeCoord.y() / 2.0 + 1),
                                       (int)std::floor(-kernelSizeCoord.z() / 2.0 + 1)});
 
-    auto sourceBatchAccessor = sourceBatchHdl.deviceAccessor<nanovdb::ValueOnIndex>();
+    auto sourceBatchAccessor = sourceBatchHdl.deviceAccessor();
     auto kernelMapAcc        = kernelMap.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>();
 
     auto cb = [=] __device__(int32_t bidx,
                              int32_t lidx,
                              int32_t vidx,
                              int32_t cidx,
-                             BatchGridAccessor<nanovdb::ValueOnIndex> batchAcc) {
+                             BatchGridAccessor batchAcc) {
         convolutionKernelMapVoxelCallback(bidx,
                                           lidx,
                                           vidx,
@@ -145,8 +145,8 @@ dispatchConvolutionKernelMap<torch::kCPU>(const GridBatchImpl &source,
                                           const Vec3iOrScalar &stride) {
     const nanovdb::Coord &kernelSizeCoord = kernelSize.value();
     const nanovdb::Coord &strideCoord     = stride.value();
-    convolutionKernelMapCPU(source.hostAccessor<nanovdb::ValueOnIndex>(),
-                            target.hostAccessor<nanovdb::ValueOnIndex>(),
+    convolutionKernelMapCPU(source.hostAccessor(),
+                            target.hostAccessor(),
                             kernelSizeCoord,
                             strideCoord,
                             kernelMap.accessor<int, 2>());

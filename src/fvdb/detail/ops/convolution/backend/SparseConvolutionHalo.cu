@@ -22,7 +22,7 @@ __launch_bounds__(1024) void
 stencilConvHaloKernel(int kM,
                       int kN,
                       int numLeaves,
-                      BatchGridAccessor<nanovdb::ValueOnIndex> gridAcc,
+                      BatchGridAccessor gridAcc,
                       TorchRAcc64<float, 2> inFeatures,
                       TorchRAcc64<float, 7> stencil,
                       TorchRAcc64<float, 2> outFeatures) {
@@ -35,7 +35,7 @@ stencilConvHaloKernel(int kM,
     int nIdx    = (blockIdx.x / numLeaves) % kN;
     int mIdx    = blockIdx.x / numLeaves / kN;
 
-    using LeafNodeType = typename nanovdb::NanoTree<nanovdb::ValueOnIndex>::LeafNodeType;
+    using LeafNodeType = typename nanovdb::OnIndexTree::LeafNodeType;
 
     // Constants: TensorCore GEMM shape MK x KN = MN
     static constexpr int M = 16;
@@ -201,7 +201,7 @@ __global__ __launch_bounds__(256) void
 stencilConvHaloLargeDepthKernel(int kM,
                                 int kN,
                                 int numLeaves,
-                                BatchGridAccessor<nanovdb::ValueOnIndex> gridAcc,
+                                BatchGridAccessor gridAcc,
                                 TorchRAcc64<float, 2> inFeatures,
                                 TorchRAcc64<float, 7> stencil,
                                 TorchRAcc64<float, 2> outFeatures) {
@@ -218,7 +218,7 @@ stencilConvHaloLargeDepthKernel(int kM,
     const int nIdx    = (restIdx / numLeaves) % kN;
     const int mIdx    = restIdx / numLeaves / kN;
 
-    using LeafNodeType = typename nanovdb::NanoTree<nanovdb::ValueOnIndex>::LeafNodeType;
+    using LeafNodeType = typename nanovdb::OnIndexTree::LeafNodeType;
 
     // Constants: Input and output dimension multiples
     static constexpr int Di = 64;
@@ -423,7 +423,7 @@ dispatchSparseConvolutionHalo<torch::kCUDA>(const GridBatchImpl &batchHdl,
     paddedKernel = paddedKernel.permute({0, 1, 2, 3, 5, 4, 6}).contiguous();
 
     // Launch kernels for each M x N x leaf.
-    auto gridAccessor = batchHdl.deviceAccessor<nanovdb::ValueOnIndex>();
+    auto gridAccessor = batchHdl.deviceAccessor();
 
     if (variant == 8) {
         stencilConvHaloKernel<<<M * N * numLeaves, 1024>>>(

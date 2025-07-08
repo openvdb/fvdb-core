@@ -84,7 +84,7 @@ valueGetter(torch::TensorAccessor<uint8_t, 2> &acc, int rowIdx) {
 /// nanovdb grid
 ///        with values stored directly in the leaves. This will only work for values which
 ///        correspond to valid nanovdb grid types (e.g. Vec3f, Vec4f, Vec3d, Vec4d, etc...)
-/// @tparam OutGridType The type of data to store in the returned grid (e.g. float, nanovdb::Vec3f,
+/// @tparam OutGridT The type of data to store in the returned grid (e.g. float, nanovdb::Vec3f,
 /// etc...)
 /// @tparam InScalarType The scalar type of the input jagged tensor (e.g float, double, int32_t,
 /// etc...)
@@ -92,7 +92,7 @@ valueGetter(torch::TensorAccessor<uint8_t, 2> &acc, int rowIdx) {
 /// @param data The JaggedTensor of data to copy
 /// @param names The names of the grids in the batch to write to the copied output (optional)
 /// @return A nanovdb grid handle with the copied data stored in the leaves
-template <typename OutGridType, typename InScalarType>
+template <typename OutGridT, typename InScalarType>
 nanovdb::GridHandle<nanovdb::HostBuffer>
 fvdbToNanovdbGridWithValues(const GridBatch &gridBatch,
                             const JaggedTensor &data,
@@ -103,7 +103,7 @@ fvdbToNanovdbGridWithValues(const GridBatch &gridBatch,
             std::to_string(names.size()) + " names for batch size " +
             std::to_string(gridBatch.grid_count()));
 
-    using ProxyGridT     = nanovdb::tools::build::Grid<OutGridType>;
+    using ProxyGridT     = nanovdb::tools::build::Grid<OutGridT>;
     using GridValueT     = typename ProxyGridT::ValueType;
     using HostGridHandle = nanovdb::GridHandle<nanovdb::HostBuffer>;
 
@@ -180,9 +180,9 @@ fvdbToNanovdbGridWithValues(const GridBatch &gridBatch,
                                data.jdata().dim() + 1,
                                sizeof(int64_t));
         buffers.push_back(
-            converter.template getHandle<OutGridType, nanovdb::HostBuffer>(nanovdb::HostBuffer()));
+            converter.template getHandle<OutGridT, nanovdb::HostBuffer>(nanovdb::HostBuffer()));
         TORCH_CHECK(buffers.back().gridCount() == 1, "Internal error. Invalid grid count.");
-        nanovdb::NanoGrid<OutGridType> *nanoGrid = buffers.back().grid<OutGridType>();
+        nanovdb::NanoGrid<OutGridT> *nanoGrid = buffers.back().grid<OutGridT>();
         TORCH_CHECK(nanoGrid->blindDataCount() == 1,
                     "Internal error. Invalid blind metadata count.");
         int64_t *writeHead  = (int64_t *)nanoGrid->blindMetaData(0).blindData();
@@ -218,48 +218,48 @@ maybeConvertToStandardNanovdbGrid(const fvdb::GridBatch &gridBatch,
     }
     if (data.dtype() == torch::kHalf) {
         if (jdataSqueezed.dim() == 1 || (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 1)) {
-            using GridType = nanovdb::Fp16;
-            return fvdbToNanovdbGridWithValues<GridType, c10::Half>(gridBatch, data, names);
+            using GridT = nanovdb::Fp16;
+            return fvdbToNanovdbGridWithValues<GridT, c10::Half>(gridBatch, data, names);
         }
     } else if (data.dtype() == torch::kFloat32) {
         if (jdataSqueezed.dim() == 1 || (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 1)) {
-            using GridType = float;
-            return fvdbToNanovdbGridWithValues<GridType, float>(gridBatch, data, names);
+            using GridT = float;
+            return fvdbToNanovdbGridWithValues<GridT, float>(gridBatch, data, names);
         } else if (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 3) {
-            using GridType = nanovdb::Vec3f;
-            return fvdbToNanovdbGridWithValues<GridType, float>(gridBatch, data, names);
+            using GridT = nanovdb::Vec3f;
+            return fvdbToNanovdbGridWithValues<GridT, float>(gridBatch, data, names);
         } else if (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 4) {
-            using GridType = nanovdb::Vec4f;
-            return fvdbToNanovdbGridWithValues<GridType, float>(gridBatch, data, names);
+            using GridT = nanovdb::Vec4f;
+            return fvdbToNanovdbGridWithValues<GridT, float>(gridBatch, data, names);
         }
     } else if (data.dtype() == torch::kFloat64) {
         if (jdataSqueezed.dim() == 1 || (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 1)) {
-            using GridType = double;
-            return fvdbToNanovdbGridWithValues<GridType, double>(gridBatch, data, names);
+            using GridT = double;
+            return fvdbToNanovdbGridWithValues<GridT, double>(gridBatch, data, names);
         } else if (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 3) {
-            using GridType = nanovdb::Vec3d;
-            return fvdbToNanovdbGridWithValues<GridType, double>(gridBatch, data, names);
+            using GridT = nanovdb::Vec3d;
+            return fvdbToNanovdbGridWithValues<GridT, double>(gridBatch, data, names);
         } else if (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 4) {
-            using GridType = nanovdb::Vec4d;
-            return fvdbToNanovdbGridWithValues<GridType, double>(gridBatch, data, names);
+            using GridT = nanovdb::Vec4d;
+            return fvdbToNanovdbGridWithValues<GridT, double>(gridBatch, data, names);
         }
     } else if (data.dtype() == torch::kInt32) {
         if (jdataSqueezed.dim() == 1 || (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 1)) {
-            using GridType = int32_t;
-            return fvdbToNanovdbGridWithValues<GridType, int32_t>(gridBatch, data, names);
+            using GridT = int32_t;
+            return fvdbToNanovdbGridWithValues<GridT, int32_t>(gridBatch, data, names);
         } else if (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 3) {
-            using GridType = nanovdb::Vec3i;
-            return fvdbToNanovdbGridWithValues<GridType, int32_t>(gridBatch, data, names);
+            using GridT = nanovdb::Vec3i;
+            return fvdbToNanovdbGridWithValues<GridT, int32_t>(gridBatch, data, names);
         }
     } else if (data.dtype() == torch::kInt64) {
         if (jdataSqueezed.dim() == 1 || (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 1)) {
-            using GridType = int64_t;
-            return fvdbToNanovdbGridWithValues<GridType, int64_t>(gridBatch, data, names);
+            using GridT = int64_t;
+            return fvdbToNanovdbGridWithValues<GridT, int64_t>(gridBatch, data, names);
         }
     } else if (data.dtype() == torch::kUInt8) {
         if (jdataSqueezed.dim() == 2 && jdataSqueezed.size(1) == 4) {
-            using GridType = nanovdb::math::Rgba8;
-            return fvdbToNanovdbGridWithValues<GridType, uint8_t>(gridBatch, data, names);
+            using GridT = nanovdb::math::Rgba8;
+            return fvdbToNanovdbGridWithValues<GridT, uint8_t>(gridBatch, data, names);
         }
     }
 

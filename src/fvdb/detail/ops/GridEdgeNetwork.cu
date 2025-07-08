@@ -20,7 +20,7 @@ __hostdev__ inline void
 gridEdgeNetworkCallback(int64_t batchIdx,
                         int32_t leafIdx,
                         int32_t voxelIdx,
-                        GridBatchImpl::Accessor<nanovdb::ValueOnIndex> gridAccessor,
+                        GridBatchImpl::Accessor gridAccessor,
                         TorchAccessor<float, 2> outV,
                         TorchAccessor<fvdb::JIdxType, 1> outVBidx,
                         TorchAccessor<int64_t, 2> outE,
@@ -115,7 +115,7 @@ GridEdgeNetwork(const GridBatchImpl &batchHdl, bool returnVoxelCoordinates) {
                                  int32_t leafIdx,
                                  int32_t voxelIdx,
                                  int32_t,
-                                 GridBatchImpl::Accessor<nanovdb::ValueOnIndex> gridAccessor) {
+                                 GridBatchImpl::Accessor gridAccessor) {
             gridEdgeNetworkCallback<TorchRAcc32>(batchIdx,
                                                  leafIdx,
                                                  voxelIdx,
@@ -132,7 +132,7 @@ GridEdgeNetwork(const GridBatchImpl &batchHdl, bool returnVoxelCoordinates) {
                       int32_t leafIdx,
                       int32_t voxelIdx,
                       int32_t,
-                      GridBatchImpl::Accessor<nanovdb::ValueOnIndex> gridAccessor) {
+                      GridBatchImpl::Accessor gridAccessor) {
             gridEdgeNetworkCallback<TorchAcc>(batchIdx,
                                               leafIdx,
                                               voxelIdx,

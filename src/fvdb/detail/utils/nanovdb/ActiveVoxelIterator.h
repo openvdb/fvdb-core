@@ -10,7 +10,7 @@ namespace fvdb {
 
 /*
  * Hack to extract true data type within a nanovdb::NanoTree.
- * We need this because nanovdb::NanoTree<nanovdb::ValueOnIndex> has a data type mapping to
+ * We need this because nanovdb::OnIndexTree has a data type mapping to
  * nanovdb::ValueOnIndex (which is a dummy struct), but the actual data is uint64_t.
  *
  * FIXME: We should mvoe this inside ActiveVoxelIterator to not pollute the namespace
@@ -18,7 +18,7 @@ namespace fvdb {
 template <typename TreeT> struct ActiveVoxelIteratorDataTypeExtractor {
     using DataType = typename TreeT::DataType;
 };
-template <> struct ActiveVoxelIteratorDataTypeExtractor<nanovdb::NanoTree<nanovdb::ValueOnIndex>> {
+template <> struct ActiveVoxelIteratorDataTypeExtractor<nanovdb::OnIndexTree> {
     using DataType = int64_t;
 };
 template <>
@@ -41,7 +41,7 @@ struct ActiveVoxelIteratorDataTypeExtractor<nanovdb::NanoTree<nanovdb::ValueOnIn
  */
 template <int64_t Offset = 0> struct ActiveVoxelIterator {
     // Iterator traits from std::iterator.
-    using TreeT             = typename nanovdb::NanoTree<nanovdb::ValueOnIndex>;
+    using TreeT             = typename nanovdb::OnIndexTree;
     using DataType          = typename ActiveVoxelIteratorDataTypeExtractor<TreeT>::DataType;
     using value_type        = std::pair<nanovdb::Coord, DataType>;
     using pointer           = value_type *;
@@ -52,8 +52,7 @@ template <int64_t Offset = 0> struct ActiveVoxelIterator {
 
     ActiveVoxelIterator() = delete;
 
-    ActiveVoxelIterator(const nanovdb::NanoTree<nanovdb::ValueOnIndex> &tree,
-                        int64_t baseOffset = 0) {
+    ActiveVoxelIterator(const nanovdb::OnIndexTree &tree, int64_t baseOffset = 0) {
         mLeaves            = tree.template getFirstNode<0>();
         mNumLeaves         = tree.nodeCount(0);
         mCurrentLeaf       = 0;
@@ -136,9 +135,9 @@ template <int64_t Offset = 0> struct ActiveVoxelIterator {
     int64_t mBaseOffset = 0;
 };
 
-template <typename GridType> struct ActiveVoxelIteratorIJKOnly {
-    using TreeT                  = typename nanovdb::NanoTree<GridType>;
-    using LeafT                  = typename nanovdb::NanoTree<GridType>::LeafNodeType;
+template <typename GridT> struct ActiveVoxelIteratorIJKOnly {
+    using TreeT                  = typename nanovdb::NanoTree<GridT>;
+    using LeafT                  = typename nanovdb::NanoTree<GridT>::LeafNodeType;
     ActiveVoxelIteratorIJKOnly() = delete;
     ActiveVoxelIteratorIJKOnly(const TreeT &tree) {
         mLeaves            = tree.template getFirstNode<0>();

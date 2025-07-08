@@ -33,7 +33,7 @@ rayImplicitCallback(int32_t bidx,
                     JaggedAccessor<ScalarT, 2> raysO,
                     JaggedAccessor<ScalarT, 2> raysD,
                     JaggedAccessor<ScalarT, 1> gridScalarsJ,
-                    BatchGridAccessor<nanovdb::ValueOnIndex> batchAcc,
+                    BatchGridAccessor batchAcc,
                     TensorAccessor<ScalarT, 1> outTimes,
                     ScalarT eps) {
     const nanovdb::OnIndexGrid *gpuGrid = batchAcc.grid(bidx);
@@ -150,7 +150,7 @@ RayImplicitIntersection(const GridBatchImpl &batchHdl,
                 numThreads = 256;
             }
 
-            auto batchAcc       = gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(batchHdl);
+            auto batchAcc       = gridBatchAccessor<DeviceTag>(batchHdl);
             auto rayDAcc        = jaggedAccessor<DeviceTag, scalar_t, 2>(rayD);
             auto gridScalarsAcc = jaggedAccessor<DeviceTag, scalar_t, 1>(gridScalars);
             auto outTimesAcc    = tensorAccessor<DeviceTag, scalar_t, 1>(outTimes);

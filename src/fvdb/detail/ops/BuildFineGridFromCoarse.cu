@@ -62,7 +62,7 @@ fineIjkForCoarseGridVoxelCallback(int32_t bidx,
                                   int32_t lidx,
                                   int32_t vidx,
                                   int32_t cidx,
-                                  const GridBatchImpl::Accessor<nanovdb::ValueOnIndex> batchAcc,
+                                  const GridBatchImpl::Accessor batchAcc,
                                   nanovdb::Coord upsamplingFactor,
                                   TorchRAcc64<int32_t, 2> outIJKData,
                                   TorchRAcc64<fvdb::JIdxType, 1> outIJKBIdx) {
@@ -107,7 +107,7 @@ fineIJKForCoarseGrid(const GridBatchImpl &batchHdl,
                              int32_t lidx,
                              int32_t vidx,
                              int32_t cidx,
-                             GridBatchImpl::Accessor<nanovdb::ValueOnIndex> bacc) {
+                             GridBatchImpl::Accessor bacc) {
         fineIjkForCoarseGridVoxelCallback(
             bidx, lidx, vidx, cidx, bacc, upsamplingFactor, outIJKAcc, outIJKBIdxAcc);
     };
@@ -147,7 +147,7 @@ nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildFineGridFromCoarse<torch::kCPU>(const GridBatchImpl &coarseBatchHdl,
                                              const nanovdb::Coord subdivisionFactor,
                                              const std::optional<JaggedTensor> &subdivMask) {
-    using GridType = nanovdb::ValueOnIndex;
+    using GridT = nanovdb::ValueOnIndex;
     torch::Tensor subdivMaskTensor;
     if (subdivMask.has_value()) {
         subdivMaskTensor = subdivMask.value().jdata();
@@ -155,7 +155,7 @@ dispatchBuildFineGridFromCoarse<torch::kCPU>(const GridBatchImpl &coarseBatchHdl
         subdivMaskTensor = torch::zeros(0, torch::TensorOptions().dtype(torch::kBool));
     }
 
-    using IndexTree = nanovdb::NanoTree<GridType>;
+    using IndexTree = nanovdb::NanoTree<GridT>;
 
     const nanovdb::GridHandle<TorchDeviceBuffer> &coarseGridHdl = coarseBatchHdl.nanoGridHandle();
     const torch::TensorAccessor<bool, 1> &subdivMaskAcc = subdivMaskTensor.accessor<bool, 1>();
@@ -163,7 +163,7 @@ dispatchBuildFineGridFromCoarse<torch::kCPU>(const GridBatchImpl &coarseBatchHdl
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
     batchHandles.reserve(coarseGridHdl.gridCount());
     for (uint32_t bidx = 0; bidx < coarseGridHdl.gridCount(); bidx += 1) {
-        const nanovdb::OnIndexGrid *coarseGrid = coarseGridHdl.template grid<GridType>(bidx);
+        const nanovdb::OnIndexGrid *coarseGrid = coarseGridHdl.template grid<GridT>(bidx);
         if (!coarseGrid) {
             throw std::runtime_error("Failed to get pointer to nanovdb index grid");
         }
@@ -194,7 +194,7 @@ dispatchBuildFineGridFromCoarse<torch::kCPU>(const GridBatchImpl &coarseBatchHdl
         }
 
         proxyGridAccessor.merge();
-        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridType, TorchDeviceBuffer>(
+        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
             *proxyGrid, 0u, false, false);
         ret.buffer().to(torch::kCPU);
         batchHandles.push_back(std::move(ret));

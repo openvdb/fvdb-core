@@ -8,11 +8,10 @@ namespace fvdb {
 namespace _private {
 
 __global__ void
-voxelMetaIndexCUDAKernel(fvdb::detail::GridBatchImpl::Accessor<nanovdb::ValueOnIndex> gridAccessor,
+voxelMetaIndexCUDAKernel(fvdb::detail::GridBatchImpl::Accessor gridAccessor,
                          TorchRAcc32<int64_t, 2> metaIndex) {
-    constexpr int32_t VOXELS_PER_LEAF =
-        nanovdb::NanoTree<nanovdb::ValueOnIndex>::LeafNodeType::NUM_VALUES;
-    const int64_t lvIdx = ((int64_t)blockIdx.x * (int64_t)blockDim.x) + threadIdx.x;
+    constexpr int32_t VOXELS_PER_LEAF = nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES;
+    const int64_t lvIdx               = ((int64_t)blockIdx.x * (int64_t)blockDim.x) + threadIdx.x;
 
     if (lvIdx >= gridAccessor.totalLeaves() * VOXELS_PER_LEAF) {
         return;

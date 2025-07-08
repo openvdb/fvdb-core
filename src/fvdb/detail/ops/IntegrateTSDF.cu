@@ -113,8 +113,8 @@ integrateTSDFKernel(const ScalarDataType truncationMargin,
                     const fvdb::TorchRAcc64<ScalarDataType, 3> depthImages,
                     const fvdb::TorchRAcc64<FeatureScalarDataType, 4> featureImages,
                     const fvdb::TorchRAcc64<ScalarDataType, 3> weightImages,
-                    const fvdb::detail::BatchGridAccessor<nanovdb::ValueOnIndex> baseGridAcc,
-                    const fvdb::detail::BatchGridAccessor<nanovdb::ValueOnIndex> unionGridAcc,
+                    const fvdb::detail::BatchGridAccessor baseGridAcc,
+                    const fvdb::detail::BatchGridAccessor unionGridAcc,
                     const fvdb::JaggedRAcc32<ScalarDataType, 1> tsdfAcc,
                     const fvdb::JaggedRAcc32<ScalarDataType, 1> weightsAcc,
                     const fvdb::JaggedRAcc32<FeatureScalarDataType, 2> featuresAcc,
@@ -124,14 +124,14 @@ integrateTSDFKernel(const ScalarDataType truncationMargin,
     using ScalarType        = OpType<ScalarDataType>::type;
     using FeatureScalarType = OpType<FeatureScalarDataType>::type;
 
-    using GridType     = nanovdb::ValueOnIndex;
-    using LeafNodeType = nanovdb::NanoGrid<GridType>::LeafNodeType;
+    using GridT        = nanovdb::ValueOnIndex;
+    using LeafNodeType = nanovdb::NanoGrid<GridT>::LeafNodeType;
     using Vec3T        = nanovdb::math::Vec3<ScalarType>;
     using Vec4T        = nanovdb::math::Vec4<ScalarType>;
     using Mat3T        = nanovdb::math::Mat3<ScalarType>;
     using Mat4T        = nanovdb::math::Mat4<ScalarType>;
 
-    constexpr uint64_t VOXELS_PER_LEAF = nanovdb::NanoTree<GridType>::LeafNodeType::NUM_VALUES;
+    constexpr uint64_t VOXELS_PER_LEAF = nanovdb::NanoTree<GridT>::LeafNodeType::NUM_VALUES;
 
     const auto batchSize = projMats.size(0);
 
@@ -189,8 +189,8 @@ integrateTSDFKernel(const ScalarDataType truncationMargin,
             static_cast<int64_t>((idx - cumUnionLeafIdx * VOXELS_PER_LEAF));
 
         // Get pointers to each grid
-        const nanovdb::NanoGrid<GridType> *unionGrid = unionGridAcc.grid(batchIdx);
-        const nanovdb::NanoGrid<GridType> *baseGrid  = baseGridAcc.grid(batchIdx);
+        const nanovdb::NanoGrid<GridT> *unionGrid = unionGridAcc.grid(batchIdx);
+        const nanovdb::NanoGrid<GridT> *baseGrid  = baseGridAcc.grid(batchIdx);
 
         // Get the leaf node in the union grid
         const LeafNodeType &unionLeaf = unionGrid->tree().template getFirstNode<0>()[unionLeafIdx];
@@ -445,12 +445,11 @@ doIntegrate(const float truncationMargin,
         tsdf.scalar_type(),
         "integrateTSDFKernel",
         AT_WRAP([&]() {
-            using Mat3T = nanovdb::math::Mat3<scalar_t>;
-            using Mat4T = nanovdb::math::Mat4<scalar_t>;
-            constexpr uint64_t VOXELS_PER_LEAF =
-                nanovdb::NanoTree<nanovdb::ValueOnIndex>::LeafNodeType::NUM_VALUES;
-            const auto numUnionLeaves   = unionGrid.totalLeaves();
-            const auto numSharedScalars = 2 * batchSize * 3 * 3 + batchSize * 4 * 4;
+            using Mat3T                        = nanovdb::math::Mat3<scalar_t>;
+            using Mat4T                        = nanovdb::math::Mat4<scalar_t>;
+            constexpr uint64_t VOXELS_PER_LEAF = nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES;
+            const auto numUnionLeaves          = unionGrid.totalLeaves();
+            const auto numSharedScalars        = 2 * batchSize * 3 * 3 + batchSize * 4 * 4;
             const auto problemSize =
                 std::max(numUnionLeaves * VOXELS_PER_LEAF, uint64_t(numSharedScalars));
             const auto sharedMemSize = 2 * batchSize * sizeof(Mat3T) + batchSize * sizeof(Mat4T);
@@ -489,8 +488,8 @@ doIntegrate(const float truncationMargin,
                     depthImages.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
                     featureImages.packed_accessor64<feature_t, 4, torch::RestrictPtrTraits>(),
                     weightImages.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
-                    baseGrid.deviceAccessor<nanovdb::ValueOnIndex>(),
-                    unionGrid.deviceAccessor<nanovdb::ValueOnIndex>(),
+                    baseGrid.deviceAccessor(),
+                    unionGrid.deviceAccessor(),
                     tsdf.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
                     weights.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
                     features.packed_accessor32<feature_t, 2, torch::RestrictPtrTraits>(),
