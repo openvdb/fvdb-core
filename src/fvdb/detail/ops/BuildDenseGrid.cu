@@ -67,7 +67,7 @@ dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
                                               nanovdb::Coord size,
                                               torch::Device device,
                                               const std::optional<torch::Tensor> &mask) {
-    using GridType = nanovdb::ValueOnIndex;
+    using GridT = nanovdb::ValueOnIndex;
     TORCH_CHECK(device.is_cuda(), "device must be cuda");
     TORCH_CHECK(device.has_index(), "device must have index");
     checkInputs(device, batchSize, size, ijkMin, mask);
@@ -108,7 +108,7 @@ dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
         handles.push_back(
             nVoxels == 0
                 ? createEmptyGridHandle(guide.device())
-                : nanovdb::tools::cuda::voxelsToGrid<GridType, nanovdb::Coord *, TorchDeviceBuffer>(
+                : nanovdb::tools::cuda::voxelsToGrid<GridT, nanovdb::Coord *, TorchDeviceBuffer>(
                       (nanovdb::Coord *)ijkData.data_ptr(), nVoxels, 1.0, guide));
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
@@ -130,7 +130,7 @@ dispatchCreateNanoGridFromDense<torch::kCPU>(int64_t batchSize,
                                              nanovdb::Coord size,
                                              torch::Device device,
                                              const std::optional<torch::Tensor> &mask) {
-    using GridType = nanovdb::ValueOnIndex;
+    using GridT = nanovdb::ValueOnIndex;
     checkInputs(device, batchSize, size, ijkMin, mask);
 
     torch::TensorAccessor<bool, 3> maskAccessor(nullptr, nullptr, nullptr);
@@ -161,7 +161,7 @@ dispatchCreateNanoGridFromDense<torch::kCPU>(int64_t batchSize,
 
     proxyGridAccessor.merge();
     nanovdb::GridHandle<TorchDeviceBuffer> ret =
-        nanovdb::tools::createNanoGrid<ProxyGridT, GridType, TorchDeviceBuffer>(
+        nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
             *proxyGrid, 0u, false, false);
     ret.buffer().to(torch::kCPU);
 

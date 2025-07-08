@@ -17,7 +17,7 @@ coarseIjkForFineGridVoxelCallback(int32_t bidx,
                                   int32_t lidx,
                                   int32_t vidx,
                                   int32_t cidx,
-                                  const GridBatchImpl::Accessor<nanovdb::ValueOnIndex> batchAcc,
+                                  const GridBatchImpl::Accessor batchAcc,
                                   nanovdb::Coord coarseningFactor,
                                   TorchRAcc64<int32_t, 2> outIJKData,
                                   TorchRAcc64<fvdb::JIdxType, 1> outIJKBIdx) {
@@ -61,7 +61,7 @@ dispatchCoarseIJKForFineGrid<torch::kCUDA>(const GridBatchImpl &batchHdl,
                              int32_t lidx,
                              int32_t vidx,
                              int32_t cidx,
-                             GridBatchImpl::Accessor<nanovdb::ValueOnIndex> bacc) {
+                             GridBatchImpl::Accessor bacc) {
         coarseIjkForFineGridVoxelCallback(
             bidx, lidx, vidx, cidx, bacc, coarseningFactor, outIJKAcc, outIJKBIdxAcc);
     };

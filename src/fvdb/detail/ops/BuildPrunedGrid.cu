@@ -90,8 +90,8 @@ dispatchPruneGrid<torch::kCUDA>(const GridBatchImpl &gridBatch, const JaggedTens
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchPruneGrid<torch::kCPU>(const GridBatchImpl &gridBatch, const JaggedTensor &mask) {
-    using GridType  = nanovdb::ValueOnIndex;
-    using IndexTree = nanovdb::NanoTree<GridType>;
+    using GridT     = nanovdb::ValueOnIndex;
+    using IndexTree = nanovdb::NanoTree<GridT>;
 
     TORCH_CHECK_VALUE(mask.rdim() == 1, "Mask must be a one-dimensional boolean tensor");
     TORCH_CHECK_VALUE(mask.scalar_type() == torch::kBool, "Mask must be a boolean tensor");
@@ -102,7 +102,7 @@ dispatchPruneGrid<torch::kCPU>(const GridBatchImpl &gridBatch, const JaggedTenso
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> gridHandles;
     gridHandles.reserve(gridHdl.gridCount());
     for (uint32_t bidx = 0; bidx < gridHdl.gridCount(); bidx += 1) {
-        const nanovdb::OnIndexGrid *grid = gridHdl.template grid<GridType>(bidx);
+        const nanovdb::OnIndexGrid *grid = gridHdl.template grid<GridT>(bidx);
         if (!grid) {
             throw std::runtime_error("Failed to get pointer to nanovdb index grid");
         }
@@ -124,7 +124,7 @@ dispatchPruneGrid<torch::kCPU>(const GridBatchImpl &gridBatch, const JaggedTenso
         }
 
         proxyGridAccessor.merge();
-        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridType, TorchDeviceBuffer>(
+        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
             *proxyGrid, 0u, false, false);
         ret.buffer().to(torch::kCPU);
         gridHandles.push_back(std::move(ret));

@@ -22,7 +22,7 @@ voxelNeighborhoodCallback(int32_t bidx,
                           int32_t eidx,
                           JaggedAccessor<ScalarType, 2> coords,
                           TensorAccessor<int64_t, 4> outIndex,
-                          BatchGridAccessor<nanovdb::ValueOnIndex> batchAccessor,
+                          BatchGridAccessor batchAccessor,
                           nanovdb::Coord extentMin,
                           nanovdb::Coord extentMax,
                           int32_t shift) {
@@ -76,7 +76,7 @@ VoxelNeighborhood(const GridBatchImpl &batchHdl,
         ijk.scalar_type(),
         "VoxelNeighborhood",
         AT_WRAP([&]() {
-            auto batchAcc    = gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(batchHdl);
+            auto batchAcc    = gridBatchAccessor<DeviceTag>(batchHdl);
             auto outIndexAcc = tensorAccessor<DeviceTag, int64_t, 4>(outIndex);
 
             if constexpr (DeviceTag == torch::kCUDA) {

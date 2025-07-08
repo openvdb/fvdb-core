@@ -21,7 +21,7 @@ nanovdb::GridHandle<TorchDeviceBuffer>
 buildGridFromMeshCPU(const JaggedTensor &vertices,
                      const JaggedTensor &triangles,
                      const std::vector<VoxelCoordTransform> &tx) {
-    using GridType   = nanovdb::ValueOnIndex;
+    using GridT      = nanovdb::ValueOnIndex;
     using Vec3T      = nanovdb::math::Vec3<ScalarType>;
     using ProxyGridT = nanovdb::tools::build::Grid<float>;
 
@@ -79,7 +79,7 @@ buildGridFromMeshCPU(const JaggedTensor &vertices,
         // std::cerr << "I searched over " << numSearched << " voxels" << std::endl;
         // std::cerr << "I found " << numFound << " voxels" << std::endl;
         proxyGridAccessor.merge();
-        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridType, TorchDeviceBuffer>(
+        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
             *proxyGrid, 0u, false, false);
         ret.buffer().to(torch::kCPU);
         batchHandles.push_back(std::move(ret));

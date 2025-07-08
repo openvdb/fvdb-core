@@ -22,7 +22,7 @@ pointsInGridCallback(int32_t bidx,
                      int32_t eidx,
                      JaggedAccessor<ScalarType, 2> points,
                      TorchAccessor<bool, 1> outMask,
-                     BatchGridAccessor<nanovdb::ValueOnIndex> batchAccessor) {
+                     BatchGridAccessor batchAccessor) {
     const auto *gpuGrid                  = batchAccessor.grid(bidx);
     auto primalAcc                       = gpuGrid->getAccessor();
     const VoxelCoordTransform &transform = batchAccessor.primalTransform(bidx);
@@ -42,7 +42,7 @@ PointsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points) {
     auto opts             = torch::TensorOptions().dtype(torch::kBool).device(points.device());
     torch::Tensor outMask = torch::empty({points.rsize(0)}, opts);
 
-    auto batchAcc        = gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(batchHdl);
+    auto batchAcc        = gridBatchAccessor<DeviceTag>(batchHdl);
     auto outMaskAccessor = tensorAccessor<DeviceTag, bool, 1>(outMask);
     if constexpr (DeviceTag == torch::kCUDA) {
         auto cb = [=]

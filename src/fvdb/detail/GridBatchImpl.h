@@ -115,9 +115,9 @@ class GridBatchImpl : public torch::CustomClassHolder {
     c10::intrusive_ptr<GridBatchImpl> indexInternal(const Indexable &idx, int64_t size) const;
 
   public:
-    template <typename GridType> class Accessor {
+    class Accessor {
         const GridBatchImpl::GridMetadata *__restrict__ mMetadata = nullptr; // 8 bytes
-        const nanovdb::NanoGrid<GridType> *__restrict__ mGridPtr  = nullptr; // 8 bytes
+        const nanovdb::OnIndexGrid *__restrict__ mGridPtr         = nullptr; // 8 bytes
         fvdb::JIdxType *__restrict__ mLeafBatchIndices            = nullptr; // 8 bytes
         int64_t mTotalVoxels                                      = 0;       // 8 bytes
         int64_t mTotalLeaves                                      = 0;       // 8 bytes
@@ -137,7 +137,7 @@ class GridBatchImpl : public torch::CustomClassHolder {
 
       public:
         Accessor(const GridBatchImpl::GridMetadata *metadata,
-                 const nanovdb::NanoGrid<GridType> *gridPtr,
+                 const nanovdb::OnIndexGrid *gridPtr,
                  fvdb::JIdxType *leafBatchIndices,
                  int64_t totalVoxels,
                  int64_t totalLeaves,
@@ -148,10 +148,10 @@ class GridBatchImpl : public torch::CustomClassHolder {
               mTotalVoxels(totalVoxels), mTotalLeaves(totalLeaves), mMaxVoxels(maxVoxels),
               mMaxLeafCount(maxLeafCount), mGridCount(gridCount) {}
 
-        __hostdev__ const nanovdb::NanoGrid<GridType> *
+        __hostdev__ const nanovdb::OnIndexGrid *
         grid(int64_t bi) const {
             bi = negativeToPositiveIndexWithRangecheck(bi);
-            return reinterpret_cast<const nanovdb::NanoGrid<GridType> *>(
+            return reinterpret_cast<const nanovdb::OnIndexGrid *>(
                 reinterpret_cast<const char *>(mGridPtr) + mMetadata[bi].mCumBytes);
         }
 
@@ -224,37 +224,37 @@ class GridBatchImpl : public torch::CustomClassHolder {
         }
     };
 
-    template <typename GridType>
-    Accessor<GridType>
+    Accessor
     hostAccessor() const {
         TORCH_CHECK(!isEmpty(), "Cannot access empty grid");
-        TORCH_CHECK(mGridHdl->template grid<GridType>(), "Failed to get host grid pointer");
-        Accessor<GridType> ret(mHostGridMetadata,
-                               mGridHdl->template grid<GridType>(),
-                               mLeafBatchIndices.data_ptr<fvdb::JIdxType>(),
-                               mBatchMetadata.mTotalVoxels,
-                               mBatchMetadata.mTotalLeaves,
-                               mBatchMetadata.mMaxVoxels,
-                               mBatchMetadata.mMaxLeafCount,
-                               mBatchSize);
+        TORCH_CHECK(mGridHdl->template grid<nanovdb::ValueOnIndex>(),
+                    "Failed to get host grid pointer");
+        Accessor ret(mHostGridMetadata,
+                     mGridHdl->template grid<nanovdb::ValueOnIndex>(),
+                     mLeafBatchIndices.data_ptr<fvdb::JIdxType>(),
+                     mBatchMetadata.mTotalVoxels,
+                     mBatchMetadata.mTotalLeaves,
+                     mBatchMetadata.mMaxVoxels,
+                     mBatchMetadata.mMaxLeafCount,
+                     mBatchSize);
         return ret;
     }
 
-    template <typename GridType>
-    Accessor<GridType>
+    Accessor
     deviceAccessor() const {
         TORCH_CHECK(!isEmpty(), "Cannot access empty grid");
         TORCH_CHECK(device().is_cuda() || device().is_privateuseone(),
                     "Cannot access device accessor without a CUDA or PrivateUse1 device");
-        TORCH_CHECK(mGridHdl->template deviceGrid<GridType>(), "Failed to get device grid pointer");
-        Accessor<GridType> ret(mDeviceGridMetadata,
-                               mGridHdl->template deviceGrid<GridType>(),
-                               mLeafBatchIndices.data_ptr<fvdb::JIdxType>(),
-                               mBatchMetadata.mTotalVoxels,
-                               mBatchMetadata.mTotalLeaves,
-                               mBatchMetadata.mMaxVoxels,
-                               mBatchMetadata.mMaxLeafCount,
-                               mBatchSize);
+        TORCH_CHECK(mGridHdl->template deviceGrid<nanovdb::ValueOnIndex>(),
+                    "Failed to get device grid pointer");
+        Accessor ret(mDeviceGridMetadata,
+                     mGridHdl->template deviceGrid<nanovdb::ValueOnIndex>(),
+                     mLeafBatchIndices.data_ptr<fvdb::JIdxType>(),
+                     mBatchMetadata.mTotalVoxels,
+                     mBatchMetadata.mTotalLeaves,
+                     mBatchMetadata.mMaxVoxels,
+                     mBatchMetadata.mMaxLeafCount,
+                     mBatchSize);
         return ret;
     }
 
@@ -624,7 +624,7 @@ class GridBatchImpl : public torch::CustomClassHolder {
     static c10::intrusive_ptr<GridBatchImpl> deserializeV0(const torch::Tensor &serialized);
 };
 
-template <typename GridType> using BatchGridAccessor = typename GridBatchImpl::Accessor<GridType>;
+using BatchGridAccessor = typename GridBatchImpl::Accessor;
 
 } // namespace detail
 } // namespace fvdb

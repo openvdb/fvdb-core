@@ -36,7 +36,7 @@ struct GradStencilFunctor {
     operator()(int kM,
                int kN,
                int numLeaves,
-               BatchGridAccessor<nanovdb::ValueOnIndex> gridAcc,
+               BatchGridAccessor gridAcc,
                TorchRAcc64<float, 2> inFeatures,
                TorchRAcc64<float, 2> gradOutFeatures,
                TorchRAcc64<float, 5> gradStencil,
@@ -63,7 +63,7 @@ struct GradStencilFunctor {
         auto &sGradStencil          = storage.gradStencil;
         auto sWarpMatrixC           = storage.warpMatrixC;
 
-        using LeafNodeType = typename nanovdb::NanoTree<nanovdb::ValueOnIndex>::LeafNodeType;
+        using LeafNodeType = typename nanovdb::OnIndexTree::LeafNodeType;
 
         const int64_t batchIdx     = gridAcc.leafBatchIndex(leafIdx);
         const int64_t localLeafIdx = leafIdx - gridAcc.leafOffset(batchIdx);
@@ -226,7 +226,7 @@ __global__ __launch_bounds__(GradStencilFunctor::MaxThreadsPerBlock) void
 stencilConvHaloGradKernel(int kM,
                           int kN,
                           int numLeaves,
-                          BatchGridAccessor<nanovdb::ValueOnIndex> gridAcc,
+                          BatchGridAccessor gridAcc,
                           TorchRAcc64<float, 2> inFeatures,
                           TorchRAcc64<float, 2> gradOutFeatures,
                           TorchRAcc64<float, 5> gradStencil) {
@@ -261,7 +261,7 @@ dispatchSparseConvolutionHaloGrad<torch::kCUDA>(const GridBatchImpl &batchHdl,
     constexpr size_t smemSize = sizeof(typename GradStencilFunctor::SharedStorage);
 
     // Launch kernels for each M x N x leaf.
-    auto gridAccessor = batchHdl.deviceAccessor<nanovdb::ValueOnIndex>();
+    auto gridAccessor = batchHdl.deviceAccessor();
     cudaFuncSetAttribute(
         stencilConvHaloGradKernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smemSize);
 

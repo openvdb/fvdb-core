@@ -20,7 +20,7 @@ __hostdev__ inline void
 activeGridVoxelInBoundsMaskCallback(int32_t batchIdx,
                                     int32_t leafIdx,
                                     int32_t voxelIdx,
-                                    GridBatchImpl::Accessor<nanovdb::ValueOnIndex> gridAccessor,
+                                    GridBatchImpl::Accessor gridAccessor,
                                     TorchAccessor<int32_t, 3> bboxes,
                                     TorchAccessor<bool, 1> outGridBoundsMask) {
     const nanovdb::CoordBBox maskBbox(
@@ -42,7 +42,6 @@ activeGridVoxelInBoundsMaskCallback(int32_t batchIdx,
 
 /// @brief Get a boolean mask of the active grid voxels for a batch of grids  (including disabled
 /// coordinates in mutable grids)
-/// @tparam GridType The type of the grid (one of ValueOnIndex, ValueOnIndexMask)
 /// @param gridBatch The batch of grids
 /// @param batchBboxes The batch of bounding boxes
 /// @param outGridCoords Tensor which will contain the output grid coordinates
@@ -59,7 +58,7 @@ GetActiveVoxelsInBoundsMask(const GridBatchImpl &gridBatch,
                                  int32_t leafIdx,
                                  int32_t voxelIdx,
                                  int32_t,
-                                 GridBatchImpl::Accessor<nanovdb::ValueOnIndex> gridAccessor) {
+                                 GridBatchImpl::Accessor gridAccessor) {
             activeGridVoxelInBoundsMaskCallback<TorchRAcc32>(
                 batchIdx, leafIdx, voxelIdx, gridAccessor, bboxAcc, outMaskAcc);
         };
@@ -69,7 +68,7 @@ GetActiveVoxelsInBoundsMask(const GridBatchImpl &gridBatch,
                       int32_t leafIdx,
                       int32_t voxelIdx,
                       int32_t,
-                      GridBatchImpl::Accessor<nanovdb::ValueOnIndex> gridAccessor) {
+                      GridBatchImpl::Accessor gridAccessor) {
             activeGridVoxelInBoundsMaskCallback<TorchAcc>(
                 batchIdx, leafIdx, voxelIdx, gridAccessor, bboxAcc, outMaskAcc);
         };

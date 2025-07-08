@@ -17,15 +17,14 @@ createEmptyGridHandle(torch::Device device, size_t numGrids = 1) {
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> gridHandles;
     gridHandles.reserve(numGrids);
     for (size_t i = 0; i < numGrids; ++i) {
-        using GridType         = nanovdb::ValueOnIndex;
+        using GridT            = nanovdb::ValueOnIndex;
         using ProxyGridT       = nanovdb::tools::build::Grid<float>;
         auto proxyGrid         = std::make_shared<ProxyGridT>(0.0f);
         auto proxyGridAccessor = proxyGrid->getWriteAccessor();
 
         proxyGridAccessor.merge();
-        gridHandles.push_back(
-            nanovdb::tools::createNanoGrid<ProxyGridT, GridType, TorchDeviceBuffer>(
-                *proxyGrid, 0u, false, false));
+        gridHandles.push_back(nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
+            *proxyGrid, 0u, false, false));
     }
     auto ret = numGrids == 1 ? std::move(gridHandles[0]) : nanovdb::mergeGrids(gridHandles);
     ret.buffer().to(device);

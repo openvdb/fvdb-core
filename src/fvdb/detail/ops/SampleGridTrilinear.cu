@@ -27,7 +27,7 @@ sampleTrilinearCallback(int32_t bidx,
                         int32_t cidx,
                         JaggedAccessor<ScalarType, 2> points,
                         TensorAccessor<ScalarType, 2> gridData,
-                        BatchGridAccessor<nanovdb::ValueOnIndex> batchAccessor,
+                        BatchGridAccessor batchAccessor,
                         TensorAccessor<ScalarType, 2> outFeatures) {
     using MathType = at::opmath_type<ScalarType>;
 
@@ -68,7 +68,7 @@ SampleGridTrilinear(const GridBatchImpl &batchHdl,
         torch::zeros({points.rsize(0), gridDataReshape.size(1)}, opts); // [B*M, -1]
     auto outShape = spliceShape({points.rsize(0)}, gridData, 1);        // [B*M, *]
 
-    auto batchAcc       = gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(batchHdl);
+    auto batchAcc       = gridBatchAccessor<DeviceTag>(batchHdl);
     auto gridDataAcc    = tensorAccessor<DeviceTag, scalar_t, 2>(gridDataReshape);
     auto outFeaturesAcc = tensorAccessor<DeviceTag, scalar_t, 2>(outFeatures);
     if constexpr (DeviceTag == torch::kCUDA) {

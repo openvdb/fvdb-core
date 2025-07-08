@@ -20,7 +20,7 @@ readIntoDenseVoxelCallback(
     int32_t leafIdx,
     int32_t voxelIdx,
     int32_t channelIdx,
-    GridBatchImpl::Accessor<nanovdb::ValueOnIndex> batchHandle,
+    GridBatchImpl::Accessor batchHandle,
     torch::PackedTensorAccessor64<int32_t, 2, torch::RestrictPtrTraits> denseOrigins, // [B, 3]
     torch::PackedTensorAccessor64<ScalarType, 2, torch::RestrictPtrTraits>
         inSparseTensor,                                                               // [B*N, C]
@@ -51,7 +51,7 @@ readIntoDenseVoxelCallback(
 
 template <typename ScalarType>
 void
-readIntoDenseCPU(const GridBatchImpl::Accessor<nanovdb::ValueOnIndex> &gridHandle,
+readIntoDenseCPU(const GridBatchImpl::Accessor &gridHandle,
                  const torch::TensorAccessor<ScalarType, 2> inGridData,
                  const torch::TensorAccessor<int32_t, 2> denseOrigins,
                  torch::TensorAccessor<ScalarType, 5> outDenseTensor,
@@ -106,8 +106,7 @@ dispatchReadIntoDense<torch::kCUDA>(const GridBatchImpl &batchHdl,
                                            int32_t lidx,
                                            int32_t vidx,
                                            int32_t cidx,
-                                           GridBatchImpl::Accessor<nanovdb::ValueOnIndex>
-                                               batchAcc) {
+                                           GridBatchImpl::Accessor batchAcc) {
                 readIntoDenseVoxelCallback<scalar_t>(
                     bidx, lidx, vidx, cidx, batchAcc, denseOriginsAcc, inGridDataAcc, outDenseAcc);
             };
@@ -129,7 +128,7 @@ dispatchReadIntoDense<torch::kCPU>(const GridBatchImpl &gridHdl,
     AT_DISPATCH_V2(outDenseTensor.scalar_type(),
                    "readIntoDense",
                    AT_WRAP([&]() {
-                       readIntoDenseCPU(gridHdl.hostAccessor<nanovdb::ValueOnIndex>(),
+                       readIntoDenseCPU(gridHdl.hostAccessor(),
                                         inGridData.accessor<scalar_t, 2>(),
                                         denseOrigins.accessor<int32_t, 2>(),
                                         outDenseTensor.accessor<scalar_t, 5>(),

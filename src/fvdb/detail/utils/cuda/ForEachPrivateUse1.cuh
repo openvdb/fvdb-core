@@ -21,7 +21,7 @@ template <typename Func, typename... Args>
 __global__ void
 forEachLeafPrivateUse1Kernel(int64_t leafChannelCount,
                              int64_t leafChannelOffset,
-                             fvdb::detail::GridBatchImpl::Accessor<nanovdb::ValueOnIndex> grid,
+                             fvdb::detail::GridBatchImpl::Accessor grid,
                              const int32_t channelsPerLeaf,
                              Func func,
                              Args... args) {
@@ -43,12 +43,11 @@ template <typename Func, typename... Args>
 __global__ void
 forEachVoxelPrivateUse1Kernel(int64_t leafVoxelChannelCount,
                               int64_t leafVoxelChannelOffset,
-                              fvdb::detail::GridBatchImpl::Accessor<nanovdb::ValueOnIndex> grid,
+                              fvdb::detail::GridBatchImpl::Accessor grid,
                               int64_t channelsPerVoxel,
                               Func func,
                               Args... args) {
-    constexpr auto VOXELS_PER_LEAF =
-        nanovdb::NanoTree<nanovdb::ValueOnIndex>::LeafNodeType::NUM_VALUES;
+    constexpr auto VOXELS_PER_LEAF = nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES;
 
     for (int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
          idx < leafVoxelChannelCount;
@@ -100,7 +99,7 @@ forEachLeafPrivateUse1(int64_t numChannels,
 
     const int64_t leafCount = batchHdl.totalLeaves();
 
-    auto batchAccessor = batchHdl.deviceAccessor<nanovdb::ValueOnIndex>();
+    auto batchAccessor = batchHdl.deviceAccessor();
 
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
@@ -145,11 +144,10 @@ forEachVoxelPrivateUse1(int64_t numChannels,
     TORCH_CHECK(batchHdl.device().is_privateuseone(), "Grid batch must be on a PrivateUse1 device");
     TORCH_CHECK(!fvdb::Config::global().ultraSparseAccelerationEnabled());
 
-    const int64_t VOXELS_PER_LEAF =
-        nanovdb::NanoTree<nanovdb::ValueOnIndex>::LeafNodeType::NUM_VALUES;
-    const int64_t leafCount = batchHdl.totalLeaves();
+    const int64_t VOXELS_PER_LEAF = nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES;
+    const int64_t leafCount       = batchHdl.totalLeaves();
 
-    auto batchAccessor = batchHdl.deviceAccessor<nanovdb::ValueOnIndex>();
+    auto batchAccessor = batchHdl.deviceAccessor();
 
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));

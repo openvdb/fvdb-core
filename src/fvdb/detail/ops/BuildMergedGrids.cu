@@ -63,8 +63,8 @@ dispatchMergeGrids<torch::kCUDA>(const GridBatchImpl &gridBatch1, const GridBatc
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchMergeGrids<torch::kCPU>(const GridBatchImpl &gridBatch1, const GridBatchImpl &gridBatch2) {
-    using GridType  = nanovdb::ValueOnIndex;
-    using IndexTree = nanovdb::NanoTree<GridType>;
+    using GridT     = nanovdb::ValueOnIndex;
+    using IndexTree = nanovdb::NanoTree<GridT>;
     TORCH_CHECK(gridBatch1.device().is_cpu(), "All arguments to MergeGrids must be on the CPU");
     TORCH_CHECK(gridBatch2.device().is_cpu(), "All arguments to MergeGrids must be on the CPU");
     TORCH_CHECK_VALUE(gridBatch1.batchSize() == gridBatch2.batchSize(),
@@ -76,8 +76,8 @@ dispatchMergeGrids<torch::kCPU>(const GridBatchImpl &gridBatch1, const GridBatch
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> gridHandles;
     gridHandles.reserve(gridHdl1.gridCount());
     for (uint32_t bidx = 0; bidx < gridHdl1.gridCount(); bidx += 1) {
-        const nanovdb::OnIndexGrid *grid1 = gridHdl1.template grid<GridType>(bidx);
-        const nanovdb::OnIndexGrid *grid2 = gridHdl2.template grid<GridType>(bidx);
+        const nanovdb::OnIndexGrid *grid1 = gridHdl1.template grid<GridT>(bidx);
+        const nanovdb::OnIndexGrid *grid2 = gridHdl2.template grid<GridT>(bidx);
         TORCH_CHECK(grid1, "Failed to get pointer to nanovdb index grid (first argument to merge)");
         TORCH_CHECK(grid2,
                     "Failed to get pointer to nanovdb index grid (second argument to merge)");
@@ -97,7 +97,7 @@ dispatchMergeGrids<torch::kCPU>(const GridBatchImpl &gridBatch1, const GridBatch
         }
 
         proxyGridAccessor.merge();
-        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridType, TorchDeviceBuffer>(
+        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
             *proxyGrid, 0u, false, false);
         ret.buffer().to(torch::kCPU);
         gridHandles.push_back(std::move(ret));

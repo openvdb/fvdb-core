@@ -18,8 +18,8 @@ upsampleNearestVoxelCallback(int32_t batchIdx,
                              int32_t leafIdx,
                              int32_t voxelIdx,
                              int32_t channelIdx,
-                             GridBatchImpl::Accessor<nanovdb::ValueOnIndex> coarseBatchAccessor,
-                             GridBatchImpl::Accessor<nanovdb::ValueOnIndex> fineBatchAccessor,
+                             GridBatchImpl::Accessor coarseBatchAccessor,
+                             GridBatchImpl::Accessor fineBatchAccessor,
                              const TensorAccessor<Dtype, 2> coarseData, // [B*N, C]
                              TensorAccessor<Dtype, 2> outFineData,      // [B*N, C]
                              nanovdb::Coord upsamplingFactor) {
@@ -59,16 +59,15 @@ template <typename Dtype,
           template <typename T, int32_t D>
           typename TensorAccessor>
 __hostdev__ inline void
-upsampleNearestBackwardsVoxelCallback(
-    int32_t batchIdx,
-    int32_t leafIdx,
-    int32_t voxelIdx,
-    int32_t channelIdx,
-    GridBatchImpl::Accessor<nanovdb::ValueOnIndex> coarseBatchAccessor,
-    GridBatchImpl::Accessor<nanovdb::ValueOnIndex> fineBatchAccessor,
-    const TensorAccessor<Dtype, 2> fineData, // [B*N, C]
-    TensorAccessor<Dtype, 2> outCoarseData,  // [B*N, C]
-    nanovdb::Coord upsamplingFactor) {
+upsampleNearestBackwardsVoxelCallback(int32_t batchIdx,
+                                      int32_t leafIdx,
+                                      int32_t voxelIdx,
+                                      int32_t channelIdx,
+                                      GridBatchImpl::Accessor coarseBatchAccessor,
+                                      GridBatchImpl::Accessor fineBatchAccessor,
+                                      const TensorAccessor<Dtype, 2> fineData, // [B*N, C]
+                                      TensorAccessor<Dtype, 2> outCoarseData,  // [B*N, C]
+                                      nanovdb::Coord upsamplingFactor) {
     const nanovdb::OnIndexGrid *coarseGrid = coarseBatchAccessor.grid(batchIdx);
     const nanovdb::OnIndexGrid *fineGrid   = fineBatchAccessor.grid(batchIdx);
 
@@ -136,47 +135,44 @@ UpsampleGridNearest(const GridBatchImpl &coarseBatchAccessor,
         coarseData.scalar_type(),
         "UpsampleGridNearest",
         AT_WRAP([&]() {
-            auto coarseBatchAcc =
-                gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(coarseBatchAccessor);
+            auto coarseBatchAcc = gridBatchAccessor<DeviceTag>(coarseBatchAccessor);
             auto coarseDataAcc = tensorAccessor<DeviceTag, scalar_t, 2, int64_t>(coarseDataReshape);
             auto outFineDataAcc =
                 tensorAccessor<DeviceTag, scalar_t, 2, int64_t>(outFineDataReshape);
 
             if constexpr (DeviceTag == torch::kCUDA) {
-                auto callback = [=]
-                    __device__(int32_t batchIdx,
-                               int32_t leafIdx,
-                               int32_t voxelIdx,
-                               int32_t channelIdx,
-                               GridBatchImpl::Accessor<nanovdb::ValueOnIndex> fineBatchAccessor) {
-                        upsampleNearestVoxelCallback<scalar_t, TorchRAcc64>(batchIdx,
-                                                                            leafIdx,
-                                                                            voxelIdx,
-                                                                            channelIdx,
-                                                                            coarseBatchAcc,
-                                                                            fineBatchAccessor,
-                                                                            coarseDataAcc,
-                                                                            outFineDataAcc,
-                                                                            upsamplingFactor);
-                    };
+                auto callback = [=] __device__(int32_t batchIdx,
+                                               int32_t leafIdx,
+                                               int32_t voxelIdx,
+                                               int32_t channelIdx,
+                                               GridBatchImpl::Accessor fineBatchAccessor) {
+                    upsampleNearestVoxelCallback<scalar_t, TorchRAcc64>(batchIdx,
+                                                                        leafIdx,
+                                                                        voxelIdx,
+                                                                        channelIdx,
+                                                                        coarseBatchAcc,
+                                                                        fineBatchAccessor,
+                                                                        coarseDataAcc,
+                                                                        outFineDataAcc,
+                                                                        upsamplingFactor);
+                };
                 forEachVoxelCUDA(640, outFineData.size(1), fineBatchAccessor, callback);
             } else {
-                auto callback =
-                    [=](int32_t batchIdx,
-                        int32_t leafIdx,
-                        int32_t voxelIdx,
-                        int32_t channelIdx,
-                        GridBatchImpl::Accessor<nanovdb::ValueOnIndex> fineBatchAccessor) {
-                        upsampleNearestVoxelCallback<scalar_t, TorchAcc>(batchIdx,
-                                                                         leafIdx,
-                                                                         voxelIdx,
-                                                                         channelIdx,
-                                                                         coarseBatchAcc,
-                                                                         fineBatchAccessor,
-                                                                         coarseDataAcc,
-                                                                         outFineDataAcc,
-                                                                         upsamplingFactor);
-                    };
+                auto callback = [=](int32_t batchIdx,
+                                    int32_t leafIdx,
+                                    int32_t voxelIdx,
+                                    int32_t channelIdx,
+                                    GridBatchImpl::Accessor fineBatchAccessor) {
+                    upsampleNearestVoxelCallback<scalar_t, TorchAcc>(batchIdx,
+                                                                     leafIdx,
+                                                                     voxelIdx,
+                                                                     channelIdx,
+                                                                     coarseBatchAcc,
+                                                                     fineBatchAccessor,
+                                                                     coarseDataAcc,
+                                                                     outFineDataAcc,
+                                                                     upsamplingFactor);
+                };
                 forEachVoxelCPU(outFineData.size(1), fineBatchAccessor, callback);
             }
         }),
@@ -206,49 +202,46 @@ UpsampleGridNearestBackward(const GridBatchImpl &fineBatchAccessor,
         gradOut.scalar_type(),
         "UpsampleGridNearestBackward",
         AT_WRAP([&]() {
-            auto coarseBatchAcc =
-                gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(coarseBatchAccessor);
-            auto gradOutAcc = tensorAccessor<DeviceTag, scalar_t, 2, int64_t>(gradOutReshape);
+            auto coarseBatchAcc = gridBatchAccessor<DeviceTag>(coarseBatchAccessor);
+            auto gradOutAcc     = tensorAccessor<DeviceTag, scalar_t, 2, int64_t>(gradOutReshape);
             auto outCoarseDataAcc =
                 tensorAccessor<DeviceTag, scalar_t, 2, int64_t>(outGradInReshape);
 
             if constexpr (DeviceTag == torch::kCUDA) {
-                auto callback = [=]
-                    __device__(int32_t batchIdx,
-                               int32_t leafIdx,
-                               int32_t voxelIdx,
-                               int32_t channelIdx,
-                               GridBatchImpl::Accessor<nanovdb::ValueOnIndex> fineBatchAccessor) {
-                        upsampleNearestBackwardsVoxelCallback<scalar_t, DeviceTag, TorchRAcc64>(
-                            batchIdx,
-                            leafIdx,
-                            voxelIdx,
-                            channelIdx,
-                            coarseBatchAcc,
-                            fineBatchAccessor,
-                            gradOutAcc,
-                            outCoarseDataAcc,
-                            upsamplingFactor);
-                    };
+                auto callback = [=] __device__(int32_t batchIdx,
+                                               int32_t leafIdx,
+                                               int32_t voxelIdx,
+                                               int32_t channelIdx,
+                                               GridBatchImpl::Accessor fineBatchAccessor) {
+                    upsampleNearestBackwardsVoxelCallback<scalar_t, DeviceTag, TorchRAcc64>(
+                        batchIdx,
+                        leafIdx,
+                        voxelIdx,
+                        channelIdx,
+                        coarseBatchAcc,
+                        fineBatchAccessor,
+                        gradOutAcc,
+                        outCoarseDataAcc,
+                        upsamplingFactor);
+                };
                 forEachVoxelCUDA(640, outGradInReshape.size(1), fineBatchAccessor, callback);
             } else {
-                auto callback =
-                    [=](int32_t batchIdx,
-                        int32_t leafIdx,
-                        int32_t voxelIdx,
-                        int32_t channelIdx,
-                        GridBatchImpl::Accessor<nanovdb::ValueOnIndex> fineBatchAccessor) {
-                        upsampleNearestBackwardsVoxelCallback<scalar_t, DeviceTag, TorchAcc>(
-                            batchIdx,
-                            leafIdx,
-                            voxelIdx,
-                            channelIdx,
-                            coarseBatchAcc,
-                            fineBatchAccessor,
-                            gradOutAcc,
-                            outCoarseDataAcc,
-                            upsamplingFactor);
-                    };
+                auto callback = [=](int32_t batchIdx,
+                                    int32_t leafIdx,
+                                    int32_t voxelIdx,
+                                    int32_t channelIdx,
+                                    GridBatchImpl::Accessor fineBatchAccessor) {
+                    upsampleNearestBackwardsVoxelCallback<scalar_t, DeviceTag, TorchAcc>(
+                        batchIdx,
+                        leafIdx,
+                        voxelIdx,
+                        channelIdx,
+                        coarseBatchAcc,
+                        fineBatchAccessor,
+                        gradOutAcc,
+                        outCoarseDataAcc,
+                        upsamplingFactor);
+                };
                 forEachVoxelCPU(outGradInReshape.size(1), fineBatchAccessor, callback);
             }
         }),

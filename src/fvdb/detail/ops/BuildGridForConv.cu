@@ -21,15 +21,15 @@ namespace ops {
 nanovdb::GridHandle<TorchDeviceBuffer>
 buildCoarseGridFromFineGridCPU(const GridBatchImpl &fineBatchHdl,
                                const nanovdb::Coord branchingFactor) {
-    using GridType  = nanovdb::ValueOnIndex;
-    using IndexTree = nanovdb::NanoTree<GridType>;
+    using GridT     = nanovdb::ValueOnIndex;
+    using IndexTree = nanovdb::NanoTree<GridT>;
 
     const nanovdb::GridHandle<TorchDeviceBuffer> &fineGridHdl = fineBatchHdl.nanoGridHandle();
 
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
     batchHandles.reserve(fineGridHdl.gridCount());
     for (uint32_t bidx = 0; bidx < fineGridHdl.gridCount(); bidx += 1) {
-        const nanovdb::OnIndexGrid *fineGrid = fineGridHdl.template grid<GridType>(bidx);
+        const nanovdb::OnIndexGrid *fineGrid = fineGridHdl.template grid<GridT>(bidx);
         if (!fineGrid) {
             throw std::runtime_error("Failed to get pointer to nanovdb index grid");
         }
@@ -46,7 +46,7 @@ buildCoarseGridFromFineGridCPU(const GridBatchImpl &fineBatchHdl,
         }
 
         proxyGridAccessor.merge();
-        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridType, TorchDeviceBuffer>(
+        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
             *proxyGrid, 0u, false, false);
         ret.buffer().to(torch::kCPU);
         batchHandles.push_back(std::move(ret));
@@ -64,7 +64,7 @@ convIjkForGridCallback(int32_t bidx,
                        int32_t lidx,
                        int32_t vidx,
                        int32_t cidx,
-                       const GridBatchImpl::Accessor<nanovdb::ValueOnIndex> batchAcc,
+                       const GridBatchImpl::Accessor batchAcc,
                        const nanovdb::Coord &kernelSize,
                        const nanovdb::Coord &stride,
                        int kernelVolume,
@@ -152,7 +152,7 @@ convIJKForGrid(const GridBatchImpl &batchHdl,
                              int32_t lidx,
                              int32_t vidx,
                              int32_t cidx,
-                             GridBatchImpl::Accessor<nanovdb::ValueOnIndex> bacc) {
+                             GridBatchImpl::Accessor bacc) {
         convIjkForGridCallback(bidx,
                                lidx,
                                vidx,
@@ -188,7 +188,7 @@ nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildGridForConv<torch::kCPU>(const GridBatchImpl &baseBatchHdl,
                                       const nanovdb::Coord &kernelSize,
                                       const nanovdb::Coord &stride) {
-    using GridType = nanovdb::ValueOnIndex;
+    using GridT = nanovdb::ValueOnIndex;
     if (stride == nanovdb::Coord(1) || stride == kernelSize) {
         return buildCoarseGridFromFineGridCPU(baseBatchHdl, stride);
     }
@@ -209,7 +209,7 @@ dispatchBuildGridForConv<torch::kCPU>(const GridBatchImpl &baseBatchHdl,
     }
 
     for (uint32_t bidx = 0; bidx < baseGridHdl.gridCount(); bidx += 1) {
-        const nanovdb::OnIndexGrid *baseGrid = baseGridHdl.template grid<GridType>(bidx);
+        const nanovdb::OnIndexGrid *baseGrid = baseGridHdl.template grid<GridT>(bidx);
         if (!baseGrid) {
             throw std::runtime_error("Failed to get pointer to nanovdb index grid");
         }
@@ -238,7 +238,7 @@ dispatchBuildGridForConv<torch::kCPU>(const GridBatchImpl &baseBatchHdl,
         }
 
         proxyGridAccessor.merge();
-        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridType, TorchDeviceBuffer>(
+        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
             *proxyGrid, 0u, false, false);
         batchHandles.push_back(std::move(ret));
     }

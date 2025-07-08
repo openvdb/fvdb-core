@@ -14,7 +14,7 @@ namespace fvdb {
 /// @brief Run the given function on each leaf in the grid batch on the CPU.
 ///        The callback has the form:
 ///            void(int32_t bidx, int32_t lidx, int32_t cidx,
-///            fvdb::detail::GridBatchImpl::Accessor<nanovdb::ValueOnIndex> batchAcc, Args...)
+///            fvdb::detail::GridBatchImpl::Accessor batchAcc, Args...)
 ///        Where:
 ///            - bidx is the batch index of the current leaf
 ///            - lidx is the index of the leaf within the bidx^th grid in the batch
@@ -22,7 +22,7 @@ namespace fvdb {
 /// @tparam Func The type of the callback function to run on each leaf. It must be a callable of the
 /// form
 ///         void(int32_t, int32_t, int32_t,
-///         fvdb::detail::GridBatchImpl::Accessor<nanovdb::ValueOnIndex>, Args...)
+///         fvdb::detail::GridBatchImpl::Accessor, Args...)
 /// @tparam Args... The types of any extra arguments to pass to the callback function
 ///
 /// @param stream Which cuda stream to run the kernel on
@@ -38,7 +38,7 @@ forEachLeafCPU(int64_t channelsPerLeaf,
                Func func,
                Args... args) {
     TORCH_CHECK(batchHdl.device().is_cpu(), "Grid batch must be on the CPU");
-    auto batchAccessor = batchHdl.hostAccessor<nanovdb::ValueOnIndex>();
+    auto batchAccessor = batchHdl.hostAccessor();
 
     for (uint64_t leafChannelIdx = 0;
          leafChannelIdx < static_cast<uint64_t>(batchAccessor.totalLeaves()) * channelsPerLeaf;
@@ -81,7 +81,7 @@ forEachLeafInOneGridCPU(int64_t numChannels,
                         Args... args) {
     TORCH_CHECK(batchHdl.device().is_cpu(), "Grid batch must be on the CPU");
     TORCH_CHECK(batchIdx >= 0 && batchIdx < batchHdl.batchSize(), "Batch index out of range");
-    auto batchAccessor = batchHdl.hostAccessor<nanovdb::ValueOnIndex>();
+    auto batchAccessor = batchHdl.hostAccessor();
 
     const typename nanovdb::OnIndexGrid *cpuGrid = batchAccessor.grid(batchIdx);
 
@@ -98,7 +98,7 @@ forEachLeafInOneGridCPU(int64_t numChannels,
 /// @brief Run the given function on each voxel in the grid batch on the CPU.
 ///        The callback has the form:
 ///            void(int32_t bidx, int32_t lidx, int32_t vidx, int32_t cidx,
-///            fvdb::detail::GridBatchImpl::Accessor<nanovdb::ValueOnIndex> batchAcc, Args...)
+///            fvdb::detail::GridBatchImpl::Accessor batchAcc, Args...)
 ///         Where:
 ///             - bidx is the batch index of the current voxel
 ///             - lidx is the index of the leaf containing the voxelwithin the bidx^th grid in the
@@ -111,7 +111,7 @@ forEachLeafInOneGridCPU(int64_t numChannels,
 /// @tparam Func The type of the callback function to run on each voxel. It must be a callable of
 /// the form
 ///         void(int32_t, int32_t, int32_t, int32_t,
-///         fvdb::detail::GridBatchImpl::Accessor<nanovdb::ValueOnIndex>, Args...)
+///         fvdb::detail::GridBatchImpl::Accessor, Args...)
 /// @tparam Args... The types of any extra arguments to pass to the callback function
 ///
 /// @param stream Which cuda stream to run the kernel on
@@ -128,8 +128,8 @@ forEachVoxelCPU(int64_t numChannels,
                 Args... args) {
     TORCH_CHECK(batchHdl.device().is_cpu(), "Grid batch must be on the CPU");
     constexpr int64_t VOXELS_PER_LEAF =
-        static_cast<int64_t>(nanovdb::NanoTree<nanovdb::ValueOnIndex>::LeafNodeType::NUM_VALUES);
-    auto batchAccessor = batchHdl.hostAccessor<nanovdb::ValueOnIndex>();
+        static_cast<int64_t>(nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES);
+    auto batchAccessor = batchHdl.hostAccessor();
     for (fvdb::JIdxType batchIdx = 0; batchIdx < batchAccessor.batchSize(); batchIdx += 1) {
         const nanovdb::OnIndexGrid *grid = batchAccessor.grid(batchIdx);
         for (int64_t leafIdx = 0; leafIdx < grid->tree().nodeCount(0); leafIdx += 1) {

@@ -29,7 +29,7 @@ voxelsAlongRaysCallback(int32_t bidx,
                         TensorAccessor<fvdb::JLIdxType, 2> outJLIdx,             // [B*M, 2]
                         TensorAccessor<int32_t, 2> outVoxels,                    // [B*M*S, 3]
                         TensorAccessor<ScalarType, 2> outTimes,                  // [B*M*S, 2]
-                        GridBatchImpl::Accessor<nanovdb::ValueOnIndex> batchAccessor,
+                        GridBatchImpl::Accessor batchAccessor,
                         int64_t maxVox,
                         ScalarType eps,
                         bool cumulative) {
@@ -122,7 +122,7 @@ countVoxelsAlongRaysCallback(int32_t bidx,
                              const JaggedAccessor<ScalarType, 2> rayOrigins,
                              const JaggedAccessor<ScalarType, 2> rayDirections,
                              TensorAccessor<int32_t, 1> outCounts,
-                             BatchGridAccessor<nanovdb::ValueOnIndex> batchAccessor,
+                             BatchGridAccessor batchAccessor,
                              int64_t maxVox,
                              ScalarType eps) {
     const nanovdb::OnIndexGrid *gpuGrid  = batchAccessor.grid(bidx);
@@ -223,7 +223,7 @@ VoxelsAlongRays(const GridBatchImpl &batchHdl,
             // Count number of voxels along each ray
             torch::Tensor rayCounts = torch::zeros({rayOrigins.rsize(0) + 1}, optsI32); // [B*M]
             auto outCountsAcc       = tensorAccessor<DeviceTag, int32_t, 1>(rayCounts);
-            auto batchAcc           = gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(batchHdl);
+            auto batchAcc           = gridBatchAccessor<DeviceTag>(batchHdl);
             auto rayDirectionsAcc   = jaggedAccessor<DeviceTag, scalar_t, 2>(rayDirections);
             if constexpr (DeviceTag == torch::kCUDA) {
                 auto cb1 = [=] __device__(int32_t bidx,

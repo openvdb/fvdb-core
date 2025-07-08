@@ -21,7 +21,7 @@ __hostdev__ inline void
 activeGridCoordsVoxelCallback(int64_t batchIdx,
                               int64_t leafIdx,
                               int64_t voxelIdx,
-                              GridBatchImpl::Accessor<nanovdb::ValueOnIndex> gridAccessor,
+                              GridBatchImpl::Accessor gridAccessor,
                               TorchAccessor<int32_t, 2> outGridCoords) {
     const nanovdb::OnIndexGrid *grid = gridAccessor.grid(batchIdx);
     const typename nanovdb::OnIndexGrid::LeafNodeType &leaf =
@@ -39,7 +39,6 @@ activeGridCoordsVoxelCallback(int64_t batchIdx,
 
 /// @brief Get the active grid coordinates for a batch of grids (including disabled coordinates in
 /// mutable grids)
-/// @tparam GridType The type of the grid (one of ValueOnIndex, ValueOnIndexMask)
 /// @param gridBatch The batch of grids
 /// @param outGridCoords Tensor which will contain the output grid coordinates
 template <c10::DeviceType DeviceTag>
@@ -52,7 +51,7 @@ GetActiveGridCoords(const GridBatchImpl &gridBatch, torch::Tensor &outGridCoords
                                  int64_t leafIdx,
                                  int64_t voxelIdx,
                                  int64_t,
-                                 GridBatchImpl::Accessor<nanovdb::ValueOnIndex> gridAccessor) {
+                                 GridBatchImpl::Accessor gridAccessor) {
             activeGridCoordsVoxelCallback<TorchRAcc32>(
                 batchIdx, leafIdx, voxelIdx, gridAccessor, outCoordsAcc);
         };
@@ -62,7 +61,7 @@ GetActiveGridCoords(const GridBatchImpl &gridBatch, torch::Tensor &outGridCoords
                                  int64_t leafIdx,
                                  int64_t voxelIdx,
                                  int64_t,
-                                 GridBatchImpl::Accessor<nanovdb::ValueOnIndex> gridAccessor) {
+                                 GridBatchImpl::Accessor gridAccessor) {
             activeGridCoordsVoxelCallback<TorchRAcc32>(
                 batchIdx, leafIdx, voxelIdx, gridAccessor, outCoordsAcc);
         };
@@ -72,7 +71,7 @@ GetActiveGridCoords(const GridBatchImpl &gridBatch, torch::Tensor &outGridCoords
                       int64_t leafIdx,
                       int64_t voxelIdx,
                       int64_t,
-                      GridBatchImpl::Accessor<nanovdb::ValueOnIndex> gridAccessor) {
+                      GridBatchImpl::Accessor gridAccessor) {
             activeGridCoordsVoxelCallback<TorchAcc>(
                 batchIdx, leafIdx, voxelIdx, gridAccessor, outCoordsAcc);
         };

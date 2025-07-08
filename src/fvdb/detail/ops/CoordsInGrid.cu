@@ -21,7 +21,7 @@ coordsInGridCallback(int32_t bidx,
                      int32_t eidx,
                      JaggedAccessor<ScalarType, 2> ijk,
                      TensorAccessor<bool, 1> outMask,
-                     BatchGridAccessor<nanovdb::ValueOnIndex> batchAccessor) {
+                     BatchGridAccessor batchAccessor) {
     const auto *gpuGrid = batchAccessor.grid(bidx);
     auto primalAcc      = gpuGrid->getAccessor();
 
@@ -48,31 +48,32 @@ CoordsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &ijk) {
     auto opts             = torch::TensorOptions().dtype(torch::kBool).device(ijk.device());
     torch::Tensor outMask = torch::empty({ijk.rsize(0)}, opts);
 
-    AT_DISPATCH_V2(
-        ijk.scalar_type(),
-        "CoordsInGrid",
-        AT_WRAP([&]() {
-            auto batchAcc        = gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(batchHdl);
-            auto outMaskAccessor = tensorAccessor<DeviceTag, bool, 1>(outMask);
-            if constexpr (DeviceTag == torch::kCUDA) {
-                auto cb = [=] __device__(int32_t bidx,
+    AT_DISPATCH_V2(ijk.scalar_type(),
+                   "CoordsInGrid",
+                   AT_WRAP([&]() {
+                       auto batchAcc        = gridBatchAccessor<DeviceTag>(batchHdl);
+                       auto outMaskAccessor = tensorAccessor<DeviceTag, bool, 1>(outMask);
+                       if constexpr (DeviceTag == torch::kCUDA) {
+                           auto cb = [=] __device__(int32_t bidx,
+                                                    int32_t eidx,
+                                                    int32_t cidx,
+                                                    JaggedRAcc32<scalar_t, 2> ijkAcc) {
+                               coordsInGridCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+                                   bidx, eidx, ijkAcc, outMaskAccessor, batchAcc);
+                           };
+                           forEachJaggedElementChannelCUDA<scalar_t, 2>(1024, 1, ijk, cb);
+                       } else {
+                           auto cb = [=](int32_t bidx,
                                          int32_t eidx,
                                          int32_t cidx,
-                                         JaggedRAcc32<scalar_t, 2> ijkAcc) {
-                    coordsInGridCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
-                        bidx, eidx, ijkAcc, outMaskAccessor, batchAcc);
-                };
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(1024, 1, ijk, cb);
-            } else {
-                auto cb =
-                    [=](int32_t bidx, int32_t eidx, int32_t cidx, JaggedAcc<scalar_t, 2> ijkAcc) {
-                        coordsInGridCallback<scalar_t, JaggedAcc, TorchAcc>(
-                            bidx, eidx, ijkAcc, outMaskAccessor, batchAcc);
-                    };
-                forEachJaggedElementChannelCPU<scalar_t, 2>(1, ijk, cb);
-            }
-        }),
-        AT_EXPAND(AT_INTEGRAL_TYPES));
+                                         JaggedAcc<scalar_t, 2> ijkAcc) {
+                               coordsInGridCallback<scalar_t, JaggedAcc, TorchAcc>(
+                                   bidx, eidx, ijkAcc, outMaskAccessor, batchAcc);
+                           };
+                           forEachJaggedElementChannelCPU<scalar_t, 2>(1, ijk, cb);
+                       }
+                   }),
+                   AT_EXPAND(AT_INTEGRAL_TYPES));
 
     return ijk.jagged_like(outMask);
 }

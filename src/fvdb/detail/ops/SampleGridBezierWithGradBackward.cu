@@ -27,7 +27,7 @@ sampleBezierWithGradBackwardCallback(int32_t bidx,
                                      JaggedAccessor<ScalarType, 2> points,
                                      TensorAccessor<ScalarType, 2> gradOutFeatures,
                                      TensorAccessor<ScalarType, 3> gradOutGradFeatures,
-                                     BatchGridAccessor<nanovdb::ValueOnIndex> batchAccessor,
+                                     BatchGridAccessor batchAccessor,
                                      TensorAccessor<ScalarType, 2> outGridData) {
     using MathType = at::opmath_type<ScalarType>;
 
@@ -82,7 +82,7 @@ SampleGridBezierWithGradBackward(const GridBatchImpl &batchHdl,
         points.scalar_type(),
         "SampleGridBezierWithGradBackward",
         AT_WRAP([&] {
-            auto batchAcc           = gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(batchHdl);
+            auto batchAcc           = gridBatchAccessor<DeviceTag>(batchHdl);
             auto gradOutFeaturesAcc = tensorAccessor<DeviceTag, scalar_t, 2>(gradOutFeatures);
             auto gradOutGradFeaturesAcc =
                 tensorAccessor<DeviceTag, scalar_t, 3>(gradOutGradFeatures);

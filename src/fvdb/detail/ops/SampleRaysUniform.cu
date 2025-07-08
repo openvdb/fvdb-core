@@ -31,7 +31,7 @@ countSamplesPerRayCallback(int32_t bidx,
                            const JaggedAccessor<ScalarType, 1> tMin, // [B*M,]
                            const JaggedAccessor<ScalarType, 1> tMax, // [B*M]
                            TensorAccessor<int32_t, 1> outRayCounts,  // [B*M]
-                           BatchGridAccessor<nanovdb::ValueOnIndex> batchAccessor,
+                           BatchGridAccessor batchAccessor,
                            ScalarType minStepSize,
                            ScalarType coneAngle,
                            bool includeEndpointSegments,
@@ -137,7 +137,7 @@ generateRaySamplesCallback(int32_t bidx,
                            TensorAccessor<fvdb::JIdxType, 1> outJIdx,               // [B*M, 2]
                            TensorAccessor<fvdb::JLIdxType, 2> outJLIdx,             // [B*M, 2]
                            TensorAccessor<ScalarType, 2> outRayTimes,               // [B*M*S, 2]
-                           BatchGridAccessor<nanovdb::ValueOnIndex> batchAccessor,
+                           BatchGridAccessor batchAccessor,
                            ScalarType minStepSize,
                            ScalarType coneAngle,
                            bool includeEndpointSegments,
@@ -350,7 +350,7 @@ UniformRaySamples(const GridBatchImpl &batchHdl,
             const auto optsJLIdx =
                 torch::TensorOptions().dtype(fvdb::JLIdxScalarType).device(rayOrigins.device());
 
-            auto batchAcc         = gridBatchAccessor<DeviceTag, nanovdb::ValueOnIndex>(batchHdl);
+            auto batchAcc         = gridBatchAccessor<DeviceTag>(batchHdl);
             auto rayDirectionsAcc = jaggedAccessor<DeviceTag, scalar_t, 2>(rayDirections);
 
             auto tMinAcc = jaggedAccessor<DeviceTag, scalar_t, 1>(tMin);
