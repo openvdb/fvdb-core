@@ -345,7 +345,7 @@ class GaussianSplat3d {
     /// @return The number of SH bases used in the scene.
     int64_t
     numShBases() const {
-        return mShN.size(0) + 1;
+        return mShN.size(1) + 1;
     }
 
     /// @brief Return the number of channels used in the scene (e.g. 3 for RGB colors).

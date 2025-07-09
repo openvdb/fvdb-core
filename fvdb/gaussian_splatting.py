@@ -1,6 +1,7 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
+import math
 from typing import overload
 
 import torch
@@ -32,7 +33,7 @@ class GaussianSplat3d:
             logit_opacities (torch.Tensor): Tensor of shape (N,) representing the logit opacities of the gaussians.
             sh0 (torch.Tensor): Tensor of shape (N, 1, D) representing the diffuse SH coefficients
                 where D is the number of channels (see `num_channels`).
-            shN (torch.Tensor): Tensor of shape (N, num_sh_bases) representing the directionally
+            shN (torch.Tensor): Tensor of shape (N, K-1, D) representing the directionally
                 varying SH coefficients where D is the number of channels (see `num_channels`),
                 and K is the number of spherical harmonic bases (see `num_sh_bases`).
             requires_grad (bool): If True, gradients will be computed for these parameters. Default is False.
@@ -60,22 +61,89 @@ class GaussianSplat3d:
         """
         ...
 
+    @overload
+    def __init__(self, num_channels: int = 3, device=torch.device("cpu")) -> None:
+        """
+        Initializes an empty GaussianSplat3d instance with a given number of feature channels.
+        This constructor is used to create an empty instance of GaussianSplat3d on the specified device.
+
+        Args:
+            num_channels (int): The number of feature channels for the Gaussians.
+            device (torch.device): The device on which the GaussianSplat3d instance will be created.
+                Default is torch.device("cpu"). This can be set to a GPU device if available.
+
+        """
+        ...
+
+    @staticmethod
+    def _make_empty_gaussian_splat_cpp(
+        num_channels: int = 3, device: torch.device = torch.device("cpu")
+    ) -> GaussianSplat3dCpp:
+        return GaussianSplat3dCpp(
+            means=torch.empty(0, 3, device=device),
+            quats=torch.empty(0, 4, device=device),
+            log_scales=torch.empty(0, 3, device=device),
+            logit_opacities=torch.empty(0, device=device),
+            sh0=torch.empty(0, 1, num_channels, device=device),
+            shN=torch.empty(0, 0, num_channels, device=device),
+            requires_grad=False,
+        )
+
     def __init__(self, *args, **kwargs) -> None:
-        if len(args) == 1:
+        if len(args) == 1 and len(kwargs) == 0:
             if isinstance(args[0], GaussianSplat3dCpp):
                 self._impl = args[0]
-            else:
-                raise TypeError("Expected 'args[0]' to be an instance of GaussianSplat3dCpp.")
+                return
         elif len(args) == 0 and len(kwargs) == 1:
             if "impl" in kwargs:
                 if isinstance(kwargs["impl"], GaussianSplat3dCpp):
                     self._impl = kwargs["impl"]
-                else:
-                    raise TypeError("Expected 'impl' to be an instance of GaussianSplat3dCpp.")
-            else:
-                raise ValueError("Expected 'impl' to be provided in kwargs.")
-        else:
-            self._impl = GaussianSplat3dCpp(*args, **kwargs)
+                    return
+
+        try:
+            self._impl = GaussianSplat3d._make_empty_gaussian_splat_cpp(*args, **kwargs)
+        except TypeError:
+            try:
+                self._impl = GaussianSplat3dCpp(*args, **kwargs)
+            except TypeError:
+                # TODO: More informative error message
+                raise TypeError("Invalid constructor arguments for GaussianSplat3d.")
+
+    @property
+    def device(self) -> torch.device:
+        """
+        Returns the device on which the GaussianSplat3d instance is stored.
+        This is typically used to determine whether the instance is on CPU or GPU.
+
+        Returns:
+            torch.device: The device of the GaussianSplat3d instance.
+        """
+        return self._impl.means.device
+
+    @property
+    def dtype(self) -> torch.dtype:
+        """
+        Returns the data type of the GaussianSplat3d instance.
+        This is typically used to determine whether the instance is using float32, float64, etc.
+
+        Returns:
+            torch.dtype: The data type of the GaussianSplat3d instance.
+        """
+        return self._impl.means.dtype
+
+    @property
+    def sh_degree(self) -> int:
+        """
+        Returns the degree of the spherical harmonics used in the Gaussian splatting representation.
+        This is typically used to determine the complexity of the spherical harmonics representation.
+
+        Note: this is **not** the same as `num_sh_bases` but is related. The degree of the
+        spherical harmonics is defined as `sqrt(num_sh_bases) - 1`.
+
+        Returns:
+            int: The degree of the spherical harmonics.
+        """
+        return int(math.sqrt(self._impl.num_sh_bases)) - 1
 
     @staticmethod
     def from_state_dict(state_dict: dict[str, torch.Tensor]) -> "GaussianSplat3d":
@@ -873,7 +941,7 @@ class GaussianSplat3d:
                 are small or when the projection results in high-frequency details.
 
         Returns:
-            depth_images (torch.Tensor): A tensor of shape (C, H, W, D) where C is the number of cameras,
+            images (torch.Tensor): A tensor of shape (C, H, W, D) where C is the number of cameras,
                 H is the height of the images, W is the width of the images, and D is the number of
                 channels (e.g., 3 for RGB).
             alpha_images (torch.Tensor): A tensor of shape (C, H, W, 1) where C is the number of cameras,
