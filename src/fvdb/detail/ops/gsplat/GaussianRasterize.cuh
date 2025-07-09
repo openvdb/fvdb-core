@@ -68,13 +68,14 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
     uint32_t mNumTilesH;
 
     // Common input tensors
-    VectorAccessor mFeatures;                 // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
     VectorAccessor mMeans2d;                  // [C, N, 2] or [nnz, 2]
     VectorAccessor mConics;                   // [C, N, 3] or [nnz, 3]
     ScalarAccessor mOpacities;                // [C, N] or [nnz]
     TorchRAcc64<int32_t, 3> mTileOffsets;     // [C, nTilesH, nTilesW]
     TorchRAcc64<int32_t, 1> mTileGaussianIds; // [totalIntersections]
     // Common optional input tensors
+    bool mHasFeatures;
+    VectorAccessor mFeatures;                // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
     TorchRAcc64<ScalarType, 2> mBackgrounds; // [C, NUM_CHANNELS]
     bool mHasBackgrounds;
     TorchRAcc64<bool, 3> mMasks;             // [C, nTilesH, nTilesW]
@@ -82,16 +83,16 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
 
     // Common sparse input tensors
     bool mIsSparse;
-    TorchRAcc64<int32_t, 1> mActiveTiles;     // [AT]
-    TorchRAcc64<uint64_t, 2> mTilePixelMask;  // [AT, wordsPerTile] e.g. [AT, 4]
-    TorchRAcc64<int64_t, 1> mTilePixelCumsum; // [AT]
-    TorchRAcc64<int64_t, 1> mPixelMap;        // [AP]
+    TorchRAcc64<int32_t, 1> mActiveTiles;             // [AT]
+    TorchRAcc64<uint64_t, 2> mTilePixelMask;          // [AT, wordsPerTile] e.g. [AT, 4]
+    TorchRAcc64<int64_t, 1> mTilePixelCumsum;         // [AT]
+    TorchRAcc64<int64_t, 1> mPixelMap;                // [AP]
 
     RasterizeCommonArgs(
-        const torch::Tensor &means2d,         // [C, N, 2] or [nnz, 2]
-        const torch::Tensor &conics,          // [C, N, 3] or [nnz, 3]
-        const torch::Tensor &features,        // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
-        const torch::Tensor &opacities,       // [C, N] or [nnz]
+        const torch::Tensor &means2d,                 // [C, N, 2] or [nnz, 2]
+        const torch::Tensor &conics,                  // [C, N, 3] or [nnz, 3]
+        const torch::Tensor &opacities,               // [C, N] or [nnz]
+        const std::optional<torch::Tensor> &features, // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
         const std::optional<torch::Tensor> &backgrounds, // [C, NUM_CHANNELS]
         const std::optional<torch::Tensor> &masks,       // [C, numTilesH, numTilesW]
         const uint32_t imageWidth,
@@ -109,10 +110,12 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
         : mImageWidth(imageWidth), mImageHeight(imageHeight), mImageOriginW(imageOriginW),
           mImageOriginH(imageOriginH), mTileOriginW(imageOriginW / tileSize),
           mTileOriginH(imageOriginH / tileSize), mTileSize(tileSize),
-          mFeatures(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(features, "features")),
           mMeans2d(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(means2d, "means2d")),
           mConics(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(conics, "conics")),
           mOpacities(initAccessor<ScalarType, NUM_OUTER_DIMS>(opacities, "opacities")),
+          mHasFeatures(features.has_value()),
+          mFeatures(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(
+              features, opacities.options(), "features")),
           mBackgrounds(initAccessor<ScalarType, 2>(backgrounds, means2d.options(), "backgrounds")),
           mHasBackgrounds(backgrounds.has_value()),
           mMasks(initAccessor<bool, 3>(masks, means2d.options().dtype(torch::kBool), "masks")),
@@ -144,25 +147,32 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
 
         TORCH_CHECK_VALUE(2 == mMeans2d.size(NUM_OUTER_DIMS), "Bad size for means2d");
         TORCH_CHECK_VALUE(3 == mConics.size(NUM_OUTER_DIMS), "Bad size for conics");
-        TORCH_CHECK_VALUE(NUM_CHANNELS == mFeatures.size(NUM_OUTER_DIMS), "Bad size for features");
 
         if constexpr (IS_PACKED) {
             TORCH_CHECK_VALUE(totalGaussians == mMeans2d.size(0), "Bad size for means2d");
             TORCH_CHECK_VALUE(totalGaussians == mConics.size(0), "Bad size for conics");
-            TORCH_CHECK_VALUE(totalGaussians == mFeatures.size(0), "Bad size for features");
             TORCH_CHECK_VALUE(totalGaussians == mOpacities.size(0), "Bad size for opacities");
         } else {
             TORCH_CHECK_VALUE(mNumCameras == mMeans2d.size(0), "Bad size for means2d");
             TORCH_CHECK_VALUE(mNumGaussiansPerCamera == mMeans2d.size(1), "Bad size for means2d");
             TORCH_CHECK_VALUE(mNumCameras == mConics.size(0), "Bad size for conics");
             TORCH_CHECK_VALUE(mNumGaussiansPerCamera == mConics.size(1), "Bad size for conics");
-            TORCH_CHECK_VALUE(mNumCameras == mFeatures.size(0), "Bad size for features");
-            TORCH_CHECK_VALUE(mNumGaussiansPerCamera == mFeatures.size(1), "Bad size for features");
             TORCH_CHECK_VALUE(mNumCameras == mOpacities.size(0), "Bad size for opacities");
             TORCH_CHECK_VALUE(mNumGaussiansPerCamera == mOpacities.size(1),
                               "Bad size for opacities");
         }
 
+        if (mHasFeatures) {
+            TORCH_CHECK_VALUE(NUM_CHANNELS == mFeatures.size(NUM_OUTER_DIMS),
+                              "Bad size for features");
+            if constexpr (IS_PACKED) {
+                TORCH_CHECK_VALUE(totalGaussians == mFeatures.size(0), "Bad size for features");
+            } else {
+                TORCH_CHECK_VALUE(mNumCameras == mFeatures.size(0), "Bad size for features");
+                TORCH_CHECK_VALUE(mNumGaussiansPerCamera == mFeatures.size(1),
+                                  "Bad size for features");
+            }
+        }
         if (mHasBackgrounds) {
             TORCH_CHECK_VALUE(mNumCameras == mBackgrounds.size(0), "Bad size for backgrounds");
             TORCH_CHECK_VALUE(NUM_CHANNELS == mBackgrounds.size(1), "Bad size for backgrounds");

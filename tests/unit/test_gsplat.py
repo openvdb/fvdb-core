@@ -441,6 +441,24 @@ class TestTopGaussianContributionsRender(unittest.TestCase):
 
         self.assertTrue(torch.allclose(weights[0][h // 2 - 1][w // 2 - 1], expected_weights))
 
+        # sparse rendering
+        pixels_to_render = JaggedTensor([torch.tensor([[h // 2 - 1, w // 2 - 1]])]).to(self.device)
+
+        sparse_ids, sparse_weights = gs3d.sparse_render_top_contributing_gaussian_ids(
+            num_samples,
+            pixels_to_render,
+            world_to_cam_xform.unsqueeze(0).contiguous(),
+            intrinsics.unsqueeze(0).contiguous(),
+            w,
+            h,
+            0.1,
+            10000.0,
+        )
+
+        self.assertTrue(torch.equal(sparse_ids.unbind()[0][0], ids[0][h // 2 - 1][w // 2 - 1]))
+
+        self.assertTrue(torch.equal(sparse_weights.unbind()[0][0], weights[0][h // 2 - 1][w // 2 - 1]))
+
     def test_gaussians_grid_render(self):
         h = 1024
         w = 512
@@ -541,6 +559,47 @@ class TestTopGaussianContributionsRender(unittest.TestCase):
 
         self.assertTrue(torch.allclose(weight_centers, expected_weight_centers, atol=1e-5, rtol=1e-8))
 
+        # sparse rendering - use pixels that we know have gaussians (center pixels)
+        num_pixels_to_render = 100
+
+        # Generate random pixel coordinates within image bounds
+        xCoords = torch.randint(0, w, (num_pixels_to_render,))
+        yCoords = torch.randint(0, h, (num_pixels_to_render,))
+
+        # Stack x and y coordinates to form 2D pixel coordinates
+        test_pixels = torch.stack([yCoords, xCoords], 1)
+
+        pixels_to_render = JaggedTensor([test_pixels]).to(self.device)
+
+        sparse_ids, sparse_weights = gs3d.sparse_render_top_contributing_gaussian_ids(
+            num_samples,
+            pixels_to_render,
+            world_to_cam_xform.unsqueeze(0).contiguous(),
+            intrinsics.unsqueeze(0).contiguous(),
+            w,
+            h,
+            0.1,
+            10000.0,
+        )
+
+        for pixels, sparse_ids, reference_ids in zip(pixels_to_render.unbind(), sparse_ids.unbind(), ids):
+            y_coords = pixels[:, 0]  # [num_pixels_to_render]
+            x_coords = pixels[:, 1]  # [num_pixels_to_render]
+            # Index reference_ids using the coordinates
+            selected_reference_ids = reference_ids[y_coords, x_coords]  # [num_pixels_to_render, num_samples]
+
+            self.assertTrue(torch.equal(sparse_ids, selected_reference_ids))
+
+        # check weights
+        for pixels, sparse_weights, reference_weights in zip(
+            pixels_to_render.unbind(), sparse_weights.unbind(), weights
+        ):
+            y_coords = pixels[:, 0]  # [num_pixels_to_render]
+            x_coords = pixels[:, 1]  # [num_pixels_to_render]
+            # Index reference_weights using the coordinates
+            selected_reference_weights = reference_weights[y_coords, x_coords]  # [num_pixels_to_render, num_samples]
+            self.assertTrue(torch.equal(sparse_weights, selected_reference_weights))
+
     def test_gaussians_scene_render(self):
         ids, weights = self.gs3d.render_top_contributing_gaussian_ids(
             6,
@@ -562,6 +621,98 @@ class TestTopGaussianContributionsRender(unittest.TestCase):
 
         self.assertTrue(torch.equal(ids, ids_regression))
         self.assertTrue(torch.equal(weights, weights_regression))
+
+    def test_gaussians_scene_sparse_render(self):
+
+        # sparse rendering - use pixels that we know have gaussians (center pixels)
+        num_pixels_to_render = 100
+
+        # Generate random pixel coordinates within image bounds
+        xCoords = torch.randint(0, self.width, (num_pixels_to_render,))
+        yCoords = torch.randint(0, self.height, (num_pixels_to_render,))
+
+        # Stack x and y coordinates to form 2D pixel coordinates
+        test_pixels = torch.stack([yCoords, xCoords], 1)
+
+        pixels_to_render = JaggedTensor([test_pixels]).to(self.device)
+
+        sparse_ids, sparse_weights = self.gs3d.sparse_render_top_contributing_gaussian_ids(
+            6,
+            pixels_to_render,
+            self.cam_to_world_mats,
+            self.projection_mats,
+            self.width,
+            self.height,
+            0.01,
+            10000.0,
+        )
+
+        # load the regression data
+        ids_regression = torch.load(self.data_path / "regression_top_contributors_ids.pt", weights_only=True)
+        weights_regression = torch.load(self.data_path / "regression_top_contributors_weights.pt", weights_only=True)
+
+        for pixels, sparse_ids, reference_ids in zip(pixels_to_render.unbind(), sparse_ids.unbind(), ids_regression):
+            y_coords = pixels[:, 0]  # [num_pixels_to_render]
+            x_coords = pixels[:, 1]  # [num_pixels_to_render]
+            # Index reference_ids using the coordinates
+            selected_reference_ids = reference_ids[y_coords, x_coords]  # [num_pixels_to_render, num_samples]
+
+            self.assertTrue(torch.equal(sparse_ids, selected_reference_ids))
+
+        # check weights
+        for pixels, sparse_weights, reference_weights in zip(
+            pixels_to_render.unbind(), sparse_weights.unbind(), weights_regression
+        ):
+            y_coords = pixels[:, 0]  # [num_pixels_to_render]
+            x_coords = pixels[:, 1]  # [num_pixels_to_render]
+            # Index reference_weights using the coordinates
+            selected_reference_weights = reference_weights[y_coords, x_coords]  # [num_pixels_to_render, num_samples]
+            self.assertTrue(torch.equal(sparse_weights, selected_reference_weights))
+
+    def test_gaussians_scene_dense_pixels_sparse_render(self):
+        # Test that the sparse render works with dense pixel specification
+        # Taking a [C, R, 2] tensor as pixels_to_render and returning Tensors [C, R, num_samples]
+
+        # sparse rendering - use pixels that we know have gaussians (center pixels)
+        num_pixels_to_render = 100
+
+        # Generate random pixel coordinates within image bounds
+        xCoords = torch.randint(0, self.width, (num_pixels_to_render,))
+        yCoords = torch.randint(0, self.height, (num_pixels_to_render,))
+
+        # Stack x and y coordinates to form 2D pixel coordinates
+        pixels_to_render = torch.stack([yCoords, xCoords], 1).unsqueeze(0).to(self.device)
+
+        sparse_ids, sparse_weights = self.gs3d.sparse_render_top_contributing_gaussian_ids(
+            6,
+            pixels_to_render,
+            self.cam_to_world_mats,
+            self.projection_mats,
+            self.width,
+            self.height,
+            0.01,
+            10000.0,
+        )
+
+        # load the regression data
+        ids_regression = torch.load(self.data_path / "regression_top_contributors_ids.pt", weights_only=True)
+        weights_regression = torch.load(self.data_path / "regression_top_contributors_weights.pt", weights_only=True)
+
+        for pixels, sparse_ids, reference_ids in zip(pixels_to_render, sparse_ids, ids_regression):
+            y_coords = pixels[:, 0]  # [num_pixels_to_render]
+            x_coords = pixels[:, 1]  # [num_pixels_to_render]
+            # Index reference_ids using the coordinates
+            selected_reference_ids = reference_ids[y_coords, x_coords]  # [num_pixels_to_render, num_samples]
+
+            self.assertTrue(torch.equal(sparse_ids, selected_reference_ids))
+
+        # check weights
+        for pixels, sparse_weights, reference_weights in zip(pixels_to_render, sparse_weights, weights_regression):
+            y_coords = pixels[:, 0]  # [num_pixels_to_render]
+            x_coords = pixels[:, 1]  # [num_pixels_to_render]
+            # Index reference_weights using the coordinates
+            selected_reference_weights = reference_weights[y_coords, x_coords]  # [num_pixels_to_render, num_samples]
+            self.assertTrue(torch.equal(sparse_weights, selected_reference_weights))
 
 
 if __name__ == "__main__":

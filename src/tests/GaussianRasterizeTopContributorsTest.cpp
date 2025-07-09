@@ -4,6 +4,7 @@
 #include "utils/Tensor.h"
 
 #include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
 
 #include <torch/script.h>
 #include <torch/torch.h>
@@ -18,7 +19,7 @@
 #error "FVDB_EXTERNAL_TEST_DATA_PATH must be defined"
 #endif
 
-struct GaussianTopContributorsTestFixture : public ::testing::Test {
+struct GaussianRasterizeTopContributorsTestFixture : public ::testing::Test {
     void
     loadInputData(const std::string insPath) {
         const std::string dataPath =
@@ -139,7 +140,7 @@ struct GaussianTopContributorsTestFixture : public ::testing::Test {
     uint32_t numDepthSamples;
 };
 
-TEST_F(GaussianTopContributorsTestFixture, TestBasicInputsAndOutputs) {
+TEST_F(GaussianRasterizeTopContributorsTestFixture, TestBasicInputsAndOutputs) {
     loadTestData("gaussian_top_contributors_1point_input.pt");
 
     fvdb::detail::ops::RenderSettings settings;
@@ -201,7 +202,89 @@ TEST_F(GaussianTopContributorsTestFixture, TestBasicInputsAndOutputs) {
     EXPECT_TRUE(torch::allclose(centerWeights, expectedWeights));
 }
 
-TEST_F(GaussianTopContributorsTestFixture, CPUThrows) {
+TEST_F(GaussianRasterizeTopContributorsTestFixture, TestBasicInputsAndOutputsSparse) {
+    loadTestData("gaussian_top_contributors_1point_input.pt");
+
+    fvdb::detail::ops::RenderSettings settings;
+    settings.imageWidth      = imageWidth;
+    settings.imageHeight     = imageHeight;
+    settings.tileSize        = tileSize;
+    settings.numDepthSamples = numDepthSamples;
+
+    const auto [outIds, outWeights] =
+        fvdb::detail::ops::dispatchGaussianRasterizeTopContributingGaussianIds<torch::kCUDA>(
+            means2d, conics, opacities, tileOffsets, tileGaussianIds, settings);
+
+    const int h = imageHeight;
+    const int w = imageWidth;
+
+    const auto pixelsToRender = torch::tensor({{h / 2 - 1, w / 2 - 1}}).cuda();
+
+    auto [activeTiles, activeTileMask, tilePixelMask, tilePixelCumsum, pixelMap] =
+        fvdb::detail::ops::computeSparseInfo(
+            tileSize, tileOffsets.size(2), tileOffsets.size(1), pixelsToRender);
+
+    // Run the same scene with sparse sampling of only the center pixel
+    const auto [outIdsSparse, outWeightsSparse] =
+        fvdb::detail::ops::dispatchGaussianSparseRasterizeTopContributingGaussianIds<torch::kCUDA>(
+            means2d,
+            conics,
+            opacities,
+            tileOffsets,
+            tileGaussianIds,
+            pixelsToRender,
+            activeTiles,
+            tilePixelMask,
+            tilePixelCumsum,
+            pixelMap,
+            settings);
+
+    const int numGaussianLayers = 5;
+
+    auto centerIdsSlice =
+        outIds.index({0,
+                      h / 2 - 1,
+                      w / 2 - 1,
+                      torch::indexing::Slice(torch::indexing::None, numGaussianLayers)});
+
+    auto outIdsSparseSlice =
+        outIdsSparse.jdata().index({0, torch::indexing::Slice(0, numGaussianLayers)});
+
+    EXPECT_TRUE(torch::equal(outIdsSparseSlice, centerIdsSlice));
+
+    // Test that remaining slots are filled with -1
+    auto remainingIdsSparseSlice = outIdsSparse.jdata().index(
+        {0, torch::indexing::Slice(numGaussianLayers, torch::indexing::None)});
+
+    int64_t remainingSize     = outIds.size(3) - numGaussianLayers;
+    auto expectedNegativeOnes = torch::full(
+        {remainingSize}, -1, torch::TensorOptions().device(outIds.device()).dtype(torch::kInt32));
+
+    EXPECT_TRUE(torch::equal(remainingIdsSparseSlice, expectedNegativeOnes));
+
+    // TODO can remove this and just use the weights from the dense rasterization
+    {
+        // Test expected weights calculation
+        auto expectedWeights = torch::zeros(
+            numDepthSamples,
+            torch::TensorOptions().device(outWeights.device()).dtype(outWeights.dtype()));
+        float accumulatedTransparency = 1.0f;
+
+        // Get the first opacity value as a scalar
+        float opacityVal = opacities.flatten()[0].item<float>();
+
+        for (int i = 0; i < numGaussianLayers; ++i) {
+            expectedWeights[i] = accumulatedTransparency * opacityVal;
+            accumulatedTransparency *= (1.0f - opacityVal);
+        }
+        EXPECT_TRUE(torch::equal(outWeightsSparse.jdata()[0], expectedWeights));
+    }
+
+    auto centerWeightsSlice = outWeights.index({0, h / 2 - 1, w / 2 - 1});
+    EXPECT_TRUE(torch::allclose(outWeightsSparse.jdata()[0], centerWeightsSlice));
+}
+
+TEST_F(GaussianRasterizeTopContributorsTestFixture, CPUThrows) {
     loadTestData("gaussian_top_contributors_1point_input.pt");
     moveToDevice(torch::kCPU);
 
