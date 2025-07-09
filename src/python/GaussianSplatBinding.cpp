@@ -258,6 +258,22 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("tile_size")       = 16,
              py::arg("min_radius_2d")   = 0.0,
              py::arg("eps_2d")          = 0.3,
+             py::arg("antialias")       = false)
+
+        .def("sparse_render_top_contributing_gaussian_ids",
+             &fvdb::GaussianSplat3d::sparseRenderTopContributingGaussianIds,
+             py::arg("num_samples"),
+             py::arg("pixels_to_render"),
+             py::arg("world_to_camera_matrices"),
+             py::arg("projection_matrices"),
+             py::arg("image_width"),
+             py::arg("image_height"),
+             py::arg("near"),
+             py::arg("far"),
+             py::arg("projection_type") = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
+             py::arg("tile_size")       = 16,
+             py::arg("min_radius_2d")   = 0.0,
+             py::arg("eps_2d")          = 0.3,
              py::arg("antialias")       = false);
 
     m.def("gaussian_render_jagged",

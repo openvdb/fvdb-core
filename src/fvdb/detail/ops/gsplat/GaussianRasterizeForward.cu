@@ -36,8 +36,8 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Ras
     RasterizeForwardArgs(
         const torch::Tensor &means2d,         // [C, N, 2] or [nnz, 2]
         const torch::Tensor &conics,          // [C, N, 3] or [nnz, 3]
-        const torch::Tensor &features,        // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
         const torch::Tensor &opacities,       // [C, N] or [nnz]
+        const torch::Tensor &features,        // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
         const std::optional<torch::Tensor> &backgrounds, // [C, NUM_CHANNELS]
         const std::optional<torch::Tensor> &masks,       // [C, numTilesH, numTilesW]
         const uint32_t imageWidth,
@@ -49,7 +49,7 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Ras
         const torch::Tensor &tileGaussianIds, // [totalIntersections]
         // output JaggedTensors:
         // In Dense mode, first dimension X = C * imageHeight * imageWidth
-        // In Sparse mode, first dimension X = C
+        // In Sparse mode, first dimension X = C * nPixels_i (i from 0 to C-1)
         const fvdb::JaggedTensor &outFeatures,                          // [X, NUM_CHANNELS]
         const fvdb::JaggedTensor &outAlphas,                            // [X, 1]
         const fvdb::JaggedTensor &outLastIds,                           // [X]
@@ -60,8 +60,8 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Ras
         const std::optional<torch::Tensor> &pixelMap        = std::nullopt)        // [AP]
         : commonArgs(means2d,
                      conics,
-                     features,
                      opacities,
+                     features,
                      backgrounds,
                      masks,
                      imageWidth,
@@ -126,12 +126,7 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Ras
                             const bool pixelIsActive,
                             const uint32_t activePixelIndex) {
         extern __shared__ int s[];
-        Gaussian2D<ScalarType> *sharedGaussians =
-            reinterpret_cast<Gaussian2D<ScalarType> *>(s); // [blockSize]
-
-        // We don't return right away if the pixel is not in the image since we want
-        // to use this thread to load gaussians into shared memory
-        bool done = !pixelIsActive;
+        auto *sharedGaussians = reinterpret_cast<Gaussian2D<ScalarType> *>(s); // [blockSize]
 
         // NOTE: The accumulated transmittance is used in the backward pass, and
         // since it's a
@@ -143,10 +138,19 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Ras
         // index of most recent gaussian to write to this thread's pixel
         int32_t curIdx = -1;
 
+        // We don't return right away if the pixel is not in the image since we want
+        // to use this thread to load gaussians into shared memory
+        bool done = !pixelIsActive;
+
         // Process Gaussians in batches of block size (i.e. one Gaussian per thread in the block)
         const uint32_t tidx = threadIdx.y * blockDim.x + threadIdx.x;
         const uint32_t numBatches =
             (lastGaussianIdInBlock - firstGaussianIdInBlock + blockSize - 1) / blockSize;
+
+        // (row, col) coordinates are relative to the specified image origin which may
+        // be a crop so we need to add the origin to get the absolute pixel coordinates
+        const ScalarType px = col + commonArgs.mImageOriginW + ScalarType{0.5f};
+        const ScalarType py = row + commonArgs.mImageOriginH + ScalarType{0.5f};
 
         // collect and process batches of gaussians
         // each thread loads one gaussian at a time before rasterizing its
@@ -179,16 +183,9 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Ras
                 for (uint32_t t = 0; (t < batchSize) && !done; ++t) {
                     const Gaussian2D<ScalarType> gaussian = sharedGaussians[t];
 
-                    // (row, col) coordinates are relative to the specified image origin which may
-                    // be a crop so we need to add the origin to get the absolute pixel coordinates
-                    const ScalarType px = col + commonArgs.mImageOriginW + ScalarType{0.5f};
-                    const ScalarType py = row + commonArgs.mImageOriginH + ScalarType{0.5f};
-
                     const ScalarType sigma = gaussian.sigma(px, py);
                     const ScalarType alpha = min(0.999f, gaussian.opacity * __expf(-sigma));
 
-                    // TODO: are we quantizing the alpha too early? They could add up to
-                    // significant opacity.
                     if (sigma < 0.f || alpha < 1.f / 255.f) {
                         continue;
                     }
@@ -238,14 +235,14 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Ras
 template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED>
 __global__ void
 rasterizeGaussiansForward(RasterizeForwardArgs<ScalarType, NUM_CHANNELS, IS_PACKED> forwardArgs) {
+    auto &commonArgs = forwardArgs.commonArgs;
+
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
     int32_t cameraId;
     int32_t tileRow;
     int32_t tileCol;
     uint32_t row, col;
-
-    auto &commonArgs = forwardArgs.commonArgs;
 
     cuda::std::tie(cameraId, tileRow, tileCol, row, col) =
         commonArgs.mIsSparse ? commonArgs.sparseCoordinates() : commonArgs.denseCoordinates();
@@ -369,8 +366,8 @@ launchRasterizeForwardKernel(
 
     auto args = RasterizeForwardArgs<ScalarType, NUM_CHANNELS, IS_PACKED>(means2d,
                                                                           conics,
-                                                                          features,
                                                                           opacities,
+                                                                          features,
                                                                           backgrounds,
                                                                           masks,
                                                                           imageWidth,

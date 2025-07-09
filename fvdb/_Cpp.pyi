@@ -171,6 +171,22 @@ class GaussianSplat3d:
         eps_2d: float = ...,
         antialias: bool = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
+    def sparse_render_top_contributing_gaussian_ids(
+        self,
+        pixels_to_render: JaggedTensor,
+        num_samples: int,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        image_width: int,
+        image_height: int,
+        near: float,
+        far: float,
+        projection_type=...,
+        tile_size: int = ...,
+        min_radius_2d: float = ...,
+        eps_2d: float = ...,
+        antialias: bool = ...,
+    ) -> tuple[JaggedTensor, JaggedTensor]: ...
     def reset_grad_state(self) -> None: ...
     def save_ply(self, filename: str) -> None: ...
     def load_ply(self, filename: str, device: torch.device = ...) -> None: ...

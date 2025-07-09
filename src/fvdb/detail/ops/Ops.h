@@ -815,10 +815,9 @@ dispatchGaussianRasterizeBackward(
 /// other parameters
 ///
 /// @return std::tuple containing:
-///         - Rendered quantities [C, image_height, image_width, n_depth_samples, D] where D matches
-/// input attribute dimension
-///         - Alpha/weight values [C, image_height, image_width, n_depth_samples]
-///         - Last Gaussian ID rendered at each pixel [C, image_height, image_width]
+///         - Index of the top-K most visible Gaussians for each pixel
+///           [C, image_height, image_width, n_depth_samples]
+///         - Weighted alpha values for each sample [C, image_height, image_width, n_depth_samples]
 ///
 /// @note Unlike standard rasterization, this function can output multiple samples per pixel in the
 /// depth dimension.
@@ -833,6 +832,55 @@ std::tuple<torch::Tensor, torch::Tensor> dispatchGaussianRasterizeTopContributin
     const torch::Tensor &opacities,         // [N]
     const torch::Tensor &tile_offsets,      // [C, tile_height, tile_width]
     const torch::Tensor &tile_gaussian_ids, // [n_isects]
+    const RenderSettings &settings);
+
+/// @brief Performs sparse deep image rasterization to render the IDs and weighted alpha values of
+/// the top-K most visible Gaussians for each pixel. Renders only specified pixels.
+///
+/// This function rasterizes 2D Gaussians into an image using a tile-based approach for efficiency,
+/// with support for multiple samples per pixel along the depth dimension.  The samples are chosen
+/// by determining the top-K most visible Gaussians for each pixel where K is specified in the
+/// rendering settings.  Each Gaussian is represented by its 2D projected center, covariance matrix
+/// in conic form, rendering attributes (such as RGB colors, depth, etc.), and opacity. The function
+/// returns the Gaussians' IDs and alpha/weight values for each sample.  These samples are ordered
+/// front to back in their depth ordering from camera.
+///
+/// @tparam DeviceType Device type template parameter (torch::kCUDA or torch::kCPU)
+///
+/// @param[in] means2d 2D projected Gaussian centers [C, N, 2]
+/// @param[in] conics Gaussian covariance matrices in conic form [C, N, 3] representing (a, b, c) in
+/// ax² + 2bxy + cy²
+/// @param[in] opacities Opacity values for each Gaussian [N]
+/// @param[in] tile_offsets Offsets for tiles [C, tile_height, tile_width] indicating for each tile
+/// where its Gaussians start
+/// @param[in] tile_gaussian_ids Gaussian IDs for tile intersection [n_isects] indicating which
+/// Gaussians affect each tile
+/// @param[in] pixelsToRender Sparse pixels to render [C, NumPixels, 2]
+/// @param[in] activeTiles Indices of active tiles [C, NumTiles]
+/// @param[in] tilePixelMask Mask for each tile pixel [C, NumTiles, NumPixels]
+/// @param[in] tilePixelCumsum Cumulative sum of tile pixels [C, NumTiles, NumPixels]
+/// @param[in] pixelMap Mapping of pixels to output indices [C, NumPixels]
+/// @param[in] settings Rendering settings containing image dimensions, number of depth samples, and
+/// other parameters
+///
+/// @return std::tuple containing:
+///         - Index of the top-K most visible Gaussians for each pixel
+///           [C, NumPixels, n_depth_samples]
+///         - Weighted alpha values for each sample [C, NumPixels, n_depth_samples]
+///
+template <c10::DeviceType>
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
+dispatchGaussianSparseRasterizeTopContributingGaussianIds(
+    const torch::Tensor &means2d,           // [C, N, 2]
+    const torch::Tensor &conics,            // [C, N, 3]
+    const torch::Tensor &opacities,         // [N]
+    const torch::Tensor &tile_offsets,      // [C, tile_height, tile_width]
+    const torch::Tensor &tile_gaussian_ids, // [n_isects]
+    const fvdb::JaggedTensor &pixelsToRender,
+    const torch::Tensor &activeTiles,
+    const torch::Tensor &tilePixelMask,
+    const torch::Tensor &tilePixelCumsum,
+    const torch::Tensor &pixelMap,
     const RenderSettings &settings);
 
 /// @brief Project 3D Gaussians to 2D screen space using jagged tensors for batched processing

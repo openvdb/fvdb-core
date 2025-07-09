@@ -43,8 +43,8 @@ struct RasterizeBackwardArgs {
     RasterizeBackwardArgs(
         const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]
         const torch::Tensor &conics,    // [C, N, 3] or [nnz, 3]
-        const torch::Tensor &features,  // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
         const torch::Tensor &opacities, // [C, N] or [nnz]
+        const torch::Tensor &features,  // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
         const at::optional<torch::Tensor> &backgrounds, // [C, NUM_CHANNELS]
         const at::optional<torch::Tensor> &masks,       // [C, numTilesH, numTilesW]
         const uint32_t imageWidth,
@@ -65,8 +65,8 @@ struct RasterizeBackwardArgs {
         const std::optional<torch::Tensor> &outDLossDMeans2dAbs) // [C, N, 2] or [nnz, 2]
         : commonArgs(means2d,
                      conics,
-                     features,
                      opacities,
+                     features,
                      backgrounds,
                      masks,
                      imageWidth,
@@ -856,8 +856,8 @@ callRasterizeBackwardWithTemplatedSharedChannels(
     RasterizeBackwardArgs<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED> args(
         means2d,
         conics,
-        features,
         opacities,
+        features,
         backgrounds,
         masks,
         imageWidth,

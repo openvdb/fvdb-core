@@ -4,6 +4,7 @@
 #include <fvdb/GaussianSplat3d.h>
 #include <fvdb/detail/autograd/Autograd.h>
 #include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
 
 #define TINYPLY_IMPLEMENTATION
 #include <tinyply.h>
@@ -478,6 +479,37 @@ GaussianSplat3d::renderTopContributingGaussianIdsImpl(
     });
 }
 
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
+GaussianSplat3d::sparseRenderTopContributingGaussianIdsImpl(
+    const fvdb::JaggedTensor &pixelsToRender,
+    const torch::Tensor &worldToCameraMatrices,
+    const torch::Tensor &projectionMatrices,
+    const fvdb::detail::ops::RenderSettings &settings) {
+    const ProjectedGaussianSplats &state =
+        projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settings);
+
+    const auto [activeTiles, activeTileMask, tilePixelMask, tilePixelCumsum, pixelMap] =
+        fvdb::detail::ops::computeSparseInfo(settings.tileSize,
+                                             state.tileOffsets.size(2),
+                                             state.tileOffsets.size(1),
+                                             pixelsToRender);
+
+    return FVDB_DISPATCH_KERNEL_DEVICE(state.perGaussian2dMean.device(), [&]() {
+        return fvdb::detail::ops::dispatchGaussianSparseRasterizeTopContributingGaussianIds<
+            DeviceTag>(state.perGaussian2dMean,
+                       state.perGaussianConic,
+                       state.perGaussianOpacity,
+                       state.tileOffsets,
+                       state.tileGaussianIds,
+                       pixelsToRender,
+                       activeTiles,
+                       tilePixelMask,
+                       tilePixelCumsum,
+                       pixelMap,
+                       settings);
+    });
+}
+
 GaussianSplat3d::ProjectedGaussianSplats
 GaussianSplat3d::projectGaussiansForImages(const torch::Tensor &worldToCameraMatrices,
                                            const torch::Tensor &projectionMatrices,
@@ -851,6 +883,37 @@ GaussianSplat3d::renderTopContributingGaussianIds(const int numSamples,
 
     return renderTopContributingGaussianIdsImpl(
         worldToCameraMatrices, projectionMatrices, settings);
+}
+
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
+GaussianSplat3d::sparseRenderTopContributingGaussianIds(const int numSamples,
+                                                        const fvdb::JaggedTensor &pixelsToRender,
+                                                        const torch::Tensor &worldToCameraMatrices,
+                                                        const torch::Tensor &projectionMatrices,
+                                                        const size_t imageWidth,
+                                                        const size_t imageHeight,
+                                                        const float near,
+                                                        const float far,
+                                                        const ProjectionType projectionType,
+                                                        const size_t tileSize,
+                                                        const float minRadius2d,
+                                                        const float eps2d,
+                                                        const bool antialias) {
+    RenderSettings settings;
+    settings.imageWidth      = imageWidth;
+    settings.imageHeight     = imageHeight;
+    settings.nearPlane       = near;
+    settings.farPlane        = far;
+    settings.projectionType  = projectionType;
+    settings.shDegreeToUse   = 0;
+    settings.tileSize        = tileSize;
+    settings.radiusClip      = minRadius2d;
+    settings.eps2d           = eps2d;
+    settings.renderMode      = RenderSettings::RenderMode::DEPTH;
+    settings.numDepthSamples = numSamples;
+
+    return sparseRenderTopContributingGaussianIdsImpl(
+        pixelsToRender, worldToCameraMatrices, projectionMatrices, settings);
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
