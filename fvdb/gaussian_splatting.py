@@ -66,20 +66,6 @@ class GaussianSplat3d:
         """
         ...
 
-    @overload
-    def __init__(self, num_channels: int = 3, device=torch.device("cpu")) -> None:
-        """
-        Initializes an empty GaussianSplat3d instance with a given number of feature channels.
-        This constructor is used to create an empty instance of GaussianSplat3d on the specified device.
-
-        Args:
-            num_channels (int): The number of feature channels for the Gaussians.
-            device (torch.device): The device on which the GaussianSplat3d instance will be created.
-                Default is torch.device("cpu"). This can be set to a GPU device if available.
-
-        """
-        ...
-
     def __init__(self, *args, **kwargs) -> None:
         if kwargs.get("impl") is not None:
             assert len(args) == 0, "Expected no positional arguments when 'impl' is provided."
