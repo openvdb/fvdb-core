@@ -3,7 +3,6 @@
 #
 import tempfile
 import unittest
-from pathlib import Path
 
 import imageio
 import numpy as np
@@ -16,6 +15,7 @@ from fvdb.utils.tests import (
     generate_random_4x4_xform,
     get_fvdb_test_data_path,
 )
+from parameterized import parameterized
 
 from fvdb import GaussianSplat3d, JaggedTensor, gaussian_render_jagged
 
@@ -41,8 +41,7 @@ def rgb_to_sh(rgb: torch.Tensor) -> torch.Tensor:
     return (rgb - 0.5) / C0
 
 
-class TestGaussianRender(unittest.TestCase):
-
+class BaseGaussianTestCase(unittest.TestCase):
     data_path = get_fvdb_test_data_path() / "gsplat"
     save_image_data = False
     # NB: The files for regression data are saved at pwd to prevent accidental overwrites
@@ -77,8 +76,8 @@ class TestGaussianRender(unittest.TestCase):
             logit_opacities=torch.logit(opacities),
             sh0=sh_0,
             shN=sh_n,
-            requires_grad=True,
         )
+        self.gs3d.requires_grad = True
 
         nan_mean = means.clone()
         nan_mean[0] = torch.tensor([float("nan"), float("nan"), float("nan")], device=self.device)
@@ -89,14 +88,664 @@ class TestGaussianRender(unittest.TestCase):
             logit_opacities=torch.logit(opacities),
             sh0=sh_0,
             shN=sh_n,
-            requires_grad=True,
-        )
+        ).detach()
+        self.nan_gs3d.requires_grad = True
 
         self.num_cameras = self.cam_to_world_mats.shape[0]
         self.near_plane = 0.01
         self.far_plane = 1e10
 
-    def test_fully_fused_projection(self):
+
+class TestGaussianSplatIndexSet(BaseGaussianTestCase):
+    def setUp(self):
+        super().setUp()
+
+    def make_src_and_dst(self, indices, src_acc_grad_mean_2d, dst_acc_grad_mean_2d, acc_max_2d_radii):
+        # Create a destination Gaussian Splat (matching self.gs3d) that requires gradients
+        dst = GaussianSplat3d(
+            means=self.gs3d.means,
+            quats=self.gs3d.quats,
+            log_scales=self.gs3d.log_scales,
+            logit_opacities=self.gs3d.logit_opacities,
+            sh0=self.gs3d.sh0,
+            shN=self.gs3d.shN,
+            accumulate_max_2d_radii=acc_max_2d_radii,
+            accumulate_mean_2d_gradients=dst_acc_grad_mean_2d,
+        ).detach()
+        dst.requires_grad = True
+
+        # Create a source Gaussian Splat with half the Gaussians of the destination
+        # and make sure it requires gradients
+        num_src_gs = int(indices.sum().item()) if indices.dtype == torch.bool else int(indices.numel())
+        src = GaussianSplat3d(
+            means=torch.randn(num_src_gs, 3, device=self.device),
+            quats=torch.randn(num_src_gs, 4, device=self.device),
+            log_scales=torch.randn(num_src_gs, 3, device=self.device),
+            logit_opacities=torch.randn(num_src_gs, device=self.device),
+            sh0=torch.randn(num_src_gs, 1, 3, device=self.device),
+            shN=torch.randn(num_src_gs, 15, 3, device=self.device),
+            accumulate_mean_2d_gradients=src_acc_grad_mean_2d,
+            accumulate_max_2d_radii=acc_max_2d_radii,
+        )
+        src.requires_grad = True
+
+        # Render and compute losses on the source and destination Gaussian Splats
+        # to make sure they have gradients but have a seperate autograd graph
+        if dst_acc_grad_mean_2d or acc_max_2d_radii:
+            rgb1, alpha1 = dst.render_images(
+                self.cam_to_world_mats,
+                self.projection_mats,
+                self.width,
+                self.height,
+                self.near_plane,
+                self.far_plane,
+            )
+            loss1 = rgb1.sum()
+            loss1.backward()
+        if src_acc_grad_mean_2d or acc_max_2d_radii:
+            rgb2, alpha2 = src.render_images(
+                self.cam_to_world_mats,
+                self.projection_mats,
+                self.width,
+                self.height,
+                self.near_plane,
+                self.far_plane,
+            )
+            loss2 = rgb2.sum()
+            loss2.backward()
+
+        return src, dst
+
+    def compare_src_and_dst(
+        self,
+        src: GaussianSplat3d,
+        dst: GaussianSplat3d,
+        src_acc_m2d_grads: bool,
+        dst_track_m2d_grads: bool,
+        track_max_2d_radii: bool,
+        assertfun,
+        selfun,
+    ):
+        # Check that the source and destination Gaussians values
+        assertfun(torch.equal(src.means, selfun(dst.means)))
+        assertfun(torch.equal(src.quats, selfun(dst.quats)))
+        assertfun(torch.equal(src.log_scales, selfun(dst.log_scales)))
+        assertfun(torch.equal(src.logit_opacities, selfun(dst.logit_opacities)))
+        assertfun(torch.equal(src.sh0, selfun(dst.sh0)))
+        assertfun(torch.equal(src.shN, selfun(dst.shN)))
+
+        # Check that both the source and destination Gaussian Splat get their accumulate
+        # gradient state correctly set
+        if src_acc_m2d_grads and dst_track_m2d_grads:
+            assertfun(
+                torch.equal(
+                    src.accumulated_gradient_step_counts,
+                    selfun(dst.accumulated_gradient_step_counts),
+                )
+            )
+            assertfun(
+                torch.equal(
+                    src.accumulated_mean_2d_gradient_norms,
+                    selfun(dst.accumulated_mean_2d_gradient_norms),
+                )
+            )
+            if track_max_2d_radii:
+                assertfun(
+                    torch.equal(
+                        src.accumulated_max_2d_radii,
+                        selfun(dst.accumulated_max_2d_radii),
+                    )
+                )
+        elif dst_track_m2d_grads and not src_acc_m2d_grads:
+            assertfun(
+                torch.equal(
+                    torch.zeros(src.num_gaussians).to(dst.accumulated_gradient_step_counts),
+                    selfun(dst.accumulated_gradient_step_counts),
+                )
+            )
+            assertfun(
+                torch.equal(
+                    torch.zeros(src.num_gaussians).to(dst.accumulated_mean_2d_gradient_norms),
+                    selfun(dst.accumulated_mean_2d_gradient_norms),
+                )
+            )
+            if track_max_2d_radii:
+                assertfun(
+                    torch.equal(
+                        torch.zeros(src.num_gaussians).to(dst.accumulated_max_2d_radii),
+                        selfun(dst.accumulated_max_2d_radii),
+                    )
+                )
+        elif src_acc_m2d_grads and not dst_track_m2d_grads:
+
+            self.assertEqual(dst.accumulated_mean_2d_gradient_norms, None)
+            self.assertEqual(dst.accumulated_gradient_step_counts, None)
+            # Check that the destination Gaussian Splat has the same gradient shapes as before
+            self.assertTrue(src.accumulated_gradient_step_counts.shape == (src.num_gaussians,))
+            self.assertTrue(src.accumulated_mean_2d_gradient_norms.shape == (src.num_gaussians,))
+            if track_max_2d_radii:
+                self.assertTrue(src.accumulated_max_2d_radii.shape == (src.num_gaussians,))
+
+    def _run_test(self, indices, src_requires_grad, dst_requires_grad, track_max_2d_radii, slicefun=None):
+        # Create the source and destination Gaussian Splats
+        src, dst = self.make_src_and_dst(
+            indices,
+            src_acc_grad_mean_2d=src_requires_grad,
+            dst_acc_grad_mean_2d=dst_requires_grad,
+            acc_max_2d_radii=track_max_2d_radii,
+        )
+
+        # We're testing slicing, so we can't write to the destiation tensor if it
+        # has requires_grad = True (since it's a leaf tensor)
+        if slicefun:
+            dst.requires_grad = False
+
+        # Check that the source and destination Gaussian Splat do not match before the assignment
+        self.compare_src_and_dst(
+            src=src,
+            dst=dst,
+            track_max_2d_radii=track_max_2d_radii,
+            src_acc_m2d_grads=src_requires_grad,
+            dst_track_m2d_grads=dst_requires_grad,
+            assertfun=self.assertFalse,
+            selfun=lambda x: x[indices],
+        )
+
+        # Do the assignment
+        if slicefun:
+            slicefun(src, dst, indices)
+        else:
+            dst[indices] = src
+
+        # Check that the source and destination Gaussian Splat match after the assignment
+        self.compare_src_and_dst(
+            src=src,
+            dst=dst,
+            track_max_2d_radii=track_max_2d_radii,
+            src_acc_m2d_grads=src_requires_grad,
+            dst_track_m2d_grads=dst_requires_grad,
+            assertfun=self.assertTrue,
+            selfun=lambda x: x[indices],
+        )
+
+    @parameterized.expand(
+        [
+            [True, True, True],
+            [True, True, False],
+            [True, False, True],
+            [True, False, False],
+            [False, True, True],
+            [False, True, False],
+            [False, False, True],
+            [False, False, False],
+        ]
+    )
+    def def_test_int_tensor_index(self, src_acc_m2d_grads, dst_acc_m2d_grads, track_max_2d_radii):
+        # Create indices that select half the Gaussians
+        half_indices = torch.arange(self.gs3d.num_gaussians // 2, device=self.device, dtype=torch.long)
+        self._run_test(
+            indices=half_indices,
+            src_requires_grad=src_acc_m2d_grads,
+            dst_requires_grad=dst_acc_m2d_grads,
+            track_max_2d_radii=track_max_2d_radii,
+        )
+
+        # Create indices that select every other Gaussian
+        every_other_indices = torch.arange(0, self.gs3d.num_gaussians, 2, device=self.device, dtype=torch.long)
+        self._run_test(
+            indices=every_other_indices,
+            src_requires_grad=src_acc_m2d_grads,
+            dst_requires_grad=dst_acc_m2d_grads,
+            track_max_2d_radii=track_max_2d_radii,
+        )
+
+    @parameterized.expand(
+        [
+            [True, True, True],
+            [True, True, False],
+            [True, False, True],
+            [True, False, False],
+            [False, True, True],
+            [False, True, False],
+            [False, False, True],
+            [False, False, False],
+        ]
+    )
+    def test_mask_set(self, src_acc_m2d_grads, dst_acc_m2d_grads, track_max_2d_radii):
+        mask = torch.zeros(self.gs3d.num_gaussians, dtype=torch.bool, device=self.device)
+        mask[: len(mask) // 2] = True  # Select first half of the Gaussians
+        self._run_test(
+            indices=mask,
+            src_requires_grad=src_acc_m2d_grads,
+            dst_requires_grad=dst_acc_m2d_grads,
+            track_max_2d_radii=track_max_2d_radii,
+        )
+
+        mask = torch.zeros(self.gs3d.num_gaussians, dtype=torch.bool, device=self.device)
+        mask[::2] = True  # Select every other Gaussian
+        self._run_test(
+            indices=mask,
+            src_requires_grad=src_acc_m2d_grads,
+            dst_requires_grad=dst_acc_m2d_grads,
+            track_max_2d_radii=track_max_2d_radii,
+        )
+
+    @parameterized.expand(
+        [
+            [True, True, True],
+            [True, True, False],
+            [True, False, True],
+            [True, False, False],
+            [False, True, True],
+            [False, True, False],
+            [False, False, True],
+            [False, False, False],
+        ]
+    )
+    def test_slice_set(self, src_acc_m2d_grads, dst_acc_m2d_grads, track_max_2d_radii):
+        # Create indices that select half the Gaussians
+        gt_idx = torch.arange(self.gs3d.num_gaussians // 2, device=self.device, dtype=torch.long)
+
+        def assignfun(src, dst, _):
+            dst[: self.gs3d.num_gaussians // 2] = src
+
+        self._run_test(
+            indices=gt_idx,
+            src_requires_grad=src_acc_m2d_grads,
+            dst_requires_grad=dst_acc_m2d_grads,
+            track_max_2d_radii=track_max_2d_radii,
+            slicefun=assignfun,  # Use slice assignment
+        )
+
+        # Create indices that select every other Gaussian
+        gt_idx = torch.arange(0, self.gs3d.num_gaussians // 2, 2, device=self.device, dtype=torch.long)
+
+        def assignfun2(src, dst, _):
+            dst[: self.gs3d.num_gaussians // 2 : 2] = src
+
+        self._run_test(
+            indices=gt_idx,
+            src_requires_grad=src_acc_m2d_grads,
+            dst_requires_grad=dst_acc_m2d_grads,
+            track_max_2d_radii=track_max_2d_radii,
+            slicefun=assignfun2,  # Use slice assignment
+        )
+
+        # Create indices that select every other Gaussian from 10 up to half
+        gt_idx = torch.arange(10, self.gs3d.num_gaussians // 2, 2, device=self.device, dtype=torch.long)
+
+        def assignfun3(src, dst, _):
+            dst[10 : self.gs3d.num_gaussians // 2 : 2] = src
+
+        self._run_test(
+            indices=gt_idx,
+            src_requires_grad=src_acc_m2d_grads,
+            dst_requires_grad=dst_acc_m2d_grads,
+            track_max_2d_radii=track_max_2d_radii,
+            slicefun=assignfun3,  # Use slice assignment
+        )
+
+        # Create indices that select every other Gaussian up to -7
+        gt_idx = torch.arange(self.gs3d.num_gaussians, device=self.device, dtype=torch.long)[:-7]
+
+        def assignfun4(src, dst, _):
+            dst[:-7] = src
+
+        self._run_test(
+            indices=gt_idx,
+            src_requires_grad=src_acc_m2d_grads,
+            dst_requires_grad=dst_acc_m2d_grads,
+            track_max_2d_radii=track_max_2d_radii,
+            slicefun=assignfun4,  # Use slice assignment
+        )
+
+
+class TestGaussianSplatIndex(BaseGaussianTestCase):
+    def setUp(self):
+        super().setUp()
+
+    def _check(
+        self,
+        indices_or_mask: torch.Tensor,
+        selected: GaussianSplat3d,
+        dst: GaussianSplat3d,
+        accumulate_max_2d_radii: bool,
+        accumulate_mean_2d_gradients: bool,
+    ):
+        num_gs = (
+            int(indices_or_mask.sum().item()) if indices_or_mask.dtype == torch.bool else int(indices_or_mask.numel())
+        )
+        self.assertEqual(selected.num_gaussians, num_gs)
+        self.assertTrue(torch.equal(selected.means, dst.means[indices_or_mask]))
+        self.assertTrue(torch.equal(selected.quats, dst.quats[indices_or_mask]))
+        self.assertTrue(torch.equal(selected.log_scales, dst.log_scales[indices_or_mask]))
+        self.assertTrue(torch.equal(selected.logit_opacities, dst.logit_opacities[indices_or_mask]))
+        self.assertTrue(torch.equal(selected.sh0, dst.sh0[indices_or_mask]))
+        self.assertTrue(torch.equal(selected.shN, dst.shN[indices_or_mask]))
+
+        # Ensure the selected Gaussian Splat is empty
+        self.assertEqual(selected.num_gaussians, num_gs)
+        self.assertTrue(selected.means.shape == (num_gs, 3))
+        self.assertTrue(selected.quats.shape == (num_gs, 4))
+        self.assertTrue(selected.log_scales.shape == (num_gs, 3))
+        self.assertTrue(selected.logit_opacities.shape == (num_gs,))
+        self.assertTrue(selected.sh0.shape == (num_gs, 1, 3))
+        self.assertTrue(selected.shN.shape == (num_gs, dst.shN.shape[1], 3))
+
+        if accumulate_mean_2d_gradients:
+            # Ensure the gradients and accumulated gradient state match at every other Gaussian
+            self.assertTrue(
+                torch.equal(
+                    selected.accumulated_gradient_step_counts,
+                    dst.accumulated_gradient_step_counts[indices_or_mask],
+                )
+            )
+            self.assertTrue(
+                torch.equal(
+                    selected.accumulated_mean_2d_gradient_norms,
+                    dst.accumulated_mean_2d_gradient_norms[indices_or_mask],
+                )
+            )
+        if accumulate_max_2d_radii:
+            self.assertTrue(
+                torch.equal(
+                    selected.accumulated_max_2d_radii,
+                    dst.accumulated_max_2d_radii[indices_or_mask],
+                )
+            )
+
+    def _make_gs3d(
+        self, accumulate_mean_2d_gradients: bool, accumulate_max_2d_radii: bool, empty_shN: bool
+    ) -> GaussianSplat3d:
+        # Create a GaussianSplat3d instance with gradients that matches self.gs3d
+        shN = torch.empty((self.gs3d.num_gaussians, 0, 3), device=self.device) if empty_shN else self.gs3d.shN
+        gs3d = GaussianSplat3d(
+            means=self.gs3d.means,
+            quats=self.gs3d.quats,
+            log_scales=self.gs3d.log_scales,
+            logit_opacities=self.gs3d.logit_opacities,
+            sh0=self.gs3d.sh0,
+            shN=shN,
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+            accumulate_max_2d_radii=accumulate_max_2d_radii,
+        )
+        gs3d.requires_grad = False
+        if accumulate_mean_2d_gradients or accumulate_max_2d_radii:
+            gs3d.requires_grad = True
+            # Render images and compute a loss so we get gradients
+            rgb, alpha = gs3d.render_images(
+                self.cam_to_world_mats,
+                self.projection_mats,
+                self.width,
+                self.height,
+                self.near_plane,
+                self.far_plane,
+            )
+            loss = rgb.sum()
+            loss.backward()
+
+            # Check that we tracked accumulated gradient state properly
+            if accumulate_mean_2d_gradients:
+                self.assertTrue(gs3d.accumulated_gradient_step_counts.shape == (gs3d.num_gaussians,))
+                self.assertTrue(gs3d.accumulated_mean_2d_gradient_norms.shape == (gs3d.num_gaussians,))
+            if accumulate_max_2d_radii:
+                self.assertTrue(gs3d.accumulated_max_2d_radii.shape == (gs3d.num_gaussians,))
+        return gs3d
+
+    @parameterized.expand(
+        [
+            [True, True, True],
+            [True, True, False],
+            [True, False, True],
+            [True, False, False],
+            [False, True, True],
+            [False, True, False],
+            [False, False, True],
+            [False, False, False],
+        ]
+    )
+    def test_gaussian_mask_selection(self, accumulate_mean_2d_gradients, track_max_2d_radii, empty_shN):
+
+        # Create a mask that selects every other Gaussian and use it to select from the Gaussian Splat
+        gs3d = self._make_gs3d(
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            empty_shN=empty_shN,
+        )
+        every_other_mask = torch.zeros(gs3d.num_gaussians, dtype=torch.bool, device=self.device)
+        every_other_mask[::2] = True
+        gs3d_every_other = gs3d[every_other_mask]
+
+        self._check(
+            indices_or_mask=every_other_mask,
+            selected=gs3d_every_other,
+            dst=gs3d,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+        )
+
+        # Create a mask that selects half
+        gs3d = self._make_gs3d(
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            empty_shN=empty_shN,
+        )
+        half_mask = torch.zeros(gs3d.num_gaussians, dtype=torch.bool, device=self.device)
+        half_mask[: gs3d.num_gaussians // 2] = True
+        gs3d_half = gs3d[half_mask]
+
+        self._check(
+            indices_or_mask=half_mask,
+            selected=gs3d_half,
+            dst=gs3d,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+        )
+
+        # Create a mask that selects none
+        gs3d = self._make_gs3d(
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            empty_shN=empty_shN,
+        )
+        empty_mask = torch.zeros(gs3d.num_gaussians, dtype=torch.bool, device=self.device)
+        gs3d_empty = gs3d[empty_mask]
+
+        self._check(
+            indices_or_mask=empty_mask,
+            selected=gs3d_empty,
+            dst=gs3d,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+        )
+
+    @parameterized.expand(
+        [
+            [True, True, True],
+            [True, True, False],
+            [True, False, True],
+            [True, False, False],
+            [False, True, True],
+            [False, True, False],
+            [False, False, True],
+            [False, False, False],
+        ]
+    )
+    def test_gaussian_index_selection(self, accumulate_mean_2d_gradients, track_max_2d_radii, empty_shN):
+
+        # Create indices that select every other Gaussian and use it to select from the Gaussian Splat
+        gs3d = self._make_gs3d(
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            empty_shN=empty_shN,
+        )
+        every_other_idx = torch.arange(0, gs3d.num_gaussians, 2, device=self.device, dtype=torch.long)
+        gs3d_every_other = gs3d[every_other_idx]
+
+        self._check(
+            indices_or_mask=every_other_idx,
+            selected=gs3d_every_other,
+            dst=gs3d,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+        )
+
+        # Create indices that select half
+        gs3d = self._make_gs3d(
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            empty_shN=empty_shN,
+        )
+        half_idx = torch.arange(gs3d.num_gaussians, device=self.device, dtype=torch.long)[: gs3d.num_gaussians // 2]
+        gs3d_half = gs3d[half_idx]
+
+        self._check(
+            indices_or_mask=half_idx,
+            selected=gs3d_half,
+            dst=gs3d,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+        )
+
+        # Create indices that permutes
+        gs3d = self._make_gs3d(
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            empty_shN=empty_shN,
+        )
+        pmt_idx = torch.randperm(gs3d.num_gaussians, device=self.device)
+        gs3d_pmt = gs3d[pmt_idx]
+
+        self._check(
+            indices_or_mask=pmt_idx,
+            selected=gs3d_pmt,
+            dst=gs3d,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+        )
+
+        # Create indices that duplicate the first half of the Gaussians three times
+        gs3d = self._make_gs3d(
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            empty_shN=empty_shN,
+        )
+        half_idx = torch.arange(gs3d.num_gaussians, device=self.device, dtype=torch.long)[: gs3d.num_gaussians // 2]
+        dup_idx = torch.cat([half_idx, half_idx, half_idx], dim=0)
+        gs3d_dup = gs3d[dup_idx]
+
+        self._check(
+            indices_or_mask=dup_idx,
+            selected=gs3d_dup,
+            dst=gs3d,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+        )
+
+    @parameterized.expand(
+        [
+            [True, True, True],
+            [True, True, False],
+            [True, False, True],
+            [True, False, False],
+            [False, True, True],
+            [False, True, False],
+            [False, False, True],
+            [False, False, False],
+        ]
+    )
+    def test_gaussian_slice_selection(self, accumulate_mean_2d_gradients, track_max_2d_radii, empty_shN):
+
+        def check_is_view(selected, gtidx):
+            if not accumulate_mean_2d_gradients and not track_max_2d_radii:
+                selected.means += 10.0
+                self._check(
+                    indices_or_mask=gtidx,
+                    selected=selected,
+                    dst=gs3d,
+                    accumulate_max_2d_radii=track_max_2d_radii,
+                    accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+                )
+
+        # Create indices that select every other Gaussian and use it to select from the Gaussian Splat
+        gs3d = self._make_gs3d(
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            empty_shN=empty_shN,
+        )
+        gt_idx = torch.arange(0, gs3d.num_gaussians, 2, device=self.device, dtype=torch.long)
+        gs_sel = gs3d[::2]
+
+        self._check(
+            indices_or_mask=gt_idx,
+            selected=gs_sel,
+            dst=gs3d,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+        )
+        check_is_view(gs_sel, gt_idx)
+
+        # Create indices that select every other Gaussian up to half and use it to select from the Gaussian Splat
+        gs3d = self._make_gs3d(
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            empty_shN=empty_shN,
+        )
+        gt_idx = torch.arange(0, gs3d.num_gaussians // 2, 2, device=self.device, dtype=torch.long)
+        gs_sel = gs3d[: gs3d.num_gaussians // 2 : 2]
+
+        self._check(
+            indices_or_mask=gt_idx,
+            selected=gs_sel,
+            dst=gs3d,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+        )
+        check_is_view(gs_sel, gt_idx)
+
+        # Create indices that select every other Gaussian from 10 up to half and use it to select from the Gaussian Splat
+        gs3d = self._make_gs3d(
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            empty_shN=empty_shN,
+        )
+        gt_idx = torch.arange(10, gs3d.num_gaussians // 2, 2, device=self.device, dtype=torch.long)
+        gs_sel = gs3d[10 : gs3d.num_gaussians // 2 : 2]
+
+        self._check(
+            indices_or_mask=gt_idx,
+            selected=gs_sel,
+            dst=gs3d,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+        )
+        check_is_view(gs_sel, gt_idx)
+
+        # Create indices that select every other Gaussian up to -7 and use it to select from the Gaussian Splat
+        gs3d = self._make_gs3d(
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            empty_shN=empty_shN,
+        )
+        gt_idx = torch.arange(gs3d.num_gaussians, device=self.device, dtype=torch.long)[:-7]
+        gs_sel = gs3d[:-7]
+
+        self._check(
+            indices_or_mask=gt_idx,
+            selected=gs_sel,
+            dst=gs3d,
+            accumulate_max_2d_radii=track_max_2d_radii,
+            accumulate_mean_2d_gradients=accumulate_mean_2d_gradients,
+        )
+        check_is_view(gs_sel, gt_idx)
+
+
+class TestGaussianRender(BaseGaussianTestCase):
+
+    def setUp(self):
+        super().setUp()
+
+    def test_gaussian_projection(self):
         proj_res = self.gs3d.project_gaussians_for_images_and_depths(
             self.cam_to_world_mats,
             self.projection_mats,
@@ -142,25 +791,14 @@ class TestGaussianRender(unittest.TestCase):
         )
         return (canvas * 255).astype(np.uint8)
 
-    def _create_gs3d_without_first_gaussian(self, gs3d):
-        """Helper to create a new GS3D instance with the first gaussian removed."""
-        return GaussianSplat3d(
-            means=gs3d.means[1:],
-            quats=gs3d.quats[1:],
-            log_scales=gs3d.log_scales[1:],
-            logit_opacities=gs3d.logit_opacities[1:],
-            sh0=gs3d.sh0[1:, :, :],
-            shN=gs3d.shN[1:, :, :],
-            requires_grad=True,
-        )
-
     def test_save_ply_handles_nan(self):
         tf = tempfile.NamedTemporaryFile(delete=True, suffix=".ply")
 
         self.nan_gs3d.save_ply(tf.name)
 
         # Remove the first element from all tensors to compare with expected loaded ply
-        gs3d_without_nan = self._create_gs3d_without_first_gaussian(self.nan_gs3d)
+        # since we set it to NaN
+        gs3d_without_nan = self.nan_gs3d[1:]
 
         loaded = pcu.load_triangle_mesh(tf.name)
         attribs = loaded.vertex_data.custom_attributes
@@ -325,43 +963,10 @@ class TestGaussianRender(unittest.TestCase):
         )
 
 
-class TestTopGaussianContributionsRender(unittest.TestCase):
-    data_path = get_fvdb_test_data_path() / "gsplat"
-    save_image_data = False
-    # NB: The files for regression data are saved at pwd to prevent accidental overwrites
-    save_regression_data = False
+class TestTopGaussianContributionsRender(BaseGaussianTestCase):
 
     def setUp(self):
-        self.device = "cuda:0"
-
-        data_path = self.data_path / "test_garden_cropped.npz"
-
-        data = np.load(data_path)
-        means = torch.from_numpy(data["means3d"]).float().to(self.device)
-        quats = torch.from_numpy(data["quats"]).float().to(self.device)
-        scales = torch.from_numpy(data["scales"]).float().to(self.device)
-        opacities = torch.from_numpy(data["opacities"]).float().to(self.device)
-        colors = torch.from_numpy(data["colors"]).float().to(self.device)
-        self.cam_to_world_mats = torch.from_numpy(data["viewmats"]).float().to(self.device)
-        self.projection_mats = torch.from_numpy(data["Ks"]).float().to(self.device)
-        self.width = data["width"].item()
-        self.height = data["height"].item()
-
-        self.sh_degree = 3
-        sh_coeffs = torch.zeros((means.shape[0], (self.sh_degree + 1) ** 2, 3), device=self.device)
-        sh_coeffs[:, 0, :] = rgb_to_sh(colors)
-        sh_0 = sh_coeffs[:, 0, :].unsqueeze(1).clone()
-        sh_n = sh_coeffs[:, 1:, :].clone()
-
-        self.gs3d = GaussianSplat3d(
-            means=means,
-            quats=quats,
-            log_scales=torch.log(scales),
-            logit_opacities=torch.logit(opacities),
-            sh0=sh_0,
-            shN=sh_n,
-            requires_grad=True,
-        )
+        super().setUp()
 
     def test_gaussians_center_render(self):
         h = 1024

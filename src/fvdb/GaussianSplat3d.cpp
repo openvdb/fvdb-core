@@ -6,6 +6,10 @@
 #include <fvdb/detail/ops/Ops.h>
 #include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
 
+#include <ATen/core/TensorBody.h>
+#include <ATen/core/grad_mode.h>
+#include <torch/csrc/autograd/generated/variable_factories.h>
+
 #define TINYPLY_IMPLEMENTATION
 #include <tinyply.h>
 
@@ -96,24 +100,26 @@ GaussianSplat3d::GaussianSplat3d(const torch::Tensor &means,
                                  const torch::Tensor &logitOpacities,
                                  const torch::Tensor &sh0,
                                  const torch::Tensor &shN,
-                                 const bool requiresGrad)
-    : mMeans(means.contiguous()), mQuats(quats.contiguous()), mLogScales(logScales.contiguous()),
-      mLogitOpacities(logitOpacities.contiguous()), mSh0(sh0.contiguous()), mShN(shN),
-      mRequiresGrad(requiresGrad) {
+                                 const bool accumulateMeans2dGradients,
+                                 const bool accumulateMax2dRadii,
+                                 const bool copyAndDetach)
+    : mMeans(means), mQuats(quats), mLogScales(logScales), mLogitOpacities(logitOpacities),
+      mSh0(sh0), mShN(shN), mAccumulateMean2dGradients(accumulateMeans2dGradients),
+      mAccumulateMax2dRadii(accumulateMax2dRadii) {
     const int64_t N = means.size(0); // number of gaussians
     if (mSh0.dim() == 2) {
         TORCH_CHECK(mSh0.size(0) == N, "sh0 must have shape (1, N, D) or (N, D)");
         mSh0 = mSh0.unsqueeze(0);
     }
-
+    if (copyAndDetach) {
+        mMeans          = means.detach();
+        mQuats          = quats.detach();
+        mLogScales      = logScales.detach();
+        mLogitOpacities = logitOpacities.detach();
+        mSh0            = sh0.detach();
+        mShN            = shN.detach();
+    }
     checkState(mMeans, mQuats, mLogScales, mLogitOpacities, mSh0, mShN);
-
-    mMeans.requires_grad_(requiresGrad);
-    mQuats.requires_grad_(requiresGrad);
-    mLogScales.requires_grad_(requiresGrad);
-    mLogitOpacities.requires_grad_(requiresGrad);
-    mSh0.requires_grad_(requiresGrad);
-    mShN.requires_grad_(requiresGrad);
 }
 
 void
@@ -122,26 +128,16 @@ GaussianSplat3d::setState(const torch::Tensor &means,
                           const torch::Tensor &logScales,
                           const torch::Tensor &logitOpacities,
                           const torch::Tensor &sh0,
-                          const torch::Tensor &shN,
-                          const bool requiresGrad) {
+                          const torch::Tensor &shN) {
     checkState(means, quats, logScales, logitOpacities, sh0, shN);
-    if (mRequiresGrad) {
-        resetGradState();
-    }
+    resetAccumulatedGradientState();
+
     mMeans          = means;
     mQuats          = quats;
     mLogScales      = logScales;
     mLogitOpacities = logitOpacities;
     mSh0            = sh0;
     mShN            = shN;
-    mRequiresGrad   = requiresGrad;
-
-    mMeans.requires_grad_(requiresGrad);
-    mQuats.requires_grad_(requiresGrad);
-    mLogScales.requires_grad_(requiresGrad);
-    mLogitOpacities.requires_grad_(requiresGrad);
-    mSh0.requires_grad_(requiresGrad);
-    mShN.requires_grad_(requiresGrad);
 }
 
 std::unordered_map<std::string, torch::Tensor>
@@ -153,11 +149,11 @@ GaussianSplat3d::stateDict() const {
                                                               {"sh0", mSh0},
                                                               {"shN", mShN}};
 
-    const auto boolOpts  = torch::TensorOptions().dtype(torch::kBool);
-    ret["requires_grad"] = mRequiresGrad ? torch::ones({}, boolOpts) : torch::zeros({}, boolOpts);
-    ret["track_max_2d_radii_for_grad"] =
-        mTrackMax2dRadiiForGrad ? torch::ones({}, boolOpts) : torch::zeros({}, boolOpts);
-    ret["track_max_2d_radii_for_grad"] = torch::zeros({}, boolOpts);
+    const auto boolOpts = torch::TensorOptions().dtype(torch::kBool);
+    ret["accumulate_means_2d_gradients"] =
+        mAccumulateMean2dGradients ? torch::ones({}, boolOpts) : torch::zeros({}, boolOpts);
+    ret["accumulate_max_2d_radii"] =
+        mAccumulateMax2dRadii ? torch::ones({}, boolOpts) : torch::zeros({}, boolOpts);
 
     if (mAccumulatedNormalized2dMeansGradientNormsForGrad.numel() != 0) {
         ret["accumulated_mean_2d_gradient_norms_for_grad"] =
@@ -182,11 +178,11 @@ GaussianSplat3d::loadStateDict(const std::unordered_map<std::string, torch::Tens
     TORCH_CHECK_VALUE(stateDict.count("sh0") == 1, "Missing key 'sh0' in state dict");
     TORCH_CHECK_VALUE(stateDict.count("shN") == 1, "Missing key 'shN' in state dict");
 
-    TORCH_CHECK_VALUE(stateDict.count("requires_grad") == 1,
-                      "Missing key 'requires_grad' in state dict");
+    TORCH_CHECK_VALUE(stateDict.count("accumulate_means_2d_gradients") == 1,
+                      "Missing key 'accumulate_means_2d_gradients' in state dict");
 
-    TORCH_CHECK_VALUE(stateDict.count("track_max_2d_radii_for_grad") == 1,
-                      "Missing key 'track_max_2d_radii_for_grad' in state dict");
+    TORCH_CHECK_VALUE(stateDict.count("accumulate_max_2d_radii") == 1,
+                      "Missing key 'accumulate_max_2d_radii' in state dict");
 
     const torch::Tensor means          = stateDict.at("means");
     const torch::Tensor quats          = stateDict.at("quats");
@@ -199,8 +195,9 @@ GaussianSplat3d::loadStateDict(const std::unordered_map<std::string, torch::Tens
 
     checkState(means, quats, logScales, logitOpacities, sh0, shN);
 
-    const bool requiresGrad           = stateDict.at("requires_grad").item().toBool();
-    const bool trackMax2dRadiiForGrad = stateDict.at("track_max_2d_radii_for_grad").item().toBool();
+    const bool accumulateMeans2dGrad =
+        stateDict.at("accumulate_means_2d_gradients").item().toBool();
+    const bool accumulateMax2dRadii = stateDict.at("accumulate_max_2d_radii").item().toBool();
     torch::Tensor accumulatedNormalized2dMeansGradientNormsForGrad;
     torch::Tensor accumulated2dRadiiForGrad;
     torch::Tensor gradientStepCountForGrad;
@@ -244,9 +241,6 @@ GaussianSplat3d::loadStateDict(const std::unordered_map<std::string, torch::Tens
 
     if (stateDict.count("accumulated_max_2d_radii_for_grad") > 0) {
         accumulated2dRadiiForGrad = stateDict.at("accumulated_max_2d_radii_for_grad");
-        TORCH_CHECK_VALUE(trackMax2dRadiiForGrad,
-                          "accumulated_max_2d_radii_for_grad must be non-empty only if "
-                          "track_max_2d_radii_for_grad is true");
         TORCH_CHECK_VALUE(accumulated2dRadiiForGrad.numel() == N,
                           "accumulated_max_2d_radii_for_grad must have shape (N)");
         TORCH_CHECK_VALUE(accumulated2dRadiiForGrad.device() == means.device(),
@@ -265,19 +259,12 @@ GaussianSplat3d::loadStateDict(const std::unordered_map<std::string, torch::Tens
     mSh0            = sh0;
     mShN            = shN;
 
-    mRequiresGrad           = requiresGrad;
-    mTrackMax2dRadiiForGrad = trackMax2dRadiiForGrad;
+    mAccumulateMean2dGradients = accumulateMeans2dGrad;
+    mAccumulateMax2dRadii      = accumulateMax2dRadii;
     mAccumulatedNormalized2dMeansGradientNormsForGrad =
         accumulatedNormalized2dMeansGradientNormsForGrad;
     mAccumulated2dRadiiForGrad = accumulated2dRadiiForGrad;
     mGradientStepCountForGrad  = gradientStepCountForGrad;
-
-    mMeans.requires_grad_(requiresGrad);
-    mQuats.requires_grad_(requiresGrad);
-    mLogScales.requires_grad_(requiresGrad);
-    mLogitOpacities.requires_grad_(requiresGrad);
-    mSh0.requires_grad_(requiresGrad);
-    mShN.requires_grad_(requiresGrad);
 }
 
 GaussianSplat3d::ProjectedGaussianSplats
@@ -302,13 +289,9 @@ GaussianSplat3d::projectGaussiansImpl(const torch::Tensor &worldToCameraMatrices
     std::optional<torch::Tensor> maybeNormalizedMeans2dGradientNorms = std::nullopt;
     std::optional<torch::Tensor> maybePerGaussianRadiiForGrad        = std::nullopt;
     std::optional<torch::Tensor> maybeGradientStepCount              = std::nullopt;
-    if (mRequiresGrad) {
+    if (mAccumulateMean2dGradients) {
         if (mAccumulatedNormalized2dMeansGradientNormsForGrad.numel() != N) {
             mAccumulatedNormalized2dMeansGradientNormsForGrad = torch::zeros({N}, mMeans.options());
-        }
-        if (mAccumulated2dRadiiForGrad.numel() != N && mTrackMax2dRadiiForGrad) {
-            mAccumulated2dRadiiForGrad = torch::zeros(
-                {N}, torch::TensorOptions().dtype(torch::kInt32).device(mMeans.device()));
         }
         if (mGradientStepCountForGrad.numel() != N) {
             mGradientStepCountForGrad = torch::zeros(
@@ -316,9 +299,13 @@ GaussianSplat3d::projectGaussiansImpl(const torch::Tensor &worldToCameraMatrices
         }
         maybeNormalizedMeans2dGradientNorms = mAccumulatedNormalized2dMeansGradientNormsForGrad;
         maybeGradientStepCount              = mGradientStepCountForGrad;
-        if (mTrackMax2dRadiiForGrad) {
-            maybePerGaussianRadiiForGrad = mAccumulated2dRadiiForGrad;
+    }
+    if (mAccumulateMax2dRadii) {
+        if (mAccumulated2dRadiiForGrad.numel() != N && mAccumulateMax2dRadii) {
+            mAccumulated2dRadiiForGrad = torch::zeros(
+                {N}, torch::TensorOptions().dtype(torch::kInt32).device(mMeans.device()));
         }
+        maybePerGaussianRadiiForGrad = mAccumulated2dRadiiForGrad;
     }
 
     // Project to image plane
@@ -943,6 +930,209 @@ GaussianSplat3d::renderImagesAndDepths(const torch::Tensor &worldToCameraMatrice
     settings.renderMode     = RenderSettings::RenderMode::RGBD;
 
     return renderImpl(worldToCameraMatrices, projectionMatrices, settings);
+}
+
+GaussianSplat3d
+GaussianSplat3d::tensorIndexGetImpl(const torch::Tensor &indices) const {
+    auto ret = GaussianSplat3d(mMeans.index({indices}),
+                               mQuats.index({indices}),
+                               mLogScales.index({indices}),
+                               mLogitOpacities.index({indices}),
+                               mSh0.index({indices}),
+                               mShN.index({indices}),
+                               mAccumulateMean2dGradients,
+                               mAccumulateMax2dRadii,
+                               false);
+
+    if (mAccumulated2dRadiiForGrad.numel() > 0) {
+        ret.mAccumulated2dRadiiForGrad = mAccumulated2dRadiiForGrad.index({indices});
+    }
+
+    if (mGradientStepCountForGrad.numel() > 0) {
+        ret.mGradientStepCountForGrad = mGradientStepCountForGrad.index({indices});
+    }
+
+    if (mAccumulatedNormalized2dMeansGradientNormsForGrad.numel() > 0) {
+        ret.mAccumulatedNormalized2dMeansGradientNormsForGrad =
+            mAccumulatedNormalized2dMeansGradientNormsForGrad.index({indices});
+    }
+
+    return ret;
+}
+GaussianSplat3d
+GaussianSplat3d::sliceSelect(const int64_t begin, const int64_t stop, const int64_t step) const {
+    auto slice = torch::indexing::Slice(begin, stop, step);
+
+    auto ret = GaussianSplat3d(mMeans.index({slice}),
+                               mQuats.index({slice}),
+                               mLogScales.index({slice}),
+                               mLogitOpacities.index({slice}),
+                               mSh0.index({slice}),
+                               mShN.index({slice}),
+                               mAccumulateMean2dGradients,
+                               mAccumulateMax2dRadii,
+                               false);
+
+    if (mAccumulated2dRadiiForGrad.numel() > 0) {
+        ret.mAccumulated2dRadiiForGrad = mAccumulated2dRadiiForGrad.index({slice});
+    }
+
+    if (mGradientStepCountForGrad.numel() > 0) {
+        ret.mGradientStepCountForGrad = mGradientStepCountForGrad.index({slice});
+    }
+
+    if (mAccumulatedNormalized2dMeansGradientNormsForGrad.numel() > 0) {
+        ret.mAccumulatedNormalized2dMeansGradientNormsForGrad =
+            mAccumulatedNormalized2dMeansGradientNormsForGrad.index({slice});
+    }
+
+    return ret;
+}
+
+GaussianSplat3d
+GaussianSplat3d::indexSelect(const torch::Tensor &indices) const {
+    TORCH_CHECK_VALUE(indices.dim() == 1, "indices must be a 1D tensor");
+    TORCH_CHECK_VALUE(indices.dtype() == torch::kInt64 || indices.dtype() == torch::kInt32,
+                      "indices must be of type int64 or int32");
+    TORCH_CHECK_VALUE(indices.device() == indices.device(),
+                      "indices must be on the same device as the GaussianSplat3d object");
+
+    return tensorIndexGetImpl(indices);
+}
+
+GaussianSplat3d
+GaussianSplat3d::maskSelect(const torch::Tensor &mask) const {
+    TORCH_CHECK_VALUE(mask.dim() == 1, "mask must be a 1D tensor");
+    TORCH_CHECK_VALUE(mask.dtype() == torch::kBool, "mask must be of type bool");
+    TORCH_CHECK_VALUE(mask.device() == mMeans.device(),
+                      "mask must be on the same device as the GaussianSplat3d object");
+    TORCH_CHECK_VALUE(mask.size(0) == mMeans.size(0),
+                      "mask must have the same size as the number of gaussians");
+
+    return tensorIndexGetImpl(mask);
+}
+
+void
+GaussianSplat3d::tensorIndexSetImpl(const torch::Tensor &indices, const GaussianSplat3d &other) {
+    mMeans          = mMeans.index_put({indices}, other.mMeans);
+    mQuats          = mQuats.index_put({indices}, other.mQuats);
+    mLogScales      = mLogScales.index_put({indices}, other.mLogScales);
+    mLogitOpacities = mLogitOpacities.index_put({indices}, other.mLogitOpacities);
+    mSh0            = mSh0.index_put({indices}, other.mSh0);
+    mShN            = mShN.index_put({indices}, other.mShN);
+
+    if (mAccumulated2dRadiiForGrad.numel() > 0) {
+        if (other.mAccumulated2dRadiiForGrad.numel() > 0) {
+            // If other is also tracking max 2d radii, make sure we copy them over
+            mAccumulated2dRadiiForGrad.index_put_({indices}, other.mAccumulated2dRadiiForGrad);
+        } else {
+            // If the other does not have accumulated radii, we set it to zero
+            mAccumulated2dRadiiForGrad.index_put_(
+                {indices},
+                torch::zeros(other.numGaussians(), mAccumulated2dRadiiForGrad.options()));
+        }
+    }
+
+    if (mAccumulatedNormalized2dMeansGradientNormsForGrad.numel() > 0) {
+        if (other.mAccumulatedNormalized2dMeansGradientNormsForGrad.numel() > 0) {
+            // If other is also tracking accumulated normalized means gradient norms,
+            // make sure we copy them over
+            mAccumulatedNormalized2dMeansGradientNormsForGrad.index_put_(
+                {indices}, other.mAccumulatedNormalized2dMeansGradientNormsForGrad);
+        } else {
+            // If the other does not have accumulated normalized means gradient norms, we set it to
+            // zero
+            mAccumulatedNormalized2dMeansGradientNormsForGrad.index_put_(
+                {indices},
+                torch::zeros(other.numGaussians(),
+                             mAccumulatedNormalized2dMeansGradientNormsForGrad.options()));
+        }
+    }
+
+    if (mGradientStepCountForGrad.numel() > 0) {
+        if (other.mGradientStepCountForGrad.numel() > 0) {
+            // If other is also tracking gradient step counts, make sure we copy them over
+            mGradientStepCountForGrad.index_put_({indices}, other.mGradientStepCountForGrad);
+        } else {
+            // If the other does not have gradient step counts, we set it to zero
+            mGradientStepCountForGrad.index_put_(
+                {indices}, torch::zeros(other.numGaussians(), mGradientStepCountForGrad.options()));
+        }
+    }
+}
+
+void
+GaussianSplat3d::sliceSet(const int64_t begin,
+                          const int64_t end,
+                          const int64_t step,
+                          const GaussianSplat3d &other) {
+    const auto slice = torch::indexing::Slice(begin, end, step);
+
+    mMeans.index({slice})          = other.mMeans;
+    mQuats.index({slice})          = other.mQuats;
+    mLogScales.index({slice})      = other.mLogScales;
+    mLogitOpacities.index({slice}) = other.mLogitOpacities;
+    mSh0.index({slice})            = other.mSh0;
+    mShN.index({slice})            = other.mShN;
+
+    if (mAccumulated2dRadiiForGrad.numel() > 0) {
+        if (other.mAccumulated2dRadiiForGrad.numel() > 0) {
+            // If other is also tracking max 2d radii, make sure we copy them over
+            mAccumulated2dRadiiForGrad.index({slice}) = other.mAccumulated2dRadiiForGrad;
+        } else {
+            // If the other does not have accumulated radii, we set it to zero
+            mAccumulated2dRadiiForGrad.index({slice}) =
+                torch::zeros(other.numGaussians(), mAccumulated2dRadiiForGrad.options());
+        }
+    }
+
+    if (mAccumulatedNormalized2dMeansGradientNormsForGrad.numel() > 0) {
+        if (other.mAccumulatedNormalized2dMeansGradientNormsForGrad.numel() > 0) {
+            // If other is also tracking accumulated normalized means gradient norms,
+            // make sure we copy them over
+            mAccumulatedNormalized2dMeansGradientNormsForGrad.index({slice}) =
+                other.mAccumulatedNormalized2dMeansGradientNormsForGrad;
+        } else {
+            // If the other does not have accumulated normalized means gradient norms, we set it to
+            // zero
+            mAccumulatedNormalized2dMeansGradientNormsForGrad.index({slice}) = torch::zeros(
+                other.numGaussians(), mAccumulatedNormalized2dMeansGradientNormsForGrad.options());
+        }
+    }
+
+    if (mGradientStepCountForGrad.numel() > 0) {
+        if (other.mGradientStepCountForGrad.numel() > 0) {
+            // If other is also tracking gradient step counts, make sure we copy them over
+            mGradientStepCountForGrad.index({slice}) = other.mGradientStepCountForGrad;
+        } else {
+            // If the other does not have gradient step counts, we set it to zero
+            mGradientStepCountForGrad.index({slice}) =
+                torch::zeros(other.numGaussians(), mGradientStepCountForGrad.options());
+        }
+    }
+}
+
+void
+GaussianSplat3d::indexSet(const torch::Tensor &indices, const GaussianSplat3d &other) {
+    TORCH_CHECK_VALUE(indices.dim() == 1, "indices must be a 1D tensor");
+    TORCH_CHECK_VALUE(indices.dtype() == torch::kInt64 || indices.dtype() == torch::kInt32,
+                      "indices must be of type int64 or int32");
+    TORCH_CHECK_VALUE(indices.device() == indices.device(),
+                      "indices must be on the same device as the GaussianSplat3d object");
+
+    tensorIndexSetImpl(indices, other);
+}
+
+void
+GaussianSplat3d::maskSet(const torch::Tensor &mask, const GaussianSplat3d &other) {
+    TORCH_CHECK_VALUE(mask.dim() == 1, "mask must be a 1D tensor");
+    TORCH_CHECK_VALUE(mask.dtype() == torch::kBool, "mask must be of type bool");
+    TORCH_CHECK_VALUE(mask.device() == mMeans.device(),
+                      "mask must be on the same device as the GaussianSplat3d object");
+    TORCH_CHECK_VALUE(mask.size(0) == mMeans.size(0),
+                      "mask must have the same size as the number of gaussians");
+
+    tensorIndexSetImpl(mask, other);
 }
 
 // TODO: Make a batched class
