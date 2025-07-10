@@ -93,6 +93,8 @@ bind_gaussian_splat3d(py::module &m) {
                       torch::Tensor,
                       torch::Tensor,
                       torch::Tensor,
+                      bool,
+                      bool,
                       bool>(),
              py::arg("means"),
              py::arg("quats"),
@@ -100,7 +102,10 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("logit_opacities"),
              py::arg("sh0"),
              py::arg("shN"),
-             py::arg("requires_grad") = false)
+             py::arg("accumulate_mean_2d_gradients"),
+             py::arg("accumulate_max_2d_radii"),
+             py::arg("detach"))
+        .def_property_readonly("sh_degree", &fvdb::GaussianSplat3d::shDegree)
         .def_property("means", &fvdb::GaussianSplat3d::means, &fvdb::GaussianSplat3d::setMeans)
         .def_property("quats", &fvdb::GaussianSplat3d::quats, &fvdb::GaussianSplat3d::setQuats)
         .def_property_readonly("scales", &fvdb::GaussianSplat3d::scales)
@@ -116,14 +121,17 @@ bind_gaussian_splat3d(py::module &m) {
         .def_property_readonly("num_sh_bases", &fvdb::GaussianSplat3d::numShBases)
         .def_property_readonly("num_channels", &fvdb::GaussianSplat3d::numChannels)
         .def_property_readonly("requires_grad", &fvdb::GaussianSplat3d::requiresGrad)
-        .def_property("track_max_2d_radii_for_grad",
-                      &fvdb::GaussianSplat3d::trackMax2dRadiiForGrad,
-                      &fvdb::GaussianSplat3d::setTrackMax2dRadiiForGrad)
-        .def_property_readonly("accumulated_mean_2d_gradient_norms_for_grad",
+        .def_property("accumulate_max_2d_radii",
+                      &fvdb::GaussianSplat3d::accumulateMax2dRadii,
+                      &fvdb::GaussianSplat3d::setAccumulateMax2dRadii)
+        .def_property("accumulate_mean_2d_gradients",
+                      &fvdb::GaussianSplat3d::accumulateMean2dGradients,
+                      &fvdb::GaussianSplat3d::setAccumulateMean2dGradients)
+        .def_property_readonly("accumulated_mean_2d_gradient_norms",
                                &fvdb::GaussianSplat3d::accumulated2dMeansGradientNormsForGrad)
-        .def_property_readonly("accumulated_max_2d_radii_for_grad",
+        .def_property_readonly("accumulated_max_2d_radii",
                                &fvdb::GaussianSplat3d::accumulatedMax2dRadiiForGrad)
-        .def_property_readonly("accumulated_gradient_step_counts_for_grad",
+        .def_property_readonly("accumulated_gradient_step_counts",
                                &fvdb::GaussianSplat3d::gradientStepCountsForGrad)
         .def_static(
             "from_state_dict",
@@ -131,6 +139,8 @@ bind_gaussian_splat3d(py::module &m) {
                 return fvdb::GaussianSplat3d(stateDict);
             },
             py::arg("state_dict"))
+        .def("detach", &fvdb::GaussianSplat3d::detach)
+        .def("detach_in_place", &fvdb::GaussianSplat3d::detachInPlace)
         .def("state_dict", &fvdb::GaussianSplat3d::stateDict)
         .def("load_state_dict", &fvdb::GaussianSplat3d::loadStateDict, py::arg("state_dict"))
         .def_property("requires_grad",
@@ -143,14 +153,14 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("log_scales"),
              py::arg("logit_opacities"),
              py::arg("sh0"),
-             py::arg("shN"),
-             py::arg("requires_grad") = false)
+             py::arg("shN"))
         .def("save_ply", &fvdb::GaussianSplat3d::savePly, py::arg("filename"))
         .def("load_ply",
              &fvdb::GaussianSplat3d::loadPly,
              py::arg("filename"),
              py::arg("device") = torch::kCPU)
-        .def("reset_grad_state", &fvdb::GaussianSplat3d::resetGradState)
+        .def("reset_accumulated_gradient_state",
+             &fvdb::GaussianSplat3d::resetAccumulatedGradientState)
         .def("project_gaussians_for_images",
              &fvdb::GaussianSplat3d::projectGaussiansForImages,
              py::arg("world_to_camera_matrices"),
@@ -274,7 +284,39 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("tile_size")       = 16,
              py::arg("min_radius_2d")   = 0.0,
              py::arg("eps_2d")          = 0.3,
-             py::arg("antialias")       = false);
+             py::arg("antialias")       = false)
+
+        .def("sparse_render_top_contributing_gaussian_ids",
+             &fvdb::GaussianSplat3d::sparseRenderTopContributingGaussianIds,
+             py::arg("num_samples"),
+             py::arg("pixels_to_render"),
+             py::arg("world_to_camera_matrices"),
+             py::arg("projection_matrices"),
+             py::arg("image_width"),
+             py::arg("image_height"),
+             py::arg("near"),
+             py::arg("far"),
+             py::arg("projection_type") = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
+             py::arg("tile_size")       = 16,
+             py::arg("min_radius_2d")   = 0.0,
+             py::arg("eps_2d")          = 0.3,
+             py::arg("antialias")       = false)
+
+        .def("index_select", &fvdb::GaussianSplat3d::indexSelect, py::arg("indices"))
+        .def("mask_select", &fvdb::GaussianSplat3d::maskSelect, py::arg("mask"))
+        .def("slice_select",
+             &fvdb::GaussianSplat3d::sliceSelect,
+             py::arg("begin"),
+             py::arg("end"),
+             py::arg("step"))
+        .def("index_set", &fvdb::GaussianSplat3d::indexSet, py::arg("indices"), py::arg("value"))
+        .def("mask_set", &fvdb::GaussianSplat3d::maskSet, py::arg("mask"), py::arg("value"))
+        .def("slice_set",
+             &fvdb::GaussianSplat3d::sliceSet,
+             py::arg("begin"),
+             py::arg("end"),
+             py::arg("step"),
+             py::arg("value"));
 
     m.def("gaussian_render_jagged",
           &fvdb::gaussianRenderJagged,

@@ -26,7 +26,9 @@ class GaussianSplat3d {
                     const torch::Tensor &logitOpacities,
                     const torch::Tensor &sh0,
                     const torch::Tensor &shN,
-                    const bool requiresGrad = false);
+                    const bool accumulateMean2dGradients,
+                    const bool accumulateMax2dRadii,
+                    const bool detach);
 
     /// @brief Create a GaussianSplat3d object from a state_dict (similar to Pytorch's nn.Module).
     /// @param stateDict A dictionary containing the state of the GaussianSplat3d object.
@@ -201,24 +203,43 @@ class GaussianSplat3d {
         return torch::sigmoid(mLogitOpacities);
     }
 
-    /// @brief Whether to track the maximum 2D radii across backward passes for the projected
-    ///        Gaussians in this scene. This is used during optimization to decide whether to
-    ///        split/delete/duplicate Gaussians.
-    /// @return Whether to track the maximum 2D radii across backward passes for the projected
-    ///         Gaussians in this scene.
-    bool
-    trackMax2dRadiiForGrad() const {
-        return mTrackMax2dRadiiForGrad;
+    int64_t
+    shDegree() const {
+        // The SH degree is determined by the number of SH coefficients in shN.
+        // If shN is empty, we return -1 to indicate that no SH coefficients are used.
+        const auto K        = mShN.size(1) + 1; // number of SH bases
+        const auto shDegree = static_cast<int64_t>(std::sqrt(K) - 1);
+        return shDegree;
     }
 
-    /// @brief Set whether to track the maximum 2D radii across backward passes for the projected
-    ///        Gaussians in this scene. This is used during optimization to decide whether to
-    ///        split/delete/duplicate Gaussians.
-    /// @param track Whether to track the maximum 2D radii across backward passes for the projected
-    ///              Gaussians in this scene.
+    /// @brief Return a copy of this GaussianSplat3d object with the same parameters, but detached
+    ///        from the computation graph.
+    /// @return A new instance of GaussianSplat3d with the same parameters, but detached from the
+    ///         computation graph.
+    GaussianSplat3d
+    detach() const {
+        return GaussianSplat3d(mMeans.detach(),
+                               mQuats.detach(),
+                               mLogScales.detach(),
+                               mLogitOpacities.detach(),
+                               mSh0.detach(),
+                               mShN.detach(),
+                               mAccumulateMean2dGradients,
+                               mAccumulateMax2dRadii,
+                               false);
+    }
+
+    /// @brief Detach the parameters of this GaussianSplat3d object in place.
+    ///        This will detach the parameters from the computation graph, allowing them to be
+    ///        modified without affecting the gradients of the original tensors.
     void
-    setTrackMax2dRadiiForGrad(bool track) {
-        mTrackMax2dRadiiForGrad = track;
+    detachInPlace() {
+        mMeans.detach_();
+        mQuats.detach_();
+        mLogScales.detach_();
+        mLogitOpacities.detach_();
+        mSh0.detach_();
+        mShN.detach_();
     }
 
     /// @brief Set the log of the opacities of the Gaussians in this scene.
@@ -293,23 +314,116 @@ class GaussianSplat3d {
         mShN = shN;
     }
 
-    /// @brief Set whether we should track gradients and accumulated projection statisitics used
-    ///        for splitting/deleting/duplicating Gaussians during optimization
-    ///        (see @ref accumulated2dMeansGradientNormsForGrad, @ref gradientStepCountsForGrad,
-    ///        @ref accumulatedMax2dRadiiForGrad) for the projected Gaussians in this scene.
-    /// @param requiresGrad Whether to track gradients and accumulated projection statisitics used
-    ///                     for splitting/deleting/duplicating Gaussians during optimization.
+    /// @brief Return whether to track the maximum 2D radii of each Gaussian over backward passes
+    ///        of projection.
+    /// @return True if the maximum 2D radii are tracked, false otherwise.
+    /// @note This is used by some optimizers to decide whether to split/delete/duplicate Gaussians.
+    ///       If this is set to true, the maximum 2D radii will be accumulated during the
+    ///       backward pass of projection.
+    bool
+    accumulateMax2dRadii() const {
+        return mAccumulateMax2dRadii;
+    }
+
+    /// @brief Set whether to accumulate the maximum 2D radii of each Gaussian over backward passes
+    ///        of projection.
+    /// @param accumulateMax2dRadii Whether to accumulate the maximum 2D radii of each Gaussian
+    ///                             over backward passes of projection.
+    /// @note This is used by some optimizers to decide whether to split/delete/duplicate Gaussians.
+    ///       If this is set to true, the maximum 2D radii will be accumulated during the
+    ///       backward pass of projection.
+    void
+    setAccumulateMax2dRadii(bool accumulateMax2dRadii) {
+        mAccumulateMax2dRadii = accumulateMax2dRadii;
+    }
+
+    /// @brief Return whether to accumulate the means 2D gradients of each Gaussian over backward
+    ///        passes of projection.
+    /// @return True if the means 2D gradients are accumulated, false otherwise.
+    /// @note This is used by some optimizers to decide whether to split/delete/duplicate Gaussians.
+    ///       If this is set to true, the average norm of the gradient of projected means
+    ///       for each Gaussian will be accumulated during the backward pass of projection.
+    ///       This is useful for some optimization techniques.
+    bool
+    accumulateMean2dGradients() const {
+        return mAccumulateMean2dGradients;
+    }
+
+    /// @brief Set whether to accumulate the means 2D gradients of each Gaussian over backward
+    ///        passes of projection.
+    /// @param accumulateMean2dGradients Whether to accumulate the means 2D gradients
+    ///                                   of each Gaussian over backward passes of projection.
+    /// @note This is used by some optimizers to decide whether to split/delete/duplicate Gaussians.
+    ///       If this is set to true, the average norm of the gradient
+    ///       of projected means for each Gaussian will be accumulated during the backward pass
+    ///       of projection. This is useful for some optimization techniques.
+    void
+    setAccumulateMean2dGradients(bool accumulateMean2dGradients) {
+        mAccumulateMean2dGradients = accumulateMean2dGradients;
+    }
+
+    /// @brief Return true if all tensors tracked by this object require gradients.
+    /// @return True if all tensors tracked by this object require gradients, false otherwise.
+    /// @note This function checks if all tensors are leaf tensors and have requires_grad set to
+    /// true.
+    ///       If any of the tensors are non-leaf tensors, this function will return false.
+    ///       If you want to check if the tensors require gradients individually, you can use
+    ///       the `requires_grad()` method on each tensor directly.
+    /// @note If you want to ensure all tensors are leaf tensors, you can create a
+    ///       new GaussianSplat3d object with the `detach` flag set to `True` when
+    ///       creating the object.
+    bool
+    requiresGrad() const {
+        return mMeans.requires_grad() && mQuats.requires_grad() && mLogScales.requires_grad() &&
+               mLogitOpacities.requires_grad() && mSh0.requires_grad() && mShN.requires_grad();
+    }
+
+    /// @brief Set requires_grad on all tensors managed by this object.
+    /// @param requiresGrad Whether the tensors should require gradients.
+    /// @note This function will throw an error if any of the tensors are non-leaf tensors.
+    ///       If you want to set requires_grad on specific tensors, set them on the tensors directly
+    ///       instead of using this function.
+    /// @note If you want to ensure all tensors are leaf tensors, you can call .detach() or create a
+    ///       new GaussianSplat3d object with the `detach` flag set to `True` when
+    ///       creating the object.
     void
     setRequiresGrad(bool requiresGrad) {
-        if (requiresGrad == mRequiresGrad) {
-            return;
-        }
-        if (requiresGrad == false) {
-            mAccumulatedNormalized2dMeansGradientNormsForGrad = torch::Tensor();
-            mAccumulated2dRadiiForGrad                        = torch::Tensor();
-            mGradientStepCountForGrad                         = torch::Tensor();
-        }
-        mRequiresGrad = requiresGrad;
+        TORCH_CHECK_VALUE(
+            mMeans.is_leaf(),
+            "Cannot set requires_grad of means which is a non-leaf tensor. "
+            "Call .detach() on this object or create a new GaussianSplat3d object with leaf tensors.");
+
+        TORCH_CHECK_VALUE(
+            mQuats.is_leaf(),
+            "Cannot set requires_grad of quats which is a non-leaf tensor. "
+            "Call .detach() on this object or create a new GaussianSplat3d object with leaf tensors.");
+
+        TORCH_CHECK_VALUE(
+            mLogScales.is_leaf(),
+            "Cannot set requires_grad of log_scales which is a non-leaf tensor. "
+            "Call .detach() on this object or create a new GaussianSplat3d object with leaf tensors.");
+
+        TORCH_CHECK_VALUE(
+            mLogitOpacities.is_leaf(),
+            "Cannot set requires_grad of logit_opacities which is a non-leaf tensor. "
+            "Call .detach() on this object or create a new GaussianSplat3d object with leaf tensors.");
+
+        TORCH_CHECK_VALUE(
+            mSh0.is_leaf(),
+            "Cannot set requires_grad of sh0 which is a non-leaf tensor. "
+            "Call .detach() on this object or create a new GaussianSplat3d object with leaf tensors.");
+
+        TORCH_CHECK_VALUE(
+            mShN.is_leaf(),
+            "Cannot set requires_grad of shN which is a non-leaf tensor. "
+            "Call .detach() on this object or create a new GaussianSplat3d object with leaf tensors.");
+
+        mMeans.requires_grad_(requiresGrad);
+        mQuats.requires_grad_(requiresGrad);
+        mLogScales.requires_grad_(requiresGrad);
+        mLogitOpacities.requires_grad_(requiresGrad);
+        mSh0.requires_grad_(requiresGrad);
+        mShN.requires_grad_(requiresGrad);
     }
 
     /// @brief Set the data of the GaussianSplat3d object from the given tensors.
@@ -324,15 +438,12 @@ class GaussianSplat3d {
     ///            Gaussians in this scene.
     /// @param shN A [N, K-1, D]-shaped tensor representing the directionally-dependent SH
     ///            coefficients of the Gaussians in this scene.
-    /// @param requiresGrad Whether to track gradients and accumulated projection statisitics used
-    ///                     for splitting/deleting/duplicating Gaussians during optimization.
     void setState(const torch::Tensor &means,
                   const torch::Tensor &quats,
                   const torch::Tensor &logScales,
                   const torch::Tensor &logitOpacities,
                   const torch::Tensor &sh0,
-                  const torch::Tensor &shN,
-                  const bool requiresGrad = false);
+                  const torch::Tensor &shN);
 
     /// @brief Return the number of Gaussians in the scene.
     /// @return The number of Gaussians in the scene.
@@ -355,20 +466,13 @@ class GaussianSplat3d {
         return mShN.size(2);
     }
 
-    /// @brief Return whether gradients are being tracked for the Gaussians in this scene.
-    /// @return Whether gradients are being tracked for the Gaussians in this scene.
-    bool
-    requiresGrad() const {
-        return mRequiresGrad;
-    }
-
     /// @brief Return the accumulated gradient norms of projected Gaussians in this
     ///        scene across backward passes.
     ///        This is used during optimization to decide whether to split/delete/duplicate
     ///        Gaussians.
     /// @return An [N]-shaped tensor representing the accumulated gradient norms of projected
     ///         Gaussians in this scene across backward passes or an empty tensor if
-    ///         requiresGrad is false.
+    ///         accumulateMean2dGradients is false.
     torch::Tensor
     accumulated2dMeansGradientNormsForGrad() const {
         return mAccumulatedNormalized2dMeansGradientNormsForGrad;
@@ -380,7 +484,7 @@ class GaussianSplat3d {
     ///        Gaussians.
     /// @return An [N]-shaped tensor representing the accumulated maximum 2D radii of projected
     ///         Gaussians in this scene across backward passes or an empty tensor if
-    ///         requiresGrad and trackMax2dRadiiForGrad track are false.
+    ///         accumulateMax2dRadii is false.
     torch::Tensor
     accumulatedMax2dRadiiForGrad() const {
         return mAccumulated2dRadiiForGrad;
@@ -390,7 +494,8 @@ class GaussianSplat3d {
     ///        This is used during optimization to decide whether to split/delete/duplicate
     ///        Gaussians.
     /// @return An [N]-shaped tensor representing the backward passes used to accumulate each
-    ///         Gaussian during optimization or an empty tensor if requiresGrad is false.
+    ///         Gaussian during optimization or an empty tensor if accumulateMean2dGradients is
+    ///         false.
     torch::Tensor
     gradientStepCountsForGrad() const {
         return mGradientStepCountForGrad;
@@ -401,11 +506,14 @@ class GaussianSplat3d {
     ///        @ref accumulatedMax2dRadiiForGrad.
     /// @note This function is only valid if requiresGrad is true.
     void
-    resetGradState() {
-        TORCH_CHECK(mRequiresGrad, "Cannot reset gradient state when requires_grad is false");
-        mAccumulatedNormalized2dMeansGradientNormsForGrad = torch::Tensor();
-        mAccumulated2dRadiiForGrad                        = torch::Tensor();
-        mGradientStepCountForGrad                         = torch::Tensor();
+    resetAccumulatedGradientState() {
+        if (mAccumulateMean2dGradients) {
+            mAccumulatedNormalized2dMeansGradientNormsForGrad = torch::Tensor();
+            mGradientStepCountForGrad                         = torch::Tensor();
+        }
+        if (mAccumulateMax2dRadii) {
+            mAccumulated2dRadiiForGrad = torch::Tensor();
+        }
     }
 
     /// @brief Return the state of the GaussianSplat3d object as a dictionary (similar to Pytorch's
@@ -643,6 +751,53 @@ class GaussianSplat3d {
         const float eps2d                   = 0.3,
         const bool antialias                = false);
 
+    /// @brief Select a subset of the Gaussians in this scene based on the given slice.
+    /// @param begin The start index of the slice (inclusive)
+    /// @param end The end index of the slice (exclusive)
+    /// @param step The step size of the slice
+    /// @return A new GaussianSplat3d object containing only the selected Gaussians.
+    GaussianSplat3d sliceSelect(const int64_t begin, const int64_t end, const int64_t step) const;
+
+    /// @brief Select a subset of the Gaussians in this scene based on the given indices.
+    /// @param indices A 1D tensor of indices in the range [0, numGaussians-1] to select from the
+    //  Gaussians in this scene.
+    /// @return A new GaussianSplat3d object containing only the selected Gaussians.
+    GaussianSplat3d indexSelect(const torch::Tensor &indices) const;
+
+    /// @brief Select a subset of the Gaussians in this scene based on the given mask.
+    /// @param mask A 1D boolean tensor of shape [N] where N is the number of Gaussians in this
+    ///             scene. The mask indicates which Gaussians to select.
+    /// @return A new GaussianSplat3d object containing only the selected Gaussians.
+    ///         The mask must have the same length as the number of Gaussians in this scene.
+    GaussianSplat3d maskSelect(const torch::Tensor &mask) const;
+
+    /// @brief Assign new Gaussians to a subset of the Gaussians in this scene based on the given
+    /// indices.
+    /// @param indices A 1D tensor of indices in the range [0, numGaussians-1] to assign new
+    /// Gaussians to.
+    /// @param other A GaussianSplat3d object containing the new Gaussians to assign.
+    void indexSet(const torch::Tensor &indices, const GaussianSplat3d &other);
+
+    /// @brief Assign new Gaussians to a subset of the Gaussians in this scene based on the given
+    /// slice.
+    /// @param begin The start index of the slice (inclusive)
+    /// @param end The end index of the slice (exclusive)
+    /// @param step The step size of the slice
+    /// @param other A GaussianSplat3d object containing the new Gaussians to assign.
+    ///             The mask must have the same length as the number of Gaussians in this scene.
+    void sliceSet(const int64_t begin,
+                  const int64_t end,
+                  const int64_t step,
+                  const GaussianSplat3d &other);
+
+    /// @brief Assign new Gaussians to a subset of the Gaussians in this scene based on the given
+    /// mask.
+    /// @param mask A 1D boolean tensor of shape [N] where N is the number of Gaussians in this
+    ///             scene. The mask indicates which Gaussians to assign.
+    /// @param other A GaussianSplat3d object containing the new Gaussians to assign.
+    ///             The mask must have the same length as the number of Gaussians in this scene.
+    void maskSet(const torch::Tensor &mask, const GaussianSplat3d &other);
+
     /// @brief Render the IDs of the gaussians that are the top K contributors to the rendered
     /// pixels and the value of the weighted contribution to the rendered pixels.  If the size of
     /// `numSamples`(i.e. K) is greater than the number of contributing samples for a pixel, the
@@ -696,8 +851,8 @@ class GaussianSplat3d {
     torch::Tensor mAccumulatedNormalized2dMeansGradientNormsForGrad; // [N]
     torch::Tensor mAccumulated2dRadiiForGrad;                        // [N]
     torch::Tensor mGradientStepCountForGrad;                         // [N]
-    bool mRequiresGrad           = false;
-    bool mTrackMax2dRadiiForGrad = false;
+    bool mAccumulateMean2dGradients = false;
+    bool mAccumulateMax2dRadii      = false;
 
     static void checkState(const torch::Tensor &means,
                            const torch::Tensor &quats,
@@ -717,6 +872,20 @@ class GaussianSplat3d {
                                          const ssize_t cropHeight,
                                          const ssize_t cropOriginW,
                                          const ssize_t cropOriginH);
+
+    /// @brief Implements index set with a tensor of booleans or integer indices
+    /// @param indexOrMask A 1D tensor of indices in the range [0, numGaussians-1] or a boolean mask
+    ///                    of shape [N] where N is the number of Gaussians in this scene.
+    /// @param other A GaussianSplat3d object containing the new Gaussians to assign.
+    ///              The mask must have the same length as the number of Gaussians in this scene.
+    void tensorIndexSetImpl(const torch::Tensor &indexOrMask, const GaussianSplat3d &other);
+
+    /// @brief Implements indexing with a tensor of booleans or integer indices
+    /// @param indexOrMask A 1D tensor of indices in the range [0, numGaussians-1] or a boolean mask
+    ///                    of shape [N] where N is the number of Gaussians in this scene.
+    /// @return A new GaussianSplat3d object containing only the selected Gaussians.
+    ///         The mask must have the same length as the number of Gaussians in this scene.
+    GaussianSplat3d tensorIndexGetImpl(const torch::Tensor &indexOrMask) const;
 
     /// @brief Render the gaussian splatting scene
     ///         This function returns a single render quantity (RGB, depth, RGB+D) and

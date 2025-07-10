@@ -22,7 +22,9 @@ class GaussianSplat3d:
         logit_opacities: torch.Tensor,
         sh0: torch.Tensor,
         shN: torch.Tensor,
-        requires_grad: bool = False,
+        accumulate_mean_2d_gradients: bool = False,
+        accumulate_max_2d_radii: bool = False,
+        detach: bool = False,
     ) -> None:
         """
         Initializes the GaussianSplat3d with the provided parameters.
@@ -37,16 +39,23 @@ class GaussianSplat3d:
             shN (torch.Tensor): Tensor of shape (N, K-1, D) representing the directionally
                 varying SH coefficients where D is the number of channels (see `num_channels`),
                 and K is the number of spherical harmonic bases (see `num_sh_bases`).
-            requires_grad (bool): If True, gradients will be computed for these parameters. Default is False.
-
-        Raises:
-            TypeError: If the provided tensors do not match the expected types.
-            ValueError: If the number of gaussians (N) is not consistent across the provided tensors
-                or if the tensors are incorrectly sized.
+            accumulate_mean_2d_gradients (bool, optional): If True, tracks the average norm of the
+                gradient of projected means for each Gaussian during the backward pass of projection.
+                This is useful for some optimization techniques.
+                Defaults to False.
+            accumulate_max_2d_radii (bool, optional): If True, tracks the maximum 2D radii for each Gaussian
+                during the backward pass of projection.
+                Defaults to False.
+            detach (bool, optional): If True, creates copies of the input tensors and detaches them
+                from the computation graph. Defaults to False.
         """
 
     @overload
-    def __init__(self, impl: GaussianSplat3dCpp) -> None:
+    def __init__(
+        self,
+        *,
+        impl: GaussianSplat3dCpp,
+    ) -> None:
         """
         Initializes the GaussianSplat3d with an existing C++ implementation.
         This constructor is used to wrap an existing instance of GaussianSplat3dCpp.
@@ -54,11 +63,6 @@ class GaussianSplat3d:
 
         Args:
             impl (GaussianSplat3dCpp): An instance of the C++ implementation.
-
-        Raises:
-            TypeError: If the provided impl is not an instance of GaussianSplat3dCpp
-                or if the arguments do not match the expected types.
-            ValueError: If the impl is not provided or is None.
         """
         ...
 
@@ -76,75 +80,199 @@ class GaussianSplat3d:
         """
         ...
 
-    @staticmethod
-    def _make_empty_gaussian_splat_cpp(
-        num_channels: int = 3, device: torch.device = torch.device("cpu")
-    ) -> GaussianSplat3dCpp:
-        return GaussianSplat3dCpp(
-            means=torch.empty(0, 3, device=device),
-            quats=torch.empty(0, 4, device=device),
-            log_scales=torch.empty(0, 3, device=device),
-            logit_opacities=torch.empty(0, device=device),
-            sh0=torch.empty(0, 1, num_channels, device=device),
-            shN=torch.empty(0, 0, num_channels, device=device),
-            requires_grad=False,
-        )
-
     def __init__(self, *args, **kwargs) -> None:
-        if len(args) == 1 and len(kwargs) == 0:
-            if isinstance(args[0], GaussianSplat3dCpp):
-                self._impl = args[0]
-                return
-        elif len(args) == 0 and len(kwargs) == 1:
-            if "impl" in kwargs:
-                if isinstance(kwargs["impl"], GaussianSplat3dCpp):
-                    self._impl = kwargs["impl"]
-                    return
+        if kwargs.get("impl") is not None:
+            assert len(args) == 0, "Expected no positional arguments when 'impl' is provided."
+            assert isinstance(
+                kwargs["impl"], GaussianSplat3dCpp
+            ), "Expected 'impl' to be an instance of GaussianSplat3dCpp."
+            assert len(kwargs) == 1, "Expected only 'impl' as a keyword argument."
+            self._impl = kwargs["impl"]
+        else:
 
-        try:
-            self._impl = GaussianSplat3d._make_empty_gaussian_splat_cpp(*args, **kwargs)
-        except TypeError:
-            try:
-                self._impl = GaussianSplat3dCpp(*args, **kwargs)
-            except TypeError:
-                # TODO: More informative error message
-                raise TypeError("Invalid constructor arguments for GaussianSplat3d.")
+            parameter_names = [
+                "means",
+                "quats",
+                "log_scales",
+                "logit_opacities",
+                "sh0",
+                "shN",
+                "accumulate_mean_2d_gradients",
+                "accumulate_max_2d_radii",
+                "detach",
+            ]
+            parameter_values = [None, None, None, None, None, None, False, False, False]
+            cpp_args = dict(zip(parameter_names, parameter_values))
+            tensor_parameter_names = parameter_names[:6]
+            arg_parameters = parameter_names[: len(args)]
+            for kw, arg in zip(arg_parameters, args):
+                if kw in tensor_parameter_names:
+                    if not isinstance(arg, torch.Tensor):
+                        raise TypeError(f"Expected '{kw}' to be a torch.Tensor.")
+                    cpp_args[kw] = arg
+                else:
+                    if not isinstance(arg, bool):
+                        raise TypeError(f"Expected '{kw}' to be a bool.")
+                cpp_args[kw] = arg
 
-    @property
-    def device(self) -> torch.device:
+            for kwargname in kwargs:
+                if kwargname in parameter_names:
+                    if kwargname in tensor_parameter_names:
+                        if not isinstance(kwargs[kwargname], torch.Tensor):
+                            raise TypeError(f"Expected '{kwargname}' to be a torch.Tensor.")
+                    else:
+                        if not isinstance(kwargs[kwargname], bool):
+                            raise TypeError(f"Expected '{kwargname}' to be a bool.")
+                    cpp_args[kwargname] = kwargs[kwargname]
+                else:
+                    raise ValueError(f"Unexpected keyword argument '{kwargname}' for GaussianSplat3d constructor.")
+
+            for param_name in tensor_parameter_names:
+                if cpp_args[param_name] is None:
+                    raise ValueError(f"Expected '{param_name}' to be provided as a tensor argument.")
+            self._impl = GaussianSplat3dCpp(
+                means=cpp_args["means"],
+                quats=cpp_args["quats"],
+                log_scales=cpp_args["log_scales"],
+                logit_opacities=cpp_args["logit_opacities"],
+                sh0=cpp_args["sh0"],
+                shN=cpp_args["shN"],
+                accumulate_mean_2d_gradients=cpp_args["accumulate_mean_2d_gradients"],
+                accumulate_max_2d_radii=cpp_args["accumulate_max_2d_radii"],
+                detach=cpp_args["detach"],
+            )
+
+    @overload
+    def __getitem__(self, index: slice) -> "GaussianSplat3d":
         """
-        Returns the device on which the GaussianSplat3d instance is stored.
-        This is typically used to determine whether the instance is on CPU or GPU.
+        Select a subset of Gaussians from the GaussianSplat3d instance using a slice.
+
+        Args:
+            index (slice): A slice object to select a range of Gaussians.
 
         Returns:
-            torch.device: The device of the GaussianSplat3d instance.
+            GaussianSplat3d: A new instance of GaussianSplat3d containing only the selected Gaussians.
         """
-        return self._impl.means.device
+        ...
 
-    @property
-    def dtype(self) -> torch.dtype:
+    @overload
+    def __getitem__(self, index: torch.Tensor) -> "GaussianSplat3d":
         """
-        Returns the data type of the GaussianSplat3d instance.
-        This is typically used to determine whether the instance is using float32, float64, etc.
+        Select a subset of Gaussians from the GaussianSplat3d instance using integer indices or a boolean mask.
 
-        Returns:
-            torch.dtype: The data type of the GaussianSplat3d instance.
-        """
-        return self._impl.means.dtype
-
-    @property
-    def sh_degree(self) -> int:
-        """
-        Returns the degree of the spherical harmonics used in the Gaussian splatting representation.
-        This is typically used to determine the complexity of the spherical harmonics representation.
-
-        Note: this is **not** the same as `num_sh_bases` but is related. The degree of the
-        spherical harmonics is defined as `sqrt(num_sh_bases) - 1`.
+        Args:
+            index (torch.Tensor): A 1D tensor ofcontaining either integer indices or a boolean mask.
+                If it is a 1D tensor of integers, it selects the Gaussians at those indices.
+                If it is a 1D boolean tensor, it selects the Gaussians where the mask is True and must have shape (`num_gaussians`).
 
         Returns:
-            int: The degree of the spherical harmonics.
+            GaussianSplat3d: A new instance of GaussianSplat3d containing only the selected Gaussians.
+
         """
-        return int(math.sqrt(self._impl.num_sh_bases)) - 1
+        ...
+
+    def __getitem__(self, index: slice | torch.Tensor) -> "GaussianSplat3d":
+        if not isinstance(index, (slice, torch.Tensor)):
+            raise TypeError("Expected 'index' to be a slice or a torch.Tensor.")
+
+        if isinstance(index, slice):
+            return GaussianSplat3d(
+                impl=self._impl.slice_select(
+                    index.start if index.start is not None else 0,
+                    index.stop if index.stop is not None else self.num_gaussians,
+                    index.step if index.step is not None else 1,
+                ),
+            )
+
+        if index.dim() != 1:
+            raise ValueError("Expected 'index' to be a 1D tensor.")
+
+        if index.dtype == torch.bool:
+            if len(index) != self.num_gaussians:
+                raise ValueError(
+                    f"Expected 'index_or_mask' to have the same length as the number of Gaussians ({self.num_gaussians}), "
+                    f"but got {len(index)}."
+                )
+            return GaussianSplat3d(impl=self._impl.mask_select(index))
+        elif index.dtype == torch.int64 or index.dtype == torch.int32:
+            return GaussianSplat3d(impl=self._impl.index_select(index))
+        else:
+            raise TypeError("Expected 'index' to be a boolean or integer (int32 or int64) tensor.")
+
+    @overload
+    def __setitem__(self, index: slice, value: "GaussianSplat3d") -> None:
+        """
+        Set a subset of Gaussians in the GaussianSplat3d instance using a slice.
+
+        Args:
+            index (slice): A slice object to select a range of Gaussians.
+            value (GaussianSplat3d): A new instance of GaussianSplat3d containing the values to set.
+        """
+        ...
+
+    @overload
+    def __setitem__(self, index: torch.Tensor, value: "GaussianSplat3d") -> None:
+        """
+        Set a subset of Gaussians in the GaussianSplat3d instance using integer indices or a boolean mask.
+
+        Note: If using integer indices with duplicate indices, the Gaussian set from `value` at the duplicate indices will
+        overwrite in a random order.
+
+        Args:
+            index (torch.Tensor): A 1D tensor of shape (`num_gaussians`,) containing either integer indices or a boolean mask.
+                If it is a 1D tensor of integers, it selects the Gaussians at those indices.
+                If it is a 1D boolean tensor, it selects the Gaussians where the mask is True.
+            value (GaussianSplat3d): The GaussianSplat3d instance containing the new values to set.
+                Must have the same number of Gaussians as the selected indices or mask.
+        """
+        ...
+
+    def __setitem__(self, index: torch.Tensor | slice, value: "GaussianSplat3d") -> None:
+        if not isinstance(index, (slice, torch.Tensor)):
+            raise TypeError("Expected 'index' to be a slice or a torch.Tensor.")
+
+        if isinstance(index, slice):
+            self._impl.slice_set(
+                index.start if index.start is not None else 0,
+                index.stop if index.stop is not None else self.num_gaussians,
+                index.step if index.step is not None else 1,
+                value._impl,
+            )
+            return
+
+        if index.dim() != 1:
+            raise ValueError("Expected 'index' to be a 1D tensor.")
+
+        if index.dtype == torch.bool:
+            if len(index) != self.num_gaussians:
+                raise ValueError(
+                    f"Expected 'index' to have the same length as the number of Gaussians ({self.num_gaussians}), "
+                    f"but got {len(index)}."
+                )
+            self._impl.mask_set(index, value._impl)
+        elif index.dtype == torch.int64 or index.dtype == torch.int32:
+            self._impl.index_set(index, value._impl)
+        else:
+            raise TypeError("Expected 'index' to be a boolean or integer (int32 or int64) tensor.")
+
+    def detach(self) -> "GaussianSplat3d":
+        """
+        Detaches the GaussianSplat3d instance from the computation graph.
+        This is useful when you want to stop tracking gradients for this instance.
+
+        Returns:
+            GaussianSplat3d: A new instance of GaussianSplat3d with detached tensors.
+        """
+        return GaussianSplat3d(impl=self._impl.detach())
+
+    def detach_(self) -> None:
+        """
+        Detaches the GaussianSplat3d instance from the computation graph in place.
+        This modifies the current instance to stop tracking gradients.
+
+        Note: This method modifies the current instance and does not return a new instance.
+        """
+        self._impl.detach_in_place()
 
     @staticmethod
     def from_state_dict(state_dict: dict[str, torch.Tensor]) -> "GaussianSplat3d":
@@ -160,18 +288,50 @@ class GaussianSplat3d:
                 - 'logit_opacities': Tensor of shape (N,) representing the logit opacities of the Gaussians.
                 - 'sh0': Tensor of shape (N, 1, D) representing the diffuse SH coefficients where D is the number of channels (see `num_channels`).
                 - 'shN': Tensor of shape (N, K-1, D) representing the directionally varying SH coefficients where D is the number of channels (see `num_channels`), and K is the number of spherical harmonic bases (see `num_sh_bases`).
-                - 'requires_grad': bool Tensor with a single element indicating whether gradients should be computed for these parameters.
-                - 'track_max_2d_radii_for_grad': bool Tensor with a single element indicating whether to track the maximum 2D radii for gradients.
-                - 'track_max_2d_radii_for_grad': bool Tensor with a single element indicating whether to track the average norm of the gradient of projected means for each Gaussian.
+                - 'accumulate_max_2d_radii': bool Tensor with a single element indicating whether to track the maximum 2D radii for gradients.
+                - 'accumulate_mean_2d_gradients': bool Tensor with a single element indicating whether to track the average norm of the gradient of projected means for each Gaussian.
                 It can optionally contain:
-                - 'accumulated_gradient_step_counts_for_grad': Tensor of shape (N,) representing the accumulated gradient step counts for each Gaussian.
-                - 'accumulated_max_2d_radii_for_grad': Tensor of shape (N,) representing the maximum 2D projected radius for each Gaussian across every iteration of optimization.
-                - 'accumulated_mean_2d_gradient_norms_for_grad': Tensor of shape (N,) representing the average norm of the gradient of projected means for each Gaussian across every iteration of optimization.
+                - 'accumulated_gradient_step_counts': Tensor of shape (N,) representing the accumulated gradient step counts for each Gaussian.
+                - 'accumulated_max_2d_radii': Tensor of shape (N,) representing the maximum 2D projected radius for each Gaussian across every iteration of optimization.
+                - 'accumulated_mean_2d_gradient_norms': Tensor of shape (N,) representing the average norm of the gradient of projected means for each Gaussian across every iteration of optimization.
 
         Returns:
             GaussianSplat3d: An instance of GaussianSplat3d initialized with the provided state dictionary.
         """
-        return GaussianSplat3d(GaussianSplat3dCpp.from_state_dict(state_dict))
+        return GaussianSplat3d(impl=GaussianSplat3dCpp.from_state_dict(state_dict))
+
+    @property
+    def device(self) -> torch.device:
+        """
+        Returns the device on which the GaussianSplat3d instance is stored.
+        This is useful for checking if the instance is on CPU or GPU.
+
+        Returns:
+            torch.device: The device of the GaussianSplat3d instance.
+        """
+        return self.means.device
+
+    @property
+    def dtype(self) -> torch.dtype:
+        """
+        Returns the data type of the GaussianSplat3d instance.
+        This is useful for checking the precision of the stored tensors.
+
+        Returns:
+            torch.dtype: The data type of the GaussianSplat3d instance.
+        """
+        return self.means.dtype
+
+    @property
+    def sh_degree(self) -> int:
+        """
+        Returns the degree of the spherical harmonics used in the Gaussian splatting representation.
+        This is typically 0 for diffuse SH coefficients and 1 for directionally varying SH coefficients.
+
+        Returns:
+            int: The degree of the spherical harmonics.
+        """
+        return self._impl.sh_degree
 
     @property
     def num_channels(self) -> int:
@@ -486,7 +646,7 @@ class GaussianSplat3d:
         return self._impl.scales
 
     @property
-    def accumulated_gradient_step_counts_for_grad(self) -> torch.Tensor:
+    def accumulated_gradient_step_counts(self) -> torch.Tensor:
         """
         Returns the accumulated gradient step counts for each Gaussian.
 
@@ -496,61 +656,58 @@ class GaussianSplat3d:
         This tensor is used to track how many gradient steps have been applied to each Gaussian,
         which is useful for various optimization techniques.
 
-        Note: To reset the counts, you can call the `reset_grad_state` method.
-
-        Note: This property will be empty if the `requires_grad` flag was not set to True when initializing the GaussianSplat3d instance.
+        Note: To reset the counts, you can call the `reset_accumulated_gradient_state` method.
 
         Returns:
             torch.Tensor: A tensor of shape (N,) where N is the number of Gaussians (see `num_gaussians`).
                 Each element represents the accumulated gradient step count for a Gaussian.
         """
-        return self._impl.accumulated_gradient_step_counts_for_grad
+        return self._impl.accumulated_gradient_step_counts
 
     @property
-    def accumulated_max_2d_radii_for_grad(self) -> torch.Tensor:
+    def accumulated_max_2d_radii(self) -> torch.Tensor:
         """
         Returns the maximum 2D projected radius for each Gaussian across every iteration of optimization.
         This is used by certain optimization techniques to ensure that the Gaussians
         do not become too large or too small during the optimization process.
         This tensor is used to track the maximum 2D radius a Gaussian has been projected to during the optimization process.
 
-        Note: To reset the maximum radii, you can call the `reset_grad_state` method.
+        Note: To reset the maximum radii, you can call the `reset_accumulated_gradient_state` method.
 
-        Note: This property will be empty if the `requires_grad` flag was not set to True when initializing the GaussianSplat3d instance.
-
-        Note: This property will be empty if `track_max_2d_radii_for_grad` is set to False.
+        Note: This property will be empty if `accumulate_max_2d_radii` is set to False.
 
         Returns:
             torch.Tensor: A tensor of shape (N,) where N is the number of Gaussians (see `num_gaussians`).
                 Each element represents the maximum 2D radius for a Gaussian across all optimization iterations.
 
         """
-        return self._impl.accumulated_max_2d_radii_for_grad
+        return self._impl.accumulated_max_2d_radii
 
     @property
-    def track_max_2d_radii_for_grad(self) -> bool:
+    def accumulate_max_2d_radii(self) -> bool:
         """
-        Returns whether to track the maximum 2D radii for gradients (False by default).
+        Returns whether to track the maximum 2D radii during the backward pass of the projection
+        step (False by default).
 
         This property is used by certain optimization techniques to ensure that the Gaussians
         do not become too large or too small during the optimization process.
 
-        Note: See `accumulated_max_2d_radii_for_grad` for the actual maximum radii values.
+        Note: See `accumulated_max_2d_radii` for the actual maximum radii values.
 
         Returns:
             bool: True if the maximum 2D radii are being tracked, False otherwise.
         """
-        return self._impl.track_max_2d_radii_for_grad
+        return self._impl.accumulate_max_2d_radii
 
-    @track_max_2d_radii_for_grad.setter
-    def track_max_2d_radii_for_grad(self, value) -> bool:
+    @accumulate_max_2d_radii.setter
+    def accumulate_max_2d_radii(self, value) -> None:
         """
         Sets whether to track the maximum 2D radii for gradients (False by default).
 
         This property is used by certain optimization techniques to ensure that the Gaussians
         do not become too large or too small during the optimization process.
 
-        Note: See `accumulated_max_2d_radii_for_grad` for the actual maximum radii values.
+        Note: See `accumulated_max_2d_radii` for the actual maximum radii values.
 
         Args:
             value (bool): True if the maximum 2D radii should be tracked, False otherwise.
@@ -560,10 +717,43 @@ class GaussianSplat3d:
         """
         if not isinstance(value, bool):
             raise TypeError("Expected 'value' to be a boolean.")
-        return self._impl.track_max_2d_radii_for_grad
+        self._impl.accumulate_max_2d_radii = value
 
     @property
-    def accumulated_mean_2d_gradient_norms_for_grad(self) -> torch.Tensor:
+    def accumulate_mean_2d_gradients(self) -> bool:
+        """
+        Returns whether to track the average norm of the gradient of projected means for each Gaussian during the backward pass of projection (False by default).
+
+        This property is used by certain optimization techniques to split/prune/duplicate Gaussians.
+
+        Note: See `accumulated_mean_2d_gradient_norms` for the actual average norms of the gradients.
+
+        Returns:
+            bool: True if the average norm of the gradient of projected means is being tracked, False otherwise.
+        """
+        return self._impl.accumulate_mean_2d_gradients
+
+    @accumulate_mean_2d_gradients.setter
+    def accumulate_mean_2d_gradients(self, value: bool) -> None:
+        """
+        Sets whether to track the average norm of the gradient of projected means for each Gaussian during the backward pass of projection (False by default).
+
+        This property is used by certain optimization techniques to split/prune/duplicate Gaussians.
+
+        Note: See `accumulated_mean_2d_gradient_norms` for the actual average norms of the gradients.
+
+        Args:
+            value (bool): True if the average norm of the gradient of projected means should be tracked, False otherwise.
+
+        Raises:
+            TypeError: If the provided value is not a boolean.
+        """
+        if not isinstance(value, bool):
+            raise TypeError("Expected 'value' to be a boolean.")
+        self._impl.accumulate_mean_2d_gradients = value
+
+    @property
+    def accumulated_mean_2d_gradient_norms(self) -> torch.Tensor:
         r"""
         Returns the average norm of the gradient of projected (2D) means for each Gaussian across every iteration of optimization.
         This is used by certain optimization techniques to split/prune/duplicate Gaussians.
@@ -573,17 +763,14 @@ class GaussianSplat3d:
         :math:`\frac{1}{T C} \sum_{t=1}^{T} \sum_{c=1}^{C} \| \partial_{L_t} \mu_i^c \|_2`
         where :math:`L_t` is the loss at iteration :math:`t`.
 
-        Note: To reset the accumulated norms, you can call the `reset_grad_state` method.
-
-        Note: This property will be empty if the `requires_grad` flag was not set to True
-            when initializing the GaussianSplat3d instance.
+        Note: To reset the accumulated norms, you can call the `reset_accumulated_gradient_state` method.
 
         Returns:
             torch.Tensor: A tensor of shape (N,) where N is the number of Gaussians (see `num_gaussians`).
                 Each element represents the average norm of the gradient of projected means for a Gaussian across all optimization iterations.
                 The norm is computed in 2D space, i.e., the projected means.
         """
-        return self._impl.accumulated_mean_2d_gradient_norms_for_grad
+        return self._impl.accumulated_mean_2d_gradient_norms
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor]) -> None:
         """
@@ -600,13 +787,12 @@ class GaussianSplat3d:
                 - 'logit_opacities': Tensor of shape (N,) representing the logit opacities of the Gaussians.
                 - 'sh0': Tensor of shape (N, 1, D) representing the diffuse SH coefficients where D is the number of channels (see `num_channels`).
                 - 'shN': Tensor of shape (N, K-1, D) representing the directionally varying SH coefficients where D is the number of channels (see `num_channels`), and K is the number of spherical harmonic bases (see `num_sh_bases`).
-                - 'requires_grad': bool Tensor with a single element indicating whether gradients should be computed for these parameters.
-                - 'track_max_2d_radii_for_grad': bool Tensor with a single element indicating whether to track the maximum 2D radii for gradients.
-                - 'track_max_2d_radii_for_grad': bool Tensor with a single element indicating whether to track the average norm of the gradient of projected means for each Gaussian.
+                - 'accumulate_max_2d_radii': bool Tensor with a single element indicating whether to track the maximum 2D radii for gradients.
+                - 'accumulate_mean_2d_gradients': bool Tensor with a single element indicating whether to track the average norm of the gradient of projected means for each Gaussian.
                 It can optionally contain:
-                - 'accumulated_gradient_step_counts_for_grad': Tensor of shape (N,) representing the accumulated gradient step counts for each Gaussian.
-                - 'accumulated_max_2d_radii_for_grad': Tensor of shape (N,) representing the maximum 2D projected radius for each Gaussian across every iteration of optimization.
-                - 'accumulated_mean_2d_gradient_norms_for_grad': Tensor of shape (N,) representing the average norm of the gradient of projected means for each Gaussian across every iteration of optimization.
+                - 'accumulated_gradient_step_counts': Tensor of shape (N,) representing the accumulated gradient step counts for each Gaussian.
+                - 'accumulated_max_2d_radii': Tensor of shape (N,) representing the maximum 2D projected radius for each Gaussian across every iteration of optimization.
+                - 'accumulated_mean_2d_gradient_norms': Tensor of shape (N,) representing the average norm of the gradient of projected means for each Gaussian across every iteration of optimization.
 
         Raises:
             TypeError: If the provided state_dict does not match the expected types or keys.
@@ -1296,8 +1482,8 @@ class GaussianSplat3d:
 
             ids_list = result_ids.unbind()
             weights_list = result_weights.unbind()
-            dense_ids = torch.stack(ids_list, dim=0)  # Shape: (C, R, num_samples)
-            dense_weights = torch.stack(weights_list, dim=0)  # Shape: (C, R, num_samples)
+            dense_ids = torch.stack(ids_list, dim=0)  # type: ignore # Shape: (C, R, num_samples)
+            dense_weights = torch.stack(weights_list, dim=0)  # type: ignore # Shape: (C, R, num_samples)
 
             return dense_ids, dense_weights
         else:
@@ -1318,14 +1504,15 @@ class GaussianSplat3d:
                 antialias=antialias,
             )
 
-    def reset_grad_state(self) -> None:
+    def reset_accumulated_gradient_state(self) -> None:
         """
-        Reset state tracked during backward passes if `requires_grad` was set to True when initializing the GaussianSplat3d instance.
-        This method clears the accumulated gradient step counts (`accumulated_gradient_step_counts_for_grad`),
-        maximum 2D radii (`accumulated_max_2d_radii_for_grad`), and average 2D gradient
-        norms (`accumulated_mean_2d_gradient_norms_for_grad`) for each Gaussian.
+        Reset state tracked during backward passes if `accumulate_mean_2d_gradients` and/or
+        or if `accumulate_2d_radii` is set to true for the GaussianSplat3d instance.
+        This method clears the accumulated gradient step counts (`accumulated_gradient_step_counts`),
+        maximum 2D radii (`accumulated_max_2d_radii`), and average 2D gradient
+        norms (`accumulated_mean_2d_gradient_norms`) for each Gaussian.
         """
-        self._impl.reset_grad_state()
+        self._impl.reset_accumulated_gradient_state()
 
     def save_ply(self, filename: str) -> None:
         """
@@ -1357,12 +1544,11 @@ class GaussianSplat3d:
         logit_opacities: torch.Tensor,
         sh0: torch.Tensor,
         shN: torch.Tensor,
-        requires_grad: bool = False,
     ) -> None:
         """
         Set the state of the GaussianSplat3d instance with the provided parameters.
 
-        Note: If `requires_grad` is True, this call will reset the gradient state (see `reset_grad_state`).
+        Note: If `accumulate_mean_2d_gradients` is True, this call will reset the gradient state (see `reset_accumulated_gradient_state`).
 
         Args:
             means (torch.Tensor): Tensor of shape (N, 3) representing the means of the Gaussians.
@@ -1376,7 +1562,6 @@ class GaussianSplat3d:
             sh0 (torch.Tensor): Tensor of shape (N, 1, D) representing the diffuse SH coefficients where D is the number of channels (see `num_channels`).
             shN (torch.Tensor): Tensor of shape (N, K-1, D) representing the directionally varying SH coefficients where D is the number of channels (see `num_channels`),
                 and K is the number of spherical harmonic bases (see `num_sh_bases`).
-            requires_grad (bool): If True, the GaussianSplat3d instance will track gradients for the parameters.
         """
         self._impl.set_state(
             means=means,
@@ -1385,7 +1570,6 @@ class GaussianSplat3d:
             logit_opacities=logit_opacities,
             sh0=sh0,
             shN=shN,
-            requires_grad=requires_grad,
         )
 
     def state_dict(self) -> dict[str, torch.Tensor]:
@@ -1401,13 +1585,12 @@ class GaussianSplat3d:
                 - 'logit_opacities': Tensor of shape (N,) representing the logit opacities of the Gaussians.
                 - 'sh0': Tensor of shape (N, 1, D) representing the diffuse SH coefficients where D is the number of channels (see `num_channels`).
                 - 'shN': Tensor of shape (N, K-1, D) representing the directionally varying SH coefficients where D is the number of channels (see `num_channels`), and K is the number of spherical harmonic bases (see `num_sh_bases`).
-                - 'requires_grad': bool Tensor with a single element indicating whether gradients should be computed for these parameters.
-                - 'track_max_2d_radii_for_grad': bool Tensor with a single element indicating whether to track the maximum 2D radii for gradients.
-                - 'track_max_2d_radii_for_grad': bool Tensor with a single element indicating whether to track the average norm of the gradient of projected means for each Gaussian.
+                - 'accumulate_max_2d_radii': bool Tensor with a single element indicating whether to track the maximum 2D radii for gradients.
+                - 'accumulate_mean_2d_gradients': bool Tensor with a single element indicating whether to track the average norm of the gradient of projected means for each Gaussian.
                 It can optionally contain:
-                - 'accumulated_gradient_step_counts_for_grad': Tensor of shape (N,) representing the accumulated gradient step counts for each Gaussian.
-                - 'accumulated_max_2d_radii_for_grad': Tensor of shape (N,) representing the maximum 2D projected radius for each Gaussian across every iteration of optimization.
-                - 'accumulated_mean_2d_gradient_norms_for_grad': Tensor of shape (N,) representing the average norm of the gradient of projected means for each Gaussian across every iteration of optimization.
+                - 'accumulated_gradient_step_counts': Tensor of shape (N,) representing the accumulated gradient step counts for each Gaussian.
+                - 'accumulated_max_2d_radii': Tensor of shape (N,) representing the maximum 2D projected radius for each Gaussian across every iteration of optimization.
+                - 'accumulated_mean_2d_gradient_norms': Tensor of shape (N,) representing the average norm of the gradient of projected means for each Gaussian across every iteration of optimization.
 
         """
         return self._impl.state_dict()

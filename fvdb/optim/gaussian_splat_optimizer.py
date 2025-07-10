@@ -25,6 +25,7 @@ class GaussianSplatOptimizer:
     Args:
         module (GaussianSplat3d): The module representing the Gaussian Splatting scene (e.g. fvdb.nn.GaussianSplat3D).
         mean_lr_decay_exponent (float): The exponent to decay the learning rate for the means. Default: 1.0.
+        scene_scale (float): The scale of the scene, used to scale the learning rates. Default: 1.0.
 
         prune_opacity_threshold (float): The opacity threshold below which to prune a Gaussian. Default: 0.005.
         prune_scale3d_threshold (float): The 3D scale threshold above which to prune a Gaussian. Default: 0.1.
@@ -62,6 +63,8 @@ class GaussianSplatOptimizer:
             "sh0": 2.5e-3,
             "shN": 2.5e-3 / 20,
         }
+
+        self.module.accumulate_mean_2d_gradients = True
 
         if self.absgrad:
             raise NotImplementedError("absgrad is not yet implemented")
@@ -173,10 +176,10 @@ class GaussianSplatOptimizer:
     @torch.no_grad()
     def refine_gaussians(self, use_scales: bool = False, use_screen_space_scales: bool = False):
         if use_screen_space_scales:
-            if not self.module.track_max_2d_radii_for_grad:
+            if not self.module.accumulate_max_2d_radii:
                 raise ValueError(
                     "use_screen_space_scales is set to True but the model is not configured to "
-                    + "track screen space scales. Set model.track_max_2d_radii_for_grad = True."
+                    + "track screen space scales. Set model.accumulate_max_2d_radii = True."
                 )
         # Grow the number of Gaussians via:
         # 1. Duplicating those whose loss gradients are high and spatial size are small (i.e. have small eigenvals)
@@ -189,7 +192,7 @@ class GaussianSplatOptimizer:
         # Prune Gaussians whose opacity is below a threshold or whose screen space spatial extent is too large
         n_prune = self._prune_gs(use_scales, use_screen_space_scales)
         # Reset running statistics used to determine which Gaussians to add/split/prune
-        self.module.reset_grad_state()
+        self.module.reset_accumulated_gradient_state()
 
         return n_dupli, n_split, n_prune
 
@@ -226,18 +229,18 @@ class GaussianSplatOptimizer:
         Args:
             use_screen_space_scales: If set to true, use the tracked screen space scales to decide whether to split.
                                      Note that the model must have been configured to track these scales by setting
-                                     GaussianSplat3d.track_max_2d_radii_for_grad = True.
+                                     GaussianSplat3d.track_max_2d_radii = True.
         """
 
         # We use the average gradient ( over the the last N steps) of the projected Gaussians with respect to the
         # loss to decide which Gaussians to add/split/prune
         # count is the number of times a Gaussian has been projected (i.e. included in the loss gradient computation)
         # grad_2d is the sum of the gradients of the projected Gaussians (dL/dμ2D) over the last N steps
-        count = self.module.accumulated_gradient_step_counts_for_grad.clamp_min(1)
+        count = self.module.accumulated_gradient_step_counts.clamp_min(1)
         if self._num_grad_accumulation_steps > 1:
             count *= self._num_grad_accumulation_steps
 
-        grads = self.module.accumulated_mean_2d_gradient_norms_for_grad / count
+        grads = self.module.accumulated_mean_2d_gradient_norms / count
         device = grads.device
 
         # If the 2D projected gradient is high and the spatial size is small, duplicate the Gaussian
@@ -252,7 +255,7 @@ class GaussianSplatOptimizer:
 
         # If the 2D projected spatial extent exceeds the threshold, split the Gaussian
         if use_screen_space_scales:
-            is_split |= self.module.accumulated_max_2d_radii_for_grad > self.grow_scale2d_threshold
+            is_split |= self.module.accumulated_max_2d_radii > self.grow_scale2d_threshold
         n_split: int = int(is_split.sum().item())
 
         # Hardcode these for now but could be made configurable
@@ -282,7 +285,7 @@ class GaussianSplatOptimizer:
             # https://github.com/graphdeco-inria/gaussian-splatting/issues/123
             # We implement it here for completeness but it doesn't really get used
             if use_screen_space_scales:
-                is_too_big |= self.module.accumulated_max_2d_radii_for_grad > self.prune_scale2d_threshold
+                is_too_big |= self.module.accumulated_max_2d_radii > self.prune_scale2d_threshold
 
             is_prune = is_prune | is_too_big
 
@@ -475,5 +478,4 @@ class GaussianSplatOptimizer:
             params["opacities"],
             params["sh0"],
             params["shN"],
-            True,
         )
