@@ -304,7 +304,7 @@ class JaggedTensor : public torch::CustomClassHolder {
 
     /// @brief Set the raw data of this JaggedTensor to the given tensor
     /// @param data A data tensor with the same number of elements as the original data
-    void set_data(const torch::Tensor &data);
+    void set_jdata(const torch::Tensor &data);
 
     /// @brief  Get the raw data indexed by this JaggedTensor
     /// @return The raw data tensor

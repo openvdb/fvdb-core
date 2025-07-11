@@ -535,13 +535,13 @@ JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(torch::Tensor jdata,
 }
 
 void
-JaggedTensor::set_data(const torch::Tensor &data) {
-    TORCH_CHECK_VALUE(data.dim() > 0,
+JaggedTensor::set_jdata(const torch::Tensor &jdata) {
+    TORCH_CHECK_VALUE(jdata.dim() > 0,
                       "assigned data must have shape [N, ...], but got data.dim() = 0");
-    TORCH_CHECK_VALUE((data.device() == mBatchIdx.device()) ||
+    TORCH_CHECK_VALUE((jdata.device() == mBatchIdx.device()) ||
                           (mBatchIdx.numel() == 0 && num_tensors() == 1),
                       "Incorrect device for data");
-    TORCH_CHECK_VALUE(data.device() == mOffsets.device(), "Incorrect device for data");
+    TORCH_CHECK_VALUE(jdata.device() == mOffsets.device(), "Incorrect device for data");
     TORCH_CHECK_VALUE(mListIdx.dim() == 2, "Corrupt list indices. This should never happen");
     TORCH_CHECK_VALUE(mListIdx.numel() == 0 || mListIdx.size(0) == (mOffsets.size(0) - 1),
                       "Corrupt list indices. This should never happen");
@@ -550,12 +550,12 @@ JaggedTensor::set_data(const torch::Tensor &data) {
         TORCH_CHECK(mOffsets.dim() == 1, "bad offsets. this should never happen");
         TORCH_CHECK(mOffsets.size(0) == (num_outer_lists() + 1),
                     "bad offsets. this should never happen");
-        TORCH_CHECK_VALUE(data.size(0) == mData.size(0), "assigned data must have shape [N, ...]");
+        TORCH_CHECK_VALUE(jdata.size(0) == mData.size(0), "assigned data must have shape [N, ...]");
     } else {
-        TORCH_CHECK_VALUE(data.size(0) == mBatchIdx.size(0),
+        TORCH_CHECK_VALUE(jdata.size(0) == mBatchIdx.size(0),
                           "assigned data must have shape [N, ...]");
     }
-    mData = data;
+    mData = jdata;
 }
 
 JaggedTensor
