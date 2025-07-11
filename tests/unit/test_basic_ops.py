@@ -34,7 +34,6 @@ class TestBasicOps(unittest.TestCase):
     def setUp(self):
         torch.random.manual_seed(0)
         np.random.seed(0)
-        pass
 
     @parameterized.expand(["cpu", "cuda"])
     def test_dilate_grid(self, device):
