@@ -164,6 +164,8 @@ target_include_directories(fvdb PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../../nanovdb
     ${TORCH_INCLUDE_DIRS}
     ${Python3_INCLUDE_DIRS})
+target_include_directories(fvdb INTERFACE
+    ${CUDAToolkit_INCLUDE_DIRS})
 target_include_directories(fvdb PRIVATE
     ${TORCH_SOURCE_INCLUDE_DIRS}
     ${tinyply_SOURCE_DIR}/source)
@@ -199,7 +201,9 @@ target_compile_options(fvdb PRIVATE
     >)
 
 target_link_libraries(fvdb PRIVATE
-    ${TORCH_LIBRARIES} ${Python3_LIBRARIES} tinyply cudnn_frontend cudnn cutlass blosc::blosc)
+    ${TORCH_LIBRARIES} tinyply cudnn_frontend cudnn cutlass blosc::blosc)
+target_link_libraries(fvdb PUBLIC
+    ${Python3_LIBRARIES})
 
 # Install rules
 install(TARGETS fvdb

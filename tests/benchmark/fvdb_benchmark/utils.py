@@ -60,6 +60,7 @@ def df_to_table(
 L2_CACHE_TABLE = {
     "NVIDIA RTX 6000 Ada Generation": 96,
     "NVIDIA GeForce RTX 4090": 72,
+    "NVIDIA GeForce RTX 3090": 6,
 }
 L2_CACHE_BUFFER = None
 

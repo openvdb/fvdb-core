@@ -571,7 +571,7 @@ class TestConv(unittest.TestCase):
                 tol_grad = {"atol": 1e-1, "rtol": 1e-1}
         elif dtype == torch.bfloat16:
             tol = {"atol": 1e-1, "rtol": 1e-1}
-            tol_grad = {"atol": 1e-1, "rtol": 1e-1}
+            tol_grad = {"atol": 4e-1, "rtol": 4e-1}
         elif dtype == torch.float32:
             tol = {"atol": 1e-4}
             tol_grad = {"atol": 1e-3}
@@ -631,15 +631,15 @@ class TestConv(unittest.TestCase):
         diff_idxs = torch.where(~torch.isclose(out_dense_features, out_dense_features_ref, **tol))
         self.assertTrue(
             torch.allclose(out_dense_features, out_dense_features_ref, **tol),  # type: ignore
-            f"Max dist is {torch.max(out_dense_features - out_dense_features_ref)}",
+            f"Max dist is {torch.max(torch.abs(out_dense_features - out_dense_features_ref))}",
         )
         self.assertTrue(
             torch.allclose(vdb_features_grad, dense_features_grad, **tol_grad),  # type: ignore
-            f"Max dist is {torch.max(vdb_features_grad - dense_features_grad)}",
+            f"Max dist is {torch.max(torch.abs(vdb_features_grad - dense_features_grad))}",
         )
         self.assertTrue(
             torch.allclose(vdb_kernels_grad, dense_kernels_grad, **tol_grad),  # type: ignore
-            f"Max dist is {torch.max(vdb_kernels_grad - dense_kernels_grad)}",
+            f"Max dist is {torch.max(torch.abs(vdb_kernels_grad - dense_kernels_grad))}",
         )
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True

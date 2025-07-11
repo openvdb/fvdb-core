@@ -179,6 +179,10 @@ def splat_bezier_naive(pts, feats, grid):
 
 
 class TestSample(unittest.TestCase):
+    def setUp(self):
+        torch.random.manual_seed(0)
+        np.random.seed(0)
+
     @parameterized.expand(all_device_dtype_combos)
     def test_trilinear_dense_vs_pytorch(self, device, dtype):
         if dtype == torch.half:
