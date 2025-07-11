@@ -9,6 +9,7 @@
 #include <fvdb/detail/autograd/EvaluateSphericalHarmonics.h>
 #include <fvdb/detail/autograd/FillFromGrid.h>
 #include <fvdb/detail/autograd/GaussianRender.h>
+#include <fvdb/detail/autograd/Inject.h>
 #include <fvdb/detail/autograd/JaggedReduce.h>
 #include <fvdb/detail/autograd/MaxPoolGrid.h>
 #include <fvdb/detail/autograd/ReadFromDense.h>

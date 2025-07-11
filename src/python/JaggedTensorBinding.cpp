@@ -33,7 +33,7 @@ bind_jagged_tensor(py::module &m) {
             Returns:
             jt (JaggedTensor): The concatenated JaggedTensor with the same order as the list.)_FVDB_")
         .def(py::init<std::vector<std::vector<torch::Tensor>>&>(), py::arg("tensor_list"))
-        .def_property("jdata", &fvdb::JaggedTensor::jdata, &fvdb::JaggedTensor::set_data, "The data of the JaggedTensor.")
+        .def_property("jdata", &fvdb::JaggedTensor::jdata, &fvdb::JaggedTensor::set_jdata, "The data of the JaggedTensor.")
         .def_property_readonly("jidx", [](const fvdb::JaggedTensor& self) {
             // FIXME: (@fwilliams) This is a bit ugly and the abstraction leaks
             if (self.jidx().numel() == 0 && self.jdata().numel() > 0) {
