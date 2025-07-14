@@ -8,6 +8,7 @@
 
 #include <ATen/cuda/Atomic.cuh>
 #include <ATen/cuda/CUDAGeneratorImpl.h>
+#include <c10/cuda/CUDAGuard.h>
 
 namespace fvdb {
 namespace detail {

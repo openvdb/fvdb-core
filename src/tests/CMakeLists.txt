@@ -69,6 +69,7 @@ function(ConfigureTest CMAKE_TEST_NAME)
     $<TARGET_PROPERTY:fvdb,INTERFACE_INCLUDE_DIRECTORIES> # Get includes exposed by fvdb
     $<TARGET_PROPERTY:GTest::gtest,INTERFACE_INCLUDE_DIRECTORIES> # Get includes exposed by GTest::gtest
     $<TARGET_PROPERTY:GTest::gtest_main,INTERFACE_INCLUDE_DIRECTORIES> # Get includes exposed by GTest::gtest_main
+    ${CUDAToolkit_INCLUDE_DIRS}
   )
 
   target_compile_options(${CMAKE_TEST_NAME}_obj PRIVATE

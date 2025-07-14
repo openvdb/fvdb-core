@@ -12,7 +12,6 @@
 #include <nanovdb/NanoVDB.h>
 
 #include <ATen/Dispatch_v2.h>
-#include <c10/cuda/CUDAGuard.h>
 #include <c10/util/Half.h>
 #include <torch/extension.h>
 

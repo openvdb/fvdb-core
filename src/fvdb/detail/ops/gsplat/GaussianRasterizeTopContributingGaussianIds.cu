@@ -10,6 +10,8 @@
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 
+#include <c10/cuda/CUDAGuard.h>
+
 #include <cub/block/block_scan.cuh>
 
 #include <optional>

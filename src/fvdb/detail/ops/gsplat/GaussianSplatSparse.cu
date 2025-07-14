@@ -7,6 +7,7 @@
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <ATen/Dispatch_v2.h>
+#include <c10/cuda/CUDAGuard.h>
 
 #include <cub/cub.cuh>
 #include <cuda/std/atomic>

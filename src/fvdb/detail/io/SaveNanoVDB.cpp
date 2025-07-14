@@ -10,6 +10,7 @@
 #include <nanovdb/tools/GridBuilder.h>
 
 #include <c10/cuda/CUDACachingAllocator.h>
+#include <c10/cuda/CUDAGuard.h>
 #include <torch/all.h>
 
 #include <cuda.h>

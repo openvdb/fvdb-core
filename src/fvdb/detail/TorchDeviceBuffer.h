@@ -9,8 +9,6 @@
 
 #include <torch/types.h>
 
-#include <cuda_runtime_api.h>
-
 namespace fvdb {
 namespace detail {
 
@@ -89,7 +87,7 @@ class TorchDeviceBuffer {
     /// @return An instance of this class using move semantics
     static TorchDeviceBuffer create(uint64_t size,
                                     const TorchDeviceBuffer *guide = nullptr,
-                                    int device                     = cudaCpuDeviceId,
+                                    int device                     = -1, // cudaCpuDeviceId
                                     void *stream                   = nullptr);
 
 }; // TorchDeviceBuffer class

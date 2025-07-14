@@ -5,6 +5,8 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
+#include <c10/cuda/CUDAGuard.h>
+
 namespace fvdb {
 namespace detail {
 namespace ops {

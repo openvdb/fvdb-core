@@ -8,6 +8,7 @@
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <ATen/cuda/Atomic.cuh>
+#include <c10/cuda/CUDAGuard.h>
 
 #include <cooperative_groups.h>
 
