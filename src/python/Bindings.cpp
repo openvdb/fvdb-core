@@ -6,6 +6,7 @@
 #include <fvdb/Config.h>
 #include <fvdb/FVDB.h>
 
+#include <c10/cuda/CUDAFunctions.h>
 #include <torch/extension.h>
 
 #include <pybind11/numpy.h>

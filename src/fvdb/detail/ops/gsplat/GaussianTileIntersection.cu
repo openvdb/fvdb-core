@@ -5,7 +5,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
 
-#include <c10/cuda/CUDACachingAllocator.h>
+#include <c10/cuda/CUDAGuard.h>
 
 #include <cub/cub.cuh>
 #include <thrust/binary_search.h>

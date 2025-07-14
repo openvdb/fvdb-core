@@ -12,7 +12,7 @@
 
 #include <nanovdb/NanoVDB.h>
 
-#include <c10/cuda/CUDAStream.h>
+#include <c10/cuda/CUDAGuard.h>
 
 namespace fvdb {
 

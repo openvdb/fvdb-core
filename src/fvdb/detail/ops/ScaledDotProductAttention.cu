@@ -5,6 +5,7 @@
 #include <fvdb/detail/utils/BezierInterpolationIterator.h>
 
 #include <THC/THCAtomics.cuh>
+#include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAException.h>
 
 #if (defined(__CUDACC_VER_MAJOR__) && __CUDACC_VER_MAJOR__ >= 12)

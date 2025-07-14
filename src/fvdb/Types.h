@@ -8,7 +8,6 @@
 
 #include <nanovdb/NanoVDB.h>
 
-#include <c10/cuda/CUDAFunctions.h>
 #include <torch/all.h>
 
 namespace fvdb {

@@ -11,6 +11,7 @@
 
 #include <nanovdb/math/Math.h>
 
+#include <c10/cuda/CUDAGuard.h>
 #include <c10/util/Exception.h>
 
 #include <cub/block/block_scan.cuh>

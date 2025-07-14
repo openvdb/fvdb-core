@@ -6,6 +6,8 @@
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
+#include <c10/cuda/CUDAGuard.h>
+
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
 

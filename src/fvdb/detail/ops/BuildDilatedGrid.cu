@@ -11,6 +11,8 @@
 #include <nanovdb/tools/cuda/DilateGrid.cuh>
 #include <nanovdb/util/MorphologyHelpers.h>
 
+#include <c10/cuda/CUDAGuard.h>
+
 namespace fvdb::detail::ops {
 
 template <>
