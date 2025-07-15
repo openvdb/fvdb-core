@@ -685,8 +685,8 @@ GaussianSplat3d::savePly(const std::string &filename) const {
     plyf.write(outstream, true);
 }
 
-void
-GaussianSplat3d::loadPly(const std::string &filename, torch::Device device) {
+GaussianSplat3d
+GaussianSplat3d::fromPly(const std::string &filename, torch::Device device) {
     using namespace tinyply;
 
     std::ifstream instream(filename, std::ios::binary);
@@ -704,74 +704,76 @@ GaussianSplat3d::loadPly(const std::string &filename, torch::Device device) {
     }
 
     // Request position data (x, y, z)
-    std::shared_ptr<PlyData> position_data =
+    std::shared_ptr<PlyData> meansData =
         plyf.request_properties_from_element("vertex", {"x", "y", "z"});
-    std::shared_ptr<PlyData> opacity_data =
+    std::shared_ptr<PlyData> logitOpacitiesData =
         plyf.request_properties_from_element("vertex", {"opacity"});
-    std::shared_ptr<PlyData> scale_data =
+    std::shared_ptr<PlyData> logScalesData =
         plyf.request_properties_from_element("vertex", {"scale_0", "scale_1", "scale_2"});
-    std::shared_ptr<PlyData> rotation_data =
+    std::shared_ptr<PlyData> quatsData =
         plyf.request_properties_from_element("vertex", {"rot_0", "rot_1", "rot_2", "rot_3"});
 
     // Find all SH coefficient properties
-    std::vector<std::string> dc_properties;
-    std::vector<std::string> rest_properties;
+    std::vector<std::string> sh0PlyPropertyNames;
+    std::vector<std::string> shNPlyPropertyNames;
 
     for (const auto &prop: vertex_element_iter->properties) {
         if (prop.name.substr(0, 5) == "f_dc_") {
-            dc_properties.push_back(prop.name);
+            sh0PlyPropertyNames.push_back(prop.name);
         } else if (prop.name.substr(0, 7) == "f_rest_") {
-            rest_properties.push_back(prop.name);
+            shNPlyPropertyNames.push_back(prop.name);
         }
     }
 
     // Request SH coefficient data
-    std::shared_ptr<PlyData> sh_dc_data =
-        plyf.request_properties_from_element("vertex", dc_properties);
-    std::shared_ptr<PlyData> sh_rest_data =
-        plyf.request_properties_from_element("vertex", rest_properties);
+    std::shared_ptr<PlyData> sh0Data =
+        plyf.request_properties_from_element("vertex", sh0PlyPropertyNames);
+    std::shared_ptr<PlyData> shNData =
+        plyf.request_properties_from_element("vertex", shNPlyPropertyNames);
 
     // Read the file
     plyf.read(instream);
 
     // Get the number of vertices
-    size_t vertex_count = position_data->count;
+    size_t vertex_count = meansData->count;
 
     // Create tensors to hold the data
     torch::Tensor means = torch::from_blob(
-        position_data->buffer.get(), {static_cast<int64_t>(vertex_count), 3}, torch::kFloat32);
-    torch::Tensor opacities = torch::from_blob(
-        opacity_data->buffer.get(), {static_cast<int64_t>(vertex_count)}, torch::kFloat32);
-    torch::Tensor scales = torch::from_blob(
-        scale_data->buffer.get(), {static_cast<int64_t>(vertex_count), 3}, torch::kFloat32);
+        meansData->buffer.get(), {static_cast<int64_t>(vertex_count), 3}, torch::kFloat32);
+    torch::Tensor logitOpacities = torch::from_blob(
+        logitOpacitiesData->buffer.get(), {static_cast<int64_t>(vertex_count)}, torch::kFloat32);
+    torch::Tensor logScales = torch::from_blob(
+        logScalesData->buffer.get(), {static_cast<int64_t>(vertex_count), 3}, torch::kFloat32);
     torch::Tensor quats = torch::from_blob(
-        rotation_data->buffer.get(), {static_cast<int64_t>(vertex_count), 4}, torch::kFloat32);
+        quatsData->buffer.get(), {static_cast<int64_t>(vertex_count), 4}, torch::kFloat32);
 
     // Create tensor to hold SH coefficients
-    int sh_dc_channels   = static_cast<int>(dc_properties.size());
-    int sh_rest_channels = static_cast<int>(rest_properties.size());
-    int sh_degree        = static_cast<int>(std::sqrt(sh_rest_channels / 3 + 1)) - 1;
+    int numChannels  = static_cast<int>(sh0PlyPropertyNames.size());
+    int numShNCoeffs = static_cast<int>(shNPlyPropertyNames.size());
+    int nShNBases    = numShNCoeffs / numChannels;
 
-    torch::Tensor sh_0_coeffs; // (N, 1, D)
-    if (sh_dc_data && sh_dc_data->count > 0) {
-        sh_0_coeffs = torch::from_blob(sh_dc_data->buffer.get(),
-                                       {static_cast<int64_t>(vertex_count), 1, sh_dc_channels},
-                                       torch::kFloat32);
+    torch::Tensor sh0Coeffs; // (N, 1, D)
+    if (sh0Data && sh0Data->count > 0) {
+        sh0Coeffs = torch::from_blob(sh0Data->buffer.get(),
+                                     {static_cast<int64_t>(vertex_count), 1, numChannels},
+                                     torch::kFloat32);
     }
-    torch::Tensor sh_N_coeffs; // (N, K-1, D)
-    if (sh_rest_data && sh_rest_data->count > 0) {
-        sh_N_coeffs =
-            torch::from_blob(sh_rest_data->buffer.get(),
-                             {static_cast<int64_t>(vertex_count), sh_degree - 1, sh_dc_channels},
-                             torch::kFloat32);
+    torch::Tensor shNCoeffs; // (N, K-1, D)
+    if (shNData && shNData->count > 0) {
+        shNCoeffs = torch::from_blob(shNData->buffer.get(),
+                                     {static_cast<int64_t>(vertex_count), nShNBases, numChannels},
+                                     torch::kFloat32);
     }
 
-    mMeans          = means.to(device);
-    mQuats          = quats.to(device);
-    mLogScales      = scales.to(device);
-    mLogitOpacities = opacities.to(device);
-    mSh0            = sh_0_coeffs.to(device);
-    mShN            = sh_N_coeffs.to(device);
+    return GaussianSplat3d(means.to(device),
+                           quats.to(device),
+                           logScales.to(device),
+                           logitOpacities.to(device),
+                           sh0Coeffs.to(device),
+                           shNCoeffs.to(device),
+                           false,
+                           false,
+                           false);
 }
 
 std::tuple<torch::Tensor, torch::Tensor>

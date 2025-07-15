@@ -874,6 +874,20 @@ class TestGaussianRender(BaseGaussianTestCase):
         shN_loaded = shN_loaded.view(self.gs3d.num_gaussians, 15, 3)
         self.assertTrue(torch.allclose(shN_loaded, self.gs3d.shN))
 
+    def test_save_and_load_ply(self):
+        tf = tempfile.NamedTemporaryFile(delete=True, suffix=".ply")
+
+        self.gs3d.save_ply(tf.name)
+
+        gs3d_loaded = GaussianSplat3d.from_ply(tf.name)
+
+        self.assertTrue(torch.allclose(gs3d_loaded.means, self.gs3d.means))
+        self.assertTrue(torch.allclose(gs3d_loaded.quats, self.gs3d.quats))
+        self.assertTrue(torch.allclose(gs3d_loaded.log_scales, self.gs3d.log_scales))
+        self.assertTrue(torch.allclose(gs3d_loaded.logit_opacities, self.gs3d.logit_opacities))
+        self.assertTrue(torch.allclose(gs3d_loaded.sh0, self.gs3d.sh0))
+        self.assertTrue(torch.allclose(gs3d_loaded.shN, self.gs3d.shN))
+
     def test_gaussian_render(self):
         render_colors, render_alphas = self.gs3d.render_images(
             self.cam_to_world_mats,
@@ -1188,6 +1202,8 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
         )
 
         for pixels, sparse_ids, reference_ids in zip(pixels_to_render.unbind(), sparse_ids.unbind(), ids):
+            assert isinstance(pixels, torch.Tensor)
+            assert isinstance(sparse_ids, torch.Tensor)
             y_coords = pixels[:, 0]  # [num_pixels_to_render]
             x_coords = pixels[:, 1]  # [num_pixels_to_render]
             # Index reference_ids using the coordinates
@@ -1199,6 +1215,9 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
         for pixels, sparse_weights, reference_weights in zip(
             pixels_to_render.unbind(), sparse_weights.unbind(), weights
         ):
+            assert isinstance(pixels, torch.Tensor)
+            assert isinstance(sparse_ids, torch.Tensor)
+            assert isinstance(sparse_weights, torch.Tensor)
             y_coords = pixels[:, 0]  # [num_pixels_to_render]
             x_coords = pixels[:, 1]  # [num_pixels_to_render]
             # Index reference_weights using the coordinates
@@ -1257,6 +1276,8 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
         weights_regression = torch.load(self.data_path / "regression_top_contributors_weights.pt", weights_only=True)
 
         for pixels, sparse_ids, reference_ids in zip(pixels_to_render.unbind(), sparse_ids.unbind(), ids_regression):
+            assert isinstance(pixels, torch.Tensor)
+            assert isinstance(sparse_ids, torch.Tensor)
             y_coords = pixels[:, 0]  # [num_pixels_to_render]
             x_coords = pixels[:, 1]  # [num_pixels_to_render]
             # Index reference_ids using the coordinates
@@ -1268,6 +1289,9 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
         for pixels, sparse_weights, reference_weights in zip(
             pixels_to_render.unbind(), sparse_weights.unbind(), weights_regression
         ):
+            assert isinstance(pixels, torch.Tensor)
+            assert isinstance(sparse_ids, torch.Tensor)
+            assert isinstance(sparse_weights, torch.Tensor)
             y_coords = pixels[:, 0]  # [num_pixels_to_render]
             x_coords = pixels[:, 1]  # [num_pixels_to_render]
             # Index reference_weights using the coordinates
