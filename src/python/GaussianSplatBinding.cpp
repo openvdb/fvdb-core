@@ -155,10 +155,10 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("sh0"),
              py::arg("shN"))
         .def("save_ply", &fvdb::GaussianSplat3d::savePly, py::arg("filename"))
-        .def("load_ply",
-             &fvdb::GaussianSplat3d::loadPly,
-             py::arg("filename"),
-             py::arg("device") = torch::kCPU)
+        .def_static("from_ply",
+                    &fvdb::GaussianSplat3d::fromPly,
+                    py::arg("filename"),
+                    py::arg("device") = torch::kCPU)
         .def("reset_accumulated_gradient_state",
              &fvdb::GaussianSplat3d::resetAccumulatedGradientState)
         .def("project_gaussians_for_images",

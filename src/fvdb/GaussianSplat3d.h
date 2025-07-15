@@ -613,7 +613,7 @@ class GaussianSplat3d {
     /// of this GaussianSplat3d object
     /// @param filename Filename of the PLY file
     /// @param device Device to transfer the loaded tensors to
-    void loadPly(const std::string &filename, torch::Device device = torch::kCPU);
+    static GaussianSplat3d fromPly(const std::string &filename, torch::Device device = torch::kCPU);
 
     /// @brief Render using precomputed projected Gaussians (see
     /// @ref projectGaussiansForImages, @ref projectGaussiansForDepths,

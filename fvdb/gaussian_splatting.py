@@ -1510,17 +1510,25 @@ class GaussianSplat3d:
         """
         self._impl.save_ply(filename)
 
-    def load_ply(self, filename: str, device: torch.device = torch.device("cuda")) -> None:
+    @staticmethod
+    def from_ply(filename: str, device: torch.device | str = torch.device("cuda")) -> "GaussianSplat3d":
         """
-        Load the state of the GaussianSplat3d instance from a PLY file.
+        Create a `GaussianSplat3d` instance from a PLY file.
+
         Args:
             filename (str): The name of the file to load the PLY data from.
             device (torch.device): The device to load the data onto. Default is "cuda".
-        Raises:
-            FileNotFoundError: If the specified PLY file does not exist.
-            ValueError: If the PLY file does not contain the expected data format or structure.
+
+        Returns:
+            GaussianSplat3d: An instance of GaussianSplat3d initialized with the data from the PLY file.
         """
-        self._impl.load_ply(filename, device=device)
+        if not isinstance(device, (torch.device, str)):
+            raise TypeError(f"Expected device to be torch.device or str, got {type(device)}")
+        device_: torch.device = torch.device(device) if isinstance(device, str) else device
+        if device_.type == "cuda" and device_.index is None:
+            device_ = torch.device("cuda", torch.cuda.current_device())
+
+        return GaussianSplat3d(impl=GaussianSplat3dCpp.from_ply(filename=filename, device=device_))
 
     def set_state(
         self,
