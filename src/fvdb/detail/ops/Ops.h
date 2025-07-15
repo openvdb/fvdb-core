@@ -145,12 +145,6 @@ void dispatchReadFromDense(const GridBatchImpl &batchHdl,
                            torch::Tensor &outSparseTensor);
 
 template <c10::DeviceType>
-void dispatchFillFromGrid(const GridBatchImpl &fromGrid,
-                          const GridBatchImpl &toGrid,
-                          const torch::Tensor &fromFeatures,
-                          torch::Tensor &toFeatures);
-
-template <c10::DeviceType>
 JaggedTensor
 dispatchIjkToInvIndex(const GridBatchImpl &batchHdl, const JaggedTensor &ijk, bool cumulative);
 

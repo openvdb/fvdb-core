@@ -78,12 +78,7 @@ Inject::forward(AutogradContext *ctx,
 
 Inject::variable_list
 Inject::backward(AutogradContext *ctx, Inject::variable_list grad_output) {
-    // FIXME: We are making the dstFeaturesJData gradients contiguous here because
-    // inject doesn't support striding yet. This is generally bad because it can
-    // lead to memory overhead and performance issues. We should implement a more
-    // efficient way to handle strided tensors in the future.
-    // auto dLossDSrcFeaturesJData = grad_output[0].clone().contiguous();
-    // auto dLossDDstFeaturesJData = grad_output[1].clone().contiguous();
+    // We need to make copies here because we're going to modify these tensors and return them
     auto dLossDSrcFeaturesJData = grad_output[0].clone().contiguous();
     auto dLossDDstFeaturesJData = grad_output[1].clone().contiguous();
 

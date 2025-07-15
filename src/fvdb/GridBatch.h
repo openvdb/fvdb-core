@@ -279,17 +279,6 @@ struct GridBatch : torch::CustomClassHolder {
                                  const std::optional<Vec3iBatch> &min_coord = std::nullopt,
                                  const std::optional<Vec3i> &grid_size      = std::nullopt) const;
 
-    /// @brief Given a GridBatch and features associated with it,
-    ///        return a JaggedTensor representing features for this batch of grids.
-    ///        Fill any voxels not in the GridBatch with the default value.
-    /// @param other_features A JaggedTensor of shape [B, -1, *] containing features associated with
-    /// other_grid.
-    /// @param other_grid A GridBatch representing the grid to fill from.
-    /// @param default_value The value to fill in for voxels not in other_grid.
-    JaggedTensor fill_from_grid(const JaggedTensor &other_features,
-                                const GridBatch &other_grid,
-                                float default_value = 0.0f) const;
-
     /// @brief Convert grid coordinates to world coordinates
     /// @param ijk A JaggedTensor of grid coordinates with shape [B, -1, 3] (one point set per grid
     /// in the batch)
@@ -620,12 +609,6 @@ struct GridBatch : torch::CustomClassHolder {
     /// @param src Sidecar (of this gridbatch) to inject from
     /// @param dst Sidecar (of the desination gridbatch) to inject into
     void inject_to(const GridBatch &dstGrid, const JaggedTensor &src, JaggedTensor &dst) const;
-
-    /// @brief Injects sidecar data from the sidecar of the provided gridbatch, into this gridbatch
-    /// @param srcGrid Gridbatch to inject from
-    /// @param src Sidecar (of the source gridbatch) to inject from
-    /// @param dst Sidecar (of this gridbatch) to inject into
-    void inject_from(const GridBatch &srcGrid, const JaggedTensor &src, JaggedTensor &dst) const;
 
     /// @brief Return a batch of grids representing the clipped version of this batch of grids and
     /// corresponding features.

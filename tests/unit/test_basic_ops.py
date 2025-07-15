@@ -1299,56 +1299,6 @@ class TestBasicOps(unittest.TestCase):
         self.assertEqual(grid2.device, to_device)
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_fill_from_grid(self, device, dtype):
-        grid1 = GridBatch(device)
-        grid2 = GridBatch(device)
-
-        random_points_b1 = torch.randn(100, 3, device=device, dtype=dtype)
-        random_points_b2 = torch.randn(100, 3, device=device, dtype=dtype)
-
-        grid1.set_from_points(
-            JaggedTensor([random_points_b1[:70], random_points_b2[:70]]), voxel_sizes=0.01, origins=[0, 0, 0]
-        )
-        grid2.set_from_points(
-            JaggedTensor([random_points_b1[30:], random_points_b2[30:]]), voxel_sizes=0.01, origins=[0, 0, 0]
-        )
-
-        random_features_b1 = torch.randn(grid1[0].total_voxels, 32, device=device, dtype=dtype)
-        random_features_b2 = torch.randn(grid1[1].total_voxels, 32, device=device, dtype=dtype)
-        ret = grid2.fill_from_grid(JaggedTensor([random_features_b1, random_features_b2]), grid1)
-
-        # Perform an all pairs comparison between grid1 and grid2 points.
-        # All points that match up should have the same features.
-
-        # Test independently for both batches.
-        b1_comparison = torch.all(grid1[0].ijk.jdata.unsqueeze(0) == grid2[0].ijk.jdata.unsqueeze(1), dim=-1)
-        b2_comparison = torch.all(grid1[1].ijk.jdata.unsqueeze(0) == grid2[1].ijk.jdata.unsqueeze(1), dim=-1)
-
-        toinds, frominds = torch.where(b1_comparison)
-        self.assertTrue(torch.all(ret[0].jdata[toinds] == random_features_b1[frominds]))
-
-        toinds, frominds = torch.where(b2_comparison)
-        self.assertTrue(torch.all(ret[1].jdata[toinds] == random_features_b2[frominds]))
-
-        # All the rest should be zero.
-        self.assertTrue(torch.all(ret[0].jdata[~torch.any(b1_comparison, dim=1)] == 0.0))
-        self.assertTrue(torch.all(ret[1].jdata[~torch.any(b2_comparison, dim=1)] == 0.0))
-
-        # Test the gradients
-        grid1 = grid1[0]
-        grid2 = grid2[0]
-
-        random_features = torch.randn(grid1.total_voxels, 32, device=device, dtype=dtype, requires_grad=True)
-
-        out = grid2.fill_from_grid(random_features, grid1).jdata.sum()
-        out.backward()
-
-        one_indices = torch.where(torch.all(random_features.grad == 1.0, dim=1))[0]
-
-        toinds, frominds = torch.where(b1_comparison)
-        self.assertTrue(torch.all(one_indices == frominds))
-
-    @parameterized.expand(all_device_dtype_combos)
     def test_grid_construction(self, device, dtype):
         rand_ijk = torch.randint(-100, 100, (1000, 3), device=device)
         rand_pts = torch.randn(1000, 3, device=device, dtype=dtype)

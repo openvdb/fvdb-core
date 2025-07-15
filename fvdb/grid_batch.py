@@ -706,71 +706,113 @@ class GridBatch:
 
         return GridBatch(impl=self._impl.pruned_grid(mask))
 
-    def inject_to(self, dst_grid: "GridBatch", src: JaggedTensorOrTensor, dst: JaggedTensorOrTensor) -> None:
+    def inject_to(
+        self,
+        dst_grid: "GridBatch",
+        src: JaggedTensorOrTensor,
+        dst: JaggedTensorOrTensor | None = None,
+        default_value: float | int | bool = 0,
+    ) -> JaggedTensor:
         """
         Inject data from this grid to a destination grid.
-
-        Copies data from voxels in this grid to corresponding voxels in the destination grid.
-        This is an in-place operation that modifies the dst tensor.
+        This method copies sidecar data for voxels in this grid to a sidecar corresponding to voxels in the destination grid.
 
         The copy occurs in "index-space", the grid-to-world transform is not applied.
+
+        If you pass in the destination data (`dst`), it will be modified in-place.
+        If `dst` is None, a new JaggedTensor will be created with the same element shape as src
+        and filled with `default_value` for any voxels that do not have corresponding data in `src`.
 
         Args:
             dst_grid (GridBatch): The destination grid to inject data into.
-            src (JaggedTensor or torch.Tensor): Source data from this grid.
-                Shape: (total_voxels, channels).
-            dst (JaggedTensor or torch.Tensor): Destination data to be modified in-place.
-                Shape: (dst_total_voxels, channels).
+            src (JaggedTensor | torch.Tensor): Source data from this grid.
+                This must be a JaggedTensor with shape (grid_count, -1, *).
+            dst (JaggedTensor | torch.Tensor | None): Optional destination data to be modified in-place.
+                This must be a JaggedTensor with shape (grid_cont, -1, *) or None.
+            default_value (float | int | bool): Value to fill in for voxels that do not have corresponding data in `src`.
+                This is used only if `dst` is None. Default is 0.
 
         Returns:
-            None  (this modifies the dst_grid in place)
+            JaggedTensor: The destination sidecar data after injection.
         """
-        if not (is_JaggedTensorOrTensor(src) and is_JaggedTensorOrTensor(dst)):
-            raise TypeError(
-                f"src must be a JaggedTensorOrTensor, but got {type(src)}, "
-                f"dst must be a JaggedTensorOrTensor, but got {type(dst)}"
-            )
+        if not (is_JaggedTensorOrTensor(src)):
+            raise TypeError(f"src must be a JaggedTensorOrTensor, but got {type(src)}, ")
 
         if isinstance(src, torch.Tensor):
             src = JaggedTensor(src)
 
-        if isinstance(dst, torch.Tensor):
-            dst = JaggedTensor(dst)
+        if dst is None:
+            dst_shape = [dst_grid.total_voxels]
+            dst_shape.extend(src.eshape)
+            dst = dst_grid.jagged_like(
+                torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device)
+            )
+        else:
+            if not is_JaggedTensorOrTensor(dst):
+                raise TypeError(f"dst must be a JaggedTensorOrTensor, but got {type(dst)}")
+            if isinstance(dst, torch.Tensor):
+                dst = JaggedTensor(dst)
 
+        if dst.eshape != src.eshape:
+            raise ValueError(
+                f"src and dst must have the same element shape, but got src: {src.eshape}, dst: {dst.eshape}"
+            )
         self._impl.inject_to(dst_grid._impl, src, dst)
+        return dst
 
-    def inject_from(self, src_grid: "GridBatch", src: JaggedTensorOrTensor, dst: JaggedTensorOrTensor) -> None:
+    def inject_from(
+        self,
+        src_grid: "GridBatch",
+        src: JaggedTensorOrTensor,
+        dst: JaggedTensorOrTensor | None = None,
+        default_value: float | int | bool = 0,
+    ) -> JaggedTensor:
         """
-        Inject data from a source grid into this grid.
-
-        Copies data from voxels in the source grid to corresponding voxels in this grid.
-        This is an in-place operation that modifies this grid.
+        Inject data from the source grid to this grid.
+        This method copies sidecar data for voxels in the source grid to a sidecar corresponding to voxels in this grid.
 
         The copy occurs in "index-space", the grid-to-world transform is not applied.
 
+        If you pass in the destination data (`dst`), it will be modified in-place.
+        If `dst` is None, a new JaggedTensor will be created with the same element shape as src
+        and filled with `default_value` for any voxels that do not have corresponding data in `src`.
+
         Args:
-            src_grid (GridBatch): The source grid to inject data from.
-            src (JaggedTensor or torch.Tensor): Source data from the source grid.
-                Shape: (src_total_voxels, channels).
-            dst (JaggedTensor or torch.Tensor): Destination data in this grid to be modified in-place.
-                Shape: (total_voxels, channels).
+            dst_grid (GridBatch): The destination grid to inject data into.
+            src (JaggedTensor | torch.Tensor): Source data from this grid.
+                This must be a JaggedTensor with shape (grid_count, -1, *).
+            dst (JaggedTensor | torch.Tensor | None): Optional destination data to be modified in-place.
+                This must be a JaggedTensor with shape (grid_cont, -1, *) or None.
+            default_value (float | int | bool): Value to fill in for voxels that do not have corresponding data in `src`.
+                This is used only if `dst` is None. Default is 0.
 
         Returns:
-            None  (this modifies the dst tensor in place)
+            JaggedTensor: The destination sidecar data after injection.
         """
-        if not (is_JaggedTensorOrTensor(src) and is_JaggedTensorOrTensor(dst)):
-            raise TypeError(
-                f"src must be a JaggedTensorOrTensor, but got {type(src)}, "
-                f"dst must be a JaggedTensorOrTensor, but got {type(dst)}"
-            )
+        if not (is_JaggedTensorOrTensor(src)):
+            raise TypeError(f"src must be a JaggedTensorOrTensor, but got {type(src)}, ")
 
         if isinstance(src, torch.Tensor):
             src = JaggedTensor(src)
 
-        if isinstance(dst, torch.Tensor):
-            dst = JaggedTensor(dst)
+        if dst is None:
+            dst_shape = [self.total_voxels]
+            dst_shape.extend(src.eshape)
+            dst = self.jagged_like(torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device))
+        else:
+            if not is_JaggedTensorOrTensor(dst):
+                raise TypeError(f"dst must be a JaggedTensorOrTensor, but got {type(dst)}")
+            if isinstance(dst, torch.Tensor):
+                dst = JaggedTensor(dst)
 
-        self._impl.inject_from(src_grid._impl, src, dst)
+        if dst.eshape != src.eshape:
+            raise ValueError(
+                f"src and dst must have the same element shape, but got src: {src.eshape}, dst: {dst.eshape}"
+            )
+
+        src_grid._impl.inject_to(self._impl, src, dst)
+
+        return dst
 
     def dual_bbox_at(self, bi: int) -> torch.Tensor:
         """
@@ -801,42 +843,6 @@ class GridBatch:
             GridBatch: A new GridBatch representing the dual grid.
         """
         return GridBatch(impl=self._impl.dual_grid(exclude_border))
-
-    def fill_from_grid(
-        self, other_features: JaggedTensorOrTensor, other_grid: "GridBatch", default_value: float = 0.0
-    ) -> JaggedTensor:
-        """
-        Fill voxel features from another grid's features.
-
-        For each voxel in this grid, looks up the corresponding voxel in the other grid
-        and copies its features. If a voxel doesn't exist in the other grid, uses the
-        default value.
-
-        The copy occurs in "index-space", the grid-to-world transform is not applied.
-
-        Args:
-            other_features (JaggedTensor or torch.Tensor): Features from the other grid.
-                Shape: (other_total_voxels, channels).
-            other_grid (GridBatch): The other grid to copy features from.
-            default_value (float): Value to use for voxels that don't exist in the other grid.
-                Default is 0.0.
-
-        Returns:
-            JaggedTensor: Features for this grid's voxels, copied from the other grid where available.
-                Shape: (total_voxels, channels).
-        """
-        if not (is_JaggedTensorOrTensor(other_features) and isinstance(other_grid, GridBatch)):
-            raise TypeError(
-                f"other_features must be a JaggedTensorOrTensor, but got {type(other_features)}, "
-                f"other_grid must be a GridBatch, but got {type(other_grid)}"
-            )
-
-        if isinstance(other_features, torch.Tensor):
-            other_features = JaggedTensor(other_features)
-
-        return self._impl.fill_from_grid(
-            other_features, other_grid._impl if isinstance(other_grid, GridBatch) else other_grid, default_value
-        )
 
     def grid_to_world(self, ijk: JaggedTensorOrTensor) -> JaggedTensor:
         """

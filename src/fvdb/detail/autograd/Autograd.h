@@ -7,7 +7,6 @@
 #include <fvdb/detail/autograd/Attention.h>
 #include <fvdb/detail/autograd/AvgPoolGrid.h>
 #include <fvdb/detail/autograd/EvaluateSphericalHarmonics.h>
-#include <fvdb/detail/autograd/FillFromGrid.h>
 #include <fvdb/detail/autograd/GaussianRender.h>
 #include <fvdb/detail/autograd/Inject.h>
 #include <fvdb/detail/autograd/JaggedReduce.h>

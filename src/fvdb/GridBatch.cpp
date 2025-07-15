@@ -336,39 +336,6 @@ GridBatch::write_to_dense(const JaggedTensor &sparse_data,
 }
 
 JaggedTensor
-GridBatch::fill_from_grid(const JaggedTensor &other_features,
-                          const GridBatch &other_grid,
-                          float default_value) const {
-    c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        other_features.ldim() == 1,
-        "Expected features to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        other_features.ldim(),
-        "list dimensions");
-
-    auto shape = detail::spliceShape({total_voxels()}, other_features.jdata());
-
-    JaggedTensor ret = mImpl->jaggedTensor(
-        torch::full(shape,
-                    default_value,
-                    torch::TensorOptions().device(device()).dtype(other_features.jdata().dtype())));
-
-    auto retData = detail::autograd::Inject::apply(other_grid.mImpl,
-                                                   other_features.jdata(),
-                                                   other_features.joffsets(),
-                                                   other_features.jidx(),
-                                                   other_features.jlidx(),
-                                                   mImpl,
-                                                   ret.jdata(),
-                                                   ret.joffsets(),
-                                                   ret.jidx(),
-                                                   ret.jlidx());
-
-    return JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
-        retData[1], ret.joffsets(), ret.jidx(), ret.jlidx(), grid_count());
-}
-
-JaggedTensor
 GridBatch::grid_to_world(const JaggedTensor &ijk) const {
     c10::DeviceGuard guard(device());
     TORCH_CHECK_VALUE(
@@ -824,41 +791,6 @@ GridBatch::inject_to(const GridBatch &dstGrid, const JaggedTensor &src, JaggedTe
                                                dst.jidx(),
                                                dst.jlidx());
 
-    // Make sure we set the jdata of the destination JaggedTensor after the operation
-    // to ensure gradients are correctly propagated.
-    // NOTE: You would think we should be able to do this in the autograd::Inject operation
-    //       by passing the the dst as a mutable reference, but that does not work
-    //       correctly in the autograd engine, so we have to do it here.
-    dst.set_jdata(ret[1]);
-}
-
-void
-GridBatch::inject_from(const GridBatch &srcGrid, const JaggedTensor &src, JaggedTensor &dst) const {
-    c10::DeviceGuard guard(device());
-
-    TORCH_CHECK_VALUE(this->grid_count() == src.num_tensors(),
-                      "Source GridBatch should match number of tensors");
-    TORCH_CHECK_VALUE(srcGrid.grid_count() == dst.num_tensors(),
-                      "Destination GridBatch should match number of tensors");
-    TORCH_CHECK_VALUE(this->device() == srcGrid.device(),
-                      "Source/destination GridBatches should be on the same device");
-    TORCH_CHECK_VALUE(this->device() == src.device(),
-                      "Source GridBatch should be on the same device");
-    TORCH_CHECK_VALUE(srcGrid.device() == dst.device(),
-                      "Destination GridBatch should be on the same device");
-    TORCH_CHECK_VALUE(src.ldim() == 1, "Source data should be a list of tensors");
-    TORCH_CHECK_VALUE(dst.ldim() == 1, "Destination data should be a list of tensors");
-
-    auto ret = detail::autograd::Inject::apply(srcGrid.mImpl,
-                                               src.jdata(),
-                                               src.joffsets(),
-                                               src.jidx(),
-                                               src.jlidx(),
-                                               mImpl,
-                                               dst.jdata(),
-                                               dst.joffsets(),
-                                               dst.jidx(),
-                                               dst.jlidx());
     // Make sure we set the jdata of the destination JaggedTensor after the operation
     // to ensure gradients are correctly propagated.
     // NOTE: You would think we should be able to do this in the autograd::Inject operation

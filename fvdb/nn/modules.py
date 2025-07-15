@@ -149,7 +149,7 @@ class FillFromGrid(nn.Module):
         else:
             return input
 
-        new_feature = other_grid.fill_from_grid(input.data, input.grid, self.default_value)
+        new_feature = other_grid.inject_from(input.grid, input.data, default_value=self.default_value)
         return VDBTensor(other_grid, new_feature, kmap=other_kmap)
 
 
