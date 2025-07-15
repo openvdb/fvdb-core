@@ -106,7 +106,6 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/SampleGridBezierWithGrad.cu
     fvdb/detail/ops/JaggedTensorIndex.cu
     fvdb/detail/ops/SampleRaysUniform.cu
-    fvdb/detail/ops/FillFromGrid.cu
     fvdb/detail/ops/SplatIntoGridTrilinear.cu
     fvdb/detail/ops/DownsampleGridMaxPool.cu
     fvdb/detail/ops/SampleGridBezier.cu

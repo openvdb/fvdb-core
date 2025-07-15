@@ -417,24 +417,6 @@ bind_grid_batch(py::module &m) {
                         sparse_data (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, *]` of values indexed by this grid batch.
                 )_FVDB_")
 
-        .def("fill_from_grid",
-             &fvdb::GridBatch::fill_from_grid,
-             py::arg("features"),
-             py::arg("other_grid"),
-             py::arg("default_value") = 0.0,
-             R"_FVDB_(
-                    Given a GridBatch and features associated with it, return a JaggedTensor representing features for this batch of grid.
-                    Fill any voxels not in the GridBatch with the default value.
-
-                    Args:
-                        other_features (JaggedTensor): A JaggedTensor of shape `[B, -1, *]` containing features associated with other_grid.
-                        other_grid (GridBatch): A GridBatch containing the grid to fill from.
-                        default_value (float): The value to fill in for voxels not in the GridBatch (default 0.0).
-
-                    Returns:
-                        filled_features (JaggedTensor): A JaggedTensor of shape `[B, -1, *]` of features associated with this batch of grids.
-                )_FVDB_")
-
         // Derived grids
         .def("dual_grid", &fvdb::GridBatch::dual_grid, py::arg("exclude_border") = false, R"_FVDB_(
                 Return a batch of grids representing the dual of this batch.
@@ -554,19 +536,6 @@ bind_grid_batch(py::module &m) {
                                       src (JaggedTensor): Source sidecar (corresponding to this gridbatch)
                                       dst (JaggedTensor): Destination sidecar (corresponding to the destination gridbatch given as input)
                                )_FVDB_")
-        .def("inject_from",
-             &fvdb::GridBatch::inject_from,
-             py::arg("src_grid"),
-             py::arg("src"),
-             py::arg("dst"),
-             R"_FVDB_(
-                                                     Injects a sidecar of data to the present gridbatch from a provided source
-
-                                                     Args:
-                                                         src_grid (GridBatch): Source gridbatch to inject from
-                                                         src (JaggedTensor): Source sidecar (corresponding to the destination gridbatch given as input)
-                                                         dst (JaggedTensor): Destination sidecar (corresponding to this gridbatch)
-                                                  )_FVDB_")
 
         // Clipping to a bounding box
         .def("clip",
