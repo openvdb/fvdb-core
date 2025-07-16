@@ -423,7 +423,7 @@ struct RasterizeBackwardArgs {
     inline __device__ void
     calculateMeansConicsAndOpacitiesGradientContribution(
         ScalarType opac,
-        ScalarType vis,
+        ScalarType expMinusSigma,
         ScalarType alphaGradientContribution,
         const vec3t &conic,
         const vec2t &delta,
@@ -432,8 +432,9 @@ struct RasterizeBackwardArgs {
         vec2t &outMean2dAbsGradientContribution,
         ScalarType &outOpacityGradientContribution) const {
         // Contribution from this pixel to sigma for this Gaussian
-        const ScalarType sigmaGradientContribution = -opac * vis * alphaGradientContribution;
-        outConicGradientContribution               = {
+        const ScalarType sigmaGradientContribution =
+            -opac * expMinusSigma * alphaGradientContribution;
+        outConicGradientContribution = {
             ScalarType{0.5} * sigmaGradientContribution * delta[0] * delta[0],
             sigmaGradientContribution * delta[0] * delta[1],
             ScalarType{0.5} * sigmaGradientContribution * delta[1] * delta[1]};
@@ -444,7 +445,7 @@ struct RasterizeBackwardArgs {
             outMean2dAbsGradientContribution = {abs(outMean2dGradientContribution[0]),
                                                 abs(outMean2dGradientContribution[1])};
         }
-        outOpacityGradientContribution = vis * alphaGradientContribution;
+        outOpacityGradientContribution = expMinusSigma * alphaGradientContribution;
     }
 
     /// @brief Calculate the gradient contribution from this pixel to the gradients of the loss with
@@ -475,9 +476,12 @@ struct RasterizeBackwardArgs {
     /// @param outOpacityGradientContribution The gradient contribution from this pixel to the
     /// gradient of the loss with respect to the opacity of this Gaussian
     /// @return Whether this Gaussian contributes to this pixel
-    inline __device__ bool
+    inline __device__ void
     calculateGradientContributions(const uint32_t cameraId,
                                    const Gaussian2D<ScalarType> &gaussian,
+                                   const vec2t &delta,
+                                   const ScalarType expMinusSigma,
+                                   const ScalarType alpha,
                                    const ScalarType *gaussianFeature,
                                    const ScalarType *dLossDRenderedFeature,
                                    const ScalarType dLossDRenderedAlpha,
@@ -493,21 +497,8 @@ struct RasterizeBackwardArgs {
                                    vec2t &outMean2dGradientContribution,
                                    vec2t &outMean2dAbsGradientContribution,
                                    ScalarType &outOpacityGradientContribution) const {
-        constexpr ScalarType ALPHA_THRESHOLD = ScalarType{0.999};
-
-        const vec3t conic      = gaussian.conic;
-        const ScalarType opac  = gaussian.opacity;
-        const auto delta       = gaussian.delta(px, py);
-        const ScalarType sigma = gaussian.sigma(px, py);
-        const ScalarType vis   = __expf(-sigma);
-        const ScalarType alpha = min(ALPHA_THRESHOLD, opac * vis);
-
-        const bool gaussianIsValid =
-            !(sigma < ScalarType{0} || alpha < static_cast<ScalarType>(1.f / 255.f));
-        // if there are no active thread in this warp, skip this loop
-        if (!gaussianIsValid) {
-            return false;
-        }
+        const vec3t conic     = gaussian.conic;
+        const ScalarType opac = gaussian.opacity;
 
         // Compute the transmittance for the current gaussian
         const ScalarType oneOverOneMinusAlpha = ScalarType{1} / (ScalarType{1} - alpha);
@@ -532,9 +523,9 @@ struct RasterizeBackwardArgs {
                                                numChannels,
                                                calculateMeansConicsAndOpacitiesGradient);
 
-        if (opac * vis <= ALPHA_THRESHOLD) {
+        if (opac * expMinusSigma <= commonArgs.ALPHA_THRESHOLD) {
             calculateMeansConicsAndOpacitiesGradientContribution(opac,
-                                                                 vis,
+                                                                 expMinusSigma,
                                                                  alphaGradientContribution,
                                                                  conic,
                                                                  delta,
@@ -545,8 +536,6 @@ struct RasterizeBackwardArgs {
         }
 
         accumulateFeaturesStep(gaussianFeature, fac, numChannels, accumFeature);
-
-        return true;
     }
 
     /// @brief Compute the gradient of the loss with respect to the parameters of the Gaussians
@@ -656,10 +645,22 @@ struct RasterizeBackwardArgs {
                     const ScalarType py =
                         row + ScalarType(commonArgs.mImageOriginH) + ScalarType{0.5};
 
-                    bool valid = pixelIsActive;
-                    if (batchEnd - t > lastGaussianId) {
-                        valid = false;
+                    bool valid = pixelIsActive && (batchEnd - t <= lastGaussianId);
+
+                    const auto [gaussianIsValid, delta, expMinusSigma, alpha] = [&]() {
+                        if (valid) {
+                            return commonArgs.evalGaussian(sharedGaussians[t], px, py);
+                        }
+                        return std::make_tuple(false, vec2t{}, ScalarType{0}, ScalarType{0});
+                    }();
+
+                    valid = valid && gaussianIsValid;
+
+                    // if there are no active thread in this warp, skip this loop
+                    if (!warp.any(valid)) {
+                        continue;
                     }
+
                     // How much each pixel contributes to the gradient of the parameters for
                     // this gaussian Initialize to 0 and only set if this pixel is valid
                     ScalarType featureGradientContribution[NUM_SHARED_CHANNELS] = {ScalarType{0}};
@@ -668,28 +669,28 @@ struct RasterizeBackwardArgs {
                     vec2t mean2dAbsGradientContribution    = {ScalarType{0}, ScalarType{0}};
                     ScalarType opacityGradientContribution = ScalarType{0};
 
-                    valid = valid && calculateGradientContributions(
-                                         cameraId,
-                                         sharedGaussians[t],
-                                         &sharedGaussianFeatures[t * NUM_SHARED_CHANNELS],
-                                         dLossDRenderedFeature,
-                                         dLossDRenderedAlpha,
-                                         px,
-                                         py,
-                                         finalTransmittance,
-                                         numChannels,
-                                         isLastChunk,
-                                         accumTransmittance,
-                                         accumFeature,
-                                         featureGradientContribution,
-                                         conicGradientContribution,
-                                         mean2dGradientContribution,
-                                         mean2dAbsGradientContribution,
-                                         opacityGradientContribution);
-
-                    // if there are no active thread in this warp, skip this loop
-                    if (!warp.any(valid)) {
-                        continue;
+                    if (valid) {
+                        calculateGradientContributions(
+                            cameraId,
+                            sharedGaussians[t],
+                            delta,
+                            expMinusSigma,
+                            alpha,
+                            &sharedGaussianFeatures[t * NUM_SHARED_CHANNELS],
+                            dLossDRenderedFeature,
+                            dLossDRenderedAlpha,
+                            px,
+                            py,
+                            finalTransmittance,
+                            numChannels,
+                            isLastChunk,
+                            accumTransmittance,
+                            accumFeature,
+                            featureGradientContribution,
+                            conicGradientContribution,
+                            mean2dGradientContribution,
+                            mean2dAbsGradientContribution,
+                            opacityGradientContribution);
                     }
 
                     // Accumulate the gradient contribution to this Gaussian from every

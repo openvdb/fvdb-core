@@ -184,10 +184,10 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Ras
                 for (uint32_t t = 0; (t < batchSize) && !done; ++t) {
                     const Gaussian2D<ScalarType> gaussian = sharedGaussians[t];
 
-                    const ScalarType sigma = gaussian.sigma(px, py);
-                    const ScalarType alpha = min(0.999f, gaussian.opacity * __expf(-sigma));
+                    const auto [gaussianIsValid, delta, expMinusSigma, alpha] =
+                        commonArgs.evalGaussian(gaussian, px, py);
 
-                    if (sigma < 0.f || alpha < 1.f / 255.f) {
+                    if (!gaussianIsValid) {
                         continue;
                     }
 

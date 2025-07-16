@@ -48,6 +48,7 @@ initJaggedAccessor(const fvdb::JaggedTensor &tensor, const std::string &name) {
 /// @tparam IS_PACKED Whether the Gaussian is packed (i.e. linearized across the outer dimensions)
 template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct RasterizeCommonArgs {
     constexpr static size_t NUM_OUTER_DIMS         = IS_PACKED ? 1 : 2;
+    constexpr static ScalarType ALPHA_THRESHOLD    = ScalarType{0.999};
     using vec2t                                    = nanovdb::math::Vec2<ScalarType>;
     using vec3t                                    = nanovdb::math::Vec3<ScalarType>;
     template <typename T, int N> using TorchRAcc64 = fvdb::TorchRAcc64<T, N>;
@@ -215,6 +216,23 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
                 mOpacities[cid][gid],
                 vec3t(mConics[cid][gid][0], mConics[cid][gid][1], mConics[cid][gid][2]));
         }
+    }
+
+    // Evaluate a Gaussian at a given pixel
+    // @return tuple: {gaussianIsValid, delta, exp(-sigma),
+    //   alpha = min(ALPHA_THRESHOLD, opacity * exp(-sigma))}
+    inline __device__ auto
+    evalGaussian(const Gaussian2D<ScalarType> &gaussian,
+                 const ScalarType px,
+                 const ScalarType py) const {
+        const auto delta         = gaussian.delta(px, py);
+        const auto sigma         = gaussian.sigma(px, py);
+        const auto expMinusSigma = __expf(-sigma);
+        const auto alpha         = min(ALPHA_THRESHOLD, gaussian.opacity * expMinusSigma);
+
+        const bool gaussianIsValid = !(sigma < 0 || alpha < 1.f / 255.f);
+
+        return std::make_tuple(gaussianIsValid, delta, expMinusSigma, alpha);
     }
 
     // Get the pixel index for a sparse pixel in the output tensor
