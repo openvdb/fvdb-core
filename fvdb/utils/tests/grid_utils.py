@@ -5,9 +5,16 @@ from typing import Union
 
 import numpy as np
 import torch
+from fvdb.types import (
+    DeviceIdentifier,
+    NumericMaxRank1,
+    Vec3d,
+    Vec3i,
+    to_PositiveVec3i,
+    to_Vec3f,
+)
 
-from fvdb import GridBatch, gridbatch_from_dense
-from fvdb.types import Vec3d, Vec3i
+from fvdb import Grid, GridBatch, gridbatch_from_dense
 
 NumberOrVec3 = Union[Vec3i, Vec3d, int, float]
 Vec3 = Union[Vec3i, Vec3d]
@@ -58,7 +65,7 @@ def gridbatch_from_dense_cube(
     return gridbatch_from_dense(1, resolution, voxel_sizes=voxel_size, origins=origin, device=str(device))
 
 
-def make_dense_grid_and_point_data(nvox, device, dtype):
+def make_dense_grid_and_point_data(nvox, device, dtype) -> tuple[GridBatch, GridBatch, torch.Tensor]:
     grid_origin = (0.0, 0.0, 0.0)
     voxel_size = 1.0 / (np.floor(0.5 * nvox) + 0.5)
 
@@ -85,7 +92,9 @@ def make_dense_grid_and_point_data(nvox, device, dtype):
     return fvdb, fvdb_d, p
 
 
-def make_gridbatch_and_point_data(device, dtype, include_boundary_points: bool = False, expand: int = 10):
+def make_gridbatch_and_point_data(
+    device, dtype, include_boundary_points: bool = False, expand: int = 10
+) -> tuple[GridBatch, GridBatch, torch.Tensor]:
     p = torch.randn((100, 3), device=device, dtype=dtype)
     vox_size = 0.05
     grid = GridBatch(device=device)
@@ -109,6 +118,126 @@ def make_gridbatch_and_point_data(device, dtype, include_boundary_points: bool =
         samples = torch.cat([primal_pts] * expand, dim=0)
         samples += torch.randn_like(samples) * vox_size
         mask = grid.points_in_active_voxel(samples).jdata
+        found = not (torch.all(mask) or torch.all(~mask))
+
+    samples = samples.to(dtype)
+
+    assert not torch.all(mask)
+    assert not torch.all(~mask)
+
+    return grid, grid_d, samples
+
+
+# ------------------------------------------------
+# SINGLE GRID UTILITIES
+# ------------------------------------------------
+
+
+def grid_from_dense_cube(
+    resolution: NumericMaxRank1,
+    cube_min: NumericMaxRank1 = (0.0, 0.0, 0.0),
+    cube_max: NumericMaxRank1 = (1.0, 1.0, 1.0),
+    voxel_center: bool = False,
+    device: DeviceIdentifier = "cpu",
+) -> Grid:
+    """Create a Grid from a dense cube specification.
+
+    Args:
+        resolution: Grid resolution, broadcastable to shape (3,), integer dtype
+        cube_min: Minimum corner of the cube, broadcastable to shape (3,), floating dtype
+        cube_max: Maximum corner of the cube, broadcastable to shape (3,), floating dtype
+        voxel_center: If True, voxels are positioned at cube corners, else at centers
+        device: Device to create the grid on
+
+    Returns:
+        Grid: A new grid covering the specified cube
+    """
+    resolution = to_PositiveVec3i(resolution, device=device)
+    cube_min = to_Vec3f(cube_min, device=device)
+    cube_max = to_Vec3f(cube_max, device=device)
+
+    if torch.any(cube_max <= cube_min):
+        raise ValueError("cube_max must be greater than cube_min in all axes")
+
+    if voxel_center:
+        voxel_size = (cube_max - cube_min) / (resolution.to(torch.float64) - 1.0)
+        origin = cube_min
+    else:
+        voxel_size = (cube_max - cube_min) / resolution.to(torch.float64)
+        origin = cube_min + 0.5 * voxel_size
+
+    return Grid.from_dense(resolution, voxel_size=voxel_size, origin=origin, device=device)
+
+
+def make_dense_grid_and_point_data_single(
+    nvox: int, device: DeviceIdentifier, dtype: torch.dtype
+) -> tuple[Grid, Grid, torch.Tensor]:
+    """Create a dense grid and point data for testing.
+
+    Args:
+        nvox: Number of voxels parameter for grid sizing
+        device: Device to create tensors on
+        dtype: Data type for tensors
+
+    Returns:
+        tuple: (primal_grid, dual_grid, points)
+    """
+    grid_origin = (0.0, 0.0, 0.0)
+    voxel_size = 1.0 / (np.floor(0.5 * nvox) + 0.5)
+    target_vox = int(2 * np.floor(0.5 * nvox) + 1) ** 3
+    target_corners = int(2 * np.floor(0.5 * nvox) + 2) ** 3
+
+    p = (2.0 * torch.rand(1, 3) - 1.0).to(device).to(dtype)
+    grid: Grid | None = None
+    while grid is None or grid.num_voxels != target_vox:
+        p = (2.0 * torch.rand(10 * p.shape[0], 3) - 1.0).to(device)
+        p = torch.clip(p, -1.0 + 0.25 * voxel_size, 1.0 - 0.25 * voxel_size).to(dtype)
+        grid = Grid.from_points(p, voxel_size, grid_origin, device=device)
+
+    grid_d = grid.dual_grid()
+    assert grid_d.num_voxels == target_corners
+    dual_corners_xyz = grid_d.grid_to_world(grid_d.ijk.float())
+    assert torch.allclose(dual_corners_xyz.min(0)[0], -torch.ones(3).to(dual_corners_xyz))
+    assert torch.allclose(dual_corners_xyz.max(0)[0], torch.ones(3).to(dual_corners_xyz))
+
+    return grid, grid_d, p
+
+
+def make_grid_and_point_data(
+    device: DeviceIdentifier, dtype: torch.dtype, include_boundary_points: bool = False, expand: int = 10
+) -> tuple[Grid, Grid, torch.Tensor]:
+    """Create a grid and point data for testing.
+
+    Args:
+        device: Device to create tensors on
+        dtype: Data type for tensors
+        include_boundary_points: If True, create points both inside and outside the grid
+        expand: Number of times to replicate points when creating boundary samples
+
+    Returns:
+        tuple: (primal_grid, dual_grid, points)
+    """
+    p = torch.randn((100, 3), device=device, dtype=dtype)
+    vox_size = 0.05
+    grid = Grid.from_points(p, vox_size, [0.0] * 3, device=device).dilated_grid(1)
+    grid_d = grid.dual_grid()
+
+    if not include_boundary_points:
+        return grid, grid_d, p
+
+    # Ensure some samples land inside and outside the voxel grid
+    # We create samples by sampling in a radius roughly the size of a voxel around each
+    # voxel center so that some points will land outside but only slightly
+    found = False
+    mask = torch.zeros(1)
+    samples = torch.zeros(1)
+    while not found:
+        # Do everything in double then cast so fp16 samples are
+        # as close as possible from double and float
+        primal_pts = grid.grid_to_world(grid.ijk.double())
+        samples = torch.cat([primal_pts] * expand, dim=0)
+        samples += torch.randn_like(samples) * vox_size
+        mask = grid.points_in_active_voxel(samples)
         found = not (torch.all(mask) or torch.all(~mask))
 
     samples = samples.to(dtype)

@@ -642,7 +642,7 @@ class TestBasicOps(unittest.TestCase):
         # np.random.seed(0)
 
         grid, grid_d, p = make_gridbatch_and_point_data(device, dtype, include_boundary_points=True)
-        voxel_size = grid.voxel_sizes
+        voxel_size = grid.voxel_size_at(0)
 
         primal_mask = grid.cubes_in_grid(p).jdata
         dual_mask = grid_d.cubes_in_grid(p, -voxel_size / 2, voxel_size / 2).jdata

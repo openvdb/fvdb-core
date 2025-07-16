@@ -14,8 +14,11 @@ from git.exc import InvalidGitRepositoryError
 from parameterized import parameterized
 
 from .grid_utils import (
+    grid_from_dense_cube,
     gridbatch_from_dense_cube,
     make_dense_grid_and_point_data,
+    make_dense_grid_and_point_data_single,
+    make_grid_and_point_data,
     make_gridbatch_and_point_data,
 )
 from .gsplat_utils import (
@@ -153,6 +156,9 @@ __all__ = [
     "gridbatch_from_dense_cube",
     "make_dense_grid_and_point_data",
     "make_gridbatch_and_point_data",
+    "grid_from_dense_cube",
+    "make_dense_grid_and_point_data_single",
+    "make_grid_and_point_data",
     "generate_random_4x4_xform",
     "create_uniform_grid_points_at_depth",
     "generate_center_frame_point_at_depth",
