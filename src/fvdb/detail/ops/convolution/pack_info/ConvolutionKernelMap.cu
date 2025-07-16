@@ -25,32 +25,35 @@ convolutionKernelMapVoxelCallback(int32_t batchIdx,
                                   const nanovdb::Coord &stride) {
     using LeafNodeType = typename nanovdb::OnIndexTree::LeafNodeType;
 
-    const nanovdb::OnIndexGrid *source = sourceBatchAcc.grid(batchIdx);
     const nanovdb::OnIndexGrid *target = targetBatchAcc.grid(batchIdx);
-
-    const LeafNodeType &leaf = target->tree().template getFirstNode<0>()[leafIdx];
-    auto sourceAcc           = source->getAccessor();
-
-    const int64_t targetBaseOffset = targetBatchAcc.voxelOffset(batchIdx);
-    const int64_t sourceBaseOffset = sourceBatchAcc.voxelOffset(batchIdx);
-
-    const nanovdb::Coord tCoord = leaf.offsetToGlobalCoord(voxelIdx);
-    const nanovdb::Coord sCoord(
-        tCoord.x() * stride.z(), tCoord.y() * stride.y(), tCoord.z() * stride.x());
-
-    const int kIdx = channelIdx; // = kx + ky * ks[0] + kz * ks[1] * ks[0];
-    auto ks0ks1    = kernelSize.x() * kernelSize.y();
-    const int kz   = kernelStart.z() + (channelIdx / ks0ks1);
-    const int ky   = kernelStart.y() + ((channelIdx % ks0ks1) / kernelSize.x());
-    const int kx   = kernelStart.x() + ((channelIdx % ks0ks1) % kernelSize.x());
-
+    const LeafNodeType &leaf           = target->tree().template getFirstNode<0>()[leafIdx];
     if (leaf.isActive(voxelIdx)) {
-        const nanovdb::Coord sOffset = sCoord + nanovdb::Coord(kz, ky, kx);
-        if (sourceAcc.isActive(sOffset)) {
-            kmap[targetBaseOffset + leaf.getValue(voxelIdx) - 1][kIdx] =
-                sourceBaseOffset + sourceAcc.getValue(sOffset) - 1;
-        } else {
-            kmap[targetBaseOffset + leaf.getValue(voxelIdx) - 1][kIdx] = -1;
+        const nanovdb::OnIndexGrid *source = sourceBatchAcc.grid(batchIdx);
+        auto sourceAcc                     = source->getAccessor();
+
+        const int64_t targetBaseOffset = targetBatchAcc.voxelOffset(batchIdx);
+        const int64_t sourceBaseOffset = sourceBatchAcc.voxelOffset(batchIdx);
+
+        const nanovdb::Coord tCoord = leaf.offsetToGlobalCoord(voxelIdx);
+        const nanovdb::Coord sCoord(
+            tCoord.x() * stride.z(), tCoord.y() * stride.y(), tCoord.z() * stride.x());
+
+        const int64_t targetOffset = targetBaseOffset + leaf.getValue(voxelIdx) - 1;
+
+        int kIdx = 0;
+        for (int kz = kernelStart.z(); kz < kernelStart.z() + kernelSize.z(); ++kz) {
+            for (int ky = kernelStart.y(); ky < kernelStart.y() + kernelSize.y(); ++ky) {
+                for (int kx = kernelStart.x(); kx < kernelStart.x() + kernelSize.x();
+                     ++kx, ++kIdx) {
+                    const nanovdb::Coord sOffset = sCoord + nanovdb::Coord(kz, ky, kx);
+                    if (sourceAcc.isActive(sOffset)) {
+                        kmap[targetOffset][kIdx] =
+                            sourceBaseOffset + sourceAcc.getValue(sOffset) - 1;
+                    } else {
+                        kmap[targetOffset][kIdx] = -1;
+                    }
+                }
+            }
         }
     }
 }
@@ -132,8 +135,7 @@ dispatchConvolutionKernelMap<torch::kCUDA>(const GridBatchImpl &sourceBatchHdl,
                                           kernelSizeCoord,
                                           strideCoord);
     };
-    forEachVoxelCUDA(
-        128, kernelSizeCoord.x() * kernelSizeCoord.y() * kernelSizeCoord.z(), targetBatchHdl, cb);
+    forEachVoxelCUDA(DEFAULT_BLOCK_DIM, 1, targetBatchHdl, cb);
 }
 
 template <>
