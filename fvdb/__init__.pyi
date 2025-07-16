@@ -33,6 +33,7 @@ from ._Cpp import (
     volume_render,
 )
 from .gaussian_splatting import GaussianSplat3d
+from .grid import Grid, load_grid, save_grid
 from .grid_batch import (
     GridBatch,
     gridbatch_from_dense,
@@ -41,7 +42,9 @@ from .grid_batch import (
     gridbatch_from_nearest_voxels_to_points,
     gridbatch_from_points,
     load,
+    load_gridbatch,
     save,
+    save_gridbatch,
 )
 from .sparse_conv_pack_info import SparseConvPackInfo
 
@@ -65,11 +68,13 @@ __all__ = [
     "gridbatch_from_nearest_voxels_to_points",
     "gridbatch_from_dense",
     "gridbatch_from_mesh",
+    "load_gridbatch",
+    "save_gridbatch",
     "load",
+    "save",
     "jcat",
     "scaled_dot_product_attention",
     "config",
-    "save",
     "jrand",
     "jrandn",
     "jones",
@@ -77,4 +82,7 @@ __all__ = [
     "jempty",
     "volume_render",
     "gaussian_render_jagged",
+    "Grid",
+    "load_grid",
+    "save_grid",
 ]

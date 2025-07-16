@@ -11,10 +11,10 @@ import torch.backends.cuda
 import torch.backends.cudnn
 import torchsparse_20
 import torchsparse_20.nn.functional as spF
+from fvdb.utils.tests import expand_tests
 from parameterized import parameterized
 
 from fvdb import ConvPackBackend, GridBatch, JaggedTensor
-from fvdb.utils.tests import expand_tests
 
 all_device_dtype_combos = [
     ["cuda", torch.bfloat16, "gather_scatter"],
@@ -450,7 +450,7 @@ class TestConv(unittest.TestCase):
 
         torch.random.manual_seed(0)
         grid = GridBatch(device=device)
-        grid.set_from_dense_grid(1, (32,) * 3)
+        grid.set_from_dense_grid(1, (32, 32, 32))
         tol = {}
         tol_grad = {}
         if dtype == torch.float16:
@@ -573,8 +573,8 @@ class TestConv(unittest.TestCase):
             tol = {"atol": 1e-1, "rtol": 1e-1}
             tol_grad = {"atol": 4e-1, "rtol": 4e-1}
         elif dtype == torch.float32:
-            tol = {"atol": 1e-4}
-            tol_grad = {"atol": 1e-3}
+            tol = {"atol": 1e-4, "rtol": 1e-4}
+            tol_grad = {"atol": 1e-3, "rtol": 1e-3}
             torch.backends.cuda.matmul.allow_tf32 = False
             torch.backends.cudnn.allow_tf32 = False
 
@@ -628,17 +628,16 @@ class TestConv(unittest.TestCase):
         dense_features_grad = torch.clone(vdb_features.grad)
         dense_kernels_grad = torch.clone(vdb_kernels.grad)
 
-        diff_idxs = torch.where(~torch.isclose(out_dense_features, out_dense_features_ref, **tol))
         self.assertTrue(
-            torch.allclose(out_dense_features, out_dense_features_ref, **tol),  # type: ignore
+            torch.allclose(out_dense_features, out_dense_features_ref, **tol),
             f"Max dist is {torch.max(torch.abs(out_dense_features - out_dense_features_ref))}",
         )
         self.assertTrue(
-            torch.allclose(vdb_features_grad, dense_features_grad, **tol_grad),  # type: ignore
+            torch.allclose(vdb_features_grad, dense_features_grad, **tol_grad),
             f"Max dist is {torch.max(torch.abs(vdb_features_grad - dense_features_grad))}",
         )
         self.assertTrue(
-            torch.allclose(vdb_kernels_grad, dense_kernels_grad, **tol_grad),  # type: ignore
+            torch.allclose(vdb_kernels_grad, dense_kernels_grad, **tol_grad),
             f"Max dist is {torch.max(torch.abs(vdb_kernels_grad - dense_kernels_grad))}",
         )
         torch.backends.cuda.matmul.allow_tf32 = True

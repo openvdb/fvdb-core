@@ -329,8 +329,8 @@ class GridBatch:
         self, points: JaggedTensor, voxel_data: JaggedTensor
     ) -> tuple[JaggedTensor, JaggedTensor]: ...
     def segments_along_rays(
-        self, ray_origins: torch.Tensor, ray_directions: torch.Tensor, max_segments: int, eps: float = 0.0
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]: ...
+        self, ray_origins: JaggedTensor, ray_directions: JaggedTensor, max_segments: int, eps: float = 0.0
+    ) -> JaggedTensor: ...
     def set_from_dense_grid(
         self,
         num_grids: int,
@@ -390,26 +390,26 @@ class GridBatch:
     def to(self, to_grid: GridBatch) -> GridBatch: ...
     def uniform_ray_samples(
         self,
-        ray_origins: torch.Tensor,
-        ray_directions: torch.Tensor,
-        t_min: float,
-        t_max: float,
+        ray_origins: JaggedTensor,
+        ray_directions: JaggedTensor,
+        t_min: JaggedTensor,
+        t_max: JaggedTensor,
         step_size: float,
         cone_angle: float = 0.0,
         include_end_segments: bool = True,
         return_midpoints: bool = False,
         eps: float = 0.0,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
+    ) -> JaggedTensor: ...
     def voxel_size_at(self, arg0: int) -> torch.Tensor: ...
     def voxels_along_rays(
         self,
-        ray_origins: torch.Tensor,
-        ray_directions: torch.Tensor,
+        ray_origins: JaggedTensor,
+        ray_directions: JaggedTensor,
         max_voxels: int,
         eps: float = 0.0,
         return_ijk: bool = True,
         cumulative: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
+    ) -> tuple[JaggedTensor, JaggedTensor]: ...
     def world_to_grid(self, points: JaggedTensor) -> JaggedTensor: ...
     def write_to_dense(
         self, sparse_data: JaggedTensor, min_coord: Vec3iBatch | None = ..., grid_size: Vec3i | None = ...

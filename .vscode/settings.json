@@ -39,8 +39,12 @@
     "python.testing.unittestArgs": [
         "-v", "-s", "."
     ],
-    "python.testing.pytestEnabled": false,
-    "python.testing.unittestEnabled": true,
+    "python.testing.pytestEnabled": true,
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestArgs": [
+        "-v",
+        "tests"
+    ],
     "black-formatter.args": [
         "--target-version=py311",
         "--line-length=120"

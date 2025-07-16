@@ -81,8 +81,17 @@ from .grid_batch import (
     gridbatch_from_nearest_voxels_to_points,
     gridbatch_from_dense,
     gridbatch_from_mesh,
+    load_gridbatch,
+    save_gridbatch,
     load,
     save,
+)
+
+
+from .grid import (
+    Grid,
+    load_grid,
+    save_grid,
 )
 
 # Import SparseConvPackInfo from sparse_conv_pack_info.py
@@ -146,11 +155,13 @@ __all__ = [
     "gridbatch_from_nearest_voxels_to_points",
     "gridbatch_from_dense",
     "gridbatch_from_mesh",
+    "load_gridbatch",
+    "save_gridbatch",
     "load",
+    "save",
     "jcat",
     "scaled_dot_product_attention",
     "config",
-    "save",
     "jrand",
     "jrandn",
     "jones",
@@ -158,4 +169,7 @@ __all__ = [
     "jempty",
     "volume_render",
     "gaussian_render_jagged",
+    "Grid",
+    "load_grid",
+    "save_grid",
 ]
