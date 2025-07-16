@@ -82,15 +82,15 @@ Inject::backward(AutogradContext *ctx, Inject::variable_list grad_output) {
     auto dLossDSrcFeaturesJData = grad_output[0].clone().contiguous();
     auto dLossDDstFeaturesJData = grad_output[1].clone().contiguous();
 
-    auto srcGrid     = ctx->saved_data["src_grid"].toCustomClass<GridBatchImpl>();
-    auto srcJOffsets = ctx->saved_data["src_joffsets"].toTensor();
-    auto srcJIdx     = ctx->saved_data["src_jidx"].toTensor();
-    auto srcJLIdx    = ctx->saved_data["src_jlidx"].toTensor();
+    const auto srcGrid     = ctx->saved_data["src_grid"].toCustomClass<GridBatchImpl>();
+    const auto srcJOffsets = ctx->saved_data["src_joffsets"].toTensor();
+    const auto srcJIdx     = ctx->saved_data["src_jidx"].toTensor();
+    const auto srcJLIdx    = ctx->saved_data["src_jlidx"].toTensor();
 
-    auto dstGrid     = ctx->saved_data["dst_grid"].toCustomClass<GridBatchImpl>();
-    auto dstJOffsets = ctx->saved_data["dst_joffsets"].toTensor();
-    auto dstJIdx     = ctx->saved_data["dst_jidx"].toTensor();
-    auto dstJLIdx    = ctx->saved_data["dst_jlidx"].toTensor();
+    const auto dstGrid     = ctx->saved_data["dst_grid"].toCustomClass<GridBatchImpl>();
+    const auto dstJOffsets = ctx->saved_data["dst_joffsets"].toTensor();
+    const auto dstJIdx     = ctx->saved_data["dst_jidx"].toTensor();
+    const auto dstJLIdx    = ctx->saved_data["dst_jlidx"].toTensor();
 
     // Rebuild JaggedTensors for the gradients using saved JOffsets, JIdx, and JLIdx
     JaggedTensor dLossDDstFeatures = JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
@@ -108,8 +108,14 @@ Inject::backward(AutogradContext *ctx, Inject::variable_list grad_output) {
     // into dLoss/dDstFeatures so the gradient is zero for those locations.
     // This is necessary because we may have injected into the same voxels multiple times, in which
     // case we only want to backpropagate the gradient for the last injected value.
-    JaggedTensor injectZeros =
-        dLossDSrcFeatures.jagged_like(torch::zeros_like(dLossDSrcFeaturesJData));
+    //
+    // Note that we don't actually allocate a tensor of all zeros but instead rely on striding and
+    // only allocate a tensor with one zero that we expand to the right shape.
+    // This is a memory optimization to avoid allocating large tensors unnecessarily.
+    const std::vector<int64_t> allOnesShape(dLossDSrcFeaturesJData.dim(), 1);
+    const auto injectZerosJData = torch::zeros(allOnesShape, dLossDSrcFeaturesJData.options())
+                                      .expand(dLossDSrcFeaturesJData.sizes());
+    const JaggedTensor injectZeros = dLossDSrcFeatures.jagged_like(injectZerosJData);
     FVDB_DISPATCH_KERNEL_DEVICE(srcGrid->device(), [&]() {
         ops::dispatchInject<DeviceTag>(*dstGrid, *srcGrid, dLossDDstFeatures, injectZeros);
     });
