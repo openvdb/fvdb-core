@@ -1,24 +1,21 @@
+version: '3'
 services:
   fvdb-dev:
     build:
       context: ../
       dockerfile: fvdb/Dockerfile
-
-    command: sleep infinity
+      args:
+        MODE: dev
     volumes:
       - ../:/openvdb
-      # --- SSH Agent Forwarding ---
-      # Mount the SSH agent socket from your host into the container.
-      # The devcontainer extension automatically resolves ${SSH_AUTH_SOCK} on the host.
-      - type: bind
-        source: ${SSH_AUTH_SOCK}
-        target: /tmp/ssh-agent.sock
-
+    # Uncomment and adjust the following as needed
+    # ports:
+    #   - "8888:8888"  # Example for Jupyter notebook
+    entrypoint: /bin/bash
+    stdin_open: true
+    tty: true
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
-      # --- SSH Agent Forwarding ---
-      # Tell tools inside the container where to find the agent socket.
-      - SSH_AUTH_SOCK=/tmp/ssh-agent.sock
     deploy:
       resources:
         reservations:

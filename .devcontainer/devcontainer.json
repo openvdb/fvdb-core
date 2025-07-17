@@ -1,7 +1,11 @@
 {
     "name": "FVDB Development Environment",
+
+    // Ensure SSH agent is running before starting
+    "initializeCommand": "test -z \"$SSH_AUTH_SOCK\" && eval \"$(ssh-agent -s)\" || true",
+
     "dockerComposeFile": [
-        "../docker-compose.yml"
+        "docker-compose-devcontainer.yml"
     ],
     "service": "fvdb-dev",
     "workspaceFolder": "/openvdb/fvdb",
@@ -26,8 +30,7 @@
     // This runs after you connect, good for user-specific setup like SSH.
     "postAttachCommand": "rm -rf ~/.ssh && ln -sfn /tmp/.ssh-localhost ~/.ssh",
 
-    // This mounts the host's .ssh directory to a generic location inside the container.
-    // We will then symlink it in the postCreateCommand.
+    // Mount SSH keys directory
     "mounts": [
         "source=${localEnv:HOME}/.ssh,target=/tmp/.ssh-localhost,type=bind,readonly"
     ],
@@ -36,13 +39,25 @@
     "customizations": {
         "vscode": {
             "extensions": [
+                "llvm-vs-code-extensions.vscode-clangd",
+                "ms-azuretools.vscode-docker",
+                "ms-python.black-formatter",
+                "ms-python.debugpy",
+                "ms-python.isort",
                 "ms-python.python",
-                "ms-vscode.cpptools",
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "ms-toolsai.tensorboard",
                 "ms-vscode.cmake-tools",
-                "ms-azuretools.vscode-docker"
+                "ms-vscode.cpptools-extension-pack",
+                "ms-vscode.cpptools",
+                "rodolphebarbanneau.python-docstring-highlighter",
+                "Seaube.clangformat",
             ],
             "settings": {
-                "python.defaultInterpreterPath": "/opt/conda/envs/fvdb/bin/python"
+                "python.defaultInterpreterPath": "/opt/conda/envs/fvdb/bin/python",
+                "remote.SSH.enableAgentForwarding": true,
+                "remote.containers.sshAgentSocketMount": true
             }
         }
     },
