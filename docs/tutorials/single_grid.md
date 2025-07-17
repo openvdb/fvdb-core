@@ -21,8 +21,6 @@ device = torch.device("cuda:0")
 
 # Load your point cloud data
 points = torch.randn(1000, 3, device=device)
-query_points = torch.randn(500, 3, device=device)
-features = torch.randn(len(points), 32, device=device)
 
 # Creating a grid from points requires instantiation then population
 grid_batch = GridBatch(device=device)
@@ -31,6 +29,9 @@ grid_batch.set_from_points(
     voxel_sizes=0.1,
     origins=[0, 0, 0]
 )
+
+features = torch.randn(grid_batch.total_voxels, 32, device=device)
+query_points = torch.randn(500, 3, device=device)
 
 # Sampling requires handling JaggedTensor inputs/outputs
 sample_points = JaggedTensor(query_points)
@@ -50,13 +51,14 @@ device = torch.device("cuda:0")
 
 # Load your point cloud data
 points = torch.randn(1000, 3, device=device)
-query_points = torch.randn(500, 3, device=device)
 
 # Clean creation using classmethod
 grid = Grid.from_points(points, voxel_size=0.1, origin=[0, 0, 0], device=device)
 
 # Assume features tensor matches grid voxel count
 features = torch.randn(grid.num_voxels, 32, device=device)
+
+query_points = torch.randn(500, 3, device=device)
 
 # Direct tensor operations - no JaggedTensor wrapping needed
 interpolated = grid.sample_trilinear(query_points, features)

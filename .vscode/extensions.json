@@ -17,6 +17,9 @@
     ],
     // List of extensions recommended by VS Code that should not be recommended for users of this workspace.
     "unwantedRecommendations": [
-
+        "ms-kubernetes-tools.vscode-kubernetes-tools",
+        "davidanson.vscode-markdownlint",
+        "anysphere.remote-wsl",
+        "eamodio.gitlens"
     ]
 }
