@@ -111,6 +111,39 @@ class TestBasicOps(unittest.TestCase):
         self.assertTrue(torch.equal(merged_grid_batch.ijk.jdata, expected_grid.ijk.jdata))
 
     @parameterized.expand(["cpu", "cuda"])
+    def test_merge_empty_grids(self, device):
+        def get_point_list(npc: list, device: torch.device | str) -> list[torch.Tensor]:
+            batch_size = len(npc)
+            plist = []
+            for i in range(batch_size):
+                ni = npc[i]
+                plist.append(torch.randn((ni, 3), dtype=torch.float32, device=device, requires_grad=False))
+            return plist
+
+        batch_size = 2
+        vxl_size = 0.4
+        npc = torch.randint(low=0, high=1000, size=(batch_size,), device=device).tolist()
+        plist = get_point_list(npc, device)
+        pc_jagged = fvdb.JaggedTensor(plist)
+        grid_batch1 = fvdb.gridbatch_from_points(pc_jagged, voxel_sizes=[[vxl_size] * 3] * batch_size)
+        npc = torch.zeros(size=(batch_size,), dtype=torch.int32, device=device).tolist()
+        plist = get_point_list(npc, device)
+        pc_jagged = fvdb.JaggedTensor(plist)
+        grid_batch2 = fvdb.gridbatch_from_points(pc_jagged, voxel_sizes=[[vxl_size] * 3] * batch_size)
+
+        # Merge non-empty gridbatch against an empty one
+        merged_grid_batch = grid_batch1.merged_grid(grid_batch2)
+        self.assertTrue(torch.equal(merged_grid_batch.ijk.jdata, grid_batch1.ijk.jdata))
+
+        # Merge empty gridbatch against a non-empty one
+        merged_grid_batch = grid_batch2.merged_grid(grid_batch1)
+        self.assertTrue(torch.equal(merged_grid_batch.ijk.jdata, grid_batch1.ijk.jdata))
+
+        # Merge empty gridbatch against a non-empty one
+        merged_grid_batch = grid_batch2.merged_grid(grid_batch2)
+        self.assertTrue(torch.equal(merged_grid_batch.ijk.jdata, grid_batch2.ijk.jdata))
+
+    @parameterized.expand(["cpu", "cuda"])
     def test_prune_grids(self, device):
         def get_point_list(npc: list, device: torch.device | str) -> list[torch.Tensor]:
             batch_size = len(npc)
