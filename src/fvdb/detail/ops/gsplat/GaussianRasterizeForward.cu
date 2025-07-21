@@ -20,8 +20,6 @@
 #include <cstdint>
 #include <optional>
 
-#define PRAGMA_UNROLL _Pragma("unroll")
-
 namespace fvdb::detail::ops {
 namespace {
 
@@ -219,7 +217,7 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Ras
         }
 
         if (pixelIsActive) {
-            auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
+            const auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
             writeAlpha(pixIdx, 1.0f - accumTransmittance);
             writeLastId(pixIdx, curIdx);
             writeFeatures(pixIdx, [&](uint32_t k) {
@@ -235,41 +233,31 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Ras
 /// @param args The arguments for the rasterization
 template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED>
 __global__ void
-rasterizeGaussiansForward(RasterizeForwardArgs<ScalarType, NUM_CHANNELS, IS_PACKED> forwardArgs) {
-    auto &commonArgs = forwardArgs.commonArgs;
+rasterizeGaussiansForward(RasterizeForwardArgs<ScalarType, NUM_CHANNELS, IS_PACKED> args) {
+    auto &commonArgs = args.commonArgs;
 
-    // each thread draws one pixel, but also timeshares caching gaussians in a
-    // shared tile
     int32_t cameraId;
     int32_t tileRow;
     int32_t tileCol;
-    uint32_t row, col;
+    uint32_t row;
+    uint32_t col;
 
     cuda::std::tie(cameraId, tileRow, tileCol, row, col) =
         commonArgs.mIsSparse ? commonArgs.sparseCoordinates() : commonArgs.denseCoordinates();
 
-    // Whether this pixel is inside the image bounds.
     // NOTE: We keep threads which correspond to pixels outside the image bounds around
     //       to load gaussians from global memory, but they do not contribute to the output.
-    bool pixelInImage = (row < commonArgs.mImageHeight && col < commonArgs.mImageWidth);
 
-    // Index of this pixel in the output for the block if it is active
-    // Only used in sparse mode, computed using CUB BlockScan
-    uint32_t activePixelIndex = 0;
-
-    if (commonArgs.mIsSparse) {
-        // Use CUB BlockScan to compute the index of each active pixel in the block
-        __shared__
-        typename cub::BlockScan<uint32_t, 16, cub::BLOCK_SCAN_RAKING, 16>::TempStorage tempStorage;
-        pixelInImage = commonArgs.tilePixelActive();
-        cub::BlockScan<uint32_t, 16, cub::BLOCK_SCAN_RAKING, 16>(tempStorage)
-            .ExclusiveSum(pixelInImage, activePixelIndex);
-        __syncthreads();
-    }
+    // pixelInImage: Whether this pixel is inside the image bounds.
+    // activePixelIndex: Index of this pixel in the output for the block if it is active (sparse
+    // mode only).
+    bool pixelInImage{false};
+    uint32_t activePixelIndex{0};
+    cuda::std::tie(pixelInImage, activePixelIndex) = commonArgs.activePixelIndex(row, col);
 
     if (commonArgs.mHasMasks && pixelInImage && !commonArgs.mMasks[cameraId][tileRow][tileCol]) {
         auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
-        forwardArgs.writeFeatures(pixIdx, [&](uint32_t k) {
+        args.writeFeatures(pixIdx, [&](uint32_t k) {
             return commonArgs.mHasBackgrounds ? commonArgs.mBackgrounds[cameraId][k] : 0.0f;
         });
         return;
@@ -280,14 +268,14 @@ rasterizeGaussiansForward(RasterizeForwardArgs<ScalarType, NUM_CHANNELS, IS_PACK
     cuda::std::tie(firstGaussianIdInBlock, lastGaussianIdInBlock) =
         commonArgs.tileGaussianRange(cameraId, tileRow, tileCol);
 
-    forwardArgs.volumeRenderTileForward(cameraId,
-                                        row,
-                                        col,
-                                        firstGaussianIdInBlock,
-                                        lastGaussianIdInBlock,
-                                        blockDim.x * blockDim.y,
-                                        pixelInImage,
-                                        activePixelIndex);
+    args.volumeRenderTileForward(cameraId,
+                                 row,
+                                 col,
+                                 firstGaussianIdInBlock,
+                                 lastGaussianIdInBlock,
+                                 blockDim.x * blockDim.y,
+                                 pixelInImage,
+                                 activePixelIndex);
 }
 
 /// @brief Get the shared memory requirements for the forward pass kernel
