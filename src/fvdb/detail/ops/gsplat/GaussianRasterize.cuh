@@ -10,7 +10,10 @@
 
 #include <nanovdb/math/Math.h>
 
+#include <cub/block/block_scan.cuh>
 #include <cuda/std/tuple>
+
+#define PRAGMA_UNROLL _Pragma("unroll")
 
 namespace fvdb::detail::ops {
 
@@ -196,6 +199,26 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
             TORCH_CHECK_VALUE(mTilePixelCumsum.size(0) == mActiveTiles.size(0),
                               "Bad size for tilePixelCumsum");
         }
+    }
+
+    // Get the index of the current pixel in the current block
+    inline __device__ cuda::std::tuple<bool, uint32_t>
+    activePixelIndex(uint32_t row, uint32_t col) {
+        uint32_t index = 0;
+        bool pixelInImage =
+            mIsSparse ? tilePixelActive() : (row < mImageHeight && col < mImageWidth);
+
+        if (mIsSparse) {
+            // Use CUB BlockScan to compute the index of each active pixel in the block
+            __shared__
+            typename cub::BlockScan<uint32_t, 16, cub::BLOCK_SCAN_RAKING, 16>::TempStorage
+                tempStorage;
+
+            cub::BlockScan<uint32_t, 16, cub::BLOCK_SCAN_RAKING, 16>(tempStorage)
+                .ExclusiveSum(pixelInImage, index);
+            __syncthreads();
+        }
+        return {pixelInImage, index};
     }
 
     // Construct a Gaussian2D object from the input tensors at the given index

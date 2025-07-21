@@ -98,6 +98,11 @@ class PackedJaggedAccessor {
     template <typename T, size_t N>
     using TensorAccessorType = torch::GenericPackedTensorAccessor<T, N, PtrTraits, index_t>;
 
+    inline __hostdev__ JOffsetsType
+    numTensors() const {
+        return mOffsets.size(0) - 1;
+    }
+
     /// @brief Get the number of elements in the jagged tensor
     /// @return The number of elements in the jagged tensor
     inline __hostdev__ index_t

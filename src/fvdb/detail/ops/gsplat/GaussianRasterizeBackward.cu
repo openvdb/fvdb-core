@@ -29,23 +29,28 @@ struct RasterizeBackwardArgs {
     constexpr static bool IS_CHUNKED = (NUM_CHANNELS != NUM_SHARED_CHANNELS);
     bool mAbsGrad;
 
-    CommonArgs::template TorchRAcc64<ScalarType, 4> mRenderedAlphas; // [C, imgH, imgW, 1]
-    CommonArgs::template TorchRAcc64<int32_t, 3> mLastGaussianIds;   // [C, imgH, imgW]
-    CommonArgs::template TorchRAcc64<ScalarType, 4>
-        mDLossDRenderedFeatures; // [C, imgH, imgW, NUM_CHANNELS]
-    CommonArgs::template TorchRAcc64<ScalarType, 4> mDLossDRenderedAlphas; // [C, imgH, imgW, 1]
+    // These are either a packed tensor accessor or a jagged tensor accessor, depending on the
+    // mode (dense or sparse, respectively). In sparse mode, they have dimensions {C, [AP_i, X]},
+    // where AP_i is the number of active pixels in the i-th camera image and X is [], null, or
+    // [NUM_CHANNELS]. In dense mode, they have dimensions {1, [C, H, W, X]}
+    fvdb::JaggedRAcc64<ScalarType, 2> mRenderedAlphas; // {1, [C, H, W, 1]} or {C, [AP_i, 1]}
+    fvdb::JaggedRAcc64<int32_t, 1> mLastGaussianIds;   // {1, [C, H, W]} or {C, [AP_i]}
+    fvdb::JaggedRAcc64<ScalarType, 2>
+        mDLossDRenderedFeatures; // {1, [C, H, W, NUM_CHANNELS]} or {C, [numPixels, NUM_CHANNELS]}
+    fvdb::JaggedRAcc64<ScalarType, 2>
+        mDLossDRenderedAlphas;   // {1, [C, H, W, 1]} or {C, [numPixels, 1]}
 
-    VectorAccessor mOutDLossDMeans2dAbs;                                   // [C, N, 2] or [nnz, 2]
-    VectorAccessor mOutDLossDMeans2d;                                      // [C, N, 2] or [nnz, 2]
-    VectorAccessor mOutDLossDConics;                                       // [C, N, 3] or [nnz, 3]
-    VectorAccessor mOutDLossDFeatures;  // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
-    ScalarAccessor mOutDLossDOpacities; // [C, N] or [nnz]
+    VectorAccessor mOutDLossDMeans2dAbs; // [C, N, 2] or [nnz, 2]
+    VectorAccessor mOutDLossDMeans2d;    // [C, N, 2] or [nnz, 2]
+    VectorAccessor mOutDLossDConics;     // [C, N, 3] or [nnz, 3]
+    VectorAccessor mOutDLossDFeatures;   // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
+    ScalarAccessor mOutDLossDOpacities;  // [C, N] or [nnz]
 
     RasterizeBackwardArgs(
-        const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]
-        const torch::Tensor &conics,    // [C, N, 3] or [nnz, 3]
-        const torch::Tensor &opacities, // [C, N] or [nnz]
-        const torch::Tensor &features,  // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
+        const torch::Tensor &means2d,    // [C, N, 2] or [nnz, 2]
+        const torch::Tensor &conics,     // [C, N, 3] or [nnz, 3]
+        const torch::Tensor &opacities,  // [C, N] or [nnz]
+        const torch::Tensor &features,   // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
         const at::optional<torch::Tensor> &backgrounds, // [C, NUM_CHANNELS]
         const at::optional<torch::Tensor> &masks,       // [C, numTilesH, numTilesW]
         const uint32_t imageWidth,
@@ -53,17 +58,23 @@ struct RasterizeBackwardArgs {
         const uint32_t imageOriginW,
         const uint32_t imageOriginH,
         const uint32_t tileSize,
-        const torch::Tensor &tileOffsets,            // [C, numTilesH, numTilesW]
-        const torch::Tensor &tileGaussianIds,        // [totalIntersections]
-        const torch::Tensor &renderedAlphas,         // [C, imageHeight, imageWidth, 1]
-        const torch::Tensor &lastGaussianIds,        // [C, imageHeight, imageWidth]
-        const torch::Tensor &dLossDRenderedFeatures, // [C, imageHeight, imageWidth, NUM_CHANNELS]
-        const torch::Tensor &dLossDRenderedAlphas,   // [C, imageHeight, imageWidth, 1]
-        const torch::Tensor &outDLossDMeans2d,       // [C, N, 2] or [nnz, 2]
-        const torch::Tensor &outDLossDConics,        // [C, N, 3] or [nnz, 3]
-        const torch::Tensor &outDLossDFeatures,      // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
-        const torch::Tensor &outDLossDOpacities,     // [C, N] or [nnz]
-        const std::optional<torch::Tensor> &outDLossDMeans2dAbs) // [C, N, 2] or [nnz, 2]
+        const torch::Tensor &tileOffsets,          // [C, numTilesH, numTilesW]
+        const torch::Tensor &tileGaussianIds,      // [totalIntersections]
+        const fvdb::JaggedTensor &renderedAlphas,  // {C, [AP_i, 1]} or {1, [C, H, W, 1]}
+        const fvdb::JaggedTensor &lastGaussianIds, // {C, [AP_i]} or {1, [C, H, W]}
+        const fvdb::JaggedTensor
+            &dLossDRenderedFeatures, // {C, [AP_i, NUM_CHANNELS]} or {1, [C, H, W, NUM_CHANNELS]}
+        const fvdb::JaggedTensor &dLossDRenderedAlphas, // {C, [AP_i, 1]} or {1, [C, H, W, 1]}
+        const torch::Tensor &outDLossDMeans2d,          // [C, N, 2] or [nnz, 2]
+        const torch::Tensor &outDLossDConics,           // [C, N, 3] or [nnz, 3]
+        const torch::Tensor &outDLossDFeatures,  // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
+        const torch::Tensor &outDLossDOpacities, // [C, N] or [nnz]
+        const std::optional<torch::Tensor> &outDLossDMeans2dAbs,        // [C, N, 2] or [nnz, 2]
+        const std::optional<torch::Tensor> &activeTiles = std::nullopt, // [AT]
+        const std::optional<torch::Tensor> &tilePixelMask =
+            std::nullopt, // [AT, wordsPerTileBitmask] e.g. [AT, 4]
+        const std::optional<torch::Tensor> &tilePixelCumsum = std::nullopt, // [AT]
+        const std::optional<torch::Tensor> &pixelMap        = std::nullopt)        // [AP]
         : commonArgs(means2d,
                      conics,
                      opacities,
@@ -76,14 +87,18 @@ struct RasterizeBackwardArgs {
                      imageOriginH,
                      tileSize,
                      tileOffsets,
-                     tileGaussianIds),
+                     tileGaussianIds,
+                     activeTiles,
+                     tilePixelMask,
+                     tilePixelCumsum,
+                     pixelMap),
           mAbsGrad(outDLossDMeans2dAbs.has_value()),
-          mRenderedAlphas(initAccessor<ScalarType, 4>(renderedAlphas, "renderedAlphas")),
-          mLastGaussianIds(initAccessor<int32_t, 3>(lastGaussianIds, "lastGaussianIds")),
+          mRenderedAlphas(initJaggedAccessor<ScalarType, 2>(renderedAlphas, "renderedAlphas")),
+          mLastGaussianIds(initJaggedAccessor<int32_t, 1>(lastGaussianIds, "lastGaussianIds")),
           mDLossDRenderedFeatures(
-              initAccessor<ScalarType, 4>(dLossDRenderedFeatures, "dLossDRenderedFeatures")),
+              initJaggedAccessor<ScalarType, 2>(dLossDRenderedFeatures, "dLossDRenderedFeatures")),
           mDLossDRenderedAlphas(
-              initAccessor<ScalarType, 4>(dLossDRenderedAlphas, "dLossDRenderedAlphas")),
+              initJaggedAccessor<ScalarType, 2>(dLossDRenderedAlphas, "dLossDRenderedAlphas")),
           mOutDLossDMeans2dAbs(initAccessor<ScalarType, CommonArgs::NUM_OUTER_DIMS + 1>(
               outDLossDMeans2dAbs, means2d.options(), "outDLossDMeans2dAbs")),
           mOutDLossDMeans2d(initAccessor<ScalarType, CommonArgs::NUM_OUTER_DIMS + 1>(
@@ -151,37 +166,77 @@ struct RasterizeBackwardArgs {
                               "Bad size for outDLossDOpacities");
         }
 
-        TORCH_CHECK_VALUE(commonArgs.mNumCameras == mRenderedAlphas.size(0),
-                          "Bad size for renderedAlphas");
-        TORCH_CHECK_VALUE(commonArgs.mImageHeight == mRenderedAlphas.size(1),
-                          "Bad size for renderedAlphas");
-        TORCH_CHECK_VALUE(commonArgs.mImageWidth == mRenderedAlphas.size(2),
-                          "Bad size for renderedAlphas");
-        TORCH_CHECK_VALUE(1 == mRenderedAlphas.size(3), "Bad size for renderedAlphas");
+        if (commonArgs.mIsSparse) {
+            // just check that the number of cameras and number of pixels are correct
+            TORCH_CHECK_VALUE(commonArgs.mNumCameras == mRenderedAlphas.numTensors(),
+                              "Bad size for renderedAlphas");
+            TORCH_CHECK_VALUE(commonArgs.mPixelMap.size(0) == mRenderedAlphas.elementCount(),
+                              "Bad size for renderedAlphas");
+            TORCH_CHECK_VALUE(commonArgs.mNumCameras == mLastGaussianIds.numTensors(),
+                              "Bad size for lastGaussianIds");
+            TORCH_CHECK_VALUE(commonArgs.mPixelMap.size(0) == mLastGaussianIds.elementCount(),
+                              "Bad size for lastGaussianIds");
+            TORCH_CHECK_VALUE(commonArgs.mNumCameras == mDLossDRenderedFeatures.numTensors(),
+                              "Bad size for dLossDRenderedFeatures");
+            TORCH_CHECK_VALUE(commonArgs.mPixelMap.size(0) ==
+                                  mDLossDRenderedFeatures.elementCount(),
+                              "Bad size for dLossDRenderedFeatures");
+            TORCH_CHECK_VALUE(commonArgs.mNumCameras == mDLossDRenderedAlphas.numTensors(),
+                              "Bad size for dLossDRenderedAlphas");
+            TORCH_CHECK_VALUE(commonArgs.mPixelMap.size(0) == mDLossDRenderedAlphas.elementCount(),
+                              "Bad size for dLossDRenderedAlphas");
+        } else {
+            auto const tensorSize =
+                commonArgs.mNumCameras * commonArgs.mImageHeight * commonArgs.mImageWidth;
+            TORCH_CHECK_VALUE(tensorSize == mRenderedAlphas.data().size(0),
+                              "Bad size for renderedAlphas");
+            TORCH_CHECK_VALUE(1 == mRenderedAlphas.data().size(1), "Bad size for renderedAlphas");
 
-        TORCH_CHECK_VALUE(commonArgs.mNumCameras == mLastGaussianIds.size(0),
-                          "Bad size for lastGaussianIds");
-        TORCH_CHECK_VALUE(commonArgs.mImageHeight == mLastGaussianIds.size(1),
-                          "Bad size for lastGaussianIds");
-        TORCH_CHECK_VALUE(commonArgs.mImageWidth == mLastGaussianIds.size(2),
-                          "Bad size for lastGaussianIds");
+            TORCH_CHECK_VALUE(tensorSize == mLastGaussianIds.data().size(0),
+                              "Bad size for lastGaussianIds");
 
-        TORCH_CHECK_VALUE(commonArgs.mNumCameras == mDLossDRenderedFeatures.size(0),
-                          "Bad size for dLossDRenderedFeatures");
-        TORCH_CHECK_VALUE(commonArgs.mImageHeight == mDLossDRenderedFeatures.size(1),
-                          "Bad size for dLossDRenderedFeatures");
-        TORCH_CHECK_VALUE(commonArgs.mImageWidth == mDLossDRenderedFeatures.size(2),
-                          "Bad size for dLossDRenderedFeatures");
-        TORCH_CHECK_VALUE(NUM_CHANNELS == mDLossDRenderedFeatures.size(3),
-                          "Bad size for dLossDRenderedFeatures");
+            TORCH_CHECK_VALUE(tensorSize == mDLossDRenderedFeatures.data().size(0),
+                              "Bad size for dLossDRenderedFeatures");
+            TORCH_CHECK_VALUE(NUM_CHANNELS == mDLossDRenderedFeatures.data().size(1),
+                              "Bad size for dLossDRenderedFeatures");
 
-        TORCH_CHECK_VALUE(commonArgs.mNumCameras == mDLossDRenderedAlphas.size(0),
-                          "Bad size for dLossDRenderedAlphas");
-        TORCH_CHECK_VALUE(commonArgs.mImageHeight == mDLossDRenderedAlphas.size(1),
-                          "Bad size for dLossDRenderedAlphas");
-        TORCH_CHECK_VALUE(commonArgs.mImageWidth == mDLossDRenderedAlphas.size(2),
-                          "Bad size for dLossDRenderedAlphas");
-        TORCH_CHECK_VALUE(1 == mDLossDRenderedAlphas.size(3), "Bad size for dLossDRenderedAlphas");
+            TORCH_CHECK_VALUE(tensorSize == mDLossDRenderedAlphas.data().size(0),
+                              "Bad size for dLossDRenderedAlphas");
+            TORCH_CHECK_VALUE(1 == mDLossDRenderedAlphas.data().size(1),
+                              "Bad size for dLossDRenderedAlphas");
+        }
+    }
+
+    /// @brief Read the alpha value for a pixel
+    /// @param pixelIndex The index of the pixel
+    /// @return The alpha value for the pixel
+    __device__ ScalarType
+    readAlpha(uint64_t pixelIndex) {
+        return mRenderedAlphas.data()[pixelIndex][0];
+    }
+
+    /// @brief Read the last ID for a pixel
+    /// @param pixelIndex The index of the pixel
+    /// @return The last ID for the pixel
+    __device__ int32_t
+    readLastId(uint64_t pixelIndex) {
+        return mLastGaussianIds.data()[pixelIndex];
+    }
+
+    /// @brief Read the gradient of the loss with respect to the rendered alpha for a pixel
+    /// @param pixelIndex The index of the pixel
+    /// @return The gradient of the loss with respect to the rendered alpha for the pixel
+    __device__ ScalarType
+    readDLossDRenderedAlpha(uint64_t pixelIndex) {
+        return mDLossDRenderedAlphas.data()[pixelIndex][0];
+    }
+
+    /// @brief Read the gradient of the loss with respect to the rendered features for a pixel
+    /// @param pixelIndex The index of the pixel
+    /// @return The gradient of the loss with respect to the rendered features for the pixel
+    __device__ ScalarType
+    readDLossDRenderedFeature(uint64_t pixelIndex, uint32_t channel) {
+        return mDLossDRenderedFeatures.data()[pixelIndex][channel];
     }
 
     // Fetch the features for a Gaussian into shared memory
@@ -547,14 +602,15 @@ struct RasterizeBackwardArgs {
     /// @param firstGaussianIdInBlock The ID of the first Gaussian in the block
     template <size_t WARP_TILE_SIZE>
     inline __device__ void
-    volumeRenderTileBackward(const cooperative_groups::thread_block_tile<WARP_TILE_SIZE> &warp,
-                             const uint32_t cameraId,
-                             const uint32_t row,
-                             const uint32_t col,
-                             const int32_t firstGaussianIdInBlock,
-                             const int32_t lastGaussianIdInBlock,
-                             const uint32_t blockSize,
-                             const bool pixelIsActive) {
+    volumeRenderTileBackward( // const cooperative_groups::thread_block_tile<WARP_TILE_SIZE> &warp,
+        const uint32_t cameraId,
+        const uint32_t row,
+        const uint32_t col,
+        const int32_t firstGaussianIdInBlock,
+        const int32_t lastGaussianIdInBlock,
+        const uint32_t blockSize,
+        const bool pixelIsActive,
+        const uint32_t activePixelIndex) {
         extern __shared__ int s[];
 
         Gaussian2D<ScalarType> *sharedGaussians =
@@ -566,19 +622,30 @@ struct RasterizeBackwardArgs {
         const auto rowClamped = min(row, commonArgs.mImageHeight - 1);
         const auto colClamped = min(col, commonArgs.mImageWidth - 1);
 
-        // this is the T AFTER the last gaussian in this pixel
-        const ScalarType finalTransmittance =
-            ScalarType{1} - mRenderedAlphas[cameraId][rowClamped][colClamped][0];
+        const auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
 
-        // Gradient of the loss with respect to the alpha output of the forward pass at this
-        // pixel
-        const ScalarType dLossDRenderedAlpha =
-            mDLossDRenderedAlphas[cameraId][rowClamped][colClamped][0];
+        // Only access memory if the pixel is active (within image bounds)
+        ScalarType finalTransmittance  = ScalarType{1};
+        ScalarType dLossDRenderedAlpha = ScalarType{0};
+        int32_t lastGaussianId         = 0;
 
-        // ID of the last Gaussian to contribute to this pixel and the last gaussian id to
-        // contribute to any pixel in this block
-        const int32_t lastGaussianId =
-            pixelIsActive ? mLastGaussianIds[cameraId][rowClamped][colClamped] : 0;
+        if (pixelIsActive) {
+            // this is the T AFTER the last gaussian in this pixel
+            finalTransmittance = ScalarType{1} - readAlpha(pixIdx);
+
+            // Gradient of the loss with respect to the alpha output of the forward pass at this
+            // pixel
+            dLossDRenderedAlpha = readDLossDRenderedAlpha(pixIdx);
+
+            // ID of the last Gaussian to contribute to this pixel
+            lastGaussianId = readLastId(pixIdx);
+        }
+
+        namespace cg = cooperative_groups;
+        auto block   = cg::this_thread_block();
+        const cg::thread_block_tile<WARP_TILE_SIZE> warp =
+            cg::tiled_partition<WARP_TILE_SIZE>(block);
+
         const int32_t lastGaussianIdInWarp = warpMax(lastGaussianId, warp);
 
         // Process Gaussians in batches of block size (i.e. one Gaussian per thread in the block)
@@ -601,9 +668,14 @@ struct RasterizeBackwardArgs {
             // Gradient of the loss with respect to the color output of the forward pass at this
             // pixel
             ScalarType dLossDRenderedFeature[NUM_SHARED_CHANNELS];
-            for (auto k = 0; k < numChannels; ++k) {
-                dLossDRenderedFeature[k] =
-                    mDLossDRenderedFeatures[cameraId][rowClamped][colClamped][channelStart + k];
+            if (pixelIsActive) {
+                for (auto k = 0; k < numChannels; ++k) {
+                    dLossDRenderedFeature[k] = readDLossDRenderedFeature(pixIdx, channelStart + k);
+                }
+            } else {
+                for (auto k = 0; k < numChannels; ++k) {
+                    dLossDRenderedFeature[k] = ScalarType{0};
+                }
             }
             for (auto k = numChannels; k < NUM_SHARED_CHANNELS; ++k) {
                 dLossDRenderedFeature[k] = ScalarType{0};
@@ -741,11 +813,17 @@ struct RasterizeBackwardArgs {
     /// @return The grid dimensions
     const dim3
     getGridDim() const {
-        const uint32_t tileExtentW =
-            (commonArgs.mImageWidth + commonArgs.mTileSize - 1) / commonArgs.mTileSize;
-        const uint32_t tileExtentH =
-            (commonArgs.mImageHeight + commonArgs.mTileSize - 1) / commonArgs.mTileSize;
-        return {commonArgs.mNumCameras, tileExtentH, tileExtentW};
+        if (commonArgs.mIsSparse) {
+            // Sparse mode: only launch blocks for active tiles
+            return {static_cast<uint32_t>(commonArgs.mActiveTiles.size(0)), 1, 1};
+        } else {
+            // Dense mode: launch blocks for all tiles
+            const uint32_t tileExtentW =
+                (commonArgs.mImageWidth + commonArgs.mTileSize - 1) / commonArgs.mTileSize;
+            const uint32_t tileExtentH =
+                (commonArgs.mImageHeight + commonArgs.mTileSize - 1) / commonArgs.mTileSize;
+            return {commonArgs.mNumCameras, tileExtentH, tileExtentW};
+        }
     }
 };
 
@@ -758,11 +836,8 @@ struct RasterizeBackwardArgs {
 template <typename ScalarType, size_t NUM_CHANNELS, size_t NUM_SHARED_CHANNELS, bool IS_PACKED>
 __global__ void
 rasterizeGaussiansBackward(
-    RasterizeBackwardArgs<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED> backwardArgs) {
-    auto &commonArgs = backwardArgs.commonArgs;
-
-    namespace cg = cooperative_groups;
-    auto block   = cg::this_thread_block();
+    RasterizeBackwardArgs<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED> args) {
+    auto &commonArgs = args.commonArgs;
 
     int32_t cameraId;
     int32_t tileRow;
@@ -770,12 +845,18 @@ rasterizeGaussiansBackward(
     uint32_t row;
     uint32_t col;
 
-    cuda::std::tie(cameraId, tileRow, tileCol, row, col) = commonArgs.denseCoordinates();
+    cuda::std::tie(cameraId, tileRow, tileCol, row, col) =
+        commonArgs.mIsSparse ? commonArgs.sparseCoordinates() : commonArgs.denseCoordinates();
 
-    // Whether this pixel is inside the image bounds.
     // NOTE: We keep threads which correspond to pixels outside the image bounds around
     //       to load gaussians from global memory, but they do not contribute to the output.
-    const bool pixelInImage = (row < commonArgs.mImageHeight && col < commonArgs.mImageWidth);
+
+    // pixelInImage: Whether this pixel is inside the image bounds.
+    // activePixelIndex: Index of this pixel in the output for the block if it is active (sparse
+    // mode only).
+    bool pixelInImage{false};
+    uint32_t activePixelIndex{0};
+    cuda::std::tie(pixelInImage, activePixelIndex) = commonArgs.activePixelIndex(row, col);
 
     // If the caller provides a per-tile mask and this tile is masked, do nothing and return
     if (commonArgs.mHasMasks && !commonArgs.mMasks[cameraId][tileRow][tileCol]) {
@@ -789,17 +870,15 @@ rasterizeGaussiansBackward(
 
     // Compute the backward pass for the current tile starting at pixel (i, j)
     // and containing Gaussians with ids in [firstGaussianIdInBlock, lastGaussianIdInBlock)
-    constexpr uint32_t WARP_TILE_SIZE                = 32; // TODO (fwilliams): Tune this value
-    const cg::thread_block_tile<WARP_TILE_SIZE> warp = cg::tiled_partition<WARP_TILE_SIZE>(block);
-
-    backwardArgs.template volumeRenderTileBackward<WARP_TILE_SIZE>(warp,
-                                                                   cameraId,
-                                                                   row,
-                                                                   col,
-                                                                   firstGaussianIdInBlock,
-                                                                   lastGaussianIdInBlock,
-                                                                   block.size(),
-                                                                   pixelInImage);
+    constexpr uint32_t WARP_TILE_SIZE = 32; // TODO (fwilliams): Tune this value
+    args.template volumeRenderTileBackward<WARP_TILE_SIZE>(cameraId,
+                                                           row,
+                                                           col,
+                                                           firstGaussianIdInBlock,
+                                                           lastGaussianIdInBlock,
+                                                           blockDim.x * blockDim.y,
+                                                           pixelInImage,
+                                                           activePixelIndex);
 }
 
 /// @brief Get the shared memory requirements for the backward pass kernel
@@ -827,14 +906,19 @@ callRasterizeBackwardWithTemplatedSharedChannels(
     const uint32_t imageOriginW,
     const uint32_t imageOriginH,
     const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,            // [C, numTilesH, numTilesW]
-    const torch::Tensor &tileGaussianIds,        // [totalIntersections]
-    const torch::Tensor &renderedAlphas,         // [C, imageHeight, imageWidth, 1]
-    const torch::Tensor &lastGaussianIds,        // [C, imageHeight, imageWidth]
-    const torch::Tensor &dLossDRenderedFeatures, // [C, imageHeight, imageWidth, 3]
-    const torch::Tensor &dLossDRenderedAlphas,   // [C, imageHeight, imageWidth, 1]
+    const torch::Tensor &tileOffsets,          // [C, numTilesH, numTilesW]
+    const torch::Tensor &tileGaussianIds,      // [totalIntersections]
+    const fvdb::JaggedTensor &renderedAlphas,  // {C, [AP, 1]} or {1, [C, H, W, 1]}
+    const fvdb::JaggedTensor &lastGaussianIds, // {C, [AP]} or {1, [C, H, W]}
+    const fvdb::JaggedTensor
+        &dLossDRenderedFeatures, // {C, [AP, NUM_CHANNELS]} or {1, [C, H, W, NUM_CHANNELS]}
+    const fvdb::JaggedTensor &dLossDRenderedAlphas, // {C, [AP, 1]} or {1, [C, H, W, 1]}
     bool absGrad, // True if we are computing the gradient of the absolute gradient of the means2d
-    at::cuda::CUDAStream stream) {
+    at::cuda::CUDAStream stream,
+    const std::optional<torch::Tensor> &activeTiles     = std::nullopt,
+    const std::optional<torch::Tensor> &tilePixelMask   = std::nullopt,
+    const std::optional<torch::Tensor> &tilePixelCumsum = std::nullopt,
+    const std::optional<torch::Tensor> &pixelMap        = std::nullopt) {
     TORCH_CHECK(tileSize > 0, "Tile size must be greater than 0");
 
     torch::Tensor outDLossDMeans2d   = torch::zeros_like(means2d);
@@ -855,6 +939,27 @@ callRasterizeBackwardWithTemplatedSharedChannels(
                                outDLossDOpacities);
     }
 
+    const uint32_t C = means2d.size(0);
+    const uint32_t H = imageHeight;
+    const uint32_t W = imageWidth;
+
+    auto [reshapedRenderedAlphas,
+          reshapedLastGaussianIds,
+          reshapedDLossDRenderedFeatures,
+          reshapedDLossDRenderedAlphas] = [&]() {
+        if (!activeTiles.has_value()) {
+            // Dense mode. Reshape the JaggedTensor inputs to match sparse mode
+            return std::make_tuple(
+                fvdb::JaggedTensor(renderedAlphas.jdata().reshape({C * H * W, 1})),
+                fvdb::JaggedTensor(lastGaussianIds.jdata().reshape({C * H * W})),
+                fvdb::JaggedTensor(
+                    dLossDRenderedFeatures.jdata().reshape({C * H * W, NUM_CHANNELS})),
+                fvdb::JaggedTensor(dLossDRenderedAlphas.jdata().reshape({C * H * W, 1})));
+        }
+        return std::make_tuple(
+            renderedAlphas, lastGaussianIds, dLossDRenderedFeatures, dLossDRenderedAlphas);
+    }();
+
     RasterizeBackwardArgs<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED> args(
         means2d,
         conics,
@@ -869,15 +974,19 @@ callRasterizeBackwardWithTemplatedSharedChannels(
         tileSize,
         tileOffsets,
         tileGaussianIds,
-        renderedAlphas,
-        lastGaussianIds,
-        dLossDRenderedFeatures,
-        dLossDRenderedAlphas,
+        reshapedRenderedAlphas,
+        reshapedLastGaussianIds,
+        reshapedDLossDRenderedFeatures,
+        reshapedDLossDRenderedAlphas,
         outDLossDMeans2d,
         outDLossDConics,
         outDLossDFeatures,
         outDLossDOpacities,
-        absGrad ? std::make_optional(outDLossDMeans2dAbs) : std::nullopt);
+        absGrad ? std::make_optional(outDLossDMeans2dAbs) : std::nullopt,
+        activeTiles,
+        tilePixelMask,
+        tilePixelCumsum,
+        pixelMap);
 
     const size_t numChannels =
         (NUM_SHARED_CHANNELS == NUM_CHANNELS) ? NUM_CHANNELS : NUM_SHARED_CHANNELS + 1;
@@ -915,14 +1024,19 @@ callRasterizeBackwardWithCorrectSharedChannels(
     const uint32_t imageOriginW,
     const uint32_t imageOriginH,
     const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,            // [C, numTilesH, numTilesW]
-    const torch::Tensor &tileGaussianIds,        // [totalIntersections]
-    const torch::Tensor &renderedAlphas,         // [C, imageHeight, imageWidth, 1]
-    const torch::Tensor &lastGaussianIds,        // [C, imageHeight, imageWidth]
-    const torch::Tensor &dLossDRenderedFeatures, // [C, imageHeight, imageWidth, 3]
-    const torch::Tensor &dLossDRenderedAlphas,   // [C, imageHeight, imageWidth, 1]
+    const torch::Tensor &tileOffsets,          // [C, numTilesH, numTilesW]
+    const torch::Tensor &tileGaussianIds,      // [totalIntersections]
+    const fvdb::JaggedTensor &renderedAlphas,  // {C, [AP, 1]} or {1, [C, H, W, 1]}
+    const fvdb::JaggedTensor &lastGaussianIds, // {C, [AP]} or {1, [C, H, W]}
+    const fvdb::JaggedTensor
+        &dLossDRenderedFeatures, // {C, [AP, NUM_CHANNELS]} or {1, [C, H, W, NUM_CHANNELS]}
+    const fvdb::JaggedTensor &dLossDRenderedAlphas, // {C, [AP, 1]} or {1, [C, H, W, 1]}
     const bool absGrad,
-    const int64_t numSharedSharedChannelsOverride) {
+    const int64_t numSharedSharedChannelsOverride,
+    const std::optional<torch::Tensor> &activeTiles     = std::nullopt,
+    const std::optional<torch::Tensor> &tilePixelMask   = std::nullopt,
+    const std::optional<torch::Tensor> &tilePixelCumsum = std::nullopt,
+    const std::optional<torch::Tensor> &pixelMap        = std::nullopt) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means2d));
 
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
@@ -937,8 +1051,8 @@ callRasterizeBackwardWithCorrectSharedChannels(
                 conics,
                 features,
                 opacities,
-                at::nullopt /*backgrounds*/,
-                at::nullopt /*masks*/,
+                backgrounds,
+                masks,
                 imageWidth,
                 imageHeight,
                 imageOriginW,
@@ -951,7 +1065,11 @@ callRasterizeBackwardWithCorrectSharedChannels(
                 dLossDRenderedFeatures,
                 dLossDRenderedAlphas,
                 absGrad,
-                stream);
+                stream,
+                activeTiles,
+                tilePixelMask,
+                tilePixelCumsum,
+                pixelMap);
         } else if (numSharedChannels == 64) {
             return callRasterizeBackwardWithTemplatedSharedChannels<ScalarType,
                                                                     NUM_CHANNELS,
@@ -961,8 +1079,8 @@ callRasterizeBackwardWithCorrectSharedChannels(
                 conics,
                 features,
                 opacities,
-                at::nullopt /*backgrounds*/,
-                at::nullopt /*masks*/,
+                backgrounds,
+                masks,
                 imageWidth,
                 imageHeight,
                 imageOriginW,
@@ -975,7 +1093,11 @@ callRasterizeBackwardWithCorrectSharedChannels(
                 dLossDRenderedFeatures,
                 dLossDRenderedAlphas,
                 absGrad,
-                stream);
+                stream,
+                activeTiles,
+                tilePixelMask,
+                tilePixelCumsum,
+                pixelMap);
         } else if (numSharedChannels == 32) {
             return callRasterizeBackwardWithTemplatedSharedChannels<ScalarType,
                                                                     NUM_CHANNELS,
@@ -985,8 +1107,8 @@ callRasterizeBackwardWithCorrectSharedChannels(
                 conics,
                 features,
                 opacities,
-                at::nullopt /*backgrounds*/,
-                at::nullopt /*masks*/,
+                backgrounds,
+                masks,
                 imageWidth,
                 imageHeight,
                 imageOriginW,
@@ -999,7 +1121,11 @@ callRasterizeBackwardWithCorrectSharedChannels(
                 dLossDRenderedFeatures,
                 dLossDRenderedAlphas,
                 absGrad,
-                stream);
+                stream,
+                activeTiles,
+                tilePixelMask,
+                tilePixelCumsum,
+                pixelMap);
         } else if (numSharedChannels == 16) {
             return callRasterizeBackwardWithTemplatedSharedChannels<ScalarType,
                                                                     NUM_CHANNELS,
@@ -1009,8 +1135,8 @@ callRasterizeBackwardWithCorrectSharedChannels(
                 conics,
                 features,
                 opacities,
-                at::nullopt /*backgrounds*/,
-                at::nullopt /*masks*/,
+                backgrounds,
+                masks,
                 imageWidth,
                 imageHeight,
                 imageOriginW,
@@ -1023,7 +1149,11 @@ callRasterizeBackwardWithCorrectSharedChannels(
                 dLossDRenderedFeatures,
                 dLossDRenderedAlphas,
                 absGrad,
-                stream);
+                stream,
+                activeTiles,
+                tilePixelMask,
+                tilePixelCumsum,
+                pixelMap);
         } else {
             if (numSharedSharedChannelsOverride > 0) {
                 AT_ERROR("Invalid numSharedChannelsOverride. Must be 64, 32, or 16.");
@@ -1075,7 +1205,7 @@ dispatchGaussianRasterizeBackward<torch::kCUDA>(
     const torch::Tensor &dLossDRenderedFeatures, // [C, imageHeight, imageWidth, 3]
     const torch::Tensor &dLossDRenderedAlphas,   // [C, imageHeight, imageWidth, 1]
     const bool absGrad,
-    const int64_t numSharedSharedChannelsOverride) {
+    const int64_t numSharedChannelsOverride) {
     uint32_t colorDim   = features.size(-1);
     const bool isPacked = means2d.dim() == 2;
 
@@ -1101,7 +1231,7 @@ dispatchGaussianRasterizeBackward<torch::kCUDA>(
                 dLossDRenderedFeatures,                                             \
                 dLossDRenderedAlphas,                                               \
                 absGrad,                                                            \
-                numSharedSharedChannelsOverride);                                   \
+                numSharedChannelsOverride);                                         \
         } else {                                                                    \
             return callRasterizeBackwardWithCorrectSharedChannels<float, N, false>( \
                 means2d,                                                            \
@@ -1122,7 +1252,7 @@ dispatchGaussianRasterizeBackward<torch::kCUDA>(
                 dLossDRenderedFeatures,                                             \
                 dLossDRenderedAlphas,                                               \
                 absGrad,                                                            \
-                numSharedSharedChannelsOverride);                                   \
+                numSharedChannelsOverride);                                         \
         }                                                                           \
     }
 
@@ -1138,7 +1268,7 @@ dispatchGaussianRasterizeBackward<torch::kCUDA>(
         __GS__CALL_BWD_(17)
         __GS__CALL_BWD_(32)
         __GS__CALL_BWD_(33)
-        __GS__CALL_BWD_(47)
+        __GS__CALL_BWD_(47) // TODO, is this only here to support a gtest?
         __GS__CALL_BWD_(64)
         __GS__CALL_BWD_(65)
         __GS__CALL_BWD_(128)
@@ -1172,7 +1302,145 @@ dispatchGaussianRasterizeBackward<torch::kCPU>(
     const torch::Tensor &dLossDRenderedFeatures, // [C, imageHeight, imageWidth, 3]
     const torch::Tensor &dLossDRenderedAlphas,   // [C, imageHeight, imageWidth, 1]
     const bool absGrad,
-    const int64_t numSharedSharedChannelsOverride) {
+    const int64_t numSharedChannelsOverride) {
+    TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
+}
+
+template <>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchGaussianSparseRasterizeBackward<torch::kCUDA>(
+    const fvdb::JaggedTensor &pixelsToRender, // [C, NumPixels, 2]
+    const torch::Tensor &means2d,             // [C, N, 2]
+    const torch::Tensor &conics,              // [C, N, 3]
+    const torch::Tensor &features,            // [C, N, D]
+    const torch::Tensor &opacities,           // [N]
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const uint32_t imageOriginW,
+    const uint32_t imageOriginH,
+    const uint32_t tileSize,
+    const torch::Tensor &tileOffsets,                 // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds,             // [n_isects]
+    const fvdb::JaggedTensor &renderedAlphas,         // [C lists: varying sizes, each element [1]]
+    const fvdb::JaggedTensor &lastGaussianIds,        // [C lists: varying sizes]
+    const fvdb::JaggedTensor &dLossDRenderedFeatures, // [C lists: varying sizes, each element [D]]
+    const fvdb::JaggedTensor &dLossDRenderedAlphas,   // [C lists: varying sizes, each element [1]]
+    const torch::Tensor &activeTiles,                 // [AT]
+    const torch::Tensor &tilePixelMask,               // [AT, wordsPerTile]
+    const torch::Tensor &tilePixelCumsum,             // [AT]
+    const torch::Tensor &pixelMap,                    // [AP]
+    const bool absGrad,
+    const int64_t numSharedChannelsOverride) {
+    uint32_t colorDim   = features.size(-1);
+    const bool isPacked = means2d.dim() == 2;
+
+#define __GS__CALL_SPARSE_BWD_(N)                                                   \
+    case N: {                                                                       \
+        if (isPacked) {                                                             \
+            return callRasterizeBackwardWithCorrectSharedChannels<float, N, true>(  \
+                means2d,                                                            \
+                conics,                                                             \
+                features,                                                           \
+                opacities,                                                          \
+                at::nullopt /*backgrounds*/,                                        \
+                at::nullopt /*masks*/,                                              \
+                imageWidth,                                                         \
+                imageHeight,                                                        \
+                imageOriginW,                                                       \
+                imageOriginH,                                                       \
+                tileSize,                                                           \
+                tileOffsets,                                                        \
+                tileGaussianIds,                                                    \
+                renderedAlphas,                                                     \
+                lastGaussianIds,                                                    \
+                dLossDRenderedFeatures,                                             \
+                dLossDRenderedAlphas,                                               \
+                absGrad,                                                            \
+                numSharedChannelsOverride,                                          \
+                activeTiles,                                                        \
+                tilePixelMask,                                                      \
+                tilePixelCumsum,                                                    \
+                pixelMap);                                                          \
+        } else {                                                                    \
+            return callRasterizeBackwardWithCorrectSharedChannels<float, N, false>( \
+                means2d,                                                            \
+                conics,                                                             \
+                features,                                                           \
+                opacities,                                                          \
+                at::nullopt /*backgrounds*/,                                        \
+                at::nullopt /*masks*/,                                              \
+                imageWidth,                                                         \
+                imageHeight,                                                        \
+                imageOriginW,                                                       \
+                imageOriginH,                                                       \
+                tileSize,                                                           \
+                tileOffsets,                                                        \
+                tileGaussianIds,                                                    \
+                renderedAlphas,                                                     \
+                lastGaussianIds,                                                    \
+                dLossDRenderedFeatures,                                             \
+                dLossDRenderedAlphas,                                               \
+                absGrad,                                                            \
+                numSharedChannelsOverride,                                          \
+                activeTiles,                                                        \
+                tilePixelMask,                                                      \
+                tilePixelCumsum,                                                    \
+                pixelMap);                                                          \
+        }                                                                           \
+    }
+
+    switch (colorDim) {
+        __GS__CALL_SPARSE_BWD_(1)
+        __GS__CALL_SPARSE_BWD_(2)
+        __GS__CALL_SPARSE_BWD_(3)
+        __GS__CALL_SPARSE_BWD_(4)
+        __GS__CALL_SPARSE_BWD_(5)
+        __GS__CALL_SPARSE_BWD_(8)
+        __GS__CALL_SPARSE_BWD_(9)
+        __GS__CALL_SPARSE_BWD_(16)
+        __GS__CALL_SPARSE_BWD_(17)
+        __GS__CALL_SPARSE_BWD_(32)
+        __GS__CALL_SPARSE_BWD_(33)
+        __GS__CALL_SPARSE_BWD_(47)
+        __GS__CALL_SPARSE_BWD_(64)
+        __GS__CALL_SPARSE_BWD_(65)
+        __GS__CALL_SPARSE_BWD_(128)
+        __GS__CALL_SPARSE_BWD_(129)
+        __GS__CALL_SPARSE_BWD_(192)
+        __GS__CALL_SPARSE_BWD_(193)
+        __GS__CALL_SPARSE_BWD_(256)
+        __GS__CALL_SPARSE_BWD_(257)
+        __GS__CALL_SPARSE_BWD_(512)
+        __GS__CALL_SPARSE_BWD_(513)
+    default: AT_ERROR("Unsupported number of channels: ", colorDim);
+    }
+}
+
+template <>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchGaussianSparseRasterizeBackward<torch::kCPU>(
+    const fvdb::JaggedTensor &pixelsToRender, // [C, NumPixels, 2]
+    const torch::Tensor &means2d,             // [C, N, 2]
+    const torch::Tensor &conics,              // [C, N, 3]
+    const torch::Tensor &features,            // [C, N, D]
+    const torch::Tensor &opacities,           // [N]
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const uint32_t imageOriginW,
+    const uint32_t imageOriginH,
+    const uint32_t tileSize,
+    const torch::Tensor &tileOffsets,                 // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds,             // [n_isects]
+    const fvdb::JaggedTensor &renderedAlphas,         // [C lists: varying sizes, each element [1]]
+    const fvdb::JaggedTensor &lastIds,                // [C lists: varying sizes]
+    const fvdb::JaggedTensor &dLossDRenderedFeatures, // [C lists: varying sizes, each element [D]]
+    const fvdb::JaggedTensor &dLossDRenderedAlphas,   // [C lists: varying sizes, each element [1]]
+    const torch::Tensor &activeTiles,                 // [AT]
+    const torch::Tensor &tilePixelMask,               // [AT, wordsPerTile]
+    const torch::Tensor &tilePixelCumsum,             // [AT]
+    const torch::Tensor &pixelMap,                    // [AP]
+    const bool absGrad,
+    const int64_t numSharedChannelsOverride) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
 }
 
