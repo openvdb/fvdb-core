@@ -2,6 +2,5 @@ pip >= 23.3.1
 scikit_build_core
 wheel
 ninja
-tqdm
 numpy
 torch
