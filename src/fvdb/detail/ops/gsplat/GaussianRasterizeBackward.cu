@@ -950,11 +950,10 @@ callRasterizeBackwardWithTemplatedSharedChannels(
         if (!activeTiles.has_value()) {
             // Dense mode. Reshape the JaggedTensor inputs to match sparse mode
             return std::make_tuple(
-                fvdb::JaggedTensor(renderedAlphas.jdata().reshape({C * H * W, 1})),
-                fvdb::JaggedTensor(lastGaussianIds.jdata().reshape({C * H * W})),
-                fvdb::JaggedTensor(
-                    dLossDRenderedFeatures.jdata().reshape({C * H * W, NUM_CHANNELS})),
-                fvdb::JaggedTensor(dLossDRenderedAlphas.jdata().reshape({C * H * W, 1})));
+                fvdb::JaggedTensor(renderedAlphas.jdata().view({C * H * W, 1})),
+                fvdb::JaggedTensor(lastGaussianIds.jdata().view({C * H * W})),
+                fvdb::JaggedTensor(dLossDRenderedFeatures.jdata().view({C * H * W, NUM_CHANNELS})),
+                fvdb::JaggedTensor(dLossDRenderedAlphas.jdata().view({C * H * W, 1})));
         }
         return std::make_tuple(
             renderedAlphas, lastGaussianIds, dLossDRenderedFeatures, dLossDRenderedAlphas);
