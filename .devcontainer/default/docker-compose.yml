@@ -1,12 +1,12 @@
 services:
   fvdb-dev:
     build:
-      context: ../../
-      dockerfile: fvdb/.devcontainer/Dockerfile.devcontainer
+      context: ../../../
+      dockerfile: fvdb/.devcontainer/default/Dockerfile.dev
 
     command: sleep infinity
     volumes:
-      - ../../:/openvdb
+      - ../../../:/openvdb
 
     environment:
       - NVIDIA_VISIBLE_DEVICES=all

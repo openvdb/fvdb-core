@@ -5,7 +5,7 @@
     "initializeCommand": "test -z \"$SSH_AUTH_SOCK\" && eval \"$(ssh-agent -s)\" || true",
 
     "dockerComposeFile": [
-        "docker-compose-devcontainer.yml"
+        "docker-compose.yml"
     ],
     "service": "fvdb-dev",
     "workspaceFolder": "/openvdb/fvdb",
@@ -25,7 +25,7 @@
     // Single source of truth for creating the dev environment.
     // We use 'bash -i -c' to ensure the shell is interactive, which properly
     // sources the .bashrc and activates conda before running the command.
-    "postCreateCommand": "bash -i -c 'conda init bash && conda env create -f /openvdb/fvdb/env/dev_environment.yml && conda clean -afy && echo \"conda activate fvdb\" >> ~/.bashrc'",
+    "postCreateCommand": "pip install --no-cache-dir -r /openvdb/fvdb/env/build_requirements.txt",
 
     // This runs after you connect, good for user-specific setup like SSH.
     "postAttachCommand": "rm -rf ~/.ssh && ln -sfn /tmp/.ssh-localhost ~/.ssh",
