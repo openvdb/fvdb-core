@@ -1,0 +1,19 @@
+FROM nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
+
+# Set environment variables to prevent interactive prompts during installation.
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python
+RUN apt-get update && \
+    apt-get install -y python3-pip python3-dev python-is-python3 ca-certificates gpg curl wget git sudo && \
+    rm -rf /var/lib/apt/lists/* && \
+    python -m pip install --upgrade pip
+
+# Install CMake
+RUN mkdir ~/temp && \
+    cd ~/temp && \
+    wget -nv https://github.com/Kitware/CMake/releases/download/v4.0.3/cmake-4.0.3-linux-x86_64.sh && \
+    mkdir /opt/cmake && \
+    sh cmake-4.0.3-linux-x86_64.sh --prefix=/usr/local --skip-license && \
+    cmake --version
+
