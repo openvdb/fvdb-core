@@ -94,7 +94,7 @@ SparseConvPackInfo::buildImplicitGEMM(
                     torch::TensorOptions().dtype(torch::kInt32).device(mTargetGrid.device()));
     mIGEMMUseTF32 = use_tf32;
 
-    // // Note: This could also be converted from GSNeighbourMap if exists
+    // Note: This could also be converted from GSNeighbourMap if exists
     GridBatch::computeConvolutionKernelMap(
         mSourceGrid, mTargetGrid, mIGEMMOutInMap.value(), mKernelSize, mStride);
 
