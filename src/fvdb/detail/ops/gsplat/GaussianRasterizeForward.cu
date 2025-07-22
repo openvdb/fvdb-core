@@ -398,16 +398,15 @@ launchRasterizeForwardKernel(
     rasterizeGaussiansForward<<<gridDim, blockDim, sharedMem, stream>>>(args);
 
     C10_CUDA_KERNEL_LAUNCH_CHECK();
-    C10_CUDA_CHECK(cudaDeviceSynchronize());
 
     // In dense mode, we need to reshape the output tensors to the original image size
     // because they are packed into a single JaggedTensor so that the output code is the same
     // for dense and sparse modes.
     if (!args.commonArgs.mIsSparse) {
         outFeatures =
-            fvdb::JaggedTensor(outFeatures.jdata().reshape({C, imageHeight, imageWidth, channels}));
-        outAlphas  = fvdb::JaggedTensor(outAlphas.jdata().reshape({C, imageHeight, imageWidth, 1}));
-        outLastIds = fvdb::JaggedTensor(outLastIds.jdata().reshape({C, imageHeight, imageWidth}));
+            fvdb::JaggedTensor(outFeatures.jdata().view({C, imageHeight, imageWidth, channels}));
+        outAlphas  = fvdb::JaggedTensor(outAlphas.jdata().view({C, imageHeight, imageWidth, 1}));
+        outLastIds = fvdb::JaggedTensor(outLastIds.jdata().view({C, imageHeight, imageWidth}));
     }
 
     return std::make_tuple(outFeatures, outAlphas, outLastIds);
