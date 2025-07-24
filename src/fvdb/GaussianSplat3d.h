@@ -229,6 +229,42 @@ class GaussianSplat3d {
                                false);
     }
 
+    /// @brief Return a copy of this GaussianSplat3d object with the same parameters, but moved to
+    ///        the specified device and dtype, or return *this if the device and dtype match this.
+    /// @param device The device to move the tensors to.
+    /// @param dtype The data type to convert the tensors to.
+    /// @return A new instance of GaussianSplat3d with the same parameters, but moved to the
+    ///         specified device and dtype, or *this if the device and dtype match this.
+    GaussianSplat3d
+    to(torch::Device device, torch::ScalarType dtype) {
+        if (mMeans.device() == device && mMeans.scalar_type() == dtype) {
+            return *this; // No need to copy if already on the right device and type
+        } else {
+            auto ret = GaussianSplat3d(
+                mMeans.to(device, dtype),
+                mQuats.to(device, dtype),
+                mLogScales.to(device, dtype),
+                mLogitOpacities.to(device, dtype),
+                mSh0.to(device, dtype),
+                mShN.to(device, dtype),
+                mAccumulateMean2dGradients,
+                mAccumulateMax2dRadii,
+                false // Detach is false since we are copying the data (not detaching it)
+            );
+            if (mAccumulated2dRadiiForGrad.defined()) {
+                ret.mAccumulated2dRadiiForGrad = mAccumulated2dRadiiForGrad.to(device);
+            }
+            if (mAccumulatedNormalized2dMeansGradientNormsForGrad.defined()) {
+                ret.mAccumulatedNormalized2dMeansGradientNormsForGrad =
+                    mAccumulatedNormalized2dMeansGradientNormsForGrad.to(device, dtype);
+            }
+            if (mGradientStepCountForGrad.defined()) {
+                ret.mGradientStepCountForGrad = mGradientStepCountForGrad.to(device);
+            }
+            return ret;
+        }
+    }
+
     /// @brief Detach the parameters of this GaussianSplat3d object in place.
     ///        This will detach the parameters from the computation graph, allowing them to be
     ///        modified without affecting the gradients of the original tensors.

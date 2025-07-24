@@ -1,14 +1,17 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-import math
+import pathlib
 from typing import overload
 
 import torch
 
 from . import JaggedTensor
 from ._Cpp import GaussianSplat3d as GaussianSplat3dCpp
-from ._Cpp import ProjectedGaussianSplats
+from ._Cpp import JaggedTensor, ProjectedGaussianSplats
+from .grid import Grid
+from .grid_batch import GridBatch
+from .types import DeviceIdentifier, is_DeviceIdentifier
 
 
 class GaussianSplat3d:
@@ -1500,7 +1503,7 @@ class GaussianSplat3d:
         """
         self._impl.reset_accumulated_gradient_state()
 
-    def save_ply(self, filename: str) -> None:
+    def save_ply(self, filename: pathlib.Path | str) -> None:
         """
         Save the current state of the GaussianSplat3d instance to a PLY file.
         Args:
@@ -1508,10 +1511,12 @@ class GaussianSplat3d:
                 The file will contain the means, quaternions, log scales, logit opacities, and
                 spherical harmonics coefficients of the Gaussians.
         """
+        if isinstance(filename, pathlib.Path):
+            filename = str(filename)
         self._impl.save_ply(filename)
 
     @staticmethod
-    def from_ply(filename: str, device: torch.device | str = torch.device("cuda")) -> "GaussianSplat3d":
+    def from_ply(filename: pathlib.Path | str, device: torch.device | str = torch.device("cuda")) -> "GaussianSplat3d":
         """
         Create a `GaussianSplat3d` instance from a PLY file.
 
@@ -1524,11 +1529,238 @@ class GaussianSplat3d:
         """
         if not isinstance(device, (torch.device, str)):
             raise TypeError(f"Expected device to be torch.device or str, got {type(device)}")
+        if isinstance(filename, pathlib.Path):
+            filename = str(filename)
+
         device_: torch.device = torch.device(device) if isinstance(device, str) else device
         if device_.type == "cuda" and device_.index is None:
             device_ = torch.device("cuda", torch.cuda.current_device())
 
         return GaussianSplat3d(impl=GaussianSplat3dCpp.from_ply(filename=filename, device=device_))
+
+    @overload
+    def to(self, dtype: torch.dtype | None = None) -> "GaussianSplat3d":
+        """
+        Returns a new GaussianSplat3d instance with the same data but on the specified device and/or with the specified dtype.
+
+        If the `dtype` matches the current `dtype` or is None, it returns the current instance without copying.
+
+        Args:
+            dtype (torch.dtype, optional): The target data type for the GaussianSplat3d instance.
+                If None, the current dtype is used.
+        Returns:
+            GaussianSplat3d: A new instance of GaussianSplat3d with the specified dtype.
+                If the `dtype` matches the current `dtype` or is None, it returns the current instance without copying.
+        """
+        ...
+
+    @overload
+    def to(
+        self,
+        device: DeviceIdentifier | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> "GaussianSplat3d":
+        """
+        Returns a new GaussianSplat3d instance with the same data but on the specified device and/or with the specified dtype.
+
+        If the `dtype` and `device` matches the current `dtype` and `device` or are None, it returns the current instance without copying.
+
+        Args:
+            device (DeviceIdentifier | None, optional): The target device to move the GaussianSplat3d instance to.
+                If None, the current device is used.
+            dtype (torch.dtype | None, optional): The target data type for the GaussianSplat3d instance.
+                If None, the current dtype is used.
+
+        Returns:
+            GaussianSplat3d: A new instance of GaussianSplat3d with the specified device and/or dtype.
+                If the `dtype` and `device` match the current `dtype` and `device` or are None, it returns the current instance without copying.
+        """
+        ...
+
+    @overload
+    def to(
+        self,
+        other: torch.Tensor,
+    ) -> "GaussianSplat3d":
+        """
+        Returns a new `GaussianSplat3d` instance with the same data but on the device and dtype of the provided tensor.
+
+        If the `dtype` and `device` of the provided tensor match the current `dtype` and `device`, it returns the current instance without copying.
+
+        Args:
+            other (torch.Tensor): A tensor whose device and dtype will be used to create the new `GaussianSplat3d` instance.
+
+        Returns:
+            GaussianSplat3d: A new instance of `GaussianSplat3d` with the same data but on the device and dtype of the provided tensor.
+                If the `dtype` and `device` of the provided tensor match the current `dtype` and `device`, it returns the current instance without copying.
+        """
+        ...
+
+    @overload
+    def to(
+        self,
+        other: "GaussianSplat3d",
+    ) -> "GaussianSplat3d":
+        """
+        Returns a new `GaussianSplat3d` instance with the same data but on the device and dtype of the provided `GaussianSplat3d` instance.
+
+        If the `dtype` and `device` of the provided GaussianSplat3d instance match the current `dtype` and `device`, it returns the current instance without copying.
+
+        Args:
+            other (GaussianSplat3d): A `GaussianSplat3d` instance whose device and dtype will be used to create the new `GaussianSplat3d` instance.
+
+        Returns:
+            GaussianSplat3d: A new instance of `GaussianSplat3d` with the same data but on the device and dtype of the provided `GaussianSplat3d` instance.
+                If the `dtype` and `device` of the provided `GaussianSplat3d` instance match the current `dtype` and `device`,
+                it returns the current instance without copying.
+        """
+        ...
+
+    @overload
+    def to(
+        self,
+        other: Grid,
+    ) -> "GaussianSplat3d":
+        """
+        Returns a new `GaussianSplat3d` instance with the same data but on the device as the provided `Grid` instance.
+
+        If the `device` of the provided `Grid` instance matches the current `device`, it returns the current instance without copying.
+
+        Args:
+            other (Grid): A `Grid` instance whose device will be used to create the new `GaussianSplat3d` instance.
+
+        Returns:
+            GaussianSplat3d: A new instance of `GaussianSplat3d` with the same data but on the device of the provided `Grid` instance.
+                If the `device` of the provided `Grid` instance matches the current `device`, it returns the current instance without copying.
+        """
+        ...
+
+    @overload
+    def to(
+        self,
+        other: GridBatch,
+    ) -> "GaussianSplat3d":
+        """
+        Returns a new `GaussianSplat3d` instance with the same data but on the device as the provided `GridBatch` instance.
+
+        If the `device` of the provided `GridBatch` instance matches the current `device`, it returns the current instance without copying.
+
+        Args:
+            other (GridBatch): A `GridBatch` instance whose device will be used to create the new `GaussianSplat3d` instance.
+
+        Returns:
+            GaussianSplat3d: A new instance of `GaussianSplat3d` with the same data but on the device of the provided `GridBatch` instance.
+                If the `device` of the provided `GridBatch` instance matches the current `device`, it returns the current instance without copying.
+        """
+        ...
+
+    @overload
+    def to(
+        self,
+        other: JaggedTensor,
+    ) -> "GaussianSplat3d":
+        """
+        Returns a new `GaussianSplat3d` instance with the same data but on the device and dtype of the provided `JaggedTensor`.
+
+        If the `dtype` and `device` of the provided `JaggedTensor` match the current `dtype` and `device`, it returns the current instance without copying.
+
+        Args:
+            other (JaggedTensor): A `JaggedTensor` whose device and dtype will be used to create the new `GaussianSplat3d` instance.
+
+        Returns:
+            GaussianSplat3d: A new instance of `GaussianSplat3d` with the same data but on the device and dtype of the provided `JaggedTensor`.
+                If the `dtype` and `device` of the provided `JaggedTensor` match the current `dtype` and `device`, it returns the current instance without copying.
+        """
+        ...
+
+    def to(
+        self,
+        *args,
+        **kwargs,
+    ) -> "GaussianSplat3d":
+        """
+        Move the GaussianSplat3d instance to a different device or change its data type or both.
+
+        Args:
+            other (DeviceIdentifier | torch.Tensor | GaussianSplat3d | Grid | GridBatch | JaggedTensor): The target device or tensor to which the GaussianSplat3d instance should be moved.
+            device (DeviceIdentifier, optional): The target device to move the GaussianSplat3d instance to.
+            dtype (torch.dtype, optional): The target data type for the GaussianSplat3d instance.
+
+        Returns:
+            GaussianSplat3d: A new instance of GaussianSplat3d with the specified device and/or data type.
+        """
+
+        # All values passed by keyword arguments
+        if len(args) == 0:
+            if len(kwargs) == 1:
+                # .to(device=...) or .to(other=...)
+                if "device" in kwargs:
+                    device = kwargs["device"]
+                    dtype = kwargs.get("dtype", self.dtype)
+                elif "other" in kwargs:
+                    other = kwargs["other"]
+                    if isinstance(other, (torch.Tensor, JaggedTensor, GaussianSplat3d)):
+                        device = other.device
+                        dtype = other.dtype
+                    elif isinstance(other, (Grid, GridBatch)):
+                        device = other.device
+                        dtype = self.dtype
+                else:
+                    raise TypeError(
+                        f"Invalid keyword arguments for to(): {kwargs}. Expected 'device' or 'other' and optionally 'dtype'."
+                    )
+            elif len(kwargs) == 2:
+                # .to(device=..., dtype=...) or .to(dtype=..., device=...)
+                if "device" in kwargs and "dtype" in kwargs:
+                    device = kwargs["device"]
+                    dtype = kwargs["dtype"]
+                else:
+                    raise TypeError(
+                        f"Invalid keyword arguments for to(): {kwargs}. Expected 'device' or 'other' and optionally 'dtype'."
+                    )
+            else:
+                raise TypeError(
+                    f"Invalid keyword arguments for to(): {kwargs}. Expected 'device' or 'other' and optionally 'dtype'."
+                )
+
+        elif len(args) == 1 and isinstance(args[0], (torch.Tensor, GaussianSplat3d, JaggedTensor)):
+            # .to(other)
+            device = args[0].device
+            dtype = args[0].dtype
+        elif len(args) == 1 and isinstance(args[0], (Grid, GridBatch)):
+            # .to(other)
+            device = args[0].device
+            dtype = self.dtype
+        elif len(args) == 1:
+            # .to(device)
+            device = args[0]
+            dtype = kwargs.get("dtype", self.dtype)
+        elif len(args) == 2:
+            # .to(device, dtype)
+            device = args[0]
+            dtype = args[1]
+        else:
+            raise TypeError(
+                f"Invalid arguments for to(): {args}. Expected a DeviceIdentifier, torch.Tensor, GaussianSplat3d, Grid, GridBatch, or JaggedTensor."
+            )
+
+        device = self.device if device is None else device
+        dtype = self.dtype if dtype is None else dtype
+
+        if not is_DeviceIdentifier(device):
+            raise TypeError(f"Expected device to be torch.device or str, got {type(device)}")
+        if isinstance(device, str):
+            device = torch.device(device)
+
+        if not isinstance(dtype, torch.dtype):
+            raise TypeError(f"Expected dtype to be torch.dtype, got {type(dtype)}")
+
+        return GaussianSplat3d(
+            impl=self._impl.to(
+                device=device,
+                dtype=dtype,
+            )
+        )
 
     def set_state(
         self,

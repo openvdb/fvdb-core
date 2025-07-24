@@ -15,9 +15,9 @@ from fvdb.utils.tests import (
     generate_random_4x4_xform,
     get_fvdb_test_data_path,
 )
-from parameterized import parameterized
+from parameterized import parameterized, parameterized_class
 
-from fvdb import GaussianSplat3d, JaggedTensor, gaussian_render_jagged
+from fvdb import GaussianSplat3d, Grid, JaggedTensor, gaussian_render_jagged
 
 
 def compare_images(pixels_or_path_a, pixels_or_path_b):
@@ -94,6 +94,158 @@ class BaseGaussianTestCase(unittest.TestCase):
         self.num_cameras = self.cam_to_world_mats.shape[0]
         self.near_plane = 0.01
         self.far_plane = 1e10
+
+
+@parameterized_class(("run_backward"), [(True,), (False,)])
+class TestGaussianSplatTo(BaseGaussianTestCase):
+    def setUp(self):
+        super().setUp()
+
+        self.run_backward = self.run_backward
+
+        if self.run_backward:
+            self.gs3d.accumulate_max_2d_radii = True
+            self.gs3d.accumulate_mean_2d_gradients = True
+            rgb1, alpha1 = self.gs3d.render_images(
+                self.cam_to_world_mats,
+                self.projection_mats,
+                self.width,
+                self.height,
+                self.near_plane,
+                self.far_plane,
+            )
+            loss1 = rgb1.sum()
+            loss1.backward()
+
+    def check_device_and_dtype(self, gs3d, device, dtype):
+        self.assertTrue(gs3d.device == device)
+        self.assertTrue(gs3d.dtype == dtype)
+        if gs3d.accumulated_gradient_step_counts is not None:
+            assert self.run_backward, "accumulated_gradient_step_counts should only be set when run_backward is True"
+            self.assertTrue(
+                gs3d.accumulated_gradient_step_counts.shape == self.gs3d.accumulated_gradient_step_counts.shape
+            )
+            self.assertTrue(gs3d.accumulated_gradient_step_counts.device == device)
+            self.assertTrue(gs3d.accumulated_gradient_step_counts.dtype == torch.int32)
+        else:
+            assert not self.run_backward, "accumulated_gradient_step_counts should be None when run_backward is False"
+            self.assertEqual(self.gs3d.accumulated_gradient_step_counts, None)
+        if gs3d.accumulated_mean_2d_gradient_norms is not None:
+            assert self.run_backward, "accumulated_mean_2d_gradient_norms should only be set when run_backward is True"
+            self.assertTrue(
+                gs3d.accumulated_mean_2d_gradient_norms.shape == self.gs3d.accumulated_mean_2d_gradient_norms.shape
+            )
+            self.assertTrue(gs3d.accumulated_mean_2d_gradient_norms.device == device)
+            self.assertTrue(gs3d.accumulated_mean_2d_gradient_norms.dtype == dtype)
+        else:
+            assert not self.run_backward, "accumulated_mean_2d_gradient_norms should be None when run_backward is False"
+            self.assertEqual(self.gs3d.accumulated_mean_2d_gradient_norms, None)
+
+        if gs3d.accumulated_max_2d_radii is not None:
+            assert self.run_backward, "accumulated_max_2d_radii should only be set when run_backward is True"
+            self.assertTrue(gs3d.accumulated_max_2d_radii.shape == self.gs3d.accumulated_max_2d_radii.shape)
+            self.assertTrue(gs3d.accumulated_max_2d_radii.device == device)
+            self.assertTrue(gs3d.accumulated_max_2d_radii.dtype == torch.int32)
+        else:
+            assert not self.run_backward, "accumulated_max_2d_radii should be None when run_backward is False"
+            self.assertEqual(self.gs3d.accumulated_max_2d_radii, None)
+
+    def test_to_device(self):
+        self.assertTrue(self.gs3d.device == torch.device(self.device))
+
+        gs3d = self.gs3d.to("cpu")
+        self.check_device_and_dtype(gs3d, torch.device("cpu"), self.gs3d.dtype)
+
+        gs3d = self.gs3d.to(self.device)
+        self.check_device_and_dtype(gs3d, torch.device(self.device), self.gs3d.dtype)
+
+    def test_to_device_and_dtype(self):
+        self.assertTrue(self.gs3d.device == torch.device(self.device))
+        self.assertTrue(self.gs3d.dtype == torch.float32)
+
+        gs3d = self.gs3d.to("cpu", torch.float16)
+        self.check_device_and_dtype(gs3d, torch.device("cpu"), torch.float16)
+
+        gs3d = self.gs3d.to(self.device, torch.float32)
+        self.check_device_and_dtype(gs3d, torch.device(self.device), torch.float32)
+
+    def test_to_device_and_dtype_kwargs(self):
+        self.assertTrue(self.gs3d.device == torch.device(self.device))
+        self.assertTrue(self.gs3d.dtype == torch.float32)
+
+        gs3d = self.gs3d.to(device="cpu", dtype=torch.float16)
+        self.check_device_and_dtype(gs3d, torch.device("cpu"), torch.float16)
+
+        gs3d = self.gs3d.to(device=self.device, dtype=torch.float32)
+        self.check_device_and_dtype(gs3d, torch.device(self.device), torch.float32)
+
+    def test_to_dtype_and_device_kwargs(self):
+        self.assertTrue(self.gs3d.device == torch.device(self.device))
+        self.assertTrue(self.gs3d.dtype == torch.float32)
+
+        gs3d = self.gs3d.to(dtype=torch.float16, device="cpu")
+        self.check_device_and_dtype(gs3d, torch.device("cpu"), torch.float16)
+
+        gs3d = self.gs3d.to(dtype=torch.float32, device=self.device)
+        self.check_device_and_dtype(gs3d, torch.device(self.device), torch.float32)
+
+    def test_to_other(self):
+        self.assertTrue(self.gs3d.device == torch.device(self.device))
+        self.assertTrue(self.gs3d.dtype == torch.float32)
+
+        cpu_f16_tensor = self.gs3d.means.to(device="cpu", dtype=torch.float16)
+
+        gs3d = self.gs3d.to(cpu_f16_tensor)
+        self.check_device_and_dtype(gs3d, torch.device("cpu"), torch.float16)
+
+        gs3d = self.gs3d.to(self.gs3d.means)
+        self.check_device_and_dtype(gs3d, torch.device(self.device), torch.float32)
+
+        gs3d = self.gs3d.to(cpu_f16_tensor)
+        self.check_device_and_dtype(gs3d, torch.device("cpu"), torch.float16)
+
+        gs3d = self.gs3d.to(self.gs3d)
+        self.check_device_and_dtype(gs3d, torch.device(self.device), torch.float32)
+
+        gs3d = self.gs3d.to(cpu_f16_tensor)
+        self.check_device_and_dtype(gs3d, torch.device("cpu"), torch.float16)
+
+        grid = Grid.from_dense(1, 0, device="cuda")
+        gs3d = gs3d.to(grid)
+        self.check_device_and_dtype(gs3d, torch.device(grid.device), torch.float16)
+
+        jagged_cpu_f32 = JaggedTensor([cpu_f16_tensor.to(torch.float32)])
+        gs3d = gs3d.to(jagged_cpu_f32)
+        self.check_device_and_dtype(gs3d, jagged_cpu_f32.device, torch.float32)
+
+    def test_to_other_kwargs(self):
+        self.assertTrue(self.gs3d.device == torch.device(self.device))
+        self.assertTrue(self.gs3d.dtype == torch.float32)
+
+        cpu_f16_tensor = self.gs3d.means.to(device="cpu", dtype=torch.float16)
+
+        gs3d = self.gs3d.to(other=cpu_f16_tensor)
+        self.check_device_and_dtype(gs3d, torch.device("cpu"), torch.float16)
+
+        gs3d = self.gs3d.to(other=self.gs3d.means)
+        self.check_device_and_dtype(gs3d, torch.device(self.device), torch.float32)
+
+        gs3d = self.gs3d.to(other=cpu_f16_tensor)
+        self.check_device_and_dtype(gs3d, torch.device("cpu"), torch.float16)
+
+        gs3d = self.gs3d.to(other=self.gs3d)
+        self.check_device_and_dtype(gs3d, torch.device(self.device), torch.float32)
+
+        gs3d = self.gs3d.to(other=cpu_f16_tensor)
+        self.check_device_and_dtype(gs3d, torch.device("cpu"), torch.float16)
+
+        grid = Grid.from_dense(1, 0, device="cuda")
+        gs3d = gs3d.to(other=grid)
+        self.check_device_and_dtype(gs3d, torch.device(grid.device), torch.float16)
+
+        jagged_cpu_f32 = JaggedTensor([cpu_f16_tensor.to(torch.float32)])
+        gs3d = gs3d.to(other=jagged_cpu_f32)
+        self.check_device_and_dtype(gs3d, jagged_cpu_f32.device, torch.float32)
 
 
 class TestGaussianSplatIndexSet(BaseGaussianTestCase):
