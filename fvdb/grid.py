@@ -425,7 +425,7 @@ class Grid:
 
     def integrate_tsdf(
         self,
-        voxel_truncation_distance: float,
+        truncation_distance: float,
         projection_matrix: torch.Tensor,
         cam_to_world_matrix: torch.Tensor,
         tsdf: torch.Tensor,
@@ -441,7 +441,7 @@ class Grid:
         reconstruction from RGB-D sensors.
 
         Args:
-            voxel_truncation_distance (float): Maximum distance to truncate TSDF values.
+            truncation_distance (float): Maximum distance to truncate TSDF values (in world units).
             projection_matrix (torch.Tensor): Camera projection matrix.
                 Shape: (4, 4).
             cam_to_world_matrix (torch.Tensor): Camera to world transformation matrix.
@@ -476,14 +476,51 @@ class Grid:
                 f"cam_to_world_matrix must be a torch.Tensor, but got {type(cam_to_world_matrix)}"
             )
 
+        if cam_to_world_matrix.shape != (4, 4):
+            raise ValueError(f"cam_to_world_matrix must have shape (4, 4), but got {cam_to_world_matrix.shape}")
+        if projection_matrix.shape != (3, 3):
+            raise ValueError(f"projection_matrix must have shape (3, 3), but got {projection_matrix.shape}")
+
+        if tsdf.dim() != 1:
+            if tsdf.dim() != 2 or tsdf.shape[1] != 1:
+                raise ValueError(f"tsdf must have shape (N, 1) or (N,), but got {tsdf.shape}")
+
+        if tsdf.shape[0] != weights.shape[0]:
+            raise ValueError(
+                f"tsdf and weights must have the same number of elements, "
+                f"but got {tsdf.shape[0]} and {weights.shape[0]}"
+            )
+
+        if weights.dim() != 1:
+            if weights.dim() != 2 or weights.shape[1] != 1:
+                raise ValueError(f"weights must have shape (N, 1) or (N,), but got {weights.shape}")
+
+        if depth_image.dim() != 2:
+            if depth_image.dim() != 3 or depth_image.shape[2] != 1:
+                raise ValueError(f"depth_image must have shape (height, width), but got {depth_image.shape}")
+
         if weight_image is not None and not isinstance(weight_image, torch.Tensor):
             raise RuntimeError(f"weight_image must be a torch.Tensor or None, but got {type(weight_image)}")
+
+        if weight_image is not None:
+            if weight_image.dim() != 2:
+                if weight_image.dim() != 3 or weight_image.shape[2] != 1:
+                    raise ValueError(
+                        f"weight_image must have shape (height, width) or (height, width, 1), but got {weight_image.shape}"
+                    )
+
+            if weight_image.shape[:2] != depth_image.shape[:2]:
+                raise ValueError(
+                    f"weight_image must have the same shape as depth_image, "
+                    f"but got {weight_image.shape[:2]} and {depth_image.shape[:2]}"
+                )
+
         jagged_tsdf = JaggedTensor(tsdf)
 
         jagged_weights = JaggedTensor(weights)
 
         result_grid_impl, result_jagged_1, result_jagged_2 = self._impl.integrate_tsdf(
-            voxel_truncation_distance,
+            truncation_distance,
             projection_matrix.unsqueeze(0),
             cam_to_world_matrix.unsqueeze(0),
             jagged_tsdf,
@@ -496,7 +533,7 @@ class Grid:
 
     def integrate_tsdf_with_features(
         self,
-        voxel_truncation_distance: float,
+        truncation_distance: float,
         projection_matrix: torch.Tensor,
         cam_to_world_matrix: torch.Tensor,
         tsdf: torch.Tensor,
@@ -513,9 +550,9 @@ class Grid:
         along with the depth information. This is useful for colored 3D reconstruction.
 
         Args:
-            voxel_truncation_distance (float): Maximum distance to truncate TSDF values.
+            truncation_distance (float): Maximum distance to truncate TSDF values.
             projection_matrix (torch.Tensor): Camera projection matrix.
-                Shape: (4, 4).
+                Shape: (3, 3).
             cam_to_world_matrix (torch.Tensor): Camera to world transformation matrix.
                 Shape: (4, 4).
             tsdf (torch.Tensor): Current TSDF values for each voxel.
@@ -560,12 +597,74 @@ class Grid:
         if weight_image is not None and not isinstance(weight_image, torch.Tensor):
             raise RuntimeError(f"weight_images must be a torch.Tensor or None, but got {type(weight_image)}")
 
+        if cam_to_world_matrix.shape != (4, 4):
+            raise ValueError(f"cam_to_world_matrix must have shape (4, 4), but got {cam_to_world_matrix.shape}")
+        if projection_matrix.shape != (3, 3):
+            raise ValueError(f"projection_matrix must have shape (3, 3), but got {projection_matrix.shape}")
+
+        if tsdf.dim() != 1:
+            if tsdf.dim() != 2 or tsdf.shape[1] != 1:
+                raise ValueError(f"tsdf must have shape (N, 1) or (N,), but got {tsdf.shape}")
+
+        if weights.dim() != 1:
+            if weights.dim() != 2 or weights.shape[1] != 1:
+                raise ValueError(f"weights must have shape (N, 1) or (N,), but got {weights.shape}")
+
+        if features.dim() != 2:
+            raise ValueError(f"features must have shape (N, feature_dim), but got {features.shape}")
+
+        if features.shape[0] != tsdf.shape[0]:
+            raise ValueError(
+                f"features must have the same number of voxels as tsdf, "
+                f"but got {features.shape[0]} and {tsdf.shape[0]}"
+            )
+        if weights.shape[0] != tsdf.shape[0]:
+            raise ValueError(
+                f"weights must have the same number of voxels as tsdf, "
+                f"but got {weights.shape[0]} and {tsdf.shape[0]}"
+            )
+
+        if depth_image.dim() != 2:
+            if depth_image.dim() != 3 or depth_image.shape[2] != 1:
+                raise ValueError(f"depth_image must have shape (height, width), but got {depth_image.shape}")
+
+        if feature_image.dim() != 3 or feature_image.shape[2] < 1:
+            raise ValueError(
+                f"feature_image must have shape (height, width, feature_dim), " f"but got {feature_image.shape}"
+            )
+        if feature_image.shape[:2] != depth_image.shape[:2]:
+            raise ValueError(
+                f"feature_image must have the same shape as depth_image, "
+                f"but got {feature_image.shape[:2]} and {depth_image.shape[:2]}"
+            )
+        if feature_image.shape[2] != features.shape[1]:
+            raise ValueError(
+                f"feature_image's last dimension must match features' second dimension, "
+                f"but got {feature_image.shape[2]} and {features.shape[1]}"
+            )
+
+        if weight_image is not None and not isinstance(weight_image, torch.Tensor):
+            raise RuntimeError(f"weight_image must be a torch.Tensor or None, but got {type(weight_image)}")
+
+        if weight_image is not None:
+            if weight_image.dim() != 2:
+                if weight_image.dim() != 3 or weight_image.shape[2] != 1:
+                    raise ValueError(
+                        f"weight_image must have shape (height, width) or (height, width, 1), but got {weight_image.shape}"
+                    )
+
+            if weight_image.shape[:2] != depth_image.shape[:2]:
+                raise ValueError(
+                    f"weight_image must have the same shape as depth_image, "
+                    f"but got {weight_image.shape[:2]} and {depth_image.shape[:2]}"
+                )
+
         jagged_tsdf = JaggedTensor(tsdf)
         jagged_weights = JaggedTensor(weights)
         jagged_features = JaggedTensor(features)
 
         result_grid_impl, result_jagged_1, result_jagged_2, result_jagged_3 = self._impl.integrate_tsdf_with_features(
-            voxel_truncation_distance,
+            truncation_distance,
             projection_matrix.unsqueeze(0),
             cam_to_world_matrix.unsqueeze(0),
             jagged_tsdf,
@@ -763,7 +862,7 @@ class Grid:
         jagged_src = JaggedTensor(src)
 
         if dst is None:
-            dst_shape = [dst_grid.num_voxels]
+            dst_shape = [dst_grid.num_voxels, *src.shape[1:]] if src.dim() > 1 else [dst_grid.num_voxels]
             jagged_dst = JaggedTensor(
                 torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device)
             )
@@ -804,7 +903,7 @@ class Grid:
         jagged_src = JaggedTensor(src)
 
         if dst is None:
-            dst_shape = [self.num_voxels]
+            dst_shape = [self.num_voxels, *src.shape[1:]] if src.dim() > 1 else [self.num_voxels]
             dst = torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device)
 
         jagged_dst = JaggedTensor(dst)

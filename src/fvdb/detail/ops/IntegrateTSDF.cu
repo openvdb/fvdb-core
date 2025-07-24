@@ -654,9 +654,9 @@ checkInputSizes(const GridBatchImpl &grid,
     }
 
     if (weightImages.has_value()) {
-        TORCH_CHECK_VALUE(weightImages.value().dim() == 3,
+        TORCH_CHECK_VALUE(weightImages.value().dim() == 3 || weightImages.value().dim() == 4,
                           "Weight images must be of shape (batch_size, image_height, "
-                          "image_width), but got ",
+                          "image_width) or (batch_size, image_height, image_width, 1), but got ",
                           weightImages.value().sizes());
         TORCH_CHECK_VALUE(weightImages.value().size(0) == depthImages.size(0),
                           "Weight images must have the same batch size as depth images, but got "
@@ -676,6 +676,12 @@ checkInputSizes(const GridBatchImpl &grid,
                           weightImages.value().size(2),
                           " and depth_images.size(2) = ",
                           depthImages.size(2));
+        if (weightImages.value().dim() == 4) {
+            TORCH_CHECK_VALUE(weightImages.value().size(3) == 1,
+                              "Weight images must have a last dimension of size 1, but got "
+                              "weight_images.size(3) = ",
+                              weightImages.value().size(3));
+        }
     }
     // Step 1. Check that the batch size of the grid matches the batch size of the other tensors
     const int64_t batchSize = grid.batchSize();
@@ -856,12 +862,13 @@ integrateTSDFImpl(const c10::intrusive_ptr<GridBatchImpl> grid,
     const auto weightImagesValue = weightImages.has_value()
                                        ? weightImages.value()
                                        : torch::empty({0, 0, 0}, squeezedDepthImages.options());
-
+    const auto weightImagesSqueezed =
+        weightImagesValue.dim() == 4 ? weightImagesValue.squeeze(-1) : weightImagesValue;
     // Step 3: Integrate weights, tsdf values, and feautures into the output tensor
     const auto [outTsdf, outWeights, outFeatures] = doIntegrate(truncationMargin,
                                                                 squeezedDepthImages,
                                                                 featureImagesValue,
-                                                                weightImagesValue,
+                                                                weightImagesSqueezed,
                                                                 projectionMats,
                                                                 invProjectionMats,
                                                                 camToWorldMats,

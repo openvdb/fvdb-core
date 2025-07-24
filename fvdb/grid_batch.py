@@ -333,7 +333,7 @@ class GridBatch:
 
     def integrate_tsdf(
         self,
-        voxel_truncation_distance: float,
+        truncation_distance: float,
         projection_matrices: torch.Tensor,
         cam_to_world_matrices: torch.Tensor,
         tsdf: JaggedTensorOrTensor,
@@ -349,7 +349,7 @@ class GridBatch:
         reconstruction from RGB-D sensors.
 
         Args:
-            voxel_truncation_distance (float): Maximum distance to truncate TSDF values.
+            truncation_distance (float): Maximum distance to truncate TSDF values (in world units).
             projection_matrices (torch.Tensor): Camera projection matrices.
                 Shape: (batch_size, 4, 4).
             cam_to_world_matrices (torch.Tensor): Camera to world transformation matrices.
@@ -393,7 +393,7 @@ class GridBatch:
             weights = JaggedTensor(weights)
 
         result_grid_impl, result_jagged_1, result_jagged_2 = self._impl.integrate_tsdf(
-            voxel_truncation_distance,
+            truncation_distance,
             projection_matrices,
             cam_to_world_matrices,
             tsdf,
@@ -406,7 +406,7 @@ class GridBatch:
 
     def integrate_tsdf_with_features(
         self,
-        voxel_truncation_distance: float,
+        truncation_distance: float,
         projection_matrices: torch.Tensor,
         cam_to_world_matrices: torch.Tensor,
         tsdf: JaggedTensorOrTensor,
@@ -423,7 +423,7 @@ class GridBatch:
         along with the depth information. This is useful for colored 3D reconstruction.
 
         Args:
-            voxel_truncation_distance (float): Maximum distance to truncate TSDF values.
+            truncation_distance (float): Maximum distance to truncate TSDF values (in world units).
             projection_matrices (torch.Tensor): Camera projection matrices.
                 Shape: (batch_size, 4, 4).
             cam_to_world_matrices (torch.Tensor): Camera to world transformation matrices.
@@ -480,7 +480,7 @@ class GridBatch:
             features = JaggedTensor(features)
 
         result_grid_impl, result_jagged_1, result_jagged_2, result_jagged_3 = self._impl.integrate_tsdf_with_features(
-            voxel_truncation_distance,
+            truncation_distance,
             projection_matrices,
             cam_to_world_matrices,
             tsdf,
