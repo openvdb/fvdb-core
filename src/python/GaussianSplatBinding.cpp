@@ -139,6 +139,7 @@ bind_gaussian_splat3d(py::module &m) {
                 return fvdb::GaussianSplat3d(stateDict);
             },
             py::arg("state_dict"))
+        .def("to", &fvdb::GaussianSplat3d::to, py::arg("device"), py::arg("dtype"))
         .def("detach", &fvdb::GaussianSplat3d::detach)
         .def("detach_in_place", &fvdb::GaussianSplat3d::detachInPlace)
         .def("state_dict", &fvdb::GaussianSplat3d::stateDict)
