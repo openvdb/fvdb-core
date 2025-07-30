@@ -400,7 +400,7 @@ class SparseConv3d(nn.Module):
             out_feature.jdata = out_feature.jdata + self.bias
 
         if out_grid is None:
-            raise RuntimeError("Failed to compute output grid. This is a bug in the implementation.")
+            raise ValueError("Failed to compute output grid. This is a bug in the implementation.")
         return VDBTensor(out_grid, out_feature, out_kmap)
 
 

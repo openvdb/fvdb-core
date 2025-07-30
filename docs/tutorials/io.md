@@ -10,7 +10,7 @@ While not necessary for fVDB's functionality, they are useful utilities to have 
 
 ## Python Serialization
 
-Batches of sparse grids can be serialized to a NanoVDB file using the `fvdb.save` method.  Here, we create two grids of different sizes and numbers of points and save them to a compressed NanoVDB file with specified names.  The names are optional.
+Batches of sparse grids can be serialized to a NanoVDB file using the `fvdb.save_gridbatch` method.  Here, we create two grids of different sizes and numbers of points and save them to a compressed NanoVDB file with specified names.  The names are optional.
 
 ```python
 import torch
@@ -25,13 +25,13 @@ p = fvdb.JaggedTensor(
         torch.randn(100, 3),
     ]
 )
-grid = fvdb.gridbatch_from_points(
+grid = fvdb.GridBatch.from_points(
     p, voxel_sizes=[[0.1, 0.1, 0.1], [0.15, 0.15, 0.15]], origins=[0.0] * 3
 )
 
 # save the grid and features to a compressed nvdb file
 path = os.path.join(tempfile.gettempdir(), "two_random_grids.nvdb")
-fvdb.save(path, grid, names=["taco1", "taco2"], compressed=True)
+fvdb.save_gridbatch(path, grid, names=["taco1", "taco2"], compressed=True)
 ```
 
 We can use the `nanovdb_print` command line tool to show information about our saved file.  Note how our grids have the `INDEX` class since they have no features and only store the voxel indices.
@@ -44,7 +44,7 @@ The file "/tmp/tmpwnu7qc_7/two_random_grids.nvdb" contains the following 2 grids
 2  taco2  OnIndex  INDEX  32.6.0   BLOSC  2.326 MB  12.7 KB   (0.15,0.15,0.15)  100       33 x 39 x 38
 ```
 
-We can include N-dimensional features by passing a JaggedTensor as the second argument (or `data` kwarg) to `fvdb.save`.  Here, we create a grid with a single, float feature channel for our grids and save it to a `nvdb` file.
+We can include N-dimensional features by passing a JaggedTensor as the second argument (or `data` kwarg) to `fvdb.save_gridbatch`.  Here, we create a grid with a single, float feature channel for our grids and save it to a `nvdb` file.
 
 ```python continuation
 # a single, scalar float feature per grid
@@ -52,7 +52,7 @@ feats = fvdb.JaggedTensor([torch.randn(x, 1) for x in grid.num_voxels])
 
 # save the grid and features to a compressed nvdb file
 path = os.path.join(tempfile.gettempdir(), "two_random_grids.nvdb")
-fvdb.save(path, grid, feats, names=["taco1", "taco2"], compressed=True)
+fvdb.save_gridbatch(path, grid, feats, names=["taco1", "taco2"], compressed=True)
 ```
 
 Again, we can use the `nanovdb_print` command line tool to show information about our saved file.
@@ -74,7 +74,7 @@ feats = fvdb.JaggedTensor([torch.randn(x, 3, dtype=torch.float64) for x in grid.
 
 # save the grid and features to a compressed nvdb file
 saved_nvdb = os.path.join(tempfile.gettempdir(), "two_random_vec3d_grids.nvdb")
-fvdb.save(saved_nvdb, grid, feats, names=["taco1", "taco2"], compressed=True)
+fvdb.save_gridbatch(saved_nvdb, grid, feats, names=["taco1", "taco2"], compressed=True)
 ```
 
 ```bash
@@ -86,11 +86,11 @@ The file "/tmp/tmpwnu7qc_7/two_random_grids.nvdb" contains the following 2 grids
 
 ## Loading NanoVDB Files
 
-Loading NanoVDB files is as simple as calling `fvdb.load`.  You can optionally supply a PyTorch device you'd like the grids and features loaded onto.  Here, we load the two grids we saved in the previous section onto our GPU.
+Loading NanoVDB files is as simple as calling `fvdb.load_gridbatch`.  You can optionally supply a PyTorch device you'd like the grids and features loaded onto.  Here, we load the two grids we saved in the previous section onto our GPU.
 
 ```python continuation
 # Load the grid and features from the compressed nvdb file
-grid_batch, features, names = fvdb.load(saved_nvdb, device=torch.device("cuda:0"))
+grid_batch, features, names = fvdb.load_gridbatch(saved_nvdb, device=torch.device("cuda:0"))
 print("Loaded grid batch total number of voxels: ", grid_batch.total_voxels)
 print("Loaded grid batch data type: %s, device: %s" % (features.dtype, features.device))
 ```
@@ -133,7 +133,7 @@ print("nanovdb_convert roundtrip the vdb to nvdb: ", convert_cmd)
 print(subprocess.check_output(convert_cmd.split()).decode("utf-8"))
 
 # Load the nvdb file of the converted vdb
-grid_batch, features, names = fvdb.load(saved_nvdb, device=torch.device("cuda:0"))
+grid_batch, features, names = fvdb.load_gridbatch(saved_nvdb, device=torch.device("cuda:0"))
 print("Loaded grid batch total number of voxels: ", grid_batch.total_voxels)
 print("Loaded grid batch data type: %s, device: %s" % (features.dtype, features.device))
 print("\n")

@@ -10,10 +10,10 @@ import numpy as np
 import point_cloud_utils as pcu
 import polyscope as ps
 import torch
+from fvdb.utils.examples import load_dragon_mesh, make_ray_grid, plot_ray_segments
 
 import fvdb
 from fvdb import GridBatch, JaggedTensor
-from fvdb.utils.examples import load_dragon_mesh, make_ray_grid, plot_ray_segments
 
 
 def main():
@@ -31,8 +31,6 @@ def main():
     nrays = 100
     plot_every = 20
     batch_size = 2
-
-    p, n = load_dragon_mesh(device=device, dtype=dtype)
 
     p, n = load_dragon_mesh(device=device, dtype=dtype)
     p -= p.mean(0)
@@ -54,8 +52,7 @@ def main():
     p, n = JaggedTensor([p] * batch_size), JaggedTensor([n] * batch_size)
     ray_o, ray_d = JaggedTensor([ray_o] * batch_size), JaggedTensor([ray_d] * batch_size)
 
-    grid = GridBatch(device=device)
-    grid.set_from_points(p, [-1] * 3, [1] * 3, voxel_sizes=vox_size, origins=vox_origin)
+    grid = GridBatch.from_points(p, voxel_sizes=vox_size, origins=vox_origin)
 
     gc, ge = grid.viz_edge_network
 

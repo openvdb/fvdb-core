@@ -6,14 +6,16 @@ from typing import Any
 
 import torch
 from fvdb.types import (
-    JaggedTensorOrTensor,
-    Vec3dBatch,
-    Vec3dBatchOrScalar,
-    Vec3i,
-    is_JaggedTensorOrTensor,
+    DeviceIdentifier,
+    NumericMaxRank1,
+    NumericMaxRank2,
+    cast_check,
+    to_Vec3f,
+    to_Vec3fBatch,
+    to_Vec3i,
 )
 
-from fvdb import GridBatch, JaggedTensor, SparseConvPackInfo, gridbatch_from_dense
+from fvdb import GridBatch, JaggedTensor, SparseConvPackInfo
 
 
 @dataclass
@@ -212,24 +214,16 @@ class VDBTensor:
     # Interpolation functions
     # -----------------------
 
-    def sample_bezier(self, points: JaggedTensorOrTensor) -> JaggedTensor:
-        if not is_JaggedTensorOrTensor(points):
-            raise TypeError(f"points should be a JaggedTensor or a torch.Tensor, but got {type(points)}")
+    def sample_bezier(self, points: JaggedTensor) -> JaggedTensor:
         return self.grid.sample_bezier(points, self.data)  # type: ignore
 
-    def sample_bezier_with_grad(self, points: JaggedTensorOrTensor) -> tuple[JaggedTensor, JaggedTensor]:
-        if not is_JaggedTensorOrTensor(points):
-            raise TypeError(f"points should be a JaggedTensor or a torch.Tensor, but got {type(points)}")
+    def sample_bezier_with_grad(self, points: JaggedTensor) -> tuple[JaggedTensor, JaggedTensor]:
         return self.grid.sample_bezier_with_grad(points, self.data)  # type: ignore
 
-    def sample_trilinear(self, points: JaggedTensorOrTensor) -> JaggedTensor:
-        if not is_JaggedTensorOrTensor(points):
-            raise TypeError(f"points should be a JaggedTensor or a torch.Tensor, but got {type(points)}")
+    def sample_trilinear(self, points: JaggedTensor) -> JaggedTensor:
         return self.grid.sample_trilinear(points, self.data)  # type: ignore
 
-    def sample_trilinear_with_grad(self, points: JaggedTensorOrTensor) -> tuple[JaggedTensor, JaggedTensor]:
-        if not is_JaggedTensorOrTensor(points):
-            raise TypeError(f"points should be a JaggedTensor or a torch.Tensor, but got {type(points)}")
+    def sample_trilinear_with_grad(self, points: JaggedTensor) -> tuple[JaggedTensor, JaggedTensor]:
         return self.grid.sample_trilinear_with_grad(points, self.data)  # type: ignore
 
     def cpu(self):
@@ -320,10 +314,7 @@ class VDBTensor:
 
     @property
     def cum_voxels(self) -> torch.LongTensor:
-        cv = self.grid.cum_voxels
-        if not isinstance(cv, torch.LongTensor):
-            raise TypeError(f"cum_voxels should be a torch.LongTensor, but got {type(cv)}")
-        return cv
+        return cast_check(self.grid.cum_voxels, torch.LongTensor, "cum_voxels")
 
     @property
     def grid_count(self) -> int:
@@ -335,17 +326,11 @@ class VDBTensor:
 
     @property
     def num_voxels(self) -> torch.LongTensor:
-        nv = self.grid.num_voxels
-        if not isinstance(nv, torch.LongTensor):
-            raise TypeError(f"num_voxels should be a torch.LongTensor, but got {type(nv)}")
-        return nv
+        return cast_check(self.grid.num_voxels, torch.LongTensor, "num_voxels")
 
     @property
     def origins(self) -> torch.FloatTensor:
-        o = self.grid.origins
-        if not isinstance(o, torch.FloatTensor):
-            raise TypeError(f"origins should be a torch.FloatTensor, but got {type(o)}")
-        return o
+        return cast_check(self.grid.origins, torch.FloatTensor, "origins")
 
     @property
     def total_voxels(self) -> int:
@@ -353,10 +338,7 @@ class VDBTensor:
 
     @property
     def voxel_sizes(self) -> torch.FloatTensor:
-        vs = self.grid.voxel_sizes
-        if not isinstance(vs, torch.FloatTensor):
-            raise TypeError(f"voxel_sizes should be a torch.FloatTensor, but got {type(vs)}")
-        return vs
+        return cast_check(self.grid.voxel_sizes, torch.FloatTensor, "voxel_sizes")
 
     @property
     def total_leaf_nodes(self) -> int:
@@ -364,61 +346,39 @@ class VDBTensor:
 
     @property
     def num_leaf_nodes(self) -> torch.LongTensor:
-        nl = self.grid.num_leaf_nodes
-        if not isinstance(nl, torch.LongTensor):
-            raise TypeError(f"num_leaf_nodes should be a torch.LongTensor, but got {type(nl)}")
-        return nl
+        return cast_check(self.grid.num_leaf_nodes, torch.LongTensor, "num_leaf_nodes")
 
     @property
     def grid_to_world_matrices(self) -> torch.FloatTensor:
-        gtwm = self.grid.grid_to_world_matrices
-        if not isinstance(gtwm, torch.FloatTensor):
-            raise TypeError(f"grid_to_world_matrices should be a torch.FloatTensor, but got {type(gtwm)}")
-        return gtwm
+        return cast_check(self.grid.grid_to_world_matrices, torch.FloatTensor, "grid_to_world_matrices")
 
     @property
     def world_to_grid_matrices(self) -> torch.FloatTensor:
-        wtg = self.grid.world_to_grid_matrices
-        if not isinstance(wtg, torch.FloatTensor):
-            raise TypeError(f"world_to_grid_matrices should be a torch.FloatTensor, but got {type(wtg)}")
-        return wtg
+        return cast_check(self.grid.world_to_grid_matrices, torch.FloatTensor, "world_to_grid_matrices")
 
     @property
-    def bbox(self) -> torch.IntTensor:
-        b = self.grid.bbox
-        if not isinstance(b, torch.IntTensor):
-            raise TypeError(f"bbox should be a torch.IntTensor, but got {type(b)}")
-        return b
+    def bboxes(self) -> torch.IntTensor:
+        return cast_check(self.grid.bboxes, torch.IntTensor, "bboxes")
 
     @property
-    def dual_bbox(self) -> torch.IntTensor:
-        db = self.grid.dual_bbox
-        if not isinstance(db, torch.IntTensor):
-            raise TypeError(f"dual_bbox should be a torch.IntTensor, but got {type(db)}")
-        return db
+    def dual_bboxes(self) -> torch.IntTensor:
+        return cast_check(self.grid.dual_bboxes, torch.IntTensor, "dual_bboxes")
 
     @property
     def total_bbox(self) -> torch.IntTensor:
-        tb = self.grid.total_bbox
-        if not isinstance(tb, torch.IntTensor):
-            raise TypeError(f"total_bbox should be a torch.IntTensor, but got {type(tb)}")
-        return tb
+        return cast_check(self.grid.total_bbox, torch.IntTensor, "total_bbox")
 
 
 def vdbtensor_from_dense(
     dense_data: torch.Tensor,
-    ijk_min: Vec3i | None = None,
-    voxel_sizes: Vec3dBatchOrScalar | None = None,
-    origins: Vec3dBatch | None = None,
+    ijk_min: NumericMaxRank1 = 0,
+    voxel_sizes: NumericMaxRank2 = 1,
+    origins: NumericMaxRank2 = 0,
 ) -> VDBTensor:
-    if origins is None:
-        origins = [0.0] * 3
-    if voxel_sizes is None:
-        voxel_sizes = [1.0] * 3
-    if ijk_min is None:
-        ijk_min = [0, 0, 0]
-    assert ijk_min is not None
-    grid = gridbatch_from_dense(
+    ijk_min = to_Vec3i(ijk_min, device=dense_data.device)
+    voxel_sizes = to_Vec3fBatch(voxel_sizes, device=dense_data.device)
+    origins = to_Vec3fBatch(origins, device=dense_data.device)
+    grid = GridBatch.from_dense(
         dense_data.size(0),
         dense_data.size()[1:4],
         ijk_min=ijk_min,

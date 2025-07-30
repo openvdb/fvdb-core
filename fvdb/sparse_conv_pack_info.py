@@ -20,10 +20,13 @@ from ._Cpp import GridBatch as GridBatchCpp
 from ._Cpp import JaggedTensor
 from ._Cpp import SparseConvPackInfo as SparseConvPackInfoCpp
 from .types import (
+    DeviceIdentifier,
     JaggedTensorOrTensor,
     Vec3iOrScalar,
+    cast_check,
     is_JaggedTensorOrTensor,
     is_Vec3iOrScalar,
+    resolve_device,
 )
 
 
@@ -88,20 +91,14 @@ class SparseConvPackInfo:
                 # Import here to avoid circular dependency
                 from .grid_batch import GridBatch
 
-                if isinstance(source_grid, GridBatch):
-                    source_impl = source_grid._impl
-                else:
-                    raise TypeError(f"Unsupported type for source_grid: {type(source_grid)}")
+                source_impl = cast_check(source_grid, GridBatch, "source_grid")._impl
 
             target_impl = None
             if target_grid is not None:
                 # Import here to avoid circular dependency
                 from .grid_batch import GridBatch
 
-                if isinstance(target_grid, GridBatch):
-                    target_impl = target_grid._impl
-                else:
-                    raise TypeError(f"Unsupported type for target_grid: {type(target_grid)}")
+                target_impl = cast_check(target_grid, GridBatch, "target_grid")._impl
 
             if not is_Vec3iOrScalar(kernel_size) or not is_Vec3iOrScalar(stride):
                 raise TypeError(
@@ -258,7 +255,7 @@ class SparseConvPackInfo:
         """
         return self._impl.sparse_transpose_conv_3d(input, weights, backend)
 
-    def to(self, to_device: torch.device | str) -> "SparseConvPackInfo":
+    def to(self, to_device: DeviceIdentifier) -> "SparseConvPackInfo":
         """
         Move SparseConvPackInfo to a target device.
 
@@ -269,8 +266,7 @@ class SparseConvPackInfo:
         Returns:
             SparseConvPackInfo: A new SparseConvPackInfo instance on the target device.
         """
-        if isinstance(to_device, str):
-            to_device = _parse_device_string(to_device)
+        to_device = resolve_device(to_device)
         return SparseConvPackInfo(impl=self._impl.to(to_device))
 
     # Properties that wrap GridBatch

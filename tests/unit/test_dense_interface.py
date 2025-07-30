@@ -7,8 +7,7 @@ import numpy as np
 import torch
 from parameterized import parameterized
 
-from fvdb import GridBatch
-from fvdb.utils.tests import gridbatch_from_dense_cube
+from fvdb import GridBatch, JaggedTensor
 
 all_device_dtype_combos = [
     ["cpu", torch.float16],
@@ -28,8 +27,13 @@ all_device_combos = [
 class TestUtils(unittest.TestCase):
     @parameterized.expand(all_device_dtype_combos)
     def test_dense(self, device, dtype):
-        dense_vdb = gridbatch_from_dense_cube(
-            [10, 11, 12], (-2.0, -2.0, -2.0), (1.0, 1.0, 1.0), voxel_center=False, device=device
+        dense_vdb = GridBatch.from_dense_axis_aligned_bounds(
+            num_grids=1,
+            dense_dims=[10, 11, 12],
+            bounds_min=[-2.0, -2.0, -2.0],
+            bounds_max=[1.0, 1.0, 1.0],
+            voxel_center=False,
+            device=device,
         )
         self.assertTrue(dense_vdb.total_voxels == 10 * 11 * 12)
 
@@ -38,11 +42,13 @@ class TestUtils(unittest.TestCase):
         self.assertAlmostEqual(torch.max(vdb_coords).item(), 1.0 - 3 / 12 * 0.5, places=6)
 
         vdb_feature = torch.randn((dense_vdb.total_voxels, 4), device=device, dtype=dtype)
-        dense_feature = dense_vdb.write_to_dense(vdb_feature).squeeze(0)
+        dense_feature = dense_vdb.write_to_dense(JaggedTensor(vdb_feature)).squeeze(0)
         for i in range(10):
             for j in range(11):
                 for k in range(12):
-                    vdb_f = vdb_feature[dense_vdb.ijk_to_index(torch.tensor([[i, j, k]], device=device)).jdata]
+                    vdb_f = vdb_feature[
+                        dense_vdb.ijk_to_index(JaggedTensor(torch.tensor([[i, j, k]], device=device))).jdata
+                    ]
                     dense_f = dense_feature[i, j, k, :]  # dense_feature[:, k, j, i]
                     self.assertTrue(torch.allclose(vdb_f, dense_f))
         vdb_feature2 = dense_vdb.read_from_dense(dense_feature.unsqueeze(0)).jdata
@@ -52,23 +58,20 @@ class TestUtils(unittest.TestCase):
     def test_read_from_dense(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
-        grid = GridBatch(device=device)
-        grid.set_from_points(random_points, voxel_sizes=0.1, origins=[0.0] * 3)
+        grid = GridBatch.from_points(JaggedTensor(random_points), voxel_sizes=0.1, origins=[0.0] * 3)
 
         dense_size = [np.random.randint(low=10, high=128) for _ in range(3)]
         random_grid = torch.randn(*dense_size, 4, device=device, dtype=dtype)
         ijk = grid.ijk.jdata
 
         for _ in range(10):
-            dense_origin = (
-                torch.tensor(
-                    [
-                        np.random.randint(low=ijk.min(0).values[i].item(), high=ijk.max(0).values[i].item())
-                        for i in range(3)
-                    ]
-                )
-                .to(torch.long)
-                .to(device)
+            dense_origin = torch.tensor(
+                [
+                    np.random.randint(low=int(ijk.min(0).values[i].item()), high=int(ijk.max(0).values[i].item()))
+                    for i in range(3)
+                ],
+                dtype=torch.long,
+                device=device,
             )
 
             ijk_offset = ijk - dense_origin.unsqueeze(0)
@@ -77,7 +80,7 @@ class TestUtils(unittest.TestCase):
                 torch.all(ijk_offset >= 0, dim=-1), torch.all(ijk_offset < max_bound.unsqueeze(0), dim=-1)
             )
 
-            grid_index = grid.ijk_to_index(ijk).jdata[keep_mask]
+            grid_index = grid.ijk_to_index(JaggedTensor(ijk)).jdata[keep_mask]
             i, j, k = ijk_offset[keep_mask, 0], ijk_offset[keep_mask, 1], ijk_offset[keep_mask, 2]
             offset = i * dense_size[2] * dense_size[1] + j * dense_size[2] + k
 
@@ -94,23 +97,20 @@ class TestUtils(unittest.TestCase):
     def test_read_from_dense_multidim(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
-        grid = GridBatch(device=device)
-        grid.set_from_points(random_points, voxel_sizes=0.1, origins=[0.0] * 3)
+        grid = GridBatch.from_points(JaggedTensor(random_points), voxel_sizes=0.1, origins=[0.0] * 3)
 
         dense_size = [np.random.randint(low=10, high=128) for _ in range(3)]
         random_grid = torch.randn(*dense_size, 4, 3, 2, device=device, dtype=dtype)
         ijk = grid.ijk.jdata
 
         for _ in range(10):
-            dense_origin = (
-                torch.tensor(
-                    [
-                        np.random.randint(low=ijk.min(0).values[i].item(), high=ijk.max(0).values[i].item())
-                        for i in range(3)
-                    ]
-                )
-                .to(torch.long)
-                .to(device)
+            dense_origin = torch.tensor(
+                [
+                    np.random.randint(low=int(ijk.min(0).values[i].item()), high=int(ijk.max(0).values[i].item()))
+                    for i in range(3)
+                ],
+                dtype=torch.long,
+                device=device,
             )
 
             ijk_offset = ijk - dense_origin.unsqueeze(0)
@@ -119,7 +119,7 @@ class TestUtils(unittest.TestCase):
                 torch.all(ijk_offset >= 0, dim=-1), torch.all(ijk_offset < max_bound.unsqueeze(0), dim=1)
             )
 
-            grid_index = grid.ijk_to_index(ijk).jdata[keep_mask]
+            grid_index = grid.ijk_to_index(JaggedTensor(ijk)).jdata[keep_mask]
             i, j, k = ijk_offset[keep_mask, 0], ijk_offset[keep_mask, 1], ijk_offset[keep_mask, 2]
             offset = i * random_grid.shape[2] * random_grid.shape[1] + j * random_grid.shape[2] + k
 
@@ -136,8 +136,7 @@ class TestUtils(unittest.TestCase):
     def test_read_from_dense_multidim_grad(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
-        grid = GridBatch(device=device)
-        grid.set_from_points(random_points, voxel_sizes=0.1, origins=[0.0] * 3)
+        grid = GridBatch.from_points(JaggedTensor(random_points), voxel_sizes=0.1, origins=[0.0] * 3)
 
         dense_size = [np.random.randint(low=10, high=128) for _ in range(3)]
         random_grid = torch.randn(*dense_size, 4, 3, 2, device=device, dtype=dtype)
@@ -148,15 +147,13 @@ class TestUtils(unittest.TestCase):
         ijk = grid.ijk.jdata
 
         for _ in range(10):
-            dense_origin = (
-                torch.tensor(
-                    [
-                        np.random.randint(low=ijk.min(0).values[i].item(), high=ijk.max(0).values[i].item())
-                        for i in range(3)
-                    ]
-                )
-                .to(torch.long)
-                .to(device)
+            dense_origin = torch.tensor(
+                [
+                    np.random.randint(low=int(ijk.min(0).values[i].item()), high=int(ijk.max(0).values[i].item()))
+                    for i in range(3)
+                ],
+                dtype=torch.long,
+                device=device,
             )
 
             ijk_offset = ijk - dense_origin.unsqueeze(0)
@@ -165,7 +162,7 @@ class TestUtils(unittest.TestCase):
                 torch.all(ijk_offset >= 0, dim=-1), torch.all(ijk_offset < max_bound.unsqueeze(0), dim=1)
             )
 
-            grid_index = grid.ijk_to_index(ijk).jdata[keep_mask]
+            grid_index = grid.ijk_to_index(JaggedTensor(ijk)).jdata[keep_mask]
             i, j, k = ijk_offset[keep_mask, 0], ijk_offset[keep_mask, 1], ijk_offset[keep_mask, 2]
             offset = i * random_grid_copy.shape[2] * random_grid_copy.shape[1] + j * random_grid_copy.shape[2] + k
 
@@ -190,8 +187,7 @@ class TestUtils(unittest.TestCase):
     def test_write_to_dense(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
-        grid = GridBatch(device=device)
-        grid.set_from_points(random_points, voxel_sizes=0.1, origins=[0.0] * 3)
+        grid = GridBatch.from_points(JaggedTensor(random_points), voxel_sizes=0.1, origins=[0.0] * 3)
 
         ijk = grid.ijk.jdata
         sparse_data = torch.randn((grid.total_voxels, 4), device=device, dtype=dtype)
@@ -206,10 +202,14 @@ class TestUtils(unittest.TestCase):
         max_crop_coord = min_crop_coord + max_crop_size
         for _ in range(10):
             crop_min = torch.tensor(
-                [np.random.randint(low=min_crop_coord[i].item(), high=max_crop_coord[i].item()) for i in range(3)]
-            ).to(device)
-            crop_size = torch.tensor([np.random.randint(low=1, high=max_crop_size[i].item()) for i in range(3)]).to(
-                device
+                [
+                    np.random.randint(low=int(min_crop_coord[i].item()), high=int(max_crop_coord[i].item()))
+                    for i in range(3)
+                ],
+                device=device,
+            )
+            crop_size = torch.tensor(
+                [np.random.randint(low=1, high=int(max_crop_size[i].item())) for i in range(3)], device=device
             )
 
             target_crop = torch.zeros(*crop_size.cpu().numpy(), sparse_data.shape[-1], dtype=dtype, device=device)
@@ -221,7 +221,7 @@ class TestUtils(unittest.TestCase):
             idx = write_ijk[:, 0] * crop_size[1] * crop_size[2] + write_ijk[:, 1] * crop_size[2] + write_ijk[:, 2]
             target_crop.view(-1, sparse_data.shape[-1])[idx] = sparse_data[keep_mask]
 
-            pred_crop = grid.write_to_dense(sparse_data, crop_min, crop_size).squeeze(0)
+            pred_crop = grid.write_to_dense(JaggedTensor(sparse_data), crop_min, crop_size).squeeze(0)
 
             self.assertTrue(torch.all(pred_crop == target_crop))
 
@@ -229,8 +229,7 @@ class TestUtils(unittest.TestCase):
     def test_write_to_dense_multidim(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
-        grid = GridBatch(device=device)
-        grid.set_from_points(random_points, voxel_sizes=0.1, origins=[0.0] * 3)
+        grid = GridBatch.from_points(JaggedTensor(random_points), voxel_sizes=0.1, origins=[0.0] * 3)
 
         ijk = grid.ijk.jdata
         sparse_data = torch.randn((grid.total_voxels, 4, 3, 2), device=device, dtype=dtype)
@@ -245,10 +244,14 @@ class TestUtils(unittest.TestCase):
         max_crop_coord = min_crop_coord + max_crop_size
         for _ in range(10):
             crop_min = torch.tensor(
-                [np.random.randint(low=min_crop_coord[i].item(), high=max_crop_coord[i].item()) for i in range(3)]
-            ).to(device)
-            crop_size = torch.tensor([np.random.randint(low=1, high=max_crop_size[i].item()) for i in range(3)]).to(
-                device
+                [
+                    np.random.randint(low=int(min_crop_coord[i].item()), high=int(max_crop_coord[i].item()))
+                    for i in range(3)
+                ],
+                device=device,
+            )
+            crop_size = torch.tensor(
+                [np.random.randint(low=1, high=int(max_crop_size[i].item())) for i in range(3)], device=device
             )
 
             target_crop = torch.zeros(*crop_size.cpu().numpy(), *sparse_data.shape[1:], dtype=dtype, device=device)
@@ -260,7 +263,7 @@ class TestUtils(unittest.TestCase):
             idx = write_ijk[:, 0] * crop_size[1] * crop_size[2] + write_ijk[:, 1] * crop_size[2] + write_ijk[:, 2]
             target_crop.view(-1, *sparse_data.shape[1:])[idx] = sparse_data[keep_mask]
 
-            pred_crop = grid.write_to_dense(sparse_data, crop_min, crop_size).squeeze(0)
+            pred_crop = grid.write_to_dense(JaggedTensor(sparse_data), crop_min, crop_size).squeeze(0)
 
             self.assertTrue(torch.all(pred_crop == target_crop))
 
@@ -268,8 +271,7 @@ class TestUtils(unittest.TestCase):
     def test_write_to_dense_multidim_grad(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
-        grid = GridBatch(device=device)
-        grid.set_from_points(random_points, voxel_sizes=0.1, origins=[0.0] * 3)
+        grid = GridBatch.from_points(JaggedTensor(random_points), voxel_sizes=0.1, origins=[0.0] * 3)
 
         ijk = grid.ijk.jdata
         sparse_data = torch.randn((grid.total_voxels, 4, 3, 2), device=device, dtype=dtype)
@@ -287,10 +289,14 @@ class TestUtils(unittest.TestCase):
         max_crop_coord = min_crop_coord + max_crop_size
         for _ in range(10):
             crop_min = torch.tensor(
-                [np.random.randint(low=min_crop_coord[i].item(), high=max_crop_coord[i].item()) for i in range(3)]
-            ).to(device)
-            crop_size = torch.tensor([np.random.randint(low=1, high=max_crop_size[i].item()) for i in range(3)]).to(
-                device
+                [
+                    np.random.randint(low=int(min_crop_coord[i].item()), high=int(max_crop_coord[i].item()))
+                    for i in range(3)
+                ],
+                device=device,
+            )
+            crop_size = torch.tensor(
+                [np.random.randint(low=1, high=int(max_crop_size[i].item())) for i in range(3)], device=device
             )
 
             target_crop = torch.zeros(*crop_size.cpu().numpy(), *sparse_data.shape[1:], dtype=dtype, device=device)
@@ -305,7 +311,7 @@ class TestUtils(unittest.TestCase):
             loss_copy = target_crop.sum()
             loss_copy.backward()
 
-            pred_crop = grid.write_to_dense(sparse_data, crop_min, crop_size).squeeze(0)
+            pred_crop = grid.write_to_dense(JaggedTensor(sparse_data), crop_min, crop_size).squeeze(0)
             loss = pred_crop.sum()
             loss.backward()
 
@@ -321,8 +327,7 @@ class TestUtils(unittest.TestCase):
         gsize = (int(gsize[0].item()), int(gsize[1].item()), int(gsize[2].item()))
         num_dense_vox = gsize[0] * gsize[1] * gsize[2]
 
-        grid = GridBatch(device=device)
-        grid.set_from_dense_grid(1, gsize, gorigin, 0.1, [0.0] * 3)
+        grid = GridBatch.from_dense(1, gsize, gorigin, 0.1, [0.0] * 3, device=device)
         grid_ijk = grid.ijk.jdata
         target_min_ijk = torch.zeros(3).to(grid_ijk) + torch.tensor(gorigin).to(grid_ijk)
         target_max_ijk = torch.tensor(gsize).to(grid_ijk) - 1 + torch.tensor(gorigin).to(grid_ijk)
@@ -342,11 +347,11 @@ class TestUtils(unittest.TestCase):
         dense_mask = torch.zeros(*gsize, dtype=torch.bool).to(device)
         mask_coord_set = set()
         for idx in range(ijk_mask.shape[0]):
-            i, j, k = [a.item() for a in ijk_mask[idx]]
+            i, j, k = [int(a.item()) for a in ijk_mask[idx]]
             dense_mask[i, j, k] = True
             mask_coord_set.add((i, j, k))
 
-        grid.set_from_dense_grid(1, gsize, gorigin, 0.1, [0.0] * 3, mask=dense_mask)
+        grid = GridBatch.from_dense(1, gsize, gorigin, 0.1, [0.0] * 3, mask=dense_mask, device=device)
         grid_ijk = grid.ijk.jdata
 
         self.assertEqual(len(mask_coord_set), grid_ijk.shape[0])

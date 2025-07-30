@@ -11,7 +11,7 @@ import torch
 from fvdb.utils.tests import (
     dtype_to_atol,
     expand_tests,
-    make_dense_grid_and_point_data_single,
+    make_dense_grid_and_point_data,
     make_grid_and_point_data,
 )
 from parameterized import parameterized
@@ -572,7 +572,7 @@ class TestBasicOpsSingle(unittest.TestCase):
     def test_ijk_to_index(self, device, dtype):
         gsize = 7
 
-        grid_p, grid_d, _ = make_dense_grid_and_point_data_single(gsize, device, dtype)
+        grid_p, grid_d, _ = make_dense_grid_and_point_data(gsize, device, dtype)
 
         pijk = grid_p.ijk
         dijk = grid_d.ijk
@@ -1032,184 +1032,6 @@ class TestBasicOpsSingle(unittest.TestCase):
 
     #         self.assertEqual(torch.abs(grid_vals_grad_t_flat - grid_vals_grad).max().item(), 0.0)
 
-    # @parameterized.expand(all_device_dtype_combos + bfloat16_combos)
-    # def test_avg_pool_grad(self, device, dtype):
-    #     vox_size = 0.05
-    #     vox_origin = (0.0, 0.0, 0.0)
-    #     gsize = int(1 / vox_size)
-    #     grid = GridBatch(device=device)
-    #     grid.set_from_dense_grid(1, [20, 20, 20], voxel_sizes=vox_size, origins=vox_origin)
-    #     assert grid.total_voxels == 20**3
-    #     for pool_factor in ((2, 4, 5), 1, 2, 4, 5, 10):
-    #         grid_vals = torch.randn(grid.total_voxels, 3, device=device, dtype=dtype) + 0.5
-    #         grid_vals.requires_grad = True
-
-    #         grid_vals_coarse, grid_coarse = grid.avg_pool(pool_factor, grid_vals)
-    #         grid_vals_coarse = grid_vals_coarse.jdata
-
-    #         if isinstance(pool_factor, int):
-    #             self.assertTrue(torch.allclose(grid_coarse.voxel_sizes[0], grid.voxel_sizes[0] * pool_factor))
-    #             self.assertTrue(
-    #                 torch.allclose(
-    #                     grid_coarse.origins[0], grid.origins[0] + 0.5 * grid.voxel_sizes[0] * (pool_factor - 1)
-    #                 )
-    #             )
-    #             npool_vox = pool_factor**3
-    #         else:
-    #             self.assertTrue(
-    #                 torch.allclose(
-    #                     grid_coarse.voxel_sizes[0], grid.voxel_sizes[0] * torch.tensor(pool_factor).to(device)
-    #                 )
-    #             )
-    #             self.assertTrue(
-    #                 torch.allclose(
-    #                     grid_coarse.origins[0],
-    #                     grid.origins[0] + 0.5 * grid.voxel_sizes[0] * (torch.tensor(pool_factor) - 1).to(device),
-    #                 )
-    #             )
-    #             npool_vox = pool_factor[0] * pool_factor[1] * pool_factor[2]
-    #         # self.assertTrue(torch.allclose(grid_coarse.voxel_sizes[0], grid.voxel_sizes[0] * pool_factor))
-    #         # self.assertTrue(torch.allclose(grid_coarse.origins[0], grid.origins[0] + 0.5 * grid.voxel_sizes[0] * (pool_factor - 1)))
-
-    #         loss = (grid_vals_coarse.pow(3) * -1.111).sum()
-    #         loss.backward()
-
-    #         assert grid_vals.grad is not None  # Removes type errors with .grad
-
-    #         grid_vals_grad = grid_vals.grad.clone()
-    #         self.assertLessEqual(
-    #             (grid_vals_grad.abs() > 0).sum().to(torch.int32).item(),
-    #             grid_vals_coarse.shape[0] * grid_vals_coarse.shape[1] * npool_vox,
-    #         )
-
-    #         grid_vals.grad.zero_()
-
-    #         # Pytorch pooling
-    #         torch_pool_op = torch.nn.AvgPool3d(pool_factor, pool_factor, ceil_mode=True)
-    #         dense_grid = torch.zeros((gsize, gsize, gsize, 3), dtype=dtype, device=device)
-    #         ijk = grid.ijk.jdata
-    #         dense_grid[ijk[:, 0], ijk[:, 1], ijk[:, 2]] = grid_vals.detach()
-    #         grid_vals_t = dense_grid.permute(3, 0, 1, 2)
-
-    #         grid_vals_t.requires_grad = True
-
-    #         grid_vals_t_coarse = torch_pool_op(grid_vals_t.unsqueeze(0)).squeeze()
-
-    #         x, y, z = torch.split(grid_coarse.ijk.jdata, 1, dim=-1)
-    #         grid_vals_coarse_t_flat = grid_vals_t_coarse[:, x.squeeze(), y.squeeze(), z.squeeze()].permute(1, 0)
-
-    #         diff_idxs = torch.where(
-    #             ~torch.isclose(
-    #                 grid_vals_coarse, grid_vals_coarse_t_flat, atol=dtype_to_atol(dtype), rtol=dtype_to_atol(dtype)
-    #             )
-    #         )
-    #         self.assertTrue(
-    #             torch.allclose(
-    #                 grid_vals_coarse, grid_vals_coarse_t_flat, atol=dtype_to_atol(dtype), rtol=dtype_to_atol(dtype)
-    #             ),
-    #             f"({pool_factor}) Exceed at {diff_idxs}:\n{grid_vals_coarse[diff_idxs][:10]}\nvs\n{grid_vals_coarse_t_flat[diff_idxs][:10]}",
-    #         )
-
-    #         loss = (grid_vals_t_coarse.pow(3) * -1.111).sum()
-    #         loss.backward()
-
-    #         assert grid_vals_t.grad is not None  # Removes type errors with .grad
-
-    #         grid_vals_grad_t_flat = torch.zeros_like(grid_vals_grad, device="cpu")
-    #         grid_ijk_cpu = grid.ijk.jdata.cpu()
-    #         grid_vals_t_cpu_grad = grid_vals_t.grad.cpu()
-    #         for i, coord in enumerate(grid_ijk_cpu):
-    #             grid_vals_grad_t_flat[i] = grid_vals_t_cpu_grad[:, coord[0], coord[1], coord[2]]
-    #         grid_vals_grad_t_flat = grid_vals_grad_t_flat.to(device)
-
-    #         expected_nnz_ub = (
-    #             grid_vals_t_coarse.shape[1]
-    #             * grid_vals_t_coarse.shape[2]
-    #             * grid_vals_t_coarse.shape[3]
-    #             * grid_vals_t_coarse.shape[0]
-    #             * npool_vox
-    #         )
-    #         self.assertLessEqual((grid_vals_grad_t_flat.abs() > 0).to(torch.int32).sum().item(), expected_nnz_ub)
-
-    #         self.assertTrue(torch.abs(grid_vals_grad_t_flat - grid_vals_grad).max().item() < dtype_to_atol(dtype))
-
-    # @parameterized.expand(all_device_dtype_combos + bfloat16_combos)
-    # def test_strided_max_pool_grad(self, device, dtype):
-    #     vox_size = 0.05
-    #     vox_origin = (0.0, 0.0, 0.0)
-    #     gsize = int(1 / vox_size)
-    #     grid = GridBatch(device=device)
-    #     grid.set_from_dense_grid(1, [20, 20, 20], voxel_sizes=vox_size, origins=vox_origin)
-    #     assert grid.total_voxels == 20**3
-    #     for pool_factor in (2, 4, 5, 10):
-    #         for stride in (pool_factor, pool_factor + 1, pool_factor + 2, pool_factor + 5):
-    #             grid_vals = torch.rand(grid.total_voxels, 3).to(device).to(dtype) + 0.5
-    #             grid_vals.requires_grad = True
-
-    #             grid_vals_coarse, grid_coarse = grid.max_pool(pool_factor, grid_vals, stride=stride)
-    #             grid_vals_coarse = grid_vals_coarse.jdata
-    #             self.assertTrue(torch.allclose(grid_coarse.voxel_sizes[0], grid.voxel_sizes[0] * stride))
-    #             self.assertTrue(
-    #                 torch.allclose(grid_coarse.origins[0], grid.origins[0] + 0.5 * grid.voxel_sizes[0] * (stride - 1))
-    #             )
-
-    #             loss = (grid_vals_coarse.pow(3) * -1.111).sum()
-    #             loss.backward()
-
-    #             assert grid_vals.grad is not None  # Removes type errors with .grad
-
-    #             grid_vals_grad = grid_vals.grad.clone()
-    #             self.assertEqual(
-    #                 (grid_vals_grad.abs() > 0).sum().to(torch.int32).item(),
-    #                 grid_vals_coarse.shape[0] * grid_vals_coarse.shape[1],
-    #             )
-
-    #             mask = grid_vals_grad.abs() > 0
-    #             a = torch.sort(torch.tensor([x.item() for x in grid_vals[mask[:, 0]][:, 0]]))[0]
-    #             b = torch.sort(torch.tensor([x.item() for x in grid_vals_coarse[:, 0]]))[0]
-    #             self.assertEqual(torch.max(a - b).max().item(), 0)
-
-    #             grid_vals.grad.zero_()
-
-    #             # Pytorch pooling
-    #             torch_pool_op = torch.nn.MaxPool3d(pool_factor, stride=stride, ceil_mode=True)
-    #             dense_grid = torch.zeros((gsize, gsize, gsize, 3), dtype=dtype, device=device)
-    #             ijk = grid.ijk.jdata
-    #             dense_grid[ijk[:, 0], ijk[:, 1], ijk[:, 2]] = grid_vals.detach()
-    #             grid_vals_t = dense_grid.permute(3, 0, 1, 2)
-
-    #             grid_vals_t.requires_grad = True
-
-    #             grid_vals_t_coarse = torch_pool_op(grid_vals_t.unsqueeze(0)).squeeze()
-
-    #             grid_vals_coarse_t_flat = torch.zeros_like(grid_vals_coarse)
-    #             for i, coord in enumerate(grid_coarse.ijk.jdata):
-    #                 grid_vals_coarse_t_flat[i] = grid_vals_t_coarse[:, coord[0], coord[1], coord[2]]
-
-    #             self.assertTrue(torch.all(grid_vals_coarse == grid_vals_coarse_t_flat))
-
-    #             loss = (grid_vals_t_coarse.pow(3) * -1.111).sum()
-    #             loss.backward()
-
-    #             assert grid_vals_t.grad is not None  # Removes type errors with .grad
-
-    #             grid_vals_grad_t_flat = torch.zeros_like(grid_vals_grad, device="cpu")
-    #             grid_ijk_cpu = grid.ijk.jdata.cpu()
-    #             grid_vals_t_cpu_grad = grid_vals_t.grad.cpu()
-    #             for i, coord in enumerate(grid_ijk_cpu):
-    #                 grid_vals_grad_t_flat[i] = grid_vals_t_cpu_grad[:, coord[0], coord[1], coord[2]]
-    #             grid_vals_grad_t_flat = grid_vals_grad_t_flat.to(device)
-
-    #             expected_nnz = (
-    #                 grid_vals_t_coarse.shape[1]
-    #                 * grid_vals_t_coarse.shape[2]
-    #                 * grid_vals_t_coarse.shape[3]
-    #                 * grid_vals_t_coarse.shape[0]
-    #             )
-    #             self.assertEqual((grid_vals_grad_t_flat.abs() > 0).to(torch.int32).sum().item(), expected_nnz)
-
-    #             self.assertEqual(torch.abs(grid_vals_grad_t_flat - grid_vals_grad).max().item(), 0.0)
-
     @parameterized.expand(all_device_dtype_combos)
     def test_pickle(self, device, dtype):
         grid, _, _ = make_grid_and_point_data(device, dtype)
@@ -1219,99 +1041,6 @@ class TestBasicOpsSingle(unittest.TestCase):
         self.assertEqual(grid.device, grid_2.device)
         self.assertTrue(torch.all(grid.voxel_size == grid_2.voxel_size))
         self.assertTrue(torch.all(grid.origin == grid_2.origin))
-
-    # @parameterized.expand(all_device_dtype_combos)
-    # def test_to_device(self, device, dtype):
-    #     vox_size = np.random.rand() * 0.1 + 0.05
-    #     vox_origin = torch.rand(3).to(device).to(dtype)
-
-    #     pts = torch.randn(10000, 3).to(device=device, dtype=dtype)
-    #     grid = GridBatch(device=device)
-    #     grid.set_from_points(pts, vox_size, vox_origin)
-    #     grid = grid.dilated_grid(1)
-    #     grid = grid.dual_grid()
-
-    #     target_dual_coordinates = ((pts - vox_origin) / vox_size) + 0.5
-    #     pred_dual_coordinates = grid.world_to_grid(pts).jdata
-    #     self.assertTrue(torch.allclose(pred_dual_coordinates, target_dual_coordinates, atol=dtype_to_atol(dtype)))
-    #     self.assertEqual(grid.device.type, torch.device(device).type)
-
-    #     to_device = torch.device("cpu")
-    #     grid2 = grid.to(to_device)
-    #     target_dual_coordinates = ((pts - vox_origin) / vox_size) + 0.5
-    #     if torch.device(device).type != to_device.type:
-    #         with self.assertRaises(RuntimeError):
-    #             pred_dual_coordinates = grid2.world_to_grid(pts).jdata
-    #     pred_dual_coordinates = grid2.world_to_grid(pts.to(to_device)).jdata
-    #     self.assertTrue(
-    #         torch.allclose(pred_dual_coordinates, target_dual_coordinates.to(to_device), atol=dtype_to_atol(dtype))
-    #     )
-    #     self.assertEqual(grid2.device, to_device)
-
-    #     to_device = torch.device("cuda:0")
-    #     grid2 = grid.to(to_device)
-    #     target_dual_coordinates = ((pts - vox_origin) / vox_size) + 0.5
-    #     if torch.device(device).type != to_device.type:
-    #         with self.assertRaises(RuntimeError):
-    #             pred_dual_coordinates = grid2.world_to_grid(pts).jdata
-    #     pred_dual_coordinates = grid2.world_to_grid(pts.to(to_device)).jdata
-    #     self.assertTrue(
-    #         torch.allclose(pred_dual_coordinates, target_dual_coordinates.to(to_device), atol=dtype_to_atol(dtype))
-    #     )
-    #     self.assertEqual(grid2.device, to_device)
-
-    # @parameterized.expand(all_device_dtype_combos)
-    # def test_fill_from_grid(self, device, dtype):
-    #     grid1 = GridBatch(device)
-    #     grid2 = GridBatch(device)
-
-    #     random_points_b1 = torch.randn(100, 3, device=device, dtype=dtype)
-    #     random_points_b2 = torch.randn(100, 3, device=device, dtype=dtype)
-
-    #     grid1.set_from_points(
-    #         JaggedTensor([random_points_b1[:70], random_points_b2[:70]]), voxel_sizes=0.01, origins=[0, 0, 0]
-    #     )
-    #     grid2.set_from_points(
-    #         JaggedTensor([random_points_b1[30:], random_points_b2[30:]]), voxel_sizes=0.01, origins=[0, 0, 0]
-    #     )
-
-    #     random_features_b1 = torch.randn(grid1[0].total_voxels, 32, device=device, dtype=dtype)
-    #     random_features_b2 = torch.randn(grid1[1].total_voxels, 32, device=device, dtype=dtype)
-    #     ret = grid2.fill_from_grid(JaggedTensor([random_features_b1, random_features_b2]), grid1)
-
-    #     # Perform an all pairs comparison between grid1 and grid2 points.
-    #     # All points that match up should have the same features.
-
-    #     # Test independently for both batches.
-    #     b1_comparison = torch.all(grid1[0].ijk.jdata.unsqueeze(0) == grid2[0].ijk.jdata.unsqueeze(1), dim=-1)
-    #     b2_comparison = torch.all(grid1[1].ijk.jdata.unsqueeze(0) == grid2[1].ijk.jdata.unsqueeze(1), dim=-1)
-
-    #     toinds, frominds = torch.where(b1_comparison)
-    #     self.assertTrue(torch.all(ret[0].jdata[toinds] == random_features_b1[frominds]))
-
-    #     toinds, frominds = torch.where(b2_comparison)
-    #     self.assertTrue(torch.all(ret[1].jdata[toinds] == random_features_b2[frominds]))
-
-    #     # All the rest should be zero.
-    #     self.assertTrue(torch.all(ret[0].jdata[~torch.any(b1_comparison, dim=1)] == 0.0))
-    #     self.assertTrue(torch.all(ret[1].jdata[~torch.any(b2_comparison, dim=1)] == 0.0))
-
-    #     # Test the gradients
-    #     grid1 = grid1[0]
-    #     grid2 = grid2[0]
-
-    #     random_features = torch.randn(grid1.total_voxels, 32, device=device, dtype=dtype, requires_grad=True)
-
-    #     def func(features):
-    #         return grid2.fill_from_grid(features, grid1).jdata.sum()
-
-    #     out = func(random_features)
-    #     out.backward()
-
-    #     one_indices = torch.where(torch.all(random_features.grad == 1.0, dim=1))[0]
-
-    #     toinds, frominds = torch.where(b1_comparison)
-    #     self.assertTrue(torch.all(one_indices == frominds))
 
     @parameterized.expand(all_device_dtype_combos)
     def test_grid_construction(self, device, dtype):
@@ -1337,25 +1066,33 @@ class TestBasicOpsSingle(unittest.TestCase):
         grid = Grid.from_points(pts, vox_size, vox_origin, device=device).dilated_grid(1)
 
         for builder in [build_from_ijk, build_from_pts, build_from_pts_nn, build_from_dense]:
-            with self.assertRaises(RuntimeError):
+
+            # Value error because of negative voxel size
+            with self.assertRaises(ValueError):
                 grid = builder(-vox_size, [0.01] * 3)
 
-            with self.assertRaises(RuntimeError):
+            # Value error because of negative voxel size
+            with self.assertRaises(ValueError):
                 grid = builder(-1.0, [0.01] * 3)
 
-            with self.assertRaises(RuntimeError):
+            # Value error because of zero voxel size
+            with self.assertRaises(ValueError):
                 grid = builder(vox_size * 0.0, [0.01] * 3)
 
-            with self.assertRaises(RuntimeError):
+            # Value error because of zero voxel size
+            with self.assertRaises(ValueError):
                 grid = builder(0.0, [0.01] * 3)
 
-            with self.assertRaises(RuntimeError):
+            # Value error because origins is wrong shape
+            with self.assertRaises(ValueError):
                 grid = builder(vox_size, [0.01] * 4)
 
-            with self.assertRaises(RuntimeError):
+            # Value error because origins is wrong shape
+            with self.assertRaises(ValueError):
                 grid = builder(vox_size, [0.01] * 2)
 
-            with self.assertRaises(RuntimeError):
+            # Value error because origins is wrong shape
+            with self.assertRaises(ValueError):
                 grid = builder(vox_size, [[0.01, 0.01, 0.01]])
 
             # These should work just fine. It's no longer an error to have a scalar
@@ -1567,39 +1304,31 @@ class TestBasicOpsSingle(unittest.TestCase):
     #     self.assertTrue(res.rshape[1] == 17)
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_empty_grid_construction(self, device, dtype):
+    def test_zero_voxels_grid_construction(self, device, dtype):
         """Test Grid.from_empty() creates an empty grid with correct properties"""
         # Test with default device
-        grid = Grid.from_empty()
+        grid = Grid.from_zero_voxels()
         self.assertEqual(grid.device.type, "cpu")
         self.assertEqual(grid.num_voxels, 0)
-        self.assertTrue(torch.equal(grid.bbox, torch.empty(0, 2, 3, device="cpu")))
+        self.assertTrue(torch.equal(grid.bbox, torch.zeros(2, 3, dtype=torch.int32, device="cpu")))
 
         # Test with specified device
-        grid = Grid.from_empty(device=device)
+        grid = Grid.from_zero_voxels(device=device)
         self.assertEqual(grid.device.type, device)
         self.assertEqual(grid.num_voxels, 0)
-        self.assertTrue(torch.equal(grid.bbox, torch.empty(0, 2, 3, device=device)))
+        self.assertTrue(torch.equal(grid.bbox, torch.zeros(2, 3, dtype=torch.int32, device=device)))
 
         # Test with torch.device object
         torch_device = torch.device(device)
-        grid = Grid.from_empty(device=torch_device)
+        grid = Grid.from_zero_voxels(device=torch_device)
         self.assertEqual(grid.device.type, device)
         self.assertEqual(grid.num_voxels, 0)
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_setting_transform_on_empty_batch_fails(self, device, dtype):
-        grid = Grid.from_empty(device=device)
-        with self.assertRaises(RuntimeError):
-            grid.set_global_origin(torch.zeros(3).to(device))
-
-        with self.assertRaises(RuntimeError):
-            grid.set_global_voxel_size(torch.ones(3).to(device))
-
-    @parameterized.expand(all_device_dtype_combos)
     def test_bbox_attrs(self, device, dtype):
-        grid = Grid.from_empty(device=device)
-        self.assertTrue(torch.equal(grid.bbox, torch.empty(0, 2, 3, device=device)))
+        grid = Grid.from_zero_voxels(device=device)
+        print(f"Empty grid bbox: {grid.bbox}")
+        self.assertTrue(torch.equal(grid.bbox, torch.zeros(2, 3, dtype=torch.float32, device=device)))
 
         grid = Grid.from_dense([32, 32, 32], [0, 0, 0], voxel_size=1.0 / 32, origin=[0, 0, 0], device=device)
         self.assertTrue(torch.equal(grid.bbox, torch.tensor([[0, 0, 0], [31, 31, 31]], device=device)))

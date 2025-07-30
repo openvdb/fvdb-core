@@ -34,6 +34,7 @@ Please refer to the tutorials for examples of how to install and use fVDB to bui
    :maxdepth: 1
    :caption: API References
 
+   api/grid
    api/grid_batch
    api/jagged_tensor
 

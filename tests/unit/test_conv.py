@@ -56,8 +56,7 @@ class TestConv(unittest.TestCase):
     @parameterized.expand(all_device_dtype_combos)
     def test_conv_vs_torch_dense_simple(self, device, dtype, backend):
         torch.random.manual_seed(0)
-        grid = GridBatch(device=device)
-        grid.set_from_dense_grid(1, (1, 1, 1))
+        grid = GridBatch.from_dense(1, (1, 1, 1), device=device)
 
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
@@ -90,7 +89,7 @@ class TestConv(unittest.TestCase):
         vdb_kernels.grad.zero_()
 
         # # Dense convolution & backward
-        dense_features = grid.write_to_dense(vdb_features).squeeze(0).permute(3, 2, 1, 0)
+        dense_features = grid.write_to_dense(JaggedTensor(vdb_features)).squeeze(0).permute(3, 2, 1, 0)
         out_dense_features_ref = torch.nn.functional.conv3d(
             dense_features, vdb_kernels, padding=(kernel_size - 1) // 2, stride=stride
         )
@@ -123,8 +122,7 @@ class TestConv(unittest.TestCase):
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
-        grid = GridBatch(device=device)
-        grid.set_from_points(
+        grid = GridBatch.from_points(
             JaggedTensor([torch.randn((100, 3), device=device, dtype=dtype) for _ in range(batch_size)]),
             voxel_sizes=0.05,
             origins=[0.0] * 3,
@@ -193,8 +191,7 @@ class TestConv(unittest.TestCase):
         torch.random.manual_seed(0)
         in_channel, out_channel = 128, 128
 
-        grid = GridBatch(device=device)
-        grid.set_from_points(
+        grid = GridBatch.from_points(
             JaggedTensor([torch.randn((100, 3), device=device, dtype=dtype) for _ in range(batch_size)]),
             voxel_sizes=0.05,
             origins=[0.0] * 3,
@@ -253,8 +250,7 @@ class TestConv(unittest.TestCase):
         torch.random.manual_seed(0)
         in_channel, out_channel = 4, 8
 
-        grid = GridBatch(device=device)
-        grid.set_from_points(
+        grid = GridBatch.from_points(
             JaggedTensor([torch.randn((100, 3), device=device, dtype=torch.float) for _ in range(batch_size)]),
             voxel_sizes=0.05,
             origins=[0.0] * 3,
@@ -355,8 +351,7 @@ class TestConv(unittest.TestCase):
             return
 
         torch.random.manual_seed(0)
-        grid = GridBatch(device=device)
-        grid.set_from_dense_grid(1, (32, 32, 32))
+        grid = GridBatch.from_dense(1, (32, 32, 32), device=device)
         tol = {}
         tol_grad = {}
         dtype2prec = {torch.float: 1e-4, torch.double: 1e-5, torch.half: 1e-2, torch.bfloat16: 1e-1}
@@ -377,7 +372,7 @@ class TestConv(unittest.TestCase):
         vdb_kernels.requires_grad = True
 
         # Dense convolution & backward
-        dense_features = grid.write_to_dense(vdb_features).squeeze(0).permute(3, 2, 1, 0)
+        dense_features = grid.write_to_dense(JaggedTensor(vdb_features)).squeeze(0).permute(3, 2, 1, 0)
         out_dense_features_ref = torch.nn.functional.conv3d(
             dense_features, vdb_kernels, padding=(kernel_size - 1) // 2, stride=stride
         )
@@ -449,8 +444,7 @@ class TestConv(unittest.TestCase):
             return
 
         torch.random.manual_seed(0)
-        grid = GridBatch(device=device)
-        grid.set_from_dense_grid(1, (32, 32, 32))
+        grid = GridBatch.from_dense(1, (32, 32, 32), device=device)
         tol = {}
         tol_grad = {}
         if dtype == torch.float16:
@@ -474,7 +468,7 @@ class TestConv(unittest.TestCase):
         vdb_kernels.requires_grad = True
 
         # Dense convolution & backward
-        dense_features = grid.write_to_dense(vdb_features).squeeze(0).permute(3, 2, 1, 0)
+        dense_features = grid.write_to_dense(JaggedTensor(vdb_features)).squeeze(0).permute(3, 2, 1, 0)
         out_dense_features_ref = torch.nn.functional.conv3d(
             dense_features,
             vdb_kernels,
@@ -558,8 +552,7 @@ class TestConv(unittest.TestCase):
             return
 
         torch.random.manual_seed(0)
-        source_grid = GridBatch(device=device)
-        source_grid.set_from_dense_grid(1, (32, 32, 32))
+        source_grid = GridBatch.from_dense(1, (32, 32, 32), device=device)
         tol = {}
         tol_grad = {}
         if dtype == torch.float16:
@@ -616,7 +609,7 @@ class TestConv(unittest.TestCase):
         out_padding = 32 - out_size if out_size < 32 else 0
         in_padding = (out_size - 32) // 2 if out_size > 32 else 0
 
-        dense_features = target_grid.write_to_dense(vdb_features).squeeze(0).permute(3, 2, 1, 0)
+        dense_features = target_grid.write_to_dense(JaggedTensor(vdb_features)).squeeze(0).permute(3, 2, 1, 0)
         out_dense_features_ref = torch.nn.functional.conv_transpose3d(
             dense_features, vdb_kernels, stride=stride, padding=in_padding, output_padding=out_padding
         )
@@ -629,15 +622,15 @@ class TestConv(unittest.TestCase):
         dense_kernels_grad = torch.clone(vdb_kernels.grad)
 
         self.assertTrue(
-            torch.allclose(out_dense_features, out_dense_features_ref, **tol),
+            torch.allclose(out_dense_features, out_dense_features_ref, **tol),  # type: ignore
             f"Max dist is {torch.max(torch.abs(out_dense_features - out_dense_features_ref))}",
         )
         self.assertTrue(
-            torch.allclose(vdb_features_grad, dense_features_grad, **tol_grad),
+            torch.allclose(vdb_features_grad, dense_features_grad, **tol_grad),  # type: ignore
             f"Max dist is {torch.max(torch.abs(vdb_features_grad - dense_features_grad))}",
         )
         self.assertTrue(
-            torch.allclose(vdb_kernels_grad, dense_kernels_grad, **tol_grad),
+            torch.allclose(vdb_kernels_grad, dense_kernels_grad, **tol_grad),  # type: ignore
             f"Max dist is {torch.max(torch.abs(vdb_kernels_grad - dense_kernels_grad))}",
         )
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -648,9 +641,10 @@ class TestConv(unittest.TestCase):
 
         torch.random.manual_seed(0)
 
-        grid = GridBatch().to(device)
-        grid.set_from_points(
-            torch.randn(1000, 3, device=device, dtype=torch.float), voxel_sizes=0.025, origins=[0.0, 0.0, 0.0]
+        grid = GridBatch.from_points(
+            JaggedTensor(torch.randn(1000, 3, device=device, dtype=torch.float)),
+            voxel_sizes=0.025,
+            origins=[0.0, 0.0, 0.0],
         )
 
         def do_conv(feats, kernels):

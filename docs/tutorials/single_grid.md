@@ -23,8 +23,7 @@ device = torch.device("cuda:0")
 points = torch.randn(1000, 3, device=device)
 
 # Creating a grid from points requires instantiation then population
-grid_batch = GridBatch(device=device)
-grid_batch.set_from_points(
+grid_batch = GridBatch.from_points(
     JaggedTensor(points),  # Must wrap in JaggedTensor even for single grid
     voxel_sizes=0.1,
     origins=[0, 0, 0]
@@ -53,7 +52,7 @@ device = torch.device("cuda:0")
 points = torch.randn(1000, 3, device=device)
 
 # Clean creation using classmethod
-grid = Grid.from_points(points, voxel_size=0.1, origin=[0, 0, 0], device=device)
+grid = Grid.from_points(points, voxel_size=0.1, origin=[0, 0, 0])
 
 # Assume features tensor matches grid voxel count
 features = torch.randn(grid.num_voxels, 32, device=device)
@@ -72,17 +71,15 @@ operations, making the code cleaner and more intuitive.
 
 The `Grid` class simplifies the `GridBatch` API for single-grid operations:
 
-1. **Cleaner Construction**: Named constructors (`Grid.from_points()`, `Grid.from_mesh()`, etc.) make intent clear and reduce boilerplate code.
+1. **No JaggedTensor Wrapping**: Work directly with PyTorch tensors without the overhead of wrapping single tensors in `JaggedTensor` containers.
 
-2. **No JaggedTensor Wrapping**: Work directly with PyTorch tensors without the overhead of wrapping single tensors in `JaggedTensor` containers.
+2. **Automatic Batch Handling**: Grid manages batch dimensions internally for operations that require them, eliminating manual tensor reshaping.
 
-3. **Automatic Batch Handling**: Grid manages batch dimensions internally for operations that require them, eliminating manual tensor reshaping.
+3. **Simplified Return Values**: Get tensors directly instead of unwrapping results from `JaggedTensors`.
 
-4. **Simplified Return Values**: Get tensors directly instead of unwrapping results from `JaggedTensors`.
+4. **More Pythonic**: Properties like `grid.num_voxels` instead of `grid_batch.num_voxels_at(0)` provide cleaner access to grid attributes.
 
-5. **More Pythonic**: Properties like `grid.num_voxels` instead of `grid_batch.num_voxels_at(0)` provide cleaner access to grid attributes.
-
-6. **Consistent API**: All methods operate on regular tensors, providing a consistent interface that integrates naturally with PyTorch workflows.
+5. **Consistent API**: All methods operate on regular tensors, providing a consistent interface that integrates naturally with PyTorch workflows.
 
 The `Grid` class maintains full compatibility with GPU operations and sparse grid functionality while providing a much more intuitive interface for the common case of working with single sparse grids. For batch operations with multiple grids, `GridBatch` remains the appropriate choice.
 

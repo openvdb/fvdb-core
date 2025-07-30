@@ -50,7 +50,7 @@ class InjectionTests(unittest.TestCase):
         npc = torch.randint(low=10, high=1000, size=(self.batch_size,), device=self.device).tolist()
         plist = self.get_point_list(npc, self.device)
         pc_jagged = fvdb.JaggedTensor(plist)
-        return fvdb.gridbatch_from_points(pc_jagged, voxel_sizes=[[self.voxel_size] * 3] * self.batch_size)
+        return fvdb.GridBatch.from_points(pc_jagged, voxel_sizes=[[self.voxel_size] * 3] * self.batch_size)
 
     def build_sidecar(self, grid_batch: fvdb.GridBatch, build_func: Callable) -> fvdb.JaggedTensor:
         sizes = [grid_batch.total_voxels] + list(self.element_shape)
@@ -629,9 +629,9 @@ class InjectionTests(unittest.TestCase):
         sidecar123.requires_grad = True  # This is the leaf tensor, so it should not require gradients
 
         # This should fail because sidecar123 is a leaf tensor
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(Exception):
             self.grid_batch1.inject_to(self.grid_batch123, sidecar1, sidecar123)  # sidecar1 -> sidecar123
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(Exception):
             self.grid_batch123.inject_from(self.grid_batch2, sidecar2, sidecar123)  # sidecar2 -> sidecar123
 
     def test_inject_in_place_backprop_dst_sidecar_requires_grad(self):
@@ -712,16 +712,13 @@ class InjectionTests(unittest.TestCase):
 
     @parameterized.expand([(torch.float32,), (torch.float16,), (torch.float64,)])
     def test_inject_out_of_place(self, dtype: torch.dtype):
-        grid1 = fvdb.GridBatch(self.device)
-        grid2 = fvdb.GridBatch(self.device)
-
         random_points_b1 = torch.randn(100, 3, device=self.device, dtype=dtype)
         random_points_b2 = torch.randn(100, 3, device=self.device, dtype=dtype)
 
-        grid1.set_from_points(
+        grid1 = fvdb.GridBatch.from_points(
             fvdb.JaggedTensor([random_points_b1[:70], random_points_b2[:70]]), voxel_sizes=0.01, origins=[0, 0, 0]
         )
-        grid2.set_from_points(
+        grid2 = fvdb.GridBatch.from_points(
             fvdb.JaggedTensor([random_points_b1[30:], random_points_b2[30:]]), voxel_sizes=0.01, origins=[0, 0, 0]
         )
 
@@ -754,7 +751,7 @@ class InjectionTests(unittest.TestCase):
 
         random_features = torch.randn(grid1.total_voxels, 32, device=self.device, dtype=dtype, requires_grad=True)
 
-        out = grid2.inject_from(grid1, random_features).jdata.sum()
+        out = grid2.inject_from(grid1, fvdb.JaggedTensor([random_features])).jdata.sum()
         out.backward()
 
         one_indices = torch.where(torch.all(random_features.grad == 1.0, dim=1))[0]

@@ -37,8 +37,7 @@ class TestBatching(unittest.TestCase):
         ]
         randpts = fvdb.JaggedTensor(pts_list)
 
-        gridbatch = fvdb.GridBatch(device)
-        gridbatch.set_from_points(randpts, voxel_sizes=0.01)
+        gridbatch = fvdb.GridBatch.from_points(randpts, voxel_sizes=0.01)
         self.assertTrue(gridbatch.is_contiguous())
 
         voxels_idx_target = gridbatch.ijk.jdata[gridbatch.joffsets[idx] : gridbatch.joffsets[idx + 1]]
@@ -73,8 +72,7 @@ class TestBatching(unittest.TestCase):
         ]
         randpts = fvdb.JaggedTensor(pts_list)
 
-        gridbatch = fvdb.GridBatch(device)
-        gridbatch.set_from_points(randpts, voxel_sizes=0.01)
+        gridbatch = fvdb.GridBatch.from_points(randpts, voxel_sizes=0.01)
         self.assertTrue(gridbatch.is_contiguous())
 
         all_ijk = gridbatch.ijk
@@ -134,8 +132,7 @@ class TestBatching(unittest.TestCase):
         ]
         randpts = fvdb.JaggedTensor(pts_list)
 
-        gridbatch = fvdb.GridBatch(device)
-        gridbatch.set_from_points(randpts, voxel_sizes=0.01)
+        gridbatch = fvdb.GridBatch.from_points(randpts, voxel_sizes=0.01)
         self.assertTrue(gridbatch.is_contiguous())
 
         all_ijk = gridbatch.ijk
@@ -204,8 +201,7 @@ class TestBatching(unittest.TestCase):
         ]
         randpts = fvdb.JaggedTensor(pts_list)
 
-        gridbatch = fvdb.GridBatch(device)
-        gridbatch.set_from_points(randpts, voxel_sizes=0.01)
+        gridbatch = fvdb.GridBatch.from_points(randpts, voxel_sizes=0.01)
         self.assertTrue(gridbatch.is_contiguous())
 
         all_ijk = gridbatch.ijk
@@ -269,8 +265,7 @@ class TestBatching(unittest.TestCase):
         ]
         randpts = fvdb.JaggedTensor(pts_list)
 
-        gridbatch = fvdb.GridBatch(device)
-        gridbatch.set_from_points(randpts, voxel_sizes=0.01)
+        gridbatch = fvdb.GridBatch.from_points(randpts, voxel_sizes=0.01)
 
         all_ijk = gridbatch.ijk
 
@@ -298,8 +293,7 @@ class TestBatching(unittest.TestCase):
         ]
         randpts = fvdb.JaggedTensor(pts_list)
 
-        gridbatch = fvdb.GridBatch(device)
-        gridbatch.set_from_points(randpts, voxel_sizes=0.01)
+        gridbatch = fvdb.GridBatch.from_points(randpts, voxel_sizes=0.01)
 
         all_ijk = gridbatch.ijk
 
@@ -318,7 +312,7 @@ class TestBatching(unittest.TestCase):
         self.assertFalse(gridbatch[mask].is_contiguous())
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_empty_grid(self, device, dtype):
+    def test_zero_voxels_grid(self, device, dtype):
         num_grids = np.random.randint(32, 64)
         nvox_per_grid = NVOX if device == "cuda" else 100
         nrand = 10_000 if device == "cuda" else 100
@@ -327,18 +321,18 @@ class TestBatching(unittest.TestCase):
             for _ in range(num_grids)
         ]
         randpts = fvdb.JaggedTensor(pts_list)
-        gridbatch = fvdb.GridBatch(device)
+        gridbatch = fvdb.GridBatch.from_zero_voxels(device=device)
         gd = gridbatch.dual_grid()
         self.assertEqual(gd.total_voxels, 0)
         gc = gridbatch.coarsened_grid(2)
         self.assertEqual(gc.total_voxels, 0)
         gs = gridbatch.subdivided_grid(2)
         self.assertEqual(gs.total_voxels, 0)
-        self.assertEqual(gridbatch.grid_count, 0)
-        self.assertEqual(gridbatch.num_voxels.numel(), 0)
+        self.assertEqual(gridbatch.grid_count, 1)
+        self.assertEqual(gridbatch.num_voxels.numel(), 1)
         self.assertEqual(gridbatch.total_voxels, 0)
         self.assertEqual(gridbatch.ijk.jdata.numel(), 0)
-        gridbatch.set_from_points(randpts, voxel_sizes=0.01)
+        gridbatch = fvdb.GridBatch.from_points(randpts, voxel_sizes=0.01)
         self.assertTrue(gridbatch.is_contiguous())
 
         empty_mask = torch.zeros_like(gridbatch.num_voxels, dtype=torch.bool)
@@ -363,17 +357,14 @@ class TestBatching(unittest.TestCase):
             for _ in range(num_grids)
         ]
         randpts = fvdb.JaggedTensor(pts_list)
-        gridbatch = fvdb.GridBatch(device)
-        gridbatch.set_from_points(randpts, voxel_sizes=0.01)
+        gridbatch = fvdb.GridBatch.from_points(randpts, voxel_sizes=0.01)
 
         randpts_1 = fvdb.JaggedTensor(pts_list[:10])
-        gridbatch_1 = fvdb.GridBatch(device)
-        gridbatch_1.set_from_points(randpts_1, voxel_sizes=0.01)
+        gridbatch_1 = fvdb.GridBatch.from_points(randpts_1, voxel_sizes=0.01)
         self.assertTrue(gridbatch_1.is_contiguous())
 
         randpts_2 = fvdb.JaggedTensor(pts_list[10:])
-        gridbatch_2 = fvdb.GridBatch(device)
-        gridbatch_2.set_from_points(randpts_2, voxel_sizes=0.01)
+        gridbatch_2 = fvdb.GridBatch.from_points(randpts_2, voxel_sizes=0.01)
         self.assertTrue(gridbatch_2.is_contiguous())
 
         gridbatch_cat = fvdb.jcat([gridbatch_1, gridbatch_2])
@@ -384,7 +375,7 @@ class TestBatching(unittest.TestCase):
         self.assertTrue(torch.equal(gridbatch_cat.num_voxels, gridbatch.num_voxels))
         self.assertTrue(torch.equal(gridbatch_cat.ijk.jdata, gridbatch.ijk.jdata))
 
-        gridbatch_cat_2 = fvdb.jcat([gridbatch_1, fvdb.GridBatch(device), gridbatch_2])
+        gridbatch_cat_2 = fvdb.jcat([gridbatch_1, fvdb.GridBatch.from_zero_grids(device=device), gridbatch_2])
 
         self.assertEqual(gridbatch_cat_2.grid_count, gridbatch.grid_count)
         self.assertEqual(len(gridbatch), len(gridbatch_cat_2))
@@ -398,8 +389,7 @@ class TestBatching(unittest.TestCase):
         self.assertFalse(gridbatch_4.is_contiguous())
 
         pts_list_2 = [pts_list[i] for i in [7, 11, 13, 15, 17, 19, 19, 21, 33, 44, 55]]
-        gridbatch_target = fvdb.GridBatch(device)
-        gridbatch_target.set_from_points(fvdb.JaggedTensor(pts_list_2), voxel_sizes=0.01)
+        gridbatch_target = fvdb.GridBatch.from_points(fvdb.JaggedTensor(pts_list_2), voxel_sizes=0.01)
 
         gridbatch_cat_3 = fvdb.jcat([gridbatch_3, gridbatch_4])
         self.assertEqual(gridbatch_cat_3.grid_count, gridbatch_target.grid_count)
@@ -413,7 +403,7 @@ class TestBatching(unittest.TestCase):
         pts_to_cat = []
         for i in range(7):
             if np.random.rand() > 0.5:
-                grids_to_cat.append(fvdb.GridBatch(device))
+                grids_to_cat.append(fvdb.GridBatch.from_zero_grids(device=device))
 
             indices = torch.randperm(len(gridbatch))[:7]
             num_indices = indices.clone()
@@ -432,8 +422,7 @@ class TestBatching(unittest.TestCase):
             self.assertFalse(grids_to_cat[-1].is_contiguous())
 
         grid_pts = fvdb.JaggedTensor(pts_to_cat)
-        target_grid = fvdb.GridBatch(device)
-        target_grid.set_from_points(grid_pts, voxel_sizes=0.01)
+        target_grid = fvdb.GridBatch.from_points(grid_pts, voxel_sizes=0.01)
 
         gridbatch_cat_4 = fvdb.jcat(grids_to_cat)
 
@@ -497,15 +486,14 @@ class TestBatching(unittest.TestCase):
             for _ in range(num_grids)
         ]
         randpts = fvdb.JaggedTensor(pts_list)
-        gridbatch = fvdb.GridBatch(device)
-        gridbatch.set_from_points(randpts, voxel_sizes=0.01)
+        gridbatch = fvdb.GridBatch.from_points(randpts, voxel_sizes=0.01)
 
         # Stress test: concatenate a whole bunch of views and empty tensors created in different ways
         grids_to_cat = []
         pts_to_cat = []
         for i in range(7):
             if np.random.rand() > 0.5:
-                grids_to_cat.append(fvdb.GridBatch(device))
+                grids_to_cat.append(fvdb.GridBatch.from_zero_voxels(device=device))
 
             indices = torch.randperm(len(gridbatch))[:7]
             num_indices = indices.clone()
@@ -538,15 +526,14 @@ class TestBatching(unittest.TestCase):
             for _ in range(num_grids)
         ]
         randpts = fvdb.JaggedTensor(pts_list)
-        gridbatch = fvdb.GridBatch(device)
-        gridbatch.set_from_points(randpts, voxel_sizes=0.01)
+        gridbatch = fvdb.GridBatch.from_points(randpts, voxel_sizes=0.01)
 
         grids_to_cat = []
         last_grid = gridbatch
         global_indices = torch.arange(len(gridbatch))
         for i in range(7):
             if np.random.rand() > 0.5:
-                grids_to_cat.append(fvdb.GridBatch(device))
+                grids_to_cat.append(fvdb.GridBatch.from_zero_voxels(device=device))
 
             indices = torch.randperm(len(last_grid))[: len(last_grid) - np.random.randint(1, 3)]
             num_indices = indices.clone()
@@ -577,8 +564,7 @@ class TestBatching(unittest.TestCase):
             for _ in range(num_grids)
         ]
         randpts = fvdb.JaggedTensor(pts_list)
-        gridbatch = fvdb.GridBatch(device)
-        gridbatch.set_from_points(randpts, voxel_sizes=0.01)
+        gridbatch = fvdb.GridBatch.from_points(randpts, voxel_sizes=0.01)
 
         gb2 = gridbatch[7:-100]
         self.assertTrue(gb2.is_contiguous())
@@ -642,10 +628,9 @@ class TestBatching(unittest.TestCase):
             for _ in range(num_grids)
         ]
         randpts = fvdb.JaggedTensor(pts_list)
-        gridbatch = fvdb.GridBatch(device)
 
         # Random voxel sizes and origins
-        gridbatch.set_from_points(
+        gridbatch = fvdb.GridBatch.from_points(
             randpts, voxel_sizes=np.random.rand(num_grids, 3), origins=np.random.randn(num_grids, 3)
         )
 

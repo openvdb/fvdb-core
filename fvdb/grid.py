@@ -10,21 +10,25 @@ Classes:
 - Grid: A single sparse voxel grid with support for efficient operations
 
 Class-methods for creating Grid objects from various sources:
-- from_dense: Create from dense grid dimensions
-- from_ijk: Create from explicit voxel coordinates
-- from_mesh: Create from triangle meshes
-- from_points: Create from point clouds
-- from_nearest_voxels_to_points: Create from nearest voxels to points
+- Grid.from_dense() for dense data
+- Grid.from_dense_axis_aligned_bounds() for dense defined by axis-aligned bounds
+- Grid.from_grid_batch() for a single grid from a grid batch
+- Grid.from_ijk() for voxel coordinates
+- Grid.from_mesh() for triangle meshes
+- Grid.from_nearest_voxels_to_points() for nearest voxel mapping
+- Grid.from_points() for point clouds
+- Grid.from_zero_voxels() for a single grid with zero voxels
 
-Module-level functions for creating Grid objects from various sources:
-- load/save: Load and save grids to/from .nvdb files
+Module-level functions for loading and saving grids:
+- load_grid/save_grid: Load and save grids to/from .nvdb files
 
 Grid supports operations like convolution, pooling, interpolation, ray casting,
 mesh extraction, and coordinate transformations on sparse voxel data.
 """
 
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Sequence, cast, overload
+from types import ClassMethodDescriptorType
+from typing import TYPE_CHECKING, Any, Sequence, cast, overload
 
 import numpy as np
 import torch
@@ -44,6 +48,7 @@ from .types import (
     to_NonNegativeVec3f,
     to_NonNegativeVec3i,
     to_PositiveVec3f,
+    to_PositiveVec3fBatch,
     to_PositiveVec3i,
     to_Vec3f,
     to_Vec3fBatch,
@@ -56,6 +61,7 @@ from .types import (
 )
 
 if TYPE_CHECKING:
+    from .grid_batch import GridBatch
     from .sparse_conv_pack_info import SparseConvPackInfo
 
 
@@ -67,60 +73,36 @@ class Grid:
     efficiently on a GPU. The class provides methods for common operations like
     sampling, convolution, pooling, and other operations.
 
+    A Grid cannot be a nonexistent (grid_count==0) grid, for that you'd need a
+    GridBatch with batch_size=0. However, a Grid can have zero voxels.
+
     The grid is stored in a sparse format where only active (non-empty) voxels are
     allocated, making it memory efficient for representing large volumes with sparse
     occupancy.
 
     Note:
         For creating grids with actual content, use the classmethods:
-        - Grid.from_empty() for empty grids
         - Grid.from_dense() for dense data
+        - Grid.from_dense_axis_aligned_bounds() for dense defined by axis-aligned bounds
+        - Grid.from_grid_batch() for a single grid from a grid batch
         - Grid.from_ijk() for voxel coordinates
         - Grid.from_mesh() for triangle meshes
-        - Grid.from_points() for point clouds
         - Grid.from_nearest_voxels_to_points() for nearest voxel mapping
+        - Grid.from_points() for point clouds
+        - Grid.from_zero_voxels() for a single grid with zero voxels
 
         The Grid constructor is for internal use only, always use the classmethods.
     """
 
-    def __init__(self, *, device: torch.device | None = None, impl: GridBatchCpp | None = None):
+    def __init__(self, *, impl: GridBatchCpp):
         """
         Constructor for internal use only. - use the Grid.from_* classmethods instead.
         """
-        if impl is not None:
-            # For internal use only - impl should be provided alone
-            if device is not None:
-                raise RuntimeError("Device cannot be provided when impl is provided")
-            self._impl = impl
-        elif device is not None:
-            # For internal use only - device should be a resolved torch.device
-            if not isinstance(device, torch.device):
-                raise RuntimeError(
-                    f"Grid constructor requires torch.device, got {type(device)}. Use Grid.from_empty() instead."
-                )
-            self._impl = GridBatchCpp(device)
-        else:
-            raise RuntimeError("Either impl or device must be provided to Grid constructor")
+        self._impl = impl
 
-    @classmethod
-    def from_empty(cls, device: DeviceIdentifier = "cpu") -> "Grid":
-        """
-        Create a new empty Grid on a specific device.
-
-        Args:
-            device: The device to create the Grid on. Can be a string (e.g., "cuda", "cpu")
-                or a torch.device object. Defaults to "cpu".
-
-        Returns:
-            Grid: A new empty Grid object.
-
-        Examples:
-            >>> grid = Grid.from_empty("cuda")  # string
-            >>> grid = Grid.from_empty(torch.device("cuda:0"))  # device directly
-            >>> grid = Grid.from_empty()  # defaults to CPU
-        """
-        resolved_device = resolve_device(device)
-        return cls(device=resolved_device)
+    # ============================================================
+    #                  Grid from_* constructors
+    # ============================================================
 
     @classmethod
     def from_dense(
@@ -166,9 +148,53 @@ class Grid:
         voxel_size = to_PositiveVec3f(voxel_size, device=resolved_device)
         origin = to_Vec3f(origin, device=resolved_device)
 
-        grid = cls(device=resolved_device)
-        grid._impl.set_from_dense_grid(1, dense_dims, ijk_min, voxel_size, origin, mask)
-        return grid
+        grid_impl = GridBatchCpp(device=resolved_device)
+        grid_impl.set_from_dense_grid(1, dense_dims, ijk_min, voxel_size, origin, mask)
+        return cls(impl=grid_impl)
+
+    @classmethod
+    def from_dense_axis_aligned_bounds(
+        cls,
+        dense_dims: NumericMaxRank1,
+        bounds_min: NumericMaxRank1 = 0,
+        bounds_max: NumericMaxRank1 = 1,
+        voxel_center: bool = False,
+        device: DeviceIdentifier = "cpu",
+    ) -> "Grid":
+        dense_dims = to_PositiveVec3i(dense_dims, device=resolve_device(device))
+        bounds_min = to_Vec3f(bounds_min, device=resolve_device(device))
+        bounds_max = to_Vec3f(bounds_max, device=resolve_device(device))
+
+        if torch.any(bounds_max <= bounds_min):
+            raise ValueError("bounds_max must be greater than bounds_min in all axes")
+
+        if voxel_center:
+            voxel_size = (bounds_max - bounds_min) / (dense_dims.to(torch.float64) - 1.0)
+            origin = bounds_min
+        else:
+            voxel_size = (bounds_max - bounds_min) / dense_dims.to(torch.float64)
+            origin = bounds_min + 0.5 * voxel_size
+
+        return cls.from_dense(dense_dims=dense_dims, voxel_size=voxel_size, origin=origin, device=device)
+
+    @classmethod
+    def from_grid_batch(cls, grid_batch: "GridBatch", index: int = 0) -> "Grid":
+        """
+        Create a single grid from one grid in a grid batch.
+        If the given grid batch is empty, the returned grid will be empty
+        with the same empty voxel size and origin.
+
+        Args:
+            grid_batch (GridBatch): The grid batch to create the grid from.
+            index (int): The index of the grid to create. Defaults to 0.
+
+        Returns:
+            Grid: A new Grid object.
+        """
+        grid_impl = grid_batch.index_int(index)._impl
+        assert grid_impl is not None
+        assert grid_impl.grid_count == 1
+        return cls(impl=grid_impl)
 
     @classmethod
     def from_ijk(
@@ -200,9 +226,9 @@ class Grid:
         voxel_size = to_PositiveVec3f(voxel_size, device=resolved_device)
         origin = to_Vec3f(origin, device=resolved_device)
 
-        grid = cls(device=resolved_device)
-        grid._impl.set_from_ijk(jagged_ijk, voxel_size, origin)
-        return grid
+        grid_impl = GridBatchCpp(device=resolved_device)
+        grid_impl.set_from_ijk(jagged_ijk, voxel_size, origin)
+        return cls(impl=grid_impl)
 
     @classmethod
     def from_mesh(
@@ -238,9 +264,9 @@ class Grid:
         voxel_size = to_PositiveVec3f(voxel_size, device=resolved_device)
         origin = to_Vec3f(origin, device=resolved_device)
 
-        grid = cls(device=resolved_device)
-        grid._impl.set_from_mesh(jagged_mesh_vertices, jagged_mesh_faces, voxel_size, origin)
-        return grid
+        grid_impl = GridBatchCpp(device=resolved_device)
+        grid_impl.set_from_mesh(jagged_mesh_vertices, jagged_mesh_faces, voxel_size, origin)
+        return cls(impl=grid_impl)
 
     @classmethod
     def from_nearest_voxels_to_points(
@@ -272,9 +298,9 @@ class Grid:
         voxel_size = to_PositiveVec3f(voxel_size, device=resolved_device)
         origin = to_Vec3f(origin, device=resolved_device)
 
-        grid = cls(device=resolved_device)
-        grid._impl.set_from_nearest_voxels_to_points(jagged_points, voxel_size, origin)
-        return grid
+        grid_impl = GridBatchCpp(device=resolved_device)
+        grid_impl.set_from_nearest_voxels_to_points(jagged_points, voxel_size, origin)
+        return cls(impl=grid_impl)
 
     @classmethod
     def from_points(
@@ -306,9 +332,47 @@ class Grid:
         voxel_size = to_PositiveVec3f(voxel_size, device=resolved_device)
         origin = to_Vec3f(origin, device=resolved_device)
 
-        grid = cls(device=resolved_device)
-        grid._impl.set_from_points(jagged_points, voxel_size, origin)
-        return grid
+        grid_impl = GridBatchCpp(device=resolved_device)
+        grid_impl.set_from_points(jagged_points, voxel_size, origin)
+        return cls(impl=grid_impl)
+
+    @classmethod
+    def from_zero_voxels(
+        cls,
+        device: DeviceIdentifier = "cpu",
+        voxel_size: NumericMaxRank1 = 1,
+        origin: NumericMaxRank1 = 0,
+    ) -> "Grid":
+        """
+        Create a new Grid with zero voxels on a specific device.
+
+        Args:
+            device: The device to create the Grid on. Can be a string (e.g., "cuda", "cpu")
+                or a torch.device object. Defaults to "cpu".
+            voxel_size (NumericMaxRank1): Size of each voxel,
+                broadcastable to shape (3,), floating dtype
+                Defaults to 1.
+            origin (NumericMaxRank1): Origin of the grid,
+                broadcastable to shape (3,), floating dtype
+                Defaults to 0.
+
+        Returns:
+            Grid: A new Grid object with zero voxels.
+
+        Examples:
+            >>> grid = Grid.from_empty("cuda", 1, 0)  # string
+            >>> grid = Grid.from_empty(torch.device("cuda:0"), 1, 0)  # device directly
+            >>> grid = Grid.from_empty(voxel_size=1, origin=0)  # defaults to CPU
+        """
+        resolved_device = resolve_device(device)
+        voxel_sizes = to_PositiveVec3fBatch(voxel_size, device=resolved_device)
+        origins = to_Vec3fBatch(origin, device=resolved_device)
+        grid_impl = GridBatchCpp(voxel_sizes=voxel_sizes, grid_origins=origins, device=resolved_device)
+        return cls(impl=grid_impl)
+
+    # ============================================================
+    #                Regular Instance Methods Begin
+    # ============================================================
 
     def avg_pool(
         self,
@@ -338,9 +402,9 @@ class Grid:
                 - The pooled data as a torch.Tensor
                 - The coarse Grid containing the pooled structure
         """
-        pool_factor = to_PositiveVec3i(pool_factor)
+        pool_factor = to_PositiveVec3i(pool_factor, self.device)
         jagged_data = JaggedTensor(data)
-        stride = to_NonNegativeVec3i(stride)
+        stride = to_NonNegativeVec3i(stride, self.device)
         coarse_grid_impl = coarse_grid._impl if coarse_grid else None
 
         result_data, result_grid_impl = self._impl.avg_pool(pool_factor, jagged_data, stride, coarse_grid_impl)
@@ -368,8 +432,8 @@ class Grid:
                 - A new Grid containing only voxels within the bounds
         """
         jagged_features = JaggedTensor(features)
-        ijk_min = to_Vec3i(ijk_min)
-        ijk_max = to_Vec3i(ijk_max)
+        ijk_min = to_Vec3i(ijk_min, self.device)
+        ijk_max = to_Vec3i(ijk_max, self.device)
 
         result_features, result_grid_impl = self._impl.clip(jagged_features, ijk_min, ijk_max)
         return result_features.jdata, Grid(impl=result_grid_impl)
@@ -392,8 +456,8 @@ class Grid:
         Returns:
             clipped_grid (Grid): A Grid representing the clipped version of this grid.
         """
-        ijk_min = to_Vec3i(ijk_min)
-        ijk_max = to_Vec3i(ijk_max)
+        ijk_min = to_Vec3i(ijk_min, self.device)
+        ijk_max = to_Vec3i(ijk_max, self.device)
         return Grid(impl=self._impl.clipped_grid(ijk_min, ijk_max))
 
     def coarsened_grid(self, coarsening_factor: NumericMaxRank1) -> "Grid":
@@ -408,7 +472,7 @@ class Grid:
         Returns:
             coarsened_grid (Grid): A Grid representing the coarsened version of this grid.
         """
-        coarsening_factor = to_PositiveVec3i(coarsening_factor)
+        coarsening_factor = to_PositiveVec3i(coarsening_factor, self.device)
         return Grid(impl=self._impl.coarsened_grid(coarsening_factor))
 
     def contiguous(self) -> "Grid":
@@ -422,6 +486,286 @@ class Grid:
             Grid: A new Grid with contiguous memory layout.
         """
         return Grid(impl=self._impl.contiguous())
+
+    def conv_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 0) -> "Grid":
+        """
+        Return a grid representing the convolution of this grid with a given kernel.
+
+        Args:
+            kernel_size (NumericMaxRank1): The size of the kernel to convolve with,
+                broadcastable to shape (3,), integer dtype
+            stride (NumericMaxRank1): The stride to use when convolving,
+                broadcastable to shape (3,), integer dtype
+
+        Returns:
+            conv_grid (Grid): A Grid representing the convolution of this grid.
+        """
+        kernel_size = to_PositiveVec3i(kernel_size, self.device)
+        stride = to_NonNegativeVec3i(stride, self.device)
+        return Grid(impl=self._impl.conv_grid(kernel_size, stride))
+
+    def coords_in_active_voxel(self, ijk: torch.Tensor) -> torch.Tensor:
+        """
+        Check if voxel coordinates are in active voxels.
+
+        Args:
+            ijk (torch.Tensor): Voxel coordinates to check.
+                Shape: (num_queries, 3) with integer coordinates.
+
+        Returns:
+            torch.Tensor: Boolean mask indicating which coordinates correspond to
+                active voxels. Shape: (num_queries,).
+        """
+        jagged_ijk = JaggedTensor(ijk)
+        return self._impl.coords_in_active_voxel(jagged_ijk).jdata
+
+    def cpu(self) -> "Grid":
+        """
+        Move the grid to CPU.
+
+        Returns:
+            Grid: A new Grid on CPU device.
+        """
+        return Grid(impl=self._impl.cpu())
+
+    def cubes_in_grid(
+        self,
+        cube_centers: torch.Tensor,
+        cube_min: NumericMaxRank1 = 0.0,
+        cube_max: NumericMaxRank1 = 0.0,
+    ) -> torch.Tensor:
+        """
+        Check if axis-aligned cubes are fully contained within the grid.
+
+        Tests whether cubes defined by their centers and bounds are completely inside
+        the active voxels of the grid.
+
+        Args:
+            cube_centers (torch.Tensor): Centers of the cubes in world coordinates.
+                Shape: (num_cubes, 3).
+            cube_min (NumericMaxRank1): Minimum offsets from center defining cube bounds,
+                broadcastable to shape (3,), floating dtype
+            cube_max (NumericMaxRank1): Maximum offsets from center defining cube bounds,
+                broadcastable to shape (3,), floating dtype
+
+        Returns:
+            torch.Tensor: Boolean mask indicating which cubes are fully contained in the grid.
+                Shape: (num_cubes,).
+        """
+        jagged_cube_centers = JaggedTensor(cube_centers)
+        cube_min = to_Vec3f(cube_min, self.device)
+        cube_max = to_Vec3f(cube_max, self.device)
+
+        return self._impl.cubes_in_grid(jagged_cube_centers, cube_min, cube_max).jdata
+
+    def cubes_intersect_grid(
+        self,
+        cube_centers: torch.Tensor,
+        cube_min: NumericMaxRank1 = 0.0,
+        cube_max: NumericMaxRank1 = 0.0,
+    ) -> torch.Tensor:
+        """
+        Check if axis-aligned cubes intersect with the grid.
+
+        Tests whether cubes defined by their centers and bounds have any intersection
+        with the active voxels of the grid.
+
+        Args:
+            cube_centers (torch.Tensor): Centers of the cubes in world coordinates.
+                Shape: (num_cubes, 3).
+            cube_min (NumericMaxRank1): Minimum offsets from center defining cube bounds,
+                broadcastable to shape (3,), floating dtype
+            cube_max (NumericMaxRank1): Maximum offsets from center defining cube bounds,
+                broadcastable to shape (3,), floating dtype
+
+        Returns:
+            torch.Tensor: Boolean mask indicating which cubes intersect the grid.
+                Shape: (num_cubes,).
+        """
+        jagged_cube_centers = JaggedTensor(cube_centers)
+        cube_min = to_Vec3f(cube_min, self.device)
+        cube_max = to_Vec3f(cube_max, self.device)
+        return self._impl.cubes_intersect_grid(jagged_cube_centers, cube_min, cube_max).jdata
+
+    def cuda(self) -> "Grid":
+        """
+        Move the grid to CUDA device.
+
+        Returns:
+            Grid: A new Grid on CUDA device.
+        """
+        return Grid(impl=self._impl.cuda())
+
+    def dilated_grid(self, dilation: int) -> "Grid":
+        """
+        Return the grid dilated by a given number of voxels.
+
+        Args:
+            dilation (int): The dilation radius in voxels.
+
+        Returns:
+            Grid: A new Grid with dilated active regions.
+        """
+        return Grid(impl=self._impl.dilated_grid(dilation))
+
+    def dual_grid(self, exclude_border: bool = False) -> "Grid":
+        """
+        Return the dual grid where voxel centers correspond to corners of the primal grid.
+
+        The dual grid is useful for staggered grid discretizations and finite difference operations.
+
+        Args:
+            exclude_border (bool): If True, excludes border voxels that would extend beyond
+                the primal grid bounds. Default is False.
+
+        Returns:
+            Grid: A new Grid representing the dual grid.
+        """
+        return Grid(impl=self._impl.dual_grid(exclude_border))
+
+    def grid_to_world(self, ijk: torch.Tensor) -> torch.Tensor:
+        """
+        Convert grid (index) coordinates to world coordinates.
+
+        Transforms voxel indices to their corresponding positions in world space
+        using the grid's origin and voxel size.
+
+        Args:
+            ijk (torch.Tensor): Grid coordinates to convert.
+                Shape: (num_points, 3). Can be fractional for interpolation.
+
+        Returns:
+            torch.Tensor: World coordinates. Shape: (num_points, 3).
+        """
+        jagged_ijk = JaggedTensor(ijk)
+        return self._impl.grid_to_world(jagged_ijk).jdata
+
+    def has_same_address_and_grid_count(self, other: Any) -> bool:
+        """
+        Check if two grid batches have the same address and grid count.
+        """
+        if isinstance(other, Grid):
+            return self.address == other.address
+        elif isinstance(other, GridBatchCpp):
+            return self.address == other.address and self._impl.grid_count == other.grid_count
+        else:
+            return False
+
+    def ijk_to_index(self, ijk: torch.Tensor) -> torch.Tensor:
+        """
+        Convert voxel coordinates to linear indices.
+
+        Maps 3D voxel coordinates to their corresponding linear indices in the sparse storage.
+        Returns -1 for coordinates that don't correspond to active voxels.
+
+        Args:
+            ijk (torch.Tensor): Voxel coordinates to convert.
+                Shape: (num_queries, 3) with integer coordinates.
+
+        Returns:
+            torch.Tensor: Linear indices for each coordinate, or -1 if not active.
+                Shape: (num_queries,).
+        """
+        jagged_ijk = JaggedTensor(ijk)
+        return self._impl.ijk_to_index(jagged_ijk).jdata
+
+    def ijk_to_inv_index(self, ijk: torch.Tensor) -> torch.Tensor:
+        """
+        Get inverse permutation for ijk_to_index.
+
+        Args:
+            ijk (torch.Tensor): Voxel coordinates to convert.
+                Shape: (num_queries, 3) with integer coordinates.
+
+        Returns:
+            torch.Tensor: Inverse permutation for ijk_to_index.
+                Shape: (num_queries,).
+        """
+        jagged_ijk = JaggedTensor(ijk)
+        return self._impl.ijk_to_inv_index(jagged_ijk).jdata
+
+    def inject_from(
+        self,
+        src_grid: "Grid",
+        src: torch.Tensor,
+        dst: torch.Tensor | None = None,
+        default_value: float | int | bool = 0,
+    ) -> torch.Tensor:
+        """
+        Inject data from the source grid to this grid.
+        This method copies sidecar data for voxels in the source grid to a sidecar corresponding to voxels in this grid.
+
+        The copy occurs in "index-space", the grid-to-world transform is not applied.
+
+        If you pass in the destination data (`dst`), it will be modified in-place.
+        If `dst` is None, a new Tensor will be created with the same element shape as src
+        and filled with `default_value` for any voxels that do not have corresponding data in `src`.
+
+        Args:
+            dst_grid (Grid): The destination grid to inject data into.
+            src (torch.Tensor): Source data from this grid.
+                This must be a Tensor with shape (-1, *).
+            dst (torch.Tensor | None): Optional destination data to be modified in-place.
+                This must be a Tensor with shape (-1, *) or None.
+            default_value (float | int | bool): Value to fill in for voxels that do not have corresponding data in `src`.
+                This is used only if `dst` is None. Default is 0.
+
+        Returns:
+            torch.Tensor: The destination sidecar data after injection.
+        """
+        jagged_src = JaggedTensor(src)
+
+        if dst is None:
+            dst_shape = [self.num_voxels, *src.shape[1:]] if src.dim() > 1 else [self.num_voxels]
+            dst = torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device)
+
+        jagged_dst = JaggedTensor(dst)
+
+        src_grid._impl.inject_to(self._impl, jagged_src, jagged_dst)
+
+        return jagged_dst.jdata
+
+    def inject_to(
+        self,
+        dst_grid: "Grid",
+        src: torch.Tensor,
+        dst: torch.Tensor | None = None,
+        default_value: float | int | bool = 0,
+    ) -> torch.Tensor:
+        """
+        Inject data from this grid to a destination grid.
+        This method copies sidecar data for voxels in this grid to a sidecar corresponding to
+        voxels in the destination grid.
+
+        The copy occurs in "index-space", the grid-to-world transform is not applied.
+
+        If you pass in the destination data (`dst`), it will be modified in-place.
+        If `dst` is None, a new Tensor will be created with the same element shape as src
+        and filled with `default_value` for any voxels that do not have corresponding data in `src`.
+
+        Args:
+            dst_grid (Grid): The destination grid to inject data into.
+            src (torch.Tensor): Source data from this grid.
+                This must be a Tensor with shape (-1, *).
+            dst (torch.Tensor | None): Optional destination data to be modified in-place.
+                This must be a Tensor with shape (-1, *) or None.
+            default_value (float | int | bool): Value to fill in for voxels that do not have corresponding data in `src`.
+                This is used only if `dst` is None. Default is 0.
+
+        Returns:
+            torch.Tensor: The destination sidecar data after injection.
+        """
+        jagged_src = JaggedTensor(src)
+
+        if dst is None:
+            dst_shape = [dst_grid.num_voxels, *src.shape[1:]] if src.dim() > 1 else [dst_grid.num_voxels]
+            jagged_dst = JaggedTensor(
+                torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device)
+            )
+        else:
+            jagged_dst = JaggedTensor(dst)
+        self._impl.inject_to(dst_grid._impl, jagged_src, jagged_dst)
+        return jagged_dst.jdata
 
     def integrate_tsdf(
         self,
@@ -461,21 +805,6 @@ class Grid:
                 - Updated TSDF values as torch.Tensor
                 - Updated weights as torch.Tensor
         """
-        if not (
-            isinstance(tsdf, torch.Tensor)
-            and isinstance(weights, torch.Tensor)
-            and isinstance(depth_image, torch.Tensor)
-            and isinstance(projection_matrix, torch.Tensor)
-            and isinstance(cam_to_world_matrix, torch.Tensor)
-        ):
-            raise RuntimeError(
-                f"tsdf must be a torch.Tensor, but got {type(tsdf)}, "
-                f"weights must be a torch.Tensor, but got {type(weights)}, "
-                f"depth_image must be a torch.Tensor, but got {type(depth_image)}, "
-                f"projection_matrix must be a torch.Tensor, but got {type(projection_matrix)}, "
-                f"cam_to_world_matrix must be a torch.Tensor, but got {type(cam_to_world_matrix)}"
-            )
-
         if cam_to_world_matrix.shape != (4, 4):
             raise ValueError(f"cam_to_world_matrix must have shape (4, 4), but got {cam_to_world_matrix.shape}")
         if projection_matrix.shape != (3, 3):
@@ -498,9 +827,6 @@ class Grid:
         if depth_image.dim() != 2:
             if depth_image.dim() != 3 or depth_image.shape[2] != 1:
                 raise ValueError(f"depth_image must have shape (height, width), but got {depth_image.shape}")
-
-        if weight_image is not None and not isinstance(weight_image, torch.Tensor):
-            raise RuntimeError(f"weight_image must be a torch.Tensor or None, but got {type(weight_image)}")
 
         if weight_image is not None:
             if weight_image.dim() != 2:
@@ -575,28 +901,6 @@ class Grid:
                 - Updated weights as torch.Tensor
                 - Updated features as torch.Tensor
         """
-        if not (
-            isinstance(tsdf, torch.Tensor)
-            and isinstance(weights, torch.Tensor)
-            and isinstance(features, torch.Tensor)
-            and isinstance(depth_image, torch.Tensor)
-            and isinstance(feature_image, torch.Tensor)
-            and isinstance(projection_matrix, torch.Tensor)
-            and isinstance(cam_to_world_matrix, torch.Tensor)
-        ):
-            raise RuntimeError(
-                f"tsdf must be a torch.Tensor, but got {type(tsdf)}, "
-                f"weights must be a torch.Tensor, but got {type(weights)}, "
-                f"features must be a torch.Tensor, but got {type(features)}, "
-                f"depth_image must be a torch.Tensor, but got {type(depth_image)}, "
-                f"feature_image must be a torch.Tensor, but got {type(feature_image)}, "
-                f"projection_matrix must be a torch.Tensor, but got {type(projection_matrix)}, "
-                f"cam_to_world_matrix must be a torch.Tensor, but got {type(cam_to_world_matrix)}"
-            )
-
-        if weight_image is not None and not isinstance(weight_image, torch.Tensor):
-            raise RuntimeError(f"weight_images must be a torch.Tensor or None, but got {type(weight_image)}")
-
         if cam_to_world_matrix.shape != (4, 4):
             raise ValueError(f"cam_to_world_matrix must have shape (4, 4), but got {cam_to_world_matrix.shape}")
         if projection_matrix.shape != (3, 3):
@@ -643,9 +947,6 @@ class Grid:
                 f"but got {feature_image.shape[2]} and {features.shape[1]}"
             )
 
-        if weight_image is not None and not isinstance(weight_image, torch.Tensor):
-            raise RuntimeError(f"weight_image must be a torch.Tensor or None, but got {type(weight_image)}")
-
         if weight_image is not None:
             if weight_image.dim() != 2:
                 if weight_image.dim() != 3 or weight_image.shape[2] != 1:
@@ -676,306 +977,6 @@ class Grid:
         )
 
         return Grid(impl=result_grid_impl), result_jagged_1.jdata, result_jagged_2.jdata, result_jagged_3.jdata
-
-    def conv_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 0) -> "Grid":
-        """
-        Return a grid representing the convolution of this grid with a given kernel.
-
-        Args:
-            kernel_size (NumericMaxRank1): The size of the kernel to convolve with,
-                broadcastable to shape (3,), integer dtype
-            stride (NumericMaxRank1): The stride to use when convolving,
-                broadcastable to shape (3,), integer dtype
-
-        Returns:
-            conv_grid (Grid): A Grid representing the convolution of this grid.
-        """
-        kernel_size = to_PositiveVec3i(kernel_size)
-        stride = to_NonNegativeVec3i(stride)
-        return Grid(impl=self._impl.conv_grid(kernel_size, stride))
-
-    def coords_in_active_voxel(self, ijk: torch.Tensor) -> torch.Tensor:
-        """
-        Check if voxel coordinates are in active voxels.
-
-        Args:
-            ijk (torch.Tensor): Voxel coordinates to check.
-                Shape: (num_queries, 3) with integer coordinates.
-
-        Returns:
-            torch.Tensor: Boolean mask indicating which coordinates correspond to
-                active voxels. Shape: (num_queries,).
-        """
-        jagged_ijk = JaggedTensor(ijk)
-        return self._impl.coords_in_active_voxel(jagged_ijk).jdata
-
-    def cpu(self) -> "Grid":
-        """
-        Move the grid to CPU.
-
-        Returns:
-            Grid: A new Grid on CPU device.
-        """
-        return Grid(impl=self._impl.cpu())
-
-    def cubes_in_grid(
-        self,
-        cube_centers: torch.Tensor,
-        cube_min: NumericMaxRank1 = 0.0,
-        cube_max: NumericMaxRank1 = 0.0,
-    ) -> torch.Tensor:
-        """
-        Check if axis-aligned cubes are fully contained within the grid.
-
-        Tests whether cubes defined by their centers and bounds are completely inside
-        the active voxels of the grid.
-
-        Args:
-            cube_centers (torch.Tensor): Centers of the cubes in world coordinates.
-                Shape: (num_cubes, 3).
-            cube_min (NumericMaxRank1): Minimum offsets from center defining cube bounds,
-                broadcastable to shape (3,), floating dtype
-            cube_max (NumericMaxRank1): Maximum offsets from center defining cube bounds,
-                broadcastable to shape (3,), floating dtype
-
-        Returns:
-            torch.Tensor: Boolean mask indicating which cubes are fully contained in the grid.
-                Shape: (num_cubes,).
-        """
-        jagged_cube_centers = JaggedTensor(cube_centers)
-        cube_min = to_Vec3f(cube_min)
-        cube_max = to_Vec3f(cube_max)
-
-        return self._impl.cubes_in_grid(jagged_cube_centers, cube_min, cube_max).jdata
-
-    def cubes_intersect_grid(
-        self,
-        cube_centers: torch.Tensor,
-        cube_min: NumericMaxRank1 = 0.0,
-        cube_max: NumericMaxRank1 = 0.0,
-    ) -> torch.Tensor:
-        """
-        Check if axis-aligned cubes intersect with the grid.
-
-        Tests whether cubes defined by their centers and bounds have any intersection
-        with the active voxels of the grid.
-
-        Args:
-            cube_centers (torch.Tensor): Centers of the cubes in world coordinates.
-                Shape: (num_cubes, 3).
-            cube_min (NumericMaxRank1): Minimum offsets from center defining cube bounds,
-                broadcastable to shape (3,), floating dtype
-            cube_max (NumericMaxRank1): Maximum offsets from center defining cube bounds,
-                broadcastable to shape (3,), floating dtype
-
-        Returns:
-            torch.Tensor: Boolean mask indicating which cubes intersect the grid.
-                Shape: (num_cubes,).
-        """
-        jagged_cube_centers = JaggedTensor(cube_centers)
-        cube_min = to_Vec3f(cube_min)
-        cube_max = to_Vec3f(cube_max)
-        return self._impl.cubes_intersect_grid(jagged_cube_centers, cube_min, cube_max).jdata
-
-    def cuda(self) -> "Grid":
-        """
-        Move the grid to CUDA device.
-
-        Returns:
-            Grid: A new Grid on CUDA device.
-        """
-        return Grid(impl=self._impl.cuda())
-
-    def dilated_grid(self, dilation: int) -> "Grid":
-        """
-        Return the grid dilated by a given number of voxels.
-
-        Args:
-            dilation (int): The dilation radius in voxels.
-
-        Returns:
-            Grid: A new Grid with dilated active regions.
-        """
-        return Grid(impl=self._impl.dilated_grid(dilation))
-
-    def merged_grid(self, other: "Grid") -> "Grid":
-        """
-        Return a grid that is the union of this grid with another.
-
-        Merges two grids by taking the union of their active voxels.
-        The grids must have compatible dimensions and transforms.
-
-        Args:
-            other (Grid): The other grid batch to merge with.
-
-        Returns:
-            Grid: A new Grid containing the union of active voxels from both grids.
-        """
-        return Grid(impl=self._impl.merged_grid(other._impl))
-
-    def pruned_grid(self, mask: torch.Tensor) -> "Grid":
-        """
-        Return a pruned grid based on a boolean mask.
-
-        Creates a new grid containing only the voxels where the mask is True.
-
-        Args:
-            mask (torch.Tensor): Boolean mask for each voxel.
-                Shape: (total_voxels,).
-
-        Returns:
-            GridBatch: A new GridBatch containing only voxels where mask is True.
-        """
-        jagged_mask = JaggedTensor(mask)
-        return Grid(impl=self._impl.pruned_grid(jagged_mask))
-
-    def inject_to(
-        self,
-        dst_grid: "Grid",
-        src: torch.Tensor,
-        dst: torch.Tensor | None = None,
-        default_value: float | int | bool = 0,
-    ) -> torch.Tensor:
-        """
-        Inject data from this grid to a destination grid.
-        This method copies sidecar data for voxels in this grid to a sidecar corresponding to
-        voxels in the destination grid.
-
-        The copy occurs in "index-space", the grid-to-world transform is not applied.
-
-        If you pass in the destination data (`dst`), it will be modified in-place.
-        If `dst` is None, a new Tensor will be created with the same element shape as src
-        and filled with `default_value` for any voxels that do not have corresponding data in `src`.
-
-        Args:
-            dst_grid (Grid): The destination grid to inject data into.
-            src (torch.Tensor): Source data from this grid.
-                This must be a Tensor with shape (-1, *).
-            dst (torch.Tensor | None): Optional destination data to be modified in-place.
-                This must be a Tensor with shape (-1, *) or None.
-            default_value (float | int | bool): Value to fill in for voxels that do not have corresponding data in `src`.
-                This is used only if `dst` is None. Default is 0.
-
-        Returns:
-            torch.Tensor: The destination sidecar data after injection.
-        """
-        jagged_src = JaggedTensor(src)
-
-        if dst is None:
-            dst_shape = [dst_grid.num_voxels, *src.shape[1:]] if src.dim() > 1 else [dst_grid.num_voxels]
-            jagged_dst = JaggedTensor(
-                torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device)
-            )
-        else:
-            jagged_dst = JaggedTensor(dst)
-        self._impl.inject_to(dst_grid._impl, jagged_src, jagged_dst)
-        return jagged_dst.jdata
-
-    def inject_from(
-        self,
-        src_grid: "Grid",
-        src: torch.Tensor,
-        dst: torch.Tensor | None = None,
-        default_value: float | int | bool = 0,
-    ) -> torch.Tensor:
-        """
-        Inject data from the source grid to this grid.
-        This method copies sidecar data for voxels in the source grid to a sidecar corresponding to voxels in this grid.
-
-        The copy occurs in "index-space", the grid-to-world transform is not applied.
-
-        If you pass in the destination data (`dst`), it will be modified in-place.
-        If `dst` is None, a new Tensor will be created with the same element shape as src
-        and filled with `default_value` for any voxels that do not have corresponding data in `src`.
-
-        Args:
-            dst_grid (Grid): The destination grid to inject data into.
-            src (torch.Tensor): Source data from this grid.
-                This must be a Tensor with shape (-1, *).
-            dst (torch.Tensor | None): Optional destination data to be modified in-place.
-                This must be a Tensor with shape (-1, *) or None.
-            default_value (float | int | bool): Value to fill in for voxels that do not have corresponding data in `src`.
-                This is used only if `dst` is None. Default is 0.
-
-        Returns:
-            torch.Tensor: The destination sidecar data after injection.
-        """
-        jagged_src = JaggedTensor(src)
-
-        if dst is None:
-            dst_shape = [self.num_voxels, *src.shape[1:]] if src.dim() > 1 else [self.num_voxels]
-            dst = torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device)
-
-        jagged_dst = JaggedTensor(dst)
-
-        src_grid._impl.inject_to(self._impl, jagged_src, jagged_dst)
-
-        return jagged_dst.jdata
-
-    def dual_grid(self, exclude_border: bool = False) -> "Grid":
-        """
-        Return the dual grid where voxel centers correspond to corners of the primal grid.
-
-        The dual grid is useful for staggered grid discretizations and finite difference operations.
-
-        Args:
-            exclude_border (bool): If True, excludes border voxels that would extend beyond
-                the primal grid bounds. Default is False.
-
-        Returns:
-            Grid: A new Grid representing the dual grid.
-        """
-        return Grid(impl=self._impl.dual_grid(exclude_border))
-
-    def grid_to_world(self, ijk: torch.Tensor) -> torch.Tensor:
-        """
-        Convert grid (index) coordinates to world coordinates.
-
-        Transforms voxel indices to their corresponding positions in world space
-        using the grid's origin and voxel size.
-
-        Args:
-            ijk (torch.Tensor): Grid coordinates to convert.
-                Shape: (num_points, 3). Can be fractional for interpolation.
-
-        Returns:
-            torch.Tensor: World coordinates. Shape: (num_points, 3).
-        """
-        jagged_ijk = JaggedTensor(ijk)
-        return self._impl.grid_to_world(jagged_ijk).jdata
-
-    def ijk_to_index(self, ijk: torch.Tensor) -> torch.Tensor:
-        """
-        Convert voxel coordinates to linear indices.
-
-        Maps 3D voxel coordinates to their corresponding linear indices in the sparse storage.
-        Returns -1 for coordinates that don't correspond to active voxels.
-
-        Args:
-            ijk (torch.Tensor): Voxel coordinates to convert.
-                Shape: (num_queries, 3) with integer coordinates.
-
-        Returns:
-            torch.Tensor: Linear indices for each coordinate, or -1 if not active.
-                Shape: (num_queries,).
-        """
-        jagged_ijk = JaggedTensor(ijk)
-        return self._impl.ijk_to_index(jagged_ijk).jdata
-
-    def ijk_to_inv_index(self, ijk: torch.Tensor) -> torch.Tensor:
-        """
-        Get inverse permutation for ijk_to_index.
-
-        Args:
-            ijk (torch.Tensor): Voxel coordinates to convert.
-                Shape: (num_queries, 3) with integer coordinates.
-
-        Returns:
-            torch.Tensor: Inverse permutation for ijk_to_index.
-                Shape: (num_queries,).
-        """
-        jagged_ijk = JaggedTensor(ijk)
-        return self._impl.ijk_to_inv_index(jagged_ijk).jdata
 
     def is_contiguous(self) -> bool:
         """
@@ -1053,13 +1054,28 @@ class Grid:
                 - The pooled data as a torch.Tensor
                 - The coarse Grid containing the pooled structure
         """
-        pool_factor = to_PositiveVec3i(pool_factor)
+        pool_factor = to_PositiveVec3i(pool_factor, self.device)
         jagged_data = JaggedTensor(data)
-        stride = to_NonNegativeVec3i(stride)
+        stride = to_NonNegativeVec3i(stride, self.device)
         coarse_grid_impl = coarse_grid._impl if coarse_grid else None
 
         result_data, result_grid_impl = self._impl.max_pool(pool_factor, jagged_data, stride, coarse_grid_impl)
         return result_data.jdata, Grid(impl=result_grid_impl)
+
+    def merged_grid(self, other: "Grid") -> "Grid":
+        """
+        Return a grid that is the union of this grid with another.
+
+        Merges two grids by taking the union of their active voxels.
+        The grids must have compatible dimensions and transforms.
+
+        Args:
+            other (Grid): The other grid batch to merge with.
+
+        Returns:
+            Grid: A new Grid containing the union of active voxels from both grids.
+        """
+        return Grid(impl=self._impl.merged_grid(other._impl))
 
     def neighbor_indexes(self, ijk: torch.Tensor, extent: int, bitshift: int = 0) -> torch.Tensor:
         """
@@ -1096,6 +1112,22 @@ class Grid:
         """
         jagged_points = JaggedTensor(points)
         return self._impl.points_in_active_voxel(jagged_points).jdata
+
+    def pruned_grid(self, mask: torch.Tensor) -> "Grid":
+        """
+        Return a pruned grid based on a boolean mask.
+
+        Creates a new grid containing only the voxels where the mask is True.
+
+        Args:
+            mask (torch.Tensor): Boolean mask for each voxel.
+                Shape: (total_voxels,).
+
+        Returns:
+            GridBatch: A new GridBatch containing only voxels where mask is True.
+        """
+        jagged_mask = JaggedTensor(mask)
+        return Grid(impl=self._impl.pruned_grid(jagged_mask))
 
     def ray_implicit_intersection(
         self,
@@ -1148,7 +1180,7 @@ class Grid:
             torch.Tensor: Values from the dense tensor at active voxel locations.
                 Shape: (total_voxels, channels).
         """
-        dense_origin = to_Vec3i(dense_origin)
+        dense_origin = to_Vec3i(dense_origin, self.device)
         return self._impl.read_from_dense(dense_data, dense_origin).jdata
 
     def sample_bezier(self, points: torch.Tensor, voxel_data: torch.Tensor) -> torch.Tensor:
@@ -1274,34 +1306,6 @@ class Grid:
 
         return self._impl.segments_along_rays(jagged_ray_origins, jagged_ray_directions, max_segments, eps).jdata
 
-    def set_global_origin(self, origin: NumericMaxRank1) -> None:
-        """
-        Set the voxel origin of the grid.
-
-        Args:
-            origin (NumericMaxRank1): Origin of the grid,
-                broadcastable to shape (3,), floating dtype
-
-        Returns:
-            None  (this modifies the grid in place)
-        """
-        origin = to_Vec3f(origin)
-        self._impl.set_global_origin(origin)
-
-    def set_global_voxel_size(self, voxel_size: NumericMaxRank1) -> None:
-        """
-        Set the voxel size of the grid.
-
-        Args:
-            voxel_size (NumericMaxRank1): Size of each voxel,
-                broadcastable to shape (3,), floating dtype
-
-        Returns:
-            None  (this modifies the grid in place)
-        """
-        voxel_size = to_PositiveVec3f(voxel_size)
-        self._impl.set_global_voxel_size(voxel_size)
-
     def sparse_conv_halo(self, input: torch.Tensor, weight: torch.Tensor, variant: int = 8) -> torch.Tensor:
         """
         Perform sparse convolution with halo exchange optimization.
@@ -1343,8 +1347,8 @@ class Grid:
         # Import here to avoid circular dependency
         from .sparse_conv_pack_info import SparseConvPackInfo
 
-        kernel_size = to_PositiveVec3i(kernel_size)
-        stride = to_NonNegativeVec3i(stride)
+        kernel_size = to_PositiveVec3i(kernel_size, self.device)
+        stride = to_NonNegativeVec3i(stride, self.device)
         target_impl = target_grid._impl if target_grid is not None else None
 
         sparse_impl, grid_impl = self._impl.sparse_conv_kernel_map(kernel_size, stride, target_impl)
@@ -1424,7 +1428,7 @@ class Grid:
                 - The subdivided data as a torch.Tensor
                 - The fine Grid containing the subdivided structure
         """
-        subdiv_factor = to_PositiveVec3i(subdiv_factor)
+        subdiv_factor = to_PositiveVec3i(subdiv_factor, self.device)
         jagged_data = JaggedTensor(data)
         jagged_mask = JaggedTensor(mask) if mask is not None else None
 
@@ -1454,7 +1458,7 @@ class Grid:
             Grid: A new Grid with subdivided structure.
         """
 
-        subdiv_factor = to_PositiveVec3i(subdiv_factor)
+        subdiv_factor = to_PositiveVec3i(subdiv_factor, self.device)
         jagged_mask = JaggedTensor(mask) if mask is not None else None
 
         return Grid(impl=self._impl.subdivided_grid(subdiv_factor, mask=jagged_mask))
@@ -1486,7 +1490,7 @@ class Grid:
         elif isinstance(target, Grid):
             return Grid(impl=self._impl.to(target._impl))
         else:
-            raise RuntimeError(f"Unsupported type for to(): {type(target)}")
+            raise TypeError(f"Unsupported type for to(): {type(target)}")
 
     def uniform_ray_samples(
         self,
@@ -1635,6 +1639,10 @@ class Grid:
         grid_size = to_PositiveVec3i(grid_size) if grid_size is not None else None
         return self._impl.write_to_dense(jagged_sparse_data, min_coord, grid_size)
 
+    # ============================================================
+    #                        Properties
+    # ============================================================
+
     # Properties
     @property
     def address(self) -> int:
@@ -1642,8 +1650,8 @@ class Grid:
 
     @property
     def bbox(self) -> torch.Tensor:
-        if self._impl.grid_count == 0:
-            return torch.empty(0, 2, 3, device=self.device)
+        if self.has_zero_voxels:
+            return torch.zeros((2, 3), dtype=torch.int32, device=self.device)
         else:
             return self._impl.bbox_at(0)
 
@@ -1653,17 +1661,18 @@ class Grid:
 
     @property
     def dual_bbox(self) -> torch.Tensor:
-        if self._impl.grid_count == 0:
-            return torch.empty(0, 2, 3, device=self.device)
+        if self.has_zero_voxels:
+            return torch.zeros((2, 3), dtype=torch.int32, device=self.device)
         else:
             return self._impl.dual_bbox_at(0)
 
     @property
     def grid_to_world_matrix(self) -> torch.Tensor:
-        if self._impl.grid_count == 0:
-            return torch.empty(4, 4, device=self.device)
-        else:
-            return self._impl.grid_to_world_matrices[0]
+        return self._impl.grid_to_world_matrices[0]
+
+    @property
+    def has_zero_voxels(self) -> bool:
+        return self.num_voxels == 0
 
     @property
     def ijk(self) -> torch.Tensor:
@@ -1683,10 +1692,7 @@ class Grid:
 
     @property
     def origin(self) -> torch.Tensor:
-        if self._impl.grid_count == 0:
-            return torch.empty(3, device=self.device)
-        else:
-            return self._impl.origin_at(0)
+        return self._impl.origin_at(0)
 
     @property
     def viz_edge_network(self) -> tuple[torch.Tensor, torch.Tensor]:
@@ -1695,17 +1701,11 @@ class Grid:
 
     @property
     def voxel_size(self) -> torch.Tensor:
-        if self._impl.grid_count == 0:
-            return torch.empty(3, device=self.device)
-        else:
-            return self._impl.voxel_size_at(0)
+        return self._impl.voxel_size_at(0)
 
     @property
     def world_to_grid_matrix(self) -> torch.Tensor:
-        if self._impl.grid_count == 0:
-            return torch.empty(4, 4, device=self.device)
-        else:
-            return self._impl.world_to_grid_matrices[0]
+        return self._impl.world_to_grid_matrices[0]
 
     # Expose underlying implementation for compatibility
     @property
@@ -1772,7 +1772,7 @@ def load_grid(
     # Check that only one selector is provided
     selectors = [index is not None, name is not None]
     if sum(selectors) > 1:
-        raise RuntimeError("Only one of index or name can be specified")
+        raise ValueError("Only one of index or name can be specified")
 
     # Call the appropriate overload
     if index is not None:

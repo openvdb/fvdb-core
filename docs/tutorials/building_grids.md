@@ -21,7 +21,7 @@ coords_jagged = fvdb.JaggedTensor([
 ])
 voxel_sizes = [[0.1, 0.1, 0.1], [0.15, 0.15, 0.15]]
 
-grid = fvdb.gridbatch_from_ijk(coords_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
+grid = fvdb.GridBatch.from_ijk(coords_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
 ```
 
 The above code assumes that you want to build a grid with two batch elements, one with voxel size `[0.1, 0.1, 0.1]`, and the other with voxel size `[0.15, 0.15, 0.15]` (although usually you just want all the elements in your batch to have the same size, in which case you could just pass in `voxel_sizes=[0.1, 0.1, 0.1]`).
@@ -49,14 +49,10 @@ pcd_jagged = fvdb.JaggedTensor([
 voxel_sizes = [[0.1, 0.1, 0.1], [0.15, 0.15, 0.15]]
 
 # Method 1:
-grid_a1 = fvdb.gridbatch_from_points(pcd_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
+grid_a1 = fvdb.GridBatch.from_points(pcd_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
 
-# Method 2:
-grid_a2 = fvdb.GridBatch(device=pcd_jagged.device)
-grid_a2.set_from_points(pcd_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
-```
 
-Above we show two methods of building grids from points. Similar functions exist for other grid building approaches. The built grids are shown as following:
+Above we show the method for building grids from points. Similar functions exist for other grid building approaches. The built grids are shown as following:
 
 ![build_from_points.png](../imgs/fig/build_from_points.png)
 
@@ -77,7 +73,7 @@ pcd_jagged = fvdb.JaggedTensor([
 voxel_sizes = [[0.1, 0.1, 0.1], [0.15, 0.15, 0.15]]
 
 # Build grid from containing nearest voxels to the points
-grid_b = fvdb.gridbatch_from_nearest_voxels_to_points(pcd_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
+grid_b = fvdb.GridBatch.from_nearest_voxels_to_points(pcd_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
 ```
 
 ![build_from_points_nn.png](../imgs/fig/build_from_points_nn.png)
@@ -105,7 +101,7 @@ mesh_f_jagged = fvdb.JaggedTensor([
 ])
 
 voxel_sizes = [[0.1, 0.1, 0.1], [0.15, 0.15, 0.15]]
-grid = fvdb.gridbatch_from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
+grid = fvdb.GridBatch.from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
 ```
 
 Here `mesh_1_v` and `mesh_1_f` are the vertex array and triangle array of the mesh to build grid from, with the shape of $(V, 3)$ and $(F, 3)$. The triangle array is an integer array that indexes into the vertex array (starting from 0 for each element in the batch). Same for another `mesh_2_v` and `mesh_2_f`.
@@ -119,7 +115,7 @@ We have APIs for you to build dense grids of shape $(D, H, W)$ containing the fu
 ```python
 import fvdb
 
-grid = fvdb.gridbatch_from_dense(num_grids=1, dense_dims=[32, 32, 32], device="cuda")
+grid = fvdb.GridBatch.from_dense(num_grids=1, dense_dims=[32, 32, 32], device="cuda")
 ```
 
 ![build_from_dense.png](../imgs/fig/build_from_dense.png)
@@ -159,7 +155,7 @@ from fvdb.utils.examples import load_dragon_mesh
 
 coords_1, _ = load_dragon_mesh()
 
-grid_primal = fvdb.gridbatch_from_points(fvdb.JaggedTensor([coords_1]))
+grid_primal = fvdb.GridBatch.from_points(fvdb.JaggedTensor([coords_1]))
 
 grid_dual = grid_primal.dual_grid()
 ```
@@ -174,7 +170,7 @@ from fvdb.utils.examples import load_happy_mesh
 
 coords_1, _ = load_happy_mesh(mode='vf')
 
-grid = fvdb.gridbatch_from_points(fvdb.JaggedTensor([coords_1]))
+grid = fvdb.GridBatch.from_points(fvdb.JaggedTensor([coords_1]))
 
 grid_subdivided = grid.subdivided_grid(2)
 grid_coarsened = grid.coarsened_grid(2)

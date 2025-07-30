@@ -59,4 +59,8 @@
 
     "clangd.path": "${env:CONDA_PREFIX}/envs/fvdb/bin/clangd",
     "clangFormat.executable.linux": "${env.CONDA_PREFIX}/envs/fvdb/bin/clang-format",
+    "cursorpyright.analysis.diagnosticSeverityOverrides": {
+        "reportPrivateImportUsage": "none"
+    },
+    "cursorpyright.analysis.typeCheckingMode": "basic",
 }

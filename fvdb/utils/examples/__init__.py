@@ -14,9 +14,10 @@ import git.repo
 import numpy as np
 import point_cloud_utils as pcu
 import torch
+from fvdb.types import NumericMaxRank1, NumericMaxRank2
 from git.exc import InvalidGitRepositoryError
 
-from fvdb import GridBatch
+from fvdb import Grid, GridBatch, JaggedTensor
 
 
 def _is_editable_install() -> bool:
@@ -81,15 +82,30 @@ def _get_md5_checksum(file_path: Path):
     return md5_hash.hexdigest()
 
 
-def make_grid_from_points(pts: torch.Tensor, padding, vox_size, vox_origin) -> GridBatch:
+def make_grid_batch_from_points(
+    points: JaggedTensor, padding: int, voxel_sizes: NumericMaxRank2, origins: NumericMaxRank2
+) -> GridBatch:
     logging.info("Building GridBatch from points...")
     start = timeit.default_timer()
-    grid = GridBatch(device=pts.device)
-    grid.set_from_points(pts, voxel_sizes=vox_size, origins=vox_origin)
+    grid_batch = GridBatch.from_points(points, voxel_sizes=voxel_sizes, origins=origins, device=points.device)
+    grid_batch = grid_batch.dilated_grid(padding)
+    torch.cuda.synchronize()
+    logging.info(f"Done in {timeit.default_timer() - start}s")
+    logging.info(f"GridBatch has {grid_batch.total_voxels} voxels")
+
+    return grid_batch
+
+
+def make_grid_from_points(
+    points: torch.Tensor, padding: int, voxel_size: NumericMaxRank1, origin: NumericMaxRank1
+) -> Grid:
+    logging.info("Building Grid from points...")
+    start = timeit.default_timer()
+    grid = Grid.from_points(points, voxel_size=voxel_size, origin=origin, device=points.device)
     grid = grid.dilated_grid(padding)
     torch.cuda.synchronize()
     logging.info(f"Done in {timeit.default_timer() - start}s")
-    logging.info(f"GridBatch has {grid.total_voxels} voxels")
+    logging.info(f"Grid has {grid.num_voxels} voxels")
 
     return grid
 

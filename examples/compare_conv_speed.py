@@ -6,9 +6,9 @@ import time
 import numpy as np
 import torch
 import tqdm
-
-from fvdb import GridBatch
 from fvdb.utils.examples import load_dragon_mesh
+
+from fvdb import GridBatch, JaggedTensor
 
 
 def benchmark_inplace_conv(grid: GridBatch, in_feature, in_kernel):
@@ -39,10 +39,10 @@ def main():
 
     vox_size = 0.005
     vox_origin = (0.0, 0.0, 0.0)
-    p, n = load_dragon_mesh(device=device, dtype=dtype)
+    p, _ = load_dragon_mesh(device=device, dtype=dtype)
+    jagged_p = JaggedTensor(p)
 
-    index0 = GridBatch(device=device)
-    index0.set_from_points(p, [-1, -1, -1], [1, 1, 1], voxel_sizes=vox_size, origins=vox_origin)
+    index0 = GridBatch.from_points(jagged_p, voxel_sizes=vox_size, origins=vox_origin)
 
     grid_feats = torch.rand((index0.total_voxels, in_channel), device=device, dtype=dtype) * 0.5 + 0.5
     kernels = (
