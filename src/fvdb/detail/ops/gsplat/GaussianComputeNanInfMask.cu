@@ -3,6 +3,7 @@
 
 #include <fvdb/detail/ops/Ops.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
+#include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <c10/cuda/CUDAGuard.h>
@@ -72,6 +73,7 @@ dispatchGaussianNanInfMask<torch::kCUDA>(const fvdb::JaggedTensor &means,
                                          const fvdb::JaggedTensor &logitOpacities,
                                          const fvdb::JaggedTensor &sh0,
                                          const fvdb::JaggedTensor &shN) {
+    FVDB_FUNC_RANGE();
     TORCH_CHECK_VALUE(means.rsize(0) == quats.rsize(0),
                       "All inputs must have the same number of gaussians");
     TORCH_CHECK_VALUE(means.rsize(0) == logScales.rsize(0),

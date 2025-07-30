@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/Ops.h>
 #include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
+#include <fvdb/detail/utils/Nvtx.h>
 
 #include <c10/cuda/CUDAGuard.h>
 
@@ -574,6 +575,7 @@ dispatchGaussianTileIntersection<torch::kCUDA>(
     const uint32_t tile_size,
     const uint32_t num_tiles_h,
     const uint32_t num_tiles_w) {
+    FVDB_FUNC_RANGE();
     return gaussianTileIntersectionCUDAImpl(means2d,
                                             radii,
                                             depths,
@@ -613,6 +615,7 @@ dispatchGaussianTileIntersectionSparse<torch::kCUDA>(
     const uint32_t tile_size,
     const uint32_t num_tiles_h,
     const uint32_t num_tiles_w) {
+    FVDB_FUNC_RANGE();
     return gaussianTileIntersectionCUDAImpl(means2d,
                                             radii,
                                             depths,

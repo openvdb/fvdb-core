@@ -9,6 +9,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
+#include <fvdb/detail/utils/Nvtx.h>
 
 #include <c10/cuda/CUDAGuard.h>
 
@@ -470,6 +471,7 @@ dispatchGaussianRasterizeTopContributingGaussianIds<torch::kCUDA>(
     const RenderSettings &settings        // render settings
 
 ) {
+    FVDB_FUNC_RANGE();
     const bool isPacked = means2d.dim() == 2;
 
     const std::optional<torch::Tensor> backgrounds = std::nullopt;
@@ -538,6 +540,7 @@ dispatchGaussianSparseRasterizeTopContributingGaussianIds<torch::kCUDA>(
     const torch::Tensor &pixelMap,
     const RenderSettings &settings // render settings
 ) {
+    FVDB_FUNC_RANGE();
     const bool isPacked = means2d.dim() == 2;
 
     const std::optional<torch::Tensor> backgrounds = std::nullopt;

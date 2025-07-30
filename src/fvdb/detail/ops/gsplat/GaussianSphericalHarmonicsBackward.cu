@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/Ops.h>
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
+#include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <ATen/cuda/Atomic.cuh>
@@ -372,6 +373,7 @@ dispatchSphericalHarmonicsBackward<torch::kCUDA>(
     const torch::Tensor &dLossDRenderQuantities, // [C, N, D]
     const torch::Tensor &radii,                  // [C, N]
     const bool computeDLossDViewDirs) {
+    FVDB_FUNC_RANGE();
     const at::cuda::OptionalCUDAGuard device_guard(at::device_of(dLossDRenderQuantities));
 
     const bool hasShNCoeffs = shNCoeffs.defined();

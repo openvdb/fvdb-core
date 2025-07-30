@@ -3,6 +3,7 @@
 //
 #include <fvdb/detail/autograd/GaussianRender.h>
 #include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
 
 namespace fvdb {
@@ -27,6 +28,7 @@ ProjectGaussians::forward(ProjectGaussians::AutogradContext *ctx,
                           std::optional<Variable> outNormalizeddLossdMeans2dNormAccum,
                           std::optional<Variable> outNormalizedMaxRadiiAccum,
                           std::optional<Variable> outGradientStepCount) {
+    FVDB_FUNC_RANGE_WITH_NAME("ProjectGaussians::forward");
     TORCH_CHECK(means.dim() == 2, "means must have shape (N, 3)");
     TORCH_CHECK(worldToCamMatrices.dim() == 3, "worldToCamMatrices must have shape (C, 4, 4)");
     TORCH_CHECK(projectionMatrices.dim() == 3, "projectionMatrices must have shape (C, 3, 3)");
@@ -91,6 +93,7 @@ ProjectGaussians::forward(ProjectGaussians::AutogradContext *ctx,
 ProjectGaussians::VariableList
 ProjectGaussians::backward(ProjectGaussians::AutogradContext *ctx,
                            ProjectGaussians::VariableList gradOutput) {
+    FVDB_FUNC_RANGE_WITH_NAME("ProjectGaussians::backward");
     Variable dLossDRadii   = gradOutput.at(0);
     Variable dLossDMeans2d = gradOutput.at(1);
     Variable dLossDDepths  = gradOutput.at(2);
@@ -212,6 +215,7 @@ RasterizeGaussiansToPixels::forward(
     const RasterizeGaussiansToPixels::Variable &tileOffsets,     // [C, tile_height, tile_width]
     const RasterizeGaussiansToPixels::Variable &tileGaussianIds, // [n_isects]
     const bool absgrad) {
+    FVDB_FUNC_RANGE_WITH_NAME("RasterizeGaussiansToPixels::forward");
     // const int C = means2d.size(0);
     // const int N = means2d.size(1);
 
@@ -253,6 +257,7 @@ RasterizeGaussiansToPixels::forward(
 RasterizeGaussiansToPixels::VariableList
 RasterizeGaussiansToPixels::backward(RasterizeGaussiansToPixels::AutogradContext *ctx,
                                      RasterizeGaussiansToPixels::VariableList gradOutput) {
+    FVDB_FUNC_RANGE_WITH_NAME("RasterizeGaussiansToPixels::backward");
     Variable dLossDRenderedColors = gradOutput.at(0);
     Variable dLossDRenderedAlphas = gradOutput.at(1);
 
@@ -344,6 +349,7 @@ ProjectGaussiansJagged::forward(
     const float farPlane,
     const float minRadius2D,
     const bool ortho) {
+    FVDB_FUNC_RANGE_WITH_NAME("ProjectGaussiansJagged::forward");
     auto variables   = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
         return ops::dispatchGaussianProjectionJaggedForward<DeviceTag>(gSizes,
                                                                        means,
@@ -385,6 +391,7 @@ ProjectGaussiansJagged::forward(
 ProjectGaussiansJagged::VariableList
 ProjectGaussiansJagged::backward(ProjectGaussiansJagged::AutogradContext *ctx,
                                  ProjectGaussiansJagged::VariableList gradOutput) {
+    FVDB_FUNC_RANGE_WITH_NAME("ProjectGaussiansJagged::backward");
     Variable dLossDRadii   = gradOutput.at(0);
     Variable dLossDMeans2d = gradOutput.at(1);
     Variable dLossDDepths  = gradOutput.at(2);

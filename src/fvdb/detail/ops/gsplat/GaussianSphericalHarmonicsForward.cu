@@ -3,6 +3,7 @@
 //
 #include <fvdb/detail/ops/Ops.h>
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
+#include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <ATen/cuda/Atomic.cuh>
@@ -200,6 +201,7 @@ dispatchSphericalHarmonicsForward<torch::kCUDA>(const int64_t shDegreeToUse,
                                                 const torch::Tensor &shNCoeffs, // [N, K-1, D]
                                                 const torch::Tensor &radii      // [C, N]
 ) {
+    FVDB_FUNC_RANGE();
     // Valid modes:
     // 0: sh0Coeffs only
     // 1: sh0Coeffs + radii

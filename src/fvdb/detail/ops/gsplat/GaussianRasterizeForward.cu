@@ -8,6 +8,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
+#include <fvdb/detail/utils/Nvtx.h>
 
 #include <nanovdb/math/Math.h>
 
@@ -430,6 +431,7 @@ dispatchGaussianRasterizeForward<torch::kCUDA>(
     const torch::Tensor &tileOffsets,    // [C, tile_height, tile_width]
     const torch::Tensor &tileGaussianIds // [n_isects]
 ) {
+    FVDB_FUNC_RANGE();
     const uint32_t channels = features.size(-1);
     const bool isPacked     = means2d.dim() == 2;
 
@@ -545,6 +547,7 @@ dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
     const torch::Tensor &tilePixelMask,
     const torch::Tensor &tilePixelCumsum,
     const torch::Tensor &pixelMap) {
+    FVDB_FUNC_RANGE();
     const uint32_t channels = features.size(-1);
     const bool isPacked     = means2d.dim() == 2;
 

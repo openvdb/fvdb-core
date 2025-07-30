@@ -5,6 +5,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianMacros.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
+#include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <ATen/cuda/Atomic.cuh>
@@ -178,6 +179,7 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
     const float farPlane,
     const float minRadius2d,
     const bool ortho) {
+    FVDB_FUNC_RANGE();
     // These are supported by the underlying kernel, but they are not exposed
     const at::optional<torch::Tensor> &covars = std::nullopt;
     constexpr bool calc_compensations         = false;
