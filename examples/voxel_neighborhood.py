@@ -4,9 +4,9 @@
 import numpy as np
 import polyscope as ps
 import torch
-
-from fvdb import GridBatch, gridbatch_from_ijk
 from fvdb.utils.examples import load_dragon_mesh
+
+from fvdb import Grid
 
 
 def main():
@@ -18,12 +18,11 @@ def main():
 
     [p] = load_dragon_mesh(mode="v", skip_every=N, device=torch.device(device))
 
-    index = GridBatch(device=device)
-    index.set_from_points(p, [-1, -1, -1], [1, 1, 1], vox_size, vox_origin)
+    index = Grid.from_points(p, vox_size, vox_origin)
 
-    primal_voxels = index.ijk.jdata
+    primal_voxels = index.ijk
 
-    nhood = index.neighbor_indexes(primal_voxels, 1, 0).jdata
+    nhood = index.neighbor_indexes(primal_voxels, 1, 0)
 
     ps.init()
     for _ in range(10):
@@ -35,10 +34,8 @@ def main():
         nhood_ijk = torch.cat([voxijk.unsqueeze(0), nbrs], dim=0)
 
         vp, ve = index.viz_edge_network
-        vp, ve = vp.jdata, ve.jdata
 
-        vi, vei = gridbatch_from_ijk(nhood_ijk, voxel_sizes=vox_size, origins=vox_origin).viz_edge_network
-        vi, vei = vi.jdata, vei.jdata
+        vi, vei = Grid.from_ijk(nhood_ijk, voxel_size=vox_size, origin=vox_origin).viz_edge_network
 
         ps.register_curve_network("vox", vp.cpu().numpy(), ve.cpu().numpy(), radius=0.0025)
         ps.register_curve_network("nhd", vi.cpu().numpy(), vei.cpu().numpy(), radius=0.005)

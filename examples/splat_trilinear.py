@@ -6,9 +6,9 @@ import timeit
 
 import polyscope as ps
 import torch
-
-from fvdb import GridBatch
 from fvdb.utils.examples import load_dragon_mesh
+
+from fvdb import Grid
 
 
 def main():
@@ -22,8 +22,7 @@ def main():
 
     p, n = load_dragon_mesh(skip_every=1, device=device, dtype=dtype)
 
-    index = GridBatch(device=device)
-    index.set_from_points(p, voxel_sizes=vox_size, origins=vox_origin)
+    index = Grid.from_points(p, voxel_size=vox_size, origin=vox_origin)
     index_dual = index.dual_grid()
 
     logging.info("Splatting into grid...")
@@ -44,9 +43,9 @@ def main():
 
     ps.init()
     ps.register_point_cloud("points", p, radius=0.00075)
-    grid_pts = ps.register_point_cloud("vox coords", gp.jdata, radius=0.0005)
+    grid_pts = ps.register_point_cloud("vox coords", gp, radius=0.0005)
 
-    grid_pts.add_vector_quantity("splatted normals", nsplat.jdata, enabled=True, length=0.05, radius=0.001)
+    grid_pts.add_vector_quantity("splatted normals", nsplat, enabled=True, length=0.05, radius=0.001)
     ps.show()
 
 

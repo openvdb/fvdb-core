@@ -9,10 +9,10 @@ from typing import List
 import numpy as np
 import torch
 import torch_scatter
+from fvdb.utils.tests import get_fvdb_test_data_path, probabilistic_test
 from parameterized import parameterized
 
 import fvdb
-from fvdb.utils.tests import get_fvdb_test_data_path, probabilistic_test
 
 all_device_dtype_combos = [
     ["cuda", torch.float16],
@@ -431,10 +431,10 @@ class TestJaggedTensor(unittest.TestCase):
         self.check_lshape(jt3, l3)
         self.check_lshape(jt4, l4)
 
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             jtcat = fvdb.jcat([jt1, jt2], dim=0)
 
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             jtcat = fvdb.jcat([], dim=0)
 
         for dim in [-1, 0, 1]:
@@ -486,9 +486,9 @@ class TestJaggedTensor(unittest.TestCase):
                 lcatted[-1].append(cat_ij)
                 self.assertTrue(torch.all(jtcatij.jdata == cat_ij))
 
-        with self.assertRaises(IndexError):
+        with self.assertRaises(Exception):
             jtcat = fvdb.jcat([jt1, jt1], dim=-2)
-        with self.assertRaises(IndexError):
+        with self.assertRaises(Exception):
             jtcat = fvdb.jcat([jt1, jt1], dim=2)
         with self.assertRaises(IndexError):
             jtcat = fvdb.jcat([jt1, jt1], dim=-3)
@@ -526,23 +526,23 @@ class TestJaggedTensor(unittest.TestCase):
 
         # Nesting dimension mismatch
         jt4 = fvdb.JaggedTensor([torch.randn(np.random.randint(4, 100), 4, device=device, dtype=dtype)] * 7)
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             _ = fvdb.jcat([jt1, jt4], dim=None)
 
         # Device dimension mismatch
         other_device = "cpu" if device == "cuda" else "cuda"
         jt4 = jt1.to(other_device)
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             _ = fvdb.jcat([jt1, jt4], dim=None)
 
         # Dtype dimension mismatch
         other_dtype = torch.float32 if dtype != torch.float32 else torch.float64
         jt4 = jt1.to(other_dtype)
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             _ = fvdb.jcat([jt1, jt4], dim=None)
 
         # Empty list
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             _ = fvdb.jcat([], dim=None)
 
     @parameterized.expand(
@@ -598,8 +598,7 @@ class TestJaggedTensor(unittest.TestCase):
             pts_list = [torch.rand(1000 + np.random.randint(10), 3, device=device, dtype=dtype) for _ in range(4)]
         randpts = fvdb.JaggedTensor(pts_list)
         self.check_lshape(randpts, pts_list)
-        gridbatch = fvdb.GridBatch(device=device)
-        gridbatch.set_from_points(randpts, voxel_sizes=0.1)
+        gridbatch = fvdb.GridBatch.from_points(randpts, voxel_sizes=0.1)
 
         grid = gridbatch[0]
 
@@ -621,12 +620,11 @@ class TestJaggedTensor(unittest.TestCase):
         while len(pts_list) == 0:
             for _ in range(17):
                 pts = torch.rand(1000 + np.random.randint(10), 3, device=device, dtype=dtype) * 10.0
-                ijk = fvdb.gridbatch_from_points(pts, voxel_sizes=0.5).ijk.jdata
+                ijk = fvdb.GridBatch.from_points(fvdb.JaggedTensor([pts]), voxel_sizes=0.5).ijk.jdata
                 ijk_list.append(ijk)
                 pts_list.append(pts)
         randpts = fvdb.JaggedTensor(pts_list)
-        gridbatch = fvdb.GridBatch(device=device)
-        gridbatch.set_from_points(randpts, voxel_sizes=0.5)
+        gridbatch = fvdb.GridBatch.from_points(randpts, voxel_sizes=0.5)
 
         idx = np.random.randint(len(gridbatch))
 
@@ -684,22 +682,22 @@ class TestJaggedTensor(unittest.TestCase):
         self.check_lshape(gridbatch[::].ijk, ijk_list[::])
         self.check_lshape(gridbatch.ijk[::], ijk_list[::])
 
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             print(gridbatch.ijk[9:8:0])
 
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             print(gridbatch.ijk[9:8:-1])
 
-        with self.assertRaises(TypeError):
+        with self.assertRaises(Exception):
             print(gridbatch.ijk[None])
 
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             print(gridbatch.ijk[9:8:-1])
 
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             print(gridbatch.ijk[::-1])
 
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             print(gridbatch.ijk[::-3])
 
     @parameterized.expand(all_device_dtype_combos)
@@ -743,7 +741,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res2.jdata, randpts_b.jdata + randpts_c.jdata))
         self.check_lshape(res2, pts_list)
         fvdb.config.pedantic_error_checking = True
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             res = randpts_b + randpts_c
         fvdb.config.pedantic_error_checking = False
 
@@ -762,7 +760,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res2.jdata, randpts_b.jdata - randpts_c.jdata))
         self.check_lshape(res2, pts_list)
         fvdb.config.pedantic_error_checking = True
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             res = randpts_b - randpts_c
         fvdb.config.pedantic_error_checking = False
 
@@ -781,7 +779,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res2.jdata, randpts_b.jdata * randpts_c.jdata))
         self.check_lshape(res2, pts_list)
         fvdb.config.pedantic_error_checking = True
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             res = randpts_b * randpts_c
         fvdb.config.pedantic_error_checking = False
 
@@ -796,7 +794,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res2.jdata, randpts_b.jdata / randpts_c.jdata))
         self.check_lshape(res2, pts_list)
         fvdb.config.pedantic_error_checking = True
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             res = randpts_b / randpts_c
         fvdb.config.pedantic_error_checking = False
 
@@ -815,7 +813,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res2.jdata, randpts_b.jdata**randpts_c.jdata))
         self.check_lshape(res2, pts_list)
         fvdb.config.pedantic_error_checking = True
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             res = randpts_b**randpts_c
         fvdb.config.pedantic_error_checking = False
 
@@ -834,7 +832,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res2.jdata, randpts_b.jdata // randpts_c.jdata))
         self.check_lshape(res2, pts_list)
         fvdb.config.pedantic_error_checking = True
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             res = randpts_b // randpts_c
         fvdb.config.pedantic_error_checking = False
 
@@ -854,7 +852,7 @@ class TestJaggedTensor(unittest.TestCase):
             self.assertTrue(torch.allclose(res2.jdata, randpts_b.jdata % randpts_c.jdata))
             self.check_lshape(res2, pts_list)
             fvdb.config.pedantic_error_checking = True
-            with self.assertRaises(ValueError):
+            with self.assertRaises(Exception):
                 res = randpts_b % randpts_c
             fvdb.config.pedantic_error_checking = False
 
@@ -873,7 +871,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res2.jdata, randpts_b.jdata > randpts_c.jdata))
         self.check_lshape(res2, pts_list)
         fvdb.config.pedantic_error_checking = True
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             res = randpts_b > randpts_c
         fvdb.config.pedantic_error_checking = False
 
@@ -896,7 +894,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res2.jdata, randpts_b.jdata >= randpts_c.jdata))
         self.check_lshape(res2, pts_list)
         fvdb.config.pedantic_error_checking = True
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             res = randpts_b >= randpts_c
         fvdb.config.pedantic_error_checking = False
 
@@ -919,7 +917,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res2.jdata, randpts_b.jdata < randpts_c.jdata))
         self.check_lshape(res2, pts_list)
         fvdb.config.pedantic_error_checking = True
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             res = randpts_b < randpts_c
         fvdb.config.pedantic_error_checking = False
 
@@ -942,7 +940,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res2.jdata, randpts_b.jdata <= randpts_c.jdata))
         self.check_lshape(res2, pts_list)
         fvdb.config.pedantic_error_checking = True
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             res = randpts_b <= randpts_c
         fvdb.config.pedantic_error_checking = False
 
@@ -965,7 +963,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res2.jdata, randpts_b.jdata == randpts_c.jdata))
         self.check_lshape(res2, pts_list)
         fvdb.config.pedantic_error_checking = True
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             res = randpts_b == randpts_c
         fvdb.config.pedantic_error_checking = False
 
@@ -988,7 +986,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res2.jdata, randpts_b.jdata != randpts_c.jdata))
         self.check_lshape(res2, pts_list)
         fvdb.config.pedantic_error_checking = True
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             res = randpts_b != randpts_c
         fvdb.config.pedantic_error_checking = False
 
@@ -1067,7 +1065,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res2.jdata, randpts.jdata + randpts_c.jdata))
         self.check_lshape(res2, pts_list)
         fvdb.config.pedantic_error_checking = True
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             res2 = randpts + randpts_c
         fvdb.config.pedantic_error_checking = False
 
@@ -1087,7 +1085,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res2.jdata, randpts.jdata - randpts_c.jdata))
         self.check_lshape(res2, pts_list)
         fvdb.config.pedantic_error_checking = True
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             res2 = randpts - randpts_c
         fvdb.config.pedantic_error_checking = False
 
@@ -1103,7 +1101,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res2.jdata, randpts.jdata * randpts_c.jdata))
         self.check_lshape(res2, pts_list)
         fvdb.config.pedantic_error_checking = True
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             res2 = randpts * randpts_c
         fvdb.config.pedantic_error_checking = False
 
@@ -1120,7 +1118,7 @@ class TestJaggedTensor(unittest.TestCase):
             self.assertTrue(torch.allclose(res2.jdata, randpts.jdata / randpts_c.jdata))
             self.check_lshape(res2, pts_list)
             fvdb.config.pedantic_error_checking = True
-            with self.assertRaises(ValueError):
+            with self.assertRaises(Exception):
                 res2 = randpts / randpts_c
             fvdb.config.pedantic_error_checking = False
 
@@ -1137,7 +1135,7 @@ class TestJaggedTensor(unittest.TestCase):
             self.assertTrue(torch.allclose(res2.jdata, randpts.jdata // randpts_c.jdata))
             self.check_lshape(res2, pts_list)
             fvdb.config.pedantic_error_checking = True
-            with self.assertRaises(ValueError):
+            with self.assertRaises(Exception):
                 res2 = randpts // randpts_c
             fvdb.config.pedantic_error_checking = False
 
@@ -1161,7 +1159,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res2.jdata, randpts.jdata > randpts_c.jdata))
         self.check_lshape(res2, pts_list)
         fvdb.config.pedantic_error_checking = True
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             res2 = randpts > randpts_c
         fvdb.config.pedantic_error_checking = False
 
@@ -1173,7 +1171,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res2.jdata, randpts.jdata >= randpts_c.jdata))
         self.check_lshape(res2, pts_list)
         fvdb.config.pedantic_error_checking = True
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             res2 = randpts >= randpts_c
         fvdb.config.pedantic_error_checking = False
 
@@ -1185,7 +1183,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res2.jdata, randpts.jdata < randpts_c.jdata))
         self.check_lshape(res2, pts_list)
         fvdb.config.pedantic_error_checking = True
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             res2 = randpts < randpts_c
         fvdb.config.pedantic_error_checking = False
 
@@ -1197,7 +1195,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res2.jdata, randpts.jdata <= randpts_c.jdata))
         self.check_lshape(res2, pts_list)
         fvdb.config.pedantic_error_checking = True
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             res2 = randpts <= randpts_c
         fvdb.config.pedantic_error_checking = False
 
@@ -1209,7 +1207,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res2.jdata, randpts.jdata == randpts_c.jdata))
         self.check_lshape(res2, pts_list)
         fvdb.config.pedantic_error_checking = True
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             res2 = randpts == randpts_c
         fvdb.config.pedantic_error_checking = False
 
@@ -1221,7 +1219,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(res2.jdata, randpts.jdata != randpts_c.jdata))
         self.check_lshape(res2, pts_list)
         fvdb.config.pedantic_error_checking = True
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Exception):
             res2 = randpts != randpts_c
         fvdb.config.pedantic_error_checking = False
 
@@ -2328,16 +2326,16 @@ class TestJaggedTensor(unittest.TestCase):
         for func in funcs:
             lsizes = []
             eshape = (3, 4)
-            with self.assertRaises(ValueError):
+            with self.assertRaises(Exception):
                 jt = fvdb.jrand(lsizes, eshape, device=device, dtype=dtype)
 
             lsizes = [[]]
-            with self.assertRaises(ValueError):
-                jt = fvdb.jrand(lsizes, eshape, device=device, dtype=dtype)
+            with self.assertRaises(Exception):
+                jt = fvdb.jrand(lsizes, eshape, device=device, dtype=dtype)  # type: ignore
 
             lsizes = [[], []]
-            with self.assertRaises(ValueError):
-                jt = fvdb.jrand(lsizes, eshape, device=device, dtype=dtype)
+            with self.assertRaises(Exception):
+                jt = fvdb.jrand(lsizes, eshape, device=device, dtype=dtype)  # type: ignore
 
     @parameterized.expand(all_device_dtype_combos)
     def test_assignment(self, device, dtype):

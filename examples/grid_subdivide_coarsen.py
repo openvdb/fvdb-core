@@ -7,9 +7,9 @@ import numpy as np
 import point_cloud_utils as pcu
 import polyscope as ps
 import torch
+from fvdb.utils.examples import load_dragon_mesh
 
 import fvdb
-from fvdb.utils.examples import load_dragon_mesh
 
 
 def visualize_grid(a: fvdb.GridBatch, offset: float):
@@ -30,7 +30,7 @@ if __name__ == "__main__":
 
     [p] = load_dragon_mesh(mode="v", device=torch.device("cuda", torch.cuda.current_device()))
 
-    grid_origin = fvdb.gridbatch_from_points(p, voxel_sizes=[0.005] * 3, origins=[0.0] * 3)
+    grid_origin = fvdb.GridBatch.from_points(fvdb.JaggedTensor(p), voxel_sizes=[0.005] * 3, origins=[0.0] * 3)
     visualize_grid(grid_origin, 0.0)
 
     grid_subdivided = grid_origin.subdivided_grid(2)

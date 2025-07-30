@@ -11,7 +11,7 @@ from ._Cpp import GaussianSplat3d as GaussianSplat3dCpp
 from ._Cpp import JaggedTensor, ProjectedGaussianSplats
 from .grid import Grid
 from .grid_batch import GridBatch
-from .types import DeviceIdentifier, is_DeviceIdentifier
+from .types import DeviceIdentifier, cast_check, is_DeviceIdentifier, resolve_device
 
 
 class GaussianSplat3d:
@@ -96,23 +96,16 @@ class GaussianSplat3d:
             arg_parameters = parameter_names[: len(args)]
             for kw, arg in zip(arg_parameters, args):
                 if kw in tensor_parameter_names:
-                    if not isinstance(arg, torch.Tensor):
-                        raise TypeError(f"Expected '{kw}' to be a torch.Tensor.")
-                    cpp_args[kw] = arg
+                    cpp_args[kw] = cast_check(arg, torch.Tensor, kw)
                 else:
-                    if not isinstance(arg, bool):
-                        raise TypeError(f"Expected '{kw}' to be a bool.")
-                cpp_args[kw] = arg
+                    cpp_args[kw] = cast_check(arg, bool, kw)
 
             for kwargname in kwargs:
                 if kwargname in parameter_names:
                     if kwargname in tensor_parameter_names:
-                        if not isinstance(kwargs[kwargname], torch.Tensor):
-                            raise TypeError(f"Expected '{kwargname}' to be a torch.Tensor.")
+                        cpp_args[kwargname] = cast_check(kwargs[kwargname], torch.Tensor, kwargname)
                     else:
-                        if not isinstance(kwargs[kwargname], bool):
-                            raise TypeError(f"Expected '{kwargname}' to be a bool.")
-                    cpp_args[kwargname] = kwargs[kwargname]
+                        cpp_args[kwargname] = cast_check(kwargs[kwargname], bool, kwargname)
                 else:
                     raise ValueError(f"Unexpected keyword argument '{kwargname}' for GaussianSplat3d constructor.")
 
@@ -161,9 +154,6 @@ class GaussianSplat3d:
         ...
 
     def __getitem__(self, index: slice | torch.Tensor) -> "GaussianSplat3d":
-        if not isinstance(index, (slice, torch.Tensor)):
-            raise TypeError("Expected 'index' to be a slice or a torch.Tensor.")
-
         if isinstance(index, slice):
             return GaussianSplat3d(
                 impl=self._impl.slice_select(
@@ -172,21 +162,23 @@ class GaussianSplat3d:
                     index.step if index.step is not None else 1,
                 ),
             )
+        elif isinstance(index, torch.Tensor):
+            if index.dim() != 1:
+                raise ValueError("Expected 'index' to be a 1D tensor.")
 
-        if index.dim() != 1:
-            raise ValueError("Expected 'index' to be a 1D tensor.")
-
-        if index.dtype == torch.bool:
-            if len(index) != self.num_gaussians:
-                raise ValueError(
-                    f"Expected 'index_or_mask' to have the same length as the number of Gaussians ({self.num_gaussians}), "
-                    f"but got {len(index)}."
-                )
-            return GaussianSplat3d(impl=self._impl.mask_select(index))
-        elif index.dtype == torch.int64 or index.dtype == torch.int32:
-            return GaussianSplat3d(impl=self._impl.index_select(index))
+            if index.dtype == torch.bool:
+                if len(index) != self.num_gaussians:
+                    raise ValueError(
+                        f"Expected 'index_or_mask' to have the same length as the number of Gaussians ({self.num_gaussians}), "
+                        f"but got {len(index)}."
+                    )
+                return GaussianSplat3d(impl=self._impl.mask_select(index))
+            elif index.dtype == torch.int64 or index.dtype == torch.int32:
+                return GaussianSplat3d(impl=self._impl.index_select(index))
+            else:
+                raise ValueError("Expected 'index' to be a boolean or integer (int32 or int64) tensor.")
         else:
-            raise TypeError("Expected 'index' to be a boolean or integer (int32 or int64) tensor.")
+            raise TypeError("Expected 'index' to be a slice or a torch.Tensor.")
 
     @overload
     def __setitem__(self, index: slice, value: "GaussianSplat3d") -> None:
@@ -217,9 +209,6 @@ class GaussianSplat3d:
         ...
 
     def __setitem__(self, index: torch.Tensor | slice, value: "GaussianSplat3d") -> None:
-        if not isinstance(index, (slice, torch.Tensor)):
-            raise TypeError("Expected 'index' to be a slice or a torch.Tensor.")
-
         if isinstance(index, slice):
             self._impl.slice_set(
                 index.start if index.start is not None else 0,
@@ -228,21 +217,24 @@ class GaussianSplat3d:
                 value._impl,
             )
             return
+        elif isinstance(index, torch.Tensor):
 
-        if index.dim() != 1:
-            raise ValueError("Expected 'index' to be a 1D tensor.")
+            if index.dim() != 1:
+                raise ValueError("Expected 'index' to be a 1D tensor.")
 
-        if index.dtype == torch.bool:
-            if len(index) != self.num_gaussians:
-                raise ValueError(
-                    f"Expected 'index' to have the same length as the number of Gaussians ({self.num_gaussians}), "
-                    f"but got {len(index)}."
-                )
-            self._impl.mask_set(index, value._impl)
-        elif index.dtype == torch.int64 or index.dtype == torch.int32:
-            self._impl.index_set(index, value._impl)
+            if index.dtype == torch.bool:
+                if len(index) != self.num_gaussians:
+                    raise ValueError(
+                        f"Expected 'index' to have the same length as the number of Gaussians ({self.num_gaussians}), "
+                        f"but got {len(index)}."
+                    )
+                self._impl.mask_set(index, value._impl)
+            elif index.dtype == torch.int64 or index.dtype == torch.int32:
+                self._impl.index_set(index, value._impl)
+            else:
+                raise ValueError("Expected 'index' to be a boolean or integer (int32 or int64) tensor.")
         else:
-            raise TypeError("Expected 'index' to be a boolean or integer (int32 or int64) tensor.")
+            raise TypeError("Expected 'index' to be a slice or a torch.Tensor")
 
     def detach(self) -> "GaussianSplat3d":
         """
@@ -292,8 +284,8 @@ class GaussianSplat3d:
             impl=GaussianSplat3dCpp.cat(splat_list, accumulate_mean_2d_gradients, accumulate_max_2d_radii, detach)
         )
 
-    @staticmethod
-    def from_state_dict(state_dict: dict[str, torch.Tensor]) -> "GaussianSplat3d":
+    @classmethod
+    def from_state_dict(cls, state_dict: dict[str, torch.Tensor]) -> "GaussianSplat3d":
         """
         Creates a GaussianSplat3d instance from a state dictionary.
         This method is typically used to load a saved state of the GaussianSplat3d instance.
@@ -316,7 +308,7 @@ class GaussianSplat3d:
         Returns:
             GaussianSplat3d: An instance of GaussianSplat3d initialized with the provided state dictionary.
         """
-        return GaussianSplat3d(impl=GaussianSplat3dCpp.from_state_dict(state_dict))
+        return cls(impl=GaussianSplat3dCpp.from_state_dict(state_dict))
 
     @property
     def device(self) -> torch.device:
@@ -426,9 +418,7 @@ class GaussianSplat3d:
             TypeError: If the provided value is not a torch.Tensor.
             ValueError: If the shape of the provided value does not match the expected shape (N, 3).
         """
-        if not isinstance(value, torch.Tensor):
-            raise TypeError("Expected 'value' to be a torch.Tensor.")
-        self._impl.log_scales = value
+        self._impl.log_scales = cast_check(value, torch.Tensor, "log_scales")
 
     @property
     def logit_opacities(self) -> torch.Tensor:
@@ -457,14 +447,8 @@ class GaussianSplat3d:
         Args:
             value (torch.Tensor): A tensor of shape (N,) where N is the number of Gaussians (see `num_gaussians`).
                 Each element represents the logit of the opacity of a gaussian.
-
-        Raises:
-            TypeError: If the provided value is not a torch.Tensor.
-            ValueError: If the shape of the provided value does not match the expected shape (N,).
         """
-        if not isinstance(value, torch.Tensor):
-            raise TypeError("Expected 'value' to be a torch.Tensor.")
-        self._impl.logit_opacities = value
+        self._impl.logit_opacities = cast_check(value, torch.Tensor, "logit_opacities")
 
     @property
     def means(self) -> torch.Tensor:
@@ -487,14 +471,8 @@ class GaussianSplat3d:
         Args:
             value (torch.Tensor): A tensor of shape (N, 3) where N is the number
                 of Gaussians (see `num_gaussians`). Each row represents the mean of a Gaussian in 3D space.
-
-        Raises:
-            TypeError: If the provided value is not a torch.Tensor.
-            ValueError: If the shape of the provided value does not match the expected shape (N, 3).
         """
-        if not isinstance(value, torch.Tensor):
-            raise TypeError("Expected 'value' to be a torch.Tensor.")
-        self._impl.means = value
+        self._impl.means = cast_check(value, torch.Tensor, "means")
 
     @property
     def quats(self) -> torch.Tensor:
@@ -527,14 +505,8 @@ class GaussianSplat3d:
         Args:
             value (torch.Tensor): A tensor of shape (N, 4) where N is the number
                 of Gaussians (see `num_gaussians`). Each row represents the unit quaternion of a Gaussian in 3D space.
-
-        Raises:
-            TypeError: If the provided value is not a torch.Tensor.
-            ValueError: If the shape of the provided value does not match the expected shape (N, 4).
         """
-        if not isinstance(value, torch.Tensor):
-            raise TypeError("Expected 'value' to be a torch.Tensor.")
-        self._impl.quats = value
+        self._impl.quats = cast_check(value, torch.Tensor, "quats")
 
     @property
     def requires_grad(self) -> bool:
@@ -555,13 +527,8 @@ class GaussianSplat3d:
 
         Args:
             value (bool): True if gradients are required, False otherwise.
-
-        Raises:
-            TypeError: If the provided value is not a boolean.
         """
-        if not isinstance(value, bool):
-            raise TypeError("Expected 'value' to be a boolean.")
-        self._impl.requires_grad = value
+        self._impl.requires_grad = cast_check(value, bool, "requires_grad")
 
     @property
     def sh0(self) -> torch.Tensor:
@@ -586,14 +553,8 @@ class GaussianSplat3d:
             value (torch.Tensor): A tensor of shape (N, 1, D) where N is the number of Gaussians (see `num_gaussians`),
                 and D is the number of channels (see `num_channels`).
                 Each row represents the diffuse SH coefficients for a Gaussian.
-
-        Raises:
-            TypeError: If the provided value is not a torch.Tensor.
-            ValueError: If the shape of the provided value does not match the expected shape (N, 1, D).
         """
-        if not isinstance(value, torch.Tensor):
-            raise TypeError("Expected 'value' to be a torch.Tensor.")
-        self._impl.sh0 = value
+        self._impl.sh0 = cast_check(value, torch.Tensor, "sh0")
 
     @property
     def shN(self) -> torch.Tensor:
@@ -620,14 +581,8 @@ class GaussianSplat3d:
                 of Gaussians (see `num_gaussians`), D is the number of channels (see `num_channels`),
                 and K is the number of spherical harmonic bases (see `num_sh_bases`).
                 Each row represents the directionally varying SH coefficients for a Gaussian.
-
-        Raises:
-            TypeError: If the provided value is not a torch.Tensor.
-            ValueError: If the shape of the provided value does not match the expected shape (N, K-1, D).
         """
-        if not isinstance(value, torch.Tensor):
-            raise TypeError("Expected 'value' to be a torch.Tensor.")
-        self._impl.shN = value
+        self._impl.shN = cast_check(value, torch.Tensor, "shN")
 
     @property
     def opacities(self) -> torch.Tensor:
@@ -729,13 +684,8 @@ class GaussianSplat3d:
 
         Args:
             value (bool): True if the maximum 2D radii should be tracked, False otherwise.
-
-        Raises:
-            TypeError: If the provided value is not a boolean.
         """
-        if not isinstance(value, bool):
-            raise TypeError("Expected 'value' to be a boolean.")
-        self._impl.accumulate_max_2d_radii = value
+        self._impl.accumulate_max_2d_radii = cast_check(value, bool, "accumulate_max_2d_radii")
 
     @property
     def accumulate_mean_2d_gradients(self) -> bool:
@@ -762,13 +712,8 @@ class GaussianSplat3d:
 
         Args:
             value (bool): True if the average norm of the gradient of projected means should be tracked, False otherwise.
-
-        Raises:
-            TypeError: If the provided value is not a boolean.
         """
-        if not isinstance(value, bool):
-            raise TypeError("Expected 'value' to be a boolean.")
-        self._impl.accumulate_mean_2d_gradients = value
+        self._impl.accumulate_mean_2d_gradients = cast_check(value, bool, "accumulate_mean_2d_gradients")
 
     @property
     def accumulated_mean_2d_gradient_norms(self) -> torch.Tensor:
@@ -811,11 +756,6 @@ class GaussianSplat3d:
                 - 'accumulated_gradient_step_counts': Tensor of shape (N,) representing the accumulated gradient step counts for each Gaussian.
                 - 'accumulated_max_2d_radii': Tensor of shape (N,) representing the maximum 2D projected radius for each Gaussian across every iteration of optimization.
                 - 'accumulated_mean_2d_gradient_norms': Tensor of shape (N,) representing the average norm of the gradient of projected means for each Gaussian across every iteration of optimization.
-
-        Raises:
-            TypeError: If the provided state_dict does not match the expected types or keys.
-            ValueError: If the state_dict is missing required keys or if the shapes of the tensors
-                do not match the expected shapes for the GaussianSplat3d instance.
         """
         self._impl.load_state_dict(state_dict)
 
@@ -858,10 +798,6 @@ class GaussianSplat3d:
             ProjectedGaussianSplats: An instance of ProjectedGaussianSplats containing the projected Gaussians.
                 This object contains the projected 2D representations of the Gaussians, which can be used for rendering depth images or further processing.
 
-        Raises:
-            TypeError: If the provided tensors do not match the expected types or shapes.
-            ValueError: If the number of cameras (C) does not match the dimensions of the provided matrices,
-                or if the image dimensions are not positive integers.
         """
         return self._impl.project_gaussians_for_depths(
             world_to_camera_matrices=world_to_camera_matrices,
@@ -919,10 +855,6 @@ class GaussianSplat3d:
             ProjectedGaussianSplats: An instance of ProjectedGaussianSplats containing the projected Gaussians.
                 This object contains the projected 2D representations of the Gaussians, which can be used for rendering images or further processing.
 
-        Raises:
-            TypeError: If the provided tensors do not match the expected types or shapes.
-            ValueError: If the number of cameras (C) does not match the dimensions of the provided matrices,
-                or if the image dimensions are not positive integers.
         """
         return self._impl.project_gaussians_for_images(
             world_to_camera_matrices=world_to_camera_matrices,
@@ -984,10 +916,6 @@ class GaussianSplat3d:
                 This object contains the projected 2D representations of the Gaussians, which can be used for
                 rendering images and depth maps or further processing.
 
-        Raises:
-            TypeError: If the provided tensors do not match the expected types or shapes.
-            ValueError: If the number of cameras (C) does not match the dimensions of the
-                provided matrices, or if the image dimensions are not positive integers.
         """
         return self._impl.project_gaussians_for_images_and_depths(
             world_to_camera_matrices=world_to_camera_matrices,
@@ -1544,8 +1472,8 @@ class GaussianSplat3d:
             filename = str(filename)
         self._impl.save_ply(filename)
 
-    @staticmethod
-    def from_ply(filename: pathlib.Path | str, device: torch.device | str = torch.device("cuda")) -> "GaussianSplat3d":
+    @classmethod
+    def from_ply(cls, filename: pathlib.Path | str, device: DeviceIdentifier = "cuda") -> "GaussianSplat3d":
         """
         Create a `GaussianSplat3d` instance from a PLY file.
 
@@ -1556,16 +1484,11 @@ class GaussianSplat3d:
         Returns:
             GaussianSplat3d: An instance of GaussianSplat3d initialized with the data from the PLY file.
         """
-        if not isinstance(device, (torch.device, str)):
-            raise TypeError(f"Expected device to be torch.device or str, got {type(device)}")
+        device = resolve_device(device)
         if isinstance(filename, pathlib.Path):
             filename = str(filename)
 
-        device_: torch.device = torch.device(device) if isinstance(device, str) else device
-        if device_.type == "cuda" and device_.index is None:
-            device_ = torch.device("cuda", torch.cuda.current_device())
-
-        return GaussianSplat3d(impl=GaussianSplat3dCpp.from_ply(filename=filename, device=device_))
+        return cls(impl=GaussianSplat3dCpp.from_ply(filename=filename, device=device))
 
     @overload
     def to(self, dtype: torch.dtype | None = None) -> "GaussianSplat3d":
@@ -1773,16 +1696,8 @@ class GaussianSplat3d:
                 f"Invalid arguments for to(): {args}. Expected a DeviceIdentifier, torch.Tensor, GaussianSplat3d, Grid, GridBatch, or JaggedTensor."
             )
 
-        device = self.device if device is None else device
-        dtype = self.dtype if dtype is None else dtype
-
-        if not is_DeviceIdentifier(device):
-            raise TypeError(f"Expected device to be torch.device or str, got {type(device)}")
-        if isinstance(device, str):
-            device = torch.device(device)
-
-        if not isinstance(dtype, torch.dtype):
-            raise TypeError(f"Expected dtype to be torch.dtype, got {type(dtype)}")
+        device = resolve_device(device, inherit_from=self)
+        dtype = self.dtype if dtype is None else cast_check(dtype, torch.dtype, "dtype")
 
         return GaussianSplat3d(
             impl=self._impl.to(

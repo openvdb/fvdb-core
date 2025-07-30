@@ -10,9 +10,9 @@ import point_cloud_utils as pcu
 import polyscope as ps
 import torch
 import tqdm
-
-from fvdb import GridBatch
 from fvdb.utils.examples import load_happy_mesh
+
+from fvdb import Grid
 
 
 def prepare_sdf(npts, ng):
@@ -74,16 +74,14 @@ def main():
 
     p, n = torch.from_numpy(pts).to(device).to(dtype), torch.from_numpy(nms).to(device).to(dtype)
 
-    grid = GridBatch(device=device)
-
-    grid.set_from_points(p, vox_size, vox_origin)
+    grid = Grid.from_points(p, vox_size, vox_origin)
     dual_index = grid.dual_grid()
 
-    mask = grid.points_in_active_voxel(torch.from_numpy(gpts).to(dtype).to(device)).jdata.cpu().numpy()
+    mask = grid.points_in_active_voxel(torch.from_numpy(gpts).to(dtype).to(device)).cpu().numpy()
     vol_pts = torch.from_numpy(gpts[mask]).to(device=device, dtype=dtype)
     vol_sdf = torch.from_numpy(sdf[mask]).to(device=device, dtype=dtype).unsqueeze(-1)
 
-    features = torch.randn(dual_index.total_voxels, 1).to(device).to(dtype)
+    features = torch.randn(dual_index.num_voxels, 1).to(device).to(dtype)
     features.requires_grad = True
 
     optimizer = torch.optim.Adam([features], lr=1e-2)
@@ -96,7 +94,7 @@ def main():
         vpts = vol_pts[vp_idx]
         vsdf = vol_sdf[vp_idx]
 
-        samp_sdf = dual_index.sample_trilinear(vpts, features).jdata
+        samp_sdf = dual_index.sample_trilinear(vpts, features)
 
         loss = torch.nn.functional.mse_loss(samp_sdf, vsdf)
         loss.backward()
@@ -104,7 +102,7 @@ def main():
         optimizer.step()
 
     ps.init()
-    pred_sdf = dual_index.sample_trilinear(vol_pts, features).jdata
+    pred_sdf = dual_index.sample_trilinear(vol_pts, features)
     assert isinstance(pred_sdf, torch.Tensor)
     vol_pc = ps.register_point_cloud("pts", vol_pts.cpu().numpy())
     vol_pc.add_scalar_quantity("sdf_pred", pred_sdf.squeeze().detach().cpu().numpy())

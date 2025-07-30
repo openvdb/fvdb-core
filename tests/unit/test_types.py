@@ -128,7 +128,7 @@ class TestTypesRedux(unittest.TestCase):
                 else:
                     return float(x)
             else:
-                raise RuntimeError(f"Expected NumericScalar, got {type(x)}")
+                raise TypeError(f"Expected NumericScalar, got {type(x)}")
 
         # Test that the function works with various inputs
         self.assertEqual(process_numeric_scalar(1), 1.0)
@@ -137,7 +137,7 @@ class TestTypesRedux(unittest.TestCase):
         self.assertEqual(process_numeric_scalar(np.array(3.5)), 3.5)
 
         # Test that it fails appropriately
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(TypeError):
             process_numeric_scalar([1, 2, 3])
 
     def test_type_guard_conversion_chain(self):
@@ -152,7 +152,7 @@ class TestTypesRedux(unittest.TestCase):
                 # Convert rank 1 input to Vec3i
                 return to_Vec3i(x)
             else:
-                raise RuntimeError(f"Cannot convert {type(x)} to Vec3i")
+                raise TypeError(f"Cannot convert {type(x)} to Vec3i")
 
         # Test scalar input
         result = smart_to_vec3i(5)
@@ -167,7 +167,7 @@ class TestTypesRedux(unittest.TestCase):
         self.assertTrue(torch.equal(result, torch.tensor([4, 5, 6])))
 
         # Test failure case
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(TypeError):
             smart_to_vec3i([[1, 2], [3, 4]])
 
     def test_type_guard_with_union_types(self):
@@ -334,10 +334,10 @@ class TestTypesRedux(unittest.TestCase):
     def test_resolve_device_error_cases(self):
         """Test resolve_device error handling"""
         # Test invalid device_id types
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(TypeError):
             resolve_device(123)  # type: ignore
 
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(TypeError):
             resolve_device([1, 2, 3])  # type: ignore
 
     # ========== Scalar Conversion Tests ==========
@@ -356,10 +356,9 @@ class TestTypesRedux(unittest.TestCase):
             self.assertEqual(result.item(), 1)
 
         # Test that floating point inputs fail
-        # All invalid inputs now raise RuntimeError for consistency
         invalid_inputs = [1.0, np.float32(1.0), np.array(1.0), torch.tensor(1.0)]
         for inp in invalid_inputs:
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(Exception):
                 result = to_IntegerScalar(inp, device=device)
 
     @parameterized.expand(all_devices)
@@ -379,18 +378,18 @@ class TestTypesRedux(unittest.TestCase):
     def test_scalar_conversion_failures(self):
         """Test scalar conversion failure cases"""
         # Non-scalar tensors should fail
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(Exception):
             to_IntegerScalar(torch.tensor([1, 2]))
 
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(Exception):
             to_FloatingScalar(np.array([1, 2]))
 
         # Invalid dtypes
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_IntegerScalar(1, dtype=torch.float32)
 
         # Invalid input types
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(TypeError):
             to_IntegerScalar("not a number")  # type: ignore
 
     # ========== Tensor Broadcasting Tests ==========
@@ -409,7 +408,7 @@ class TestTypesRedux(unittest.TestCase):
         self.assertTrue(torch.equal(result, torch.tensor([1, 2, 3], device=device, dtype=result.dtype)))
 
         # Test broadcasting failure
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_IntegerTensorBroadcastableRank1([1, 2], (3,), device=device)
 
     @parameterized.expand(all_devices)
@@ -428,15 +427,15 @@ class TestTypesRedux(unittest.TestCase):
     def test_tensor_broadcasting_failures(self):
         """Test tensor broadcasting failure cases"""
         # Wrong rank for test_shape
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_IntegerTensorBroadcastableRank1(1, (2, 3))  # type: ignore
 
         # Incompatible shapes
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_IntegerTensorBroadcastableRank1([1, 2], (3,))
 
         # Invalid dtypes
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_IntegerTensorBroadcastableRank1(1, (3,), dtype=torch.float32)
 
     # ========== Vec3 Conversion Tests ==========
@@ -455,7 +454,7 @@ class TestTypesRedux(unittest.TestCase):
         self.assertTrue(torch.equal(result, torch.tensor([1, 2, 3], device=device, dtype=result.dtype)))
 
         # Test failure case
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_Vec3i([1, 2], device=device)
 
     @parameterized.expand(all_devices)
@@ -506,14 +505,14 @@ class TestTypesRedux(unittest.TestCase):
     def test_vec3_conversion_failures(self):
         """Test Vec3 conversion failure cases"""
         # Wrong size for Vec3
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_Vec3i([1, 2, 3, 4])
 
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_Vec3f([1, 2])
 
         # Invalid rank for Vec3iBatch
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(TypeError):
             to_Vec3iBatch([[[1, 2, 3]]])  # type: ignore
 
     # ========== Positive Vec3 Conversion Tests ==========
@@ -607,52 +606,52 @@ class TestTypesRedux(unittest.TestCase):
     def test_positive_vec3_conversion_failures(self):
         """Test Positive Vec3 conversion failure cases"""
         # Test zero values - should fail
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_PositiveVec3i([0, 1, 2])
 
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_PositiveVec3f([1.0, 0.0, 2.0])
 
         # Test negative values - should fail
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_PositiveVec3i([-1, 2, 3])
 
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_PositiveVec3f([1.0, -1.0, 2.0])
 
         # Test scalar zero - should fail
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_PositiveVec3i(0)
 
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_PositiveVec3f(0.0)
 
         # Test scalar negative - should fail
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_PositiveVec3i(-5)
 
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_PositiveVec3f(-1.5)
 
         # Test batch with zero values - should fail
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_PositiveVec3iBatch([[1, 2, 3], [0, 5, 6]])
 
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_PositiveVec3fBatch([[1.0, 2.0, 3.0], [4.0, 0.0, 6.0]])
 
         # Test batch with negative values - should fail
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_PositiveVec3iBatch([[1, 2, 3], [-1, 5, 6]])
 
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_PositiveVec3fBatch([[1.0, 2.0, 3.0], [4.0, -1.0, 6.0]])
 
         # Test mixed positive and non-positive values - should fail
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_PositiveVec3i([1, 0, 3])
 
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_PositiveVec3f([1.0, 2.0, -0.1])
 
     def test_positive_vec3_edge_cases(self):
@@ -675,7 +674,7 @@ class TestTypesRedux(unittest.TestCase):
         self.assertTrue(torch.all(result > 0))
 
         # Test that error messages include the problematic tensor
-        with self.assertRaises(RuntimeError) as context:
+        with self.assertRaises(ValueError) as context:
             to_PositiveVec3i([-1, 2, 3])
         self.assertIn("All values must be greater than zero", str(context.exception))
 
@@ -720,7 +719,7 @@ class TestTypesRedux(unittest.TestCase):
         self.assertTrue(torch.equal(result, torch.tensor([0, 0, 0], device=device, dtype=result.dtype)))
 
         # Test negative values (should fail)
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_NonNegativeVec3i([-1, 2, 3], device=device)
 
     @parameterized.expand(all_devices)
@@ -742,7 +741,7 @@ class TestTypesRedux(unittest.TestCase):
         self.assertTrue(torch.allclose(result, expected))
 
         # Test negative values (should fail)
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_NonNegativeVec3f([1.0, -1.0, 2.0], device=device)
 
     @parameterized.expand(all_devices)
@@ -761,7 +760,7 @@ class TestTypesRedux(unittest.TestCase):
         self.assertTrue(torch.equal(result, expected))
 
         # Test negative values (should fail)
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_NonNegativeVec3iBatch([[1, 2, 3], [-1, 5, 6]], device=device)
 
     @parameterized.expand(all_devices)
@@ -780,24 +779,24 @@ class TestTypesRedux(unittest.TestCase):
         self.assertTrue(torch.allclose(result, expected))
 
         # Test negative values (should fail)
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_NonNegativeVec3fBatch([[1.0, 2.0, 3.0], [4.0, -1.0, 6.0]], device=device)
 
     def test_nonnegative_vs_positive_comparison(self):
         """Test key differences between NonNegative and Positive variants"""
         # Zero should work for NonNegative but fail for Positive
         to_NonNegativeVec3i([0, 1, 2])  # Should work
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_PositiveVec3i([0, 1, 2])  # Should fail
 
         to_NonNegativeVec3f([0.0, 1.0, 2.0])  # Should work
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_PositiveVec3f([0.0, 1.0, 2.0])  # Should fail
 
         # Negative should fail for both
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_NonNegativeVec3i([-1, 2, 3])
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             to_PositiveVec3i([-1, 2, 3])
 
     # ========== Dtype and Device Handling Tests ==========

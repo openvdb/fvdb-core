@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from parameterized import parameterized
 
-from fvdb import GridBatch
+from fvdb import GridBatch, JaggedTensor
 
 all_device_combos = [
     ["cpu"],
@@ -60,8 +60,7 @@ class TestBasicOps(unittest.TestCase):
             ],
             dim=0,
         )
-        grid = GridBatch(device=device)
-        grid.set_from_ijk(ijk)
+        grid = GridBatch.from_ijk(JaggedTensor([ijk]))
 
         _grid = grid.dual_grid(exclude_border=True)
         _target_ijk = torch.tensor([[0, 0, 0]], device=device)

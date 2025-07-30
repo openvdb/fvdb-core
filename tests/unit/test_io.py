@@ -75,7 +75,7 @@ class TestIO(unittest.TestCase):
 
         sizes = [np.random.randint(100, 200) for _ in range(batch_size)]
         grid_ijk = fvdb.JaggedTensor([torch.randint(-512, 512, (sizes[i], 3)) for i in range(batch_size)]).to(device)
-        grid = fvdb.gridbatch_from_ijk(grid_ijk)
+        grid = fvdb.GridBatch.from_ijk(grid_ijk)
         sizes = [[int(grid.num_voxels[i].item())] + dim for i in range(batch_size)]
         data = fvdb.JaggedTensor([(torch.rand(*sizes[i], device=device) * 256).to(dtype) for i in range(batch_size)])
 
@@ -135,7 +135,7 @@ class TestIO(unittest.TestCase):
 
         sizes = [np.random.randint(10, 20) for _ in range(batch_size)]
         grid_ijk = fvdb.JaggedTensor([torch.randint(-512, 512, (sizes[i], 3)) for i in range(batch_size)]).to(device)
-        grid = fvdb.gridbatch_from_ijk(grid_ijk)
+        grid = fvdb.GridBatch.from_ijk(grid_ijk)
 
         with tempfile.NamedTemporaryFile() as temp:
             fvdb.save_gridbatch(temp.name, grid, names=names, compressed=True)
@@ -184,7 +184,7 @@ class TestIO(unittest.TestCase):
             grid_ijk = fvdb.JaggedTensor([torch.randint(-512, 512, (sizes[i], 3)) for i in range(batch_size)]).to(
                 device
             )
-            grid = fvdb.gridbatch_from_ijk(grid_ijk)
+            grid = fvdb.GridBatch.from_ijk(grid_ijk)
             with self.assertRaises(ValueError):
                 fvdb.save_gridbatch("temp.nvdb", grid, grid_ijk, compressed=True, names=["a" * 1000] * batch_size)
 
@@ -195,7 +195,7 @@ class TestIO(unittest.TestCase):
             grid_ijk = fvdb.JaggedTensor([torch.randint(-512, 512, (sizes[i], 3)) for i in range(batch_size)]).to(
                 device
             )
-            grid = fvdb.gridbatch_from_ijk(grid_ijk)
+            grid = fvdb.GridBatch.from_ijk(grid_ijk)
             grid_data = fvdb.JaggedTensor(
                 [torch.rand(int(grid.num_voxels[i].item()) + (-1) ** (i % 2) * 2).to(device) for i in range(batch_size)]
             )
@@ -209,7 +209,7 @@ class TestIO(unittest.TestCase):
             grid_ijk = fvdb.JaggedTensor([torch.randint(-512, 512, (sizes[i], 3)) for i in range(batch_size)]).to(
                 device
             )
-            grid = fvdb.gridbatch_from_ijk(grid_ijk)
+            grid = fvdb.GridBatch.from_ijk(grid_ijk)
             grid_data = fvdb.JaggedTensor(
                 [
                     torch.rand(int(grid.num_voxels[i].item()) + (-1) ** (i % 2) * 2, 3, 3).to(device)
@@ -230,7 +230,7 @@ class TestIO(unittest.TestCase):
             grid_ijk = fvdb.JaggedTensor([torch.randint(-512, 512, (sizes[i], 3)) for i in range(batch_size)]).to(
                 device
             )
-            grid = fvdb.gridbatch_from_ijk(grid_ijk)
+            grid = fvdb.GridBatch.from_ijk(grid_ijk)
             grid_data = fvdb.JaggedTensor(
                 [torch.rand(int(grid.num_voxels[i].item())).to(bad_device) for i in range(batch_size)]
             )
@@ -244,7 +244,7 @@ class TestIO(unittest.TestCase):
             grid_ijk = fvdb.JaggedTensor([torch.randint(-512, 512, (sizes[i], 3)) for i in range(batch_size)]).to(
                 device
             )
-            grid = fvdb.gridbatch_from_ijk(grid_ijk)
+            grid = fvdb.GridBatch.from_ijk(grid_ijk)
             grid_data = fvdb.JaggedTensor(
                 [torch.rand(int(grid.num_voxels[i].item())).to(device) for i in range(batch_size)]
             )
@@ -260,7 +260,7 @@ class TestIO(unittest.TestCase):
             grid_ijk = fvdb.JaggedTensor([torch.randint(-512, 512, (sizes[i], 3)) for i in range(batch_size)]).to(
                 device
             )
-            grid = fvdb.gridbatch_from_ijk(grid_ijk)
+            grid = fvdb.GridBatch.from_ijk(grid_ijk)
             # data = fvdb.JaggedTensor([torch.rand(grid.num_voxels[i].item()).to(device) for i in range(batch_size)])
             with tempfile.NamedTemporaryFile() as temp:
                 fvdb.save_gridbatch(temp.name, grid, compressed=True, names=[f"a_{i}" for i in range(batch_size)])
@@ -278,7 +278,7 @@ class TestIO(unittest.TestCase):
             grid_ijk = fvdb.JaggedTensor([torch.randint(-512, 512, (sizes[i], 3)) for i in range(batch_size)]).to(
                 device
             )
-            grid = fvdb.gridbatch_from_ijk(grid_ijk)
+            grid = fvdb.GridBatch.from_ijk(grid_ijk)
             data = fvdb.JaggedTensor([torch.rand(1).squeeze().to(device)] * batch_size)
             with tempfile.NamedTemporaryFile() as temp:
                 fvdb.save_gridbatch(temp.name, grid, data, compressed=False)
@@ -290,7 +290,7 @@ class TestIO(unittest.TestCase):
             grid_ijk = fvdb.JaggedTensor([torch.randint(-512, 512, (sizes[i], 3)) for i in range(batch_size)]).to(
                 device
             )
-            grid = fvdb.gridbatch_from_ijk(grid_ijk)
+            grid = fvdb.GridBatch.from_ijk(grid_ijk)
             data = fvdb.JaggedTensor([torch.rand(1).unsqueeze(-1).unsqueeze(-1).to(device)] * batch_size)
             with tempfile.NamedTemporaryFile() as temp:
                 fvdb.save_gridbatch(temp.name, grid, data, compressed=False)
@@ -305,7 +305,7 @@ class TestIO(unittest.TestCase):
 
         pts = fvdb.JaggedTensor([torch.rand((100, 3)) for _ in range(8)]).to(device)
 
-        test_grid = fvdb.gridbatch_from_points(
+        test_grid = fvdb.GridBatch.from_points(
             pts,
             voxel_sizes=[np.random.random() + 0.00001 for _ in range(3)],
             origins=[np.random.randint(-100, 100) for _ in range(3)],

@@ -36,28 +36,6 @@ def _parse_device_string(device_or_device_string: str | torch.device) -> torch.d
     return device
 
 
-def _parse_tensor_or_sequence(tensor_or_sequence: torch.Tensor | Sequence, name: str = "") -> torch.Tensor:
-    """
-    Convert a sequence into a torch.Tensor. If the input is already a torch.Tensor, then simply return it.
-    E.g. if the input is [1, 2, 3], it will be converted to a torch.Tensor([1, 2, 3]).
-    E.g. if the input is [[1, 2, 3], [4, 5, 6]], it will be converted to a torch.Tensor([[1, 2, 3], [4, 5, 6]]).
-    If the input is not a torch.Tensor or Sequence, it raises a TypeError.
-
-    Args:
-        tensor_or_sequence (torch.Tensor | Sequence): The input to convert to a torch.Tensor.
-        name (str): Optional name for the input, used in error messages.
-
-    Returns:
-        torch.Tensor: The converted tensor.
-    """
-    if not isinstance(tensor_or_sequence, (torch.Tensor, Sequence)):
-        raise TypeError(f"{name} must be a torch.Tensor or Sequence, but got {type(tensor_or_sequence)}")
-    try:
-        return torch.as_tensor(tensor_or_sequence, dtype=torch.float64)
-    except Exception as e:
-        raise TypeError(f"{name} must be convertible to a torch.Tensor, but got {type(tensor_or_sequence)}") from e
-
-
 # isort: off
 from . import _Cpp  # Import the module to use in jcat
 from ._Cpp import JaggedTensor, ConvPackBackend
@@ -76,15 +54,8 @@ from ._Cpp import (
 # Import GridBatch and gridbatch_from_* functions from grid_batch.py
 from .grid_batch import (
     GridBatch,
-    gridbatch_from_ijk,
-    gridbatch_from_points,
-    gridbatch_from_nearest_voxels_to_points,
-    gridbatch_from_dense,
-    gridbatch_from_mesh,
     load_gridbatch,
     save_gridbatch,
-    load,
-    save,
 )
 
 
@@ -137,7 +108,7 @@ def jcat(things_to_cat, dim=None):
             grid_result = GridBatch(impl=_Cpp.jcat(grids)) if dim == None else grids[0]
         return nn.VDBTensor(grid_result, _Cpp.jcat(data, dim))
     else:
-        raise ValueError("jcat() can only cat GridBatch, JaggedTensor, or VDBTensor")
+        raise TypeError("jcat() can only cat GridBatch, JaggedTensor, or VDBTensor")
 
 
 from .version import __version__
@@ -150,15 +121,8 @@ __all__ = [
     "SparseConvPackInfo",
     "ConvPackBackend",
     "GaussianSplat3d",
-    "gridbatch_from_ijk",
-    "gridbatch_from_points",
-    "gridbatch_from_nearest_voxels_to_points",
-    "gridbatch_from_dense",
-    "gridbatch_from_mesh",
     "load_gridbatch",
     "save_gridbatch",
-    "load",
-    "save",
     "jcat",
     "scaled_dot_product_attention",
     "config",

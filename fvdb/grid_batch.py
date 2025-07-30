@@ -9,53 +9,49 @@ This module provides the core GridBatch class for managing sparse voxel grids:
 Classes:
 - GridBatch: A batch of sparse voxel grids with support for efficient operations
 
-Module-level functions for creating GridBatch objects from various sources:
-- gridbatch_from_dense: Create from dense grid dimensions
-- gridbatch_from_ijk: Create from explicit voxel coordinates
-- gridbatch_from_mesh: Create from triangle meshes
-- gridbatch_from_points: Create from point clouds
-- gridbatch_from_nearest_voxels_to_points: Create from nearest voxels to points
-- load/save: Load and save grid batches to/from .nvdb files
+Class-methods for creating GridBatch objects from various sources:
+- from_zero_grids: Create a grid batch with grid-count = 0.
+- from_empty: Create one or more grids with zero voxels.
+- from_dense: Create from dense grid dimensions
+- from_ijk: Create from explicit voxel coordinates
+- from_mesh: Create from triangle meshes
+- from_points: Create from point clouds
+- from_nearest_voxels_to_points: Create from nearest voxels to points
+
+Module-level functions for loading and saving grid batches:
+- load_gridbatch/save_gridbatch: Load and save grid batches to/from .nvdb files
 
 GridBatch supports operations like convolution, pooling, interpolation, ray casting,
 mesh extraction, and coordinate transformations on sparse voxel data.
 """
 
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Sequence, cast, overload
+from typing import TYPE_CHECKING, Any, Sequence, cast, overload
 
 import numpy as np
 import torch
 
-from . import _parse_device_string, _parse_tensor_or_sequence
+from . import _parse_device_string
 from ._Cpp import ConvPackBackend
 from ._Cpp import GridBatch as GridBatchCpp
 from ._Cpp import JaggedTensor
 from .types import (
+    DeviceIdentifier,
     GridBatchIndex,
-    JaggedTensorOrTensor,
-    Numeric,
-    Vec3d,
-    Vec3dBatch,
-    Vec3dBatchOrScalar,
-    Vec3dOrScalar,
-    Vec3i,
-    Vec3iBatch,
-    Vec3iOrScalar,
-    is_GridBatchIndex,
-    is_JaggedTensorOrTensor,
-    is_Vec3d,
-    is_Vec3dBatch,
-    is_Vec3dBatchOrScalar,
-    is_Vec3dOrScalar,
-    is_Vec3i,
-    is_Vec3iBatch,
-    is_Vec3iOrScalar,
+    NumericMaxRank1,
+    NumericMaxRank2,
+    resolve_device,
+    to_NonNegativeVec3i,
+    to_PositiveVec3fBatch,
+    to_PositiveVec3i,
+    to_Vec3f,
+    to_Vec3fBatch,
+    to_Vec3i,
+    to_Vec3iBatch,
 )
 
-Vec3List = Sequence[torch.Tensor] | Sequence[Sequence[Numeric]] | torch.Tensor
-
 if TYPE_CHECKING:
+    from .grid import Grid
     from .sparse_conv_pack_info import SparseConvPackInfo
 
 
@@ -68,9 +64,27 @@ class GridBatch:
     origins, and voxel sizes. The class provides methods for common operations like
     sampling, convolution, pooling, and other operations.
 
+    A GridBatch may contain zero grids, in which case it has no voxel sizes nor origins
+    that can be queried. It may also contain one or more empty grids, which means grids that
+    have zero voxels. An empty grid still has a voxel size and origin, which can be queried.
+
     The grids are stored in a sparse format where only active (non-empty) voxels are
     allocated, making it memory efficient for representing large volumes with sparse
     occupancy.
+
+    Note:
+        For creating grid batches with actual content, use the classmethods:
+        - GridBatch.from_dense() for dense data
+        - GridBatch.from_dense_axis_aligned_bounds() for dense defined by bounds
+        - GridBatch.from_grid() for building from a Grid() instance
+        - GridBatch.from_ijk() for voxel coordinates
+        - GridBatch.from_mesh() for triangle meshes
+        - GridBatch.from_nearest_voxels_to_points() for nearest voxel mapping
+        - GridBatch.from_points() for point clouds
+        - GridBatch.from_zero_grids() for zero grids
+        - GridBatch.from_zero_voxels() for one or more empty grids (zero voxels)
+
+        The GridBatch constructor is for internal use only, always use the classmethods.
 
     Attributes:
         max_grids_per_batch (int): Maximum number of grids that can be stored in a single batch.
@@ -79,114 +93,297 @@ class GridBatch:
     # Class variable
     max_grids_per_batch: int = GridBatchCpp.max_grids_per_batch
 
-    @overload
-    def __init__(self, device: torch.device | str = "cpu") -> None:
+    def __init__(self, *, impl: GridBatchCpp):
         """
-        Create a new empty (no grids) GridBatch on a specific device. _e.g._
-        >>> grid = GridBatch("cuda")  # string
-        >>> grid = GridBatch(torch.device("cuda:0")) # device directly
-        >>> grid = GridBatch()  # defaults to CPU
+        Constructor for internal use only. - use the Grid.from_* classmethods instead.
+        """
+        self._impl = impl
+
+    # ============================================================
+    #                  GridBatch from_* constructors
+    # ============================================================
+
+    @classmethod
+    def from_dense(
+        cls,
+        num_grids: int,
+        dense_dims: NumericMaxRank1,
+        ijk_min: NumericMaxRank1 = 0,
+        voxel_sizes: NumericMaxRank2 = 1,
+        origins: NumericMaxRank2 = 0,
+        mask: torch.Tensor | None = None,
+        device: DeviceIdentifier | None = None,
+    ) -> "GridBatch":
+        """
+        A dense grid has a voxel for every coordinate in an axis-aligned box of Vec3,
+        which can in turn be mapped to a world-space box.
+
+        for each grid in the batch, the dense grid is defined by:
+        - dense_dims: the size of the dense grid (shape [3,] = [W, H, D])
+        - ijk_min: the minimum voxel index for each grid in the batch (Vec3i)
+        - voxel_sizes: the world-space size of each voxel (Vec3d or scalar)
+        - origins: the world-space coordinate of the 0,0,0 voxel of each grid
+        - mask: indicates which voxels are "active" in the resulting grid.
+
+        The voxel sizes and world space origins can be per-grid or per-batch.
+        The ijk-min and sizes are the same for all grids in the batch.
+        The mask is the same for all grids in the batch.
 
         Args:
-            device (torch.device | str): The device to create the GridBatch on. Can be a string (e.g., "cuda", "cpu")
-                or a torch.device object. Defaults to "cpu".
+            num_grids (int): Number of grids to populate.
+            dense_dims (NumericMaxRank1): Dimensions of the dense grid, for all grids in the batch
+                broadcastable to shape (3,), integer dtype
+            ijk_min (NumericMaxRank1): Minimum voxel index for the grid, for all grids in the batch
+                broadcastable to shape (3,), integer dtype
+            voxel_sizes (NumericMaxRank2): World space size of each voxel, per-grid
+                broadcastable to shape (num_grids, 3), floating dtype
+            origins (NumericMaxRank2): World space coordinate of the 0,0,0 voxel of the grid, per-grid
+                broadcastable to shape (num_grids, 3), floating dtype
+            mask (torch.Tensor | None): Mask to apply to the grid,
+            device (DeviceIdentifier | None): Device to create the grid on.
+                Defaults to None, which inherits from mask, or uses "cpu" if mask is None.
+
+        Returns:
+            GridBatch: A new GridBatch object.
         """
-        ...
+        resolved_device = resolve_device(device, inherit_from=mask)
 
-    @overload
-    def __init__(
-        self,
-        voxel_sizes: torch.Tensor | Sequence[Sequence[Numeric]],
-        grid_origins: torch.Tensor | Sequence[Sequence[Numeric]] | None = None,
-        device: torch.device | str = "cpu",
-    ) -> None:
-        """
-        Create a new GridBatch with a specified number of empty grids, each of which have the
-        specified voxel sizes and origins. The number of grids is determined by the length
-        of `voxel_sizes` and `grid_origins`.
+        dense_dims = to_PositiveVec3i(dense_dims, device=resolved_device)
+        ijk_min = to_Vec3i(ijk_min, device=resolved_device)
+        voxel_sizes = to_PositiveVec3fBatch(voxel_sizes, device=resolved_device)
+        origins = to_Vec3fBatch(origins, device=resolved_device)
 
-        Args:
-            voxel_sizes (torch.Tensor | Sequence[Sequence[Numeric]]):
-                A tensor of shape (N, 3) where N is the number of grids.
-                Each row specifies the voxel size in each dimension (x, y, z).
-            grid_origins (torch.Tensor | Sequence[Sequence[Numeric]] | None):
-                An optional tensor of shape (N, 3) where N is the number of grids.
-                If none, each grid will have it's origin at [0, 0, 0]. Otherwise, each row
-                specifies the origin of the grid in world coordinates.
-            device (torch.device | str): The device to create the GridBatch on. Can be a string (e.g., "cuda", "cpu")
-                or a torch.device object. Defaults to "cpu".
-        """
-        ...
+        grid_batch_impl = GridBatchCpp(resolved_device)
+        grid_batch_impl.set_from_dense_grid(num_grids, dense_dims, ijk_min, voxel_sizes, origins, mask)
+        return cls(impl=grid_batch_impl)
 
-    @overload
-    def __init__(self, *, impl: GridBatchCpp) -> None: ...
+    @classmethod
+    def from_dense_axis_aligned_bounds(
+        cls,
+        num_grids: int,
+        dense_dims: NumericMaxRank1,
+        bounds_min: NumericMaxRank1 = 0,
+        bounds_max: NumericMaxRank1 = 1,
+        voxel_center: bool = False,
+        device: DeviceIdentifier = "cpu",
+    ) -> "GridBatch":
+        dense_dims = to_PositiveVec3i(dense_dims, device=resolve_device(device))
+        bounds_min = to_Vec3f(bounds_min, device=resolve_device(device))
+        bounds_max = to_Vec3f(bounds_max, device=resolve_device(device))
 
-    def __init__(self, *args, **kwargs):
-        if kwargs.get("impl") is not None:
-            # If impl is provided, use it directly
-            assert len(args) == 0, "Cannot provide both args and impl"
-            assert isinstance(kwargs["impl"], GridBatchCpp), "impl must be an instance of GridBatchCpp"
-            assert len(kwargs) == 1, "Only impl can be provided as a keyword argument"
-            self._impl = kwargs["impl"]
+        if torch.any(bounds_max <= bounds_min):
+            raise ValueError("bounds_max must be greater than bounds_min in all axes")
+
+        if voxel_center:
+            voxel_size = (bounds_max - bounds_min) / (dense_dims.to(torch.float64) - 1.0)
+            origin = bounds_min
         else:
+            voxel_size = (bounds_max - bounds_min) / dense_dims.to(torch.float64)
+            origin = bounds_min + 0.5 * voxel_size
 
-            if len(args) == 0 and len(kwargs) == 0:
-                # No arguments, create an empty GridBatch on CPU
-                self._impl = GridBatchCpp(_parse_device_string("cpu"))
-                return
+        return cls.from_dense(num_grids, dense_dims=dense_dims, voxel_sizes=voxel_size, origins=origin, device=device)
 
-            if len(args) == 1 and isinstance(args[0], (torch.device, str)):
-                # Single device argument
-                self._impl = GridBatchCpp(_parse_device_string(args[0]))
-                return
+    @classmethod
+    def from_grid(cls, grid: "Grid") -> "GridBatch":
+        """
+        Create a grid batch of batch size 1 from a single grid.
 
-            cpp_args = {
-                "voxel_sizes": None,
-                "grid_origins": None,
-                "device": _parse_device_string("cpu"),  # Default to CPU
-            }
+        Args:
+            grid (Grid): The grid to create the grid batch from.
 
-            parameter_names = ["voxel_sizes", "grid_origins", "device"]
-            arg_parameters = parameter_names[: len(args)]
+        Returns:
+            GridBatch: A new GridBatch object.
+        """
+        return cls(impl=grid._impl)
 
-            for kw, arg in zip(arg_parameters, args):
-                cpp_args[kw] = arg
+    @classmethod
+    def from_ijk(
+        cls,
+        ijk: JaggedTensor,
+        voxel_sizes: NumericMaxRank2 = 1,
+        origins: NumericMaxRank2 = 0,
+        device: DeviceIdentifier | None = None,
+    ) -> "GridBatch":
+        """
+        Create a grid batch from voxel coordinates.
 
-            for kwargname in kwargs:
-                if kwargname in parameter_names:
-                    cpp_args[kwargname] = kwargs[kwargname]
-                else:
-                    raise ValueError(f"Unexpected keyword argument '{kwargname}' for GridBatch constructor.")
+        Args:
+            ijk (torch.Tensor): Voxel coordinates to populate.
+                Shape: (num_voxels, 3) with integer coordinates.
+            voxel_size (NumericMaxRank1): Size of each voxel,
+                broadcastable to shape (3,), floating dtype
+            origin (NumericMaxRank1): Origin of the grid,
+                broadcastable to shape (3,), floating dtype
+            device (DeviceIdentifier | None): Device to create the grid on.
+                Defaults to None, which inherits from ijk.
 
-            if cpp_args["voxel_sizes"] is None and cpp_args["grid_origins"] is None:
-                # If both are None, create an empty GridBatch
-                self._impl = GridBatchCpp(_parse_device_string(cpp_args["device"]))
-                return
+        Returns:
+            Grid: A new Grid object.
+        """
+        resolved_device = resolve_device(device, inherit_from=ijk)
 
-            # Validate and convert arguments
-            cpp_args["voxel_sizes"] = _parse_tensor_or_sequence(cpp_args["voxel_sizes"], name="voxel_sizes")
+        voxel_sizes = to_PositiveVec3fBatch(voxel_sizes, device=resolved_device)
+        origins = to_Vec3fBatch(origins, device=resolved_device)
 
-            if cpp_args["grid_origins"] is not None:
-                cpp_args["grid_origins"] = _parse_tensor_or_sequence(cpp_args["grid_origins"], name="grid_origins")
-            else:
-                # If grid_origins is None, set it to a tensor of zeros with the same shape as voxel_sizes
-                cpp_args["grid_origins"] = torch.zeros_like(cpp_args["voxel_sizes"])
+        grid_batch_impl = GridBatchCpp(resolved_device)
+        grid_batch_impl.set_from_ijk(ijk, voxel_sizes, origins)
+        return cls(impl=grid_batch_impl)
 
-            if not isinstance(cpp_args["device"], (torch.device, str)):
-                raise TypeError(f"device must be a torch.device or str, but got {type(cpp_args['device'])}")
-            cpp_args["device"] = _parse_device_string(cpp_args["device"])
+    @classmethod
+    def from_mesh(
+        cls,
+        mesh_vertices: JaggedTensor,
+        mesh_faces: JaggedTensor,
+        voxel_sizes: NumericMaxRank2 = 1,
+        origins: NumericMaxRank2 = 0,
+        device: DeviceIdentifier | None = None,
+    ) -> "GridBatch":
+        """
+        Create a grid batch from triangle meshes.
 
-            self._impl = GridBatchCpp(
-                voxel_sizes=cpp_args["voxel_sizes"],
-                grid_origins=cpp_args["grid_origins"],
-                device=cpp_args["device"],
-            )
+        Args:
+            mesh_vertices (JaggedTensor): Vertices of the mesh.
+                Shape: (batch_size, num_vertices, 3).
+            mesh_faces (JaggedTensor): Faces of the mesh.
+                Shape: (batch_size, num_faces, 3).
+            voxel_sizes (NumericMaxRank2): Size of each voxel, per-grid
+                broadcastable to shape (batch_size, 3), floating dtype
+            origins (NumericMaxRank2): Origin of the grid, per-grid
+                broadcastable to shape (batch_size, 3), floating dtype
+            device (DeviceIdentifier | None): Device to create the grid on.
+                Defaults to None, which inherits from mesh_vertices.
+
+        Returns:
+            GridBatch: A new GridBatch object.
+        """
+        resolved_device = resolve_device(device, inherit_from=mesh_vertices)
+
+        voxel_sizes = to_PositiveVec3fBatch(voxel_sizes, device=resolved_device)
+        origins = to_Vec3fBatch(origins, device=resolved_device)
+
+        grid_batch_impl = GridBatchCpp(resolved_device)
+        grid_batch_impl.set_from_mesh(mesh_vertices, mesh_faces, voxel_sizes, origins)
+        return cls(impl=grid_batch_impl)
+
+    @classmethod
+    def from_nearest_voxels_to_points(
+        cls,
+        points: JaggedTensor,
+        voxel_sizes: NumericMaxRank2 = 1,
+        origins: NumericMaxRank2 = 0,
+        device: DeviceIdentifier | None = None,
+    ) -> "GridBatch":
+        """
+        Create a grid batch from the nearest voxels to a set of points.
+
+        Args:
+            points (JaggedTensor): Points to populate the grid from, per-grid
+                Shape: (batch_size, num_points, 3).
+            voxel_sizes (NumericMaxRank2): Size of each voxel, per-grid
+                broadcastable to shape (batch_size, 3), floating dtype
+            origins (NumericMaxRank2): Origin of the grid, per-grid
+                broadcastable to shape (batch_size, 3), floating dtype
+            device (DeviceIdentifier | None): Device to create the grid on.
+                Defaults to None, which inherits from points.
+
+        Returns:
+            GridBatch: A new GridBatch object.
+        """
+        resolved_device = resolve_device(device, inherit_from=points)
+
+        voxel_sizes = to_PositiveVec3fBatch(voxel_sizes, device=resolved_device)
+        origins = to_Vec3fBatch(origins, device=resolved_device)
+
+        grid_batch_impl = GridBatchCpp(resolved_device)
+        grid_batch_impl.set_from_nearest_voxels_to_points(points, voxel_sizes, origins)
+        return cls(impl=grid_batch_impl)
+
+    @classmethod
+    def from_points(
+        cls,
+        points: JaggedTensor,
+        voxel_sizes: NumericMaxRank2 = 1,
+        origins: NumericMaxRank2 = 0,
+        device: DeviceIdentifier | None = None,
+    ) -> "GridBatch":
+        """
+        Create a grid batch from a point cloud.
+
+        Args:
+            points (JaggedTensor): Points to populate the grid from, per-grid
+                Shape: (batch_size, num_points, 3).
+            voxel_sizes (NumericMaxRank2): Size of each voxel, per-grid
+                broadcastable to shape (batch_size, 3), floating dtype
+            origins (NumericMaxRank2): Origin of the grid, per-grid
+                broadcastable to shape (num_grids, 3), floating dtype
+            device (DeviceIdentifier | None): Device to create the grid on.
+                Defaults to None, which inherits from points.
+
+        Returns:
+            GridBatch: A new GridBatch object.
+        """
+        resolved_device = resolve_device(device, inherit_from=points)
+
+        voxel_sizes = to_PositiveVec3fBatch(voxel_sizes, device=resolved_device)
+        origins = to_Vec3fBatch(origins, device=resolved_device)
+
+        grid_batch_impl = GridBatchCpp(resolved_device)
+        grid_batch_impl.set_from_points(points, voxel_sizes, origins)
+        return cls(impl=grid_batch_impl)
+
+    @classmethod
+    def from_zero_grids(cls, device: DeviceIdentifier = "cpu") -> "GridBatch":
+        """
+        Create a new GridBatch with zero grids. It retains its device identifier, but
+        has no other information like voxel size or origin or bounding box. It will report
+        grid_count == 0
+        """
+        return cls(impl=GridBatchCpp(device=resolve_device(device)))
+
+    @classmethod
+    def from_zero_voxels(
+        cls, device: DeviceIdentifier = "cpu", voxel_sizes: NumericMaxRank2 = 1, origins: NumericMaxRank2 = 0
+    ) -> "GridBatch":
+        """
+        Create a GridBatch with one or more zero-voxel grids on a specific device.
+
+        An zero-voxel grid batch does not mean there are zero grids. It means that the grids have
+        zero voxels. This constructor will create as many zero-voxel grids as the batch size
+        of voxel_sizes and origins, defaulting to 1 grid, though for that case, you should use
+        the single-grid Grid constructor instead.
+
+        Args:
+            device (DeviceIdentifier): The device to create the GridBatch on.
+                Can be a string (e.g., "cuda", "cpu")or a torch.device object. Defaults to "cpu".
+            voxel_sizes (NumericMaxRank2): The default size per voxel,
+                broadcastable to shape (num_grids, 3), floating dtype
+            origins (NumericMaxRank2): The default origin of the grid,
+                broadcastable to shape (num_grids, 3), floating dtype
+
+
+        Returns:
+            GridBatch: A new zero-voxel GridBatch object.
+
+        Examples:
+            >>> grid_batch = GridBatch.from_zero_voxels("cuda", 1, 0)  # string
+            >>> grid_batch = GridBatch.from_zero_voxels(torch.device("cuda:0"), 1, 0)  # device directly
+            >>> grid_batch = GridBatch.from_zero_voxels(voxel_sizes=1, origins=0)  # defaults to CPU
+        """
+        resolved_device = resolve_device(device)
+        voxel_sizes = to_PositiveVec3fBatch(voxel_sizes, device=resolved_device)
+        origins = to_Vec3fBatch(origins, device=resolved_device)
+        grid_batch_impl = GridBatchCpp(voxel_sizes=voxel_sizes, grid_origins=origins, device=resolved_device)
+        return cls(impl=grid_batch_impl)
+
+    # ============================================================
+    #                Regular Instance Methods Begin
+    # ============================================================
 
     def avg_pool(
         self,
-        pool_factor: Vec3iOrScalar,
-        data: JaggedTensorOrTensor,
-        stride: Vec3iOrScalar = 0,
+        pool_factor: NumericMaxRank1,
+        data: JaggedTensor,
+        stride: NumericMaxRank1 = 0,
         coarse_grid: "GridBatch | None" = None,
     ) -> tuple[JaggedTensor, "GridBatch"]:
         """
@@ -197,12 +394,12 @@ class GridBatch:
         within the pooling window.
 
         Args:
-            pool_factor (int or 3-tuple of ints): The factor by which to downsample the grid.
-                If an int, the same factor is used for all dimensions.
-            data (JaggedTensor or torch.Tensor): The voxel data to pool. Shape should be
+            pool_factor (NumericMaxRank1): The factor by which to downsample the grid.
+                broadcastable to shape (3,), integer dtype
+            data (JaggedTensor): The voxel data to pool. Shape should be
                 (B,total_voxels, channels).
-            stride (int or 3-tuple of ints): The stride to use when pooling. If 0 (default),
-                stride equals pool_factor. If an int, the same stride is used for all dimensions.
+            stride (NumericMaxRank1): The stride to use when pooling. If 0 (default),
+                broadcastable to shape (3,), integer dtype
             coarse_grid (GridBatch, optional): Pre-allocated coarse grid to use for output.
                 If None, a new grid is created.
 
@@ -211,26 +408,12 @@ class GridBatch:
                 - The pooled data as a JaggedTensor
                 - The coarse GridBatch containing the pooled structure
         """
-
-        if not (
-            is_Vec3iOrScalar(pool_factor)
-            and is_JaggedTensorOrTensor(data)
-            and is_Vec3iOrScalar(stride)
-            and (coarse_grid is None or isinstance(coarse_grid, GridBatch))
-        ):
-            raise TypeError(
-                f"pool_factor must be a Vec3iOrScalar, but got {type(pool_factor)}, "
-                f"data must be a JaggedTensorOrTensor, but got {type(data)}, "
-                f"stride must be a Vec3iOrScalar, but got {type(stride)}, "
-                f"coarse_grid must be a GridBatch|None, but got {type(coarse_grid)}"
-            )
-
-        if isinstance(data, torch.Tensor):
-            data = JaggedTensor(data)
-
+        pool_factor = to_PositiveVec3i(pool_factor, device=self.device)
+        stride = to_NonNegativeVec3i(stride, device=self.device)
         coarse_grid_impl = coarse_grid._impl if coarse_grid else None
 
         result_data, result_grid_impl = self._impl.avg_pool(pool_factor, data, stride, coarse_grid_impl)
+
         return result_data, GridBatch(impl=cast(GridBatchCpp, result_grid_impl))
 
     def bbox_at(self, bi: int) -> torch.Tensor:
@@ -244,10 +427,14 @@ class GridBatch:
             torch.Tensor: A tensor of shape (2, 3) containing the minimum and maximum
                 coordinates of the bounding box in index space.
         """
-        return self._impl.bbox_at(bi)
+        # There's a quirk with zero-voxel grids that we handle here.
+        if self.has_zero_voxels_at(bi):
+            return torch.zeros((2, 3), dtype=torch.int32, device=self.device)
+        else:
+            return self._impl.bbox_at(bi)
 
     def clip(
-        self, features: JaggedTensorOrTensor, ijk_min: Vec3iBatch, ijk_max: Vec3iBatch
+        self, features: JaggedTensor, ijk_min: NumericMaxRank2, ijk_max: NumericMaxRank2
     ) -> tuple[JaggedTensor, "GridBatch"]:
         """
         Clip the grid to a bounding box and return clipped features.
@@ -256,66 +443,58 @@ class GridBatch:
         bounding box range [ijk_min, ijk_max] for each grid in the batch.
 
         Args:
-            features (JaggedTensor or torch.Tensor): The voxel features to clip.
-                Shape should be (B, total_voxels, channels).
-            ijk_min (list of 3-tuples): Minimum bounds in index space for each grid.
-            ijk_max (list of 3-tuples): Maximum bounds in index space for each grid.
+            features (JaggedTensor): The voxel features to clip.
+                Shape should be (num_grids, total_voxels, channels).
+            ijk_min (NumericMaxRank2): Minimum bounds in index space for each grid.
+                broadcastable to shape (num_grids, 3), integer dtype
+            ijk_max (NumericMaxRank2): Maximum bounds in index space for each grid.
+                broadcastable to shape (num_grids, 3), integer dtype
 
         Returns:
             tuple[JaggedTensor, GridBatch]: A tuple containing:
                 - The clipped features as a JaggedTensor
                 - A new GridBatch containing only voxels within the bounds
         """
-        if not (is_JaggedTensorOrTensor(features) and is_Vec3iBatch(ijk_min) and is_Vec3iBatch(ijk_max)):
-            raise TypeError(
-                f"features must be a JaggedTensorOrTensor, but got {type(features)}, "
-                f"ijk_min must be a Vec3iBatch, but got {type(ijk_min)}, "
-                f"ijk_max must be a Vec3iBatch, but got {type(ijk_max)}"
-            )
-
-        if isinstance(features, torch.Tensor):
-            features = JaggedTensor(features)
+        ijk_min = to_Vec3iBatch(ijk_min, device=self.device)
+        ijk_max = to_Vec3iBatch(ijk_max, device=self.device)
 
         result_features, result_grid_impl = self._impl.clip(features, ijk_min, ijk_max)
         return result_features, GridBatch(impl=result_grid_impl)
 
     def clipped_grid(
         self,
-        ijk_min: Vec3iBatch,
-        ijk_max: Vec3iBatch,
+        ijk_min: NumericMaxRank2,
+        ijk_max: NumericMaxRank2,
     ) -> "GridBatch":
         """
         Return a batch of grids representing the clipped version of this batch of grids.
         Each voxel `[i, j, k]` in the input batch is included in the output if it lies within `ijk_min` and `ijk_max`.
 
         Args:
-            ijk_min (list of int triplets): Index space minimum bound of the clip region.
-            ijk_max (list of int triplets): Index space maximum bound of the clip region.
+            ijk_min (NumericMaxRank2): Index space minimum bound of the clip region.
+            ijk_max (NumericMaxRank2): Index space maximum bound of the clip region.
 
         Returns:
             clipped_grid (GridBatch): A GridBatch representing the clipped version of this grid batch.
         """
-        if not (is_Vec3iBatch(ijk_min) and is_Vec3iBatch(ijk_max)):
-            raise TypeError(
-                f"ijk_min must be a Vec3iBatch, but got {type(ijk_min)}, "
-                f"ijk_max must be a Vec3iBatch, but got {type(ijk_max)}"
-            )
+        ijk_min = to_Vec3iBatch(ijk_min, device=self.device)
+        ijk_max = to_Vec3iBatch(ijk_max, device=self.device)
 
         return GridBatch(impl=self._impl.clipped_grid(ijk_min, ijk_max))
 
-    def coarsened_grid(self, coarsening_factor: Vec3iOrScalar) -> "GridBatch":
+    def coarsened_grid(self, coarsening_factor: NumericMaxRank1) -> "GridBatch":
         """
-        Return a batch of grids representing the coarsened version of this batch of grids.
-        Each voxel `[i, j, k]` in the input batch is included in the output if it lies within `ijk_min` and `ijk_max`.
+        Return a grid representing the coarsened version of this batch of grid.
+        Each voxel `[i, j, k]` in the input is included in the output if it lies within `ijk_min` and `ijk_max`.
 
         Args:
-            coarsening_factor (int or 3-tuple of ints): The factor by which to coarsen the grid.
+            coarsening_factor (NumericMaxRank1): The factor by which to coarsen the grid.
+                broadcastable to shape (3,), integer dtype
 
         Returns:
             coarsened_grid (GridBatch): A GridBatch representing the coarsened version of this grid batch.
         """
-        if not is_Vec3iOrScalar(coarsening_factor):
-            raise TypeError(f"coarsening_factor must be a Vec3iOrScalar, but got {type(coarsening_factor)}")
+        coarsening_factor = to_PositiveVec3i(coarsening_factor, device=self.device)
 
         return GridBatch(impl=self._impl.coarsened_grid(coarsening_factor))
 
@@ -331,206 +510,36 @@ class GridBatch:
         """
         return GridBatch(impl=self._impl.contiguous())
 
-    def integrate_tsdf(
-        self,
-        truncation_distance: float,
-        projection_matrices: torch.Tensor,
-        cam_to_world_matrices: torch.Tensor,
-        tsdf: JaggedTensorOrTensor,
-        weights: JaggedTensorOrTensor,
-        depth_images: torch.Tensor,
-        weight_images: torch.Tensor | None = None,
-    ) -> tuple["GridBatch", JaggedTensor, JaggedTensor]:
-        """
-        Integrate depth images into a Truncated Signed Distance Function (TSDF) volume.
-
-        Updates the TSDF values and weights in the voxel grid by integrating new depth
-        observations from multiple camera viewpoints. This is commonly used for 3D
-        reconstruction from RGB-D sensors.
-
-        Args:
-            truncation_distance (float): Maximum distance to truncate TSDF values (in world units).
-            projection_matrices (torch.Tensor): Camera projection matrices.
-                Shape: (batch_size, 4, 4).
-            cam_to_world_matrices (torch.Tensor): Camera to world transformation matrices.
-                Shape: (batch_size, 4, 4).
-            tsdf (JaggedTensor or torch.Tensor): Current TSDF values for each voxel.
-                Shape: (total_voxels, 1).
-            weights (JaggedTensor or torch.Tensor): Current integration weights for each voxel.
-                Shape: (total_voxels, 1).
-            depth_images (torch.Tensor): Depth images from cameras.
-                Shape: (batch_size, height, width).
-            weight_images (torch.Tensor, optional): Weight of each depth sample in the images.
-                Shape: (batch_size, height, width). If None, defaults to uniform weights.
-
-        Returns:
-            tuple[GridBatch, JaggedTensor, JaggedTensor]: A tuple containing:
-                - Updated GridBatch with potentially expanded voxels
-                - Updated TSDF values as JaggedTensor
-                - Updated weights as JaggedTensor
-        """
-        if not (
-            is_JaggedTensorOrTensor(tsdf)
-            and is_JaggedTensorOrTensor(weights)
-            and isinstance(depth_images, torch.Tensor)
-            and isinstance(projection_matrices, torch.Tensor)
-            and isinstance(cam_to_world_matrices, torch.Tensor)
-        ):
-            raise TypeError(
-                f"tsdf must be a JaggedTensorOrTensor, but got {type(tsdf)}, "
-                f"weights must be a JaggedTensorOrTensor, but got {type(weights)}, "
-                f"depth_images must be a torch.Tensor, but got {type(depth_images)}, "
-                f"projection_matrices must be a torch.Tensor, but got {type(projection_matrices)}, "
-                f"cam_to_world_matrices must be a torch.Tensor, but got {type(cam_to_world_matrices)}"
-            )
-
-        if weight_images is not None and not isinstance(weight_images, torch.Tensor):
-            raise TypeError(f"weight_images must be a torch.Tensor or None, but got {type(weight_images)}")
-        if isinstance(tsdf, torch.Tensor):
-            tsdf = JaggedTensor(tsdf)
-
-        if isinstance(weights, torch.Tensor):
-            weights = JaggedTensor(weights)
-
-        result_grid_impl, result_jagged_1, result_jagged_2 = self._impl.integrate_tsdf(
-            truncation_distance,
-            projection_matrices,
-            cam_to_world_matrices,
-            tsdf,
-            weights,
-            depth_images,
-            weight_images,
-        )
-
-        return GridBatch(impl=result_grid_impl), result_jagged_1, result_jagged_2
-
-    def integrate_tsdf_with_features(
-        self,
-        truncation_distance: float,
-        projection_matrices: torch.Tensor,
-        cam_to_world_matrices: torch.Tensor,
-        tsdf: JaggedTensorOrTensor,
-        features: JaggedTensorOrTensor,
-        weights: JaggedTensorOrTensor,
-        depth_images: torch.Tensor,
-        feature_images: torch.Tensor,
-        weight_images: torch.Tensor | None = None,
-    ) -> tuple["GridBatch", JaggedTensor, JaggedTensor, JaggedTensor]:
-        """
-        Integrate depth and feature images into TSDF volume with features.
-
-        Similar to integrate_tsdf but also integrates feature observations (e.g., color)
-        along with the depth information. This is useful for colored 3D reconstruction.
-
-        Args:
-            truncation_distance (float): Maximum distance to truncate TSDF values (in world units).
-            projection_matrices (torch.Tensor): Camera projection matrices.
-                Shape: (batch_size, 4, 4).
-            cam_to_world_matrices (torch.Tensor): Camera to world transformation matrices.
-                Shape: (batch_size, 4, 4).
-            tsdf (JaggedTensor or torch.Tensor): Current TSDF values for each voxel.
-                Shape: (total_voxels, 1).
-            features (JaggedTensor or torch.Tensor): Current feature values for each voxel.
-                Shape: (total_voxels, feature_dim).
-            weights (JaggedTensor or torch.Tensor): Current integration weights for each voxel.
-                Shape: (total_voxels, 1).
-            depth_images (torch.Tensor): Depth images from cameras.
-                Shape: (batch_size, height, width).
-            feature_images (torch.Tensor): Feature images (e.g., RGB) from cameras.
-                Shape: (batch_size, height, width, feature_dim).
-            weight_images (torch.Tensor, optional): Weight of each depth sample in the images.
-                Shape: (batch_size, height, width). If None, defaults to uniform weights.
-
-        Returns:
-            tuple[GridBatch, JaggedTensor, JaggedTensor, JaggedTensor]: A tuple containing:
-                - Updated GridBatch with potentially expanded voxels
-                - Updated TSDF values as JaggedTensor
-                - Updated weights as JaggedTensor
-                - Updated features as JaggedTensor
-        """
-        if not (
-            is_JaggedTensorOrTensor(tsdf)
-            and is_JaggedTensorOrTensor(weights)
-            and is_JaggedTensorOrTensor(features)
-            and isinstance(depth_images, torch.Tensor)
-            and isinstance(feature_images, torch.Tensor)
-            and isinstance(projection_matrices, torch.Tensor)
-            and isinstance(cam_to_world_matrices, torch.Tensor)
-        ):
-            raise TypeError(
-                f"tsdf must be a JaggedTensorOrTensor, but got {type(tsdf)}, "
-                f"weights must be a JaggedTensorOrTensor, but got {type(weights)}, "
-                f"features must be a JaggedTensorOrTensor, but got {type(features)}, "
-                f"depth_images must be a torch.Tensor, but got {type(depth_images)}, "
-                f"feature_images must be a torch.Tensor, but got {type(feature_images)}, "
-                f"projection_matrices must be a torch.Tensor, but got {type(projection_matrices)}, "
-                f"cam_to_world_matrices must be a torch.Tensor, but got {type(cam_to_world_matrices)}"
-            )
-
-        if weight_images is not None and not isinstance(weight_images, torch.Tensor):
-            raise TypeError(f"weight_images must be a torch.Tensor or None, but got {type(weight_images)}")
-
-        if isinstance(tsdf, torch.Tensor):
-            tsdf = JaggedTensor(tsdf)
-
-        if isinstance(weights, torch.Tensor):
-            weights = JaggedTensor(weights)
-
-        if isinstance(features, torch.Tensor):
-            features = JaggedTensor(features)
-
-        result_grid_impl, result_jagged_1, result_jagged_2, result_jagged_3 = self._impl.integrate_tsdf_with_features(
-            truncation_distance,
-            projection_matrices,
-            cam_to_world_matrices,
-            tsdf,
-            features,
-            weights,
-            depth_images,
-            feature_images,
-            weight_images,
-        )
-
-        return GridBatch(impl=result_grid_impl), result_jagged_1, result_jagged_2, result_jagged_3
-
-    def conv_grid(self, kernel_size: Vec3iOrScalar, stride: Vec3iOrScalar = 0) -> "GridBatch":
+    def conv_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 0) -> "GridBatch":
         """
         Return a batch of grids representing the convolution of this batch with a given kernel.
 
         Args:
-            kernel_size (int or 3-tuple of ints): The size of the kernel to convolve with.
-            stride (int or 3-tuple of ints): The stride to use when convolving.
+            kernel_size (NumericMaxRank1): The size of the kernel to convolve with.
+                broadcastable to shape (3,), integer dtype
+            stride (NumericMaxRank1): The stride to use when convolving.
+                broadcastable to shape (3,), integer dtype
 
         Returns:
             conv_grid (GridBatch): A GridBatch representing the convolution of this grid batch.
         """
-
-        if not (is_Vec3iOrScalar(kernel_size) and is_Vec3iOrScalar(stride)):
-            raise TypeError(
-                f"kernel_size must be a Vec3iOrScalar, but got {type(kernel_size)}, "
-                f"stride must be a Vec3iOrScalar, but got {type(stride)}"
-            )
+        kernel_size = to_PositiveVec3i(kernel_size, device=self.device)
+        stride = to_NonNegativeVec3i(stride, device=self.device)
 
         return GridBatch(impl=self._impl.conv_grid(kernel_size, stride))
 
-    def coords_in_active_voxel(self, ijk: JaggedTensorOrTensor) -> JaggedTensor:
+    def coords_in_active_voxel(self, ijk: JaggedTensor) -> JaggedTensor:
         """
         Check if voxel coordinates are in active voxels.
 
         Args:
-            ijk (JaggedTensor or torch.Tensor): Voxel coordinates to check.
-                Shape: (B, num_queries, 3) with integer coordinates.
+            ijk (JaggedTensor): Voxel coordinates to check.
+                Shape: (batch_size, num_queries, 3) with integer coordinates.
 
         Returns:
             JaggedTensor: Boolean mask indicating which coordinates correspond to
-                active voxels. Shape: (B, num_queries).
+                active voxels. Shape: (batch_size, num_queries).
         """
-        if not is_JaggedTensorOrTensor(ijk):
-            raise TypeError(f"ijk must be a JaggedTensorOrTensor, but got {type(ijk)}")
-
-        if isinstance(ijk, torch.Tensor):
-            ijk = JaggedTensor(ijk)
-
         return self._impl.coords_in_active_voxel(ijk)
 
     def cpu(self) -> "GridBatch":
@@ -543,7 +552,7 @@ class GridBatch:
         return GridBatch(impl=self._impl.cpu())
 
     def cubes_in_grid(
-        self, cube_centers: JaggedTensorOrTensor, cube_min: Vec3dOrScalar = 0.0, cube_max: Vec3dOrScalar = 0.0
+        self, cube_centers: JaggedTensor, cube_min: NumericMaxRank1 = 0, cube_max: NumericMaxRank1 = 0
     ) -> JaggedTensor:
         """
         Check if axis-aligned cubes are fully contained within the grid.
@@ -552,40 +561,24 @@ class GridBatch:
         the active voxels of the grid.
 
         Args:
-            cube_centers (JaggedTensor or torch.Tensor): Centers of the cubes in world coordinates.
-                Shape: (B,num_cubes, 3).
-            cube_min (float or 3-tuple): Minimum offsets from center defining cube bounds.
-                If scalar, same offset used for all dimensions. Global for all grids.
-            cube_max (float or 3-tuple): Maximum offsets from center defining cube bounds.
-                If scalar, same offset used for all dimensions. Global for all grids.
+            cube_centers (JaggedTensor): Centers of the cubes in world coordinates.
+                Shape: (batch_size, num_cubes, 3).
+            cube_min (NumericMaxRank1): Minimum offsets from center defining cube bounds.
+                broadcastable to shape (3,), floating dtype
+            cube_max (NumericMaxRank1): Maximum offsets from center defining cube bounds.
+                broadcastable to shape (3,), floating dtype
 
         Returns:
             JaggedTensor: Boolean mask indicating which cubes are fully contained in the grid.
-                Shape: (B, num_cubes).
+                Shape: (batch_size, num_cubes).
         """
-        if not (is_JaggedTensorOrTensor(cube_centers) and is_Vec3dOrScalar(cube_min) and is_Vec3dOrScalar(cube_max)):
-            if not is_JaggedTensorOrTensor(cube_centers):
-                print(f"cube_centers is a {type(cube_centers)}")
-
-            if not is_Vec3dOrScalar(cube_min):
-                print(f"cube_min is a {type(cube_min)}, is: {cube_min}")
-
-            if not is_Vec3dOrScalar(cube_max):
-                print(f"cube_max is a {type(cube_max)}, is: {cube_max}")
-
-            raise TypeError(
-                f"cube_centers must be a JaggedTensorOrTensor, but got {type(cube_centers)}, "
-                f"cube_min must be a Vec3dOrScalar, but got {type(cube_min)}, "
-                f"cube_max must be a Vec3dOrScalar, but got {type(cube_max)}"
-            )
-
-        if isinstance(cube_centers, torch.Tensor):
-            cube_centers = JaggedTensor(cube_centers)
+        cube_min = to_Vec3f(cube_min, device=self.device)
+        cube_max = to_Vec3f(cube_max, device=self.device)
 
         return self._impl.cubes_in_grid(cube_centers, cube_min, cube_max)
 
     def cubes_intersect_grid(
-        self, cube_centers: JaggedTensorOrTensor, cube_min: Vec3dOrScalar = 0.0, cube_max: Vec3dOrScalar = 0.0
+        self, cube_centers: JaggedTensor, cube_min: NumericMaxRank1 = 0, cube_max: NumericMaxRank1 = 0
     ) -> JaggedTensor:
         """
         Check if axis-aligned cubes intersect with the grid.
@@ -594,26 +587,19 @@ class GridBatch:
         with the active voxels of the grid.
 
         Args:
-            cube_centers (JaggedTensor or torch.Tensor): Centers of the cubes in world coordinates.
-                Shape: (B,num_cubes, 3).
-            cube_min (float or 3-tuple): Minimum offsets from center defining cube bounds.
-                If scalar, same offset used for all dimensions. Global for all grids.
-            cube_max (float or 3-tuple): Maximum offsets from center defining cube bounds.
-                If scalar, same offset used for all dimensions. Global for all grids.
+            cube_centers (JaggedTensor): Centers of the cubes in world coordinates.
+                Shape: (batch_size, num_cubes, 3).
+            cube_min (NumericMaxRank1): Minimum offsets from center defining cube bounds.
+                broadcastable to shape (3,), floating dtype
+            cube_max (NumericMaxRank1): Maximum offsets from center defining cube bounds.
+                broadcastable to shape (3,), floating dtype
 
         Returns:
             JaggedTensor: Boolean mask indicating which cubes intersect the grid.
-                Shape: (B, num_cubes).
+                Shape: (batch_size, num_cubes).
         """
-        if not (is_JaggedTensorOrTensor(cube_centers) and is_Vec3dOrScalar(cube_min) and is_Vec3dOrScalar(cube_max)):
-            raise TypeError(
-                f"cube_centers must be a JaggedTensorOrTensor, but got {type(cube_centers)}, "
-                f"cube_min must be a Vec3dOrScalar, but got {type(cube_min)}, "
-                f"cube_max must be a Vec3dOrScalar, but got {type(cube_max)}"
-            )
-
-        if isinstance(cube_centers, torch.Tensor):
-            cube_centers = JaggedTensor(cube_centers)
+        cube_min = to_Vec3f(cube_min, device=self.device)
+        cube_max = to_Vec3f(cube_max, device=self.device)
 
         return self._impl.cubes_intersect_grid(cube_centers, cube_min, cube_max)
 
@@ -650,150 +636,6 @@ class GridBatch:
         """
         return GridBatch(impl=self._impl.dilated_grid(dilation))
 
-    def merged_grid(self, other: "GridBatch") -> "GridBatch":
-        """
-        Return a grid batch that is the union of this grid batch with another.
-
-        Merges two grid batches by taking the union of their active voxels.
-        The grids must have compatible dimensions and transforms.
-
-        Args:
-            other (GridBatch): The other grid batch to merge with.
-
-        Returns:
-            GridBatch: A new GridBatch containing the union of active voxels from both grids.
-        """
-        return GridBatch(impl=self._impl.merged_grid(other._impl))
-
-    def pruned_grid(self, mask: JaggedTensorOrTensor) -> "GridBatch":
-        """
-        Return a pruned grid based on a boolean mask.
-
-        Creates a new grid containing only the voxels where the mask is True.
-
-        Args:
-            mask (JaggedTensor or torch.Tensor): Boolean mask for each voxel.
-                Shape: (B, total_voxels,).
-
-        Returns:
-            GridBatch: A new GridBatch containing only voxels where mask is True.
-        """
-        if not is_JaggedTensorOrTensor(mask):
-            raise TypeError(f"mask must be a JaggedTensorOrTensor, but got {type(mask)}")
-
-        if isinstance(mask, torch.Tensor):
-            mask = JaggedTensor(mask)
-
-        return GridBatch(impl=self._impl.pruned_grid(mask))
-
-    def inject_to(
-        self,
-        dst_grid: "GridBatch",
-        src: JaggedTensorOrTensor,
-        dst: JaggedTensorOrTensor | None = None,
-        default_value: float | int | bool = 0,
-    ) -> JaggedTensor:
-        """
-        Inject data from this grid to a destination grid.
-        This method copies sidecar data for voxels in this grid to a sidecar corresponding to voxels in the destination grid.
-
-        The copy occurs in "index-space", the grid-to-world transform is not applied.
-
-        If you pass in the destination data (`dst`), it will be modified in-place.
-        If `dst` is None, a new JaggedTensor will be created with the same element shape as src
-        and filled with `default_value` for any voxels that do not have corresponding data in `src`.
-
-        Args:
-            dst_grid (GridBatch): The destination grid to inject data into.
-            src (JaggedTensor | torch.Tensor): Source data from this grid.
-                This must be a JaggedTensor with shape (grid_count, -1, *).
-            dst (JaggedTensor | torch.Tensor | None): Optional destination data to be modified in-place.
-                This must be a JaggedTensor with shape (grid_cont, -1, *) or None.
-            default_value (float | int | bool): Value to fill in for voxels that do not have corresponding data in `src`.
-                This is used only if `dst` is None. Default is 0.
-
-        Returns:
-            JaggedTensor: The destination sidecar data after injection.
-        """
-        if not (is_JaggedTensorOrTensor(src)):
-            raise TypeError(f"src must be a JaggedTensorOrTensor, but got {type(src)}, ")
-
-        if isinstance(src, torch.Tensor):
-            src = JaggedTensor(src)
-
-        if dst is None:
-            dst_shape = [dst_grid.total_voxels]
-            dst_shape.extend(src.eshape)
-            dst = dst_grid.jagged_like(
-                torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device)
-            )
-        else:
-            if not is_JaggedTensorOrTensor(dst):
-                raise TypeError(f"dst must be a JaggedTensorOrTensor, but got {type(dst)}")
-            if isinstance(dst, torch.Tensor):
-                dst = JaggedTensor(dst)
-
-        if dst.eshape != src.eshape:
-            raise ValueError(
-                f"src and dst must have the same element shape, but got src: {src.eshape}, dst: {dst.eshape}"
-            )
-        self._impl.inject_to(dst_grid._impl, src, dst)
-        return dst
-
-    def inject_from(
-        self,
-        src_grid: "GridBatch",
-        src: JaggedTensorOrTensor,
-        dst: JaggedTensorOrTensor | None = None,
-        default_value: float | int | bool = 0,
-    ) -> JaggedTensor:
-        """
-        Inject data from the source grid to this grid.
-        This method copies sidecar data for voxels in the source grid to a sidecar corresponding to voxels in this grid.
-
-        The copy occurs in "index-space", the grid-to-world transform is not applied.
-
-        If you pass in the destination data (`dst`), it will be modified in-place.
-        If `dst` is None, a new JaggedTensor will be created with the same element shape as src
-        and filled with `default_value` for any voxels that do not have corresponding data in `src`.
-
-        Args:
-            dst_grid (GridBatch): The destination grid to inject data into.
-            src (JaggedTensor | torch.Tensor): Source data from this grid.
-                This must be a JaggedTensor with shape (grid_count, -1, *).
-            dst (JaggedTensor | torch.Tensor | None): Optional destination data to be modified in-place.
-                This must be a JaggedTensor with shape (grid_cont, -1, *) or None.
-            default_value (float | int | bool): Value to fill in for voxels that do not have corresponding data in `src`.
-                This is used only if `dst` is None. Default is 0.
-
-        Returns:
-            JaggedTensor: The destination sidecar data after injection.
-        """
-        if not (is_JaggedTensorOrTensor(src)):
-            raise TypeError(f"src must be a JaggedTensorOrTensor, but got {type(src)}, ")
-
-        if isinstance(src, torch.Tensor):
-            src = JaggedTensor(src)
-
-        if dst is None:
-            dst_shape = [self.total_voxels]
-            dst_shape.extend(src.eshape)
-            dst = self.jagged_like(torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device))
-        else:
-            if not is_JaggedTensorOrTensor(dst):
-                raise TypeError(f"dst must be a JaggedTensorOrTensor, but got {type(dst)}")
-            if isinstance(dst, torch.Tensor):
-                dst = JaggedTensor(dst)
-
-        if dst.eshape != src.eshape:
-            raise ValueError(
-                f"src and dst must have the same element shape, but got src: {src.eshape}, dst: {dst.eshape}"
-            )
-
-        src_grid._impl.inject_to(self._impl, src, dst)
-
-        return dst
-
     def dual_bbox_at(self, bi: int) -> torch.Tensor:
         """
         Get the dual bounding box of a specific grid in the batch.
@@ -807,7 +649,10 @@ class GridBatch:
             torch.Tensor: A tensor of shape (2, 3) containing the minimum and maximum
                 coordinates of the dual bounding box in index space.
         """
-        return self._impl.dual_bbox_at(bi)
+        if self.has_zero_voxels_at(bi):
+            return torch.zeros((2, 3), dtype=torch.int32, device=self.device)
+        else:
+            return self._impl.dual_bbox_at(bi)
 
     def dual_grid(self, exclude_border: bool = False) -> "GridBatch":
         """
@@ -822,9 +667,11 @@ class GridBatch:
         Returns:
             GridBatch: A new GridBatch representing the dual grid.
         """
-        return GridBatch(impl=self._impl.dual_grid(exclude_border))
+        return GridBatch(
+            impl=self._impl.dual_grid(exclude_border),
+        )
 
-    def grid_to_world(self, ijk: JaggedTensorOrTensor) -> JaggedTensor:
+    def grid_to_world(self, ijk: JaggedTensor) -> JaggedTensor:
         """
         Convert grid (index) coordinates to world coordinates.
 
@@ -832,21 +679,36 @@ class GridBatch:
         using the grid's origin and voxel size.
 
         Args:
-            ijk (JaggedTensor or torch.Tensor): Grid coordinates to convert.
-                Shape: (B, num_points, 3). Can be fractional for interpolation.
+            ijk (JaggedTensor): Grid coordinates to convert.
+                Shape: (batch_size, num_points, 3). Can be fractional for interpolation.
 
         Returns:
-            JaggedTensor: World coordinates. Shape: (B,num_points, 3).
+            JaggedTensor: World coordinates. Shape: (batch_size,num_points, 3).
         """
-        if not is_JaggedTensorOrTensor(ijk):
-            raise TypeError(f"ijk must be a JaggedTensorOrTensor, but got {type(ijk)}")
-
-        if isinstance(ijk, torch.Tensor):
-            ijk = JaggedTensor(ijk)
-
         return self._impl.grid_to_world(ijk)
 
-    def ijk_to_index(self, ijk: JaggedTensorOrTensor, cumulative: bool = False) -> JaggedTensor:
+    def has_same_address_and_grid_count(self, other: Any) -> bool:
+        """
+        Check if two grid batches have the same address and grid count.
+        """
+        if isinstance(other, (GridBatch, GridBatchCpp)):
+            return self.address == other.address and self.grid_count == other.grid_count
+        else:
+            return False
+
+    def has_zero_voxels_at(self, bi: int) -> bool:
+        """
+        Check if a specific grid in the batch is empty, which means it has zero voxels.
+
+        Args:
+            bi (int): The batch index of the grid.
+
+        Returns:
+            bool: True if the grid is empty, False otherwise.
+        """
+        return self.num_voxels_at(bi) == 0
+
+    def ijk_to_index(self, ijk: JaggedTensor, cumulative: bool = False) -> JaggedTensor:
         """
         Convert voxel coordinates to linear indices.
 
@@ -854,44 +716,236 @@ class GridBatch:
         Returns -1 for coordinates that don't correspond to active voxels.
 
         Args:
-            ijk (JaggedTensor or torch.Tensor): Voxel coordinates to convert.
-                Shape: (B, num_queries, 3) with integer coordinates.
+            ijk (JaggedTensor): Voxel coordinates to convert.
+                Shape: (batch_size, num_queries, 3) with integer coordinates.
             cumulative (bool): If True, returns cumulative indices across the entire batch.
                 If False, returns per-grid indices. Default is False.
 
         Returns:
             JaggedTensor: Linear indices for each coordinate, or -1 if not active.
-                Shape: (B, num_queries).
+                Shape: (batch_size, num_queries).
         """
-        if not is_JaggedTensorOrTensor(ijk):
-            raise TypeError(f"ijk must be a JaggedTensorOrTensor, but got {type(ijk)}")
-
-        if isinstance(ijk, torch.Tensor):
-            ijk = JaggedTensor(ijk)
-
         return self._impl.ijk_to_index(ijk, cumulative)
 
-    def ijk_to_inv_index(self, ijk: JaggedTensorOrTensor, cumulative: bool = False) -> JaggedTensor:
+    def ijk_to_inv_index(self, ijk: JaggedTensor, cumulative: bool = False) -> JaggedTensor:
         """
         Get inverse permutation for ijk_to_index.
 
         Args:
-            ijk (JaggedTensor or torch.Tensor): Voxel coordinates to convert.
-                Shape: (B, num_queries, 3) with integer coordinates.
+            ijk (JaggedTensor): Voxel coordinates to convert.
+                Shape: (batch_size, num_queries, 3) with integer coordinates.
             cumulative (bool): If True, returns cumulative indices across the entire batch.
                 If False, returns per-grid indices. Default is False.
 
         Returns:
             JaggedTensor: Inverse permutation for ijk_to_index.
-                Shape: (B, num_queries).
+                Shape: (batch_size, num_queries).
         """
-        if not is_JaggedTensorOrTensor(ijk):
-            raise TypeError(f"ijk must be a JaggedTensorOrTensor, but got {type(ijk)}")
-
-        if isinstance(ijk, torch.Tensor):
-            ijk = JaggedTensor(ijk)
-
         return self._impl.ijk_to_inv_index(ijk, cumulative)
+
+    def inject_from(
+        self,
+        src_grid: "GridBatch",
+        src: JaggedTensor,
+        dst: JaggedTensor | None = None,
+        default_value: float | int | bool = 0,
+    ) -> JaggedTensor:
+        """
+        Inject data from the source grid to this grid.
+        This method copies sidecar data for voxels in the source grid to a sidecar corresponding to voxels in this grid.
+
+        The copy occurs in "index-space", the grid-to-world transform is not applied.
+
+        If you pass in the destination data (`dst`), it will be modified in-place.
+        If `dst` is None, a new JaggedTensor will be created with the same element shape as src
+        and filled with `default_value` for any voxels that do not have corresponding data in `src`.
+
+        Args:
+            dst_grid (GridBatch): The destination grid to inject data into.
+            src (JaggedTensor): Source data from this grid.
+                Shape: (batch_size, -1, *).
+            dst (JaggedTensor | None): Optional destination data to be modified in-place.
+                Shape: (batch_size, -1, *) or None.
+            default_value (float | int | bool): Value to fill in for voxels that do not have corresponding data in `src`.
+                This is used only if `dst` is None. Default is 0.
+
+        Returns:
+            JaggedTensor: The destination sidecar data after injection.
+        """
+        if dst is None:
+            dst_shape = [self.total_voxels]
+            dst_shape.extend(src.eshape)
+            dst = self.jagged_like(torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device))
+
+        if dst.eshape != src.eshape:
+            raise ValueError(
+                f"src and dst must have the same element shape, but got src: {src.eshape}, dst: {dst.eshape}"
+            )
+
+        src_grid._impl.inject_to(self._impl, src, dst)
+
+        return dst
+
+    def inject_to(
+        self,
+        dst_grid: "GridBatch",
+        src: JaggedTensor,
+        dst: JaggedTensor | None = None,
+        default_value: float | int | bool = 0,
+    ) -> JaggedTensor:
+        """
+        Inject data from this grid to a destination grid.
+        This method copies sidecar data for voxels in this grid to a sidecar corresponding to voxels in the destination grid.
+
+        The copy occurs in "index-space", the grid-to-world transform is not applied.
+
+        If you pass in the destination data (`dst`), it will be modified in-place.
+        If `dst` is None, a new JaggedTensor will be created with the same element shape as src
+        and filled with `default_value` for any voxels that do not have corresponding data in `src`.
+
+        Args:
+            dst_grid (GridBatch): The destination grid to inject data into.
+            src (JaggedTensor): Source data from this grid.
+                Shape: (batch_size, -1, *).
+            dst (JaggedTensor | None): Optional destination data to be modified in-place.
+                Shape: (batch_size, -1, *) or None.
+            default_value (float | int | bool): Value to fill in for voxels that do not have corresponding data in `src`.
+                This is used only if `dst` is None. Default is 0.
+
+        Returns:
+            JaggedTensor: The destination sidecar data after injection.
+        """
+        if dst is None:
+            dst_shape = [dst_grid.total_voxels]
+            dst_shape.extend(src.eshape)
+            dst = dst_grid.jagged_like(
+                torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device)
+            )
+
+        if dst.eshape != src.eshape:
+            raise ValueError(
+                f"src and dst must have the same element shape, but got src: {src.eshape}, dst: {dst.eshape}"
+            )
+        self._impl.inject_to(dst_grid._impl, src, dst)
+        return dst
+
+    def integrate_tsdf(
+        self,
+        truncation_distance: float,
+        projection_matrices: torch.Tensor,
+        cam_to_world_matrices: torch.Tensor,
+        tsdf: JaggedTensor,
+        weights: JaggedTensor,
+        depth_images: torch.Tensor,
+        weight_images: torch.Tensor | None = None,
+    ) -> tuple["GridBatch", JaggedTensor, JaggedTensor]:
+        """
+        Integrate depth images into a Truncated Signed Distance Function (TSDF) volume.
+
+        Updates the TSDF values and weights in the voxel grid by integrating new depth
+        observations from multiple camera viewpoints. This is commonly used for 3D
+        reconstruction from RGB-D sensors.
+
+        Args:
+            truncation_distance (float): Maximum distance to truncate TSDF values (in world units).
+            projection_matrices (torch.Tensor): Camera projection matrices.
+                Shape: (batch_size, 4, 4).
+            cam_to_world_matrices (torch.Tensor): Camera to world transformation matrices.
+                Shape: (batch_size, 4, 4).
+            tsdf (JaggedTensor): Current TSDF values for each voxel.
+                Shape: (batch_size,total_voxels, 1).
+            weights (JaggedTensor): Current integration weights for each voxel.
+                Shape: (batch_size, total_voxels, 1).
+            depth_images (torch.Tensor): Depth images from cameras.
+                Shape: (batch_size, height, width).
+            weight_images (torch.Tensor, optional): Weight of each depth sample in the images.
+                Shape: (batch_size, height, width). If None, defaults to uniform weights.
+
+        Returns:
+            tuple[GridBatch, JaggedTensor, JaggedTensor]: A tuple containing:
+                - Updated GridBatch with potentially expanded voxels
+                - Updated TSDF values as JaggedTensor
+                - Updated weights as JaggedTensor
+        """
+
+        result_grid_impl, result_jagged_1, result_jagged_2 = self._impl.integrate_tsdf(
+            truncation_distance,
+            projection_matrices,
+            cam_to_world_matrices,
+            tsdf,
+            weights,
+            depth_images,
+            weight_images,
+        )
+
+        return (
+            GridBatch(impl=result_grid_impl),
+            result_jagged_1,
+            result_jagged_2,
+        )
+
+    def integrate_tsdf_with_features(
+        self,
+        truncation_distance: float,
+        projection_matrices: torch.Tensor,
+        cam_to_world_matrices: torch.Tensor,
+        tsdf: JaggedTensor,
+        features: JaggedTensor,
+        weights: JaggedTensor,
+        depth_images: torch.Tensor,
+        feature_images: torch.Tensor,
+        weight_images: torch.Tensor | None = None,
+    ) -> tuple["GridBatch", JaggedTensor, JaggedTensor, JaggedTensor]:
+        """
+        Integrate depth and feature images into TSDF volume with features.
+
+        Similar to integrate_tsdf but also integrates feature observations (e.g., color)
+        along with the depth information. This is useful for colored 3D reconstruction.
+
+        Args:
+            truncation_distance (float): Maximum distance to truncate TSDF values (in world units).
+            projection_matrices (torch.Tensor): Camera projection matrices.
+                Shape: (batch_size, 4, 4).
+            cam_to_world_matrices (torch.Tensor): Camera to world transformation matrices.
+                Shape: (batch_size, 4, 4).
+            tsdf (JaggedTensor): Current TSDF values for each voxel.
+                Shape: (batch_size, total_voxels, 1).
+            features (JaggedTensor): Current feature values for each voxel.
+                Shape: (batch_size, total_voxels, feature_dim).
+            weights (JaggedTensor): Current integration weights for each voxel.
+                Shape: (batch_size, total_voxels, 1).
+            depth_images (torch.Tensor): Depth images from cameras.
+                Shape: (batch_size, height, width).
+            feature_images (torch.Tensor): Feature images (e.g., RGB) from cameras.
+                Shape: (batch_size, height, width, feature_dim).
+            weight_images (torch.Tensor, optional): Weight of each depth sample in the images.
+                Shape: (batch_size, height, width). If None, defaults to uniform weights.
+
+        Returns:
+            tuple[GridBatch, JaggedTensor, JaggedTensor, JaggedTensor]: A tuple containing:
+                - Updated GridBatch with potentially expanded voxels
+                - Updated TSDF values as JaggedTensor
+                - Updated weights as JaggedTensor
+                - Updated features as JaggedTensor
+        """
+        result_grid_impl, result_jagged_1, result_jagged_2, result_jagged_3 = self._impl.integrate_tsdf_with_features(
+            truncation_distance,
+            projection_matrices,
+            cam_to_world_matrices,
+            tsdf,
+            features,
+            weights,
+            depth_images,
+            feature_images,
+            weight_images,
+        )
+
+        return (
+            GridBatch(impl=result_grid_impl),
+            result_jagged_1,
+            result_jagged_2,
+            result_jagged_3,
+        )
 
     def is_contiguous(self) -> bool:
         """
@@ -932,7 +986,7 @@ class GridBatch:
         return self._impl.jagged_like(data)
 
     def marching_cubes(
-        self, field: JaggedTensorOrTensor, level: float = 0.0
+        self, field: JaggedTensor, level: float = 0.0
     ) -> tuple[JaggedTensor, JaggedTensor, JaggedTensor]:
         """
         Extract isosurface mesh using the marching cubes algorithm.
@@ -941,29 +995,23 @@ class GridBatch:
         from a scalar field defined on the voxels.
 
         Args:
-            field (JaggedTensor or torch.Tensor): Scalar field values at each voxel.
-                Shape: (B, total_voxels, 1).
+            field (JaggedTensor): Scalar field values at each voxel.
+                Shape: (batch_size, total_voxels, 1).
             level (float): The isovalue to extract the surface at. Default is 0.0.
 
         Returns:
             tuple[JaggedTensor, JaggedTensor, JaggedTensor]: A tuple containing:
-                - Vertex positions of the mesh. Shape: (B, num_vertices, 3).
-                - Triangle face indices. Shape: (B, num_faces, 3).
-                - Vertex normals (computed from gradients). Shape: (B, num_vertices, 3).
+                - Vertex positions of the mesh. Shape: (batch_size, num_vertices, 3).
+                - Triangle face indices. Shape: (batch_size, num_faces, 3).
+                - Vertex normals (computed from gradients). Shape: (batch_size, num_vertices, 3).
         """
-        if not is_JaggedTensorOrTensor(field):
-            raise TypeError(f"field must be a JaggedTensorOrTensor, but got {type(field)}")
-
-        if isinstance(field, torch.Tensor):
-            field = JaggedTensor(field)
-
         return self._impl.marching_cubes(field, level)
 
     def max_pool(
         self,
-        pool_factor: Vec3iOrScalar,
-        data: JaggedTensorOrTensor,
-        stride: Vec3iOrScalar = 0,
+        pool_factor: NumericMaxRank1,
+        data: JaggedTensor,
+        stride: NumericMaxRank1 = 0,
         coarse_grid: "GridBatch | None" = None,
     ) -> tuple[JaggedTensor, "GridBatch"]:
         """
@@ -974,11 +1022,11 @@ class GridBatch:
         within the pooling window.
 
         Args:
-            pool_factor (int or 3-tuple of ints): The factor by which to downsample the grid.
-                If an int, the same factor is used for all dimensions.
-            data (JaggedTensor or torch.Tensor): The voxel data to pool. Shape should be
-                (B, total_voxels, channels).
-            stride (int or 3-tuple of ints): The stride to use when pooling. If 0 (default),
+            pool_factor (NumericMaxRank1): The factor by which to downsample the grid.
+                broadcastable to shape (3,), integer dtype
+            data (JaggedTensor): The voxel data to pool. Shape should be
+                (batch_size, total_voxels, channels).
+            stride (NumericMaxRank1): The stride to use when pooling. If 0 (default),
                 stride equals pool_factor. If an int, the same stride is used for all dimensions.
             coarse_grid (GridBatch, optional): Pre-allocated coarse grid to use for output.
                 If None, a new grid is created.
@@ -988,28 +1036,31 @@ class GridBatch:
                 - The pooled data as a JaggedTensor
                 - The coarse GridBatch containing the pooled structure
         """
-        if not (
-            is_Vec3iOrScalar(pool_factor)
-            and is_JaggedTensorOrTensor(data)
-            and is_Vec3iOrScalar(stride)
-            and (coarse_grid is None or isinstance(coarse_grid, GridBatch))
-        ):
-            raise TypeError(
-                f"pool_factor must be a Vec3iOrScalar, but got {type(pool_factor)}, "
-                f"data must be a JaggedTensorOrTensor, but got {type(data)}, "
-                f"stride must be a Vec3iOrScalar, but got {type(stride)}, "
-                f"coarse_grid must be a GridBatch|None, but got {type(coarse_grid)}"
-            )
-
-        if isinstance(data, torch.Tensor):
-            data = JaggedTensor(data)
+        pool_factor = to_PositiveVec3i(pool_factor, device=self.device)
+        stride = to_NonNegativeVec3i(stride, device=self.device)
 
         coarse_grid_impl = coarse_grid._impl if coarse_grid else None
 
         result_data, result_grid_impl = self._impl.max_pool(pool_factor, data, stride, coarse_grid_impl)
+
         return result_data, GridBatch(impl=result_grid_impl)
 
-    def neighbor_indexes(self, ijk: JaggedTensorOrTensor, extent: int, bitshift: int = 0) -> JaggedTensor:
+    def merged_grid(self, other: "GridBatch") -> "GridBatch":
+        """
+        Return a grid batch that is the union of this grid batch with another.
+
+        Merges two grid batches by taking the union of their active voxels.
+        The grids must have compatible dimensions and transforms.
+
+        Args:
+            other (GridBatch): The other grid batch to merge with.
+
+        Returns:
+            GridBatch: A new GridBatch containing the union of active voxels from both grids.
+        """
+        return GridBatch(impl=self._impl.merged_grid(other._impl))
+
+    def neighbor_indexes(self, ijk: JaggedTensor, extent: int, bitshift: int = 0) -> JaggedTensor:
         """
         Get indices of neighbors in N-ring neighborhood.
 
@@ -1017,20 +1068,14 @@ class GridBatch:
         around the given voxel coordinates.
 
         Args:
-            ijk (JaggedTensor or torch.Tensor): Voxel coordinates to find neighbors for.
-                Shape: (B, num_queries, 3) with integer coordinates.
+            ijk (JaggedTensor): Voxel coordinates to find neighbors for.
+                Shape: (batch_size, num_queries, 3) with integer coordinates.
             extent (int): Size of the neighborhood ring (N-ring).
             bitshift (int): Bit shift value for encoding. Default is 0.
 
         Returns:
             JaggedTensor: Linear indices of neighboring voxels.
         """
-        if not is_JaggedTensorOrTensor(ijk):
-            raise TypeError(f"ijk must be a JaggedTensorOrTensor, but got {type(ijk)}")
-
-        if isinstance(ijk, torch.Tensor):
-            ijk = JaggedTensor(ijk)
-
         return self._impl.neighbor_indexes(ijk, extent, bitshift)
 
     def num_voxels_at(self, bi: int) -> int:
@@ -1045,6 +1090,21 @@ class GridBatch:
         """
         return self._impl.num_voxels_at(bi)
 
+    def pruned_grid(self, mask: JaggedTensor) -> "GridBatch":
+        """
+        Return a pruned grid based on a boolean mask.
+
+        Creates a new grid containing only the voxels where the mask is True.
+
+        Args:
+            mask (JaggedTensor): Boolean mask for each voxel.
+                Shape: (batch_size, total_voxels,).
+
+        Returns:
+            GridBatch: A new GridBatch containing only voxels where mask is True.
+        """
+        return GridBatch(impl=self._impl.pruned_grid(mask))
+
     def origin_at(self, bi: int) -> torch.Tensor:
         """
         Get the world-space origin of a specific grid.
@@ -1057,33 +1117,27 @@ class GridBatch:
         """
         return self._impl.origin_at(bi)
 
-    def points_in_active_voxel(self, points: JaggedTensorOrTensor) -> JaggedTensor:
+    def points_in_active_voxel(self, points: JaggedTensor) -> JaggedTensor:
         """
         Check if world-space points are located within active voxels.
 
         Tests whether the given points fall within voxels that are active in the grid.
 
         Args:
-            points (JaggedTensor or torch.Tensor): World-space points to test.
-                Shape: (B, num_points, 3).
+            points (JaggedTensor): World-space points to test.
+                Shape: (batch_size, num_points, 3).
 
         Returns:
             JaggedTensor: Boolean mask indicating which points are in active voxels.
-                Shape: (B, num_points,).
+                Shape: (batch_size, num_points,).
         """
-        if not is_JaggedTensorOrTensor(points):
-            raise TypeError(f"points must be a JaggedTensorOrTensor, but got {type(points)}")
-
-        if isinstance(points, torch.Tensor):
-            points = JaggedTensor(points)
-
         return self._impl.points_in_active_voxel(points)
 
     def ray_implicit_intersection(
         self,
-        ray_origins: JaggedTensorOrTensor,
-        ray_directions: JaggedTensorOrTensor,
-        grid_scalars: JaggedTensorOrTensor,
+        ray_origins: JaggedTensor,
+        ray_directions: JaggedTensor,
+        grid_scalars: JaggedTensor,
         eps: float = 0.0,
     ) -> JaggedTensor:
         """
@@ -1093,40 +1147,20 @@ class GridBatch:
         scalar values stored in the grid voxels (e.g., signed distance function).
 
         Args:
-            ray_origins (JaggedTensor or torch.Tensor): Starting points of rays in world space.
-                Shape: (B,num_rays, 3).
-            ray_directions (JaggedTensor or torch.Tensor): Direction vectors of rays.
-                Shape: (B, num_rays, 3). Should be normalized.
-            grid_scalars (JaggedTensor or torch.Tensor): Scalar field values at each voxel.
-                Shape: (B, total_voxels, 1).
+            ray_origins (JaggedTensor): Starting points of rays in world space.
+                Shape: (batch_size,num_rays, 3).
+            ray_directions (JaggedTensor): Direction vectors of rays.
+                Shape: (batch_size, num_rays, 3). Should be normalized.
+            grid_scalars (JaggedTensor): Scalar field values at each voxel.
+                Shape: (batch_size, total_voxels, 1).
             eps (float): Epsilon value for numerical stability. Default is 0.0.
 
         Returns:
             JaggedTensor: Intersection information for each ray.
         """
-        if (
-            not is_JaggedTensorOrTensor(ray_origins)
-            or not is_JaggedTensorOrTensor(ray_directions)
-            or not is_JaggedTensorOrTensor(grid_scalars)
-        ):
-            raise TypeError(
-                "ray_origins must be a JaggedTensorOrTensor, ray_directions must be a JaggedTensorOrTensor, "
-                f"and grid_scalars must be a JaggedTensorOrTensor, but got {type(ray_origins)}, "
-                f"{type(ray_directions)}, {type(grid_scalars)}"
-            )
-
-        if isinstance(ray_origins, torch.Tensor):
-            ray_origins = JaggedTensor(ray_origins)
-
-        if isinstance(ray_directions, torch.Tensor):
-            ray_directions = JaggedTensor(ray_directions)
-
-        if isinstance(grid_scalars, torch.Tensor):
-            grid_scalars = JaggedTensor(grid_scalars)
-
         return self._impl.ray_implicit_intersection(ray_origins, ray_directions, grid_scalars, eps)
 
-    def read_from_dense(self, dense_data: torch.Tensor, dense_origins: Vec3i | None = None) -> JaggedTensor:
+    def read_from_dense(self, dense_data: torch.Tensor, dense_origins: NumericMaxRank1 = 0) -> JaggedTensor:
         """
         Read values from a dense tensor into sparse grid structure.
 
@@ -1137,26 +1171,18 @@ class GridBatch:
             dense_data (torch.Tensor): Dense tensor to read from.
                 Shape: (batch_size, channels, depth, height, width) or
                        (batch_size, depth, height, width, channels).
-            dense_origins (3-tuple of ints, optional): Origin of the dense tensor in
-                grid index space. Default is (0, 0, 0).
+            dense_origins (NumericMaxRank1): Origin of the dense tensor in grid index space.
+                broadcastable to shape (3,), integer dtype. Default is (0, 0, 0).
 
         Returns:
             JaggedTensor: Values from the dense tensor at active voxel locations.
-                Shape: (B, total_voxels, channels).
+                Shape: (batch_size, total_voxels, channels).
         """
-
-        if not isinstance(dense_data, torch.Tensor):
-            raise TypeError(f"dense_data must be a torch.Tensor, but got {type(dense_data)}")
-
-        if dense_origins is None:
-            dense_origins = torch.zeros(3, dtype=torch.int32)
-
-        if not is_Vec3i(dense_origins):
-            raise TypeError(f"dense_origins must be a Vec3i, but got {type(dense_origins)}")
+        dense_origins = to_Vec3i(dense_origins, device=self.device)
 
         return self._impl.read_from_dense(dense_data, dense_origins)
 
-    def sample_bezier(self, points: JaggedTensorOrTensor, voxel_data: JaggedTensorOrTensor) -> JaggedTensor:
+    def sample_bezier(self, points: JaggedTensor, voxel_data: JaggedTensor) -> JaggedTensor:
         """
         Sample voxel features at arbitrary points using Bézier interpolation.
 
@@ -1165,31 +1191,19 @@ class GridBatch:
         computationally expensive.
 
         Args:
-            points (JaggedTensor or torch.Tensor): World-space points to sample at.
-                Shape: (B, num_points, 3).
-            voxel_data (JaggedTensor or torch.Tensor): Features stored at each voxel.
-                Shape: (B, total_voxels, channels).
+            points (JaggedTensor): World-space points to sample at.
+                Shape: (batch_size, num_points, 3).
+            voxel_data (JaggedTensor): Features stored at each voxel.
+                Shape: (batch_size, total_voxels, channels).
 
         Returns:
             JaggedTensor: Interpolated features at each point.
-                Shape: (B, num_points, channels).
+                Shape: (batch_size, num_points, channels).
         """
-        if not (is_JaggedTensorOrTensor(points) and is_JaggedTensorOrTensor(voxel_data)):
-            raise TypeError(
-                f"points must be a JaggedTensorOrTensor, but got {type(points)}, "
-                f"voxel_data must be a JaggedTensorOrTensor, but got {type(voxel_data)}"
-            )
-
-        if isinstance(points, torch.Tensor):
-            points = JaggedTensor(points)
-
-        if isinstance(voxel_data, torch.Tensor):
-            voxel_data = JaggedTensor(voxel_data)
-
         return self._impl.sample_bezier(points, voxel_data)
 
     def sample_bezier_with_grad(
-        self, points: JaggedTensorOrTensor, voxel_data: JaggedTensorOrTensor
+        self, points: JaggedTensor, voxel_data: JaggedTensor
     ) -> tuple[JaggedTensor, JaggedTensor]:
         """
         Sample voxel features and their gradients using Bézier interpolation.
@@ -1198,32 +1212,20 @@ class GridBatch:
         interpolated values with respect to the world-space coordinates.
 
         Args:
-            points (JaggedTensor or torch.Tensor): World-space points to sample at.
-                Shape: (B, num_points, 3).
-            voxel_data (JaggedTensor or torch.Tensor): Features stored at each voxel.
-                Shape: (B, total_voxels, channels).
+            points (JaggedTensor): World-space points to sample at.
+                Shape: (batch_size, num_points, 3).
+            voxel_data (JaggedTensor): Features stored at each voxel.
+                Shape: (batch_size, total_voxels, channels).
 
         Returns:
             tuple[JaggedTensor, JaggedTensor]: A tuple containing:
-                - Interpolated features at each point. Shape: (B, num_points, channels).
+                - Interpolated features at each point. Shape: (batch_size, num_points, channels).
                 - Gradients of features with respect to world coordinates.
-                  Shape: (B, num_points, 3, channels).
+                  Shape: (batch_size, num_points, 3, channels).
         """
-        if not (is_JaggedTensorOrTensor(points) and is_JaggedTensorOrTensor(voxel_data)):
-            raise TypeError(
-                f"points must be a JaggedTensorOrTensor, but got {type(points)}, "
-                f"voxel_data must be a JaggedTensorOrTensor, but got {type(voxel_data)}"
-            )
-
-        if isinstance(points, torch.Tensor):
-            points = JaggedTensor(points)
-
-        if isinstance(voxel_data, torch.Tensor):
-            voxel_data = JaggedTensor(voxel_data)
-
         return self._impl.sample_bezier_with_grad(points, voxel_data)
 
-    def sample_trilinear(self, points: JaggedTensorOrTensor, voxel_data: JaggedTensorOrTensor) -> JaggedTensor:
+    def sample_trilinear(self, points: JaggedTensor, voxel_data: JaggedTensor) -> JaggedTensor:
         """
         Sample voxel features at arbitrary points using trilinear interpolation.
 
@@ -1231,31 +1233,19 @@ class GridBatch:
         interpolation from the 8 nearest voxels. Points outside the grid return zero.
 
         Args:
-            points (JaggedTensor or torch.Tensor): World-space points to sample at.
-                Shape: (B, num_points, 3).
-            voxel_data (JaggedTensor or torch.Tensor): Features stored at each voxel.
-                Shape: (B, total_voxels, channels).
+            points (JaggedTensor): World-space points to sample at.
+                Shape: (batch_size, num_points, 3).
+            voxel_data (JaggedTensor): Features stored at each voxel.
+                Shape: (batch_size, total_voxels, channels).
 
         Returns:
             JaggedTensor: Interpolated features at each point.
-                Shape: (B, num_points, channels).
+                Shape: (batch_size, num_points, channels).
         """
-        if not (is_JaggedTensorOrTensor(points) and is_JaggedTensorOrTensor(voxel_data)):
-            raise TypeError(
-                f"points must be a JaggedTensorOrTensor, but got {type(points)}, "
-                f"voxel_data must be a JaggedTensorOrTensor, but got {type(voxel_data)}"
-            )
-
-        if isinstance(points, torch.Tensor):
-            points = JaggedTensor(points)
-
-        if isinstance(voxel_data, torch.Tensor):
-            voxel_data = JaggedTensor(voxel_data)
-
         return self._impl.sample_trilinear(points, voxel_data)
 
     def sample_trilinear_with_grad(
-        self, points: JaggedTensorOrTensor, voxel_data: JaggedTensorOrTensor
+        self, points: JaggedTensor, voxel_data: JaggedTensor
     ) -> tuple[JaggedTensor, JaggedTensor]:
         """
         Sample voxel features and their gradients using trilinear interpolation.
@@ -1264,35 +1254,23 @@ class GridBatch:
         interpolated values with respect to the world-space coordinates.
 
         Args:
-            points (JaggedTensor or torch.Tensor): World-space points to sample at.
-                Shape: (B, num_points, 3).
-            voxel_data (JaggedTensor or torch.Tensor): Features stored at each voxel.
-                Shape: (B, total_voxels, channels).
+            points (JaggedTensor): World-space points to sample at.
+                Shape: (batch_size, num_points, 3).
+            voxel_data (JaggedTensor): Features stored at each voxel.
+                Shape: (batch_size, total_voxels, channels).
 
         Returns:
             tuple[JaggedTensor, JaggedTensor]: A tuple containing:
-                - Interpolated features at each point. Shape: (B, num_points, channels).
+                - Interpolated features at each point. Shape: (batch_size, num_points, channels).
                 - Gradients of features with respect to world coordinates.
-                  Shape: (B, num_points, 3, channels).
+                  Shape: (batch_size, num_points, 3, channels).
         """
-        if not (is_JaggedTensorOrTensor(points) and is_JaggedTensorOrTensor(voxel_data)):
-            raise TypeError(
-                f"points must be a JaggedTensorOrTensor, but got {type(points)}, "
-                f"voxel_data must be a JaggedTensorOrTensor, but got {type(voxel_data)}"
-            )
-
-        if isinstance(points, torch.Tensor):
-            points = JaggedTensor(points)
-
-        if isinstance(voxel_data, torch.Tensor):
-            voxel_data = JaggedTensor(voxel_data)
-
         return self._impl.sample_trilinear_with_grad(points, voxel_data)
 
     def segments_along_rays(
         self,
-        ray_origins: JaggedTensorOrTensor,
-        ray_directions: JaggedTensorOrTensor,
+        ray_origins: JaggedTensor,
+        ray_directions: JaggedTensor,
         max_segments: int,
         eps: float = 0.0,
     ) -> JaggedTensor:
@@ -1300,10 +1278,10 @@ class GridBatch:
         Enumerate segments along rays.
 
         Args:
-            ray_origins (JaggedTensor or torch.Tensor): Origin of each ray.
-                Shape: (B, num_rays, 3).
-            ray_directions (JaggedTensor or torch.Tensor): Direction of each ray.
-                Shape: (B, num_rays, 3).
+            ray_origins (JaggedTensor): Origin of each ray.
+                Shape: (batch_size, num_rays, 3).
+            ray_directions (JaggedTensor): Direction of each ray.
+                Shape: (batch_size, num_rays, 3).
             max_segments (int): Maximum number of segments to enumerate.
             eps (float): Small epsilon value to avoid numerical issues.
 
@@ -1313,214 +1291,9 @@ class GridBatch:
             (2,) or (1,) representing the start and end distance of each sample or the midpoint
             of each sample if return_midpoints is true
         """
-        if not (is_JaggedTensorOrTensor(ray_origins) and is_JaggedTensorOrTensor(ray_directions)):
-            raise TypeError(
-                f"ray_origins must be a JaggedTensorOrTensor, but got {type(ray_origins)}, "
-                f"ray_directions must be a JaggedTensorOrTensor, but got {type(ray_directions)}"
-            )
-
-        if isinstance(ray_origins, torch.Tensor):
-            ray_origins = JaggedTensor(ray_origins)
-
-        if isinstance(ray_directions, torch.Tensor):
-            ray_directions = JaggedTensor(ray_directions)
-
         return self._impl.segments_along_rays(ray_origins, ray_directions, max_segments, eps)
 
-    def set_from_dense_grid(
-        self,
-        num_grids: int,
-        dense_dims: Vec3i,
-        ijk_min: Vec3i = torch.zeros(3, dtype=torch.int32),
-        voxel_sizes: Vec3dBatchOrScalar = 1.0,
-        origins: Vec3dBatch = torch.zeros(3),
-        mask: torch.Tensor | None = None,
-    ) -> None:
-        """
-        A dense grid has a voxel for every coordinate in an axis-aligned box of Vec3,
-        which can in turn be mapped to a world-space box.
-
-        for each grid in the batch, the dense grid is defined by:
-        - dense_dims: the size of the dense grid (shape [3,] = [W, H, D])
-        - ijk_min: the minimum voxel index for each grid in the batch (Vec3i)
-        - voxel_sizes: the world-space size of each voxel (Vec3d or scalar)
-        - origins: the world-space coordinate of the 0,0,0 voxel of each grid
-        - mask: indicates which voxels are "active" in the resulting grid.
-
-        The voxel sizes and world space origins can be per-grid or per-batch.
-        The ijk-min and sizes are the same for all grids in the batch.
-        The mask is the same for all grids in the batch.
-
-        Args:
-            num_grids (int): Number of grids to populate.
-            dense_dims (Vec3i): Dimensions of the dense grid.
-            ijk_min (Vec3i): Minimum voxel index for each grid.
-            voxel_sizes (Vec3dBatchOrScalar): World space size of each voxel.
-            origins (Vec3dBatch): World space coordinate of the 0,0,0 voxel of each grid.
-            mask (torch.Tensor | None): Mask to apply to the grid.
-                Shape: (num_grids,).
-
-        Returns:
-            None  (this modifies the grid in place)
-        """
-        if not (
-            is_Vec3i(dense_dims) and is_Vec3i(ijk_min) and is_Vec3dBatchOrScalar(voxel_sizes) and is_Vec3dBatch(origins)
-        ):
-            raise TypeError(
-                "Unsupported types for set_from_dense_grid(): "
-                f"{type(dense_dims)}, {type(ijk_min)}, {type(voxel_sizes)}, {type(origins)}"
-            )
-
-        self._impl.set_from_dense_grid(num_grids, dense_dims, ijk_min, voxel_sizes, origins, mask)
-
-    def set_from_ijk(
-        self,
-        ijk: JaggedTensorOrTensor,
-        voxel_sizes: Vec3dBatchOrScalar = 1.0,
-        origins: Vec3dBatch = torch.zeros(3),
-    ) -> None:
-        """
-        Populate grid from voxel coordinates.
-
-        Args:
-            ijk (JaggedTensor or torch.Tensor): Voxel coordinates to populate.
-                Shape: (num_grids, num_voxels, 3) with integer coordinates.
-            voxel_sizes (Vec3dBatchOrScalar): Size of each voxel.
-            origins (Vec3dBatch): Origin of each grid.
-
-        Returns:
-            None  (this modifies the grid in place)
-        """
-        if not (is_JaggedTensorOrTensor(ijk) and is_Vec3dBatchOrScalar(voxel_sizes) and is_Vec3dBatch(origins)):
-            raise TypeError(f"Unsupported types for set_from_ijk(): {type(ijk)}, {type(voxel_sizes)}, {type(origins)}")
-
-        if isinstance(ijk, torch.Tensor):
-            ijk = JaggedTensor(ijk)
-
-        self._impl.set_from_ijk(ijk, voxel_sizes, origins)
-
-    def set_from_mesh(
-        self,
-        mesh_vertices: JaggedTensorOrTensor,
-        mesh_faces: JaggedTensorOrTensor,
-        voxel_sizes: Vec3dBatchOrScalar = 1.0,
-        origins: Vec3dBatch = torch.zeros(3),
-    ) -> None:
-        """
-        Populate grid from triangle mesh.
-
-        Args:
-            mesh_vertices (JaggedTensor or torch.Tensor): Vertices of the mesh.
-                Shape: (B,num_vertices, 3).
-            mesh_faces (JaggedTensor or torch.Tensor): Faces of the mesh.
-                Shape: (B,num_faces, 3).
-            voxel_sizes (Vec3dBatchOrScalar): Size of each voxel.
-            origins (Vec3dBatch): Origin of each grid.
-
-        Returns:
-            None  (this modifies the grid in place)
-        """
-        if not (
-            is_JaggedTensorOrTensor(mesh_vertices)
-            and is_JaggedTensorOrTensor(mesh_faces)
-            and is_Vec3dBatchOrScalar(voxel_sizes)
-            and is_Vec3dBatch(origins)
-        ):
-            raise TypeError(
-                "Unsupported types for set_from_mesh(): "
-                f"{type(mesh_vertices)}, {type(mesh_faces)}, {type(voxel_sizes)}, {type(origins)}"
-            )
-
-        if isinstance(mesh_vertices, torch.Tensor):
-            mesh_vertices = JaggedTensor(mesh_vertices)
-
-        if isinstance(mesh_faces, torch.Tensor):
-            mesh_faces = JaggedTensor(mesh_faces)
-
-        self._impl.set_from_mesh(mesh_vertices, mesh_faces, voxel_sizes, origins)
-
-    def set_from_nearest_voxels_to_points(
-        self,
-        points: JaggedTensorOrTensor,
-        voxel_sizes: Vec3dBatchOrScalar = 1.0,
-        origins: Vec3dBatch = torch.zeros(3),
-    ) -> None:
-        """
-        Populate grid from nearest voxels to points.
-
-        Args:
-            points (JaggedTensor or torch.Tensor): Points to populate the grid from.
-                Shape: (B, num_points, 3).
-            voxel_sizes (Vec3dBatchOrScalar): Size of each voxel.
-            origins (Vec3dBatch): Origin of each grid.
-
-        Returns:
-            None  (this modifies the grid in place)
-        """
-        if not (is_JaggedTensorOrTensor(points) and is_Vec3dBatchOrScalar(voxel_sizes) and is_Vec3dBatch(origins)):
-            raise TypeError(
-                "Unsupported types for set_from_nearest_voxels_to_points(): "
-                f"{type(points)}, {type(voxel_sizes)}, {type(origins)}"
-            )
-
-        if isinstance(points, torch.Tensor):
-            points = JaggedTensor(points)
-
-        self._impl.set_from_nearest_voxels_to_points(points, voxel_sizes, origins)
-
-    def set_from_points(
-        self,
-        points: JaggedTensorOrTensor,
-        voxel_sizes: Vec3dBatchOrScalar = 1.0,
-        origins: Vec3dBatch = torch.zeros(3),
-    ) -> None:
-        """
-        Populate grid from point cloud.
-
-        Args:
-            points (JaggedTensor or torch.Tensor): Points to populate the grid from.
-                Shape: (B, num_points, 3).
-            voxel_sizes (Vec3dBatchOrScalar): Size of each voxel.
-            origins (Vec3dBatch): Origin of each grid.
-
-        Returns:
-            None  (this modifies the grid in place)
-        """
-        if not (is_JaggedTensorOrTensor(points) and is_Vec3dBatchOrScalar(voxel_sizes) and is_Vec3dBatch(origins)):
-            raise TypeError(
-                f"Unsupported types for set_from_points(): {type(points)}, {type(voxel_sizes)}, {type(origins)}"
-            )
-
-        if isinstance(points, torch.Tensor):
-            points = JaggedTensor(points)
-
-        self._impl.set_from_points(points, voxel_sizes, origins)
-
-    def set_global_origin(self, origin: Vec3d) -> None:
-        """
-        Set the voxel origin of all grids.
-
-        Args:
-            origin (Vec3d): Origin of the grid.
-
-        Returns:
-            None  (this modifies the grid in place)
-        """
-        self._impl.set_global_origin(origin)
-
-    def set_global_voxel_size(self, voxel_size: Vec3dOrScalar) -> None:
-        """
-        Set the voxel size of all grids.
-
-        Args:
-            voxel_size (Vec3dOrScalar): Size of each voxel.
-
-        Returns:
-            None  (this modifies the grid in place)
-        """
-        self._impl.set_global_voxel_size(voxel_size)
-
-    def sparse_conv_halo(self, input: JaggedTensorOrTensor, weight: torch.Tensor, variant: int = 8) -> JaggedTensor:
+    def sparse_conv_halo(self, input: JaggedTensor, weight: torch.Tensor, variant: int = 8) -> JaggedTensor:
         """
         Perform sparse convolution with halo exchange optimization.
 
@@ -1528,34 +1301,28 @@ class GridBatch:
         conditions in distributed or multi-block sparse grids.
 
         Args:
-            input (JaggedTensor or torch.Tensor): Input features for each voxel.
-                Shape: (B,total_voxels, in_channels).
+            input (JaggedTensor): Input features for each voxel.
+                Shape: (batch_size, total_voxels, in_channels).
             weight (torch.Tensor): Convolution weights.
-            variant (int): Variant of the halo implementation to use. Default is 8.
+            variant (int): Variant of the halo implementation to use.
+                Default is 8.
 
         Returns:
             JaggedTensor: Output features after convolution.
         """
-        if not (is_JaggedTensorOrTensor(input) and is_JaggedTensorOrTensor(weight)):
-            raise TypeError(
-                f"input must be a JaggedTensorOrTensor, but got {type(input)}, "
-                f"weight must be a Tensor, but got {type(weight)}"
-            )
-
-        if isinstance(input, torch.Tensor):
-            input = JaggedTensor(input)
-
         return self._impl.sparse_conv_halo(input, weight, variant)
 
     def sparse_conv_kernel_map(
-        self, kernel_size: Vec3iOrScalar, stride: Vec3iOrScalar, target_grid: "GridBatch | None" = None
+        self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1, target_grid: "GridBatch | None" = None
     ) -> tuple["SparseConvPackInfo", "GridBatch"]:
         """
         Map sparse convolution kernel to target grid.
 
         Args:
-            kernel_size (Vec3iOrScalar): Size of the convolution kernel.
-            stride (Vec3iOrScalar): Stride of the convolution.
+            kernel_size (NumericMaxRank1): Size of the convolution kernel.
+                broadcastable to shape (3,), integer dtype
+            stride (NumericMaxRank1): Stride of the convolution.
+                broadcastable to shape (3,), integer dtype
             target_grid (GridBatch | None): Target grid to map the kernel to.
                 If None, the kernel is mapped to the current grid.
 
@@ -1567,20 +1334,18 @@ class GridBatch:
         # Import here to avoid circular dependency
         from .sparse_conv_pack_info import SparseConvPackInfo
 
-        if not is_Vec3iOrScalar(kernel_size) or not is_Vec3iOrScalar(stride):
-            raise TypeError(
-                f"kernel_size and stride must be of type Vec3iOrScalar, but got {type(kernel_size)} and {type(stride)}"
-            )
-        if target_grid is not None:
-            if not isinstance(target_grid, GridBatch):
-                raise TypeError(f"target_grid must be a GridBatch, but got {type(target_grid)}")
+        kernel_size = to_PositiveVec3i(kernel_size, device=self.device)
+        stride = to_NonNegativeVec3i(stride, device=self.device)
 
         target_impl = target_grid._impl if target_grid is not None else None
 
         sparse_impl, grid_impl = self._impl.sparse_conv_kernel_map(kernel_size, stride, target_impl)
-        return (SparseConvPackInfo(impl=sparse_impl), GridBatch(impl=grid_impl))
+        return (
+            SparseConvPackInfo(impl=sparse_impl),
+            GridBatch(impl=grid_impl),
+        )
 
-    def splat_bezier(self, points: JaggedTensorOrTensor, points_data: JaggedTensorOrTensor) -> JaggedTensor:
+    def splat_bezier(self, points: JaggedTensor, points_data: JaggedTensor) -> JaggedTensor:
         """
         Splat point features onto voxels using Bézier interpolation.
 
@@ -1589,30 +1354,18 @@ class GridBatch:
         trilinear splatting but is more computationally expensive.
 
         Args:
-            points (JaggedTensor or torch.Tensor): World-space positions of points.
-                Shape: (B, num_points, 3).
-            points_data (JaggedTensor or torch.Tensor): Features to splat from each point.
-                Shape: (B, num_points, channels).
+            points (JaggedTensor): World-space positions of points.
+                Shape: (batch_size, num_points, 3).
+            points_data (JaggedTensor): Features to splat from each point.
+                Shape: (batch_size, num_points, channels).
 
         Returns:
             JaggedTensor: Accumulated features at each voxel after splatting.
-                Shape: (B, total_voxels, channels).
+                Shape: (batch_size, total_voxels, channels).
         """
-        if not (is_JaggedTensorOrTensor(points) and is_JaggedTensorOrTensor(points_data)):
-            raise TypeError(
-                f"points must be a JaggedTensorOrTensor, but got {type(points)}, "
-                f"points_data must be a JaggedTensorOrTensor, but got {type(points_data)}"
-            )
-
-        if isinstance(points, torch.Tensor):
-            points = JaggedTensor(points)
-
-        if isinstance(points_data, torch.Tensor):
-            points_data = JaggedTensor(points_data)
-
         return self._impl.splat_bezier(points, points_data)
 
-    def splat_trilinear(self, points: JaggedTensorOrTensor, points_data: JaggedTensorOrTensor) -> JaggedTensor:
+    def splat_trilinear(self, points: JaggedTensor, points_data: JaggedTensor) -> JaggedTensor:
         """
         Splat point features onto voxels using trilinear interpolation.
 
@@ -1621,34 +1374,22 @@ class GridBatch:
         point-based data to voxel grids.
 
         Args:
-            points (JaggedTensor or torch.Tensor): World-space positions of points.
-                Shape: (B, num_points, 3).
-            points_data (JaggedTensor or torch.Tensor): Features to splat from each point.
-                Shape: (B, num_points, channels).
+            points (JaggedTensor): World-space positions of points.
+                Shape: (batch_size, num_points, 3).
+            points_data (JaggedTensor): Features to splat from each point.
+                Shape: (batch_size, num_points, channels).
 
         Returns:
             JaggedTensor: Accumulated features at each voxel after splatting.
-                Shape: (B, total_voxels, channels).
+                Shape: (batch_size, total_voxels, channels).
         """
-        if not (is_JaggedTensorOrTensor(points) and is_JaggedTensorOrTensor(points_data)):
-            raise TypeError(
-                f"points must be a JaggedTensorOrTensor, but got {type(points)}, "
-                f"points_data must be a JaggedTensorOrTensor, but got {type(points_data)}"
-            )
-
-        if isinstance(points, torch.Tensor):
-            points = JaggedTensor(points)
-
-        if isinstance(points_data, torch.Tensor):
-            points_data = JaggedTensor(points_data)
-
         return self._impl.splat_trilinear(points, points_data)
 
     def subdivide(
         self,
-        subdiv_factor: Vec3iOrScalar,
-        data: JaggedTensorOrTensor,
-        mask: JaggedTensorOrTensor | None = None,
+        subdiv_factor: NumericMaxRank1,
+        data: JaggedTensor,
+        mask: JaggedTensor | None = None,
         fine_grid: "GridBatch | None" = None,
     ) -> tuple[JaggedTensor, "GridBatch"]:
         """
@@ -1658,13 +1399,13 @@ class GridBatch:
         filling in new voxels using nearest neighbor interpolation of the existing data.
 
         Args:
-            subdiv_factor (int or 3-tuple of ints): Factor by which to subdivide the grid.
-                If an int, the same factor is used for all dimensions.
-            data (JaggedTensor or torch.Tensor): Voxel data to subdivide.
-                Shape: (B, total_voxels, channels).
-            mask (JaggedTensor or torch.Tensor, optional): Boolean mask indicating which
-                voxels to subdivide. If None, all voxels are subdivided.
-            fine_grid (GridBatch, optional): Pre-allocated fine grid to use for output.
+            subdiv_factor (NumericMaxRank1): Factor by which to subdivide the grid.
+                broadcastable to shape (3,), integer dtype
+            data (JaggedTensor): Voxel data to subdivide.
+                Shape: (batch_size, total_voxels, channels).
+            mask (JaggedTensor | None): Boolean mask indicating which voxels to subdivide.
+                If None, all voxels are subdivided.
+            fine_grid (GridBatch | None): Pre-allocated fine grid to use for output.
                 If None, a new grid is created.
 
         Returns:
@@ -1672,33 +1413,16 @@ class GridBatch:
                 - The subdivided data as a JaggedTensor
                 - The fine GridBatch containing the subdivided structure
         """
-
-        if not (
-            is_Vec3iOrScalar(subdiv_factor)
-            and is_JaggedTensorOrTensor(data)
-            and (mask is None or is_JaggedTensorOrTensor(mask))
-            and (fine_grid is None or isinstance(fine_grid, GridBatch))
-        ):
-            raise TypeError(
-                f"subdiv_factor must be a Vec3iOrScalar, but got {type(subdiv_factor)}, "
-                f"data must be a JaggedTensorOrTensor, but got {type(data)}, "
-                f"mask must be a JaggedTensorOrTensor|None, but got {type(mask)}, "
-                f"fine_grid must be a GridBatch|None, but got {type(fine_grid)}"
-            )
-
-        if isinstance(data, torch.Tensor):
-            data = JaggedTensor(data)
-
-        if mask is not None:
-            if isinstance(mask, torch.Tensor):
-                mask = JaggedTensor(mask)
-
+        subdiv_factor = to_PositiveVec3i(subdiv_factor, device=self.device)
         fine_grid_impl = fine_grid._impl if fine_grid else None
-
         result_data, result_grid_impl = self._impl.subdivide(subdiv_factor, data, mask, fine_grid_impl)
         return result_data, GridBatch(impl=result_grid_impl)
 
-    def subdivided_grid(self, subdiv_factor: "Vec3iOrScalar", mask: JaggedTensorOrTensor | None = None) -> "GridBatch":
+    def subdivided_grid(
+        self,
+        subdiv_factor: NumericMaxRank1,
+        mask: JaggedTensor | None = None,
+    ) -> "GridBatch":
         """
         Return a subdivided version of the grid structure.
 
@@ -1706,25 +1430,15 @@ class GridBatch:
         Only the grid structure is returned, not the data.
 
         Args:
-            subdiv_factor (int or 3-tuple of ints): Factor by which to subdivide the grid.
-                If an int, the same factor is used for all dimensions.
-            mask (JaggedTensor or torch.Tensor, optional): Boolean mask indicating which
-                voxels to subdivide. If None, all voxels are subdivided.
+            subdiv_factor (NumericMaxRank1): Factor by which to subdivide the grid.
+                broadcastable to shape (3,), integer dtype
+            mask (JaggedTensor | None): Boolean mask indicating which voxels to subdivide.
+                If None, all voxels are subdivided.
 
         Returns:
             GridBatch: A new GridBatch with subdivided structure.
         """
-
-        if not (is_Vec3iOrScalar(subdiv_factor) and (mask is None or is_JaggedTensorOrTensor(mask))):
-            raise TypeError(
-                f"subdiv_factor must be a Vec3iOrScalar, but got {type(subdiv_factor)}, "
-                f"mask must be a JaggedTensorOrTensor, but got {type(mask)}"
-            )
-
-        if mask is not None:
-            if isinstance(mask, torch.Tensor):
-                mask = JaggedTensor(mask)
-
+        subdiv_factor = to_PositiveVec3i(subdiv_factor, device=self.device)
         return GridBatch(impl=self._impl.subdivided_grid(subdiv_factor, mask=mask))
 
     def to(self, target: "str | torch.device | torch.Tensor | JaggedTensor | GridBatch") -> "GridBatch":
@@ -1758,10 +1472,10 @@ class GridBatch:
 
     def uniform_ray_samples(
         self,
-        ray_origins: JaggedTensorOrTensor,
-        ray_directions: JaggedTensorOrTensor,
-        t_min: JaggedTensorOrTensor,
-        t_max: JaggedTensorOrTensor,
+        ray_origins: JaggedTensor,
+        ray_directions: JaggedTensor,
+        t_min: JaggedTensor,
+        t_max: JaggedTensor,
         step_size: float,
         cone_angle: float = 0.0,
         include_end_segments: bool = True,
@@ -1775,14 +1489,14 @@ class GridBatch:
         that intersect with active voxels. Useful for volume rendering and ray marching.
 
         Args:
-            ray_origins (JaggedTensor or torch.Tensor): Starting points of rays in world space.
-                Shape: (B, num_rays, 3).
-            ray_directions (JaggedTensor or torch.Tensor): Direction vectors of rays (should be normalized).
-                Shape: (B, num_rays, 3).
-            t_min (JaggedTensor or torch.Tensor): Minimum distance along rays to start sampling.
-                Shape: (B, num_rays).
-            t_max (JaggedTensor or torch.Tensor): Maximum distance along rays to stop sampling.
-                Shape: (B, num_rays).
+            ray_origins (JaggedTensor): Starting points of rays in world space.
+                Shape: (batch_size, num_rays, 3).
+            ray_directions (JaggedTensor): Direction vectors of rays (should be normalized).
+                Shape: (batch_size, num_rays, 3).
+            t_min (JaggedTensor): Minimum distance along rays to start sampling.
+                Shape: (batch_size, num_rays).
+            t_max (JaggedTensor): Maximum distance along rays to stop sampling.
+                Shape: (batch_size, num_rays).
             step_size (float): Distance between samples along each ray.
             cone_angle (float): Cone angle for cone tracing (in radians). Default is 0.0.
             include_end_segments (bool): Whether to include partial segments at ray ends.
@@ -1797,31 +1511,6 @@ class GridBatch:
               (2,) or (1,) representing the start and end distance of each sample or the midpoint
               of each sample if return_midpoints is true.
         """
-        if not (
-            is_JaggedTensorOrTensor(ray_origins)
-            and is_JaggedTensorOrTensor(ray_directions)
-            and is_JaggedTensorOrTensor(t_min)
-            and is_JaggedTensorOrTensor(t_max)
-        ):
-            raise TypeError(
-                f"ray_origins must be a JaggedTensorOrTensor, but got {type(ray_origins)}, "
-                f"ray_directions must be a JaggedTensorOrTensor, but got {type(ray_directions)}, "
-                f"t_min must be a JaggedTensorOrTensor, but got {type(t_min)}, "
-                f"t_max must be a JaggedTensorOrTensor, but got {type(t_max)}"
-            )
-
-        if isinstance(ray_origins, torch.Tensor):
-            ray_origins = JaggedTensor(ray_origins)
-
-        if isinstance(ray_directions, torch.Tensor):
-            ray_directions = JaggedTensor(ray_directions)
-
-        if isinstance(t_min, torch.Tensor):
-            t_min = JaggedTensor(t_min)
-
-        if isinstance(t_max, torch.Tensor):
-            t_max = JaggedTensor(t_max)
-
         return self._impl.uniform_ray_samples(
             ray_origins,
             ray_directions,
@@ -1849,8 +1538,8 @@ class GridBatch:
 
     def voxels_along_rays(
         self,
-        ray_origins: JaggedTensorOrTensor,
-        ray_directions: JaggedTensorOrTensor,
+        ray_origins: JaggedTensor,
+        ray_directions: JaggedTensor,
         max_voxels: int,
         eps: float = 0.0,
         return_ijk: bool = True,
@@ -1863,9 +1552,9 @@ class GridBatch:
         DDA (Digital Differential Analyzer) algorithm.
 
         Args:
-            ray_origins (JaggedTensorOrTensor): Starting points of rays in world space.
+            ray_origins (JaggedTensor): Starting points of rays in world space.
                 Shape: (batch_size, num_rays, 3).
-            ray_directions (JaggedTensorOrTensor): Direction vectors of rays (should be normalized).
+            ray_directions (JaggedTensor): Direction vectors of rays (should be normalized).
                 Shape: (batch_size, num_rays, 3).
             max_voxels (int): Maximum number of voxels to return per ray.
             eps (float): Epsilon value for numerical stability. Default is 0.0.
@@ -1881,21 +1570,9 @@ class GridBatch:
                 - times: A JaggedTensor with lshape [[T_{0,0}, ..., T_{0,N_0}], ..., [T_{B,0}, ..., T_{B,N_B}]]
                           and eshape (2,) containinng the entry and exit distance along the ray of each voxel
         """
-        if not (is_JaggedTensorOrTensor(ray_origins) and is_JaggedTensorOrTensor(ray_directions)):
-            raise TypeError(
-                f"ray_origins must be a JaggedTensorOrTensor, but got {type(ray_origins)}, "
-                f"ray_directions must be a JaggedTensorOrTensor, but got {type(ray_directions)}"
-            )
-
-        if isinstance(ray_origins, torch.Tensor):
-            ray_origins = JaggedTensor(ray_origins)
-
-        if isinstance(ray_directions, torch.Tensor):
-            ray_directions = JaggedTensor(ray_directions)
-
         return self._impl.voxels_along_rays(ray_origins, ray_directions, max_voxels, eps, return_ijk, cumulative)
 
-    def world_to_grid(self, points: JaggedTensorOrTensor) -> JaggedTensor:
+    def world_to_grid(self, points: JaggedTensor) -> JaggedTensor:
         """
         Convert world coordinates to grid (index) coordinates.
 
@@ -1904,23 +1581,20 @@ class GridBatch:
         fractional for use in interpolation.
 
         Args:
-            points (JaggedTensor or torch.Tensor): World-space positions to convert.
-                Shape: (B, num_points, 3).
+            points (JaggedTensor): World-space positions to convert.
+                Shape: (batch_size, num_points, 3).
 
         Returns:
-            JaggedTensor: Grid coordinates. Shape: (B, num_points, 3).
+            JaggedTensor: Grid coordinates. Shape: (batch_size, num_points, 3).
                 Can contain fractional values.
         """
-        if not is_JaggedTensorOrTensor(points):
-            raise TypeError(f"points must be a JaggedTensorOrTensor, but got {type(points)}")
-
-        if isinstance(points, torch.Tensor):
-            points = JaggedTensor(points)
-
         return self._impl.world_to_grid(points)
 
     def write_to_dense(
-        self, sparse_data: JaggedTensorOrTensor, min_coord: Vec3iBatch | None = None, grid_size: Vec3i | None = None
+        self,
+        sparse_data: JaggedTensor,
+        min_coord: NumericMaxRank2 | None = None,
+        grid_size: NumericMaxRank1 | None = None,
     ) -> torch.Tensor:
         """
         Write sparse voxel data to a dense tensor.
@@ -1929,32 +1603,27 @@ class GridBatch:
         Voxels not present in the sparse grid are filled with zeros.
 
         Args:
-            sparse_data (JaggedTensor or torch.Tensor): Sparse voxel features to write.
-                Shape: (B, total_voxels, channels).
-            min_coord (list of 3-tuples, optional): Minimum coordinates for each grid
-                in the batch. If None, computed from the grid bounds.
-            grid_size (3-tuple of ints, optional): Size of the output dense tensor.
+            sparse_data (JaggedTensor): Sparse voxel features to write.
+                Shape: (batch_size, total_voxels, channels).
+            min_coord (NumericMaxRank2 | None): Minimum coordinates for each grid in the batch.
+                (broadcastable to shape (batch_size, 3), integer dtype)
+                If None, computed from the grid bounds.
+            grid_size (NumericMaxRank1 | None): Size of the output dense tensor.
+                (broadcastable to shape (3,), integer dtype)
                 If None, computed to fit all active voxels.
 
         Returns:
             torch.Tensor: Dense tensor containing the sparse data.
                 Shape: (batch_size, channels, depth, height, width).
         """
-        if not (
-            is_JaggedTensorOrTensor(sparse_data)
-            and (min_coord is None or is_Vec3iBatch(min_coord))
-            and (grid_size is None or is_Vec3i(grid_size))
-        ):
-            raise TypeError(
-                f"sparse_data must be a JaggedTensorOrTensor, but got {type(sparse_data)}, "
-                f"min_coord must be a Vec3iBatch|None, but got {type(min_coord)}, "
-                f"grid_size must be a Vec3i|None, but got {type(grid_size)}"
-            )
-
-        if isinstance(sparse_data, torch.Tensor):
-            sparse_data = JaggedTensor(sparse_data)
+        min_coord = to_Vec3iBatch(min_coord, device=self.device) if min_coord is not None else None
+        grid_size = to_Vec3i(grid_size, device=self.device) if grid_size is not None else None
 
         return self._impl.write_to_dense(sparse_data, min_coord, grid_size)
+
+    # ============================================================
+    #                Indexing and Special Functions
+    # ============================================================
 
     # Index methods
     def index_int(self, bi: int | np.integer) -> "GridBatch":
@@ -1969,18 +1638,6 @@ class GridBatch:
         """
         return GridBatch(impl=self._impl.index_int(int(bi)))
 
-    def index_slice(self, s: slice) -> "GridBatch":
-        """
-        Get a subset of grids from the batch using slicing.
-
-        Args:
-            s (slice): Slicing object.
-
-        Returns:
-            GridBatch: A new GridBatch containing the selected grids.
-        """
-        return GridBatch(impl=self._impl.index_slice(s))
-
     def index_list(self, indices: list[bool] | list[int]) -> "GridBatch":
         """
         Get a subset of grids from the batch using list indexing.
@@ -1992,6 +1649,18 @@ class GridBatch:
             GridBatch: A new GridBatch containing the selected grids.
         """
         return GridBatch(impl=self._impl.index_list(indices))
+
+    def index_slice(self, s: slice) -> "GridBatch":
+        """
+        Get a subset of grids from the batch using slicing.
+
+        Args:
+            s (slice): Slicing object.
+
+        Returns:
+            GridBatch: A new GridBatch containing the selected grids.
+        """
+        return GridBatch(impl=self._impl.index_slice(s))
 
     def index_tensor(self, indices: torch.Tensor) -> "GridBatch":
         """
@@ -2022,9 +1691,6 @@ class GridBatch:
         Returns:
             GridBatch: A new GridBatch containing the selected grids.
         """
-        if not is_GridBatchIndex(index):
-            raise TypeError(f"index must be a GridBatchIndex, but got {type(index)}")
-
         if isinstance(index, (int, np.integer)):
             return self.index_int(int(index))
         elif isinstance(index, slice):
@@ -2034,7 +1700,7 @@ class GridBatch:
         elif isinstance(index, torch.Tensor):
             return self.index_tensor(index)
         else:
-            raise TypeError(f"Unsupported index type: {type(index)}")
+            raise TypeError(f"index must be a GridBatchIndex, but got {type(index)}")
 
     def __iter__(self) -> Iterator["GridBatch"]:
         """
@@ -2055,22 +1721,9 @@ class GridBatch:
         """
         return self._impl.grid_count
 
-    def has_same_address_and_grid_count(self, other: "GridBatch|GridBatchCpp") -> bool:
-        """
-        Check if two GridBatch objects have the same address and grid count.
-
-        Args:
-            other (GridBatch|GridBatchCpp): Other GridBatch object to compare.
-
-        Returns:
-            bool: True if the two GridBatch objects have the same address and grid count, False otherwise.
-        """
-        if isinstance(other, GridBatch):
-            return self._impl.address == other._impl.address and self._impl.grid_count == other._impl.grid_count
-        elif isinstance(other, GridBatchCpp):
-            return self._impl.address == other.address and self._impl.grid_count == other.grid_count
-        else:
-            raise TypeError(f"Unsupported type for has_same_address_and_grid_count(): {type(other)}")
+    # ============================================================
+    #                        Properties
+    # ============================================================
 
     # Properties
     @property
@@ -2078,20 +1731,68 @@ class GridBatch:
         return self._impl.address
 
     @property
-    def bbox(self) -> torch.Tensor:
-        return self._impl.bbox
+    def all_have_zero_voxels(self) -> bool:
+        return self.has_zero_grids or self.total_voxels == 0
+
+    @property
+    def any_have_zero_voxels(self) -> bool:
+        if self.has_zero_grids:
+            return True
+        else:
+            return bool(torch.any(self.num_voxels == 0).item())
+
+    @property
+    def bboxes(self) -> torch.Tensor:
+        if self.has_zero_grids:
+            return torch.empty((0, 2, 3), dtype=torch.int32, device=self.device)
+        else:
+            if self.all_have_zero_voxels:
+                return torch.zeros((self.grid_count, 2, 3), dtype=torch.int32, device=self.device)
+            elif self.any_have_zero_voxels:
+                bboxes = self._impl.bbox
+
+                fixed_bboxes = []
+                for i in range(self.grid_count):
+                    if self.num_voxels[i] == 0:
+                        fixed_bboxes.append(torch.zeros((2, 3), dtype=torch.int32, device=self.device))
+                    else:
+                        fixed_bboxes.append(bboxes[i])
+
+                return torch.stack(fixed_bboxes, dim=0)
+            else:
+                return self._impl.bbox
 
     @property
     def cum_voxels(self) -> torch.Tensor:
-        return self._impl.cum_voxels
+        if self.has_zero_grids:
+            return torch.empty((0,), dtype=torch.int64, device=self.device)
+        else:
+            return self._impl.cum_voxels
 
     @property
     def device(self) -> torch.device:
         return self._impl.device
 
     @property
-    def dual_bbox(self) -> torch.Tensor:
-        return self._impl.dual_bbox
+    def dual_bboxes(self) -> torch.Tensor:
+        if self.has_zero_grids:
+            return torch.empty((0, 2, 3), dtype=torch.int32, device=self.device)
+        else:
+            if self.all_have_zero_voxels:
+                return torch.zeros((self.grid_count, 2, 3), dtype=torch.int32, device=self.device)
+            elif self.any_have_zero_voxels:
+                bboxes = self._impl.dual_bbox
+
+                fixed_bboxes = []
+                for i in range(self.grid_count):
+                    if self.num_voxels[i] == 0:
+                        fixed_bboxes.append(torch.zeros((2, 3), dtype=torch.int32, device=self.device))
+                    else:
+                        fixed_bboxes.append(bboxes[i])
+
+                return torch.stack(fixed_bboxes, dim=0)
+            else:
+                return self._impl.dual_bbox
 
     @property
     def grid_count(self) -> int:
@@ -2099,7 +1800,14 @@ class GridBatch:
 
     @property
     def grid_to_world_matrices(self) -> torch.Tensor:
-        return self._impl.grid_to_world_matrices
+        if self.has_zero_grids:
+            return torch.empty((0, 4, 4), dtype=torch.float32, device=self.device)
+        else:
+            return self._impl.grid_to_world_matrices
+
+    @property
+    def has_zero_grids(self) -> bool:
+        return self.grid_count == 0
 
     @property
     def ijk(self) -> JaggedTensor:
@@ -2107,43 +1815,73 @@ class GridBatch:
 
     @property
     def jidx(self) -> torch.Tensor:
-        return self._impl.jidx
+        if self.has_zero_grids:
+            return torch.empty((0,), dtype=torch.int32, device=self.device)
+        else:
+            return self._impl.jidx
 
     @property
     def joffsets(self) -> torch.Tensor:
-        return self._impl.joffsets
+        if self.has_zero_grids:
+            return torch.empty((0,), dtype=torch.int64, device=self.device)
+        else:
+            return self._impl.joffsets
 
     @property
     def num_bytes(self) -> torch.Tensor:
-        return self._impl.num_bytes
+        if self.has_zero_grids:
+            return torch.empty((0,), dtype=torch.int64, device=self.device)
+        else:
+            return self._impl.num_bytes
 
     @property
     def num_leaf_nodes(self) -> torch.Tensor:
-        return self._impl.num_leaf_nodes
+        if self.has_zero_grids:
+            return torch.empty((0,), dtype=torch.int64, device=self.device)
+        else:
+            return self._impl.num_leaf_nodes
 
     @property
     def num_voxels(self) -> torch.Tensor:
-        return self._impl.num_voxels
+        if self.has_zero_grids:
+            return torch.empty((0,), dtype=torch.int64, device=self.device)
+        else:
+            return self._impl.num_voxels
 
     @property
     def origins(self) -> torch.Tensor:
-        return self._impl.origins
+        if self.has_zero_grids:
+            return torch.empty((0, 3), dtype=torch.float32, device=self.device)
+        else:
+            return self._impl.origins
 
     @property
     def total_bbox(self) -> torch.Tensor:
-        return self._impl.total_bbox
+        if self.has_zero_grids or self.all_have_zero_voxels:
+            return torch.zeros((2, 3), dtype=torch.int32, device=self.device)
+        else:
+            return self._impl.total_bbox
 
     @property
     def total_bytes(self) -> int:
-        return self._impl.total_bytes
+        if self.has_zero_grids:
+            return 0
+        else:
+            return self._impl.total_bytes
 
     @property
     def total_leaf_nodes(self) -> int:
-        return self._impl.total_leaf_nodes
+        if self.has_zero_grids:
+            return 0
+        else:
+            return self._impl.total_leaf_nodes
 
     @property
     def total_voxels(self) -> int:
-        return self._impl.total_voxels
+        if self.has_zero_grids:
+            return 0
+        else:
+            return self._impl.total_voxels
 
     @property
     def viz_edge_network(self) -> tuple[JaggedTensor, JaggedTensor]:
@@ -2151,11 +1889,17 @@ class GridBatch:
 
     @property
     def voxel_sizes(self) -> torch.Tensor:
-        return self._impl.voxel_sizes
+        if self.has_zero_grids:
+            return torch.empty((0, 3), dtype=torch.float32, device=self.device)
+        else:
+            return self._impl.voxel_sizes
 
     @property
     def world_to_grid_matrices(self) -> torch.Tensor:
-        return self._impl.world_to_grid_matrices
+        if self.has_zero_grids:
+            return torch.empty((0, 4, 4), dtype=torch.float32, device=self.device)
+        else:
+            return self._impl.world_to_grid_matrices
 
     # Expose underlying implementation for compatibility
     @property
@@ -2164,203 +1908,12 @@ class GridBatch:
         return self._impl
 
 
-# Module-level functions that create GridBatch objects
-def gridbatch_from_dense(
-    num_grids: int,
-    dense_dims: Vec3i,
-    ijk_min: Vec3i = torch.zeros(3, dtype=torch.int32),
-    voxel_sizes: Vec3dBatchOrScalar = 1.0,
-    origins: Vec3dBatch = torch.zeros(3),
-    mask: torch.Tensor | None = None,
-    device: torch.device | str = torch.device("cpu"),
-) -> GridBatch:
-    """
-    Create a GridBatch from dense grid dimensions.
-
-    Creates a sparse grid batch by allocating all voxels within the specified
-    dense dimensions. Optionally, a mask can be provided to specify which voxels
-    should be active.
-
-    Args:
-        num_grids (int): Number of grids in the batch.
-        dense_dims (3-tuple of ints): Dimensions of the dense grid (width, height, depth).
-        ijk_min (3-tuple of ints): Minimum corner of the dense region in index space.
-            Default is (0, 0, 0).
-        voxel_sizes (float or 3-tuple or tensor): Size of each voxel. If scalar, same size
-            for all dimensions. Can be per-grid or global. Default is 1.0.
-        origins (3-tuple or tensor): World-space origin for each grid. Default is (0, 0, 0).
-        mask (torch.Tensor, optional): Boolean mask indicating which voxels are active.
-            Shape: (num_grids, dense_dims[0], dense_dims[1], dense_dims[2]).
-        device (torch.device or str): Device to create the grid on. Default is CPU.
-
-    Returns:
-        GridBatch: A new GridBatch with the specified dense structure.
-    """
-    from ._Cpp import gridbatch_from_dense as _gridbatch_from_dense
-
-    if isinstance(device, str):
-        device = _parse_device_string(device)
-
-    if not (
-        is_Vec3i(dense_dims) and is_Vec3i(ijk_min) and is_Vec3dBatchOrScalar(voxel_sizes) and is_Vec3dBatch(origins)
-    ):
-        raise TypeError(
-            "Unsupported types for gridbatch_from_dense(): "
-            f"{type(dense_dims)}, {type(ijk_min)}, {type(voxel_sizes)}, {type(origins)}"
-        )
-
-    if mask is not None and not isinstance(mask, torch.Tensor):
-        raise TypeError(f"Unsupported type for mask: {type(mask)}")
-
-    impl = _gridbatch_from_dense(num_grids, dense_dims, ijk_min, voxel_sizes, origins, mask, device)
-    return GridBatch(impl=impl)
-
-
-def gridbatch_from_ijk(
-    ijk: JaggedTensorOrTensor, voxel_sizes: Vec3dBatchOrScalar = 1.0, origins: Vec3dBatch = torch.zeros(3)
-) -> GridBatch:
-    """
-    Create a GridBatch from explicit voxel coordinates.
-
-    Creates a sparse grid batch by specifying the exact integer coordinates of
-    active voxels.
-
-    Args:
-        ijk (JaggedTensor or torch.Tensor): Integer voxel coordinates for each grid.
-            Shape: (B, total_voxels, 3) with each row being (i, j, k) indices.
-        voxel_sizes (float or 3-tuple or tensor): Size of each voxel. If scalar, same size
-            for all dimensions. Can be per-grid or global. Default is 1.0.
-        origins (3-tuple or tensor): World-space origin for each grid. Default is (0, 0, 0).
-
-    Returns:
-        GridBatch: A new GridBatch with active voxels at the specified coordinates.
-    """
-    from ._Cpp import gridbatch_from_ijk as _gridbatch_from_ijk
-
-    if not (is_JaggedTensorOrTensor(ijk) and is_Vec3dBatchOrScalar(voxel_sizes) and is_Vec3dBatch(origins)):
-        raise TypeError(
-            f"Unsupported types for gridbatch_from_ijk(): {type(ijk)}, {type(voxel_sizes)}, {type(origins)}"
-        )
-
-    impl = _gridbatch_from_ijk(ijk, voxel_sizes, origins)
-    return GridBatch(impl=impl)
-
-
-def gridbatch_from_mesh(
-    vertices: JaggedTensorOrTensor,
-    faces: JaggedTensorOrTensor,
-    voxel_sizes: Vec3dBatchOrScalar = 1.0,
-    origins: Vec3dBatch = torch.zeros(3),
-) -> GridBatch:
-    """
-    Create a GridBatch from triangle meshes.
-
-    Voxelizes triangle meshes by creating active voxels for all voxels that
-    intersect with the mesh surface.
-
-    Args:
-        vertices (JaggedTensor or torch.Tensor): Vertex positions for each mesh.
-            Shape: (B, total_vertices, 3).
-        faces (JaggedTensor or torch.Tensor): Triangle face indices for each mesh.
-            Shape: (B, total_faces, 3) with each row containing vertex indices.
-        voxel_sizes (float or 3-tuple or tensor): Size of each voxel. If scalar, same size
-            for all dimensions. Can be per-grid or global. Default is 1.0.
-        origins (3-tuple or tensor): World-space origin for each grid. Default is (0, 0, 0).
-
-    Returns:
-        GridBatch: A new GridBatch with voxels intersecting the mesh surfaces.
-    """
-    from ._Cpp import gridbatch_from_mesh as _gridbatch_from_mesh
-
-    if not (
-        is_JaggedTensorOrTensor(vertices)
-        and is_JaggedTensorOrTensor(faces)
-        and is_Vec3dBatchOrScalar(voxel_sizes)
-        and is_Vec3dBatch(origins)
-    ):
-        raise TypeError(
-            "Unsupported types for gridbatch_from_mesh(): "
-            f"{type(vertices)}, {type(faces)}, {type(voxel_sizes)}, {type(origins)}"
-        )
-
-    impl = _gridbatch_from_mesh(vertices, faces, voxel_sizes, origins)
-    return GridBatch(impl=impl)
-
-
-def gridbatch_from_nearest_voxels_to_points(
-    points: JaggedTensorOrTensor,
-    voxel_sizes: Vec3dBatchOrScalar = 1.0,
-    origins: Vec3dBatch = torch.zeros(3),
-) -> GridBatch:
-    """
-    Create a GridBatch from nearest voxels to points.
-
-    Creates active voxels at the locations of the voxel centers that are nearest
-    to each input point. This is useful for sparse point cloud representations
-    where each point should activate exactly one voxel.
-
-    Args:
-        points (JaggedTensor or torch.Tensor): Point positions in world space.
-            Shape: (B, total_points, 3).
-        voxel_sizes (float or 3-tuple or tensor): Size of each voxel. If scalar, same size
-            for all dimensions. Can be per-grid or global. Default is 1.0.
-        origins (3-tuple or tensor): World-space origin for each grid. Default is (0, 0, 0).
-
-    Returns:
-        GridBatch: A new GridBatch with active voxels at nearest positions to points.
-    """
-    from ._Cpp import (
-        gridbatch_from_nearest_voxels_to_points as _gridbatch_from_nearest_voxels_to_points,
-    )
-
-    if not (is_JaggedTensorOrTensor(points) and is_Vec3dBatchOrScalar(voxel_sizes) and is_Vec3dBatch(origins)):
-        raise TypeError(
-            "Unsupported types for gridbatch_from_nearest_voxels_to_points(): "
-            f"{type(points)}, {type(voxel_sizes)}, {type(origins)}"
-        )
-
-    impl = _gridbatch_from_nearest_voxels_to_points(points, voxel_sizes, origins)
-    return GridBatch(impl=impl)
-
-
-def gridbatch_from_points(
-    points: JaggedTensorOrTensor,
-    voxel_sizes: Vec3dBatchOrScalar = 1.0,
-    origins: Vec3dBatch = torch.zeros(3),
-) -> GridBatch:
-    """
-    Create a GridBatch from point clouds.
-
-    Creates active voxels at all locations containing one or more points.
-    Multiple points falling within the same voxel result in a single active voxel.
-
-    Args:
-        points (JaggedTensor or torch.Tensor): Point positions in world space.
-            Shape: (B, total_points, 3).
-        voxel_sizes (float or 3-tuple or tensor): Size of each voxel. If scalar, same size
-            for all dimensions. Can be per-grid or global. Default is 1.0.
-        origins (3-tuple or tensor): World-space origin for each grid. Default is (0, 0, 0).
-
-    Returns:
-        GridBatch: A new GridBatch with active voxels containing points.
-    """
-    from ._Cpp import gridbatch_from_points as _gridbatch_from_points
-
-    if not (is_JaggedTensorOrTensor(points) and is_Vec3dBatchOrScalar(voxel_sizes) and is_Vec3dBatch(origins)):
-        raise TypeError(
-            f"Unsupported types for gridbatch_from_points(): {type(points)}, {type(voxel_sizes)}, {type(origins)}"
-        )
-
-    impl = _gridbatch_from_points(points, voxel_sizes, origins)
-    return GridBatch(impl=impl)
-
-
 # Load and save functions
 @overload
 def load_gridbatch(
     path: str,
     *,
-    device: torch.device | str = torch.device("cpu"),
+    device: DeviceIdentifier = "cpu",
     verbose: bool = False,
 ) -> tuple[GridBatch, JaggedTensor, list[str]]: ...
 
@@ -2370,7 +1923,7 @@ def load_gridbatch(
     path: str,
     *,
     indices: list[int],
-    device: torch.device | str = torch.device("cpu"),
+    device: DeviceIdentifier = "cpu",
     verbose: bool = False,
 ) -> tuple[GridBatch, JaggedTensor, list[str]]: ...
 
@@ -2380,7 +1933,7 @@ def load_gridbatch(
     path: str,
     *,
     index: int,
-    device: torch.device | str = torch.device("cpu"),
+    device: DeviceIdentifier = "cpu",
     verbose: bool = False,
 ) -> tuple[GridBatch, JaggedTensor, list[str]]: ...
 
@@ -2390,7 +1943,7 @@ def load_gridbatch(
     path: str,
     *,
     names: list[str],
-    device: torch.device | str = torch.device("cpu"),
+    device: DeviceIdentifier = "cpu",
     verbose: bool = False,
 ) -> tuple[GridBatch, JaggedTensor, list[str]]: ...
 
@@ -2400,7 +1953,7 @@ def load_gridbatch(
     path: str,
     *,
     name: str,
-    device: torch.device | str = torch.device("cpu"),
+    device: DeviceIdentifier = "cpu",
     verbose: bool = False,
 ) -> tuple[GridBatch, JaggedTensor, list[str]]: ...
 
@@ -2412,7 +1965,7 @@ def load_gridbatch(
     index: int | None = None,
     names: list[str] | None = None,
     name: str | None = None,
-    device: torch.device | str = torch.device("cpu"),
+    device: DeviceIdentifier = "cpu",
     verbose: bool = False,
 ) -> tuple[GridBatch, JaggedTensor, list[str]]:
     """Load a grid batch from a .nvdb file.
@@ -2433,8 +1986,7 @@ def load_gridbatch(
     """
     from ._Cpp import load as _load
 
-    if isinstance(device, str):
-        device = _parse_device_string(device)
+    device = resolve_device(device)
 
     # Check that only one selector is provided
     selectors = [indices is not None, index is not None, names is not None, name is not None]
@@ -2461,7 +2013,7 @@ def load_gridbatch(
 def save_gridbatch(
     path: str,
     grid_batch: GridBatch,
-    data: JaggedTensorOrTensor | None = None,
+    data: JaggedTensor | None = None,
     names: list[str] | str | None = None,
     name: str | None = None,
     compressed: bool = False,
@@ -2476,11 +2028,11 @@ def save_gridbatch(
     Args:
         path (str): The file path to save to. Should have .nvdb extension.
         grid_batch (GridBatch): The grid batch to save.
-        data (JaggedTensor or torch.Tensor, optional): Voxel data to save with the grids.
-            Shape: (B, total_voxels, channels). If None, only grid structure is saved.
-        names (list[str] or str, optional): Names for each grid in the batch.
+        data (JaggedTensor | None): Voxel data to save with the grids.
+            Shape: (batch_size, total_voxels, channels). If None, only grid structure is saved.
+        names (list[str] | str | None): Names for each grid in the batch.
             If a single string, it's used as the name for all grids.
-        name (str, optional): Alternative way to specify a single name for all grids.
+        name (str | None): Alternative way to specify a single name for all grids.
             Takes precedence over names parameter.
         compressed (bool): Whether to compress the data using Blosc compression.
             Default is False.
@@ -2493,10 +2045,6 @@ def save_gridbatch(
         for individual names per grid.
     """
     from ._Cpp import save as _save
-
-    if data is not None:
-        if isinstance(data, torch.Tensor):
-            data = JaggedTensor(data)
 
     # Handle the overloaded signature - if name is provided, use it
     if name is not None:
@@ -2511,14 +2059,3 @@ def save_gridbatch(
     else:
         # Default case with empty names list
         _save(path, grid_batch._impl, data, [], compressed, verbose)
-
-
-# Keep load/save as wrappers, but indicate that they're deprecated
-def load(*args, **kwargs):
-    print("FVDB WARNING: fvdb.load() is deprecated. Use fvdb.load_gridbatch() instead.")
-    return load_gridbatch(*args, **kwargs)
-
-
-def save(*args, **kwargs):
-    print("FVDB WARNING: fvdb.save() is deprecated. Use fvdb.save_gridbatch() instead.")
-    return save_gridbatch(*args, **kwargs)

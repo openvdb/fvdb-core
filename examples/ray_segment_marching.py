@@ -6,9 +6,9 @@ import timeit
 
 import polyscope as ps
 import torch
+from fvdb.utils.examples import load_dragon_mesh, make_ray_grid
 
 from fvdb import GridBatch, JaggedTensor
-from fvdb.utils.examples import load_dragon_mesh, make_ray_grid
 
 
 def main():
@@ -48,8 +48,7 @@ def main():
     p, n = JaggedTensor([p] * batch_size), JaggedTensor([n] * batch_size)
     ray_o, ray_d = JaggedTensor([ray_o] * batch_size), JaggedTensor([ray_d] * batch_size)
 
-    grid = GridBatch(device=device)
-    grid.set_from_points(p, [-1] * 3, [1] * 3, voxel_sizes=vox_size, origins=vox_origin)
+    grid = GridBatch.from_points(p, voxel_sizes=vox_size, origins=vox_origin)
 
     gc, ge = grid.viz_edge_network
 

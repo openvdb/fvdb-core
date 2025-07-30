@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from fvdb import GridBatch, gridbatch_from_ijk
+from fvdb import GridBatch, JaggedTensor
 
 
 class CoordsDataset(Dataset):
@@ -54,13 +54,13 @@ class CoordsDataset(Dataset):
     def load_grid(self, path) -> GridBatch:
         if path.suffix == ".pkl":
             input_data = torch.load(path)
-            input_points: GridBatch = input_data["grid"]
+            input_points = input_data["grid"]
         elif path.suffix == ".csv":
             input_data = np.loadtxt(path, delimiter=",").astype(int)
-            input_points: GridBatch = gridbatch_from_ijk(torch.from_numpy(input_data))
+            input_points = GridBatch.from_ijk(JaggedTensor(torch.from_numpy(input_data)))
         elif path.suffix == ".npy":
             input_data = np.load(path).astype(int)
-            input_points: GridBatch = gridbatch_from_ijk(torch.from_numpy(input_data))
+            input_points = GridBatch.from_ijk(JaggedTensor(torch.from_numpy(input_data)))
         else:
             raise NotImplementedError
         return input_points
@@ -71,13 +71,13 @@ class CoordsDataset(Dataset):
 
         # Pad data.
         if self.pad_level > 0:
-            input_grid = gridbatch_from_ijk(input_grid.ijk, pad_min=[-self.pad_level] * 3, pad_max=[self.pad_level] * 3)
+            input_grid = input_grid.dilated_grid(self.pad_level)
 
         # Make sure the coordinates are positive.
         if self.positive_only:
             ijk = input_grid.ijk.jdata
             ijk -= ijk.min(0).values
-            input_grid = gridbatch_from_ijk(ijk)
+            input_grid = GridBatch.from_ijk(JaggedTensor(ijk))
 
         feature: torch.Tensor = torch.randn(input_grid.total_voxels, self.in_channels)
 

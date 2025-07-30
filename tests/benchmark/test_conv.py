@@ -4,11 +4,11 @@
 import logging
 import random
 
+import fvdb.nn as fvdbnn
 import pytest
 import torch
 
 import fvdb
-import fvdb.nn as fvdbnn
 
 torch.backends.cudnn.deterministic = True
 
@@ -28,7 +28,7 @@ def test_forward_conv3d(benchmark, i_ch, o_ch, backend):
     pts = random.choice(PTS_CACHE).to(device=device) * 4
 
     coords = torch.floor(pts / 0.01).to(torch.int32)
-    grid = fvdb.gridbatch_from_ijk(coords).to(device)
+    grid = fvdb.GridBatch.from_ijk(fvdb.JaggedTensor(coords), device=device)
 
     feature = torch.empty(grid.total_voxels, i_ch, dtype=torch.float32, device=device).random_()
 

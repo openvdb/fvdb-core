@@ -14,12 +14,10 @@ from git.exc import InvalidGitRepositoryError
 from parameterized import parameterized
 
 from .grid_utils import (
-    grid_from_dense_cube,
-    gridbatch_from_dense_cube,
     make_dense_grid_and_point_data,
-    make_dense_grid_and_point_data_single,
+    make_dense_grid_batch_and_jagged_point_data,
     make_grid_and_point_data,
-    make_gridbatch_and_point_data,
+    make_grid_batch_and_jagged_point_data,
 )
 from .gsplat_utils import (
     create_uniform_grid_points_at_depth,
@@ -147,17 +145,15 @@ def dtype_to_atol(dtype: torch.dtype) -> float:
         return 1e-5
     if dtype == torch.float64:
         return 1e-5
-    raise ValueError("dtype must be a valid torch floating type")
+    raise TypeError("dtype must be a valid torch floating type")
 
 
 __all__ = [
     "set_testing_git_tag",
     "get_fvdb_test_data_path",
-    "gridbatch_from_dense_cube",
     "make_dense_grid_and_point_data",
-    "make_gridbatch_and_point_data",
-    "grid_from_dense_cube",
-    "make_dense_grid_and_point_data_single",
+    "make_dense_grid_batch_and_jagged_point_data",
+    "make_grid_batch_and_jagged_point_data",
     "make_grid_and_point_data",
     "generate_random_4x4_xform",
     "create_uniform_grid_points_at_depth",

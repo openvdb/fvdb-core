@@ -19,7 +19,7 @@ v2, f2 = load_car_2_mesh(mode="vf")
 # Build a GridBatch from two meshes
 mesh_v_jagged = fvdb.JaggedTensor([v1, v2])
 mesh_f_jagged = fvdb.JaggedTensor([f1, f2]).int()
-grid = fvdb.gridbatch_from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=0.1)
+grid = fvdb.GridBatch.from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=0.1)
 
 # Generate some sample points by adding random gaussian noise to the center of each voxel
 world_space_centers = grid.grid_to_world(grid.ijk.float())
@@ -64,7 +64,7 @@ points = fvdb.JaggedTensor([pts1, pts2])
 colors = fvdb.JaggedTensor([clrs1, clrs2])
 
 # Create a grid where the voxels each have unit sidelength
-grid = fvdb.gridbatch_from_points(points, voxel_sizes=1.0)
+grid = fvdb.GridBatch.from_points(points, voxel_sizes=1.0)
 
 # Splat the normals into the grid with trilinear interpolation
 # vox_normals is a JaggedTensor of per-voxel normals
@@ -95,11 +95,11 @@ f1, f2 = f1.to(torch.int32), f2.to(torch.int32)
 # Build a GridBatch from two meshes
 mesh_v_jagged = fvdb.JaggedTensor([v1, v2]).cuda()
 mesh_f_jagged = fvdb.JaggedTensor([f1, f2]).cuda()
-grid = fvdb.gridbatch_from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=0.1)
+grid = fvdb.GridBatch.from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=0.1)
 
 # Generate some points and check if they lie within the grid
-bbox_sizes = grid.bbox[:, 1] - grid.bbox[:, 0]
-bbox_origins = grid.bbox[:, 0]
+bbox_sizes = grid.bboxes[:, 1] - grid.bboxes[:, 0]
+bbox_origins = grid.bboxes[:, 0]
 pts = fvdb.JaggedTensor([
     (torch.randn(10_000, 3, device='cuda') - bbox_origins[0]) * bbox_sizes[0],
     (torch.randn(11_000, 3, device='cuda') - bbox_origins[0]) * bbox_sizes[0],
@@ -134,10 +134,10 @@ f1, f2 = f1.to(torch.int32), f2.to(torch.int32)
 # Build a GridBatch from two meshes
 mesh_v_jagged = fvdb.JaggedTensor([v1, v2]).cuda()
 mesh_f_jagged = fvdb.JaggedTensor([f1, f2]).cuda()
-grid = fvdb.gridbatch_from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=0.025)
+grid = fvdb.GridBatch.from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=0.025)
 
 rand_idx_pts = []
-for b, b_grid in enumerate(grid.bbox):
+for b, b_grid in enumerate(grid.bboxes):
     pts = [torch.randint(int(b_grid[0][i]), int(b_grid[1][i]), size=(2_000 * (b+1),), device='cuda') for i in range(3)]
     rand_idx_pts.append(torch.stack(pts, dim=1))
 
@@ -173,11 +173,11 @@ f1, f2 = f1.to(torch.int32), f2.to(torch.int32)
 # Build a GridBatch from two meshes
 mesh_v_jagged = fvdb.JaggedTensor([v1, v2]).cuda()
 mesh_f_jagged = fvdb.JaggedTensor([f1, f2]).cuda()
-grid = fvdb.gridbatch_from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=0.025)
+grid = fvdb.GridBatch.from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=0.025)
 
 # Generate some points and check if they lie within the grid
-bbox_sizes = (grid.bbox[:, 1] - grid.bbox[:, 0]) * grid.voxel_sizes
-bbox_origins = (grid.bbox[:, 0] + grid.origins) * grid.voxel_sizes
+bbox_sizes = (grid.bboxes[:, 1] - grid.bboxes[:, 0]) * grid.voxel_sizes
+bbox_origins = (grid.bboxes[:, 0] + grid.origins) * grid.voxel_sizes
 pts = fvdb.JaggedTensor(
     [
         (torch.rand(3000, 3, device="cuda")) * bbox_sizes[0] + bbox_origins[0],
@@ -238,9 +238,9 @@ f1, f2 = f1.to(torch.int32), f2.to(torch.int32)
 # Build a GridBatch from two meshes
 mesh_v_jagged = fvdb.JaggedTensor([v1, v2]).cuda()
 mesh_f_jagged = fvdb.JaggedTensor([f1, f2]).cuda()
-grid = fvdb.gridbatch_from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=0.025)
+grid = fvdb.GridBatch.from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=0.025)
 
-rand_pts = fvdb.JaggedTensor([generate_random_points(bbox, 1000) for bbox in grid.bbox]).cuda()
+rand_pts = fvdb.JaggedTensor([generate_random_points(bbox, 1000) for bbox in grid.bboxes]).cuda()
 
 rand_pts_indices = grid.ijk_to_index(rand_pts)
 
@@ -271,7 +271,7 @@ f1, f2 = f1.to(torch.int32), f2.to(torch.int32)
 # Build a GridBatch from two meshes
 mesh_v_jagged = fvdb.JaggedTensor([v1, v2]).cuda()
 mesh_f_jagged = fvdb.JaggedTensor([f1, f2]).cuda()
-grid = fvdb.gridbatch_from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=0.025)
+grid = fvdb.GridBatch.from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=0.025)
 
 rand_indexes = torch.randint(0, grid.total_voxels, size=(1000,)).cuda()
 print(grid.ijk.jdata[rand_indexes])
@@ -326,7 +326,7 @@ f1, f2 = f1.to(torch.int32), f2.to(torch.int32)
 # Build a GridBatch from two meshes
 mesh_v_jagged = fvdb.JaggedTensor([v1, v2]).cuda()
 mesh_f_jagged = fvdb.JaggedTensor([f1, f2]).cuda()
-reference_grid = fvdb.gridbatch_from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=0.025)
+reference_grid = fvdb.GridBatch.from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=0.025)
 
 # 7 random feature values for each voxel in the grid
 features = reference_grid.jagged_like(torch.rand(reference_grid.total_voxels, 7).to(reference_grid.device))
@@ -379,7 +379,7 @@ f1, f2 = f1.to(torch.int32), f2.to(torch.int32)
 # Build a GridBatch from two meshes
 mesh_v_jagged = fvdb.JaggedTensor([v1, v2]).cuda()
 mesh_f_jagged = fvdb.JaggedTensor([f1, f2]).cuda()
-grid = fvdb.gridbatch_from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=0.025)
+grid = fvdb.GridBatch.from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=0.025)
 
 # Build a set of 24 randomly selected ijk values per grid
 rand_ijks = fvdb.JaggedTensor(
@@ -433,7 +433,7 @@ mesh_fs = fvdb.JaggedTensor(mesh_fs)
 vox_size = 0.01
 
 # Build GridBatch from meshes
-grid = fvdb.gridbatch_from_mesh(mesh_vs, mesh_fs, vox_size)
+grid = fvdb.GridBatch.from_mesh(mesh_vs, mesh_fs, vox_size)
 
 # Use `clipped_grid` to clip the grids outside of the specified minimum and maximum bounding boxes for each grid…
 clipped_grid = grid.clipped_grid(
@@ -488,7 +488,7 @@ points = fvdb.JaggedTensor(points)
 normals = fvdb.JaggedTensor(normals)
 
 # Create a grid
-grid = fvdb.gridbatch_from_points(points, voxel_sizes=vox_size)
+grid = fvdb.GridBatch.from_points(points, voxel_sizes=vox_size)
 
 # Splat the normals into the grid with trilinear interpolation
 vox_normals = grid.splat_trilinear(points, normals)
@@ -538,7 +538,7 @@ points = fvdb.JaggedTensor(points)
 normals = fvdb.JaggedTensor(normals)
 
 # Create a grid
-grid = fvdb.gridbatch_from_points(points, voxel_sizes=vox_size)
+grid = fvdb.GridBatch.from_points(points, voxel_sizes=vox_size)
 
 # Splat the normals into the grid with trilinear interpolation
 vox_normals = grid.splat_trilinear(points, normals)
@@ -611,8 +611,7 @@ import torch
 # Create a GridBatch of random points
 batch_size = 4
 pts = fvdb.JaggedTensor([torch.rand(10_000*(i+1),3) for i in range(batch_size)])
-grid = fvdb.GridBatch()
-grid.set_from_points(pts, voxel_sizes=0.02)
+grid = fvdb.GridBatch.from_points(pts, voxel_sizes=0.02)
 
 # Get the number of voxels per grid in the batch
 for batch, num_voxels in enumerate(grid.num_voxels):
@@ -636,8 +635,7 @@ import torch
 # Create a GridBatch of random points
 batch_size = 4
 pts = fvdb.JaggedTensor([torch.rand(10_000*(i+1),3) for i in range(batch_size)])
-grid = fvdb.GridBatch()
-grid.set_from_points(pts,
+grid = fvdb.GridBatch.from_points(pts,
                     voxel_sizes=[[0.02, 0.02, 0.02], [0.03, 0.03, 0.03], [0.04, 0.04, 0.04], [0.05, 0.05, 0.05]],
                     origins=[[-.1,-.1,-.1], [0.0,0.0,0.0], [.1,.1,.1], [.2,-.2,.2]])
 ```
@@ -766,7 +764,7 @@ points = fvdb.JaggedTensor(points)
 normals = fvdb.JaggedTensor(normals)
 
 # Create a grid
-grid = fvdb.gridbatch_from_points(points, voxel_sizes=vox_size)
+grid = fvdb.GridBatch.from_points(points, voxel_sizes=vox_size)
 
 # Splat the normals into the grid with trilinear interpolation
 vox_normals = grid.splat_trilinear(points, normals)
@@ -845,7 +843,7 @@ points = fvdb.JaggedTensor(points)
 normals = fvdb.JaggedTensor(normals)
 
 # Create a grid
-grid = fvdb.gridbatch_from_points(points, voxel_sizes=vox_size)
+grid = fvdb.GridBatch.from_points(points, voxel_sizes=vox_size)
 
 # Splat the normals into the grid with trilinear interpolation
 vox_normals = grid.splat_trilinear(points, normals)\

@@ -7,11 +7,11 @@ import numpy as np
 import point_cloud_utils as pcu
 import polyscope as ps
 import torch
+from fvdb.nn import VDBTensor
+from fvdb.utils.examples import load_car_1_mesh, load_car_2_mesh
 
 import fvdb
 from fvdb import JaggedTensor
-from fvdb.nn import VDBTensor
-from fvdb.utils.examples import load_car_1_mesh, load_car_2_mesh
 
 voxel_size_1 = 0.02
 voxel_size_2 = 0.03
@@ -23,11 +23,7 @@ def build_from_pointcloud(pcd_1: np.ndarray, pcd_2: np.ndarray):
     voxel_sizes = [[voxel_size_1, voxel_size_1, voxel_size_1], [voxel_size_2, voxel_size_2, voxel_size_2]]
 
     # Method 1:
-    grid_a1 = fvdb.gridbatch_from_points(pcd_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
-
-    # Method 2:
-    grid_a2 = fvdb.GridBatch(device=pcd_jagged.device)
-    grid_a2.set_from_points(pcd_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
+    grid_a1 = fvdb.GridBatch.from_points(pcd_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
 
     # Visualization
     gv_a1, ge_a1 = grid_a1.viz_edge_network
@@ -36,14 +32,10 @@ def build_from_pointcloud(pcd_1: np.ndarray, pcd_2: np.ndarray):
     ps.register_curve_network(
         "grid_a1", gv_a1[0].jdata.cpu().numpy(), ge_a1[0].jdata.cpu().numpy(), enabled=True, radius=0.004
     )
-    ps.register_point_cloud("pcd_2", pcd_2, enabled=True, radius=0.01)
-    ps.register_curve_network(
-        "grid_a2", gv_a1[1].jdata.cpu().numpy(), ge_a1[1].jdata.cpu().numpy(), enabled=True, radius=0.004
-    )
     ps.show()
 
     # Build grid from containing nearest voxels to the points
-    grid_b = fvdb.gridbatch_from_nearest_voxels_to_points(pcd_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
+    grid_b = fvdb.GridBatch.from_nearest_voxels_to_points(pcd_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
 
     # Visualization
     gv_b, ge_b = grid_b.viz_edge_network
@@ -52,10 +44,6 @@ def build_from_pointcloud(pcd_1: np.ndarray, pcd_2: np.ndarray):
     ps.register_curve_network(
         "grid_b1", gv_b[0].jdata.cpu().numpy(), ge_b[0].jdata.cpu().numpy(), enabled=True, radius=0.004
     )
-    ps.register_point_cloud("pcd_2", pcd_2, enabled=True, radius=0.01)
-    ps.register_curve_network(
-        "grid_b2", gv_b[1].jdata.cpu().numpy(), ge_b[1].jdata.cpu().numpy(), enabled=True, radius=0.004
-    )
     ps.show()
 
 
@@ -63,7 +51,7 @@ def build_from_coordinates(coords_1: np.ndarray, coords_2: np.ndarray):
     coords_jagged = JaggedTensor([torch.from_numpy(coords_1).long().cuda(), torch.from_numpy(coords_2).long().cuda()])
     voxel_sizes = [[voxel_size_1, voxel_size_1, voxel_size_1], [voxel_size_2, voxel_size_2, voxel_size_2]]
 
-    grid = fvdb.gridbatch_from_ijk(coords_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
+    grid = fvdb.GridBatch.from_ijk(coords_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
 
     # Visualization
     grid_mesh_1 = pcu.voxel_grid_geometry(
@@ -91,7 +79,7 @@ def build_from_mesh(mesh_1_vf, mesh_2_vf):
     )
 
     voxel_sizes = [[voxel_size_1, voxel_size_1, voxel_size_1], [voxel_size_2, voxel_size_2, voxel_size_2]]
-    grid = fvdb.gridbatch_from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
+    grid = fvdb.GridBatch.from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
 
     # Visualization
     gv, ge = grid.viz_edge_network
@@ -108,7 +96,7 @@ def build_from_mesh(mesh_1_vf, mesh_2_vf):
 
 
 def build_from_dense():
-    grid = fvdb.gridbatch_from_dense(num_grids=1, dense_dims=[32, 32, 32], device="cuda")
+    grid = fvdb.GridBatch.from_dense(num_grids=1, dense_dims=[32, 32, 32], device="cuda")
 
     # Easy way to initialize a VDBTensor from a torch 3D tensor [B, D, H, W, C]
     dense_data = torch.ones(2, 32, 32, 32, 16).cuda()

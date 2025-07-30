@@ -8,14 +8,14 @@ import unittest
 from collections.abc import MutableMapping
 from typing import List, NamedTuple
 
+import fvdb.nn as fvnn
 import torch
 import torch.nn as nn
+from fvdb.utils.tests import expand_tests
 from parameterized import parameterized
 
 import fvdb
-import fvdb.nn as fvnn
 from fvdb import GridBatch
-from fvdb.utils.tests import expand_tests
 
 all_device_dtype_combos = [
     ["cuda", torch.float16],
@@ -151,8 +151,7 @@ class TestNN(unittest.TestCase):
         vox_size = 0.05
         vox_origin = (0.0, 0.0, 0.0)
         gsize = int(1 / vox_size)
-        grid = GridBatch(device=device)
-        grid.set_from_dense_grid(1, [20, 20, 20], voxel_sizes=vox_size, origins=vox_origin)
+        grid = GridBatch.from_dense(1, [20, 20, 20], voxel_sizes=vox_size, origins=vox_origin, device=device)
         assert grid.total_voxels == 20**3
 
         for affine in (True, False):
@@ -194,8 +193,7 @@ class TestNN(unittest.TestCase):
         vox_size = 0.05
         vox_origin = (0.0, 0.0, 0.0)
         gsize = int(1 / vox_size)
-        grid = GridBatch(device=device)
-        grid.set_from_dense_grid(1, [20, 20, 20], voxel_sizes=vox_size, origins=vox_origin)
+        grid = GridBatch.from_dense(1, [20, 20, 20], voxel_sizes=vox_size, origins=vox_origin, device=device)
         assert grid.total_voxels == 20**3
         grid_vals = torch.randn(grid.total_voxels, 3).to(device).to(dtype)
 
@@ -237,7 +235,7 @@ class TestNN(unittest.TestCase):
         self.assertTrue(torch.allclose(dense_tensor, vdb_tensor.to_dense()))
 
     def test_vdbtensor_arithmetic(self):
-        grid = fvdb.gridbatch_from_dense(8, [32, 32, 32], voxel_sizes=0.05, origins=(0.0, 0.0, 0.0))
+        grid = GridBatch.from_dense(8, [32, 32, 32], voxel_sizes=0.05, origins=(0.0, 0.0, 0.0))
         v1 = fvnn.VDBTensor(grid, grid.jagged_like(torch.randn(grid.total_voxels, 3)))
         v2 = fvnn.VDBTensor(grid, grid.jagged_like(torch.randn(grid.total_voxels, 3)))
 
@@ -272,7 +270,7 @@ class TestNN(unittest.TestCase):
 
     def test_conv_backends(self):
         dtype, device = torch.float32, "cuda"
-        grid = fvdb.gridbatch_from_points(
+        grid = GridBatch.from_points(
             fvdb.JaggedTensor([torch.rand(1024, 3, device=device, dtype=dtype) * 2.0 - 1.0 for _ in range(8)]),
             voxel_sizes=[0.025] * 3,
             origins=[0.0] * 3,
@@ -356,8 +354,7 @@ class TestNN(unittest.TestCase):
             pts = torch.empty((10_000, 3), device=device).normal_()
             coords = torch.floor(pts / 0.01).to(torch.int32)
 
-            grid = GridBatch(device=device)
-            grid.set_from_ijk(coords)
+            grid = GridBatch.from_ijk(fvdb.JaggedTensor(coords))
 
             feature = torch.empty((grid.total_voxels, 4), device=device, dtype=dtype).normal_()
 
@@ -391,7 +388,7 @@ def _run_syncbn_test(rank: int, world_size: int, return_dict: MutableMapping[int
     num_features = 2
     points = fvdb.JaggedTensor([torch.randn(num_features, 3, device="cuda") for _ in range(rank + 1)])
 
-    grid = fvdb.gridbatch_from_points(points)
+    grid = GridBatch.from_points(points)
     channels = 8
     features = grid.jagged_like(torch.randn(grid.ijk.jdata.shape[0], channels, device="cuda"))
     input_tensor = fvdb.nn.VDBTensor(grid, features)

@@ -7,9 +7,9 @@ from typing import List
 import numpy as np
 import torch
 import viser
-
-import fvdb
 from fvdb.utils.examples import load_dragon_mesh
+
+from fvdb import Grid
 
 
 class Viewer:
@@ -17,25 +17,22 @@ class Viewer:
         self.server = viser.ViserServer()
         self.scene: viser.SceneApi = self.server.scene
 
-    def plot_grid_edges(self, name: str, grid: fvdb.GridBatch, color: List[float]):
+    def plot_grid_edges(self, name: str, grid: Grid, color: List[float]):
         gv, ge = grid.viz_edge_network
 
-        for i in range(grid.grid_count):
-            gvi, gei = gv[i].jdata, ge[i].jdata
+        segments = torch.stack(
+            [
+                gv[ge[:, 0], :],  # [N, 3]
+                gv[ge[:, 1], :],  # [N, 3]
+            ],
+            dim=1,
+        )
 
-            segments = torch.stack(
-                [
-                    gvi[gei[:, 0], :],  # [N, 3]
-                    gvi[gei[:, 1], :],  # [N, 3]
-                ],
-                dim=1,
-            )
-
-            self.scene.add_line_segments(
-                name=f"/{name}/grid_{i}",
-                points=segments.cpu().numpy(),
-                colors=np.array([color])[None, :],
-            )
+        self.scene.add_line_segments(
+            name=f"/{name}/grid",
+            points=segments.cpu().numpy(),
+            colors=np.array([color])[None, :],
+        )
 
     def show(self):
         while True:
@@ -52,12 +49,14 @@ def main():
 
     vox_size = 0.25
 
-    grid = fvdb.gridbatch_from_mesh(vertices_t.cuda(), faces=faces_t.cuda(), voxel_sizes=vox_size, origins=[0.0] * 3)
-    print(f"Grid has {grid.total_voxels} voxels")
+    grid = Grid.from_mesh(
+        mesh_vertices=vertices_t.cuda(), mesh_faces=faces_t.cuda(), voxel_size=vox_size, origin=[0.0] * 3
+    )
+    print(f"Grid has {grid.num_voxels} voxels")
 
     grid_dilated = grid.dilated_grid(3)
 
-    print(f"Grid has {grid_dilated.total_voxels} voxels")
+    print(f"Grid has {grid_dilated.num_voxels} voxels")
 
     viewer = Viewer()
     viewer.plot_grid_edges("base_grid", grid, [1.0, 0.0, 0.0])

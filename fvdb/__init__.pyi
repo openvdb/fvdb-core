@@ -8,12 +8,11 @@ from typing import overload
 
 import torch
 
-from .types import JaggedTensorOrTensor
-
 if torch.cuda.is_available():
     torch.cuda.init()
 
-def _parse_tensor_or_sequence(tensor_or_sequence: torch.Tensor | Sequence, name: str = "") -> torch.Tensor: ...
+from .types import JaggedTensorOrTensor
+
 def _parse_device_string(device_string: str | torch.device) -> torch.device: ...
 
 # The following import needs to come after the GridBatch and JaggedTensor imports
@@ -34,18 +33,7 @@ from ._Cpp import (
 )
 from .gaussian_splatting import GaussianSplat3d
 from .grid import Grid, load_grid, save_grid
-from .grid_batch import (
-    GridBatch,
-    gridbatch_from_dense,
-    gridbatch_from_ijk,
-    gridbatch_from_mesh,
-    gridbatch_from_nearest_voxels_to_points,
-    gridbatch_from_points,
-    load,
-    load_gridbatch,
-    save,
-    save_gridbatch,
-)
+from .grid_batch import GridBatch, load_gridbatch, save_gridbatch
 from .sparse_conv_pack_info import SparseConvPackInfo
 
 @overload
@@ -63,15 +51,8 @@ __all__ = [
     "SparseConvPackInfo",
     "ConvPackBackend",
     "GaussianSplat3d",
-    "gridbatch_from_ijk",
-    "gridbatch_from_points",
-    "gridbatch_from_nearest_voxels_to_points",
-    "gridbatch_from_dense",
-    "gridbatch_from_mesh",
     "load_gridbatch",
     "save_gridbatch",
-    "load",
-    "save",
     "jcat",
     "scaled_dot_product_attention",
     "config",

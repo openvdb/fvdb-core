@@ -6,10 +6,10 @@ import timeit
 
 import polyscope as ps
 import torch
+from fvdb.utils.examples import load_dragon_mesh, make_ray_grid, plot_ray_segments
 
 import fvdb
 from fvdb import GridBatch, JaggedTensor
-from fvdb.utils.examples import load_dragon_mesh, make_ray_grid, plot_ray_segments
 
 
 def main():
@@ -42,8 +42,7 @@ def main():
     p = fvdb.JaggedTensor([p] * batch_size)
     n = fvdb.JaggedTensor([n] * batch_size)
 
-    grid = GridBatch(device=device)
-    grid.set_from_points(p, [-1] * 3, [1] * 3, voxel_sizes=vox_size, origins=vox_origin)
+    grid = GridBatch.from_points(p, voxel_sizes=vox_size, origins=vox_origin)
 
     logging.info(f"Created {len(grid)} grids with {grid.total_voxels} total voxels")
     gc, ge = grid.viz_edge_network
@@ -81,7 +80,7 @@ def main():
         logging.info("Plotted Ray Segments")
 
         logging.info(f"Creating a new grid of only the voxels intersected by this ray")
-        isected_grid = fvdb.gridbatch_from_ijk(vox[i].jflatten(), voxel_sizes=vox_size, origins=vox_origin)
+        isected_grid = fvdb.GridBatch.from_ijk(vox[i].jflatten(), voxel_sizes=vox_size, origins=vox_origin)
         logging.info(f"Created {len(isected_grid)} grids with {isected_grid.total_voxels} total voxels")
         iv, ie = isected_grid.viz_edge_network
         ps.register_curve_network("intersected voxels", iv.jdata.cpu(), ie.jdata.cpu(), enabled=True, radius=0.0009)

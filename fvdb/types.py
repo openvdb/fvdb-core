@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any, Sequence, TypeGuard
+from typing import Any, Sequence, TypeGuard, TypeVar, cast
 
 import numpy
 import numpy as np
@@ -219,6 +219,20 @@ def is_GridBatchIndex(x: Any) -> bool:
 # REDUX
 # ----------------------------------------------------------------------------------------------------------------------
 
+
+T = TypeVar("T")
+
+
+def cast_check(x: object, expected_type: type[T], name: str) -> T:
+    """
+    Checks if x is of type expected_type, raises TypeError if not.
+    Returns True if x is of type T (for use as a TypeGuard).
+    """
+    if not isinstance(x, expected_type):
+        raise TypeError(f"Expected {name} to be a {expected_type}, got {type(x)}")
+    return cast(T, x)
+
+
 DeviceIdentifier = str | torch.device
 NumericScalarNative = int | float | np.integer | np.floating
 NumericScalar = torch.Tensor | numpy.ndarray | NumericScalarNative
@@ -293,7 +307,7 @@ def resolve_device(device_id: DeviceIdentifier | None, inherit_from: Any = None)
     if device_id is not None:
         # Normalize the provided device
         if not isinstance(device_id, (str, torch.device)):
-            raise RuntimeError(f"Expected DeviceIdentifier, got {type(device_id)}")
+            raise TypeError(f"Expected DeviceIdentifier, got {type(device_id)}")
 
         device = torch.device(device_id)
         if device.type == "cuda" and device.index is None:
@@ -301,8 +315,10 @@ def resolve_device(device_id: DeviceIdentifier | None, inherit_from: Any = None)
         return device
 
     # device_id is None - inherit from inherit_from
-    if inherit_from is not None and isinstance(inherit_from, torch.Tensor):
+    if inherit_from is not None and isinstance(inherit_from, (torch.Tensor, JaggedTensor)):
         return inherit_from.device  # Preserve original device without normalization
+    elif hasattr(inherit_from, "device") and isinstance(inherit_from.device, torch.device):
+        return inherit_from.device
     else:
         # Python objects, NumPy objects, None, etc. -> use CPU
         return torch.device("cpu")
@@ -331,24 +347,24 @@ def to_GenericScalar(
         A scalar torch.Tensor of the specified dtype on the specified device.
     """
     if not is_NumericScalar(x):
-        raise RuntimeError(f"Expected NumericScalar, got {type(x)}")
+        raise TypeError(f"Expected NumericScalar, got {type(x)}")
 
     if dtype not in allowed_torch_dtypes:
-        raise RuntimeError(f"Expected {dtype_category} dtype, got {dtype}")
+        raise ValueError(f"Expected {dtype_category} dtype, got {dtype}")
 
     if isinstance(x, torch.Tensor):
         if x.ndim != 0:
-            raise RuntimeError(f"Expected scalar tensor, got {x.shape}")
+            raise ValueError(f"Expected scalar tensor, got {x.shape}")
         if x.dtype not in allowed_torch_dtypes:
-            raise RuntimeError(f"Expected scalar tensor with {dtype_category} dtype, got {x.dtype}")
+            raise ValueError(f"Expected scalar tensor with {dtype_category} dtype, got {x.dtype}")
         device = resolve_device(device, inherit_from=x)
         return x.to(device).to(dtype)
 
     elif isinstance(x, numpy.ndarray):
         if x.ndim != 0:
-            raise RuntimeError(f"Expected scalar array, got {x.shape}")
+            raise ValueError(f"Expected scalar array, got {x.shape}")
         if x.dtype not in allowed_numpy_dtypes:
-            raise RuntimeError(f"Expected scalar array with {dtype_category} dtype, got {x.dtype}")
+            raise ValueError(f"Expected scalar array with {dtype_category} dtype, got {x.dtype}")
         device = resolve_device(device, inherit_from=x)
         return torch.from_numpy(x).to(device).to(dtype)
 
@@ -356,13 +372,13 @@ def to_GenericScalar(
         # Validate native Python scalars against allowed types
         if dtype_category == "int":
             if not isinstance(x, (int, np.integer)):
-                raise RuntimeError(f"Expected integer scalar, got {type(x)} with value {x}")
+                raise TypeError(f"Expected integer scalar, got {type(x)} with value {x}")
         elif dtype_category == "float":
             if not isinstance(x, (int, float, np.integer, np.floating)):
-                raise RuntimeError(f"Expected numeric scalar, got {type(x)} with value {x}")
+                raise TypeError(f"Expected numeric scalar, got {type(x)} with value {x}")
         elif dtype_category == "int or float":
             if not isinstance(x, (int, float, np.integer, np.floating)):
-                raise RuntimeError(f"Expected numeric scalar, got {type(x)} with value {x}")
+                raise TypeError(f"Expected numeric scalar, got {type(x)} with value {x}")
 
         device = resolve_device(device, inherit_from=x)
         return torch.tensor(x, device=device, dtype=dtype)
@@ -393,13 +409,13 @@ def to_GenericTensorBroadcastableRank1(
         A torch.Tensor of the specified dtype and device.
     """
     if not is_NumericMaxRank1(x):
-        raise RuntimeError(f"Expected NumericMaxRank1, got {type(x)}")
+        raise TypeError(f"Expected NumericMaxRank1, got {type(x)}")
 
     if len(test_shape) != 1:
-        raise RuntimeError(f"Expected test_shape of rank 1, got {test_shape}")
+        raise ValueError(f"Expected test_shape of rank 1, got {test_shape}")
 
     if dtype not in allowed_torch_dtypes:
-        raise RuntimeError(f"Expected {dtype_category} dtype, got {dtype}")
+        raise ValueError(f"Expected {dtype_category} dtype, got {dtype}")
 
     if is_NumericScalar(x):
         return to_GenericScalar(x, device, dtype, allowed_torch_dtypes, allowed_numpy_dtypes, dtype_category)
@@ -407,8 +423,8 @@ def to_GenericTensorBroadcastableRank1(
         x_shape = (len(x),)
         try:
             result_shape = torch.broadcast_shapes(x_shape, test_shape)
-        except RuntimeError as e:
-            raise RuntimeError(f"Sequence with shape {x_shape} cannot broadcast to {test_shape}: {e}")
+        except Exception as e:
+            raise ValueError(f"Sequence with shape {x_shape} cannot broadcast to {test_shape}: {e}")
 
         device = resolve_device(device, inherit_from=x)
         return torch.tensor(x, device=device, dtype=dtype)
@@ -416,38 +432,38 @@ def to_GenericTensorBroadcastableRank1(
         x_shape = (len(x),)
         try:
             result_shape = torch.broadcast_shapes(x_shape, test_shape)
-        except RuntimeError as e:
-            raise RuntimeError(f"torch.Size with shape {x_shape} cannot broadcast to {test_shape}: {e}")
+        except Exception as e:
+            raise ValueError(f"torch.Size with shape {x_shape} cannot broadcast to {test_shape}: {e}")
 
         device = resolve_device(device, inherit_from=x)
         return torch.tensor(x, device=device, dtype=dtype)
     elif isinstance(x, torch.Tensor):
         if x.dtype not in allowed_torch_dtypes:
-            raise RuntimeError(f"Expected tensor with {dtype_category} dtype, got {x.dtype}")
+            raise ValueError(f"Expected tensor with {dtype_category} dtype, got {x.dtype}")
 
         assert x.ndim == 1
         try:
             result_shape = torch.broadcast_shapes(x.shape, test_shape)
-        except RuntimeError as e:
-            raise RuntimeError(f"Tensor with shape {x.shape} cannot broadcast to {test_shape}: {e}")
+        except Exception as e:
+            raise ValueError(f"Tensor with shape {x.shape} cannot broadcast to {test_shape}: {e}")
 
         device = resolve_device(device, inherit_from=x)
         return x.to(device).to(dtype)
     elif isinstance(x, numpy.ndarray):
         if x.dtype not in allowed_numpy_dtypes:
-            raise RuntimeError(f"Expected array with {dtype_category} dtype, got {x.dtype}")
+            raise ValueError(f"Expected array with {dtype_category} dtype, got {x.dtype}")
 
         assert x.ndim == 1
         try:
             result_shape = torch.broadcast_shapes(x.shape, test_shape)
-        except RuntimeError as e:
-            raise RuntimeError(f"Array with shape {x.shape} cannot broadcast to {test_shape}: {e}")
+        except Exception as e:
+            raise ValueError(f"Array with shape {x.shape} cannot broadcast to {test_shape}: {e}")
 
         device = resolve_device(device, inherit_from=x)
         return torch.from_numpy(x).to(device).to(dtype)
 
     else:
-        raise RuntimeError(f"Expected NumericMaxRank1, got {type(x)}")
+        raise TypeError(f"Expected NumericMaxRank1, got {type(x)}")
 
 
 def to_GenericTensorBroadcastableRank2(
@@ -475,13 +491,13 @@ def to_GenericTensorBroadcastableRank2(
         A torch.Tensor of the specified dtype and device.
     """
     if not is_NumericMaxRank2(x):
-        raise RuntimeError(f"Expected NumericMaxRank2, got {type(x)}")
+        raise TypeError(f"Expected NumericMaxRank2, got {type(x)}")
 
     if len(test_shape) != 2:
-        raise RuntimeError(f"Expected test_shape of rank 2, got {test_shape}")
+        raise ValueError(f"Expected test_shape of rank 2, got {test_shape}")
 
     if dtype not in allowed_torch_dtypes:
-        raise RuntimeError(f"Expected {dtype_category} dtype, got {dtype}")
+        raise ValueError(f"Expected {dtype_category} dtype, got {dtype}")
 
     if is_NumericMaxRank1(x):
         return to_GenericTensorBroadcastableRank1(
@@ -493,44 +509,44 @@ def to_GenericTensorBroadcastableRank2(
         # test that all the rank 1 sizes are the same
         rank_1_sizes = [len(sub_sequence) for sub_sequence in x]
         if not all(size == rank_1_sizes[0] for size in rank_1_sizes):
-            raise RuntimeError(f"All rank 1 sizes must be the same, got {rank_1_sizes}")
+            raise ValueError(f"All rank 1 sizes must be the same, got {rank_1_sizes}")
 
         x_shape = (rank_2_size, rank_1_sizes[0])
 
         try:
             result_shape = torch.broadcast_shapes(x_shape, test_shape)
-        except RuntimeError as e:
-            raise RuntimeError(f"Sequence with shape {x_shape} cannot broadcast to {test_shape}: {e}")
+        except Exception as e:
+            raise ValueError(f"Sequence with shape {x_shape} cannot broadcast to {test_shape}: {e}")
 
         device = resolve_device(device, inherit_from=x)
         return torch.tensor(x, device=device, dtype=dtype)
     elif isinstance(x, torch.Tensor):
         if x.dtype not in allowed_torch_dtypes:
-            raise RuntimeError(f"Expected tensor with {dtype_category} dtype, got {x.dtype}")
+            raise ValueError(f"Expected tensor with {dtype_category} dtype, got {x.dtype}")
 
         assert x.ndim == 2
         try:
             result_shape = torch.broadcast_shapes(x.shape, test_shape)
-        except RuntimeError as e:
-            raise RuntimeError(f"Tensor with shape {x.shape} cannot broadcast to {test_shape}: {e}")
+        except Exception as e:
+            raise ValueError(f"Tensor with shape {x.shape} cannot broadcast to {test_shape}: {e}")
 
         device = resolve_device(device, inherit_from=x)
         return x.to(device).to(dtype)
     elif isinstance(x, numpy.ndarray):
         if x.dtype not in allowed_numpy_dtypes:
-            raise RuntimeError(f"Expected array with {dtype_category} dtype, got {x.dtype}")
+            raise ValueError(f"Expected array with {dtype_category} dtype, got {x.dtype}")
 
         assert x.ndim == 2
         try:
             result_shape = torch.broadcast_shapes(x.shape, test_shape)
-        except RuntimeError as e:
-            raise RuntimeError(f"Array with shape {x.shape} cannot broadcast to {test_shape}: {e}")
+        except Exception as e:
+            raise ValueError(f"Array with shape {x.shape} cannot broadcast to {test_shape}: {e}")
 
         device = resolve_device(device, inherit_from=x)
         return torch.from_numpy(x).to(device).to(dtype)
 
     else:
-        raise RuntimeError(f"Expected NumericMaxRank2, got {type(x)}")
+        raise TypeError(f"Expected NumericMaxRank2, got {type(x)}")
 
 
 def to_IntegerScalar(
@@ -806,8 +822,8 @@ def to_Vec3i(
     """
     try:
         return to_Vec3iLike(x, device, dtype).broadcast_to((3,))
-    except RuntimeError as e:
-        raise RuntimeError(f"Failed to broadcast {x} to Vec3i: {e}")
+    except Exception as e:
+        raise ValueError(f"Failed to broadcast {x} to Vec3i: {e}")
 
 
 def to_Vec3f(
@@ -829,8 +845,8 @@ def to_Vec3f(
     """
     try:
         return to_Vec3fLike(x, device, dtype).broadcast_to((3,))
-    except RuntimeError as e:
-        raise RuntimeError(f"Failed to broadcast {x} to Vec3f: {e}")
+    except Exception as e:
+        raise ValueError(f"Failed to broadcast {x} to Vec3f: {e}")
 
 
 def to_Vec3iBatch(
@@ -865,8 +881,8 @@ def to_Vec3iBatch(
     # Explicitly broadcast the tensor to the target shape.
     try:
         return tensor.broadcast_to(target_shape)
-    except RuntimeError as e:
-        raise RuntimeError(f"Failed to broadcast {x} to Vec3iBatch: {e}")
+    except Exception as e:
+        raise ValueError(f"Failed to broadcast {x} to Vec3iBatch: {e}")
 
 
 def to_Vec3fBatch(
@@ -901,8 +917,8 @@ def to_Vec3fBatch(
     # Explicitly broadcast the tensor to the target shape.
     try:
         return tensor.broadcast_to(target_shape)
-    except RuntimeError as e:
-        raise RuntimeError(f"Failed to broadcast {x} to Vec3fBatch: {e}")
+    except Exception as e:
+        raise ValueError(f"Failed to broadcast {x} to Vec3fBatch: {e}")
 
 
 def to_PositiveVec3i(
@@ -923,7 +939,7 @@ def to_PositiveVec3i(
     """
     tensor = to_Vec3i(x, device, dtype)
     if torch.any(tensor <= 0):
-        raise RuntimeError(f"All values must be greater than zero, got {tensor}")
+        raise ValueError(f"All values must be greater than zero, got {tensor}")
     return tensor
 
 
@@ -945,7 +961,7 @@ def to_PositiveVec3f(
     """
     tensor = to_Vec3f(x, device, dtype)
     if torch.any(tensor <= 0):
-        raise RuntimeError(f"All values must be greater than zero, got {tensor}")
+        raise ValueError(f"All values must be greater than zero, got {tensor}")
     return tensor
 
 
@@ -967,7 +983,7 @@ def to_PositiveVec3iBatch(
     """
     tensor = to_Vec3iBatch(x, device, dtype)
     if torch.any(tensor <= 0):
-        raise RuntimeError(f"All values must be greater than zero, got {tensor}")
+        raise ValueError(f"All values must be greater than zero, got {tensor}")
     return tensor
 
 
@@ -989,7 +1005,7 @@ def to_PositiveVec3fBatch(
     """
     tensor = to_Vec3fBatch(x, device, dtype)
     if torch.any(tensor <= 0):
-        raise RuntimeError(f"All values must be greater than zero, got {tensor}")
+        raise ValueError(f"All values must be greater than zero, got {tensor}")
     return tensor
 
 
@@ -1011,7 +1027,7 @@ def to_NonNegativeVec3i(
     """
     tensor = to_Vec3i(x, device, dtype)
     if torch.any(tensor < 0):
-        raise RuntimeError(f"All values must be non-negative, got {tensor}")
+        raise ValueError(f"All values must be non-negative, got {tensor}")
     return tensor
 
 
@@ -1033,7 +1049,7 @@ def to_NonNegativeVec3f(
     """
     tensor = to_Vec3f(x, device, dtype)
     if torch.any(tensor < 0):
-        raise RuntimeError(f"All values must be non-negative, got {tensor}")
+        raise ValueError(f"All values must be non-negative, got {tensor}")
     return tensor
 
 
@@ -1055,7 +1071,7 @@ def to_NonNegativeVec3iBatch(
     """
     tensor = to_Vec3iBatch(x, device, dtype)
     if torch.any(tensor < 0):
-        raise RuntimeError(f"All values must be non-negative, got {tensor}")
+        raise ValueError(f"All values must be non-negative, got {tensor}")
     return tensor
 
 
@@ -1077,5 +1093,5 @@ def to_NonNegativeVec3fBatch(
     """
     tensor = to_Vec3fBatch(x, device, dtype)
     if torch.any(tensor < 0):
-        raise RuntimeError(f"All values must be non-negative, got {tensor}")
+        raise ValueError(f"All values must be non-negative, got {tensor}")
     return tensor

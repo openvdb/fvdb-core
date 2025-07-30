@@ -452,7 +452,7 @@ def main():
 
     if not os.path.exists(data_path):
         data_url = "https://drive.google.com/drive/folders/1i6qMn-mnPwPEioiNIFMO8QJlTjU0dS1b?usp=share_link"
-        raise RuntimeError(f"You need to download the data at {data_url} "
+        raise ValueError(f"You need to download the data at {data_url} "
                            "into <repository_root>/data "
                            "in order to run this script")
 

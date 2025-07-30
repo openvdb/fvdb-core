@@ -260,7 +260,7 @@ coords = fvdb.JaggedTensor([
     (torch.randn(11_000, 3, device='cuda')),
 ])
 
-grid = fvdb.gridbatch_from_points(coords)
+grid = fvdb.GridBatch.from_points(coords)
 features = grid.jagged_like(torch.randn(grid.total_voxels, 32, device='cuda'))
 sinput = fvnn.VDBTensor(grid, features)
 

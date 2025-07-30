@@ -6,10 +6,10 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
+from fvdb.nn import SparseConv3d, VDBTensor
 from torchsparse import SparseTensor
 
 import fvdb
-from fvdb.nn import SparseConv3d, VDBTensor
 
 
 class BaseConfig(ABC):
@@ -36,7 +36,7 @@ class BaseConfig(ABC):
     def to_baseline_input(self, vdb_tensor: VDBTensor, baseline: str):
         if baseline == "ts":
             return SparseTensor(
-                vdb_tensor.feature.jdata.clone(),
+                vdb_tensor.data.jdata.clone(),
                 torch.cat(
                     [
                         vdb_tensor.grid.ijk.jidx[:, None].int(),
@@ -66,7 +66,7 @@ class GridBuildingConfig(BaseConfig):
         if vdb_tensor.device != torch.device("cuda", torch.cuda.current_device()):
             vdb_tensor = vdb_tensor.to("cuda")
         coord = vdb_tensor.grid.ijk
-        feats = vdb_tensor.feature.jdata
+        feats = vdb_tensor.data.jdata
         return {"coords": coord, "feats": feats}
 
     def to_baseline_input(self, vdb_tensor: VDBTensor, baseline: str):
@@ -85,7 +85,12 @@ class XCubeConfig(BaseConfig):
             coords = torch.unique(coords, dim=0)
             gt_coords[layer_idx] = coords
 
-        return {"gt_coords": {layer_idx: fvdb.gridbatch_from_ijk(coords) for (layer_idx, coords) in gt_coords.items()}}
+        return {
+            "gt_coords": {
+                layer_idx: fvdb.GridBatch.from_ijk(fvdb.JaggedTensor(coords))
+                for (layer_idx, coords) in gt_coords.items()
+            }
+        }
 
     def _make_model(self, baseline: str) -> nn.Module:
         from fvdb_benchmark.model.xcube import XCubeVAE
