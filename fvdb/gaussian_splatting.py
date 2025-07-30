@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import pathlib
-from typing import overload
+from typing import Sequence, overload
 
 import torch
 
@@ -264,6 +264,35 @@ class GaussianSplat3d:
         self._impl.detach_in_place()
 
     @staticmethod
+    def cat(
+        splats: "Sequence[GaussianSplat3d]",
+        accumulate_mean_2d_gradients: bool = False,
+        accumulate_max_2d_radii: bool = False,
+        detach: bool = False,
+    ) -> "GaussianSplat3d":
+        """
+        Concatenates a sequence of `GaussianSplat3d` instances into a single `GaussianSplat3d` instance.
+
+        Args:
+            splats (Sequence[GaussianSplat3d]): A sequence of GaussianSplat3d instances to concatenate.
+            accumulate_mean_2d_gradients (bool): If True, copies over the accumulated mean 2D gradients
+                for each GaussianSplat3d into the new one.
+                Defaults to False
+            accumulate_max_2d_radii (bool): If True, copies the accumulated maximum 2D radii
+                for each GaussianSplat3d into the concatenated one.
+                Defaults to False.
+            detach (bool): If True, detaches the concatenated GaussianSplat3d from the computation graph.
+                Defaults to False.
+
+        Returns:
+            GaussianSplat3d: A new instance of GaussianSplat3d containing the concatenated Gaussians.
+        """
+        splat_list = [splat._impl for splat in splats]
+        return GaussianSplat3d(
+            impl=GaussianSplat3dCpp.cat(splat_list, accumulate_mean_2d_gradients, accumulate_max_2d_radii, detach)
+        )
+
+    @staticmethod
     def from_state_dict(state_dict: dict[str, torch.Tensor]) -> "GaussianSplat3d":
         """
         Creates a GaussianSplat3d instance from a state dictionary.
@@ -298,7 +327,7 @@ class GaussianSplat3d:
         Returns:
             torch.device: The device of the GaussianSplat3d instance.
         """
-        return self.means.device
+        return self._impl.device
 
     @property
     def dtype(self) -> torch.dtype:
@@ -309,7 +338,7 @@ class GaussianSplat3d:
         Returns:
             torch.dtype: The data type of the GaussianSplat3d instance.
         """
-        return self.means.dtype
+        return self._impl.dtype
 
     @property
     def sh_degree(self) -> int:

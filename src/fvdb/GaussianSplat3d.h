@@ -7,6 +7,8 @@
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
 
+#include <ATen/core/TensorBody.h>
+#include <c10/core/Device.h>
 #include <torch/all.h>
 
 namespace fvdb {
@@ -139,6 +141,161 @@ class GaussianSplat3d {
     };
 
   public:
+    /// @brief Concatenate a vector of GaussianSplat3d objects into a single GaussianSplat3d object.
+    /// @param splats A vector of GaussianSplat3d objects to concatenate.
+    /// @param accumulateMean2dGradients Whether to accumulate the mean 2D gradients for each
+    /// Gaussian.
+    ///     For splats that do not have mean2d gradients, zeros will be copied to the means2d
+    ///     gradient norm state in the output.
+    /// @param accumulateMax2dRadii Whether to accumulate the maximum 2D radii for each Gaussian.
+    ///     For splats that do not have 2D radii, zeros will be copied to the radii state in the
+    ///     output.
+    /// @return A new GaussianSplat3d object that is the concatenation of the input splats.
+    static GaussianSplat3d
+    cat(const std::vector<GaussianSplat3d> &splats,
+        bool accumulateMean2dGradients,
+        bool accumulateMax2dRadii,
+        bool detach) {
+        TORCH_CHECK_VALUE(!splats.empty(), "Cannot concatenate an empty vector of splats");
+
+        std::vector<torch::Tensor> meansVec, quatsVec, logScalesVec, logitOpacitiesVec, sh0Vec,
+            shNVec;
+
+        std::vector<torch::Tensor> accStepCountsVec, accMax2dRadiiVec, accNorm2dMeansGradientsVec;
+
+        const auto device = splats[0].device();
+        const auto dtype  = splats[0].scalarType();
+
+        for (const auto &splat: splats) {
+            TORCH_CHECK_VALUE(splat.device() == device, "All splats must be on the same device");
+            TORCH_CHECK_VALUE(splat.scalarType() == dtype, "All splats must be of the same type");
+
+            meansVec.push_back(splat.mMeans);
+            quatsVec.push_back(splat.mQuats);
+            logScalesVec.push_back(splat.mLogScales);
+            logitOpacitiesVec.push_back(splat.mLogitOpacities);
+            sh0Vec.push_back(splat.mSh0);
+            shNVec.push_back(splat.mShN);
+
+            const auto N = splat.numGaussians();
+            if (accumulateMean2dGradients) {
+                auto [accNorm2dMeansGradients, accGradientStepCounts] = [&]() {
+                    if (splat.mAccumulatedNormalized2dMeansGradientNormsForGrad.defined()) {
+                        TORCH_CHECK(
+                            splat.mAccumulatedNormalized2dMeansGradientNormsForGrad.numel() == N,
+                            "accumulated_mean_2d_gradient_norms_for_grad must have shape (N)");
+                        TORCH_CHECK(
+                            splat.mAccumulatedNormalized2dMeansGradientNormsForGrad.device() ==
+                                splat.device(),
+                            "accumulated_mean_2d_gradient_norms_for_grad must be on the same device as "
+                            "means");
+                        TORCH_CHECK(splat.mGradientStepCountForGrad.defined(),
+                                    "gradient_step_counts_for_grad must be non-empty if "
+                                    "accumulated_mean_2d_gradient_norms_for_grad is non-empty");
+                        TORCH_CHECK(
+                            splat.mGradientStepCountForGrad.numel() == N,
+                            "accumulated_gradient_step_counts_for_grad must have shape (N)");
+                        return std::make_tuple(
+                            splat.mAccumulatedNormalized2dMeansGradientNormsForGrad,
+                            splat.mGradientStepCountForGrad);
+                    } else {
+                        return std::make_tuple(torch::zeros({N}, splat.mMeans.options()),
+                                               torch::zeros({N}, torch::kInt32).to(splat.device()));
+                    }
+                }();
+                accNorm2dMeansGradientsVec.push_back(accNorm2dMeansGradients);
+                accStepCountsVec.push_back(accGradientStepCounts);
+            }
+            if (accumulateMax2dRadii) {
+                if (splat.mAccumulated2dRadiiForGrad.defined()) {
+                    TORCH_CHECK(splat.mAccumulated2dRadiiForGrad.numel() == N,
+                                "accumulated_max_2d_radii_for_grad must have shape (N)");
+                    TORCH_CHECK(
+                        splat.mAccumulated2dRadiiForGrad.device() == splat.device(),
+                        "accumulated_max_2d_radii_for_grad must be on the same device as means");
+                    accMax2dRadiiVec.push_back(splat.mAccumulated2dRadiiForGrad);
+                } else {
+                    accMax2dRadiiVec.push_back(torch::zeros({N}, torch::kInt32).to(splat.device()));
+                }
+            }
+        }
+
+        torch::Tensor meansCat          = torch::cat(meansVec, 0);
+        torch::Tensor quatsCat          = torch::cat(quatsVec, 0);
+        torch::Tensor logScalesCat      = torch::cat(logScalesVec, 0);
+        torch::Tensor logitOpacitiesCat = torch::cat(logitOpacitiesVec, 0);
+        torch::Tensor sh0Cat            = torch::cat(sh0Vec, 0);
+        torch::Tensor shNCat            = torch::cat(shNVec, 0);
+
+        auto ret = GaussianSplat3d(meansCat,
+                                   quatsCat,
+                                   logScalesCat,
+                                   logitOpacitiesCat,
+                                   sh0Cat,
+                                   shNCat,
+                                   accumulateMean2dGradients,
+                                   accumulateMax2dRadii,
+                                   detach);
+
+        if (accumulateMean2dGradients) {
+            auto catNorm2dGradMeans = torch::cat(accNorm2dMeansGradientsVec, 0);
+            if (detach) {
+                catNorm2dGradMeans = catNorm2dGradMeans.detach();
+            }
+            auto catStepCounts = torch::cat(accStepCountsVec, 0);
+            if (detach) {
+                catStepCounts = catStepCounts.detach();
+            }
+            ret.mAccumulatedNormalized2dMeansGradientNormsForGrad = catNorm2dGradMeans;
+            ret.mGradientStepCountForGrad                         = catStepCounts;
+        }
+        if (accumulateMax2dRadii) {
+            auto catMax2dRadii = torch::cat(accMax2dRadiiVec, 0);
+            if (detach) {
+                catMax2dRadii = catMax2dRadii.detach();
+            }
+            ret.mAccumulated2dRadiiForGrad = catMax2dRadii;
+        }
+
+        return ret;
+    }
+
+    /// @brief Get the device this Gaussian splat is on.
+    /// @return The device of the means tensor.
+    torch::Device
+    device() const {
+        TORCH_CHECK(mMeans.device() == mQuats.device(),
+                    "All tensors must be on the same device. Means and quats must match.");
+        TORCH_CHECK(mMeans.device() == mLogScales.device(),
+                    "All tensors must be on the same device. Means and log scales must match.");
+        TORCH_CHECK(
+            mMeans.device() == mLogitOpacities.device(),
+            "All tensors must be on the same device. Means and logit opacities must match.");
+        TORCH_CHECK(mMeans.device() == mSh0.device(),
+                    "All tensors must be on the same device. Means and SH0 must match.");
+        TORCH_CHECK(mMeans.device() == mShN.device(),
+                    "All tensors must be on the same device. Means and SHN must match.");
+        return mMeans.device();
+    }
+
+    /// @brief Get the scalar type of the tensors in this Gaussian splat.
+    /// @return The scalar type of the means tensor.
+    ///         All tensors are expected to have the same scalar type.
+    torch::ScalarType
+    scalarType() const {
+        TORCH_CHECK(mMeans.scalar_type() == mQuats.scalar_type(),
+                    "All tensors must be of the same type. Means and quats must match.");
+        TORCH_CHECK(mMeans.scalar_type() == mLogScales.scalar_type(),
+                    "All tensors must be of the same type. Means and log scales must match.");
+        TORCH_CHECK(mMeans.scalar_type() == mLogitOpacities.scalar_type(),
+                    "All tensors must be of the same type. Means and logit opacities must match.");
+        TORCH_CHECK(mMeans.scalar_type() == mSh0.scalar_type(),
+                    "All tensors must be of the same type. Means and SH0 must match.");
+        TORCH_CHECK(mMeans.scalar_type() == mShN.scalar_type(),
+                    "All tensors must be of the same type. Means and SHN must match.");
+        return mMeans.scalar_type();
+    }
+
     /// @brief Return the means of the Gaussians in this scene.
     /// @return An [N, 3]-shaped tensor representing the means of the Gaussians in this scenes.
     torch::Tensor
@@ -237,7 +394,7 @@ class GaussianSplat3d {
     ///         specified device and dtype, or *this if the device and dtype match this.
     GaussianSplat3d
     to(torch::Device device, torch::ScalarType dtype) {
-        if (mMeans.device() == device && mMeans.scalar_type() == dtype) {
+        if (this->device() == device && this->scalarType() == dtype) {
             return *this; // No need to copy if already on the right device and type
         } else {
             auto ret = GaussianSplat3d(

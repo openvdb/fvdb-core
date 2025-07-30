@@ -105,6 +105,8 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("accumulate_mean_2d_gradients"),
              py::arg("accumulate_max_2d_radii"),
              py::arg("detach"))
+        .def_property_readonly("device", &fvdb::GaussianSplat3d::device)
+        .def_property_readonly("dtype", &fvdb::GaussianSplat3d::scalarType)
         .def_property_readonly("sh_degree", &fvdb::GaussianSplat3d::shDegree)
         .def_property("means", &fvdb::GaussianSplat3d::means, &fvdb::GaussianSplat3d::setMeans)
         .def_property("quats", &fvdb::GaussianSplat3d::quats, &fvdb::GaussianSplat3d::setQuats)
@@ -160,6 +162,12 @@ bind_gaussian_splat3d(py::module &m) {
                     &fvdb::GaussianSplat3d::fromPly,
                     py::arg("filename"),
                     py::arg("device") = torch::kCPU)
+        .def_static("cat",
+                    &fvdb::GaussianSplat3d::cat,
+                    py::arg("splats_to_cat"),
+                    py::arg("accumulate_mean_2d_gradients") = false,
+                    py::arg("accumulate_max_2d_radii")      = false,
+                    py::arg("detach")                       = false)
         .def("reset_accumulated_gradient_state",
              &fvdb::GaussianSplat3d::resetAccumulatedGradientState)
         .def("project_gaussians_for_images",
