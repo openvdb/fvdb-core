@@ -5,6 +5,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianMacros.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
+#include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <nanovdb/math/Math.h>
@@ -305,6 +306,7 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
     at::optional<torch::Tensor> outNormalizedMaxRadiiAccum,          // [N]
     at::optional<torch::Tensor> outGradientStepCounts                // [N]
 ) {
+    FVDB_FUNC_RANGE();
     // These are supported by the underlying kernel, but they are not exposed
     const at::optional<torch::Tensor> &covars = std::nullopt;
     // const at::optional<torch::Tensor> &compensations = std::nullopt;

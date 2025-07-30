@@ -3,6 +3,7 @@
 //
 #include <fvdb/detail/autograd/EvaluateSphericalHarmonics.h>
 #include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
 
 namespace fvdb {
@@ -20,6 +21,7 @@ EvaluateSphericalHarmonics::forward(
     const std::optional<EvaluateSphericalHarmonics::Variable> &shNCoeffs, // [N, K-1, D]
     const EvaluateSphericalHarmonics::Variable &radii                     // [C, N]
 ) {
+    FVDB_FUNC_RANGE_WITH_NAME("EvaluateSphericalHarmonics::forward");
     const Variable viewDirectionsValue = viewDirections.value_or(torch::Tensor());
     const Variable shNCoeffsValue      = shNCoeffs.value_or(torch::Tensor());
     const Variable renderQuantities    = FVDB_DISPATCH_KERNEL_DEVICE(sh0Coeffs.device(), [&]() {
@@ -36,6 +38,7 @@ EvaluateSphericalHarmonics::forward(
 EvaluateSphericalHarmonics::VariableList
 EvaluateSphericalHarmonics::backward(EvaluateSphericalHarmonics::AutogradContext *ctx,
                                      EvaluateSphericalHarmonics::VariableList gradOutput) {
+    FVDB_FUNC_RANGE_WITH_NAME("EvaluateSphericalHarmonics::backward");
     Variable dLossDColors = gradOutput.at(0);
 
     // ensure the gradients are contiguous if they are not None

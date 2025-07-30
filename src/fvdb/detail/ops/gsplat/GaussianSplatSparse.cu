@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/Ops.h>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
+#include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <ATen/Dispatch_v2.h>
@@ -213,6 +214,7 @@ computeSparseInfo(const int32_t tileSideLength,
                   const int32_t numTilesW,
                   const int32_t numTilesH,
                   const fvdb::JaggedTensor &pixelsToRender) {
+    FVDB_FUNC_RANGE();
     TORCH_CHECK_NOT_IMPLEMENTED(pixelsToRender.device().is_cuda(),
                                 "computeSparseInfo only implemented on the device");
 

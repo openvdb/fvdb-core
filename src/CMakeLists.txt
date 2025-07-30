@@ -163,7 +163,8 @@ target_include_directories(fvdb PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/../../nanovdb
     ${TORCH_INCLUDE_DIRS}
-    ${Python3_INCLUDE_DIRS})
+    ${Python3_INCLUDE_DIRS}
+    ${nvtx3_SOURCE_DIR}/include)
 target_include_directories(fvdb PRIVATE
     ${TORCH_SOURCE_INCLUDE_DIRS}
     ${tinyply_SOURCE_DIR}/source)

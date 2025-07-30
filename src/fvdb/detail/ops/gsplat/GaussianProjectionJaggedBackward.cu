@@ -5,6 +5,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianMacros.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
+#include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <ATen/cuda/Atomic.cuh>
@@ -263,6 +264,7 @@ dispatchGaussianProjectionJaggedBackward<torch::kCUDA>(
     const torch::Tensor &dLossDConics,  // [N, 3]
     const bool worldToCamMatricesRequiresGrad,
     const bool ortho) {
+    FVDB_FUNC_RANGE();
     // These are supported by the underlying kernel, but they are not exposed
     const at::optional<torch::Tensor> &covars              = std::nullopt;
     const at::optional<torch::Tensor> &compensations       = std::nullopt;

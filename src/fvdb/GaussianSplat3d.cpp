@@ -5,6 +5,7 @@
 #include <fvdb/detail/autograd/Autograd.h>
 #include <fvdb/detail/ops/Ops.h>
 #include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
+#include <fvdb/detail/utils/Nvtx.h>
 
 #include <ATen/core/TensorBody.h>
 #include <ATen/core/grad_mode.h>
@@ -25,6 +26,7 @@ torch::Tensor
 GaussianSplat3d::evalSphericalHarmonicsImpl(const int64_t shDegreeToUse,
                                             const torch::Tensor &worldToCameraMatrices,
                                             const torch::Tensor &perGaussianProjectedRadii) const {
+    FVDB_FUNC_RANGE();
     const auto K              = mShN.size(1) + 1;              // number of SH bases
     const auto C              = worldToCameraMatrices.size(0); // number of cameras
     const auto actualShDegree = shDegreeToUse < 0 ? (std::sqrt(K) - 1) : shDegreeToUse;
@@ -271,6 +273,7 @@ GaussianSplat3d::ProjectedGaussianSplats
 GaussianSplat3d::projectGaussiansImpl(const torch::Tensor &worldToCameraMatrices,
                                       const torch::Tensor &projectionMatrices,
                                       const RenderSettings &settings) {
+    FVDB_FUNC_RANGE();
     const bool ortho = settings.projectionType == fvdb::detail::ops::ProjectionType::ORTHOGRAPHIC;
     const int C      = worldToCameraMatrices.size(0); // number of cameras
     const int N      = mMeans.size(0);                // number of gaussians
@@ -385,6 +388,7 @@ GaussianSplat3d::renderCropFromProjectedGaussiansImpl(
     const ssize_t cropHeight,
     const ssize_t cropOriginW,
     const ssize_t cropOriginH) {
+    FVDB_FUNC_RANGE();
     // Negative values mean use the whole image, but all values must be negative
     if (cropWidth <= 0 || cropHeight <= 0 || cropOriginW < 0 || cropOriginH < 0) {
         TORCH_CHECK_VALUE(cropWidth <= 0 && cropHeight <= 0 && cropOriginW <= 0 && cropOriginH <= 0,
@@ -425,6 +429,7 @@ std::tuple<torch::Tensor, torch::Tensor>
 GaussianSplat3d::renderImpl(const torch::Tensor &worldToCameraMatrices,
                             const torch::Tensor &projectionMatrices,
                             const fvdb::detail::ops::RenderSettings &settings) {
+    FVDB_FUNC_RANGE();
     const ProjectedGaussianSplats state =
         projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settings);
     return renderCropFromProjectedGaussiansImpl(
@@ -436,6 +441,7 @@ GaussianSplat3d::renderTopContributingGaussianIdsImpl(
     const torch::Tensor &worldToCameraMatrices,
     const torch::Tensor &projectionMatrices,
     const fvdb::detail::ops::RenderSettings &settings) {
+    FVDB_FUNC_RANGE();
     const ProjectedGaussianSplats &state =
         projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settings);
     // TODO: Currently projection only performs spherical harmonics evaluation on input SH/features,
@@ -472,6 +478,7 @@ GaussianSplat3d::sparseRenderTopContributingGaussianIdsImpl(
     const torch::Tensor &worldToCameraMatrices,
     const torch::Tensor &projectionMatrices,
     const fvdb::detail::ops::RenderSettings &settings) {
+    FVDB_FUNC_RANGE();
     const ProjectedGaussianSplats &state =
         projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settings);
 

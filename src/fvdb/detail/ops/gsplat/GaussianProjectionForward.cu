@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/Ops.h>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
+#include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <c10/cuda/CUDAGuard.h>
@@ -259,6 +260,7 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
     const float radiusClip,
     const bool calcCompensations,
     const bool ortho) {
+    FVDB_FUNC_RANGE();
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means));
 
     const auto N                = means.size(0);              // number of gaussians
