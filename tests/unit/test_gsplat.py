@@ -97,6 +97,237 @@ class BaseGaussianTestCase(unittest.TestCase):
 
 
 @parameterized_class(("run_backward"), [(True,), (False,)])
+class TestGaussianSplatCat(BaseGaussianTestCase):
+    def setUp(self):
+        super().setUp()
+
+        self.run_backward = self.run_backward
+
+        self.gs3d1 = GaussianSplat3d(
+            means=self.gs3d.means.clone(),
+            quats=self.gs3d.quats.clone(),
+            log_scales=self.gs3d.log_scales.clone(),
+            logit_opacities=self.gs3d.logit_opacities.clone(),
+            sh0=self.gs3d.sh0.clone(),
+            shN=self.gs3d.shN.clone(),
+            accumulate_max_2d_radii=self.gs3d.accumulate_max_2d_radii,
+            accumulate_mean_2d_gradients=self.gs3d.accumulate_mean_2d_gradients,
+            detach=True,  # Detach to avoid gradients from the original Gaussian Splat
+        )
+        self.gs3d2 = GaussianSplat3d(
+            means=self.gs3d.means.clone() + 0.1,
+            quats=self.gs3d.quats.clone() + 0.01,
+            log_scales=self.gs3d.log_scales.clone() + 0.01,
+            logit_opacities=self.gs3d.logit_opacities.clone() + 0.01,
+            sh0=self.gs3d.sh0.clone() + 0.01,
+            shN=self.gs3d.shN.clone() + 0.01,
+            accumulate_max_2d_radii=self.gs3d.accumulate_max_2d_radii,
+            accumulate_mean_2d_gradients=self.gs3d.accumulate_mean_2d_gradients,
+        )
+        self.gs3d3 = GaussianSplat3d(
+            means=self.gs3d.means.clone() + 0.2,
+            quats=self.gs3d.quats.clone() + 0.02,
+            log_scales=self.gs3d.log_scales.clone() + 0.02,
+            logit_opacities=self.gs3d.logit_opacities.clone() + 0.02,
+            sh0=self.gs3d.sh0.clone() + 0.02,
+            shN=self.gs3d.shN.clone() + 0.02,
+            accumulate_max_2d_radii=self.gs3d.accumulate_max_2d_radii,
+            accumulate_mean_2d_gradients=self.gs3d.accumulate_mean_2d_gradients,
+        )
+
+        self.device = torch.device(self.device)
+        if self.run_backward:
+            self.run_backward_on_gs3d(self.gs3d1)
+
+    def run_backward_on_gs3d(self, gs3d):
+        gs3d.requires_grad = True
+        gs3d.accumulate_max_2d_radii = True
+        gs3d.accumulate_mean_2d_gradients = True
+        rgb, alpha = gs3d.render_images(
+            self.cam_to_world_mats,
+            self.projection_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+        )
+        loss = rgb.sum()
+        loss.backward()
+
+    def check_grad(self):
+        if self.run_backward:
+            self.assertTrue(self.gs3d1.means.grad is not None)
+            self.assertTrue(self.gs3d1.quats.grad is not None)
+            self.assertTrue(self.gs3d1.log_scales.grad is not None)
+            self.assertTrue(self.gs3d1.logit_opacities.grad is not None)
+            self.assertTrue(self.gs3d1.sh0.grad is not None)
+            self.assertTrue(self.gs3d1.shN.grad is not None)
+            self.assertTrue(self.gs3d1.accumulated_gradient_step_counts is not None)
+            self.assertTrue(self.gs3d1.accumulated_mean_2d_gradient_norms is not None)
+            if self.gs3d1.accumulate_max_2d_radii:
+                self.assertTrue(self.gs3d1.accumulated_max_2d_radii is not None)
+            else:
+                self.assertEqual(self.gs3d1.accumulated_max_2d_radii, None)
+
+            self.assertTrue(self.gs3d1.accumulated_gradient_step_counts.shape == (self.gs3d1.num_gaussians,))
+            self.assertTrue(self.gs3d1.accumulated_mean_2d_gradient_norms.shape == (self.gs3d1.num_gaussians,))
+
+    def check_basic(self, gs3d_cat, gs3d_list, acc2d_rad, acc_m2dgrad):
+
+        self.assertTrue(gs3d_cat.num_gaussians == len(gs3d_list) * self.gs3d.num_gaussians)
+        self.assertTrue(torch.equal(gs3d_cat.means, torch.cat([gs.means for gs in gs3d_list], dim=0)))
+        self.assertTrue(torch.equal(gs3d_cat.quats, torch.cat([gs.quats for gs in gs3d_list], dim=0)))
+        self.assertTrue(torch.equal(gs3d_cat.log_scales, torch.cat([gs.log_scales for gs in gs3d_list], dim=0)))
+        self.assertTrue(
+            torch.equal(gs3d_cat.logit_opacities, torch.cat([gs.logit_opacities for gs in gs3d_list], dim=0))
+        )
+        self.assertTrue(torch.equal(gs3d_cat.sh0, torch.cat([gs.sh0 for gs in gs3d_list], dim=0)))
+        self.assertTrue(torch.equal(gs3d_cat.shN, torch.cat([gs.shN for gs in gs3d_list], dim=0)))
+        self.assertEqual(gs3d_cat.accumulate_max_2d_radii, acc2d_rad)
+        self.assertEqual(gs3d_cat.accumulate_mean_2d_gradients, acc_m2dgrad)
+
+        if gs3d_cat.accumulate_max_2d_radii:
+            self.assertTrue(gs3d_cat.accumulated_max_2d_radii.shape == (gs3d_cat.num_gaussians,))
+            self.assertTrue(gs3d_cat.accumulated_max_2d_radii.dtype == torch.int32)
+            self.assertTrue(gs3d_cat.accumulated_max_2d_radii.device == self.device)
+        else:
+            self.assertEqual(gs3d_cat.accumulated_max_2d_radii, None)
+
+        if gs3d_cat.accumulate_max_2d_radii:
+            self.assertTrue(gs3d_cat.accumulated_gradient_step_counts.shape == (gs3d_cat.num_gaussians,))
+            self.assertTrue(gs3d_cat.accumulated_gradient_step_counts.dtype == torch.int32)
+            self.assertTrue(gs3d_cat.accumulated_gradient_step_counts.device == self.device)
+
+            self.assertTrue(gs3d_cat.accumulated_mean_2d_gradient_norms.shape == (gs3d_cat.num_gaussians,))
+            self.assertTrue(gs3d_cat.accumulated_mean_2d_gradient_norms.dtype == gs3d_cat.dtype)
+            self.assertTrue(gs3d_cat.accumulated_mean_2d_gradient_norms.device == self.device)
+        else:
+            self.assertEqual(gs3d_cat.accumulated_gradient_step_counts, None)
+            self.assertEqual(gs3d_cat.accumulated_mean_2d_gradient_norms, None)
+
+    def test_cat_basic(self):
+        gs3d_cat = GaussianSplat3d.cat(
+            [self.gs3d1, self.gs3d2, self.gs3d3], accumulate_max_2d_radii=False, accumulate_mean_2d_gradients=False
+        )
+        self.check_grad()
+        self.check_basic(gs3d_cat, [self.gs3d1, self.gs3d2, self.gs3d3], False, False)
+
+    def test_cat_track_state_no_backward_on_two_and_three(self):
+        gs3d_cat = GaussianSplat3d.cat(
+            [self.gs3d1, self.gs3d2, self.gs3d3], accumulate_max_2d_radii=True, accumulate_mean_2d_gradients=True
+        )
+
+        self.check_grad()
+        self.check_basic(gs3d_cat, [self.gs3d1, self.gs3d2, self.gs3d3], True, True)
+
+        self.assertTrue(gs3d_cat.accumulated_gradient_step_counts.shape, (gs3d_cat.num_gaussians,))
+        self.assertTrue(gs3d_cat.accumulated_mean_2d_gradient_norms.shape, (gs3d_cat.num_gaussians,))
+        if self.run_backward:
+            step_counts = torch.cat(
+                [
+                    self.gs3d1.accumulated_gradient_step_counts,
+                    torch.zeros_like(self.gs3d1.accumulated_gradient_step_counts),
+                    torch.zeros_like(self.gs3d1.accumulated_gradient_step_counts),
+                ],
+                dim=0,
+            )
+            means2dnorms = torch.cat(
+                [
+                    self.gs3d1.accumulated_mean_2d_gradient_norms,
+                    torch.zeros_like(self.gs3d1.accumulated_mean_2d_gradient_norms),
+                    torch.zeros_like(self.gs3d1.accumulated_mean_2d_gradient_norms),
+                ],
+                dim=0,
+            )
+            max_radii = torch.cat(
+                [
+                    self.gs3d1.accumulated_max_2d_radii,
+                    torch.zeros_like(self.gs3d1.accumulated_max_2d_radii),
+                    torch.zeros_like(self.gs3d1.accumulated_max_2d_radii),
+                ],
+                dim=0,
+            )
+        else:
+            step_counts = torch.zeros(gs3d_cat.num_gaussians, dtype=torch.int32, device=self.device)
+            means2dnorms = torch.zeros(gs3d_cat.num_gaussians, dtype=self.gs3d1.dtype, device=self.device)
+            max_radii = torch.zeros(gs3d_cat.num_gaussians, dtype=torch.int32, device=self.device)
+        self.assertTrue(torch.equal(gs3d_cat.accumulated_gradient_step_counts, step_counts))
+        self.assertTrue(torch.equal(gs3d_cat.accumulated_mean_2d_gradient_norms, means2dnorms))
+        self.assertTrue(torch.equal(gs3d_cat.accumulated_max_2d_radii, max_radii))
+
+    def test_cat_track_state_all_backward(self):
+        gs3d1_d, gs3d2_d, gs3d3_d = self.gs3d1.detach(), self.gs3d2.detach(), self.gs3d3.detach()
+        if self.run_backward:
+            self.run_backward_on_gs3d(gs3d1_d)
+            self.run_backward_on_gs3d(gs3d2_d)
+            self.run_backward_on_gs3d(gs3d3_d)
+
+        gs3d_cat = GaussianSplat3d.cat(
+            [gs3d1_d, gs3d2_d, gs3d3_d], accumulate_max_2d_radii=True, accumulate_mean_2d_gradients=True
+        )
+
+        self.check_grad()
+        self.check_basic(gs3d_cat, [gs3d1_d, gs3d2_d, gs3d3_d], True, True)
+
+        self.assertTrue(gs3d_cat.accumulate_max_2d_radii)
+        self.assertTrue(gs3d_cat.accumulate_mean_2d_gradients)
+
+        self.assertTrue(gs3d_cat.accumulated_gradient_step_counts.shape, (gs3d_cat.num_gaussians,))
+        self.assertTrue(gs3d_cat.accumulated_mean_2d_gradient_norms.shape, (gs3d_cat.num_gaussians,))
+
+        if self.run_backward:
+            step_counts = torch.cat(
+                [
+                    gs3d1_d.accumulated_gradient_step_counts,
+                    gs3d2_d.accumulated_gradient_step_counts,
+                    gs3d3_d.accumulated_gradient_step_counts,
+                ],
+                dim=0,
+            )
+            means2dnorms = torch.cat(
+                [
+                    gs3d1_d.accumulated_mean_2d_gradient_norms,
+                    gs3d2_d.accumulated_mean_2d_gradient_norms,
+                    gs3d3_d.accumulated_mean_2d_gradient_norms,
+                ],
+                dim=0,
+            )
+            max_radii = torch.cat(
+                [
+                    gs3d1_d.accumulated_max_2d_radii,
+                    gs3d2_d.accumulated_max_2d_radii,
+                    gs3d3_d.accumulated_max_2d_radii,
+                ],
+                dim=0,
+            )
+        else:
+            step_counts = torch.cat(
+                [
+                    torch.zeros(gs3d1_d.num_gaussians, device=self.device, dtype=torch.int32),
+                ]
+                * 3,
+                dim=0,
+            )
+            means2dnorms = torch.cat(
+                [
+                    torch.zeros(gs3d1_d.num_gaussians, device=self.device, dtype=gs3d1_d.dtype),
+                ]
+                * 3,
+                dim=0,
+            )
+            max_radii = torch.cat(
+                [
+                    torch.zeros(gs3d1_d.num_gaussians, device=self.device, dtype=torch.int32),
+                ]
+                * 3,
+                dim=0,
+            )
+        self.assertTrue(torch.equal(gs3d_cat.accumulated_gradient_step_counts, step_counts))
+        self.assertTrue(torch.equal(gs3d_cat.accumulated_mean_2d_gradient_norms, means2dnorms))
+        self.assertTrue(torch.equal(gs3d_cat.accumulated_max_2d_radii, max_radii))
+
+
+@parameterized_class(("run_backward"), [(True,), (False,)])
 class TestGaussianSplatTo(BaseGaussianTestCase):
     def setUp(self):
         super().setUp()
@@ -1497,4 +1728,5 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
 
 
 if __name__ == "__main__":
+    unittest.main()
     unittest.main()
