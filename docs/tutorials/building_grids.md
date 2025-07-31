@@ -50,7 +50,7 @@ voxel_sizes = [[0.1, 0.1, 0.1], [0.15, 0.15, 0.15]]
 
 # Method 1:
 grid_a1 = fvdb.GridBatch.from_points(pcd_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
-
+```
 
 Above we show the method for building grids from points. Similar functions exist for other grid building approaches. The built grids are shown as following:
 
