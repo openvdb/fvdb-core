@@ -32,6 +32,12 @@ dependencies:
   - tensorboard
   - tqdm
   - zlib
+  ## 3dgs
+  - pyproj
+  - scikit-image
+  - torchmetrics
+  - torchvision=0.19
+  - viser
   - pip:
     - gsplat
     - pytest-markdown-docs
