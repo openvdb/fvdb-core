@@ -375,9 +375,9 @@ def vdbtensor_from_dense(
     voxel_sizes: NumericMaxRank2 = 1,
     origins: NumericMaxRank2 = 0,
 ) -> VDBTensor:
-    ijk_min = to_Vec3i(ijk_min, device=dense_data.device)
-    voxel_sizes = to_Vec3fBatch(voxel_sizes, device=dense_data.device)
-    origins = to_Vec3fBatch(origins, device=dense_data.device)
+    ijk_min = to_Vec3i(ijk_min)
+    voxel_sizes = to_Vec3fBatch(voxel_sizes)
+    origins = to_Vec3fBatch(origins)
     grid = GridBatch.from_dense(
         dense_data.size(0),
         dense_data.size()[1:4],
