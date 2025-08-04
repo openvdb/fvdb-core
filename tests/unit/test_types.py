@@ -47,6 +47,18 @@ class TestTypesRedux(unittest.TestCase):
         torch.random.manual_seed(42)
         np.random.seed(42)
 
+    def assertSameDevice(self, a: Any, b: Any):
+        if isinstance(a, torch.Tensor):
+            a_device = a.device
+        else:
+            a_device = torch.device("cpu")
+
+        if isinstance(b, torch.Tensor):
+            b_device = b.device
+        else:
+            b_device = torch.device("cpu")
+        self.assertEqual(a_device, b_device)
+
     # ========== Type Guard Tests ==========
 
     def test_is_NumericScalarNative(self):
@@ -346,32 +358,37 @@ class TestTypesRedux(unittest.TestCase):
     def test_to_IntegerScalar(self, device):
         """Test to_IntegerScalar conversion"""
         # Test valid integer input types
-        valid_inputs = [1, np.int32(1), torch.tensor(1, dtype=torch.int32), torch.tensor(1, dtype=torch.int64)]
+        valid_inputs = [
+            1,
+            np.int32(1),
+            torch.tensor(1, dtype=torch.int32, device=device),
+            torch.tensor(1, dtype=torch.int64, device=device),
+        ]
 
         for inp in valid_inputs:
-            result = to_IntegerScalar(inp, device=device)
+            result = to_IntegerScalar(inp)
+            self.assertSameDevice(result, inp)
             self.assertEqual(result.shape, torch.Size([]))
-            self.assertEqual(result.device.type, device)
             self.assertTrue(result.dtype in [torch.int32, torch.int64])
             self.assertEqual(result.item(), 1)
 
         # Test that floating point inputs fail
-        invalid_inputs = [1.0, np.float32(1.0), np.array(1.0), torch.tensor(1.0)]
+        invalid_inputs = [1.0, np.float32(1.0), np.array(1.0), torch.tensor(1.0, device=device)]
         for inp in invalid_inputs:
             with self.assertRaises(Exception):
-                result = to_IntegerScalar(inp, device=device)
+                result = to_IntegerScalar(inp)
 
     @parameterized.expand(all_devices)
     def test_to_FloatingScalar(self, device):
         """Test to_FloatingScalar conversion"""
         # Test various input types
-        inputs = [1, 1.5, np.float32(1.5), torch.tensor(1.5)]
+        inputs = [1, 1.5, np.float32(1.5), torch.tensor(1.5, device=device)]
 
         # Integers and floats both upcast to floats.
         for inp in inputs:
-            result = to_FloatingScalar(inp, device=device)
+            result = to_FloatingScalar(inp)
+            self.assertSameDevice(result, inp)
             self.assertEqual(result.shape, torch.Size([]))
-            self.assertEqual(result.device.type, device)
             if inp is not 1:
                 self.assertAlmostEqual(result.item(), 1.5, places=5)
 
@@ -394,35 +411,31 @@ class TestTypesRedux(unittest.TestCase):
 
     # ========== Tensor Broadcasting Tests ==========
 
-    @parameterized.expand(all_devices)
-    def test_to_IntegerTensorBroadcastableRank1(self, device):
+    def test_to_IntegerTensorBroadcastableRank1(self):
         """Test rank 1 integer tensor broadcasting"""
         # Test scalar to broadcast
-        result = to_IntegerTensorBroadcastableRank1(5, (3,), device=device)
+        result = to_IntegerTensorBroadcastableRank1(5, (3,))
         self.assertEqual(result.shape, torch.Size([]))
-        self.assertEqual(result.device.type, device)
 
         # Test list input
-        result = to_IntegerTensorBroadcastableRank1([1, 2, 3], (3,), device=device)
+        result = to_IntegerTensorBroadcastableRank1([1, 2, 3], (3,))
         self.assertEqual(result.shape, torch.Size([3]))
-        self.assertTrue(torch.equal(result, torch.tensor([1, 2, 3], device=device, dtype=result.dtype)))
+        self.assertTrue(torch.equal(result, torch.tensor([1, 2, 3], dtype=result.dtype)))
 
         # Test broadcasting failure
         with self.assertRaises(ValueError):
-            to_IntegerTensorBroadcastableRank1([1, 2], (3,), device=device)
+            to_IntegerTensorBroadcastableRank1([1, 2], (3,))
 
-    @parameterized.expand(all_devices)
-    def test_to_FloatingTensorBroadcastableRank2(self, device):
+    def test_to_FloatingTensorBroadcastableRank2(self):
         """Test rank 2 floating tensor broadcasting"""
         # Test scalar input
-        result = to_FloatingTensorBroadcastableRank2(1.5, (2, 3), device=device)
+        result = to_FloatingTensorBroadcastableRank2(1.5, (2, 3))
         self.assertEqual(result.shape, torch.Size([]))
 
         # Test 2D list input
         input_data = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
-        result = to_FloatingTensorBroadcastableRank2(input_data, (2, 3), device=device)
+        result = to_FloatingTensorBroadcastableRank2(input_data, (2, 3))
         self.assertEqual(result.shape, torch.Size([2, 3]))
-        self.assertEqual(result.device.type, device)
 
     def test_tensor_broadcasting_failures(self):
         """Test tensor broadcasting failure cases"""
@@ -440,66 +453,62 @@ class TestTypesRedux(unittest.TestCase):
 
     # ========== Vec3 Conversion Tests ==========
 
-    @parameterized.expand(all_devices)
-    def test_to_Vec3i(self, device):
+    def test_to_Vec3i(self):
         """Test Vec3i conversion"""
         # Test scalar input (should broadcast)
-        result = to_Vec3i(5, device=device)
+        result = to_Vec3i(5)
         self.assertEqual(result.shape, torch.Size([3]))
-        self.assertTrue(torch.equal(result, torch.tensor([5, 5, 5], device=device, dtype=result.dtype)))
+        self.assertTrue(torch.equal(result, torch.tensor([5, 5, 5], dtype=result.dtype)))
 
         # Test list input
-        result = to_Vec3i([1, 2, 3], device=device)
+        result = to_Vec3i([1, 2, 3])
         self.assertEqual(result.shape, torch.Size([3]))
-        self.assertTrue(torch.equal(result, torch.tensor([1, 2, 3], device=device, dtype=result.dtype)))
+        self.assertTrue(torch.equal(result, torch.tensor([1, 2, 3], dtype=result.dtype)))
 
         # Test failure case
         with self.assertRaises(ValueError):
-            to_Vec3i([1, 2], device=device)
+            to_Vec3i([1, 2])
 
-    @parameterized.expand(all_devices)
-    def test_to_Vec3f(self, device):
+    def test_to_Vec3f(self):
         """Test Vec3f conversion"""
         # Test scalar input
-        result = to_Vec3f(1.5, device=device)
+        result = to_Vec3f(1.5)
         self.assertEqual(result.shape, torch.Size([3]))
-        expected = torch.tensor([1.5, 1.5, 1.5], device=device, dtype=result.dtype)
+        expected = torch.tensor([1.5, 1.5, 1.5], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
         # Test list input
-        result = to_Vec3f([1.0, 2.5, 3.0], device=device)
+        result = to_Vec3f([1.0, 2.5, 3.0])
         self.assertEqual(result.shape, torch.Size([3]))
-        expected = torch.tensor([1.0, 2.5, 3.0], device=device, dtype=result.dtype)
+        expected = torch.tensor([1.0, 2.5, 3.0], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
-    @parameterized.expand(all_devices)
-    def test_to_Vec3iBatch(self, device):
+    def test_to_Vec3iBatch(self):
         """Test Vec3iBatch conversion"""
         # Test scalar input (should create batch of size 1)
-        result = to_Vec3iBatch(5, device=device)
+        result = to_Vec3iBatch(5)
         self.assertEqual(result.shape, torch.Size([1, 3]))
-        expected = torch.tensor([[5, 5, 5]], device=device, dtype=result.dtype)
+        expected = torch.tensor([[5, 5, 5]], dtype=result.dtype)
         self.assertTrue(torch.equal(result, expected))
 
         # Test 2D list input
         input_data = [[1, 2, 3], [4, 5, 6]]
-        result = to_Vec3iBatch(input_data, device=device)
+        result = to_Vec3iBatch(input_data)
         self.assertEqual(result.shape, torch.Size([2, 3]))
-        expected = torch.tensor([[1, 2, 3], [4, 5, 6]], device=device, dtype=result.dtype)
+        expected = torch.tensor([[1, 2, 3], [4, 5, 6]], dtype=result.dtype)
         self.assertTrue(torch.equal(result, expected))
 
-    @parameterized.expand(all_devices)
-    def test_to_Vec3fBatch(self, device):
+    def test_to_Vec3fBatch(self):
         """Test Vec3fBatch conversion"""
         # Test scalar input
-        result = to_Vec3fBatch(1.5, device=device)
+        result = to_Vec3fBatch(1.5)
         self.assertEqual(result.shape, torch.Size([1, 3]))
-        expected = torch.tensor([[1.5, 1.5, 1.5]], device=device, dtype=result.dtype)
+        expected = torch.tensor([[1.5, 1.5, 1.5]], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
         # Test 2D list input
         input_data = [[1.0, 2.0, 3.0], [4.5, 5.5, 6.5]]
-        result = to_Vec3fBatch(input_data, device=device)
+        result = to_Vec3fBatch(input_data)
         self.assertEqual(result.shape, torch.Size([2, 3]))
 
     def test_vec3_conversion_failures(self):
@@ -517,90 +526,86 @@ class TestTypesRedux(unittest.TestCase):
 
     # ========== Positive Vec3 Conversion Tests ==========
 
-    @parameterized.expand(all_devices)
-    def test_to_PositiveVec3i(self, device):
+    def test_to_PositiveVec3i(self):
         """Test PositiveVec3i conversion with valid positive values"""
         # Test scalar input (should broadcast)
-        result = to_PositiveVec3i(5, device=device)
+        result = to_PositiveVec3i(5)
         self.assertEqual(result.shape, torch.Size([3]))
-        self.assertTrue(torch.equal(result, torch.tensor([5, 5, 5], device=device, dtype=result.dtype)))
+        self.assertTrue(torch.equal(result, torch.tensor([5, 5, 5], dtype=result.dtype)))
 
         # Test list input with positive values
-        result = to_PositiveVec3i([1, 2, 3], device=device)
+        result = to_PositiveVec3i([1, 2, 3])
         self.assertEqual(result.shape, torch.Size([3]))
-        self.assertTrue(torch.equal(result, torch.tensor([1, 2, 3], device=device, dtype=result.dtype)))
+        self.assertTrue(torch.equal(result, torch.tensor([1, 2, 3], dtype=result.dtype)))
 
         # Test tensor input with positive values
         input_tensor = torch.tensor([10, 20, 30], dtype=torch.int32)
-        result = to_PositiveVec3i(input_tensor, device=device)
+        result = to_PositiveVec3i(input_tensor)
         self.assertEqual(result.shape, torch.Size([3]))
-        self.assertTrue(torch.equal(result, torch.tensor([10, 20, 30], device=device, dtype=result.dtype)))
+        self.assertTrue(torch.equal(result, torch.tensor([10, 20, 30], dtype=result.dtype)))
 
-    @parameterized.expand(all_devices)
-    def test_to_PositiveVec3f(self, device):
+    def test_to_PositiveVec3f(self):
         """Test PositiveVec3f conversion with valid positive values"""
         # Test scalar input
-        result = to_PositiveVec3f(1.5, device=device)
+        result = to_PositiveVec3f(1.5)
         self.assertEqual(result.shape, torch.Size([3]))
-        expected = torch.tensor([1.5, 1.5, 1.5], device=device, dtype=result.dtype)
+        expected = torch.tensor([1.5, 1.5, 1.5], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
         # Test list input with positive values
-        result = to_PositiveVec3f([1.0, 2.5, 3.0], device=device)
+        result = to_PositiveVec3f([1.0, 2.5, 3.0])
         self.assertEqual(result.shape, torch.Size([3]))
-        expected = torch.tensor([1.0, 2.5, 3.0], device=device, dtype=result.dtype)
+        expected = torch.tensor([1.0, 2.5, 3.0], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
         # Test very small positive values
-        result = to_PositiveVec3f([0.001, 0.002, 0.003], device=device)
+        result = to_PositiveVec3f([0.001, 0.002, 0.003])
         self.assertEqual(result.shape, torch.Size([3]))
-        expected = torch.tensor([0.001, 0.002, 0.003], device=device, dtype=result.dtype)
+        expected = torch.tensor([0.001, 0.002, 0.003], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
-    @parameterized.expand(all_devices)
-    def test_to_PositiveVec3iBatch(self, device):
+    def test_to_PositiveVec3iBatch(self):
         """Test PositiveVec3iBatch conversion with valid positive values"""
         # Test scalar input (should create batch of size 1)
-        result = to_PositiveVec3iBatch(5, device=device)
+        result = to_PositiveVec3iBatch(5)
         self.assertEqual(result.shape, torch.Size([1, 3]))
-        expected = torch.tensor([[5, 5, 5]], device=device, dtype=result.dtype)
+        expected = torch.tensor([[5, 5, 5]], dtype=result.dtype)
         self.assertTrue(torch.equal(result, expected))
 
         # Test 2D list input with positive values
         input_data = [[1, 2, 3], [4, 5, 6]]
-        result = to_PositiveVec3iBatch(input_data, device=device)
+        result = to_PositiveVec3iBatch(input_data)
         self.assertEqual(result.shape, torch.Size([2, 3]))
-        expected = torch.tensor([[1, 2, 3], [4, 5, 6]], device=device, dtype=result.dtype)
+        expected = torch.tensor([[1, 2, 3], [4, 5, 6]], dtype=result.dtype)
         self.assertTrue(torch.equal(result, expected))
 
         # Test with large positive values
         input_data = [[100, 200, 300], [400, 500, 600]]
-        result = to_PositiveVec3iBatch(input_data, device=device)
+        result = to_PositiveVec3iBatch(input_data)
         self.assertEqual(result.shape, torch.Size([2, 3]))
-        expected = torch.tensor([[100, 200, 300], [400, 500, 600]], device=device, dtype=result.dtype)
+        expected = torch.tensor([[100, 200, 300], [400, 500, 600]], dtype=result.dtype)
         self.assertTrue(torch.equal(result, expected))
 
-    @parameterized.expand(all_devices)
-    def test_to_PositiveVec3fBatch(self, device):
+    def test_to_PositiveVec3fBatch(self):
         """Test PositiveVec3fBatch conversion with valid positive values"""
         # Test scalar input
-        result = to_PositiveVec3fBatch(1.5, device=device)
+        result = to_PositiveVec3fBatch(1.5)
         self.assertEqual(result.shape, torch.Size([1, 3]))
-        expected = torch.tensor([[1.5, 1.5, 1.5]], device=device, dtype=result.dtype)
+        expected = torch.tensor([[1.5, 1.5, 1.5]], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
         # Test 2D list input with positive values
         input_data = [[1.0, 2.0, 3.0], [4.5, 5.5, 6.5]]
-        result = to_PositiveVec3fBatch(input_data, device=device)
+        result = to_PositiveVec3fBatch(input_data)
         self.assertEqual(result.shape, torch.Size([2, 3]))
-        expected = torch.tensor([[1.0, 2.0, 3.0], [4.5, 5.5, 6.5]], device=device, dtype=result.dtype)
+        expected = torch.tensor([[1.0, 2.0, 3.0], [4.5, 5.5, 6.5]], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
         # Test with very small positive values
         input_data = [[0.1, 0.2, 0.3], [0.001, 0.002, 0.003]]
-        result = to_PositiveVec3fBatch(input_data, device=device)
+        result = to_PositiveVec3fBatch(input_data)
         self.assertEqual(result.shape, torch.Size([2, 3]))
-        expected = torch.tensor([[0.1, 0.2, 0.3], [0.001, 0.002, 0.003]], device=device, dtype=result.dtype)
+        expected = torch.tensor([[0.1, 0.2, 0.3], [0.001, 0.002, 0.003]], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
     def test_positive_vec3_conversion_failures(self):
@@ -688,10 +693,10 @@ class TestTypesRedux(unittest.TestCase):
         self.assertEqual(result.dtype, torch.float64)
 
         # Test device specification
-        result = to_PositiveVec3i([1, 2, 3], device="cpu")
+        result = to_PositiveVec3i([1, 2, 3])
         self.assertEqual(result.device.type, "cpu")
 
-        result = to_PositiveVec3f([1.0, 2.0, 3.0], device="cpu")
+        result = to_PositiveVec3f([1.0, 2.0, 3.0])
         self.assertEqual(result.device.type, "cpu")
 
         # Test batch versions
@@ -703,84 +708,80 @@ class TestTypesRedux(unittest.TestCase):
 
     # ========== NonNegative Vec3 Conversion Tests ==========
 
-    @parameterized.expand(all_devices)
-    def test_to_NonNegativeVec3i(self, device):
+    def test_to_NonNegativeVec3i(self):
         """Test NonNegativeVec3i conversion - allows zero, rejects negative"""
         # Test positive values (should work)
-        result = to_NonNegativeVec3i([1, 2, 3], device=device)
-        self.assertTrue(torch.equal(result, torch.tensor([1, 2, 3], device=device, dtype=result.dtype)))
+        result = to_NonNegativeVec3i([1, 2, 3])
+        self.assertTrue(torch.equal(result, torch.tensor([1, 2, 3], dtype=result.dtype)))
 
         # Test zero values (should work - key difference from Positive)
-        result = to_NonNegativeVec3i([0, 1, 2], device=device)
-        self.assertTrue(torch.equal(result, torch.tensor([0, 1, 2], device=device, dtype=result.dtype)))
+        result = to_NonNegativeVec3i([0, 1, 2])
+        self.assertTrue(torch.equal(result, torch.tensor([0, 1, 2], dtype=result.dtype)))
 
         # Test scalar zero (should work)
-        result = to_NonNegativeVec3i(0, device=device)
-        self.assertTrue(torch.equal(result, torch.tensor([0, 0, 0], device=device, dtype=result.dtype)))
+        result = to_NonNegativeVec3i(0)
+        self.assertTrue(torch.equal(result, torch.tensor([0, 0, 0], dtype=result.dtype)))
 
         # Test negative values (should fail)
         with self.assertRaises(ValueError):
-            to_NonNegativeVec3i([-1, 2, 3], device=device)
+            to_NonNegativeVec3i([-1, 2, 3])
 
-    @parameterized.expand(all_devices)
-    def test_to_NonNegativeVec3f(self, device):
+    def test_to_NonNegativeVec3f(self):
         """Test NonNegativeVec3f conversion - allows zero, rejects negative"""
         # Test positive values
-        result = to_NonNegativeVec3f([1.0, 2.0, 3.0], device=device)
-        expected = torch.tensor([1.0, 2.0, 3.0], device=device, dtype=result.dtype)
+        result = to_NonNegativeVec3f([1.0, 2.0, 3.0])
+        expected = torch.tensor([1.0, 2.0, 3.0], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
         # Test zero values (should work)
-        result = to_NonNegativeVec3f([0.0, 1.0, 2.0], device=device)
-        expected = torch.tensor([0.0, 1.0, 2.0], device=device, dtype=result.dtype)
+        result = to_NonNegativeVec3f([0.0, 1.0, 2.0])
+        expected = torch.tensor([0.0, 1.0, 2.0], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
         # Test scalar zero (should work)
-        result = to_NonNegativeVec3f(0.0, device=device)
-        expected = torch.tensor([0.0, 0.0, 0.0], device=device, dtype=result.dtype)
+        result = to_NonNegativeVec3f(0.0)
+        expected = torch.tensor([0.0, 0.0, 0.0], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
         # Test negative values (should fail)
         with self.assertRaises(ValueError):
-            to_NonNegativeVec3f([1.0, -1.0, 2.0], device=device)
+            to_NonNegativeVec3f([1.0, -1.0, 2.0])
 
-    @parameterized.expand(all_devices)
-    def test_to_NonNegativeVec3iBatch(self, device):
+    def test_to_NonNegativeVec3iBatch(self):
         """Test NonNegativeVec3iBatch conversion - allows zero, rejects negative"""
         # Test positive values
         input_data = [[1, 2, 3], [4, 5, 6]]
-        result = to_NonNegativeVec3iBatch(input_data, device=device)
-        expected = torch.tensor([[1, 2, 3], [4, 5, 6]], device=device, dtype=result.dtype)
+        result = to_NonNegativeVec3iBatch(input_data)
+        expected = torch.tensor([[1, 2, 3], [4, 5, 6]], dtype=result.dtype)
         self.assertTrue(torch.equal(result, expected))
 
         # Test with zero values (should work)
         input_data = [[0, 1, 2], [3, 0, 5]]
-        result = to_NonNegativeVec3iBatch(input_data, device=device)
-        expected = torch.tensor([[0, 1, 2], [3, 0, 5]], device=device, dtype=result.dtype)
+        result = to_NonNegativeVec3iBatch(input_data)
+        expected = torch.tensor([[0, 1, 2], [3, 0, 5]], dtype=result.dtype)
         self.assertTrue(torch.equal(result, expected))
 
         # Test negative values (should fail)
         with self.assertRaises(ValueError):
-            to_NonNegativeVec3iBatch([[1, 2, 3], [-1, 5, 6]], device=device)
+            to_NonNegativeVec3iBatch([[1, 2, 3], [-1, 5, 6]])
 
-    @parameterized.expand(all_devices)
-    def test_to_NonNegativeVec3fBatch(self, device):
+    def test_to_NonNegativeVec3fBatch(self):
         """Test NonNegativeVec3fBatch conversion - allows zero, rejects negative"""
         # Test positive values
         input_data = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
-        result = to_NonNegativeVec3fBatch(input_data, device=device)
-        expected = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], device=device, dtype=result.dtype)
+        result = to_NonNegativeVec3fBatch(input_data)
+        expected = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
         # Test with zero values (should work)
         input_data = [[0.0, 1.0, 2.0], [3.0, 0.0, 5.0]]
-        result = to_NonNegativeVec3fBatch(input_data, device=device)
-        expected = torch.tensor([[0.0, 1.0, 2.0], [3.0, 0.0, 5.0]], device=device, dtype=result.dtype)
+        result = to_NonNegativeVec3fBatch(input_data)
+        expected = torch.tensor([[0.0, 1.0, 2.0], [3.0, 0.0, 5.0]], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
         # Test negative values (should fail)
         with self.assertRaises(ValueError):
-            to_NonNegativeVec3fBatch([[1.0, 2.0, 3.0], [4.0, -1.0, 6.0]], device=device)
+            to_NonNegativeVec3fBatch([[1.0, 2.0, 3.0], [4.0, -1.0, 6.0]])
 
     def test_nonnegative_vs_positive_comparison(self):
         """Test key differences between NonNegative and Positive variants"""
@@ -819,36 +820,30 @@ class TestTypesRedux(unittest.TestCase):
         # Test tensor should inherit device when device=None
         input_tensor = torch.tensor([1, 2, 3], device=device)
         result = to_IntegerTensorBroadcastableRank1(input_tensor, (3,))
-        self.assertEqual(result.device.type, device)
+        self.assertSameDevice(result, input_tensor)
 
-        # Test explicit device override
-        result = to_IntegerTensorBroadcastableRank1(input_tensor, (3,), device="cpu")
-        self.assertEqual(result.device.type, "cpu")
-
-    @parameterized.expand(all_devices)
-    def test_numpy_compatibility(self, device):
+    def test_numpy_compatibility(self):
         """Test numpy array compatibility"""
         # Numpy arrays should be converted properly
         np_array = np.array([1, 2, 3], dtype=np.int32)
-        result = to_IntegerTensorBroadcastableRank1(np_array, (3,), device=device)
+        result = to_IntegerTensorBroadcastableRank1(np_array, (3,))
         self.assertTrue(isinstance(result, torch.Tensor))
         self.assertEqual(result.shape, torch.Size([3]))
-        self.assertEqual(result.device.type, device)
+        self.assertEqual(result.device.type, "cpu")
 
         # 2D numpy arrays
         np_array_2d = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
-        result = to_FloatingTensorBroadcastableRank2(np_array_2d, (2, 3), device=device)
+        result = to_FloatingTensorBroadcastableRank2(np_array_2d, (2, 3))
         self.assertEqual(result.shape, torch.Size([2, 3]))
-        self.assertEqual(result.device.type, device)
+        self.assertEqual(result.device.type, "cpu")
 
-    @parameterized.expand(all_devices)
-    def test_torch_size_compatibility(self, device):
+    def test_torch_size_compatibility(self):
         """Test torch.Size compatibility"""
         size = torch.Size([1, 2, 3])
-        result = to_IntegerTensorBroadcastableRank1(size, (3,), device=device)
+        result = to_IntegerTensorBroadcastableRank1(size, (3,))
         self.assertEqual(result.shape, torch.Size([3]))
-        self.assertEqual(result.device.type, device)
-        self.assertTrue(torch.equal(result, torch.tensor([1, 2, 3], device=device, dtype=result.dtype)))
+        self.assertEqual(result.device.type, "cpu")
+        self.assertTrue(torch.equal(result, torch.tensor([1, 2, 3], dtype=result.dtype)))
 
 
 if __name__ == "__main__":

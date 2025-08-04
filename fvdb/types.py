@@ -324,9 +324,13 @@ def resolve_device(device_id: DeviceIdentifier | None, inherit_from: Any = None)
         return torch.device("cpu")
 
 
+# ============================================================
+# ===           Begin "to_***" validation convertors        ===
+# ============================================================
+
+
 def to_GenericScalar(
     x: NumericScalar,
-    device: DeviceIdentifier | None,
     dtype: torch.dtype,
     allowed_torch_dtypes: tuple[torch.dtype, ...],
     allowed_numpy_dtypes: tuple[np.dtype | type, ...],
@@ -337,7 +341,6 @@ def to_GenericScalar(
 
     Args:
         x: The input scalar value.
-        device: The optional device to place the output tensor on.
         dtype: The dtype of the output tensor.
         allowed_torch_dtypes: Allowed torch dtypes for validation.
         allowed_numpy_dtypes: Allowed numpy dtypes for validation.
@@ -357,16 +360,14 @@ def to_GenericScalar(
             raise ValueError(f"Expected scalar tensor, got {x.shape}")
         if x.dtype not in allowed_torch_dtypes:
             raise ValueError(f"Expected scalar tensor with {dtype_category} dtype, got {x.dtype}")
-        device = resolve_device(device, inherit_from=x)
-        return x.to(device).to(dtype)
+        return x.to(dtype)
 
     elif isinstance(x, numpy.ndarray):
         if x.ndim != 0:
             raise ValueError(f"Expected scalar array, got {x.shape}")
         if x.dtype not in allowed_numpy_dtypes:
             raise ValueError(f"Expected scalar array with {dtype_category} dtype, got {x.dtype}")
-        device = resolve_device(device, inherit_from=x)
-        return torch.from_numpy(x).to(device).to(dtype)
+        return torch.from_numpy(x).to(dtype)
 
     else:
         # Validate native Python scalars against allowed types
@@ -380,14 +381,12 @@ def to_GenericScalar(
             if not isinstance(x, (int, float, np.integer, np.floating)):
                 raise TypeError(f"Expected numeric scalar, got {type(x)} with value {x}")
 
-        device = resolve_device(device, inherit_from=x)
-        return torch.tensor(x, device=device, dtype=dtype)
+        return torch.tensor(x, device="cpu", dtype=dtype)
 
 
 def to_GenericTensorBroadcastableRank1(
     x: NumericMaxRank1,
     test_shape: tuple[int] | torch.Size,
-    device: DeviceIdentifier | None,
     dtype: torch.dtype,
     allowed_torch_dtypes: tuple[torch.dtype, ...],
     allowed_numpy_dtypes: tuple[np.dtype | type, ...],
@@ -399,7 +398,6 @@ def to_GenericTensorBroadcastableRank1(
     Args:
         x: The input tensor.
         test_shape: The shape to test broadcastability against.
-        device: The optional device to place the output tensor on.
         dtype: The dtype of the output tensor.
         allowed_torch_dtypes: Allowed torch dtypes for validation.
         allowed_numpy_dtypes: Allowed numpy dtypes for validation.
@@ -418,7 +416,7 @@ def to_GenericTensorBroadcastableRank1(
         raise ValueError(f"Expected {dtype_category} dtype, got {dtype}")
 
     if is_NumericScalar(x):
-        return to_GenericScalar(x, device, dtype, allowed_torch_dtypes, allowed_numpy_dtypes, dtype_category)
+        return to_GenericScalar(x, dtype, allowed_torch_dtypes, allowed_numpy_dtypes, dtype_category)
     elif is_SequenceOfNumericScalarNative(x):
         x_shape = (len(x),)
         try:
@@ -426,8 +424,7 @@ def to_GenericTensorBroadcastableRank1(
         except Exception as e:
             raise ValueError(f"Sequence with shape {x_shape} cannot broadcast to {test_shape}: {e}")
 
-        device = resolve_device(device, inherit_from=x)
-        return torch.tensor(x, device=device, dtype=dtype)
+        return torch.tensor(x, device="cpu", dtype=dtype)
     elif isinstance(x, torch.Size):
         x_shape = (len(x),)
         try:
@@ -435,8 +432,7 @@ def to_GenericTensorBroadcastableRank1(
         except Exception as e:
             raise ValueError(f"torch.Size with shape {x_shape} cannot broadcast to {test_shape}: {e}")
 
-        device = resolve_device(device, inherit_from=x)
-        return torch.tensor(x, device=device, dtype=dtype)
+        return torch.tensor(x, device="cpu", dtype=dtype)
     elif isinstance(x, torch.Tensor):
         if x.dtype not in allowed_torch_dtypes:
             raise ValueError(f"Expected tensor with {dtype_category} dtype, got {x.dtype}")
@@ -447,8 +443,7 @@ def to_GenericTensorBroadcastableRank1(
         except Exception as e:
             raise ValueError(f"Tensor with shape {x.shape} cannot broadcast to {test_shape}: {e}")
 
-        device = resolve_device(device, inherit_from=x)
-        return x.to(device).to(dtype)
+        return x.to(dtype)
     elif isinstance(x, numpy.ndarray):
         if x.dtype not in allowed_numpy_dtypes:
             raise ValueError(f"Expected array with {dtype_category} dtype, got {x.dtype}")
@@ -459,8 +454,7 @@ def to_GenericTensorBroadcastableRank1(
         except Exception as e:
             raise ValueError(f"Array with shape {x.shape} cannot broadcast to {test_shape}: {e}")
 
-        device = resolve_device(device, inherit_from=x)
-        return torch.from_numpy(x).to(device).to(dtype)
+        return torch.from_numpy(x).to(dtype)
 
     else:
         raise TypeError(f"Expected NumericMaxRank1, got {type(x)}")
@@ -469,7 +463,6 @@ def to_GenericTensorBroadcastableRank1(
 def to_GenericTensorBroadcastableRank2(
     x: NumericMaxRank2,
     test_shape: tuple[int, int] | torch.Size,
-    device: DeviceIdentifier | None,
     dtype: torch.dtype,
     allowed_torch_dtypes: tuple[torch.dtype, ...],
     allowed_numpy_dtypes: tuple[np.dtype | type, ...],
@@ -481,7 +474,6 @@ def to_GenericTensorBroadcastableRank2(
     Args:
         x: The input tensor.
         test_shape: The shape to test broadcastability against.
-        device: The optional device to place the output tensor on.
         dtype: The dtype of the output tensor.
         allowed_torch_dtypes: Allowed torch dtypes for validation.
         allowed_numpy_dtypes: Allowed numpy dtypes for validation.
@@ -501,7 +493,7 @@ def to_GenericTensorBroadcastableRank2(
 
     if is_NumericMaxRank1(x):
         return to_GenericTensorBroadcastableRank1(
-            x, (test_shape[1],), device, dtype, allowed_torch_dtypes, allowed_numpy_dtypes, dtype_category
+            x, (test_shape[1],), dtype, allowed_torch_dtypes, allowed_numpy_dtypes, dtype_category
         )
     elif is_SequenceOfSequenceOfNumericScalarNative(x):
         rank_2_size = len(x)
@@ -518,47 +510,42 @@ def to_GenericTensorBroadcastableRank2(
         except Exception as e:
             raise ValueError(f"Sequence with shape {x_shape} cannot broadcast to {test_shape}: {e}")
 
-        device = resolve_device(device, inherit_from=x)
-        return torch.tensor(x, device=device, dtype=dtype)
+        return torch.tensor(x, device="cpu", dtype=dtype)
     elif isinstance(x, torch.Tensor):
         if x.dtype not in allowed_torch_dtypes:
             raise ValueError(f"Expected tensor with {dtype_category} dtype, got {x.dtype}")
 
+        # This assertion is true because we already checked numeric rank 1 above.
         assert x.ndim == 2
         try:
             result_shape = torch.broadcast_shapes(x.shape, test_shape)
         except Exception as e:
             raise ValueError(f"Tensor with shape {x.shape} cannot broadcast to {test_shape}: {e}")
 
-        device = resolve_device(device, inherit_from=x)
-        return x.to(device).to(dtype)
+        return x.to(dtype)
     elif isinstance(x, numpy.ndarray):
         if x.dtype not in allowed_numpy_dtypes:
             raise ValueError(f"Expected array with {dtype_category} dtype, got {x.dtype}")
 
+        # This assertion is true because we already checked numeric rank 1 above.
         assert x.ndim == 2
         try:
             result_shape = torch.broadcast_shapes(x.shape, test_shape)
         except Exception as e:
             raise ValueError(f"Array with shape {x.shape} cannot broadcast to {test_shape}: {e}")
 
-        device = resolve_device(device, inherit_from=x)
-        return torch.from_numpy(x).to(device).to(dtype)
+        return torch.from_numpy(x).to(dtype)
 
     else:
         raise TypeError(f"Expected NumericMaxRank2, got {type(x)}")
 
 
-def to_IntegerScalar(
-    x: NumericScalar, device: DeviceIdentifier | None = None, dtype: torch.dtype = torch.int64
-) -> torch.Tensor:
+def to_IntegerScalar(x: NumericScalar, dtype: torch.dtype = torch.int64) -> torch.Tensor:
     """
     Converts a NumericScalar to an integer scalar tensor.
 
     Args:
         x (NumericScalar): The input scalar value.
-        device (DeviceIdentifier | None): The optional device to place the output tensor on.
-          If None, defaults to device of the torch input if it can, otherwise "cpu"
         dtype (torch.dtype): The integer dtype of the output tensor. Defaults to torch.int64.
 
     Returns:
@@ -566,7 +553,6 @@ def to_IntegerScalar(
     """
     return to_GenericScalar(
         x,
-        device,
         dtype,
         allowed_torch_dtypes=(torch.int32, torch.int64),
         allowed_numpy_dtypes=(np.int32, np.int64, np.uint32, np.uint64),
@@ -574,16 +560,12 @@ def to_IntegerScalar(
     )
 
 
-def to_FloatingScalar(
-    x: NumericScalar, device: DeviceIdentifier | None = None, dtype: torch.dtype = torch.float32
-) -> torch.Tensor:
+def to_FloatingScalar(x: NumericScalar, dtype: torch.dtype = torch.float32) -> torch.Tensor:
     """
     Converts a NumericScalar to a floating scalar tensor.
 
     Args:
         x (NumericScalar): The input scalar value.
-        device (DeviceIdentifier | None): The optional device to place the output tensor on.
-          If None, defaults to device of the torch input if it can, otherwise "cpu"
         dtype (torch.dtype): The floating dtype of the output tensor. Defaults to torch.float32.
 
     Returns:
@@ -591,7 +573,6 @@ def to_FloatingScalar(
     """
     return to_GenericScalar(
         x,
-        device,
         dtype,
         allowed_torch_dtypes=(torch.int32, torch.int64, torch.float16, torch.float32, torch.float64),
         allowed_numpy_dtypes=(np.int32, np.int64, np.uint32, np.uint64, np.float16, np.float32, np.float64),
@@ -602,7 +583,6 @@ def to_FloatingScalar(
 def to_IntegerTensorBroadcastableRank1(
     x: NumericMaxRank1,
     test_shape: tuple[int] | torch.Size,
-    device: DeviceIdentifier | None = None,
     dtype: torch.dtype = torch.int64,
 ) -> torch.Tensor:
     """
@@ -612,17 +592,14 @@ def to_IntegerTensorBroadcastableRank1(
     Args:
         x (NumericMaxRank1): The input tensor.
         test_shape (tuple[int]|torch.Size): The shape to test the broadcastability against.
-        device (DeviceIdentifier | None): The optional device to place the output tensor on.
-          If None, defaults to device of the torch input if it can, otherwise "cpu"
         dtype (torch.dtype): The integer dtype of the output tensor. Defaults to torch.int64.
 
     Returns:
-        A torch.Tensor of dtype dtype and device device.
+        A torch.Tensor of dtype dtype.
     """
     return to_GenericTensorBroadcastableRank1(
         x,
         test_shape,
-        device,
         dtype,
         allowed_torch_dtypes=(torch.int32, torch.int64),
         allowed_numpy_dtypes=(np.int32, np.int64),
@@ -633,7 +610,6 @@ def to_IntegerTensorBroadcastableRank1(
 def to_FloatingTensorBroadcastableRank1(
     x: NumericMaxRank1,
     test_shape: tuple[int] | torch.Size,
-    device: DeviceIdentifier | None = None,
     dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
     """
@@ -643,17 +619,14 @@ def to_FloatingTensorBroadcastableRank1(
     Args:
         x (NumericMaxRank1): The input tensor.
         test_shape (tuple[int]|torch.Size): The shape to test the broadcastability against.
-        device (DeviceIdentifier | None): The optional device to place the output tensor on.
-          If None, defaults to device of the torch input if it can, otherwise "cpu"
         dtype (torch.dtype): The floating dtype of the output tensor. Defaults to torch.float32.
 
     Returns:
-        A torch.Tensor of dtype dtype and device device.
+        A torch.Tensor of dtype dtype.
     """
     return to_GenericTensorBroadcastableRank1(
         x,
         test_shape,
-        device,
         dtype,
         allowed_torch_dtypes=(torch.int32, torch.int64, torch.float16, torch.float32, torch.float64),
         allowed_numpy_dtypes=(np.int32, np.int64, np.uint32, np.uint64, np.float16, np.float32, np.float64),
@@ -664,7 +637,6 @@ def to_FloatingTensorBroadcastableRank1(
 def to_IntegerTensorBroadcastableRank2(
     x: NumericMaxRank2,
     test_shape: tuple[int, int] | torch.Size,
-    device: DeviceIdentifier | None = None,
     dtype: torch.dtype = torch.int64,
 ) -> torch.Tensor:
     """
@@ -674,17 +646,14 @@ def to_IntegerTensorBroadcastableRank2(
     Args:
         x (NumericMaxRank2): The input tensor.
         test_shape (tuple[int, int]|torch.Size): The shape to test the broadcastability against.
-        device (DeviceIdentifier | None): The optional device to place the output tensor on.
-          If None, defaults to device of the torch input if it can, otherwise "cpu"
         dtype (torch.dtype): The integer dtype of the output tensor. Defaults to torch.int64.
 
     Returns:
-        A torch.Tensor of dtype dtype and device device.
+        A torch.Tensor of dtype dtype.
     """
     return to_GenericTensorBroadcastableRank2(
         x,
         test_shape,
-        device,
         dtype,
         allowed_torch_dtypes=(torch.int32, torch.int64),
         allowed_numpy_dtypes=(np.int32, np.int64),
@@ -695,7 +664,6 @@ def to_IntegerTensorBroadcastableRank2(
 def to_FloatingTensorBroadcastableRank2(
     x: NumericMaxRank2,
     test_shape: tuple[int, int] | torch.Size,
-    device: DeviceIdentifier | None = None,
     dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
     """
@@ -705,17 +673,14 @@ def to_FloatingTensorBroadcastableRank2(
     Args:
         x (NumericMaxRank2): The input tensor.
         test_shape (tuple[int, int]|torch.Size): The shape to test the broadcastability against.
-        device (DeviceIdentifier | None): The optional device to place the output tensor on.
-          If None, defaults to device of the torch input if it can, otherwise "cpu"
         dtype (torch.dtype): The floating dtype of the output tensor. Defaults to torch.float32.
 
     Returns:
-        A torch.Tensor of dtype dtype and device device.
+        A torch.Tensor of dtype dtype.
     """
     return to_GenericTensorBroadcastableRank2(
         x,
         test_shape,
-        device,
         dtype,
         allowed_torch_dtypes=(torch.int32, torch.int64, torch.float16, torch.float32, torch.float64),
         allowed_numpy_dtypes=(np.int32, np.int64, np.uint32, np.uint64, np.float16, np.float32, np.float64),
@@ -725,7 +690,6 @@ def to_FloatingTensorBroadcastableRank2(
 
 def to_Vec3iLike(
     x: NumericMaxRank1,
-    device: DeviceIdentifier | None = None,
     dtype: torch.dtype = torch.int64,
 ) -> torch.Tensor:
     """
@@ -733,19 +697,16 @@ def to_Vec3iLike(
 
     Args:
         x (NumericMaxRank1): The input tensor.
-        device (DeviceIdentifier | None): The optional device to place the output tensor on.
-          If None, defaults to device of the torch input if it can, otherwise "cpu"
         dtype (torch.dtype): The integer dtype of the output tensor. Defaults to torch.int64.
 
     Returns:
-        A torch.Tensor of dtype dtype and device device.
+        A torch.Tensor of dtype dtype.
     """
-    return to_IntegerTensorBroadcastableRank1(x, (3,), device, dtype)
+    return to_IntegerTensorBroadcastableRank1(x, (3,), dtype)
 
 
 def to_Vec3fLike(
     x: NumericMaxRank1,
-    device: DeviceIdentifier | None = None,
     dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
     """
@@ -753,19 +714,16 @@ def to_Vec3fLike(
 
     Args:
         x (NumericMaxRank1): The input tensor.
-        device (DeviceIdentifier | None): The optional device to place the output tensor on.
-          If None, defaults to device of the torch input if it can, otherwise "cpu"
         dtype (torch.dtype): The floating dtype of the output tensor. Defaults to torch.float32.
 
     Returns:
-        A torch.Tensor of dtype dtype and device device.
+        A torch.Tensor of dtype dtype.
     """
-    return to_FloatingTensorBroadcastableRank1(x, (3,), device, dtype)
+    return to_FloatingTensorBroadcastableRank1(x, (3,), dtype)
 
 
 def to_Vec3iBatchLike(
     x: NumericMaxRank2,
-    device: DeviceIdentifier | None = None,
     dtype: torch.dtype = torch.int64,
 ) -> torch.Tensor:
     """
@@ -773,19 +731,16 @@ def to_Vec3iBatchLike(
 
     Args:
         x (NumericMaxRank2): The input tensor.
-        device (DeviceIdentifier | None): The optional device to place the output tensor on.
-          If None, defaults to device of the torch input if it can, otherwise "cpu"
         dtype (torch.dtype): The integer dtype of the output tensor. Defaults to torch.int64.
 
     Returns:
-        A torch.Tensor of dtype dtype and device device.
+        A torch.Tensor of dtype dtype.
     """
-    return to_IntegerTensorBroadcastableRank2(x, (1, 3), device, dtype)
+    return to_IntegerTensorBroadcastableRank2(x, (1, 3), dtype)
 
 
 def to_Vec3fBatchLike(
     x: NumericMaxRank2,
-    device: DeviceIdentifier | None = None,
     dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
     """
@@ -793,19 +748,16 @@ def to_Vec3fBatchLike(
 
     Args:
         x (NumericMaxRank2): The input tensor.
-        device (DeviceIdentifier | None): The optional device to place the output tensor on.
-          If None, defaults to device of the torch input if it can, otherwise "cpu"
         dtype (torch.dtype): The floating dtype of the output tensor. Defaults to torch.float32.
 
     Returns:
-        A torch.Tensor of dtype dtype and device device.
+        A torch.Tensor of dtype dtype.
     """
-    return to_FloatingTensorBroadcastableRank2(x, (1, 3), device, dtype)
+    return to_FloatingTensorBroadcastableRank2(x, (1, 3), dtype)
 
 
 def to_Vec3i(
     x: NumericMaxRank1,
-    device: DeviceIdentifier | None = None,
     dtype: torch.dtype = torch.int64,
 ) -> torch.Tensor:
     """
@@ -813,22 +765,19 @@ def to_Vec3i(
 
     Args:
         x (NumericMaxRank1): The input tensor.
-        device (DeviceIdentifier | None): The optional device to place the output tensor on.
-          If None, defaults to device of the torch input if it can, otherwise "cpu"
         dtype (torch.dtype): The integer dtype of the output tensor. Defaults to torch.int64.
 
     Returns:
-        A torch.Tensor of dtype dtype and device device.
+        A torch.Tensor of dtype dtype.
     """
     try:
-        return to_Vec3iLike(x, device, dtype).broadcast_to((3,))
+        return to_Vec3iLike(x, dtype).broadcast_to((3,))
     except Exception as e:
         raise ValueError(f"Failed to broadcast {x} to Vec3i: {e}")
 
 
 def to_Vec3f(
     x: NumericMaxRank1,
-    device: DeviceIdentifier | None = None,
     dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
     """
@@ -836,22 +785,19 @@ def to_Vec3f(
 
     Args:
         x (NumericMaxRank1): The input tensor.
-        device (DeviceIdentifier | None): The optional device to place the output tensor on.
-          If None, defaults to device of the torch input if it can, otherwise "cpu"
         dtype (torch.dtype): The floating dtype of the output tensor. Defaults to torch.float32.
 
     Returns:
-        A torch.Tensor of dtype dtype and device device.
+        A torch.Tensor of dtype dtype.
     """
     try:
-        return to_Vec3fLike(x, device, dtype).broadcast_to((3,))
+        return to_Vec3fLike(x, dtype).broadcast_to((3,))
     except Exception as e:
         raise ValueError(f"Failed to broadcast {x} to Vec3f: {e}")
 
 
 def to_Vec3iBatch(
     x: NumericMaxRank2,
-    device: DeviceIdentifier | None = None,
     dtype: torch.dtype = torch.int64,
 ) -> torch.Tensor:
     """
@@ -859,14 +805,12 @@ def to_Vec3iBatch(
 
     Args:
         x (NumericMaxRank2): The input tensor.
-        device (DeviceIdentifier | None): The optional device to place the output tensor on.
-          If None, defaults to device of the torch input if it can, otherwise "cpu"
         dtype (torch.dtype): The integer dtype of the output tensor. Defaults to torch.int64.
 
     Returns:
-        A torch.Tensor of dtype dtype and device device.
+        A torch.Tensor of dtype dtype.
     """
-    tensor = to_Vec3iBatchLike(x, device, dtype)
+    tensor = to_Vec3iBatchLike(x, dtype)
 
     # Determine the batch size 'N' from the resulting tensor's shape.
     if tensor.ndim == 2:
@@ -887,7 +831,6 @@ def to_Vec3iBatch(
 
 def to_Vec3fBatch(
     x: NumericMaxRank2,
-    device: DeviceIdentifier | None = None,
     dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
     """
@@ -895,14 +838,12 @@ def to_Vec3fBatch(
 
     Args:
         x (NumericMaxRank2): The input tensor.
-        device (DeviceIdentifier | None): The optional device to place the output tensor on.
-          If None, defaults to device of the torch input if it can, otherwise "cpu"
         dtype (torch.dtype): The floating dtype of the output tensor. Defaults to torch.float32.
 
     Returns:
-        A torch.Tensor of dtype dtype and device device.
+        A torch.Tensor of dtype dtype.
     """
-    tensor = to_Vec3fBatchLike(x, device, dtype)
+    tensor = to_Vec3fBatchLike(x, dtype)
 
     # Determine the batch size 'N' from the resulting tensor's shape.
     if tensor.ndim == 2:
@@ -923,7 +864,6 @@ def to_Vec3fBatch(
 
 def to_PositiveVec3i(
     x: NumericMaxRank1,
-    device: DeviceIdentifier | None = None,
     dtype: torch.dtype = torch.int64,
 ) -> torch.Tensor:
     """
@@ -931,13 +871,12 @@ def to_PositiveVec3i(
 
     Args:
         x: Input tensor.
-        device: Target device. Defaults to input device or "cpu".
         dtype: Integer dtype. Defaults to torch.int64.
 
     Returns:
         Vec3i tensor with all values > 0.
     """
-    tensor = to_Vec3i(x, device, dtype)
+    tensor = to_Vec3i(x, dtype)
     if torch.any(tensor <= 0):
         raise ValueError(f"All values must be greater than zero, got {tensor}")
     return tensor
@@ -945,7 +884,6 @@ def to_PositiveVec3i(
 
 def to_PositiveVec3f(
     x: NumericMaxRank1,
-    device: DeviceIdentifier | None = None,
     dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
     """
@@ -953,13 +891,12 @@ def to_PositiveVec3f(
 
     Args:
         x: Input tensor.
-        device: Target device. Defaults to input device or "cpu".
         dtype: Float dtype. Defaults to torch.float32.
 
     Returns:
         Vec3f tensor with all values > 0.
     """
-    tensor = to_Vec3f(x, device, dtype)
+    tensor = to_Vec3f(x, dtype)
     if torch.any(tensor <= 0):
         raise ValueError(f"All values must be greater than zero, got {tensor}")
     return tensor
@@ -967,7 +904,6 @@ def to_PositiveVec3f(
 
 def to_PositiveVec3iBatch(
     x: NumericMaxRank2,
-    device: DeviceIdentifier | None = None,
     dtype: torch.dtype = torch.int64,
 ) -> torch.Tensor:
     """
@@ -975,13 +911,12 @@ def to_PositiveVec3iBatch(
 
     Args:
         x: Input tensor.
-        device: Target device. Defaults to input device or "cpu".
         dtype: Integer dtype. Defaults to torch.int64.
 
     Returns:
         Vec3iBatch tensor with all values > 0.
     """
-    tensor = to_Vec3iBatch(x, device, dtype)
+    tensor = to_Vec3iBatch(x, dtype)
     if torch.any(tensor <= 0):
         raise ValueError(f"All values must be greater than zero, got {tensor}")
     return tensor
@@ -989,7 +924,6 @@ def to_PositiveVec3iBatch(
 
 def to_PositiveVec3fBatch(
     x: NumericMaxRank2,
-    device: DeviceIdentifier | None = None,
     dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
     """
@@ -997,13 +931,12 @@ def to_PositiveVec3fBatch(
 
     Args:
         x: Input tensor.
-        device: Target device. Defaults to input device or "cpu".
         dtype: Float dtype. Defaults to torch.float32.
 
     Returns:
         Vec3fBatch tensor with all values > 0.
     """
-    tensor = to_Vec3fBatch(x, device, dtype)
+    tensor = to_Vec3fBatch(x, dtype)
     if torch.any(tensor <= 0):
         raise ValueError(f"All values must be greater than zero, got {tensor}")
     return tensor
@@ -1011,7 +944,6 @@ def to_PositiveVec3fBatch(
 
 def to_NonNegativeVec3i(
     x: NumericMaxRank1,
-    device: DeviceIdentifier | None = None,
     dtype: torch.dtype = torch.int64,
 ) -> torch.Tensor:
     """
@@ -1019,13 +951,12 @@ def to_NonNegativeVec3i(
 
     Args:
         x: Input tensor.
-        device: Target device. Defaults to input device or "cpu".
         dtype: Integer dtype. Defaults to torch.int64.
 
     Returns:
         Vec3i tensor with all values >= 0.
     """
-    tensor = to_Vec3i(x, device, dtype)
+    tensor = to_Vec3i(x, dtype)
     if torch.any(tensor < 0):
         raise ValueError(f"All values must be non-negative, got {tensor}")
     return tensor
@@ -1033,7 +964,6 @@ def to_NonNegativeVec3i(
 
 def to_NonNegativeVec3f(
     x: NumericMaxRank1,
-    device: DeviceIdentifier | None = None,
     dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
     """
@@ -1041,13 +971,12 @@ def to_NonNegativeVec3f(
 
     Args:
         x: Input tensor.
-        device: Target device. Defaults to input device or "cpu".
         dtype: Float dtype. Defaults to torch.float32.
 
     Returns:
         Vec3f tensor with all values >= 0.
     """
-    tensor = to_Vec3f(x, device, dtype)
+    tensor = to_Vec3f(x, dtype)
     if torch.any(tensor < 0):
         raise ValueError(f"All values must be non-negative, got {tensor}")
     return tensor
@@ -1055,7 +984,6 @@ def to_NonNegativeVec3f(
 
 def to_NonNegativeVec3iBatch(
     x: NumericMaxRank2,
-    device: DeviceIdentifier | None = None,
     dtype: torch.dtype = torch.int64,
 ) -> torch.Tensor:
     """
@@ -1063,13 +991,12 @@ def to_NonNegativeVec3iBatch(
 
     Args:
         x: Input tensor.
-        device: Target device. Defaults to input device or "cpu".
         dtype: Integer dtype. Defaults to torch.int64.
 
     Returns:
         Vec3iBatch tensor with all values >= 0.
     """
-    tensor = to_Vec3iBatch(x, device, dtype)
+    tensor = to_Vec3iBatch(x, dtype)
     if torch.any(tensor < 0):
         raise ValueError(f"All values must be non-negative, got {tensor}")
     return tensor
@@ -1077,7 +1004,6 @@ def to_NonNegativeVec3iBatch(
 
 def to_NonNegativeVec3fBatch(
     x: NumericMaxRank2,
-    device: DeviceIdentifier | None = None,
     dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
     """
@@ -1085,13 +1011,12 @@ def to_NonNegativeVec3fBatch(
 
     Args:
         x: Input tensor.
-        device: Target device. Defaults to input device or "cpu".
         dtype: Float dtype. Defaults to torch.float32.
 
     Returns:
         Vec3fBatch tensor with all values >= 0.
     """
-    tensor = to_Vec3fBatch(x, device, dtype)
+    tensor = to_Vec3fBatch(x, dtype)
     if torch.any(tensor < 0):
         raise ValueError(f"All values must be non-negative, got {tensor}")
     return tensor

@@ -148,10 +148,10 @@ class GridBatch:
         """
         resolved_device = resolve_device(device, inherit_from=mask)
 
-        dense_dims = to_PositiveVec3i(dense_dims, device=resolved_device)
-        ijk_min = to_Vec3i(ijk_min, device=resolved_device)
-        voxel_sizes = to_PositiveVec3fBatch(voxel_sizes, device=resolved_device)
-        origins = to_Vec3fBatch(origins, device=resolved_device)
+        dense_dims = to_PositiveVec3i(dense_dims)
+        ijk_min = to_Vec3i(ijk_min)
+        voxel_sizes = to_PositiveVec3fBatch(voxel_sizes)
+        origins = to_Vec3fBatch(origins)
 
         grid_batch_impl = GridBatchCpp(resolved_device)
         grid_batch_impl.set_from_dense_grid(num_grids, dense_dims, ijk_min, voxel_sizes, origins, mask)
@@ -167,9 +167,9 @@ class GridBatch:
         voxel_center: bool = False,
         device: DeviceIdentifier = "cpu",
     ) -> "GridBatch":
-        dense_dims = to_PositiveVec3i(dense_dims, device=resolve_device(device))
-        bounds_min = to_Vec3f(bounds_min, device=resolve_device(device))
-        bounds_max = to_Vec3f(bounds_max, device=resolve_device(device))
+        dense_dims = to_PositiveVec3i(dense_dims)
+        bounds_min = to_Vec3f(bounds_min)
+        bounds_max = to_Vec3f(bounds_max)
 
         if torch.any(bounds_max <= bounds_min):
             raise ValueError("bounds_max must be greater than bounds_min in all axes")
@@ -222,8 +222,8 @@ class GridBatch:
         """
         resolved_device = resolve_device(device, inherit_from=ijk)
 
-        voxel_sizes = to_PositiveVec3fBatch(voxel_sizes, device=resolved_device)
-        origins = to_Vec3fBatch(origins, device=resolved_device)
+        voxel_sizes = to_PositiveVec3fBatch(voxel_sizes)
+        origins = to_Vec3fBatch(origins)
 
         grid_batch_impl = GridBatchCpp(resolved_device)
         grid_batch_impl.set_from_ijk(ijk, voxel_sizes, origins)
@@ -258,8 +258,8 @@ class GridBatch:
         """
         resolved_device = resolve_device(device, inherit_from=mesh_vertices)
 
-        voxel_sizes = to_PositiveVec3fBatch(voxel_sizes, device=resolved_device)
-        origins = to_Vec3fBatch(origins, device=resolved_device)
+        voxel_sizes = to_PositiveVec3fBatch(voxel_sizes)
+        origins = to_Vec3fBatch(origins)
 
         grid_batch_impl = GridBatchCpp(resolved_device)
         grid_batch_impl.set_from_mesh(mesh_vertices, mesh_faces, voxel_sizes, origins)
@@ -291,8 +291,8 @@ class GridBatch:
         """
         resolved_device = resolve_device(device, inherit_from=points)
 
-        voxel_sizes = to_PositiveVec3fBatch(voxel_sizes, device=resolved_device)
-        origins = to_Vec3fBatch(origins, device=resolved_device)
+        voxel_sizes = to_PositiveVec3fBatch(voxel_sizes)
+        origins = to_Vec3fBatch(origins)
 
         grid_batch_impl = GridBatchCpp(resolved_device)
         grid_batch_impl.set_from_nearest_voxels_to_points(points, voxel_sizes, origins)
@@ -324,8 +324,8 @@ class GridBatch:
         """
         resolved_device = resolve_device(device, inherit_from=points)
 
-        voxel_sizes = to_PositiveVec3fBatch(voxel_sizes, device=resolved_device)
-        origins = to_Vec3fBatch(origins, device=resolved_device)
+        voxel_sizes = to_PositiveVec3fBatch(voxel_sizes)
+        origins = to_Vec3fBatch(origins)
 
         grid_batch_impl = GridBatchCpp(resolved_device)
         grid_batch_impl.set_from_points(points, voxel_sizes, origins)
@@ -370,8 +370,8 @@ class GridBatch:
             >>> grid_batch = GridBatch.from_zero_voxels(voxel_sizes=1, origins=0)  # defaults to CPU
         """
         resolved_device = resolve_device(device)
-        voxel_sizes = to_PositiveVec3fBatch(voxel_sizes, device=resolved_device)
-        origins = to_Vec3fBatch(origins, device=resolved_device)
+        voxel_sizes = to_PositiveVec3fBatch(voxel_sizes)
+        origins = to_Vec3fBatch(origins)
         grid_batch_impl = GridBatchCpp(voxel_sizes=voxel_sizes, grid_origins=origins, device=resolved_device)
         return cls(impl=grid_batch_impl)
 
@@ -408,8 +408,8 @@ class GridBatch:
                 - The pooled data as a JaggedTensor
                 - The coarse GridBatch containing the pooled structure
         """
-        pool_factor = to_PositiveVec3i(pool_factor, device=self.device)
-        stride = to_NonNegativeVec3i(stride, device=self.device)
+        pool_factor = to_PositiveVec3i(pool_factor)
+        stride = to_NonNegativeVec3i(stride)
         coarse_grid_impl = coarse_grid._impl if coarse_grid else None
 
         result_data, result_grid_impl = self._impl.avg_pool(pool_factor, data, stride, coarse_grid_impl)
@@ -455,8 +455,8 @@ class GridBatch:
                 - The clipped features as a JaggedTensor
                 - A new GridBatch containing only voxels within the bounds
         """
-        ijk_min = to_Vec3iBatch(ijk_min, device=self.device)
-        ijk_max = to_Vec3iBatch(ijk_max, device=self.device)
+        ijk_min = to_Vec3iBatch(ijk_min)
+        ijk_max = to_Vec3iBatch(ijk_max)
 
         result_features, result_grid_impl = self._impl.clip(features, ijk_min, ijk_max)
         return result_features, GridBatch(impl=result_grid_impl)
@@ -477,8 +477,8 @@ class GridBatch:
         Returns:
             clipped_grid (GridBatch): A GridBatch representing the clipped version of this grid batch.
         """
-        ijk_min = to_Vec3iBatch(ijk_min, device=self.device)
-        ijk_max = to_Vec3iBatch(ijk_max, device=self.device)
+        ijk_min = to_Vec3iBatch(ijk_min)
+        ijk_max = to_Vec3iBatch(ijk_max)
 
         return GridBatch(impl=self._impl.clipped_grid(ijk_min, ijk_max))
 
@@ -494,7 +494,7 @@ class GridBatch:
         Returns:
             coarsened_grid (GridBatch): A GridBatch representing the coarsened version of this grid batch.
         """
-        coarsening_factor = to_PositiveVec3i(coarsening_factor, device=self.device)
+        coarsening_factor = to_PositiveVec3i(coarsening_factor)
 
         return GridBatch(impl=self._impl.coarsened_grid(coarsening_factor))
 
@@ -523,8 +523,8 @@ class GridBatch:
         Returns:
             conv_grid (GridBatch): A GridBatch representing the convolution of this grid batch.
         """
-        kernel_size = to_PositiveVec3i(kernel_size, device=self.device)
-        stride = to_NonNegativeVec3i(stride, device=self.device)
+        kernel_size = to_PositiveVec3i(kernel_size)
+        stride = to_NonNegativeVec3i(stride)
 
         return GridBatch(impl=self._impl.conv_grid(kernel_size, stride))
 
@@ -572,8 +572,8 @@ class GridBatch:
             JaggedTensor: Boolean mask indicating which cubes are fully contained in the grid.
                 Shape: (batch_size, num_cubes).
         """
-        cube_min = to_Vec3f(cube_min, device=self.device)
-        cube_max = to_Vec3f(cube_max, device=self.device)
+        cube_min = to_Vec3f(cube_min)
+        cube_max = to_Vec3f(cube_max)
 
         return self._impl.cubes_in_grid(cube_centers, cube_min, cube_max)
 
@@ -598,8 +598,8 @@ class GridBatch:
             JaggedTensor: Boolean mask indicating which cubes intersect the grid.
                 Shape: (batch_size, num_cubes).
         """
-        cube_min = to_Vec3f(cube_min, device=self.device)
-        cube_max = to_Vec3f(cube_max, device=self.device)
+        cube_min = to_Vec3f(cube_min)
+        cube_max = to_Vec3f(cube_max)
 
         return self._impl.cubes_intersect_grid(cube_centers, cube_min, cube_max)
 
@@ -1036,8 +1036,8 @@ class GridBatch:
                 - The pooled data as a JaggedTensor
                 - The coarse GridBatch containing the pooled structure
         """
-        pool_factor = to_PositiveVec3i(pool_factor, device=self.device)
-        stride = to_NonNegativeVec3i(stride, device=self.device)
+        pool_factor = to_PositiveVec3i(pool_factor)
+        stride = to_NonNegativeVec3i(stride)
 
         coarse_grid_impl = coarse_grid._impl if coarse_grid else None
 
@@ -1178,7 +1178,7 @@ class GridBatch:
             JaggedTensor: Values from the dense tensor at active voxel locations.
                 Shape: (batch_size, total_voxels, channels).
         """
-        dense_origins = to_Vec3i(dense_origins, device=self.device)
+        dense_origins = to_Vec3i(dense_origins)
 
         return self._impl.read_from_dense(dense_data, dense_origins)
 
@@ -1334,8 +1334,8 @@ class GridBatch:
         # Import here to avoid circular dependency
         from .sparse_conv_pack_info import SparseConvPackInfo
 
-        kernel_size = to_PositiveVec3i(kernel_size, device=self.device)
-        stride = to_NonNegativeVec3i(stride, device=self.device)
+        kernel_size = to_PositiveVec3i(kernel_size)
+        stride = to_NonNegativeVec3i(stride)
 
         target_impl = target_grid._impl if target_grid is not None else None
 
@@ -1413,7 +1413,7 @@ class GridBatch:
                 - The subdivided data as a JaggedTensor
                 - The fine GridBatch containing the subdivided structure
         """
-        subdiv_factor = to_PositiveVec3i(subdiv_factor, device=self.device)
+        subdiv_factor = to_PositiveVec3i(subdiv_factor)
         fine_grid_impl = fine_grid._impl if fine_grid else None
         result_data, result_grid_impl = self._impl.subdivide(subdiv_factor, data, mask, fine_grid_impl)
         return result_data, GridBatch(impl=result_grid_impl)
@@ -1438,7 +1438,7 @@ class GridBatch:
         Returns:
             GridBatch: A new GridBatch with subdivided structure.
         """
-        subdiv_factor = to_PositiveVec3i(subdiv_factor, device=self.device)
+        subdiv_factor = to_PositiveVec3i(subdiv_factor)
         return GridBatch(impl=self._impl.subdivided_grid(subdiv_factor, mask=mask))
 
     def to(self, target: "str | torch.device | torch.Tensor | JaggedTensor | GridBatch") -> "GridBatch":
@@ -1616,8 +1616,8 @@ class GridBatch:
             torch.Tensor: Dense tensor containing the sparse data.
                 Shape: (batch_size, channels, depth, height, width).
         """
-        min_coord = to_Vec3iBatch(min_coord, device=self.device) if min_coord is not None else None
-        grid_size = to_Vec3i(grid_size, device=self.device) if grid_size is not None else None
+        min_coord = to_Vec3iBatch(min_coord) if min_coord is not None else None
+        grid_size = to_Vec3i(grid_size) if grid_size is not None else None
 
         return self._impl.write_to_dense(sparse_data, min_coord, grid_size)
 
