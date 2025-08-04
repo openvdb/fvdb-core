@@ -725,6 +725,78 @@ class Grid:
 
         return jagged_dst.jdata
 
+    def inject_from_ijk(
+        self,
+        src_ijk: torch.Tensor,
+        src: torch.Tensor,
+        dst: torch.Tensor | None = None,
+        default_value: float | int | bool = 0,
+    ):
+        """
+
+        Inject data from source voxel coordinates to this grid.
+
+        This method copies sidecar data for voxels at specified indices in the source grid
+        to a sidecar corresponding to voxels in this grid.
+
+        If you pass in the destination data (`dst`), it will be modified in-place.
+
+        If `dst` is None, a new Tensor will be created with the same element shape as src
+        and filled with `default_value` for any voxels that do not have corresponding data in `src`.
+
+        Args:
+            src_ijk (torch.Tensor): Source voxel coordinates in index space.
+                Shape: (num_src_voxels, 3) with integer coordinates.
+            src (torch.Tensor): Source data from the source grid.
+                This must be a Tensor with shape (-1, *).
+            dst (torch.Tensor | None): Optional destination data to be modified in-place.
+                This must be a Tensor with shape (-1, *) or None.
+            default_value (float | int | bool): Value to fill in for voxels that do not have corresponding data in `src`.
+                This is used only if `dst` is None. Default is 0.
+        """
+
+        if not isinstance(src_ijk, torch.Tensor):
+            raise TypeError(f"src_ijk must be a torch.Tensor, but got {type(src_ijk)}")
+
+        if not isinstance(src, torch.Tensor):
+            raise TypeError(f"src must be a torch.Tensor, but got {type(src)}")
+
+        if dst is None:
+            dst_shape = [self.num_voxels, *src.shape[1:]] if src.dim() > 1 else [self.num_voxels]
+            dst = torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device)
+        else:
+            if not isinstance(dst, torch.Tensor):
+                raise TypeError(f"dst must be a torch.Tensor, but got {type(dst)}")
+        if src_ijk.dim() != 2 or src_ijk.shape[1] != 3:
+            raise ValueError(f"src_ijk must have shape (num_src_voxels, 3), but got {src_ijk.shape}")
+
+        if src_ijk.dtype != torch.int32 and src_ijk.dtype != torch.int64:
+            raise ValueError(f"src_ijk must have integer dtype, but got {src_ijk.dtype}")
+
+        if src_ijk.device != src.device:
+            raise ValueError(f"src_ijk must be on the same device as src, but got {src_ijk.device} and {src.device}")
+
+        if src_ijk.shape[0] != src.shape[0]:
+            raise ValueError(
+                f"src_ijk and src must have the same number of elements, but got {src_ijk.shape[0]} and {src.shape[0]}"
+            )
+        if dst.shape[0] != self.num_voxels:
+            raise ValueError(
+                f"dst must have the same number of elements as the grid, "
+                f"but got {dst.shape[0]} and {self.num_voxels}"
+            )
+        if dst.shape[1:] != src.shape[1:]:
+            raise ValueError(
+                f"dst must have the same shape as src except for the first dimension, "
+                f"but got {dst.shape[1:]} and {src.shape[1:]}"
+            )
+        src_idx = self.ijk_to_index(src_ijk)
+        src_mask = src_idx >= 0
+        src_idx = src_idx[src_mask]
+        dst[src_idx] = src[src_mask]
+
+        return dst
+
     def inject_to(
         self,
         dst_grid: "Grid",
