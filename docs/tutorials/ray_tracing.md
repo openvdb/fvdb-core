@@ -10,7 +10,7 @@ This function traces rays through a batch of sparse volume grids, returning the 
 
 ## Function Signature
 
-```python
+```python notest
 voxels, times = grid_batch.voxels_along_rays(
     ray_origins,
     ray_directions,
@@ -76,7 +76,7 @@ The function returns a tuple of two JaggedTensors:
 ## Usage Examples
 
 ### Basic Ray Tracing
-```python
+```python notest
 # Trace rays through a sparse volume
 ray_origins = JaggedTensor(...)     # Starting points
 ray_directions = JaggedTensor(...)  # Ray directions
@@ -96,7 +96,7 @@ for batch_idx in range(grid_batch.batch_size()):
 ```
 
 ### Limited Ray Marching
-```python
+```python notest
 # Limit to first 10 voxels per ray (useful for early termination)
 voxels, times = grid_batch.voxels_along_rays(
     ray_origins,
@@ -106,7 +106,7 @@ voxels, times = grid_batch.voxels_along_rays(
 ```
 
 ### Using Linear Indices
-```python
+```python notest
 # Get linear indices instead of coordinates
 voxels, times = grid_batch.voxels_along_rays(
     ray_origins,
@@ -119,7 +119,7 @@ voxel_data = grid_data[voxels]  # Index into your voxel data array
 ```
 
 ### Filtering Grazing Intersections
-```python
+```python notest
 # Filter out very small intersections
 voxels, times = grid_batch.voxels_along_rays(
     ray_origins,
