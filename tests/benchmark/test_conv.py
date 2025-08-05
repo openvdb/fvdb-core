@@ -12,6 +12,8 @@ import fvdb
 
 torch.backends.cudnn.deterministic = True
 
+random.seed(42)
+torch.manual_seed(42)
 PTS_CACHE = [torch.empty((10_000, 3), dtype=torch.float32).normal_() for _ in range(100)]
 
 
