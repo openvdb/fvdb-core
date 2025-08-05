@@ -1371,7 +1371,7 @@ class TestBasicOps(unittest.TestCase):
                 grid = builder(vox_size, [0.01] * 2)
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_ijk_to_inv_index(self, device, dtype):
+    def test_inverting_grid_indices(self, device, dtype):
         vox_size = 0.1
 
         # Unique IJK since for duplicates the permutation is non-bijective
@@ -1380,7 +1380,9 @@ class TestBasicOps(unittest.TestCase):
 
         grid = GridBatch.from_ijk(fvdb.JaggedTensor(ijk), voxel_sizes=vox_size, origins=[0.0] * 3)
 
-        inv_index = grid.ijk_to_inv_index(fvdb.JaggedTensor(ijk)).jdata
+        inv_index = grid.inject_from_ijk(
+            grid.jagged_like(ijk), grid.jagged_like(torch.arange(len(ijk), device=grid.device)), default_value=-1
+        ).jdata
 
         target_inv_index = torch.full_like(grid.ijk.jdata[:, 0], -1)
         idx = grid.ijk_to_index(fvdb.JaggedTensor(ijk)).jdata
@@ -1389,7 +1391,7 @@ class TestBasicOps(unittest.TestCase):
 
         self.assertTrue(torch.all(inv_index == target_inv_index))
 
-        # Test functionality where size of ijk_to_inv_index's argument != len(grid.ijk)
+        # Test functionality where size of inverse index's argument != len(grid.ijk)
         # Pick random ijk subset
         rand_ijks = []
         for i in range(grid.grid_count):
@@ -1398,9 +1400,10 @@ class TestBasicOps(unittest.TestCase):
 
         rand_ijks = fvdb.JaggedTensor(rand_ijks)
 
-        rand_ijk_inv_indices = grid.ijk_to_inv_index(rand_ijks)
-
         # valid ijk indices
+        rand_ijk_inv_indices = grid.inject_from_ijk(
+            rand_ijks, rand_ijks.jagged_like(torch.arange(len(rand_ijks.jdata))), default_value=-1
+        )
         inv_rand_ijk = grid.ijk.jdata[rand_ijk_inv_indices.jdata != -1]
         assert len(inv_rand_ijk) == len(rand_ijks.jdata)
         inv_rand_ijk = rand_ijks.jagged_like(inv_rand_ijk)
@@ -1423,16 +1426,16 @@ class TestBasicOps(unittest.TestCase):
             return True
 
         for i, (inv_ijks, ijks) in enumerate(zip(inv_rand_ijk, rand_ijks)):
-            # ensure output of ijk_to_inv_index is a permutation of the input
+            # ensure output of inverse_index is a permutation of the input
             inv_ijks_sorted, _ = torch.sort(inv_ijks.jdata, dim=0)
             ijks_sorted, _ = torch.sort(ijks.jdata, dim=0)
             assert torch.equal(inv_ijks_sorted, ijks_sorted)
 
-            # ensure output of ijk_to_inv_index appears in ascending order in ijks
+            # ensure output of inverse_index appears in ascending order in ijks
             assert check_order(grid.ijk.jdata[grid.ijk.jidx == i], inv_ijks.jdata)
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_ijk_to_inv_index_batched(self, device, dtype):
+    def test_inverting_grid_indices_batched(self, device, dtype):
         vox_size = 0.1
 
         # Unique IJK since for duplicates the permutation is non-bijective
@@ -1452,7 +1455,8 @@ class TestBasicOps(unittest.TestCase):
 
         grid = GridBatch.from_ijk(ijk, voxel_sizes=vox_size, origins=[0.0] * 3)
 
-        inv_index = grid.ijk_to_inv_index(ijk).jdata
+        unsorted_indices = fvdb.JaggedTensor([torch.arange(x.shape[0], device=grid.device) for x in ijk.unbind()])  # type: ignore
+        inv_index = grid.inject_from_ijk(ijk, unsorted_indices, default_value=-1).jdata
 
         target_inv_index = torch.full_like(grid.ijk.jdata[:, 0], -1)
         idx = grid.ijk_to_index(ijk, cumulative=True)
@@ -1463,7 +1467,7 @@ class TestBasicOps(unittest.TestCase):
 
         self.assertTrue(torch.all(inv_index == target_inv_index))
 
-        # Test functionality where size of ijk_to_inv_index's argument != len(grid.ijk)
+        # Test functionality where size of inv_index's argument != len(grid.ijk)
         # Pick random ijk subset
         rand_ijks = []
         for i in range(grid.grid_count):
@@ -1471,8 +1475,8 @@ class TestBasicOps(unittest.TestCase):
             rand_ijks.append(torch.unique(ijks[torch.randint(len(ijks), (50,), device=ijks.device)], dim=0))
 
         rand_ijks = fvdb.JaggedTensor(rand_ijks)
-
-        rand_ijk_inv_indices = grid.ijk_to_inv_index(rand_ijks)
+        unsorted_indices = fvdb.JaggedTensor([torch.arange(x.shape[0], device=grid.device) for x in rand_ijks.unbind()])  # type: ignore
+        rand_ijk_inv_indices = grid.inject_from_ijk(rand_ijks, unsorted_indices, default_value=-1).jdata
 
         # # valid ijk indices
         inv_rand_ijk = grid.ijk[rand_ijk_inv_indices != -1]
@@ -1496,24 +1500,24 @@ class TestBasicOps(unittest.TestCase):
             return True
 
         for i, (inv_ijks, ijks) in enumerate(zip(inv_rand_ijk, rand_ijks)):
-            # ensure output of ijk_to_inv_index is a permutation of the input
+            # ensure output of inverse_index is a permutation of the input
             inv_ijks_sorted, _ = torch.sort(inv_ijks.jdata, dim=0)
             ijks_sorted, _ = torch.sort(ijks.jdata, dim=0)
             assert torch.equal(inv_ijks_sorted, ijks_sorted)
 
-            # ensure output of ijk_to_inv_index appears in ascending order in ijks
+            # ensure output of inverse_index appears in ascending order in ijks
             assert check_order(grid.ijk.jdata[grid.ijk.jidx == i], inv_ijks.jdata)
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_ijk_to_inv_index_batched_noncumulative(self, device, dtype):
+    def test_invert_grid_indices_batched_noncumulative(self, device, dtype):
         batch_size = 5
 
         ijks = [torch.randint(-10, 10, (int(torch.randint(1_000, 10_000, (1,))), 3)) for i in range(batch_size)]
         ijks = fvdb.JaggedTensor([i.to(device) for i in ijks])
-
+        unsorted_idxs = fvdb.JaggedTensor([torch.arange(i.shape[0], device=device) for i in ijks.unbind()])  # type: ignore
         gridbatch = fvdb.GridBatch.from_ijk(ijks)
 
-        inv_idx = gridbatch.ijk_to_inv_index(ijks, cumulative=False)
+        inv_idx = gridbatch.inject_from_ijk(ijks, unsorted_idxs, default_value=-1)
 
         assert torch.equal(ijks[inv_idx].jdata, gridbatch.ijk.jdata)
 
@@ -1521,7 +1525,8 @@ class TestBasicOps(unittest.TestCase):
         ijks_unbound = ijks.unbind()
         assert all(isinstance(i, torch.Tensor) for i in ijks_unbound)
         double_ijks = fvdb.JaggedTensor([torch.cat([i, i]) for i in ijks_unbound])  # type: ignore
-        d_inv_idx = gridbatch.ijk_to_inv_index(double_ijks, cumulative=False)
+        unsorted_idxs = fvdb.JaggedTensor([torch.arange(i.shape[0], device=device) for i in double_ijks.unbind()])  # type: ignore
+        d_inv_idx = gridbatch.inject_from_ijk(double_ijks, unsorted_idxs, default_value=-1)
         assert torch.equal(double_ijks[d_inv_idx].jdata, gridbatch.ijk.jdata)
 
     @parameterized.expand(all_device_dtype_combos)
