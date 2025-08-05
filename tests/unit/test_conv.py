@@ -157,11 +157,13 @@ class TestConv(unittest.TestCase):
         out_ts_tensor = spF.conv3d(ts_tensor, ts_kernel, 3, stride=1)
 
         # Check target grid is aligned.
-        ts_target_grid_ijk = JaggedTensor(
+        ts_grid_ijk_jagged = JaggedTensor(
             [out_ts_tensor.coords[out_ts_tensor.coords[:, -1] == b, :3] for b in range(batch_size)]
         )
+        ts_feats_ts_order = ts_grid_ijk_jagged.jagged_like(out_ts_tensor.feats)
 
-        ts_features = out_ts_tensor.feats[grid.ijk_to_inv_index(ts_target_grid_ijk, cumulative=True).jdata]
+        ts_features_vdb_order = grid.inject_from_ijk(ts_grid_ijk_jagged, ts_feats_ts_order)
+        ts_features = ts_features_vdb_order.jdata
         ts_features.backward(grad_out)
 
         ts_features_grad = torch.clone(vdb_features.jdata.grad)
@@ -216,18 +218,20 @@ class TestConv(unittest.TestCase):
         assert out_ts_tensor.stride[0] == stride
 
         # Check target grid is aligned.
-        ts_target_grid_ijk = JaggedTensor(
+        ts_grid_ijk_jagged = JaggedTensor(
             [
                 torch.div(out_ts_tensor.coords[out_ts_tensor.coords[:, -1] == b, :3], stride, rounding_mode="floor")
                 for b in range(batch_size)
             ]
         )
-        idx_map = vdb_target_grid.ijk_to_index(ts_target_grid_ijk, cumulative=True)
+        idx_map = vdb_target_grid.ijk_to_index(ts_grid_ijk_jagged, cumulative=True)
 
         assert idx_map.jdata.shape[0] == vdb_target_grid.total_voxels
         assert torch.all(torch.sort(idx_map.jdata).values == torch.arange(vdb_target_grid.total_voxels, device=device))
 
-        ts_features = out_ts_tensor.feats[vdb_target_grid.ijk_to_inv_index(ts_target_grid_ijk, cumulative=True).jdata]
+        ts_feats_ts_order = ts_grid_ijk_jagged.jagged_like(out_ts_tensor.feats)
+        ts_features_vdb_order = grid.inject_from_ijk(ts_grid_ijk_jagged, ts_feats_ts_order)
+        ts_features = ts_features_vdb_order.jdata
         self.assertTrue(
             torch.allclose(out_vdb_features.jdata, ts_features, atol=0.1),
             f"Max dist is {torch.max(out_vdb_features.jdata - ts_features)}",
@@ -293,13 +297,13 @@ class TestConv(unittest.TestCase):
         assert out_ts_tensor.stride[0] == stride
 
         # Check target grid is aligned.
-        ts_target_grid_ijk = JaggedTensor(
+        ts_grid_ijk_jagged = JaggedTensor(
             [
                 torch.div(out_ts_tensor.coords[out_ts_tensor.coords[:, -1] == b, :3], stride, rounding_mode="floor")
                 for b in range(batch_size)
             ]
         )
-        idx_map = vdb_target_grid.ijk_to_index(ts_target_grid_ijk, cumulative=True)
+        idx_map = vdb_target_grid.ijk_to_index(ts_grid_ijk_jagged, cumulative=True)
 
         # (Optionally: visualize)
         # from pycg import vis
@@ -308,15 +312,17 @@ class TestConv(unittest.TestCase):
         #     grid.grid_to_world(grid.ijk.jdata + 0.5).jdata, solid=True, ucid=0)] +
         #     [vis.wireframe_bbox(vdb_target_grid.grid_to_world(vdb_target_grid.ijk.jdata - 0.5).jdata,
         #     vdb_target_grid.grid_to_world(vdb_target_grid.ijk.jdata + 0.5).jdata, solid=True, ucid=1)] +
-        #     [vis.wireframe_bbox(vdb_target_grid.grid_to_world(ts_target_grid_ijk.jdata - 0.5).jdata,
-        #     vdb_target_grid.grid_to_world(ts_target_grid_ijk.jdata + 0.5).jdata, solid=True, ucid=2)],
+        #     [vis.wireframe_bbox(vdb_target_grid.grid_to_world(ts_grid_ijk_jagged.jdata - 0.5).jdata,
+        #     vdb_target_grid.grid_to_world(ts_grid_ijk_jagged.jdata + 0.5).jdata, solid=True, ucid=2)],
         #     use_new_api=True
         # )
 
         assert idx_map.jdata.shape[0] == vdb_target_grid.total_voxels
         assert torch.all(torch.sort(idx_map.jdata).values == torch.arange(vdb_target_grid.total_voxels, device=device))
 
-        ts_features = out_ts_tensor.feats[vdb_target_grid.ijk_to_inv_index(ts_target_grid_ijk, cumulative=True).jdata]
+        ts_features_ts_order = ts_grid_ijk_jagged.jagged_like(out_ts_tensor.feats)
+        ts_features_vdb_order = vdb_target_grid.inject_from_ijk(ts_grid_ijk_jagged, ts_features_ts_order)
+        ts_features = ts_features_vdb_order.jdata
         ts_features.backward(grad_out)
 
         dense_features_grad = torch.clone(vdb_features.jdata.grad)
@@ -324,15 +330,15 @@ class TestConv(unittest.TestCase):
 
         self.assertTrue(
             torch.allclose(out_vdb_features.jdata, ts_features, atol=dtype2prec[dtype], rtol=0.0),
-            f"Max dist is {torch.max(out_vdb_features.jdata - ts_features)}",
+            f"Feature mismatch -- Max dist is {torch.max(out_vdb_features.jdata - ts_features)}",
         )
         self.assertTrue(
             torch.allclose(vdb_features_grad, dense_features_grad, atol=dtype2prec[dtype], rtol=0.0),
-            f"Max dist is {torch.max(vdb_features_grad - dense_features_grad)}",
+            f"Grad feature mismatch -- Max dist is {torch.max(vdb_features_grad - dense_features_grad)}",
         )
         self.assertTrue(
             torch.allclose(vdb_kernels_grad, dense_kernels_grad, atol=dtype2prec[dtype], rtol=dtype2prec[dtype]),
-            f"Max dist is {torch.max(vdb_kernels_grad - dense_kernels_grad)}",
+            f"Grad kernel mismatch -- Max dist is {torch.max(vdb_kernels_grad - dense_kernels_grad)}",
         )
 
     @expand_tests(

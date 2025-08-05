@@ -786,6 +786,53 @@ class GridBatch:
 
         return dst
 
+    def inject_from_ijk(
+        self,
+        src_ijk: JaggedTensor,
+        src: JaggedTensor,
+        dst: JaggedTensor | None = None,
+        default_value: float | int | bool = 0,
+    ):
+        """
+        Inject data from source voxel coordinates to a sidecar for this grid.
+
+        Args:
+            src_ijk (JaggedTensor): Voxel coordinates in index space from which to copy data.
+                Shape: (B, num_src_voxels, 3).
+            src (JaggedTensor): Source data to inject. Must match the shape of the destination.
+                Shape: (B, num_src_voxels, *).
+            dst (JaggedTensor | None): Optional destination data to be modified in-place.
+                If None, a new JaggedTensor will be created with the same element shape as src
+                and filled with `default_value` for any voxels that do not have corresponding data in `src`.
+            default_value (float | int | bool): Value to fill in for voxels that do not have corresponding data in `src`.
+                Default is 0.
+        """
+
+        if not isinstance(src_ijk, JaggedTensor):
+            raise TypeError(f"src_ijk must be a JaggedTensor, but got {type(src_ijk)}")
+
+        if not isinstance(src, JaggedTensor):
+            raise TypeError(f"src must be a JaggedTensor, but got {type(src)}")
+
+        if dst is None:
+            dst_shape = [self.total_voxels]
+            dst_shape.extend(src.eshape)
+            dst = self.jagged_like(torch.full(dst_shape, fill_value=default_value, dtype=src.dtype, device=src.device))
+        else:
+            if not isinstance(dst, JaggedTensor):
+                raise TypeError(f"dst must be a JaggedTensor, but got {type(dst)}")
+
+        if dst.eshape != src.eshape:
+            raise ValueError(
+                f"src and dst must have the same element shape, but got src: {src.eshape}, dst: {dst.eshape}"
+            )
+
+        src_idx = self.ijk_to_index(src_ijk, cumulative=True).jdata
+        src_mask = src_idx >= 0
+        src_idx = src_idx[src_mask]
+        dst.jdata[src_idx] = src.jdata[src_mask]
+        return dst
+
     def inject_to(
         self,
         dst_grid: "GridBatch",
