@@ -31,6 +31,16 @@ computeBatchOffsetsFromMetadata(
     }
 }
 
+__global__ void
+updateGridCountAndZeroChecksum(nanovdb::GridData *d_data, uint32_t gridIndex, uint32_t gridCount) {
+    NANOVDB_ASSERT(gridIndex < gridCount);
+    if (d_data->mGridIndex != gridIndex || d_data->mGridCount != gridCount) {
+        d_data->mGridIndex = gridIndex;
+        d_data->mGridCount = gridCount;
+    }
+    d_data->mChecksum.disable();
+}
+
 // We use a helper with std::malloc rather than just using new because it makes
 // clangd not crash on this file.
 fvdb::detail::GridBatchImpl::GridMetadata *
@@ -1091,6 +1101,9 @@ GridBatchImpl::concatenate(const std::vector<c10::intrusive_ptr<GridBatchImpl>> 
             nonEmptyCount += 1;
         }
     } else {
+        TORCH_CHECK(device.has_index(), "Device must have an index for CUDA operations");
+        at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(device.index());
+
         for (size_t i = 0; i < elements.size(); i += 1) {
             if (elements[i]->batchSize() == 0) {
                 continue;
@@ -1105,15 +1118,10 @@ GridBatchImpl::concatenate(const std::vector<c10::intrusive_ptr<GridBatchImpl>> 
                 nanovdb::GridData *dst =
                     reinterpret_cast<nanovdb::GridData *>(buffer.deviceData() + writeOffset);
                 const uint8_t *src = elements[i]->mGridHdl->buffer().deviceData() + readOffset;
-                cudaMemcpyAsync((uint8_t *)dst, src, numBytes, cudaMemcpyDeviceToDevice);
+                cudaMemcpyAsync((uint8_t *)dst, src, numBytes, cudaMemcpyDeviceToDevice, stream);
 
-                bool dirty, *d_dirty;
-                cudaMallocAsync((void **)&d_dirty, sizeof(bool), 0);
-                nanovdb::cuda::updateGridCount<<<1, 1>>>(dst, count++, totalGrids, d_dirty);
+                updateGridCountAndZeroChecksum<<<1, 1, 0, stream>>>(dst, count++, totalGrids);
                 C10_CUDA_KERNEL_LAUNCH_CHECK();
-                cudaMemcpyAsync(&dirty, d_dirty, sizeof(bool), cudaMemcpyDeviceToHost);
-                if (dirty)
-                    nanovdb::tools::cuda::updateChecksum(dst, nanovdb::CheckMode::Partial);
             }
             nonEmptyCount += 1;
         }
@@ -1158,6 +1166,9 @@ GridBatchImpl::contiguous(c10::intrusive_ptr<GridBatchImpl> input) {
         }
 
     } else {
+        TORCH_CHECK(input->device().has_index(), "Device must have an index for CUDA operations");
+        at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(input->device().index());
+
         for (int64_t i = 0; i < input->batchSize(); i += 1) {
             voxelSizes.push_back(input->voxelSizeAt(i));
             voxelOrigins.push_back(input->voxelOriginAt(i));
@@ -1167,15 +1178,11 @@ GridBatchImpl::contiguous(c10::intrusive_ptr<GridBatchImpl> input) {
                 reinterpret_cast<nanovdb::GridData *>(buffer.deviceData() + writeOffset);
             const uint8_t *src =
                 input->nanoGridHandle().buffer().deviceData() + input->cumBytesAt(i);
-            cudaMemcpyAsync((uint8_t *)dst, src, input->numBytesAt(i), cudaMemcpyDeviceToDevice);
+            cudaMemcpyAsync(
+                (uint8_t *)dst, src, input->numBytesAt(i), cudaMemcpyDeviceToDevice, stream);
 
-            bool dirty, *d_dirty;
-            cudaMallocAsync((void **)&d_dirty, sizeof(bool), 0);
-            nanovdb::cuda::updateGridCount<<<1, 1>>>(dst, i, totalGrids, d_dirty);
+            updateGridCountAndZeroChecksum<<<1, 1, 0, stream>>>(dst, i, totalGrids);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
-            cudaMemcpyAsync(&dirty, d_dirty, sizeof(bool), cudaMemcpyDeviceToHost);
-            if (dirty)
-                nanovdb::tools::cuda::updateChecksum(dst, nanovdb::CheckMode::Partial);
             writeOffset += input->numBytesAt(i);
         }
     }
