@@ -285,7 +285,7 @@ MarchingCubes(const GridBatchImpl &batchHdl, const torch::Tensor &sdf, double le
     // cumsum to determine starting position.
     torch::Tensor countCsum = torch::cumsum(nVertices, 0);
     int64_t nTriangles      = countCsum[-1].item<int64_t>() / 3;
-    countCsum               = torch::roll(countCsum, torch::IntList(1));
+    countCsum               = torch::roll(countCsum, {1});
     countCsum[0]            = 0;
 
     // Generate triangles
