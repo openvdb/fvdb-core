@@ -1,7 +1,6 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-import logging
 import random
 
 import fvdb.nn as fvdbnn
