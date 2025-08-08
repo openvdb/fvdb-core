@@ -82,55 +82,107 @@ fineIjkForCoarseGridVoxelCallback(int32_t bidx,
     }
 }
 
+__device__ void
+fineIjkForCoarseGridVoxelCallback(int32_t bidx,
+                                  int32_t lidx,
+                                  int32_t vidx,
+                                  int32_t cidx,
+                                  const GridBatchImpl::Accessor batchAcc,
+                                  nanovdb::Coord upsamplingFactor,
+                                  TorchRAcc64<int32_t, 2> outIJKData,
+                                  TorchRAcc64<fvdb::JIdxType, 1> outIJKBIdx,
+                                  TorchRAcc64<bool, 1> maskData,
+                                  TorchRAcc64<int64_t, 1> maskPrefixSumData) {
+    const nanovdb::OnIndexGrid *gridPtr = batchAcc.grid(bidx);
+    const typename nanovdb::OnIndexGrid::LeafNodeType &leaf =
+        gridPtr->tree().template getFirstNode<0>()[lidx];
+    const int64_t baseOffset     = batchAcc.voxelOffset(bidx);
+    const int64_t totalPadAmount = upsamplingFactor[0] * upsamplingFactor[1] * upsamplingFactor[2];
+    if (leaf.isActive(vidx)) {
+        const int64_t value = ((int64_t)leaf.getValue(vidx)) - 1;
+        if (maskData[baseOffset + value]) {
+            const int64_t index = (maskPrefixSumData[baseOffset + value] - 1) * totalPadAmount;
+            const nanovdb::Coord coarseIjk = leaf.offsetToGlobalCoord(vidx);
+            const nanovdb::Coord fineIjk(coarseIjk[0] * upsamplingFactor[0],
+                                         coarseIjk[1] * upsamplingFactor[1],
+                                         coarseIjk[2] * upsamplingFactor[2]);
+            copyCoords(bidx, index, upsamplingFactor, fineIjk, outIJKData, outIJKBIdx);
+        }
+    }
+}
+
 JaggedTensor
 fineIJKForCoarseGrid(const GridBatchImpl &batchHdl,
                      nanovdb::Coord upsamplingFactor,
-                     const std::optional<JaggedTensor> &maybeMask) {
+                     const std::optional<JaggedTensor> &mask) {
     TORCH_CHECK(batchHdl.device().is_cuda(), "GridBatchImpl must be on CUDA device");
     TORCH_CHECK(batchHdl.device().has_index(), "GridBatchImpl must have a valid index");
 
     const int64_t totalPadAmount = upsamplingFactor[0] * upsamplingFactor[1] * upsamplingFactor[2];
 
-    const torch::TensorOptions optsData =
-        torch::TensorOptions().dtype(torch::kInt32).device(batchHdl.device());
-    const torch::TensorOptions optsBIdx =
-        torch::TensorOptions().dtype(fvdb::JIdxScalarType).device(batchHdl.device());
-    torch::Tensor outIJK     = torch::empty({batchHdl.totalVoxels() * totalPadAmount, 3}, optsData);
-    torch::Tensor outIJKBIdx = torch::empty({batchHdl.totalVoxels() * totalPadAmount},
-                                            optsBIdx); // TODO: Don't populate for single batch
+    const auto optsData = torch::TensorOptions().dtype(torch::kInt32).device(batchHdl.device());
+    const auto optsBIdx = optsData.dtype(fvdb::JIdxScalarType);
 
-    auto outIJKAcc = outIJK.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>();
-    auto outIJKBIdxAcc =
-        outIJKBIdx.packed_accessor64<fvdb::JIdxType, 1, torch::RestrictPtrTraits>();
+    if (mask) {
+        torch::Tensor maskPrefixSum = torch::cumsum(mask.value().jdata(), 0);
+        auto totalMaskedVoxels      = maskPrefixSum[-1].item<int64_t>();
 
-    auto cb = [=] __device__(int32_t bidx,
-                             int32_t lidx,
-                             int32_t vidx,
-                             int32_t cidx,
-                             GridBatchImpl::Accessor bacc) {
-        fineIjkForCoarseGridVoxelCallback(
-            bidx, lidx, vidx, cidx, bacc, upsamplingFactor, outIJKAcc, outIJKBIdxAcc);
-    };
+        torch::Tensor outIJK     = torch::empty({totalMaskedVoxels * totalPadAmount, 3}, optsData);
+        torch::Tensor outIJKBIdx = torch::empty({totalMaskedVoxels * totalPadAmount},
+                                                optsBIdx); // TODO: Don't populate for single batch
 
-    forEachVoxelCUDA(1024, 1, batchHdl, cb);
+        auto outIJKAcc = outIJK.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>();
+        auto outIJKBIdxAcc =
+            outIJKBIdx.packed_accessor64<fvdb::JIdxType, 1, torch::RestrictPtrTraits>();
 
-    // FIXME: (Francis) this uses a bunch of extra memory. Maybe we can avoid it in the future by
-    // allowing for invalid values in the nanovdb GPU grid building process
-    if (maybeMask.has_value()) {
-        std::vector<torch::Tensor> stack;
-        stack.reserve(totalPadAmount);
-        for (int i = 0; i < totalPadAmount; ++i) {
-            stack.push_back(maybeMask.value().jdata());
-        }
-        torch::Tensor mask = torch::stack(stack, 1).view({-1});
-        outIJK             = outIJK.index({mask}).contiguous();
-        outIJKBIdx         = outIJKBIdx.index({mask}).contiguous();
+        auto maskAcc = mask.value().jdata().packed_accessor64<bool, 1, torch::RestrictPtrTraits>();
+        auto maskPrefixSumAcc =
+            maskPrefixSum.packed_accessor64<int64_t, 1, torch::RestrictPtrTraits>();
+
+        auto cb = [=] __device__(int32_t bidx,
+                                 int32_t lidx,
+                                 int32_t vidx,
+                                 int32_t cidx,
+                                 GridBatchImpl::Accessor bacc) {
+            fineIjkForCoarseGridVoxelCallback(bidx,
+                                              lidx,
+                                              vidx,
+                                              cidx,
+                                              bacc,
+                                              upsamplingFactor,
+                                              outIJKAcc,
+                                              outIJKBIdxAcc,
+                                              maskAcc,
+                                              maskPrefixSumAcc);
+        };
+
+        forEachVoxelCUDA(DEFAULT_BLOCK_DIM, 1, batchHdl, cb);
+
         return JaggedTensor::from_data_indices_and_list_ids(
             outIJK, outIJKBIdx, batchHdl.jlidx(), batchHdl.batchSize());
-    }
+    } else {
+        torch::Tensor outIJK = torch::empty({batchHdl.totalVoxels() * totalPadAmount, 3}, optsData);
+        torch::Tensor outIJKBIdx = torch::empty({batchHdl.totalVoxels() * totalPadAmount},
+                                                optsBIdx); // TODO: Don't populate for single batch
 
-    return JaggedTensor::from_data_offsets_and_list_ids(
-        outIJK, batchHdl.voxelOffsets() * totalPadAmount, batchHdl.jlidx());
+        auto outIJKAcc = outIJK.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>();
+        auto outIJKBIdxAcc =
+            outIJKBIdx.packed_accessor64<fvdb::JIdxType, 1, torch::RestrictPtrTraits>();
+
+        auto cb = [=] __device__(int32_t bidx,
+                                 int32_t lidx,
+                                 int32_t vidx,
+                                 int32_t cidx,
+                                 GridBatchImpl::Accessor bacc) {
+            fineIjkForCoarseGridVoxelCallback(
+                bidx, lidx, vidx, cidx, bacc, upsamplingFactor, outIJKAcc, outIJKBIdxAcc);
+        };
+
+        forEachVoxelCUDA(DEFAULT_BLOCK_DIM, 1, batchHdl, cb);
+
+        return JaggedTensor::from_data_offsets_and_list_ids(
+            outIJK, batchHdl.voxelOffsets() * totalPadAmount, batchHdl.jlidx());
+    }
 }
 
 template <>
