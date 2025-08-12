@@ -40,24 +40,14 @@ from ._Cpp import JaggedTensor
 from .types import (
     DeviceIdentifier,
     NumericMaxRank1,
-    NumericMaxRank2,
-    NumericScalar,
+    ValueConstraint,
     resolve_device,
-    to_FloatingScalar,
-    to_IntegerScalar,
-    to_NonNegativeVec3f,
-    to_NonNegativeVec3i,
-    to_PositiveVec3f,
-    to_PositiveVec3fBatch,
-    to_PositiveVec3i,
     to_Vec3f,
     to_Vec3fBatch,
-    to_Vec3fBatchLike,
-    to_Vec3fLike,
+    to_Vec3fBatchBroadcastable,
+    to_Vec3fBroadcastable,
     to_Vec3i,
-    to_Vec3iBatch,
-    to_Vec3iBatchLike,
-    to_Vec3iLike,
+    to_Vec3iBroadcastable,
 )
 
 if TYPE_CHECKING:
@@ -143,9 +133,9 @@ class Grid:
         """
         resolved_device = resolve_device(device, inherit_from=mask)
 
-        dense_dims = to_PositiveVec3i(dense_dims)
+        dense_dims = to_Vec3i(dense_dims, value_constraint=ValueConstraint.POSITIVE)
         ijk_min = to_Vec3i(ijk_min)
-        voxel_size = to_PositiveVec3f(voxel_size)
+        voxel_size = to_Vec3fBroadcastable(voxel_size, value_constraint=ValueConstraint.POSITIVE)
         origin = to_Vec3f(origin)
 
         grid_impl = GridBatchCpp(device=resolved_device)
@@ -161,19 +151,19 @@ class Grid:
         voxel_center: bool = False,
         device: DeviceIdentifier = "cpu",
     ) -> "Grid":
-        dense_dims = to_PositiveVec3i(dense_dims)
-        bounds_min = to_Vec3f(bounds_min)
-        bounds_max = to_Vec3f(bounds_max)
+        dense_dims = to_Vec3iBroadcastable(dense_dims, value_constraint=ValueConstraint.POSITIVE)
+        bounds_min = to_Vec3fBroadcastable(bounds_min)
+        bounds_max = to_Vec3fBroadcastable(bounds_max)
 
         if torch.any(bounds_max <= bounds_min):
             raise ValueError("bounds_max must be greater than bounds_min in all axes")
 
         if voxel_center:
             voxel_size = (bounds_max - bounds_min) / (dense_dims.to(torch.float64) - 1.0)
-            origin = bounds_min
+            origin = to_Vec3f(bounds_min)
         else:
             voxel_size = (bounds_max - bounds_min) / dense_dims.to(torch.float64)
-            origin = bounds_min + 0.5 * voxel_size
+            origin = to_Vec3f(bounds_min + 0.5 * voxel_size)
 
         return cls.from_dense(dense_dims=dense_dims, voxel_size=voxel_size, origin=origin, device=device)
 
@@ -223,7 +213,7 @@ class Grid:
         resolved_device = resolve_device(device, inherit_from=ijk)
 
         jagged_ijk = JaggedTensor(ijk)
-        voxel_size = to_PositiveVec3f(voxel_size)
+        voxel_size = to_Vec3fBroadcastable(voxel_size, value_constraint=ValueConstraint.POSITIVE)
         origin = to_Vec3f(origin)
 
         grid_impl = GridBatchCpp(device=resolved_device)
@@ -261,7 +251,7 @@ class Grid:
 
         jagged_mesh_vertices = JaggedTensor(mesh_vertices)
         jagged_mesh_faces = JaggedTensor(mesh_faces)
-        voxel_size = to_PositiveVec3f(voxel_size)
+        voxel_size = to_Vec3fBroadcastable(voxel_size, value_constraint=ValueConstraint.POSITIVE)
         origin = to_Vec3f(origin)
 
         grid_impl = GridBatchCpp(device=resolved_device)
@@ -295,7 +285,7 @@ class Grid:
         resolved_device = resolve_device(device, inherit_from=points)
 
         jagged_points = JaggedTensor(points)
-        voxel_size = to_PositiveVec3f(voxel_size)
+        voxel_size = to_Vec3fBroadcastable(voxel_size, value_constraint=ValueConstraint.POSITIVE)
         origin = to_Vec3f(origin)
 
         grid_impl = GridBatchCpp(device=resolved_device)
@@ -329,7 +319,7 @@ class Grid:
         resolved_device = resolve_device(device, inherit_from=points)
 
         jagged_points = JaggedTensor(points)
-        voxel_size = to_PositiveVec3f(voxel_size)
+        voxel_size = to_Vec3fBroadcastable(voxel_size, value_constraint=ValueConstraint.POSITIVE)
         origin = to_Vec3f(origin)
 
         grid_impl = GridBatchCpp(device=resolved_device)
@@ -360,14 +350,14 @@ class Grid:
             Grid: A new Grid object with zero voxels.
 
         Examples:
-            >>> grid = Grid.from_empty("cuda", 1, 0)  # string
-            >>> grid = Grid.from_empty(torch.device("cuda:0"), 1, 0)  # device directly
-            >>> grid = Grid.from_empty(voxel_size=1, origin=0)  # defaults to CPU
+            >>> grid = Grid.from_zero_voxels("cuda", 1, 0)  # string
+            >>> grid = Grid.from_zero_voxels(torch.device("cuda:0"), 1, 0)  # device directly
+            >>> grid = Grid.from_zero_voxels(voxel_size=1, origin=0)  # defaults to CPU
         """
         resolved_device = resolve_device(device)
-        voxel_sizes = to_PositiveVec3fBatch(voxel_size)
-        origins = to_Vec3fBatch(origin)
-        grid_impl = GridBatchCpp(voxel_sizes=voxel_sizes, grid_origins=origins, device=resolved_device)
+        voxel_size = to_Vec3fBatch(voxel_size, value_constraint=ValueConstraint.POSITIVE)
+        origin = to_Vec3fBatch(origin)
+        grid_impl = GridBatchCpp(voxel_sizes=voxel_size, grid_origins=origin, device=resolved_device)
         return cls(impl=grid_impl)
 
     # ============================================================
@@ -402,9 +392,9 @@ class Grid:
                 - The pooled data as a torch.Tensor
                 - The coarse Grid containing the pooled structure
         """
-        pool_factor = to_PositiveVec3i(pool_factor)
+        pool_factor = to_Vec3iBroadcastable(pool_factor, value_constraint=ValueConstraint.POSITIVE)
         jagged_data = JaggedTensor(data)
-        stride = to_NonNegativeVec3i(stride)
+        stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.NON_NEGATIVE)
         coarse_grid_impl = coarse_grid._impl if coarse_grid else None
 
         result_data, result_grid_impl = self._impl.avg_pool(pool_factor, jagged_data, stride, coarse_grid_impl)
@@ -432,8 +422,8 @@ class Grid:
                 - A new Grid containing only voxels within the bounds
         """
         jagged_features = JaggedTensor(features)
-        ijk_min = to_Vec3i(ijk_min)
-        ijk_max = to_Vec3i(ijk_max)
+        ijk_min = to_Vec3iBroadcastable(ijk_min)
+        ijk_max = to_Vec3iBroadcastable(ijk_max)
 
         result_features, result_grid_impl = self._impl.clip(jagged_features, ijk_min, ijk_max)
         return result_features.jdata, Grid(impl=result_grid_impl)
@@ -456,8 +446,8 @@ class Grid:
         Returns:
             clipped_grid (Grid): A Grid representing the clipped version of this grid.
         """
-        ijk_min = to_Vec3i(ijk_min)
-        ijk_max = to_Vec3i(ijk_max)
+        ijk_min = to_Vec3iBroadcastable(ijk_min)
+        ijk_max = to_Vec3iBroadcastable(ijk_max)
         return Grid(impl=self._impl.clipped_grid(ijk_min, ijk_max))
 
     def coarsened_grid(self, coarsening_factor: NumericMaxRank1) -> "Grid":
@@ -472,7 +462,7 @@ class Grid:
         Returns:
             coarsened_grid (Grid): A Grid representing the coarsened version of this grid.
         """
-        coarsening_factor = to_PositiveVec3i(coarsening_factor)
+        coarsening_factor = to_Vec3iBroadcastable(coarsening_factor, value_constraint=ValueConstraint.POSITIVE)
         return Grid(impl=self._impl.coarsened_grid(coarsening_factor))
 
     def contiguous(self) -> "Grid":
@@ -500,8 +490,8 @@ class Grid:
         Returns:
             conv_grid (Grid): A Grid representing the convolution of this grid.
         """
-        kernel_size = to_PositiveVec3i(kernel_size)
-        stride = to_NonNegativeVec3i(stride)
+        kernel_size = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
+        stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.NON_NEGATIVE)
         return Grid(impl=self._impl.conv_grid(kernel_size, stride))
 
     def coords_in_active_voxel(self, ijk: torch.Tensor) -> torch.Tensor:
@@ -553,8 +543,8 @@ class Grid:
                 Shape: (num_cubes,).
         """
         jagged_cube_centers = JaggedTensor(cube_centers)
-        cube_min = to_Vec3f(cube_min)
-        cube_max = to_Vec3f(cube_max)
+        cube_min = to_Vec3fBroadcastable(cube_min)
+        cube_max = to_Vec3fBroadcastable(cube_max)
 
         return self._impl.cubes_in_grid(jagged_cube_centers, cube_min, cube_max).jdata
 
@@ -583,8 +573,8 @@ class Grid:
                 Shape: (num_cubes,).
         """
         jagged_cube_centers = JaggedTensor(cube_centers)
-        cube_min = to_Vec3f(cube_min)
-        cube_max = to_Vec3f(cube_max)
+        cube_min = to_Vec3fBroadcastable(cube_min)
+        cube_max = to_Vec3fBroadcastable(cube_max)
         return self._impl.cubes_intersect_grid(jagged_cube_centers, cube_min, cube_max).jdata
 
     def cuda(self) -> "Grid":
@@ -1126,9 +1116,9 @@ class Grid:
                 - The pooled data as a torch.Tensor
                 - The coarse Grid containing the pooled structure
         """
-        pool_factor = to_PositiveVec3i(pool_factor)
+        pool_factor = to_Vec3iBroadcastable(pool_factor, value_constraint=ValueConstraint.POSITIVE)
         jagged_data = JaggedTensor(data)
-        stride = to_NonNegativeVec3i(stride)
+        stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.NON_NEGATIVE)
         coarse_grid_impl = coarse_grid._impl if coarse_grid else None
 
         result_data, result_grid_impl = self._impl.max_pool(pool_factor, jagged_data, stride, coarse_grid_impl)
@@ -1419,8 +1409,8 @@ class Grid:
         # Import here to avoid circular dependency
         from .sparse_conv_pack_info import SparseConvPackInfo
 
-        kernel_size = to_PositiveVec3i(kernel_size)
-        stride = to_NonNegativeVec3i(stride)
+        kernel_size = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
+        stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.NON_NEGATIVE)
         target_impl = target_grid._impl if target_grid is not None else None
 
         sparse_impl, grid_impl = self._impl.sparse_conv_kernel_map(kernel_size, stride, target_impl)
@@ -1500,7 +1490,7 @@ class Grid:
                 - The subdivided data as a torch.Tensor
                 - The fine Grid containing the subdivided structure
         """
-        subdiv_factor = to_PositiveVec3i(subdiv_factor)
+        subdiv_factor = to_Vec3iBroadcastable(subdiv_factor, value_constraint=ValueConstraint.POSITIVE)
         jagged_data = JaggedTensor(data)
         jagged_mask = JaggedTensor(mask) if mask is not None else None
 
@@ -1530,7 +1520,7 @@ class Grid:
             Grid: A new Grid with subdivided structure.
         """
 
-        subdiv_factor = to_PositiveVec3i(subdiv_factor)
+        subdiv_factor = to_Vec3iBroadcastable(subdiv_factor, value_constraint=ValueConstraint.POSITIVE)
         jagged_mask = JaggedTensor(mask) if mask is not None else None
 
         return Grid(impl=self._impl.subdivided_grid(subdiv_factor, mask=jagged_mask))
@@ -1707,8 +1697,12 @@ class Grid:
                 Shape: (channels, depth, height, width).
         """
         jagged_sparse_data = JaggedTensor(sparse_data)
-        min_coord = to_Vec3i(min_coord) if min_coord is not None else None
-        grid_size = to_PositiveVec3i(grid_size) if grid_size is not None else None
+        min_coord = to_Vec3iBroadcastable(min_coord) if min_coord is not None else None
+        grid_size = (
+            to_Vec3iBroadcastable(grid_size, value_constraint=ValueConstraint.POSITIVE)
+            if grid_size is not None
+            else None
+        )
         return self._impl.write_to_dense(jagged_sparse_data, min_coord, grid_size)
 
     # ============================================================
