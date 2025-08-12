@@ -825,57 +825,51 @@ class TestBasicOpsSingle(unittest.TestCase):
             masked_gradients = feats.grad[~mask]
             self.assertTrue(torch.all(masked_gradients == torch.zeros_like(masked_gradients)))
 
-    # @parameterized.expand(all_device_dtype_combos + bfloat16_combos)
-    # def test_max_pool(self, device, dtype):
-    #     vox_size = 0.05
-    #     vox_origin = (0.0, 0.0, 0.0)
-    #     gsize = int(1 / vox_size)
-    #     grid = GridBatch(device=device)
-    #     grid.set_from_dense_grid(1, [20, 20, 20], voxel_sizes=vox_size, origins=vox_origin)
-    #     assert grid.total_voxels == 20**3
-    #     grid_vals = torch.randn(grid.total_voxels, 3).to(device).to(dtype)
+    @parameterized.expand(all_device_dtype_combos + bfloat16_combos)
+    def test_max_pool(self, device, dtype):
+        vox_size = 0.05
+        vox_origin = (0.0, 0.0, 0.0)
+        gsize = int(1 / vox_size)
+        grid = Grid.from_dense([20, 20, 20], voxel_size=vox_size, origin=vox_origin, device=device)
+        assert grid.num_voxels == 20**3
+        grid_vals = torch.randn(grid.num_voxels, 3).to(device).to(dtype)
 
-    #     for pool_factor in ((2, 3, 1), 1, 2, 3, 4, 5, 7, 15, 10):
-    #         grid_vals_coarse, grid_coarse = grid.max_pool(pool_factor, grid_vals)
-    #         grid_vals_coarse = grid_vals_coarse.jdata
-    #         if isinstance(pool_factor, int):
-    #             self.assertTrue(torch.allclose(grid_coarse.voxel_sizes[0], grid.voxel_sizes[0] * pool_factor))
-    #             self.assertTrue(
-    #                 torch.allclose(
-    #                     grid_coarse.origins[0], grid.origins[0] + 0.5 * grid.voxel_sizes[0] * (pool_factor - 1)
-    #                 )
-    #             )
-    #         else:
-    #             self.assertTrue(
-    #                 torch.allclose(
-    #                     grid_coarse.voxel_sizes[0], grid.voxel_sizes[0] * torch.tensor(pool_factor).to(device)
-    #                 )
-    #             )
-    #             self.assertTrue(
-    #                 torch.allclose(
-    #                     grid_coarse.origins[0],
-    #                     grid.origins[0] + 0.5 * grid.voxel_sizes[0] * (torch.tensor(pool_factor) - 1).to(device),
-    #                 )
-    #             )
+        for pool_factor in ((2, 3, 1), 1, 2, 3, 4, 5, 7, 15, 10):
+            grid_vals_coarse, grid_coarse = grid.max_pool(pool_factor, grid_vals)
+            if isinstance(pool_factor, int):
+                self.assertTrue(torch.allclose(grid_coarse.voxel_size, grid.voxel_size * pool_factor))
+                self.assertTrue(
+                    torch.allclose(grid_coarse.origin, grid.origin + 0.5 * grid.voxel_size * (pool_factor - 1))
+                )
+            else:
+                self.assertTrue(
+                    torch.allclose(grid_coarse.voxel_size, grid.voxel_size * torch.tensor(pool_factor).to(device))
+                )
+                self.assertTrue(
+                    torch.allclose(
+                        grid_coarse.origin,
+                        grid.origin + 0.5 * grid.voxel_size * (torch.tensor(pool_factor) - 1).to(device),
+                    )
+                )
 
-    #         # Pytorch pooling
-    #         torch_pool_op = torch.nn.MaxPool3d(pool_factor, pool_factor, ceil_mode=True)
-    #         # We compy everything to the CPU because it's noticeably faster to iterate and copy this way
-    #         grid_vals_t = torch.zeros(gsize, gsize, gsize, 3).to(device="cpu", dtype=dtype)
-    #         grid_ijk_cpu = grid.ijk.jdata.cpu()
-    #         grid_vals_cpu = grid_vals.cpu()
-    #         for i, coord in enumerate(grid_ijk_cpu):
-    #             grid_vals_t[coord[0], coord[1], coord[2]] = grid_vals_cpu[i]
-    #         grid_vals_t = grid_vals_t.to(device)
-    #         grid_vals_t = grid_vals_t.permute(3, 0, 1, 2).contiguous()
-    #         grid_vals_t_coarse = torch_pool_op(grid_vals_t.unsqueeze(0)).squeeze()
+            # Pytorch pooling
+            torch_pool_op = torch.nn.MaxPool3d(pool_factor, pool_factor, ceil_mode=True)
+            # We compy everything to the CPU because it's noticeably faster to iterate and copy this way
+            grid_vals_t = torch.zeros(gsize, gsize, gsize, 3).to(device="cpu", dtype=dtype)
+            grid_ijk_cpu = grid.ijk.cpu()
+            grid_vals_cpu = grid_vals.cpu()
+            for i, coord in enumerate(grid_ijk_cpu):
+                grid_vals_t[coord[0], coord[1], coord[2]] = grid_vals_cpu[i]
+            grid_vals_t = grid_vals_t.to(device)
+            grid_vals_t = grid_vals_t.permute(3, 0, 1, 2).contiguous()
+            grid_vals_t_coarse = torch_pool_op(grid_vals_t.unsqueeze(0)).squeeze()
 
-    #         grid_vals_coarse_t_flat = torch.zeros_like(grid_vals_coarse, device="cpu")
-    #         grid_coarse_ijk_cpu = grid_coarse.ijk.jdata.cpu()
-    #         for i, coord in enumerate(grid_coarse_ijk_cpu):
-    #             grid_vals_coarse_t_flat[i] = grid_vals_t_coarse[:, coord[0], coord[1], coord[2]]
-    #         grid_vals_coarse_t_flat = grid_vals_coarse_t_flat.to(device)
-    #         self.assertTrue(torch.all(grid_vals_coarse == grid_vals_coarse_t_flat))
+            grid_vals_coarse_t_flat = torch.zeros_like(grid_vals_coarse, device="cpu")
+            grid_coarse_ijk_cpu = grid_coarse.ijk.cpu()
+            for i, coord in enumerate(grid_coarse_ijk_cpu):
+                grid_vals_coarse_t_flat[i] = grid_vals_t_coarse[:, coord[0], coord[1], coord[2]]
+            grid_vals_coarse_t_flat = grid_vals_coarse_t_flat.to(device)
+            self.assertTrue(torch.all(grid_vals_coarse == grid_vals_coarse_t_flat))
 
     # @parameterized.expand(all_device_dtype_combos + bfloat16_combos)
     # def test_strided_max_pool(self, device, dtype):
@@ -1091,8 +1085,9 @@ class TestBasicOpsSingle(unittest.TestCase):
             with self.assertRaises(ValueError):
                 grid = builder(vox_size, [0.01] * 2)
 
-            # Value error because origins is wrong shape
-            with self.assertRaises(ValueError):
+            # Type error because origins is a list of lists, rather than a list of numbers,
+            # and is not the right python type to be rank 1.
+            with self.assertRaises(TypeError):
                 grid = builder(vox_size, [[0.01, 0.01, 0.01]])
 
             # These should work just fine. It's no longer an error to have a scalar

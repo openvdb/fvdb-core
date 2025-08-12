@@ -5,13 +5,7 @@ from typing import Union
 
 import numpy as np
 import torch
-from fvdb.types import (
-    DeviceIdentifier,
-    NumericMaxRank1,
-    to_PositiveVec3i,
-    to_Vec3f,
-    to_Vec3i,
-)
+from fvdb.types import DeviceIdentifier, NumericMaxRank1, to_Vec3f, to_Vec3i
 
 from fvdb import Grid, GridBatch, JaggedTensor
 

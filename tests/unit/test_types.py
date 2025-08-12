@@ -12,6 +12,7 @@ from fvdb.types import (  # Type guard functions; Type definitions; Conversion f
     NumericMaxRank2,
     NumericScalar,
     NumericScalarNative,
+    ValueConstraint,
     is_NumericMaxRank1,
     is_NumericMaxRank2,
     is_NumericScalar,
@@ -23,14 +24,6 @@ from fvdb.types import (  # Type guard functions; Type definitions; Conversion f
     to_IntegerScalar,
     to_IntegerTensorBroadcastableRank1,
     to_IntegerTensorBroadcastableRank2,
-    to_NonNegativeVec3f,
-    to_NonNegativeVec3fBatch,
-    to_NonNegativeVec3i,
-    to_NonNegativeVec3iBatch,
-    to_PositiveVec3f,
-    to_PositiveVec3fBatch,
-    to_PositiveVec3i,
-    to_PositiveVec3iBatch,
     to_Vec3f,
     to_Vec3fBatch,
     to_Vec3i,
@@ -529,37 +522,37 @@ class TestTypesRedux(unittest.TestCase):
     def test_to_PositiveVec3i(self):
         """Test PositiveVec3i conversion with valid positive values"""
         # Test scalar input (should broadcast)
-        result = to_PositiveVec3i(5)
+        result = to_Vec3i(5, value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.shape, torch.Size([3]))
         self.assertTrue(torch.equal(result, torch.tensor([5, 5, 5], dtype=result.dtype)))
 
         # Test list input with positive values
-        result = to_PositiveVec3i([1, 2, 3])
+        result = to_Vec3i([1, 2, 3], value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.shape, torch.Size([3]))
         self.assertTrue(torch.equal(result, torch.tensor([1, 2, 3], dtype=result.dtype)))
 
         # Test tensor input with positive values
         input_tensor = torch.tensor([10, 20, 30], dtype=torch.int32)
-        result = to_PositiveVec3i(input_tensor)
+        result = to_Vec3i(input_tensor, value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.shape, torch.Size([3]))
         self.assertTrue(torch.equal(result, torch.tensor([10, 20, 30], dtype=result.dtype)))
 
     def test_to_PositiveVec3f(self):
         """Test PositiveVec3f conversion with valid positive values"""
         # Test scalar input
-        result = to_PositiveVec3f(1.5)
+        result = to_Vec3f(1.5, value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.shape, torch.Size([3]))
         expected = torch.tensor([1.5, 1.5, 1.5], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
         # Test list input with positive values
-        result = to_PositiveVec3f([1.0, 2.5, 3.0])
+        result = to_Vec3f([1.0, 2.5, 3.0], value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.shape, torch.Size([3]))
         expected = torch.tensor([1.0, 2.5, 3.0], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
         # Test very small positive values
-        result = to_PositiveVec3f([0.001, 0.002, 0.003])
+        result = to_Vec3f([0.001, 0.002, 0.003], value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.shape, torch.Size([3]))
         expected = torch.tensor([0.001, 0.002, 0.003], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
@@ -567,21 +560,21 @@ class TestTypesRedux(unittest.TestCase):
     def test_to_PositiveVec3iBatch(self):
         """Test PositiveVec3iBatch conversion with valid positive values"""
         # Test scalar input (should create batch of size 1)
-        result = to_PositiveVec3iBatch(5)
+        result = to_Vec3iBatch(5, value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.shape, torch.Size([1, 3]))
         expected = torch.tensor([[5, 5, 5]], dtype=result.dtype)
         self.assertTrue(torch.equal(result, expected))
 
         # Test 2D list input with positive values
         input_data = [[1, 2, 3], [4, 5, 6]]
-        result = to_PositiveVec3iBatch(input_data)
+        result = to_Vec3iBatch(input_data, value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.shape, torch.Size([2, 3]))
         expected = torch.tensor([[1, 2, 3], [4, 5, 6]], dtype=result.dtype)
         self.assertTrue(torch.equal(result, expected))
 
         # Test with large positive values
         input_data = [[100, 200, 300], [400, 500, 600]]
-        result = to_PositiveVec3iBatch(input_data)
+        result = to_Vec3iBatch(input_data, value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.shape, torch.Size([2, 3]))
         expected = torch.tensor([[100, 200, 300], [400, 500, 600]], dtype=result.dtype)
         self.assertTrue(torch.equal(result, expected))
@@ -589,21 +582,21 @@ class TestTypesRedux(unittest.TestCase):
     def test_to_PositiveVec3fBatch(self):
         """Test PositiveVec3fBatch conversion with valid positive values"""
         # Test scalar input
-        result = to_PositiveVec3fBatch(1.5)
+        result = to_Vec3fBatch(1.5, value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.shape, torch.Size([1, 3]))
         expected = torch.tensor([[1.5, 1.5, 1.5]], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
         # Test 2D list input with positive values
         input_data = [[1.0, 2.0, 3.0], [4.5, 5.5, 6.5]]
-        result = to_PositiveVec3fBatch(input_data)
+        result = to_Vec3fBatch(input_data, value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.shape, torch.Size([2, 3]))
         expected = torch.tensor([[1.0, 2.0, 3.0], [4.5, 5.5, 6.5]], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
         # Test with very small positive values
         input_data = [[0.1, 0.2, 0.3], [0.001, 0.002, 0.003]]
-        result = to_PositiveVec3fBatch(input_data)
+        result = to_Vec3fBatch(input_data, value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.shape, torch.Size([2, 3]))
         expected = torch.tensor([[0.1, 0.2, 0.3], [0.001, 0.002, 0.003]], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
@@ -612,98 +605,98 @@ class TestTypesRedux(unittest.TestCase):
         """Test Positive Vec3 conversion failure cases"""
         # Test zero values - should fail
         with self.assertRaises(ValueError):
-            to_PositiveVec3i([0, 1, 2])
+            to_Vec3i([0, 1, 2], value_constraint=ValueConstraint.POSITIVE)
 
         with self.assertRaises(ValueError):
-            to_PositiveVec3f([1.0, 0.0, 2.0])
+            to_Vec3f([1.0, 0.0, 2.0], value_constraint=ValueConstraint.POSITIVE)
 
         # Test negative values - should fail
         with self.assertRaises(ValueError):
-            to_PositiveVec3i([-1, 2, 3])
+            to_Vec3i([-1, 2, 3], value_constraint=ValueConstraint.POSITIVE)
 
         with self.assertRaises(ValueError):
-            to_PositiveVec3f([1.0, -1.0, 2.0])
+            to_Vec3f([1.0, -1.0, 2.0], value_constraint=ValueConstraint.POSITIVE)
 
         # Test scalar zero - should fail
         with self.assertRaises(ValueError):
-            to_PositiveVec3i(0)
+            to_Vec3i(0, value_constraint=ValueConstraint.POSITIVE)
 
         with self.assertRaises(ValueError):
-            to_PositiveVec3f(0.0)
+            to_Vec3f(0.0, value_constraint=ValueConstraint.POSITIVE)
 
         # Test scalar negative - should fail
         with self.assertRaises(ValueError):
-            to_PositiveVec3i(-5)
+            to_Vec3i(-5, value_constraint=ValueConstraint.POSITIVE)
 
         with self.assertRaises(ValueError):
-            to_PositiveVec3f(-1.5)
+            to_Vec3f(-1.5, value_constraint=ValueConstraint.POSITIVE)
 
         # Test batch with zero values - should fail
         with self.assertRaises(ValueError):
-            to_PositiveVec3iBatch([[1, 2, 3], [0, 5, 6]])
+            to_Vec3iBatch([[1, 2, 3], [0, 5, 6]], value_constraint=ValueConstraint.POSITIVE)
 
         with self.assertRaises(ValueError):
-            to_PositiveVec3fBatch([[1.0, 2.0, 3.0], [4.0, 0.0, 6.0]])
+            to_Vec3fBatch([[1.0, 2.0, 3.0], [4.0, 0.0, 6.0]], value_constraint=ValueConstraint.POSITIVE)
 
         # Test batch with negative values - should fail
         with self.assertRaises(ValueError):
-            to_PositiveVec3iBatch([[1, 2, 3], [-1, 5, 6]])
+            to_Vec3iBatch([[1, 2, 3], [-1, 5, 6]], value_constraint=ValueConstraint.POSITIVE)
 
         with self.assertRaises(ValueError):
-            to_PositiveVec3fBatch([[1.0, 2.0, 3.0], [4.0, -1.0, 6.0]])
+            to_Vec3fBatch([[1.0, 2.0, 3.0], [4.0, -1.0, 6.0]], value_constraint=ValueConstraint.POSITIVE)
 
         # Test mixed positive and non-positive values - should fail
         with self.assertRaises(ValueError):
-            to_PositiveVec3i([1, 0, 3])
+            to_Vec3i([1, 0, 3], value_constraint=ValueConstraint.POSITIVE)
 
         with self.assertRaises(ValueError):
-            to_PositiveVec3f([1.0, 2.0, -0.1])
+            to_Vec3f([1.0, 2.0, -0.1], value_constraint=ValueConstraint.POSITIVE)
 
     def test_positive_vec3_edge_cases(self):
         """Test Positive Vec3 conversion edge cases"""
         # Test very small positive values (should succeed)
-        result = to_PositiveVec3f([1e-6, 1e-5, 1e-4])
+        result = to_Vec3f([1e-6, 1e-5, 1e-4], value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.shape, torch.Size([3]))
         self.assertTrue(torch.all(result > 0))
 
         # Test tensor inputs with positive values
         input_tensor = torch.tensor([1, 2, 3], dtype=torch.int64)
-        result = to_PositiveVec3i(input_tensor)
+        result = to_Vec3i(input_tensor, value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.shape, torch.Size([3]))
         self.assertTrue(torch.all(result > 0))
 
         # Test numpy inputs with positive values
         np_input = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-        result = to_PositiveVec3f(np_input)
+        result = to_Vec3f(np_input, value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.shape, torch.Size([3]))
         self.assertTrue(torch.all(result > 0))
 
         # Test that error messages include the problematic tensor
         with self.assertRaises(ValueError) as context:
-            to_PositiveVec3i([-1, 2, 3])
-        self.assertIn("All values must be greater than zero", str(context.exception))
+            to_Vec3i([-1, 2, 3], value_constraint=ValueConstraint.POSITIVE)
+        self.assertIn("Expected positive values", str(context.exception))
 
     def test_positive_vec3_dtype_and_device_handling(self):
         """Test that positive Vec3 functions handle dtype and device correctly"""
         # Test custom dtype
-        result = to_PositiveVec3i([1, 2, 3], dtype=torch.int32)
+        result = to_Vec3i([1, 2, 3], dtype=torch.int32, value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.dtype, torch.int32)
 
-        result = to_PositiveVec3f([1.0, 2.0, 3.0], dtype=torch.float64)
+        result = to_Vec3f([1.0, 2.0, 3.0], dtype=torch.float64, value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.dtype, torch.float64)
 
         # Test device specification
-        result = to_PositiveVec3i([1, 2, 3])
+        result = to_Vec3i([1, 2, 3], value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.device.type, "cpu")
 
-        result = to_PositiveVec3f([1.0, 2.0, 3.0])
+        result = to_Vec3f([1.0, 2.0, 3.0], value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.device.type, "cpu")
 
         # Test batch versions
-        result = to_PositiveVec3iBatch([[1, 2, 3]], dtype=torch.int32)
+        result = to_Vec3iBatch([[1, 2, 3]], dtype=torch.int32, value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.dtype, torch.int32)
 
-        result = to_PositiveVec3fBatch([[1.0, 2.0, 3.0]], dtype=torch.float64)
+        result = to_Vec3fBatch([[1.0, 2.0, 3.0]], dtype=torch.float64, value_constraint=ValueConstraint.POSITIVE)
         self.assertEqual(result.dtype, torch.float64)
 
     # ========== NonNegative Vec3 Conversion Tests ==========
@@ -711,94 +704,94 @@ class TestTypesRedux(unittest.TestCase):
     def test_to_NonNegativeVec3i(self):
         """Test NonNegativeVec3i conversion - allows zero, rejects negative"""
         # Test positive values (should work)
-        result = to_NonNegativeVec3i([1, 2, 3])
+        result = to_Vec3i([1, 2, 3], value_constraint=ValueConstraint.NON_NEGATIVE)
         self.assertTrue(torch.equal(result, torch.tensor([1, 2, 3], dtype=result.dtype)))
 
         # Test zero values (should work - key difference from Positive)
-        result = to_NonNegativeVec3i([0, 1, 2])
+        result = to_Vec3i([0, 1, 2], value_constraint=ValueConstraint.NON_NEGATIVE)
         self.assertTrue(torch.equal(result, torch.tensor([0, 1, 2], dtype=result.dtype)))
 
         # Test scalar zero (should work)
-        result = to_NonNegativeVec3i(0)
+        result = to_Vec3i(0, value_constraint=ValueConstraint.NON_NEGATIVE)
         self.assertTrue(torch.equal(result, torch.tensor([0, 0, 0], dtype=result.dtype)))
 
         # Test negative values (should fail)
         with self.assertRaises(ValueError):
-            to_NonNegativeVec3i([-1, 2, 3])
+            to_Vec3i([-1, 2, 3], value_constraint=ValueConstraint.NON_NEGATIVE)
 
     def test_to_NonNegativeVec3f(self):
         """Test NonNegativeVec3f conversion - allows zero, rejects negative"""
         # Test positive values
-        result = to_NonNegativeVec3f([1.0, 2.0, 3.0])
+        result = to_Vec3f([1.0, 2.0, 3.0], value_constraint=ValueConstraint.NON_NEGATIVE)
         expected = torch.tensor([1.0, 2.0, 3.0], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
         # Test zero values (should work)
-        result = to_NonNegativeVec3f([0.0, 1.0, 2.0])
+        result = to_Vec3f([0.0, 1.0, 2.0], value_constraint=ValueConstraint.NON_NEGATIVE)
         expected = torch.tensor([0.0, 1.0, 2.0], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
         # Test scalar zero (should work)
-        result = to_NonNegativeVec3f(0.0)
+        result = to_Vec3f(0.0, value_constraint=ValueConstraint.NON_NEGATIVE)
         expected = torch.tensor([0.0, 0.0, 0.0], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
         # Test negative values (should fail)
         with self.assertRaises(ValueError):
-            to_NonNegativeVec3f([1.0, -1.0, 2.0])
+            to_Vec3f([1.0, -1.0, 2.0], value_constraint=ValueConstraint.NON_NEGATIVE)
 
     def test_to_NonNegativeVec3iBatch(self):
         """Test NonNegativeVec3iBatch conversion - allows zero, rejects negative"""
         # Test positive values
         input_data = [[1, 2, 3], [4, 5, 6]]
-        result = to_NonNegativeVec3iBatch(input_data)
+        result = to_Vec3iBatch(input_data, value_constraint=ValueConstraint.NON_NEGATIVE)
         expected = torch.tensor([[1, 2, 3], [4, 5, 6]], dtype=result.dtype)
         self.assertTrue(torch.equal(result, expected))
 
         # Test with zero values (should work)
         input_data = [[0, 1, 2], [3, 0, 5]]
-        result = to_NonNegativeVec3iBatch(input_data)
+        result = to_Vec3iBatch(input_data, value_constraint=ValueConstraint.NON_NEGATIVE)
         expected = torch.tensor([[0, 1, 2], [3, 0, 5]], dtype=result.dtype)
         self.assertTrue(torch.equal(result, expected))
 
         # Test negative values (should fail)
         with self.assertRaises(ValueError):
-            to_NonNegativeVec3iBatch([[1, 2, 3], [-1, 5, 6]])
+            to_Vec3iBatch([[1, 2, 3], [-1, 5, 6]], value_constraint=ValueConstraint.NON_NEGATIVE)
 
     def test_to_NonNegativeVec3fBatch(self):
         """Test NonNegativeVec3fBatch conversion - allows zero, rejects negative"""
         # Test positive values
         input_data = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
-        result = to_NonNegativeVec3fBatch(input_data)
+        result = to_Vec3fBatch(input_data, value_constraint=ValueConstraint.NON_NEGATIVE)
         expected = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
         # Test with zero values (should work)
         input_data = [[0.0, 1.0, 2.0], [3.0, 0.0, 5.0]]
-        result = to_NonNegativeVec3fBatch(input_data)
+        result = to_Vec3fBatch(input_data, value_constraint=ValueConstraint.NON_NEGATIVE)
         expected = torch.tensor([[0.0, 1.0, 2.0], [3.0, 0.0, 5.0]], dtype=result.dtype)
         self.assertTrue(torch.allclose(result, expected))
 
         # Test negative values (should fail)
         with self.assertRaises(ValueError):
-            to_NonNegativeVec3fBatch([[1.0, 2.0, 3.0], [4.0, -1.0, 6.0]])
+            to_Vec3fBatch([[1.0, 2.0, 3.0], [4.0, -1.0, 6.0]], value_constraint=ValueConstraint.NON_NEGATIVE)
 
     def test_nonnegative_vs_positive_comparison(self):
         """Test key differences between NonNegative and Positive variants"""
         # Zero should work for NonNegative but fail for Positive
-        to_NonNegativeVec3i([0, 1, 2])  # Should work
+        to_Vec3i([0, 1, 2], value_constraint=ValueConstraint.NON_NEGATIVE)  # Should work
         with self.assertRaises(ValueError):
-            to_PositiveVec3i([0, 1, 2])  # Should fail
+            to_Vec3i([0, 1, 2], value_constraint=ValueConstraint.POSITIVE)  # Should fail
 
-        to_NonNegativeVec3f([0.0, 1.0, 2.0])  # Should work
+        to_Vec3f([0.0, 1.0, 2.0], value_constraint=ValueConstraint.NON_NEGATIVE)  # Should work
         with self.assertRaises(ValueError):
-            to_PositiveVec3f([0.0, 1.0, 2.0])  # Should fail
+            to_Vec3f([0.0, 1.0, 2.0], value_constraint=ValueConstraint.POSITIVE)  # Should fail
 
         # Negative should fail for both
         with self.assertRaises(ValueError):
-            to_NonNegativeVec3i([-1, 2, 3])
+            to_Vec3i([-1, 2, 3], value_constraint=ValueConstraint.NON_NEGATIVE)
         with self.assertRaises(ValueError):
-            to_PositiveVec3i([-1, 2, 3])
+            to_Vec3i([-1, 2, 3], value_constraint=ValueConstraint.POSITIVE)
 
     # ========== Dtype and Device Handling Tests ==========
 
