@@ -1585,6 +1585,35 @@ class GridBatch:
         """
         return self._impl.voxel_size_at(bi)
 
+    def rays_intersect_voxels(
+        self, ray_origins: JaggedTensor, ray_directions: JaggedTensor, eps: float = 0.0
+    ) -> JaggedTensor:
+        """
+        Return a boolean JaggedTensor recording whether a set of rays hit any voxels in this gridbatch.
+
+        Args:
+            ray_origins (JaggedTensor): A `JaggedTensor` of ray origins (one set of rays per grid in the batch).
+                _i.e._ a `JaggedTensor` of the form `[ray_o0, ..., ray_oB]` where `ray_oI` has shape `[N_I, 3]`.
+            ray_directions (JaggedTensor): A `JaggedTensor` of ray directions (one set of rays per grid in the batch).
+                _i.e._ a `JaggedTensor` of the form `[ray_d0, ..., ray_dB]` where `ray_dI` has shape `[N_I, 3]`.
+            eps (float): Epsilon value to skip intersections whose length is less than this value for
+                numerical stability. Default is 0.0.
+        Returns:
+            JaggedTensor: A `JaggedTensor` indicating whether each ray hit a voxel.
+                _i.e._ a boolean `JaggedTensor` of the form `[hit_0, ..., hit_B]` where `hit_I` has shape `[N_I]`.
+        """
+        _, ray_times = self.voxels_along_rays(
+            ray_origins=ray_origins,
+            ray_directions=ray_directions,
+            max_voxels=1,
+            eps=eps,
+            return_ijk=False,
+            cumulative=False,
+        )
+
+        did_hit = (ray_times.joffsets[1:] - ray_times.joffsets[:-1]) > 0
+        return ray_origins.jagged_like(did_hit)
+
     def voxels_along_rays(
         self,
         ray_origins: JaggedTensor,

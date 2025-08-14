@@ -1224,6 +1224,31 @@ class Grid:
             jagged_ray_origins, jagged_ray_directions, jagged_grid_scalars, eps
         ).jdata
 
+    def rays_intersect_voxels(
+        self, ray_origins: torch.Tensor, ray_directions: torch.Tensor, eps: float = 0.0
+    ) -> torch.Tensor:
+        """
+        Return a boolean tensor indicating which rays intersect this Grid.
+
+        Args:
+            ray_origins (torch.Tensor): an [N, 3] shaped tensor of ray origins
+            ray_directions (torch.Tensor): an [N, 3] shaped tensor of ray directions
+            eps (float): a small value to avoid numerical instability
+
+        Returns:
+            torch.Tensor: a boolean tensor of shape [N,] indicating which rays intersect the grid.
+                _i.e._ `rays_intersect_voxels(ray_origins, ray_directions, eps)[i]` is `True` if the
+                ray corresponding to `ray_origins[i]`, `ray_directions[i]` intersects with this Grid.
+        """
+        _, ray_times = self.voxels_along_rays(
+            ray_origins=ray_origins,
+            ray_directions=ray_directions,
+            max_voxels=1,
+            eps=eps,
+            return_ijk=False,
+        )
+        return (ray_times.joffsets[1:] - ray_times.joffsets[:-1]) > 0
+
     def read_from_dense(self, dense_data: torch.Tensor, dense_origin: NumericMaxRank1 = 0) -> torch.Tensor:
         """
         Read values from a dense tensor into sparse grid structure.
@@ -1345,7 +1370,7 @@ class Grid:
 
     def segments_along_rays(
         self, ray_origins: torch.Tensor, ray_directions: torch.Tensor, max_segments: int, eps: float = 0.0
-    ) -> torch.Tensor:
+    ) -> JaggedTensor:
         """
         Enumerate segments along rays.
 
@@ -1366,7 +1391,7 @@ class Grid:
         jagged_ray_origins = JaggedTensor(ray_origins)
         jagged_ray_directions = JaggedTensor(ray_directions)
 
-        return self._impl.segments_along_rays(jagged_ray_origins, jagged_ray_directions, max_segments, eps).jdata
+        return self._impl.segments_along_rays(jagged_ray_origins, jagged_ray_directions, max_segments, eps)[0]
 
     def sparse_conv_halo(self, input: torch.Tensor, weight: torch.Tensor, variant: int = 8) -> torch.Tensor:
         """
@@ -1565,7 +1590,7 @@ class Grid:
         include_end_segments: bool = True,
         return_midpoints: bool = False,
         eps: float = 0.0,
-    ) -> torch.Tensor:
+    ) -> JaggedTensor:
         """
         Generate uniform samples along rays within the grid.
 
@@ -1610,7 +1635,7 @@ class Grid:
             include_end_segments,
             return_midpoints,
             eps,
-        ).jdata
+        )[0]
 
     def voxels_along_rays(
         self,
@@ -1619,7 +1644,7 @@ class Grid:
         max_voxels: int,
         eps: float = 0.0,
         return_ijk: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[JaggedTensor, JaggedTensor]:
         """
         Enumerate voxels intersected by rays.
 
@@ -1649,7 +1674,7 @@ class Grid:
         voxels, times = self._impl.voxels_along_rays(
             jagged_ray_origins, jagged_ray_directions, max_voxels, eps, return_ijk, True
         )
-        return voxels.jdata, times.jdata
+        return voxels[0], times[0]
 
     def world_to_grid(self, points: torch.Tensor) -> torch.Tensor:
         """

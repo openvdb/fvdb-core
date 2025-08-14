@@ -60,3 +60,5 @@ releases/
 lightning_logs
 logs
 tests/data/
+*.lock
+*.db
