@@ -16,6 +16,8 @@
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAMathCompat.h>
 
+#include <cub/cub.cuh>
+
 namespace fvdb::detail::ops {
 
 __device__ inline void
@@ -158,8 +160,41 @@ fineIJKForCoarseGrid(const GridBatchImpl &batchHdl,
 
         forEachVoxelCUDA(DEFAULT_BLOCK_DIM, 1, batchHdl, cb);
 
-        return JaggedTensor::from_data_indices_and_list_ids(
-            outIJK, outIJKBIdx, batchHdl.jlidx(), batchHdl.batchSize());
+        at::cuda::CUDAStream stream  = at::cuda::getCurrentCUDAStream(batchHdl.device().index());
+        torch::Tensor outVoxelCounts = torch::zeros_like(batchHdl.voxelOffsets());
+
+        void *dTempStorage      = nullptr;
+        size_t tempStorageBytes = 0;
+        // voxelOffsets has a length equal to batchSize() + 1 such that the first element is zero
+        // and the last element is equal to the size of jdata
+        auto maskCounts        = outVoxelCounts.data_ptr<int64_t>() + 1;
+        const auto numSegments = batchHdl.batchSize();
+        // offset of the next segment is the end of the current segment
+        auto beginOffsets = batchHdl.voxelOffsets().const_data_ptr<int64_t>();
+        auto endOffsets   = beginOffsets + 1;
+        cub::DeviceSegmentedReduce::Sum(dTempStorage,
+                                        tempStorageBytes,
+                                        mask.value().jdata().const_data_ptr<bool>(),
+                                        maskCounts,
+                                        numSegments,
+                                        beginOffsets,
+                                        endOffsets,
+                                        stream);
+        dTempStorage =
+            c10::cuda::CUDACachingAllocator::raw_alloc_with_stream(tempStorageBytes, stream);
+        cub::DeviceSegmentedReduce::Sum(dTempStorage,
+                                        tempStorageBytes,
+                                        mask.value().jdata().const_data_ptr<bool>(),
+                                        maskCounts,
+                                        numSegments,
+                                        beginOffsets,
+                                        endOffsets,
+                                        stream);
+        c10::cuda::CUDACachingAllocator::raw_delete(dTempStorage);
+
+        torch::Tensor outVoxelOffsets = torch::cumsum(outVoxelCounts, 0) * totalPadAmount;
+        return JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
+            outIJK, outVoxelOffsets, outIJKBIdx, batchHdl.jlidx(), batchHdl.batchSize());
     } else {
         torch::Tensor outIJK = torch::empty({batchHdl.totalVoxels() * totalPadAmount, 3}, optsData);
         torch::Tensor outIJKBIdx = torch::empty({batchHdl.totalVoxels() * totalPadAmount},
