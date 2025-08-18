@@ -7,7 +7,6 @@
 
 #include <nanovdb/NanoVDB.h>
 
-#include <THC/THCAtomics.cuh>
 #include <c10/cuda/CUDAException.h>
 
 namespace fvdb {

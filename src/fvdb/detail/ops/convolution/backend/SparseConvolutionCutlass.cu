@@ -4,7 +4,6 @@
 #include <fvdb/detail/ops/convolution/backend/ConvOps.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 
-#include <THC/THCAtomics.cuh>
 #include <c10/cuda/CUDAException.h>
 
 #include <cute/algorithm/copy.hpp>

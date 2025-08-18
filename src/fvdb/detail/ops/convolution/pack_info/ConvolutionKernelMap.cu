@@ -5,7 +5,6 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
-#include <THC/THCAtomics.cuh>
 #include <c10/cuda/CUDAException.h>
 
 namespace fvdb {
