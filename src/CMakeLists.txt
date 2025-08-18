@@ -45,6 +45,7 @@ set(FVDB_CPP_FILES
     fvdb/detail/autograd/JaggedReduce.cpp
     fvdb/detail/autograd/MaxPoolGrid.cpp
     fvdb/detail/autograd/EvaluateSphericalHarmonics.cpp
+    fvdb/detail/autograd/ReadFromDense.cpp
     fvdb/detail/autograd/ReadIntoDense.cpp
     fvdb/detail/autograd/SampleGrid.cpp
     fvdb/detail/autograd/SparseConvolutionHalo.cpp
