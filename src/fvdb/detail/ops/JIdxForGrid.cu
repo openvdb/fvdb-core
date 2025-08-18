@@ -4,7 +4,6 @@
 #include <fvdb/detail/GridBatchImpl.h>
 #include <fvdb/detail/ops/Ops.h>
 
-#include <THC/THCAtomics.cuh>
 #include <c10/cuda/CUDAException.h>
 
 namespace fvdb {

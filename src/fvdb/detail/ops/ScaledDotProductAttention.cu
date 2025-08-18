@@ -4,7 +4,6 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/BezierInterpolationIterator.h>
 
-#include <THC/THCAtomics.cuh>
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAException.h>
 
