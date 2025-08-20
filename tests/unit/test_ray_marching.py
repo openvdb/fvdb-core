@@ -530,10 +530,7 @@ class TestRayMarching(unittest.TestCase):
 
         segments = grid.segments_along_rays(JaggedTensor(ray_o.to(dtype)), JaggedTensor(ray_d.to(dtype)), 100, 0.0)
 
-        if dtype == torch.float16:
-            self.assertEqual(segments[0][0].jdata.shape[0], 53)
-        else:
-            self.assertEqual(segments[0][0].jdata.shape[0], 52)
+        self.assertEqual(segments[0][0].jdata.shape[0], 52)
 
     @parameterized.expand(all_device_dtype_combos)
     def test_segments_along_rays_always_sorted(self, device, dtype):
