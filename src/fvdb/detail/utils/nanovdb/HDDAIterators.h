@@ -195,14 +195,27 @@ template <typename AccT, typename ScalarT> struct HDDAVoxelIterator {
     __hostdev__ bool
     nextVoxel() {
         do {
-            // Coordinate of the current voxel
-            const int dim = mAcc.getDim(mHdda.voxel(), mRay);
-
-            // Set the level of HDDA
+            // Adjust HDDA level
+            // This can take three passes to complete, since mVoxel gains precision each pass
+            // 4096 -> 128
+            // 128  -> 8
+            // 8    -> 1
+            int dim = mAcc.getDim(mHdda.voxel(), mRay);
             if (mHdda.dim() != dim) {
                 mRay.setMinTime(mHdda.time());
                 mHdda.update(mRay, dim);
             }
+            dim = mAcc.getDim(mHdda.voxel(), mRay);
+            if (mHdda.dim() != dim) {
+                mRay.setMinTime(mHdda.time());
+                mHdda.update(mRay, dim);
+            }
+            dim = mAcc.getDim(mHdda.voxel(), mRay);
+            if (mHdda.dim() != dim) {
+                mRay.setMinTime(mHdda.time());
+                mHdda.update(mRay, dim);
+            }
+
             // NOTE: This will return true if a tile is active
             if (mAcc.isActive(mHdda.voxel())) { // We hit an active voxel, increment hdda and return
                 mData = {mHdda.voxel(), TimespanT(mHdda.time(), mHdda.next())};
