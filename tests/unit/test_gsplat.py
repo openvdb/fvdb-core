@@ -1123,56 +1123,9 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
         check_is_view(gs_sel, gt_idx)
 
 
-class TestGaussianRender(BaseGaussianTestCase):
-
+class TestLoadAndSavePly(BaseGaussianTestCase):
     def setUp(self):
         super().setUp()
-
-    def test_gaussian_projection(self):
-        proj_res = self.gs3d.project_gaussians_for_images_and_depths(
-            self.cam_to_world_mats,
-            self.projection_mats,
-            self.width,
-            self.height,
-            self.near_plane,
-            self.far_plane,
-        )
-        radii = proj_res.radii
-        means2d = proj_res.means2d
-        depths = proj_res.render_quantities[..., -1]
-        conics = proj_res.conics
-
-        if self.save_regression_data:
-            torch.save(radii, "regression_radii.pt")
-            torch.save(means2d, "regression_means2d.pt")
-            torch.save(depths, "regression_depths.pt")
-            torch.save(conics, "regression_conics.pt")
-
-        # Regression test
-        test_radii = torch.load(self.data_path / "regression_radii.pt", weights_only=True)
-        test_means2d = torch.load(self.data_path / "regression_means2d.pt", weights_only=True)
-        test_depths = torch.load(self.data_path / "regression_depths.pt", weights_only=True)
-        test_conics = torch.load(self.data_path / "regression_conics.pt", weights_only=True)
-
-        torch.testing.assert_close(radii, test_radii)
-        torch.testing.assert_close(means2d[radii > 0], test_means2d[radii > 0])
-        torch.testing.assert_close(depths[radii > 0], test_depths[radii > 0])
-        torch.testing.assert_close(conics[radii > 0], test_conics[radii > 0], atol=1e-5, rtol=1e-4)
-
-    def _tensors_to_pixel(self, colors, alphas):
-        canvas = (
-            torch.cat(
-                [
-                    colors.reshape(self.num_cameras * self.height, self.width, 3),
-                    alphas.reshape(self.num_cameras * self.height, self.width, 1).expand(-1, -1, 3),
-                ],
-                dim=1,
-            )
-            .detach()
-            .cpu()
-            .numpy()
-        )
-        return (canvas * 255).astype(np.uint8)
 
     def test_save_ply_handles_nan(self):
         tf = tempfile.NamedTemporaryFile(delete=True, suffix=".ply")
@@ -1262,7 +1215,7 @@ class TestGaussianRender(BaseGaussianTestCase):
 
         self.gs3d.save_ply(tf.name)
 
-        gs3d_loaded = GaussianSplat3d.from_ply(tf.name)
+        gs3d_loaded, training_info = GaussianSplat3d.from_ply(tf.name)
 
         self.assertTrue(torch.allclose(gs3d_loaded.means, self.gs3d.means))
         self.assertTrue(torch.allclose(gs3d_loaded.quats, self.gs3d.quats))
@@ -1270,6 +1223,123 @@ class TestGaussianRender(BaseGaussianTestCase):
         self.assertTrue(torch.allclose(gs3d_loaded.logit_opacities, self.gs3d.logit_opacities))
         self.assertTrue(torch.allclose(gs3d_loaded.sh0, self.gs3d.sh0))
         self.assertTrue(torch.allclose(gs3d_loaded.shN, self.gs3d.shN))
+
+        self.assertTrue(torch.all(training_info.normalization_transform == torch.eye(4).to(self.device)))
+        self.assertTrue(training_info.camera_to_world_matrices.shape == (0, 4, 4))
+        self.assertTrue(training_info.projection_types.numel() == 0)
+        self.assertTrue(training_info.projection_parameters.numel() == 0)
+
+    def test_save_and_load_ply_with_training_info(self):
+        tf = tempfile.NamedTemporaryFile(delete=True, suffix=".ply")
+
+        num_cams = 88
+        normalization_tx = torch.randn(4, 4)
+        cam_to_worlds = torch.randn(num_cams, 4, 4)
+        cam_types = torch.full((num_cams,), 8).to(torch.int32)
+        proj_params = torch.randn(num_cams, 4, 5, 7)
+
+        self.gs3d.save_ply_and_training_info(tf.name, normalization_tx, cam_to_worlds, cam_types, proj_params)
+
+        gs3d_loaded, training_info = GaussianSplat3d.from_ply(tf.name)
+        print(cam_types, training_info.projection_types)
+
+        self.assertTrue(torch.allclose(gs3d_loaded.means, self.gs3d.means))
+        self.assertTrue(torch.allclose(gs3d_loaded.quats, self.gs3d.quats))
+        self.assertTrue(torch.allclose(gs3d_loaded.log_scales, self.gs3d.log_scales))
+        self.assertTrue(torch.allclose(gs3d_loaded.logit_opacities, self.gs3d.logit_opacities))
+        self.assertTrue(torch.allclose(gs3d_loaded.sh0, self.gs3d.sh0))
+        self.assertTrue(torch.allclose(gs3d_loaded.shN, self.gs3d.shN))
+
+        self.assertTrue(torch.allclose(training_info.normalization_transform, normalization_tx.to(self.device)))
+        self.assertTrue(torch.allclose(training_info.camera_to_world_matrices, cam_to_worlds.to(self.device)))
+        self.assertTrue(torch.equal(training_info.projection_types, cam_types.to(self.device)))
+        self.assertTrue(
+            torch.allclose(training_info.projection_parameters, proj_params.to(self.device).view(num_cams, -1))
+        )
+
+    def test_save_and_load_ply_with_training_info_non_contiguous(self):
+        tf = tempfile.NamedTemporaryFile(delete=True, suffix=".ply")
+
+        num_cams = 88
+        normalization_tx = torch.randn(4, 4).T
+        cam_to_worlds = torch.randn(num_cams, 4, 4)[::2]
+        cam_types = torch.full((num_cams,), 8).to(torch.int32)[::2]
+        proj_params = torch.randn(num_cams, 4, 5, 7)[::2]
+
+        self.gs3d.save_ply_and_training_info(
+            tf.name, normalization_tx, cam_to_worlds, cam_types, proj_params, "my version"
+        )
+
+        gs3d_loaded, training_info = GaussianSplat3d.from_ply(tf.name)
+
+        self.assertTrue(torch.allclose(gs3d_loaded.means, self.gs3d.means))
+        self.assertTrue(torch.allclose(gs3d_loaded.quats, self.gs3d.quats))
+        self.assertTrue(torch.allclose(gs3d_loaded.log_scales, self.gs3d.log_scales))
+        self.assertTrue(torch.allclose(gs3d_loaded.logit_opacities, self.gs3d.logit_opacities))
+        self.assertTrue(torch.allclose(gs3d_loaded.sh0, self.gs3d.sh0))
+        self.assertTrue(torch.allclose(gs3d_loaded.shN, self.gs3d.shN))
+
+        self.assertTrue(torch.allclose(training_info.normalization_transform, normalization_tx.to(self.device)))
+        self.assertTrue(torch.allclose(training_info.camera_to_world_matrices, cam_to_worlds.to(self.device)))
+        self.assertTrue(torch.equal(training_info.projection_types, cam_types.to(self.device)))
+        self.assertTrue(
+            torch.allclose(
+                training_info.projection_parameters, proj_params.to(self.device).view(proj_params.shape[0], -1)
+            )
+        )
+        self.assertEqual(training_info.version_string, "my version")
+
+
+class TestGaussianRender(BaseGaussianTestCase):
+
+    def setUp(self):
+        super().setUp()
+
+    def test_gaussian_projection(self):
+        proj_res = self.gs3d.project_gaussians_for_images_and_depths(
+            self.cam_to_world_mats,
+            self.projection_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+        )
+        radii = proj_res.radii
+        means2d = proj_res.means2d
+        depths = proj_res.render_quantities[..., -1]
+        conics = proj_res.conics
+
+        if self.save_regression_data:
+            torch.save(radii, "regression_radii.pt")
+            torch.save(means2d, "regression_means2d.pt")
+            torch.save(depths, "regression_depths.pt")
+            torch.save(conics, "regression_conics.pt")
+
+        # Regression test
+        test_radii = torch.load(self.data_path / "regression_radii.pt", weights_only=True)
+        test_means2d = torch.load(self.data_path / "regression_means2d.pt", weights_only=True)
+        test_depths = torch.load(self.data_path / "regression_depths.pt", weights_only=True)
+        test_conics = torch.load(self.data_path / "regression_conics.pt", weights_only=True)
+
+        torch.testing.assert_close(radii, test_radii)
+        torch.testing.assert_close(means2d[radii > 0], test_means2d[radii > 0])
+        torch.testing.assert_close(depths[radii > 0], test_depths[radii > 0])
+        torch.testing.assert_close(conics[radii > 0], test_conics[radii > 0], atol=1e-5, rtol=1e-4)
+
+    def _tensors_to_pixel(self, colors, alphas):
+        canvas = (
+            torch.cat(
+                [
+                    colors.reshape(self.num_cameras * self.height, self.width, 3),
+                    alphas.reshape(self.num_cameras * self.height, self.width, 1).expand(-1, -1, 3),
+                ],
+                dim=1,
+            )
+            .detach()
+            .cpu()
+            .numpy()
+        )
+        return (canvas * 255).astype(np.uint8)
 
     def test_gaussian_render(self):
         render_colors, render_alphas = self.gs3d.render_images(
@@ -1728,5 +1798,4 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
     unittest.main()

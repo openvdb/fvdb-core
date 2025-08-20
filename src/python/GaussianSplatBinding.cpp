@@ -7,6 +7,7 @@
 #include <torch/extension.h>
 
 #include <pybind11/numpy.h>
+#include <pybind11/pytypes.h>
 #include <pybind11/stl.h>
 
 namespace pybind11::detail {
@@ -157,7 +158,14 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("logit_opacities"),
              py::arg("sh0"),
              py::arg("shN"))
-        .def("save_ply", &fvdb::GaussianSplat3d::savePly, py::arg("filename"))
+        .def("save_ply",
+             &fvdb::GaussianSplat3d::savePly,
+             py::arg("filename"),
+             py::arg("normalization_transform"),
+             py::arg("camera_to_world_matrices"),
+             py::arg("projection_types"),
+             py::arg("projection_parameters"),
+             py::arg("version_string"))
         .def_static("from_ply",
                     &fvdb::GaussianSplat3d::fromPly,
                     py::arg("filename"),
