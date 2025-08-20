@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import pathlib
-from typing import Sequence, overload
+from typing import Any, Sequence, overload
 
 import torch
 
@@ -14,7 +14,115 @@ from .grid_batch import GridBatch
 from .types import DeviceIdentifier, cast_check, is_DeviceIdentifier, resolve_device
 
 
+class GaussianSplat3dTrainingMetadata:
+    """
+    Stores the following training metadata (where C is the number of cameras):
+     - scene normalization transform: tensor (4, 4)
+     - camera to world transforms of the training views: tensor (C, 4, 4)
+     - projection type of each training camera: tensor, integer (C,)
+     - intrinsics for each training camera (e.g. focal length, principal point): tensor, (C, *)
+
+    The interpretation of the camera projection type and intrinsics is application dependent and up to the user.
+    """
+
+    __PRIVATE__ = object()
+
+    def __init__(
+        self,
+        normalization_transform: torch.Tensor,
+        camera_to_world_matrices: torch.Tensor,
+        projection_types: torch.Tensor,
+        projection_parameters: torch.Tensor,
+        version_string: str,
+        _private: Any = None,
+    ):
+        """
+        Construct an `GaussianSplat3dTrainingMetadata` with the following (where C is the number of cameras):
+         - scene normalization transform: tensor (4, 4)
+         - camera to world transforms of the training views: tensor (C, 4, 4)
+         - projection type of each training camera: tensor, integer (C,)
+         - intrinsics for each training camera (e.g. focal length, principal point): tensor, (C, *)
+         - an optional version string to tag which application generated this PLY
+
+        Note: You should not construct this class directly. Instead it will be returned by methods
+        such as `from_ply` in `GaussianSplat3d`.
+
+        Args:
+            normalization_transform (torch.Tensor): The 4x4 transformation matrix used to transform a splat scene from its original coordinates to a normalized coordinate space.
+            camera_to_world_matrices (torch.Tensor): The camera to world transformations for all the cameras used to train a splat scene.
+            projection_types (torch.Tensor): An integer tensor encoding the camera model of each camera used to train the splat scene.
+            projection_parameters (torch.Tensor): A set of projection parameters (e.g. focal length, distortion, etc.) for each camera used to train a splat scene.
+            _private (Any): A private argument to prevent direct instantiation.
+        """
+        if _private != GaussianSplat3dTrainingMetadata.__PRIVATE__:
+            raise ValueError("This class is not meant to be instantiated directly.")
+
+        self._normalization_transform = normalization_transform
+        self._camera_to_world_matrices = camera_to_world_matrices
+        self._projection_types = projection_types
+        self._projection_parameters = projection_parameters
+        self._version_string = version_string
+
+    @property
+    def version_string(self) -> str:
+        """
+        Returns an optional version string to tag which application generated this PLY.
+
+        Returns:
+            str: The version string.
+        """
+        return self._version_string
+
+    @property
+    def normalization_transform(self):
+        """
+        Return the 4x4 transformation matrix used to transform a splat scene from its original
+        coordinates to a normalized coordinate space.
+
+        Returns:
+            torch.Tensor: A (4, 4)-shaped Tensor encoding the transformation of a splat scene
+                from its original coordinates to normalized coordinates.
+        """
+        return self._normalization_transform
+
+    @property
+    def camera_to_world_matrices(self):
+        """
+        Return the camera to world transformations for all the cameras used to train a splat scene.
+
+        Returns:
+            torch.Tensor: A (C, 4, 4)-shaped tensor of C camera to world matrices (one for each training camera).
+        """
+        return self._camera_to_world_matrices
+
+    @property
+    def projection_types(self):
+        """
+        Return an integer tensor encoding the camera model of each camera used to train the splat scene.
+        The interpretation of the integer values is application dependent and is up to the user
+        (e.g. a user may use 0=pinhole, 1=fisheye, etc.).
+
+        Returns:
+            torch.Tensor: A (C,)-shaped tensor of C integer values encoding the projection model of each
+                training camera.
+        """
+        return self._projection_types
+
+    @property
+    def projection_parameters(self):
+        """
+        Return a set of projection parameters (e.g. focal length, distortion, etc.) for each camera
+        used to train a splat scene.
+
+        Returns:
+            torch.Tensor: A (C, *)-shaped tensor of projection parameters for each training camera.
+        """
+        return self._projection_parameters
+
+
 class GaussianSplat3d:
+
+    PLY_VERSION_STRING = "fvdb_ply 1.0.0"
 
     @overload
     def __init__(
@@ -1460,20 +1568,74 @@ class GaussianSplat3d:
         """
         self._impl.reset_accumulated_gradient_state()
 
-    def save_ply(self, filename: pathlib.Path | str) -> None:
+    def save_ply(
+        self,
+        filename: pathlib.Path | str,
+        normalization_transform: torch.Tensor = torch.eye(4),
+        version_string: str | None = None,
+    ) -> None:
         """
         Save the current state of the GaussianSplat3d instance to a PLY file.
         Args:
             filename (str): The name of the file to save the PLY data to.
                 The file will contain the means, quaternions, log scales, logit opacities, and
                 spherical harmonics coefficients of the Gaussians.
+            normalization_transform (torch.Tensor): A (4, 4)-shaped tensor encoding the transformation used to
+                normalize the scene from its original space. Defaults to identity.
+            version_string (str | None): An optional version string to tag this PLY with the particular
+                application that generated it. If none is passed in, it will default to
+                GaussianSplat3d.PLY_VERSION_STRING
         """
         if isinstance(filename, pathlib.Path):
             filename = str(filename)
-        self._impl.save_ply(filename)
+        self._impl.save_ply(filename, normalization_transform, None, None, None, version_string)
+
+    def save_ply_and_training_info(
+        self,
+        filename: pathlib.Path | str,
+        normalization_transform: torch.Tensor,
+        camera_to_world_matrices: torch.Tensor,
+        projection_types: torch.Tensor,
+        projection_parameters: torch.Tensor,
+        version_string: str = PLY_VERSION_STRING,
+    ) -> None:
+        """
+        Save the current state of the GaussianSplat3d and basic information about the training views
+        and normalization transform to a PLY file.
+
+        Args:
+            filename (str): The name of the file to save the PLY data to.
+                The file will contain the means, quaternions, log scales, logit opacities, and
+                spherical harmonics coefficients of the Gaussians.
+            normalization_transform (torch.Tensor): A (4, 4)-shaped tensor encoding the transformation used to
+                normalize the scene from its original space.
+            camera_to_world_matrices (torch.Tensor): A (C, 4, 4)-shaped tensor encoding the camera to world
+                transformation matrices for each training view.
+            projection_types (torch.Tensor): A (C,)-shaped integer tensor encoding the type of camera projection
+                used by each training view. The interpretation of these parameters is application-dependent and up
+                to the user.
+            projection_parameters (torch.Tensor): A (C, *)-shaped floating point tensor encoding the projection
+                parameters used by each training view (e.g. focal length and optical center for a pinhole camera).
+                The interpretation of these parameters is application dependent and up to the user.
+            version_string (str): An optional version string to tag this PLY with the particular
+                application that generated it. If none is passed in, it will default to
+                GaussianSplat3d.PLY_VERSION_STRING
+        """
+        if isinstance(filename, pathlib.Path):
+            filename = str(filename)
+        self._impl.save_ply(
+            filename,
+            normalization_transform,
+            camera_to_world_matrices,
+            projection_types,
+            projection_parameters,
+            version_string,
+        )
 
     @classmethod
-    def from_ply(cls, filename: pathlib.Path | str, device: DeviceIdentifier = "cuda") -> "GaussianSplat3d":
+    def from_ply(
+        cls, filename: pathlib.Path | str, device: DeviceIdentifier = "cuda"
+    ) -> "tuple[GaussianSplat3d, GaussianSplat3dTrainingMetadata]":
         """
         Create a `GaussianSplat3d` instance from a PLY file.
 
@@ -1482,13 +1644,25 @@ class GaussianSplat3d:
             device (torch.device): The device to load the data onto. Default is "cuda".
 
         Returns:
-            GaussianSplat3d: An instance of GaussianSplat3d initialized with the data from the PLY file.
+            splats (GaussianSplat3d): An instance of GaussianSplat3d initialized with the data from the PLY file.
+            training_metadata (GaussianSplat3dTrainingMedadata): An instance of GaussianSplat3dTrainingMetadata containing
+                the training information if it was stored in the PLY.
         """
         device = resolve_device(device)
         if isinstance(filename, pathlib.Path):
             filename = str(filename)
 
-        return cls(impl=GaussianSplat3dCpp.from_ply(filename=filename, device=device))
+        gs_impl, training_info_dict, version_string = GaussianSplat3dCpp.from_ply(filename=filename, device=device)
+
+        training_info = GaussianSplat3dTrainingMetadata(
+            normalization_transform=training_info_dict["normalization_transform"],
+            camera_to_world_matrices=training_info_dict["camera_to_world_matrices"],
+            projection_types=training_info_dict["projection_types"],
+            projection_parameters=training_info_dict["projection_parameters"],
+            version_string=version_string,
+            _private=GaussianSplat3dTrainingMetadata.__PRIVATE__,
+        )
+        return cls(impl=gs_impl), training_info
 
     @overload
     def to(self, dtype: torch.dtype | None = None) -> "GaussianSplat3d":

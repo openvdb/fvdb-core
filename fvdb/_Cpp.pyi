@@ -219,9 +219,17 @@ class GaussianSplat3d:
         antialias: bool = ...,
     ) -> tuple[JaggedTensor, JaggedTensor]: ...
     def reset_accumulated_gradient_state(self) -> None: ...
-    def save_ply(self, filename: str) -> None: ...
+    def save_ply(
+        self,
+        filename: str,
+        normalization_transform: torch.Tensor | None,
+        camera_to_world_matrices: torch.Tensor | None,
+        projection_types: torch.Tensor | None,
+        projection_parameters: torch.Tensor | None,
+        version_string: str | None,
+    ) -> None: ...
     @staticmethod
-    def from_ply(filename: str, device: torch.device = ...) -> GaussianSplat3d: ...
+    def from_ply(filename: str, device: torch.device = ...) -> tuple[GaussianSplat3d, dict[str, torch.Tensor], str]: ...
     def set_state(
         self,
         means: torch.Tensor,

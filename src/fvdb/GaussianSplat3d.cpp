@@ -601,7 +601,12 @@ tensorBytePointer(const torch::Tensor &tensor) {
 } // namespace
 
 void
-GaussianSplat3d::savePly(const std::string &filename) const {
+GaussianSplat3d::savePly(const std::string &filename,
+                         std::optional<torch::Tensor> normalizationTransform,
+                         std::optional<torch::Tensor> cameraToWorldMatrices,
+                         std::optional<torch::Tensor> projectionTypes,
+                         std::optional<torch::Tensor> projectionParameters,
+                         std::optional<std::string> versionString) const {
     using namespace tinyply;
 
     const fvdb::JaggedTensor validMask = FVDB_DISPATCH_KERNEL_DEVICE(mMeans.device(), [&]() {
@@ -690,10 +695,135 @@ GaussianSplat3d::savePly(const std::string &filename) const {
                                    Type::INVALID,
                                    0);
 
+    // We need to keep this tensor around outside the if block so if we assign data to it
+    // it's memory doesn't get freed before writing
+    torch::Tensor normalizationTransformValue;
+    if (normalizationTransform.has_value()) {
+        TORCH_CHECK_VALUE(normalizationTransform.value().is_floating_point(),
+                          "normalization_transform must be a floating point tensor");
+        TORCH_CHECK_VALUE(normalizationTransform.value().dim() == 2 &&
+                              normalizationTransform.value().size(0) == 4 &&
+                              normalizationTransform.value().size(1) == 4,
+                          "normalization_transform must be have shape (4, 4) but got ",
+                          normalizationTransform.value().sizes());
+
+        normalizationTransformValue =
+            normalizationTransform.value().squeeze().to(torch::kFloat32).cpu().contiguous();
+
+        plyf.add_properties_to_element("normalization",
+                                       {"tx_00",
+                                        "tx_01",
+                                        "tx_02",
+                                        "tx_03",
+                                        "tx_10",
+                                        "tx_11",
+                                        "tx_12",
+                                        "tx_13",
+                                        "tx_20",
+                                        "tx_21",
+                                        "tx_22",
+                                        "tx_23",
+                                        "tx_30",
+                                        "tx_31",
+                                        "tx_32",
+                                        "tx_33"},
+                                       Type::FLOAT32,
+                                       1,
+                                       tensorBytePointer(normalizationTransformValue),
+                                       Type::INVALID,
+                                       0);
+    }
+
+    // We need to keep this tensor around outside the if block so if we assign data to it
+    // it's memory doesn't get freed before writing
+    torch::Tensor cameraToWorldMatricesValue;
+    if (cameraToWorldMatrices.has_value()) {
+        TORCH_CHECK_VALUE(cameraToWorldMatrices.value().is_floating_point(),
+                          "camera_to_world_matrices must be a floating point tensor");
+
+        TORCH_CHECK_VALUE(cameraToWorldMatrices.value().dim() == 3 &&
+                              cameraToWorldMatrices.value().size(1) == 4 &&
+                              cameraToWorldMatrices.value().size(2) == 4,
+                          "camera_to_world_matrices must have shape (C, 4, 4) but got ",
+                          cameraToWorldMatrices.value().sizes());
+
+        cameraToWorldMatricesValue =
+            cameraToWorldMatrices.value().to(torch::kFloat32).cpu().contiguous();
+
+        plyf.add_properties_to_element("camera_to_world_matrices",
+                                       {"ctx_00",
+                                        "ctx_01",
+                                        "ctx_02",
+                                        "ctx_03",
+                                        "ctx_10",
+                                        "ctx_11",
+                                        "ctx_12",
+                                        "ctx_13",
+                                        "ctx_20",
+                                        "ctx_21",
+                                        "ctx_22",
+                                        "ctx_23",
+                                        "ctx_30",
+                                        "ctx_31",
+                                        "ctx_32",
+                                        "ctx_33"},
+                                       Type::FLOAT32,
+                                       cameraToWorldMatricesValue.size(0),
+                                       tensorBytePointer(cameraToWorldMatricesValue),
+                                       Type::INVALID,
+                                       0);
+    }
+
+    // We need to keep these tensors around outside the if block so if we assign data to it
+    // it's memory doesn't get freed before writing
+    torch::Tensor projectionParametersValue;
+    if (projectionParameters.has_value()) {
+        TORCH_CHECK_VALUE(projectionParameters.value().is_floating_point(),
+                          "projection_parameters must be a floating point tensor");
+        projectionParametersValue = projectionParameters.value().to(torch::kFloat32).cpu();
+        projectionParametersValue =
+            projectionParametersValue.view({projectionParametersValue.size(0), -1}).contiguous();
+
+        std::vector<std::string> projectionParamsNames(projectionParametersValue.size(1));
+        std::generate(projectionParamsNames.begin(),
+                      projectionParamsNames.end(),
+                      [i = 0]() mutable { return "pp_" + std::to_string(i++); });
+        plyf.add_properties_to_element("projection",
+                                       projectionParamsNames,
+                                       Type::FLOAT32,
+                                       projectionParametersValue.size(0),
+                                       tensorBytePointer(projectionParametersValue),
+                                       Type::INVALID,
+                                       0);
+    }
+
+    // We need to keep these tensors around outside the if block so if we assign data to it
+    // it's memory doesn't get freed before writing
+    torch::Tensor projectionTypesValue;
+    if (projectionTypes.has_value()) {
+        TORCH_CHECK_VALUE(!projectionTypes.value().is_floating_point() &&
+                              !projectionTypes.value().is_complex(),
+                          "projection_types must be an integer tensor");
+
+        projectionTypesValue = projectionTypes.value().to(torch::kInt32).cpu().contiguous();
+        plyf.add_properties_to_element("projection",
+                                       {"type"},
+                                       Type::INT32,
+                                       projectionTypesValue.size(0),
+                                       tensorBytePointer(projectionTypesValue),
+                                       Type::INVALID,
+                                       0);
+    }
+
+    if (versionString.has_value()) {
+        plyf.get_comments().push_back("fvdb_gs_ply_version " + versionString.value());
+    } else {
+        plyf.get_comments().push_back("fvdb_gs_ply_version " + PLY_VERSION_STRING);
+    }
     plyf.write(outstream, true);
 }
 
-GaussianSplat3d
+std::tuple<GaussianSplat3d, std::unordered_map<std::string, torch::Tensor>, std::string>
 GaussianSplat3d::fromPly(const std::string &filename, torch::Device device) {
     using namespace tinyply;
 
@@ -703,6 +833,21 @@ GaussianSplat3d::fromPly(const std::string &filename, torch::Device device) {
     plyf.parse_header(instream);
 
     std::vector<PlyElement> elements = plyf.get_elements();
+
+    const std::string versionString = [&]() {
+        for (auto comment: plyf.get_comments()) {
+            // Check for the fvdb version comment
+            const std::string versionTag("fvdb_gs_ply_version");
+            const auto versionTagStrlen     = versionTag.size();
+            const auto startOfVersionString = comment.find(versionTag);
+            if (startOfVersionString != std::string::npos) {
+                // Extract the version number from the comment
+                return comment.substr(startOfVersionString + versionTagStrlen + 1);
+            }
+        }
+        return std::string("");
+    }();
+
     // Find the vertex element
     auto vertex_element_iter = std::find_if(
         elements.begin(), elements.end(), [](const PlyElement &e) { return e.name == "vertex"; });
@@ -739,6 +884,74 @@ GaussianSplat3d::fromPly(const std::string &filename, torch::Device device) {
     std::shared_ptr<PlyData> shNData =
         plyf.request_properties_from_element("vertex", shNPlyPropertyNames);
 
+    std::shared_ptr<PlyData> normalizationTransformData, cameraToWorldMatricesData,
+        projectionTypesData, projectionParametersData;
+
+    auto normalizationElement =
+        std::find_if(elements.begin(), elements.end(), [](const PlyElement &e) {
+            return e.name == "normalization";
+        });
+    if (normalizationElement != elements.end()) {
+        normalizationTransformData = plyf.request_properties_from_element("normalization",
+                                                                          {"tx_00",
+                                                                           "tx_01",
+                                                                           "tx_02",
+                                                                           "tx_03",
+                                                                           "tx_10",
+                                                                           "tx_11",
+                                                                           "tx_12",
+                                                                           "tx_13",
+                                                                           "tx_20",
+                                                                           "tx_21",
+                                                                           "tx_22",
+                                                                           "tx_23",
+                                                                           "tx_30",
+                                                                           "tx_31",
+                                                                           "tx_32",
+                                                                           "tx_33"});
+    }
+
+    auto cameraToWorldMatricesElement =
+        std::find_if(elements.begin(), elements.end(), [](const PlyElement &e) {
+            return e.name == "camera_to_world_matrices";
+        });
+    if (cameraToWorldMatricesElement != elements.end()) {
+        cameraToWorldMatricesData = plyf.request_properties_from_element("camera_to_world_matrices",
+                                                                         {"ctx_00",
+                                                                          "ctx_01",
+                                                                          "ctx_02",
+                                                                          "ctx_03",
+                                                                          "ctx_10",
+                                                                          "ctx_11",
+                                                                          "ctx_12",
+                                                                          "ctx_13",
+                                                                          "ctx_20",
+                                                                          "ctx_21",
+                                                                          "ctx_22",
+                                                                          "ctx_23",
+                                                                          "ctx_30",
+                                                                          "ctx_31",
+                                                                          "ctx_32",
+                                                                          "ctx_33"});
+    }
+    auto projectionElement =
+        std::find_if(elements.begin(), elements.end(), [](const PlyElement &e) {
+            return e.name == "projection";
+        });
+    if (projectionElement != elements.end()) {
+        projectionTypesData = plyf.request_properties_from_element("projection", {"type"});
+
+        std::vector<std::string> projectionPropertyNames;
+        for (const auto &prop: projectionElement->properties) {
+            if (prop.name != "type") {
+                projectionPropertyNames.push_back(prop.name);
+            }
+        }
+
+        projectionParametersData =
+            plyf.request_properties_from_element("projection", projectionPropertyNames);
+    }
+
     // Read the file
     plyf.read(instream);
 
@@ -773,15 +986,72 @@ GaussianSplat3d::fromPly(const std::string &filename, torch::Device device) {
                                      torch::kFloat32);
     }
 
-    return GaussianSplat3d(means.to(device),
-                           quats.to(device),
-                           logScales.to(device),
-                           logitOpacities.to(device),
-                           sh0Coeffs.to(device),
-                           shNCoeffs.to(device),
-                           false,
-                           false,
-                           false);
+    const auto floatOpts = torch::TensorOptions().dtype(torch::kFloat32).device(device);
+    const auto intOpts   = torch::TensorOptions().dtype(torch::kInt32).device(device);
+
+    std::unordered_map<std::string, torch::Tensor> retTrainingInfo;
+    if (normalizationTransformData) {
+        retTrainingInfo["normalization_transform"] =
+            torch::from_blob(normalizationTransformData->buffer.get(), {4, 4}, torch::kFloat32)
+                .to(device);
+    } else {
+        retTrainingInfo["normalization_transform"] = torch::eye(4, floatOpts);
+    }
+
+    if (cameraToWorldMatricesData) {
+        const int64_t numCameras = static_cast<int64_t>(cameraToWorldMatricesData->count);
+        retTrainingInfo["camera_to_world_matrices"] =
+            torch::from_blob(
+                cameraToWorldMatricesData->buffer.get(), {numCameras, 4, 4}, torch::kFloat32)
+                .to(device);
+    } else {
+        retTrainingInfo["camera_to_world_matrices"] = torch::empty({0, 4, 4}, floatOpts);
+    }
+
+    if (projectionTypesData) {
+        const int64_t numCameras = static_cast<int64_t>(projectionTypesData->count);
+
+        retTrainingInfo["projection_types"] = torch::from_blob(projectionTypesData->buffer.get(),
+                                                               {
+                                                                   numCameras,
+                                                               },
+                                                               torch::kInt32)
+                                                  .to(device);
+    } else {
+        retTrainingInfo["projection_types"] = torch::empty(
+            {
+                0,
+            },
+            intOpts);
+    }
+
+    if (projectionParametersData) {
+        const int64_t numCameras = static_cast<int64_t>(projectionParametersData->count);
+        const int64_t numParams  = projectionParametersData->buffer.size_bytes() / sizeof(float);
+        const int64_t paramsPerCamera = numParams / numCameras;
+        retTrainingInfo["projection_parameters"] =
+            torch::from_blob(projectionParametersData->buffer.get(),
+                             {numCameras, paramsPerCamera},
+                             torch::kFloat32)
+                .to(device);
+    } else {
+        retTrainingInfo["projection_parameters"] = torch::empty(
+            {
+                0,
+            },
+            floatOpts);
+    }
+    return std::make_tuple(GaussianSplat3d(means.to(device),
+                                           quats.to(device),
+                                           logScales.to(device),
+                                           logitOpacities.to(device),
+                                           sh0Coeffs.to(device),
+                                           shNCoeffs.to(device),
+                                           false,
+                                           false,
+                                           false),
+                           retTrainingInfo,
+                           versionString);
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
