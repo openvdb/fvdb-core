@@ -422,7 +422,7 @@ class GroupNorm(nn.GroupNorm):
         for b in range(num_batches):
             feat = flat_data[flat_offsets[b] : flat_offsets[b + 1]]
             if feat.size(0) != 0:
-                feat = feat.transpose(0, 1).reshape(1, num_channels, -1)
+                feat = feat.transpose(0, 1).contiguous().reshape(1, num_channels, -1)
                 feat = super().forward(feat)
                 feat = feat.reshape(num_channels, -1).transpose(0, 1)
 
