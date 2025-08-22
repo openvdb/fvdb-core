@@ -380,6 +380,11 @@ JaggedTensor dispatchCoarseIJKForFineGrid(const GridBatchImpl &batchHdl,
                                           nanovdb::Coord coarseningFactor);
 
 template <c10::DeviceType>
+JaggedTensor dispatchFineIJKForCoarseGrid(const GridBatchImpl &batchHdl,
+                                          nanovdb::Coord upsamplingFactor,
+                                          const std::optional<JaggedTensor> &maybeMask);
+
+template <c10::DeviceType>
 torch::Tensor dispatchScaledDotProductAttention(const torch::Tensor &query,
                                                 const torch::Tensor &key,
                                                 const torch::Tensor &value,
