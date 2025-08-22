@@ -406,9 +406,11 @@ def _run_syncbn_test(rank: int, world_size: int, return_dict: MutableMapping[int
     _sync_bn_cleanup()
 
 
-@unittest.skipUnless(torch.cuda.is_available(), "SyncBatchNorm is only supported on CUDA backends.")
+@unittest.skipUnless(
+    torch.cuda.is_available() and torch.distributed.is_available(),
+    "SyncBatchNorm is only supported on CUDA backends with distributed enabled.",
+)
 class TestSyncBatchNorm(unittest.TestCase):
-
     def setUp(self):
         self.original_start_method = torch.multiprocessing.get_start_method(allow_none=True)
         torch.multiprocessing.set_start_method("spawn", force=True)
