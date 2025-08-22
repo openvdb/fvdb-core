@@ -113,10 +113,11 @@ fineIjkForCoarseGridVoxelCallback(int32_t bidx,
     }
 }
 
+template <>
 JaggedTensor
-fineIJKForCoarseGrid(const GridBatchImpl &batchHdl,
-                     nanovdb::Coord upsamplingFactor,
-                     const std::optional<JaggedTensor> &mask) {
+dispatchFineIJKForCoarseGrid<torch::kCUDA>(const GridBatchImpl &batchHdl,
+                                           nanovdb::Coord upsamplingFactor,
+                                           const std::optional<JaggedTensor> &mask) {
     TORCH_CHECK(batchHdl.device().is_cuda(), "GridBatchImpl must be on CUDA device");
     TORCH_CHECK(batchHdl.device().has_index(), "GridBatchImpl must have a valid index");
 
@@ -225,7 +226,8 @@ nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildFineGridFromCoarse<torch::kCUDA>(const GridBatchImpl &coarseBatchHdl,
                                               const nanovdb::Coord subdivisionFactor,
                                               const std::optional<JaggedTensor> &subdivMask) {
-    JaggedTensor coords = fineIJKForCoarseGrid(coarseBatchHdl, subdivisionFactor, subdivMask);
+    JaggedTensor coords =
+        dispatchFineIJKForCoarseGrid<torch::kCUDA>(coarseBatchHdl, subdivisionFactor, subdivMask);
     return ops::dispatchCreateNanoGridFromIJK<torch::kCUDA>(coords);
 }
 
