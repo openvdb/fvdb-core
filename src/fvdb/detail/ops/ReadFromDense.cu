@@ -3,8 +3,8 @@
 //
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
+#include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
-#include <THC/THCAtomics.cuh>
 #include <c10/cuda/CUDAException.h>
 
 namespace fvdb {
@@ -110,6 +110,37 @@ dispatchReadFromDense<torch::kCUDA>(const GridBatchImpl &batchHdl,
                     bidx, lidx, vidx, cidx, batchAcc, inDenseAcc, denseOriginsAcc, outSparseAcc);
             };
             forEachVoxelCUDA(1024, outSparseTensor.size(1), batchHdl, callback);
+        }),
+        AT_EXPAND(AT_FLOATING_TYPES),
+        c10::kHalf,
+        c10::kBFloat16);
+}
+
+template <>
+void
+dispatchReadFromDense<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
+                                           const torch::Tensor &inDenseTensor,
+                                           const torch::Tensor &denseOrigins,
+                                           torch::Tensor &outSparseTensor) {
+    AT_DISPATCH_V2(
+        inDenseTensor.scalar_type(),
+        "readFromDense",
+        AT_WRAP([&]() {
+            auto inDenseAcc =
+                inDenseTensor.packed_accessor64<scalar_t, 5, torch::RestrictPtrTraits>();
+            auto denseOriginsAcc =
+                denseOrigins.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>();
+            auto outSparseAcc =
+                outSparseTensor.packed_accessor64<scalar_t, 2, torch::RestrictPtrTraits>();
+            auto callback = [=] __device__(int32_t bidx,
+                                           int32_t lidx,
+                                           int32_t vidx,
+                                           int32_t cidx,
+                                           GridBatchImpl::Accessor batchAcc) {
+                readFromDenseVoxelCallback<scalar_t>(
+                    bidx, lidx, vidx, cidx, batchAcc, inDenseAcc, denseOriginsAcc, outSparseAcc);
+            };
+            forEachVoxelPrivateUse1(outSparseTensor.size(1), batchHdl, callback);
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
         c10::kHalf,

@@ -4,9 +4,11 @@
 
 #include <fvdb/detail/ops/convolution/backend/ConvOps.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <THC/THCAtomics.cuh>
-#include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAStream.h>
 
 #include <mma.h>
 
@@ -22,6 +24,7 @@ __launch_bounds__(1024) void
 stencilConvHaloKernel(int kM,
                       int kN,
                       int numLeaves,
+                      int blockOffset,
                       BatchGridAccessor gridAcc,
                       TorchRAcc64<float, 2> inFeatures,
                       TorchRAcc64<float, 7> stencil,
@@ -31,9 +34,9 @@ stencilConvHaloKernel(int kM,
 #if __CUDA_ARCH__ >= 800
 
     int tid     = threadIdx.x;
-    int leafIdx = blockIdx.x % numLeaves;
-    int nIdx    = (blockIdx.x / numLeaves) % kN;
-    int mIdx    = blockIdx.x / numLeaves / kN;
+    int leafIdx = (blockIdx.x + blockOffset) % numLeaves;
+    int nIdx    = ((blockIdx.x + blockOffset) / numLeaves) % kN;
+    int mIdx    = (blockIdx.x + blockOffset) / numLeaves / kN;
 
     using LeafNodeType = typename nanovdb::OnIndexTree::LeafNodeType;
 
@@ -201,6 +204,7 @@ __global__ __launch_bounds__(256) void
 stencilConvHaloLargeDepthKernel(int kM,
                                 int kN,
                                 int numLeaves,
+                                int blockOffset,
                                 BatchGridAccessor gridAcc,
                                 TorchRAcc64<float, 2> inFeatures,
                                 TorchRAcc64<float, 7> stencil,
@@ -210,10 +214,10 @@ stencilConvHaloLargeDepthKernel(int kM,
 #if __CUDA_ARCH__ >= 800
 
     const int tid     = threadIdx.x;
-    const int Bk      = (blockIdx.x & 0x1) << 2;
-    const int Bj      = ((blockIdx.x >> 1) & 0x3) << 1;
-    const int Bi      = ((blockIdx.x >> 3) & 0x3) << 1;
-    const int restIdx = blockIdx.x >> 5;
+    const int Bk      = ((blockIdx.x + blockOffset) & 0x1) << 2;
+    const int Bj      = (((blockIdx.x + blockOffset) >> 1) & 0x3) << 1;
+    const int Bi      = (((blockIdx.x + blockOffset) >> 3) & 0x3) << 1;
+    const int restIdx = (blockIdx.x + blockOffset) >> 5;
     const int leafIdx = restIdx % numLeaves;
     const int nIdx    = (restIdx / numLeaves) % kN;
     const int mIdx    = restIdx / numLeaves / kN;
@@ -390,6 +394,9 @@ dispatchSparseConvolutionHalo<torch::kCUDA>(const GridBatchImpl &batchHdl,
                                             const torch::Tensor &inFeatures,
                                             const torch::Tensor &kernel,
                                             int variant) {
+    c10::cuda::CUDAGuard deviceGuard(batchHdl.device());
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(batchHdl.device().index());
+
     // Check compute capability
     {
         int device_id = inFeatures.device().index();
@@ -425,27 +432,149 @@ dispatchSparseConvolutionHalo<torch::kCUDA>(const GridBatchImpl &batchHdl,
     // Launch kernels for each M x N x leaf.
     auto gridAccessor = batchHdl.deviceAccessor();
 
-    if (variant == 8) {
-        stencilConvHaloKernel<<<M * N * numLeaves, 1024>>>(
-            M,
-            N,
-            numLeaves,
-            gridAccessor,
-            inFeatures.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
-            paddedKernel.packed_accessor64<float, 7, torch::RestrictPtrTraits>(),
-            outFeatures.packed_accessor64<float, 2, torch::RestrictPtrTraits>());
-    } else {
-        stencilConvHaloLargeDepthKernel<<<M * N * numLeaves * 32, 256>>>(
-            M,
-            N,
-            numLeaves,
-            gridAccessor,
-            inFeatures.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
-            paddedKernel.packed_accessor64<float, 7, torch::RestrictPtrTraits>(),
-            outFeatures.packed_accessor64<float, 2, torch::RestrictPtrTraits>());
+    if (numLeaves) {
+        if (variant == 8) {
+            stencilConvHaloKernel<<<M * N * numLeaves, 1024, 0, stream>>>(
+                M,
+                N,
+                numLeaves,
+                0,
+                gridAccessor,
+                inFeatures.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+                paddedKernel.packed_accessor64<float, 7, torch::RestrictPtrTraits>(),
+                outFeatures.packed_accessor64<float, 2, torch::RestrictPtrTraits>());
+        } else {
+            stencilConvHaloLargeDepthKernel<<<M * N * numLeaves * 32, 256, 0, stream>>>(
+                M,
+                N,
+                numLeaves,
+                0,
+                gridAccessor,
+                inFeatures.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+                paddedKernel.packed_accessor64<float, 7, torch::RestrictPtrTraits>(),
+                outFeatures.packed_accessor64<float, 2, torch::RestrictPtrTraits>());
+        }
+
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    return outFeatures;
+}
+
+template <>
+torch::Tensor
+dispatchSparseConvolutionHalo<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
+                                                   const torch::Tensor &inFeatures,
+                                                   const torch::Tensor &kernel,
+                                                   int variant) {
+    // Check compute capability
+    {
+        int device_id = inFeatures.device().index();
+        cudaDeviceProp deviceProp;
+        cudaGetDeviceProperties(&deviceProp, device_id);
+        int computeCapability = deviceProp.major * 100 + deviceProp.minor * 10;
+        TORCH_CHECK(computeCapability >= 800,
+                    "SparseConvolutionHalo requires Ampere (compute capability >= 800)!");
+    }
+
+    const auto numLeaves = batchHdl.totalLeaves();
+
+    // Constants: I/O dimension multiples
+    const int Di = (variant == 8) ? 8 : 64;
+    const int Do = (variant == 8) ? 16 : 128;
+
+    // Output features
+    const int outC = kernel.size(4), inC = kernel.size(3);
+    auto outFeatures = torch::zeros({inFeatures.size(0), outC}, inFeatures.options());
+
+    // Pad kernel: [3, 3, 3, I, O] -> [3, 3, 3, MxDi, NxDo] -> [3, 3, 3, M, N, Di, Do]
+    const int M = (inC + Di - 1) / Di;
+    const int N = (outC + Do - 1) / Do;
+
+    torch::Tensor paddedKernel = kernel;
+    if (M * Di != inC || N * Do != outC) {
+        paddedKernel = torch::zeros({3, 3, 3, M * Di, N * Do}, kernel.options());
+        paddedKernel.slice(3, 0, inC).slice(4, 0, outC) = kernel;
+    }
+    paddedKernel = paddedKernel.view({3, 3, 3, M, Di, N, Do});
+    paddedKernel = paddedKernel.permute({0, 1, 2, 3, 5, 4, 6}).contiguous();
+
+    // Launch kernels for each M x N x leaf.
+    auto gridAccessor = batchHdl.deviceAccessor();
+
+    cudaMemAdvise(paddedKernel.data_ptr<float>(),
+                  paddedKernel.numel() * sizeof(float),
+                  cudaMemAdviseSetReadMostly,
+                  cudaInvalidDeviceId);
+
+    cudaMemAdvise(inFeatures.data_ptr<float>(),
+                  inFeatures.numel() * sizeof(float),
+                  cudaMemAdviseSetReadMostly,
+                  cudaInvalidDeviceId);
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
+
+        cudaMemPrefetchAsync(
+            paddedKernel.data_ptr<float>(), paddedKernel.numel() * sizeof(float), deviceId, stream);
+
+        size_t deviceFeatureCount, deviceFeatureOffset;
+        std::tie(deviceFeatureCount, deviceFeatureOffset) =
+            deviceCountAndOffset(inFeatures.size(0), deviceId);
+
+        cudaMemPrefetchAsync(inFeatures.data_ptr<float>(),
+                             deviceFeatureCount * inFeatures.size(1) * sizeof(float),
+                             deviceId,
+                             stream);
+    }
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
+
+        size_t deviceNumLeaves, deviceLeafOffset;
+        std::tie(deviceNumLeaves, deviceLeafOffset) = deviceCountAndOffset(numLeaves, deviceId);
+        if (deviceNumLeaves) {
+            if (variant == 8) {
+                stencilConvHaloKernel<<<M * N * deviceNumLeaves, 1024, 0, stream>>>(
+                    M,
+                    N,
+                    numLeaves,
+                    deviceLeafOffset * M * N,
+                    gridAccessor,
+                    inFeatures.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+                    paddedKernel.packed_accessor64<float, 7, torch::RestrictPtrTraits>(),
+                    outFeatures.packed_accessor64<float, 2, torch::RestrictPtrTraits>());
+            } else {
+                stencilConvHaloLargeDepthKernel<<<M * N * deviceNumLeaves * 32, 256, 0, stream>>>(
+                    M,
+                    N,
+                    numLeaves,
+                    deviceLeafOffset * M * N * 32,
+                    gridAccessor,
+                    inFeatures.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+                    paddedKernel.packed_accessor64<float, 7, torch::RestrictPtrTraits>(),
+                    outFeatures.packed_accessor64<float, 2, torch::RestrictPtrTraits>());
+            }
+
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+        }
+    }
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
+    }
+
+    cudaMemAdvise(paddedKernel.data_ptr<float>(),
+                  paddedKernel.numel() * sizeof(float),
+                  cudaMemAdviseUnsetReadMostly,
+                  cudaInvalidDeviceId);
+
+    cudaMemAdvise(inFeatures.data_ptr<float>(),
+                  inFeatures.numel() * sizeof(float),
+                  cudaMemAdviseUnsetReadMostly,
+                  cudaInvalidDeviceId);
 
     return outFeatures;
 }

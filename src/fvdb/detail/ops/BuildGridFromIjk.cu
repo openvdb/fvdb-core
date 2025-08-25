@@ -4,11 +4,10 @@
 #include <fvdb/detail/GridBatchImpl.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
 #include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
 
-#define CCCL_INCLUSIVE_SUM_INIT_SUPPORTED (__CUDACC_VER_MAJOR__ >= 12 && __CUDACC_VER_MINOR__ >= 8)
-
-#if CCCL_INCLUSIVE_SUM_INIT_SUPPORTED
+#if CCCL_DEVICE_MERGE_SUPPORTED
 #include <nanovdb/tools/cuda/DistributedPointsToGrid.cuh>
 #else
 #include <nanovdb/tools/cuda/PointsToGrid.cuh>
@@ -86,7 +85,7 @@ nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(const JaggedTensor &ijk) {
     using GridT = nanovdb::ValueOnIndex;
 
-#if CCCL_INCLUSIVE_SUM_INIT_SUPPORTED
+#if CCCL_DEVICE_MERGE_SUPPORTED
     TORCH_CHECK(ijk.is_contiguous(), "ijk must be contiguous");
     TORCH_CHECK(ijk.device().is_privateuseone(), "device must be privateuseone");
     TORCH_CHECK(ijk.device().has_index(), "device must have index");

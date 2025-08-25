@@ -59,7 +59,7 @@ Inject::forward(AutogradContext *ctx,
     TORCH_CHECK_VALUE(dstFeatures.device() == dstGrid->device(),
                       "Destination features must be on the same device as destination Grid");
 
-    FVDB_DISPATCH_KERNEL_DEVICE(srcGrid->device(), [&]() {
+    FVDB_DISPATCH_KERNEL(srcGrid->device(), [&]() {
         ops::dispatchInject<DeviceTag>(*dstGrid, *srcGrid, dstFeatures, srcFeatures);
     });
 

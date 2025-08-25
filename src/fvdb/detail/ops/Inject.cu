@@ -105,7 +105,8 @@ template <typename ValueType, int64_t Offset = -1> struct InjectGridPytorchFunct
     static constexpr int MinBlocksPerMultiprocessor = 1;
 
     __device__ void
-    operator()(const nanovdb::OnIndexGrid *srcGrid,
+    operator()(unsigned int srcLeafOffset,
+               const nanovdb::OnIndexGrid *srcGrid,
                const nanovdb::OnIndexGrid *dstGrid,
                const std::size_t numFeaturesPerVoxel,
                const int64_t nDim,
@@ -134,7 +135,7 @@ template <typename ValueType, int64_t Offset = -1> struct InjectGridPytorchFunct
         }
         __syncthreads();
 
-        const auto srcLeafID      = blockIdx.x;
+        const auto srcLeafID      = blockIdx.x + srcLeafOffset;
         const auto warpID         = threadIdx.x >> 5;
         const auto threadInWarpID = threadIdx.x & 0x1f;
 
@@ -200,12 +201,6 @@ dispatchInject<torch::kCUDA>(const GridBatchImpl &dstGridBatch,
                              const JaggedTensor &src) {
     c10::cuda::CUDAGuard deviceGuard(dstGridBatch.device());
 
-    // This guide buffer is a hack to pass in a device with an index to the cudaCreateNanoGrid
-    // function. We can't pass in a device directly but we can pass in a buffer which gets
-    // passed to TorchDeviceBuffer::create. The guide buffer holds the device and effectively
-    // passes it to the created buffer.
-    TorchDeviceBuffer guide(0, dstGridBatch.device());
-
     TORCH_CHECK_VALUE(dst.rdim() == src.rdim(),
                       "Source/Destination tensors should have matching dimensions");
     TORCH_CHECK_VALUE(dst.scalar_type() == src.scalar_type(),
@@ -252,6 +247,7 @@ dispatchInject<torch::kCUDA>(const GridBatchImpl &dstGridBatch,
                               "Shared memory size exceeds maximum threads per block");
                 nanovdb::util::cuda::operatorKernel<Op>
                     <<<srcLeafCount, Op::MaxThreadsPerBlock, sharedMemSize, stream.stream()>>>(
+                        0u,
                         srcGrid,
                         dstGrid,
                         featureDim,
@@ -266,6 +262,88 @@ dispatchInject<torch::kCUDA>(const GridBatchImpl &dstGridBatch,
             }),
             AT_EXPAND(AT_ALL_TYPES),
             torch::kFloat16);
+    }
+}
+
+template <>
+void
+dispatchInject<torch::kPrivateUse1>(const GridBatchImpl &dstGridBatch,
+                                    const GridBatchImpl &srcGridBatch,
+                                    JaggedTensor &dst,
+                                    const JaggedTensor &src) {
+    TORCH_CHECK_VALUE(dst.rdim() == src.rdim(),
+                      "Source/Destination tensors should have matching dimensions");
+    TORCH_CHECK_VALUE(dst.scalar_type() == src.scalar_type(),
+                      "Source/Destination tensors should have matching scalar types");
+
+    for (auto i = 1; i < dst.rdim(); i++) {
+        TORCH_CHECK_VALUE(dst.rsize(i) == src.rsize(i),
+                          "Source/Destination tensors should have matching feature dimensions");
+        TORCH_CHECK_VALUE(dst.jdata().stride(i) != 0,
+                          "Destination tensor cannot have zero strides");
+    }
+
+    int64_t featureDim = 1;
+    for (auto j = 1; j < dst.rdim(); j++) {
+        featureDim *= dst.rsize(j);
+    }
+
+    // Create a grid for each batch item and store the handles
+    for (int i = 0; i < dstGridBatch.batchSize(); i += 1) {
+        const nanovdb::OnIndexGrid *dstGrid =
+            dstGridBatch.nanoGridHandle().deviceGrid<nanovdb::ValueOnIndex>(i);
+        const nanovdb::OnIndexGrid *srcGrid =
+            srcGridBatch.nanoGridHandle().deviceGrid<nanovdb::ValueOnIndex>(i);
+        TORCH_CHECK(dstGrid, "Destination grid is null");
+        TORCH_CHECK(srcGrid, "Source grid is null");
+
+        torch::Tensor dstI       = dst.index(i).jdata();
+        const torch::Tensor srcI = src.index(i).jdata();
+
+        const auto srcLeafCount                   = srcGridBatch.numLeavesAt(i);
+        const auto [srcContigStrides, srcStrides] = stridesAndContiguousStrides(srcI);
+        const auto [dstContigStrides, dstStrides] = stridesAndContiguousStrides(dstI);
+
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            C10_CUDA_CHECK(cudaSetDevice(deviceId));
+            cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
+
+            auto deviceSrcLeafCount =
+                (srcLeafCount + c10::cuda::device_count() - 1) / c10::cuda::device_count();
+            const auto deviceSrcLeafOffset = deviceSrcLeafCount * deviceId;
+            deviceSrcLeafCount = std::min(deviceSrcLeafCount, srcLeafCount - deviceSrcLeafOffset);
+
+            AT_DISPATCH_V2(
+                src.scalar_type(),
+                "Inject",
+                AT_WRAP([&] {
+                    constexpr size_t sharedMemSize =
+                        64 * 4 * sizeof(int64_t); // Maximum 64 dimensions
+                    using Op = InjectGridPytorchFunctor<scalar_t>;
+                    static_assert(sharedMemSize <= Op::MaxThreadsPerBlock * sizeof(int64_t),
+                                  "Shared memory size exceeds maximum threads per block");
+                    nanovdb::util::cuda::operatorKernel<Op>
+                        <<<deviceSrcLeafCount, Op::MaxThreadsPerBlock, sharedMemSize, stream>>>(
+                            deviceSrcLeafOffset,
+                            srcGrid,
+                            dstGrid,
+                            featureDim,
+                            srcI.dim(),
+                            srcContigStrides.const_data_ptr<int64_t>(),
+                            srcStrides.const_data_ptr<int64_t>(),
+                            srcI.const_data_ptr<scalar_t>(),
+                            dstContigStrides.const_data_ptr<int64_t>(),
+                            dstStrides.const_data_ptr<int64_t>(),
+                            dstI.data_ptr<scalar_t>());
+                    C10_CUDA_KERNEL_LAUNCH_CHECK();
+                }),
+                AT_EXPAND(AT_ALL_TYPES),
+                torch::kFloat16);
+        }
+    }
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
     }
 }
 

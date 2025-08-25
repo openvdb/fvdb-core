@@ -670,6 +670,27 @@ jaggedTensorIndexIntCpu(const JaggedTensor &jt, int64_t idxVal) {
 // This corresponds to indexing with an integer
 // i.e. jt = JaggedTensor([...])
 //      jt[2] -> JaggedTensor([...]) where the 3rd list is selected
+JaggedTensor
+jaggedTensorIndexIntPrivateUse1(const JaggedTensor &jt, int64_t idxVal) {
+    if (idxVal < 0) {
+        idxVal += jt.num_outer_lists();
+    }
+    TORCH_CHECK_INDEX(idxVal >= 0 && idxVal < jt.num_outer_lists(),
+                      "Index ",
+                      idxVal,
+                      " is out of bounds for JaggedTensor with ",
+                      jt.num_outer_lists(),
+                      " elements");
+
+    TORCH_CHECK(jt.jlidx().size(0) == 0,
+                "jaggedTensorIndexIntPrivateUse1 is not implemented for jlidx().size(0) != 0");
+
+    return jaggedTensorIndexIntOneList(jt, idxVal);
+}
+
+// This corresponds to indexing with an integer
+// i.e. jt = JaggedTensor([...])
+//      jt[2] -> JaggedTensor([...]) where the 3rd list is selected
 template <>
 JaggedTensor
 dispatchJaggedTensorIndexInt<torch::kCPU>(const JaggedTensor &jt, int64_t idxVal) {
@@ -680,6 +701,11 @@ JaggedTensor
 dispatchJaggedTensorIndexInt<torch::kCUDA>(const JaggedTensor &jt, int64_t idxVal) {
     c10::cuda::CUDAGuard deviceGuard(jt.device());
     return jaggedTensorIndexIntCuda(jt, idxVal);
+}
+template <>
+JaggedTensor
+dispatchJaggedTensorIndexInt<torch::kPrivateUse1>(const JaggedTensor &jt, int64_t idxVal) {
+    return jaggedTensorIndexIntPrivateUse1(jt, idxVal);
 }
 
 // This corresponds to indexing with a slice

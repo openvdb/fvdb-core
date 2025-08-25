@@ -4,6 +4,7 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
+#include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
 #include <nanovdb/NanoVDB.h>
 
@@ -67,6 +68,15 @@ IjkToIndex(const GridBatchImpl &batchHdl, const JaggedTensor &ijk, bool cumulati
                                    bidx, eidx, batchAcc, ijkAcc, outIndexAcc, cumulative);
                            };
                            forEachJaggedElementChannelCUDA<scalar_t, 2>(512, 1, ijk, cb);
+                       } else if constexpr (DeviceTag == torch::kPrivateUse1) {
+                           auto cb = [=] __device__(fvdb::JIdxType bidx,
+                                                    int64_t eidx,
+                                                    int64_t cidx,
+                                                    JaggedRAcc32<scalar_t, 2> ijkAcc) {
+                               ijkToIndexCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+                                   bidx, eidx, batchAcc, ijkAcc, outIndexAcc, cumulative);
+                           };
+                           forEachJaggedElementChannelPrivateUse1<scalar_t, 2>(1, ijk, cb);
                        } else {
                            auto cb = [=](fvdb::JIdxType bidx,
                                          int64_t eidx,
@@ -89,6 +99,14 @@ dispatchIjkToIndex<torch::kCUDA>(const GridBatchImpl &batchHdl,
                                  const JaggedTensor &ijk,
                                  bool cumulative) {
     return IjkToIndex<torch::kCUDA>(batchHdl, ijk, cumulative);
+}
+
+template <>
+JaggedTensor
+dispatchIjkToIndex<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
+                                        const JaggedTensor &ijk,
+                                        bool cumulative) {
+    return IjkToIndex<torch::kPrivateUse1>(batchHdl, ijk, cumulative);
 }
 
 template <>

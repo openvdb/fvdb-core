@@ -4,6 +4,7 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
+#include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
 #include <nanovdb/NanoVDB.h>
 
@@ -67,6 +68,40 @@ dispatchCoarseIJKForFineGrid<torch::kCUDA>(const GridBatchImpl &batchHdl,
     };
 
     forEachVoxelCUDA(1024, 1, batchHdl, cb);
+
+    return JaggedTensor::from_data_offsets_and_list_ids(
+        outIJK, batchHdl.voxelOffsets(), batchHdl.jlidx());
+}
+
+template <>
+JaggedTensor
+dispatchCoarseIJKForFineGrid<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
+                                                  nanovdb::Coord coarseningFactor) {
+    TORCH_CHECK(batchHdl.device().is_privateuseone(),
+                "GridBatchImpl must be on PrivateUse1 device");
+
+    const torch::TensorOptions optsData =
+        torch::TensorOptions().dtype(torch::kInt32).device(batchHdl.device());
+    const torch::TensorOptions optsBIdx =
+        torch::TensorOptions().dtype(fvdb::JIdxScalarType).device(batchHdl.device());
+    torch::Tensor outIJK = torch::empty({batchHdl.totalVoxels(), 3}, optsData);
+    torch::Tensor outIJKBIdx =
+        torch::empty({batchHdl.totalVoxels()}, optsBIdx); // TODO: Don't populate for single batch
+
+    auto outIJKAcc = outIJK.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>();
+    auto outIJKBIdxAcc =
+        outIJKBIdx.packed_accessor64<fvdb::JIdxType, 1, torch::RestrictPtrTraits>();
+
+    auto cb = [=] __device__(int32_t bidx,
+                             int32_t lidx,
+                             int32_t vidx,
+                             int32_t cidx,
+                             GridBatchImpl::Accessor bacc) {
+        coarseIjkForFineGridVoxelCallback(
+            bidx, lidx, vidx, cidx, bacc, coarseningFactor, outIJKAcc, outIJKBIdxAcc);
+    };
+
+    forEachVoxelPrivateUse1(1, batchHdl, cb);
 
     return JaggedTensor::from_data_offsets_and_list_ids(
         outIJK, batchHdl.voxelOffsets(), batchHdl.jlidx());

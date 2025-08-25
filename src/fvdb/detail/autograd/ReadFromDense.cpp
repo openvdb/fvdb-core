@@ -38,7 +38,7 @@ ReadFromDense::forward(ReadFromDense::AutogradContext *ctx,
         denseOrigins.tensorValue(grid->batchSize(), false /*onlyPositive*/, "dense_origins")
             .to(denseData.device());
 
-    FVDB_DISPATCH_KERNEL_DEVICE(grid->device(), [&]() {
+    FVDB_DISPATCH_KERNEL(grid->device(), [&]() {
         ops::dispatchReadFromDense<DeviceTag>(*grid, denseDataReshape, denseOriginsI32, ret);
     });
 
@@ -79,7 +79,7 @@ ReadFromDense::backward(ReadFromDense::AutogradContext *ctx,
         {grid->batchSize(), gridSize[0], gridSize[1], gridSize[2], gradOutReshape.size(1)},
         denseDataOpts);                                // [B, W, H, D, -1]
 
-    FVDB_DISPATCH_KERNEL_DEVICE(grid->device(), [&]() {
+    FVDB_DISPATCH_KERNEL(grid->device(), [&]() {
         ops::dispatchReadIntoDense<DeviceTag>(*grid, gradOutReshape, denseOrigins, ret);
     });
 

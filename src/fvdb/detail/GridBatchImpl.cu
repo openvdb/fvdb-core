@@ -1545,7 +1545,7 @@ GridBatchImpl::dense(const int64_t numGrids,
     TORCH_CHECK((size_t)numGrids == origins.size(),
                 "If this happens, Francis' paranoia was justified. File a bug");
 
-    auto denseGridBatchHdl = FVDB_DISPATCH_KERNEL_DEVICE(device, [&]() {
+    auto denseGridBatchHdl = FVDB_DISPATCH_KERNEL(device, [&]() {
         return detail::ops::dispatchCreateNanoGridFromDense<DeviceTag>(
             numGrids, ijkMin, denseDims, device, mask);
     });
@@ -1617,7 +1617,7 @@ GridBatchImpl::coarsen(const nanovdb::Coord coarseningFactor) {
     std::vector<nanovdb::Vec3d> voxS, voxO;
     gridVoxelSizesAndOrigins(voxS, voxO);
 
-    auto coarseGridBatchHdl = FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
+    auto coarseGridBatchHdl = FVDB_DISPATCH_KERNEL(device(), [&]() {
         return detail::ops::dispatchBuildCoarseGridFromFine<DeviceTag>(*this, coarseningFactor);
     });
     auto ret =
@@ -1664,7 +1664,7 @@ GridBatchImpl::upsample(const nanovdb::Coord upsampleFactor,
 
     std::vector<nanovdb::Vec3d> voxS, voxO;
     gridVoxelSizesAndOrigins(voxS, voxO);
-    auto fineGridBatchHdl = FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
+    auto fineGridBatchHdl = FVDB_DISPATCH_KERNEL(device(), [&]() {
         return detail::ops::dispatchBuildFineGridFromCoarse<DeviceTag>(*this, upsampleFactor, mask);
     });
     auto ret = c10::make_intrusive<detail::GridBatchImpl>(std::move(fineGridBatchHdl), voxS, voxO);
