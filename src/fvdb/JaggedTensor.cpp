@@ -583,7 +583,7 @@ JaggedTensor::rmask(const torch::Tensor &mask) const {
 
 JaggedTensor
 JaggedTensor::index(int64_t index) const {
-    return FVDB_DISPATCH_KERNEL_DEVICE(mData.device(), [&]() {
+    return FVDB_DISPATCH_KERNEL(mData.device(), [&]() {
         return detail::ops::dispatchJaggedTensorIndexInt<DeviceTag>(*this, index);
     });
 }

@@ -18,7 +18,7 @@ MaxPoolGrid::forward(MaxPoolGrid::AutogradContext *ctx,
                      nanovdb::Coord poolingFactor,
                      nanovdb::Coord stride,
                      MaxPoolGrid::Variable fineData) {
-    torch::Tensor outCoarseData = FVDB_DISPATCH_KERNEL_DEVICE(fineData.device(), [&]() {
+    torch::Tensor outCoarseData = FVDB_DISPATCH_KERNEL(fineData.device(), [&]() {
         return ops::dispatchDownsampleGridMaxPool<DeviceTag>(
             *fineGrid, *coarseGrid, fineData, poolingFactor, stride);
     });
@@ -54,7 +54,7 @@ MaxPoolGrid::backward(MaxPoolGrid::AutogradContext *ctx, MaxPoolGrid::variable_l
 
     Variable gradOut = grad_output.at(0).contiguous(); // [#coarse_voxels | #coarse_corners, *]
 
-    Variable outGradIn = FVDB_DISPATCH_KERNEL_DEVICE(gradOut.device(), [&]() {
+    Variable outGradIn = FVDB_DISPATCH_KERNEL(gradOut.device(), [&]() {
         return ops::dispatchDownsampleGridMaxPoolBackward<DeviceTag>(
             *coarseGrid, *fineGrid, fineData, gradOut, poolingFactor, stride);
     });

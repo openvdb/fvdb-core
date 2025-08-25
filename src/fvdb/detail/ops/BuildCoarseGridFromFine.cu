@@ -28,6 +28,15 @@ dispatchBuildCoarseGridFromFine<torch::kCUDA>(const GridBatchImpl &fineGridBatch
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
+dispatchBuildCoarseGridFromFine<torch::kPrivateUse1>(const GridBatchImpl &fineGridBatch,
+                                                     const nanovdb::Coord branchingFactor) {
+    JaggedTensor coords =
+        ops::dispatchCoarseIJKForFineGrid<torch::kPrivateUse1>(fineGridBatch, branchingFactor);
+    return ops::dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(coords);
+}
+
+template <>
+nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildCoarseGridFromFine<torch::kCPU>(const GridBatchImpl &fineBatchHdl,
                                              const nanovdb::Coord branchingFactor) {
     using GridT     = nanovdb::ValueOnIndex;

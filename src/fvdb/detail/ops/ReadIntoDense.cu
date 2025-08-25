@@ -3,10 +3,10 @@
 //
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
+#include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
 #include <nanovdb/NanoVDB.h>
 
-#include <THC/THCAtomics.cuh>
 #include <c10/cuda/CUDAException.h>
 
 namespace fvdb {
@@ -111,6 +111,37 @@ dispatchReadIntoDense<torch::kCUDA>(const GridBatchImpl &batchHdl,
                     bidx, lidx, vidx, cidx, batchAcc, denseOriginsAcc, inGridDataAcc, outDenseAcc);
             };
             forEachVoxelCUDA(1024, inGridData.size(1), batchHdl, callback);
+        }),
+        AT_EXPAND(AT_FLOATING_TYPES),
+        c10::kHalf,
+        c10::kBFloat16);
+}
+
+template <>
+void
+dispatchReadIntoDense<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
+                                           const torch::Tensor &inGridData,
+                                           const torch::Tensor &denseOrigins,
+                                           torch::Tensor &outDenseTensor) {
+    AT_DISPATCH_V2(
+        outDenseTensor.scalar_type(),
+        "readIntoDense",
+        AT_WRAP([&]() {
+            auto outDenseAcc =
+                outDenseTensor.packed_accessor64<scalar_t, 5, torch::RestrictPtrTraits>();
+            auto denseOriginsAcc =
+                denseOrigins.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>();
+            auto inGridDataAcc =
+                inGridData.packed_accessor64<scalar_t, 2, torch::RestrictPtrTraits>();
+            auto callback = [=] __device__(int32_t bidx,
+                                           int32_t lidx,
+                                           int32_t vidx,
+                                           int32_t cidx,
+                                           GridBatchImpl::Accessor batchAcc) {
+                readIntoDenseVoxelCallback<scalar_t>(
+                    bidx, lidx, vidx, cidx, batchAcc, denseOriginsAcc, inGridDataAcc, outDenseAcc);
+            };
+            forEachVoxelPrivateUse1(inGridData.size(1), batchHdl, callback);
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
         c10::kHalf,

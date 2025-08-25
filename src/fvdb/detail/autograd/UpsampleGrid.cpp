@@ -32,7 +32,7 @@ UpsampleGrid::forward(UpsampleGrid::AutogradContext *ctx,
         return variable_list({torch::empty({0, coarseData.size(1)}, coarseData.options())});
     }
 
-    torch::Tensor ret = FVDB_DISPATCH_KERNEL_DEVICE(coarseData.device(), [&]() {
+    torch::Tensor ret = FVDB_DISPATCH_KERNEL(coarseData.device(), [&]() {
         return ops::dispatchUpsampleGridNearest<DeviceTag>(
             *coarseGrid, *fineGrid, coarseData, upsamplingFactor);
     });

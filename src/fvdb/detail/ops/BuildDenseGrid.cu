@@ -5,9 +5,14 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
 #include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
 
+#if CCCL_DEVICE_MERGE_SUPPORTED
+#include <nanovdb/tools/cuda/DistributedPointsToGrid.cuh>
+#else
 #include <nanovdb/tools/cuda/PointsToGrid.cuh>
+#endif
 
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -17,19 +22,23 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
+namespace {
+
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
-ijkForDense(nanovdb::Coord ijkMin, nanovdb::Coord size, TorchRAcc32<int32_t, 2> outIJKAccessor) {
-    const int32_t w = size[0], h = size[1], d = size[2];
-    const uint64_t tid = (static_cast<uint64_t>(blockIdx.x) * blockDim.x) +
-                         threadIdx.x; // = x * (h * d) + y * d + z)
+ijkForDense(uint64_t offset,
+            nanovdb::Coord ijkMin,
+            nanovdb::Coord size,
+            TorchRAcc32<int32_t, 2> outIJKAccessor) {
+    const uint64_t tid = (static_cast<uint64_t>(blockIdx.x) * blockDim.x) + threadIdx.x + offset;
 
     if (tid >= outIJKAccessor.size(0)) {
         return;
     }
 
-    const int64_t xi = tid / (h * d);
-    const int64_t yi = (tid - xi * (h * d)) / d;
-    const int64_t zi = tid - (xi * h * d) - (yi * d);
+    // tid = x * size[1] * size[2] + y * size[2] + z
+    const int64_t xi = tid / (size[1] * size[2]);
+    const int64_t yi = tid % (size[1] * size[2]) / size[2];
+    const int64_t zi = tid % size[2];
 
     outIJKAccessor[tid][0] = xi + ijkMin[0];
     outIJKAccessor[tid][1] = yi + ijkMin[1];
@@ -60,6 +69,8 @@ checkInputs(const torch::Device device,
     }
 }
 
+} // namespace
+
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
@@ -83,7 +94,7 @@ dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
 
     if (NUM_BLOCKS > 0) {
         ijkForDense<<<NUM_BLOCKS, DEFAULT_BLOCK_DIM>>>(
-            ijkMin, size, ijkData.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
+            0u, ijkMin, size, ijkData.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 
@@ -121,6 +132,101 @@ dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
         // grids
         return nanovdb::cuda::mergeGridHandles(handles, &guide);
     }
+}
+
+template <>
+nanovdb::GridHandle<TorchDeviceBuffer>
+dispatchCreateNanoGridFromDense<torch::kPrivateUse1>(int64_t batchSize,
+                                                     nanovdb::Coord ijkMin,
+                                                     nanovdb::Coord size,
+                                                     torch::Device device,
+                                                     const std::optional<torch::Tensor> &mask) {
+    using GridT = nanovdb::ValueOnIndex;
+
+#if CCCL_DEVICE_MERGE_SUPPORTED
+    TORCH_CHECK(device.is_privateuseone(), "device must be privateuseone");
+    checkInputs(device, batchSize, size, ijkMin, mask);
+
+    const int64_t volume = static_cast<int64_t>(size[0]) * static_cast<int64_t>(size[1]) *
+                           static_cast<int64_t>(size[2]);
+    const torch::TensorOptions opts = torch::TensorOptions().dtype(torch::kInt32).device(device);
+    torch::Tensor ijkData           = torch::empty({volume, 3}, opts);
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
+
+        auto deviceVolume = (volume + c10::cuda::device_count() - 1) / c10::cuda::device_count();
+        const auto deviceOffset = deviceVolume * deviceId;
+        deviceVolume            = std::min(deviceVolume, volume - deviceOffset);
+
+        constexpr int64_t kNumThreads = DEFAULT_BLOCK_DIM;
+        const int64_t deviceNumBlocks = GET_BLOCKS(deviceVolume, kNumThreads);
+        if (deviceNumBlocks > 0) {
+            ijkForDense<<<deviceNumBlocks, kNumThreads>>>(
+                deviceOffset,
+                ijkMin,
+                size,
+                ijkData.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+        }
+    }
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
+    }
+
+    if (mask.has_value()) {
+        torch::Tensor maskValue = mask.value().view({-1});
+        TORCH_CHECK(maskValue.device() == device, "mask must be on same device as ijkData");
+        ijkData = ijkData.index({maskValue});
+    }
+
+    // This guide buffer is a hack to pass in a device with an index to the cudaCreateNanoGrid
+    // function. We can't pass in a device directly but we can pass in a buffer which gets
+    // passed to TorchDeviceBuffer::create. The guide buffer holds the device and effectively
+    // passes it to the created buffer.
+    TorchDeviceBuffer guide(0, device);
+
+    TORCH_CHECK(ijkData.is_contiguous(), "ijkData must be contiguous");
+
+    // Create a grid for each batch item and store the handles
+    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
+    for (int64_t i = 0; i < batchSize; i++) {
+        const int64_t nVoxels = ijkData.size(0);
+
+        if (!nVoxels) {
+            auto handle = createEmptyGridHandle(device);
+            handles.emplace_back(std::move(handle));
+        } else {
+            int32_t *dataPtr = ijkData.data_ptr<int32_t>();
+            auto coordPtr    = reinterpret_cast<nanovdb::Coord *>(dataPtr);
+
+            nanovdb::cuda::DeviceMesh mesh;
+            nanovdb::tools::cuda::DistributedPointsToGrid<GridT> converter(mesh);
+            auto handle =
+                converter.getHandle<nanovdb::Coord *, TorchDeviceBuffer>(coordPtr, nVoxels, guide);
+            handles.emplace_back(std::move(handle));
+        }
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+    }
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
+    }
+
+    if (handles.size() == 1) {
+        // If there's only one handle, just return it
+        return std::move(handles[0]);
+    } else {
+        // This copies all the handles into a single handle -- only do it if there are multie
+        // grids
+        return nanovdb::cuda::mergeGridHandles(handles, &guide);
+    }
+#else
+    TORCH_CHECK(false, "Distributed creation of grids requires CUDA 12.8 or later");
+    return nanovdb::GridHandle<TorchDeviceBuffer>();
+#endif
 }
 
 template <>

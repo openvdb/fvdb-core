@@ -41,7 +41,7 @@ SparseConvolutionHalo::forward(SparseConvolutionHalo::AutogradContext *ctx,
     // [O, I, 3, 3, 3] to [3, 3, 3, I, O]
     kernels = kernels.permute({4, 3, 2, 1, 0}).contiguous();
 
-    torch::Tensor outFeatures = FVDB_DISPATCH_KERNEL_DEVICE(inFeatures.device(), [&]() {
+    torch::Tensor outFeatures = FVDB_DISPATCH_KERNEL(inFeatures.device(), [&]() {
         return ops::dispatchSparseConvolutionHalo<DeviceTag>(*grid, inFeatures, kernels, variant);
     });
 
@@ -67,10 +67,10 @@ SparseConvolutionHalo::backward(AutogradContext *ctx, variable_list grad_output)
     Variable gradOut    = grad_output.at(0);
 
     kernels = kernels.permute({0, 1, 2, 4, 3}).flip({0, 1, 2}).contiguous(); // [3, 3, 3, O, I]
-    torch::Tensor gradInput  = FVDB_DISPATCH_KERNEL_DEVICE(inFeatures.device(), [&]() {
+    torch::Tensor gradInput  = FVDB_DISPATCH_KERNEL(inFeatures.device(), [&]() {
         return ops::dispatchSparseConvolutionHalo<DeviceTag>(*grid, gradOut, kernels, variant);
     });
-    torch::Tensor gradKernel = FVDB_DISPATCH_KERNEL_DEVICE(inFeatures.device(), [&]() {
+    torch::Tensor gradKernel = FVDB_DISPATCH_KERNEL(inFeatures.device(), [&]() {
         return ops::dispatchSparseConvolutionHaloGrad<DeviceTag>(*grid, inFeatures, gradOut);
     });
 

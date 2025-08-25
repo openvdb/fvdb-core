@@ -7,6 +7,7 @@
 
 #include <THC/THCAtomics.cuh>
 #include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAGuard.h>
 
 #include <mma.h>
 
@@ -240,6 +241,9 @@ torch::Tensor
 dispatchSparseConvolutionHaloGrad<torch::kCUDA>(const GridBatchImpl &batchHdl,
                                                 const torch::Tensor &inFeatures,
                                                 const torch::Tensor &gradOutFeatures) {
+    c10::cuda::CUDAGuard deviceGuard(batchHdl.device());
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(batchHdl.device().index());
+
     // Check compute capability
     {
         int device_id = inFeatures.device().index();
@@ -267,7 +271,8 @@ dispatchSparseConvolutionHaloGrad<torch::kCUDA>(const GridBatchImpl &batchHdl,
 
     stencilConvHaloGradKernel<<<M * N * numLeaves,
                                 GradStencilFunctor::MaxThreadsPerBlock,
-                                smemSize>>>(
+                                smemSize,
+                                stream>>>(
         M,
         N,
         numLeaves,
@@ -282,10 +287,18 @@ dispatchSparseConvolutionHaloGrad<torch::kCUDA>(const GridBatchImpl &batchHdl,
 
 template <>
 torch::Tensor
+dispatchSparseConvolutionHaloGrad<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
+                                                       const torch::Tensor &inFeatures,
+                                                       const torch::Tensor &gradOutFeatures) {
+    TORCH_CHECK(false, "PrivateUse1 not supported for SparseConvolutionHaloGrad yet!");
+}
+
+template <>
+torch::Tensor
 dispatchSparseConvolutionHaloGrad<torch::kCPU>(const GridBatchImpl &batchHdl,
                                                const torch::Tensor &inFeatures,
                                                const torch::Tensor &gradOutFeatures) {
-    TORCH_CHECK(false, "CPU not supported for SparseConvolutionHalo yet!");
+    TORCH_CHECK(false, "CPU not supported for SparseConvolutionHaloGrad yet!");
 }
 
 } // namespace ops

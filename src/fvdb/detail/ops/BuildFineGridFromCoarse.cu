@@ -6,6 +6,7 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
+#include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <nanovdb/NanoVDB.h>
@@ -127,7 +128,7 @@ dispatchFineIJKForCoarseGrid<torch::kCUDA>(const GridBatchImpl &batchHdl,
     const auto optsBIdx = optsData.dtype(fvdb::JIdxScalarType);
 
     if (mask) {
-        torch::Tensor maskPrefixSum = torch::cumsum(mask.value().jdata(), 0);
+        torch::Tensor maskPrefixSum = torch::cumsum(mask.value().jdata(), 0, torch::kLong);
         auto totalMaskedVoxels      = maskPrefixSum[-1].item<int64_t>();
 
         torch::Tensor outIJK     = torch::empty({totalMaskedVoxels * totalPadAmount, 3}, optsData);
@@ -222,6 +223,122 @@ dispatchFineIJKForCoarseGrid<torch::kCUDA>(const GridBatchImpl &batchHdl,
 }
 
 template <>
+JaggedTensor
+dispatchFineIJKForCoarseGrid<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
+                                                  nanovdb::Coord upsamplingFactor,
+                                                  const std::optional<JaggedTensor> &mask) {
+    TORCH_CHECK(batchHdl.device().is_privateuseone(),
+                "GridBatchImpl must be on PrivateUse1 device");
+
+    const int64_t totalPadAmount = upsamplingFactor[0] * upsamplingFactor[1] * upsamplingFactor[2];
+
+    const auto optsData = torch::TensorOptions().dtype(torch::kInt32).device(batchHdl.device());
+    const auto optsBIdx = optsData.dtype(fvdb::JIdxScalarType);
+
+    if (mask) {
+        torch::Tensor maskPrefixSum = torch::cumsum(mask.value().jdata(), 0, torch::kLong);
+        auto totalMaskedVoxels      = maskPrefixSum[-1].item<int64_t>();
+
+        torch::Tensor outIJK     = torch::empty({totalMaskedVoxels * totalPadAmount, 3}, optsData);
+        torch::Tensor outIJKBIdx = torch::empty({totalMaskedVoxels * totalPadAmount},
+                                                optsBIdx); // TODO: Don't populate for single batch
+
+        auto outIJKAcc = outIJK.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>();
+        auto outIJKBIdxAcc =
+            outIJKBIdx.packed_accessor64<fvdb::JIdxType, 1, torch::RestrictPtrTraits>();
+
+        auto maskAcc = mask.value().jdata().packed_accessor64<bool, 1, torch::RestrictPtrTraits>();
+        auto maskPrefixSumAcc =
+            maskPrefixSum.packed_accessor64<int64_t, 1, torch::RestrictPtrTraits>();
+
+        auto cb = [=] __device__(int32_t bidx,
+                                 int32_t lidx,
+                                 int32_t vidx,
+                                 int32_t cidx,
+                                 GridBatchImpl::Accessor bacc) {
+            fineIjkForCoarseGridVoxelCallback(bidx,
+                                              lidx,
+                                              vidx,
+                                              cidx,
+                                              bacc,
+                                              upsamplingFactor,
+                                              outIJKAcc,
+                                              outIJKBIdxAcc,
+                                              maskAcc,
+                                              maskPrefixSumAcc);
+        };
+
+        forEachVoxelPrivateUse1(1, batchHdl, cb);
+
+        torch::Tensor outVoxelCounts = torch::zeros_like(batchHdl.voxelOffsets());
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            C10_CUDA_CHECK(cudaSetDevice(deviceId));
+            cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
+
+            auto deviceNumSegments =
+                (batchHdl.batchSize() + c10::cuda::device_count() - 1) / c10::cuda::device_count();
+            const auto deviceOffset = deviceNumSegments * deviceId;
+            deviceNumSegments = std::min(deviceNumSegments, batchHdl.batchSize() - deviceOffset);
+
+            auto maskCounts   = outVoxelCounts.data_ptr<int64_t>() + deviceOffset + 1;
+            auto beginOffsets = batchHdl.voxelOffsets().const_data_ptr<int64_t>() + deviceOffset;
+            auto endOffsets   = beginOffsets + 1;
+
+            void *dTempStorage      = nullptr;
+            size_t tempStorageBytes = 0;
+            cub::DeviceSegmentedReduce::Sum(dTempStorage,
+                                            tempStorageBytes,
+                                            mask.value().jdata().const_data_ptr<bool>(),
+                                            maskCounts,
+                                            deviceNumSegments,
+                                            beginOffsets,
+                                            endOffsets,
+                                            stream);
+            cudaMallocAsync(&dTempStorage, tempStorageBytes, stream);
+            cub::DeviceSegmentedReduce::Sum(dTempStorage,
+                                            tempStorageBytes,
+                                            mask.value().jdata().const_data_ptr<bool>(),
+                                            maskCounts,
+                                            deviceNumSegments,
+                                            beginOffsets,
+                                            endOffsets,
+                                            stream);
+            cudaFreeAsync(dTempStorage, stream);
+        }
+
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
+        }
+
+        torch::Tensor outVoxelOffsets = torch::cumsum(outVoxelCounts, 0) * totalPadAmount;
+        return JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
+            outIJK, outVoxelOffsets, outIJKBIdx, batchHdl.jlidx(), batchHdl.batchSize());
+    } else {
+        torch::Tensor outIJK = torch::empty({batchHdl.totalVoxels() * totalPadAmount, 3}, optsData);
+        torch::Tensor outIJKBIdx = torch::empty({batchHdl.totalVoxels() * totalPadAmount},
+                                                optsBIdx); // TODO: Don't populate for single batch
+
+        auto outIJKAcc = outIJK.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>();
+        auto outIJKBIdxAcc =
+            outIJKBIdx.packed_accessor64<fvdb::JIdxType, 1, torch::RestrictPtrTraits>();
+
+        auto cb = [=] __device__(int32_t bidx,
+                                 int32_t lidx,
+                                 int32_t vidx,
+                                 int32_t cidx,
+                                 GridBatchImpl::Accessor bacc) {
+            fineIjkForCoarseGridVoxelCallback(
+                bidx, lidx, vidx, cidx, bacc, upsamplingFactor, outIJKAcc, outIJKBIdxAcc);
+        };
+
+        forEachVoxelPrivateUse1(1, batchHdl, cb);
+
+        return JaggedTensor::from_data_offsets_and_list_ids(
+            outIJK, batchHdl.voxelOffsets() * totalPadAmount, batchHdl.jlidx());
+    }
+}
+
+template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildFineGridFromCoarse<torch::kCUDA>(const GridBatchImpl &coarseBatchHdl,
                                               const nanovdb::Coord subdivisionFactor,
@@ -229,6 +346,17 @@ dispatchBuildFineGridFromCoarse<torch::kCUDA>(const GridBatchImpl &coarseBatchHd
     JaggedTensor coords =
         dispatchFineIJKForCoarseGrid<torch::kCUDA>(coarseBatchHdl, subdivisionFactor, subdivMask);
     return ops::dispatchCreateNanoGridFromIJK<torch::kCUDA>(coords);
+}
+
+template <>
+nanovdb::GridHandle<TorchDeviceBuffer>
+dispatchBuildFineGridFromCoarse<torch::kPrivateUse1>(
+    const GridBatchImpl &coarseBatchHdl,
+    const nanovdb::Coord subdivisionFactor,
+    const std::optional<JaggedTensor> &subdivMask) {
+    JaggedTensor coords = dispatchFineIJKForCoarseGrid<torch::kPrivateUse1>(
+        coarseBatchHdl, subdivisionFactor, subdivMask);
+    return ops::dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(coords);
 }
 
 template <>

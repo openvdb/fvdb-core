@@ -113,19 +113,19 @@ forEachLeafPrivateUse1(int64_t numChannels,
         const auto deviceLeafChannelCount  = deviceLeafCount * numChannels;
         const auto deviceLeafChannelOffset = deviceLeafOffset * numChannels;
 
-        constexpr int64_t kNumThreads = 256;
-        const int64_t deviceNumBlocks = GET_BLOCKS(deviceLeafChannelCount, kNumThreads);
+        const int64_t deviceNumBlocks = GET_BLOCKS(deviceLeafChannelCount, DEFAULT_BLOCK_DIM);
         TORCH_INTERNAL_ASSERT(deviceNumBlocks <
                                   static_cast<int64_t>(std::numeric_limits<unsigned int>::max()),
                               "Too many blocks in forEachLeafPrivateUse1");
         if (deviceNumBlocks > 0) {
-            _private::forEachLeafPrivateUse1Kernel<<<deviceNumBlocks, kNumThreads, 0, stream>>>(
-                deviceLeafChannelCount,
-                deviceLeafChannelOffset,
-                batchAccessor,
-                numChannels,
-                func,
-                args...);
+            _private::
+                forEachLeafPrivateUse1Kernel<<<deviceNumBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                    deviceLeafChannelCount,
+                    deviceLeafChannelOffset,
+                    batchAccessor,
+                    numChannels,
+                    func,
+                    args...);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
     }
@@ -161,20 +161,20 @@ forEachVoxelPrivateUse1(int64_t numChannels,
         const auto deviceLeafVoxelChannelCount  = deviceLeafCount * VOXELS_PER_LEAF * numChannels;
         const auto deviceLeafVoxelChannelOffset = deviceLeafOffset * VOXELS_PER_LEAF * numChannels;
 
-        const int64_t kNumThreads     = 256;
-        const int64_t deviceNumBlocks = GET_BLOCKS(deviceLeafVoxelChannelCount, kNumThreads);
+        const int64_t deviceNumBlocks = GET_BLOCKS(deviceLeafVoxelChannelCount, DEFAULT_BLOCK_DIM);
         TORCH_INTERNAL_ASSERT(deviceNumBlocks <
                                   static_cast<int64_t>(std::numeric_limits<unsigned int>::max()),
                               "Too many blocks in forEachVoxelPrivateUse1");
 
         if (deviceNumBlocks > 0) {
-            _private::forEachVoxelPrivateUse1Kernel<<<deviceNumBlocks, kNumThreads, 0, stream>>>(
-                deviceLeafVoxelChannelCount,
-                deviceLeafVoxelChannelOffset,
-                batchAccessor,
-                numChannels,
-                func,
-                args...);
+            _private::
+                forEachVoxelPrivateUse1Kernel<<<deviceNumBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                    deviceLeafVoxelChannelCount,
+                    deviceLeafVoxelChannelOffset,
+                    batchAccessor,
+                    numChannels,
+                    func,
+                    args...);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
     }
@@ -202,11 +202,10 @@ forEachJaggedElementChannelPrivateUse1(int64_t numChannels,
         deviceNumElements =
             std::min(deviceNumElements, jaggedTensor.element_count() - deviceOffset);
 
-        const int64_t kNumThreads     = 256;
-        const int64_t deviceNumBlocks = GET_BLOCKS(deviceNumElements, kNumThreads);
+        const int64_t deviceNumBlocks = GET_BLOCKS(deviceNumElements, DEFAULT_BLOCK_DIM);
         if (deviceNumBlocks > 0) {
             _private::forEachJaggedElementChannelPrivateUse1Kernel<NDIMS, ScalarT, Func, Args...>
-                <<<deviceNumBlocks, kNumThreads, 0, stream>>>(
+                <<<deviceNumBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
                     deviceNumElements,
                     deviceOffset,
                     jaggedTensor.packed_accessor32<ScalarT, NDIMS, torch::RestrictPtrTraits>(),
