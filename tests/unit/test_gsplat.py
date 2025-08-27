@@ -1,6 +1,7 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
+import sys
 import tempfile
 import unittest
 
@@ -1215,7 +1216,7 @@ class TestLoadAndSavePly(BaseGaussianTestCase):
 
         self.gs3d.save_ply(tf.name)
 
-        gs3d_loaded, training_info = GaussianSplat3d.from_ply(tf.name)
+        gs3d_loaded, metadata = GaussianSplat3d.from_ply(tf.name)
 
         self.assertTrue(torch.allclose(gs3d_loaded.means, self.gs3d.means))
         self.assertTrue(torch.allclose(gs3d_loaded.quats, self.gs3d.quats))
@@ -1224,10 +1225,7 @@ class TestLoadAndSavePly(BaseGaussianTestCase):
         self.assertTrue(torch.allclose(gs3d_loaded.sh0, self.gs3d.sh0))
         self.assertTrue(torch.allclose(gs3d_loaded.shN, self.gs3d.shN))
 
-        self.assertTrue(torch.all(training_info.normalization_transform == torch.eye(4).to(self.device)))
-        self.assertTrue(training_info.camera_to_world_matrices.shape == (0, 4, 4))
-        self.assertTrue(training_info.projection_types.numel() == 0)
-        self.assertTrue(training_info.projection_parameters.numel() == 0)
+        self.assertTrue(len(metadata) == 0)
 
     def test_save_and_load_ply_with_training_info(self):
         tf = tempfile.NamedTemporaryFile(delete=True, suffix=".ply")
@@ -1238,10 +1236,18 @@ class TestLoadAndSavePly(BaseGaussianTestCase):
         cam_types = torch.full((num_cams,), 8).to(torch.int32)
         proj_params = torch.randn(num_cams, 4, 5, 7)
 
-        self.gs3d.save_ply_and_training_info(tf.name, normalization_tx, cam_to_worlds, cam_types, proj_params)
+        metadata_dict = {
+            "normalization_transform": normalization_tx,
+            "camera_to_world_matrices": cam_to_worlds,
+            "projection_types": cam_types,
+            "projection_parameters": proj_params,
+            "string_parameter": "The Quick brown fox jumps over the lazy dog",
+            "int_param": 8198767135,
+            "float_param": 0.121243243523524650345740953,
+        }
+        self.gs3d.save_ply(tf.name, metadata=metadata_dict)
 
         gs3d_loaded, training_info = GaussianSplat3d.from_ply(tf.name)
-        print(cam_types, training_info.projection_types)
 
         self.assertTrue(torch.allclose(gs3d_loaded.means, self.gs3d.means))
         self.assertTrue(torch.allclose(gs3d_loaded.quats, self.gs3d.quats))
@@ -1250,12 +1256,52 @@ class TestLoadAndSavePly(BaseGaussianTestCase):
         self.assertTrue(torch.allclose(gs3d_loaded.sh0, self.gs3d.sh0))
         self.assertTrue(torch.allclose(gs3d_loaded.shN, self.gs3d.shN))
 
-        self.assertTrue(torch.allclose(training_info.normalization_transform, normalization_tx.to(self.device)))
-        self.assertTrue(torch.allclose(training_info.camera_to_world_matrices, cam_to_worlds.to(self.device)))
-        self.assertTrue(torch.equal(training_info.projection_types, cam_types.to(self.device)))
-        self.assertTrue(
-            torch.allclose(training_info.projection_parameters, proj_params.to(self.device).view(num_cams, -1))
-        )
+        assert isinstance(training_info["normalization_transform"], torch.Tensor)
+        assert isinstance(training_info["camera_to_world_matrices"], torch.Tensor)
+        assert isinstance(training_info["projection_types"], torch.Tensor)
+        assert isinstance(training_info["projection_parameters"], torch.Tensor)
+        self.assertTrue(torch.allclose(training_info["normalization_transform"], normalization_tx.to(self.device)))
+        self.assertTrue(torch.allclose(training_info["camera_to_world_matrices"], cam_to_worlds.to(self.device)))
+        self.assertTrue(torch.equal(training_info["projection_types"], cam_types.to(self.device)))
+        self.assertTrue(torch.allclose(training_info["projection_parameters"], proj_params.to(self.device)))
+        self.assertEqual(training_info["float_param"], 0.121243243523524650345740953)
+        self.assertEqual(training_info["int_param"], 8198767135)
+        self.assertEqual(training_info["string_parameter"], "The Quick brown fox jumps over the lazy dog")
+
+    def test_save_ply_only_string_keys(self):
+        tf = tempfile.NamedTemporaryFile(delete=True, suffix=".ply")
+
+        metadata_dict = {"_a_key_key": "foo bar baz", "anotherkey": "qux quux corge"}
+        self.gs3d.save_ply(tf.name, metadata=metadata_dict)
+
+        gs, meta = GaussianSplat3d.from_ply(tf.name)
+        self.assertEqual(meta["_a_key_key"], "foo bar baz")
+        self.assertEqual(meta["anotherkey"], "qux quux corge")
+
+    def test_save_ply_only_int_keys(self):
+        tf = tempfile.NamedTemporaryFile(delete=True, suffix=".ply")
+
+        metadata_dict = {"_a_key_key": 42, "anotherkey": sys.maxsize}
+        self.gs3d.save_ply(tf.name, metadata=metadata_dict)
+
+        gs, meta = GaussianSplat3d.from_ply(tf.name)
+        self.assertEqual(meta["_a_key_key"], 42)
+        self.assertEqual(meta["anotherkey"], sys.maxsize)
+
+    def test_save_ply_invalid_metadata_keys(self):
+        tf = tempfile.NamedTemporaryFile(delete=True, suffix=".ply")
+
+        metadata_dict = {
+            "invalid key": torch.randn(4, 4),
+        }
+        with self.assertRaises(ValueError):
+            self.gs3d.save_ply(tf.name, metadata=metadata_dict)
+
+        metadata_dict = {
+            "invalid@key": torch.randn(4, 4),
+        }
+        with self.assertRaises(ValueError):
+            self.gs3d.save_ply(tf.name, metadata=metadata_dict)
 
     def test_save_and_load_ply_with_training_info_non_contiguous(self):
         tf = tempfile.NamedTemporaryFile(delete=True, suffix=".ply")
@@ -1266,9 +1312,15 @@ class TestLoadAndSavePly(BaseGaussianTestCase):
         cam_types = torch.full((num_cams,), 8).to(torch.int32)[::2]
         proj_params = torch.randn(num_cams, 4, 5, 7)[::2]
 
-        self.gs3d.save_ply_and_training_info(
-            tf.name, normalization_tx, cam_to_worlds, cam_types, proj_params, "my version"
-        )
+        metadata_dict = {
+            "num_cams": 88,
+            "normalization_tx": normalization_tx,
+            "camera_to_world_matrices123": cam_to_worlds,
+            "projection_types": cam_types,
+            "projection_parameters": proj_params,
+            "version_string": "my version",
+        }
+        self.gs3d.save_ply(tf.name, metadata_dict)
 
         gs3d_loaded, training_info = GaussianSplat3d.from_ply(tf.name)
 
@@ -1279,15 +1331,16 @@ class TestLoadAndSavePly(BaseGaussianTestCase):
         self.assertTrue(torch.allclose(gs3d_loaded.sh0, self.gs3d.sh0))
         self.assertTrue(torch.allclose(gs3d_loaded.shN, self.gs3d.shN))
 
-        self.assertTrue(torch.allclose(training_info.normalization_transform, normalization_tx.to(self.device)))
-        self.assertTrue(torch.allclose(training_info.camera_to_world_matrices, cam_to_worlds.to(self.device)))
-        self.assertTrue(torch.equal(training_info.projection_types, cam_types.to(self.device)))
-        self.assertTrue(
-            torch.allclose(
-                training_info.projection_parameters, proj_params.to(self.device).view(proj_params.shape[0], -1)
-            )
-        )
-        self.assertEqual(training_info.version_string, "my version")
+        assert isinstance(training_info["normalization_tx"], torch.Tensor)
+        assert isinstance(training_info["camera_to_world_matrices123"], torch.Tensor)
+        assert isinstance(training_info["projection_types"], torch.Tensor)
+        assert isinstance(training_info["projection_parameters"], torch.Tensor)
+        self.assertTrue(torch.allclose(training_info["normalization_tx"], normalization_tx.to(self.device)))
+        self.assertTrue(torch.allclose(training_info["camera_to_world_matrices123"], cam_to_worlds.to(self.device)))
+        self.assertTrue(torch.equal(training_info["projection_types"], cam_types.to(self.device)))
+        self.assertTrue(torch.allclose(training_info["projection_parameters"], proj_params.to(self.device)))
+        self.assertEqual(training_info["version_string"], "my version")
+        self.assertEqual(training_info["num_cams"], 88)
 
 
 class TestGaussianRender(BaseGaussianTestCase):

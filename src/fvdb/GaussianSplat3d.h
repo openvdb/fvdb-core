@@ -22,7 +22,15 @@ namespace fvdb {
 /// optimize these quantities without clipping them to a specific range.
 class GaussianSplat3d {
   public:
+    /// Magic string prepended to additional metadata properties stored in PLY files
+    inline static const std::string PLY_MAGIC = "fvdb_ply_af_8198767135";
+
+    /// We won't allow keys in a PLY file longer than this many characters.
+    inline static const size_t MAX_PLY_KEY_LENGTH = 256;
+
     inline static const std::string PLY_VERSION_STRING = "fvdb_ply 1.0.0";
+
+    using PlyMetadataTypes = std::variant<std::string, int64_t, double, torch::Tensor>;
 
     GaussianSplat3d(const torch::Tensor &means,
                     const torch::Tensor &quats,
@@ -804,39 +812,19 @@ class GaussianSplat3d {
 
     /// @brief Save this scene and optional training metadata to a PLY file with the given filename
     /// @param filename The path to save the PLY file to
-    /// @param normalizationTransform an optional 4x4 scene normalization transform.
-    /// @param cameraToWorldMatrices An optional (C, 4, 4)-shaped tensor of training camera-to-world
-    /// transformations
-    /// @param projectionTyoes An optional (C,)-shaped integer tensor encoding the type of
-    /// projection model used for each training camera.
-    /// @param projectionParameters An optional (C, *)-shaped tensor of camera intrinsic parameters.
-    /// @param versionString An optional version string to write to this PLY in order to track what
-    /// application generated it. If none is passed in, it will default to
-    /// GaussianSplat3d::PLY_VERSION_STRING
+    /// @param metadata An optional dictionary of training metadata to include in the PLY file. The
+    /// keys are strings and the values are either strings, int64s, doubles, or tensors
     void savePly(const std::string &filename,
-                 std::optional<torch::Tensor> normalizationTransform,
-                 std::optional<torch::Tensor> cameraToWorldMatrices,
-                 std::optional<torch::Tensor> projectionTypes,
-                 std::optional<torch::Tensor> projectionParameters,
-                 std::optional<std::string> versionString) const;
+                 std::optional<std::unordered_map<std::string, PlyMetadataTypes>> metadata) const;
 
     /// @brief Load a PLY file's means, quats, scales, opacities, and SH coefficients as the state
     /// of this GaussianSplat3d object
     /// @param filename Filename of the PLY file
     /// @param device Device to transfer the loaded tensors to
-    /// @return The loaded GaussianSplat3d class, a dictionary of training metadata, and a version
-    /// string.
-    ///  The dictionary contains the keys where C = the number of training cameras and C = 0 if this
-    ///  is not present in the PLY:
-    ///   - "normalization_transform": A 4x4 normalization transform for the scene (Identity if not
-    ///   present in the PLY)
-    ///   - "camera_to_world_matrices": A (C, 4, 4)-shaped tensor of camera to world matrices.
-    ///   - "projection_types": A (C,)-shaped integer tensor defining the type of camera model used.
-    ///   The interpretation is application dependent.
-    ///   - "projection_parameters": A (C, *)-shaped tensor of camera intrinsics whose
-    ///   interpretation depends on the application (e.g. it may contain fx, fy, cx, cy for a
-    ///   pinhole camera).
-    static std::tuple<GaussianSplat3d, std::unordered_map<std::string, torch::Tensor>, std::string>
+    /// @return The loaded GaussianSplat3d class, and a dictionary of metadata (can be empty if no
+    //  metadata was saved in the PLY file). The metadata keys are strings and the values are either
+    //  strings, int64s, doubles, or tensors.
+    static std::tuple<GaussianSplat3d, std::unordered_map<std::string, PlyMetadataTypes>>
     fromPly(const std::string &filename, torch::Device device = torch::kCPU);
 
     /// @brief Render using precomputed projected Gaussians (see
