@@ -56,6 +56,7 @@ set(FVDB_CPP_FILES
     fvdb/detail/autograd/Inject.cpp
     fvdb/detail/io/LoadNanovdb.cpp
     fvdb/detail/io/SaveNanoVDB.cpp
+    fvdb/detail/io/GaussianPlyIO.cpp
     fvdb/detail/TorchDeviceBuffer.cpp)
 
 set(FVDB_CU_FILES
