@@ -57,7 +57,7 @@ class TestBasicOps(unittest.TestCase):
         expected_ijk = []
         for i in range(batch_size):
             ijk_i = grid_batch.ijk[i].jdata
-            if ijk_i.numel == 0:
+            if ijk_i.numel() == 0:
                 expected_ijk.append(ijk_i)
             else:
                 dilated_ijk_i = torch.cat(
