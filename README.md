@@ -145,6 +145,13 @@ sphinx-build -E -a docs/ build/sphinx
 open build/sphinx/index.html
 ```
 
+### Building NanoVDB Editor
+
+To be able to `import nanovdb_editor`, run build with following modifier to first build NanoVDB Editor which is located in `openvdb/nanovdb/nanovdb_editor`.
+```shell
+./build.sh install nanovdb_editor
+```
+
 ### Setting up Intellisense with clangd in Visual Studio Code
 
 Please see the guide [`Clangd for Intellisense in fVDB`](docs/markdown/clangd.md)
