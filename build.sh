@@ -12,7 +12,6 @@ usage() {
   echo "                   install    - Build and install the package (default)."
   echo "                   wheel      - Build the Python wheel."
   echo "                   ctest      - Run tests (requires tests to be built)."
-  echo "                   debug      - Build in debug mode with full debug symbols and no optimizations."
   echo ""
   echo "Options:"
   echo "  -h, --help     Display this help message and exit."
@@ -20,6 +19,8 @@ usage() {
   echo "Build Modifiers (for 'install' and 'wheel' build types, typically passed after build_type):"
   echo "  gtests         Enable building tests (sets FVDB_BUILD_TESTS=ON)."
   echo "  benchmarks     Enable building benchmarks (sets FVDB_BUILD_BENCHMARKS=ON)."
+  echo "  nanovdb_editor Enable building NanoVDB Editor."
+  echo "  debug          Build in debug mode with full debug symbols and no optimizations."
   echo "  verbose        Enable verbose build output for pip and CMake."
   echo ""
   echo "  Any modifier arguments not matching above are passed through to pip."
@@ -62,6 +63,39 @@ setup_parallel_build_jobs() {
   fi
 }
 
+build_nanovdb_editor() {
+  # TODO: change to deps folder after fvdb moves to its own repository
+  NANOVDB_EDITOR_DIR="../nanovdb/nanovdb_editor/pymodule"
+  if [ ! -d "$NANOVDB_EDITOR_DIR" ]; then
+    echo "Error: nanovdb_editor directory not found at $NANOVDB_EDITOR_DIR"
+    return 1
+  fi
+
+  if [ "$BUILD_TYPE" == "wheel" ]; then
+    TASK_NAME="Building nanovdb_editor wheel"
+    PIP_CMD="pip wheel . --wheel-dir dist/ $PIP_ARGS"
+  elif [[ "$BUILD_TYPE" == "install" || "$BUILD_TYPE" == "debug" ]]; then
+    TASK_NAME="Building and installing nanovdb_editor"
+    PIP_CMD="pip install --force-reinstall $PIP_ARGS ."
+  fi
+
+  echo $TASK_NAME
+  pushd "$NANOVDB_EDITOR_DIR" > /dev/null
+  $PIP_CMD
+  BUILD_EXIT_CODE=$?
+  popd > /dev/null
+  if [ "$BUILD_EXIT_CODE" -eq 0 ]; then
+    echo "Success: $TASK_NAME"
+    if [ "$BUILD_TYPE" = "wheel" ]; then
+      echo "Wheel file location: $NANOVDB_EDITOR_DIR/dist/"
+    fi
+  else
+    echo "Error: Failed $TASK_NAME"
+  fi
+
+  return $BUILD_EXIT_CODE
+}
+
 if [[ "$1" == "-h" || "$1" == "--help" ]]; then
   usage
 fi
@@ -84,6 +118,7 @@ fi
 
 CONFIG_SETTINGS=""
 PASS_THROUGH_ARGS=""
+BUILD_NANOVDB_EDITOR=false
 
 while (( "$#" )); do
   is_config_arg_handled=false
@@ -95,6 +130,11 @@ while (( "$#" )); do
     elif [[ "$1" == "benchmarks" ]]; then
       echo "Detected 'benchmarks' flag for $BUILD_TYPE build. Enabling FVDB_BUILD_BENCHMARKS."
       CONFIG_SETTINGS+=" --config-settings=cmake.define.FVDB_BUILD_BENCHMARKS=ON"
+      is_config_arg_handled=true
+    elif [[ "$1" == "nanovdb_editor" ]]; then
+      echo "Detected 'nanovdb_editor' flag for $BUILD_TYPE build. Enabling NanoVDB Editor build."
+      CONFIG_SETTINGS+=" --config-settings=cmake.define.NANOVDB_EDITOR_USE_GLFW=OFF"
+      BUILD_NANOVDB_EDITOR=true
       is_config_arg_handled=true
     elif [[ "$1" == "verbose" ]]; then
       echo "Enabling verbose build"
@@ -116,6 +156,16 @@ done
 
 # Construct PIP_ARGS with potential CMake args and other pass-through args
 export PIP_ARGS="--no-build-isolation$CONFIG_SETTINGS$PASS_THROUGH_ARGS"
+
+# Build and install nanovdb_editor first if requested
+if [ "$BUILD_NANOVDB_EDITOR" = true ]; then
+    build_nanovdb_editor
+    NANOVDB_EXIT_CODE=$?
+    if [ $NANOVDB_EXIT_CODE -ne 0 ]; then
+        echo "Error: Stopping build process due to nanovdb_editor build failure"
+        exit $NANOVDB_EXIT_CODE
+    fi
+fi
 
 if [ "$BUILD_TYPE" != "ctest" ]; then
     setup_parallel_build_jobs
