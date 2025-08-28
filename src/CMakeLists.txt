@@ -49,6 +49,8 @@ set(FVDB_CPP_FILES
     fvdb/detail/autograd/ReadIntoDense.cpp
     fvdb/detail/autograd/SampleGrid.cpp
     fvdb/detail/autograd/SparseConvolutionHalo.cpp
+    fvdb/detail/autograd/SparseConvolutionImplicitGEMM.cpp
+    fvdb/detail/autograd/SparseConvolutionKernelMap.cpp
     fvdb/detail/autograd/SplatIntoGrid.cpp
     fvdb/detail/autograd/TransformPoints.cpp
     fvdb/detail/autograd/UpsampleGrid.cpp
