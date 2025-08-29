@@ -502,31 +502,32 @@ dispatchSparseConvolutionHalo<torch::kPrivateUse1>(const GridBatchImpl &batchHdl
     // Launch kernels for each M x N x leaf.
     auto gridAccessor = batchHdl.deviceAccessor();
 
-    cudaMemAdvise(paddedKernel.data_ptr<float>(),
-                  paddedKernel.numel() * sizeof(float),
-                  cudaMemAdviseSetReadMostly,
-                  cudaInvalidDeviceId);
+    nanovdb::util::cuda::memAdvise(paddedKernel.data_ptr<float>(),
+                                   paddedKernel.numel() * sizeof(float),
+                                   cudaMemAdviseSetReadMostly,
+                                   cudaInvalidDeviceId);
 
-    cudaMemAdvise(inFeatures.data_ptr<float>(),
-                  inFeatures.numel() * sizeof(float),
-                  cudaMemAdviseSetReadMostly,
-                  cudaInvalidDeviceId);
+    nanovdb::util::cuda::memAdvise(inFeatures.data_ptr<float>(),
+                                   inFeatures.numel() * sizeof(float),
+                                   cudaMemAdviseSetReadMostly,
+                                   cudaInvalidDeviceId);
 
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
 
-        cudaMemPrefetchAsync(
+        nanovdb::util::cuda::memPrefetchAsync(
             paddedKernel.data_ptr<float>(), paddedKernel.numel() * sizeof(float), deviceId, stream);
 
         size_t deviceFeatureCount, deviceFeatureOffset;
         std::tie(deviceFeatureCount, deviceFeatureOffset) =
             deviceCountAndOffset(inFeatures.size(0), deviceId);
 
-        cudaMemPrefetchAsync(inFeatures.data_ptr<float>(),
-                             deviceFeatureCount * inFeatures.size(1) * sizeof(float),
-                             deviceId,
-                             stream);
+        nanovdb::util::cuda::memPrefetchAsync(inFeatures.data_ptr<float>(),
+                                              deviceFeatureCount * inFeatures.size(1) *
+                                                  sizeof(float),
+                                              deviceId,
+                                              stream);
     }
 
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
@@ -566,15 +567,15 @@ dispatchSparseConvolutionHalo<torch::kPrivateUse1>(const GridBatchImpl &batchHdl
         c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
     }
 
-    cudaMemAdvise(paddedKernel.data_ptr<float>(),
-                  paddedKernel.numel() * sizeof(float),
-                  cudaMemAdviseUnsetReadMostly,
-                  cudaInvalidDeviceId);
+    nanovdb::util::cuda::memAdvise(paddedKernel.data_ptr<float>(),
+                                   paddedKernel.numel() * sizeof(float),
+                                   cudaMemAdviseUnsetReadMostly,
+                                   cudaInvalidDeviceId);
 
-    cudaMemAdvise(inFeatures.data_ptr<float>(),
-                  inFeatures.numel() * sizeof(float),
-                  cudaMemAdviseUnsetReadMostly,
-                  cudaInvalidDeviceId);
+    nanovdb::util::cuda::memAdvise(inFeatures.data_ptr<float>(),
+                                   inFeatures.numel() * sizeof(float),
+                                   cudaMemAdviseUnsetReadMostly,
+                                   cudaInvalidDeviceId);
 
     return outFeatures;
 }
