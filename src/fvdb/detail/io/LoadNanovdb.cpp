@@ -547,7 +547,59 @@ loadOneGrid(const nanovdb::GridHandle<nanovdb::HostBuffer> &handle, uint32_t gri
 std::tuple<GridBatch, JaggedTensor, std::vector<std::string>>
 fromNVDB(nanovdb::GridHandle<nanovdb::HostBuffer> &handle,
          const std::optional<torch::Device> maybeDevice) {
-    return fromNVDB({handle}, maybeDevice);
+    // Load the grids, data, names, voxel origins, and sizes
+    std::vector<torch::Tensor> data;
+    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> grids;
+    std::vector<nanovdb::Vec3d> voxSizes, voxOrigins;
+    std::vector<std::string> names;
+    uint32_t bi                    = 0;
+    nanovdb::GridType lastGridType = nanovdb::GridType::Unknown;
+    for (size_t gridId = 0; gridId < handle.gridCount(); gridId += 1) {
+        auto gridData = loadOneGrid(handle, gridId, bi);
+        grids.push_back(std::move(std::get<0>(gridData)));
+        names.push_back(std::move(std::get<1>(gridData)));
+        data.push_back(std::move(std::get<2>(gridData)));
+        voxSizes.push_back(std::move(std::get<3>(gridData)));
+        voxOrigins.push_back(std::move(std::get<4>(gridData)));
+
+        // FVDB grid batches all share the same mutability. i.e. a grid batch consists of all
+        // ValueOnIndex (immutable) grids or all ValueOnIndexMask (mutable) grids.
+        // In all but two cases, we load a ValueOnIndex grid and a tensor of data:
+        //   1. When the user saved a mutable Tensor grid with save
+        //   2. When the user loaded a batch with a ValueOnIndexMask grid
+        // If the file the list of grids the user loaded contains a mix of ValueOnIndex and
+        // ValueOnIndexMask grids, then it's unclear what to do, so throw an exception.
+        if (bi > 0) {
+            TORCH_CHECK(
+                lastGridType == grids.back().gridData()->mGridType,
+                "All grids in a batch must have the same mutability (i.e. all ValueOnIndex or all ValueOnIndexMask).");
+        }
+        lastGridType = grids.back().gridData()->mGridType;
+
+        bi += 1;
+    }
+
+    // Merge all the loaded grids into a single handle
+    TORCH_CHECK_VALUE(grids.size() <= fvdb::GridBatch::MAX_GRIDS_PER_BATCH,
+                      "Cannot load more than ",
+                      fvdb::GridBatch::MAX_GRIDS_PER_BATCH,
+                      " grids.");
+    nanovdb::GridHandle<TorchDeviceBuffer> resCpu = nanovdb::mergeGrids(grids);
+    GridBatch ret(std::move(resCpu), voxSizes, voxOrigins);
+
+    // Merge loaded data Tensors into a JaggedTensor
+    JaggedTensor dataJagged(data);
+
+    // Transfer the grid handle to the device the user requested
+    if (maybeDevice.has_value()) {
+        torch::Device toDevice = maybeDevice.value();
+        if (toDevice != ret.device()) {
+            ret        = ret.to(toDevice);
+            dataJagged = dataJagged.to(toDevice);
+        }
+    }
+
+    return std::make_tuple(ret, dataJagged, names);
 }
 
 std::tuple<GridBatch, JaggedTensor, std::vector<std::string>>
@@ -560,9 +612,9 @@ fromNVDB(const std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> &handles,
     std::vector<std::string> names;
     uint32_t bi                    = 0;
     nanovdb::GridType lastGridType = nanovdb::GridType::Unknown;
-    for (size_t handleId = 0; handleId < handles.size(); handleId += 1) {
-        for (size_t gridId = 0; gridId < handles[handleId].gridCount(); gridId += 1) {
-            auto gridData = loadOneGrid(handles[handleId], gridId, bi);
+    for (const auto &handle: handles) {
+        for (size_t gridId = 0; gridId < handle.gridCount(); gridId += 1) {
+            auto gridData = loadOneGrid(handle, gridId, bi);
             grids.push_back(std::move(std::get<0>(gridData)));
             names.push_back(std::move(std::get<1>(gridData)));
             data.push_back(std::move(std::get<2>(gridData)));
