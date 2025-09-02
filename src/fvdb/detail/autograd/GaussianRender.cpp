@@ -38,7 +38,7 @@ ProjectGaussians::forward(ProjectGaussians::AutogradContext *ctx,
     TORCH_CHECK(worldToCamMatrices.dim() == 3, "worldToCamMatrices must have shape (C, 4, 4)");
     TORCH_CHECK(projectionMatrices.dim() == 3, "projectionMatrices must have shape (C, 3, 3)");
 
-    auto variables   = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
+    auto variables   = FVDB_DISPATCH_KERNEL(means.device(), [&]() {
         return ops::dispatchGaussianProjectionForward<DeviceTag>(means,
                                                                  quats,
                                                                  scales,

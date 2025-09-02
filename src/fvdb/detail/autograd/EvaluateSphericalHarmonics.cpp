@@ -25,7 +25,7 @@ EvaluateSphericalHarmonics::forward(
     FVDB_FUNC_RANGE_WITH_NAME("EvaluateSphericalHarmonics::forward");
     const Variable viewDirectionsValue = viewDirections.value_or(torch::Tensor());
     const Variable shNCoeffsValue      = shNCoeffs.value_or(torch::Tensor());
-    const Variable renderQuantities    = FVDB_DISPATCH_KERNEL_DEVICE(sh0Coeffs.device(), [&]() {
+    const Variable renderQuantities    = FVDB_DISPATCH_KERNEL(sh0Coeffs.device(), [&]() {
         return ops::dispatchSphericalHarmonicsForward<DeviceTag>(
             shDegreeToUse, numCameras, viewDirectionsValue, sh0Coeffs, shNCoeffsValue, radii);
     });
