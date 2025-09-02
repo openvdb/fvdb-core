@@ -18,3 +18,9 @@ popd
 pushd ../fvdb
 format_files
 popd
+
+pushd ../python
+format_files
+popd
+
+
