@@ -499,9 +499,6 @@ dispatchSparseConvolutionHalo<torch::kPrivateUse1>(const GridBatchImpl &batchHdl
     paddedKernel = paddedKernel.view({3, 3, 3, M, Di, N, Do});
     paddedKernel = paddedKernel.permute({0, 1, 2, 3, 5, 4, 6}).contiguous();
 
-    // Launch kernels for each M x N x leaf.
-    auto gridAccessor = batchHdl.deviceAccessor();
-
     nanovdb::util::cuda::memAdvise(paddedKernel.data_ptr<float>(),
                                    paddedKernel.numel() * sizeof(float),
                                    cudaMemAdviseSetReadMostly,
@@ -519,16 +516,38 @@ dispatchSparseConvolutionHalo<torch::kPrivateUse1>(const GridBatchImpl &batchHdl
         nanovdb::util::cuda::memPrefetchAsync(
             paddedKernel.data_ptr<float>(), paddedKernel.numel() * sizeof(float), deviceId, stream);
 
-        size_t deviceFeatureCount, deviceFeatureOffset;
-        std::tie(deviceFeatureCount, deviceFeatureOffset) =
-            deviceCountAndOffset(inFeatures.size(0), deviceId);
+        auto hostGridAccessor = batchHdl.hostAccessor();
+        size_t deviceNumLeaves, deviceLeafOffset;
+        std::tie(deviceNumLeaves, deviceLeafOffset) = deviceCountAndOffset(numLeaves, deviceId);
+        if (deviceNumLeaves) {
+            // Query the first and last leaf processed by each GPU. The start index of the first
+            // leaf and end index of the last leaf provides us with a very good heuristic for the
+            // memory segment of the input features (minus the halo region) that is read by each GPU
+            // in the convolution kernel.
+            const auto startLeafIdx     = deviceLeafOffset;
+            const int64_t startBatchIdx = hostGridAccessor.leafBatchIndex(startLeafIdx);
+            const int64_t startLocalLeafIdx =
+                startLeafIdx - hostGridAccessor.leafOffset(startBatchIdx);
+            const nanovdb::OnIndexGrid *startGrid = hostGridAccessor.grid(startBatchIdx);
+            const auto &startLeaf = startGrid->tree().template getFirstNode<0>()[startLocalLeafIdx];
 
-        nanovdb::util::cuda::memPrefetchAsync(inFeatures.data_ptr<float>(),
-                                              deviceFeatureCount * inFeatures.size(1) *
-                                                  sizeof(float),
-                                              deviceId,
-                                              stream);
+            const auto endLeafIdx         = deviceLeafOffset + deviceNumLeaves - 1;
+            const int64_t endBatchIdx     = hostGridAccessor.leafBatchIndex(endLeafIdx);
+            const int64_t endLocalLeafIdx = endLeafIdx - hostGridAccessor.leafOffset(endBatchIdx);
+            const nanovdb::OnIndexGrid *endGrid = hostGridAccessor.grid(endBatchIdx);
+            const auto &endLeaf = endGrid->tree().template getFirstNode<0>()[endLocalLeafIdx];
+
+            nanovdb::util::cuda::memPrefetchAsync(
+                inFeatures.data_ptr<float>() + startLeaf.firstOffset() * inFeatures.stride(0),
+                (endLeaf.firstOffset() + endLeaf.valueCount() - startLeaf.firstOffset()) *
+                    inFeatures.stride(0) * sizeof(float),
+                deviceId,
+                stream);
+        }
     }
+
+    // Launch kernels for each M x N x leaf.
+    auto deviceGridAccessor = batchHdl.deviceAccessor();
 
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
@@ -543,7 +562,7 @@ dispatchSparseConvolutionHalo<torch::kPrivateUse1>(const GridBatchImpl &batchHdl
                     N,
                     numLeaves,
                     deviceLeafOffset * M * N,
-                    gridAccessor,
+                    deviceGridAccessor,
                     inFeatures.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
                     paddedKernel.packed_accessor64<float, 7, torch::RestrictPtrTraits>(),
                     outFeatures.packed_accessor64<float, 2, torch::RestrictPtrTraits>());
@@ -553,7 +572,7 @@ dispatchSparseConvolutionHalo<torch::kPrivateUse1>(const GridBatchImpl &batchHdl
                     N,
                     numLeaves,
                     deviceLeafOffset * M * N * 32,
-                    gridAccessor,
+                    deviceGridAccessor,
                     inFeatures.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
                     paddedKernel.packed_accessor64<float, 7, torch::RestrictPtrTraits>(),
                     outFeatures.packed_accessor64<float, 2, torch::RestrictPtrTraits>());
