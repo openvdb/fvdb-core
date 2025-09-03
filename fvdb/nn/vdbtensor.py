@@ -62,7 +62,7 @@ class VDBTensor:
 
     def to_dense(self) -> torch.Tensor:
         # This would map grid.ijk.min() to dense_feature[0, 0, 0]
-        return self.grid.write_to_dense(self.data)
+        return self.grid.write_to_dense_xyzc(self.data)
 
     def clear_cache(self):
         self.kmap = None
@@ -387,5 +387,5 @@ def vdbtensor_from_dense(
         device=dense_data.device,
     )
     # Note: this would map dense_feature[0, 0, 0] to grid[ijk_min]
-    data = grid.read_from_dense(dense_data.contiguous(), dense_origins=ijk_min)
+    data = grid.read_from_dense_xyzc(dense_data.contiguous(), dense_origins=ijk_min)
     return VDBTensor(grid, data)

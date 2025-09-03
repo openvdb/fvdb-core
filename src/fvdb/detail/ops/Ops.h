@@ -133,16 +133,28 @@ void dispatchPopulateGridMetadata(const nanovdb::GridHandle<TorchDeviceBuffer> &
                                   GridBatchImpl::GridBatchMetadata *outBatchMetadataDevice);
 
 template <c10::DeviceType>
-void dispatchReadIntoDense(const GridBatchImpl &batchHdl,
-                           const torch::Tensor &inGridData,
-                           const torch::Tensor &denseOrigins,
-                           torch::Tensor &outDenseTensor);
+void dispatchReadIntoDenseXyzc(const GridBatchImpl &batchHdl,
+                               const torch::Tensor &inGridData,
+                               const torch::Tensor &denseOrigins,
+                               torch::Tensor &outDenseTensor);
 
 template <c10::DeviceType>
-void dispatchReadFromDense(const GridBatchImpl &batchHdl,
-                           const torch::Tensor &inDenseTensor,
-                           const torch::Tensor &denseOrigins,
-                           torch::Tensor &outSparseTensor);
+void dispatchReadIntoDenseCzyx(const GridBatchImpl &batchHdl,
+                               const torch::Tensor &inGridData,
+                               const torch::Tensor &denseOrigins,
+                               torch::Tensor &outDenseTensor);
+
+template <c10::DeviceType>
+void dispatchReadFromDenseXyzc(const GridBatchImpl &batchHdl,
+                               const torch::Tensor &inDenseTensor,
+                               const torch::Tensor &denseOrigins,
+                               torch::Tensor &outSparseTensor);
+
+template <c10::DeviceType>
+void dispatchReadFromDenseCzyx(const GridBatchImpl &batchHdl,
+                               const torch::Tensor &inDenseTensor,
+                               const torch::Tensor &denseOrigins,
+                               torch::Tensor &outSparseTensor);
 
 template <c10::DeviceType>
 JaggedTensor

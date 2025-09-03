@@ -19,7 +19,7 @@ RESOLUTION = 1292  # over int32_t max limit
 
 class TestAccessors(unittest.TestCase):
     @parameterized.expand(all_device_combos)
-    def test_read_from_dense(self, device):
+    def test_read_from_dense_xyzc(self, device):
         dense_origin = torch.tensor([0, 0, 0], dtype=torch.long, device=device)
         dense_grid = torch.zeros(
             (1, RESOLUTION, RESOLUTION, RESOLUTION, 1),
@@ -30,25 +30,25 @@ class TestAccessors(unittest.TestCase):
         sparse_points = torch.tensor([[0, 0, 0], [1, 1, 1]], dtype=torch.float16, device=device)
         grid_batch = GridBatch.from_points(JaggedTensor(sparse_points), voxel_sizes=0.1, origins=0.0)
 
-        read_jagged_data = grid_batch.read_from_dense(dense_grid, dense_origin)
+        read_jagged_data = grid_batch.read_from_dense_xyzc(dense_grid, dense_origin)
         self.assertIsInstance(read_jagged_data, JaggedTensor)
 
         grid = Grid.from_points(sparse_points, voxel_size=0.1, origin=0.0)
-        read_tensor_data = grid.read_from_dense(dense_grid, dense_origin)
+        read_tensor_data = grid.read_from_dense_xyzc(dense_grid, dense_origin)
         self.assertIsInstance(read_tensor_data, torch.Tensor)
 
     @parameterized.expand(all_device_combos)
-    def test_write_to_dense(self, device):
+    def test_write_to_dense_xyzc(self, device):
         dense_origin = torch.tensor([0, 0, 0]).to(torch.long).to(device)
 
         zero_points = torch.tensor([[0, 0, 0], [1, 1, 1]], dtype=torch.float16, device=device)
         grid_batch = GridBatch.from_points(JaggedTensor(zero_points), voxel_sizes=0.1, origins=0.0)
 
         sparse_data = torch.tensor([[0], [0]], dtype=torch.float16, device=device)
-        grid_batch.write_to_dense(JaggedTensor(sparse_data), dense_origin, (RESOLUTION, RESOLUTION, RESOLUTION))
+        grid_batch.write_to_dense_xyzc(JaggedTensor(sparse_data), dense_origin, (RESOLUTION, RESOLUTION, RESOLUTION))
 
         grid = Grid.from_points(zero_points, voxel_size=0.1, origin=0.0)
-        grid.write_to_dense(sparse_data, dense_origin, (RESOLUTION, RESOLUTION, RESOLUTION))
+        grid.write_to_dense_xyzc(sparse_data, dense_origin, (RESOLUTION, RESOLUTION, RESOLUTION))
 
 
 if __name__ == "__main__":
