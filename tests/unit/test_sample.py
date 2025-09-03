@@ -24,7 +24,7 @@ all_device_dtype_combos = [
 
 
 def trilinear_sample_pytorch(fvdb, p, features, is_dual: bool):
-    dual_features_grid = fvdb.write_to_dense(features).squeeze(0).permute(3, 2, 1, 0).unsqueeze(0)
+    dual_features_grid = fvdb.write_to_dense_xyzc(features).squeeze(0).permute(3, 2, 1, 0).unsqueeze(0)
     p_in = p.jdata.reshape(1, 1, 1, -1, 3)  # [1, 1, 1, N, 3]
     res = (
         torch.nn.functional.grid_sample(dual_features_grid, p_in, mode="bilinear", align_corners=is_dual)
@@ -253,13 +253,13 @@ class TestSample(unittest.TestCase):
 
         small_features = torch.rand((1, nvox, nvox, nvox), device=device, dtype=dtype)
         small_features.requires_grad = True
-        small_features_vdb = fvdb.read_from_dense(small_features.permute(3, 2, 1, 0).contiguous().unsqueeze(0))
+        small_features_vdb = fvdb.read_from_dense_xyzc(small_features.permute(3, 2, 1, 0).contiguous().unsqueeze(0))
 
         fvdb_big = fvdb.subdivided_grid(scale)
         big_pos = fvdb_big.grid_to_world(fvdb_big.ijk.type(dtype)).jdata
         self.assertEqual(big_pos.dtype, dtype)
         big_features_vdb = fvdb.sample_trilinear(JaggedTensor(big_pos), small_features_vdb).jdata
-        fv = fvdb_big.write_to_dense(JaggedTensor(big_features_vdb)).squeeze(0).permute(3, 2, 1, 0)
+        fv = fvdb_big.write_to_dense_xyzc(JaggedTensor(big_features_vdb)).squeeze(0).permute(3, 2, 1, 0)
         grad_out = torch.rand_like(fv) + 0.1
         fv.backward(grad_out)
         assert small_features.grad is not None
@@ -276,11 +276,11 @@ class TestSample(unittest.TestCase):
         self.assertTrue(
             torch.allclose(gv, gp, atol=atol, rtol=rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
         )
-        small_features_vdb = fvdb.read_from_dense(small_features.permute(3, 2, 1, 0).contiguous().unsqueeze(0))
+        small_features_vdb = fvdb.read_from_dense_xyzc(small_features.permute(3, 2, 1, 0).contiguous().unsqueeze(0))
         fvdb_big = fvdb.subdivided_grid(scale)
         big_pos = fvdb_big.grid_to_world(fvdb_big.ijk.type(dtype)).jdata
         big_features_vdb, _ = fvdb.subdivide(scale, small_features_vdb, fine_grid=fvdb_big)
-        fv = fvdb_big.write_to_dense(big_features_vdb).squeeze(0).permute(3, 2, 1, 0)
+        fv = fvdb_big.write_to_dense_xyzc(big_features_vdb).squeeze(0).permute(3, 2, 1, 0)
         fv.backward(grad_out)
         gv = small_features.grad.clone()
         small_features.grad.zero_()

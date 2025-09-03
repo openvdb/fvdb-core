@@ -677,6 +677,9 @@ JaggedTensor::jflatten(const int64_t dim) const {
 JaggedTensor
 JaggedTensor::jsum(int64_t dim, bool keepdim) const {
     const int64_t jdim = mData.dim();
+
+    // ...
+
     TORCH_CHECK_INDEX(dim >= -(jdim - 1) && dim < jdim,
                       "dim must be between ",
                       -(jdim - 1),

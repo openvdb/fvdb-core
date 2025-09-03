@@ -256,14 +256,24 @@ struct GridBatch : torch::CustomClassHolder {
               std::optional<GridBatch> fine_grid     = std::nullopt) const;
 
     /// @brief Read the values from a dense tensor of the voxels at the specified coordinates
-    /// @param dense_data A dense tensor of shape [B, W, H, D, *]
+    /// @param dense_data A dense tensor of shape [B, X, Y, Z, C*]
     /// @param dense_origins A tensor of shape [B, 3] or [3,] specifying the voxel coordinate(s) of
     /// the origin of the dense tensor i.e. [:, 0, 0, 0]
     /// @return A JaggedTensor with shape [B, -1, *] containing the values at the specified
     /// coordinates
     JaggedTensor
-    read_from_dense(const torch::Tensor &dense_data,
-                    const Vec3iBatch &dense_origins = torch::zeros(3, torch::kInt32)) const;
+    read_from_dense_xyzc(const torch::Tensor &dense_data,
+                         const Vec3iBatch &dense_origins = torch::zeros(3, torch::kInt32)) const;
+
+    /// @brief Read the values from a dense tensor of the voxels at the specified coordinates
+    /// @param dense_data A dense tensor of shape [B, C*, X, Y, Z]
+    /// @param dense_origins A tensor of shape [B, 3] or [3,] specifying the voxel coordinate(s) of
+    /// the origin of the dense tensor i.e. [:, 0, 0, 0]
+    /// @return A JaggedTensor with shape [B, -1, *] containing the values at the specified
+    /// coordinates
+    JaggedTensor
+    read_from_dense_czyx(const torch::Tensor &dense_data,
+                         const Vec3iBatch &dense_origins = torch::zeros(3, torch::kInt32)) const;
 
     /// @brief Read the values from a JaggedTensor indexed by this batch into a dense tensor
     /// @param sparse_data A JaggedTensor of shape [B, -1, *] containing one value per voxel in the
@@ -273,11 +283,25 @@ struct GridBatch : torch::CustomClassHolder {
     ///                  Defaults to the minimum coordinate of the batch.
     /// @param grid_size An optional grid size to read from the batch (in voxel coordinates).
     ///                  Defaults to the total size of a grid containing the whole batch.
-    /// @return A dense tensor of shape [B, W, H, D, *] containing the values at the specified
+    /// @return A dense tensor of shape [B, X, Y, Z, C*] containing the values at the specified
     /// coordinates (and zero elsewhere)
-    torch::Tensor write_to_dense(const JaggedTensor &sparse_data,
-                                 const std::optional<Vec3iBatch> &min_coord = std::nullopt,
-                                 const std::optional<Vec3i> &grid_size      = std::nullopt) const;
+    torch::Tensor write_to_dense_xyzc(const JaggedTensor &sparse_data,
+                                      const std::optional<Vec3iBatch> &min_coord = std::nullopt,
+                                      const std::optional<Vec3i> &grid_size = std::nullopt) const;
+
+    /// @brief Read the values from a JaggedTensor indexed by this batch into a dense tensor
+    /// @param sparse_data A JaggedTensor of shape [B, -1, *] containing one value per voxel in the
+    /// batch
+    /// @param min_coord An optional minimum coordinate to read from the batch (in voxel
+    /// coordinates).
+    ///                  Defaults to the minimum coordinate of the batch.
+    /// @param grid_size An optional grid size to read from the batch (in voxel coordinates).
+    ///                  Defaults to the total size of a grid containing the whole batch.
+    /// @return A dense tensor of shape [B, C*, X, Y, Z] containing the values at the specified
+    /// coordinates (and zero elsewhere)
+    torch::Tensor write_to_dense_czyx(const JaggedTensor &sparse_data,
+                                      const std::optional<Vec3iBatch> &min_coord = std::nullopt,
+                                      const std::optional<Vec3i> &grid_size = std::nullopt) const;
 
     /// @brief Convert grid coordinates to world coordinates
     /// @param ijk A JaggedTensor of grid coordinates with shape [B, -1, 3] (one point set per grid

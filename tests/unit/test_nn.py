@@ -10,6 +10,7 @@ from typing import List, NamedTuple
 
 import fvdb.nn as fvnn
 import torch
+import torch.distributed
 import torch.nn as nn
 from fvdb.utils.tests import expand_tests
 from parameterized import parameterized

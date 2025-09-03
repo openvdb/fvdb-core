@@ -13,7 +13,20 @@ namespace fvdb {
 namespace detail {
 namespace autograd {
 
-struct ReadFromDense : public torch::autograd::Function<ReadFromDense> {
+struct ReadFromDenseXyzc : public torch::autograd::Function<ReadFromDenseXyzc> {
+    using variable_list   = torch::autograd::variable_list;
+    using AutogradContext = torch::autograd::AutogradContext;
+    using Variable        = torch::autograd::Variable;
+
+    static variable_list forward(AutogradContext *ctx,
+                                 c10::intrusive_ptr<GridBatchImpl> grid,
+                                 Variable denseData,
+                                 const Vec3iBatch &denseOrigins);
+
+    static variable_list backward(AutogradContext *ctx, variable_list grad_output);
+};
+
+struct ReadFromDenseCzyx : public torch::autograd::Function<ReadFromDenseCzyx> {
     using variable_list   = torch::autograd::variable_list;
     using AutogradContext = torch::autograd::AutogradContext;
     using Variable        = torch::autograd::Variable;

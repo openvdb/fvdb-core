@@ -315,11 +315,11 @@ class SparseConv3d(nn.Module):
             assert out_grid is None or in_grid.is_same(out_grid)
             min_coord = in_grid.ijk.jdata.min(axis=0).values
             # BWHDC -> BCDHW
-            dense_feature = in_grid.write_to_dense(in_feature, min_coord=min_coord).permute(0, 4, 3, 2, 1)
+            dense_feature = in_grid.write_to_dense_czyx(in_feature, min_coord=min_coord)
             dense_feature = torch.nn.functional.conv3d(dense_feature, self.weight, padding=1, stride=1)
             # BCDHW -> BWHDC
-            dense_feature = dense_feature.permute(0, 4, 3, 2, 1).contiguous()
-            dense_feature = in_grid.read_from_dense(dense_feature, dense_origins=min_coord)
+            dense_feature = dense_feature.contiguous()
+            dense_feature = in_grid.read_from_dense_czyx(dense_feature, dense_origins=min_coord)
 
             return in_grid, dense_feature, None
 

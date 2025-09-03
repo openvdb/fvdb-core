@@ -150,6 +150,61 @@ featureCoalescedView(const torch::Tensor &inTensor, int64_t ndim = 1) {
     return outTensor;
 }
 
+/// @brief Return a view of the input tensor with dimensions between the first `ndim` and the last
+///        `trailingdim` dimensions coalesced into a single middle dimension. The leading `ndim`
+///        and trailing `trailingdim` dimensions are preserved.
+///        For example, if inTensor has shape [A, B, C, D, E, F, G], ndim=1 and trailingdim=3,
+///        the output shape is [A, (B*C*D), E, F, G].
+///        When there are no middle dimensions to coalesce (i.e. ndim + trailingdim ==
+///        inTensor.dim()), the shape is unchanged.
+/// @param inTensor The tensor to reshape as a view
+/// @param ndim The number of leading dimensions to preserve (may be 0)
+/// @param trailingdim The number of trailing dimensions to preserve (may be 0)
+/// @return A view of the input tensor with the middle block coalesced into a single dimension
+inline torch::Tensor
+featureCoalescedViewTrailing(const torch::Tensor &inTensor,
+                             int64_t ndim        = 1,
+                             int64_t trailingdim = 0) {
+    TORCH_CHECK(ndim >= 0, "ndim must be non-negative");
+    TORCH_CHECK(trailingdim >= 0, "trailingdim must be non-negative");
+    TORCH_CHECK(ndim + trailingdim <= inTensor.dim(),
+                "ndim + trailingdim must be <= inTensor.dim()");
+
+    const int64_t totalDims       = inTensor.dim();
+    const int64_t midStart        = ndim;
+    const int64_t midEndExclusive = totalDims - trailingdim; // may equal midStart
+    const int64_t midCount        = midEndExclusive - midStart;
+
+    // Fast path: nothing to coalesce
+    if (midCount == 0 || midCount == 1) {
+        return inTensor;
+    }
+
+    std::vector<int64_t> outSize;
+    outSize.reserve(ndim + 1 + trailingdim);
+
+    // Preserve leading dimensions
+    for (int64_t i = 0; i < ndim; ++i) {
+        outSize.push_back(inTensor.size(i));
+    }
+
+    // Coalesce middle dimensions into one
+    int64_t middleProduct = 1;
+    for (int64_t i = midStart; i < midEndExclusive; ++i) {
+        middleProduct *= inTensor.size(i);
+    }
+    outSize.push_back(middleProduct);
+
+    // Preserve trailing dimensions
+    for (int64_t i = midEndExclusive; i < totalDims; ++i) {
+        outSize.push_back(inTensor.size(i));
+    }
+
+    torch::Tensor outTensor = inTensor.view(outSize);
+    TORCH_CHECK(inTensor.storage().is_alias_of(outTensor.storage()), "output should be a view!");
+    return outTensor;
+}
+
 /// @brief Convert a tensor of shape [B, 3] or [3] representing a batch of coordinates or a single
 /// coordinate into a
 ///        tensor of shape [B, 3] (if the input has shape [B, 3], this is a no-op)
