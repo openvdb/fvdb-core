@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/DownsampleGridMaxPool.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
@@ -122,7 +123,7 @@ maxPoolBackardVoxelCallback(int32_t batchIdx,
     }
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 torch::Tensor
 DownsampleGridMaxPool(const GridBatchImpl &fineBatchHdl,
                       const GridBatchImpl &coarseBatchHdl,
@@ -226,7 +227,7 @@ DownsampleGridMaxPool(const GridBatchImpl &fineBatchHdl,
     return outCoarseData;
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 torch::Tensor
 DownsampleGridMaxPoolBackward(const GridBatchImpl &coarseBatchHdl,
                               const GridBatchImpl &fineBatchHdl,
@@ -322,7 +323,7 @@ DownsampleGridMaxPoolBackward(const GridBatchImpl &coarseBatchHdl,
     return outGradInReshape.reshape(spliceShape({fineData.size(0)}, coarseGradOut));
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 torch::Tensor
 dispatchDownsampleGridMaxPool<DeviceTag>(const GridBatchImpl &fineBatchHdl,
                                          const GridBatchImpl &coarseBatchHdl,
@@ -333,7 +334,7 @@ dispatchDownsampleGridMaxPool<DeviceTag>(const GridBatchImpl &fineBatchHdl,
         fineBatchHdl, coarseBatchHdl, fineData, poolingFactor, stride);
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 torch::Tensor
 dispatchDownsampleGridMaxPoolBackward<DeviceTag>(const GridBatchImpl &coarseBatchHdl,
                                                  const GridBatchImpl &fineBatchHdl,

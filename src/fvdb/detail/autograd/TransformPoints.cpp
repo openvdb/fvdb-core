@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/autograd/TransformPoints.h>
-#include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/TransformPointToGrid.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>

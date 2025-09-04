@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/GridBatchImpl.h>
-#include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/JIdxForGrid.h>
+#include <fvdb/detail/ops/JIdxForJOffsets.h>
 
 #include <c10/cuda/CUDAException.h>
 

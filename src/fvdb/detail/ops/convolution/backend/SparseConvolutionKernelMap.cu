@@ -1,10 +1,12 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/ops/Ops.h>
-#include <fvdb/detail/ops/convolution/backend/ConvOps.h>
+#include <fvdb/detail/ops/convolution/backend/ConvPragmaMessage.h>
+#include <fvdb/detail/ops/convolution/backend/SparseConvolutionKernelMap.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
+#include <ATen/Dispatch_v2.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/extension.h>
@@ -113,11 +115,11 @@ gatherCpu(const int n_k,
 //                      holding w[0,0].
 template <>
 void
-dispatchSparseConvolutionKernelMap<torch::kCUDA>(at::Tensor in_feat,
-                                                 at::Tensor out_feat,
-                                                 at::Tensor kernel,
-                                                 at::Tensor neighbor_map,
-                                                 at::Tensor neighbor_offset,
+dispatchSparseConvolutionKernelMap<torch::kCUDA>(torch::Tensor in_feat,
+                                                 torch::Tensor out_feat,
+                                                 torch::Tensor kernel,
+                                                 torch::Tensor neighbor_map,
+                                                 torch::Tensor neighbor_offset,
                                                  const bool transpose,
                                                  const bool middleAcceleration) {
     TORCH_CHECK(in_feat.device().is_cuda(), "in_feat must be a CUDA tensor");
@@ -199,8 +201,8 @@ dispatchSparseConvolutionKernelMap<torch::kCUDA>(at::Tensor in_feat,
         // for i = n_active_feats (# of features in the activated kernel from
         // neighbor_offset) out_buffer_activated (i, o) holds the dense output
         // features to scatter
-        at::Tensor out_buffer_activated;
-        at::Tensor in_buffer_activated;
+        torch::Tensor out_buffer_activated;
+        torch::Tensor in_buffer_activated;
         if (is_half) {
             out_buffer_activated = torch::from_blob(
                 out_buffer.data_ptr<at::Half>(), {n_active_feats, n_out_channels}, options);
@@ -260,13 +262,13 @@ dispatchSparseConvolutionKernelMap<torch::kCUDA>(at::Tensor in_feat,
 
 template <>
 void
-dispatchSparseConvolutionKernelMapGrad<torch::kCUDA>(at::Tensor in_feat,
-                                                     at::Tensor grad_in_feat,
-                                                     at::Tensor grad_out_feat,
-                                                     at::Tensor kernel,
-                                                     at::Tensor grad_kernel,
-                                                     at::Tensor neighbor_map,
-                                                     at::Tensor neighbor_offset,
+dispatchSparseConvolutionKernelMapGrad<torch::kCUDA>(torch::Tensor in_feat,
+                                                     torch::Tensor grad_in_feat,
+                                                     torch::Tensor grad_out_feat,
+                                                     torch::Tensor kernel,
+                                                     torch::Tensor grad_kernel,
+                                                     torch::Tensor neighbor_map,
+                                                     torch::Tensor neighbor_offset,
                                                      const bool transpose) {
     TORCH_CHECK(in_feat.device().is_cuda(), "in_feat must be a CUDA tensor");
     TORCH_CHECK(in_feat.device().has_index(), "in_feat must have a device index");
@@ -320,9 +322,9 @@ dispatchSparseConvolutionKernelMapGrad<torch::kCUDA>(at::Tensor in_feat,
         }
 
         // Can't figure out a cleaner way to do this
-        at::Tensor out_grad_buffer_activated;
-        at::Tensor in_grad_buffer_activated;
-        at::Tensor in_buffer_activated;
+        torch::Tensor out_grad_buffer_activated;
+        torch::Tensor in_grad_buffer_activated;
+        torch::Tensor in_buffer_activated;
         if (is_half) {
             out_grad_buffer_activated = torch::from_blob(
                 out_grad_buffer.data_ptr<at::Half>(), {n_active_feats, kernel.size(2)}, options);
@@ -508,13 +510,13 @@ dispatchSparseConvolutionKernelMap<torch::kCPU>(torch::Tensor in_feat,
 
 template <>
 void
-dispatchSparseConvolutionKernelMapGrad<torch::kCPU>(at::Tensor in_feat,
-                                                    at::Tensor grad_in_feat,
-                                                    at::Tensor grad_out_feat,
-                                                    at::Tensor kernel,
-                                                    at::Tensor grad_kernel,
-                                                    at::Tensor neighbor_map,
-                                                    at::Tensor neighbor_offset,
+dispatchSparseConvolutionKernelMapGrad<torch::kCPU>(torch::Tensor in_feat,
+                                                    torch::Tensor grad_in_feat,
+                                                    torch::Tensor grad_out_feat,
+                                                    torch::Tensor kernel,
+                                                    torch::Tensor grad_kernel,
+                                                    torch::Tensor neighbor_map,
+                                                    torch::Tensor neighbor_offset,
                                                     bool transpose) {
     grad_in_feat.resize_as_(in_feat);
     grad_in_feat.zero_();

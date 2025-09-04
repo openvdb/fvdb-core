@@ -1,13 +1,14 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/ops/jagged/JaggedOps.h>
+#include <fvdb/detail/ops/jagged/JaggedReduce.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/cuda/Atomics.cuh>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <c10/cuda/CUDAException.h>
+#include <torch/extension.h>
 
 namespace fvdb {
 namespace detail {
@@ -84,7 +85,7 @@ jaggedReduceDeviceCallback(int32_t tidx,
 template <typename scalar_t,
           template <typename T, int32_t D>
           typename TensorAccessor,
-          c10::DeviceType DeviceTag>
+          torch::DeviceType DeviceTag>
 __hostdev__ void
 jaggedArgReduceCallback(int32_t tidx,
                         int32_t eidx,
@@ -106,7 +107,7 @@ jaggedArgReduceCallback(int32_t tidx,
     }
 }
 
-template <c10::DeviceType DeviceTag, ReductionType REDUCE>
+template <torch::DeviceType DeviceTag, ReductionType REDUCE>
 std::tuple<torch::Tensor, std::optional<torch::Tensor>>
 JaggedReduce(const torch::Tensor &jdataRaw,
              const torch::Tensor &jidx,

@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/io/GaussianPlyIO.h>
-#include <fvdb/detail/ops/Ops.h>
+
+// Ops headers
+#include <fvdb/detail/ops/gsplat/GaussianComputeNanInfMask.h>
+
+// Utils headers
+#include <fvdb/detail/utils/Utils.h>
 
 #include <c10/core/ScalarType.h>
 #include <c10/util/flat_hash_map.h>

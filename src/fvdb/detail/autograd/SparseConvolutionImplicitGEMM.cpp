@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/autograd/SparseConvolutionImplicitGEMM.h>
-#include <fvdb/detail/ops/convolution/backend/ConvOps.h>
+#include <fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMM.h>
+#include <fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMMGrad.h>
+#include <fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMMGradSorted.h>
+#include <fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMMSorted.h>
+
+#include <torch/extension.h>
 
 namespace fvdb {
 namespace detail {

@@ -2,8 +2,25 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/GridBatchImpl.h>
-#include <fvdb/detail/ops/Ops.h>
 #include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
+
+// Ops headers for dispatch functions
+#include <fvdb/detail/ops/ActiveGridGoords.h>
+#include <fvdb/detail/ops/ActiveVoxelsInBoundsMask.h>
+#include <fvdb/detail/ops/BuildCoarseGridFromFine.h>
+#include <fvdb/detail/ops/BuildDenseGrid.h>
+#include <fvdb/detail/ops/BuildDilatedGrid.h>
+#include <fvdb/detail/ops/BuildFineGridFromCoarse.h>
+#include <fvdb/detail/ops/BuildGridForConv.h>
+#include <fvdb/detail/ops/BuildGridFromIjk.h>
+#include <fvdb/detail/ops/BuildGridFromMesh.h>
+#include <fvdb/detail/ops/BuildGridFromNearestVoxelsToPoints.h>
+#include <fvdb/detail/ops/BuildGridFromPoints.h>
+#include <fvdb/detail/ops/BuildMergedGrids.h>
+#include <fvdb/detail/ops/BuildPaddedGrid.h>
+#include <fvdb/detail/ops/BuildPrunedGrid.h>
+#include <fvdb/detail/ops/JIdxForGrid.h>
+#include <fvdb/detail/ops/PopulateGridMetadata.h>
 
 #include <nanovdb/cuda/GridHandle.cuh>
 #include <nanovdb/tools/CreateNanoGrid.h>

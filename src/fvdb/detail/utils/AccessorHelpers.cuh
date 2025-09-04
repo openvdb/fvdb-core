@@ -6,9 +6,12 @@
 
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchImpl.h>
-#include <fvdb/detail/ops/Ops.h>
 
 #include <nanovdb/NanoVDB.h>
+
+#include <torch/types.h>
+
+#include <cstdint>
 
 namespace fvdb {
 

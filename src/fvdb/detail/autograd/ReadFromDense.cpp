@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/autograd/ReadFromDense.h>
-#include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/ReadFromDense.h>
+#include <fvdb/detail/ops/ReadIntoDense.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>

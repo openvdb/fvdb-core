@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/VoxelNeighborhood.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/TrilinearInterpolationIterator.h>
@@ -43,7 +44,7 @@ voxelNeighborhoodCallback(int32_t bidx,
     }
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 JaggedTensor
 VoxelNeighborhood(const GridBatchImpl &batchHdl,
                   const JaggedTensor &ijk,

@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/SplatIntoGridTrilinear.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/TrilinearInterpolationIterator.h>
@@ -14,7 +15,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <c10::DeviceType DeviceTag,
+template <torch::DeviceType DeviceTag,
           typename ScalarType,
           template <typename T, int32_t D>
           typename JaggedAccessor,
@@ -58,7 +59,7 @@ splatIntoGridTrilinearCallback(int32_t bidx,
     }
 }
 
-template <c10::DeviceType DeviceTag, typename scalar_t>
+template <torch::DeviceType DeviceTag, typename scalar_t>
 torch::Tensor
 SplatIntoGridTrilinear(const GridBatchImpl &batchHdl,
                        const JaggedTensor &points,
@@ -111,7 +112,7 @@ SplatIntoGridTrilinear(const GridBatchImpl &batchHdl,
     return outGridData;
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 torch::Tensor
 dispatchSplatIntoGridTrilinear<DeviceTag>(const GridBatchImpl &batchHdl,
                                           const JaggedTensor &points,

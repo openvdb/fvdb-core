@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/PointsInGrid.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
@@ -36,7 +37,7 @@ pointsInGridCallback(int32_t bidx,
     outMask[eidx]       = isActive;
 }
 
-template <c10::DeviceType DeviceTag, typename scalar_t>
+template <torch::DeviceType DeviceTag, typename scalar_t>
 JaggedTensor
 PointsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points) {
     auto opts             = torch::TensorOptions().dtype(torch::kBool).device(points.device());
@@ -69,7 +70,7 @@ PointsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points) {
     return points.jagged_like(outMask);
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 JaggedTensor
 dispatchPointsInGrid<DeviceTag>(const GridBatchImpl &batchHdl, const JaggedTensor &points) {
     batchHdl.checkNonEmptyGrid();

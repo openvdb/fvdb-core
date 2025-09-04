@@ -3,11 +3,42 @@
 //
 #include <fvdb/GridBatch.h>
 #include <fvdb/detail/GridBatchImpl.h>
-#include <fvdb/detail/autograd/Autograd.h>
-#include <fvdb/detail/io/IO.h>
-#include <fvdb/detail/ops/Ops.h>
-#include <fvdb/detail/ops/convolution/pack_info/PackInfoOps.h>
+#include <fvdb/detail/io/LoadNanovdb.h>
+#include <fvdb/detail/io/SaveNanoVDB.h>
+
+// Autograd headers
+#include <fvdb/detail/autograd/AvgPoolGrid.h>
+#include <fvdb/detail/autograd/Inject.h>
+#include <fvdb/detail/autograd/MaxPoolGrid.h>
+#include <fvdb/detail/autograd/ReadFromDense.h>
+#include <fvdb/detail/autograd/ReadIntoDense.h>
+#include <fvdb/detail/autograd/SampleGrid.h>
+#include <fvdb/detail/autograd/SparseConvolutionHalo.h>
+#include <fvdb/detail/autograd/SplatIntoGrid.h>
+#include <fvdb/detail/autograd/TransformPoints.h>
+#include <fvdb/detail/autograd/UpsampleGrid.h>
+
+// Ops headers
+#include <fvdb/detail/ops/ActiveGridGoords.h>
+#include <fvdb/detail/ops/CoordsInGrid.h>
+#include <fvdb/detail/ops/CubesInGrid.h>
+#include <fvdb/detail/ops/GridEdgeNetwork.h>
+#include <fvdb/detail/ops/IjkToIndex.h>
+#include <fvdb/detail/ops/IjkToInvIndex.h>
+#include <fvdb/detail/ops/IntegrateTSDF.h>
+#include <fvdb/detail/ops/MarchingCubes.h>
+#include <fvdb/detail/ops/PointsInGrid.h>
+#include <fvdb/detail/ops/RayImplicitIntersection.h>
+#include <fvdb/detail/ops/SampleRaysUniform.h>
+#include <fvdb/detail/ops/SegmentsAlongRays.h>
+#include <fvdb/detail/ops/VoxelNeighborhood.h>
+#include <fvdb/detail/ops/VoxelsAlongRays.h>
+#include <fvdb/detail/ops/convolution/pack_info/BrickHaloBuffer.h>
+#include <fvdb/detail/ops/convolution/pack_info/ConvolutionKernelMap.h>
+#include <fvdb/detail/ops/convolution/pack_info/IGEMMBitOperations.h>
 #include <fvdb/detail/utils/Utils.h>
+
+#include <torch/extension.h>
 
 namespace fvdb {
 

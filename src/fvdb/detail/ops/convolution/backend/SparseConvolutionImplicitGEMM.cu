@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/ops/Ops.h>
-#include <fvdb/detail/ops/convolution/backend/ConvOps.h>
+#include <fvdb/detail/ops/convolution/backend/ConvPragmaMessage.h>
+#include <fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMM.h>
 
 #include <torch/extension.h>
 
@@ -2764,7 +2764,7 @@ dispatchSparseConvolutionImplicitGEMM<torch::kCUDA>(torch::Tensor _in_feats,
     int kernel_volume   = _out_in_map.size(1);
 
     auto options = torch::TensorOptions().dtype(_in_feats.dtype()).device(_in_feats.device());
-    at::Tensor _out_feats = torch::empty({num_out_feats, num_out_channels}, options);
+    torch::Tensor _out_feats = torch::empty({num_out_feats, num_out_channels}, options);
 
     auto out_in_map  = _out_in_map.data_ptr<int>();
     bool is_half     = _in_feats.scalar_type() == at::ScalarType::Half;

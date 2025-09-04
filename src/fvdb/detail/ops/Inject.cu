@@ -4,7 +4,7 @@
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchImpl.h>
 #include <fvdb/detail/TorchDeviceBuffer.h>
-#include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/Inject.h>
 #include <fvdb/detail/utils/nanovdb/ActiveVoxelIterator.h>
 
 #include <nanovdb/NanoVDB.h>

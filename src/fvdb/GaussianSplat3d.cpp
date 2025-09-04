@@ -2,11 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/GaussianSplat3d.h>
-#include <fvdb/detail/autograd/Autograd.h>
 #include <fvdb/detail/io/GaussianPlyIO.h>
-#include <fvdb/detail/ops/Ops.h>
-#include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
 #include <fvdb/detail/utils/Nvtx.h>
+
+// Autograd headers
+#include <fvdb/detail/autograd/EvaluateSphericalHarmonics.h>
+#include <fvdb/detail/autograd/GaussianRender.h>
+
+// Ops headers
+#include <fvdb/detail/ops/gsplat/GaussianRasterizeNumContributingGaussians.h>
+#include <fvdb/detail/ops/gsplat/GaussianRasterizeTopContributingGaussianIds.h>
+#include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
+#include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
+#include <fvdb/detail/ops/gsplat/GaussianTileIntersection.h>
 
 #include <ATen/core/TensorBody.h>
 #include <ATen/core/grad_mode.h>

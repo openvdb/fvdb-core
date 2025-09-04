@@ -1,11 +1,11 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/ops/convolution/pack_info/PackInfoOps.h>
+#include <fvdb/detail/ops/convolution/pack_info/IGEMMBitOperations.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 
 #include <c10/cuda/CUDAException.h>
-#include <torch/torch.h>
+#include <torch/extension.h>
 
 namespace fvdb {
 namespace detail {

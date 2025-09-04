@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/GridEdgeNetwork.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
@@ -87,7 +88,7 @@ gridEdgeNetworkCallback(int64_t batchIdx,
     }
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 std::vector<JaggedTensor>
 GridEdgeNetwork(const GridBatchImpl &batchHdl, bool returnVoxelCoordinates) {
     batchHdl.checkNonEmptyGrid();

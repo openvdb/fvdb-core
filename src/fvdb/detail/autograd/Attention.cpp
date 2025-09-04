@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/autograd/Attention.h>
-#include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/ScaledDotProductAttention.h>
 #include <fvdb/detail/utils/Utils.h>
 
 namespace fvdb {

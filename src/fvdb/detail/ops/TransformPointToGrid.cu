@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/TransformPointToGrid.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
@@ -98,7 +99,7 @@ invTransformPointsToGridBackwardCallback(int32_t bidx,
     outGradIn[eidx][2] = wci[2] * gradOutI[2];
 }
 
-template <c10::DeviceType DeviceTag, typename scalar_t>
+template <torch::DeviceType DeviceTag, typename scalar_t>
 torch::Tensor
 TransformPointsToGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points, bool isPrimal) {
     batchHdl.checkDevice(points);
@@ -137,7 +138,7 @@ TransformPointsToGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points,
     return outCoords;
 }
 
-template <c10::DeviceType DeviceTag, typename scalar_t>
+template <torch::DeviceType DeviceTag, typename scalar_t>
 torch::Tensor
 InvTransformPointsToGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points, bool isPrimal) {
     batchHdl.checkDevice(points);
@@ -176,7 +177,7 @@ InvTransformPointsToGrid(const GridBatchImpl &batchHdl, const JaggedTensor &poin
     return outCoords;
 }
 
-template <c10::DeviceType DeviceTag, typename scalar_t>
+template <torch::DeviceType DeviceTag, typename scalar_t>
 torch::Tensor
 TransformPointsToGridBackward(const GridBatchImpl &batchHdl,
                               const JaggedTensor &gradOut,
@@ -210,7 +211,7 @@ TransformPointsToGridBackward(const GridBatchImpl &batchHdl,
     return outGradIn;
 }
 
-template <c10::DeviceType DeviceTag, typename scalar_t>
+template <torch::DeviceType DeviceTag, typename scalar_t>
 torch::Tensor
 InvTransformPointsToGridBackward(const GridBatchImpl &batchHdl,
                                  const JaggedTensor &gradOut,
@@ -244,7 +245,7 @@ InvTransformPointsToGridBackward(const GridBatchImpl &batchHdl,
     return outGradIn;
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 torch::Tensor
 dispatchTransformPointsToGrid<DeviceTag>(const GridBatchImpl &batchHdl,
                                          const JaggedTensor &points,
@@ -259,7 +260,7 @@ dispatchTransformPointsToGrid<DeviceTag>(const GridBatchImpl &batchHdl,
                           c10::kHalf);
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 torch::Tensor
 dispatchInvTransformPointsToGrid<DeviceTag>(const GridBatchImpl &batchHdl,
                                             const JaggedTensor &points,
@@ -274,7 +275,7 @@ dispatchInvTransformPointsToGrid<DeviceTag>(const GridBatchImpl &batchHdl,
                           c10::kHalf);
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 torch::Tensor
 dispatchTransformPointsToGridBackward<DeviceTag>(const GridBatchImpl &batchHdl,
                                                  const JaggedTensor &gradOut,
@@ -289,7 +290,7 @@ dispatchTransformPointsToGridBackward<DeviceTag>(const GridBatchImpl &batchHdl,
                           c10::kHalf);
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 torch::Tensor
 dispatchInvTransformPointsToGridBackward<DeviceTag>(const GridBatchImpl &batchHdl,
                                                     const JaggedTensor &gradOut,

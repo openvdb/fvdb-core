@@ -1,15 +1,12 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef FVDB_DETAIL_AUTOGRAD_FILLFROMGRID_H
-#define FVDB_DETAIL_AUTOGRAD_FILLFROMGRID_H
 
-#include "fvdb/JaggedTensor.h"
-
+#include <fvdb/JaggedTensor.h>
 #include <fvdb/Types.h>
 #include <fvdb/detail/GridBatchImpl.h>
 #include <fvdb/detail/autograd/Inject.h>
-#include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/Inject.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>
@@ -135,5 +132,3 @@ Inject::backward(AutogradContext *ctx, Inject::variable_list grad_output) {
 }
 
 } // namespace fvdb::detail::autograd
-
-#endif // FVDB_DETAIL_AUTOGRAD_FILLFROMGRID_H

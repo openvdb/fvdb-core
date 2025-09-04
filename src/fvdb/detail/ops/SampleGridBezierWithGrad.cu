@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/SampleGridBezierWithGrad.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/BezierInterpolationWithGradIterator.h>
 #include <fvdb/detail/utils/ForEachCPU.h>
@@ -60,7 +61,7 @@ sampleBezierWithGradCallback(int32_t bidx,
     }
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 std::vector<torch::Tensor>
 SampleGridBezierWithGrad(const GridBatchImpl &batchHdl,
                          const JaggedTensor &points,

@@ -1,9 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-
 #include <fvdb/detail/TorchDeviceBuffer.h>
-#include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/BuildDilatedGrid.h>
 
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
@@ -12,6 +11,7 @@
 #include <nanovdb/util/MorphologyHelpers.h>
 
 #include <c10/cuda/CUDAGuard.h>
+#include <torch/extension.h>
 
 namespace fvdb::detail::ops {
 

@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/autograd/GaussianRender.h>
-#include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionBackward.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedBackward.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianRasterizeBackward.h>
+#include <fvdb/detail/ops/gsplat/GaussianRasterizeForward.h>
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
 

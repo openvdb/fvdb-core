@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/MarchingCubes.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/MarchingCubesData.h>
@@ -223,7 +224,7 @@ meshingCubeCallback(int32_t batchIdx,
     }
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 std::vector<JaggedTensor>
 MarchingCubes(const GridBatchImpl &batchHdl, const torch::Tensor &sdf, double level) {
     batchHdl.checkDevice(sdf);

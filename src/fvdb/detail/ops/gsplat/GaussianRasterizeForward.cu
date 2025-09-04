@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/ops/Ops.h>
 #include <fvdb/detail/ops/gsplat/Gaussian2D.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRasterize.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianRasterizeForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>

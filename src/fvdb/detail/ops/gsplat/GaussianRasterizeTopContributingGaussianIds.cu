@@ -1,11 +1,10 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include "fvdb/JaggedTensor.h"
-
-#include <fvdb/detail/ops/Ops.h>
+#include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/ops/gsplat/Gaussian2D.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRasterize.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianRasterizeTopContributingGaussianIds.h>
 #include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>

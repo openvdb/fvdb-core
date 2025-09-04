@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/UpsampleGridNearest.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
@@ -56,7 +57,7 @@ upsampleNearestVoxelCallback(int32_t batchIdx,
 }
 
 template <typename Dtype,
-          c10::DeviceType DeviceTag,
+          torch::DeviceType DeviceTag,
           template <typename T, int32_t D>
           typename TensorAccessor>
 __hostdev__ inline void
@@ -106,7 +107,7 @@ upsampleNearestBackwardsVoxelCallback(int32_t batchIdx,
     }
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 torch::Tensor
 UpsampleGridNearest(const GridBatchImpl &coarseBatchAccessor,
                     const GridBatchImpl &fineBatchAccessor,
@@ -201,7 +202,7 @@ UpsampleGridNearest(const GridBatchImpl &coarseBatchAccessor,
     return outFineData;
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 torch::Tensor
 UpsampleGridNearestBackward(const GridBatchImpl &fineBatchAccessor,
                             const GridBatchImpl &coarseBatchAccessor,
@@ -291,7 +292,7 @@ UpsampleGridNearestBackward(const GridBatchImpl &fineBatchAccessor,
     return outGradIn;
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 torch::Tensor
 dispatchUpsampleGridNearest<DeviceTag>(const GridBatchImpl &coarseBatchAccessor,
                                        const GridBatchImpl &fineBatchAccessor,
@@ -301,7 +302,7 @@ dispatchUpsampleGridNearest<DeviceTag>(const GridBatchImpl &coarseBatchAccessor,
         coarseBatchAccessor, fineBatchAccessor, coarseData, upsamplingFactor);
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 torch::Tensor
 dispatchUpsampleGridNearestBackward<DeviceTag>(const GridBatchImpl &fineBatchAccessor,
                                                const GridBatchImpl &coarseBatchAccessor,

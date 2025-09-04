@@ -2,9 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/FVDB.h>
-#include <fvdb/detail/autograd/Autograd.h>
-#include <fvdb/detail/io/IO.h>
-#include <fvdb/detail/ops/jagged/JaggedOps.h>
+
+// Autograd headers
+#include <fvdb/detail/autograd/Attention.h>
+#include <fvdb/detail/autograd/VolumeRender.h>
+
+// IO headers
+#include <fvdb/detail/io/LoadNanovdb.h>
+#include <fvdb/detail/io/SaveNanoVDB.h>
 
 #include <ATen/cuda/CUDAContext.h>
 

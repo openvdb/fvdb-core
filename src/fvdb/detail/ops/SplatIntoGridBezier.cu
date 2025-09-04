@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/SplatIntoGridBezier.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/BezierInterpolationIterator.h>
 #include <fvdb/detail/utils/ForEachCPU.h>
@@ -13,7 +14,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <c10::DeviceType DeviceTag,
+template <torch::DeviceType DeviceTag,
           typename ScalarType,
           template <typename T, int32_t D>
           typename JaggedAccessor,
@@ -55,7 +56,7 @@ splatIntoGridBezierCallback(int32_t bidx,
     }
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 torch::Tensor
 SplatIntoGridBezier(const GridBatchImpl &batchHdl,
                     const JaggedTensor &points,

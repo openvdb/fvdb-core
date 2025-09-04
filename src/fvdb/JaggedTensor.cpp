@@ -4,8 +4,13 @@
 #include <fvdb/Config.h>
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/autograd/JaggedReduce.h>
-#include <fvdb/detail/ops/Ops.h>
-#include <fvdb/detail/ops/jagged/JaggedOps.h>
+
+// Ops headers
+#include <fvdb/detail/ops/JCat0.h>
+#include <fvdb/detail/ops/JIdxForJOffsets.h>
+#include <fvdb/detail/ops/JOffsetsFromJIdx.h>
+#include <fvdb/detail/ops/JaggedTensorIndex.h>
+#include <fvdb/detail/ops/jagged/JaggedSort.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <optional>
