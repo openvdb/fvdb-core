@@ -873,6 +873,53 @@ dispatchGaussianSparseRasterizeBackward(
     const bool absGrad,
     const int64_t numSharedChannelsOverride = -1);
 
+/// @brief Render the number of contributing Gaussians for each pixel in the image.
+/// @param means2d [C, N, 2]
+/// @param conics [C, N, 3]
+/// @param opacities [N]
+/// @param tile_offsets [C, tile_height, tile_width]
+/// @param tile_gaussian_ids [n_isects]
+/// @param settings [RenderSettings]
+/// @return Tuple of two tensors:
+///     num_contributing_gaussians: A [C, H, W] tensor containing the number of contributing
+///                                 Gaussians for each pixel for each camera
+///     alphas: A [C, H, W, 1] tensor containing the alpha values of the rendered images
+template <c10::DeviceType>
+std::tuple<torch::Tensor, torch::Tensor>
+dispatchGaussianRasterizeNumContributingGaussians(const torch::Tensor &means2d,
+                                                  const torch::Tensor &conics,
+                                                  const torch::Tensor &opacities,
+                                                  const torch::Tensor &tile_offsets,
+                                                  const torch::Tensor &tile_gaussian_ids,
+                                                  const RenderSettings &settings);
+
+/// @brief Render the number of contributing Gaussians for each pixel in the image.
+/// @param means2d [C, N, 2]
+/// @param conics [C, N, 3]
+/// @param opacities [N]
+/// @param tile_offsets [C, tile_height, tile_width]
+/// @param tile_gaussian_ids [n_isects]
+/// @param settings [RenderSettings]
+/// @return Tuple of two jagged tensors:
+///     num_contributing_gaussians: A [P1 + P2 + ..., 1] jagged tensor containing the number of
+///     contributing
+///                                 Gaussians for each pixel for each camera
+///     alphas: A [P1 + P2 + ..., 1] jagged tensor containing the composited alpha value of the
+///     pixels
+template <c10::DeviceType>
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
+dispatchGaussianSparseRasterizeNumContributingGaussians(const torch::Tensor &means2d,
+                                                        const torch::Tensor &conics,
+                                                        const torch::Tensor &opacities,
+                                                        const torch::Tensor &tile_offsets,
+                                                        const torch::Tensor &tile_gaussian_ids,
+                                                        const fvdb::JaggedTensor &pixelsToRender,
+                                                        const torch::Tensor &activeTiles,
+                                                        const torch::Tensor &tilePixelMask,
+                                                        const torch::Tensor &tilePixelCumsum,
+                                                        const torch::Tensor &pixelMap,
+                                                        const RenderSettings &settings);
+
 /// @brief Performs deep image rasterization to render the IDs and weighted alpha values of the
 /// top-K most visible Gaussians for each pixel
 ///

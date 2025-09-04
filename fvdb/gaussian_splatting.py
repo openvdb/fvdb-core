@@ -1161,6 +1161,272 @@ class GaussianSplat3d:
             antialias=antialias,
         )
 
+    def render_num_contributing_gaussians(
+        self,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        image_width: int,
+        image_height: int,
+        near: float,
+        far: float,
+        projection_type="perspective",
+        tile_size: int = 16,
+        min_radius_2d: float = 0.0,
+        eps_2d: float = 0.3,
+        antialias: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Renders the number of contributing Gaussians for each pixel in the image.
+
+        Args:
+            world_to_camera_matrices (torch.Tensor): Tensor of shape (C, 4, 4) representing the world-to-camera transformation matrices for C cameras.
+                Each matrix transforms points from world coordinates to camera coordinates.
+            projection_matrices (torch.Tensor): Tensor of shape (C, 3, 3) representing the projection matrices for C cameras.
+                Each matrix projects points in camera space into homogeneous pixel coordinates.
+            image_width (int): The width of the images to be rendered.
+            image_height (int): The height of the images to be rendered.
+            near (float): The near clipping plane distance for the projection.
+            far (float): The far clipping plane distance for the projection.
+            projection_type (str): The type of projection to use. Default is "perspective".
+                Other options could include "orthographic".
+            tile_size (int): The size of the tiles to use for rendering. Default is 16.
+            min_radius_2d (float): The minimum radius in pixel space below which Gaussians are ignored during rendering.
+                This helps to avoid rendering very small Gaussians that may not contribute significantly to the depth map.
+            eps_2d (float): A small epsilon value to avoid numerical issues during projection.
+            antialias (bool): If True, applies antialiasing to the rendered images.
+                This can help reduce artifacts in the images, especially when the Gaussians
+                are small or when the projection results in high-frequency details.
+
+        Returns:
+            num_contributing_gaussians (torch.Tensor): A tensor of shape (C, H, W) where C is the number of cameras,
+                H is the height of the images, W is the width of the images.
+                Each element represents the number of contributing Gaussians for that pixel.
+            alphas (torch.Tensor): A tensor of shape (C, H, W) where C is the number of cameras,
+                H is the height of the images, W is the width of the images.
+                Each element represents the alpha value (opacity) at that pixel.
+        """
+        return self._impl.render_num_contributing_gaussians(
+            world_to_camera_matrices=world_to_camera_matrices,
+            projection_matrices=projection_matrices,
+            image_width=image_width,
+            image_height=image_height,
+            near=near,
+            far=far,
+            projection_type=projection_type,
+            tile_size=tile_size,
+            min_radius_2d=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+        )
+
+    @overload
+    def sparse_render_num_contributing_gaussians(
+        self,
+        pixels_to_render: torch.Tensor,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        image_width: int,
+        image_height: int,
+        near: float,
+        far: float,
+        projection_type="perspective",
+        tile_size: int = 16,
+        min_radius_2d: float = 0.0,
+        eps_2d: float = 0.3,
+        antialias: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Renders the number of contributing Gaussians for each pixel in the image. i.e the number of the
+        most opaque Gaussians along each ray.
+
+        Args:
+            pixels_to_render (torch.Tensor): A dense tensor of shape (C, R, 2) representing the
+                pixels to render for each camera, where C is the number of cameras and R is the
+                number of pixels to render per camera (same for all cameras).
+            world_to_camera_matrices (torch.Tensor): Tensor of shape (C, 4, 4) representing the
+                world-to-camera transformation matrices for C cameras.
+                Each matrix transforms points from world coordinates to camera coordinates.
+            projection_matrices (torch.Tensor): Tensor of shape (C, 3, 3) representing the
+                projection matrices for C cameras.
+                Each matrix projects points in camera space into homogeneous pixel coordinates.
+            image_width (int): The width of the images to be rendered.
+            image_height (int): The height of the images to be rendered.
+            near (float): The near clipping plane distance for the projection.
+            far (float): The far clipping plane distance for the projection.
+            projection_type (str): The type of projection to use. Default is "perspective".
+                Other options could include "orthographic".
+            tile_size (int): The size of the tiles to use for rendering. Default is 16.
+            min_radius_2d (float): The minimum radius in pixel space below which Gaussians are
+                ignored during rendering. This helps to avoid rendering very small Gaussians that
+                may not contribute significantly to the depth map. Default is 0.0.
+            eps_2d (float): A small epsilon value to avoid numerical issues during projection.
+                Default is 0.3.
+            antialias (bool): If True, applies antialiasing to the rendered images. Default is False.
+                This can help reduce artifacts in the images, especially when the Gaussians
+                are small or when the projection results in high-frequency details.
+
+        Returns:
+            num_contributing_gaussians (torch.Tensor): A tensor of shape (C, R) where C is the number of cameras,
+                R is the number of pixels to render per camera.
+            alphas (torch.Tensor): A tensor of shape (C, R) where C is the number of cameras,
+                R is the number of pixels to render per camera.
+        """
+        ...
+
+    @overload
+    def sparse_render_num_contributing_gaussians(
+        self,
+        pixels_to_render: JaggedTensor,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        image_width: int,
+        image_height: int,
+        near: float,
+        far: float,
+        projection_type="perspective",
+        tile_size: int = 16,
+        min_radius_2d: float = 0.0,
+        eps_2d: float = 0.3,
+        antialias: bool = False,
+    ) -> tuple[JaggedTensor, JaggedTensor]:
+        """
+        Renders the number of contributing Gaussians for each pixel in the image. i.e the number of the
+        most opaque Gaussians along each ray.
+
+        Args:
+            pixels_to_render (JaggedTensor): A JaggedTensor of ldim=1, num_tensors=[C] (the number
+                of cameras in the batch) and each tensor is of shape [R_i, 2] representing the
+                pixels to render for the i-th camera.
+            world_to_camera_matrices (torch.Tensor): Tensor of shape (C, 4, 4) representing the
+                world-to-camera transformation matrices for C cameras.
+                Each matrix transforms points from world coordinates to camera coordinates.
+            projection_matrices (torch.Tensor): Tensor of shape (C, 3, 3) representing the
+                projection matrices for C cameras.
+                Each matrix projects points in camera space into homogeneous pixel coordinates.
+            image_width (int): The width of the images to be rendered.
+            image_height (int): The height of the images to be rendered.
+            near (float): The near clipping plane distance for the projection.
+            far (float): The far clipping plane distance for the projection.
+            projection_type (str): The type of projection to use. Default is "perspective".
+                Other options could include "orthographic".
+            tile_size (int): The size of the tiles to use for rendering. Default is 16.
+            min_radius_2d (float): The minimum radius in pixel space below which Gaussians are
+                ignored during rendering. This helps to avoid rendering very small Gaussians that
+                This helps to avoid rendering very small Gaussians that may not contribute
+                significantly to the depth map. Default is 0.0.
+            eps_2d (float): A small epsilon value to avoid numerical issues during projection.
+                Default is 0.3.
+            antialias (bool): If True, applies antialiasing to the rendered images. Default is False.
+                This can help reduce artifacts in the images, especially when the Gaussians
+                are small or when the projection results in high-frequency details.
+
+        Returns:
+            num_contributing_gaussians (fvdb.JaggedTensor): A JaggedTensor of ldim=1,
+                num_tensors=[C] (the number of cameras in the batch) and each tensor is of shape
+                [R_i] where R_i is the number of pixels to render for the i-th camera. Each element
+                represents the number of contributing Gaussians that contributes to the pixel.
+            alphas (fvdb.JaggedTensor): A JaggedTensor of ldim=1, num_tensors=[C] (the number of
+                cameras in the batch) and each tensor is of shape [R_i] where R_i is the number of
+                pixels to render for the i-th camera. Each element represents the alpha value of the
+                Gaussian that contributes to the pixel.
+        """
+        ...
+
+    def sparse_render_num_contributing_gaussians(
+        self,
+        pixels_to_render: JaggedTensor | torch.Tensor,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        image_width: int,
+        image_height: int,
+        near: float,
+        far: float,
+        projection_type="perspective",
+        tile_size: int = 16,
+        min_radius_2d: float = 0.0,
+        eps_2d: float = 0.3,
+        antialias: bool = False,
+    ) -> tuple[JaggedTensor | torch.Tensor, JaggedTensor | torch.Tensor]:
+        """
+        Renders the number of contributing Gaussians for each pixel in the image. i.e the number of the
+        most opaque Gaussians along each ray.
+
+        Args:
+            pixels_to_render (JaggedTensor | torch.Tensor): A JaggedTensor or dense tensor of shape (C, R, 2) representing the
+                pixels to render for each camera, where C is the number of cameras and R is the
+                number of pixels to render per camera (same for all cameras).
+            world_to_camera_matrices (torch.Tensor): Tensor of shape (C, 4, 4) representing the
+                world-to-camera transformation matrices for C cameras.
+                Each matrix transforms points from world coordinates to camera coordinates.
+            projection_matrices (torch.Tensor): Tensor of shape (C, 3, 3) representing the
+                projection matrices for C cameras.
+                Each matrix projects points in camera space into homogeneous pixel coordinates.
+            image_width (int): The width of the images to be rendered.
+            image_height (int): The height of the images to be rendered.
+            near (float): The near clipping plane distance for the projection.
+            far (float): The far clipping plane distance for the projection.
+            projection_type (str): The type of projection to use. Default is "perspective".
+                Other options could include "orthographic".
+            tile_size (int): The size of the tiles to use for rendering. Default is 16.
+            min_radius_2d (float): The minimum radius in pixel space below which Gaussians are
+                ignored during rendering. This helps to avoid rendering very small Gaussians that
+                may not contribute significantly to the depth map. Default is 0.0.
+            eps_2d (float): A small epsilon value to avoid numerical issues during projection.
+                Default is 0.3.
+            antialias (bool): If True, applies antialiasing to the rendered images. Default is False.
+                This can help reduce artifacts in the images, especially when the Gaussians
+                are small or when the projection results in high-frequency details.
+
+        Returns:
+            num_contributing_gaussians (JaggedTensor | torch.Tensor): A JaggedTensor or dense tensor of shape (C, R) where C is the number of cameras,
+                R is the number of pixels to render per camera. Each element represents the number of Gaussians
+                that contributes to the pixel.
+            alphas (JaggedTensor | torch.Tensor): A JaggedTensor or dense tensor of shape (C, R) where C is the number of cameras,
+                R is the number of pixels to render per camera.
+        """
+        if isinstance(pixels_to_render, torch.Tensor):
+            C, R, _ = pixels_to_render.shape
+            tensors = [pixels_to_render[i] for i in range(C)]
+            pixels_to_render_jagged = JaggedTensor(tensors)
+
+            result_num_contributing_gaussians, result_alphas = self._impl.sparse_render_num_contributing_gaussians(
+                pixels_to_render=pixels_to_render_jagged,
+                world_to_camera_matrices=world_to_camera_matrices,
+                projection_matrices=projection_matrices,
+                image_width=image_width,
+                image_height=image_height,
+                near=near,
+                far=far,
+                projection_type=projection_type,
+                tile_size=tile_size,
+                min_radius_2d=min_radius_2d,
+                eps_2d=eps_2d,
+                antialias=antialias,
+            )
+
+            num_contributing_gaussians_list = result_num_contributing_gaussians.unbind()
+            alphas_list = result_alphas.unbind()
+            dense_num_contributing_gaussians = torch.stack(num_contributing_gaussians_list, dim=0)  # type: ignore # Shape: (C, R)
+            dense_alphas = torch.stack(alphas_list, dim=0)  # type: ignore # Shape: (C, R)
+
+            return dense_num_contributing_gaussians, dense_alphas
+        else:
+            # Already a JaggedTensor, call C++ implementation directly
+            return self._impl.sparse_render_num_contributing_gaussians(
+                pixels_to_render=pixels_to_render,
+                world_to_camera_matrices=world_to_camera_matrices,
+                projection_matrices=projection_matrices,
+                image_width=image_width,
+                image_height=image_height,
+                near=near,
+                far=far,
+                projection_type=projection_type,
+                tile_size=tile_size,
+                min_radius_2d=min_radius_2d,
+                eps_2d=eps_2d,
+                antialias=antialias,
+            )
+
     def render_top_contributing_gaussian_ids(
         self,
         num_samples: int,

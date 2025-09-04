@@ -927,6 +927,60 @@ class GaussianSplat3d {
                           const float eps2d                   = 0.3,
                           const bool antialias                = false);
 
+    /// @brief Render the number of contributing Gaussians for each pixel in the image.
+    /// @param worldToCameraMatrices [C, 4, 4] Camera-to-world matrices
+    /// @param projectionMatrices [C, 4, 4] Projection matrices
+    /// @param imageWidth Width of the image
+    /// @param imageHeight Height of the image
+    /// @param near Near plane
+    /// @param far Far plane
+    /// @param projectionType Type of projection (PERSPECTIVE or ORTHOGRAPHIC)
+    /// @param tileSize Size of the tiles used for rendering
+    /// @param minRadius2d Minimum radius in pixels below which projected Gaussians are ignored
+    /// @param eps2d Blur factor for antialiasing (only used if antialias is true)
+    /// @param antialias Whether to antialias the image
+    /// @return Tuple of two tensors:
+    ///     num_contributing_gaussians: A [C, H, W] tensor containing the number of contributing
+    ///                                 Gaussians for each pixel for each camera
+    ///     alphas: A [C, H, W] tensor containing the alpha values of the rendered images
+    std::tuple<torch::Tensor, torch::Tensor> renderNumContributingGaussians(
+        const torch::Tensor &worldToCameraMatrices,
+        const torch::Tensor &projectionMatrices,
+        const size_t imageWidth,
+        const size_t imageHeight,
+        const float near,
+        const float far,
+        const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
+        const size_t tileSize               = 16,
+        const float minRadius2d             = 0.0,
+        const float eps2d                   = 0.3,
+        const bool antialias                = false);
+
+    /// @brief Render the number of contributing Gaussians for each pixel in the image.
+    /// @param pixelsToRender [P1 + P2 + ..., 2] JaggedTensor of pixels per camera to render.
+    /// @param worldToCameraMatrices [C, 4, 4]
+    /// @param projectionMatrices [C, 3, 3]
+    /// @param settings
+    /// @return Tuple of two tensors:
+    ///     num_contributing_gaussians: A [P1 + P2 + ..., 1] jagged tensor containing the number of
+    ///     contributing
+    ///                                 Gaussians for each pixel for each camera
+    ///     alphas: A [P1 + P2 + ..., 1] jagged tensor containing the composited alpha value of the
+    ///     pixels
+    std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
+    sparseRenderNumContributingGaussians(const fvdb::JaggedTensor &pixelsToRender,
+                                         const torch::Tensor &worldToCameraMatrices,
+                                         const torch::Tensor &projectionMatrices,
+                                         const size_t imageWidth,
+                                         const size_t imageHeight,
+                                         const float near,
+                                         const float far,
+                                         const ProjectionType projectionType,
+                                         const size_t tileSize,
+                                         const float minRadius2d,
+                                         const float eps2d,
+                                         const bool antialias);
+
     /// @brief Render the IDs of the gaussians that are the top K contributors to the rendered
     /// pixels and the value of the weighted contribution to the rendered pixels.  If the size of
     /// `numSamples`(i.e. K) is greater than the number of contributing samples for a pixel, the
@@ -951,6 +1005,48 @@ class GaussianSplat3d {
     ///              list is exahustive of all contributing samples.
     std::tuple<torch::Tensor, torch::Tensor> renderTopContributingGaussianIds(
         const int numSamples,
+        const torch::Tensor &worldToCameraMatrices,
+        const torch::Tensor &projectionMatrices,
+        const size_t imageWidth,
+        const size_t imageHeight,
+        const float near,
+        const float far,
+        const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
+        const size_t tileSize               = 16,
+        const float minRadius2d             = 0.0,
+        const float eps2d                   = 0.3,
+        const bool antialias                = false);
+
+    /// @brief Render the IDs of the gaussians that are the top K contributors to the rendered
+    /// pixels and the value of the weighted contribution to the rendered pixels.  If the size of
+    /// `numSamples`(i.e. K) is greater than the number of contributing samples for a pixel, the
+    /// remaining samples' weights are filled with zeros and the IDs are filled with -1.  This
+    /// function will render only a sparse subset of the pixels in the overall image, as specified
+    /// by the `pixelsToRender` parameter.
+    /// @param numSamples Requested number of top K contributing samples per pixel
+    /// @param pixelsToRender [P1 + P2 + ..., 2] JaggedTensor of pixels per camera to render.
+    /// @param worldToCameraMatrices [C, 4, 4] Camera-to-world matrices
+    /// @param projectionMatrices [C, 4, 4] Projection matrices
+    /// @param imageWidth Width of the image
+    /// @param imageHeight Height of the image
+    /// @param near Near plane
+    /// @param far Far plane
+    /// @param projectionType Type of projection (PERSPECTIVE or ORTHOGRAPHIC)
+    /// @param tileSize Size of the tiles used for rendering
+    /// @param minRadius2d Minimum radius in pixels below which projected Gaussians are ignored
+    /// @param eps2d Blur factor for antialiasing (only used if antialias is true)
+    /// @param antialias Whether to antialias the image
+    /// @return Tuple of two tensors:
+    ///     ids: A [P1 + P2 + ..., K] jagged tensor containing the the IDs of the top K contributors
+    ///     to the
+    ///          rendered pixel for each camera
+    ///     weights: A [P1 + P2 + ..., K] jagged tensor containing the weights of the top K
+    ///     contributors to the
+    ///              rendered pixel for each camera. The weights are normalized to sum to 1 if the
+    ///              list is exahustive of all contributing samples.
+    std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor> sparseRenderTopContributingGaussianIds(
+        const int numSamples,
+        const fvdb::JaggedTensor &pixelsToRender,
         const torch::Tensor &worldToCameraMatrices,
         const torch::Tensor &projectionMatrices,
         const size_t imageWidth,
@@ -1010,47 +1106,6 @@ class GaussianSplat3d {
     ///             The mask must have the same length as the number of Gaussians in this scene.
     void maskSet(const torch::Tensor &mask, const GaussianSplat3d &other);
 
-    /// @brief Render the IDs of the gaussians that are the top K contributors to the rendered
-    /// pixels and the value of the weighted contribution to the rendered pixels.  If the size of
-    /// `numSamples`(i.e. K) is greater than the number of contributing samples for a pixel, the
-    /// remaining samples' weights are filled with zeros and the IDs are filled with -1.  This
-    /// function will render only a sparse subset of the pixels in the overall image, as specified
-    /// by the `pixelsToRender` parameter.
-    /// @param numSamples Requested number of top K contributing samples per pixel
-    /// @param pixelsToRender JaggedTensor of pixels to render. If provided, only the
-    /// pixel coordinates per-camera specified will be rendered.
-    /// @param worldToCameraMatrices [C, 4, 4] Camera-to-world matrices
-    /// @param projectionMatrices [C, 4, 4] Projection matrices
-    /// @param imageWidth Width of the image
-    /// @param imageHeight Height of the image
-    /// @param near Near plane
-    /// @param far Far plane
-    /// @param projectionType Type of projection (PERSPECTIVE or ORTHOGRAPHIC)
-    /// @param tileSize Size of the tiles used for rendering
-    /// @param minRadius2d Minimum radius in pixels below which projected Gaussians are ignored
-    /// @param eps2d Blur factor for antialiasing (only used if antialias is true)
-    /// @param antialias Whether to antialias the image
-    /// @return Tuple of two tensors:
-    ///     ids: A [C, H, W, K] tensor containing the the IDs of the top K contributors to the
-    ///          rendered pixel for each camera
-    ///     weights: A [C, H, W, K] tensor containing the weights of the top K contributors to the
-    ///              rendered pixel for each camera. The weights are normalized to sum to 1 if the
-    ///              list is exahustive of all contributing samples.
-    std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor> sparseRenderTopContributingGaussianIds(
-        const int numSamples,
-        const fvdb::JaggedTensor &pixelsToRender,
-        const torch::Tensor &worldToCameraMatrices,
-        const torch::Tensor &projectionMatrices,
-        const size_t imageWidth,
-        const size_t imageHeight,
-        const float near,
-        const float far,
-        const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
-        const size_t tileSize               = 16,
-        const float minRadius2d             = 0.0,
-        const float eps2d                   = 0.3,
-        const bool antialias                = false);
-
   private:
     torch::Tensor mMeans;          // [N, 3]
     torch::Tensor mQuats;          // [N, 4]
@@ -1102,14 +1157,43 @@ class GaussianSplat3d {
     /// @brief Render the gaussian splatting scene
     ///         This function returns a single render quantity (RGB, depth, RGB+D) and
     ///         single alpha value per pixel.
-    /// @param worldToCameraMatrices [B, 4, 4]
-    /// @param projectionMatrices [B, 3, 3]
+    /// @param worldToCameraMatrices [C, 4, 4]
+    /// @param projectionMatrices [C, 3, 3]
     /// @param settings
     /// @return Tuple of (render quantity, alpha value)
     std::tuple<torch::Tensor, torch::Tensor>
     renderImpl(const torch::Tensor &worldToCameraMatrices,
                const torch::Tensor &projectionMatrices,
                const fvdb::detail::ops::RenderSettings &settings);
+
+    /// @brief Render the number of contributing Gaussians for each pixel in the image.
+    /// @param worldToCameraMatrices [C, 4, 4]
+    /// @param projectionMatrices [C, 3, 3]
+    /// @param settings
+    /// @return Tuple of two tensors:
+    ///     num_contributing_gaussians: A [B, H, W] tensor containing the number of contributing
+    ///                                 Gaussians for each pixel for each camera
+    std::tuple<torch::Tensor, torch::Tensor>
+    renderNumContributingGaussiansImpl(const torch::Tensor &worldToCameraMatrices,
+                                       const torch::Tensor &projectionMatrices,
+                                       const fvdb::detail::ops::RenderSettings &settings);
+
+    /// @brief Render the number of contributing Gaussians for each pixel in the image.
+    /// @param pixelsToRender [P1 + P2 + ..., 2] JaggedTensor of pixels per camera to render.
+    /// @param worldToCameraMatrices [C, 4, 4]
+    /// @param projectionMatrices [C, 3, 3]
+    /// @param settings
+    /// @return Tuple of two tensors:
+    ///     num_contributing_gaussians: A [P1 + P2 + ..., 1] jagged tensor containing the number of
+    ///     contributing
+    ///                                 Gaussians for each pixel for each camera
+    ///     alphas: A [P1 + P2 + ..., 1] jagged tensor containing the composited alpha value of the
+    ///     pixels
+    std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
+    sparseRenderNumContributingGaussiansImpl(const fvdb::JaggedTensor &pixelsToRender,
+                                             const torch::Tensor &worldToCameraMatrices,
+                                             const torch::Tensor &projectionMatrices,
+                                             const fvdb::detail::ops::RenderSettings &settings);
 
     /// @brief Render the gaussian splatting scene
     ///         For every pixel being rendered, this function returns multiple samples in depth of
@@ -1119,8 +1203,8 @@ class GaussianSplat3d {
     ///         contributing samples for a pixel, the remaining samples' weights are filled with
     ///         zeros and the IDs are filled with -1.  The samples are ordered front to back in
     ///         their depth ordering from camera.
-    /// @param worldToCameraMatrices [B, 4, 4]
-    /// @param projectionMatrices [B, 3, 3]
+    /// @param worldToCameraMatrices [C, 4, 4]
+    /// @param projectionMatrices [C, 3, 3]
     /// @param settings
     /// @return Tuple of two tensors:
     ///     ids: A [B, H, W, K] tensor containing the the IDs of the top K contributors to the
@@ -1142,13 +1226,16 @@ class GaussianSplat3d {
     ///         contributing samples for a pixel, the remaining samples' weights are filled with
     ///         zeros and the IDs are filled with -1.  The samples are ordered front to back in
     ///         their depth ordering from camera.
-    /// @param worldToCameraMatrices [B, 4, 4]
-    /// @param projectionMatrices [B, 3, 3]
+    /// @param pixelsToRender [P1 + P2 + ..., 2] JaggedTensor of pixels per camera to render.
+    /// @param worldToCameraMatrices [C, 4, 4]
+    /// @param projectionMatrices [C, 3, 3]
     /// @param settings
     /// @return Tuple of two tensors:
-    ///     ids: A [B, H, W, K] tensor containing the the IDs of the top K contributors to the
+    ///     ids: A [P1 + P2 + ..., K] jagged tensor containing the the IDs of the top K contributors
+    ///     to the
     ///          rendered pixel for each camera
-    ///     weights: A [B, H, W, K] tensor containing the weights of the top K contributors to the
+    ///     weights: A [P1 + P2 + ..., K] jagged tensor containing the weights of the top K
+    ///     contributors to the
     ///              rendered pixel for each camera. The weights are normalized to sum to the alpha
     ///              value of the final rendered pixel if the list is exahustive of all contributing
     ///              samples.
