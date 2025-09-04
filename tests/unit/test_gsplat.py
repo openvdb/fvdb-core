@@ -49,6 +49,8 @@ class BaseGaussianTestCase(unittest.TestCase):
     save_regression_data = False
 
     def setUp(self):
+        torch.random.manual_seed(0)
+        np.random.seed(0)
         self.device = "cuda:0"
 
         data_path = self.data_path / "test_garden_cropped.npz"
@@ -1488,6 +1490,15 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
     def setUp(self):
         super().setUp()
 
+    @staticmethod
+    def calculate_expected_alpha(opacity: float, num_layers: int) -> float:
+        accumulated_transparency = 1.0
+        expected_alpha = 0.0
+        for i in range(num_layers):
+            expected_alpha += accumulated_transparency * opacity
+            accumulated_transparency *= 1.0 - opacity
+        return expected_alpha
+
     def test_gaussians_center_render(self):
         h = 1024
         w = 512
@@ -1535,6 +1546,23 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
 
         gs3d = GaussianSplat3d(means3d, quats, log_scales, logit_opacities, sh0, shN)
 
+        # Test render num contributing gaussians
+        num_contributing_gaussians, alphas = gs3d.render_num_contributing_gaussians(
+            world_to_cam_xform.unsqueeze(0).contiguous(),
+            intrinsics.unsqueeze(0).contiguous(),
+            w,
+            h,
+            0.1,
+            10000.0,
+        )
+        # test the center pixel should have num_gaussian_layers contributing gaussians
+        self.assertTrue(num_contributing_gaussians[0][h // 2 - 1][w // 2 - 1] == num_gaussian_layers)
+
+        expected_alpha = self.calculate_expected_alpha(opacities[0].item(), num_gaussian_layers)
+        # test the center pixel should have the expected alpha
+        self.assertTrue(alphas[0][h // 2 - 1][w // 2 - 1] == expected_alpha)
+
+        # Test render top contributing gaussian ids
         ids, weights = gs3d.render_top_contributing_gaussian_ids(
             num_samples,
             world_to_cam_xform.unsqueeze(0).contiguous(),
@@ -1567,8 +1595,31 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
         self.assertTrue(torch.allclose(weights[0][h // 2 - 1][w // 2 - 1], expected_weights))
 
         # sparse rendering
+        # render the center pixel
         pixels_to_render = JaggedTensor([torch.tensor([[h // 2 - 1, w // 2 - 1]])]).to(self.device)
 
+        # test sparse render num contributing gaussians
+        sparse_num_contributing_gaussians, sparse_alphas = gs3d.sparse_render_num_contributing_gaussians(
+            pixels_to_render,
+            world_to_cam_xform.unsqueeze(0).contiguous(),
+            intrinsics.unsqueeze(0).contiguous(),
+            w,
+            h,
+            0.1,
+            10000.0,
+        )
+
+        # test the center pixel should have the correct number of contributing gaussians
+        self.assertTrue(
+            torch.equal(
+                sparse_num_contributing_gaussians.unbind()[0][0], num_contributing_gaussians[0][h // 2 - 1][w // 2 - 1]
+            )
+        )
+
+        # test the center pixel should have the correct alpha
+        self.assertTrue(torch.equal(sparse_alphas.unbind()[0][0], alphas[0][h // 2 - 1][w // 2 - 1]))
+
+        # test sparse render top contributing gaussian ids
         sparse_ids, sparse_weights = gs3d.sparse_render_top_contributing_gaussian_ids(
             num_samples,
             pixels_to_render,
@@ -1633,6 +1684,33 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
 
         gs3d = GaussianSplat3d(means3d, quats, log_scales, logit_opacities, sh0, shN)
 
+        # Test render num contributing gaussians
+        num_contributing_gaussians, alphas = gs3d.render_num_contributing_gaussians(
+            world_to_cam_xform.unsqueeze(0).contiguous(),
+            intrinsics.unsqueeze(0).contiguous(),
+            w,
+            h,
+            0.1,
+            10000.0,
+        )
+
+        # pixelsdirectly under the centers of the gaussians should have the correct number of contributing gaussians
+        num_gaussians_centers = num_contributing_gaussians[0][::2, ::2]
+        alphas_centers = alphas[0][::2, ::2]
+
+        expected_num_gaussians_centers = torch.full(
+            (num_gaussians_centers.shape[0], num_gaussians_centers.shape[1]), num_gaussian_layers, device=self.device
+        )
+        self.assertTrue(torch.equal(num_gaussians_centers, expected_num_gaussians_centers))
+
+        # pixels directly under the centers of the gaussians should have the correct alpha
+        expected_alpha = self.calculate_expected_alpha(opacities[0].item(), num_gaussian_layers)
+        expected_alphas_centers = torch.full(
+            (alphas_centers.shape[0], alphas_centers.shape[1]), expected_alpha, device=self.device
+        )
+        self.assertTrue(torch.allclose(alphas_centers, expected_alphas_centers, atol=1e-5, rtol=1e-8))
+
+        # Test render top contributing gaussian ids
         ids, weights = gs3d.render_top_contributing_gaussian_ids(
             num_samples,
             world_to_cam_xform.unsqueeze(0).contiguous(),
@@ -1696,6 +1774,40 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
 
         pixels_to_render = JaggedTensor([test_pixels]).to(self.device)
 
+        # test sparse render num contributing gaussians
+        sparse_num_contributing_gaussians, sparse_alphas = gs3d.sparse_render_num_contributing_gaussians(
+            pixels_to_render,
+            world_to_cam_xform.unsqueeze(0).contiguous(),
+            intrinsics.unsqueeze(0).contiguous(),
+            w,
+            h,
+            0.1,
+            10000.0,
+        )
+
+        for pixels, sparse_num_contributing_gaussians, reference_num_contributing_gaussians in zip(
+            pixels_to_render.unbind(), sparse_num_contributing_gaussians.unbind(), num_contributing_gaussians
+        ):
+            assert isinstance(pixels, torch.Tensor)
+            assert isinstance(sparse_num_contributing_gaussians, torch.Tensor)
+            y_coords = pixels[:, 0]  # [num_pixels_to_render]
+            x_coords = pixels[:, 1]  # [num_pixels_to_render]
+            # Index reference_num_contributing_gaussians using the coordinates
+            selected_reference_num_contributing_gaussians = reference_num_contributing_gaussians[y_coords, x_coords]
+            self.assertTrue(
+                torch.equal(sparse_num_contributing_gaussians, selected_reference_num_contributing_gaussians)
+            )
+
+        for pixels, sparse_alphas, reference_alphas in zip(pixels_to_render.unbind(), sparse_alphas.unbind(), alphas):
+            assert isinstance(pixels, torch.Tensor)
+            assert isinstance(sparse_alphas, torch.Tensor)
+            y_coords = pixels[:, 0]  # [num_pixels_to_render]
+            x_coords = pixels[:, 1]  # [num_pixels_to_render]
+            # Index reference_alphas using the coordinates
+            selected_reference_alphas = reference_alphas[y_coords, x_coords]
+            self.assertTrue(torch.equal(sparse_alphas, selected_reference_alphas))
+
+        # test sparse render top contributing gaussian ids
         sparse_ids, sparse_weights = gs3d.sparse_render_top_contributing_gaussian_ids(
             num_samples,
             pixels_to_render,
@@ -1730,7 +1842,45 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
             selected_reference_weights = reference_weights[y_coords, x_coords]  # [num_pixels_to_render, num_samples]
             self.assertTrue(torch.equal(sparse_weights, selected_reference_weights))
 
-    def test_gaussians_scene_render(self):
+    def test_gaussian_contributors_scene_render(self):
+        # Test render num contributing gaussians
+        num_contributing_gaussians, alphas = self.gs3d.render_num_contributing_gaussians(
+            self.cam_to_world_mats,
+            self.projection_mats,
+            self.width,
+            self.height,
+            0.01,
+            10000.0,
+        )
+        prev_num_contributing_gaussians = num_contributing_gaussians
+        for _ in range(50):
+            num_contributing_gaussians, alphas = self.gs3d.render_num_contributing_gaussians(
+                self.cam_to_world_mats,
+                self.projection_mats,
+                self.width,
+                self.height,
+                0.01,
+                10000.0,
+            )
+            self.assertTrue(torch.equal(num_contributing_gaussians, prev_num_contributing_gaussians))
+            prev_num_contributing_gaussians = num_contributing_gaussians
+
+        if self.save_regression_data:
+            torch.save(num_contributing_gaussians, self.data_path / "regression_num_contributing_gaussians.pt")
+            torch.save(alphas, self.data_path / "regression_num_contributing_gaussians_alphas.pt")
+
+        # load the regression data
+        num_contributing_gaussians_regression = torch.load(
+            self.data_path / "regression_num_contributing_gaussians.pt", weights_only=True
+        )
+        alphas_regression = torch.load(
+            self.data_path / "regression_num_contributing_gaussians_alphas.pt", weights_only=True
+        )
+
+        self.assertTrue(torch.equal(num_contributing_gaussians, num_contributing_gaussians_regression))
+        self.assertTrue(torch.equal(alphas, alphas_regression))
+
+        # Test render top contributing gaussian ids
         ids, weights = self.gs3d.render_top_contributing_gaussian_ids(
             6,
             self.cam_to_world_mats,
@@ -1752,9 +1902,8 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
         self.assertTrue(torch.equal(ids, ids_regression))
         self.assertTrue(torch.equal(weights, weights_regression))
 
-    def test_gaussians_scene_sparse_render(self):
-
-        # sparse rendering - use pixels that we know have gaussians (center pixels)
+    def test_gaussian_contributors_scene_sparse_render(self):
+        # sparse rendering
         num_pixels_to_render = 100
 
         # Generate random pixel coordinates within image bounds
@@ -1766,6 +1915,67 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
 
         pixels_to_render = JaggedTensor([test_pixels]).to(self.device)
 
+        # Test render num contributing gaussians
+        num_contributing_gaussians, num_contributing_gaussians_alphas = (
+            self.gs3d.sparse_render_num_contributing_gaussians(
+                pixels_to_render,
+                self.cam_to_world_mats,
+                self.projection_mats,
+                self.width,
+                self.height,
+                0.01,
+                10000.0,
+            )
+        )
+        prev_num_contributing_gaussians = num_contributing_gaussians
+        for _ in range(50):
+            num_contributing_gaussians, num_contributing_gaussians_alphas = (
+                self.gs3d.sparse_render_num_contributing_gaussians(
+                    pixels_to_render,
+                    self.cam_to_world_mats,
+                    self.projection_mats,
+                    self.width,
+                    self.height,
+                    0.01,
+                    10000.0,
+                )
+            )
+            self.assertTrue(torch.equal(num_contributing_gaussians.jdata, prev_num_contributing_gaussians.jdata))
+            prev_num_contributing_gaussians = num_contributing_gaussians
+
+        # load the regression data
+        num_contributing_gaussians_regression = torch.load(
+            self.data_path / "regression_num_contributing_gaussians.pt", weights_only=True
+        )
+        alphas_regression = torch.load(
+            self.data_path / "regression_num_contributing_gaussians_alphas.pt", weights_only=True
+        )
+
+        for pixels, sparse_num_contributing_gaussians, reference_num_contributing_gaussians in zip(
+            pixels_to_render.unbind(), num_contributing_gaussians.unbind(), num_contributing_gaussians_regression
+        ):
+            assert isinstance(pixels, torch.Tensor)
+            assert isinstance(sparse_num_contributing_gaussians, torch.Tensor)
+            y_coords = pixels[:, 0]  # [num_pixels_to_render]
+            x_coords = pixels[:, 1]  # [num_pixels_to_render]
+            # Index reference_num_contributing_gaussians using the coordinates
+            selected_reference_num_contributing_gaussians = reference_num_contributing_gaussians[y_coords, x_coords]
+            self.assertTrue(
+                torch.equal(sparse_num_contributing_gaussians, selected_reference_num_contributing_gaussians)
+            )
+
+        for pixels, sparse_alphas, reference_alphas in zip(
+            pixels_to_render.unbind(), num_contributing_gaussians_alphas.unbind(), alphas_regression
+        ):
+            assert isinstance(pixels, torch.Tensor)
+            assert isinstance(sparse_alphas, torch.Tensor)
+            y_coords = pixels[:, 0]  # [num_pixels_to_render]
+            x_coords = pixels[:, 1]  # [num_pixels_to_render]
+            # Index reference_alphas using the coordinates
+            selected_reference_alphas = reference_alphas[y_coords, x_coords]
+            self.assertTrue(torch.equal(sparse_alphas, selected_reference_alphas))
+
+        # Test render top contributing gaussian ids
         sparse_ids, sparse_weights = self.gs3d.sparse_render_top_contributing_gaussian_ids(
             6,
             pixels_to_render,
@@ -1804,7 +2014,7 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
             selected_reference_weights = reference_weights[y_coords, x_coords]  # [num_pixels_to_render, num_samples]
             self.assertTrue(torch.equal(sparse_weights, selected_reference_weights))
 
-    def test_gaussians_scene_dense_pixels_sparse_render(self):
+    def test_gaussian_contributors_scene_dense_pixels_sparse_render(self):
         # Test that the sparse render works with dense pixel specification
         # Taking a [C, R, 2] tensor as pixels_to_render and returning Tensors [C, R, num_samples]
 
@@ -1818,6 +2028,50 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
         # Stack x and y coordinates to form 2D pixel coordinates
         pixels_to_render = torch.stack([yCoords, xCoords], 1).unsqueeze(0).to(self.device)
 
+        # test sparse render num contributing gaussians
+        sparse_num_contributing_gaussians, sparse_alphas = self.gs3d.sparse_render_num_contributing_gaussians(
+            pixels_to_render,
+            self.cam_to_world_mats,
+            self.projection_mats,
+            self.width,
+            self.height,
+            0.01,
+            10000.0,
+        )
+
+        # load the regression data
+        num_contributing_gaussians_regression = torch.load(
+            self.data_path / "regression_num_contributing_gaussians.pt", weights_only=True
+        )
+        alphas_regression = torch.load(
+            self.data_path / "regression_num_contributing_gaussians_alphas.pt", weights_only=True
+        )
+
+        for pixels, sparse_num_contributing_gaussians, reference_num_contributing_gaussians in zip(
+            pixels_to_render.unbind(), sparse_num_contributing_gaussians.unbind(), num_contributing_gaussians_regression
+        ):
+            assert isinstance(pixels, torch.Tensor)
+            assert isinstance(sparse_num_contributing_gaussians, torch.Tensor)
+            y_coords = pixels[:, 0]  # [num_pixels_to_render]
+            x_coords = pixels[:, 1]  # [num_pixels_to_render]
+            # Index reference_num_contributing_gaussians using the coordinates
+            selected_reference_num_contributing_gaussians = reference_num_contributing_gaussians[y_coords, x_coords]
+            self.assertTrue(
+                torch.equal(sparse_num_contributing_gaussians, selected_reference_num_contributing_gaussians)
+            )
+
+        for pixels, sparse_alphas, reference_alphas in zip(
+            pixels_to_render.unbind(), sparse_alphas.unbind(), alphas_regression
+        ):
+            assert isinstance(pixels, torch.Tensor)
+            assert isinstance(sparse_alphas, torch.Tensor)
+            y_coords = pixels[:, 0]  # [num_pixels_to_render]
+            x_coords = pixels[:, 1]  # [num_pixels_to_render]
+            # Index reference_alphas using the coordinates
+            selected_reference_alphas = reference_alphas[y_coords, x_coords]
+            self.assertTrue(torch.equal(sparse_alphas, selected_reference_alphas))
+
+        # test sparse render top contributing gaussian ids
         sparse_ids, sparse_weights = self.gs3d.sparse_render_top_contributing_gaussian_ids(
             6,
             pixels_to_render,
