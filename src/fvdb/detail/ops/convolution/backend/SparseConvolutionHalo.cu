@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-#include <fvdb/detail/ops/convolution/backend/ConvOps.h>
+#include <fvdb/detail/ops/convolution/backend/ConvPragmaMessage.h>
+#include <fvdb/detail/ops/convolution/backend/SparseConvolutionHalo.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 

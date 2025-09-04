@@ -5,7 +5,6 @@
 #define FVDB_DETAIL_AUTOGRAD_SPARSECONVOLUTIONKERNELMAP_H
 
 #include <fvdb/SparseConvPackInfo.h>
-#include <fvdb/detail/ops/convolution/backend/ConvOps.h>
 
 #include <torch/autograd.h>
 

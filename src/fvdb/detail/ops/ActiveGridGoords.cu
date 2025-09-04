@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-
 #include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/ops/ActiveGridGoords.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
@@ -40,7 +40,7 @@ activeGridCoordsVoxelCallback(int64_t batchIdx,
 /// mutable grids)
 /// @param gridBatch The batch of grids
 /// @param outGridCoords Tensor which will contain the output grid coordinates
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 void
 GetActiveGridCoords(const GridBatchImpl &gridBatch, torch::Tensor &outGridCoords) {
     auto outCoordsAcc = tensorAccessor<DeviceTag, int32_t, 2>(outGridCoords);
@@ -85,7 +85,7 @@ GetActiveGridCoords(const GridBatchImpl &gridBatch, torch::Tensor &outGridCoords
 /// @param ignoreDisabledVoxels If set to true, and the grid batch is mutable, also return
 /// coordinates that are disabled
 /// @return A JaggedTensor or shape [B, -1, 3] of active/enabled IJK coordinates
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 JaggedTensor
 ActiveGridCoords(const GridBatchImpl &gridBatch) {
     gridBatch.checkNonEmptyGrid();

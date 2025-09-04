@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/ops/Ops.h>
-#include <fvdb/detail/ops/convolution/backend/ConvOps.h>
+#include <fvdb/detail/ops/convolution/backend/ConvPragmaMessage.h>
+#include <fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMMGradSorted.h>
 
 #include <torch/extension.h>
 
@@ -3051,7 +3051,7 @@ dispatchSparseConvolutionImplicitGEMMGradSorted<torch::kCUDA>(torch::Tensor _in_
     int reduced_mask_len = _reduced_mask.size(1);
     int reorder_loc_len  = _reorder_loc.size(1);
     auto options = torch::TensorOptions().dtype(_in_feats.dtype()).device(_in_feats.device());
-    at::Tensor _out_feats =
+    torch::Tensor _out_feats =
         torch::empty({split_k_iters, num_in_channels * kernel_volume, _kernel.size(1)}, options);
     int num_out_feats    = _out_feats.size(1);
     int num_out_channels = _out_feats.size(2);

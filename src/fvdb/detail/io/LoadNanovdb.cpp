@@ -3,7 +3,7 @@
 //
 #include <fvdb/Types.h>
 #include <fvdb/detail/GridBatchImpl.h>
-#include <fvdb/detail/io/IO.h>
+#include <fvdb/detail/io/LoadNanovdb.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>

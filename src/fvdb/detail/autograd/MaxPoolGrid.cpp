@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/autograd/MaxPoolGrid.h>
-#include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/DownsampleGridMaxPool.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>

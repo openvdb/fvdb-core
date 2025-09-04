@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/SampleGridTrilinear.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/TrilinearInterpolationIterator.h>
@@ -54,7 +55,7 @@ sampleTrilinearCallback(int32_t bidx,
     }
 }
 
-template <c10::DeviceType DeviceTag, typename scalar_t>
+template <torch::DeviceType DeviceTag, typename scalar_t>
 std::vector<torch::Tensor>
 SampleGridTrilinear(const GridBatchImpl &batchHdl,
                     const JaggedTensor &points,
@@ -97,7 +98,7 @@ SampleGridTrilinear(const GridBatchImpl &batchHdl,
     return {outFeatures.reshape(outShape)};
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 std::vector<torch::Tensor>
 dispatchSampleGridTrilinear(const GridBatchImpl &batchHdl,
                             const JaggedTensor &points,

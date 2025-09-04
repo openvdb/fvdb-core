@@ -2,9 +2,24 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/SparseConvPackInfo.h>
-#include <fvdb/detail/autograd/Autograd.h>
-#include <fvdb/detail/ops/Ops.h>
-#include <fvdb/detail/ops/convolution/pack_info/PackInfoOps.h>
+
+// Autograd headers
+#include <fvdb/detail/autograd/SparseConvolutionImplicitGEMM.h>
+#include <fvdb/detail/autograd/SparseConvolutionKernelMap.h>
+
+// Ops headers
+#include <fvdb/detail/ops/convolution/backend/SparseConvolutionCutlass.h>
+#include <fvdb/detail/ops/convolution/backend/SparseConvolutionHalo.h>
+#include <fvdb/detail/ops/convolution/backend/SparseConvolutionHaloGrad.h>
+#include <fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMM.h>
+#include <fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMMGrad.h>
+#include <fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMMGradSorted.h>
+#include <fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMMSorted.h>
+#include <fvdb/detail/ops/convolution/backend/SparseConvolutionKernelMap.h>
+#include <fvdb/detail/ops/convolution/backend/SparseConvolutionLggs.h>
+#include <fvdb/detail/ops/convolution/pack_info/BrickHaloBuffer.h>
+#include <fvdb/detail/ops/convolution/pack_info/ConvolutionKernelMap.h>
+#include <fvdb/detail/ops/convolution/pack_info/IGEMMBitOperations.h>
 
 namespace fvdb {
 

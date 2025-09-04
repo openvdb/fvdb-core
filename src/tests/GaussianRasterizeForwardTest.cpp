@@ -4,7 +4,7 @@
 #include "utils/ImageUtils.h"
 #include "utils/Tensor.h"
 
-#include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/gsplat/GaussianRasterizeForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
 
 #include <torch/script.h>

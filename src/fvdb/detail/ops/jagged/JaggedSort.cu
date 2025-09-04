@@ -1,12 +1,13 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/ops/jagged/JaggedOps.h>
+#include <fvdb/detail/ops/jagged/JaggedSort.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <c10/cuda/CUDAException.h>
+#include <torch/extension.h>
 
 namespace fvdb {
 namespace detail {
@@ -88,7 +89,7 @@ qsortCallback(int32_t tidx,
     }
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 torch::Tensor
 JaggedArgsort(const JaggedTensor &jt) {
     torch::Tensor data    = jt.jdata();

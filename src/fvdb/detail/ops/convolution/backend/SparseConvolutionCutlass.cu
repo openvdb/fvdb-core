@@ -1,7 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/ops/convolution/backend/ConvOps.h>
+#include <fvdb/detail/ops/convolution/backend/ConvPragmaMessage.h>
+#include <fvdb/detail/ops/convolution/backend/SparseConvolutionCutlass.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 
 #include <c10/cuda/CUDAException.h>

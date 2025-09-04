@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/GridBatchImpl.h>
-#include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/BuildFineGridFromCoarse.h>
+#include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
@@ -16,6 +17,7 @@
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAMathCompat.h>
+#include <torch/extension.h>
 
 #include <cub/cub.cuh>
 

@@ -1,9 +1,10 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-
 #include <fvdb/detail/GridBatchImpl.h>
-#include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/BuildCoarseGridFromFine.h>
+#include <fvdb/detail/ops/BuildGridFromIjk.h>
+#include <fvdb/detail/ops/CoarseIjkForFineGrid.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
 
@@ -14,6 +15,7 @@
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAMathCompat.h>
+#include <torch/extension.h>
 
 namespace fvdb::detail::ops {
 

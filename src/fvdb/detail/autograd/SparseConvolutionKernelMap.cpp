@@ -3,7 +3,13 @@
 //
 
 #include <fvdb/detail/autograd/SparseConvolutionKernelMap.h>
-#include <fvdb/detail/ops/convolution/backend/ConvOps.h>
+#include <fvdb/detail/ops/convolution/backend/MESparseConvolution.h>
+#include <fvdb/detail/ops/convolution/backend/SparseConvolutionKernelMap.h>
+
+#include <torch/extension.h>
+
+#include <string>
+#include <vector>
 
 namespace fvdb {
 namespace detail {

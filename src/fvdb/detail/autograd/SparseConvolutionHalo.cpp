@@ -2,8 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/autograd/SparseConvolutionHalo.h>
-#include <fvdb/detail/ops/convolution/backend/ConvOps.h>
+#include <fvdb/detail/ops/convolution/backend/SparseConvolutionHalo.h>
+#include <fvdb/detail/ops/convolution/backend/SparseConvolutionHaloGrad.h>
 #include <fvdb/detail/utils/Utils.h>
+
+#include <torch/extension.h>
+
+#include <string>
 
 namespace fvdb {
 namespace detail {

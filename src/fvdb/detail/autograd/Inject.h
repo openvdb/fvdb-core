@@ -4,12 +4,7 @@
 #ifndef FVDB_DETAIL_AUTOGRAD_INJECT_H
 #define FVDB_DETAIL_AUTOGRAD_INJECT_H
 
-#include <fvdb/Types.h>
 #include <fvdb/detail/GridBatchImpl.h>
-#include <fvdb/detail/ops/Ops.h>
-#include <fvdb/detail/utils/Utils.h>
-
-#include <nanovdb/NanoVDB.h>
 
 #include <torch/autograd.h>
 

@@ -1,11 +1,10 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchImpl.h>
 #include <fvdb/detail/TorchDeviceBuffer.h>
-#include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/BuildPrunedGrid.h>
 #include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
 
 #include <nanovdb/NanoVDB.h>

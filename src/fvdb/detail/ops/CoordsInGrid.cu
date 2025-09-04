@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/CoordsInGrid.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
@@ -31,7 +32,7 @@ coordsInGridCallback(int32_t bidx,
     outMask[eidx]       = isActive;
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 JaggedTensor
 CoordsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &ijk) {
     batchHdl.checkNonEmptyGrid();

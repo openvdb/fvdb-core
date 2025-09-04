@@ -3,7 +3,8 @@
 
 #include "utils/Tensor.h"
 
-#include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionBackward.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
 
 #include <torch/script.h>
 #include <torch/torch.h>

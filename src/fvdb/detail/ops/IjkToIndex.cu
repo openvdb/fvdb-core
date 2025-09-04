@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/IjkToIndex.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
@@ -38,7 +39,7 @@ ijkToIndexCallback(fvdb::JIdxType bidx,
     }
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 JaggedTensor
 IjkToIndex(const GridBatchImpl &batchHdl, const JaggedTensor &ijk, bool cumulative) {
     batchHdl.checkNonEmptyGrid();

@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/VoxelsAlongRays.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
@@ -163,7 +164,7 @@ countVoxelsAlongRaysCallback(int32_t bidx,
     outCounts[eidx + 1] = numVox;
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 std::vector<JaggedTensor>
 VoxelsAlongRays(const GridBatchImpl &batchHdl,
                 const JaggedTensor &rayOrigins,

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/autograd/EvaluateSphericalHarmonics.h>
-#include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsBackward.h>
+#include <fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsForward.h>
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
 

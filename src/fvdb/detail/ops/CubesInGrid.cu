@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/Types.h>
+#include <fvdb/detail/ops/CubesInGrid.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
@@ -62,7 +63,7 @@ cubesInGridCallback(int32_t bidx,
     outMask[eidx] = mask;
 }
 
-template <c10::DeviceType DeviceTag, bool IsTouch>
+template <torch::DeviceType DeviceTag, bool IsTouch>
 JaggedTensor
 CubesInGrid(const GridBatchImpl &batchHdl,
             const JaggedTensor &cubeCenters,

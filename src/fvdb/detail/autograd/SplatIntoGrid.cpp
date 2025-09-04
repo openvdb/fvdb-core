@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/autograd/SplatIntoGrid.h>
-#include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/SampleGridBezier.h>
+#include <fvdb/detail/ops/SampleGridTrilinear.h>
+#include <fvdb/detail/ops/SplatIntoGridBezier.h>
+#include <fvdb/detail/ops/SplatIntoGridTrilinear.h>
 #include <fvdb/detail/utils/Utils.h>
 
 void

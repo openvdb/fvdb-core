@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/autograd/JaggedReduce.h>
-#include <fvdb/detail/ops/jagged/JaggedOps.h>
+#include <fvdb/detail/ops/jagged/JaggedReduce.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>

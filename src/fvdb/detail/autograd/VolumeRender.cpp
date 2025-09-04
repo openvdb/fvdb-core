@@ -1,8 +1,9 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/autograd/VolumeRender.h>
-#include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/VolumeRender.h>
 #include <fvdb/detail/utils/Utils.h>
 
 namespace fvdb {

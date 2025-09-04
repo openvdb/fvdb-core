@@ -1,13 +1,14 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-
 #include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/ops/ActiveVoxelsInBoundsMask.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <c10/cuda/CUDAException.h>
+#include <torch/extension.h>
 
 namespace fvdb {
 namespace detail {
@@ -45,7 +46,7 @@ activeGridVoxelInBoundsMaskCallback(int32_t batchIdx,
 /// @param gridBatch The batch of grids
 /// @param batchBboxes The batch of bounding boxes
 /// @param outGridCoords Tensor which will contain the output grid coordinates
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 void
 GetActiveVoxelsInBoundsMask(const GridBatchImpl &gridBatch,
                             torch::Tensor &batchBboxes,
@@ -76,7 +77,7 @@ GetActiveVoxelsInBoundsMask(const GridBatchImpl &gridBatch,
     }
 }
 
-template <c10::DeviceType DeviceTag>
+template <torch::DeviceType DeviceTag>
 JaggedTensor
 ActiveVoxelsInBoundsMask(const GridBatchImpl &batchHdl,
                          const std::vector<nanovdb::Coord> &bboxMins,

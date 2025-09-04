@@ -3,7 +3,7 @@
 
 #include "utils/Tensor.h"
 
-#include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/gsplat/GaussianComputeNanInfMask.h>
 
 #include <torch/torch.h>
 

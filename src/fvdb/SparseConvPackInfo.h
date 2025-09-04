@@ -5,6 +5,12 @@
 #define FVDB_SPARSECONVPACKINFO_H
 
 #include <fvdb/GridBatch.h>
+#include <fvdb/JaggedTensor.h>
+#include <fvdb/Types.h>
+
+#include <torch/types.h>
+
+#include <optional>
 
 namespace fvdb {
 

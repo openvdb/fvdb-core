@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/VolumeRender.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
@@ -62,7 +63,7 @@ volumeRenderFwdCallback(const TensorAccessor<scalar_t, 1> sigmas,
     outTotalSamples[rayIdx] = numSamples;
 }
 
-template <c10::DeviceType device,
+template <torch::DeviceType device,
           typename scalar_t,
           template <typename T, int32_t D>
           typename TensorAccessor>

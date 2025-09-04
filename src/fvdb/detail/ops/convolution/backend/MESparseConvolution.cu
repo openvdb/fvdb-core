@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef GPU_CONVOLUTION
-#define GPU_CONVOLUTION
+
+#include <fvdb/detail/ops/convolution/backend/MESparseConvolution.h>
 
 #include <ATen/Dispatch_v2.h>
 #include <ATen/OpMathType.h>
@@ -720,13 +720,13 @@ matmul2(const Dtype *__restrict__ A,
 //    cudaStream_t stream);
 
 void
-dispatchMESparseConvolutionKernelMapGrad(at::Tensor in_feat,
-                                         at::Tensor grad_in_feat,
-                                         at::Tensor grad_out_feat,
-                                         at::Tensor kernel,
-                                         at::Tensor grad_kernel,
-                                         at::Tensor neighbor_map,
-                                         at::Tensor neighbor_offset,
+dispatchMESparseConvolutionKernelMapGrad(torch::Tensor in_feat,
+                                         torch::Tensor grad_in_feat,
+                                         torch::Tensor grad_out_feat,
+                                         torch::Tensor kernel,
+                                         torch::Tensor grad_kernel,
+                                         torch::Tensor neighbor_map,
+                                         torch::Tensor neighbor_offset,
                                          const bool transpose) {
     grad_in_feat.resize_as_(in_feat);
     grad_in_feat.zero_();
@@ -955,5 +955,3 @@ dispatchMESparseConvolutionKernelMapGrad(at::Tensor in_feat,
 } // namespace ops
 } // namespace detail
 } // namespace fvdb
-
-#endif // end GPU_CONVOLUTION

@@ -1,7 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/ops/Ops.h>
+#include <fvdb/detail/ops/JOffsetsFromJIdx.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 
 #include <c10/cuda/CUDAGuard.h>
