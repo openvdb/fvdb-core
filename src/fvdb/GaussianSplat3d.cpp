@@ -368,7 +368,7 @@ GaussianSplat3d::projectGaussiansImpl(const torch::Tensor &worldToCameraMatrices
     // Intersect projected Gaussians with image tiles [non-differentiable]
     const int numTilesW = std::ceil(settings.imageWidth / static_cast<float>(settings.tileSize));
     const int numTilesH = std::ceil(settings.imageHeight / static_cast<float>(settings.tileSize));
-    const auto [tileOffsets, tileGaussianIds] = FVDB_DISPATCH_KERNEL_DEVICE(mMeans.device(), [&]() {
+    const auto [tileOffsets, tileGaussianIds] = FVDB_DISPATCH_KERNEL(mMeans.device(), [&]() {
         return detail::ops::dispatchGaussianTileIntersection<DeviceTag>(ret.perGaussian2dMean,
                                                                         ret.perGaussianRadius,
                                                                         ret.perGaussianDepth,
