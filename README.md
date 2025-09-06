@@ -55,7 +55,7 @@ When you are ready to build ƒVDB, run the following command within the docker c
 ```shell
 conda activate fvdb;
 cd /openvdb/fvdb;
-TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6+PTX" \
+TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6+PTX" \
 ./build.sh install
 ```
 
@@ -108,7 +108,7 @@ pip install -r env/build_requirements.txt
 
 When you're ready to build fVDB, run the following command after activating the Python virtual environment
 ```shell
-TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6+PTX" ./build.sh install
+TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6+PTX" ./build.sh install
 ```
 
 ### Building *f*VDB

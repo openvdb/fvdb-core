@@ -24,7 +24,7 @@ function(detect_torch_pybind11_version)
     endif()
 
     if(NOT PYBIND11_HEADER)
-        message(FATAL_ERROR "Could not find pybind11 headers in PyTorch")
+        message(WARNING "Could not find pybind11 headers in PyTorch")
     endif()
 
     # Extract the version from the header by reading the file content
