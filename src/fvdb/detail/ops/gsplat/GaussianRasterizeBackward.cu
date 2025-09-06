@@ -146,7 +146,6 @@ struct RasterizeBackwardArgs {
                               "Bad size for outDLossDFeatures");
             TORCH_CHECK_VALUE(totalGaussians == mOutDLossDOpacities.size(0),
                               "Bad size for outDLossDOpacities");
-            TORCH_CHECK_VALUE(1 == mOutDLossDOpacities.size(1), "Bad size for outDLossDOpacities");
         } else {
             if (mAbsGrad) {
                 TORCH_CHECK_VALUE(commonArgs.mNumCameras == mOutDLossDMeans2dAbs.size(0),

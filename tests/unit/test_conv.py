@@ -9,8 +9,8 @@ import torch
 import torch.backends
 import torch.backends.cuda
 import torch.backends.cudnn
-import torchsparse_20
-import torchsparse_20.nn.functional as spF
+import torchsparse_20 as torchsparse  # type: ignore
+import torchsparse_20.nn.functional as spF  # type: ignore
 from fvdb.utils.tests import expand_tests
 from parameterized import parameterized
 
@@ -150,7 +150,7 @@ class TestConv(unittest.TestCase):
 
         # torchsparse convolution & backward (kernel arrangement is weird...)
         #   ref: torchsparse@2.0.0b/nn/utils/kernel.py
-        ts_tensor = torchsparse_20.SparseTensor(
+        ts_tensor = torchsparse.SparseTensor(
             vdb_features.jdata, torch.cat([grid.ijk.jdata, grid.ijk.jidx[:, None]], dim=1)
         )
         ts_kernel = vdb_kernels.permute(2, 3, 4, 1, 0).reshape(-1, in_channel, out_channel)
@@ -210,7 +210,7 @@ class TestConv(unittest.TestCase):
 
         # torchsparse convolution & backward (kernel arrangement is weird...)
         #   ref: torchsparse@2.0.0b/nn/utils/kernel.py
-        ts_tensor = torchsparse_20.SparseTensor(
+        ts_tensor = torchsparse.SparseTensor(
             vdb_features.jdata, torch.cat([grid.ijk.jdata, grid.ijk.jidx[:, None]], dim=1)
         )
         ts_kernel = vdb_kernels.permute(2, 3, 4, 1, 0).reshape(-1, in_channel, out_channel)
@@ -286,7 +286,7 @@ class TestConv(unittest.TestCase):
 
         # torchsparse convolution & backward (kernel arrangement is weird...)
         #   ref: torchsparse@2.0.0b/nn/utils/kernel.py
-        ts_tensor = torchsparse_20.SparseTensor(
+        ts_tensor = torchsparse.SparseTensor(
             vdb_features.jdata, torch.cat([grid.ijk.jdata, grid.ijk.jidx[:, None]], dim=1)
         )
         if kernel_size % 2 == 0:
