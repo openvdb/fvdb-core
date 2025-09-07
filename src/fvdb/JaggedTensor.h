@@ -647,6 +647,13 @@ class JaggedTensor : public torch::CustomClassHolder {
         return mData.is_cuda();
     }
 
+    /// @brief Check if the JaggedTensor is on a PrivateUse1 device
+    /// @return True if the JaggedTensor is on a PrivateUse1 device, false otherwise
+    inline bool
+    is_privateuseone() const {
+        return mData.is_privateuseone();
+    }
+
     /// @brief Check if the JaggedTensor is on a CPU device
     /// @return True if the JaggedTensor is on a CPU device, false otherwise
     inline bool
