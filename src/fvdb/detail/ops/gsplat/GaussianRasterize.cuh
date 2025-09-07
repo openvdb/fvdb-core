@@ -21,7 +21,10 @@ namespace fvdb::detail::ops {
 template <typename T, int N>
 inline auto
 initAccessor(const torch::Tensor &tensor, const std::string &name) {
-    TORCH_CHECK(tensor.is_cuda(), "Tensor ", name, " must be a CUDA tensor");
+    TORCH_CHECK(tensor.is_cuda() || tensor.is_privateuseone(),
+                "Tensor ",
+                name,
+                " must be a CUDA or PrivateUse1 tensor");
     return tensor.packed_accessor64<T, N, torch::RestrictPtrTraits>();
 }
 
@@ -41,7 +44,10 @@ initAccessor(const std::optional<torch::Tensor> &tensor,
 template <typename T, int N>
 inline auto
 initJaggedAccessor(const fvdb::JaggedTensor &tensor, const std::string &name) {
-    TORCH_CHECK(tensor.is_cuda(), "Tensor ", name, " must be a CUDA tensor");
+    TORCH_CHECK(tensor.is_cuda() || tensor.is_privateuseone(),
+                "Tensor ",
+                name,
+                " must be a CUDA or PrivateUse1 tensor");
     return tensor.packed_accessor64<T, N, torch::RestrictPtrTraits>();
 }
 
