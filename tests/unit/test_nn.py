@@ -407,6 +407,7 @@ def _run_syncbn_test(rank: int, world_size: int, return_dict: MutableMapping[int
     _sync_bn_cleanup()
 
 
+@unittest.skip("Temporarily disabled while fixing in new CI setup")
 @unittest.skipUnless(
     torch.cuda.is_available() and torch.distributed.is_available(),
     "SyncBatchNorm is only supported on CUDA backends with distributed enabled.",
