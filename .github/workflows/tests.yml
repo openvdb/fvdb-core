@@ -46,7 +46,7 @@ jobs:
   # BUILD FVDB
   ##############################################################################
   start-build-runner:
-    name: Start self-hosted CPU-only EC2 runner
+    name: Start CPU-only EC2 runner for build
     runs-on: ubuntu-latest
     outputs:
       label: ${{ steps.start-ec2-runner.outputs.label }}
@@ -144,7 +144,7 @@ jobs:
           echo "Cleanup completed"
 
   fvdb-build-stop-runner:
-    name: Stop self-hosted CPU-only EC2 runner
+    name: Stop CPU-only EC2 runner for build
     needs:
       - start-build-runner # required to get output from the start-build-runner job
       - fvdb-build # required to wait when the main job is done
@@ -187,7 +187,7 @@ jobs:
   ##############################################################################
 
   start-gtests-runner:
-    name: Start self-hosted GPU EC2 runner
+    name: Start GPU EC2 runner for gtests
     needs: fvdb-build
     runs-on: ubuntu-latest
     outputs:
@@ -256,7 +256,7 @@ jobs:
           echo "Cleanup completed"
 
   fvdb-gtests-stop-runner:
-    name: Stop gtests EC2 runner
+    name: Stop GPU EC2 runner for gtests
     needs:
       - start-gtests-runner # required to get output from the start-gtests-runner job
       - fvdb-gtests # required to wait when the main job is done
@@ -300,7 +300,7 @@ jobs:
   ##############################################################################
 
   start-unit-tests-runner:
-    name: Start self-hosted GPU EC2 runner
+    name: Start GPU EC2 runner for unit tests
     needs: fvdb-build
     runs-on: ubuntu-latest
     outputs:
@@ -369,7 +369,7 @@ jobs:
           echo "Cleanup completed"
 
   fvdb-unit-tests-stop-runner:
-    name: Stop unit tests EC2 runner
+    name: Stop GPU EC2 runner for unit tests
     needs:
       - start-unit-tests-runner # required to get output from the start-unit-tests-runner job
       - fvdb-unit-tests # required to wait when the main job is done
@@ -412,7 +412,7 @@ jobs:
   # RUN FVDB DOCUMENTATION TESTS
   #############################################################################
   start-docs-tests-runner:
-    name: Start self-hosted GPU EC2 runner
+    name: Start GPU EC2 runner for docs tests
     needs: fvdb-build
     runs-on: ubuntu-latest
     outputs:
@@ -479,7 +479,7 @@ jobs:
           echo "Cleanup completed"
 
   fvdb-docs-test-stop-runner:
-    name: Stop docs tests EC2 runner
+    name: Stop GPU EC2 runner for docs tests
     needs:
       - start-docs-tests-runner # required to get output from the start-docs-tests-runner job
       - fvdb-docs-test # required to wait when the main job is done
