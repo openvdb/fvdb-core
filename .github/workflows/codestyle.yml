@@ -1,0 +1,84 @@
+name: fVDB Code Style
+on:
+    pull_request:
+      branches:
+        - main
+      paths-ignore:
+          - 'CODEOWNERS'
+          - '**.md'
+          - 'docs/**'
+          - 'env/**'
+          - 'notebooks/**'
+
+# Allow subsequent pushes to the same PR or REF to cancel any previous jobs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-python-black-lint:
+    name: Check Python code style with black
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: psf/black@stable
+        with:
+          options: "--check --verbose --target-version=py311 --line-length=120"
+          src: "./"
+          version: "~= 24.0"
+
+  test-cpp-clang-format-lint:
+    name: Check C++ code style with clang-format
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: DoozyX/clang-format-lint-action@v0.18.2
+      with:
+        source: 'src/'
+        extensions: 'h,cpp,cc,cu,cuh'
+        clangFormatVersion: 18
+        style: file
+
+  include-guards:
+    name: Check include guards
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: swahtz/include-guards-check-action@master
+      with:
+        path: 'src/'
+
+  check-spdx-identifiers:
+    name: Check SPDX identifiers
+    runs-on: ubuntu-latest
+    steps:
+    - name: checkout
+      uses: actions/checkout@v4
+    - uses: enarx/spdx@master
+      with:
+        licenses: |-
+          Apache-2.0
+
+  # Search the git repository for any trailing spaces excluding auto-generated wlt files
+  # NOTE: Migrated from openvdb whitespace.yml
+  trailingspaces:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: test
+      run: |
+          set +e
+          git grep -n -I -E '^.+[ ]+$' -- ':!*.wlt'
+          test $? -eq 1
+
+  # Search for any tabs excluding meeting notes, image files and a few others
+  # NOTE: Migrated from openvdb whitespace.yml
+  spacesnottabs:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: test
+      run: |
+          set +e
+          git grep -n "	" -- ':!*.svg' ':!*.cmd' ':!*.png' ':!*.wlt' ':!*.jpg' ':!*.gif' ':!*.mp4' ':!*.pt' ':!*.pth' ':!*.nvdb' ':!*.npz'
+          test $? -eq 1

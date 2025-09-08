@@ -1,0 +1,446 @@
+name: fVDB Unit Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+        - 'CODEOWNERS'
+        - '**.md'
+        - 'debug/**'
+        - 'examples/**'
+        - 'notebooks/**'
+        - 'scripts/**'
+  push:
+    branches:
+      - main
+    paths-ignore:
+        - 'CODEOWNERS'
+        - '**.md'
+        - 'debug/**'
+        - 'examples/**'
+        - 'notebooks/**'
+        - 'scripts/**'
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to build"
+        required: true
+        default: "main"
+
+# Allow subsequent pushes to the same PR or REF to cancel any previous jobs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  deployments: write
+  pull-requests: read
+  issues: read
+  # Need ID token write permission to use OIDC
+  id-token: write
+
+jobs:
+  ##############################################################################
+  # BUILD FVDB
+  ##############################################################################
+  start-build-runner:
+    name: Start self-hosted CPU-only EC2 runner
+    runs-on: ubuntu-latest
+    outputs:
+      label: ${{ steps.start-ec2-runner.outputs.label }}
+      ec2-instance-id: ${{ steps.start-ec2-runner.outputs.ec2-instance-id }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
+          aws-region: us-east-2
+      - name: Start EC2 runner
+        id: start-ec2-runner
+        uses: machulav/ec2-github-runner@v2
+        with:
+          mode: start
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          ec2-image-id: ami-0e14a711dad782a70
+          ec2-instance-type: m6a.16xlarge
+          subnet-id: subnet-03f2320d6e6e0005b
+          security-group-id: sg-0cd08bd89d6212223
+  fvdb-build:
+    name: fVDB Build
+    needs: start-build-runner # required to start the main job when the runner is ready
+    runs-on: ${{ needs.start-build-runner.outputs.label }} # run the job on the newly created runner
+    container:
+      image: aswf/ci-openvdb:2024-clang17.2
+      env:
+        PYTHONPATH: ""
+        CPM_SOURCE_CACHE: "/__w/cpm_cache"
+        CONDA_OVERRIDE_CUDA: "12.8"  # this is to build an environment on machines that lack a CUDA device and needs to match the CUDA version in the build_environment.yml file
+      options: --rm
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for all branches
+          # For pull requests, this automatically checks out the merge commit
+          # For pushes, this checks out the pushed commit
+
+      - name: Simulate merge for push events
+        if: github.event_name == 'push'
+        run: |
+          echo "Push event detected - simulating merge with target branch"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$(pwd)"
+
+          # Get the target branch (main in this case, since push is only on main)
+          TARGET_BRANCH="main"
+          CURRENT_COMMIT="${{ github.sha }}"
+
+          echo "Creating merge simulation: merging $CURRENT_COMMIT into $TARGET_BRANCH"
+          git fetch origin $TARGET_BRANCH
+          git checkout $TARGET_BRANCH
+          git merge --no-ff $CURRENT_COMMIT --message "CI: Simulating merge of $CURRENT_COMMIT into $TARGET_BRANCH"
+
+      - name: Set up fvdb_build Conda env
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          conda-remove-defaults: "true"
+          activate-environment: fvdb_build
+          environment-file: env/build_environment.yml
+
+      - name: Buid fvdb
+        run: |
+          cd fvdb;
+          TORCH_CUDA_ARCH_LIST="8.9+PTX" conda run --no-capture-output -n fvdb_build ./build.sh wheel verbose gtests benchmarks
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+            name: fvdb-test-package
+            path: dist/*.whl
+            retention-days: 2
+
+      #NOTE: This tar step is here because directly uploading the build directory
+      #      wasn't working due to losing executable permissions on the files.
+      - name: Tar build directory
+        run: tar -cvf fvdb-gtest.tar build/
+
+      - name: Upload gtests
+        uses: actions/upload-artifact@v4
+        with:
+            name: fvdb-gtest
+            path: fvdb-gtest.tar
+            retention-days: 2
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up /__w/_temp directory"
+          sudo rm -rf /__w/_temp/*
+          echo "Cleanup completed"
+
+  fvdb-build-stop-runner:
+    name: Stop self-hosted CPU-only EC2 runner
+    needs:
+      - start-build-runner # required to get output from the start-build-runner job
+      - fvdb-build # required to wait when the main job is done
+    runs-on: ubuntu-latest
+    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
+          aws-region: us-east-2
+      - name: Stop EC2 runner
+        uses: machulav/ec2-github-runner@v2
+        with:
+          mode: stop
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          label: ${{ needs.start-build-runner.outputs.label }}
+          ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
+
+  ##############################################################################
+  # RUN FVDB GTESTS
+  ##############################################################################
+
+  start-gtests-runner:
+    name: Start self-hosted GPU EC2 runner
+    needs: fvdb-build
+    runs-on: ubuntu-latest
+    outputs:
+      label: ${{ steps.start-ec2-runner.outputs.label }}
+      ec2-instance-id: ${{ steps.start-ec2-runner.outputs.ec2-instance-id }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
+          aws-region: us-east-2
+      - name: Start EC2 runner
+        id: start-ec2-runner
+        uses: machulav/ec2-github-runner@v2
+        with:
+          mode: start
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          ec2-image-id: ami-09b7393a99945f2d0
+          ec2-instance-type: g6.xlarge # 4 CPU-core, L4 GPU
+          subnet-id: subnet-03f2320d6e6e0005b
+          security-group-id: sg-0cd08bd89d6212223
+  fvdb-gtests:
+    needs: start-gtests-runner # required to start the main job when the runner is ready
+    name: fVDB GTests
+    runs-on: ${{ needs.start-gtests-runner.outputs.label }} # run the job on the newly created runner
+    container:
+      image: aswf/ci-openvdb:2024-clang17.2
+      env:
+        PYTHONPATH: ""
+        CPM_SOURCE_CACHE: "/__w/cpm_cache"
+      options: --rm
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up fvdb_test Conda env
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          conda-remove-defaults: "true"
+          activate-environment: fvdb_test
+          environment-file: env/test_environment.yml
+
+      - name: Download gtests
+        uses: actions/download-artifact@v4
+        with:
+            name: fvdb-gtest
+            path: .
+
+      - name: Extract tar
+        run: |
+            tar -xvf fvdb-gtest.tar
+
+      - name: Run tests
+        run: |
+            conda activate fvdb_test
+            export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CONDA_PREFIX/lib
+            cd fvdb
+            ./build.sh ctest
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up /__w/_temp directory"
+          sudo rm -rf /__w/_temp/*
+          echo "Cleanup completed"
+
+  fvdb-gtests-stop-runner:
+    name: Stop gtests EC2 runner
+    needs:
+      - start-gtests-runner # required to get output from the start-gtests-runner job
+      - fvdb-gtests # required to wait when the main job is done
+    runs-on: ubuntu-latest
+    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
+          aws-region: us-east-2
+      - name: Stop EC2 runner
+        uses: machulav/ec2-github-runner@v2
+        with:
+          mode: stop
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          label: ${{ needs.start-gtests-runner.outputs.label }}
+          ec2-instance-id: ${{ needs.start-gtests-runner.outputs.ec2-instance-id }}
+
+  ##############################################################################
+  # RUN FVDB UNIT TESTS
+  ##############################################################################
+
+  start-unit-tests-runner:
+    name: Start self-hosted GPU EC2 runner
+    needs: fvdb-build
+    runs-on: ubuntu-latest
+    outputs:
+      label: ${{ steps.start-ec2-runner.outputs.label }}
+      ec2-instance-id: ${{ steps.start-ec2-runner.outputs.ec2-instance-id }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
+          aws-region: us-east-2
+      - name: Start EC2 runner
+        id: start-ec2-runner
+        uses: machulav/ec2-github-runner@v2
+        with:
+          mode: start
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          ec2-image-id: ami-09b7393a99945f2d0
+          ec2-instance-type: g6.xlarge # 4 CPU-core, L4 GPU
+          subnet-id: subnet-03f2320d6e6e0005b
+          security-group-id: sg-0cd08bd89d6212223
+  fvdb-unit-tests:
+    needs: start-unit-tests-runner # required to start the main job when the runner is ready
+    name: fVDB Unit Tests
+    runs-on: ${{ needs.start-unit-tests-runner.outputs.label }} # run the job on the newly created runner
+    container:
+      image: aswf/ci-openvdb:2024-clang17.2
+      env:
+        PYTHONPATH: ""
+        CPM_SOURCE_CACHE: "/__w/cpm_cache"
+      options: --rm
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up fvdb_test Conda env
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          conda-remove-defaults: "true"
+          activate-environment: fvdb_test
+          environment-file: env/test_environment.yml
+
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+            name: fvdb-test-package
+            path: ./dist
+
+      - name: Install package
+        run: |
+            conda activate fvdb_test
+            pip install ./dist/*.whl
+
+      - name: Run tests
+        run: |
+            cd tests;
+            pytest -v unit
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up /__w/_temp directory"
+          sudo rm -rf /__w/_temp/*
+          echo "Cleanup completed"
+
+  fvdb-unit-tests-stop-runner:
+    name: Stop unit tests EC2 runner
+    needs:
+      - start-unit-tests-runner # required to get output from the start-unit-tests-runner job
+      - fvdb-unit-tests # required to wait when the main job is done
+    runs-on: ubuntu-latest
+    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
+          aws-region: us-east-2
+      - name: Stop EC2 runner
+        uses: machulav/ec2-github-runner@v2
+        with:
+          mode: stop
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          label: ${{ needs.start-unit-tests-runner.outputs.label }}
+          ec2-instance-id: ${{ needs.start-unit-tests-runner.outputs.ec2-instance-id }}
+
+  ##############################################################################
+  # RUN FVDB DOCUMENTATION TESTS
+  #############################################################################
+  start-docs-tests-runner:
+    name: Start self-hosted GPU EC2 runner
+    needs: fvdb-build
+    runs-on: ubuntu-latest
+    outputs:
+      label: ${{ steps.start-ec2-runner.outputs.label }}
+      ec2-instance-id: ${{ steps.start-ec2-runner.outputs.ec2-instance-id }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
+          aws-region: us-east-2
+      - name: Start EC2 runner
+        id: start-ec2-runner
+        uses: machulav/ec2-github-runner@v2
+        with:
+          mode: start
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          ec2-image-id: ami-09b7393a99945f2d0
+          ec2-instance-type: g6.xlarge # 4 CPU-core, L4 GPU
+          subnet-id: subnet-03f2320d6e6e0005b
+          security-group-id: sg-0cd08bd89d6212223
+  fvdb-docs-test:
+    needs: start-docs-tests-runner # required to start the main job when the runner is ready
+    name: fVDB Documentation Tests
+    runs-on: ${{ needs.start-docs-tests-runner.outputs.label }} # run the job on the newly created runner
+    container:
+      image: aswf/ci-openvdb:2024-clang17.2
+      env:
+        PYTHONPATH: ""
+      options: --rm
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up fvdb_test Conda env
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          conda-remove-defaults: "true"
+          activate-environment: fvdb_test
+          environment-file: env/test_environment.yml
+
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+            name: fvdb-test-package
+            path: ./dist
+
+      - name: Install package
+        run: |
+            conda activate fvdb_test
+            pip install ./dist/*.whl
+
+      - name: Run tests
+        run: |
+            pytest --markdown-docs docs
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up /__w/_temp directory"
+          sudo rm -rf /__w/_temp/*
+          echo "Cleanup completed"
+
+  fvdb-docs-test-stop-runner:
+    name: Stop docs tests EC2 runner
+    needs:
+      - start-docs-tests-runner # required to get output from the start-docs-tests-runner job
+      - fvdb-docs-test # required to wait when the main job is done
+    runs-on: ubuntu-latest
+    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
+          aws-region: us-east-2
+      - name: Stop EC2 runner
+        uses: machulav/ec2-github-runner@v2
+        with:
+          mode: stop
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          label: ${{ needs.start-docs-tests-runner.outputs.label }}
+          ec2-instance-id: ${{ needs.start-docs-tests-runner.outputs.ec2-instance-id }}
