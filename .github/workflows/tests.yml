@@ -280,6 +280,7 @@ jobs:
           instance_id: ${{ needs.start-gtests-runner.outputs.ec2-instance-id }}
       - name: Stop EC2 runner
         uses: machulav/ec2-github-runner@v2
+        if: ${{ needs.start-gtests-runner.result == 'success'}}
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -392,6 +393,7 @@ jobs:
           instance_id: ${{ needs.start-unit-tests-runner.outputs.ec2-instance-id }}
       - name: Stop EC2 runner
         uses: machulav/ec2-github-runner@v2
+        if: ${{ needs.start-unit-tests-runner.result == 'success'}}
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -501,6 +503,7 @@ jobs:
           instance_id: ${{ needs.start-docs-tests-runner.outputs.ec2-instance-id }}
       - name: Stop EC2 runner
         uses: machulav/ec2-github-runner@v2
+        if: ${{ needs.start-docs-tests-runner.result == 'success'}}
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
