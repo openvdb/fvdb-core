@@ -127,7 +127,6 @@ jobs:
       - name: Build fvdb
         run: |
           source .venv/bin/activate
-          cd fvdb;
           TORCH_CUDA_ARCH_LIST="8.0;8.6+PTX" ./build.sh wheel verbose gtests benchmarks
 
       - name: Upload wheel
@@ -261,7 +260,6 @@ jobs:
       - name: Run tests
         run: |
           source .venv/bin/activate
-          cd fvdb
           ./build.sh ctest
 
       - name: Cleanup

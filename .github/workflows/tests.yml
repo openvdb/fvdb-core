@@ -115,7 +115,6 @@ jobs:
 
       - name: Buid fvdb
         run: |
-          cd fvdb;
           TORCH_CUDA_ARCH_LIST="8.9+PTX" conda run --no-capture-output -n fvdb_build ./build.sh wheel verbose gtests benchmarks
 
       - name: Upload wheel
@@ -229,7 +228,6 @@ jobs:
         run: |
             conda activate fvdb_test
             export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CONDA_PREFIX/lib
-            cd fvdb
             ./build.sh ctest
 
       - name: Cleanup
