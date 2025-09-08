@@ -76,7 +76,7 @@ jobs:
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
-        CONDA_OVERRIDE_CUDA: "12.0"  # this is to build an environment on machines that lack a CUDA device and needs to match the CUDA version in the build_environment.yml file
+        CONDA_OVERRIDE_CUDA: "12.8"  # this is to build an environment on machines that lack a CUDA device and needs to match the CUDA version in the build_environment.yml file
       options: --rm
     defaults:
       run:
@@ -111,7 +111,7 @@ jobs:
           miniforge-version: latest
           conda-remove-defaults: "true"
           activate-environment: fvdb_build
-          environment-file: fvdb/env/build_environment.yml
+          environment-file: env/build_environment.yml
 
       - name: Buid fvdb
         run: |
@@ -122,13 +122,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
             name: fvdb-test-package
-            path: fvdb/dist/*.whl
+            path: dist/*.whl
             retention-days: 2
 
       #NOTE: This tar step is here because directly uploading the build directory
       #      wasn't working due to losing executable permissions on the files.
       - name: Tar build directory
-        run: tar -cvf fvdb-gtest.tar fvdb/build/
+        run: tar -cvf fvdb-gtest.tar build/
 
       - name: Upload gtests
         uses: actions/upload-artifact@v4
@@ -213,7 +213,7 @@ jobs:
           miniforge-version: latest
           conda-remove-defaults: "true"
           activate-environment: fvdb_test
-          environment-file: fvdb/env/test_environment.yml
+          environment-file: env/test_environment.yml
 
       - name: Download gtests
         uses: actions/download-artifact@v4
@@ -308,7 +308,7 @@ jobs:
           miniforge-version: latest
           conda-remove-defaults: "true"
           activate-environment: fvdb_test
-          environment-file: fvdb/env/test_environment.yml
+          environment-file: env/test_environment.yml
 
       - name: Download package
         uses: actions/download-artifact@v4
@@ -323,7 +323,7 @@ jobs:
 
       - name: Run tests
         run: |
-            cd fvdb/tests;
+            cd tests;
             pytest -v unit
 
       - name: Cleanup
@@ -354,217 +354,93 @@ jobs:
           label: ${{ needs.start-unit-tests-runner.outputs.label }}
           ec2-instance-id: ${{ needs.start-unit-tests-runner.outputs.ec2-instance-id }}
 
-  # fvdb-unit-test:
-  #   needs: [fvdb-build]
-  #   name: fVDB PyTests
-  #   runs-on:
-  #     - self-hosted
-  #   container:
-  #     image: aswf/ci-openvdb:2024-clang17.2
-  #     env:
-  #       PYTHONPATH: ""
-  #     options: --rm
-  #   defaults:
-  #     run:
-  #       shell: bash -el {0}
-  #   steps:
-  #     ### Get the PR branch and apply changes to the target branch
-  #     - uses: actions/checkout@v4
-  #       with:
-  #         fetch-depth: 0 # Fetch all history for all branches
-  #     - name: Determine the target branch of the PR
-  #       run: |
-  #         echo "Fetching pull request metadata..."
-  #         # Install GitHub CLI and jq
-  #         dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo
-  #         yum install -y gh
-  #         which jq || yum install -y jq
-  #         # Extract PR number from branch name if it follows pattern "pull-request/123"
-  #         BRANCH_NAME=${GITHUB_REF#refs/heads/}
-  #         echo "Branch name: $BRANCH_NAME"
+  ##############################################################################
+  # RUN FVDB DOCUMENTATION TESTS
+  #############################################################################
+  start-docs-tests-runner:
+    name: Start self-hosted GPU EC2 runner
+    needs: fvdb-build
+    runs-on: ubuntu-latest
+    outputs:
+      label: ${{ steps.start-ec2-runner.outputs.label }}
+      ec2-instance-id: ${{ steps.start-ec2-runner.outputs.ec2-instance-id }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
+          aws-region: us-east-2
+      - name: Start EC2 runner
+        id: start-ec2-runner
+        uses: machulav/ec2-github-runner@v2
+        with:
+          mode: start
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          ec2-image-id: ami-09b7393a99945f2d0
+          ec2-instance-type: g6.xlarge # 4 CPU-core, L4 GPU
+          subnet-id: subnet-03f2320d6e6e0005b
+          security-group-id: sg-0cd08bd89d6212223
+  fvdb-docs-test:
+    needs: start-docs-tests-runner # required to start the main job when the runner is ready
+    name: fVDB Documentation Tests
+    runs-on: ${{ needs.start-docs-tests-runner.outputs.label }} # run the job on the newly created runner
+    container:
+      image: aswf/ci-openvdb:2024-clang17.2
+      env:
+        PYTHONPATH: ""
+      options: --rm
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up fvdb_test Conda env
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          conda-remove-defaults: "true"
+          activate-environment: fvdb_test
+          environment-file: env/test_environment.yml
 
-  #         # Setup GitHub CLI authentication
-  #         echo "${{ github.token }}" | gh auth login --with-token
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+            name: fvdb-test-package
+            path: ./dist
 
-  #         # Get default branch from repository
-  #         echo "Getting default branch from repository..."
-  #         DEFAULT_BRANCH=$(gh repo view ${{ github.repository }} --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null || echo 'develop')
-  #         echo "Repository default branch is: $DEFAULT_BRANCH"
+      - name: Install package
+        run: |
+            conda activate fvdb_test
+            pip install ./dist/*.whl
 
-  #         if [[ $BRANCH_NAME =~ pull-request/([0-9]+) ]]; then
-  #           PR_NUMBER=${BASH_REMATCH[1]}
-  #           echo "Found PR number from branch name: $PR_NUMBER"
+      - name: Run tests
+        run: |
+            pytest --markdown-docs docs
 
-  #           echo "Using gh CLI to get PR details..."
-  #           # Get PR info using GitHub CLI and extract the base branch
-  #           PR_INFO=$(gh pr view $PR_NUMBER --json baseRefName --repo ${{ github.repository }} 2>/dev/null || echo '{"baseRefName":"'$DEFAULT_BRANCH'"}')
-  #           TARGET_BRANCH=$(echo "$PR_INFO" | jq -r '.baseRefName')
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up /__w/_temp directory"
+          sudo rm -rf /__w/_temp/*
+          echo "Cleanup completed"
 
-  #           echo "Target branch is $TARGET_BRANCH"
-
-  #           if [ -z "$TARGET_BRANCH" ] || [ "$TARGET_BRANCH" = "null" ]; then
-  #             echo "Could not determine target branch, using default branch"
-  #             TARGET_BRANCH="$DEFAULT_BRANCH"
-  #           fi
-  #         else
-  #           echo "Branch doesn't match the expected pattern, using default branch"
-  #           TARGET_BRANCH="$DEFAULT_BRANCH"
-  #         fi
-
-  #         echo "Final TARGET_BRANCH=$TARGET_BRANCH"
-  #         echo "TARGET_BRANCH=$TARGET_BRANCH" >> $GITHUB_ENV
-  #     - name: Set up Git user
-  #       run: |
-  #         git config --global user.name "github-actions[bot]"
-  #         git config --global user.email "github-actions[bot]@users.noreply.github.com"
-  #     - name: Merge pushed branch into target branch
-  #       run: |
-  #         if [ -z "$TARGET_BRANCH" ]; then
-  #           echo "No pull request metadata found. Skipping merge."
-  #           exit 0
-  #         fi
-  #         git config --global --add safe.directory "$(pwd)"
-  #         git fetch origin $TARGET_BRANCH
-  #         git checkout $TARGET_BRANCH
-  #         git merge $GITHUB_REF --no-ff --message "Merging $GITHUB_REF into $TARGET_BRANCH"
-  #       env:
-  #         GITHUB_REF: ${{ github.ref }}
-  #     #### End of git merge
-
-  #     - name: Set up fvdb_test Conda env
-  #       uses: conda-incubator/setup-miniconda@v3
-  #       with:
-  #         miniforge-version: latest
-  #         conda-remove-defaults: "true"
-  #         activate-environment: fvdb_test
-  #         environment-file: fvdb/env/test_environment.yml
-
-  #     - name: Download package
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #           name: fvdb-test-package
-  #           path: ./dist
-
-  #     - name: Install package
-  #       run: |
-  #           conda activate fvdb_test
-  #           pip install ./dist/*.whl
-
-  #     - name: Run tests
-  #       run: |
-  #           cd fvdb/tests;
-  #           pytest -v unit
-
-  #     - name: Cleanup
-  #       if: always()
-  #       run: |
-  #         echo "Cleaning up /__w/_temp directory"
-  #         sudo rm -rf /__w/_temp/*
-  #         echo "Cleanup completed"
-
-  # fvdb-docs-test:
-  #   needs: [fvdb-build]
-  #   name: fVDB Documentation Tests
-  #   runs-on:
-  #     - self-hosted
-  #   container:
-  #     image: aswf/ci-openvdb:2024-clang17.2
-  #     env:
-  #       PYTHONPATH: ""
-  #     options: --rm
-  #   defaults:
-  #     run:
-  #       shell: bash -el {0}
-  #   steps:
-  #     ### Get the PR branch and apply changes to the target branch
-  #     - uses: actions/checkout@v4
-  #       with:
-  #         fetch-depth: 0 # Fetch all history for all branches
-  #     - name: Determine the target branch of the PR
-  #       run: |
-  #         echo "Fetching pull request metadata..."
-  #         # Install GitHub CLI and jq
-  #         dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo
-  #         yum install -y gh
-  #         which jq || yum install -y jq
-  #         # Extract PR number from branch name if it follows pattern "pull-request/123"
-  #         BRANCH_NAME=${GITHUB_REF#refs/heads/}
-  #         echo "Branch name: $BRANCH_NAME"
-
-  #         # Setup GitHub CLI authentication
-  #         echo "${{ github.token }}" | gh auth login --with-token
-
-  #         # Get default branch from repository
-  #         echo "Getting default branch from repository..."
-  #         DEFAULT_BRANCH=$(gh repo view ${{ github.repository }} --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null || echo 'develop')
-  #         echo "Repository default branch is: $DEFAULT_BRANCH"
-
-  #         if [[ $BRANCH_NAME =~ pull-request/([0-9]+) ]]; then
-  #           PR_NUMBER=${BASH_REMATCH[1]}
-  #           echo "Found PR number from branch name: $PR_NUMBER"
-
-  #           echo "Using gh CLI to get PR details..."
-  #           # Get PR info using GitHub CLI and extract the base branch
-  #           PR_INFO=$(gh pr view $PR_NUMBER --json baseRefName --repo ${{ github.repository }} 2>/dev/null || echo '{"baseRefName":"'$DEFAULT_BRANCH'"}')
-  #           TARGET_BRANCH=$(echo "$PR_INFO" | jq -r '.baseRefName')
-
-  #           echo "Target branch is $TARGET_BRANCH"
-
-  #           if [ -z "$TARGET_BRANCH" ] || [ "$TARGET_BRANCH" = "null" ]; then
-  #             echo "Could not determine target branch, using default branch"
-  #             TARGET_BRANCH="$DEFAULT_BRANCH"
-  #           fi
-  #         else
-  #           echo "Branch doesn't match the expected pattern, using default branch"
-  #           TARGET_BRANCH="$DEFAULT_BRANCH"
-  #         fi
-
-  #         echo "Final TARGET_BRANCH=$TARGET_BRANCH"
-  #         echo "TARGET_BRANCH=$TARGET_BRANCH" >> $GITHUB_ENV
-  #     - name: Set up Git user
-  #       run: |
-  #         git config --global user.name "github-actions[bot]"
-  #         git config --global user.email "github-actions[bot]@users.noreply.github.com"
-  #     - name: Merge pushed branch into target branch
-  #       run: |
-  #         if [ -z "$TARGET_BRANCH" ]; then
-  #           echo "No pull request metadata found. Skipping merge."
-  #           exit 0
-  #         fi
-  #         git config --global --add safe.directory "$(pwd)"
-  #         git fetch origin $TARGET_BRANCH
-  #         git checkout $TARGET_BRANCH
-  #         git merge $GITHUB_REF --no-ff --message "Merging $GITHUB_REF into $TARGET_BRANCH"
-  #       env:
-  #         GITHUB_REF: ${{ github.ref }}
-  #     #### End of git merge
-
-  #     - name: Set up fvdb_test Conda env
-  #       uses: conda-incubator/setup-miniconda@v3
-  #       with:
-  #         miniforge-version: latest
-  #         conda-remove-defaults: "true"
-  #         activate-environment: fvdb_test
-  #         environment-file: fvdb/env/test_environment.yml
-
-  #     - name: Download package
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #           name: fvdb-test-package
-  #           path: ./dist
-
-  #     - name: Install package
-  #       run: |
-  #           conda activate fvdb_test
-  #           pip install ./dist/*.whl
-
-  #     - name: Run tests
-  #       run: |
-  #           pytest --markdown-docs fvdb/docs
-
-  #     - name: Cleanup
-  #       if: always()
-  #       run: |
-  #         echo "Cleaning up /__w/_temp directory"
-  #         sudo rm -rf /__w/_temp/*
-  #         echo "Cleanup completed"
+  fvdb-docs-test-stop-runner:
+    name: Stop docs tests EC2 runner
+    needs:
+      - start-docs-tests-runner # required to get output from the start-docs-tests-runner job
+      - fvdb-docs-test # required to wait when the main job is done
+    runs-on: ubuntu-latest
+    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
+          aws-region: us-east-2
+      - name: Stop EC2 runner
+        uses: machulav/ec2-github-runner@v2
+        with:
+          mode: stop
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          label: ${{ needs.start-docs-tests-runner.outputs.label }}
+          ec2-instance-id: ${{ needs.start-docs-tests-runner.outputs.ec2-instance-id }}
