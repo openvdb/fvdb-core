@@ -156,6 +156,16 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
+      - name: Debug outputs
+        run: |
+          echo "start-build-runner job result: ${{ needs.start-build-runner.result }}"
+          echo "start-build-runner outputs.label: '${{ needs.start-build-runner.outputs.label }}'"
+          echo "start-build-runner outputs.ec2-instance-id: '${{ needs.start-build-runner.outputs.ec2-instance-id }}'"
+          echo "Label length: ${#label}"
+          echo "Instance ID length: ${#instance_id}"
+        env:
+          label: ${{ needs.start-build-runner.outputs.label }}
+          instance_id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
       - name: Stop EC2 runner
         uses: machulav/ec2-github-runner@v2
         with:
@@ -163,6 +173,14 @@ jobs:
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
           label: ${{ needs.start-build-runner.outputs.label }}
           ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
+      - name: Warn about missing outputs
+        if: ${{ needs.start-build-runner.result != 'success' || needs.start-build-runner.outputs.label == '' || needs.start-build-runner.outputs.ec2-instance-id == '' }}
+        run: |
+          echo "⚠️  WARNING: Cannot stop EC2 runner because:"
+          echo "  - start-build-runner result: ${{ needs.start-build-runner.result }}"
+          echo "  - label is empty: ${{ needs.start-build-runner.outputs.label == '' }}"
+          echo "  - ec2-instance-id is empty: ${{ needs.start-build-runner.outputs.ec2-instance-id == '' }}"
+          echo "This may leave an EC2 instance running that needs manual cleanup!"
 
   ##############################################################################
   # RUN FVDB GTESTS
@@ -250,6 +268,16 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
+      - name: Debug outputs
+        run: |
+          echo "start-gtests-runner job result: ${{ needs.start-gtests-runner.result }}"
+          echo "start-gtests-runner outputs.label: '${{ needs.start-gtests-runner.outputs.label }}'"
+          echo "start-gtests-runner outputs.ec2-instance-id: '${{ needs.start-gtests-runner.outputs.ec2-instance-id }}'"
+          echo "Label length: ${#label}"
+          echo "Instance ID length: ${#instance_id}"
+        env:
+          label: ${{ needs.start-gtests-runner.outputs.label }}
+          instance_id: ${{ needs.start-gtests-runner.outputs.ec2-instance-id }}
       - name: Stop EC2 runner
         uses: machulav/ec2-github-runner@v2
         with:
@@ -257,6 +285,14 @@ jobs:
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
           label: ${{ needs.start-gtests-runner.outputs.label }}
           ec2-instance-id: ${{ needs.start-gtests-runner.outputs.ec2-instance-id }}
+      - name: Warn about missing outputs
+        if: ${{ needs.start-gtests-runner.result != 'success' || needs.start-gtests-runner.outputs.label == '' || needs.start-gtests-runner.outputs.ec2-instance-id == '' }}
+        run: |
+          echo "⚠️  WARNING: Cannot stop EC2 runner because:"
+          echo "  - start-gtests-runner result: ${{ needs.start-gtests-runner.result }}"
+          echo "  - label is empty: ${{ needs.start-gtests-runner.outputs.label == '' }}"
+          echo "  - ec2-instance-id is empty: ${{ needs.start-gtests-runner.outputs.ec2-instance-id == '' }}"
+          echo "This may leave an EC2 instance running that needs manual cleanup!"
 
   ##############################################################################
   # RUN FVDB UNIT TESTS
@@ -344,6 +380,16 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
+      - name: Debug outputs
+        run: |
+          echo "start-unit-tests-runner job result: ${{ needs.start-unit-tests-runner.result }}"
+          echo "start-unit-tests-runner outputs.label: '${{ needs.start-unit-tests-runner.outputs.label }}'"
+          echo "start-unit-tests-runner outputs.ec2-instance-id: '${{ needs.start-unit-tests-runner.outputs.ec2-instance-id }}'"
+          echo "Label length: ${#label}"
+          echo "Instance ID length: ${#instance_id}"
+        env:
+          label: ${{ needs.start-unit-tests-runner.outputs.label }}
+          instance_id: ${{ needs.start-unit-tests-runner.outputs.ec2-instance-id }}
       - name: Stop EC2 runner
         uses: machulav/ec2-github-runner@v2
         with:
@@ -351,6 +397,14 @@ jobs:
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
           label: ${{ needs.start-unit-tests-runner.outputs.label }}
           ec2-instance-id: ${{ needs.start-unit-tests-runner.outputs.ec2-instance-id }}
+      - name: Warn about missing outputs
+        if: ${{ needs.start-unit-tests-runner.result != 'success' || needs.start-unit-tests-runner.outputs.label == '' || needs.start-unit-tests-runner.outputs.ec2-instance-id == '' }}
+        run: |
+          echo "⚠️  WARNING: Cannot stop EC2 runner because:"
+          echo "  - start-unit-tests-runner result: ${{ needs.start-unit-tests-runner.result }}"
+          echo "  - label is empty: ${{ needs.start-unit-tests-runner.outputs.label == '' }}"
+          echo "  - ec2-instance-id is empty: ${{ needs.start-unit-tests-runner.outputs.ec2-instance-id == '' }}"
+          echo "This may leave an EC2 instance running that needs manual cleanup!"
 
   ##############################################################################
   # RUN FVDB DOCUMENTATION TESTS
@@ -435,6 +489,16 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
+      - name: Debug outputs
+        run: |
+          echo "start-docs-tests-runner job result: ${{ needs.start-docs-tests-runner.result }}"
+          echo "start-docs-tests-runner outputs.label: '${{ needs.start-docs-tests-runner.outputs.label }}'"
+          echo "start-docs-tests-runner outputs.ec2-instance-id: '${{ needs.start-docs-tests-runner.outputs.ec2-instance-id }}'"
+          echo "Label length: ${#label}"
+          echo "Instance ID length: ${#instance_id}"
+        env:
+          label: ${{ needs.start-docs-tests-runner.outputs.label }}
+          instance_id: ${{ needs.start-docs-tests-runner.outputs.ec2-instance-id }}
       - name: Stop EC2 runner
         uses: machulav/ec2-github-runner@v2
         with:
@@ -442,3 +506,11 @@ jobs:
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
           label: ${{ needs.start-docs-tests-runner.outputs.label }}
           ec2-instance-id: ${{ needs.start-docs-tests-runner.outputs.ec2-instance-id }}
+      - name: Warn about missing outputs
+        if: ${{ needs.start-docs-tests-runner.result != 'success' || needs.start-docs-tests-runner.outputs.label == '' || needs.start-docs-tests-runner.outputs.ec2-instance-id == '' }}
+        run: |
+          echo "⚠️  WARNING: Cannot stop EC2 runner because:"
+          echo "  - start-docs-tests-runner result: ${{ needs.start-docs-tests-runner.result }}"
+          echo "  - label is empty: ${{ needs.start-docs-tests-runner.outputs.label == '' }}"
+          echo "  - ec2-instance-id is empty: ${{ needs.start-docs-tests-runner.outputs.ec2-instance-id == '' }}"
+          echo "This may leave an EC2 instance running that needs manual cleanup!"

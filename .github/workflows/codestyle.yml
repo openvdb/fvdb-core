@@ -80,5 +80,5 @@ jobs:
     - name: test
       run: |
           set +e
-          git grep -n "	" -- ':!*.svg' ':!*.cmd' ':!*.png' ':!*.wlt' ':!*.jpg' ':!*.gif' ':!*.mp4' ':!*.pt' ':!*.pth' ':!*.nvdb' ':!*.npz' ':!*.gitmodules'
+          git grep -n "	" -- ':!*/codestyle.yml' ':!*.svg' ':!*.cmd' ':!*.png' ':!*.wlt' ':!*.jpg' ':!*.gif' ':!*.mp4' ':!*.pt' ':!*.pth' ':!*.nvdb' ':!*.npz' ':!*.gitmodules'
           test $? -eq 1
