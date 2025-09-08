@@ -16,6 +16,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_cpm.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_nvtx.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_torch.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_pybind11.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_nanovdb.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/configure_torch_pybind11.cmake)
 
 # Generate compile_commands.json

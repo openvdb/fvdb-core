@@ -11,6 +11,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_nvtx.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_torch.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_tinyply.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_cutlass.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_nanovdb.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_cudnn_frontend.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_blosc.cmake)
 
@@ -166,7 +167,7 @@ message(STATUS "fvdb: TORCH_INCLUDE_DIRS: ${TORCH_INCLUDE_DIRS}")
 
 target_include_directories(fvdb PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../nanovdb
+    ${nanovdb_SOURCE_DIR}/nanovdb
     ${TORCH_INCLUDE_DIRS}
     ${Python3_INCLUDE_DIRS}
     ${nvtx3_SOURCE_DIR}/include)
