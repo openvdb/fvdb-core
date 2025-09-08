@@ -1,0 +1,49 @@
+name: fvdb_test
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - blas=*=mkl
+  - ca-certificates
+  - certifi
+  - cuda-version=12.8
+  - git
+  - gitpython
+  - imageio
+  - ipython
+  - libpng
+  - linkify-it-py
+  - matplotlib
+  - myst-parser
+  - numpy
+  - openssl
+  - pandas
+  - parameterized
+  - pip>=23.3.1
+  - polyscope
+  - py-opencv>=4.10[build=headless*]
+  - pytest-benchmark
+  - python=3.12
+  - pytorch-gpu=2.7.0
+  - rich
+  - scikit-learn
+  - sphinx_rtd_theme
+  - sphinx>=7.0.0
+  - tensorboard
+  - tqdm
+  - zlib
+  ## 3dgs
+  - pyproj
+  - scikit-image
+  - torchmetrics
+  - torchvision
+  - viser
+  - pip:
+    - gsplat
+    - pytest-markdown-docs
+    - point-cloud-utils
+    - https://nksr.s3.ap-northeast-1.amazonaws.com/dev-whls/pt27cu128/torchsparse-2.1.0-cp312-cp312-linux_x86_64.whl
+    - https://nksr.s3.ap-northeast-1.amazonaws.com/dev-whls/pt27cu128/torchsparse_20-2.0.0b0-cp312-cp312-linux_x86_64.whl
+    - https://nksr.s3.ap-northeast-1.amazonaws.com/dev-whls/pt27cu128/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl
+    ## 3dgs tests
+    - oiio-static-python

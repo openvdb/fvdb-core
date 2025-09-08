@@ -1,0 +1,46 @@
+// Copyright Contributors to the OpenVDB Project
+// SPDX-License-Identifier: Apache-2.0
+//
+#ifndef FVDB_DETAIL_AUTOGRAD_READFROMDENSE_H
+#define FVDB_DETAIL_AUTOGRAD_READFROMDENSE_H
+
+#include <fvdb/Types.h>
+#include <fvdb/detail/GridBatchImpl.h>
+
+#include <torch/autograd.h>
+
+namespace fvdb {
+namespace detail {
+namespace autograd {
+
+struct ReadFromDenseXyzc : public torch::autograd::Function<ReadFromDenseXyzc> {
+    using variable_list   = torch::autograd::variable_list;
+    using AutogradContext = torch::autograd::AutogradContext;
+    using Variable        = torch::autograd::Variable;
+
+    static variable_list forward(AutogradContext *ctx,
+                                 c10::intrusive_ptr<GridBatchImpl> grid,
+                                 Variable denseData,
+                                 const Vec3iBatch &denseOrigins);
+
+    static variable_list backward(AutogradContext *ctx, variable_list grad_output);
+};
+
+struct ReadFromDenseCzyx : public torch::autograd::Function<ReadFromDenseCzyx> {
+    using variable_list   = torch::autograd::variable_list;
+    using AutogradContext = torch::autograd::AutogradContext;
+    using Variable        = torch::autograd::Variable;
+
+    static variable_list forward(AutogradContext *ctx,
+                                 c10::intrusive_ptr<GridBatchImpl> grid,
+                                 Variable denseData,
+                                 const Vec3iBatch &denseOrigins);
+
+    static variable_list backward(AutogradContext *ctx, variable_list grad_output);
+};
+
+} // namespace autograd
+} // namespace detail
+} // namespace fvdb
+
+#endif // FVDB_DETAIL_AUTOGRAD_READFROMDENSE_H

@@ -1,0 +1,19 @@
+services:
+  fvdb-dev:
+    build:
+      context: ../../../
+      dockerfile: fvdb/.devcontainer/cu128/Dockerfile.dev
+
+    command: sleep infinity
+    volumes:
+      - ../../../:/openvdb
+
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
