@@ -11,6 +11,8 @@ permissions:
   deployments: write
   pull-requests: read
   issues: read
+  # Need ID token write permission to use OIDC
+  id-token: write
 
 jobs:
   fvdb-build:
