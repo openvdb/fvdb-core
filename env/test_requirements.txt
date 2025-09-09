@@ -1,0 +1,19 @@
+pip >= 23.3.1
+scikit_build_core
+wheel
+ninja
+tqdm
+numpy
+torch
+GitPython
+pandas
+pytest
+pytest-markdown-docs
+point-cloud-utils
+oiio-static-python
+imageio
+matplotlib
+rich
+pytest_benchmark
+parameterized
+polyscope
