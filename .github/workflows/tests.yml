@@ -49,8 +49,8 @@ jobs:
     name: Start CPU-only EC2 runner for build
     runs-on: ubuntu-latest
     outputs:
-      label: ${{ steps.start-ec2-runner.outputs.label }}
-      ec2-instance-id: ${{ steps.start-ec2-runner.outputs.ec2-instance-id }}
+      label: ${{ steps.start-build-runner.outputs.label }}
+      ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -58,13 +58,13 @@ jobs:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
       - name: Start EC2 runner
-        id: start-ec2-runner
+        id: start-build-runner
         uses: machulav/ec2-github-runner@v2
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
           ec2-image-id: ami-0e14a711dad782a70
-          ec2-instance-type: m6a.16xlarge
+          ec2-instance-type: m6a.8xlarge
           subnet-id: subnet-03f2320d6e6e0005b
           security-group-id: sg-0cd08bd89d6212223
   fvdb-build:
@@ -166,36 +166,39 @@ jobs:
 
 
   ##############################################################################
-  # RUN FVDB GTESTS
+  # START FVDB TESTS GPU RUNNER
   ##############################################################################
-
-  start-gtests-runner:
-    name: Start GPU EC2 runner for gtests
+  start-tests-gpu-runner:
+    name: Start EC2 GPU runner for tests
     needs: fvdb-build
     runs-on: ubuntu-latest
     outputs:
-      label: ${{ steps.start-ec2-runner.outputs.label }}
-      ec2-instance-id: ${{ steps.start-ec2-runner.outputs.ec2-instance-id }}
+      label: ${{ steps.start-tests-gpu-runner.outputs.label }}
+      ec2-instance-id: ${{ steps.start-tests-gpu-runner.outputs.ec2-instance-id }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
-      - name: Start EC2 runner
-        id: start-ec2-runner
+      - name: Start EC2 GPU runner
+        id: start-tests-gpu-runner
         uses: machulav/ec2-github-runner@v2
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          ec2-image-id: ami-09b7393a99945f2d0
+          ec2-image-id: ami-02a3849573bf21f3e
           ec2-instance-type: g6.xlarge # 4 CPU-core, L4 GPU
           subnet-id: subnet-03f2320d6e6e0005b
           security-group-id: sg-0cd08bd89d6212223
+
+  ##############################################################################
+  # RUN FVDB GTESTS
+  ##############################################################################
   fvdb-gtests:
-    needs: start-gtests-runner # required to start the main job when the runner is ready
+    needs: start-tests-gpu-runner # required to start the main job when the runner is ready
     name: fVDB GTests
-    runs-on: ${{ needs.start-gtests-runner.outputs.label }} # run the job on the newly created runner
+    runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
       image: aswf/ci-openvdb:2024-clang17.2
       env:
@@ -238,59 +241,13 @@ jobs:
           sudo rm -rf /__w/_temp/*
           echo "Cleanup completed"
 
-  fvdb-gtests-stop-runner:
-    name: Stop GPU EC2 runner for gtests
-    needs:
-      - start-gtests-runner # required to get output from the start-gtests-runner job
-      - fvdb-gtests # required to wait when the main job is done
-    runs-on: ubuntu-latest
-    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
-          aws-region: us-east-2
-      - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2
-        if: ${{ needs.start-gtests-runner.result == 'success'}}
-        with:
-          mode: stop
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          label: ${{ needs.start-gtests-runner.outputs.label }}
-          ec2-instance-id: ${{ needs.start-gtests-runner.outputs.ec2-instance-id }}
-
   ##############################################################################
   # RUN FVDB UNIT TESTS
   ##############################################################################
-
-  start-unit-tests-runner:
-    name: Start GPU EC2 runner for unit tests
-    needs: fvdb-build
-    runs-on: ubuntu-latest
-    outputs:
-      label: ${{ steps.start-ec2-runner.outputs.label }}
-      ec2-instance-id: ${{ steps.start-ec2-runner.outputs.ec2-instance-id }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
-          aws-region: us-east-2
-      - name: Start EC2 runner
-        id: start-ec2-runner
-        uses: machulav/ec2-github-runner@v2
-        with:
-          mode: start
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          ec2-image-id: ami-09b7393a99945f2d0
-          ec2-instance-type: g6.xlarge # 4 CPU-core, L4 GPU
-          subnet-id: subnet-03f2320d6e6e0005b
-          security-group-id: sg-0cd08bd89d6212223
   fvdb-unit-tests:
-    needs: start-unit-tests-runner # required to start the main job when the runner is ready
+    needs: start-tests-gpu-runner # required to start the main job when the runner is ready
     name: fVDB Unit Tests
-    runs-on: ${{ needs.start-unit-tests-runner.outputs.label }} # run the job on the newly created runner
+    runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
       image: aswf/ci-openvdb:2024-clang17.2
       env:
@@ -333,58 +290,13 @@ jobs:
           sudo rm -rf /__w/_temp/*
           echo "Cleanup completed"
 
-  fvdb-unit-tests-stop-runner:
-    name: Stop GPU EC2 runner for unit tests
-    needs:
-      - start-unit-tests-runner # required to get output from the start-unit-tests-runner job
-      - fvdb-unit-tests # required to wait when the main job is done
-    runs-on: ubuntu-latest
-    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
-          aws-region: us-east-2
-      - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2
-        if: ${{ needs.start-unit-tests-runner.result == 'success'}}
-        with:
-          mode: stop
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          label: ${{ needs.start-unit-tests-runner.outputs.label }}
-          ec2-instance-id: ${{ needs.start-unit-tests-runner.outputs.ec2-instance-id }}
-
   ##############################################################################
   # RUN FVDB DOCUMENTATION TESTS
-  #############################################################################
-  start-docs-tests-runner:
-    name: Start GPU EC2 runner for docs tests
-    needs: fvdb-build
-    runs-on: ubuntu-latest
-    outputs:
-      label: ${{ steps.start-ec2-runner.outputs.label }}
-      ec2-instance-id: ${{ steps.start-ec2-runner.outputs.ec2-instance-id }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
-          aws-region: us-east-2
-      - name: Start EC2 runner
-        id: start-ec2-runner
-        uses: machulav/ec2-github-runner@v2
-        with:
-          mode: start
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          ec2-image-id: ami-09b7393a99945f2d0
-          ec2-instance-type: g6.xlarge # 4 CPU-core, L4 GPU
-          subnet-id: subnet-03f2320d6e6e0005b
-          security-group-id: sg-0cd08bd89d6212223
+  ##############################################################################
   fvdb-docs-test:
-    needs: start-docs-tests-runner # required to start the main job when the runner is ready
+    needs: start-tests-gpu-runner # required to start the main job when the runner is ready
     name: fVDB Documentation Tests
-    runs-on: ${{ needs.start-docs-tests-runner.outputs.label }} # run the job on the newly created runner
+    runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
       image: aswf/ci-openvdb:2024-clang17.2
       env:
@@ -425,10 +337,15 @@ jobs:
           sudo rm -rf /__w/_temp/*
           echo "Cleanup completed"
 
-  fvdb-docs-test-stop-runner:
-    name: Stop GPU EC2 runner for docs tests
+  ##############################################################################
+  # STOP FVDB TESTS GPU RUNNER
+  ##############################################################################
+  fvdb-tests-stop-gpu-runner:
+    name: Stop GPU EC2 runner for tests
     needs:
-      - start-docs-tests-runner # required to get output from the start-docs-tests-runner job
+      - start-tests-gpu-runner # required to get output from the start-tests-gpu-runner job
+      - fvdb-gtests # required to wait when the main job is done
+      - fvdb-unit-tests # required to wait when the main job is done
       - fvdb-docs-test # required to wait when the main job is done
     runs-on: ubuntu-latest
     if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
@@ -440,9 +357,8 @@ jobs:
           aws-region: us-east-2
       - name: Stop EC2 runner
         uses: machulav/ec2-github-runner@v2
-        if: ${{ needs.start-docs-tests-runner.result == 'success'}}
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          label: ${{ needs.start-docs-tests-runner.outputs.label }}
-          ec2-instance-id: ${{ needs.start-docs-tests-runner.outputs.ec2-instance-id }}
+          label: ${{ needs.start-tests-gpu-runner.outputs.label }}
+          ec2-instance-id: ${{ needs.start-tests-gpu-runner.outputs.ec2-instance-id }}
