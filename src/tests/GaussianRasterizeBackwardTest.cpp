@@ -977,7 +977,8 @@ testSparseBackwardMultiChannel(int numCameras) {
         auto sparseDLossDAlphasJagged = fvdb::JaggedTensor(sparseDLossDAlphasList);
 
         // Test different numSharedChannelsOverride values for channels that support chunking
-        std::vector<int64_t> overrideValues = {-1}; // Default
+        std::vector<int64_t> overrideValues(1, -1); // Default
+        overrideValues.reserve(3);
         if (channels > 32) {
             overrideValues.push_back(32);
         }

@@ -19,6 +19,7 @@ dependencies:
   - parameterized
   - pip
   - polyscope
+  - pybind11=2.13.6
   - pyrender
   - pytest-benchmark
   - python=3.12
