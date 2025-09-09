@@ -127,7 +127,7 @@ jobs:
       - name: Build fvdb
         run: |
           source .venv/bin/activate
-          TORCH_CUDA_ARCH_LIST="8.0;8.6+PTX" ./build.sh wheel verbose gtests benchmarks
+          ./build.sh wheel verbose gtests benchmarks --cuda-arch-list '8.0;8.6+PTX'
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
