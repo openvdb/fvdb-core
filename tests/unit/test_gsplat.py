@@ -5,7 +5,6 @@ import sys
 import tempfile
 import unittest
 
-import imageio
 import numpy as np
 import OpenImageIO as oiio
 import point_cloud_utils as pcu
@@ -1410,10 +1409,14 @@ class TestGaussianRender(BaseGaussianTestCase):
         differ, cmp = compare_images(pixels, str(self.data_path / "regression_gaussian_render_result.png"))
 
         if self.save_image_data:
-            imageio.imsave(self.data_path / "output_gaussian_render.png", pixels)
+            import cv2
+
+            cv2.imwrite(str(self.data_path / "output_gaussian_render.png"), pixels)
 
         if self.save_regression_data:
-            imageio.imsave("regression_gaussian_render_result.png", pixels)
+            import cv2
+
+            cv2.imwrite("regression_gaussian_render_result.png", pixels)
 
         self.assertFalse(
             differ,
@@ -1474,10 +1477,14 @@ class TestGaussianRender(BaseGaussianTestCase):
         differ, cmp = compare_images(pixels, str(self.data_path / "regression_gaussian_render_jagged_result.png"))
 
         if self.save_image_data:
-            imageio.imsave(self.data_path / "output_gaussian_render_jagged.png", pixels)
+            import cv2
+
+            cv2.imwrite(str(self.data_path / "output_gaussian_render_jagged.png"), pixels)
 
         if self.save_regression_data:
-            imageio.imsave("regression_gaussian_render_jagged_result.png", pixels)
+            import cv2
+
+            cv2.imwrite("regression_gaussian_render_jagged_result.png", pixels)
 
         self.assertFalse(
             differ,

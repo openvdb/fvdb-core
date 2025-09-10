@@ -57,6 +57,7 @@ dependencies:
   - tqdm
   - zlib
     ## 3dgs
+  - fastai::opencv-python-headless
   - gdal
   - imageio
   - open3d

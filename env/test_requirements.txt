@@ -11,8 +11,8 @@ pytest
 pytest-markdown-docs
 point-cloud-utils
 oiio-static-python
-imageio
 matplotlib
+opencv-python-headless
 rich
 pytest_benchmark
 parameterized

@@ -9,7 +9,6 @@ dependencies:
   - cuda-version=12.8
   - git
   - gitpython
-  - imageio
   - ipython
   - libpng
   - linkify-it-py

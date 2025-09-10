@@ -28,7 +28,9 @@ dependencies:
   - tensorboard
   - tqdm
   ## 3dgs
-  - imageio
+  - torchmetrics
+  - fastai::opencv-python-headless
+  - tyro
   - pillow
   - py-opencv>=4.10[build=headless*]
   - pyyaml

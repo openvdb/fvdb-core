@@ -2,12 +2,8 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 
-import argparse
 import os
-import sys
 
-import imageio
-import numpy as np
 import torch
 import tyro
 from fvdb.utils.tests import (

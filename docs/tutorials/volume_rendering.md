@@ -8,7 +8,7 @@ import math
 import os
 from typing import Optional, Tuple, Union
 
-import imageio.v2 as imageio
+import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import polyscope as ps
@@ -247,7 +247,7 @@ class NeRFDataset:
         self.n_frames = len(frames)
 
         # Read the intrinsics
-        image = imageio.imread(os.path.join(self.root_path, frames[0]['file_path'] + '.png')) # [H, W, 3] o [H, W, 4]
+        image = cv2.imread(os.path.join(self.root_path, frames[0]['file_path'] + '.png'))
         self.H, self.W  = image.shape[:2]
         fl_x = fl_y = self.W / (2 * np.tan(transform['camera_angle_x'] / 2)) if 'camera_angle_x' in transform else None
         cx = (transform['cx']) if 'cx' in transform else (self.W / 2)
@@ -264,7 +264,7 @@ class NeRFDataset:
         for f in tqdm.tqdm(frames, desc=f'Loading {self.mode} data'):
             f_path = os.path.join(self.root_path, f['file_path'] + '.png')
             pose = nerf_matrix_to_ngp(np.array(f['transform_matrix'], dtype=np.float32), scale=self.scale)
-            image = imageio.imread(f_path) / 255.0 # [H, W, 3] o [H, W, 4]
+            image = cv2.imread(f_path) / 255.0 # [H, W, 3] o [H, W, 4]
             depth = None
 
             if self.mode == 'train':
