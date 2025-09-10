@@ -30,6 +30,23 @@ all_device_dtype_combos = [
 ]
 
 
+def _cpu_can_run_conv3d_backward(dtype: torch.dtype) -> bool:
+    """Probe actual runtime support by executing a tiny conv3d backward on CPU.
+
+    Returns True if it completes without error; False otherwise.
+    """
+    if not torch.backends.mkldnn.is_available():
+        return False
+    try:
+        x = torch.randn(1, 1, 5, 5, 5, dtype=dtype, device="cpu", requires_grad=True)
+        w = torch.randn(1, 1, 3, 3, 3, dtype=dtype, device="cpu", requires_grad=True)
+        y = torch.nn.functional.conv3d(x, w, padding=1)
+        y.backward(torch.ones_like(y))
+        return True
+    except Exception:
+        return False
+
+
 def build_spconv(grid, kernel_size, stride, backend):
     spconv, target_grid = grid.sparse_conv_kernel_map(kernel_size, stride)
     if backend == "gather_scatter":
@@ -353,8 +370,9 @@ class TestConv(unittest.TestCase):
         )
     )
     def test_torch_sparse_conv(self, device, dtype, kernel_size, stride, backend):
-        if device == "cpu" and dtype == torch.bfloat16:
-            return
+        if device == "cpu" and dtype in (torch.bfloat16, torch.float16):
+            if dtype == torch.bfloat16 or not _cpu_can_run_conv3d_backward(dtype):
+                self.skipTest(f"CPU cannot run conv3d backward with dtype={dtype}")
 
         torch.random.manual_seed(0)
         grid = GridBatch.from_dense(1, (32, 32, 32), device=device)
@@ -454,8 +472,11 @@ class TestConv(unittest.TestCase):
         )
     )
     def test_torch_sparse_aniso_conv(self, device, dtype, kernel_size: tuple, stride: tuple, backend):
-        if (device == "cpu" or backend == "gather_scatter") and dtype == torch.float16:
-            return
+        if dtype == torch.float16:
+            if device == "cpu" and not _cpu_can_run_conv3d_backward(dtype):
+                self.skipTest("CPU cannot run conv3d backward with dtype=float16")
+            if backend == "gather_scatter":
+                return
 
         torch.random.manual_seed(0)
         grid = GridBatch.from_dense(1, (32, 32, 32), device=device)
@@ -562,8 +583,11 @@ class TestConv(unittest.TestCase):
         ]
     )
     def test_torch_transposed_sparse_conv(self, device, dtype, backend, kernel_size, stride):
-        if (device == "cpu" or backend == "gather_scatter") and dtype == torch.float16:
-            return
+        if dtype == torch.float16:
+            if device == "cpu" and not _cpu_can_run_conv3d_backward(dtype):
+                self.skipTest("CPU cannot run conv3d backward with dtype=float16")
+            if backend == "gather_scatter":
+                return
 
         torch.random.manual_seed(0)
         source_grid = GridBatch.from_dense(1, (32, 32, 32), device=device)
