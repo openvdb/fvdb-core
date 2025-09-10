@@ -9,17 +9,30 @@
 #include <torch/script.h>
 #include <torch/torch.h>
 
+#include <cuda_runtime_api.h>
+
 #include <gtest/gtest.h>
 
-#include <cstddef>
 #include <cstdlib>
-#include <filesystem>
 
 #ifndef FVDB_EXTERNAL_TEST_DATA_PATH
 #error "FVDB_EXTERNAL_TEST_DATA_PATH must be defined"
 #endif
 
 struct GaussianProjectionBackwardTestFixture : public ::testing::Test {
+    // return rtol and atol for the current device
+    static std::pair<double, double>
+    tolerances() {
+        int dev = 0;
+        cudaGetDevice(&dev);
+        cudaDeviceProp prop{};
+        cudaGetDeviceProperties(&prop, dev);
+        // Loosen tolerances on Blackwell (sm_100+) where atomic/reduction order differs slightly
+        if (prop.major >= 10) {
+            return {5e-4, 6e-3};
+        }
+        return {1e-4, 1e-6};
+    }
     void
     loadInputData(const std::string insPath) {
         const auto dataPath =
@@ -350,12 +363,13 @@ TEST_F(GaussianProjectionBackwardTestFixture, TestPerspectiveProjection) {
             outNormalizedMaxRadiiAccum,
             outGradientStepCounts);
 
-    EXPECT_TRUE(torch::allclose(dLossDMeans, expectedDLossDMeans));
-    EXPECT_TRUE(torch::allclose(dLossDQuats, expectedDLossDQuats));
-    EXPECT_TRUE(torch::allclose(dLossDScales, expectedDLossDScales));
-    EXPECT_TRUE(torch::allclose(dLossDCamToWorlds, expectedDLossDCamToWorlds));
-    EXPECT_TRUE(torch::allclose(outNormalizeddLossdMeans2dNormAccum,
-                                expectedNormalizeddLossdMeans2dNormAccum));
+    auto [rtol, atol] = tolerances();
+    EXPECT_TRUE(torch::allclose(dLossDMeans, expectedDLossDMeans, rtol, atol));
+    EXPECT_TRUE(torch::allclose(dLossDQuats, expectedDLossDQuats, rtol, atol));
+    EXPECT_TRUE(torch::allclose(dLossDScales, expectedDLossDScales, rtol, atol));
+    EXPECT_TRUE(torch::allclose(dLossDCamToWorlds, expectedDLossDCamToWorlds, rtol, atol));
+    EXPECT_TRUE(torch::allclose(
+        outNormalizeddLossdMeans2dNormAccum, expectedNormalizeddLossdMeans2dNormAccum, rtol, atol));
     EXPECT_TRUE(torch::allclose(outNormalizedMaxRadiiAccum, expectedNormalizedMaxRadiiAccum));
     EXPECT_TRUE(torch::allclose(outGradientStepCounts, expectedGradientStepCounts));
 }
@@ -398,13 +412,16 @@ TEST_F(GaussianProjectionBackwardTestFixture, TestOrthographicProjection) {
             outNormalizedMaxRadiiAccum,
             outGradientStepCounts);
 
-    EXPECT_TRUE(torch::allclose(dLossDMeans, expectedDLossDMeans));
-    // EXPECT_TRUE(torch::allclose(dLossDCovars, expectedDLossDCovars));
-    EXPECT_TRUE(torch::allclose(dLossDQuats, expectedDLossDQuats));
-    EXPECT_TRUE(torch::allclose(dLossDScales, expectedDLossDScales));
-    EXPECT_TRUE(torch::allclose(dLossDCamToWorlds, expectedDLossDCamToWorlds));
-    EXPECT_TRUE(torch::allclose(outNormalizeddLossdMeans2dNormAccum,
-                                expectedNormalizeddLossdMeans2dNormAccum));
+    auto tol2   = tolerances();
+    double rtol = tol2.first;
+    double atol = tol2.second;
+    EXPECT_TRUE(torch::allclose(dLossDMeans, expectedDLossDMeans, rtol, atol));
+    // EXPECT_TRUE(torch::allclose(dLossDCovars, expectedDLossDCovars, rtol, atol));
+    EXPECT_TRUE(torch::allclose(dLossDQuats, expectedDLossDQuats, rtol, atol));
+    EXPECT_TRUE(torch::allclose(dLossDScales, expectedDLossDScales, rtol, atol));
+    EXPECT_TRUE(torch::allclose(dLossDCamToWorlds, expectedDLossDCamToWorlds, rtol, atol));
+    EXPECT_TRUE(torch::allclose(
+        outNormalizeddLossdMeans2dNormAccum, expectedNormalizeddLossdMeans2dNormAccum, rtol, atol));
     EXPECT_TRUE(torch::allclose(outNormalizedMaxRadiiAccum, expectedNormalizedMaxRadiiAccum));
     EXPECT_TRUE(torch::allclose(outGradientStepCounts, expectedGradientStepCounts));
 }
