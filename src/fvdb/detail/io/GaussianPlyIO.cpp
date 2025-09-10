@@ -327,13 +327,19 @@ saveGaussianPly(const std::string &filename,
     const torch::Tensor shCoeffs0CPU =
         gaussians.sh0().index({validMask.jdata(), 0, torch::indexing::Ellipsis}).cpu().contiguous();
     // [N, K-1, D]
-    const torch::Tensor shCoeffsNCPU =
-        gaussians.shN()
-            .index({validMask.jdata(), torch::indexing::Slice(), torch::indexing::Ellipsis})
-            .cpu()
-            .contiguous()
-            .permute({0, 2, 1})
-            .reshape({meansCPU.size(0), -1});
+    const torch::Tensor shCoeffsNCPU = [&]() {
+        if (gaussians.shN().numel() <= 0) {
+            return torch::zeros({meansCPU.size(0), 0},
+                                gaussians.shN().options().device(torch::kCPU));
+        } else {
+            return gaussians.shN()
+                .index({validMask.jdata(), torch::indexing::Slice(), torch::indexing::Ellipsis})
+                .cpu()
+                .contiguous()
+                .permute({0, 2, 1})
+                .reshape({meansCPU.size(0), -1});
+        }
+    }();
 
     plyf.add_properties_to_element("vertex",
                                    {"x", "y", "z"},
