@@ -2,7 +2,7 @@ name: fVDB Code Style
 on:
     pull_request:
       branches:
-        - main
+        - '**'
       paths-ignore:
           - 'CODEOWNERS'
           - '**.md'
