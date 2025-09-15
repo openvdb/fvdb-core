@@ -59,7 +59,7 @@ jobs:
           aws-region: us-east-2
       - name: Start EC2 runner
         id: start-build-runner
-        uses: machulav/ec2-github-runner@v2
+        uses: machulav/ec2-github-runner@v2.4.1
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -157,7 +157,7 @@ jobs:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
       - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2
+        uses: machulav/ec2-github-runner@v2.4.1
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -183,11 +183,11 @@ jobs:
           aws-region: us-east-2
       - name: Start EC2 GPU runner
         id: start-tests-gpu-runner
-        uses: machulav/ec2-github-runner@v2
+        uses: machulav/ec2-github-runner@v2.4.1
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          ec2-image-id: ami-02a3849573bf21f3e
+          ec2-image-id: ami-0f5c0b65fde08ae43
           ec2-instance-type: g6.xlarge # 4 CPU-core, L4 GPU
           subnet-id: subnet-03f2320d6e6e0005b
           security-group-id: sg-0cd08bd89d6212223
@@ -356,7 +356,7 @@ jobs:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
       - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2
+        uses: machulav/ec2-github-runner@v2.4.1
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
