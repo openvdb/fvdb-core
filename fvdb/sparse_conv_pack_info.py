@@ -14,7 +14,7 @@ from typing import overload
 
 import torch
 
-from . import GridBatch, _parse_device_string
+from . import Grid, GridBatch, _parse_device_string
 from ._Cpp import ConvPackBackend
 from ._Cpp import GridBatch as GridBatchCpp
 from ._Cpp import JaggedTensor
@@ -70,9 +70,9 @@ class SparseConvPackInfo:
         # These are None only to support the case in which the impl is provided.
         kernel_size: Vec3iOrScalar | None = None,
         stride: Vec3iOrScalar | None = None,
-        source_grid: GridBatch | None = None,
+        source_grid: GridBatch | Grid | None = None,
         # allowed to be None in normal per-element construction
-        target_grid: GridBatch | None = None,
+        target_grid: GridBatch | Grid | None = None,
         # If the impl is provided, the other parameters must be None.
         # This is a PRIVATE API, only used internally by this class, should not be used by users.
         impl: SparseConvPackInfoCpp | None = None,
@@ -88,17 +88,20 @@ class SparseConvPackInfo:
 
             source_impl = None
             if source_grid is not None:
-                # Import here to avoid circular dependency
                 from .grid_batch import GridBatch
 
-                source_impl = cast_check(source_grid, GridBatch, "source_grid")._impl
+                if not isinstance(source_grid, (Grid, GridBatch)):
+                    raise TypeError(f"source_grid must be of type GridBatch or Grid, but got {type(source_grid)}")
+                source_impl = source_grid._impl
 
             target_impl = None
             if target_grid is not None:
                 # Import here to avoid circular dependency
                 from .grid_batch import GridBatch
 
-                target_impl = cast_check(target_grid, GridBatch, "target_grid")._impl
+                if not isinstance(target_grid, (Grid, GridBatch)):
+                    raise TypeError(f"target_grid must be of type GridBatch or Grid, but got {type(target_grid)}")
+                target_impl = target_grid._impl
 
             if not is_Vec3iOrScalar(kernel_size) or not is_Vec3iOrScalar(stride):
                 raise TypeError(
@@ -281,6 +284,17 @@ class SparseConvPackInfo:
         from .grid_batch import GridBatch
 
         return GridBatch(impl=self._impl.target_grid)
+
+    # Properties that wrap GridBatch
+    @property
+    def source_grid_single(self) -> Grid:
+
+        return Grid(impl=self._impl.source_grid)
+
+    @property
+    def target_grid_single(self) -> Grid:
+
+        return Grid(impl=self._impl.target_grid)
 
     # Properties that don't need wrapping
     @property
