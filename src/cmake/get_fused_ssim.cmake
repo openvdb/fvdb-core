@@ -3,7 +3,7 @@
 CPMAddPackage(
     NAME fused_ssim
     GITHUB_REPOSITORY rahul-goel/fused-ssim
-    GIT_TAG origin/main
+    GIT_TAG b4fd8324e81c48c9b2b9f62e1b9c6431fece6ab3 # Most recent as of 2025-09-17
     OPTIONS
         "BUILD_TESTS OFF"
 )
