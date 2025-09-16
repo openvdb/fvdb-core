@@ -5,8 +5,8 @@
 
 #include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
 
-#include <torch/script.h>
 #include <torch/all.h>
+#include <torch/script.h>
 
 #include <gtest/gtest.h>
 

@@ -6,8 +6,8 @@
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeTopContributingGaussianIds.h>
 #include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
 
-#include <torch/script.h>
 #include <torch/all.h>
+#include <torch/script.h>
 
 #include <gtest/gtest.h>
 
