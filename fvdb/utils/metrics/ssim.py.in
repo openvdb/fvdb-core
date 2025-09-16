@@ -45,7 +45,7 @@ def ssim(img1: torch.Tensor,
     Args:
         img1 (torch.Tensor): A batch of images of shape (B, C, H, W)
         img2 (torch.Tensor): A batch of images of shape (B, C, H, W)
-        padding (str): The padding to use for the images (). Default is "same".
+        padding (str): The padding to use for the images ("same" or "valid"). Default is "same".
         train (bool): Whether or not to compute the gradient of the SSIM. Default is True.
 
     Returns:
