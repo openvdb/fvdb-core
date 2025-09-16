@@ -65,8 +65,7 @@ from .grid import (
     save_grid,
 )
 
-# Import SparseConvPackInfo from sparse_conv_pack_info.py
-from .sparse_conv_pack_info import SparseConvPackInfo
+from .convolution_plan import ConvolutionPlan
 from .gaussian_splatting import GaussianSplat3d
 
 # The following import needs to come after the GridBatch and JaggedTensor imports
@@ -100,9 +99,8 @@ __version_info__ = tuple(map(int, __version__.split(".")))
 __all__ = [
     "GridBatch",
     "JaggedTensor",
-    "SparseConvPackInfo",
-    "ConvPackBackend",
     "GaussianSplat3d",
+    "ConvolutionPlan",
     "load_gridbatch",
     "save_gridbatch",
     "jcat",

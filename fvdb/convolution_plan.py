@@ -420,6 +420,37 @@ class ConvolutionPlan:
         t_backend = cls._configure_backend(t_pack_info, channel_pairs, transposed, expert_config)
         return cls(t_pack_info, channel_pairs, transposed, expert_config, t_backend)
 
+    def valid_usage(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: NumericMaxRank1,
+        stride: NumericMaxRank1,
+        transposed: bool,
+    ) -> bool:
+        """
+        Check if the plan is valid for the given usage.
+
+        Args:
+            in_channels: Input channels.
+            out_channels: Output channels.
+            kernel_size: Kernel size.
+            stride: Stride.
+            transposed: Whether the plan is transposed.
+        """
+        kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
+        stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
+
+        self_kernel_size = to_Vec3i(self._pack_info.kernel_size, value_constraint=ValueConstraint.POSITIVE)
+        self_stride = to_Vec3i(self._pack_info.stride, value_constraint=ValueConstraint.POSITIVE)
+
+        return (
+            _channel_pair_supported(in_channels, out_channels, self._channel_pairs)
+            and torch.equal(kernel_size, self_kernel_size)
+            and torch.equal(stride, self_stride)
+            and transposed == self._transposed
+        )
+
     @overload
     def execute(self, data: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
         """

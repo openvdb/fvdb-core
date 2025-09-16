@@ -31,10 +31,10 @@ from ._Cpp import (
     scaled_dot_product_attention,
     volume_render,
 )
+from .convolution_plan import ConvolutionPlan
 from .gaussian_splatting import GaussianSplat3d
 from .grid import Grid, load_grid, save_grid
 from .grid_batch import GridBatch, load_gridbatch, save_gridbatch
-from .sparse_conv_pack_info import SparseConvPackInfo
 
 @overload
 def jcat(grid_batches: Sequence[GridBatch]) -> GridBatch: ...
@@ -46,8 +46,7 @@ def jcat(jagged_tensors: Sequence[JaggedTensor], dim: int | None = None) -> Jagg
 __all__ = [
     "GridBatch",
     "JaggedTensor",
-    "SparseConvPackInfo",
-    "ConvPackBackend",
+    "ConvolutionPlan",
     "GaussianSplat3d",
     "load_gridbatch",
     "save_gridbatch",

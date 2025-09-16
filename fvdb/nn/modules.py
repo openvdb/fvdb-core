@@ -16,7 +16,7 @@ from fvdb.types import (
 from torch.profiler import record_function
 
 import fvdb
-from fvdb import Grid, GridBatch, JaggedTensor, SparseConvPackInfo
+from fvdb import ConvolutionPlan, Grid, GridBatch, JaggedTensor
 
 
 def fvnn_module(module):
@@ -29,25 +29,6 @@ def fvnn_module(module):
 
     module.forward = _forward
     return module
-
-
-def _vec_is_all(v: torch.Tensor, i: int | float) -> bool:
-    return bool(torch.all(torch.eq(v, i)).item())
-
-
-def _is_same(grid1: GridBatch | Grid, grid2: GridBatch | Grid) -> bool:
-    if isinstance(grid1, GridBatch):
-        if isinstance(grid2, GridBatch):
-            return grid1.is_same(grid2)
-        else:
-            return False
-    elif isinstance(grid1, Grid):
-        if isinstance(grid2, Grid):
-            return grid1.is_same(grid2)
-        else:
-            return False
-    else:
-        raise TypeError(f"Unsupported type for is_same(): {type(grid1)} and {type(grid2)}")
 
 
 # ------------------------------------------------------------------------------------------------
@@ -184,56 +165,7 @@ class FillFromGrid(nn.Module):
 
 
 # ------------------------------------------------------------------------------------------------
-
-
-@fvnn_module
-class SparseConv3d(nn.Module):
-    r"""Base class for SparseConv3d. Applies a 3D convolution over an input signal composed of several input
-    planes, by performing a sparse convolution on the underlying VDB grid.
-
-    Args:
-        in_channels: number of channels in the input tensor
-        out_channels: number of channels produced by the convolution
-        kernel_size: size of the convolving kernel
-        stride: stride of the convolution. Default value is 1
-        bias: if ``True``, adds a learnable bias to the output. Default: ``True``
-        transposed: if ``True``, uses a transposed convolution operator
-    """
-
-    CUTLASS_SUPPORTED_CHANNELS = [
-        (32, 64),
-        (64, 128),
-        (128, 256),
-        (32, 32),
-        (64, 64),
-        (128, 128),
-        (256, 256),
-        (128, 64),
-        (64, 32),
-        (256, 128),
-        (384, 256),
-        (192, 128),
-        (256, 512),
-        (512, 256),
-        (512, 512),
-    ]
-
-    """
-    Backend for performing convolutions:
-      - "default": for now it is 'igemm_mode1'
-      - "legacy": the old slow implementation
-      - "me": MinkowskiEngine implementation
-      - "halo": 10x10x10 halo buffer implementation, stride 1, kernel 3
-      - "cutlass": 4x4x6 cutlass implementation, stride 1, kernel 3, forward only, limited channels support
-      - "lggs": kernel optimized for sparse structures
-      - "igemm_mode0": unsorted
-      - "igemm_mode1": sorted + split=1
-      - "igemm_mode2": sorted + split=3
-      - "dense": dense convolution
-    """
-    backend: str = "default"
-    allow_tf32: bool = True
-
+class _SparseConv3dBase(nn.Module):
     def __init__(
         self,
         in_channels: int,
@@ -241,7 +173,6 @@ class SparseConv3d(nn.Module):
         kernel_size: NumericMaxRank1 = 3,
         stride: NumericMaxRank1 = 1,
         bias: bool = True,
-        transposed: bool = False,
     ) -> None:
 
         super().__init__()
@@ -250,11 +181,6 @@ class SparseConv3d(nn.Module):
 
         self.kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
         self.stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
-        self.transposed = transposed
-
-        if self.transposed:
-            # Only change kernel size instead of module dict
-            out_channels, in_channels = in_channels, out_channels
 
         self.kernel_volume = math.prod(self.kernel_size)
         if self.kernel_volume > 1:
@@ -274,213 +200,52 @@ class SparseConv3d(nn.Module):
         self.reset_parameters()
 
     def extra_repr(self) -> str:
-        s = f"{self.in_channels}, {self.out_channels}, kernel_size={self.kernel_size}"
-        if not _vec_is_all(self.stride, 1):
-            s += f", stride={self.stride}"
+        s = f"{self.in_channels}, {self.out_channels}, kernel_size={self.kernel_size}, stride={self.stride}"
         if self.bias is None:
             s += ", bias=False"
-        if self.transposed:
-            s += ", transposed=True"
         return s
 
     def reset_parameters(self) -> None:
-        std = 1 / math.sqrt((self.out_channels if self.transposed else self.in_channels) * self.kernel_volume)
+        std = 1 / math.sqrt(self.in_channels * self.kernel_volume)
         self.weight.data.uniform_(-std, std)
         if self.bias is not None:
             self.bias.data.uniform_(-std, std)
 
-    def _dispatch_conv(
-        self,
-        in_feature: JaggedTensor,
-        in_grid: GridBatch,
-        in_kmap: SparseConvPackInfo | None,
-        out_grid: GridBatch | None,
-    ) -> tuple[GridBatch, JaggedTensor, SparseConvPackInfo | None]:
 
-        backend = self.backend
-
-        sm_arch = torch.cuda.get_device_capability()[0] + torch.cuda.get_device_capability()[1] / 10
-        # tf32 requires compute capability >= 8.0 (Ampere)
-        if self.allow_tf32 and self.weight.is_cuda:
-            assert (
-                sm_arch >= 8
-            ), "TF32 requires GPU with compute capability >= 8.0. Please set fvdb.nn.SparseConv3d.allow_tf32 = False."
-
-        # bf16 requires compute capability >= 8.0 (Ampere)
-        if self.weight.is_cuda and self.weight.dtype == torch.bfloat16:
-            assert sm_arch >= 8, "BF16 requires GPU with compute capability >= 8.0."
-
-        # float16 requires compute capability >= 7.5 (Turing)
-        if self.weight.is_cuda and self.weight.dtype == torch.float16:
-            assert sm_arch >= 7.5, "FP16 requires GPU with compute capability >= 7.5."
-
-        # cutlass, lggs, halo backends require compute capability >= 8.0 (Ampere)
-        if backend in ["cutlass", "lggs", "halo"]:
-            assert (
-                torch.cuda.get_device_capability()[0] >= 8
-            ), "cutlass, LGGS and Halo backends require GPU with compute capability >= 8.0."
-
-        if backend == "cutlass" and (
-            (not self.weight.is_cuda) or (self.in_channels, self.out_channels) not in self.CUTLASS_SUPPORTED_CHANNELS
-        ):
-            print(
-                f"Cutlass backend does not support {self.in_channels} -> {self.out_channels} convolutions, falling back to default"
-            )
-            backend = "default"
-
-        if backend == "lggs" and ((self.in_channels, self.out_channels) not in [(128, 128)]):
-            print("LGGS backend only supports 128 to 128 convolution, falling back to default")
-            backend = "default"
-
-        if backend == "default":
-            if (not self.weight.is_cuda) or in_feature.dtype == torch.float64:
-                backend = "legacy"
-            else:
-                backend = "igemm_mode1"
-
-        if backend == "halo" and _vec_is_all(self.stride, 1) and _vec_is_all(self.kernel_size, 3):
-            return self._dispatch_halo(in_feature, in_grid, out_grid)
-
-        elif backend == "dense" and _vec_is_all(self.stride, 1):
-            return self._dispatch_dense(in_feature, in_grid, out_grid)
-
-        else:
-            return self._dispatch_default(in_feature, in_grid, in_kmap, out_grid)
-
-    def _build_kmap_and_convert_backend(self, kmap: fvdb.SparseConvPackInfo, backend: str) -> fvdb.ConvPackBackend:
-        if backend in ["legacy", "me"]:
-            kmap.build_gather_scatter(backend == "me")
-            return fvdb.ConvPackBackend.GATHER_SCATTER
-
-        elif backend == "cutlass":
-            kmap.build_cutlass(benchmark=False)
-            return fvdb.ConvPackBackend.CUTLASS
-
-        elif backend == "igemm_mode0":
-            kmap.build_implicit_gemm(
-                sorted=False, split_mask_num=1, training=self.training, split_mask_num_bwd=3, use_tf32=self.allow_tf32
-            )
-            return fvdb.ConvPackBackend.IGEMM
-
-        elif backend == "igemm_mode1":
-            kmap.build_implicit_gemm(
-                sorted=True, split_mask_num=1, training=self.training, split_mask_num_bwd=3, use_tf32=self.allow_tf32
-            )
-            return fvdb.ConvPackBackend.IGEMM
-
-        elif backend == "igemm_mode2":
-            kmap.build_implicit_gemm(
-                sorted=True, split_mask_num=3, training=self.training, split_mask_num_bwd=3, use_tf32=self.allow_tf32
-            )
-            return fvdb.ConvPackBackend.IGEMM
-
-        elif backend == "lggs":
-            kmap.build_lggs()
-            return fvdb.ConvPackBackend.LGGS
-
-        else:
-            raise NotImplementedError(f"Backend {backend} is not supported")
-
-    def _dispatch_halo(
-        self,
-        in_feature: JaggedTensor,
-        in_grid: GridBatch,
-        out_grid: GridBatch | None,
-    ) -> tuple[GridBatch, JaggedTensor, SparseConvPackInfo | None]:
-        assert out_grid is None or _is_same(in_grid, out_grid)
-        return in_grid, in_grid.sparse_conv_halo(in_feature, self.weight, 8), None
-
-    def _dispatch_dense(
-        self,
-        in_feature: JaggedTensor,
-        in_grid: GridBatch,
-        out_grid: GridBatch | None,
-    ) -> tuple[GridBatch, JaggedTensor, SparseConvPackInfo | None]:
-        assert out_grid is None or _is_same(in_grid, out_grid)
-        min_coord = in_grid.ijk.jdata.min(dim=0).values
-        # BWHDC -> BCDHW
-        dense_feature = in_grid.write_to_dense_czyx(in_feature, min_coord=min_coord)
-        dense_feature = torch.nn.functional.conv3d(dense_feature, self.weight, padding=1, stride=1)
-        # BCDHW -> BWHDC
-        dense_feature = dense_feature.contiguous()
-        dense_feature = in_grid.read_from_dense_czyx(dense_feature, dense_origins=min_coord)
-
-        return in_grid, dense_feature, None
-
-    def _dispatch_default(
-        self,
-        in_feature: JaggedTensor,
-        in_grid: GridBatch,
-        in_kmap: SparseConvPackInfo | None,
-        out_grid: GridBatch | None,
-    ) -> tuple[GridBatch, JaggedTensor, SparseConvPackInfo | None]:
-        # Fallback to the default implementation
-        can_cache = _vec_is_all(self.stride, 1) and (out_grid is None or _is_same(in_grid, out_grid))
-
-        if in_kmap is not None and in_kmap.kernel_size == self.kernel_size and can_cache:
-            kmap, out_grid = in_kmap, in_grid
-        else:
-            if self.transposed:
-                assert out_grid is not None
-                kmap, _ = out_grid.sparse_conv_kernel_map(self.kernel_size, self.stride, in_grid)
-            else:
-                kmap, out_grid = in_grid.sparse_conv_kernel_map(self.kernel_size, self.stride, out_grid)
-
-        out_kmap = kmap if can_cache else None
-
-        backend = self._build_kmap_and_convert_backend(kmap, self.backend)
-
-        if not self.transposed:
-            out_feature = kmap.sparse_conv_3d(in_feature, self.weight, backend)
-        else:
-            out_feature = kmap.sparse_transpose_conv_3d(in_feature, self.weight, backend)
-
-        return out_grid, out_feature, out_kmap
-
+@fvnn_module
+class SparseConv3d(_SparseConv3dBase):
     def forward(
         self,
         data: JaggedTensor,
-        grid: GridBatch,
-        out_grid: GridBatch | None = None,
-        kmap: SparseConvPackInfo | None = None,
-    ) -> tuple[JaggedTensor, GridBatch, SparseConvPackInfo | None]:
+        plan: ConvolutionPlan,
+    ) -> JaggedTensor:
+        if not plan.valid_usage(self.in_channels, self.out_channels, self.kernel_size, self.stride, transposed=False):
+            raise ValueError("Invalid usage of the convolution plan")
 
-        if _vec_is_all(self.kernel_size, 1) and _vec_is_all(self.stride, 1):
-            if out_grid is not None or kmap is not None:
-                raise ValueError("out_grid and kmap must be None when kernel_size and stride are all 1")
-            out_data = data.jdata.matmul(self.weight.transpose(0, 1))
-            out_jagged_data = data.jagged_like(out_data)
-            return out_jagged_data, grid, None
-        else:
-            if kmap is not None:
-                if not _is_same(kmap.source_grid, grid):
-                    raise ValueError("kmap.source_grid must be the same as grid")
-
-                if out_grid is not None:
-                    if not _is_same(out_grid, kmap.target_grid):
-                        raise ValueError("out_grid must be the same as kmap.target_grid if not None")
-                else:
-                    out_grid = kmap.target_grid
-
-                if kmap.kernel_size != self.kernel_size:
-                    raise ValueError("kmap.kernel_size must be the same as kernel_size")
-
-                if kmap.stride != self.stride:
-                    raise ValueError("kmap.stride must be the same as stride")
-
-            out_grid, out_data, out_kmap = self._dispatch_conv(data, grid, kmap, out_grid)
-
-        assert out_grid is not None, "Failed to compute output grid. This is a bug in the implementation."
-        assert isinstance(out_data, JaggedTensor), "out_data must be a JaggedTensor"
-        assert isinstance(out_grid, GridBatch), "out_grid must be a GridBatch"
-        assert out_kmap is None or isinstance(
-            out_kmap, SparseConvPackInfo
-        ), "out_kmap must be a SparseConvPackInfo or None"
+        out_data = plan.execute(data, self.weight)
 
         if self.bias is not None:
             out_data.jdata = out_data.jdata + self.bias
 
-        return out_data, out_grid, out_kmap
+        return out_data
+
+
+@fvnn_module
+class SparseConvTranspose3d(_SparseConv3dBase):
+    def forward(
+        self,
+        data: JaggedTensor,
+        plan: ConvolutionPlan,
+    ) -> JaggedTensor:
+        if not plan.valid_usage(self.in_channels, self.out_channels, self.kernel_size, self.stride, transposed=True):
+            raise ValueError("Invalid usage of the convolution plan")
+
+        out_data = plan.execute(data, self.weight)
+
+        if self.bias is not None:
+            out_data.jdata = out_data.jdata + self.bias
+
+        return out_data
 
 
 # ------------------------------------------------------------------------------------------------
