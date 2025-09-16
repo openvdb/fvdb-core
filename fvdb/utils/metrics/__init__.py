@@ -3,7 +3,7 @@
 
 # Package exports for fvdb.utils.metrics
 
-from fvdb.utils.metrics.psnr import PSNR, psnr
+from fvdb.utils.metrics.psnr import psnr
 from fvdb.utils.metrics.ssim import ssim
 
-__all__ = ["PSNR", "psnr", "ssim"]
+__all__ = ["psnr", "ssim"]

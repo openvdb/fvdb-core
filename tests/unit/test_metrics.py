@@ -2,7 +2,7 @@ import math
 
 import pytest
 import torch
-from fvdb.utils.metrics import PSNR, psnr, ssim
+from fvdb.utils.metrics import psnr, ssim
 
 
 @pytest.mark.parametrize("padding", ["same", "valid"])  # fused-ssim supports these paddings
@@ -80,10 +80,12 @@ def test_psnr_known_values_and_reductions():
 
 
 def test_psnr_input_validation():
+    a = torch.zeros((1, 1, 8, 8))
+    b = torch.zeros((1, 1, 8, 8))
     with pytest.raises(ValueError):
-        _ = PSNR(max_value=0.0)
+        _ = psnr(a, b, max_value=0.0)
     with pytest.raises(ValueError):
-        _ = PSNR(max_value=1.0, reduction="avg")  # type: ignore[arg-type]
+        _ = psnr(a, b, max_value=1.0, reduction="avg")  # type: ignore[arg-type]
 
     # Mismatched shapes
     a = torch.zeros((1, 1, 8, 8))
