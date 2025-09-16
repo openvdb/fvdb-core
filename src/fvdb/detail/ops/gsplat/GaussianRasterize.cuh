@@ -64,6 +64,7 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
     using ScalarAccessor                           = TorchRAcc64<ScalarType, NUM_OUTER_DIMS>;
     using VectorAccessor                           = TorchRAcc64<ScalarType, NUM_OUTER_DIMS + 1>;
 
+    uint32_t mCameraOffset;
     uint32_t mNumCameras;
     uint32_t mNumGaussiansPerCamera;
     uint32_t mTotalIntersections;
@@ -110,6 +111,7 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
         const uint32_t imageOriginW,
         const uint32_t imageOriginH,
         const uint32_t tileSize,
+        const uint32_t cameraOffset,
         const torch::Tensor &tileOffsets,                               // [C, numTilesH, numTilesW]
         const torch::Tensor &tileGaussianIds,                           // [totalIntersections]
         const std::optional<torch::Tensor> &activeTiles = std::nullopt, // [AT]
@@ -130,6 +132,7 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
           mHasBackgrounds(backgrounds.has_value()),
           mMasks(initAccessor<bool, 3>(masks, means2d.options().dtype(torch::kBool), "masks")),
           mHasMasks(masks.has_value()),
+          mCameraOffset(cameraOffset),
           mTileOffsets(initAccessor<int32_t, 3>(tileOffsets, "tileOffsets")),
           mTileGaussianIds(initAccessor<int32_t, 1>(tileGaussianIds, "tileGaussianIds")),
           mIsSparse(activeTiles.has_value()),
@@ -279,7 +282,7 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
                const uint64_t row,
                const uint64_t col,
                const uint32_t activePixelIndex) {
-        return mIsSparse ? sparsePixelIndex(blockIdx.x, activePixelIndex)
+        return mIsSparse ? sparsePixelIndex(blockIdx.x + mCameraOffset, activePixelIndex)
                          : cameraId * this->mImageWidth * this->mImageHeight +
                                row * this->mImageWidth + col;
     }
@@ -288,21 +291,21 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
     inline __device__ bool
     tilePixelActive() {
         return fvdb::detail::ops::tilePixelActive(
-            mTilePixelMask, mTileSize, blockIdx.x, threadIdx.y, threadIdx.x);
+            mTilePixelMask, mTileSize, blockIdx.x + mCameraOffset, threadIdx.y, threadIdx.x);
     }
 
     // Get the camera id and tile id from a sparse tile index. Assumes a 1D grid
-    // of blocks, where blockIdx.x is the tile ordinal
+    // of blocks, where blockIdx.x + mCameraOffset is the tile ordinal
     inline __device__ std::pair<int32_t, int32_t>
     sparseCameraTileId() {
-        const int32_t globalTile = mActiveTiles[blockIdx.x];
+        const int32_t globalTile = mActiveTiles[blockIdx.x + mCameraOffset];
         const int32_t cameraId   = globalTile / (mNumTilesW * mNumTilesH);
         const int32_t tileId     = globalTile % (mNumTilesW * mNumTilesH);
         return {cameraId, tileId};
     }
 
     // Get the camera id, tile coordinates, and pixel coordinates from a sparse
-    // tile index. Assumes a 1D grid of blocks, where blockIdx.x is the tile ordinal
+    // tile index. Assumes a 1D grid of blocks, where blockIdx.x + mCameraOffset is the tile ordinal
     // @return tuple of camera id, tile row, tile col, pixel i, pixel j
     inline __device__ cuda::std::tuple<int32_t, int32_t, int32_t, uint32_t, uint32_t>
     sparseCoordinates() {
@@ -316,12 +319,12 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
     }
 
     // Get the camera id, tile coordinates, and pixel coordinates from a dense block index.
-    // Assumes a 3D grid of blocks, where blockIdx.x is the camera id, blockIdx.y is the tile
+    // Assumes a 3D grid of blocks, where blockIdx.x + mCameraOffset is the camera id, blockIdx.y is the tile
     // row, and blockIdx.z is the tile column.
     // @return tuple of camera id, tile row, tile col, pixel i, pixel j
     inline __device__ cuda::std::tuple<int32_t, int32_t, int32_t, uint32_t, uint32_t>
     denseCoordinates() {
-        const int32_t cameraId = blockIdx.x;
+        const int32_t cameraId = blockIdx.x + mCameraOffset;
 
         // blockIdx.yz runs from [0, numTilesH] x [0, numTilesW]
         const int32_t tileRow = blockIdx.y + mTileOriginH;

@@ -114,6 +114,7 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeTopContributingGa
                      imageOriginW,
                      imageOriginH,
                      tileSize,
+                     0,
                      tileOffsets,
                      tileGaussianIds,
                      activeTiles,

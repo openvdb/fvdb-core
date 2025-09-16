@@ -224,7 +224,7 @@ RasterizeGaussiansToPixels::forward(
     // const int C = means2d.size(0);
     // const int N = means2d.size(1);
 
-    auto variables          = FVDB_DISPATCH_KERNEL_DEVICE(means2d.device(), [&]() {
+    auto variables          = FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
         return ops::dispatchGaussianRasterizeForward<DeviceTag>(means2d,
                                                                 conics,
                                                                 colors,

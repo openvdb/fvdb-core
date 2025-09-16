@@ -87,6 +87,7 @@ struct RasterizeBackwardArgs {
                      imageOriginW,
                      imageOriginH,
                      tileSize,
+                     0,
                      tileOffsets,
                      tileGaussianIds,
                      activeTiles,
