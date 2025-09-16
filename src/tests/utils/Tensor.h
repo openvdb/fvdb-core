@@ -5,7 +5,7 @@
 #define TESTS_UTILS_TENSOR_H
 
 #include <torch/script.h>
-#include <torch/torch.h>
+#include <torch/all.h>
 
 #include <vector>
 

@@ -12,7 +12,7 @@
 #include <nanovdb/NanoVDB.h>
 
 #include <ATen/core/TensorBody.h>
-#include <torch/all.h>
+#include <torch/types.h>
 
 #include <vector>
 

@@ -7,7 +7,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
 
 #include <torch/script.h>
-#include <torch/torch.h>
+#include <torch/all.h>
 
 #include <cuda_runtime_api.h>
 

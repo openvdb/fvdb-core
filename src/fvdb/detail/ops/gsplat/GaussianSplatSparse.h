@@ -6,7 +6,7 @@
 
 #include <fvdb/JaggedTensor.h>
 
-#include <torch/torch.h>
+#include <torch/types.h>
 
 #include <cstdint>
 #include <tuple>

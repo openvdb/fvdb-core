@@ -7,8 +7,6 @@
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchImpl.h>
 
-#include <nanovdb/NanoVDB.h>
-
 #include <torch/types.h>
 
 #include <cstdint>

@@ -4,7 +4,7 @@
 
 // A simple minimal benchmark to serve as a starting point for fVDB benchmarks.
 
-#include <torch/torch.h>
+#include <torch/all.h>
 
 #include <benchmark/benchmark.h>
 

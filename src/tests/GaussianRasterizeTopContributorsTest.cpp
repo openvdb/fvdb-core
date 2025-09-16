@@ -7,7 +7,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
 
 #include <torch/script.h>
-#include <torch/torch.h>
+#include <torch/all.h>
 
 #include <gtest/gtest.h>
 

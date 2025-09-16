@@ -4,7 +4,6 @@
 #ifndef FVDB_DETAIL_AUTOGRAD_GAUSSIANRENDER_H
 #define FVDB_DETAIL_AUTOGRAD_GAUSSIANRENDER_H
 
-#include <torch/all.h>
 #include <torch/autograd.h>
 
 namespace fvdb {

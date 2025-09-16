@@ -8,7 +8,7 @@
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <c10/cuda/CUDAException.h>
-#include <torch/extension.h>
+#include <torch/all.h>
 
 namespace fvdb {
 namespace detail {

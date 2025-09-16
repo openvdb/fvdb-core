@@ -3,7 +3,7 @@
 
 // A simple minimal unit test to serve as a starting point for fVDB unit tests.
 
-#include <torch/torch.h>
+#include <torch/all.h>
 
 #include <gtest/gtest.h>
 

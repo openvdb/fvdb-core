@@ -6,7 +6,9 @@
 
 #include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
 
-#include <nanovdb/NanoVDB.h>
+#include <nanovdb/math/Math.h>
+
+#include <torch/types.h>
 
 namespace fvdb {
 namespace detail {

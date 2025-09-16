@@ -9,7 +9,7 @@
 #include <ATen/cuda/Atomic.cuh>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDACachingAllocator.h>
-#include <torch/extension.h>
+#include <torch/all.h>
 
 #include <cublas_v2.h>
 

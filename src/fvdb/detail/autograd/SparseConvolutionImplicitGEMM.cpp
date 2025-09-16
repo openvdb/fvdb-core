@@ -7,7 +7,7 @@
 #include <fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMMGradSorted.h>
 #include <fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMMSorted.h>
 
-#include <torch/extension.h>
+#include <torch/all.h>
 
 namespace fvdb {
 namespace detail {
