@@ -51,9 +51,17 @@ _DEFAULT_CONFIG: dict[str, Any] = {
     "feature_dtypes": _DEFAULT_DTYPES,
 }
 
+_ANY_CHANNEL_PAIRS: tuple[tuple[int, int], ...] = ()
+
 
 def _vec_is_all(v: torch.Tensor, i: int | float) -> bool:
     return bool(torch.all(torch.eq(v, i)).item())
+
+
+def _channel_pair_supported(in_channels: int, out_channels: int, channel_pairs: tuple[tuple[int, int], ...]) -> bool:
+    if len(channel_pairs) == 0:
+        return True
+    return (in_channels, out_channels) in channel_pairs
 
 
 @dataclass(frozen=True)
@@ -77,35 +85,28 @@ class ConvolutionPlan:
 
     Usage Pattern:
         1. Create a plan using one of the `from_*` class methods
-        2. Use the `apply()` method to perform convolutions with different weights
+        2. Use the `execute()` method to perform convolutions with different weights
         3. Reuse the same plan for multiple convolutions with the same configuration
-
-    Key Benefits:
-        - Pre-computes sparse data structures for optimal performance
-        - Automatically selects the best backend (CUTLASS, IGEMM, etc.) for your hardware
-        - Supports both single grids and batched operations
-        - Handles both regular and transposed convolutions
 
     Example:
         ```python
         # Create a plan for 3x3x3 convolution with stride 1
         plan = ConvolutionPlan.from_grid(
-            channel_pairs=((32, 64), (64, 128)),
             kernel_size=3,
             stride=1,
             source_grid=my_grid
         )
 
-        # Apply convolution with different weights
+        # execute convolution with different weights
         features = torch.randn(num_voxels, 32, device="cuda")
         weights = torch.randn(64, 32, 3, 3, 3, device="cuda")
-        output = plan.apply(features, weights)
+        output = plan.execute(features, weights)
         ```
 
     Note:
         - Always create plans using the `from_*` class methods, never call `__init__` directly
         - Plans are immutable once created
-        - The same plan can be reused for multiple `apply()` calls with different data/weights
+        - The same plan can be reused for multiple `execute()` calls with different data/weights
         - Channel pairs must be specified at plan creation time for optimal backend selection
     """
 
@@ -118,13 +119,13 @@ class ConvolutionPlan:
     @classmethod
     def from_grid_batch(
         cls,
-        channel_pairs: tuple[tuple[int, int], ...],
         kernel_size: NumericMaxRank1,
         stride: NumericMaxRank1,
         source_grid: GridBatch,
         target_grid: GridBatch | None = None,
         *,
         expert_config: dict[str, Any] = _DEFAULT_CONFIG,
+        channel_pairs: tuple[tuple[int, int], ...] = _ANY_CHANNEL_PAIRS,
     ) -> "ConvolutionPlan":
         """
         Create a convolution plan for batched grid operations (regular convolution).
@@ -134,9 +135,6 @@ class ConvolutionPlan:
         a batch of data.
 
         Args:
-            channel_pairs: Supported input/output channel combinations as tuples.
-                          Each tuple represents (input_channels, output_channels).
-                          Example: ((32, 64), (64, 128)) supports 32->64 and 64->128 convolutions.
             kernel_size: Size of the convolution kernel. Can be a single int (cubic kernel)
                         or a 3-element sequence for (x, y, z) dimensions.
             stride: Convolution stride. Can be a single int or 3-element sequence.
@@ -145,24 +143,27 @@ class ConvolutionPlan:
                 based on kernel_size and stride applied to source_grid, except for dense, halo, and
                 lggs backends where it uses source_grid. For those backends, target_grid must be None.
             expert_config: Advanced configuration options (rarely needed by typical users).
+            channel_pairs: Supported input/output channel combinations as tuples.
+                Each tuple represents (input_channels, output_channels).
+                Example: ((32, 64), (64, 128)) supports 32->64 and 64->128 convolutions.
+                Defaults to _ANY_CHANNEL_PAIRS, which means any channel pairs are supported.
 
         Returns:
-            ConvolutionPlan: Configured plan ready for apply() operations.
+            ConvolutionPlan: Configured plan ready for execute() operations.
 
         Example:
             ```python
             # Create plan for 3x3x3 convolution
             plan = ConvolutionPlan.from_grid_batch(
-                channel_pairs=((8, 16), (16, 32)),
                 kernel_size=3,
                 stride=1,
                 source_grid=grid_batch
             )
 
-            # Apply to batched data
+            # execute to batched data
             batch_data = JaggedTensor(torch.randn(5, 1000, 8, device="cuda"))
             weights = torch.randn(16, 8, 3, 3, 3, device="cuda")
-            output = plan.apply(batch_data, weights)
+            output = plan.execute(batch_data, weights)
             ```
         """
         kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
@@ -185,13 +186,13 @@ class ConvolutionPlan:
     @classmethod
     def from_grid_batch_transposed(
         cls,
-        channel_pairs: tuple[tuple[int, int], ...],
         kernel_size: NumericMaxRank1,
         stride: NumericMaxRank1,
         source_grid: GridBatch,
         target_grid: GridBatch | None = None,
         *,
         expert_config: dict[str, Any] = _DEFAULT_CONFIG,
+        channel_pairs: tuple[tuple[int, int], ...] = _ANY_CHANNEL_PAIRS,
     ) -> "ConvolutionPlan":
         """
         Create a transposed convolution plan for batched grid operations.
@@ -207,8 +208,6 @@ class ConvolutionPlan:
         of abstract operation.
 
         Args:
-            channel_pairs: Supported input/output channel combinations as tuples.
-                          Each tuple represents (input_channels, output_channels).
             kernel_size: Size of the convolution kernel. Can be a single int (cubic kernel)
                         or a 3-element sequence for (x, y, z) dimensions.
             stride: Convolution stride. Can be a single int or 3-element sequence.
@@ -216,6 +215,10 @@ class ConvolutionPlan:
             target_grid: Output GridBatch structure. If None, automatically computed
                 except for dense backend where it uses source_grid.
             expert_config: Advanced configuration options (rarely needed by typical users).
+            channel_pairs: Supported input/output channel combinations as tuples.
+                Each tuple represents (input_channels, output_channels).
+                Example: ((32, 64), (64, 128)) supports 32->64 and 64->128 convolutions.
+                Defaults to _ANY_CHANNEL_PAIRS, which means any channel pairs are supported.
 
         Returns:
             ConvolutionPlan: Configured plan ready for transposed convolution operations.
@@ -244,13 +247,13 @@ class ConvolutionPlan:
     @classmethod
     def from_grid(
         cls,
-        channel_pairs: tuple[tuple[int, int], ...],
         kernel_size: NumericMaxRank1,
         stride: NumericMaxRank1,
         source_grid: Grid,
         target_grid: Grid | None = None,
         *,
         expert_config: dict[str, Any] = _DEFAULT_CONFIG,
+        channel_pairs: tuple[tuple[int, int], ...] = _ANY_CHANNEL_PAIRS,
     ) -> "ConvolutionPlan":
         """
         Create a convolution plan for single grid operations (regular convolution).
@@ -259,9 +262,6 @@ class ConvolutionPlan:
         when you have individual grids rather than batched data.
 
         Args:
-            channel_pairs: Supported input/output channel combinations as tuples.
-                          Each tuple represents (input_channels, output_channels).
-                          Example: ((32, 64), (64, 128)) supports 32->64 and 64->128 convolutions.
             kernel_size: Size of the convolution kernel. Can be a single int (cubic kernel)
                         or a 3-element sequence for (x, y, z) dimensions.
             stride: Convolution stride. Can be a single int or 3-element sequence.
@@ -270,9 +270,13 @@ class ConvolutionPlan:
                 based on kernel_size and stride applied to source_grid, except for dense, halo, and
                 lggs backends where it uses source_grid. For those backends, target_grid must be None..
             expert_config: Advanced configuration options (rarely needed by typical users).
+            channel_pairs: Supported input/output channel combinations as tuples.
+                Each tuple represents (input_channels, output_channels).
+                Example: ((32, 64), (64, 128)) supports 32->64 and 64->128 convolutions.
+                Defaults to _ANY_CHANNEL_PAIRS, which means any channel pairs are supported.
 
         Returns:
-            ConvolutionPlan: Configured plan ready for apply() operations.
+            ConvolutionPlan: Configured plan ready for execute() operations.
 
         Example:
             ```python
@@ -281,16 +285,15 @@ class ConvolutionPlan:
 
             # Create plan for 3x3x3 convolution
             plan = ConvolutionPlan.from_grid(
-                channel_pairs=((8, 16), (16, 16)),
                 kernel_size=3,
                 stride=1,
                 source_grid=grid
             )
 
-            # Apply to single grid data
+            # execute to single grid data
             features = torch.randn(100, 8, device="cuda")
             weights = torch.randn(16, 8, 3, 3, 3, device="cuda")
-            output = plan.apply(features, weights)
+            output = plan.execute(features, weights)
             ```
         """
         kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
@@ -313,13 +316,13 @@ class ConvolutionPlan:
     @classmethod
     def from_grid_transposed(
         cls,
-        channel_pairs: tuple[tuple[int, int], ...],
         kernel_size: NumericMaxRank1,
         stride: NumericMaxRank1,
         source_grid: Grid,
         target_grid: Grid | None = None,
         *,
         expert_config: dict[str, Any] = _DEFAULT_CONFIG,
+        channel_pairs: tuple[tuple[int, int], ...] = _ANY_CHANNEL_PAIRS,
     ) -> "ConvolutionPlan":
         """
         Create a transposed convolution plan for single grid operations.
@@ -335,8 +338,6 @@ class ConvolutionPlan:
         of abstract operation.
 
         Args:
-            channel_pairs: Supported input/output channel combinations as tuples.
-                          Each tuple represents (input_channels, output_channels).
             kernel_size: Size of the convolution kernel. Can be a single int (cubic kernel)
                         or a 3-element sequence for (x, y, z) dimensions.
             stride: Convolution stride. Can be a single int or 3-element sequence.
@@ -344,6 +345,10 @@ class ConvolutionPlan:
             target_grid: Output Grid structure. If None, automatically computed
                         except for dense backend where it uses source_grid.
             expert_config: Advanced configuration options (rarely needed by typical users).
+            channel_pairs: Supported input/output channel combinations as tuples.
+                Each tuple represents (input_channels, output_channels).
+                Example: ((32, 64), (64, 128)) supports 32->64 and 64->128 convolutions.
+                Defaults to _ANY_CHANNEL_PAIRS, which means any channel pairs are supported.
 
         Returns:
             ConvolutionPlan: Configured plan ready for transposed convolution operations.
@@ -388,7 +393,6 @@ class ConvolutionPlan:
             ```python
             # Create forward plan
             forward_plan = ConvolutionPlan.from_grid(
-                channel_pairs=((32, 64),),
                 kernel_size=3,
                 stride=1,
                 source_grid=input_grid
@@ -396,8 +400,6 @@ class ConvolutionPlan:
 
             # Create the corresponding backward/transpose plan
             backward_plan = ConvolutionPlan.from_plan_transposed(forward_plan)
-
-            # Now backward_plan has channel_pairs=((64, 32),) and swapped grids
             ```
 
         Note:
@@ -419,9 +421,9 @@ class ConvolutionPlan:
         return cls(t_pack_info, channel_pairs, transposed, expert_config, t_backend)
 
     @overload
-    def apply(self, data: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
+    def execute(self, data: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
         """
-        Apply the convolution plan to single grid data.
+        execute the convolution plan to single grid data.
 
         Args:
             data: Input features for each voxel in the source grid.
@@ -435,9 +437,9 @@ class ConvolutionPlan:
         """
 
     @overload
-    def apply(self, data: JaggedTensor, weights: torch.Tensor) -> JaggedTensor:
+    def execute(self, data: JaggedTensor, weights: torch.Tensor) -> JaggedTensor:
         """
-        Apply the convolution plan to batched grid data.
+        execute the convolution plan to batched grid data.
 
         Args:
             data: Input features for each voxel across multiple grids in the batch.
@@ -450,7 +452,7 @@ class ConvolutionPlan:
             Shape: (batch_size, total_output_voxels_per_grid, out_channels)
         """
 
-    def apply(self, data: JaggedTensorOrTensor, weights: torch.Tensor) -> JaggedTensorOrTensor:
+    def execute(self, data: JaggedTensorOrTensor, weights: torch.Tensor) -> JaggedTensorOrTensor:
         """
         Execute the sparse convolution using this plan's configuration.
 
@@ -479,11 +481,11 @@ class ConvolutionPlan:
             # Single grid example
             features = torch.randn(1000, 32, device="cuda")  # 1000 voxels, 32 channels
             weights = torch.randn(64, 32, 3, 3, 3, device="cuda")  # 32->64 channels, 3x3x3 kernel
-            output = plan.apply(features, weights)  # Shape: (output_voxels, 64)
+            output = plan.execute(features, weights)  # Shape: (output_voxels, 64)
 
             # Batched example
             batch_features = JaggedTensor(torch.randn(5, 1000, 32, device="cuda"))
-            output = plan.apply(batch_features, weights)  # Shape: (5, output_voxels, 64)
+            output = plan.execute(batch_features, weights)  # Shape: (5, output_voxels, 64)
             ```
 
         Note:
@@ -494,7 +496,7 @@ class ConvolutionPlan:
         """
         out_c = weights.shape[0]
         in_c = weights.shape[1]
-        if (in_c, out_c) not in self._channel_pairs:
+        if not _channel_pair_supported(in_c, out_c, self._channel_pairs):
             raise ValueError(f"Channel pair {in_c, out_c} is not supported")
 
         is_flat: bool = isinstance(data, torch.Tensor)
@@ -514,9 +516,9 @@ class ConvolutionPlan:
             data = JaggedTensor(data)
 
         if self._backend == ConvPackBackend.HALO:
-            result = self._apply_halo(data, weights)
+            result = self._execute_halo(data, weights)
         elif self._backend == ConvPackBackend.DENSE:
-            result = self._apply_dense(data, weights)
+            result = self._execute_dense(data, weights)
         else:
             if self._transposed:
                 result = self._pack_info.sparse_transpose_conv_3d(data, weights, self._backend)
@@ -542,9 +544,6 @@ class ConvolutionPlan:
         """
         Configures the pack_info in place, building whatever backend structure was asked for. Returns the backend to
         """
-
-        if len(channel_pairs) == 0:
-            raise ValueError("channel_pairs must be non-empty")
 
         for channel_pair in channel_pairs:
             if len(channel_pair) != 2 or channel_pair[0] <= 0 or channel_pair[1] <= 0:
@@ -629,6 +628,9 @@ class ConvolutionPlan:
             if transposed:
                 raise ValueError("Cutlass backend does not support transposed convolution.")
 
+            if len(channel_pairs) == 0:
+                raise ValueError("Cutlass backend requires channel_pairs to be non-empty")
+
             for channel_pair in channel_pairs:
                 if channel_pair not in _CUTLASS_SUPPORTED_CHANNELS:
                     raise ValueError(f"Cutlass backend does not support {channel_pair} convolution.")
@@ -696,7 +698,7 @@ class ConvolutionPlan:
         else:
             raise NotImplementedError(f"Backend {backend} is not supported")
 
-    def _apply_halo(self, data: JaggedTensorOrTensor, weights: torch.Tensor) -> JaggedTensor:
+    def _execute_halo(self, data: JaggedTensorOrTensor, weights: torch.Tensor) -> JaggedTensor:
         assert not self._transposed, "Halo backend does not support transposed convolution."
 
         if isinstance(data, torch.Tensor):
@@ -704,7 +706,7 @@ class ConvolutionPlan:
 
         return self._pack_info.source_grid.sparse_conv_halo(data, weights, 8)
 
-    def _apply_dense(self, data: JaggedTensorOrTensor, weights: torch.Tensor) -> JaggedTensor:
+    def _execute_dense(self, data: JaggedTensorOrTensor, weights: torch.Tensor) -> JaggedTensor:
         source_grid = self._pack_info.source_grid
         target_grid = self._pack_info.target_grid
         assert source_grid.is_same(target_grid)
@@ -734,7 +736,7 @@ def _grid_test_for_typing():
 
     grid = Grid.from_zero_voxels(device="cuda", voxel_size=voxel_size, origin=origin)
 
-    plan = ConvolutionPlan.from_grid(channel_pairs=((8, 16), (16, 16)), kernel_size=3, stride=1, source_grid=grid)
+    plan = ConvolutionPlan.from_grid(kernel_size=3, stride=1, source_grid=grid)
     plan_t = ConvolutionPlan.from_plan_transposed(plan)
 
     weights_1 = torch.randn(16, 8, 3, 3, 3, device="cuda")
@@ -744,11 +746,11 @@ def _grid_test_for_typing():
 
     data_1 = torch.randn(100, 8, device="cuda")
 
-    out_1: torch.Tensor = plan.apply(data_1, weights_1)
-    out_2: torch.Tensor = plan.apply(out_1, weights_2)
+    out_1: torch.Tensor = plan.execute(data_1, weights_1)
+    out_2: torch.Tensor = plan.execute(out_1, weights_2)
 
-    out_3: torch.Tensor = plan_t.apply(out_2, weights_3)
-    out_4: torch.Tensor = plan_t.apply(out_3, weights_4)
+    out_3: torch.Tensor = plan_t.execute(out_2, weights_3)
+    out_4: torch.Tensor = plan_t.execute(out_3, weights_4)
 
 
 def _grid_batch_test_for_typing():
@@ -758,9 +760,7 @@ def _grid_batch_test_for_typing():
 
     grid_batch = GridBatch.from_zero_voxels(device="cuda", voxel_sizes=voxel_sizes, origins=origins)
 
-    plan = ConvolutionPlan.from_grid_batch(
-        channel_pairs=((8, 16), (16, 16)), kernel_size=3, stride=1, source_grid=grid_batch
-    )
+    plan = ConvolutionPlan.from_grid_batch(kernel_size=3, stride=1, source_grid=grid_batch)
     plan_t = ConvolutionPlan.from_plan_transposed(plan)
 
     weights_1 = torch.randn(16, 8, 3, 3, 3, device="cuda")
@@ -770,8 +770,8 @@ def _grid_batch_test_for_typing():
 
     data_1 = torch.randn(batch_size, 100, 8, device="cuda")
 
-    out_1: torch.Tensor = plan.apply(data_1, weights_1)
-    out_2: torch.Tensor = plan.apply(out_1, weights_2)
+    out_1: torch.Tensor = plan.execute(data_1, weights_1)
+    out_2: torch.Tensor = plan.execute(out_1, weights_2)
 
-    out_3: torch.Tensor = plan_t.apply(out_2, weights_3)
-    out_4: torch.Tensor = plan_t.apply(out_3, weights_4)
+    out_3: torch.Tensor = plan_t.execute(out_2, weights_3)
+    out_4: torch.Tensor = plan_t.execute(out_3, weights_4)
