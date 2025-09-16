@@ -6,8 +6,8 @@
 #include <fvdb/detail/ops/gsplat/GaussianProjectionBackward.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
 
+#include <torch/all.h>
 #include <torch/script.h>
-#include <torch/torch.h>
 
 #include <cuda_runtime_api.h>
 

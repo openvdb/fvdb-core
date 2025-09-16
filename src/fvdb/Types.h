@@ -6,10 +6,6 @@
 
 #include <fvdb/detail/TypesImpl.h>
 
-#include <nanovdb/NanoVDB.h>
-
-#include <torch/all.h>
-
 namespace fvdb {
 
 // These are union types that can be constructed from nanovdb types, torch tensors, std::vectors,

@@ -6,9 +6,8 @@
 
 #include <fvdb/detail/utils/Utils.h>
 
-#include <torch/all.h>
 #include <torch/custom_class.h>
-#include <torch/extension.h>
+#include <torch/types.h>
 
 #include <optional>
 

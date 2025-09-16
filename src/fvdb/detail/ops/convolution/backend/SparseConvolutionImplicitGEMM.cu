@@ -4,7 +4,7 @@
 #include <fvdb/detail/ops/convolution/backend/ConvPragmaMessage.h>
 #include <fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMM.h>
 
-#include <torch/extension.h>
+#include <torch/all.h>
 
 #include <cuda_fp16.h>
 

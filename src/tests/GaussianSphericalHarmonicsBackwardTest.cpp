@@ -5,7 +5,7 @@
 
 #include <fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsBackward.h>
 
-#include <torch/torch.h>
+#include <torch/all.h>
 
 #include <gtest/gtest.h>
 

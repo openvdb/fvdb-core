@@ -4,9 +4,9 @@
 #ifndef FVDB_DETAIL_UTILS_NANOVDB_TORCHNANOCONVERSIONS_H
 #define FVDB_DETAIL_UTILS_NANOVDB_TORCHNANOCONVERSIONS_H
 
-#include <nanovdb/NanoVDB.h>
+#include <nanovdb/math/Math.h>
 
-#include <torch/torch.h>
+#include <torch/types.h>
 
 namespace fvdb {
 

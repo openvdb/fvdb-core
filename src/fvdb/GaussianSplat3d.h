@@ -9,7 +9,7 @@
 
 #include <ATen/core/TensorBody.h>
 #include <c10/core/Device.h>
-#include <torch/all.h>
+#include <torch/types.h>
 
 namespace fvdb {
 

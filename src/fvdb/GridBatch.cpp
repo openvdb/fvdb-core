@@ -38,7 +38,7 @@
 #include <fvdb/detail/ops/convolution/pack_info/IGEMMBitOperations.h>
 #include <fvdb/detail/utils/Utils.h>
 
-#include <torch/extension.h>
+#include <torch/all.h>
 
 namespace fvdb {
 

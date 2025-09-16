@@ -7,8 +7,6 @@
 #include <fvdb/GridBatch.h>
 #include <fvdb/Types.h>
 
-#include <torch/torch.h>
-
 #include <tuple>
 
 namespace fvdb {

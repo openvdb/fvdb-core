@@ -6,14 +6,11 @@
 
 #include <fvdb/detail/utils/nanovdb/ActiveVoxelIterator.h>
 #include <fvdb/detail/utils/nanovdb/HDDAIterators.h>
-#include <fvdb/detail/utils/nanovdb/Printing.h>
 #include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
-
-#include <nanovdb/NanoVDB.h>
 
 #include <ATen/Dispatch_v2.h>
 #include <c10/util/Half.h>
-#include <torch/extension.h>
+#include <torch/types.h>
 
 #include <iostream>
 #include <memory>
