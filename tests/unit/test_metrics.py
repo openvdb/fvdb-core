@@ -2,7 +2,7 @@ import math
 
 import pytest
 import torch
-from fvdb.utils.metrics import PSNR, ssim
+from fvdb.utils.metrics import PSNR, psnr, ssim
 
 
 @pytest.mark.parametrize("padding", ["same", "valid"])  # fused-ssim supports these paddings
@@ -45,10 +45,9 @@ def test_ssim_identical_greater_than_random():
 
 
 def test_psnr_identical_images_is_inf_none_reduction():
-    psnr = PSNR(max_value=1.0, reduction="none")
     gt = torch.zeros((3, 4, 4))  # CHW per sample
     noisy = gt.clone()
-    val = psnr(noisy.unsqueeze(0), gt.unsqueeze(0))  # add batch dim
+    val = psnr(noisy.unsqueeze(0), gt.unsqueeze(0), max_value=1.0, reduction="none")  # add batch dim
 
     assert val.shape == (1,)
     assert torch.isinf(val).all()
@@ -66,19 +65,16 @@ def test_psnr_known_values_and_reductions():
         ]
     )
 
-    psnr_none = PSNR(max_value=1.0, reduction="none")
-    vals = psnr_none(noisy, gt)
+    vals = psnr(noisy, gt, max_value=1.0, reduction="none")
     assert vals.shape == (2,)
     assert math.isclose(vals[0].item(), 20.0, rel_tol=0, abs_tol=1e-4)
     assert math.isclose(vals[1].item(), 40.0, rel_tol=0, abs_tol=1e-4)
 
-    psnr_mean = PSNR(max_value=1.0, reduction="mean")
-    val_mean = psnr_mean(noisy, gt)
+    val_mean = psnr(noisy, gt, max_value=1.0, reduction="mean")
     assert val_mean.ndim == 0
     assert math.isclose(val_mean.item(), 30.0, rel_tol=0, abs_tol=1e-4)
 
-    psnr_sum = PSNR(max_value=1.0, reduction="sum")
-    val_sum = psnr_sum(noisy, gt)
+    val_sum = psnr(noisy, gt, max_value=1.0, reduction="sum")
     assert val_sum.ndim == 0
     assert math.isclose(val_sum.item(), 60.0, rel_tol=0, abs_tol=1e-4)
 
@@ -89,7 +85,6 @@ def test_psnr_input_validation():
     with pytest.raises(ValueError):
         _ = PSNR(max_value=1.0, reduction="avg")  # type: ignore[arg-type]
 
-    psnr = PSNR(max_value=1.0)
     # Mismatched shapes
     a = torch.zeros((1, 1, 8, 8))
     b = torch.zeros((1, 1, 8, 7))

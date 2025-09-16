@@ -29,7 +29,26 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+
 @FUSED_SSIM_INIT_PY_CONTENT@
 
-def ssim(img1, img2, padding="same", train=True):
+from typing import Literal
+
+def ssim(img1: torch.Tensor,
+         img2: torch.Tensor,
+         padding: Literal["same", "valid"] = "same",
+         train: bool = True
+) -> torch.Tensor:
+    """
+    Compute the Structural Similarity Index (SSIM) between two images.
+
+    Args:
+        img1 (torch.Tensor): A batch of images of shape (B, C, H, W)
+        img2 (torch.Tensor): A batch of images of shape (B, C, H, W)
+        padding (str): The padding to use for the images (). Default is "same".
+        train (bool): Whether or not to compute the gradient of the SSIM. Default is True.
+
+    Returns:
+        torch.Tensor: The SSIM between the two images.
+    """
     return fused_ssim(img1, img2, padding, train)

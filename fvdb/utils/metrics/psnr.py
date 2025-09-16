@@ -69,3 +69,28 @@ class PSNR(torch.nn.Module):
             raise RuntimeError(
                 "Unreachable. PSNR reduction should always be one of 'sum', 'mean' or 'none'"
             )  # should never happen
+
+
+def psnr(
+    noisy_images: torch.Tensor,
+    ground_truth_images: torch.Tensor,
+    max_value: float = 1.0,
+    reduction: Literal["none", "mean", "sum"] = "mean",
+) -> torch.Tensor:
+    """
+    Compute the Peak-Signal-to-Noise-Ratio (PSNR) ratio between two batches of images.
+
+    Args:
+        noisy_images (torch.Tensor): A batch of noisy images of shape (B, C, H, W)
+        ground_truth_images (torch.Tensor): A batch of ground truth images of shape (B, C, H, W)
+        max_value (float): The maximum possible value images computed with this loss can have.
+            Default is 1.0.
+        reduction (Literal["none", "mean", "sum"]): How to reduce over the batch dimension. "sum"
+            and "mean" will add-up and average the losses across the batch respectively. "none" will
+            return each loss as a seperate entry in the tensor. Default is "mean".
+
+    Returns:
+        torch.Tensor: The PSNR between the two images (optionally reduced over the batch
+            if reduction is not "none")
+    """
+    return PSNR(max_value, reduction)(noisy_images, ground_truth_images)
