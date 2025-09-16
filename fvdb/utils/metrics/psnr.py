@@ -1,10 +1,10 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 from typing import Literal
 
-import numpy as np  # type: ignore[import-not-found]
-import torch  # type: ignore[import-not-found]
+import torch
 
 
 def psnr(
@@ -40,10 +40,8 @@ def psnr(
 
     mse = torch.mean((noisy_images - ground_truth_images) ** 2, dim=(1, 2, 3))  # [B]
 
-    log_max_value = 2.0 * np.log10(max_value)
-
     # Expand log of ratio to difference of logs for better stability
-    psnr = 10.0 * (log_max_value - torch.log10(mse))
+    psnr = 10.0 * (2.0 * math.log10(max_value) - torch.log10(mse))
     if reduction == "none":
         return psnr
     elif reduction == "mean":
