@@ -136,7 +136,7 @@ class ConvolutionPlan:
         Args:
             channel_pairs: Supported input/output channel combinations as tuples.
                           Each tuple represents (input_channels, output_channels).
-                          Example: ((32, 64), (64, 128)) supports 32→64 and 64→128 convolutions.
+                          Example: ((32, 64), (64, 128)) supports 32->64 and 64->128 convolutions.
             kernel_size: Size of the convolution kernel. Can be a single int (cubic kernel)
                         or a 3-element sequence for (x, y, z) dimensions.
             stride: Convolution stride. Can be a single int or 3-element sequence.
@@ -261,7 +261,7 @@ class ConvolutionPlan:
         Args:
             channel_pairs: Supported input/output channel combinations as tuples.
                           Each tuple represents (input_channels, output_channels).
-                          Example: ((32, 64), (64, 128)) supports 32→64 and 64→128 convolutions.
+                          Example: ((32, 64), (64, 128)) supports 32->64 and 64->128 convolutions.
             kernel_size: Size of the convolution kernel. Can be a single int (cubic kernel)
                         or a 3-element sequence for (x, y, z) dimensions.
             stride: Convolution stride. Can be a single int or 3-element sequence.
