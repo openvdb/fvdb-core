@@ -23,7 +23,7 @@ def psnr(
             Default is 1.0.
         reduction (Literal["none", "mean", "sum"]): How to reduce over the batch dimension. "sum"
             and "mean" will add-up and average the losses across the batch respectively. "none" will
-            return each loss as a seperate entry in the tensor. Default is "mean".
+            return each loss as a separate entry in the tensor. Default is "mean".
 
     Returns:
         torch.Tensor: The PSNR between the two images (optionally reduced over the batch
