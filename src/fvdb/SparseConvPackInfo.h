@@ -19,6 +19,8 @@ enum ConvPackBackend {
     IGEMM,
     CUTLASS,
     LGGS,
+    HALO,
+    DENSE
 };
 
 class SparseConvPackInfo : torch::CustomClassHolder {

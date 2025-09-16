@@ -374,6 +374,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .value("IGEMM", fvdb::ConvPackBackend::IGEMM)
         .value("CUTLASS", fvdb::ConvPackBackend::CUTLASS)
         .value("LGGS", fvdb::ConvPackBackend::LGGS)
+        .value("HALO", fvdb::ConvPackBackend::HALO)
+        .value("DENSE", fvdb::ConvPackBackend::DENSE)
         .export_values();
 
     py::class_<fvdb::SparseConvPackInfo>(m, "SparseConvPackInfo")
