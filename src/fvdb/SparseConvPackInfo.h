@@ -14,15 +14,7 @@
 
 namespace fvdb {
 
-enum ConvPackBackend {
-    GATHER_SCATTER,
-    IGEMM,
-    CUTLASS,
-    LGGS,
-    HALO,
-    DENSE,
-    MATMUL
-};
+enum ConvPackBackend { GATHER_SCATTER, IGEMM, CUTLASS, LGGS, HALO, DENSE, MATMUL };
 
 class SparseConvPackInfo : torch::CustomClassHolder {
     // #IO: Number of input-output pairs

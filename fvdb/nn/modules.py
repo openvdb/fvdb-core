@@ -136,12 +136,12 @@ class UpsamplingNearest(nn.Module):
 
 
 @fvnn_module
-class FillFromGrid(nn.Module):
+class InjectFromGrid(nn.Module):
     r"""
-    Fill the content of input vdb-tensor to another grid.
+    Inject the content of input vdb-tensor to another grid.
 
     Args:
-        default_value: the default value to fill in the new grid.
+        default_value: the default value to inject in the new grid.
     """
 
     def __init__(self, default_value: float = 0.0) -> None:
@@ -182,7 +182,7 @@ class _SparseConv3dBase(nn.Module):
         self.kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
         self.stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
-        self.kernel_volume = math.prod(self.kernel_size)
+        self.kernel_volume: int = int(torch.prod(self.kernel_size).item())
         if self.kernel_volume > 1:
             # Weight tensor is of shape (Do, Di, K0, K1, K2), but the underlying data is (K2, K1, K0, Di, Do)
             #   so we don't need to make a copy of the permuted tensor within the conv kernel.
