@@ -1014,8 +1014,6 @@ callRasterizeBackwardWithCorrectSharedChannels(
     const std::optional<torch::Tensor> &tilePixelMask   = std::nullopt,
     const std::optional<torch::Tensor> &tilePixelCumsum = std::nullopt,
     const std::optional<torch::Tensor> &pixelMap        = std::nullopt) {
-    const at::cuda::OptionalCUDAGuard device_guard(device_of(means2d));
-
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
     auto callWithSharedChannels = [&](size_t numSharedChannels) {
@@ -1183,6 +1181,109 @@ dispatchGaussianRasterizeBackward<torch::kCUDA>(
     const torch::Tensor &dLossDRenderedAlphas,   // [C, imageHeight, imageWidth, 1]
     const bool absGrad,
     const int64_t numSharedChannelsOverride) {
+    const at::cuda::OptionalCUDAGuard device_guard(device_of(means2d));
+
+    uint32_t colorDim   = features.size(-1);
+    const bool isPacked = means2d.dim() == 2;
+
+#define __GS__CALL_BWD_(N)                                                          \
+    case N: {                                                                       \
+        if (isPacked) {                                                             \
+            return callRasterizeBackwardWithCorrectSharedChannels<float, N, true>(  \
+                means2d,                                                            \
+                conics,                                                             \
+                features,                                                           \
+                opacities,                                                          \
+                at::nullopt /*backgrounds*/,                                        \
+                at::nullopt /*masks*/,                                              \
+                imageWidth,                                                         \
+                imageHeight,                                                        \
+                imageOriginW,                                                       \
+                imageOriginH,                                                       \
+                tileSize,                                                           \
+                tileOffsets,                                                        \
+                tileGaussianIds,                                                    \
+                renderedAlphas,                                                     \
+                lastGaussianIds,                                                    \
+                dLossDRenderedFeatures,                                             \
+                dLossDRenderedAlphas,                                               \
+                absGrad,                                                            \
+                numSharedChannelsOverride);                                         \
+        } else {                                                                    \
+            return callRasterizeBackwardWithCorrectSharedChannels<float, N, false>( \
+                means2d,                                                            \
+                conics,                                                             \
+                features,                                                           \
+                opacities,                                                          \
+                at::nullopt /*backgrounds*/,                                        \
+                at::nullopt /*masks*/,                                              \
+                imageWidth,                                                         \
+                imageHeight,                                                        \
+                imageOriginW,                                                       \
+                imageOriginH,                                                       \
+                tileSize,                                                           \
+                tileOffsets,                                                        \
+                tileGaussianIds,                                                    \
+                renderedAlphas,                                                     \
+                lastGaussianIds,                                                    \
+                dLossDRenderedFeatures,                                             \
+                dLossDRenderedAlphas,                                               \
+                absGrad,                                                            \
+                numSharedChannelsOverride);                                         \
+        }                                                                           \
+    }
+
+    switch (colorDim) {
+        __GS__CALL_BWD_(1)
+        __GS__CALL_BWD_(2)
+        __GS__CALL_BWD_(3)
+        __GS__CALL_BWD_(4)
+        __GS__CALL_BWD_(5)
+        __GS__CALL_BWD_(8)
+        __GS__CALL_BWD_(9)
+        __GS__CALL_BWD_(16)
+        __GS__CALL_BWD_(17)
+        __GS__CALL_BWD_(32)
+        __GS__CALL_BWD_(33)
+        __GS__CALL_BWD_(47) // TODO, is this only here to support a gtest?
+        __GS__CALL_BWD_(64)
+        __GS__CALL_BWD_(65)
+        __GS__CALL_BWD_(128)
+        __GS__CALL_BWD_(129)
+        __GS__CALL_BWD_(192)
+        __GS__CALL_BWD_(193)
+        __GS__CALL_BWD_(256)
+        __GS__CALL_BWD_(257)
+        __GS__CALL_BWD_(512)
+        __GS__CALL_BWD_(513)
+    default: AT_ERROR("Unsupported number of channels: ", colorDim);
+    }
+}
+
+template <>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchGaussianRasterizeBackward<torch::kPrivateUse1>(
+    const torch::Tensor &means2d,   // [C, N, 2]
+    const torch::Tensor &conics,    // [C, N, 3]
+    const torch::Tensor &features,  // [C, N, 3]
+    const torch::Tensor &opacities, // [N]
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const uint32_t imageOriginW,
+    const uint32_t imageOriginH,
+    const uint32_t tileSize,
+    const torch::Tensor &tileOffsets,            // [C, numTilesH, numTilesW]
+    const torch::Tensor &tileGaussianIds,        // [totalIntersections]
+    const torch::Tensor &renderedAlphas,         // [C, imageHeight, imageWidth, 1]
+    const torch::Tensor &lastGaussianIds,        // [C, imageHeight, imageWidth]
+    const torch::Tensor &dLossDRenderedFeatures, // [C, imageHeight, imageWidth, 3]
+    const torch::Tensor &dLossDRenderedAlphas,   // [C, imageHeight, imageWidth, 1]
+    const bool absGrad,
+    const int64_t numSharedChannelsOverride) {
+    // TORCH_CHECK_NOT_IMPLEMENTED(false, "PrivateUse1 implementation not available");
+
+    const at::cuda::OptionalCUDAGuard device_guard(c10::Device(c10::DeviceType::CUDA, 0));
+
     uint32_t colorDim   = features.size(-1);
     const bool isPacked = means2d.dim() == 2;
 

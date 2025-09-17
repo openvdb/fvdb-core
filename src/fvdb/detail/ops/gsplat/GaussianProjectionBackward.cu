@@ -451,6 +451,35 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
+    // fwd inputs
+    const torch::Tensor &means,                       // [N, 3]
+    const torch::Tensor &quats,                       // [N, 4]
+    const torch::Tensor &scales,                      // [N, 3]
+    const torch::Tensor &worldToCamMatrices,          // [C, 4, 4]
+    const torch::Tensor &projectionMatrices,          // [C, 3, 3]
+    const at::optional<torch::Tensor> &compensations, // [N, 6] optional
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const float eps2d,
+    // fwd outputs
+    const torch::Tensor &radii,  // [C, N]
+    const torch::Tensor &conics, // [C, N, 3]
+    // grad outputs
+    const torch::Tensor &dLossDMeans2d,                     // [C, N, 2]
+    const torch::Tensor &dLossDDepths,                      // [C, N]
+    const torch::Tensor &dLossDConics,                      // [C, N, 3]
+    const at::optional<torch::Tensor> &dLossDCompensations, // [C, N] optional
+    const bool worldToCamMatricesRequiresGrad,
+    const bool ortho,
+    at::optional<torch::Tensor> outNormalizeddLossdMeans2dNormAccum,
+    at::optional<torch::Tensor> outNormalizedMaxRadiiAccum,
+    at::optional<torch::Tensor> outGradientStepCounts) {
+    TORCH_CHECK_NOT_IMPLEMENTED(false, "PrivateUse1 implementation not available");
+}
+
+template <>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchGaussianProjectionBackward<torch::kCPU>(
     // fwd inputs
     const torch::Tensor &means,                       // [N, 3]

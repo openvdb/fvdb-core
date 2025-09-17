@@ -158,7 +158,7 @@ ProjectGaussians::backward(ProjectGaussians::AutogradContext *ctx,
                 ? std::optional<at::Tensor>(ctx->saved_data["outGradientStepCount"].toTensor())
                 : std::nullopt);
     }();
-    auto variables = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
+    auto variables = FVDB_DISPATCH_KERNEL(means.device(), [&]() {
         return ops::dispatchGaussianProjectionBackward<DeviceTag>(means,
                                                                   quats,
                                                                   scales,
@@ -291,7 +291,7 @@ RasterizeGaussiansToPixels::backward(RasterizeGaussiansToPixels::AutogradContext
     const int imageOriginH = (int)ctx->saved_data["imageOriginH"].toInt();
     const bool absgrad     = ctx->saved_data["absgrad"].toBool();
 
-    auto variables = FVDB_DISPATCH_KERNEL_DEVICE(means2d.device(), [&]() {
+    auto variables = FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
         return ops::dispatchGaussianRasterizeBackward<DeviceTag>(means2d,
                                                                  conics,
                                                                  colors,

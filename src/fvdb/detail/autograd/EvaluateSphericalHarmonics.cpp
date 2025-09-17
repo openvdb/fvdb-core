@@ -56,7 +56,7 @@ EvaluateSphericalHarmonics::backward(EvaluateSphericalHarmonics::AutogradContext
     const int numGaussians           = static_cast<int>(ctx->saved_data["numGaussians"].toInt());
     const bool computeDLossDViewDirs = ctx->needs_input_grad(1);
 
-    auto variables           = FVDB_DISPATCH_KERNEL_DEVICE(dLossdColors.device(), [&]() {
+    auto variables           = FVDB_DISPATCH_KERNEL(dLossdColors.device(), [&]() {
         return ops::dispatchSphericalHarmonicsBackward<DeviceTag>(shDegreeToUse,
                                                                   numCameras,
                                                                   numGaussians,

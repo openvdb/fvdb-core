@@ -15,7 +15,6 @@
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/util/Exception.h>
 
-#include <cub/block/block_scan.cuh>
 #include <cuda/std/tuple>
 
 #include <cstdint>
@@ -438,7 +437,6 @@ launchRasterizeForwardKernels(
     const std::optional<torch::Tensor> &tilePixelMask       = std::nullopt,
     const std::optional<torch::Tensor> &tilePixelCumsum     = std::nullopt,
     const std::optional<torch::Tensor> &pixelMap            = std::nullopt) {
-
     TORCH_CHECK_VALUE(tileOffsets.size(2) == (imageWidth + tileSize - 1) / tileSize,
                       "tileOffsets width must match the number of tiles in image size");
     TORCH_CHECK_VALUE(tileOffsets.size(1) == (imageHeight + tileSize - 1) / tileSize,
@@ -484,32 +482,34 @@ launchRasterizeForwardKernels(
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
-        auto deviceCameraCount = (tileOffsets.size(0) + c10::cuda::device_count() - 1) / c10::cuda::device_count();
+        auto deviceCameraCount =
+            (tileOffsets.size(0) + c10::cuda::device_count() - 1) / c10::cuda::device_count();
         const auto deviceCameraOffset = deviceCameraCount * deviceId;
         deviceCameraCount = std::min(deviceCameraCount, tileOffsets.size(0) - deviceCameraOffset);
 
         if (deviceCameraCount) {
-            auto args = RasterizeForwardArgs<ScalarType, NUM_CHANNELS, IS_PACKED>(means2d,
-                                                                                  conics,
-                                                                                  opacities,
-                                                                                  features,
-                                                                                  backgrounds,
-                                                                                  masks,
-                                                                                  imageWidth,
-                                                                                  imageHeight,
-                                                                                  imageOriginW,
-                                                                                  imageOriginH,
-                                                                                  tileSize,
-                                                                                  deviceCameraOffset,
-                                                                                  tileOffsets,
-                                                                                  tileGaussianIds,
-                                                                                  outFeatures,
-                                                                                  outAlphas,
-                                                                                  outLastIds,
-                                                                                  activeTiles,
-                                                                                  tilePixelMask,
-                                                                                  tilePixelCumsum,
-                                                                                  pixelMap);
+            auto args =
+                RasterizeForwardArgs<ScalarType, NUM_CHANNELS, IS_PACKED>(means2d,
+                                                                          conics,
+                                                                          opacities,
+                                                                          features,
+                                                                          backgrounds,
+                                                                          masks,
+                                                                          imageWidth,
+                                                                          imageHeight,
+                                                                          imageOriginW,
+                                                                          imageOriginH,
+                                                                          tileSize,
+                                                                          deviceCameraOffset,
+                                                                          tileOffsets,
+                                                                          tileGaussianIds,
+                                                                          outFeatures,
+                                                                          outAlphas,
+                                                                          outLastIds,
+                                                                          activeTiles,
+                                                                          tilePixelMask,
+                                                                          tilePixelCumsum,
+                                                                          pixelMap);
 
             // Thread blocks cooperatively cache a tile of Gaussians in shared memory
             const uint32_t sharedMem = getSharedMemRequirements<ScalarType>(tileSize);
@@ -670,7 +670,7 @@ dispatchGaussianRasterizeForward<torch::kPrivateUse1>(
     const std::optional<torch::Tensor> backgrounds = std::nullopt;
     const std::optional<torch::Tensor> masks       = std::nullopt;
 
-#define CALL_FWD_PRIVATEUSE1(N)                                                                          \
+#define CALL_FWD_PRIVATEUSE1(N)                                                                 \
     case N: {                                                                                   \
         if (isPacked) {                                                                         \
             auto [outFeatures, outAlphas, outLastIds] =                                         \

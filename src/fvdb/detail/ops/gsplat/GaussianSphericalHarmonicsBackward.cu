@@ -475,14 +475,126 @@ dispatchSphericalHarmonicsBackward<torch::kCUDA>(
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-dispatchSphericalHarmonicsBackward<torch::kCPU>(const int64_t shDegreeToUse,
-                                                const int64_t numCameras,
-                                                const int64_t numGaussians,
-                                                const torch::Tensor &dirs,     // [N, 3]
-                                                const torch::Tensor &shCoeffs, // [N, K, 3]
-                                                const torch::Tensor &dLossDRenderQuantities,
-                                                const torch::Tensor &radii,    // [N]
-                                                const bool computeDLossDViewDirs) {
+dispatchSphericalHarmonicsBackward<torch::kPrivateUse1>(
+    const int64_t shDegreeToUse,
+    const int64_t numCameras,
+    const int64_t numGaussians,
+    const torch::Tensor &viewDirs,               // [C, N, 3]
+    const torch::Tensor &shNCoeffs,              // [N, K-1, D]
+    const torch::Tensor &dLossDRenderQuantities, // [C, N, D]
+    const torch::Tensor &radii,                  // [C, N]
+    const bool computeDLossDViewDirs) {
+    FVDB_FUNC_RANGE();
+    const at::cuda::OptionalCUDAGuard device_guard(c10::Device(c10::DeviceType::CUDA, 0));
+
+    const bool hasShNCoeffs = shNCoeffs.defined();
+    const bool hasViewirs   = viewDirs.defined();
+    const bool hasRadii     = radii.defined();
+
+    if (hasShNCoeffs) {
+        TORCH_CHECK_VALUE(hasViewirs, "viewDirs must be defined if shNCoeffs is defined");
+        TORCH_CHECK_VALUE(shNCoeffs.is_privateuseone(), "shNCoeffs must be a PrivateUse1 tensor");
+        TORCH_CHECK_VALUE(shNCoeffs.dim() == 3, "shNCoeffs must have shape [N, K-1, D]");
+        TORCH_CHECK_VALUE(shNCoeffs.size(0) == numGaussians,
+                          "shNCoeffs must have shape [N, K-1, D]");
+    } else {
+        TORCH_CHECK_VALUE(shDegreeToUse == 0, "shDegreeToUse must be 0 if no shNCoeffs");
+    }
+    if (hasRadii) {
+        TORCH_CHECK_VALUE(radii.dim() == 2, "radii must have two dimensions with shape [C, N]");
+        TORCH_CHECK_VALUE(numGaussians == radii.size(1),
+                          "radii must have shape [C, N] but got shape = ",
+                          radii.sizes());
+        TORCH_CHECK_VALUE(radii.size(0) == numCameras,
+                          "radii must have shape [C, N] and C must match numCameras");
+        TORCH_CHECK_VALUE(radii.is_privateuseone(), "radii must be a PrivateUse1 tensor");
+        TORCH_CHECK_VALUE(radii.is_contiguous(), "radii must be a contiguous");
+    }
+
+    const int64_t K           = hasShNCoeffs ? shNCoeffs.size(1) + 1 : 1;
+    const int64_t N           = dLossDRenderQuantities.size(1);
+    const int64_t C           = numCameras;
+    const int64_t D           = dLossDRenderQuantities.size(2);
+    const int64_t TOTAL_ELEMS = C * N * D;
+    const int64_t NUM_BLOCKS  = GET_BLOCKS(TOTAL_ELEMS, DEFAULT_BLOCK_DIM);
+
+    // If you are using degree > 0, then we are going to use the directions tensor which means
+    // we need to check it has the right shape
+    if (hasShNCoeffs && K > 1 && shDegreeToUse > 0) {
+        TORCH_CHECK_VALUE(viewDirs.dim() == 3, "viewDirs must have shape [C, N, 3]");
+        TORCH_CHECK_VALUE(
+            shNCoeffs.size(0) == viewDirs.size(1),
+            "shNCoeffs must have shape [N, K-1, D] and viewDirs must have shape [C, N, 3]");
+        TORCH_CHECK_VALUE(viewDirs.is_privateuseone(), "dirs must be a PrivateUse1 tensor");
+        TORCH_CHECK_VALUE(viewDirs.size(-1) == 3, "dirs must have last dimension 3");
+    }
+
+    at::cuda::CUDAStream stream =
+        at::cuda::getCurrentCUDAStream(dLossDRenderQuantities.device().index());
+
+    using scalar_t = float;
+
+    const int *radiiPtr = hasRadii ? radii.data_ptr<int>() : nullptr;
+
+    const auto tensorOptions = dLossDRenderQuantities.options();
+    if (hasShNCoeffs && K > 1) {
+        torch::Tensor dLossDShNCoeffs = torch::zeros_like(shNCoeffs);
+        torch::Tensor dLossDSh0Coeffs = torch::zeros({N, 1, D}, tensorOptions);
+        torch::Tensor dLossDViewDirs;
+        if (computeDLossDViewDirs) {
+            dLossDViewDirs = torch::zeros_like(viewDirs);
+        }
+        if (N == 0) {
+            return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
+        }
+
+        computeShBackward<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+            C,
+            N,
+            K,
+            D,
+            shDegreeToUse,
+            viewDirs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            shNCoeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            radiiPtr,
+            dLossDRenderQuantities.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            dLossDSh0Coeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            dLossDShNCoeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            computeDLossDViewDirs ? dLossDViewDirs.data_ptr<scalar_t>() : nullptr);
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+        return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
+    } else {
+        torch::Tensor dLossDSh0Coeffs = torch::zeros({N, 1, D}, tensorOptions);
+        torch::Tensor dLossDShNCoeffs;
+        torch::Tensor dLossDViewDirs;
+        if (N == 0) {
+            return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
+        }
+
+        computeShDiffuseOnlyBackward<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+            C,
+            N,
+            D,
+            dLossDRenderQuantities.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            radiiPtr,
+            dLossDSh0Coeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>());
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+        return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
+    }
+}
+
+template <>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchSphericalHarmonicsBackward<torch::kCPU>(
+    const int64_t shDegreeToUse,
+    const int64_t numCameras,
+    const int64_t numGaussians,
+    const torch::Tensor &viewDirs,               // [C, N, 3]
+    const torch::Tensor &shNCoeffs,              // [N, K-1, D]
+    const torch::Tensor &dLossDRenderQuantities, // [C, N, D]
+    const torch::Tensor &radii,                  // [C, N]
+    const bool computeDLossDViewDirs) {
     TORCH_CHECK(false, "CPU implementation not available");
 }
 
