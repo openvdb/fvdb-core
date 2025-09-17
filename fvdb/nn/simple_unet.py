@@ -22,8 +22,7 @@ Components:
 - SimpleUNetBasicBlock: Basic convolution-batchnorm-activation block
 - SimpleUNetConvBlock: Multi-layer residual block
 - SimpleUNetDown/Up: Resolution changing operations with channel adjustment
-- SimpleUNetSkipCat: Skip connection concatenation and channel fusion
-- SimpleUNetPad/Depad: Boundary handling for sparse convolutions
+- SimpleUNetPad/Unpad: Boundary handling for sparse convolutions
 - SimpleUNetDownUp: Recursive encoder-decoder structure
 - SimpleUNet: Main network combining all components
 
@@ -59,33 +58,42 @@ class SimpleUNetBasicBlock(nn.Module):
 
     This is the fundamental building block of the U-Net architecture, consisting
     of a 3D sparse convolution followed by batch normalization and ReLU activation.
-    The block maintains the same number of input and output channels and is designed
-    to preserve the spatial structure of sparse voxel data.
+
+    The block has different input/output channel counts, but the spatial topology is the same.
+
+    Because it is likely that this convolution block can share a plan with other blocks, the
+    plan is taken as an argument to the forward method.
 
     Args:
-        channels (int): Number of input and output channels.
+        in_channels (int): Number of input channels.
+        out_channels (int): Number of output channels.
         kernel_size (NumericMaxRank1): Size of the convolution kernel. Defaults to 3.
         momentum (float): Momentum parameter for batch normalization. Defaults to 0.1.
     """
 
     def __init__(
         self,
-        channels: int,
+        in_channels: int,
+        out_channels: int,
         kernel_size: NumericMaxRank1 = 3,
         momentum: float = 0.1,
     ) -> None:
         super().__init__()
 
-        self.channels = channels
+        self.in_channels = in_channels
+        self.out_channels = out_channels
         self.kernel_size = kernel_size
         self.momentum = momentum
 
-        self.conv = fvnn.SparseConv3d(channels, channels, kernel_size=kernel_size, stride=1, bias=False)
-        self.batch_norm = fvnn.BatchNorm(channels, momentum=momentum)
+        self.conv = fvnn.SparseConv3d(in_channels, out_channels, kernel_size=kernel_size, stride=1, bias=False)
+        self.batch_norm = fvnn.BatchNorm(out_channels, momentum=momentum)
         self.relu = fvnn.ReLU(inplace=True)
 
     def extra_repr(self) -> str:
-        return f"channels={self.channels}, kernel_size={self.kernel_size}, momentum={self.momentum}"
+        return (
+            f"in_channels={self.in_channels}, out_channels={self.out_channels}, "
+            f"kernel_size={self.kernel_size}, momentum={self.momentum}"
+        )
 
     def reset_parameters(self) -> None:
         self.conv.reset_parameters()
@@ -114,8 +122,16 @@ class SimpleUNetConvBlock(nn.Module):
     convolution plan maintains fixed topology to ensure compatible tensor shapes
     for the residual connection.
 
+    Takes separate input channels, mid channels, and output channels. If there's only one
+    layer, the mid channels are ignored.
+
+    Because it is likely that this convolution block can share a plan with other blocks, the
+    plan is taken as an argument to the forward method.
+
     Args:
-        channels (int): Number of input and output channels.
+        in_channels (int): Number of input channels.
+        mid_channels (int): Number of mid channels.
+        out_channels (int): Number of output channels.
         kernel_size (NumericMaxRank1): Size of the convolution kernel. Defaults to 3.
         layer_count (int): Number of basic blocks to stack. Defaults to 2.
         momentum (float): Momentum parameter for batch normalization. Defaults to 0.1.
@@ -123,25 +139,43 @@ class SimpleUNetConvBlock(nn.Module):
 
     def __init__(
         self,
-        channels: int,
+        in_channels: int,
+        mid_channels: int,
+        out_channels: int,
         kernel_size: NumericMaxRank1 = 3,
         layer_count: int = 2,
         momentum: float = 0.1,
     ) -> None:
         super().__init__()
 
-        self.channels = channels
+        self.in_channels = in_channels
+        self.mid_channels = mid_channels
+        self.out_channels = out_channels
         self.kernel_size = kernel_size
         self.layer_count = layer_count
         self.momentum = momentum
 
-        self.blocks = nn.ModuleList([SimpleUNetBasicBlock(channels, kernel_size, momentum) for _ in range(layer_count)])
+        layers = []
+
+        if layer_count == 1:
+            layers.append(SimpleUNetBasicBlock(in_channels, out_channels, kernel_size, momentum))
+        else:
+            for i in range(layer_count):
+                if i == 0:
+                    layers.append(SimpleUNetBasicBlock(in_channels, mid_channels, kernel_size, momentum))
+                elif i == layer_count - 1:
+                    layers.append(SimpleUNetBasicBlock(mid_channels, out_channels, kernel_size, momentum))
+                else:
+                    layers.append(SimpleUNetBasicBlock(mid_channels, mid_channels, kernel_size, momentum))
+
+        self.blocks = nn.ModuleList(layers)
 
         self.final_relu = fvnn.ReLU(inplace=True)
 
     def extra_repr(self) -> str:
         return (
-            f"channels={self.channels}, kernel_size={self.kernel_size}, "
+            f"in_channels={self.in_channels}, mid_channels={self.mid_channels}, out_channels={self.out_channels}, "
+            f"kernel_size={self.kernel_size}, "
             f"layer_count={self.layer_count}, momentum={self.momentum}"
         )
 
@@ -182,7 +216,9 @@ class SimpleUNetDown(nn.Module):
 
     The module performs two operations in sequence:
     1. Max pooling with factor 2 to reduce spatial resolution
-    2. 1x1 convolution to adjust channel count
+    2. 1x1 convolution to adjust channel count (channel fan-out linear layer)
+
+    The convolution plan is not able to be used elsewhere, so it is created inline.
 
     Args:
         in_channels (int): Number of input channels from the fine grid.
@@ -197,14 +233,14 @@ class SimpleUNetDown(nn.Module):
         self.out_channels = out_channels
         self.momentum = momentum
 
-        self.conv = fvnn.SparseConv3d(in_channels, out_channels, kernel_size=1, stride=1, bias=False)
+        self.channel_fan_out = fvnn.SparseConv3d(in_channels, out_channels, kernel_size=1, stride=1, bias=False)
         self.batch_norm = fvnn.BatchNorm(out_channels, momentum=momentum)
 
     def extra_repr(self) -> str:
         return f"in_channels={self.in_channels}, out_channels={self.out_channels}, momentum={self.momentum}"
 
     def reset_parameters(self) -> None:
-        self.conv.reset_parameters()
+        self.channel_fan_out.reset_parameters()
         self.batch_norm.reset_parameters()
 
     def forward(self, data: JaggedTensor, fine_grid: GridBatch, coarse_grid: GridBatch) -> JaggedTensor:
@@ -214,7 +250,7 @@ class SimpleUNetDown(nn.Module):
         data = fine_grid.max_pool(pool_factor=2, data=data, coarse_grid=coarse_grid)[0]
 
         # Increase the channel count at the lower resolution
-        data = self.conv(data, plan)
+        data = self.channel_fan_out(data, plan)
         return self.batch_norm(data, coarse_grid)
 
 
@@ -229,8 +265,10 @@ class SimpleUNetUp(nn.Module):
     information as the network progresses toward the output.
 
     The module performs two operations in sequence:
-    1. 1x1 convolution to adjust channel count
+    1. 1x1 convolution to adjust channel count (channel fan-in linear layer)
     2. Grid subdivision with factor 2 to increase spatial resolution
+
+    The convolution plan is not able to be used elsewhere, so it is created inline.
 
     Args:
         in_channels (int): Number of input channels from the coarse grid.
@@ -245,69 +283,25 @@ class SimpleUNetUp(nn.Module):
         self.out_channels = out_channels
         self.momentum = momentum
 
-        self.conv = fvnn.SparseConv3d(in_channels, out_channels, kernel_size=1, stride=1, bias=False)
+        self.channel_fan_in = fvnn.SparseConv3d(in_channels, out_channels, kernel_size=1, stride=1, bias=False)
         self.batch_norm = fvnn.BatchNorm(out_channels, momentum=momentum)
 
     def extra_repr(self) -> str:
         return f"in_channels={self.in_channels}, out_channels={self.out_channels}, momentum={self.momentum}"
 
     def reset_parameters(self) -> None:
-        self.conv.reset_parameters()
+        self.channel_fan_in.reset_parameters()
         self.batch_norm.reset_parameters()
 
     def forward(self, data: JaggedTensor, coarse_grid: GridBatch, fine_grid: GridBatch) -> JaggedTensor:
         plan = ConvolutionPlan.from_grid_batch(kernel_size=1, stride=1, source_grid=coarse_grid, target_grid=fine_grid)
 
         # Decrease the channel count at the lower resolution
-        data = self.conv(data, plan)
+        data = self.channel_fan_in(data, plan)
         data = self.batch_norm(data, coarse_grid)
 
         # Increase the resolution by a factor of 2
         return coarse_grid.subdivide(subdiv_factor=2, data=data, fine_grid=fine_grid)[0]
-
-
-@fvnn_module
-class SimpleUNetSkipCat(nn.Module):
-    """
-    Skip connection module that combines encoder and decoder features.
-
-    Implements the characteristic skip connections of U-Net architecture by concatenating
-    features from the encoder path (skip_data) with corresponding features from the
-    decoder path (lower_data). After concatenation, a 1x1 convolution reduces the
-    doubled channel count back to the original number, enabling efficient feature
-    fusion while maintaining computational efficiency.
-
-    This module is crucial for preserving fine-grained spatial details that might
-    be lost during the downsampling operations in the encoder path.
-
-    Args:
-        channels (int): Number of channels for both input tensors and the output.
-                       The concatenated tensor will have 2*channels before reduction.
-        momentum (float): Momentum parameter for batch normalization. Defaults to 0.1.
-    """
-
-    def __init__(self, channels: int, momentum: float = 0.1):
-        super().__init__()
-        self.channels = channels
-        self.momentum = momentum
-
-        self.conv = fvnn.SparseConv3d(channels * 2, channels, kernel_size=1, stride=1, bias=False)
-        self.batch_norm = fvnn.BatchNorm(channels, momentum=momentum)
-
-    def extra_repr(self) -> str:
-        return f"channels={self.channels}, momentum={self.momentum}"
-
-    def reset_parameters(self) -> None:
-        self.conv.reset_parameters()
-        self.batch_norm.reset_parameters()
-
-    def forward(self, skip_data: JaggedTensor, lower_data: JaggedTensor, grid: GridBatch) -> JaggedTensor:
-        data = fvdb.jcat([skip_data, lower_data], dim=1)
-        plan = ConvolutionPlan.from_grid_batch(kernel_size=1, stride=1, source_grid=grid, target_grid=grid)
-
-        data = self.conv(data, plan)
-        data = self.batch_norm(data, grid)
-        return data
 
 
 @fvnn_module
@@ -338,7 +332,7 @@ class SimpleUNetBottleneck(nn.Module):
         self.layer_count = layer_count
         self.momentum = momentum
 
-        self.block = SimpleUNetConvBlock(channels, kernel_size, layer_count, momentum)
+        self.block = SimpleUNetConvBlock(channels, channels, channels, kernel_size, layer_count, momentum)
 
     def extra_repr(self) -> str:
         return (
@@ -405,7 +399,9 @@ class SimpleUNetDownUp(nn.Module):
 
         coarse_channels = in_channels * channel_growth_rate
 
-        self.conv_in = SimpleUNetConvBlock(in_channels, kernel_size, block_layer_count, momentum)
+        self.conv_in = SimpleUNetConvBlock(
+            in_channels, in_channels, in_channels, kernel_size, block_layer_count, momentum
+        )
         self.down = SimpleUNetDown(in_channels, coarse_channels, momentum)
         self.inner = (
             SimpleUNetBottleneck(coarse_channels, kernel_size, block_layer_count, momentum)
@@ -415,8 +411,9 @@ class SimpleUNetDownUp(nn.Module):
             )
         )
         self.up = SimpleUNetUp(coarse_channels, in_channels, momentum)
-        self.skip_cat = SimpleUNetSkipCat(in_channels, momentum)
-        self.conv_out = SimpleUNetConvBlock(in_channels, kernel_size, block_layer_count, momentum)
+        self.conv_out = SimpleUNetConvBlock(
+            in_channels, in_channels, in_channels, kernel_size, block_layer_count, momentum
+        )
 
     def extra_repr(self) -> str:
         return (
@@ -430,22 +427,25 @@ class SimpleUNetDownUp(nn.Module):
         self.down.reset_parameters()
         self.inner.reset_parameters()
         self.up.reset_parameters()
-        self.skip_cat.reset_parameters()
         self.conv_out.reset_parameters()
 
     def forward(self, data: JaggedTensor, fine_grid: GridBatch) -> JaggedTensor:
-        coarse_grid = fine_grid.conv_grid(kernel_size=self.kernel_size, stride=1)
+        coarse_grid = fine_grid.coarsened_grid(coarsening_factor=2).conv_grid(kernel_size=self.kernel_size, stride=1)
         conv_plan = ConvolutionPlan.from_grid_batch(
             kernel_size=self.kernel_size, stride=1, source_grid=fine_grid, target_grid=fine_grid
         )
 
-        data = self.conv_in(data, conv_plan)
         skip_data = data
+        data = self.conv_in(data, conv_plan)
         data = self.down(data, fine_grid, coarse_grid)
         assert isinstance(self.inner, (SimpleUNetBottleneck, SimpleUNetDownUp))
+
+        # Here's the other downups! It is recursive. If we're at the bottom, it uses a bottleneck,
+        # otherwise it uses a downup at the coarser to even coarser resolution.
         data = self.inner(data, coarse_grid)
+
         data = self.up(data, coarse_grid, fine_grid)
-        data = self.skip_cat(skip_data, data, fine_grid)
+        data = data + skip_data
         return self.conv_out(data, conv_plan)
 
 
@@ -504,13 +504,13 @@ class SimpleUNetPad(nn.Module):
 
 
 @fvnn_module
-class SimpleUNetDepad(nn.Module):
+class SimpleUNetUnpad(nn.Module):
     """
-    Output depadding module for producing final predictions.
+    Output unpadding module for producing final predictions.
 
     Transforms the network output back to the original grid dimensions and target
     channel count. The module simultaneously handles two transformations:
-    1. Spatial depadding: Removes padding to match original grid dimensions
+    1. Spatial unpadding: Removes padding to match original grid dimensions
     2. Channel adjustment: Converts base channels to final output channels
 
     Uses transposed convolution to ensure proper gradient flow during training
@@ -565,7 +565,7 @@ class SimpleUNet(nn.Module):
     The architecture consists of three main stages:
     1. Padding: Prepares input data with appropriate spatial and channel dimensions
     2. Encoder-Decoder: Recursive downsampling and upsampling with skip connections
-    3. Depadding: Produces final output in original grid dimensions
+    3. Unpadding: Produces final output in original grid dimensions
 
     The network is designed for dense prediction tasks on sparse 3D data, such as
     semantic segmentation, shape completion, or volumetric reconstruction. The
@@ -613,7 +613,7 @@ class SimpleUNet(nn.Module):
         self.downup = SimpleUNetDownUp(
             base_channels, channel_growth_rate, kernel_size, downup_layer_count, block_layer_count, momentum
         )
-        self.depad = SimpleUNetDepad(base_channels, out_channels, kernel_size)
+        self.unpad = SimpleUNetUnpad(base_channels, out_channels, kernel_size)
 
     def extra_repr(self) -> str:
         return (
@@ -626,7 +626,7 @@ class SimpleUNet(nn.Module):
     def reset_parameters(self) -> None:
         self.pad.reset_parameters()
         self.downup.reset_parameters()
-        self.depad.reset_parameters()
+        self.unpad.reset_parameters()
 
     def forward(self, data: JaggedTensor, grid: GridBatch) -> JaggedTensor:
 
@@ -634,4 +634,4 @@ class SimpleUNet(nn.Module):
 
         data = self.pad(data, grid, padded_grid)
         data = self.downup(data, padded_grid)
-        return self.depad(data, padded_grid, grid)
+        return self.unpad(data, padded_grid, grid)
