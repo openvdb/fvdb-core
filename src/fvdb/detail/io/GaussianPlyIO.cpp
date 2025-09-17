@@ -13,6 +13,8 @@
 #include <c10/util/flat_hash_map.h>
 #include <torch/csrc/api/include/torch/types.h>
 
+#include <exception>
+
 #define TINYPLY_IMPLEMENTATION
 #include <tinyply.h>
 
@@ -225,10 +227,10 @@ loadGaussianPly(const std::string &filename, torch::Device device) {
     std::shared_ptr<PlyData> shNData;
     try {
         shNData = plyf.request_properties_from_element("vertex", shNPlyPropertyNames);
-    } catch (std::invalid_argument &e) {
+    } catch (std::exception &e) {
         // If there are no SH N coefficients, tinyply will throw an exception. We can ignore this
         // and just set shNData to nullptr
-        shNData = nullptr;
+        shNData.reset();
     }
 
     std::shared_ptr<PlyData> normalizationTransformData, cameraToWorldMatricesData,
