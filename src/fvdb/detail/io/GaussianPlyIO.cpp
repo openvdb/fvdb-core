@@ -233,9 +233,6 @@ loadGaussianPly(const std::string &filename, torch::Device device) {
         shNData.reset();
     }
 
-    std::shared_ptr<PlyData> normalizationTransformData, cameraToWorldMatricesData,
-        projectionTypesData, projectionParametersData;
-
     // Read out metadata from comment strings
     auto [retMetadata, retTensorMetadata] = parsePlyMetadataComments(plyf);
 
