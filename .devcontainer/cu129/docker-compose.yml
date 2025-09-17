@@ -2,7 +2,7 @@ services:
   fvdb-dev:
     build:
       context: ../../../
-      dockerfile: fvdb/.devcontainer/cu126/Dockerfile.dev
+      dockerfile: fvdb/.devcontainer/cu129/Dockerfile.dev
 
     command: sleep infinity
     volumes:
