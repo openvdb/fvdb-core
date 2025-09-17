@@ -6,7 +6,7 @@
 #include <fvdb/detail/ops/convolution/backend/MESparseConvolution.h>
 #include <fvdb/detail/ops/convolution/backend/SparseConvolutionKernelMap.h>
 
-#include <torch/all.h>
+#include <torch/autograd.h>
 
 #include <string>
 #include <vector>

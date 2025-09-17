@@ -3,6 +3,9 @@
 
 #include "Tensor.h"
 
+#include <torch/script.h>
+#include <torch/serialize.h>
+
 namespace fvdb::test {
 
 std::vector<torch::Tensor>

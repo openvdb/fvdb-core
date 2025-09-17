@@ -11,7 +11,7 @@
 
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
-#include <torch/all.h>
+#include <torch/types.h>
 
 #include <cuda.h>
 #include <cuda_runtime_api.h>

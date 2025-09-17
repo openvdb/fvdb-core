@@ -6,7 +6,7 @@
 #include <fvdb/detail/ops/convolution/backend/SparseConvolutionHaloGrad.h>
 #include <fvdb/detail/utils/Utils.h>
 
-#include <torch/all.h>
+#include <torch/autograd.h>
 
 #include <string>
 
