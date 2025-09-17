@@ -562,6 +562,36 @@ class ConvolutionPlan:
             return result
 
     # ============================================================
+    #                 Properties
+    # ============================================================
+
+    @property
+    def source_grid(self) -> Grid:
+        source_grid_impl = self._pack_info.source_grid
+        if source_grid_impl.grid_count != 1:
+            raise ValueError("Source grid impl must have batch size of 1 for Grid")
+        return Grid(impl=source_grid_impl)
+
+    @property
+    def source_grid_batch(self) -> GridBatch:
+        return GridBatch(impl=self._pack_info.source_grid)
+
+    @property
+    def target_grid(self) -> Grid:
+        target_grid_impl = self._pack_info.target_grid
+        if target_grid_impl.grid_count != 1:
+            raise ValueError("Target grid impl must have batch size of 1 for Grid")
+        return Grid(impl=target_grid_impl)
+
+    @property
+    def target_grid_batch(self) -> GridBatch:
+        return GridBatch(impl=self._pack_info.target_grid)
+
+    @property
+    def has_fixed_topology(self) -> bool:
+        return self._pack_info.source_grid.is_same(self._pack_info.target_grid)
+
+    # ============================================================
     #                 Private methods
     # ============================================================
 
