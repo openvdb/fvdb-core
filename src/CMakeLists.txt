@@ -14,7 +14,6 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_cutlass.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_nanovdb.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_cudnn_frontend.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_blosc.cmake)
-include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_fused_ssim.cmake)
 
 # Build options
 option(FVDB_BUILD_TESTS "Configure CMake to build tests" ON)

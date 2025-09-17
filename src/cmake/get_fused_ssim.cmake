@@ -31,7 +31,7 @@ if(fused_ssim_ADDED OR fused_ssim_SOURCE_DIR)
     # Generate into the build tree
     set(GENERATED_SSIM_PY "${CMAKE_CURRENT_BINARY_DIR}/fvdb/utils/metrics/ssim.py")
     configure_file(
-        "${CMAKE_CURRENT_SOURCE_DIR}/../fvdb/utils/metrics/ssim.py.in"
+        "${CMAKE_SOURCE_DIR}/fvdb/utils/metrics/ssim.py.in"
         "${GENERATED_SSIM_PY}"
         @ONLY
     )
