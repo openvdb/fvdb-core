@@ -1,0 +1,6 @@
+# fVDB CODEOWNERS
+# See https://help.github.com/articles/about-codeowners/
+# for more info about CODEOWNERS file
+
+# Default owner for all files is fvdb-dev. Later matches take precedence over this line
+* @openvdb/fvdb-dev
