@@ -475,7 +475,126 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
     at::optional<torch::Tensor> outNormalizeddLossdMeans2dNormAccum,
     at::optional<torch::Tensor> outNormalizedMaxRadiiAccum,
     at::optional<torch::Tensor> outGradientStepCounts) {
-    TORCH_CHECK_NOT_IMPLEMENTED(false, "PrivateUse1 implementation not available");
+    FVDB_FUNC_RANGE();
+    // These are supported by the underlying kernel, but they are not exposed
+    const at::optional<torch::Tensor> &covars = std::nullopt;
+    // const at::optional<torch::Tensor> &compensations = std::nullopt;
+    // const at::optional<torch::Tensor> &dLossDCompensations = std::nullopt;
+
+    const at::cuda::OptionalCUDAGuard device_guard(c10::Device(c10::DeviceType::CUDA, 0));
+
+    const uint32_t N            = means.size(0);              // number of gaussians
+    const uint32_t C            = worldToCamMatrices.size(0); // number of cameras
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+
+    torch::Tensor dLossDMeans = torch::zeros_like(means);
+    torch::Tensor dLossDCovars, dLossDQuats, dLossDScales; // optional
+    if (covars.has_value()) {
+        dLossDCovars = torch::zeros_like(covars.value());
+    } else {
+        dLossDQuats  = torch::zeros_like(quats);
+        dLossDScales = torch::zeros_like(scales);
+    }
+    torch::Tensor dLossDWorldToCamMatrices;
+    if (worldToCamMatricesRequiresGrad) {
+        dLossDWorldToCamMatrices = torch::zeros_like(worldToCamMatrices);
+    }
+    if (C && N) {
+        if (ortho) {
+            projectionBackwardKernel<float, true>
+                <<<GET_BLOCKS(C * N, DEFAULT_BLOCK_DIM), DEFAULT_BLOCK_DIM, 0, stream>>>(
+                    C,
+                    N,
+                    means.data_ptr<float>(),
+                    covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
+                    covars.has_value() ? nullptr : quats.data_ptr<float>(),
+                    covars.has_value() ? nullptr : scales.data_ptr<float>(),
+                    worldToCamMatrices.data_ptr<float>(),
+                    projectionMatrices.data_ptr<float>(),
+                    imageWidth,
+                    imageHeight,
+                    eps2d,
+                    radii.data_ptr<int32_t>(),
+                    conics.data_ptr<float>(),
+                    compensations.has_value() ? compensations.value().data_ptr<float>() : nullptr,
+                    dLossDMeans2d.data_ptr<float>(),
+                    dLossDDepths.data_ptr<float>(),
+                    dLossDConics.data_ptr<float>(),
+                    dLossDCompensations.has_value() ? dLossDCompensations.value().data_ptr<float>()
+                                                    : nullptr,
+                    dLossDMeans.data_ptr<float>(),
+                    covars.has_value() ? dLossDCovars.data_ptr<float>() : nullptr,
+                    covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
+                    covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
+                    worldToCamMatricesRequiresGrad ? dLossDWorldToCamMatrices.data_ptr<float>()
+                                                   : nullptr);
+        } else {
+            projectionBackwardKernel<float, false>
+                <<<GET_BLOCKS(C * N, DEFAULT_BLOCK_DIM), DEFAULT_BLOCK_DIM, 0, stream>>>(
+                    C,
+                    N,
+                    means.data_ptr<float>(),
+                    covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
+                    covars.has_value() ? nullptr : quats.data_ptr<float>(),
+                    covars.has_value() ? nullptr : scales.data_ptr<float>(),
+                    worldToCamMatrices.data_ptr<float>(),
+                    projectionMatrices.data_ptr<float>(),
+                    imageWidth,
+                    imageHeight,
+                    eps2d,
+                    radii.data_ptr<int32_t>(),
+                    conics.data_ptr<float>(),
+                    compensations.has_value() ? compensations.value().data_ptr<float>() : nullptr,
+                    dLossDMeans2d.data_ptr<float>(),
+                    dLossDDepths.data_ptr<float>(),
+                    dLossDConics.data_ptr<float>(),
+                    dLossDCompensations.has_value() ? dLossDCompensations.value().data_ptr<float>()
+                                                    : nullptr,
+                    dLossDMeans.data_ptr<float>(),
+                    covars.has_value() ? dLossDCovars.data_ptr<float>() : nullptr,
+                    covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
+                    covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
+                    worldToCamMatricesRequiresGrad ? dLossDWorldToCamMatrices.data_ptr<float>()
+                                                   : nullptr);
+        }
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+        if (outNormalizeddLossdMeans2dNormAccum.has_value()) {
+            float *outNormalizeddLossdMeans2dNormAccumPtr =
+                outNormalizeddLossdMeans2dNormAccum.value().data_ptr<float>();
+            int32_t *outGradientStepCountsPtr = outGradientStepCounts.value().data_ptr<int32_t>();
+            if (outNormalizedMaxRadiiAccum.has_value()) {
+                int32_t *outNormalizedMaxRadiiAccumPtr =
+                    outNormalizedMaxRadiiAccum.value().data_ptr<int32_t>();
+                computeGradientState<float, true>
+                    <<<GET_BLOCKS(N, DEFAULT_BLOCK_DIM), DEFAULT_BLOCK_DIM, 0, stream>>>(
+                        C,
+                        N,
+                        imageWidth,
+                        imageHeight,
+                        radii.data_ptr<int32_t>(),
+                        dLossDMeans2d.data_ptr<float>(),
+                        outNormalizeddLossdMeans2dNormAccumPtr,
+                        outNormalizedMaxRadiiAccumPtr,
+                        outGradientStepCountsPtr);
+            } else {
+                computeGradientState<float, false>
+                    <<<GET_BLOCKS(N, DEFAULT_BLOCK_DIM), DEFAULT_BLOCK_DIM, 0, stream>>>(
+                        C,
+                        N,
+                        imageWidth,
+                        imageHeight,
+                        radii.data_ptr<int32_t>(),
+                        dLossDMeans2d.data_ptr<float>(),
+                        outNormalizeddLossdMeans2dNormAccumPtr,
+                        nullptr,
+                        outGradientStepCountsPtr);
+            }
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+        }
+    }
+    return std::make_tuple(
+        dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDWorldToCamMatrices);
 }
 
 template <>

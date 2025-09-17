@@ -818,7 +818,6 @@ gaussianTileIntersectionPrivateUse1Impl(
             c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
         }
 
-        std::cout << "Return dense" << std::endl;
         return std::make_tuple(tile_joffsets, intersection_values);
     }
 }
