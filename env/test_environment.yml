@@ -35,7 +35,6 @@ dependencies:
   ## 3dgs
   - pyproj
   - scikit-image
-  - torchmetrics
   - torchvision
   - viser
   - pip:
