@@ -15,6 +15,7 @@
 void bind_grid_batch(py::module &m);
 void bind_jagged_tensor(py::module &m);
 void bind_gaussian_splat3d(py::module &m);
+void bind_viewer(py::module &m);
 
 #define __FVDB__BUILDER_INNER(FUNC_NAME, FUNC_STR, LSHAPE_TYPE)                           \
     m.def(                                                                                \
@@ -96,9 +97,18 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     py::class_<fvdb::Vec3dBatchOrScalar>(m, "Vec3dBatchOrScalar");
     py::class_<fvdb::Vec3iBatch>(m, "Vec3iBatch");
 
+    // TODO where to define this?
+    py::enum_<c10::DeviceType>(m, "DeviceType")
+        .value("CPU", c10::DeviceType::CPU)
+        .value("CUDA", c10::DeviceType::CUDA)
+        .export_values();
+
     bind_grid_batch(m);
     bind_jagged_tensor(m);
     bind_gaussian_splat3d(m);
+
+    py::module viz = m.def_submodule("viz", "Visualization bindings");
+    bind_viewer(viz);
 
     //
     // Utility functions

@@ -18,6 +18,11 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_torch.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_pybind11.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_nanovdb.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/configure_torch_pybind11.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_nanovdb_editor.cmake)
+
+if(nanovdb_editor_ADDED)
+    include(${NANOVDB_EDITOR_SOURCE_DIR}/cmake/get_nanovdb_editor.cmake)
+endif()
 
 # Generate compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -30,7 +35,8 @@ set(FVDB_BINDINGS_CPP_FILES
     src/python/Bindings.cpp
     src/python/GaussianSplatBinding.cpp
     src/python/GridBatchBinding.cpp
-    src/python/JaggedTensorBinding.cpp)
+    src/python/JaggedTensorBinding.cpp
+    src/python/ViewerBinding.cpp)
 
 # Build library
 Python3_add_library(_Cpp ${FVDB_BINDINGS_CPP_FILES})
@@ -57,13 +63,19 @@ set_target_properties(_Cpp PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     INTERFACE_POSITION_INDEPENDENT_CODE ON)
 
+# Ensure the loader can locate nanovdb_editor component libraries at runtime
+set_property(TARGET _Cpp APPEND PROPERTY BUILD_RPATH "${NANOVDB_EDITOR_LIB_DIR}")
+set_property(TARGET _Cpp APPEND PROPERTY INSTALL_RPATH "${NANOVDB_EDITOR_LIB_DIR}")
+
 target_include_directories(_Cpp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${TORCH_INCLUDE_DIRS})
+    ${TORCH_INCLUDE_DIRS}
+    ${nanovdb_editor_SOURCE_DIR})
 
 target_link_libraries(_Cpp PRIVATE
     ${TORCH_PYTHON_LIBRARY}
     ${TORCH_LIBRARIES}
+    nanovdb_editor::nanovdb_editor
     fvdb)
 
 target_compile_options(_Cpp PRIVATE

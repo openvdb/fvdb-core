@@ -60,7 +60,9 @@ set(FVDB_CPP_FILES
     fvdb/detail/io/LoadNanovdb.cpp
     fvdb/detail/io/SaveNanoVDB.cpp
     fvdb/detail/io/GaussianPlyIO.cpp
-    fvdb/detail/TorchDeviceBuffer.cpp)
+    fvdb/detail/TorchDeviceBuffer.cpp
+    fvdb/detail/viewer/Viewer.cpp
+    fvdb/detail/viewer/GaussianSplat3dView.cpp)
 
 set(FVDB_CU_FILES
     fvdb/detail/ops/IntegrateTSDF.cu
@@ -165,12 +167,14 @@ set_target_properties(
 
 message(STATUS "fvdb: TORCH_INCLUDE_DIRS: ${TORCH_INCLUDE_DIRS}")
 
+target_include_directories(fvdb SYSTEM PUBLIC
+    ${nanovdb_SOURCE_DIR}/nanovdb)
 target_include_directories(fvdb PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${nanovdb_SOURCE_DIR}/nanovdb
     ${TORCH_INCLUDE_DIRS}
     ${Python3_INCLUDE_DIRS}
-    ${nvtx3_SOURCE_DIR}/include)
+    ${nvtx3_SOURCE_DIR}/include
+    ${NANOVDB_EDITOR_INCLUDE_DIR})
 target_include_directories(fvdb PRIVATE
     ${TORCH_SOURCE_INCLUDE_DIRS}
     ${tinyply_SOURCE_DIR}/source)
@@ -206,7 +210,7 @@ target_compile_options(fvdb PRIVATE
     >)
 
 target_link_libraries(fvdb PRIVATE
-    ${TORCH_LIBRARIES} tinyply cudnn_frontend cudnn cutlass blosc::blosc)
+    ${TORCH_LIBRARIES} tinyply cudnn_frontend cudnn cutlass blosc::blosc nanovdb_editor::nanovdb_editor)
 target_link_libraries(fvdb PUBLIC
     ${Python3_LIBRARIES})
 
