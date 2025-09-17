@@ -4,7 +4,7 @@
 #ifndef TESTS_UTILS_IMAGEUTILS_H
 #define TESTS_UTILS_IMAGEUTILS_H
 
-#include <torch/all.h>
+#include <torch/types.h>
 
 #include <string>
 

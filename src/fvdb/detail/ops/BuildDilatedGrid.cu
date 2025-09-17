@@ -11,7 +11,7 @@
 #include <nanovdb/util/MorphologyHelpers.h>
 
 #include <c10/cuda/CUDAGuard.h>
-#include <torch/all.h>
+#include <torch/types.h>
 
 namespace fvdb::detail::ops {
 

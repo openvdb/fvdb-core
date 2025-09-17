@@ -5,7 +5,7 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 
 #include <c10/cuda/CUDAException.h>
-#include <torch/all.h>
+#include <torch/types.h>
 
 namespace fvdb {
 namespace detail {

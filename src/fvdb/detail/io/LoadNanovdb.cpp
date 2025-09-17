@@ -11,7 +11,7 @@
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <nanovdb/tools/GridBuilder.h>
 
-#include <torch/all.h>
+#include <torch/types.h>
 
 namespace fvdb {
 namespace detail {

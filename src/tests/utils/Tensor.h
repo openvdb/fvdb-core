@@ -4,8 +4,7 @@
 #ifndef TESTS_UTILS_TENSOR_H
 #define TESTS_UTILS_TENSOR_H
 
-#include <torch/all.h>
-#include <torch/script.h>
+#include <torch/types.h>
 
 #include <vector>
 
