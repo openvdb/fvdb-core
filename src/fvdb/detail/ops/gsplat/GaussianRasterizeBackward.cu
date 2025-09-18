@@ -801,30 +801,6 @@ struct RasterizeBackwardArgs {
             }
         }
     }
-
-    /// @brief Get the block dimensions for the backward pass
-    /// @return The block dimensions
-    const dim3
-    getBlockDim() const {
-        return {commonArgs.mTileSize, commonArgs.mTileSize, 1};
-    }
-
-    /// @brief Get the grid dimensions for the backward pass
-    /// @return The grid dimensions
-    const dim3
-    getGridDim() const {
-        if (commonArgs.mIsSparse) {
-            // Sparse mode: only launch blocks for active tiles
-            return {static_cast<uint32_t>(commonArgs.mActiveTiles.size(0)), 1, 1};
-        } else {
-            // Dense mode: launch blocks for all tiles
-            const uint32_t tileExtentW =
-                (commonArgs.mImageWidth + commonArgs.mTileSize - 1) / commonArgs.mTileSize;
-            const uint32_t tileExtentH =
-                (commonArgs.mImageHeight + commonArgs.mTileSize - 1) / commonArgs.mTileSize;
-            return {commonArgs.mNumCameras, tileExtentH, tileExtentW};
-        }
-    }
 };
 
 /// @brief Compute the gradient of the loss with respect to the parameters of the Gaussians that
@@ -1000,7 +976,8 @@ callRasterizeBackwardWithTemplatedSharedChannels(
                  " bytes), try lowering tileSize.");
     }
     rasterizeGaussiansBackward<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED>
-        <<<args.getGridDim(), args.getBlockDim(), sharedMemSize, stream>>>(args);
+        <<<args.commonArgs.getGridDim(), args.commonArgs.getBlockDim(), sharedMemSize, stream>>>(
+            args);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return std::make_tuple(outDLossDMeans2dAbs,
                            outDLossDMeans2d,

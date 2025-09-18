@@ -391,12 +391,10 @@ launchRasterizeForwardKernel(
                  " bytes), try lowering tile_size.");
     }
 
-    const dim3 blockDim = {tileSize, tileSize, 1};
-    const dim3 gridDim  = activeTiles.has_value() // sparse mode
-                              ? dim3(activeTiles.value().size(0), 1, 1)
-                              : dim3(C, tileExtentH, tileExtentW);
-
-    rasterizeGaussiansForward<<<gridDim, blockDim, sharedMem, stream>>>(args);
+    rasterizeGaussiansForward<<<args.commonArgs.getGridDim(),
+                                args.commonArgs.getBlockDim(),
+                                sharedMem,
+                                stream>>>(args);
 
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 

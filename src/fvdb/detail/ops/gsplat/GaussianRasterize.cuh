@@ -344,6 +344,28 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
                 : mTileOffsets[cameraId][nextTileRow][nextTileCol];
         return {firstGaussianIdInBlock, lastGaussianIdInBlock};
     }
+
+    /// @brief Get the block dimensions for the forward/backward pass
+    /// @return The block dimensions
+    const dim3
+    getBlockDim() const {
+        return {mTileSize, mTileSize, 1};
+    }
+
+    /// @brief Get the grid dimensions for the forward/backward pass
+    /// @return The grid dimensions
+    const dim3
+    getGridDim() const {
+        if (mIsSparse) {
+            // Sparse mode: only launch blocks for active tiles
+            return {static_cast<uint32_t>(mActiveTiles.size(0)), 1, 1};
+        } else {
+            // Dense mode: launch blocks for all tiles
+            const uint32_t tileExtentW = (mImageWidth + mTileSize - 1) / mTileSize;
+            const uint32_t tileExtentH = (mImageHeight + mTileSize - 1) / mTileSize;
+            return {mNumCameras, tileExtentH, tileExtentW};
+        }
+    }
 };
 
 } // namespace fvdb::detail::ops
