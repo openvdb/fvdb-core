@@ -391,12 +391,10 @@ launchRasterizeForwardKernel(
                  " bytes), try lowering tile_size.");
     }
 
-    const dim3 blockDim = {tileSize, tileSize, 1};
-    const dim3 gridDim  = activeTiles.has_value() // sparse mode
-                              ? dim3(activeTiles.value().size(0), 1, 1)
-                              : dim3(C, tileExtentH, tileExtentW);
-
-    rasterizeGaussiansForward<<<gridDim, blockDim, sharedMem, stream>>>(args);
+    rasterizeGaussiansForward<<<args.commonArgs.getGridDim(),
+                                args.commonArgs.getBlockDim(),
+                                sharedMem,
+                                stream>>>(args);
 
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
@@ -438,7 +436,7 @@ dispatchGaussianRasterizeForward<torch::kCUDA>(
     const std::optional<torch::Tensor> backgrounds = std::nullopt;
     const std::optional<torch::Tensor> masks       = std::nullopt;
 
-#define __CALL_FWD_(N)                                                                          \
+#define CALL_FWD_CUDA(N)                                                                        \
     case N: {                                                                                   \
         if (isPacked) {                                                                         \
             auto [outFeatures, outAlphas, outLastIds] =                                         \
@@ -480,27 +478,27 @@ dispatchGaussianRasterizeForward<torch::kCUDA>(
     // powers of two plus one to handle rendering common feature channel
     // dimensions with an optional additional depth channel
     switch (channels) {
-        __CALL_FWD_(1)
-        __CALL_FWD_(2)
-        __CALL_FWD_(3)
-        __CALL_FWD_(4)
-        __CALL_FWD_(5)
-        __CALL_FWD_(8)
-        __CALL_FWD_(9)
-        __CALL_FWD_(16)
-        __CALL_FWD_(17)
-        __CALL_FWD_(32)
-        __CALL_FWD_(33)
-        __CALL_FWD_(64)
-        __CALL_FWD_(65)
-        __CALL_FWD_(128)
-        __CALL_FWD_(129)
-        __CALL_FWD_(192)
-        __CALL_FWD_(193)
-        __CALL_FWD_(256)
-        __CALL_FWD_(257)
-        __CALL_FWD_(512)
-        __CALL_FWD_(513)
+        CALL_FWD_CUDA(1)
+        CALL_FWD_CUDA(2)
+        CALL_FWD_CUDA(3)
+        CALL_FWD_CUDA(4)
+        CALL_FWD_CUDA(5)
+        CALL_FWD_CUDA(8)
+        CALL_FWD_CUDA(9)
+        CALL_FWD_CUDA(16)
+        CALL_FWD_CUDA(17)
+        CALL_FWD_CUDA(32)
+        CALL_FWD_CUDA(33)
+        CALL_FWD_CUDA(64)
+        CALL_FWD_CUDA(65)
+        CALL_FWD_CUDA(128)
+        CALL_FWD_CUDA(129)
+        CALL_FWD_CUDA(192)
+        CALL_FWD_CUDA(193)
+        CALL_FWD_CUDA(256)
+        CALL_FWD_CUDA(257)
+        CALL_FWD_CUDA(512)
+        CALL_FWD_CUDA(513)
     default: AT_ERROR("Unsupported number of channels: ", channels);
     }
 }
@@ -554,7 +552,7 @@ dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
     const std::optional<torch::Tensor> backgrounds = std::nullopt;
     const std::optional<torch::Tensor> masks       = std::nullopt;
 
-#define __CALL_FWD_SPARSE_(N)                                                     \
+#define CALL_FWD_SPARSE_CUDA(N)                                                   \
     case N: {                                                                     \
         if (isPacked) {                                                           \
             return launchRasterizeForwardKernel<float, N, true>(means2d,          \
@@ -602,27 +600,27 @@ dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
     // powers of two plus one to handle rendering common feature channel
     // dimensions with an optional additional depth channel
     switch (channels) {
-        __CALL_FWD_SPARSE_(1)
-        __CALL_FWD_SPARSE_(2)
-        __CALL_FWD_SPARSE_(3)
-        __CALL_FWD_SPARSE_(4)
-        __CALL_FWD_SPARSE_(5)
-        __CALL_FWD_SPARSE_(8)
-        __CALL_FWD_SPARSE_(9)
-        __CALL_FWD_SPARSE_(16)
-        __CALL_FWD_SPARSE_(17)
-        __CALL_FWD_SPARSE_(32)
-        __CALL_FWD_SPARSE_(33)
-        __CALL_FWD_SPARSE_(64)
-        __CALL_FWD_SPARSE_(65)
-        __CALL_FWD_SPARSE_(128)
-        __CALL_FWD_SPARSE_(129)
-        __CALL_FWD_SPARSE_(192)
-        __CALL_FWD_SPARSE_(193)
-        __CALL_FWD_SPARSE_(256)
-        __CALL_FWD_SPARSE_(257)
-        __CALL_FWD_SPARSE_(512)
-        __CALL_FWD_SPARSE_(513)
+        CALL_FWD_SPARSE_CUDA(1)
+        CALL_FWD_SPARSE_CUDA(2)
+        CALL_FWD_SPARSE_CUDA(3)
+        CALL_FWD_SPARSE_CUDA(4)
+        CALL_FWD_SPARSE_CUDA(5)
+        CALL_FWD_SPARSE_CUDA(8)
+        CALL_FWD_SPARSE_CUDA(9)
+        CALL_FWD_SPARSE_CUDA(16)
+        CALL_FWD_SPARSE_CUDA(17)
+        CALL_FWD_SPARSE_CUDA(32)
+        CALL_FWD_SPARSE_CUDA(33)
+        CALL_FWD_SPARSE_CUDA(64)
+        CALL_FWD_SPARSE_CUDA(65)
+        CALL_FWD_SPARSE_CUDA(128)
+        CALL_FWD_SPARSE_CUDA(129)
+        CALL_FWD_SPARSE_CUDA(192)
+        CALL_FWD_SPARSE_CUDA(193)
+        CALL_FWD_SPARSE_CUDA(256)
+        CALL_FWD_SPARSE_CUDA(257)
+        CALL_FWD_SPARSE_CUDA(512)
+        CALL_FWD_SPARSE_CUDA(513)
     default: AT_ERROR("Unsupported number of channels: ", channels);
     }
 }
