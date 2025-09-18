@@ -3,7 +3,7 @@ name: fVDB CUDA 12.8.1 Build and Test
 on:
   pull_request:
     branches:
-      - main
+      - '**'
     paths-ignore:
         - 'CODEOWNERS'
         - '**.md'
@@ -18,8 +18,8 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
-  deployments: write
+  contents: read
+  deployments: read
   pull-requests: read
   issues: read
   # Need ID token write permission to use OIDC

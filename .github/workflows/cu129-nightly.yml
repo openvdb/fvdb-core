@@ -7,8 +7,8 @@ name: fVDB Nightly Build and Tests -- CUDA 12.9.1
 
 
 permissions:
-  contents: write
-  deployments: write
+  contents: read
+  deployments: read
   pull-requests: read
   issues: read
 
