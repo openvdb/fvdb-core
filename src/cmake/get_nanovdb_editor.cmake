@@ -10,10 +10,17 @@ CPMAddPackage(
 )
 
 if(nanovdb_editor_ADDED)
-    message(STATUS "Building nanovdb_editor wheel...")
+    set(NANOVDB_EDITOR_WHEEL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dist)
+    file(MAKE_DIRECTORY ${NANOVDB_EDITOR_WHEEL_DIR})
+
+    message(STATUS "Building nanovdb_editor wheel to ${NANOVDB_EDITOR_WHEEL_DIR}...")
     execute_process(
-        COMMAND bash -c "python -m pip install --force-reinstall ${nanovdb_editor_SOURCE_DIR}/pymodule"
-        WORKING_DIRECTORY ${nanovdb_editor_SOURCE_DIR}/pymodule
+        COMMAND bash -c "
+        python -m pip wheel ${nanovdb_editor_SOURCE_DIR}/pymodule --wheel-dir ${NANOVDB_EDITOR_WHEEL_DIR}
+        echo -- Installing nanovdb_editor wheel...
+        python -m pip install --force-reinstall ${NANOVDB_EDITOR_WHEEL_DIR}/*.whl
+        "
+        WORKING_DIRECTORY ${NANOVDB_EDITOR_WHEEL_DIR}
         RESULT_VARIABLE build_result
         OUTPUT_VARIABLE build_output
         ERROR_VARIABLE build_error
