@@ -1129,6 +1129,28 @@ class TestLoadAndSavePly(BaseGaussianTestCase):
     def setUp(self):
         super().setUp()
 
+    def test_load_ply_with_no_shN(self):
+        tf = tempfile.NamedTemporaryFile(delete=True, suffix=".ply")
+        shN_empty = torch.empty((self.gs3d.num_gaussians, 0, 3), device=self.device)
+        gs3d_no_shN = GaussianSplat3d(
+            means=self.gs3d.means,
+            quats=self.gs3d.quats,
+            log_scales=self.gs3d.log_scales,
+            logit_opacities=self.gs3d.logit_opacities,
+            sh0=self.gs3d.sh0,
+            shN=shN_empty,
+        )
+        gs3d_no_shN.save_ply(tf.name)
+
+        gs3d_loaded, metadata = GaussianSplat3d.from_ply(tf.name)
+
+        self.assertTrue(torch.allclose(gs3d_loaded.means, gs3d_no_shN.means))
+        self.assertTrue(torch.allclose(gs3d_loaded.quats, gs3d_no_shN.quats))
+        self.assertTrue(torch.allclose(gs3d_loaded.log_scales, gs3d_no_shN.log_scales))
+        self.assertTrue(torch.allclose(gs3d_loaded.logit_opacities, gs3d_no_shN.logit_opacities))
+        self.assertTrue(torch.allclose(gs3d_loaded.sh0, gs3d_no_shN.sh0))
+        self.assertTrue(gs3d_loaded.shN.shape == (gs3d_no_shN.num_gaussians, 0, 3))
+
     def test_save_ply_handles_nan(self):
         tf = tempfile.NamedTemporaryFile(delete=True, suffix=".ply")
 
