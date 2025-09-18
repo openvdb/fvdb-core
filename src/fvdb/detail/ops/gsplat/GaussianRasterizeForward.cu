@@ -24,6 +24,7 @@
 namespace fvdb::detail::ops {
 namespace {
 
+// comment test
 // Structure to hold arguments and methods for the rasterize forward kernel
 template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct RasterizeForwardArgs {
     using CommonArgs = RasterizeCommonArgs<ScalarType, NUM_CHANNELS, IS_PACKED>;
