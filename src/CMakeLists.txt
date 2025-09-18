@@ -167,10 +167,9 @@ set_target_properties(
 
 message(STATUS "fvdb: TORCH_INCLUDE_DIRS: ${TORCH_INCLUDE_DIRS}")
 
-target_include_directories(fvdb SYSTEM PUBLIC
-    ${nanovdb_SOURCE_DIR}/nanovdb)
 target_include_directories(fvdb PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${nanovdb_SOURCE_DIR}/nanovdb
     ${TORCH_INCLUDE_DIRS}
     ${Python3_INCLUDE_DIRS}
     ${nvtx3_SOURCE_DIR}/include

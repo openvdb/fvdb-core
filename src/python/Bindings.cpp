@@ -97,12 +97,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     py::class_<fvdb::Vec3dBatchOrScalar>(m, "Vec3dBatchOrScalar");
     py::class_<fvdb::Vec3iBatch>(m, "Vec3iBatch");
 
-    // TODO where to define this?
-    py::enum_<c10::DeviceType>(m, "DeviceType")
-        .value("CPU", c10::DeviceType::CPU)
-        .value("CUDA", c10::DeviceType::CUDA)
-        .export_values();
-
     bind_grid_batch(m);
     bind_jagged_tensor(m);
     bind_gaussian_splat3d(m);

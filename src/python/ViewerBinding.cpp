@@ -5,8 +5,6 @@
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
 #include <fvdb/detail/viewer/Viewer.h>
 
-#include <torch/extension.h>
-
 #include <pybind11/pytypes.h>
 #include <pybind11/stl.h>
 

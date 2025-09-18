@@ -31,10 +31,10 @@ target_include_directories(fvdb_test_utils
   PRIVATE
     ${CMAKE_SOURCE_DIR}/src # To find <tests/utils/ImageUtils.h>
     ${PNG_INCLUDE_DIRS}     # Include directory for png.h
+    ${NANOVDB_EDITOR_INCLUDE_DIR}
   # PUBLIC includes could be added if ImageUtils.h included e.g., Torch headers
   # PUBLIC
     # ${TORCH_INCLUDE_DIRS}
-    ${NANOVDB_EDITOR_INCLUDE_DIR}
 )
 
 # Link dependencies PRIVATE as they are implementation details
