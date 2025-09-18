@@ -59,6 +59,7 @@ struct RasterizeBackwardArgs {
         const uint32_t imageOriginW,
         const uint32_t imageOriginH,
         const uint32_t tileSize,
+        const uint32_t cameraOffset,
         const torch::Tensor &tileOffsets,          // [C, numTilesH, numTilesW]
         const torch::Tensor &tileGaussianIds,      // [totalIntersections]
         const fvdb::JaggedTensor &renderedAlphas,  // {C, [AP_i, 1]} or {1, [C, H, W, 1]}
@@ -87,7 +88,7 @@ struct RasterizeBackwardArgs {
                      imageOriginW,
                      imageOriginH,
                      tileSize,
-                     0,
+                     cameraOffset,
                      tileOffsets,
                      tileGaussianIds,
                      activeTiles,
@@ -328,13 +329,13 @@ struct RasterizeBackwardArgs {
         auto dLossDFeaturesGaussianPtr = getAccessorPointer<ScalarType>(mOutDLossDFeatures, g);
         if constexpr (IS_CHUNKED) {
             for (uint32_t k = 0; k < numChannels; ++k) {
-                gpuAtomicAdd(dLossDFeaturesGaussianPtr + channelStart + k,
-                             featureGradientContribution[k]);
+                atomicAdd_system(dLossDFeaturesGaussianPtr + channelStart + k,
+                                 featureGradientContribution[k]);
             }
         } else {
 #pragma unroll NUM_CHANNELS
             for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                gpuAtomicAdd(dLossDFeaturesGaussianPtr + k, featureGradientContribution[k]);
+                atomicAdd_system(dLossDFeaturesGaussianPtr + k, featureGradientContribution[k]);
             }
         }
     }
@@ -353,24 +354,29 @@ struct RasterizeBackwardArgs {
         const vec2t &pixelMean2dAbsGradientContribution,
         const ScalarType pixelOpacityGradientContribution) {
         auto *dLossDConicsGaussianPtr = getAccessorPointer<vec3t>(mOutDLossDConics, g);
-        gpuAtomicAdd(&dLossDConicsGaussianPtr->operator[](0), pixelConicGradientContribution[0]);
-        gpuAtomicAdd(&dLossDConicsGaussianPtr->operator[](1), pixelConicGradientContribution[1]);
-        gpuAtomicAdd(&dLossDConicsGaussianPtr->operator[](2), pixelConicGradientContribution[2]);
+        atomicAdd_system(&dLossDConicsGaussianPtr->operator[](0),
+                         pixelConicGradientContribution[0]);
+        atomicAdd_system(&dLossDConicsGaussianPtr->operator[](1),
+                         pixelConicGradientContribution[1]);
+        atomicAdd_system(&dLossDConicsGaussianPtr->operator[](2),
+                         pixelConicGradientContribution[2]);
 
         auto *dLossDMeans2DGaussianPtr = getAccessorPointer<vec2t>(mOutDLossDMeans2d, g);
-        gpuAtomicAdd(&dLossDMeans2DGaussianPtr->operator[](0), pixelMean2dGradientContribution[0]);
-        gpuAtomicAdd(&dLossDMeans2DGaussianPtr->operator[](1), pixelMean2dGradientContribution[1]);
+        atomicAdd_system(&dLossDMeans2DGaussianPtr->operator[](0),
+                         pixelMean2dGradientContribution[0]);
+        atomicAdd_system(&dLossDMeans2DGaussianPtr->operator[](1),
+                         pixelMean2dGradientContribution[1]);
 
         if (mAbsGrad) {
             auto *dLossDMeans2dAbsGaussianPtr = getAccessorPointer<vec2t>(mOutDLossDMeans2dAbs, g);
-            gpuAtomicAdd(&dLossDMeans2dAbsGaussianPtr->operator[](0),
-                         pixelMean2dAbsGradientContribution[0]);
-            gpuAtomicAdd(&dLossDMeans2dAbsGaussianPtr->operator[](1),
-                         pixelMean2dAbsGradientContribution[1]);
+            atomicAdd_system(&dLossDMeans2dAbsGaussianPtr->operator[](0),
+                             pixelMean2dAbsGradientContribution[0]);
+            atomicAdd_system(&dLossDMeans2dAbsGaussianPtr->operator[](1),
+                             pixelMean2dAbsGradientContribution[1]);
         }
 
         auto *dLossDOpacitiesGaussianPtr = get1DAccessorPointer<ScalarType>(mOutDLossDOpacities, g);
-        gpuAtomicAdd(dLossDOpacitiesGaussianPtr, pixelOpacityGradientContribution);
+        atomicAdd_system(dLossDOpacitiesGaussianPtr, pixelOpacityGradientContribution);
     }
 
     /// @brief Accumulate the features of this Gaussian into the accumulated features
@@ -948,6 +954,7 @@ callRasterizeBackwardWithTemplatedSharedChannels(
         imageOriginW,
         imageOriginH,
         tileSize,
+        0,
         tileOffsets,
         tileGaussianIds,
         reshapedRenderedAlphas,
@@ -1159,6 +1166,151 @@ callRasterizeBackwardWithCorrectSharedChannels(
     }
 }
 
+template <typename ScalarType, size_t NUM_CHANNELS, size_t NUM_SHARED_CHANNELS, bool IS_PACKED>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+callRasterizeBackwardPrivateUse1(
+    const torch::Tensor &means2d,                   // [C, N, 2] or [nnz, 2]
+    const torch::Tensor &conics,                    // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &features,                  // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &opacities,                 // [C, N] or [nnz]
+    const at::optional<torch::Tensor> &backgrounds, // [C, 3]
+    const at::optional<torch::Tensor> &masks,       // [C, numTilesH, numTilesW]
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const uint32_t imageOriginW,
+    const uint32_t imageOriginH,
+    const uint32_t tileSize,
+    const torch::Tensor &tileOffsets,          // [C, numTilesH, numTilesW]
+    const torch::Tensor &tileGaussianIds,      // [totalIntersections]
+    const fvdb::JaggedTensor &renderedAlphas,  // {C, [AP, 1]} or {1, [C, H, W, 1]}
+    const fvdb::JaggedTensor &lastGaussianIds, // {C, [AP]} or {1, [C, H, W]}
+    const fvdb::JaggedTensor
+        &dLossDRenderedFeatures, // {C, [AP, NUM_CHANNELS]} or {1, [C, H, W, NUM_CHANNELS]}
+    const fvdb::JaggedTensor &dLossDRenderedAlphas, // {C, [AP, 1]} or {1, [C, H, W, 1]}
+    bool absGrad, // True if we are computing the gradient of the absolute gradient of the means2d
+    const std::optional<torch::Tensor> &activeTiles     = std::nullopt,
+    const std::optional<torch::Tensor> &tilePixelMask   = std::nullopt,
+    const std::optional<torch::Tensor> &tilePixelCumsum = std::nullopt,
+    const std::optional<torch::Tensor> &pixelMap        = std::nullopt) {
+    TORCH_CHECK(tileSize > 0, "Tile size must be greater than 0");
+
+    torch::Tensor outDLossDMeans2d   = torch::zeros_like(means2d);
+    torch::Tensor outDLossDConics    = torch::zeros_like(conics);
+    torch::Tensor outDLossDFeatures  = torch::zeros_like(features);
+    torch::Tensor outDLossDOpacities = torch::zeros_like(opacities);
+    torch::Tensor outDLossDMeans2dAbs;
+    if (absGrad) {
+        outDLossDMeans2dAbs = torch::zeros_like(means2d);
+    }
+
+    // Just return empty tensors if there are no gaussians, cameras, or intersections
+    if (means2d.numel() == 0 || tileGaussianIds.numel() == 0) {
+        return std::make_tuple(outDLossDMeans2dAbs,
+                               outDLossDMeans2d,
+                               outDLossDConics,
+                               outDLossDFeatures,
+                               outDLossDOpacities);
+    }
+
+    const uint32_t C = means2d.size(0);
+    const uint32_t H = imageHeight;
+    const uint32_t W = imageWidth;
+
+    auto [reshapedRenderedAlphas,
+          reshapedLastGaussianIds,
+          reshapedDLossDRenderedFeatures,
+          reshapedDLossDRenderedAlphas] = [&]() {
+        if (!activeTiles.has_value()) {
+            // Dense mode. Reshape the JaggedTensor inputs to match sparse mode
+            return std::make_tuple(
+                fvdb::JaggedTensor(renderedAlphas.jdata().view({C * H * W, 1})),
+                fvdb::JaggedTensor(lastGaussianIds.jdata().view({C * H * W})),
+                fvdb::JaggedTensor(dLossDRenderedFeatures.jdata().view({C * H * W, NUM_CHANNELS})),
+                fvdb::JaggedTensor(dLossDRenderedAlphas.jdata().view({C * H * W, 1})));
+        }
+        return std::make_tuple(
+            renderedAlphas, lastGaussianIds, dLossDRenderedFeatures, dLossDRenderedAlphas);
+    }();
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+
+        auto deviceCameraCount =
+            (tileOffsets.size(0) + c10::cuda::device_count() - 1) / c10::cuda::device_count();
+        const auto deviceCameraOffset = deviceCameraCount * deviceId;
+        deviceCameraCount = std::min(deviceCameraCount, tileOffsets.size(0) - deviceCameraOffset);
+
+        if (deviceCameraCount) {
+            RasterizeBackwardArgs<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED> args(
+                means2d,
+                conics,
+                opacities,
+                features,
+                backgrounds,
+                masks,
+                imageWidth,
+                imageHeight,
+                imageOriginW,
+                imageOriginH,
+                tileSize,
+                deviceCameraOffset,
+                tileOffsets,
+                tileGaussianIds,
+                reshapedRenderedAlphas,
+                reshapedLastGaussianIds,
+                reshapedDLossDRenderedFeatures,
+                reshapedDLossDRenderedAlphas,
+                outDLossDMeans2d,
+                outDLossDConics,
+                outDLossDFeatures,
+                outDLossDOpacities,
+                absGrad ? std::make_optional(outDLossDMeans2dAbs) : std::nullopt,
+                activeTiles,
+                tilePixelMask,
+                tilePixelCumsum,
+                pixelMap);
+
+            const size_t numChannels =
+                (NUM_SHARED_CHANNELS == NUM_CHANNELS) ? NUM_CHANNELS : NUM_SHARED_CHANNELS + 1;
+            const size_t sharedMemSize =
+                getSharedMemRequirements<ScalarType>(numChannels, tileSize);
+
+            if (cudaFuncSetAttribute(rasterizeGaussiansBackward<ScalarType,
+                                                                NUM_CHANNELS,
+                                                                NUM_SHARED_CHANNELS,
+                                                                IS_PACKED>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     sharedMemSize) != cudaSuccess) {
+                AT_ERROR("Failed to set maximum shared memory size (requested ",
+                         sharedMemSize,
+                         " bytes), try lowering tileSize.");
+            }
+
+            const uint32_t tileExtentH = tileOffsets.size(1);
+            const uint32_t tileExtentW = tileOffsets.size(2);
+            const dim3 blockDim        = {tileSize, tileSize, 1};
+            const dim3 gridDim         = activeTiles.has_value() // sparse mode
+                                             ? dim3(activeTiles.value().size(0), 1, 1)
+                                             : dim3(deviceCameraCount, tileExtentH, tileExtentW);
+
+            rasterizeGaussiansBackward<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED>
+                <<<gridDim, blockDim, sharedMemSize, stream>>>(args);
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+        }
+    }
+
+    for (const auto device_index: c10::irange(c10::cuda::device_count())) {
+        c10::cuda::getCurrentCUDAStream(device_index).synchronize();
+    }
+
+    return std::make_tuple(outDLossDMeans2dAbs,
+                           outDLossDMeans2d,
+                           outDLossDConics,
+                           outDLossDFeatures,
+                           outDLossDOpacities);
+}
+
 } // namespace
 
 template <>
@@ -1182,107 +1334,6 @@ dispatchGaussianRasterizeBackward<torch::kCUDA>(
     const bool absGrad,
     const int64_t numSharedChannelsOverride) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means2d));
-
-    uint32_t colorDim   = features.size(-1);
-    const bool isPacked = means2d.dim() == 2;
-
-#define __GS__CALL_BWD_(N)                                                          \
-    case N: {                                                                       \
-        if (isPacked) {                                                             \
-            return callRasterizeBackwardWithCorrectSharedChannels<float, N, true>(  \
-                means2d,                                                            \
-                conics,                                                             \
-                features,                                                           \
-                opacities,                                                          \
-                at::nullopt /*backgrounds*/,                                        \
-                at::nullopt /*masks*/,                                              \
-                imageWidth,                                                         \
-                imageHeight,                                                        \
-                imageOriginW,                                                       \
-                imageOriginH,                                                       \
-                tileSize,                                                           \
-                tileOffsets,                                                        \
-                tileGaussianIds,                                                    \
-                renderedAlphas,                                                     \
-                lastGaussianIds,                                                    \
-                dLossDRenderedFeatures,                                             \
-                dLossDRenderedAlphas,                                               \
-                absGrad,                                                            \
-                numSharedChannelsOverride);                                         \
-        } else {                                                                    \
-            return callRasterizeBackwardWithCorrectSharedChannels<float, N, false>( \
-                means2d,                                                            \
-                conics,                                                             \
-                features,                                                           \
-                opacities,                                                          \
-                at::nullopt /*backgrounds*/,                                        \
-                at::nullopt /*masks*/,                                              \
-                imageWidth,                                                         \
-                imageHeight,                                                        \
-                imageOriginW,                                                       \
-                imageOriginH,                                                       \
-                tileSize,                                                           \
-                tileOffsets,                                                        \
-                tileGaussianIds,                                                    \
-                renderedAlphas,                                                     \
-                lastGaussianIds,                                                    \
-                dLossDRenderedFeatures,                                             \
-                dLossDRenderedAlphas,                                               \
-                absGrad,                                                            \
-                numSharedChannelsOverride);                                         \
-        }                                                                           \
-    }
-
-    switch (colorDim) {
-        __GS__CALL_BWD_(1)
-        __GS__CALL_BWD_(2)
-        __GS__CALL_BWD_(3)
-        __GS__CALL_BWD_(4)
-        __GS__CALL_BWD_(5)
-        __GS__CALL_BWD_(8)
-        __GS__CALL_BWD_(9)
-        __GS__CALL_BWD_(16)
-        __GS__CALL_BWD_(17)
-        __GS__CALL_BWD_(32)
-        __GS__CALL_BWD_(33)
-        __GS__CALL_BWD_(47) // TODO, is this only here to support a gtest?
-        __GS__CALL_BWD_(64)
-        __GS__CALL_BWD_(65)
-        __GS__CALL_BWD_(128)
-        __GS__CALL_BWD_(129)
-        __GS__CALL_BWD_(192)
-        __GS__CALL_BWD_(193)
-        __GS__CALL_BWD_(256)
-        __GS__CALL_BWD_(257)
-        __GS__CALL_BWD_(512)
-        __GS__CALL_BWD_(513)
-    default: AT_ERROR("Unsupported number of channels: ", colorDim);
-    }
-}
-
-template <>
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-dispatchGaussianRasterizeBackward<torch::kPrivateUse1>(
-    const torch::Tensor &means2d,   // [C, N, 2]
-    const torch::Tensor &conics,    // [C, N, 3]
-    const torch::Tensor &features,  // [C, N, 3]
-    const torch::Tensor &opacities, // [N]
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
-    const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,            // [C, numTilesH, numTilesW]
-    const torch::Tensor &tileGaussianIds,        // [totalIntersections]
-    const torch::Tensor &renderedAlphas,         // [C, imageHeight, imageWidth, 1]
-    const torch::Tensor &lastGaussianIds,        // [C, imageHeight, imageWidth]
-    const torch::Tensor &dLossDRenderedFeatures, // [C, imageHeight, imageWidth, 3]
-    const torch::Tensor &dLossDRenderedAlphas,   // [C, imageHeight, imageWidth, 1]
-    const bool absGrad,
-    const int64_t numSharedChannelsOverride) {
-    // TORCH_CHECK_NOT_IMPLEMENTED(false, "PrivateUse1 implementation not available");
-
-    const at::cuda::OptionalCUDAGuard device_guard(c10::Device(c10::DeviceType::CUDA, 0));
 
     uint32_t colorDim   = features.size(-1);
     const bool isPacked = means2d.dim() == 2;
@@ -1357,6 +1408,104 @@ dispatchGaussianRasterizeBackward<torch::kPrivateUse1>(
         CALL_BWD_CUDA(257)
         CALL_BWD_CUDA(512)
         CALL_BWD_CUDA(513)
+    default: AT_ERROR("Unsupported number of channels: ", colorDim);
+    }
+}
+
+template <>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchGaussianRasterizeBackward<torch::kPrivateUse1>(
+    const torch::Tensor &means2d,   // [C, N, 2]
+    const torch::Tensor &conics,    // [C, N, 3]
+    const torch::Tensor &features,  // [C, N, 3]
+    const torch::Tensor &opacities, // [N]
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const uint32_t imageOriginW,
+    const uint32_t imageOriginH,
+    const uint32_t tileSize,
+    const torch::Tensor &tileOffsets,            // [C, numTilesH, numTilesW]
+    const torch::Tensor &tileGaussianIds,        // [totalIntersections]
+    const torch::Tensor &renderedAlphas,         // [C, imageHeight, imageWidth, 1]
+    const torch::Tensor &lastGaussianIds,        // [C, imageHeight, imageWidth]
+    const torch::Tensor &dLossDRenderedFeatures, // [C, imageHeight, imageWidth, 3]
+    const torch::Tensor &dLossDRenderedAlphas,   // [C, imageHeight, imageWidth, 1]
+    const bool absGrad,
+    const int64_t numSharedChannelsOverride) {
+    TORCH_CHECK(numSharedChannelsOverride == -1,
+                "PrivateUse1 implementation does not support shared channels override");
+
+    uint32_t colorDim   = features.size(-1);
+    const bool isPacked = means2d.dim() == 2;
+
+#define CALL_BWD_PRIVATEUSE1(N)                                          \
+    case N: {                                                            \
+        if (isPacked) {                                                  \
+            return callRasterizeBackwardPrivateUse1<float, N, N, true>(  \
+                means2d,                                                 \
+                conics,                                                  \
+                features,                                                \
+                opacities,                                               \
+                at::nullopt /*backgrounds*/,                             \
+                at::nullopt /*masks*/,                                   \
+                imageWidth,                                              \
+                imageHeight,                                             \
+                imageOriginW,                                            \
+                imageOriginH,                                            \
+                tileSize,                                                \
+                tileOffsets,                                             \
+                tileGaussianIds,                                         \
+                renderedAlphas,                                          \
+                lastGaussianIds,                                         \
+                dLossDRenderedFeatures,                                  \
+                dLossDRenderedAlphas,                                    \
+                absGrad);                                                \
+        } else {                                                         \
+            return callRasterizeBackwardPrivateUse1<float, N, N, false>( \
+                means2d,                                                 \
+                conics,                                                  \
+                features,                                                \
+                opacities,                                               \
+                at::nullopt /*backgrounds*/,                             \
+                at::nullopt /*masks*/,                                   \
+                imageWidth,                                              \
+                imageHeight,                                             \
+                imageOriginW,                                            \
+                imageOriginH,                                            \
+                tileSize,                                                \
+                tileOffsets,                                             \
+                tileGaussianIds,                                         \
+                renderedAlphas,                                          \
+                lastGaussianIds,                                         \
+                dLossDRenderedFeatures,                                  \
+                dLossDRenderedAlphas,                                    \
+                absGrad);                                                \
+        }                                                                \
+    }
+
+    switch (colorDim) {
+        CALL_BWD_PRIVATEUSE1(1)
+        CALL_BWD_PRIVATEUSE1(2)
+        CALL_BWD_PRIVATEUSE1(3)
+        CALL_BWD_PRIVATEUSE1(4)
+        CALL_BWD_PRIVATEUSE1(5)
+        CALL_BWD_PRIVATEUSE1(8)
+        CALL_BWD_PRIVATEUSE1(9)
+        CALL_BWD_PRIVATEUSE1(16)
+        CALL_BWD_PRIVATEUSE1(17)
+        CALL_BWD_PRIVATEUSE1(32)
+        CALL_BWD_PRIVATEUSE1(33)
+        CALL_BWD_PRIVATEUSE1(47) // TODO, is this only here to support a gtest?
+        CALL_BWD_PRIVATEUSE1(64)
+        CALL_BWD_PRIVATEUSE1(65)
+        CALL_BWD_PRIVATEUSE1(128)
+        CALL_BWD_PRIVATEUSE1(129)
+        CALL_BWD_PRIVATEUSE1(192)
+        CALL_BWD_PRIVATEUSE1(193)
+        CALL_BWD_PRIVATEUSE1(256)
+        CALL_BWD_PRIVATEUSE1(257)
+        CALL_BWD_PRIVATEUSE1(512)
+        CALL_BWD_PRIVATEUSE1(513)
     default: AT_ERROR("Unsupported number of channels: ", colorDim);
     }
 }
