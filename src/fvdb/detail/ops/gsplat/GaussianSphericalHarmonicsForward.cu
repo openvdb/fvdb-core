@@ -130,8 +130,6 @@ evalShFunction(const int64_t degree,                      // degree of SH to be 
     return result + T(0.5);
 }
 
-} // namespace
-
 // Evalute Spherical Harmonic functions at the given directions, assuming a uniform minibatch
 // of C cameras, each with N gaussians, and K SH coefficients per gaussian.
 template <typename T>
@@ -198,6 +196,8 @@ computeShDiffuseOnly(const int64_t offset,
         outRenderQuantities[eid * D + c] = T(0.2820947917738781) * sh0Coeffs[gid][0][c] + T(0.5);
     }
 }
+
+} // namespace
 
 template <>
 torch::Tensor
@@ -343,11 +343,10 @@ dispatchSphericalHarmonicsForward<torch::kPrivateUse1>(
         TORCH_CHECK_VALUE(radii.is_contiguous(), "radii must be a contiguous");
     }
 
-    const int64_t K        = hasShNCoeffs ? shNCoeffs.size(1) + 1 : 1;
-    const int64_t N        = sh0Coeffs.size(0);
-    const int64_t C        = numCameras;
-    const int64_t D        = sh0Coeffs.size(2);
-    const auto TOTAL_ELEMS = C * N * D;
+    const int64_t K = hasShNCoeffs ? shNCoeffs.size(1) + 1 : 1;
+    const int64_t N = sh0Coeffs.size(0);
+    const int64_t C = numCameras;
+    const int64_t D = sh0Coeffs.size(2);
 
     // If you are using degree > 0, then we are going to use the directions tensor which means
     // we need to check it has the right shape
@@ -378,7 +377,7 @@ dispatchSphericalHarmonicsForward<torch::kPrivateUse1>(
         elementCount *= D;
         elementOffset *= D;
 
-        const auto NUM_BLOCKS = GET_BLOCKS(TOTAL_ELEMS, DEFAULT_BLOCK_DIM);
+        const auto NUM_BLOCKS = GET_BLOCKS(elementCount, DEFAULT_BLOCK_DIM);
 
         if (hasShNCoeffs && shDegreeToUse > 0) {
             computeSh<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(

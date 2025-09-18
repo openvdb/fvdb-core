@@ -6,6 +6,7 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <ATen/cuda/Atomic.cuh>
 #include <ATen/cuda/CUDAGeneratorImpl.h>
@@ -275,11 +276,12 @@ evalShFunctionVJP(const int64_t degree,                     // degree of SH to b
         writeDLossDViewDir(x, y, z, vX, vY, vZ, inorm, dLossDViewDir);
     }
 }
-} // namespace
 
 template <typename T>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 computeShBackward(
+    const int64_t offset,
+    const int64_t count,
     const int64_t C,
     const int64_t N,
     const int64_t K,
@@ -295,10 +297,11 @@ computeShBackward(
     T *__restrict__ outDLossDViewDirs // [C, N, 3] optiondl
 ) {
     // parallelize over C * N * D
-    const auto idx = blockIdx.x * blockDim.x + threadIdx.x; // cidx * N * D + gidx * D + c
-    if (idx >= C * N * D) {
+    auto idx = blockIdx.x * blockDim.x + threadIdx.x; // cidx * N * D + gidx * D + c
+    if (idx >= count) {
         return;
     }
+    idx += offset;
 
     const auto eid = idx / D; // cidx * N + gidx
     const auto cid = eid / N; // camera index
@@ -328,15 +331,17 @@ computeShBackward(
                       outDLossDShNCoeffs,
                       outDLossDViewDirPtr);
     if (outDLossDViewDirs != nullptr) {
-        gpuAtomicAdd(outDLossDViewDirs + eid * 3, dLossDViewDir.x);
-        gpuAtomicAdd(outDLossDViewDirs + eid * 3 + 1, dLossDViewDir.y);
-        gpuAtomicAdd(outDLossDViewDirs + eid * 3 + 2, dLossDViewDir.z);
+        atomicAdd_system(outDLossDViewDirs + eid * 3, dLossDViewDir.x);
+        atomicAdd_system(outDLossDViewDirs + eid * 3 + 1, dLossDViewDir.y);
+        atomicAdd_system(outDLossDViewDirs + eid * 3 + 2, dLossDViewDir.z);
     }
 }
 
 template <typename T>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 computeShDiffuseOnlyBackward(
+    const int64_t offset,
+    const int64_t count,
     const int64_t C,
     const int64_t N,
     const int64_t D,
@@ -346,10 +351,11 @@ computeShDiffuseOnlyBackward(
     torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits> outDLossDSh0Coeffs // [N, 1, D]
 ) {
     // parallelize over C * N * D
-    const auto idx = blockIdx.x * blockDim.x + threadIdx.x; // cidx * N * D + gidx * D + c
-    if (idx >= C * N * D) {
+    auto idx = blockIdx.x * blockDim.x + threadIdx.x; // cidx * N * D + gidx * D + c
+    if (idx >= count) {
         return;
     }
+    idx += offset;
 
     const auto eid = idx / D; // cidx * N + gidx
     const auto cid = eid / N; // camera index
@@ -361,6 +367,8 @@ computeShDiffuseOnlyBackward(
 
     outDLossDSh0Coeffs[gid][0][c] = T(0.2820947917738781) * dLossDRenderQuantities[cid][gid][c];
 }
+
+} // namespace
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
@@ -438,6 +446,8 @@ dispatchSphericalHarmonicsBackward<torch::kCUDA>(
         }
 
         computeShBackward<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+            0,
+            TOTAL_ELEMS,
             C,
             N,
             K,
@@ -462,6 +472,8 @@ dispatchSphericalHarmonicsBackward<torch::kCUDA>(
         }
 
         computeShDiffuseOnlyBackward<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+            0,
+            TOTAL_ELEMS,
             C,
             N,
             D,
@@ -485,7 +497,6 @@ dispatchSphericalHarmonicsBackward<torch::kPrivateUse1>(
     const torch::Tensor &radii,                  // [C, N]
     const bool computeDLossDViewDirs) {
     FVDB_FUNC_RANGE();
-    const at::cuda::OptionalCUDAGuard device_guard(c10::Device(c10::DeviceType::CUDA, 0));
 
     const bool hasShNCoeffs = shNCoeffs.defined();
     const bool hasViewirs   = viewDirs.defined();
@@ -511,12 +522,10 @@ dispatchSphericalHarmonicsBackward<torch::kPrivateUse1>(
         TORCH_CHECK_VALUE(radii.is_contiguous(), "radii must be a contiguous");
     }
 
-    const int64_t K           = hasShNCoeffs ? shNCoeffs.size(1) + 1 : 1;
-    const int64_t N           = dLossDRenderQuantities.size(1);
-    const int64_t C           = numCameras;
-    const int64_t D           = dLossDRenderQuantities.size(2);
-    const int64_t TOTAL_ELEMS = C * N * D;
-    const int64_t NUM_BLOCKS  = GET_BLOCKS(TOTAL_ELEMS, DEFAULT_BLOCK_DIM);
+    const int64_t K = hasShNCoeffs ? shNCoeffs.size(1) + 1 : 1;
+    const int64_t N = dLossDRenderQuantities.size(1);
+    const int64_t C = numCameras;
+    const int64_t D = dLossDRenderQuantities.size(2);
 
     // If you are using degree > 0, then we are going to use the directions tensor which means
     // we need to check it has the right shape
@@ -528,9 +537,6 @@ dispatchSphericalHarmonicsBackward<torch::kPrivateUse1>(
         TORCH_CHECK_VALUE(viewDirs.is_privateuseone(), "dirs must be a PrivateUse1 tensor");
         TORCH_CHECK_VALUE(viewDirs.size(-1) == 3, "dirs must have last dimension 3");
     }
-
-    at::cuda::CUDAStream stream =
-        at::cuda::getCurrentCUDAStream(dLossDRenderQuantities.device().index());
 
     using scalar_t = float;
 
@@ -548,20 +554,37 @@ dispatchSphericalHarmonicsBackward<torch::kPrivateUse1>(
             return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
         }
 
-        computeShBackward<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
-            C,
-            N,
-            K,
-            D,
-            shDegreeToUse,
-            viewDirs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-            shNCoeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-            radiiPtr,
-            dLossDRenderQuantities.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-            dLossDSh0Coeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-            dLossDShNCoeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-            computeDLossDViewDirs ? dLossDViewDirs.data_ptr<scalar_t>() : nullptr);
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            C10_CUDA_CHECK(cudaSetDevice(deviceId));
+            auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+
+            int64_t elementOffset, elementCount;
+            std::tie(elementOffset, elementCount) = deviceOffsetAndCount(N * C, deviceId);
+            elementCount *= D;
+            elementOffset *= D;
+
+            const auto NUM_BLOCKS = GET_BLOCKS(elementCount, DEFAULT_BLOCK_DIM);
+
+            computeShBackward<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                elementOffset,
+                elementCount,
+                C,
+                N,
+                K,
+                D,
+                shDegreeToUse,
+                viewDirs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+                shNCoeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+                radiiPtr,
+                dLossDRenderQuantities.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+                dLossDSh0Coeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+                dLossDShNCoeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+                computeDLossDViewDirs ? dLossDViewDirs.data_ptr<scalar_t>() : nullptr);
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+        }
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
+        }
 
         return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
     } else {
@@ -572,14 +595,31 @@ dispatchSphericalHarmonicsBackward<torch::kPrivateUse1>(
             return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
         }
 
-        computeShDiffuseOnlyBackward<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
-            C,
-            N,
-            D,
-            dLossDRenderQuantities.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-            radiiPtr,
-            dLossDSh0Coeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>());
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            C10_CUDA_CHECK(cudaSetDevice(deviceId));
+            auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+
+            int64_t elementOffset, elementCount;
+            std::tie(elementOffset, elementCount) = deviceOffsetAndCount(N * C, deviceId);
+            elementCount *= D;
+            elementOffset *= D;
+
+            const auto NUM_BLOCKS = GET_BLOCKS(elementCount, DEFAULT_BLOCK_DIM);
+
+            computeShDiffuseOnlyBackward<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                elementOffset,
+                elementCount,
+                C,
+                N,
+                D,
+                dLossDRenderQuantities.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+                radiiPtr,
+                dLossDSh0Coeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>());
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+        }
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
+        }
         return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
     }
 }

@@ -16,6 +16,8 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
+namespace {
+
 template <typename T, bool Ortho> struct ProjectionForward {
     using Mat3 = nanovdb::math::Mat3<T>;
     using Vec3 = nanovdb::math::Vec3<T>;
@@ -239,6 +241,8 @@ projectionForwardKernel(int64_t offset,
         projectionForward.projectionForward(idx + offset);
     }
 }
+
+} // namespace
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
