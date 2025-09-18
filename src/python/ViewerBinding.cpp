@@ -36,6 +36,14 @@ bind_viewer(py::module &m) {
             &fvdb::detail::viewer::GaussianSplat3dView::getShDegreeToUse,
             &fvdb::detail::viewer::GaussianSplat3dView::setShDegreeToUse,
             "The spherical harmonics degree used to render this Gaussian scene. A value of -1 means all available spherical harmonics are used.")
+        .def_property("near",
+                      &fvdb::detail::viewer::GaussianSplat3dView::getNear,
+                      &fvdb::detail::viewer::GaussianSplat3dView::setNear,
+                      "The near clipping plane for this Gaussian scene.")
+        .def_property("far",
+                      &fvdb::detail::viewer::GaussianSplat3dView::getFar,
+                      &fvdb::detail::viewer::GaussianSplat3dView::setFar,
+                      "The far clipping plane for this Gaussian scene.")
         .def("__repr__", [](const fvdb::detail::viewer::GaussianSplat3dView &self) {
             return "GaussianSplat3dView()";
         });

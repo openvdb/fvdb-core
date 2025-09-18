@@ -19,7 +19,7 @@ GaussianSplat3dView::GaussianSplat3dView(const std::string &name,
     mParams.eps2d               = 0.3f;
     mParams.min_radius_2d       = 0.f;
     mParams.tile_size           = static_cast<pnanovdb_uint32_t>(16);
-    mParams.sh_degree_override  = -1;
+    mParams.sh_degree_override  = 0;
     mParams.data_type           = PNANOVDB_REFLECT_DATA_TYPE(pnanovdb_raster_shader_params_t);
 }
 
