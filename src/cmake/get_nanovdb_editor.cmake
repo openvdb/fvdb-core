@@ -13,10 +13,12 @@ if(nanovdb_editor_ADDED)
     set(NANOVDB_EDITOR_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/nanovdb_editor)
     file(MAKE_DIRECTORY ${NANOVDB_EDITOR_BUILD_DIR})
 
-    message(STATUS "Building nanovdb_editor to ${NANOVDB_EDITOR_BUILD_DIR}...")
+    message(STATUS "Building nanovdb_editor wheel to ${NANOVDB_EDITOR_BUILD_DIR}...")
     execute_process(
         COMMAND bash -c "
-        python -m build --wheel --outdir ${NANOVDB_EDITOR_BUILD_DIR} ${nanovdb_editor_SOURCE_DIR}/pymodule
+        echo Building nanovdb_editor wheel...
+        python pip wheel "${nanovdb_editor_SOURCE_DIR}/pymodule" --wheel-dir "${NANOVDB_EDITOR_BUILD_DIR}"
+        echo Installing nanovdb_editor wheel...
         pip install --force-reinstall ${NANOVDB_EDITOR_BUILD_DIR}/*.whl
         "
         WORKING_DIRECTORY ${NANOVDB_EDITOR_BUILD_DIR}
