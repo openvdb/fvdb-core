@@ -12,7 +12,7 @@
 #include <cstdarg>
 #include <cstdio>
 
-#define TEST_RGBRGB
+//#define TEST_RGBRGB
 
 inline void
 pNanoLogPrint(pnanovdb_compute_log_level_t level, const char *format, ...) {
@@ -61,6 +61,9 @@ Viewer::Viewer(const std::string &ipAddress, const int port, const bool verbose)
 
     pnanovdb_compute_queue_t *queue =
         mEditor.compute.device_interface.get_compute_queue(mEditor.device);
+    if (queue == nullptr) {
+        throw std::runtime_error("Failed to get compute queue");
+    }
 
     // init raster
     mEditor.raster = {};
@@ -170,7 +173,7 @@ Viewer::registerGaussianSplat3dView(const std::string &name, const GaussianSplat
                                           set_data ? PNANOVDB_TRUE : PNANOVDB_FALSE);
         mEditor.editor.wait_for_shader_params_sync(&mEditor.editor, mEditor.rasterShaderParamsType);
     };
-    it->second.mSyncCallback(true); // initial sync is waiting for pending data update
+    it->second.mSyncCallback(true); // initial sync
 
     mEditor.compute.destroy_array(means_arr);
     mEditor.compute.destroy_array(quats_arr);
