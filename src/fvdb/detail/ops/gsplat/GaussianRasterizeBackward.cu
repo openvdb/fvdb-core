@@ -1185,7 +1185,7 @@ dispatchGaussianRasterizeBackward<torch::kCUDA>(
     uint32_t colorDim   = features.size(-1);
     const bool isPacked = means2d.dim() == 2;
 
-#define __GS__CALL_BWD_(N)                                                          \
+#define CALL_BWD_CUDA(N)                                                            \
     case N: {                                                                       \
         if (isPacked) {                                                             \
             return callRasterizeBackwardWithCorrectSharedChannels<float, N, true>(  \
@@ -1233,28 +1233,28 @@ dispatchGaussianRasterizeBackward<torch::kCUDA>(
     }
 
     switch (colorDim) {
-        __GS__CALL_BWD_(1)
-        __GS__CALL_BWD_(2)
-        __GS__CALL_BWD_(3)
-        __GS__CALL_BWD_(4)
-        __GS__CALL_BWD_(5)
-        __GS__CALL_BWD_(8)
-        __GS__CALL_BWD_(9)
-        __GS__CALL_BWD_(16)
-        __GS__CALL_BWD_(17)
-        __GS__CALL_BWD_(32)
-        __GS__CALL_BWD_(33)
-        __GS__CALL_BWD_(47) // TODO, is this only here to support a gtest?
-        __GS__CALL_BWD_(64)
-        __GS__CALL_BWD_(65)
-        __GS__CALL_BWD_(128)
-        __GS__CALL_BWD_(129)
-        __GS__CALL_BWD_(192)
-        __GS__CALL_BWD_(193)
-        __GS__CALL_BWD_(256)
-        __GS__CALL_BWD_(257)
-        __GS__CALL_BWD_(512)
-        __GS__CALL_BWD_(513)
+        CALL_BWD_CUDA(1)
+        CALL_BWD_CUDA(2)
+        CALL_BWD_CUDA(3)
+        CALL_BWD_CUDA(4)
+        CALL_BWD_CUDA(5)
+        CALL_BWD_CUDA(8)
+        CALL_BWD_CUDA(9)
+        CALL_BWD_CUDA(16)
+        CALL_BWD_CUDA(17)
+        CALL_BWD_CUDA(32)
+        CALL_BWD_CUDA(33)
+        CALL_BWD_CUDA(47) // TODO, is this only here to support a gtest?
+        CALL_BWD_CUDA(64)
+        CALL_BWD_CUDA(65)
+        CALL_BWD_CUDA(128)
+        CALL_BWD_CUDA(129)
+        CALL_BWD_CUDA(192)
+        CALL_BWD_CUDA(193)
+        CALL_BWD_CUDA(256)
+        CALL_BWD_CUDA(257)
+        CALL_BWD_CUDA(512)
+        CALL_BWD_CUDA(513)
     default: AT_ERROR("Unsupported number of channels: ", colorDim);
     }
 }
@@ -1310,7 +1310,7 @@ dispatchGaussianSparseRasterizeBackward<torch::kCUDA>(
     uint32_t colorDim   = features.size(-1);
     const bool isPacked = means2d.dim() == 2;
 
-#define __GS__CALL_SPARSE_BWD_(N)                                                   \
+#define CALL_BWD_SPARSE_CUDA(N)                                                     \
     case N: {                                                                       \
         if (isPacked) {                                                             \
             return callRasterizeBackwardWithCorrectSharedChannels<float, N, true>(  \
@@ -1366,28 +1366,28 @@ dispatchGaussianSparseRasterizeBackward<torch::kCUDA>(
     }
 
     switch (colorDim) {
-        __GS__CALL_SPARSE_BWD_(1)
-        __GS__CALL_SPARSE_BWD_(2)
-        __GS__CALL_SPARSE_BWD_(3)
-        __GS__CALL_SPARSE_BWD_(4)
-        __GS__CALL_SPARSE_BWD_(5)
-        __GS__CALL_SPARSE_BWD_(8)
-        __GS__CALL_SPARSE_BWD_(9)
-        __GS__CALL_SPARSE_BWD_(16)
-        __GS__CALL_SPARSE_BWD_(17)
-        __GS__CALL_SPARSE_BWD_(32)
-        __GS__CALL_SPARSE_BWD_(33)
-        __GS__CALL_SPARSE_BWD_(47)
-        __GS__CALL_SPARSE_BWD_(64)
-        __GS__CALL_SPARSE_BWD_(65)
-        __GS__CALL_SPARSE_BWD_(128)
-        __GS__CALL_SPARSE_BWD_(129)
-        __GS__CALL_SPARSE_BWD_(192)
-        __GS__CALL_SPARSE_BWD_(193)
-        __GS__CALL_SPARSE_BWD_(256)
-        __GS__CALL_SPARSE_BWD_(257)
-        __GS__CALL_SPARSE_BWD_(512)
-        __GS__CALL_SPARSE_BWD_(513)
+        CALL_BWD_SPARSE_CUDA(1)
+        CALL_BWD_SPARSE_CUDA(2)
+        CALL_BWD_SPARSE_CUDA(3)
+        CALL_BWD_SPARSE_CUDA(4)
+        CALL_BWD_SPARSE_CUDA(5)
+        CALL_BWD_SPARSE_CUDA(8)
+        CALL_BWD_SPARSE_CUDA(9)
+        CALL_BWD_SPARSE_CUDA(16)
+        CALL_BWD_SPARSE_CUDA(17)
+        CALL_BWD_SPARSE_CUDA(32)
+        CALL_BWD_SPARSE_CUDA(33)
+        CALL_BWD_SPARSE_CUDA(47)
+        CALL_BWD_SPARSE_CUDA(64)
+        CALL_BWD_SPARSE_CUDA(65)
+        CALL_BWD_SPARSE_CUDA(128)
+        CALL_BWD_SPARSE_CUDA(129)
+        CALL_BWD_SPARSE_CUDA(192)
+        CALL_BWD_SPARSE_CUDA(193)
+        CALL_BWD_SPARSE_CUDA(256)
+        CALL_BWD_SPARSE_CUDA(257)
+        CALL_BWD_SPARSE_CUDA(512)
+        CALL_BWD_SPARSE_CUDA(513)
     default: AT_ERROR("Unsupported number of channels: ", colorDim);
     }
 }
