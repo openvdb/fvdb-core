@@ -3,7 +3,7 @@
 
 #include "ImageUtils.h"
 
-#include <torch/all.h>
+#include <torch/types.h>
 
 #include <png.h>
 

@@ -15,7 +15,7 @@
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAMathCompat.h>
-#include <torch/all.h>
+#include <torch/types.h>
 
 namespace fvdb::detail::ops {
 

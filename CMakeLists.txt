@@ -18,6 +18,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_torch.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_pybind11.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_nanovdb.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/configure_torch_pybind11.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_fused_ssim.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_nanovdb_editor.cmake)
 
 if(nanovdb_editor_ADDED)
@@ -46,9 +47,9 @@ else()
     target_link_libraries(_Cpp PUBLIC pybind11::headers)
 endif()
 set_target_properties(_Cpp PROPERTIES
-                                INTERPROCEDURAL_OPTIMIZATION ON
-                                CXX_VISIBILITY_PRESET hidden
-                                VISIBILITY_INLINES_HIDDEN ON)
+    INTERPROCEDURAL_OPTIMIZATION ON
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON)
 
 target_link_options(_Cpp PRIVATE "-Wl,--no-as-needed")
 

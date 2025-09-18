@@ -64,7 +64,6 @@ dependencies:
   - pyyaml
   - scikit-learn
   - srt
-  - torchmetrics
   - torchvision
   - tyro
   - utm

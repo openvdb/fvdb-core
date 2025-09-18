@@ -4,7 +4,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
 #include <fvdb/detail/ops/gsplat/GaussianTileIntersection.h>
 
-#include <torch/all.h>
+#include <torch/types.h>
 
 #include <gtest/gtest.h>
 

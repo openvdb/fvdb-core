@@ -7,7 +7,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
 
-#include <torch/all.h>
+#include <torch/types.h>
 
 #include <gtest/gtest.h>
 

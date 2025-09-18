@@ -28,14 +28,11 @@ dependencies:
   - tensorboard
   - tqdm
   ## 3dgs
-  - torchmetrics
-  - fastai::opencv-python-headless
   - tyro
   - pillow
   - py-opencv>=4.10[build=headless*]
   - pyyaml
   - scikit-learn
-  - torchmetrics
   - torchvision
   - tyro
   - viser
