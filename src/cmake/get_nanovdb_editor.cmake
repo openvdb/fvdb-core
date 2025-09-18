@@ -5,27 +5,25 @@
 CPMAddPackage(
     NAME nanovdb_editor
     GITHUB_REPOSITORY openvdb/nanovdb-editor
-    GIT_TAG main
+    GIT_TAG 0634b32c5853694a4371c3170e03bcbb70edfe10
     DOWNLOAD_ONLY YES
 )
 
 if(nanovdb_editor_ADDED)
-    set(NANOVDB_EDITOR_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/nanovdb_editor)
-    file(MAKE_DIRECTORY ${NANOVDB_EDITOR_BUILD_DIR})
+    file(MAKE_DIRECTORY ${NANOVDB_EDITOR_WHEEL_DIR})
 
-    message(STATUS "Building nanovdb_editor wheel to ${NANOVDB_EDITOR_BUILD_DIR}...")
+    message(STATUS "Building nanovdb_editor wheel...")
     execute_process(
-        COMMAND bash -c "
-        echo Building nanovdb_editor wheel...
-        python pip wheel "${nanovdb_editor_SOURCE_DIR}/pymodule" --wheel-dir "${NANOVDB_EDITOR_BUILD_DIR}"
-        echo Installing nanovdb_editor wheel...
-        pip install --force-reinstall ${NANOVDB_EDITOR_BUILD_DIR}/*.whl
-        "
-        WORKING_DIRECTORY ${NANOVDB_EDITOR_BUILD_DIR}
+        COMMAND bash -c "python -mpip install --force-reinstall ${nanovdb_editor_SOURCE_DIR}/pymodule"
+        WORKING_DIRECTORY ${NANOVDB_EDITOR_WHEEL_DIR}
         RESULT_VARIABLE build_result
         OUTPUT_VARIABLE build_output
         ERROR_VARIABLE build_error
     )
-    message(STATUS "${build_output}")
-    message(STATUS "${build_error}")
+    if(NOT build_result EQUAL 0)
+        message(STATUS ${build_output})
+        message(FATAL_ERROR ${build_error})
+    else()
+        message(STATUS "nanovdb_editor wheel built and installed successfully.")
+    endif()
 endif()
