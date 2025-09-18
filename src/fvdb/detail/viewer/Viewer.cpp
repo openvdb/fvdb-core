@@ -12,7 +12,7 @@
 #include <cstdarg>
 #include <cstdio>
 
-//#define TEST_RGBRGB
+// #define TEST_RGBRGB
 
 inline void
 pNanoLogPrint(pnanovdb_compute_log_level_t level, const char *format, ...) {
