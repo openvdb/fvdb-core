@@ -21,7 +21,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/configure_torch_pybind11.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_nanovdb_editor.cmake)
 
 if(nanovdb_editor_ADDED)
-    include(${NANOVDB_EDITOR_SOURCE_DIR}/cmake/get_nanovdb_editor.cmake)
+    include(${nanovdb_editor_SOURCE_DIR}/cmake/get_nanovdb_editor.cmake)
 endif()
 
 # Generate compile_commands.json

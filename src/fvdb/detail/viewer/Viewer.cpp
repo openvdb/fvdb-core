@@ -82,6 +82,8 @@ Viewer::Viewer(const std::string &ipAddress, const int port, const bool verbose)
     mEditor.config.headless   = PNANOVDB_TRUE;
     mEditor.config.streaming  = PNANOVDB_TRUE;
 
+    mIsEditorRunning = false;
+
     startServer();
 }
 
@@ -182,6 +184,7 @@ Viewer::registerGaussianSplat3dView(const std::string &name, const GaussianSplat
 void
 Viewer::startServer() {
     if (!mIsEditorRunning) {
+        printf("Starting NanoVDB Editor server at %s:%d\n", mIpAddress.c_str(), mPort);
         mEditor.editor.start(&mEditor.editor, mEditor.device, &mEditor.config);
         mIsEditorRunning = true;
     }
