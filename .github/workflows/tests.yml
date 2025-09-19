@@ -296,6 +296,12 @@ jobs:
           activate-environment: fvdb_test
           environment-file: env/test_environment.yml
 
+      - name: Install Vulkan runtime (headless)
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+
       - name: Download package
         uses: actions/download-artifact@v4
         with:
@@ -309,6 +315,20 @@ jobs:
 
       - name: Run tests
         run: |
+            conda activate fvdb_test
+            export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CONDA_PREFIX/lib
+            NANO_LIB_DIR=$(python - <<'PY'
+            import os
+            try:
+              import nanovdb_editor as m
+              print(os.path.join(os.path.dirname(m.__file__), 'lib'))
+            except Exception:
+              print('')
+            PY
+            )
+            if [ -n "$NANO_LIB_DIR" ] && [ -d "$NANO_LIB_DIR" ]; then
+              export LD_LIBRARY_PATH="$NANO_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            fi
             cd tests;
             pytest -v unit
 
@@ -344,6 +364,12 @@ jobs:
           activate-environment: fvdb_test
           environment-file: env/test_environment.yml
 
+      - name: Install Vulkan runtime (headless)
+        run: |
+            set -e
+            sudo apt-get update
+            sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+
       - name: Download package
         uses: actions/download-artifact@v4
         with:
@@ -357,6 +383,20 @@ jobs:
 
       - name: Run tests
         run: |
+            conda activate fvdb_test
+            export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CONDA_PREFIX/lib
+            NANO_LIB_DIR=$(python - <<'PY'
+            import os
+            try:
+              import nanovdb_editor as m
+              print(os.path.join(os.path.dirname(m.__file__), 'lib'))
+            except Exception:
+              print('')
+            PY
+            )
+            if [ -n "$NANO_LIB_DIR" ] && [ -d "$NANO_LIB_DIR" ]; then
+              export LD_LIBRARY_PATH="$NANO_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            fi
             pytest --markdown-docs docs
 
       - name: Cleanup
