@@ -6,6 +6,9 @@ from __future__ import annotations
 from typing import Sequence
 
 import torch
+import ctypes
+import pathlib
+import importlib.util as _importlib_util
 
 if torch.cuda.is_available():
     torch.cuda.init()
@@ -35,6 +38,21 @@ def _parse_device_string(device_or_device_string: str | torch.device) -> torch.d
         device = torch.device("cuda", torch.cuda.current_device())
     return device
 
+# Load NanoVDB Editor shared libraries so symbols are globally available before importing the pybind module.
+# This helps the dynamic linker resolve dependencies like libpnanovdb*.so when loading fvdb's extensions.
+_spec = _importlib_util.find_spec("nanovdb_editor")
+if _spec is not None and _spec.origin is not None:
+    try:
+        _libdir = pathlib.Path(_spec.origin).parent / "lib"
+        for _so in sorted(_libdir.glob("libpnanovdb*.so")):
+            try:
+                ctypes.CDLL(str(_so), mode=ctypes.RTLD_GLOBAL)
+            except OSError:
+                print(f"Failed to load {_so} from {_libdir}")
+                pass
+    except Exception:
+        print("Failed to load nanovdb_editor from", _libdir)
+        pass
 
 # isort: off
 from . import _Cpp  # Import the module to use in jcat

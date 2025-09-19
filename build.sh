@@ -87,31 +87,6 @@ set_cuda_arch_list() {
   fi
 }
 
-# Add a Python package's lib directory to LD_LIBRARY_PATH, if available
-add_python_pkg_lib_to_ld_path() {
-  local module_name="$1"
-  local friendly_name="$2"
-  local missing_lib_hint="$3"
-
-  local lib_dir
-  lib_dir=$(python - <<PY
-import os
-try:
-  import ${module_name} as m
-  print(os.path.join(os.path.dirname(m.__file__), 'lib'))
-except Exception:
-  print('')
-PY
-)
-
-  if [ -n "$lib_dir" ] && [ -d "$lib_dir" ]; then
-    export LD_LIBRARY_PATH="$lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-    echo "Added ${friendly_name} lib directory to LD_LIBRARY_PATH: $lib_dir"
-  else
-    echo "Warning: Could not determine ${friendly_name} lib directory; gtests may fail to find ${missing_lib_hint}"
-  fi
-}
-
 if [[ "$1" == "-h" || "$1" == "--help" ]]; then
   usage
 fi
@@ -245,9 +220,22 @@ elif [ "$BUILD_TYPE" == "ctest" ]; then
     fi
     echo "Found test build directory: $BUILD_DIR"
 
-    # Ensure required shared libraries are discoverable when running native gtests
-    add_python_pkg_lib_to_ld_path "torch" "PyTorch" "libtorch.so"
-    add_python_pkg_lib_to_ld_path "nanovdb_editor" "NanoVDB Editor" "libpnanovdb*.so"
+    # Ensure PyTorch shared libraries are discoverable when running native gtests
+    TORCH_LIB_DIR=$(python - <<'PY'
+import os
+try:
+  import torch
+  print(os.path.join(os.path.dirname(torch.__file__), 'lib'))
+except Exception:
+  print('')
+PY
+)
+    if [ -n "$TORCH_LIB_DIR" ] && [ -d "$TORCH_LIB_DIR" ]; then
+        export LD_LIBRARY_PATH="$TORCH_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        echo "Added PyTorch lib directory to LD_LIBRARY_PATH: $TORCH_LIB_DIR"
+    else
+        echo "Warning: Could not determine PyTorch lib directory; gtests may fail to find libtorch.so"
+    fi
 
     # Run ctest within the test build directory
     pushd "$BUILD_DIR" > /dev/null
