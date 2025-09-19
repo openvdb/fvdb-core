@@ -110,7 +110,7 @@ jobs:
         with:
           post-cleanup: 'all'
           environment-name: fvdb_build
-          environment-file: env/build_environment.conda-lock.yml
+          environment-file: env/build_environment.yml
 
       - name: Buid fvdb
         run: |
@@ -206,9 +206,10 @@ jobs:
       - name: Set up fvdb_test Conda env
         uses: mamba-org/setup-micromamba@v2
         with:
+          cache-environment: true
           post-cleanup: 'all'
           environment-name: fvdb_test
-          environment-file: env/test_environment.conda-lock.yml
+          environment-file: env/test_environment.yml
 
       - name: Download gtests
         uses: actions/download-artifact@v4
@@ -247,9 +248,10 @@ jobs:
       - name: Set up fvdb_test Conda env
         uses: mamba-org/setup-micromamba@v2
         with:
+          cache-environment: true
           post-cleanup: 'all'
           environment-name: fvdb_test
-          environment-file: env/test_environment.conda-lock.yml
+          environment-file: env/test_environment.yml
 
       - name: Download package
         uses: actions/download-artifact@v4
@@ -287,9 +289,10 @@ jobs:
       - name: Set up fvdb_test Conda env
         uses: mamba-org/setup-micromamba@v2
         with:
+          cache-environment: true
           post-cleanup: 'all'
           environment-name: fvdb_test
-          environment-file: env/test_environment.conda-lock.yml
+          environment-file: env/test_environment.yml
 
       - name: Download package
         uses: actions/download-artifact@v4
