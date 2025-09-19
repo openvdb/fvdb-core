@@ -137,13 +137,6 @@ jobs:
             path: fvdb-gtest.tar
             retention-days: 2
 
-      - name: Cleanup
-        if: always()
-        run: |
-          echo "Cleaning up /__w/_temp directory"
-          sudo rm -rf /__w/_temp/*
-          echo "Cleanup completed"
-
   fvdb-build-stop-runner:
     name: Stop CPU-only EC2 runner for build
     needs:
@@ -235,13 +228,6 @@ jobs:
             export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CONDA_PREFIX/lib
             ./build.sh ctest
 
-      - name: Cleanup
-        if: always()
-        run: |
-          echo "Cleaning up /__w/_temp directory"
-          sudo rm -rf /__w/_temp/*
-          echo "Cleanup completed"
-
   ##############################################################################
   # RUN FVDB UNIT TESTS
   ##############################################################################
@@ -284,13 +270,6 @@ jobs:
             cd tests;
             pytest -v unit
 
-      - name: Cleanup
-        if: always()
-        run: |
-          echo "Cleaning up /__w/_temp directory"
-          sudo rm -rf /__w/_temp/*
-          echo "Cleanup completed"
-
   ##############################################################################
   # RUN FVDB DOCUMENTATION TESTS
   ##############################################################################
@@ -330,13 +309,6 @@ jobs:
       - name: Run tests
         run: |
             pytest --markdown-docs docs
-
-      - name: Cleanup
-        if: always()
-        run: |
-          echo "Cleaning up /__w/_temp directory"
-          sudo rm -rf /__w/_temp/*
-          echo "Cleanup completed"
 
   ##############################################################################
   # STOP FVDB TESTS GPU RUNNER
