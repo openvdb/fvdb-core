@@ -228,6 +228,11 @@ jobs:
         run: |
             tar -xvf fvdb-gtest.tar
 
+      - name: Install nanovdb_editor package
+        run: |
+            conda activate fvdb_test
+            pip install ./dist/nanovdb_editor*.whl
+
       - name: Run tests
         run: |
             conda activate fvdb_test
