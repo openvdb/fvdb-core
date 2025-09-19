@@ -1,17 +1,19 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 
-# Override the location with ./build.sh install -C cmake.define.CPM_nanovdb_editor_SOURCE=/path/to/nanovdb-editor
+# To build with local repository, override the location with:
+# ./build.sh install -C cmake.define.CPM_nanovdb_editor_SOURCE=/path/to/nanovdb-editor
 CPMAddPackage(
     NAME nanovdb_editor
     GITHUB_REPOSITORY openvdb/nanovdb-editor
-    GIT_TAG 0634b32c5853694a4371c3170e03bcbb70edfe10
+    GIT_TAG a9db106b5be10af0d5f0ae47645a04ca5d0bbe3a
     DOWNLOAD_ONLY YES
 )
 
 if(nanovdb_editor_ADDED)
     set(NANOVDB_EDITOR_WHEEL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dist)
     file(MAKE_DIRECTORY ${NANOVDB_EDITOR_WHEEL_DIR})
+    # TODO (@phapalova): resolve more built versions in the dist folder
 
     message(STATUS "Building nanovdb_editor wheel to ${NANOVDB_EDITOR_WHEEL_DIR}...")
     execute_process(
