@@ -106,12 +106,12 @@ jobs:
           git merge --no-ff $CURRENT_COMMIT --message "CI: Simulating merge of $CURRENT_COMMIT into $TARGET_BRANCH"
 
       - name: Set up fvdb_build Conda env
-        uses: conda-incubator/setup-miniconda@v3
+        uses: mamba-org/setup-micromamba@v2
         with:
-          miniforge-version: latest
-          conda-remove-defaults: "true"
-          activate-environment: fvdb_build
-          environment-file: env/build_environment.yml
+          cache-environment: true
+          post-cleanup: 'all'
+          environment-name: fvdb_build
+          environment-file: fvdb/env/build_environment.conda-lock.yml
 
       - name: Buid fvdb
         run: |
@@ -211,12 +211,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Set up fvdb_test Conda env
-        uses: conda-incubator/setup-miniconda@v3
+        uses: mamba-org/setup-micromamba@v2
         with:
-          miniforge-version: latest
-          conda-remove-defaults: "true"
-          activate-environment: fvdb_test
-          environment-file: env/test_environment.yml
+          cache-environment: true
+          post-cleanup: 'all'
+          environment-name: fvdb_test
+          environment-file: fvdb/env/test_environment.conda-lock.yml
 
       - name: Download gtests
         uses: actions/download-artifact@v4
@@ -260,12 +260,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Set up fvdb_test Conda env
-        uses: conda-incubator/setup-miniconda@v3
+        uses: mamba-org/setup-micromamba@v2
         with:
-          miniforge-version: latest
-          conda-remove-defaults: "true"
-          activate-environment: fvdb_test
-          environment-file: env/test_environment.yml
+          cache-environment: true
+          post-cleanup: 'all'
+          environment-name: fvdb_test
+          environment-file: fvdb/env/test_environment.conda-lock.yml
 
       - name: Download package
         uses: actions/download-artifact@v4
@@ -308,12 +308,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Set up fvdb_test Conda env
-        uses: conda-incubator/setup-miniconda@v3
+        uses: mamba-org/setup-micromamba@v2
         with:
-          miniforge-version: latest
-          conda-remove-defaults: "true"
-          activate-environment: fvdb_test
-          environment-file: env/test_environment.yml
+          cache-environment: true
+          post-cleanup: 'all'
+          environment-name: fvdb_test
+          environment-file: fvdb/env/test_environment.conda-lock.yml
 
       - name: Download package
         uses: actions/download-artifact@v4
