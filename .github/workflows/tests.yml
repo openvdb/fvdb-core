@@ -111,7 +111,7 @@ jobs:
           cache-environment: true
           post-cleanup: 'all'
           environment-name: fvdb_build
-          environment-file: fvdb/env/build_environment.conda-lock.yml
+          environment-file: env/build_environment.conda-lock.yml
 
       - name: Buid fvdb
         run: |
@@ -216,7 +216,7 @@ jobs:
           cache-environment: true
           post-cleanup: 'all'
           environment-name: fvdb_test
-          environment-file: fvdb/env/test_environment.conda-lock.yml
+          environment-file: env/test_environment.conda-lock.yml
 
       - name: Download gtests
         uses: actions/download-artifact@v4
@@ -265,7 +265,7 @@ jobs:
           cache-environment: true
           post-cleanup: 'all'
           environment-name: fvdb_test
-          environment-file: fvdb/env/test_environment.conda-lock.yml
+          environment-file: env/test_environment.conda-lock.yml
 
       - name: Download package
         uses: actions/download-artifact@v4
@@ -313,7 +313,7 @@ jobs:
           cache-environment: true
           post-cleanup: 'all'
           environment-name: fvdb_test
-          environment-file: fvdb/env/test_environment.conda-lock.yml
+          environment-file: env/test_environment.conda-lock.yml
 
       - name: Download package
         uses: actions/download-artifact@v4
