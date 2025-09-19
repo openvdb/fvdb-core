@@ -38,6 +38,7 @@ def _parse_device_string(device_or_device_string: str | torch.device) -> torch.d
         device = torch.device("cuda", torch.cuda.current_device())
     return device
 
+
 # Load NanoVDB Editor shared libraries so symbols are globally available before importing the pybind module.
 # This helps the dynamic linker resolve dependencies like libpnanovdb*.so when loading fvdb's extensions.
 _spec = _importlib_util.find_spec("nanovdb_editor")

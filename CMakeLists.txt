@@ -64,10 +64,6 @@ set_target_properties(_Cpp PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     INTERFACE_POSITION_INDEPENDENT_CODE ON)
 
-# Ensure the loader can locate nanovdb_editor component libraries at runtime
-set_property(TARGET _Cpp APPEND PROPERTY BUILD_RPATH "${NANOVDB_EDITOR_LIB_DIR}")
-set_property(TARGET _Cpp APPEND PROPERTY INSTALL_RPATH "${NANOVDB_EDITOR_LIB_DIR}")
-
 target_include_directories(_Cpp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${TORCH_INCLUDE_DIRS}
