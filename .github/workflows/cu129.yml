@@ -204,7 +204,7 @@ jobs:
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
-      options: --rm
+      options: --rm --gpus all
     defaults:
       run:
         shell: bash -el {0}
