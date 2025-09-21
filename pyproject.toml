@@ -1,6 +1,7 @@
 [build-system]
 requires = [
     "scikit-build-core",
+    "nanovdb_editor",
 ]
 build-backend = "scikit_build_core.build"
 
