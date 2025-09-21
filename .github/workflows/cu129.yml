@@ -231,7 +231,7 @@ jobs:
           cmake --version
 
       - name: Install apt dependencies
-        run: apt install -y zlib1g-dev libpng-dev
+        run: apt install -y zlib1g-dev libpng-dev mesa-vulkan-drivers vulkan-tools
 
       - name: Install pip dependencies
         run: |
