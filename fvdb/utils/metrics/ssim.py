@@ -2,13 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-# To be populated by get_fused_ssim.cmake
-
-# This file is generated at CMake configure time by get_fused_ssim.cmake
-# It contains source code from the fused-ssim library. https://github.com/rahul-goel/fused-ssim
-# The fused-ssim library is licensed under the MIT License. Original license text follows.
-# MIT License
-
 # Copyright (c) 2024 Rahul Goel
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -30,14 +23,66 @@
 # SOFTWARE.
 
 
-@FUSED_SSIM_INIT_PY_CONTENT@
+from typing import NamedTuple
+import torch
+import fvdb
+
+allowed_padding = ["same", "valid"]
+
+
+class FusedSSIMMap(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, C1, C2, img1, img2, padding="same", train=True):
+        (
+            ssim_map,
+            dm_dmu1,
+            dm_dsigma1_sq,
+            dm_dsigma12,
+        ) = torch.ops.fvdb._fused_ssim.default(C1, C2, img1, img2, train)
+
+        if padding == "valid":
+            ssim_map = ssim_map[:, :, 5:-5, 5:-5]
+
+        ctx.save_for_backward(img1.detach(), img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
+        ctx.C1 = C1
+        ctx.C2 = C2
+        ctx.padding = padding
+
+        return ssim_map
+
+    @staticmethod
+    def backward(ctx, opt_grad):
+        img1, img2, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = ctx.saved_tensors
+        C1, C2, padding = ctx.C1, ctx.C2, ctx.padding
+        dL_dmap = opt_grad
+        if padding == "valid":
+            dL_dmap = torch.zeros_like(img1)
+            dL_dmap[:, :, 5:-5, 5:-5] = opt_grad
+        grad = torch.ops.fvdb._fused_ssim_backward.default(
+            C1, C2, img1, img2, dL_dmap, dm_dmu1, dm_dsigma1_sq, dm_dsigma12
+        )
+        return None, None, grad, None, None, None
+
+
+def fused_ssim(img1, img2, padding="same", train=True):
+    C1 = 0.01**2
+    C2 = 0.03**2
+
+    assert padding in allowed_padding
+
+    img1 = img1.contiguous()
+    map = FusedSSIMMap.apply(C1, C2, img1, img2, padding, train)
+    return map.mean()
+
 
 from typing import Literal
 
-def ssim(img1: torch.Tensor,
-         img2: torch.Tensor,
-         padding: Literal["same", "valid"] = "same",
-         train: bool = True
+
+def ssim(
+    img1: torch.Tensor,
+    img2: torch.Tensor,
+    padding: Literal["same", "valid"] = "same",
+    train: bool = True,
 ) -> torch.Tensor:
     """
     Compute the Structural Similarity Index (SSIM) between two images.
