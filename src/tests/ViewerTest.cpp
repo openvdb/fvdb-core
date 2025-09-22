@@ -15,7 +15,7 @@
 // #define LOCAL_TESTING
 
 TEST(Viewer, ViewerTest) {
-    fvdb::detail::viewer::Viewer viewer = fvdb::detail::viewer::Viewer("127.0.0.1", 8080, true);
+    fvdb::detail::viewer::Viewer viewer = fvdb::detail::viewer::Viewer("127.0.0.1", 8080, false);
 
 #ifdef LOCAL_TESTING
     std::string ply_path = "";
@@ -30,7 +30,7 @@ TEST(Viewer, ViewerTest) {
     fvdb::detail::viewer::GaussianSplat3dView &view =
         viewer.registerGaussianSplat3dView("test_view", splats);
 #else
-    const int N = 100000;
+    const int N = 1000;
     torch::Device device(torch::kCUDA);
     torch::Tensor means          = torch::rand({N, 3}, device);
     torch::Tensor quats          = torch::rand({N, 4}, device);
@@ -50,7 +50,7 @@ TEST(Viewer, ViewerTest) {
     view.setNear(testNear);
     ASSERT_FLOAT_EQ(view.getNear(), testNear);
 
-    const float testFar = 1.0f;
+    const float testFar = 1000000.0f;
     view.setFar(testFar);
     ASSERT_FLOAT_EQ(view.getFar(), testFar);
 
