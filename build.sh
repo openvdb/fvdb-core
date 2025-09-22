@@ -22,7 +22,6 @@ usage() {
   echo "Build Modifiers (for 'install' and 'wheel' build types, typically passed after build_type):"
   echo "  gtests         Enable building tests (sets FVDB_BUILD_TESTS=ON)."
   echo "  benchmarks     Enable building benchmarks (sets FVDB_BUILD_BENCHMARKS=ON)."
-  echo "  nanovdb_editor Enable building NanoVDB Editor."
   echo "  debug          Build in debug mode with full debug symbols and no optimizations."
   echo "  verbose        Enable verbose build output for pip and CMake."
   echo ""
@@ -88,37 +87,29 @@ set_cuda_arch_list() {
   fi
 }
 
-build_nanovdb_editor() {
-  # TODO: change to deps folder after fvdb moves to its own repository
-  NANOVDB_EDITOR_DIR="../nanovdb/nanovdb_editor/pymodule"
-  if [ ! -d "$NANOVDB_EDITOR_DIR" ]; then
-    echo "Error: nanovdb_editor directory not found at $NANOVDB_EDITOR_DIR"
-    return 1
-  fi
+# Add a Python package's lib directory to LD_LIBRARY_PATH, if available
+add_python_pkg_lib_to_ld_path() {
+  local module_name="$1"
+  local friendly_name="$2"
+  local missing_lib_hint="$3"
 
-  if [ "$BUILD_TYPE" == "wheel" ]; then
-    TASK_NAME="Building nanovdb_editor wheel"
-    PIP_CMD="pip wheel . --wheel-dir dist/ $PIP_ARGS"
-  elif [[ "$BUILD_TYPE" == "install" || "$BUILD_TYPE" == "debug" ]]; then
-    TASK_NAME="Building and installing nanovdb_editor"
-    PIP_CMD="pip install --force-reinstall $PIP_ARGS ."
-  fi
+  local lib_dir
+  lib_dir=$(python - <<PY
+import os
+try:
+  import ${module_name} as m
+  print(os.path.join(os.path.dirname(m.__file__), 'lib'))
+except Exception:
+  print('')
+PY
+)
 
-  echo $TASK_NAME
-  pushd "$NANOVDB_EDITOR_DIR" > /dev/null
-  $PIP_CMD
-  BUILD_EXIT_CODE=$?
-  popd > /dev/null
-  if [ "$BUILD_EXIT_CODE" -eq 0 ]; then
-    echo "Success: $TASK_NAME"
-    if [ "$BUILD_TYPE" = "wheel" ]; then
-      echo "Wheel file location: $NANOVDB_EDITOR_DIR/dist/"
-    fi
+  if [ -n "$lib_dir" ] && [ -d "$lib_dir" ]; then
+    export LD_LIBRARY_PATH="$lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    echo "Added ${friendly_name} lib directory to LD_LIBRARY_PATH: $lib_dir"
   else
-    echo "Error: Failed $TASK_NAME"
+    echo "Warning: Could not determine ${friendly_name} lib directory; gtests may fail to find ${missing_lib_hint}"
   fi
-
-  return $BUILD_EXIT_CODE
 }
 
 if [[ "$1" == "-h" || "$1" == "--help" ]]; then
@@ -143,7 +134,6 @@ fi
 
 CONFIG_SETTINGS=""
 PASS_THROUGH_ARGS=""
-BUILD_NANOVDB_EDITOR=false
 CUDA_ARCH_LIST_ARG="default"
 
 while (( "$#" )); do
@@ -156,11 +146,6 @@ while (( "$#" )); do
     elif [[ "$1" == "benchmarks" ]]; then
       echo "Detected 'benchmarks' flag for $BUILD_TYPE build. Enabling FVDB_BUILD_BENCHMARKS."
       CONFIG_SETTINGS+=" --config-settings=cmake.define.FVDB_BUILD_BENCHMARKS=ON"
-      is_config_arg_handled=true
-    elif [[ "$1" == "nanovdb_editor" ]]; then
-      echo "Detected 'nanovdb_editor' flag for $BUILD_TYPE build. Enabling NanoVDB Editor build."
-      CONFIG_SETTINGS+=" --config-settings=cmake.define.NANOVDB_EDITOR_USE_GLFW=OFF"
-      BUILD_NANOVDB_EDITOR=true
       is_config_arg_handled=true
     elif [[ "$1" == "verbose" ]]; then
       echo "Enabling verbose build"
@@ -198,16 +183,6 @@ export PIP_ARGS="--no-build-isolation$CONFIG_SETTINGS$PASS_THROUGH_ARGS"
 
 # Detect and export CUDA architectures early so builds pick it up
 set_cuda_arch_list "$CUDA_ARCH_LIST_ARG"
-
-# Build and install nanovdb_editor first if requested
-if [ "$BUILD_NANOVDB_EDITOR" = true ]; then
-    build_nanovdb_editor
-    NANOVDB_EXIT_CODE=$?
-    if [ $NANOVDB_EXIT_CODE -ne 0 ]; then
-        echo "Error: Stopping build process due to nanovdb_editor build failure"
-        exit $NANOVDB_EXIT_CODE
-    fi
-fi
 
 if [ "$BUILD_TYPE" != "ctest" ]; then
     setup_parallel_build_jobs
@@ -270,22 +245,9 @@ elif [ "$BUILD_TYPE" == "ctest" ]; then
     fi
     echo "Found test build directory: $BUILD_DIR"
 
-    # Ensure PyTorch shared libraries are discoverable when running native gtests
-    TORCH_LIB_DIR=$(python - <<'PY'
-import os
-try:
-  import torch
-  print(os.path.join(os.path.dirname(torch.__file__), 'lib'))
-except Exception:
-  print('')
-PY
-)
-    if [ -n "$TORCH_LIB_DIR" ] && [ -d "$TORCH_LIB_DIR" ]; then
-        export LD_LIBRARY_PATH="$TORCH_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-        echo "Added PyTorch lib directory to LD_LIBRARY_PATH: $TORCH_LIB_DIR"
-    else
-        echo "Warning: Could not determine PyTorch lib directory; gtests may fail to find libtorch.so"
-    fi
+    # Ensure required shared libraries are discoverable when running native gtests
+    add_python_pkg_lib_to_ld_path "torch" "PyTorch" "libtorch.so"
+    add_python_pkg_lib_to_ld_path "nanovdb_editor" "NanoVDB Editor" "libpnanovdb*.so"
 
     # Run ctest within the test build directory
     pushd "$BUILD_DIR" > /dev/null
