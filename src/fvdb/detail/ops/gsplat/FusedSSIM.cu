@@ -89,7 +89,8 @@ getPixelValue(const float *img, int b, int c, int y, int x, int CH, int H, int W
 //    to dm_dmu1, dm_dsigma1_sq, dm_dsigma12
 // ------------------------------------------
 __global__ void
-fusedSSIMKernel(int offset,
+fusedSSIMKernel(int localToGlobalOffset,
+                int B,
                 int H,
                 int W,
                 int CH,
@@ -101,10 +102,17 @@ fusedSSIMKernel(int offset,
                 float *__restrict__ dm_dmu1,
                 float *__restrict__ dm_dsigma1_sq,
                 float *__restrict__ dm_dsigma12) {
-    auto block        = cg::this_thread_block();
-    const int bIdx    = block.group_index().z + offset; // batch index
-    const int pix_y   = block.group_index().y * BLOCK_Y + block.thread_index().y;
-    const int pix_x   = block.group_index().x * BLOCK_X + block.thread_index().x;
+    auto block = cg::this_thread_block();
+
+    auto globalLinearGroupIndex = block.group_index().x + localToGlobalOffset;
+    dim3 globalGroupDim((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, B);
+    dim3 globalGroupIndex(globalLinearGroupIndex % globalGroupDim.x,
+                          (globalLinearGroupIndex / globalGroupDim.x) % globalGroupDim.y,
+                          (globalLinearGroupIndex / (globalGroupDim.x * globalGroupDim.y)));
+
+    const int bIdx    = globalGroupIndex.z; // batch index
+    const int pix_y   = globalGroupIndex.y * BLOCK_Y + block.thread_index().y;
+    const int pix_x   = globalGroupIndex.x * BLOCK_X + block.thread_index().x;
     const int pix_id  = pix_y * W + pix_x;
     const int num_pix = H * W;
 
@@ -124,8 +132,8 @@ fusedSSIMKernel(int offset,
             const int threads  = BLOCK_X * BLOCK_Y;
             const int steps    = (tileSize + threads - 1) / threads;
 
-            const int tileStartY = block.group_index().y * BLOCK_Y;
-            const int tileStartX = block.group_index().x * BLOCK_X;
+            const int tileStartY = globalGroupIndex.y * BLOCK_Y;
+            const int tileStartX = globalGroupIndex.x * BLOCK_X;
 
             for (int s = 0; s < steps; ++s) {
                 int tid = s * threads + block.thread_rank();
@@ -312,7 +320,8 @@ fusedSSIMKernel(int offset,
 //    and dL/dmap (the gradient from above).
 // ------------------------------------------
 __global__ void
-fusedSSIMBackwardKernel(int offset,
+fusedSSIMBackwardKernel(int localToGlobalOffset,
+                        int B,
                         int H,
                         int W,
                         int CH,
@@ -327,11 +336,17 @@ fusedSSIMBackwardKernel(int offset,
                         const float *__restrict__ dm_dsigma12) {
     auto block = cg::this_thread_block();
 
-    const int pix_y   = block.group_index().y * BLOCK_Y + block.thread_index().y;
-    const int pix_x   = block.group_index().x * BLOCK_X + block.thread_index().x;
+    auto globalLinearGroupIndex = block.group_index().x + localToGlobalOffset;
+    dim3 globalGroupDim((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, B);
+    dim3 globalGroupIndex(globalLinearGroupIndex % globalGroupDim.x,
+                          (globalLinearGroupIndex / globalGroupDim.x) % globalGroupDim.y,
+                          (globalLinearGroupIndex / (globalGroupDim.x * globalGroupDim.y)));
+
+    const int bIdx    = globalGroupIndex.z; // batch index
+    const int pix_y   = globalGroupIndex.y * BLOCK_Y + block.thread_index().y;
+    const int pix_x   = globalGroupIndex.x * BLOCK_X + block.thread_index().x;
     const int pix_id  = pix_y * W + pix_x;
     const int num_pix = H * W;
-    const int bIdx    = block.group_index().z + offset;
 
     // Shared memory for the fused data:
     // [0]: dm_dmu1*dL, [1]: dm_dsigma1_sq*dL, [2]: dm_dsigma12*dL
@@ -347,8 +362,8 @@ fusedSSIMBackwardKernel(int offset,
 
         // (1) Load + fuse multiplication
         {
-            const int start_y = block.group_index().y * BLOCK_Y;
-            const int start_x = block.group_index().x * BLOCK_X;
+            const int start_y = globalGroupIndex.y * BLOCK_Y;
+            const int start_x = globalGroupIndex.x * BLOCK_X;
 
             int tid          = threadIdx.y * blockDim.x + threadIdx.x;
             int warp_id      = tid / 32;
@@ -476,7 +491,7 @@ fusedSSIMCUDA(double C1, double C2, torch::Tensor &img1, torch::Tensor &img2, bo
                       "Fused SSIM only supports float32 images");
 
     // Launch config
-    dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, B);
+    dim3 grid(((W + BLOCK_X - 1) / BLOCK_X) * ((H + BLOCK_Y - 1) / BLOCK_Y) * B);
     dim3 block(BLOCK_X, BLOCK_Y);
 
     // Output SSIM map
@@ -488,6 +503,7 @@ fusedSSIMCUDA(double C1, double C2, torch::Tensor &img1, torch::Tensor &img2, bo
     auto dm_dsigma12   = train ? torch::zeros_like(img1) : torch::empty({0}, img1.options());
 
     fusedSSIMKernel<<<grid, block, 0, stream>>>(0,
+                                                B,
                                                 H,
                                                 W,
                                                 CH,
@@ -533,11 +549,12 @@ fusedSSIMBackwardCUDA(double C1,
 
     auto dL_dimg1 = torch::zeros_like(img1);
 
-    dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, B);
+    dim3 grid(((W + BLOCK_X - 1) / BLOCK_X) * ((H + BLOCK_Y - 1) / BLOCK_Y) * B);
     dim3 block(BLOCK_X, BLOCK_Y);
 
     fusedSSIMBackwardKernel<<<grid, block, 0, stream>>>(
         0,
+        B,
         H,
         W,
         CH,
@@ -580,21 +597,24 @@ fusedSSIMPrivateUse1(double C1, double C2, torch::Tensor &img1, torch::Tensor &i
     auto dm_dsigma1_sq = train ? torch::zeros_like(img1) : torch::empty({0}, img1.options());
     auto dm_dsigma12   = train ? torch::zeros_like(img1) : torch::empty({0}, img1.options());
 
+    const auto globalBlockCount = ((W + BLOCK_X - 1) / BLOCK_X) * ((H + BLOCK_Y - 1) / BLOCK_Y) * B;
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
-        auto deviceBatchSize = (B + c10::cuda::device_count() - 1) / c10::cuda::device_count();
-        const auto deviceBatchOffset = deviceBatchSize * deviceId;
-        deviceBatchSize              = std::min(deviceBatchSize, B - deviceBatchOffset);
+        auto localBlockCount =
+            (globalBlockCount + c10::cuda::device_count() - 1) / c10::cuda::device_count();
+        auto localBlockOffset = deviceId * localBlockCount;
+        localBlockCount       = std::min(localBlockCount, globalBlockCount - localBlockOffset);
 
-        if (deviceBatchSize) {
+        if (localBlockCount) {
             // Launch config
-            dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, deviceBatchSize);
+            dim3 grid(localBlockCount);
             dim3 block(BLOCK_X, BLOCK_Y);
 
             fusedSSIMKernel<<<grid, block, 0, stream>>>(
-                deviceBatchOffset,
+                localBlockOffset,
+                B,
                 H,
                 W,
                 CH,
@@ -644,20 +664,24 @@ fusedSSIMBackwardPrivateUse1(double C1,
 
     auto dL_dimg1 = torch::zeros_like(img1);
 
+    const auto globalBlockCount = ((W + BLOCK_X - 1) / BLOCK_X) * ((H + BLOCK_Y - 1) / BLOCK_Y) * B;
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
-        auto deviceBatchSize = (B + c10::cuda::device_count() - 1) / c10::cuda::device_count();
-        const auto deviceBatchOffset = deviceBatchSize * deviceId;
-        deviceBatchSize              = std::min(deviceBatchSize, B - deviceBatchOffset);
+        auto localBlockCount =
+            (globalBlockCount + c10::cuda::device_count() - 1) / c10::cuda::device_count();
+        auto localBlockOffset = deviceId * localBlockCount;
+        localBlockCount       = std::min(localBlockCount, globalBlockCount - localBlockOffset);
 
-        if (deviceBatchSize) {
-            dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, deviceBatchSize);
+        if (localBlockCount) {
+            // Launch config
+            dim3 grid(localBlockCount);
             dim3 block(BLOCK_X, BLOCK_Y);
 
             fusedSSIMBackwardKernel<<<grid, block, 0, stream>>>(
-                deviceBatchOffset,
+                localBlockOffset,
+                B,
                 H,
                 W,
                 CH,
