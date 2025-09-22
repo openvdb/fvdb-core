@@ -469,5 +469,5 @@ TORCH_LIBRARY(fvdb, m) {
     m.def(
         "_fused_ssim(float C1, float C2, Tensor img1, Tensor img2, bool train) -> (Tensor, Tensor, Tensor, Tensor)");
     m.def(
-        "_fused_ssim_backward(float C1, float C2, Tensor img1, Tensor img2, Tensor dL_dmap, Tensor dm_dmu1, Tensor dm_dsigma1_sq, Tensor dm_dsigma12) -> Tensor");
+        "_fused_ssim_backward(float C1, float C2, Tensor img1, Tensor img2, Tensor(a!) dL_dmap, Tensor(b!) dm_dmu1, Tensor(c!) dm_dsigma1_sq, Tensor(d!) dm_dsigma12) -> Tensor");
 }

@@ -32,25 +32,25 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-fusedSSIMCUDA(double C1, double C2, torch::Tensor &img1, torch::Tensor &img2, bool train);
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> fusedSSIMCUDA(
+    double C1, double C2, const torch::Tensor &img1, const torch::Tensor &img2, bool train);
 
 torch::Tensor fusedSSIMBackwardCUDA(double C1,
                                     double C2,
-                                    torch::Tensor &img1,
-                                    torch::Tensor &img2,
+                                    const torch::Tensor &img1,
+                                    const torch::Tensor &img2,
                                     torch::Tensor &dL_dmap,
                                     torch::Tensor &dm_dmu1,
                                     torch::Tensor &dm_dsigma1_sq,
                                     torch::Tensor &dm_dsigma12);
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-fusedSSIMPrivateUse1(double C1, double C2, torch::Tensor &img1, torch::Tensor &img2, bool train);
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> fusedSSIMPrivateUse1(
+    double C1, double C2, const torch::Tensor &img1, const torch::Tensor &img2, bool train);
 
 torch::Tensor fusedSSIMBackwardPrivateUse1(double C1,
                                            double C2,
-                                           torch::Tensor &img1,
-                                           torch::Tensor &img2,
+                                           const torch::Tensor &img1,
+                                           const torch::Tensor &img2,
                                            torch::Tensor &dL_dmap,
                                            torch::Tensor &dm_dmu1,
                                            torch::Tensor &dm_dsigma1_sq,

@@ -477,7 +477,8 @@ fusedSSIMBackwardKernel(int localToGlobalOffset,
 //   If train=false, derivative Tensors are empty.
 // ------------------------------------------
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-fusedSSIMCUDA(double C1, double C2, torch::Tensor &img1, torch::Tensor &img2, bool train) {
+fusedSSIMCUDA(
+    double C1, double C2, const torch::Tensor &img1, const torch::Tensor &img2, bool train) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(img1));
     const auto stream = at::cuda::getCurrentCUDAStream(img1.device().index());
     int B             = img1.size(0);
@@ -509,8 +510,8 @@ fusedSSIMCUDA(double C1, double C2, torch::Tensor &img1, torch::Tensor &img2, bo
                                                 CH,
                                                 static_cast<float>(C1),
                                                 static_cast<float>(C2),
-                                                img1.contiguous().data_ptr<float>(),
-                                                img2.contiguous().data_ptr<float>(),
+                                                img1.contiguous().const_data_ptr<float>(),
+                                                img2.contiguous().const_data_ptr<float>(),
                                                 ssim_map.data_ptr<float>(),
                                                 train ? dm_dmu1.data_ptr<float>() : nullptr,
                                                 train ? dm_dsigma1_sq.data_ptr<float>() : nullptr,
@@ -529,8 +530,8 @@ fusedSSIMCUDA(double C1, double C2, torch::Tensor &img1, torch::Tensor &img2, bo
 torch::Tensor
 fusedSSIMBackwardCUDA(double C1,
                       double C2,
-                      torch::Tensor &img1,
-                      torch::Tensor &img2,
+                      const torch::Tensor &img1,
+                      const torch::Tensor &img2,
                       torch::Tensor &dL_dmap,
                       torch::Tensor &dm_dmu1,
                       torch::Tensor &dm_dsigma1_sq,
@@ -560,8 +561,8 @@ fusedSSIMBackwardCUDA(double C1,
         CH,
         static_cast<float>(C1),
         static_cast<float>(C2),
-        img1.contiguous().data_ptr<float>(),
-        img2.contiguous().data_ptr<float>(),
+        img1.contiguous().const_data_ptr<float>(),
+        img2.contiguous().const_data_ptr<float>(),
         dL_dmap.contiguous().data_ptr<float>(),
         dL_dimg1.data_ptr<float>(),
         dm_dmu1.contiguous().data_ptr<float>(),
@@ -578,7 +579,8 @@ fusedSSIMBackwardCUDA(double C1,
 //   If train=false, derivative Tensors are empty.
 // ------------------------------------------
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-fusedSSIMPrivateUse1(double C1, double C2, torch::Tensor &img1, torch::Tensor &img2, bool train) {
+fusedSSIMPrivateUse1(
+    double C1, double C2, const torch::Tensor &img1, const torch::Tensor &img2, bool train) {
     int B  = img1.size(0);
     int CH = img1.size(1);
     int H  = img1.size(2);
@@ -596,6 +598,9 @@ fusedSSIMPrivateUse1(double C1, double C2, torch::Tensor &img1, torch::Tensor &i
     auto dm_dmu1       = train ? torch::zeros_like(img1) : torch::empty({0}, img1.options());
     auto dm_dsigma1_sq = train ? torch::zeros_like(img1) : torch::empty({0}, img1.options());
     auto dm_dsigma12   = train ? torch::zeros_like(img1) : torch::empty({0}, img1.options());
+
+    auto img1_ = img1.contiguous();
+    auto img2_ = img2.contiguous();
 
     const auto globalBlockCount = ((W + BLOCK_X - 1) / BLOCK_X) * ((H + BLOCK_Y - 1) / BLOCK_Y) * B;
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
@@ -620,8 +625,8 @@ fusedSSIMPrivateUse1(double C1, double C2, torch::Tensor &img1, torch::Tensor &i
                 CH,
                 static_cast<float>(C1),
                 static_cast<float>(C2),
-                img1.contiguous().data_ptr<float>(),
-                img2.contiguous().data_ptr<float>(),
+                img1_.const_data_ptr<float>(),
+                img2_.const_data_ptr<float>(),
                 ssim_map.data_ptr<float>(),
                 train ? dm_dmu1.data_ptr<float>() : nullptr,
                 train ? dm_dsigma1_sq.data_ptr<float>() : nullptr,
@@ -646,8 +651,8 @@ fusedSSIMPrivateUse1(double C1, double C2, torch::Tensor &img1, torch::Tensor &i
 torch::Tensor
 fusedSSIMBackwardPrivateUse1(double C1,
                              double C2,
-                             torch::Tensor &img1,
-                             torch::Tensor &img2,
+                             const torch::Tensor &img1,
+                             const torch::Tensor &img2,
                              torch::Tensor &dL_dmap,
                              torch::Tensor &dm_dmu1,
                              torch::Tensor &dm_dsigma1_sq,
@@ -664,6 +669,14 @@ fusedSSIMBackwardPrivateUse1(double C1,
 
     auto dL_dimg1 = torch::zeros_like(img1);
 
+    auto img1_ = img1.contiguous();
+    auto img2_ = img2.contiguous();
+
+    auto dL_dmap_       = dL_dmap.contiguous();
+    auto dm_dmu1_       = dm_dmu1.contiguous();
+    auto dm_dsigma1_sq_ = dm_dsigma1_sq.contiguous();
+    auto dm_dsigma12_   = dm_dsigma12.contiguous();
+
     const auto globalBlockCount = ((W + BLOCK_X - 1) / BLOCK_X) * ((H + BLOCK_Y - 1) / BLOCK_Y) * B;
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
@@ -679,21 +692,20 @@ fusedSSIMBackwardPrivateUse1(double C1,
             dim3 grid(localBlockCount);
             dim3 block(BLOCK_X, BLOCK_Y);
 
-            fusedSSIMBackwardKernel<<<grid, block, 0, stream>>>(
-                localBlockOffset,
-                B,
-                H,
-                W,
-                CH,
-                static_cast<float>(C1),
-                static_cast<float>(C2),
-                img1.contiguous().data_ptr<float>(),
-                img2.contiguous().data_ptr<float>(),
-                dL_dmap.contiguous().data_ptr<float>(),
-                dL_dimg1.data_ptr<float>(),
-                dm_dmu1.contiguous().data_ptr<float>(),
-                dm_dsigma1_sq.contiguous().data_ptr<float>(),
-                dm_dsigma12.contiguous().data_ptr<float>());
+            fusedSSIMBackwardKernel<<<grid, block, 0, stream>>>(localBlockOffset,
+                                                                B,
+                                                                H,
+                                                                W,
+                                                                CH,
+                                                                static_cast<float>(C1),
+                                                                static_cast<float>(C2),
+                                                                img1_.const_data_ptr<float>(),
+                                                                img2_.const_data_ptr<float>(),
+                                                                dL_dmap_.data_ptr<float>(),
+                                                                dL_dimg1.data_ptr<float>(),
+                                                                dm_dmu1_.data_ptr<float>(),
+                                                                dm_dsigma1_sq_.data_ptr<float>(),
+                                                                dm_dsigma12_.data_ptr<float>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
     }
