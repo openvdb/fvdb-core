@@ -95,6 +95,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/VoxelNeighborhood.cu
     fvdb/detail/ops/SampleGridTrilinearWithGrad.cu
     fvdb/detail/ops/CoordsInGrid.cu
+    fvdb/detail/ops/gsplat/FusedSSIM.cu
     fvdb/detail/ops/gsplat/GaussianComputeNanInfMask.cu
     fvdb/detail/ops/gsplat/GaussianSplatSparse.cu
     fvdb/detail/ops/gsplat/GaussianProjectionJaggedBackward.cu

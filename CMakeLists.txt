@@ -18,7 +18,6 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_torch.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_pybind11.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_nanovdb.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/configure_torch_pybind11.cmake)
-include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_fused_ssim.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_nanovdb_editor.cmake)
 
 if(nanovdb_editor_ADDED)
@@ -34,6 +33,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/src/)
 # Source files
 set(FVDB_BINDINGS_CPP_FILES
     src/python/Bindings.cpp
+    src/python/FusedSSIMBinding.cpp
     src/python/GaussianSplatBinding.cpp
     src/python/GridBatchBinding.cpp
     src/python/JaggedTensorBinding.cpp

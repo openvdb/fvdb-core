@@ -460,9 +460,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("cpu", &fvdb::SparseConvPackInfo::cpu);
 }
 
-TORCH_LIBRARY(my_classes, m) {
+TORCH_LIBRARY(fvdb, m) {
     m.class_<fvdb::GridBatch>("GridBatch");
     m.class_<fvdb::JaggedTensor>("JaggedTensor");
     m.class_<fvdb::SparseConvPackInfo>("SparseConvPackInfo");
     m.class_<fvdb::detail::GridBatchImpl>("GridBatchImpl");
+
+    m.def(
+        "_fused_ssim(float C1, float C2, Tensor img1, Tensor img2, bool train) -> (Tensor, Tensor, Tensor, Tensor)");
+    m.def(
+        "_fused_ssim_backward(float C1, float C2, Tensor img1, Tensor img2, Tensor dL_dmap, Tensor dm_dmu1, Tensor dm_dsigma1_sq, Tensor dm_dsigma12) -> Tensor");
 }
