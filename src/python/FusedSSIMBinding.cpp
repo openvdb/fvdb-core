@@ -7,11 +7,11 @@
 #include <torch/library.h>
 
 TORCH_LIBRARY_IMPL(fvdb, CUDA, m) {
-    m.impl("_fused_ssim", &fvdb::detail::ops::fusedssim_cuda);
-    m.impl("_fused_ssim_backward", &fvdb::detail::ops::fusedssim_backward_cuda);
+    m.impl("_fused_ssim", &fvdb::detail::ops::fusedSSIMCUDA);
+    m.impl("_fused_ssim_backward", &fvdb::detail::ops::fusedSSIMBackwardCUDA);
 }
 
 TORCH_LIBRARY_IMPL(fvdb, PrivateUse1, m) {
-    m.impl("_fused_ssim", &fvdb::detail::ops::fusedssim_privateuse1);
-    m.impl("_fused_ssim_backward", &fvdb::detail::ops::fusedssim_backward_privateuse1);
+    m.impl("_fused_ssim", &fvdb::detail::ops::fusedSSIMPrivateUse1);
+    m.impl("_fused_ssim_backward", &fvdb::detail::ops::fusedSSIMBackwardPrivateUse1);
 }

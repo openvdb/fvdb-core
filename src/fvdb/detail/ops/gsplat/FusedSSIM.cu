@@ -36,6 +36,8 @@ namespace detail {
 
 namespace ops {
 
+namespace {
+
 namespace cg = cooperative_groups;
 
 // ------------------------------------------
@@ -71,7 +73,7 @@ __constant__ float cGauss[11] = {0.001028380123898387f,
 // Utility: Safe pixel fetch w/ zero padding
 // ------------------------------------------
 __device__ __forceinline__ float
-get_pix_value(const float *img, int b, int c, int y, int x, int CH, int H, int W) {
+getPixelValue(const float *img, int b, int c, int y, int x, int CH, int H, int W) {
     if (x < 0 || x >= W || y < 0 || y >= H) {
         return 0.0f;
     }
@@ -87,18 +89,18 @@ get_pix_value(const float *img, int b, int c, int y, int x, int CH, int H, int W
 //    to dm_dmu1, dm_dsigma1_sq, dm_dsigma12
 // ------------------------------------------
 __global__ void
-fusedssimCUDA(int offset,
-              int H,
-              int W,
-              int CH,
-              float C1,
-              float C2,
-              const float *__restrict__ img1,
-              const float *__restrict__ img2,
-              float *__restrict__ ssim_map,
-              float *__restrict__ dm_dmu1,
-              float *__restrict__ dm_dsigma1_sq,
-              float *__restrict__ dm_dsigma12) {
+fusedSSIMKernel(int offset,
+                int H,
+                int W,
+                int CH,
+                float C1,
+                float C2,
+                const float *__restrict__ img1,
+                const float *__restrict__ img2,
+                float *__restrict__ ssim_map,
+                float *__restrict__ dm_dmu1,
+                float *__restrict__ dm_dsigma1_sq,
+                float *__restrict__ dm_dsigma12) {
     auto block        = cg::this_thread_block();
     const int bIdx    = block.group_index().z + offset; // batch index
     const int pix_y   = block.group_index().y * BLOCK_Y + block.thread_index().y;
@@ -133,8 +135,8 @@ fusedssimCUDA(int offset,
                     int gy      = tileStartY + local_y - HALO;
                     int gx      = tileStartX + local_x - HALO;
 
-                    float X = get_pix_value(img1, bIdx, c, gy, gx, CH, H, W);
-                    float Y = get_pix_value(img2, bIdx, c, gy, gx, CH, H, W);
+                    float X = getPixelValue(img1, bIdx, c, gy, gx, CH, H, W);
+                    float Y = getPixelValue(img2, bIdx, c, gy, gx, CH, H, W);
 
                     sTile[local_y][local_x][0] = X;
                     sTile[local_y][local_x][1] = Y;
@@ -310,19 +312,19 @@ fusedssimCUDA(int offset,
 //    and dL/dmap (the gradient from above).
 // ------------------------------------------
 __global__ void
-fusedssim_backwardCUDA(int offset,
-                       int H,
-                       int W,
-                       int CH,
-                       float C1,
-                       float C2,
-                       const float *__restrict__ img1,
-                       const float *__restrict__ img2,
-                       const float *__restrict__ dL_dmap,
-                       float *__restrict__ dL_dimg1,
-                       const float *__restrict__ dm_dmu1,
-                       const float *__restrict__ dm_dsigma1_sq,
-                       const float *__restrict__ dm_dsigma12) {
+fusedSSIMBackwardKernel(int offset,
+                        int H,
+                        int W,
+                        int CH,
+                        float C1,
+                        float C2,
+                        const float *__restrict__ img1,
+                        const float *__restrict__ img2,
+                        const float *__restrict__ dL_dmap,
+                        float *__restrict__ dL_dimg1,
+                        const float *__restrict__ dm_dmu1,
+                        const float *__restrict__ dm_dsigma1_sq,
+                        const float *__restrict__ dm_dsigma12) {
     auto block = cg::this_thread_block();
 
     const int pix_y   = block.group_index().y * BLOCK_Y + block.thread_index().y;
@@ -339,8 +341,8 @@ fusedssim_backwardCUDA(int offset,
     for (int c = 0; c < CH; ++c) {
         float p1 = 0.f, p2 = 0.f;
         if (pix_x < W && pix_y < H) {
-            p1 = get_pix_value(img1, bIdx, c, pix_y, pix_x, CH, H, W);
-            p2 = get_pix_value(img2, bIdx, c, pix_y, pix_x, CH, H, W);
+            p1 = getPixelValue(img1, bIdx, c, pix_y, pix_x, CH, H, W);
+            p2 = getPixelValue(img2, bIdx, c, pix_y, pix_x, CH, H, W);
         }
 
         // (1) Load + fuse multiplication
@@ -359,10 +361,10 @@ fusedssim_backwardCUDA(int offset,
                 for (int col = lane_id; col < SHARED_X; col += 32) {
                     int gx = start_x + col - HALO;
 
-                    float chain = get_pix_value(dL_dmap, bIdx, c, gy, gx, CH, H, W);
-                    float vmu   = get_pix_value(dm_dmu1, bIdx, c, gy, gx, CH, H, W);
-                    float vs1   = get_pix_value(dm_dsigma1_sq, bIdx, c, gy, gx, CH, H, W);
-                    float vs12  = get_pix_value(dm_dsigma12, bIdx, c, gy, gx, CH, H, W);
+                    float chain = getPixelValue(dL_dmap, bIdx, c, gy, gx, CH, H, W);
+                    float vmu   = getPixelValue(dm_dmu1, bIdx, c, gy, gx, CH, H, W);
+                    float vs1   = getPixelValue(dm_dsigma1_sq, bIdx, c, gy, gx, CH, H, W);
+                    float vs12  = getPixelValue(dm_dsigma12, bIdx, c, gy, gx, CH, H, W);
 
                     sData[0][row][col] = vmu * chain;
                     sData[1][row][col] = vs1 * chain;
@@ -452,19 +454,26 @@ fusedssim_backwardCUDA(int offset,
     }
 }
 
+} // namespace
+
 // ------------------------------------------
 // PyTorch Interface (Forward)
 //   Returns (ssim_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12).
 //   If train=false, derivative Tensors are empty.
 // ------------------------------------------
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-fusedssim_cuda(double C1, double C2, torch::Tensor &img1, torch::Tensor &img2, bool train) {
+fusedSSIMCUDA(double C1, double C2, torch::Tensor &img1, torch::Tensor &img2, bool train) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(img1));
     const auto stream = at::cuda::getCurrentCUDAStream(img1.device().index());
     int B             = img1.size(0);
     int CH            = img1.size(1);
     int H             = img1.size(2);
     int W             = img1.size(3);
+
+    TORCH_CHECK_VALUE(img1.scalar_type() == torch::kFloat,
+                      "Fused SSIM only supports float32 images");
+    TORCH_CHECK_VALUE(img2.scalar_type() == torch::kFloat,
+                      "Fused SSIM only supports float32 images");
 
     // Launch config
     dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, B);
@@ -478,18 +487,18 @@ fusedssim_cuda(double C1, double C2, torch::Tensor &img1, torch::Tensor &img2, b
     auto dm_dsigma1_sq = train ? torch::zeros_like(img1) : torch::empty({0}, img1.options());
     auto dm_dsigma12   = train ? torch::zeros_like(img1) : torch::empty({0}, img1.options());
 
-    fusedssimCUDA<<<grid, block, 0, stream>>>(0,
-                                              H,
-                                              W,
-                                              CH,
-                                              static_cast<float>(C1),
-                                              static_cast<float>(C2),
-                                              img1.contiguous().data_ptr<float>(),
-                                              img2.contiguous().data_ptr<float>(),
-                                              ssim_map.data_ptr<float>(),
-                                              train ? dm_dmu1.data_ptr<float>() : nullptr,
-                                              train ? dm_dsigma1_sq.data_ptr<float>() : nullptr,
-                                              train ? dm_dsigma12.data_ptr<float>() : nullptr);
+    fusedSSIMKernel<<<grid, block, 0, stream>>>(0,
+                                                H,
+                                                W,
+                                                CH,
+                                                static_cast<float>(C1),
+                                                static_cast<float>(C2),
+                                                img1.contiguous().data_ptr<float>(),
+                                                img2.contiguous().data_ptr<float>(),
+                                                ssim_map.data_ptr<float>(),
+                                                train ? dm_dmu1.data_ptr<float>() : nullptr,
+                                                train ? dm_dsigma1_sq.data_ptr<float>() : nullptr,
+                                                train ? dm_dsigma12.data_ptr<float>() : nullptr);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
     return std::make_tuple(ssim_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12);
@@ -502,14 +511,14 @@ fusedssim_cuda(double C1, double C2, torch::Tensor &img1, torch::Tensor &img2, b
 //   returns dL/d(img1).
 // ------------------------------------------
 torch::Tensor
-fusedssim_backward_cuda(double C1,
-                        double C2,
-                        torch::Tensor &img1,
-                        torch::Tensor &img2,
-                        torch::Tensor &dL_dmap,
-                        torch::Tensor &dm_dmu1,
-                        torch::Tensor &dm_dsigma1_sq,
-                        torch::Tensor &dm_dsigma12) {
+fusedSSIMBackwardCUDA(double C1,
+                      double C2,
+                      torch::Tensor &img1,
+                      torch::Tensor &img2,
+                      torch::Tensor &dL_dmap,
+                      torch::Tensor &dm_dmu1,
+                      torch::Tensor &dm_dsigma1_sq,
+                      torch::Tensor &dm_dsigma12) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(img1));
     const auto stream = at::cuda::getCurrentCUDAStream(img1.device().index());
     int B             = img1.size(0);
@@ -517,24 +526,30 @@ fusedssim_backward_cuda(double C1,
     int H             = img1.size(2);
     int W             = img1.size(3);
 
+    TORCH_CHECK_VALUE(img1.scalar_type() == torch::kFloat,
+                      "Fused SSIM only supports float32 images");
+    TORCH_CHECK_VALUE(img2.scalar_type() == torch::kFloat,
+                      "Fused SSIM only supports float32 images");
+
     auto dL_dimg1 = torch::zeros_like(img1);
 
     dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, B);
     dim3 block(BLOCK_X, BLOCK_Y);
 
-    fusedssim_backwardCUDA<<<grid, block, 0, stream>>>(0,
-                                                       H,
-                                                       W,
-                                                       CH,
-                                                       static_cast<float>(C1),
-                                                       static_cast<float>(C2),
-                                                       img1.contiguous().data_ptr<float>(),
-                                                       img2.contiguous().data_ptr<float>(),
-                                                       dL_dmap.contiguous().data_ptr<float>(),
-                                                       dL_dimg1.data_ptr<float>(),
-                                                       dm_dmu1.contiguous().data_ptr<float>(),
-                                                       dm_dsigma1_sq.contiguous().data_ptr<float>(),
-                                                       dm_dsigma12.contiguous().data_ptr<float>());
+    fusedSSIMBackwardKernel<<<grid, block, 0, stream>>>(
+        0,
+        H,
+        W,
+        CH,
+        static_cast<float>(C1),
+        static_cast<float>(C2),
+        img1.contiguous().data_ptr<float>(),
+        img2.contiguous().data_ptr<float>(),
+        dL_dmap.contiguous().data_ptr<float>(),
+        dL_dimg1.data_ptr<float>(),
+        dm_dmu1.contiguous().data_ptr<float>(),
+        dm_dsigma1_sq.contiguous().data_ptr<float>(),
+        dm_dsigma12.contiguous().data_ptr<float>());
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
     return dL_dimg1;
@@ -546,11 +561,16 @@ fusedssim_backward_cuda(double C1,
 //   If train=false, derivative Tensors are empty.
 // ------------------------------------------
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-fusedssim_privateuse1(double C1, double C2, torch::Tensor &img1, torch::Tensor &img2, bool train) {
+fusedSSIMPrivateUse1(double C1, double C2, torch::Tensor &img1, torch::Tensor &img2, bool train) {
     int B  = img1.size(0);
     int CH = img1.size(1);
     int H  = img1.size(2);
     int W  = img1.size(3);
+
+    TORCH_CHECK_VALUE(img1.scalar_type() == torch::kFloat,
+                      "Fused SSIM only supports float32 images");
+    TORCH_CHECK_VALUE(img2.scalar_type() == torch::kFloat,
+                      "Fused SSIM only supports float32 images");
 
     // Output SSIM map
     auto ssim_map = torch::zeros_like(img1, img1.options()).contiguous();
@@ -573,7 +593,7 @@ fusedssim_privateuse1(double C1, double C2, torch::Tensor &img1, torch::Tensor &
             dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, deviceBatchSize);
             dim3 block(BLOCK_X, BLOCK_Y);
 
-            fusedssimCUDA<<<grid, block, 0, stream>>>(
+            fusedSSIMKernel<<<grid, block, 0, stream>>>(
                 deviceBatchOffset,
                 H,
                 W,
@@ -604,18 +624,23 @@ fusedssim_privateuse1(double C1, double C2, torch::Tensor &img1, torch::Tensor &
 //   returns dL/d(img1).
 // ------------------------------------------
 torch::Tensor
-fusedssim_backward_privateuse1(double C1,
-                               double C2,
-                               torch::Tensor &img1,
-                               torch::Tensor &img2,
-                               torch::Tensor &dL_dmap,
-                               torch::Tensor &dm_dmu1,
-                               torch::Tensor &dm_dsigma1_sq,
-                               torch::Tensor &dm_dsigma12) {
+fusedSSIMBackwardPrivateUse1(double C1,
+                             double C2,
+                             torch::Tensor &img1,
+                             torch::Tensor &img2,
+                             torch::Tensor &dL_dmap,
+                             torch::Tensor &dm_dmu1,
+                             torch::Tensor &dm_dsigma1_sq,
+                             torch::Tensor &dm_dsigma12) {
     int B  = img1.size(0);
     int CH = img1.size(1);
     int H  = img1.size(2);
     int W  = img1.size(3);
+
+    TORCH_CHECK_VALUE(img1.scalar_type() == torch::kFloat,
+                      "Fused SSIM only supports float32 images");
+    TORCH_CHECK_VALUE(img2.scalar_type() == torch::kFloat,
+                      "Fused SSIM only supports float32 images");
 
     auto dL_dimg1 = torch::zeros_like(img1);
 
@@ -631,7 +656,7 @@ fusedssim_backward_privateuse1(double C1,
             dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, deviceBatchSize);
             dim3 block(BLOCK_X, BLOCK_Y);
 
-            fusedssim_backwardCUDA<<<grid, block, 0, stream>>>(
+            fusedSSIMBackwardKernel<<<grid, block, 0, stream>>>(
                 deviceBatchOffset,
                 H,
                 W,

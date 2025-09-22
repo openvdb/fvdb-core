@@ -33,28 +33,28 @@ namespace detail {
 namespace ops {
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-fusedssim_cuda(double C1, double C2, torch::Tensor &img1, torch::Tensor &img2, bool train);
+fusedSSIMCUDA(double C1, double C2, torch::Tensor &img1, torch::Tensor &img2, bool train);
 
-torch::Tensor fusedssim_backward_cuda(double C1,
-                                      double C2,
-                                      torch::Tensor &img1,
-                                      torch::Tensor &img2,
-                                      torch::Tensor &dL_dmap,
-                                      torch::Tensor &dm_dmu1,
-                                      torch::Tensor &dm_dsigma1_sq,
-                                      torch::Tensor &dm_dsigma12);
+torch::Tensor fusedSSIMBackwardCUDA(double C1,
+                                    double C2,
+                                    torch::Tensor &img1,
+                                    torch::Tensor &img2,
+                                    torch::Tensor &dL_dmap,
+                                    torch::Tensor &dm_dmu1,
+                                    torch::Tensor &dm_dsigma1_sq,
+                                    torch::Tensor &dm_dsigma12);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-fusedssim_privateuse1(double C1, double C2, torch::Tensor &img1, torch::Tensor &img2, bool train);
+fusedSSIMPrivateUse1(double C1, double C2, torch::Tensor &img1, torch::Tensor &img2, bool train);
 
-torch::Tensor fusedssim_backward_privateuse1(double C1,
-                                             double C2,
-                                             torch::Tensor &img1,
-                                             torch::Tensor &img2,
-                                             torch::Tensor &dL_dmap,
-                                             torch::Tensor &dm_dmu1,
-                                             torch::Tensor &dm_dsigma1_sq,
-                                             torch::Tensor &dm_dsigma12);
+torch::Tensor fusedSSIMBackwardPrivateUse1(double C1,
+                                           double C2,
+                                           torch::Tensor &img1,
+                                           torch::Tensor &img2,
+                                           torch::Tensor &dL_dmap,
+                                           torch::Tensor &dm_dmu1,
+                                           torch::Tensor &dm_dsigma1_sq,
+                                           torch::Tensor &dm_dsigma12);
 
 } // namespace ops
 
