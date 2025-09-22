@@ -6,7 +6,7 @@
 CPMAddPackage(
     NAME nanovdb_editor
     GITHUB_REPOSITORY openvdb/nanovdb-editor
-    GIT_TAG 238544ea6a4e594728118f94bbafd43783fb49f2
+    GIT_TAG b5845053ea048c0f3db9e01cb2b9bcc16d6bbc1a
     DOWNLOAD_ONLY YES
 )
 

@@ -72,7 +72,5 @@ TEST(Viewer, ViewerTest) {
 
 #ifdef LOCAL_TESTING
     std::this_thread::sleep_for(std::chrono::seconds(100));
-#else
-    std::this_thread::sleep_for(std::chrono::seconds(1));
 #endif
 }
