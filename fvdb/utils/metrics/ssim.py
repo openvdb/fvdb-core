@@ -1,6 +1,6 @@
-# Copyright Contributors to the OpenVDB Project
-# SPDX-License-Identifier: Apache-2.0
-#
+# This file contains source code from the fused-ssim library obtained from
+# https://github.com/rahul-goel/fused-ssim. The fused-ssim library is licensed under the MIT
+# License. Refer to ORSB 5512107 for more. Original license text follows.
 
 # Copyright (c) 2024 Rahul Goel
 
@@ -21,6 +21,10 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
+
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+#
 
 
 from typing import NamedTuple

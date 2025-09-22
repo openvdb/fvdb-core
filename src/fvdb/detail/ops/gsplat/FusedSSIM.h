@@ -1,3 +1,7 @@
+// This file contains source code from the fused-ssim library obtained from
+// https://github.com/rahul-goel/fused-ssim. The fused-ssim library is licensed under the MIT
+// License. Refer to ORSB 5512107 for more. Original license text follows.
+
 // Copyright (c) 2024 Rahul Goel
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
