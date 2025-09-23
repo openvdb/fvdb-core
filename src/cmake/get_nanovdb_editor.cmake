@@ -11,14 +11,9 @@
 CPMAddPackage(
     NAME nanovdb_editor
     GITHUB_REPOSITORY openvdb/nanovdb-editor
-    GIT_TAG main
+    GIT_TAG 49b2626b4b594feab7e6577e305ed05139aaa7d7
     DOWNLOAD_ONLY YES
 )
-
-if(NANOVDB_EDITOR_SKIP)
-    message(STATUS "NANOVDB_EDITOR_SKIP is set; skipping nanovdb_editor wheel build.")
-    return()
-endif()
 
 if(nanovdb_editor_ADDED)
     # Check installed and downloaded nanovdb_editor versions and only proceed if newest is available
@@ -40,7 +35,7 @@ except Exception:
     except Exception:
         md = None
 
-version = '0.0.0'
+version = ''
 if md is not None:
     try:
         version = md.version('nanovdb_editor')
@@ -52,7 +47,16 @@ print(version, end='')
         OUTPUT_VARIABLE NANOVDB_EDITOR_VERSION
         OUTPUT_STRIP_TRAILING_WHITESPACE
     )
-    message(STATUS "Installed nanovdb_editor version: ${NANOVDB_EDITOR_VERSION}")
+    if(NANOVDB_EDITOR_VERSION STREQUAL "")
+        message(STATUS "Installed nanovdb_editor version not found.")
+    else()
+        message(STATUS "Installed nanovdb_editor version: ${NANOVDB_EDITOR_VERSION}")
+    endif()
+
+    if(NANOVDB_EDITOR_SKIP)
+        message(STATUS "NANOVDB_EDITOR_SKIP is set; skipping nanovdb_editor wheel build.")
+        return()
+    endif()
 
     if (NOT NANOVDB_EDITOR_FORCE)
         if(NANOVDB_EDITOR_VERSION VERSION_GREATER_EQUAL NANOVDB_EDITOR_WHEEL_VERSION)

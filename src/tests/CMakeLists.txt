@@ -145,4 +145,7 @@ ConfigureTest(GaussianSphericalHarmonicsBackwardTest "GaussianSphericalHarmonics
 ConfigureTest(GaussianProjectionForwardTest "GaussianProjectionForwardTest.cpp")
 ConfigureTest(GaussianProjectionBackwardTest "GaussianProjectionBackwardTest.cpp")
 ConfigureTest(GaussianRasterizeTopContributorsTest "GaussianRasterizeTopContributorsTest.cpp")
-ConfigureTest(ViewerTest "ViewerTest.cpp")
+
+if(NOT NANOVDB_EDITOR_VERSION STREQUAL "")
+  ConfigureTest(ViewerTest "ViewerTest.cpp")
+endif()
