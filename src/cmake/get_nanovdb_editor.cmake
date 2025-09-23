@@ -7,19 +7,21 @@
 #       ./build.sh install -C cmake.define.NANOVDB_EDITOR_FORCE=ON
 #   * To skip nanovdb_editor wheel build:
 #       ./build.sh install -C cmake.define.NANOVDB_EDITOR_SKIP=ON
+# IMPORTANT: configs are cached by cmake, so set them OFF to disable if not doing clean build
 
 CPMAddPackage(
     NAME nanovdb_editor
     GITHUB_REPOSITORY openvdb/nanovdb-editor
     GIT_TAG 49b2626b4b594feab7e6577e305ed05139aaa7d7
+    VERSION 0.0.1
     DOWNLOAD_ONLY YES
 )
 
 if(nanovdb_editor_ADDED)
     # Check installed and downloaded nanovdb_editor versions and only proceed if newest is available
-    set(NANOVDB_EDITOR_WHEEL_VERSION_FILE ${nanovdb_editor_SOURCE_DIR}/pymodule/VERSION.txt)
-    file(READ ${NANOVDB_EDITOR_WHEEL_VERSION_FILE} NANOVDB_EDITOR_WHEEL_VERSION)
-    message(STATUS "NanoVDB Editor latest wheel version: ${NANOVDB_EDITOR_WHEEL_VERSION}")
+    file(READ ${nanovdb_editor_SOURCE_DIR}/pymodule/VERSION.txt NANOVDB_EDITOR_WHEEL_VERSION)
+    string(STRIP "${NANOVDB_EDITOR_WHEEL_VERSION}" NANOVDB_EDITOR_WHEEL_VERSION)
+    message(STATUS "Latest nanovdb_editor wheel version: ${NANOVDB_EDITOR_WHEEL_VERSION}")
 
     # Get installed nanovdb_editor version from the active Python
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
@@ -69,7 +71,7 @@ print(version, end='')
 
     set(NANOVDB_EDITOR_WHEEL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dist)
 
-    message(STATUS "Removing existing nanovdb_editor wheels from ${NANOVDB_EDITOR_WHEEL_DIR}...")
+    message(STATUS "Removing existing nanovdb_editor wheel from ${NANOVDB_EDITOR_WHEEL_DIR}...")
     file(GLOB NANOVDB_EDITOR_WHEELS "${NANOVDB_EDITOR_WHEEL_DIR}/nanovdb_editor*.whl")
     foreach(wheel_file ${NANOVDB_EDITOR_WHEELS})
         file(REMOVE "${wheel_file}")
@@ -78,8 +80,7 @@ print(version, end='')
     message(STATUS "Building nanovdb_editor wheel version ${NANOVDB_EDITOR_WHEEL_VERSION} to ${NANOVDB_EDITOR_WHEEL_DIR}...")
     execute_process(
         COMMAND bash -c "
-        python -m pip wheel ${nanovdb_editor_SOURCE_DIR}/pymodule --wheel-dir ${NANOVDB_EDITOR_WHEEL_DIR} -Cbuild-dir=${nanovdb_editor_BINARY_DIR}
-        echo -- Installing nanovdb_editor wheel...
+        python -m pip wheel ${nanovdb_editor_SOURCE_DIR}/pymodule --wheel-dir ${NANOVDB_EDITOR_WHEEL_DIR} -Cbuild-dir=${nanovdb_editor_BINARY_DIR} -Cbuild.verbose=true
         python -m pip install --force-reinstall ${NANOVDB_EDITOR_WHEEL_DIR}/*.whl
         "
         WORKING_DIRECTORY ${nanovdb_editor_BINARY_DIR}
@@ -91,6 +92,6 @@ print(version, end='')
         message(STATUS ${build_output})
         message(FATAL_ERROR ${build_error})
     else()
-        message(STATUS "nanovdb_editor wheel version ${NANOVDB_EDITOR_WHEEL_VERSION} built and installed successfully.")
+        message(STATUS ${build_output})
     endif()
 endif()
