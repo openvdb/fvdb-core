@@ -146,6 +146,7 @@ ConfigureTest(GaussianProjectionForwardTest "GaussianProjectionForwardTest.cpp")
 ConfigureTest(GaussianProjectionBackwardTest "GaussianProjectionBackwardTest.cpp")
 ConfigureTest(GaussianRasterizeTopContributorsTest "GaussianRasterizeTopContributorsTest.cpp")
 
-if(NOT NANOVDB_EDITOR_VERSION STREQUAL "")
+message(STATUS "NANOVDB_EDITOR_SKIP: ${NANOVDB_EDITOR_SKIP}")
+if(NOT NANOVDB_EDITOR_SKIP)
   ConfigureTest(ViewerTest "ViewerTest.cpp")
 endif()

@@ -76,7 +76,6 @@ print(version, end='')
     execute_process(
         COMMAND bash -lc "
         python -m pip wheel ${nanovdb_editor_SOURCE_DIR}/pymodule \
-            --no-isolation \
             --wheel-dir ${NANOVDB_EDITOR_WHEEL_DIR} \
             -Cbuild-dir=${nanovdb_editor_BINARY_DIR} \
             -Cbuild.verbose=false \
@@ -84,7 +83,7 @@ print(version, end='')
             -Ccmake.define.NANOVDB_EDITOR_USE_GLFW=OFF \
             -Ccmake.define.NANOVDB_EDITOR_BUILD_TESTS=OFF \
             -v
-        python -m pip install --force-reinstall ${NANOVDB_EDITOR_WHEEL_DIR}/*.whl
+        python -m pip install --force-reinstall ${NANOVDB_EDITOR_WHEEL_DIR}/nanovdb_editor*.whl
         "
         WORKING_DIRECTORY ${nanovdb_editor_BINARY_DIR}
         RESULT_VARIABLE build_result
