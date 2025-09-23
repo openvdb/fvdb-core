@@ -303,7 +303,7 @@ saveGaussianPly(const std::string &filename,
     using namespace tinyply;
 
     const fvdb::JaggedTensor validMask =
-        FVDB_DISPATCH_KERNEL_DEVICE(gaussians.means().device(), [&]() {
+        FVDB_DISPATCH_KERNEL(gaussians.means().device(), [&]() {
             return detail::ops::dispatchGaussianNanInfMask<DeviceTag>(gaussians.means(),
                                                                       gaussians.quats(),
                                                                       gaussians.logScales(),
