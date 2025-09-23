@@ -21,10 +21,6 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/configure_torch_pybind11.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_fused_ssim.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_nanovdb_editor.cmake)
 
-if(nanovdb_editor_ADDED)
-    include(${nanovdb_editor_SOURCE_DIR}/cmake/get_nanovdb_editor.cmake)
-endif()
-
 # Generate compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -67,12 +63,11 @@ set_target_properties(_Cpp PROPERTIES
 target_include_directories(_Cpp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${TORCH_INCLUDE_DIRS}
-    ${NANOVDB_EDITOR_INCLUDE_DIR})
+    ${nanovdb_editor_SOURCE_DIR})
 
 target_link_libraries(_Cpp PRIVATE
     ${TORCH_PYTHON_LIBRARY}
     ${TORCH_LIBRARIES}
-    nanovdb_editor::nanovdb_editor
     fvdb)
 
 target_compile_options(_Cpp PRIVATE

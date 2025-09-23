@@ -173,7 +173,7 @@ target_include_directories(fvdb PUBLIC
     ${TORCH_INCLUDE_DIRS}
     ${Python3_INCLUDE_DIRS}
     ${nvtx3_SOURCE_DIR}/include
-    ${NANOVDB_EDITOR_INCLUDE_DIR})
+    ${nanovdb_editor_SOURCE_DIR})
 target_include_directories(fvdb PRIVATE
     ${TORCH_SOURCE_INCLUDE_DIRS}
     ${tinyply_SOURCE_DIR}/source)
@@ -209,7 +209,7 @@ target_compile_options(fvdb PRIVATE
     >)
 
 target_link_libraries(fvdb PRIVATE
-    ${TORCH_LIBRARIES} tinyply cudnn_frontend cudnn cutlass blosc::blosc nanovdb_editor::nanovdb_editor)
+    ${TORCH_LIBRARIES} tinyply cudnn_frontend cudnn cutlass blosc::blosc)
 target_link_libraries(fvdb PUBLIC
     ${Python3_LIBRARIES})
 
