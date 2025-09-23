@@ -31,7 +31,7 @@ target_include_directories(fvdb_test_utils
   PRIVATE
     ${CMAKE_SOURCE_DIR}/src # To find <tests/utils/ImageUtils.h>
     ${PNG_INCLUDE_DIRS}     # Include directory for png.h
-    ${NANOVDB_EDITOR_INCLUDE_DIR}
+    ${nanovdb_editor_SOURCE_DIR}
   # PUBLIC includes could be added if ImageUtils.h included e.g., Torch headers
   # PUBLIC
     # ${TORCH_INCLUDE_DIRS}
@@ -71,7 +71,7 @@ function(ConfigureTest CMAKE_TEST_NAME)
     $<TARGET_PROPERTY:GTest::gtest,INTERFACE_INCLUDE_DIRECTORIES> # Get includes exposed by GTest::gtest
     $<TARGET_PROPERTY:GTest::gtest_main,INTERFACE_INCLUDE_DIRECTORIES> # Get includes exposed by GTest::gtest_main
     ${CUDAToolkit_INCLUDE_DIRS}
-    ${NANOVDB_EDITOR_INCLUDE_DIR}
+    ${nanovdb_editor_SOURCE_DIR}
   )
 
   target_compile_options(${CMAKE_TEST_NAME}_obj PRIVATE
@@ -145,4 +145,8 @@ ConfigureTest(GaussianSphericalHarmonicsBackwardTest "GaussianSphericalHarmonics
 ConfigureTest(GaussianProjectionForwardTest "GaussianProjectionForwardTest.cpp")
 ConfigureTest(GaussianProjectionBackwardTest "GaussianProjectionBackwardTest.cpp")
 ConfigureTest(GaussianRasterizeTopContributorsTest "GaussianRasterizeTopContributorsTest.cpp")
-ConfigureTest(ViewerTest "ViewerTest.cpp")
+
+message(STATUS "NANOVDB_EDITOR_SKIP: ${NANOVDB_EDITOR_SKIP}")
+if(NOT NANOVDB_EDITOR_SKIP)
+  ConfigureTest(ViewerTest "ViewerTest.cpp")
+endif()
