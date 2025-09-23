@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: psf/black@stable
         with:
-          options: "--check --verbose --target-version=py311 --line-length=120"
+          options: "--check --diff --verbose --target-version=py311 --line-length=120"
           src: "./"
           version: "~= 24.0"
 
