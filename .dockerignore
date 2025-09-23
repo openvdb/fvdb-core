@@ -1,0 +1,70 @@
+# Ignore everything that should not be sent to the Docker build context
+# Keeps builds fast and prevents host artifacts from leaking into the image
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+.coverage
+coverage.xml
+.nox/
+.tox/
+
+# Virtual envs
+venv/
+.venv/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Build systems: scikit-build, CMake, wheels, sdist
+build/
+dist/
+*.egg-info/
+*.egg
+*.whl
+*.tar.gz
+compile_commands.json
+
+# CMake & caches
+CMakeFiles/
+CMakeCache.txt
+cmake-build*/
+_skbuild/
+
+# Editors/OS
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Logs
+*.log
+
+# Docker (do not ignore Dockerfile or compose; needed for build)
+# .dockerignore itself is harmless to include; leave it
+
+# Git (context excludes .git by default via CLI, but keep explicit)
+.git/
+.gitignore
+
+# Data and artifacts
+**/.cache/
+cache/
+tmp/
+temp/
+*.tmp
+
+# Project specifics
+notebooks/.local/
+docs/_build/
+

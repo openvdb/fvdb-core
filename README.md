@@ -35,34 +35,19 @@ During the project's initial development stages, it is necessary to [run the bui
 ## Building *f*VDB from Source
 
 ### Environment Management
-ƒVDB is a Python library implemented as a C++ Pytorch extension.  Of course you can build ƒVDB in whatever environment suits you, but we provide three paths to constructing reliable environments for building and running ƒVDB:  using [docker](#setting-up-a-docker-container), [conda](#setting-up-a-conda-environment), or a Python virtual environment.
+ƒVDB is a Python library implemented as a C++ Pytorch extension.  Of course you can build ƒVDB in whatever environment suits you, but we provide three paths to constructing reliable environments for building and running ƒVDB. These are separate options,
+choose only one. They're not intended to be used together.
+
+1. **RECOMMENDED** [conda](#option-1-setting-up-a-conda-environment-recommended)
+2. Using [docker](#option-2-setting-up-a-docker-container)
+3. Python virtual environment. [venv](#option-3-setting-up-a-python-virtual-environment)
 
 `conda` tends to be more flexible since reconfiguring toolchains and modules to suit your larger project can be dynamic, but at the same time this can be a more brittle experience compared to using a virtualized `docker` container.  Using `conda` is generally recommended for development and testing, while using `docker` is recommended for CI/CD and deployment.
 
-#### Setting up a Docker Container
-
-Running a docker container is a great way to ensure that you have a consistent environment for building and running ƒVDB.
-
-Our provided [`Dockerfile`](Dockerfile) constructs a Docker image which is ready to build ƒVDB.  The docker image is configured to install miniforge and the `fvdb` conda environment with all the dependencies needed to build and run ƒVDB.
-
-Building and starting the docker image is done by running the following command from the fvdb directory:
-```shell
-docker compose run --rm fvdb-dev
-```
+---
 
 
-When you are ready to build ƒVDB, run the following command within the docker container.  `TORCH_CUDA_ARCH_LIST` specifies which CUDA architectures to build for.
-```shell
-conda activate fvdb;
-cd /openvdb/fvdb;
-TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6+PTX" \
-./build.sh install
-```
-
-Additional information about the ƒVDB docker setup, with troubleshooting for common errors, can be found
-here: [`ƒVDB Docker`](docs/markdown/docker_readme.md)
-
-#### Setting up a Conda Environment
+#### **OPTION 1** Setting up a Conda Environment (Recommended)
 
 *f*VDB can be used with any Conda distribution installed on your system. Below is an installation guide using
 [miniforge](https://github.com/conda-forge/miniforge). You can skip steps 1-3 if you already have a Conda installation.
@@ -95,9 +80,46 @@ conda activate fvdb
 * `fvdb_test`: Use `env/test_environment.yml` for a runtime environment which has only the packages required to run the unit tests after building ƒVDB. This is the environment used by the CI pipeline to run the tests after building ƒVDB in the `fvdb_build` environment.
 * `fvdb_learn`: Use `env/learn_environment.yml` for additional runtime requirements and packages needed to run the [notebooks](notebooks) or [examples](examples) and view their visualizations.
 
-#### Setting up a Python virtual environment
+---
 
-After creating a Python virtual environment, proceed to install the exact version of PyTorch that corresponds to your CUDA version. Then, install the rest of the build requirements.
+#### **OPTION 2** Setting up a Docker Container
+
+Running a docker container is a great way to ensure that you have a consistent environment for building and running ƒVDB.
+
+Our provided [`Dockerfile`](Dockerfile) constructs a Docker image which is ready to build ƒVDB.  The docker image is configured to install miniforge and the `fvdb` conda environment with all the dependencies needed to build and run ƒVDB.
+
+Building and starting the docker image is done by running the following command from the fvdb directory:
+```shell
+docker compose run --rm fvdb-dev
+```
+
+
+When you are ready to build ƒVDB, run the following command within the docker container.  `TORCH_CUDA_ARCH_LIST` specifies which CUDA architectures to build for.
+```shell
+conda activate fvdb;
+cd /workspace;
+TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6+PTX" \
+./build.sh install verbose
+```
+
+If you've built an artifact that you want to extract from the container, with "wheel" being the
+most useful... The built wheel can be extracted from the running docker image using `docker cp`, given the
+ID of the running image. For example:
+
+```shell
+docker cp fvdb-fvdb-dev-run-0123456789ab:/workspace/dist/fvdb-0.2.1-cp312-cp312-linux_x86_64.whl .
+```
+
+where `0123456789ab` is the ID of the running docker container, obtained via `docker ps`.
+
+Additional information about the ƒVDB docker setup, with troubleshooting for common errors, can be found
+here: [`ƒVDB Docker`](docs/markdown/docker_readme.md)
+
+---
+
+#### **OPTION 3** Setting up a Python virtual environment
+
+Create a python virtual environment and then proceed to install the exact version of PyTorch that corresponds to your CUDA version. Finally, install the rest of the build requirements.
 
 ```shell
 python -m venv fvdb
@@ -110,6 +132,8 @@ When you're ready to build fVDB, run the following command after activating the 
 ```shell
 TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6+PTX" ./build.sh install
 ```
+
+---
 
 ### Building *f*VDB
 
