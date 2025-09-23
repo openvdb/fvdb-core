@@ -32,18 +32,13 @@ import sys
 try:
     import importlib.metadata as md
 except Exception:
-    try:
-        import importlib_metadata as md
-    except Exception:
-        md = None
-
+    md = None
 version = ''
 if md is not None:
     try:
         version = md.version('nanovdb_editor')
     except Exception:
         pass
-
 print(version, end='')
 ]]
         OUTPUT_VARIABLE NANOVDB_EDITOR_VERSION
@@ -79,19 +74,25 @@ print(version, end='')
     file(MAKE_DIRECTORY ${NANOVDB_EDITOR_WHEEL_DIR})
     message(STATUS "Building nanovdb_editor wheel version ${NANOVDB_EDITOR_WHEEL_VERSION} to ${NANOVDB_EDITOR_WHEEL_DIR}...")
     execute_process(
-        COMMAND bash -c "
-        python -m pip wheel ${nanovdb_editor_SOURCE_DIR}/pymodule --wheel-dir ${NANOVDB_EDITOR_WHEEL_DIR} -Cbuild-dir=${nanovdb_editor_BINARY_DIR} -Cbuild.verbose=true
+        COMMAND bash -lc "
+        python -m pip wheel ${nanovdb_editor_SOURCE_DIR}/pymodule \
+            --no-isolation \
+            --wheel-dir ${NANOVDB_EDITOR_WHEEL_DIR} \
+            -Cbuild-dir=${nanovdb_editor_BINARY_DIR} \
+            -Cbuild.verbose=false \
+            -Clogging.level=WARNING \
+            -Ccmake.define.NANOVDB_EDITOR_USE_GLFW=OFF \
+            -Ccmake.define.NANOVDB_EDITOR_BUILD_TESTS=OFF \
+            -v
         python -m pip install --force-reinstall ${NANOVDB_EDITOR_WHEEL_DIR}/*.whl
         "
         WORKING_DIRECTORY ${nanovdb_editor_BINARY_DIR}
         RESULT_VARIABLE build_result
         OUTPUT_VARIABLE build_output
-        ERROR_VARIABLE build_error
     )
     if(NOT build_result EQUAL 0)
-        message(STATUS ${build_output})
-        message(FATAL_ERROR ${build_error})
+        message(FATAL_ERROR "${build_output}")
     else()
-        message(STATUS ${build_output})
+        message(STATUS "${build_output}")
     endif()
 endif()
