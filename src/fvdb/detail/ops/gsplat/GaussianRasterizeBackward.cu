@@ -1232,16 +1232,20 @@ callRasterizeBackwardPrivateUse1(
             renderedAlphas, lastGaussianIds, dLossDRenderedFeatures, dLossDRenderedAlphas);
     }();
 
+    const uint32_t tileExtentH = tileOffsets.size(1);
+    const uint32_t tileExtentW = tileOffsets.size(2);
+    uint32_t tileCount =
+        activeTiles.has_value() ? activeTiles.value().size(0) : C * tileExtentH * tileExtentW;
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
-        auto deviceCameraCount =
-            (tileOffsets.size(0) + c10::cuda::device_count() - 1) / c10::cuda::device_count();
-        const auto deviceCameraOffset = deviceCameraCount * deviceId;
-        deviceCameraCount = std::min(deviceCameraCount, tileOffsets.size(0) - deviceCameraOffset);
+        uint32_t deviceTileCount =
+            (tileCount + c10::cuda::device_count() - 1) / c10::cuda::device_count();
+        const uint32_t deviceTileOffset = deviceTileCount * deviceId;
+        deviceTileCount                 = std::min(deviceTileCount, tileCount - deviceTileOffset);
 
-        if (deviceCameraCount) {
+        if (deviceTileCount) {
             RasterizeBackwardArgs<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED> args(
                 means2d,
                 conics,
@@ -1254,7 +1258,7 @@ callRasterizeBackwardPrivateUse1(
                 imageOriginW,
                 imageOriginH,
                 tileSize,
-                deviceCameraOffset,
+                deviceTileOffset,
                 tileOffsets,
                 tileGaussianIds,
                 reshapedRenderedAlphas,
@@ -1287,12 +1291,8 @@ callRasterizeBackwardPrivateUse1(
                          " bytes), try lowering tileSize.");
             }
 
-            const uint32_t tileExtentH = tileOffsets.size(1);
-            const uint32_t tileExtentW = tileOffsets.size(2);
-            const dim3 blockDim        = {tileSize, tileSize, 1};
-            const dim3 gridDim         = activeTiles.has_value() // sparse mode
-                                             ? dim3(activeTiles.value().size(0), 1, 1)
-                                             : dim3(deviceCameraCount, tileExtentH, tileExtentW);
+            const dim3 blockDim = {tileSize, tileSize, 1};
+            const dim3 gridDim  = {deviceTileCount, 1, 1};
 
             rasterizeGaussiansBackward<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED>
                 <<<gridDim, blockDim, sharedMemSize, stream>>>(args);

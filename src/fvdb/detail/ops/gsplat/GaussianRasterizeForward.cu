@@ -477,39 +477,39 @@ launchRasterizeForwardKernels(
     auto outAlphas   = fvdb::JaggedTensor(alphasToRenderVec);
     auto outLastIds  = fvdb::JaggedTensor(lastIdsToRenderVec);
 
-    auto isSparse = activeTiles.has_value();
+    auto isSparse      = activeTiles.has_value();
+    uint32_t tileCount = isSparse ? activeTiles.value().size(0) : C * tileExtentH * tileExtentW;
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
-        auto deviceCameraCount =
-            (tileOffsets.size(0) + c10::cuda::device_count() - 1) / c10::cuda::device_count();
-        const auto deviceCameraOffset = deviceCameraCount * deviceId;
-        deviceCameraCount = std::min(deviceCameraCount, tileOffsets.size(0) - deviceCameraOffset);
+        uint32_t deviceTileCount =
+            (tileCount + c10::cuda::device_count() - 1) / c10::cuda::device_count();
+        const uint32_t deviceTileOffset = deviceTileCount * deviceId;
+        deviceTileCount                 = std::min(deviceTileCount, tileCount - deviceTileOffset);
 
-        if (deviceCameraCount) {
-            auto args =
-                RasterizeForwardArgs<ScalarType, NUM_CHANNELS, IS_PACKED>(means2d,
-                                                                          conics,
-                                                                          opacities,
-                                                                          features,
-                                                                          backgrounds,
-                                                                          masks,
-                                                                          imageWidth,
-                                                                          imageHeight,
-                                                                          imageOriginW,
-                                                                          imageOriginH,
-                                                                          tileSize,
-                                                                          deviceCameraOffset,
-                                                                          tileOffsets,
-                                                                          tileGaussianIds,
-                                                                          outFeatures,
-                                                                          outAlphas,
-                                                                          outLastIds,
-                                                                          activeTiles,
-                                                                          tilePixelMask,
-                                                                          tilePixelCumsum,
-                                                                          pixelMap);
+        if (deviceTileCount) {
+            auto args = RasterizeForwardArgs<ScalarType, NUM_CHANNELS, IS_PACKED>(means2d,
+                                                                                  conics,
+                                                                                  opacities,
+                                                                                  features,
+                                                                                  backgrounds,
+                                                                                  masks,
+                                                                                  imageWidth,
+                                                                                  imageHeight,
+                                                                                  imageOriginW,
+                                                                                  imageOriginH,
+                                                                                  tileSize,
+                                                                                  deviceTileOffset,
+                                                                                  tileOffsets,
+                                                                                  tileGaussianIds,
+                                                                                  outFeatures,
+                                                                                  outAlphas,
+                                                                                  outLastIds,
+                                                                                  activeTiles,
+                                                                                  tilePixelMask,
+                                                                                  tilePixelCumsum,
+                                                                                  pixelMap);
 
             // Thread blocks cooperatively cache a tile of Gaussians in shared memory
             const uint32_t sharedMem = getSharedMemRequirements<ScalarType>(tileSize);
@@ -526,9 +526,7 @@ launchRasterizeForwardKernels(
             }
 
             const dim3 blockDim = {tileSize, tileSize, 1};
-            const dim3 gridDim  = activeTiles.has_value() // sparse mode
-                                      ? dim3(activeTiles.value().size(0), 1, 1)
-                                      : dim3(deviceCameraCount, tileExtentH, tileExtentW);
+            const dim3 gridDim  = {deviceTileCount, 1, 1};
 
             rasterizeGaussiansForward<<<gridDim, blockDim, sharedMem, stream>>>(args);
 
