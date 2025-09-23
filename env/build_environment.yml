@@ -38,3 +38,5 @@ dependencies:
   - sphinx>=7.0.0
   - tqdm
   - zlib
+platforms:
+  - linux-64

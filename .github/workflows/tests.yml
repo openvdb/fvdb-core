@@ -106,16 +106,16 @@ jobs:
           git merge --no-ff $CURRENT_COMMIT --message "CI: Simulating merge of $CURRENT_COMMIT into $TARGET_BRANCH"
 
       - name: Set up fvdb_build Conda env
-        uses: conda-incubator/setup-miniconda@v3
+        uses: mamba-org/setup-micromamba@v2
         with:
-          miniforge-version: latest
-          conda-remove-defaults: "true"
-          activate-environment: fvdb_build
+          post-cleanup: 'all'
+          environment-name: fvdb_build
           environment-file: env/build_environment.yml
 
       - name: Buid fvdb
         run: |
-          conda run --no-capture-output -n fvdb_build ./build.sh wheel verbose gtests benchmarks --cuda-arch-list '8.9+PTX'
+          micromamba activate fvdb_build
+          ./build.sh wheel verbose gtests benchmarks --cuda-arch-list '8.9+PTX'
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
@@ -135,13 +135,6 @@ jobs:
             name: fvdb-gtest
             path: fvdb-gtest.tar
             retention-days: 2
-
-      - name: Cleanup
-        if: always()
-        run: |
-          echo "Cleaning up /__w/_temp directory"
-          sudo rm -rf /__w/_temp/*
-          echo "Cleanup completed"
 
   fvdb-build-stop-runner:
     name: Stop CPU-only EC2 runner for build
@@ -211,11 +204,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Set up fvdb_test Conda env
-        uses: conda-incubator/setup-miniconda@v3
+        uses: mamba-org/setup-micromamba@v2
         with:
-          miniforge-version: latest
-          conda-remove-defaults: "true"
-          activate-environment: fvdb_test
+          cache-environment: true
+          post-cleanup: 'all'
+          environment-name: fvdb_test
           environment-file: env/test_environment.yml
 
       - name: Download package with nanovdb_editor
@@ -241,16 +234,9 @@ jobs:
 
       - name: Run tests
         run: |
-            conda activate fvdb_test
+            micromamba activate fvdb_test
             export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CONDA_PREFIX/lib
             ./build.sh ctest
-
-      - name: Cleanup
-        if: always()
-        run: |
-          echo "Cleaning up /__w/_temp directory"
-          sudo rm -rf /__w/_temp/*
-          echo "Cleanup completed"
 
   ##############################################################################
   # RUN FVDB UNIT TESTS
@@ -271,11 +257,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Set up fvdb_test Conda env
-        uses: conda-incubator/setup-miniconda@v3
+        uses: mamba-org/setup-micromamba@v2
         with:
-          miniforge-version: latest
-          conda-remove-defaults: "true"
-          activate-environment: fvdb_test
+          cache-environment: true
+          post-cleanup: 'all'
+          environment-name: fvdb_test
           environment-file: env/test_environment.yml
 
       - name: Download package
@@ -286,7 +272,7 @@ jobs:
 
       - name: Install package
         run: |
-            conda activate fvdb_test
+            micromamba activate fvdb_test
             pip install ./dist/*.whl
 
       - name: Run tests
@@ -294,13 +280,6 @@ jobs:
             conda activate fvdb_test
             cd tests;
             pytest -v unit
-
-      - name: Cleanup
-        if: always()
-        run: |
-          echo "Cleaning up /__w/_temp directory"
-          sudo rm -rf /__w/_temp/*
-          echo "Cleanup completed"
 
   ##############################################################################
   # RUN FVDB DOCUMENTATION TESTS
@@ -320,11 +299,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Set up fvdb_test Conda env
-        uses: conda-incubator/setup-miniconda@v3
+        uses: mamba-org/setup-micromamba@v2
         with:
-          miniforge-version: latest
-          conda-remove-defaults: "true"
-          activate-environment: fvdb_test
+          cache-environment: true
+          post-cleanup: 'all'
+          environment-name: fvdb_test
           environment-file: env/test_environment.yml
 
       - name: Download package
@@ -335,20 +314,13 @@ jobs:
 
       - name: Install package
         run: |
-            conda activate fvdb_test
+            micromamba activate fvdb_test
             pip install ./dist/*.whl
 
       - name: Run tests
         run: |
             conda activate fvdb_test
             pytest --markdown-docs docs
-
-      - name: Cleanup
-        if: always()
-        run: |
-          echo "Cleaning up /__w/_temp directory"
-          sudo rm -rf /__w/_temp/*
-          echo "Cleanup completed"
 
   ##############################################################################
   # STOP FVDB TESTS GPU RUNNER

@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   test-python-black-lint:
-    name: Check Python code style with black
+    name: Python code style (black)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +28,7 @@ jobs:
           version: "~= 24.0"
 
   test-cpp-clang-format-lint:
-    name: Check C++ code style with clang-format
+    name: C++ code style (clang-format)
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -40,7 +40,7 @@ jobs:
         style: file
 
   include-guards:
-    name: Check include guards
+    name: Include guards
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -49,11 +49,10 @@ jobs:
         path: 'src/'
 
   check-spdx-identifiers:
-    name: Check SPDX identifiers
+    name: SPDX identifiers
     runs-on: ubuntu-latest
     steps:
-    - name: checkout
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
     - uses: enarx/spdx@master
       with:
         licenses: |-
@@ -62,6 +61,7 @@ jobs:
   # Search the git repository for any trailing spaces excluding auto-generated wlt files
   # NOTE: Migrated from openvdb whitespace.yml
   trailingspaces:
+    name: Trailing spaces
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -74,6 +74,7 @@ jobs:
   # Search for any tabs excluding meeting notes, image files and a few others
   # NOTE: Migrated from openvdb whitespace.yml
   spacesnottabs:
+    name: Spaces not tabs
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
