@@ -18,6 +18,7 @@ dependencies:
   - pandas
   - parameterized
   - pip
+  - pkg-config
   - polyscope
   - pybind11=2.13.6
   - pyrender

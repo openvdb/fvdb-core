@@ -28,6 +28,7 @@ dependencies:
   - ninja
   - numpy
   - openssl
+  - pkg-config
   - psutil
   - pybind11=2.13.6
   - python=3.12
