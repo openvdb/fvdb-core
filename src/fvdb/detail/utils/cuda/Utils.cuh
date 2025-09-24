@@ -10,12 +10,13 @@
 
 #include <c10/cuda/CUDAFunctions.h>
 
-inline std::tuple<size_t, size_t>
-deviceCountAndOffset(size_t count, c10::DeviceIndex deviceId) {
+template <typename index_t>
+inline std::tuple<index_t, index_t>
+deviceOffsetAndCount(index_t count, c10::DeviceIndex deviceId) {
     auto deviceCount        = (count + c10::cuda::device_count() - 1) / c10::cuda::device_count();
     const auto deviceOffset = deviceCount * deviceId;
     deviceCount             = std::min(deviceCount, count - deviceOffset);
-    return std::make_tuple(deviceCount, deviceOffset);
+    return std::make_tuple(deviceOffset, deviceCount);
 }
 
 #endif // FVDB_DETAIL_UTILS_CUDA_UTILS_CUH
