@@ -148,6 +148,8 @@ def dtype_to_atol(dtype: torch.dtype) -> float:
     raise TypeError("dtype must be a valid torch floating type")
 
 
+from .timer import ScopedTimer
+
 __all__ = [
     "set_testing_git_tag",
     "get_fvdb_test_data_path",
@@ -160,4 +162,5 @@ __all__ = [
     "generate_center_frame_point_at_depth",
     "dtype_to_atol",
     "expand_tests",
+    "ScopedTimer",
 ]
