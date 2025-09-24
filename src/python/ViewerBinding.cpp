@@ -41,10 +41,7 @@ bind_viewer(py::module &m) {
         .def_property("far",
                       &fvdb::detail::viewer::GaussianSplat3dView::getFar,
                       &fvdb::detail::viewer::GaussianSplat3dView::setFar,
-                      "The far clipping plane for this Gaussian scene.")
-        .def("__repr__", [](const fvdb::detail::viewer::GaussianSplat3dView &self) {
-            return "GaussianSplat3dView()";
-        });
+                      "The far clipping plane for this Gaussian scene.");
 
     py::class_<fvdb::detail::viewer::Viewer>(
         m, "Viewer", "A viewer for displaying 3D data including Gaussian splats")
@@ -54,67 +51,55 @@ bind_viewer(py::module &m) {
              py::arg("verbose"),
              "Create a new Viewer instance")
         .def(
-            "register_gaussian_splat_3d",
-            &fvdb::detail::viewer::Viewer::registerGaussianSplat3dView,
+            "add_gaussian_splat_3d",
+            &fvdb::detail::viewer::Viewer::addGaussianSplat3d,
             py::arg("name"),
-            py::arg("gaussian_scene"),
+            py::arg("gaussian_splat_3d"),
             py::return_value_policy::reference_internal, // preserve reference; tie lifetime to
                                                          // parent
             "Register a Gaussian splat 3D view with the viewer (accepts Python or C++ GaussianSplat3d)")
-        .def("start_server", &fvdb::detail::viewer::Viewer::startServer, "Start the viewer")
-        .def("stop_server", &fvdb::detail::viewer::Viewer::stopServer, "Stop the viewer")
 
-        .def_property(
-            "camera_lookat",
-            &fvdb::detail::viewer::Viewer::getCameraLookat,
-            [](fvdb::detail::viewer::Viewer &self, std::tuple<float, float, float> lookat) {
-                self.setCameraLookat(std::get<0>(lookat), std::get<1>(lookat), std::get<2>(lookat));
-            },
-            "The camera look-at point as a tuple (x, y, z)")
-        .def_property(
-            "camera_position",
-            &fvdb::detail::viewer::Viewer::getCameraPosition,
-            [](fvdb::detail::viewer::Viewer &self, std::tuple<float, float, float> pos) {
-                self.setCameraPosition(std::get<0>(pos), std::get<1>(pos), std::get<2>(pos));
-            },
-            "The camera position as a tuple (x, y, z)")
-        .def_property("camera_near",
-                      &fvdb::detail::viewer::Viewer::getCameraNear,
-                      &fvdb::detail::viewer::Viewer::setCameraNear,
-                      "The camera near clipping plane")
-        .def_property("camera_far",
-                      &fvdb::detail::viewer::Viewer::getCameraFar,
-                      &fvdb::detail::viewer::Viewer::setCameraFar,
-                      "The camera far clipping plane")
-        .def("camera_pose",
-             &fvdb::detail::viewer::Viewer::setCameraPose,
-             py::arg("camera_to_world_matrix"),
-             "Set the camera pose from a 4x4 matrix")
-        .def_property(
-            "camera_eye_direction",
-            &fvdb::detail::viewer::Viewer::getCameraEyeDirection,
-            [](fvdb::detail::viewer::Viewer &self, std::tuple<float, float, float> dir) {
-                self.setCameraEyeDirection(std::get<0>(dir), std::get<1>(dir), std::get<2>(dir));
-            },
-            "The camera eye direction vector")
-        .def_property(
-            "camera_eye_up",
-            &fvdb::detail::viewer::Viewer::getCameraEyeUp,
-            [](fvdb::detail::viewer::Viewer &self, std::tuple<float, float, float> up) {
-                self.setCameraEyeUp(std::get<0>(up), std::get<1>(up), std::get<2>(up));
-            },
-            "The camera eye up vector")
-        .def_property("camera_eye_distance_from_position",
-                      &fvdb::detail::viewer::Viewer::getCameraEyeDistanceFromPosition,
-                      &fvdb::detail::viewer::Viewer::setCameraEyeDistanceFromPosition,
-                      "The camera eye distance from position")
-        .def_property(
-            "camera_mode",
-            &fvdb::detail::viewer::Viewer::getCameraMode,
-            [](fvdb::detail::viewer::Viewer &self, fvdb::GaussianSplat3d::ProjectionType mode) {
-                self.setCameraMode(mode);
-            },
-            "The camera mode (perspective or orthographic)")
-        .def("__repr__",
-             [](const fvdb::detail::viewer::Viewer &self) { return "<fvdb.viz.Viewer>"; });
+        .def("camera_origin", &fvdb::detail::viewer::Viewer::cameraOrigin, "Get the camera origin")
+        .def("set_camera_origin",
+             &fvdb::detail::viewer::Viewer::setCameraOrigin,
+             py::arg("x"),
+             py::arg("y"),
+             py::arg("z"),
+             "Set the camera origin")
+
+        .def("camera_up_direction",
+             &fvdb::detail::viewer::Viewer::cameraUpDirection,
+             "Get the camera up vector")
+        .def("set_camera_up_direction",
+             &fvdb::detail::viewer::Viewer::setCameraUpDirection,
+             py::arg("ux"),
+             py::arg("uy"),
+             py::arg("uz"),
+             "Set the camera up vector")
+
+        .def("camera_view_direction",
+             &fvdb::detail::viewer::Viewer::cameraViewDirection,
+             "Get the camera view direction")
+        .def("set_camera_view_direction",
+             &fvdb::detail::viewer::Viewer::setCameraViewDirection,
+             py::arg("dx"),
+             py::arg("dy"),
+             py::arg("dz"),
+             "Set the camera view direction")
+
+        .def("camera_near",
+             &fvdb::detail::viewer::Viewer::cameraNear,
+             "Get the camera near clipping plane")
+        .def("set_camera_near",
+             &fvdb::detail::viewer::Viewer::setCameraNear,
+             py::arg("near"),
+             "Set the camera near clipping plane")
+
+        .def("camera_projection_type",
+             &fvdb::detail::viewer::Viewer::cameraProjectionType,
+             "The camera mode (perspective or orthographic)")
+        .def("set_camera_projection_type",
+             &fvdb::detail::viewer::Viewer::setCameraProjectionType,
+             py::arg("mode"),
+             "Set the camera mode (perspective or orthographic)");
 }

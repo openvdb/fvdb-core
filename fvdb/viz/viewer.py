@@ -3,6 +3,7 @@
 #
 from typing import Any
 
+import numpy as np
 import torch
 
 from .._Cpp import GaussianSplat3d as GaussianSplat3dCpp
@@ -110,7 +111,7 @@ class Viewer:
             GaussianSplat3dView: A view for the added Gaussian splat 3D scene.
         """
         gs_impl: GaussianSplat3dCpp = gaussian_splat_3d._impl
-        view: GaussianSplat3dViewCpp = self._impl.register_gaussian_splat_3d(name=name, gaussian_scene=gs_impl)
+        view: GaussianSplat3dViewCpp = self._impl.add_gaussian_splat_3d(name=name, gaussian_splat_3d=gs_impl)
         view.tile_size = tile_size
         view.min_radius_2d = min_radius_2d
         view.eps_2d = eps_2d
@@ -123,40 +124,103 @@ class Viewer:
         return GaussianSplat3dView(view, GaussianSplat3dView.__PRIVATE__)
 
     @property
-    def camera_lookat(self):
+    def camera_origin(self) -> torch.Tensor:
         """
-        Get the lookat direction of the camera. _i.e._ the direction the view axis of the camera is pointing towards.
-        """
-        return self._impl.camera_lookat
+        Return center of the camera in world coordinates.
 
-    @camera_lookat.setter
-    def camera_lookat(self, lookat: NumericMaxRank1):
-        lookat_vec3f = to_Vec3f(lookat).cpu().numpy().tolist()
-        self._impl.camera_lookat = lookat_vec3f
+        Returns:
+            torch.Tensor: A tensor of shape (3,) representing the camera position in world coordinates.
+        """
+        ox, oy, oz = self._impl.camera_origin()
+        return torch.tensor([ox, oy, oz], dtype=torch.float32)
+
+    @camera_origin.setter
+    def camera_origin(self, origin: NumericMaxRank1):
+        """
+        Set the center of the camera in world coordinates.
+
+        Args:
+            origin (NumericMaxRank1): A tensor-like object of shape (3,) representing the camera position in world coordinates.
+        """
+        origin_vec3f = to_Vec3f(origin).cpu().numpy().tolist()
+        self._impl.set_camera_origin(*origin_vec3f)
 
     @property
-    def camera_position(self):
-        return self._impl.camera_position
+    def camera_up_direction(self) -> torch.Tensor:
+        """
+        Return the up vector of the camera. _i.e._ the direction that is considered 'up' in the camera's view.
 
-    @camera_position.setter
-    def camera_position(self, position: NumericMaxRank1):
-        position_vec3f = to_Vec3f(position).cpu().numpy().tolist()
-        self._impl.camera_position = position_vec3f
+        Returns:
+            torch.Tensor: A tensor of shape (3,) representing the up vector of the camera.
+        """
+        ux, uy, uz = self._impl.camera_up_direction()
+        return torch.tensor([ux, uy, uz], dtype=torch.float32)
 
-    @property
-    def camera_up(self):
-        return self._impl.camera_eye_up
+    @camera_up_direction.setter
+    def camera_up_direction(self, up: NumericMaxRank1):
+        """
+        Set the up vector of the camera. _i.e._ the direction that is considered 'up' in the camera's view.
 
-    @camera_up.setter
-    def camera_up(self, up: NumericMaxRank1):
+        Args:
+            up (NumericMaxRank1): A tensor-like object of shape (3,) representing the up vector of the camera.
+        """
         up_vec3f = to_Vec3f(up).cpu().numpy().tolist()
-        self._impl.camera_eye_up = up_vec3f
+        self._impl.set_camera_up_direction(*up_vec3f)
 
     @property
-    def camera_to_world_matrix(self) -> torch.Tensor:
-        return self._impl.camera_pose
+    def camera_view_direction(self) -> torch.Tensor:
+        """
+        Return the view direction of the camera.
 
-    @camera_to_world_matrix.setter
-    def camera_to_world_matrix(self, camera_to_world_matrix: NumericMaxRank2):
-        camera_to_world_matrix_mat44 = to_Mat44f(camera_to_world_matrix).cpu()
-        self._impl.camera_pose = camera_to_world_matrix_mat44
+        Returns:
+            torch.Tensor: A tensor of shape (3,) representing the view direction of the camera.
+        """
+        dx, dy, dz = self._impl.camera_view_direction()
+        return torch.tensor([dx, dy, dz], dtype=torch.float32)
+
+    @camera_view_direction.setter
+    def camera_view_direction(self, direction: NumericMaxRank1):
+        """
+        Set the view direction of the camera.
+
+        Args:
+            direction (NumericMaxRank1): A tensor-like object of shape (3,) representing the view direction of the camera.
+        """
+        dir_vec3f = to_Vec3f(direction).cpu().numpy().tolist()
+        self._impl.set_camera_view_direction(*dir_vec3f)
+
+    def set_camera_lookat(
+        self,
+        camera_origin: NumericMaxRank1,
+        lookat_point: NumericMaxRank1,
+        up_direction: NumericMaxRank1 = [0.0, 1.0, 0.0],
+    ):
+        """
+        Set the camera pose from a camera origin, a lookat point, and an up direction.
+
+        Args:
+            camera_origin (NumericMaxRank1): A tensor-like object of shape (3,) representing the camera position in world coordinates.
+            lookat_point (NumericMaxRank1): A tensor-like object of shape (3,) representing the point the camera is looking at.
+            up_direction (NumericMaxRank1): A tensor-like object of shape (3,) representing the up direction of the camera.
+        """
+        camera_origin_vec3f = to_Vec3f(camera_origin).cpu().numpy()
+        lookat_point_vec3f = to_Vec3f(lookat_point).cpu().numpy()
+        up_direction_vec3f = to_Vec3f(up_direction).cpu().numpy()
+        view_direction = lookat_point_vec3f - camera_origin_vec3f
+        if np.linalg.norm(view_direction) < 1e-6:
+            raise ValueError("Camera origin and lookat point cannot be the same.")
+        if np.linalg.norm(up_direction_vec3f) < 1e-6:
+            raise ValueError("Up direction cannot be a zero vector.")
+
+        view_direction /= np.linalg.norm(view_direction)
+        up_direction_vec3f /= np.linalg.norm(up_direction_vec3f)
+        right_direction = np.cross(view_direction, up_direction_vec3f)
+        if np.linalg.norm(right_direction) < 1e-6:
+            raise ValueError("Up direction cannot be parallel to the view direction.")
+        right_direction /= np.linalg.norm(right_direction)
+        up_direction_vec3f = np.cross(right_direction, view_direction)
+        up_direction_vec3f /= np.linalg.norm(up_direction_vec3f)
+
+        self._impl.set_camera_origin(*camera_origin_vec3f)
+        self._impl.set_camera_view_direction(*view_direction)
+        self._impl.set_camera_up_direction(*up_direction_vec3f)

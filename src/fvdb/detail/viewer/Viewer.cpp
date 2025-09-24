@@ -103,7 +103,7 @@ Viewer::~Viewer() {
 }
 
 fvdb::detail::viewer::GaussianSplat3dView &
-Viewer::registerGaussianSplat3dView(const std::string &name, const GaussianSplat3d &splats) {
+Viewer::addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splats) {
     auto [it, inserted] = mSplat3dViews.emplace(std::piecewise_construct,
                                                 std::forward_as_tuple(name),
                                                 std::forward_as_tuple(name, splats, *this));
@@ -201,8 +201,14 @@ Viewer::stopServer() {
     }
 }
 
+std::tuple<float, float, float>
+Viewer::cameraOrigin() const {
+    return std::make_tuple(mEditor.camera.state.position.x,
+                           mEditor.camera.state.position.y,
+                           mEditor.camera.state.position.z);
+}
 void
-Viewer::setCameraPosition(float x, float y, float z) {
+Viewer::setCameraOrigin(float x, float y, float z) {
     mEditor.camera.state.position.x = x;
     mEditor.camera.state.position.y = y;
     mEditor.camera.state.position.z = z;
@@ -210,85 +216,13 @@ Viewer::setCameraPosition(float x, float y, float z) {
 }
 
 std::tuple<float, float, float>
-Viewer::getCameraPosition() {
-    return std::make_tuple(mEditor.camera.state.position.x,
-                           mEditor.camera.state.position.y,
-                           mEditor.camera.state.position.z);
+Viewer::cameraViewDirection() const {
+    return std::make_tuple(mEditor.camera.state.eye_direction.x,
+                           mEditor.camera.state.eye_direction.y,
+                           mEditor.camera.state.eye_direction.z);
 }
-
 void
-Viewer::setCameraLookat(float x, float y, float z) {
-    pnanovdb_vec3_t lookat    = {x, y, z};
-    pnanovdb_vec3_t direction = {lookat.x - mEditor.camera.state.position.x,
-                                 lookat.y - mEditor.camera.state.position.y,
-                                 lookat.z - mEditor.camera.state.position.z};
-    float length =
-        sqrt(direction.x * direction.x + direction.y * direction.y + direction.z * direction.z);
-    if (length > 0.0f) {
-        mEditor.camera.state.eye_direction.x = direction.x / length;
-        mEditor.camera.state.eye_direction.y = direction.y / length;
-        mEditor.camera.state.eye_direction.z = direction.z / length;
-    }
-    updateCamera();
-}
-
-std::tuple<float, float, float>
-Viewer::getCameraLookat() {
-    float lookat_x = mEditor.camera.state.position.x + mEditor.camera.state.eye_direction.x;
-    float lookat_y = mEditor.camera.state.position.y + mEditor.camera.state.eye_direction.y;
-    float lookat_z = mEditor.camera.state.position.z + mEditor.camera.state.eye_direction.z;
-
-    return std::make_tuple(lookat_x, lookat_y, lookat_z);
-}
-
-void
-Viewer::setCameraNear(float near) {
-    mEditor.camera.config.near_plane = near;
-    updateCamera();
-}
-
-float
-Viewer::getCameraNear() {
-    return mEditor.camera.config.near_plane;
-}
-
-void
-Viewer::setCameraFar(float far) {
-    mEditor.camera.config.far_plane = far;
-    updateCamera();
-}
-
-float
-Viewer::getCameraFar() {
-    return mEditor.camera.config.far_plane;
-}
-
-void
-Viewer::setCameraPose(torch::Tensor cameraToWorldMatrix) {
-    TORCH_CHECK(cameraToWorldMatrix.dim() == 2, "Camera matrix must be 2D");
-    TORCH_CHECK(cameraToWorldMatrix.size(0) == 4 && cameraToWorldMatrix.size(1) == 4,
-                "Camera matrix must be 4x4");
-
-    // position from last column
-    mEditor.camera.state.position.x = cameraToWorldMatrix[0][3].item<float>();
-    mEditor.camera.state.position.y = cameraToWorldMatrix[1][3].item<float>();
-    mEditor.camera.state.position.z = cameraToWorldMatrix[2][3].item<float>();
-
-    // forward direction from negative Z axis
-    mEditor.camera.state.eye_direction.x = -cameraToWorldMatrix[0][2].item<float>();
-    mEditor.camera.state.eye_direction.y = -cameraToWorldMatrix[1][2].item<float>();
-    mEditor.camera.state.eye_direction.z = -cameraToWorldMatrix[2][2].item<float>();
-
-    // up direction from Y axis
-    mEditor.camera.state.eye_up.x = cameraToWorldMatrix[0][1].item<float>();
-    mEditor.camera.state.eye_up.y = cameraToWorldMatrix[1][1].item<float>();
-    mEditor.camera.state.eye_up.z = cameraToWorldMatrix[2][1].item<float>();
-
-    updateCamera();
-}
-
-void
-Viewer::setCameraEyeDirection(float x, float y, float z) {
+Viewer::setCameraViewDirection(float x, float y, float z) {
     mEditor.camera.state.eye_direction.x = x;
     mEditor.camera.state.eye_direction.y = y;
     mEditor.camera.state.eye_direction.z = z;
@@ -296,51 +230,51 @@ Viewer::setCameraEyeDirection(float x, float y, float z) {
 }
 
 std::tuple<float, float, float>
-Viewer::getCameraEyeDirection() {
-    return std::make_tuple(mEditor.camera.state.eye_direction.x,
-                           mEditor.camera.state.eye_direction.y,
-                           mEditor.camera.state.eye_direction.z);
+Viewer::cameraUpDirection() const {
+    return std::make_tuple(mEditor.camera.state.eye_up.x,
+                           mEditor.camera.state.eye_up.y,
+                           mEditor.camera.state.eye_up.z);
 }
-
 void
-Viewer::setCameraEyeUp(float x, float y, float z) {
+Viewer::setCameraUpDirection(float x, float y, float z) {
     mEditor.camera.state.eye_up.x = x;
     mEditor.camera.state.eye_up.y = y;
     mEditor.camera.state.eye_up.z = z;
     updateCamera();
 }
 
-std::tuple<float, float, float>
-Viewer::getCameraEyeUp() {
-    return std::make_tuple(mEditor.camera.state.eye_up.x,
-                           mEditor.camera.state.eye_up.y,
-                           mEditor.camera.state.eye_up.z);
+float
+Viewer::cameraNear() const {
+    return mEditor.camera.config.near_plane;
 }
-
 void
-Viewer::setCameraEyeDistanceFromPosition(float distance) {
-    mEditor.camera.state.eye_distance_from_position = distance;
+Viewer::setCameraNear(float near) {
+    mEditor.camera.config.near_plane = near;
     updateCamera();
 }
 
 float
-Viewer::getCameraEyeDistanceFromPosition() {
-    return mEditor.camera.state.eye_distance_from_position;
+Viewer::cameraFar() const {
+    return mEditor.camera.config.far_plane;
+}
+void
+Viewer::setCameraFar(float far) {
+    mEditor.camera.config.far_plane = far;
+    updateCamera();
 }
 
+GaussianSplat3d::ProjectionType
+Viewer::cameraProjectionType() const {
+    return mEditor.camera.config.is_orthographic ? GaussianSplat3d::ProjectionType::ORTHOGRAPHIC
+                                                 : GaussianSplat3d::ProjectionType::PERSPECTIVE;
+}
 void
-Viewer::setCameraMode(GaussianSplat3d::ProjectionType mode) {
+Viewer::setCameraProjectionType(GaussianSplat3d::ProjectionType mode) {
     mEditor.camera.config.is_orthographic =
         (mode == GaussianSplat3d::ProjectionType::ORTHOGRAPHIC) ? PNANOVDB_TRUE : PNANOVDB_FALSE;
     mEditor.camera.config.is_projection_rh = ~mEditor.camera.config.is_orthographic;
 
     updateCamera();
-}
-
-GaussianSplat3d::ProjectionType
-Viewer::getCameraMode() {
-    return mEditor.camera.config.is_orthographic ? GaussianSplat3d::ProjectionType::ORTHOGRAPHIC
-                                                 : GaussianSplat3d::ProjectionType::PERSPECTIVE;
 }
 
 } // namespace fvdb::detail::viewer
