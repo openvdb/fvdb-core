@@ -1,13 +1,15 @@
 # *ƒ*(VDB)
 
 
-This repository contains the code for *f*VDB, a data structure for encoding and operating on *sparse voxel hierarchies* of features in PyTorch. A sparse voxel hierarchy is a coarse-to-fine hierarchy of sparse voxel grids such that every fine voxel is contained within some coarse voxel. The image below illustrates an example. *f*VDB supports using PyTorch Tensors to represent features at the corners and centers of voxels in a hierarchy and enables a number of differentiable operations on these Tensors (*e.g.* trilinear interpolation, convolution, splatting, ray tracing).
+This repository contains the code for *f*VDB, a framework for encoding and operating on *sparse voxel hierarchies* of features in PyTorch. A sparse voxel hierarchy is a coarse-to-fine hierarchy of sparse voxel grids such that every fine voxel is contained within some coarse voxel. The image below illustrates an example. *f*VDB supports using PyTorch Tensors to represent features at the corners and centers of voxels in a hierarchy and enables a number of differentiable operations on these Tensors (*e.g.* trilinear interpolation, convolution, splatting, ray tracing).
 
 <p align="center">
   <img src="docs/imgs/fvdb_teaser.png" style="width: 40%;"alt="fVDB Teaser">
   <!-- <img src="docs/imgs/readme/av_screenshot.png" style="width: 100%;"alt="fVDB Teaser"> -->
   <figcaption style="text-align: center; font-style: italic;">An example of a sparse voxel hierarchy with 3 levels. Each fine voxel is contained within exactly one coarse voxel.</figcaption>
 </p>
+
+*f*VDB was initially internally developed by the NVIDIA High-Fidelity Physics Research Group (a part of the NVIDIA Spatial Intelligence Lab) to suit the growing needs for a robust framework for their spatial intelligence research.  Please review [the paper](https://research.nvidia.com/labs/prl/publication/williams2024fvdb/) for more details and kindly consider [citing it in your work](#references) if you find it useful.
 
 ## Learning to Use *f*VDB
 
@@ -230,14 +232,21 @@ Please consider citing this when using *f*VDB in a project. You can use the cita
 
 ```bibtex
 @article{williams2024fvdb,
-  title={fVDB: A Deep-Learning Framework for Sparse, Large-Scale, and High-Performance Spatial Intelligence},
-  author={Williams, Francis and Huang, Jiahui and Swartz, Jonathan and Klar, Gergely and Thakkar, Vijay and Cong, Matthew and Ren, Xuanchi and Li, Ruilong and Fuji-Tsang, Clement and Fidler, Sanja and Sifakis, Eftychios and Museth, Ken},
-  journal={ACM Transactions on Graphics (TOG)},
-  volume={43},
-  number={4},
-  pages={133:1--133:15},
-  year={2024},
-  publisher={ACM New York, NY, USA}
+  author = {Williams, Francis and Huang, Jiahui and Swartz, Jonathan and Klar, Gergely and Thakkar, Vijay and Cong, Matthew and Ren, Xuanchi and Li, Ruilong and Fuji-Tsang, Clement and Fidler, Sanja and Sifakis, Eftychios and Museth, Ken},
+  title = {fVDB : A Deep-Learning Framework for Sparse, Large Scale, and High Performance Spatial Intelligence},
+  year = {2024},
+  issue_date = {July 2024},
+  publisher = {Association for Computing Machinery},
+  address = {New York, NY, USA},
+  volume = {43},
+  number = {4},
+  issn = {0730-0301},
+  url = {https://doi.org/10.1145/3658226},
+  doi = {10.1145/3658226},
+  journal = {ACM Trans. Graph.},
+  month = jul,
+  articleno = {133},
+  numpages = {15},
 }
 ```
 
