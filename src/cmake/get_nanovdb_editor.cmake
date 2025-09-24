@@ -7,7 +7,7 @@
 #       ./build.sh install -C cmake.define.NANOVDB_EDITOR_FORCE=ON
 #   * To skip nanovdb_editor wheel build:
 #       ./build.sh install -C cmake.define.NANOVDB_EDITOR_SKIP=ON
-#   IMPORTANT: variables are cached by cmake, so set them OFF to disable if not doing clean build
+# IMPORTANT: configs are cached by cmake, so set them OFF to disable if not doing clean build
 
 CPMAddPackage(
     NAME nanovdb_editor
@@ -75,16 +75,15 @@ print(version, end='')
     message(STATUS "Building nanovdb_editor wheel version ${NANOVDB_EDITOR_WHEEL_VERSION} to ${NANOVDB_EDITOR_WHEEL_DIR}...")
     execute_process(
         COMMAND bash -lc "
-        ${Python3_EXECUTABLE} -m pip wheel ${nanovdb_editor_SOURCE_DIR}/pymodule \
+        python -m pip wheel ${nanovdb_editor_SOURCE_DIR}/pymodule \
             --wheel-dir ${NANOVDB_EDITOR_WHEEL_DIR} \
             -Cbuild-dir=${nanovdb_editor_BINARY_DIR} \
             -Cbuild.verbose=false \
             -Clogging.level=WARNING \
             -Ccmake.define.NANOVDB_EDITOR_USE_GLFW=OFF \
             -Ccmake.define.NANOVDB_EDITOR_BUILD_TESTS=OFF \
-            -v \
-            --no-build-isolation
-        ${Python3_EXECUTABLE} -m pip install --force-reinstall ${NANOVDB_EDITOR_WHEEL_DIR}/nanovdb_editor*.whl
+            -v
+        python -m pip install --force-reinstall ${NANOVDB_EDITOR_WHEEL_DIR}/nanovdb_editor*.whl
         "
         WORKING_DIRECTORY ${nanovdb_editor_BINARY_DIR}
         RESULT_VARIABLE build_result
