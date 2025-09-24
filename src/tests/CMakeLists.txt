@@ -147,5 +147,5 @@ ConfigureTest(GaussianProjectionBackwardTest "GaussianProjectionBackwardTest.cpp
 ConfigureTest(GaussianRasterizeTopContributorsTest "GaussianRasterizeTopContributorsTest.cpp")
 
 if(NOT NANOVDB_EDITOR_SKIP)
-  //ConfigureTest(ViewerTest "ViewerTest.cpp")
+  #ConfigureTest(ViewerTest "ViewerTest.cpp")
 endif()
