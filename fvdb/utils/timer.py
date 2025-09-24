@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time
+from typing import Any
 
 import torch
 
@@ -48,23 +49,42 @@ class ScopedTimer:
         self.elapsed_time: float | None = None
         self._last_split_time: float | None = None
         self.message: str = message
+        # CUDA event-based timing (created/used only when cuda=True)
+        self._start_event: Any | None = None
+        self._last_split_event: Any | None = None
 
     def __enter__(self):
         """Enter the context manager and start timing."""
         if self.cuda:
-            torch.cuda.synchronize()
-        self.start_time = time.perf_counter()
-        self._last_split_time = self.start_time
+            # Record a CUDA event on the current stream to mark the start.
+            start_event = torch.cuda.Event(enable_timing=True)
+            start_event.record(torch.cuda.current_stream())
+            self._start_event = start_event
+            self._last_split_event = start_event
+            # Also initialize CPU timer for non-CUDA fallback paths if needed
+            self.start_time = None
+            self._last_split_time = None
+        else:
+            self.start_time = time.perf_counter()
+            self._last_split_time = self.start_time
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Exit the context manager and calculate elapsed time."""
         if self.cuda:
-            torch.cuda.synchronize()
-        self.end_time = time.perf_counter()
-        assert isinstance(self.start_time, float)
-        self.elapsed_time = self.end_time - self.start_time
-        if self.message != "":
+            # Record an end event and measure elapsed time using CUDA timing
+            assert self._start_event is not None
+            end_event = torch.cuda.Event(enable_timing=True)
+            end_event.record(torch.cuda.current_stream())
+            # Ensure end event has completed without a device-wide sync
+            end_event.synchronize()
+            self.elapsed_time = self._start_event.elapsed_time(end_event) / 1000.0
+            self.end_time = None
+        else:
+            self.end_time = time.perf_counter()
+            assert isinstance(self.start_time, float)
+            self.elapsed_time = self.end_time - self.start_time
+        if self.message != "" and isinstance(self.elapsed_time, float):
             print(f"{self.message}: {self.elapsed_time:.4f} seconds")
 
     def split(self) -> float:
@@ -75,12 +95,19 @@ class ScopedTimer:
             float: Time elapsed since last split in seconds.
         """
         if self.cuda:
-            torch.cuda.synchronize()
-        current_time = time.perf_counter()
-
-        if self._last_split_time is None:
-            raise RuntimeError("ScopedTimer must be used within a 'with' block before calling split()")
-
-        split_time = current_time - self._last_split_time
-        self._last_split_time = current_time
-        return split_time
+            # Measure time since last split using CUDA events
+            if self._last_split_event is None:
+                raise RuntimeError("ScopedTimer must be used within a 'with' block before calling split()")
+            current_event = torch.cuda.Event(enable_timing=True)
+            current_event.record(torch.cuda.current_stream())
+            current_event.synchronize()
+            split_ms = self._last_split_event.elapsed_time(current_event)
+            self._last_split_event = current_event
+            return split_ms / 1000.0
+        else:
+            current_time = time.perf_counter()
+            if self._last_split_time is None:
+                raise RuntimeError("ScopedTimer must be used within a 'with' block before calling split()")
+            split_time = current_time - self._last_split_time
+            self._last_split_time = current_time
+            return split_time
