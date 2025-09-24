@@ -9,7 +9,7 @@ This repository contains the code for *f*VDB, a framework for encoding and opera
   <figcaption style="text-align: center; font-style: italic;">An example of a sparse voxel hierarchy with 3 levels. Each fine voxel is contained within exactly one coarse voxel.</figcaption>
 </p>
 
-*f*VDB was initially internally developed by the NVIDIA High-Fidelity Physics Research Group (a part of the NVIDIA Spatial Intelligence Lab) to suit the growing needs for a robust framework for their spatial intelligence research.  Please review [the paper](https://research.nvidia.com/labs/prl/publication/williams2024fvdb/) for more details and kindly consider [citing it in your work](#references) if you find it useful.
+*f*VDB was first developed by the [NVIDIA High-Fidelity Physics Research Group](https://research.nvidia.com/labs/prl/) (a part of the NVIDIA Spatial Intelligence Lab) and continues to be developed with the OpenVDB community to suit the growing needs for a robust framework for spatial intelligence research and applications.  Please review [the paper](https://research.nvidia.com/labs/prl/publication/williams2024fvdb/) for more details and kindly consider [citing it in your work](#references) if you find it useful.
 
 ## Learning to Use *f*VDB
 
