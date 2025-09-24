@@ -100,9 +100,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     bind_grid_batch(m);
     bind_jagged_tensor(m);
     bind_gaussian_splat3d(m);
-
-    py::module viz = m.def_submodule("viz", "Visualization bindings");
-    bind_viewer(viz);
+    bind_viewer(m);
 
     //
     // Utility functions

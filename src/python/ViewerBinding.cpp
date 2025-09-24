@@ -49,18 +49,13 @@ bind_viewer(py::module &m) {
     py::class_<fvdb::detail::viewer::Viewer>(
         m, "Viewer", "A viewer for displaying 3D data including Gaussian splats")
         .def(py::init<const std::string &, const int, const bool>(),
-             py::arg("ip_address") = "127.0.0.1",
-             py::arg("port")       = 8080,
-             py::arg("verbose")    = false,
+             py::arg("ip_address"),
+             py::arg("port"),
+             py::arg("verbose"),
              "Create a new Viewer instance")
         .def(
             "register_gaussian_splat_3d",
-            [](fvdb::detail::viewer::Viewer &self,
-               const std::string &name,
-               py::object py_splat) -> decltype(auto) {
-                auto cpp_splat = py_splat.attr("_impl").cast<fvdb::GaussianSplat3d>();
-                return self.registerGaussianSplat3dView(name, cpp_splat);
-            },
+            &fvdb::detail::viewer::Viewer::registerGaussianSplat3dView,
             py::arg("name"),
             py::arg("gaussian_scene"),
             py::return_value_policy::reference_internal, // preserve reference; tie lifetime to
@@ -68,13 +63,7 @@ bind_viewer(py::module &m) {
             "Register a Gaussian splat 3D view with the viewer (accepts Python or C++ GaussianSplat3d)")
         .def("start_server", &fvdb::detail::viewer::Viewer::startServer, "Start the viewer")
         .def("stop_server", &fvdb::detail::viewer::Viewer::stopServer, "Stop the viewer")
-        .def_property(
-            "camera_position",
-            &fvdb::detail::viewer::Viewer::getCameraPosition,
-            [](fvdb::detail::viewer::Viewer &self, std::tuple<float, float, float> pos) {
-                self.setCameraPosition(std::get<0>(pos), std::get<1>(pos), std::get<2>(pos));
-            },
-            "The camera position as a tuple (x, y, z)")
+
         .def_property(
             "camera_lookat",
             &fvdb::detail::viewer::Viewer::getCameraLookat,
