@@ -206,7 +206,7 @@ jobs:
       - name: Set up fvdb_test Conda env
         uses: mamba-org/setup-micromamba@v2
         with:
-          cache-environment: true
+          cache-environment: false
           post-cleanup: 'all'
           environment-name: fvdb_test
           environment-file: env/test_environment.yml
@@ -219,7 +219,7 @@ jobs:
 
       - name: Install nanovdb_editor
         run: |
-            conda activate fvdb_test
+            micromamba activate fvdb_test
             pip install ./dist/nanovdb_editor*.whl
 
       - name: Download gtests
@@ -259,7 +259,7 @@ jobs:
       - name: Set up fvdb_test Conda env
         uses: mamba-org/setup-micromamba@v2
         with:
-          cache-environment: true
+          cache-environment: false
           post-cleanup: 'all'
           environment-name: fvdb_test
           environment-file: env/test_environment.yml
@@ -277,7 +277,7 @@ jobs:
 
       - name: Run tests
         run: |
-            conda activate fvdb_test
+            micromamba activate fvdb_test
             cd tests;
             pytest -v unit
 
@@ -301,7 +301,7 @@ jobs:
       - name: Set up fvdb_test Conda env
         uses: mamba-org/setup-micromamba@v2
         with:
-          cache-environment: true
+          cache-environment: false
           post-cleanup: 'all'
           environment-name: fvdb_test
           environment-file: env/test_environment.yml
@@ -319,7 +319,7 @@ jobs:
 
       - name: Run tests
         run: |
-            conda activate fvdb_test
+            micromamba activate fvdb_test
             pytest --markdown-docs docs
 
   ##############################################################################
