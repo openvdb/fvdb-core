@@ -302,15 +302,14 @@ saveGaussianPly(const std::string &filename,
                 std::optional<std::unordered_map<std::string, PlyMetadataTypes>> trainingMetadata) {
     using namespace tinyply;
 
-    const fvdb::JaggedTensor validMask =
-        FVDB_DISPATCH_KERNEL(gaussians.means().device(), [&]() {
-            return detail::ops::dispatchGaussianNanInfMask<DeviceTag>(gaussians.means(),
-                                                                      gaussians.quats(),
-                                                                      gaussians.logScales(),
-                                                                      gaussians.logitOpacities(),
-                                                                      gaussians.sh0(),
-                                                                      gaussians.shN());
-        });
+    const fvdb::JaggedTensor validMask = FVDB_DISPATCH_KERNEL(gaussians.means().device(), [&]() {
+        return detail::ops::dispatchGaussianNanInfMask<DeviceTag>(gaussians.means(),
+                                                                  gaussians.quats(),
+                                                                  gaussians.logScales(),
+                                                                  gaussians.logitOpacities(),
+                                                                  gaussians.sh0(),
+                                                                  gaussians.shN());
+    });
 
     std::filebuf fb;
     fb.open(filename, std::ios::out | std::ios::binary);
