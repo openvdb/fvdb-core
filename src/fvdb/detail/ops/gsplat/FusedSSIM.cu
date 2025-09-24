@@ -536,10 +536,10 @@ fusedSSIMBackwardCUDA(double C1,
                       double C2,
                       const torch::Tensor &img1,
                       const torch::Tensor &img2,
-                      torch::Tensor &dL_dmap,
-                      torch::Tensor &dm_dmu1,
-                      torch::Tensor &dm_dsigma1_sq,
-                      torch::Tensor &dm_dsigma12) {
+                      const torch::Tensor &dL_dmap,
+                      const torch::Tensor &dm_dmu1,
+                      const torch::Tensor &dm_dsigma1_sq,
+                      const torch::Tensor &dm_dsigma12) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(img1));
     const auto stream = at::cuda::getCurrentCUDAStream(img1.device().index());
     int B             = img1.size(0);
@@ -567,11 +567,11 @@ fusedSSIMBackwardCUDA(double C1,
         static_cast<float>(C2),
         img1.contiguous().const_data_ptr<float>(),
         img2.contiguous().const_data_ptr<float>(),
-        dL_dmap.contiguous().data_ptr<float>(),
+        dL_dmap.contiguous().const_data_ptr<float>(),
         dL_dimg1.data_ptr<float>(),
-        dm_dmu1.contiguous().data_ptr<float>(),
-        dm_dsigma1_sq.contiguous().data_ptr<float>(),
-        dm_dsigma12.contiguous().data_ptr<float>());
+        dm_dmu1.contiguous().const_data_ptr<float>(),
+        dm_dsigma1_sq.contiguous().const_data_ptr<float>(),
+        dm_dsigma12.contiguous().const_data_ptr<float>());
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
     return dL_dimg1;
@@ -657,10 +657,10 @@ fusedSSIMBackwardPrivateUse1(double C1,
                              double C2,
                              const torch::Tensor &img1,
                              const torch::Tensor &img2,
-                             torch::Tensor &dL_dmap,
-                             torch::Tensor &dm_dmu1,
-                             torch::Tensor &dm_dsigma1_sq,
-                             torch::Tensor &dm_dsigma12) {
+                             const torch::Tensor &dL_dmap,
+                             const torch::Tensor &dm_dmu1,
+                             const torch::Tensor &dm_dsigma1_sq,
+                             const torch::Tensor &dm_dsigma12) {
     int B  = img1.size(0);
     int CH = img1.size(1);
     int H  = img1.size(2);
@@ -696,20 +696,21 @@ fusedSSIMBackwardPrivateUse1(double C1,
             dim3 grid(localBlockCount);
             dim3 block(BLOCK_X, BLOCK_Y);
 
-            fusedSSIMBackwardKernel<<<grid, block, 0, stream>>>(localBlockOffset,
-                                                                B,
-                                                                H,
-                                                                W,
-                                                                CH,
-                                                                static_cast<float>(C1),
-                                                                static_cast<float>(C2),
-                                                                img1_.const_data_ptr<float>(),
-                                                                img2_.const_data_ptr<float>(),
-                                                                dL_dmap_.data_ptr<float>(),
-                                                                dL_dimg1.data_ptr<float>(),
-                                                                dm_dmu1_.data_ptr<float>(),
-                                                                dm_dsigma1_sq_.data_ptr<float>(),
-                                                                dm_dsigma12_.data_ptr<float>());
+            fusedSSIMBackwardKernel<<<grid, block, 0, stream>>>(
+                localBlockOffset,
+                B,
+                H,
+                W,
+                CH,
+                static_cast<float>(C1),
+                static_cast<float>(C2),
+                img1_.const_data_ptr<float>(),
+                img2_.const_data_ptr<float>(),
+                dL_dmap_.const_data_ptr<float>(),
+                dL_dimg1.data_ptr<float>(),
+                dm_dmu1_.const_data_ptr<float>(),
+                dm_dsigma1_sq_.const_data_ptr<float>(),
+                dm_dsigma12_.const_data_ptr<float>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
     }
