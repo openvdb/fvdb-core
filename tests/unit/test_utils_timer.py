@@ -9,7 +9,7 @@ import unittest
 
 import pytest
 import torch
-from fvdb.utils.timer import ScopedTimer
+from fvdb.utils.tests import ScopedTimer
 
 
 class TestScopedTimer(unittest.TestCase):
