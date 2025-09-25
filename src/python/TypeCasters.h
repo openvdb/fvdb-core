@@ -4,6 +4,7 @@
 #ifndef PYTHON_TYPECASTERS_H
 #define PYTHON_TYPECASTERS_H
 
+#include <fvdb/GaussianSplat3d.h>
 #include <fvdb/Types.h>
 
 #include <torch/extension.h>
@@ -156,6 +157,45 @@ INBOUND_TYPE_CASTER(fvdb::Vec4i, loadCoordType)
 INBOUND_TYPE_CASTER(fvdb::Vec3dBatchOrScalar, loadVecBatch)
 INBOUND_TYPE_CASTER(fvdb::Vec3dBatch, loadVecBatch)
 INBOUND_TYPE_CASTER(fvdb::Vec3iBatch, loadVecBatch)
+
+template <>
+struct type_caster<fvdb::GaussianSplat3d::ProjectionType>
+    : public type_caster_base<fvdb::GaussianSplat3d::ProjectionType> {
+    using base = type_caster_base<fvdb::GaussianSplat3d::ProjectionType>;
+
+  public:
+    fvdb::GaussianSplat3d::ProjectionType projection_type_value;
+
+    bool
+    load(handle src, bool convert) {
+        std::string strvalue = src.cast<std::string>();
+        std::transform(strvalue.begin(), strvalue.end(), strvalue.begin(), [](unsigned char c) {
+            return std::tolower(c);
+        });
+        if (strvalue == "perspective") {
+            projection_type_value = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE;
+        } else if (strvalue == "orthographic") {
+            projection_type_value = fvdb::GaussianSplat3d::ProjectionType::ORTHOGRAPHIC;
+        } else {
+            return false;
+        }
+        value = &projection_type_value;
+        return true;
+    }
+
+    static handle
+    cast(const fvdb::GaussianSplat3d::ProjectionType &src,
+         return_value_policy policy,
+         handle parent) {
+        switch (src) {
+        case fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE:
+            return pybind11::str("perspective").release();
+        case fvdb::GaussianSplat3d::ProjectionType::ORTHOGRAPHIC:
+            return pybind11::str("orthographic").release();
+        default: return pybind11::str("unknown").release();
+        }
+    }
+};
 
 } // namespace detail
 } // namespace pybind11
