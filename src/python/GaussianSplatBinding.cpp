@@ -1,57 +1,12 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include "TypeCasters.h"
+
 #include <fvdb/FVDB.h>
 #include <fvdb/GaussianSplat3d.h>
 
 #include <torch/extension.h>
-
-#include <pybind11/numpy.h>
-#include <pybind11/pytypes.h>
-#include <pybind11/stl.h>
-
-namespace pybind11::detail {
-
-template <>
-struct type_caster<fvdb::GaussianSplat3d::ProjectionType>
-    : public type_caster_base<fvdb::GaussianSplat3d::ProjectionType> {
-    using base = type_caster_base<fvdb::GaussianSplat3d::ProjectionType>;
-
-  public:
-    fvdb::GaussianSplat3d::ProjectionType projection_type_value;
-
-    bool
-    load(handle src, bool convert) {
-        std::string strvalue = src.cast<std::string>();
-        std::transform(strvalue.begin(), strvalue.end(), strvalue.begin(), [](unsigned char c) {
-            return std::tolower(c);
-        });
-        if (strvalue == "perspective") {
-            projection_type_value = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE;
-        } else if (strvalue == "orthographic") {
-            projection_type_value = fvdb::GaussianSplat3d::ProjectionType::ORTHOGRAPHIC;
-        } else {
-            return false;
-        }
-        value = &projection_type_value;
-        return true;
-    }
-
-    static handle
-    cast(const fvdb::GaussianSplat3d::ProjectionType &src,
-         return_value_policy policy,
-         handle parent) {
-        switch (src) {
-        case fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE:
-            return pybind11::str("perspective").release();
-        case fvdb::GaussianSplat3d::ProjectionType::ORTHOGRAPHIC:
-            return pybind11::str("orthographic").release();
-        default: return pybind11::str("unknown").release();
-        }
-    }
-};
-
-} // namespace pybind11::detail
 
 void
 bind_gaussian_splat3d(py::module &m) {
