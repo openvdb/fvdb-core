@@ -13,9 +13,12 @@
 template <typename index_t>
 inline std::tuple<index_t, index_t>
 deviceOffsetAndCount(index_t count, c10::DeviceIndex deviceId) {
-    auto deviceCount        = (count + c10::cuda::device_count() - 1) / c10::cuda::device_count();
-    const auto deviceOffset = deviceCount * deviceId;
-    deviceCount             = std::min(deviceCount, count - deviceOffset);
+    auto deviceCount  = (count + c10::cuda::device_count() - 1) / c10::cuda::device_count();
+    auto deviceOffset = deviceCount * deviceId;
+    if (deviceOffset + deviceCount > count) {
+        deviceOffset = std::min(deviceOffset, count);
+        deviceCount  = std::min(deviceCount, count - deviceOffset);
+    }
     return std::make_tuple(deviceOffset, deviceCount);
 }
 
