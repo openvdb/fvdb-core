@@ -1,7 +1,7 @@
 name: fVDB CUDA 12.8.1 Build and Test
 
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - '**'
     paths-ignore:
