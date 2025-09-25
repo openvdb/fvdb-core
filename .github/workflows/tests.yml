@@ -115,7 +115,7 @@ jobs:
       - name: Buid fvdb
         run: |
           micromamba activate fvdb_build
-          ./build.sh wheel verbose gtests benchmarks --cuda-arch-list '8.9+PTX'
+          ./build.sh wheel verbose gtests benchmarks --cuda-arch-list '8.9+PTX' -C cmake.define.NANOVDB_EDITOR_SKIP=ON
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
@@ -211,16 +211,16 @@ jobs:
           environment-name: fvdb_test
           environment-file: env/test_environment.yml
 
-      - name: Download package with nanovdb_editor
-        uses: actions/download-artifact@v4
-        with:
-            name: fvdb-test-package
-            path: ./dist
+      # - name: Download package with nanovdb_editor
+      #   uses: actions/download-artifact@v4
+      #   with:
+      #       name: fvdb-test-package
+      #       path: ./dist
 
-      - name: Install nanovdb_editor
-        run: |
-            micromamba activate fvdb_test
-            pip install ./dist/nanovdb_editor*.whl
+      # - name: Install nanovdb_editor
+      #   run: |
+      #       micromamba activate fvdb_test
+      #       pip install ./dist/nanovdb_editor*.whl
 
       - name: Download gtests
         uses: actions/download-artifact@v4
