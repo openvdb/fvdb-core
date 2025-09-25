@@ -1,7 +1,7 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-from .._Cpp.viz import Viewer, GaussianSplat3dView
+from .viewer import GaussianSplat3dView, Viewer
 
 __all__ = [
     "Viewer",

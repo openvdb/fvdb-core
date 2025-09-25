@@ -40,42 +40,32 @@ class Viewer {
 
     void updateCamera();
 
+    void startServer();
+    void stopServer();
+
   public:
     Viewer(const std::string &ipAddress, const int port, const bool verbose = false);
     ~Viewer();
 
-    GaussianSplat3dView &registerGaussianSplat3dView(const std::string &name,
-                                                     const GaussianSplat3d &splats);
+    GaussianSplat3dView &addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splats);
 
-    void startServer();
-    void stopServer();
+    std::tuple<float, float, float> cameraOrigin() const;
+    void setCameraOrigin(float ox, float oy, float oz);
 
-    // Camera control methods
-    void setCameraPosition(float x, float y, float z);
-    std::tuple<float, float, float> getCameraPosition();
+    std::tuple<float, float, float> cameraUpDirection() const;
+    void setCameraUpDirection(float ux, float uy, float uz);
 
-    void setCameraLookat(float x, float y, float z);
-    std::tuple<float, float, float> getCameraLookat();
+    std::tuple<float, float, float> cameraViewDirection() const;
+    void setCameraViewDirection(float dx, float dy, float dz);
 
+    float cameraNear() const;
     void setCameraNear(float near);
-    float getCameraNear();
 
+    float cameraFar() const;
     void setCameraFar(float far);
-    float getCameraFar();
 
-    void setCameraPose(torch::Tensor cameraToWorldMatrix);
-
-    void setCameraEyeDirection(float x, float y, float z);
-    std::tuple<float, float, float> getCameraEyeDirection();
-
-    void setCameraEyeUp(float x, float y, float z);
-    std::tuple<float, float, float> getCameraEyeUp();
-
-    void setCameraEyeDistanceFromPosition(float distance);
-    float getCameraEyeDistanceFromPosition();
-
-    void setCameraMode(GaussianSplat3d::ProjectionType mode);
-    GaussianSplat3d::ProjectionType getCameraMode();
+    void setCameraProjectionType(GaussianSplat3d::ProjectionType mode);
+    GaussianSplat3d::ProjectionType cameraProjectionType() const;
 };
 
 } // namespace fvdb::detail::viewer
