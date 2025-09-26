@@ -49,14 +49,17 @@ class Viewer {
 
     GaussianSplat3dView &addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splats);
 
-    std::tuple<float, float, float> cameraOrigin() const;
-    void setCameraOrigin(float ox, float oy, float oz);
+    std::tuple<float, float, float> cameraOrbitCenter() const;
+    void setCameraOrbitCenter(float ox, float oy, float oz);
 
     std::tuple<float, float, float> cameraUpDirection() const;
     void setCameraUpDirection(float ux, float uy, float uz);
 
     std::tuple<float, float, float> cameraViewDirection() const;
     void setCameraViewDirection(float dx, float dy, float dz);
+
+    float cameraOrbitRadius() const;
+    void setCameraOrbitRadius(float radius);
 
     float cameraNear() const;
     void setCameraNear(float near);
