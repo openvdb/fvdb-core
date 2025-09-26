@@ -242,7 +242,7 @@ class Viewer:
         """
         if radius <= 0.0:
             raise ValueError(f"Radius must be positive, got {radius}")
-        self._impl.set_camera_orbit_radius(-radius)
+        self._impl.set_camera_orbit_radius(radius)
 
     @property
     def camera_orbit_direction(self) -> torch.Tensor:
@@ -387,5 +387,5 @@ class Viewer:
 
         self._impl.set_camera_orbit_center(*lookat_point_vec3f)
         self._impl.set_camera_view_direction(*view_direction_vec3f)
-        self._impl.set_camera_orbit_radius(-orbit_radius)
+        self._impl.set_camera_orbit_radius(orbit_radius)
         self._impl.set_camera_up_direction(*up_direction_vec3f)
