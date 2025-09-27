@@ -186,16 +186,26 @@ Viewer::stopServer() {
 }
 
 std::tuple<float, float, float>
-Viewer::cameraOrigin() const {
+Viewer::cameraOrbitCenter() const {
     return std::make_tuple(mEditor.camera.state.position.x,
                            mEditor.camera.state.position.y,
                            mEditor.camera.state.position.z);
 }
 void
-Viewer::setCameraOrigin(float x, float y, float z) {
+Viewer::setCameraOrbitCenter(float x, float y, float z) {
     mEditor.camera.state.position.x = x;
     mEditor.camera.state.position.y = y;
     mEditor.camera.state.position.z = z;
+    updateCamera();
+}
+
+float
+Viewer::cameraOrbitRadius() const {
+    return mEditor.camera.state.eye_distance_from_position;
+}
+void
+Viewer::setCameraOrbitRadius(float radius) {
+    mEditor.camera.state.eye_distance_from_position = radius;
     updateCamera();
 }
 

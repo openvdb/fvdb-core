@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-#include "TypeCasters.h"
-
 #include <fvdb/GaussianSplat3d.h>
 #include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
@@ -102,6 +100,44 @@ bind_viewer(py::module &m) {
                                                          // parent
             "Register a Gaussian splat 3D view with the viewer (accepts Python or C++ GaussianSplat3d)")
 
+        .def("camera_orbit_center",
+             &fvdb::detail::viewer::Viewer::cameraOrbitCenter,
+             "Get the point about which the camera orbits")
+        .def("set_camera_orbit_center",
+             &fvdb::detail::viewer::Viewer::setCameraOrbitCenter,
+             py::arg("x"),
+             py::arg("y"),
+             py::arg("z"),
+             "Set the camera orbit center")
+
+        .def("camera_orbit_radius",
+             &fvdb::detail::viewer::Viewer::cameraOrbitRadius,
+             "Get the camera orbit radius")
+        .def("set_camera_orbit_radius",
+             &fvdb::detail::viewer::Viewer::setCameraOrbitRadius,
+             py::arg("radius"),
+             "Set the camera orbit radius (must be positive)")
+
+        .def("camera_up_direction",
+             &fvdb::detail::viewer::Viewer::cameraUpDirection,
+             "Get the camera up vector")
+        .def("set_camera_up_direction",
+             &fvdb::detail::viewer::Viewer::setCameraUpDirection,
+             py::arg("ux"),
+             py::arg("uy"),
+             py::arg("uz"),
+             "Set the camera up vector")
+
+        .def("camera_view_direction",
+             &fvdb::detail::viewer::Viewer::cameraViewDirection,
+             "Get the camera view direction")
+        .def("set_camera_view_direction",
+             &fvdb::detail::viewer::Viewer::setCameraViewDirection,
+             py::arg("dx"),
+             py::arg("dy"),
+             py::arg("dz"),
+             "Set the camera view direction")
+
         .def("camera_near",
              &fvdb::detail::viewer::Viewer::cameraNear,
              "Get the camera near clipping plane")
@@ -109,6 +145,14 @@ bind_viewer(py::module &m) {
              &fvdb::detail::viewer::Viewer::setCameraNear,
              py::arg("near"),
              "Set the camera near clipping plane")
+
+        .def("camera_far",
+             &fvdb::detail::viewer::Viewer::cameraFar,
+             "Get the camera far clipping plane")
+        .def("set_camera_far",
+             &fvdb::detail::viewer::Viewer::setCameraFar,
+             py::arg("far"),
+             "Set the camera far clipping plane")
 
         .def("camera_projection_type",
              &fvdb::detail::viewer::Viewer::cameraProjectionType,

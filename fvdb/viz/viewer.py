@@ -18,6 +18,14 @@ class GaussianSplat3dView:
     __PRIVATE__ = object()
 
     def __init__(self, view: GaussianSplat3dViewCpp, _private: Any = None):
+        """
+        Create a new `GaussianSplat3dView` from a C++ implementation. This constructor is private and should not be called directly.
+        Use `Viewer.register_gaussian_splat3d_view()` instead.
+
+        Args:
+            view (GaussianSplat3dViewCpp): The C++ implementation of the Gaussian splat 3D view.
+            _private (Any): A private object to prevent direct construction. Must be `GaussianSplat3dView.__PRIVATE__`.
+        """
         self._view = view
         if _private is not self.__PRIVATE__:
             raise ValueError(
@@ -26,42 +34,113 @@ class GaussianSplat3dView:
 
     @property
     def tile_size(self) -> int:
+        """
+        Set the 2D tile size to use when rendering splats. Larger tiles can improve performance, but may
+        exhaust shared memory usage on the GPU. In general, tile sizes of 8, 16, or 32 are recommended.
+
+        Returns:
+            int: The current tile size.
+        """
         return self._view.tile_size
 
     @tile_size.setter
-    def tile_size(self, size: int):
-        self._view.tile_size = size
+    def tile_size(self, tile_size: int):
+        """
+        Set the 2D tile size to use when rendering splats. Larger tiles can improve performance, but may
+        exhaust shared memory usage on the GPU. In general, tile sizes of 8, 16, or 32 are recommended.
+
+        Args:
+            tile_size (int): The tile size to set.
+        """
+        if tile_size < 1:
+            raise ValueError(f"Tile size must be a positive integer, got {tile_size}")
+        self._view.tile_size = tile_size
 
     @property
     def min_radius_2d(self) -> float:
+        """
+        Get the minimum radius in pixels below which splats will not be rendered.
+
+        Returns:
+            float: The minimum radius in pixels.
+        """
         return self._view.min_radius_2d
 
     @min_radius_2d.setter
     def min_radius_2d(self, radius: float):
+        """
+        Set the minimum radius in pixels below which splats will not be rendered.
+
+        Args:
+            radius (float): The minimum radius in pixels.
+        """
+        if radius < 0.0:
+            raise ValueError(f"Minimum radius must be non-negative, got {radius}")
         self._view.min_radius_2d = radius
 
     @property
     def sh_degree_to_use(self) -> int:
+        """
+        Get the degree of spherical harmonics to use when rendering colors.
+
+        Returns:
+            int: The degree of spherical harmonics to use.
+        """
         return self._view.sh_degree_to_use
 
     @sh_degree_to_use.setter
     def sh_degree_to_use(self, degree: int):
+        """
+        Sets the degree of spherical harmonics to use when rendering colors. If -1, the maximum
+        degree supported by the Gaussian splat 3D scene is used.
+
+        Args:
+            degree (int): The degree of spherical harmonics to use.
+        """
         self._view.sh_degree_to_use = degree
 
     @property
     def near(self) -> float:
+        """
+        Gets the near clipping plane distance for rendering. Splats closer to the camera than this distance
+        will not be rendered.
+
+        Returns:
+            float: The near clipping plane distance.
+        """
         return self._view.near
 
     @near.setter
     def near(self, near: float):
+        """
+        Sets the near clipping plane distance for rendering. Splats closer to the camera than this distance
+        will not be rendered.
+
+        Args:
+            near (float): The near clipping plane distance.
+        """
         self._view.near = near
 
     @property
     def far(self) -> float:
+        """
+        Get the far clipping plane distance for rendering. Splats farther from the camera than this distance
+        will not be rendered.
+
+        Returns:
+            float: The far clipping plane distance.
+        """
         return self._view.far
 
     @far.setter
     def far(self, far: float):
+        """
+        Sets the far clipping plane distance for rendering. Splats farther from the camera than this distance
+        will not be rendered.
+
+        Args:
+            far (float): The far clipping plane distance.
+        """
         self._view.far = far
 
 
@@ -128,7 +207,7 @@ class Viewer:
         Create a new `Viewer` running a server at the specified IP address and port.
 
         If there is already a viewer server running at the specified address and port,
-        this will connect to the existing server instead of starting a new one.
+        this will throw an Exception.
 
         Args:
             ip_address (str): The IP address to bind the viewer server to. Default is "127.0.0.1"
@@ -137,8 +216,6 @@ class Viewer:
         if not isinstance(port, int) or port < 0 or port > 65535:
             raise ValueError(f"Port must be an integer between 0 and 65535, got {port}")
 
-        # TODO: Check that either no application is running on ip_address:port
-        # or that it is a viewer server we can connect to.
         self._impl = ViewerCpp(ip_address=ip_address, port=port, verbose=verbose)
 
     def add_gaussian_splat3d(
@@ -195,26 +272,81 @@ class Viewer:
         return CameraView(view, CameraView.__PRIVATE__)
 
     @property
-    def camera_origin(self) -> torch.Tensor:
+    def camera_orbit_center(self) -> torch.Tensor:
         """
-        Return center of the camera in world coordinates.
+        Return center of the camera orbit in world coordinates.
 
         Returns:
-            torch.Tensor: A tensor of shape (3,) representing the camera position in world coordinates.
+            torch.Tensor: A tensor of shape (3,) representing the camera orbit center in world coordinates.
         """
-        ox, oy, oz = self._impl.camera_origin()
+        ox, oy, oz = self._impl.camera_orbit_center()
         return torch.tensor([ox, oy, oz], dtype=torch.float32)
 
-    @camera_origin.setter
-    def camera_origin(self, origin: NumericMaxRank1):
+    @camera_orbit_center.setter
+    def camera_orbit_center(self, center: NumericMaxRank1):
         """
-        Set the center of the camera in world coordinates.
+        Set the center of the camera orbit in world coordinates.
 
         Args:
-            origin (NumericMaxRank1): A tensor-like object of shape (3,) representing the camera position in world coordinates.
+            center (NumericMaxRank1): A tensor-like object of shape (3,) representing the camera orbit center in world coordinates.
         """
-        origin_vec3f = to_Vec3f(origin).cpu().numpy().tolist()
-        self._impl.set_camera_origin(*origin_vec3f)
+        center_vec3f = to_Vec3f(center).cpu().numpy().tolist()
+        self._impl.set_camera_orbit_center(*center_vec3f)
+
+    @property
+    def camera_orbit_radius(self) -> float:
+        """
+        Return the radius of the camera orbit.
+
+        Returns:
+            float: The radius of the camera orbit.
+        """
+        return self._impl.camera_orbit_radius()
+
+    @camera_orbit_radius.setter
+    def camera_orbit_radius(self, radius: float):
+        """
+        Set the radius of the camera orbit.
+
+        Args:
+            radius (float): The radius of the camera orbit.
+        """
+        if radius <= 0.0:
+            raise ValueError(f"Radius must be positive, got {radius}")
+        self._impl.set_camera_orbit_radius(radius)
+
+    @property
+    def camera_orbit_direction(self) -> torch.Tensor:
+        """
+        Return the direction pointing from the orbit center to the camera position.
+
+        Note: The camera itself is positioned at:
+            camera_position = orbit_center + orbit_radius * orbit_direction
+
+        Returns:
+            torch.Tensor: A tensor of shape (3,) representing the direction pointing from the orbit
+                center to the camera position.
+        """
+        dx, dy, dz = self._impl.camera_view_direction()
+        return torch.tensor([dx, dy, dz], dtype=torch.float32)
+
+    @camera_orbit_direction.setter
+    def camera_orbit_direction(self, direction: NumericMaxRank1):
+        """
+        Set the direction pointing from the orbit center to the camera position.
+
+        Note: The camera itself is positioned at:
+            camera_position = orbit_center + orbit_radius * orbit_direction
+
+        Args:
+            direction (NumericMaxRank1): A tensor-like object of shape (3,) representing the direction pointing from the orbit
+                center to the camera position.
+        """
+        dir_vec3f = to_Vec3f(direction).cpu().numpy()
+        if np.linalg.norm(dir_vec3f) < 1e-6:
+            raise ValueError("Camera orbit direction cannot be a zero vector.")
+        dir_vec3f /= np.linalg.norm(dir_vec3f)
+        self._impl.set_camera_view_direction(*dir_vec3f)
 
     @property
     def camera_up_direction(self) -> torch.Tensor:
@@ -235,30 +367,59 @@ class Viewer:
         Args:
             up (NumericMaxRank1): A tensor-like object of shape (3,) representing the up vector of the camera.
         """
-        up_vec3f = to_Vec3f(up).cpu().numpy().tolist()
+        up_vec3f = to_Vec3f(up).cpu().numpy()
+        if np.linalg.norm(up_vec3f) < 1e-6:
+            raise ValueError("Camera up direction cannot be a zero vector.")
+        up_vec3f /= np.linalg.norm(up_vec3f)
         self._impl.set_camera_up_direction(*up_vec3f)
 
     @property
-    def camera_view_direction(self) -> torch.Tensor:
+    def camera_near(self) -> float:
         """
-        Return the view direction of the camera.
+        Get the near clipping plane distance for rendering. Splats closer to the camera than this distance
+        will not be rendered.
 
         Returns:
-            torch.Tensor: A tensor of shape (3,) representing the view direction of the camera.
+            float: The near clipping plane distance.
         """
-        dx, dy, dz = self._impl.camera_view_direction()
-        return torch.tensor([dx, dy, dz], dtype=torch.float32)
+        return self._impl.camera_near()
 
-    @camera_view_direction.setter
-    def camera_view_direction(self, direction: NumericMaxRank1):
+    @camera_near.setter
+    def camera_near(self, near: float):
         """
-        Set the view direction of the camera.
+        Sets the near clipping plane distance for rendering. Splats closer to the camera than this distance
+        will not be rendered.
 
         Args:
-            direction (NumericMaxRank1): A tensor-like object of shape (3,) representing the view direction of the camera.
+            near (float): The near clipping plane distance.
         """
-        dir_vec3f = to_Vec3f(direction).cpu().numpy().tolist()
-        self._impl.set_camera_view_direction(*dir_vec3f)
+        if near <= 0.0:
+            raise ValueError(f"Near clipping plane distance must be positive, got {near}")
+        self._impl.set_camera_near(near)
+
+    @property
+    def camera_far(self) -> float:
+        """
+        Get the far clipping plane distance for rendering. Splats farther from the camera than this distance
+        will not be rendered.
+
+        Returns:
+            float: The far clipping plane distance.
+        """
+        return self._impl.camera_far()
+
+    @camera_far.setter
+    def camera_far(self, far: float):
+        """
+        Set the far clipping plane distance for rendering. Splats farther from the camera than this distance
+        will not be rendered.
+
+        Args:
+            far (float): The far clipping plane distance.
+        """
+        if far <= 0.0:
+            raise ValueError(f"Far clipping plane distance must be positive, got {far}")
+        self._impl.set_camera_far(far)
 
     def set_camera_lookat(
         self,
@@ -277,21 +438,25 @@ class Viewer:
         camera_origin_vec3f = to_Vec3f(camera_origin).cpu().numpy()
         lookat_point_vec3f = to_Vec3f(lookat_point).cpu().numpy()
         up_direction_vec3f = to_Vec3f(up_direction).cpu().numpy()
-        view_direction = lookat_point_vec3f - camera_origin_vec3f
-        if np.linalg.norm(view_direction) < 1e-6:
+        view_direction_vec3f = lookat_point_vec3f - camera_origin_vec3f
+        orbit_radius = float(np.linalg.norm(view_direction_vec3f))
+
+        if orbit_radius < 1e-6:
+            raise ValueError("Camera origin and lookat point cannot be the same.")
+        if np.linalg.norm(view_direction_vec3f) < 1e-6:
             raise ValueError("Camera origin and lookat point cannot be the same.")
         if np.linalg.norm(up_direction_vec3f) < 1e-6:
             raise ValueError("Up direction cannot be a zero vector.")
 
-        view_direction /= np.linalg.norm(view_direction)
-        up_direction_vec3f /= np.linalg.norm(up_direction_vec3f)
-        right_direction = np.cross(view_direction, up_direction_vec3f)
-        if np.linalg.norm(right_direction) < 1e-6:
-            raise ValueError("Up direction cannot be parallel to the view direction.")
-        right_direction /= np.linalg.norm(right_direction)
-        up_direction_vec3f = np.cross(right_direction, view_direction)
+        view_direction_vec3f /= np.linalg.norm(view_direction_vec3f)
         up_direction_vec3f /= np.linalg.norm(up_direction_vec3f)
 
-        self._impl.set_camera_origin(*camera_origin_vec3f)
-        self._impl.set_camera_view_direction(*view_direction)
+        # Check that the view direction is not parallel to the up direction
+        dot_product = np.dot(view_direction_vec3f, up_direction_vec3f)
+        if abs(dot_product) > 0.999:
+            raise ValueError("View direction and up direction cannot be parallel or anti-parallel.")
+
+        self._impl.set_camera_orbit_center(*lookat_point_vec3f)
+        self._impl.set_camera_view_direction(*view_direction_vec3f)
+        self._impl.set_camera_orbit_radius(orbit_radius)
         self._impl.set_camera_up_direction(*up_direction_vec3f)
