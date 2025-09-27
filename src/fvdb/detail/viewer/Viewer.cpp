@@ -12,8 +12,6 @@
 #include <cstdarg>
 #include <cstdio>
 
-// #define TEST_RGBRGB
-
 inline void
 pNanoLogPrint(pnanovdb_compute_log_level_t level, const char *format, ...) {
     va_list args;
@@ -116,19 +114,7 @@ Viewer::addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splat
     torch::Tensor logitOpacities = splats.logitOpacities();
     torch::Tensor sh0            = splats.sh0();
     torch::Tensor shN            = splats.shN();
-
-    // Use RRRGGGBBB
-    torch::Tensor sh = torch::cat({sh0, shN}, 1);
-
-#ifdef TEST_RGBRGB
-    int N              = means.size(0);
-    auto shN_flat      = shN.reshape({N, 45});
-    auto shN_R         = shN_flat.slice(1, 0, 15).unsqueeze(2);  // (N, 15, 1)
-    auto shN_G         = shN_flat.slice(1, 15, 30).unsqueeze(2); // (N, 15, 1)
-    auto shN_B         = shN_flat.slice(1, 30, 45).unsqueeze(2); // (N, 15, 1)
-    auto shN_reordered = torch::cat({shN_R, shN_G, shN_B}, 2);   // (N, 15, 3)
-    sh                 = torch::cat({sh0, shN_reordered}, 1);    // (N, 16, 3)
-#endif
+    torch::Tensor sh             = torch::cat({sh0, shN}, 1);
 
     auto makeComputeArray = [this](const torch::Tensor &tensor) -> pnanovdb_compute_array_t * {
         torch::Tensor contig = tensor.cpu().contiguous();
@@ -165,15 +151,13 @@ Viewer::addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splat
     }
 
     mEditor.editor.add_gaussian_data(&mEditor.editor, &mEditor.raster, queue, gaussian_data);
-    mEditor.editor.setup_shader_params(
+    mEditor.editor.add_shader_params(
         &mEditor.editor, &it->second.mParams, mEditor.rasterShaderParamsType);
     it->second.mSyncCallback = [this](bool set_data) {
         mEditor.editor.sync_shader_params(&mEditor.editor,
                                           mEditor.rasterShaderParamsType,
                                           set_data ? PNANOVDB_TRUE : PNANOVDB_FALSE);
-        mEditor.editor.wait_for_shader_params_sync(&mEditor.editor, mEditor.rasterShaderParamsType);
     };
-    it->second.mSyncCallback(true); // initial sync
 
     mEditor.compute.destroy_array(means_arr);
     mEditor.compute.destroy_array(quats_arr);
@@ -272,7 +256,6 @@ void
 Viewer::setCameraProjectionType(GaussianSplat3d::ProjectionType mode) {
     mEditor.camera.config.is_orthographic =
         (mode == GaussianSplat3d::ProjectionType::ORTHOGRAPHIC) ? PNANOVDB_TRUE : PNANOVDB_FALSE;
-    mEditor.camera.config.is_projection_rh = ~mEditor.camera.config.is_orthographic;
 
     updateCamera();
 }

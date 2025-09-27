@@ -9,11 +9,14 @@
 #       ./build.sh install -C cmake.define.NANOVDB_EDITOR_SKIP=ON
 #   IMPORTANT: variables are cached by cmake, so set them OFF to disable if not doing clean build
 
+option(NANOVDB_EDITOR_FORCE "Force rebuild of nanovdb_editor wheel" OFF)
+option(NANOVDB_EDITOR_SKIP "Skip nanovdb_editor wheel build" OFF)
+
 CPMAddPackage(
     NAME nanovdb_editor
     GITHUB_REPOSITORY openvdb/nanovdb-editor
     GIT_TAG 1a3e19902b6ec8bad357f711681edcde24353f3e
-    VERSION 0.0.1
+    VERSION 0.0.2
     DOWNLOAD_ONLY YES
 )
 

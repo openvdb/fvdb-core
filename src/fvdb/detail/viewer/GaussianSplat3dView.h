@@ -102,7 +102,6 @@ class GaussianSplat3dView {
     getShDegreeToUse() const {
         mSyncCallback(false);
         return mParams.sh_degree_override;
-        return -1;
     }
     void
     setShDegreeToUse(const int shDegree) {
