@@ -6,6 +6,7 @@
 
 #include <fvdb/GaussianSplat3d.h>
 #include <fvdb/GridBatch.h>
+#include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
 
 #include <torch/torch.h>
@@ -37,6 +38,7 @@ class Viewer {
     int mPort;
 
     std::map<std::string, GaussianSplat3dView> mSplat3dViews;
+    std::map<std::string, CameraView> mCameraViews;
 
     void updateCamera();
 
@@ -48,6 +50,9 @@ class Viewer {
     ~Viewer();
 
     GaussianSplat3dView &addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splats);
+    CameraView &addCameraView(const std::string &name,
+                              const torch::Tensor &cameraToWorldMatrices,
+                              const torch::Tensor &projectionMatrices);
 
     std::tuple<float, float, float> cameraOrigin() const;
     void setCameraOrigin(float ox, float oy, float oz);

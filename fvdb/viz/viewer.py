@@ -6,11 +6,12 @@ from typing import Any
 import numpy as np
 import torch
 
+from .._Cpp import CameraView as CameraViewCpp
 from .._Cpp import GaussianSplat3d as GaussianSplat3dCpp
 from .._Cpp import GaussianSplat3dView as GaussianSplat3dViewCpp
 from .._Cpp import Viewer as ViewerCpp
 from ..gaussian_splatting import GaussianSplat3d
-from ..types import NumericMaxRank1, NumericMaxRank2, to_Mat44f, to_Vec3f
+from ..types import NumericMaxRank1, to_Vec3f
 
 
 class GaussianSplat3dView:
@@ -20,7 +21,7 @@ class GaussianSplat3dView:
         self._view = view
         if _private is not self.__PRIVATE__:
             raise ValueError(
-                "GaussianSplat3dView constructor is private. Use Viewer.register_gaussian_splat3d_view() instead."
+                "GaussianSplat3dView constructor is private. Use Viewer.add_gaussian_splat3d_view() instead."
             )
 
     @property
@@ -62,6 +63,63 @@ class GaussianSplat3dView:
     @far.setter
     def far(self, far: float):
         self._view.far = far
+
+
+class CameraView:
+    __PRIVATE__ = object()
+
+    def __init__(self, view: CameraViewCpp, _private: Any = None):
+        self._view = view
+        if _private is not self.__PRIVATE__:
+            raise ValueError("CameraView constructor is private. Use Viewer.add_camera_view() instead.")
+
+    @property
+    def visible(self) -> bool:
+        return self._view.visible
+
+    @visible.setter
+    def visible(self, v: bool):
+        self._view.visible = v
+
+    @property
+    def axis_length(self) -> float:
+        return self._view.axis_length
+
+    @axis_length.setter
+    def axis_length(self, v: float):
+        self._view.axis_length = v
+
+    @property
+    def axis_thickness(self) -> float:
+        return self._view.axis_thickness
+
+    @axis_thickness.setter
+    def axis_thickness(self, v: float):
+        self._view.axis_thickness = v
+
+    @property
+    def axis_scale(self) -> float:
+        return self._view.axis_scale
+
+    @axis_scale.setter
+    def axis_scale(self, v: float):
+        self._view.axis_scale = v
+
+    @property
+    def frustum_line_width(self) -> float:
+        return self._view.frustum_line_width
+
+    @frustum_line_width.setter
+    def frustum_line_width(self, v: float):
+        self._view.frustum_line_width = v
+
+    @property
+    def frustum_scale(self) -> float:
+        return self._view.frustum_scale
+
+    @frustum_scale.setter
+    def frustum_scale(self, v: float):
+        self._view.frustum_scale = v
 
 
 class Viewer:
@@ -122,6 +180,19 @@ class Viewer:
             sh_degree_to_use = gaussian_splat_3d.sh_degree
         view.sh_degree_to_use = sh_degree_to_use
         return GaussianSplat3dView(view, GaussianSplat3dView.__PRIVATE__)
+
+    def add_camera_view(
+        self,
+        name: str,
+        camera_to_world_matrices: torch.Tensor | None = None,
+        projection_matrices: torch.Tensor | None = None,
+    ) -> CameraView:
+        if camera_to_world_matrices is None or projection_matrices is None:
+            raise ValueError(
+                "Both camera_to_world_matrices and projection_matrices must be provided."
+            )
+        view: CameraViewCpp = self._impl.add_camera_view(name, camera_to_world_matrices, projection_matrices)
+        return CameraView(view, CameraView.__PRIVATE__)
 
     @property
     def camera_origin(self) -> torch.Tensor:

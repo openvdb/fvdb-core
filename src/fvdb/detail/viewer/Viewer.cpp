@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+#include "nanovdb_editor/putil/Camera.h"
+
 #include <fvdb/detail/viewer/Viewer.h>
 
 #include <c10/util/Exception.h>
@@ -258,6 +260,83 @@ Viewer::setCameraProjectionType(GaussianSplat3d::ProjectionType mode) {
         (mode == GaussianSplat3d::ProjectionType::ORTHOGRAPHIC) ? PNANOVDB_TRUE : PNANOVDB_FALSE;
 
     updateCamera();
+}
+
+CameraView &
+Viewer::addCameraView(const std::string &name,
+                      const torch::Tensor &cameraToWorldMatrices,
+                      const torch::Tensor &projectionMatrices) {
+    TORCH_CHECK(cameraToWorldMatrices.dim() == 3 && cameraToWorldMatrices.size(1) == 4 &&
+                    cameraToWorldMatrices.size(2) == 4,
+                "camera_to_world_matrices must have shape [N, 4, 4]");
+    TORCH_CHECK(projectionMatrices.dim() == 3 && projectionMatrices.size(1) == 3 &&
+                    projectionMatrices.size(2) == 3,
+                "projection_matrices must have shape [N, 3, 3]");
+
+    auto [it, inserted] = mCameraViews.emplace(
+        std::piecewise_construct, std::forward_as_tuple(name), std::forward_as_tuple(name));
+
+    pnanovdb_camera_config_default(&it->second.mView.config);
+
+    it->second.mView.num_states = cameraToWorldMatrices.size(0);
+    it->second.mView.states     = new pnanovdb_camera_state_t[it->second.mView.num_states];
+
+    for (int i = 0; i < it->second.mView.num_states; i++) {
+        torch::Tensor c2w = cameraToWorldMatrices.index({i}).contiguous().cpu();
+        float px          = c2w[0][3].item<float>();
+        float py          = c2w[1][3].item<float>();
+        float pz          = c2w[2][3].item<float>();
+
+        float zx = c2w[0][2].item<float>();
+        float zy = c2w[1][2].item<float>();
+        float zz = c2w[2][2].item<float>();
+        float dx = -zx, dy = -zy, dz = -zz;
+
+        float ux = c2w[0][1].item<float>();
+        float uy = c2w[1][1].item<float>();
+        float uz = c2w[2][1].item<float>();
+
+        if (i == 0) {
+            torch::Tensor M = projectionMatrices.index({i}).contiguous().cpu();
+
+            float near          = M[3][2].item<float>() / (M[2][2].item<float>() - 1.0f);
+            float far           = M[3][2].item<float>() / (M[2][2].item<float>() + 1.0f);
+            float fov           = 2.0f * std::atan(1.0f / M[1][1].item<float>());
+            bool isOrthographic = M[2][2].item<float>() == 0.0f;
+
+            it->second.mView.config.eye_up.x = ux;
+            it->second.mView.config.eye_up.y = uy;
+            it->second.mView.config.eye_up.z = uz;
+
+            it->second.mView.config.near_plane = near;
+            it->second.mView.config.far_plane  = far;
+
+            it->second.mView.config.fov_angle_y = fov;
+
+            it->second.mView.config.is_orthographic =
+                isOrthographic ? PNANOVDB_TRUE : PNANOVDB_FALSE;
+        }
+
+        pnanovdb_camera_state_default(&it->second.mView.states[i].state);
+
+        it->second.mView.states[i].state.position.x = px;
+        it->second.mView.states[i].state.position.y = py;
+        it->second.mView.states[i].state.position.z = pz;
+
+        it->second.mView.states[i].state.eye_direction.x = dx;
+        it->second.mView.states[i].state.eye_direction.y = dy;
+        it->second.mView.states[i].state.eye_direction.z = dz;
+    }
+
+    auto [it, inserted] = mCameraViews.emplace(
+        std::piecewise_construct, std::forward_as_tuple(name), std::forward_as_tuple(name));
+    it->second.setPosition(px, py, pz);
+    it->second.setEyeDirection(dx, dy, dz);
+    it->second.setEyeUp(ux, uy, uz);
+    if (inserted) {
+        mEditor.editor.add_camera_view(&mEditor.editor, &it->second.mView);
+    }
+    return it->second;
 }
 
 } // namespace fvdb::detail::viewer
