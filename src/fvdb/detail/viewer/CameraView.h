@@ -4,7 +4,10 @@
 #ifndef FVDB_DETAIL_VIEWER_CAMERAVIEW_H
 #define FVDB_DETAIL_VIEWER_CAMERAVIEW_H
 
+// clang-format off
+#include <nanovdb_editor/putil/Reflect.h>
 #include <nanovdb_editor/putil/Camera.h>
+// clang-format on
 
 #include <string>
 #include <tuple>

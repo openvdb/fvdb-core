@@ -40,12 +40,6 @@ bind_viewer(py::module &m) {
                       &fvdb::detail::viewer::CameraView::getFrustumScale,
                       &fvdb::detail::viewer::CameraView::setFrustumScale,
                       "The scale of the frustum visualization")
-        .def("get_position", &fvdb::detail::viewer::CameraView::getPosition)
-        .def("set_position", &fvdb::detail::viewer::CameraView::setPosition, py::arg("x"), py::arg("y"), py::arg("z"))
-        .def("get_eye_direction", &fvdb::detail::viewer::CameraView::getEyeDirection)
-        .def("set_eye_direction", &fvdb::detail::viewer::CameraView::setEyeDirection, py::arg("x"), py::arg("y"), py::arg("z"))
-        .def("get_eye_up", &fvdb::detail::viewer::CameraView::getEyeUp)
-        .def("set_eye_up", &fvdb::detail::viewer::CameraView::setEyeUp, py::arg("x"), py::arg("y"), py::arg("z"))
         .def_property("near_plane",
                       &fvdb::detail::viewer::CameraView::getNearPlane,
                       &fvdb::detail::viewer::CameraView::setNearPlane)
@@ -123,11 +117,6 @@ bind_viewer(py::module &m) {
              &fvdb::detail::viewer::Viewer::setCameraProjectionType,
              py::arg("mode"),
              "Set the camera mode (perspective or orthographic)")
-        .def("add_camera_view",
-             &fvdb::detail::viewer::Viewer::addCameraView,
-             py::arg("name"),
-             py::return_value_policy::reference_internal,
-             "Add a camera view visualization to the editor")
         .def("add_camera_view",
              py::overload_cast<const std::string &, const torch::Tensor &, const torch::Tensor &>(
                  &fvdb::detail::viewer::Viewer::addCameraView),
