@@ -655,13 +655,12 @@ radixSortAsync(KeyT *keysIn,
                OffsetT *mergeIntervals,
                const OffsetT *offsets,
                const CountT *counts,
-               cudaEvent_t *preEvents,
-               cudaEvent_t *postEvents) {
+               cudaEvent_t *events) {
     // Radix sort the subset of keys assigned to each device in parallel
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaEventSynchronize(preEvents[deviceId]));
+        C10_CUDA_CHECK(cudaEventSynchronize(events[deviceId]));
 
         const KeyT *deviceKeysIn     = keysIn + offsets[deviceId];
         const ValueT *deviceValuesIn = valuesIn + offsets[deviceId];
@@ -696,7 +695,7 @@ radixSortAsync(KeyT *keysIn,
                                         sizeof(KeyT) * 8,
                                         stream);
         C10_CUDA_CHECK(cudaFreeAsync(deviceTempStorage, stream));
-        C10_CUDA_CHECK(cudaEventRecord(postEvents[deviceId], stream));
+        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
     }
 
     // TODO: Generalize to numbers of GPUs that aren't powers of two
@@ -740,7 +739,7 @@ radixSortAsync(KeyT *keysIn,
                     C10_CUDA_CHECK(cudaSetDevice(deviceId));
 
                     C10_CUDA_CHECK(cudaStreamWaitEvent(c10::cuda::getCurrentCUDAStream(deviceId),
-                                                       postEvents[otherDeviceId]));
+                                                       events[otherDeviceId]));
                     mergePathKernel<<<1, 1, 0, c10::cuda::getCurrentCUDAStream(deviceId)>>>(
                         leftDeviceKeysIn,
                         leftDeviceItemCount,
@@ -749,14 +748,14 @@ radixSortAsync(KeyT *keysIn,
                         leftIntervals + deviceId,
                         rightIntervals + deviceId,
                         intervalIndex);
-                    C10_CUDA_CHECK(cudaEventRecord(postEvents[deviceId],
+                    C10_CUDA_CHECK(cudaEventRecord(events[deviceId],
                                                    c10::cuda::getCurrentCUDAStream(deviceId)));
                 };
                 mergePathSubfunc(leftDeviceId, rightDeviceId, 0);
                 mergePathSubfunc(rightDeviceId, leftDeviceId, 1);
 
-                C10_CUDA_CHECK(cudaEventSynchronize(postEvents[leftDeviceId]));
-                C10_CUDA_CHECK(cudaEventSynchronize(postEvents[rightDeviceId]));
+                C10_CUDA_CHECK(cudaEventSynchronize(events[leftDeviceId]));
+                C10_CUDA_CHECK(cudaEventSynchronize(events[rightDeviceId]));
 
                 // Merge the pairs less than the median to the left device
                 {
@@ -805,7 +804,7 @@ radixSortAsync(KeyT *keysIn,
                                                  {},
                                                  leftStream);
                     C10_CUDA_CHECK(cudaFreeAsync(deviceTempStorage, leftStream));
-                    C10_CUDA_CHECK(cudaEventRecord(postEvents[leftDeviceId], leftStream));
+                    C10_CUDA_CHECK(cudaEventRecord(events[leftDeviceId], leftStream));
                 };
 
                 // Merge the pairs greater than/equal to the median to the right device
@@ -854,11 +853,11 @@ radixSortAsync(KeyT *keysIn,
                                                  {},
                                                  rightStream);
                     C10_CUDA_CHECK(cudaFreeAsync(deviceTempStorage, rightStream));
-                    C10_CUDA_CHECK(cudaEventRecord(postEvents[rightDeviceId], rightStream));
+                    C10_CUDA_CHECK(cudaEventRecord(events[rightDeviceId], rightStream));
                 };
 
-                C10_CUDA_CHECK(cudaEventSynchronize(postEvents[leftDeviceId]));
-                C10_CUDA_CHECK(cudaEventSynchronize(postEvents[rightDeviceId]));
+                C10_CUDA_CHECK(cudaEventSynchronize(events[leftDeviceId]));
+                C10_CUDA_CHECK(cudaEventSynchronize(events[rightDeviceId]));
             });
         }
         std::for_each(threads.begin(), threads.end(), [](std::thread &t) { t.join(); });
@@ -884,36 +883,9 @@ radixSortAsync(KeyT *keysIn,
                             cudaMemcpyDefault,
                             stream);
 
-            cudaEventRecord(postEvents[deviceId], stream);
+            cudaEventRecord(events[deviceId], stream);
         }
     }
-}
-
-template <typename KeyT, typename ValueT, typename NumItemsT, typename OffsetT, typename CountT>
-void
-radixSortAsync(KeyT *keysIn,
-               KeyT *keysOut,
-               ValueT *valuesIn,
-               ValueT *valuesOut,
-               NumItemsT numItems,
-               const OffsetT *offsets,
-               const CountT *counts,
-               cudaEvent_t *preEvents,
-               cudaEvent_t *postEvents) {
-    ptrdiff_t *mergeIntervals = nullptr;
-    C10_CUDA_CHECK(
-        cudaMallocManaged(&mergeIntervals, 2 * c10::cuda::device_count() * sizeof(ptrdiff_t)));
-    radixSortAsync(keysIn,
-                   keysOut,
-                   valuesIn,
-                   valuesOut,
-                   numItems,
-                   mergeIntervals,
-                   offsets,
-                   counts,
-                   preEvents,
-                   postEvents);
-    C10_CUDA_CHECK(cudaFree(mergeIntervals));
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
@@ -1055,6 +1027,21 @@ gaussianTileIntersectionPrivateUse1Impl(
         torch::Tensor intersection_values =
             torch::empty({total_intersections}, means2d.options().dtype(torch::kInt32));
 
+        // Allocate tensors to store the sorted intersections
+        torch::Tensor keys_sorted = torch::empty_like(intersection_keys);
+        torch::Tensor vals_sorted = torch::empty_like(intersection_values);
+
+        thrust::universal_vector<ptrdiff_t> device_intersection_offsets(c10::cuda::device_count());
+        thrust::universal_vector<size_t> device_intersection_counts(c10::cuda::device_count());
+
+        thrust::universal_vector<cudaEvent_t> events(c10::cuda::device_count());
+        thrust::universal_vector<ptrdiff_t> merge_intervals(2 * c10::cuda::device_count());
+
+        // Compute a joffsets tensor that stores the offsets into the sorted Gaussian
+        // intersections
+        torch::Tensor tile_joffsets = torch::empty({num_cameras, num_tiles_h, num_tiles_w},
+                                                   means2d.options().dtype(torch::kInt32));
+
         // Compute the set of intersections between each projected Gaussian and each tile,
         // store them in intersection_keys and intersection_values
         // where intersection_keys encodes (camera_id, tile_id, depth) and intersection_values
@@ -1063,6 +1050,7 @@ gaussianTileIntersectionPrivateUse1Impl(
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+            cudaEventCreate(&events[deviceId], cudaEventDisableTiming);
 
             int64_t device_gaussian_offset, device_gaussian_count;
             std::tie(device_gaussian_offset, device_gaussian_count) =
@@ -1093,18 +1081,8 @@ gaussianTileIntersectionPrivateUse1Impl(
             c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
         }
 
-        // Allocate tensors to store the sorted intersections
-        torch::Tensor keys_sorted = torch::empty_like(intersection_keys);
-        torch::Tensor vals_sorted = torch::empty_like(intersection_values);
-
-        thrust::universal_vector<ptrdiff_t> device_intersection_offsets(c10::cuda::device_count());
-        thrust::universal_vector<size_t> device_intersection_counts(c10::cuda::device_count());
-        thrust::universal_vector<cudaEvent_t> device_pre_events(c10::cuda::device_count());
-        thrust::universal_vector<cudaEvent_t> device_post_events(c10::cuda::device_count());
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
-            cudaEventCreate(&device_pre_events[deviceId], cudaEventDisableTiming);
-            cudaEventCreate(&device_post_events[deviceId], cudaEventDisableTiming);
             std::tie(device_intersection_offsets[deviceId], device_intersection_counts[deviceId]) =
                 deviceOffsetAndCount(total_intersections, deviceId);
         }
@@ -1114,20 +1092,16 @@ gaussianTileIntersectionPrivateUse1Impl(
                        intersection_values.data_ptr<int32_t>(),
                        vals_sorted.data_ptr<int32_t>(),
                        total_intersections,
+                       merge_intervals.data().get(),
                        device_intersection_offsets.data().get(),
                        device_intersection_counts.data().get(),
-                       device_pre_events.data().get(),
-                       device_post_events.data().get());
+                       events.data().get());
 
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
         }
 
         TORCH_CHECK(!is_sparse, "Sparse tile offsets are not implemented for mGPU");
-        // Compute a joffsets tensor that stores the offsets into the sorted Gaussian
-        // intersections
-        torch::Tensor tile_joffsets = torch::empty({num_cameras, num_tiles_h, num_tiles_w},
-                                                   means2d.options().dtype(torch::kInt32));
 
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
@@ -1150,8 +1124,7 @@ gaussianTileIntersectionPrivateUse1Impl(
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-            cudaEventDestroy(device_pre_events[deviceId]);
-            cudaEventDestroy(device_post_events[deviceId]);
+            cudaEventDestroy(events[deviceId]);
         }
 
         return std::make_tuple(tile_joffsets, vals_sorted);
