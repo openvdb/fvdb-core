@@ -18,7 +18,7 @@ class Viewer;
 class GaussianSplat3dView {
     friend class Viewer;
 
-    // View can only be created by Viewer via registerGaussianSplat3dView
+    // View can only be created by Viewer via addGaussianSplat3dView
     GaussianSplat3dView(const GaussianSplat3dView &)            = delete;
     GaussianSplat3dView &operator=(const GaussianSplat3dView &) = delete;
 

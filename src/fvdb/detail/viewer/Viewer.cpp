@@ -158,6 +158,7 @@ Viewer::addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splat
                                           mEditor.rasterShaderParamsType,
                                           set_data ? PNANOVDB_TRUE : PNANOVDB_FALSE);
     };
+    it->second.mSyncCallback(true); // initial sync
 
     mEditor.compute.destroy_array(means_arr);
     mEditor.compute.destroy_array(quats_arr);
@@ -284,12 +285,11 @@ Viewer::addCameraView(const std::string &name,
     auto [it, inserted] = mCameraViews.emplace(
         std::piecewise_construct, std::forward_as_tuple(name), std::forward_as_tuple(name));
 
-    pnanovdb_camera_config_default(&it->second.mView.config);
+    it->second.mView.num_cameras = cameraToWorldMatrices.size(0);
+    it->second.mView.states      = new pnanovdb_camera_state_t[it->second.mView.num_cameras];
+    it->second.mView.configs     = new pnanovdb_camera_config_t[it->second.mView.num_cameras];
 
-    it->second.mView.num_states = cameraToWorldMatrices.size(0);
-    it->second.mView.states     = new pnanovdb_camera_state_t[it->second.mView.num_states];
-
-    for (int i = 0; i < (int)it->second.mView.num_states; i++) {
+    for (int i = 0; i < (int)it->second.mView.num_cameras; i++) {
         torch::Tensor c2w = cameraToWorldMatrices.index({i}).contiguous().cpu();
         float px          = c2w[0][3].item<float>();
         float py          = c2w[1][3].item<float>();
@@ -304,23 +304,6 @@ Viewer::addCameraView(const std::string &name,
         float uy = c2w[1][1].item<float>();
         float uz = c2w[2][1].item<float>();
 
-        if (i == 0) {
-            torch::Tensor M = projectionMatrices.index({i}).contiguous().cpu();
-
-            float near          = M[3][2].item<float>() / (M[2][2].item<float>() - 1.0f);
-            float far           = M[3][2].item<float>() / (M[2][2].item<float>() + 1.0f);
-            float fov           = 2.0f * std::atan(1.0f / M[1][1].item<float>());
-            bool isOrthographic = M[2][2].item<float>() == 0.0f;
-
-            it->second.mView.config.near_plane = near;
-            it->second.mView.config.far_plane  = far;
-
-            it->second.mView.config.fov_angle_y = fov;
-
-            it->second.mView.config.is_orthographic =
-                isOrthographic ? PNANOVDB_TRUE : PNANOVDB_FALSE;
-        }
-
         pnanovdb_camera_state_default(&it->second.mView.states[i], PNANOVDB_FALSE);
 
         it->second.mView.states[i].eye_up.x = ux;
@@ -334,6 +317,23 @@ Viewer::addCameraView(const std::string &name,
         it->second.mView.states[i].eye_direction.x = dx;
         it->second.mView.states[i].eye_direction.y = dy;
         it->second.mView.states[i].eye_direction.z = dz;
+
+        pnanovdb_camera_config_default(&it->second.mView.configs[i]);
+
+        torch::Tensor M     = projectionMatrices.index({i}).contiguous().cpu();
+        float near          = 0.1f; // assume near plane is 0.1
+        float far           = M[2][2].item<float>() * near / (M[2][2].item<float>() - 1.f);
+        float fov           = 2.0f * std::atan(1.0f / M[1][1].item<float>());
+        float aspectRatio   = M[0][0].item<float>() / M[1][1].item<float>();
+        bool isOrthographic = M[2][2].item<float>() == 0.f;
+
+        it->second.mView.configs[i].near_plane = std::min(near, far);
+        it->second.mView.configs[i].far_plane  = std::max(near, far);
+
+        it->second.mView.configs[i].fov_angle_y  = fov;
+        it->second.mView.configs[i].aspect_ratio = std::max(aspectRatio, 0.f);
+        it->second.mView.configs[i].is_orthographic =
+            isOrthographic ? PNANOVDB_TRUE : PNANOVDB_FALSE;
     }
 
     mEditor.editor.add_camera_view(&mEditor.editor, &it->second.mView);
