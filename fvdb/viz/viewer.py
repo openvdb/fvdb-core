@@ -29,7 +29,7 @@ class GaussianSplat3dView:
         self._view = view
         if _private is not self.__PRIVATE__:
             raise ValueError(
-                "GaussianSplat3dView constructor is private. Use Viewer.add_gaussian_splat3d_view() instead."
+                "GaussianSplat3dView constructor is private. Use Viewer.add_gaussian_splat3d() instead."
             )
 
     @property

@@ -85,7 +85,7 @@ print(version, end='')
             -Clogging.level=WARNING \
             -Ccmake.define.NANOVDB_EDITOR_USE_GLFW=OFF \
             -Ccmake.define.NANOVDB_EDITOR_BUILD_TESTS=OFF \
-            --config-settings=cmake.build-type=Debug \
+            --config-settings=cmake.build-type=Release \
             -v \
             --no-build-isolation
         ${Python3_EXECUTABLE} -m pip install --force-reinstall ${NANOVDB_EDITOR_WHEEL_DIR}/nanovdb_editor*.whl

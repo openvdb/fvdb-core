@@ -18,7 +18,7 @@ TEST(Viewer, ViewerTest) {
     fvdb::detail::viewer::Viewer viewer = fvdb::detail::viewer::Viewer("127.0.0.1", 8080, false);
 
 #ifdef LOCAL_TESTING
-    std::string ply_path = "/home/petul/git/openvdb_fork/nanovdb/nanovdb_editor/data/ficus.ply";
+    std::string ply_path = "";
     torch::Device device(torch::kCUDA);
     auto [splats, metadata] = fvdb::detail::io::loadGaussianPly(ply_path, device);
 
