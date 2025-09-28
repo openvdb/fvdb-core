@@ -265,9 +265,7 @@ class Viewer:
         projection_matrices: torch.Tensor | None = None,
     ) -> CameraView:
         if camera_to_world_matrices is None or projection_matrices is None:
-            raise ValueError(
-                "Both camera_to_world_matrices and projection_matrices must be provided."
-            )
+            raise ValueError("Both camera_to_world_matrices and projection_matrices must be provided.")
         view: CameraViewCpp = self._impl.add_camera_view(name, camera_to_world_matrices, projection_matrices)
         return CameraView(view, CameraView.__PRIVATE__)
 
