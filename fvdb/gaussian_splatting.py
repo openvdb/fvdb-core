@@ -15,6 +15,8 @@ from .types import DeviceIdentifier, cast_check, resolve_device
 
 
 class GaussianSplat3d:
+    class ProjectionType(GaussianSplat3dCpp.ProjectionType):
+        pass
 
     PLY_VERSION_STRING = "fvdb_ply 1.0.0"
 
@@ -769,7 +771,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type="perspective",
+        projection_type=ProjectionType.PERSPECTIVE,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
         antialias: bool = False,
@@ -788,8 +790,8 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (str): The type of projection to use. Default is "perspective".
-                Other options could include "orthographic".
+            projection_type (ProjectionType): The type of projection to use. Default is PERSPECTIVE.
+                Other options could include ORTHOGRAPHIC.
             min_radius_2d (float): The minimum radius in pixel space below which Gaussians are ignored during rendering.
             eps_2d (float): A small epsilon value to avoid numerical issues during projection.
             antialias (bool): If True, applies antialiasing to the projected Gaussians.
@@ -822,7 +824,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type="perspective",
+        projection_type=ProjectionType.PERSPECTIVE,
         sh_degree_to_use: int = -1,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -842,8 +844,8 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (str): The type of projection to use. Default is "perspective".
-                Other options could include "orthographic".
+            projection_type (ProjectionType): The type of projection to use. Default is PERSPECTIVE.
+                Other options could include ORTHOGRAPHIC.
             sh_degree_to_use (int): The degree of spherical harmonics to use for rendering. -1 means use all available SH bases.
                 0 means use only the first SH base (constant color). Note that you can't use more SH bases than available in the GaussianSplat3d instance.
                 Default is -1.
@@ -880,7 +882,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type="perspective",
+        projection_type=ProjectionType.PERSPECTIVE,
         sh_degree_to_use: int = -1,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -902,8 +904,8 @@ class GaussianSplat3d:
             image_height (int): The height of the images and depth maps to be rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (str): The type of projection to use. Default is "perspective".
-                Other options could include "orthographic".
+            projection_type (ProjectionType): The type of projection to use. Default is PERSPECTIVE.
+                Other options could include ORTHOGRAPHIC.
             sh_degree_to_use (int): The degree of spherical harmonics to use for rendering. -1 means use all available SH bases.
                 0 means use only the first SH base (constant color). Note that you can't use more SH bases than available
                 in the GaussianSplat3d instance. Default is -1.
@@ -988,7 +990,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type="perspective",
+        projection_type=ProjectionType.PERSPECTIVE,
         tile_size: int = 16,
         min_radius_2d: float = 0.3,
         eps_2d: float = 0.3,
@@ -1006,8 +1008,8 @@ class GaussianSplat3d:
             image_height (int): The height of the depth maps to be rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (str): The type of projection to use. Default is "perspective".
-                Other options could include "orthographic".
+            projection_type (ProjectionType): The type of projection to use. Default is PERSPECTIVE.
+                Other options could include ORTHOGRAPHIC.
             tile_size (int): The size of the tiles to use for rendering. Default is 16.
             min_radius_2d (float): The minimum radius in pixel space below which Gaussians are ignored during rendering.
                 This helps to avoid rendering very small Gaussians that may not contribute significantly to the depth map.
@@ -1046,7 +1048,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type="perspective",
+        projection_type=ProjectionType.PERSPECTIVE,
         sh_degree_to_use: int = -1,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
@@ -1065,8 +1067,8 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (str): The type of projection to use. Default is "perspective".
-                Other options could include "orthographic".
+            projection_type (ProjectionType): The type of projection to use. Default is PERSPECTIVE.
+                Other options could include ORTHOGRAPHIC.
             tile_size (int): The size of the tiles to use for rendering. Default is 16.
             min_radius_2d (float): The minimum radius in pixel space below which Gaussians are ignored during rendering.
                 This helps to avoid rendering very small Gaussians that may not contribute significantly to the depth map.
@@ -1106,7 +1108,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type="perspective",
+        projection_type=ProjectionType.PERSPECTIVE,
         sh_degree_to_use: int = -1,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
@@ -1125,8 +1127,8 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (str): The type of projection to use. Default is "perspective".
-                Other options could include "orthographic".
+            projection_type (ProjectionType): The type of projection to use. Default is PERSPECTIVE.
+                Other options could include ORTHOGRAPHIC.
             sh_degree_to_use (int): The degree of spherical harmonics to use for rendering. -1 means use all available SH bases.
                 0 means use only the first SH base (constant color). Note that you can't use more SH bases than available in the GaussianSplat3d instance.
                 Default is -1.
@@ -1169,7 +1171,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type="perspective",
+        projection_type=ProjectionType.PERSPECTIVE,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -1187,8 +1189,8 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (str): The type of projection to use. Default is "perspective".
-                Other options could include "orthographic".
+            projection_type (ProjectionType): The type of projection to use. Default is PERSPECTIVE.
+                Other options could include ORTHOGRAPHIC.
             tile_size (int): The size of the tiles to use for rendering. Default is 16.
             min_radius_2d (float): The minimum radius in pixel space below which Gaussians are ignored during rendering.
                 This helps to avoid rendering very small Gaussians that may not contribute significantly to the depth map.
@@ -1229,7 +1231,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type="perspective",
+        projection_type=ProjectionType.PERSPECTIVE,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -1253,8 +1255,8 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (str): The type of projection to use. Default is "perspective".
-                Other options could include "orthographic".
+            projection_type (ProjectionType): The type of projection to use. Default is PERSPECTIVE.
+                Other options could include ORTHOGRAPHIC.
             tile_size (int): The size of the tiles to use for rendering. Default is 16.
             min_radius_2d (float): The minimum radius in pixel space below which Gaussians are
                 ignored during rendering. This helps to avoid rendering very small Gaussians that
@@ -1283,7 +1285,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type="perspective",
+        projection_type=ProjectionType.PERSPECTIVE,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -1307,8 +1309,8 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (str): The type of projection to use. Default is "perspective".
-                Other options could include "orthographic".
+            projection_type (ProjectionType): The type of projection to use. Default is PERSPECTIVE.
+                Other options could include ORTHOGRAPHIC.
             tile_size (int): The size of the tiles to use for rendering. Default is 16.
             min_radius_2d (float): The minimum radius in pixel space below which Gaussians are
                 ignored during rendering. This helps to avoid rendering very small Gaussians that
@@ -1341,7 +1343,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type="perspective",
+        projection_type=ProjectionType.PERSPECTIVE,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -1365,8 +1367,8 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (str): The type of projection to use. Default is "perspective".
-                Other options could include "orthographic".
+            projection_type (ProjectionType): The type of projection to use. Default is PERSPECTIVE.
+                Other options could include ORTHOGRAPHIC.
             tile_size (int): The size of the tiles to use for rendering. Default is 16.
             min_radius_2d (float): The minimum radius in pixel space below which Gaussians are
                 ignored during rendering. This helps to avoid rendering very small Gaussians that
@@ -1436,7 +1438,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type="perspective",
+        projection_type=ProjectionType.PERSPECTIVE,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -1455,8 +1457,8 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (str): The type of projection to use. Default is "perspective".
-                Other options could include "orthographic".
+            projection_type (ProjectionType): The type of projection to use. Default is PERSPECTIVE.
+                Other options could include ORTHOGRAPHIC.
             tile_size (int): The size of the tiles to use for rendering. Default is 16.
             min_radius_2d (float): The minimum radius in pixel space below which Gaussians are ignored during rendering.
                 This helps to avoid rendering very small Gaussians that may not contribute significantly to the depth map.
@@ -1500,7 +1502,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type="perspective",
+        projection_type=ProjectionType.PERSPECTIVE,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -1525,8 +1527,8 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (str): The type of projection to use. Default is "perspective".
-                Other options could include "orthographic".
+            projection_type (ProjectionType): The type of projection to use. Default is PERSPECTIVE.
+                Other options could include ORTHOGRAPHIC.
             tile_size (int): The size of the tiles to use for rendering. Default is 16.
             min_radius_2d (float): The minimum radius in pixel space below which Gaussians are
                 ignored during rendering. This helps to avoid rendering very small Gaussians that
@@ -1561,7 +1563,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type="perspective",
+        projection_type=ProjectionType.PERSPECTIVE,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -1586,8 +1588,8 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (str): The type of projection to use. Default is "perspective".
-                Other options could include "orthographic".
+            projection_type (ProjectionType): The type of projection to use. Default is PERSPECTIVE.
+                Other options could include ORTHOGRAPHIC.
             tile_size (int): The size of the tiles to use for rendering. Default is 16.
             min_radius_2d (float): The minimum radius in pixel space below which Gaussians are
                 ignored during rendering. This helps to avoid rendering very small Gaussians that
@@ -1625,7 +1627,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type="perspective",
+        projection_type=ProjectionType.PERSPECTIVE,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -1650,8 +1652,8 @@ class GaussianSplat3d:
             image_height (int): The height of the images to be rendered.
             near (float): The near clipping plane distance for the projection.
             far (float): The far clipping plane distance for the projection.
-            projection_type (str): The type of projection to use. Default is "perspective".
-                Other options could include "orthographic".
+            projection_type (ProjectionType): The type of projection to use. Default is PERSPECTIVE.
+                Other options could include ORTHOGRAPHIC.
             tile_size (int): The size of the tiles to use for rendering. Default is 16.
             min_radius_2d (float): The minimum radius in pixel space below which Gaussians are
                 ignored during rendering. This helps to avoid rendering very small Gaussians that

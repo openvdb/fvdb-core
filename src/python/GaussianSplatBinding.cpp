@@ -43,6 +43,11 @@ bind_gaussian_splat3d(py::module &m) {
 
     py::class_<fvdb::GaussianSplat3d> gs3d(m, "GaussianSplat3d", "A gaussian splat scene");
 
+    py::enum_<fvdb::GaussianSplat3d::ProjectionType>(gs3d, "ProjectionType")
+        .value("PERSPECTIVE", fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE)
+        .value("ORTHOGRAPHIC", fvdb::GaussianSplat3d::ProjectionType::ORTHOGRAPHIC)
+        .export_values();
+
     gs3d.def(py::init<torch::Tensor,
                       torch::Tensor,
                       torch::Tensor,
