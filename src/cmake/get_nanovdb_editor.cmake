@@ -9,11 +9,14 @@
 #       ./build.sh install -C cmake.define.NANOVDB_EDITOR_SKIP=ON
 #   IMPORTANT: variables are cached by cmake, so set them OFF to disable if not doing clean build
 
+option(NANOVDB_EDITOR_FORCE "Force rebuild of nanovdb_editor wheel" OFF)
+option(NANOVDB_EDITOR_SKIP "Skip nanovdb_editor wheel build" OFF)
+
 CPMAddPackage(
     NAME nanovdb_editor
     GITHUB_REPOSITORY openvdb/nanovdb-editor
-    GIT_TAG 8f16fd978198dd6cc28c0c7f7800abb45610caf9
-    VERSION 0.0.1
+    GIT_TAG 711bad66d60fab04230dd6adb9063a6aa2d148d7
+    VERSION 0.0.2
     DOWNLOAD_ONLY YES
 )
 
@@ -82,6 +85,7 @@ print(version, end='')
             -Clogging.level=WARNING \
             -Ccmake.define.NANOVDB_EDITOR_USE_GLFW=OFF \
             -Ccmake.define.NANOVDB_EDITOR_BUILD_TESTS=OFF \
+            --config-settings=cmake.build-type=Release \
             -v \
             --no-build-isolation
         ${Python3_EXECUTABLE} -m pip install --force-reinstall ${NANOVDB_EDITOR_WHEEL_DIR}/nanovdb_editor*.whl

@@ -12,8 +12,6 @@
 #include <cstdarg>
 #include <cstdio>
 
-// #define TEST_RGBRGB
-
 inline void
 pNanoLogPrint(pnanovdb_compute_log_level_t level, const char *format, ...) {
     va_list args;
@@ -116,19 +114,7 @@ Viewer::addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splat
     torch::Tensor logitOpacities = splats.logitOpacities();
     torch::Tensor sh0            = splats.sh0();
     torch::Tensor shN            = splats.shN();
-
-    // Use RRRGGGBBB
-    torch::Tensor sh = torch::cat({sh0, shN}, 1);
-
-#ifdef TEST_RGBRGB
-    int N              = means.size(0);
-    auto shN_flat      = shN.reshape({N, 45});
-    auto shN_R         = shN_flat.slice(1, 0, 15).unsqueeze(2);  // (N, 15, 1)
-    auto shN_G         = shN_flat.slice(1, 15, 30).unsqueeze(2); // (N, 15, 1)
-    auto shN_B         = shN_flat.slice(1, 30, 45).unsqueeze(2); // (N, 15, 1)
-    auto shN_reordered = torch::cat({shN_R, shN_G, shN_B}, 2);   // (N, 15, 3)
-    sh                 = torch::cat({sh0, shN_reordered}, 1);    // (N, 16, 3)
-#endif
+    torch::Tensor sh             = torch::cat({sh0, shN}, 1);
 
     auto makeComputeArray = [this](const torch::Tensor &tensor) -> pnanovdb_compute_array_t * {
         torch::Tensor contig = tensor.cpu().contiguous();
@@ -165,13 +151,12 @@ Viewer::addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splat
     }
 
     mEditor.editor.add_gaussian_data(&mEditor.editor, &mEditor.raster, queue, gaussian_data);
-    mEditor.editor.setup_shader_params(
+    mEditor.editor.add_shader_params(
         &mEditor.editor, &it->second.mParams, mEditor.rasterShaderParamsType);
     it->second.mSyncCallback = [this](bool set_data) {
         mEditor.editor.sync_shader_params(&mEditor.editor,
                                           mEditor.rasterShaderParamsType,
                                           set_data ? PNANOVDB_TRUE : PNANOVDB_FALSE);
-        mEditor.editor.wait_for_shader_params_sync(&mEditor.editor, mEditor.rasterShaderParamsType);
     };
     it->second.mSyncCallback(true); // initial sync
 
@@ -282,9 +267,77 @@ void
 Viewer::setCameraProjectionType(GaussianSplat3d::ProjectionType mode) {
     mEditor.camera.config.is_orthographic =
         (mode == GaussianSplat3d::ProjectionType::ORTHOGRAPHIC) ? PNANOVDB_TRUE : PNANOVDB_FALSE;
-    mEditor.camera.config.is_projection_rh = ~mEditor.camera.config.is_orthographic;
 
     updateCamera();
+}
+
+CameraView &
+Viewer::addCameraView(const std::string &name,
+                      const torch::Tensor &cameraToWorldMatrices,
+                      const torch::Tensor &projectionMatrices) {
+    TORCH_CHECK(cameraToWorldMatrices.dim() == 3 && cameraToWorldMatrices.size(1) == 4 &&
+                    cameraToWorldMatrices.size(2) == 4,
+                "camera_to_world_matrices must have shape [N, 4, 4]");
+    TORCH_CHECK(projectionMatrices.dim() == 3 && projectionMatrices.size(1) == 3 &&
+                    projectionMatrices.size(2) == 3,
+                "projection_matrices must have shape [N, 3, 3]");
+
+    auto [it, inserted] = mCameraViews.emplace(
+        std::piecewise_construct, std::forward_as_tuple(name), std::forward_as_tuple(name));
+
+    it->second.mView.num_cameras = cameraToWorldMatrices.size(0);
+    it->second.mView.states      = new pnanovdb_camera_state_t[it->second.mView.num_cameras];
+    it->second.mView.configs     = new pnanovdb_camera_config_t[it->second.mView.num_cameras];
+
+    for (int i = 0; i < (int)it->second.mView.num_cameras; i++) {
+        torch::Tensor c2w = cameraToWorldMatrices.index({i}).contiguous().cpu();
+        float px          = c2w[0][3].item<float>();
+        float py          = c2w[1][3].item<float>();
+        float pz          = c2w[2][3].item<float>();
+
+        float zx = c2w[0][2].item<float>();
+        float zy = c2w[1][2].item<float>();
+        float zz = c2w[2][2].item<float>();
+        float dx = -zx, dy = -zy, dz = -zz;
+
+        float ux = c2w[0][1].item<float>();
+        float uy = c2w[1][1].item<float>();
+        float uz = c2w[2][1].item<float>();
+
+        pnanovdb_camera_state_default(&it->second.mView.states[i], PNANOVDB_FALSE);
+
+        it->second.mView.states[i].eye_up.x = ux;
+        it->second.mView.states[i].eye_up.y = uy;
+        it->second.mView.states[i].eye_up.z = uz;
+
+        it->second.mView.states[i].position.x = px;
+        it->second.mView.states[i].position.y = py;
+        it->second.mView.states[i].position.z = pz;
+
+        it->second.mView.states[i].eye_direction.x = dx;
+        it->second.mView.states[i].eye_direction.y = dy;
+        it->second.mView.states[i].eye_direction.z = dz;
+
+        pnanovdb_camera_config_default(&it->second.mView.configs[i]);
+
+        torch::Tensor M     = projectionMatrices.index({i}).contiguous().cpu();
+        float near          = 0.1f; // assume near plane is 0.1
+        float far           = M[2][2].item<float>() * near / (M[2][2].item<float>() - 1.f);
+        float fov           = 2.0f * std::atan(1.0f / M[1][1].item<float>());
+        float aspectRatio   = M[0][0].item<float>() / M[1][1].item<float>();
+        bool isOrthographic = M[2][2].item<float>() == 0.f;
+
+        it->second.mView.configs[i].near_plane = std::min(near, far);
+        it->second.mView.configs[i].far_plane  = std::max(near, far);
+
+        it->second.mView.configs[i].fov_angle_y  = fov;
+        it->second.mView.configs[i].aspect_ratio = std::max(aspectRatio, 0.f);
+        it->second.mView.configs[i].is_orthographic =
+            isOrthographic ? PNANOVDB_TRUE : PNANOVDB_FALSE;
+    }
+
+    mEditor.editor.add_camera_view(&mEditor.editor, &it->second.mView);
+    return it->second;
 }
 
 } // namespace fvdb::detail::viewer

@@ -22,13 +22,24 @@ TEST(Viewer, ViewerTest) {
     torch::Device device(torch::kCUDA);
     auto [splats, metadata] = fvdb::detail::io::loadGaussianPly(ply_path, device);
 
-    viewer.setCameraPosition(0.358805, 0.725740, -0.693701);
-    viewer.setCameraEyeDirection(-0.012344, 0.959868, -0.280182);
-    viewer.setCameraEyeUp(0.000000, 1.000000, 0.000000);
-    viewer.setCameraEyeDistanceFromPosition(-2.111028);
-
     fvdb::detail::viewer::GaussianSplat3dView &view =
-        viewer.registerGaussianSplat3dView("test_view", splats);
+        viewer.addGaussianSplat3d("test_view", splats);
+
+    torch::Tensor cameraToWorld =
+        torch::tensor({{{0.9990f, 0.0422f, 0.0123f, 0.6324f},
+                        {0.0000f, 0.2805f, -0.9599f, 0.9302f},
+                        {-0.0440f, 0.9589f, 0.2802f, -0.0052f},
+                        {0.0000f, 0.0000f, 0.0000f, 1.0000f}}},
+                      torch::TensorOptions().dtype(torch::kFloat32).device(device));
+
+    torch::Tensor projectionMat = torch::tensor(
+        {{{1.7321f, 0.0000f, 0.0000f}, {0.0000f, 1.7321f, 0.0000f}, {0.0000f, 0.0000f, 1.0010f}}},
+        torch::TensorOptions().dtype(torch::kFloat32).device(device));
+
+    fvdb::detail::viewer::CameraView &cameraView =
+        viewer.addCameraView("test_camera_view", cameraToWorld, projectionMat);
+
+    cameraView.setFrustumScale(1.2f);
 #else
     const int N = 1000;
     torch::Device device(torch::kCUDA);
@@ -43,7 +54,7 @@ TEST(Viewer, ViewerTest) {
         means, quats, logScales, logitOpacities, sh0, shN, false, false, false);
 
     fvdb::detail::viewer::GaussianSplat3dView &view =
-        viewer.registerGaussianSplat3dView("test_view", splats);
+        viewer.addGaussianSplat3d("test_view", splats);
 #endif
 
     const float testNear = 0.5f;

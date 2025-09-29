@@ -4,6 +4,7 @@
 #include "TypeCasters.h"
 
 #include <fvdb/GaussianSplat3d.h>
+#include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
 #include <fvdb/detail/viewer/Viewer.h>
 
@@ -12,6 +13,42 @@
 
 void
 bind_viewer(py::module &m) {
+    py::class_<fvdb::detail::viewer::CameraView>(
+        m, "CameraView", "A view object for visualizing a camera in the editor")
+        .def_property("visible",
+                      &fvdb::detail::viewer::CameraView::getVisible,
+                      &fvdb::detail::viewer::CameraView::setVisible,
+                      "Whether the camera view is visible")
+        .def_property_readonly(
+            "name", &fvdb::detail::viewer::CameraView::getName, "The name of this camera view")
+        .def_property("axis_length",
+                      &fvdb::detail::viewer::CameraView::getAxisLength,
+                      &fvdb::detail::viewer::CameraView::setAxisLength,
+                      "The axis length for the gizmo")
+        .def_property("axis_thickness",
+                      &fvdb::detail::viewer::CameraView::getAxisThickness,
+                      &fvdb::detail::viewer::CameraView::setAxisThickness,
+                      "The axis thickness for the gizmo")
+        .def_property("axis_scale",
+                      &fvdb::detail::viewer::CameraView::getAxisScale,
+                      &fvdb::detail::viewer::CameraView::setAxisScale,
+                      "The axis scale for the gizmo, default is 1.0")
+        .def_property("frustum_line_width",
+                      &fvdb::detail::viewer::CameraView::getFrustumLineWidth,
+                      &fvdb::detail::viewer::CameraView::setFrustumLineWidth,
+                      "The line width of the frustum")
+        .def_property("frustum_scale",
+                      &fvdb::detail::viewer::CameraView::getFrustumScale,
+                      &fvdb::detail::viewer::CameraView::setFrustumScale,
+                      "The scale of the frustum visualization, default is 1.0")
+        .def_property(
+            "frustum_color",
+            &fvdb::detail::viewer::CameraView::getFrustumColor,
+            [](fvdb::detail::viewer::CameraView &self, const std::tuple<float, float, float> &rgb) {
+                self.setFrustumColor(std::get<0>(rgb), std::get<1>(rgb), std::get<2>(rgb));
+            },
+            "The RGB color of the frustum as a 3-tuple");
+
     py::class_<fvdb::detail::viewer::GaussianSplat3dView>(
         m, "GaussianSplat3dView", "A view for displaying Gaussian splat 3D data in the viewer")
         .def_property("tile_size",
@@ -121,5 +158,13 @@ bind_viewer(py::module &m) {
         .def("set_camera_projection_type",
              &fvdb::detail::viewer::Viewer::setCameraProjectionType,
              py::arg("mode"),
-             "Set the camera mode (perspective or orthographic)");
+             "Set the camera mode (perspective or orthographic)")
+        .def("add_camera_view",
+             py::overload_cast<const std::string &, const torch::Tensor &, const torch::Tensor &>(
+                 &fvdb::detail::viewer::Viewer::addCameraView),
+             py::arg("name"),
+             py::arg("camera_to_world_matrices"),
+             py::arg("projection_matrices"),
+             py::return_value_policy::reference_internal,
+             "Add a named camera view from camera/world and projection matrices");
 }
