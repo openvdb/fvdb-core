@@ -15,7 +15,7 @@ option(NANOVDB_EDITOR_SKIP "Skip nanovdb_editor wheel build" OFF)
 CPMAddPackage(
     NAME nanovdb_editor
     GITHUB_REPOSITORY openvdb/nanovdb-editor
-    GIT_TAG 711bad66d60fab04230dd6adb9063a6aa2d148d7
+    GIT_TAG 482bd60f4263629c12d3218c615908ac77bd55de
     VERSION 0.0.2
     DOWNLOAD_ONLY YES
 )
