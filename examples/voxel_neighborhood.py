@@ -1,6 +1,7 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
+import fvdb.viz as fviz
 import numpy as np
 import polyscope as ps
 import torch
@@ -33,9 +34,9 @@ def main():
         print(nhood[randvox])
         nhood_ijk = torch.cat([voxijk.unsqueeze(0), nbrs], dim=0)
 
-        vp, ve = index.viz_edge_network
+        vp, ve = fviz.grid_edge_network(index)
 
-        vi, vei = Grid.from_ijk(nhood_ijk, voxel_size=vox_size, origin=vox_origin).viz_edge_network
+        vi, vei = fviz.grid_edge_network(Grid.from_ijk(nhood_ijk, voxel_size=vox_size, origin=vox_origin))
 
         ps.register_curve_network("vox", vp.cpu().numpy(), ve.cpu().numpy(), radius=0.0025)
         ps.register_curve_network("nhd", vi.cpu().numpy(), vei.cpu().numpy(), radius=0.005)

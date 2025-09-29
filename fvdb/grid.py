@@ -1852,11 +1852,6 @@ class Grid:
         return self._impl.origin_at(0)
 
     @property
-    def viz_edge_network(self) -> tuple[torch.Tensor, torch.Tensor]:
-        a, b = self._impl.viz_edge_network
-        return a.jdata, b.jdata
-
-    @property
     def voxel_size(self) -> torch.Tensor:
         return self._impl.voxel_size_at(0)
 
