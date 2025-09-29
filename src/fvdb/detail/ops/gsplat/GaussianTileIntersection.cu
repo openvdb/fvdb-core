@@ -1146,7 +1146,10 @@ gaussianTileIntersectionPrivateUse1Impl(
         }
 
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            C10_CUDA_CHECK(cudaSetDevice(deviceId));
             c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
+            cudaEventDestroy(device_pre_events[deviceId]);
+            cudaEventDestroy(device_post_events[deviceId]);
         }
 
         return std::make_tuple(tile_joffsets, vals_sorted);
