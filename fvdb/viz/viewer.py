@@ -345,13 +345,13 @@ class Viewer:
         name: str,
         cam_to_world_matrices: Sequence[torch.Tensor | np.ndarray] | torch.Tensor | np.ndarray,
         projection_matrices: Sequence[torch.Tensor | np.ndarray] | torch.Tensor | np.ndarray,
-        axis_length: float = 0.5,
-        axis_thickness: float = 0.0125,
+        axis_length: float = 0.3,
+        axis_thickness: float = 2.0,
         frustum_line_width: float = 2.0,
         frustum_scale: float = 1.0,
         frustum_color: Sequence[float] | np.ndarray = (0.5, 0.8, 0.3),
         frustum_near_plane: float = 0,
-        frustum_far_plane: float = 1.0,
+        frustum_far_plane: float = 0.5,
         enabled: bool = True,
     ) -> CameraView:
         """
