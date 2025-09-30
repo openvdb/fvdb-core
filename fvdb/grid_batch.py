@@ -2027,10 +2027,6 @@ class GridBatch:
             return self._impl.total_voxels
 
     @property
-    def viz_edge_network(self) -> tuple[JaggedTensor, JaggedTensor]:
-        return self._impl.viz_edge_network
-
-    @property
     def voxel_sizes(self) -> torch.Tensor:
         if self.has_zero_grids:
             return torch.empty((0, 3), dtype=torch.float32, device=self.device)

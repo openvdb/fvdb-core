@@ -4,6 +4,7 @@
 import logging
 import timeit
 
+import fvdb.viz as fviz
 import polyscope as ps
 import torch
 from fvdb.utils.examples import load_dragon_mesh, make_ray_grid, plot_ray_segments
@@ -45,7 +46,7 @@ def main():
     grid = GridBatch.from_points(p, voxel_sizes=vox_size, origins=vox_origin)
 
     logging.info(f"Created {len(grid)} grids with {grid.total_voxels} total voxels")
-    gc, ge = grid.viz_edge_network
+    gc, ge = fviz.gridbatch_edge_network(grid)
 
     ray_o, ray_d = make_ray_grid(nrays, [0.0, 0.0, -0.1], device=device, dtype=dtype)
     pmt = torch.randperm(ray_o.shape[0]).to(device)
@@ -82,7 +83,7 @@ def main():
         logging.info(f"Creating a new grid of only the voxels intersected by this ray")
         isected_grid = fvdb.GridBatch.from_ijk(vox[i].jflatten(), voxel_sizes=vox_size, origins=vox_origin)
         logging.info(f"Created {len(isected_grid)} grids with {isected_grid.total_voxels} total voxels")
-        iv, ie = isected_grid.viz_edge_network
+        iv, ie = fviz.gridbatch_edge_network(isected_grid)
         ps.register_curve_network("intersected voxels", iv.jdata.cpu(), ie.jdata.cpu(), enabled=True, radius=0.0009)
         ps.register_point_cloud("grid corners", gc_i.jdata, enabled=True, radius=0.001)
         ps.register_curve_network("grid edges", gc_i.jdata, ge_i.jdata, enabled=True, radius=0.00015, transparency=0.7)

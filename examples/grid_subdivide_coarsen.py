@@ -3,6 +3,7 @@
 #
 import uuid
 
+import fvdb.viz as fviz
 import numpy as np
 import point_cloud_utils as pcu
 import polyscope as ps
@@ -43,7 +44,7 @@ if __name__ == "__main__":
 
     grid_dual = grid_origin.dual_grid()
 
-    grid_dual_gv, grid_dual_ge = grid_dual.viz_edge_network
+    grid_dual_gv, grid_dual_ge = fviz.gridbatch_edge_network(grid_dual)
     ps.remove_all_structures()
     visualize_grid(grid_origin, 0.0)
     ps.register_curve_network(

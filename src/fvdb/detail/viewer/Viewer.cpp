@@ -106,9 +106,8 @@ Viewer::~Viewer() {
 
 fvdb::detail::viewer::GaussianSplat3dView &
 Viewer::addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splats) {
-    auto [it, inserted] = mSplat3dViews.emplace(std::piecewise_construct,
-                                                std::forward_as_tuple(name),
-                                                std::forward_as_tuple(name, splats, *this));
+    auto [it, inserted] = mSplat3dViews.emplace(
+        std::piecewise_construct, std::forward_as_tuple(name), std::forward_as_tuple(name, *this));
     // Load splats into viewer
 
     // Get the various tensors to pass to the viewer

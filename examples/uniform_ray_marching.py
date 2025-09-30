@@ -2,15 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import logging
-import os
-import time
 import timeit
 
-import numpy as np
-import point_cloud_utils as pcu
+import fvdb.viz as fviz
 import polyscope as ps
 import torch
-from fvdb.utils.examples import load_dragon_mesh, make_ray_grid, plot_ray_segments
+from fvdb.utils.examples import load_dragon_mesh, make_ray_grid
 
 import fvdb
 from fvdb import GridBatch, JaggedTensor
@@ -54,7 +51,7 @@ def main():
 
     grid = GridBatch.from_points(p, voxel_sizes=vox_size, origins=vox_origin)
 
-    gc, ge = grid.viz_edge_network
+    gc, ge = fviz.gridbatch_edge_network(grid)
 
     logging.info(f"Tracing {nrays ** 2} Ray Segments...")
     start = timeit.default_timer()

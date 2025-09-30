@@ -4,6 +4,7 @@
 import time
 from typing import List
 
+import fvdb.viz as fviz
 import numpy as np
 import torch
 import viser
@@ -18,7 +19,7 @@ class Viewer:
         self.scene: viser.SceneApi = self.server.scene
 
     def plot_grid_edges(self, name: str, grid: Grid, color: List[float]):
-        gv, ge = grid.viz_edge_network
+        gv, ge = fviz.grid_edge_network(grid)
 
         segments = torch.stack(
             [

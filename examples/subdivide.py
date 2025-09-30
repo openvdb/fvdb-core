@@ -4,6 +4,7 @@
 import logging
 import time
 
+import fvdb.viz as fviz
 import polyscope as ps
 import torch
 from fvdb.utils.examples import load_dragon_mesh
@@ -51,7 +52,7 @@ def main():
         dual_index = index.dual_grid()
         gp = index.ijk
         gd = dual_index.ijk
-        dual_v, dual_e = index.viz_edge_network
+        dual_v, dual_e = fviz.grid_edge_network(index)
 
         dual_v = dual_v.cpu()
         dual_e = dual_e.cpu()

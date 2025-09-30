@@ -68,6 +68,8 @@ print(version, end='')
     endif()
 
     set(NANOVDB_EDITOR_WHEEL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dist)
+    # Ensure the build directory used by scikit-build exists; this is where the nested build writes
+    file(MAKE_DIRECTORY ${nanovdb_editor_BINARY_DIR})
 
     message(STATUS "Removing existing nanovdb_editor wheel from ${NANOVDB_EDITOR_WHEEL_DIR}...")
     file(GLOB NANOVDB_EDITOR_WHEELS "${NANOVDB_EDITOR_WHEEL_DIR}/nanovdb_editor*.whl")
@@ -93,9 +95,10 @@ print(version, end='')
         WORKING_DIRECTORY ${nanovdb_editor_BINARY_DIR}
         RESULT_VARIABLE build_result
         OUTPUT_VARIABLE build_output
+        ERROR_VARIABLE build_error
     )
     if(NOT build_result EQUAL 0)
-        message(FATAL_ERROR "${build_output}")
+        message(FATAL_ERROR "nanovdb_editor wheel build failed.\nSTDOUT:\n${build_output}\n\nSTDERR:\n${build_error}")
     else()
         message(STATUS "${build_output}")
     endif()

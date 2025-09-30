@@ -3,6 +3,7 @@
 #
 from pathlib import Path
 
+import fvdb.viz as fviz
 import numpy as np
 import point_cloud_utils as pcu
 import polyscope as ps
@@ -26,7 +27,7 @@ def build_from_pointcloud(pcd_1: np.ndarray, pcd_2: np.ndarray):
     grid_a1 = fvdb.GridBatch.from_points(pcd_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
 
     # Visualization
-    gv_a1, ge_a1 = grid_a1.viz_edge_network
+    gv_a1, ge_a1 = fviz.gridbatch_edge_network(grid_a1)
     ps.remove_all_structures()
     ps.register_point_cloud("pcd_1", pcd_1, enabled=True, radius=0.01)
     ps.register_curve_network(
@@ -38,7 +39,7 @@ def build_from_pointcloud(pcd_1: np.ndarray, pcd_2: np.ndarray):
     grid_b = fvdb.GridBatch.from_nearest_voxels_to_points(pcd_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
 
     # Visualization
-    gv_b, ge_b = grid_b.viz_edge_network
+    gv_b, ge_b = fviz.gridbatch_edge_network(grid_b)
     ps.remove_all_structures()
     ps.register_point_cloud("pcd_1", pcd_1, enabled=True, radius=0.01)
     ps.register_curve_network(
@@ -82,7 +83,7 @@ def build_from_mesh(mesh_1_vf, mesh_2_vf):
     grid = fvdb.GridBatch.from_mesh(mesh_v_jagged, mesh_f_jagged, voxel_sizes=voxel_sizes, origins=[0.0] * 3)
 
     # Visualization
-    gv, ge = grid.viz_edge_network
+    gv, ge = fviz.gridbatch_edge_network(grid)
     ps.remove_all_structures()
     ps.register_surface_mesh("mesh_1", mesh_1_v, mesh_1_f, enabled=True)
     ps.register_curve_network(
