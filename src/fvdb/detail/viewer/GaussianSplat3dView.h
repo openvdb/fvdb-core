@@ -22,7 +22,6 @@ class GaussianSplat3dView {
     GaussianSplat3dView(const GaussianSplat3dView &)            = delete;
     GaussianSplat3dView &operator=(const GaussianSplat3dView &) = delete;
 
-    GaussianSplat3d mSplats;
     std::string mViewName;
 
   protected:
@@ -30,9 +29,7 @@ class GaussianSplat3dView {
     std::function<void(bool)> mSyncCallback;
 
   public:
-    GaussianSplat3dView(const std::string &name,
-                        const GaussianSplat3d &splats,
-                        const Viewer &viewer);
+    GaussianSplat3dView(const std::string &name, const Viewer &viewer);
 
     const float
     getNear() const {

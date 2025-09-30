@@ -10,10 +10,8 @@
 
 namespace fvdb::detail::viewer {
 
-GaussianSplat3dView::GaussianSplat3dView(const std::string &name,
-                                         const GaussianSplat3d &splats,
-                                         const Viewer &viewer)
-    : mSplats(splats), mViewName(name) {
+GaussianSplat3dView::GaussianSplat3dView(const std::string &name, const Viewer &viewer)
+    : mViewName(name) {
     mParams.near_plane_override = 0;
     mParams.far_plane_override  = 0;
     mParams.eps2d               = 0.3f;
