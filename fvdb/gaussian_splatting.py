@@ -22,6 +22,7 @@ class GaussianSplat3d:
         Possible values include PERSPECTIVE or ORTHOGRAPHIC for perspective
         and orthographic proections respectively.
         """
+
         pass
 
     PLY_VERSION_STRING = "fvdb_ply 1.0.0"
