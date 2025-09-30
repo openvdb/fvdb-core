@@ -1,7 +1,7 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 import torch
@@ -224,28 +224,63 @@ class CameraView:
         self._view.axis_thickness = thickness
 
     @property
-    def axis_scale(self) -> float:
-        return self._view.axis_scale
-
-    @axis_scale.setter
-    def axis_scale(self, scale: float):
-        self._view.axis_scale = scale
-
-    @property
     def frustum_line_width(self) -> float:
+        """
+        Get the line width of the frustum in the camera frustum view.
+        """
         return self._view.frustum_line_width
 
     @frustum_line_width.setter
     def frustum_line_width(self, width: float):
+        """
+        Set the line width of the frustum in the camera frustum view.
+
+        Args:
+            width (float): The line width of the frustum in world units.
+        """
         self._view.frustum_line_width = width
 
     @property
     def frustum_scale(self) -> float:
+        """
+        Get the scale factor applied to the frustum visualization.
+        """
         return self._view.frustum_scale
 
     @frustum_scale.setter
     def frustum_scale(self, scale: float):
+        """
+        Set the scale factor applied to the frustum visualization.
+
+        Args:
+            scale (float): The scale factor to apply to the frustum visualization.
+        """
         self._view.frustum_scale = scale
+
+    @property
+    def frustum_color(self) -> torch.Tensor:
+        """
+        Get the color of the frustum lines as a tensor of shape (3,) with values in [0, 1].
+
+        Returns:
+            torch.Tensor: The color of the frustum lines.
+        """
+        r, g, b = self._view.frustum_color
+        return torch.tensor([r, g, b], dtype=torch.float32)
+
+    @frustum_color.setter
+    def frustum_color(self, color: NumericMaxRank1):
+        """
+        Set the color of the frustum lines.
+
+        Args:
+            color (NumericMaxRank1): A tensor-like object of shape (3,) representing the color of the frustum lines
+                with values in [0, 1].
+        """
+        color_vec3f = to_Vec3f(color).cpu().numpy().tolist()
+        if any(c < 0.0 or c > 1.0 for c in color_vec3f):
+            raise ValueError(f"Frustum color components must be in [0, 1], got {color_vec3f}")
+        self._view.frustum_color = tuple(color_vec3f)
 
 
 class Viewer:
@@ -308,12 +343,49 @@ class Viewer:
     def add_camera_view(
         self,
         name: str,
-        camera_to_world_matrices: torch.Tensor | None = None,
-        projection_matrices: torch.Tensor | None = None,
+        cam_to_world_matrices: Sequence[torch.Tensor | np.ndarray] | torch.Tensor | np.ndarray,
+        projection_matrices: Sequence[torch.Tensor | np.ndarray] | torch.Tensor | np.ndarray,
+        axis_length: float = 0.5,
+        axis_thickness: float = 0.0125,
+        frustum_line_width: float = 2.0,
+        frustum_scale: float = 1.0,
+        frustum_color: Sequence[float] | np.ndarray = (0.5, 0.8, 0.3),
+        frustum_near_plane: float = 0,
+        frustum_far_plane: float = 1.0,
+        enabled: bool = True,
     ) -> CameraView:
-        if camera_to_world_matrices is None or projection_matrices is None:
+        """
+        Add CameraView to the viewer and return a view.
+
+        Args:
+            name (str): The name of the camera view.
+            cam_to_world_matrix (np.ndarray | torch.Tensor): The 4x4 camera to world transformation matrix.
+            projection_matrix (np.ndarray | torch.Tensor): The 3x3 projection matrix.
+            axis_length (float): The length of the axis lines in the camera frustum view.
+            axis_thickness (float): The thickness (in world coordinates) of the axis lines in the camera frustum view.
+            frustum_line_width (float): The width (in pixels) of the frustum lines in the camera frustum view.
+            frstum_scale (float): The scale factor for the frustum size in the camera frustum view.
+            frustum_color (Sequence[float] | np.ndarray): The color of the frustum lines as a sequence of three floats (R, G, B) in the range [0, 1].
+            frustum_near_plane (float): The near clipping plane distance for the frustum in the camera frustum view.
+            furstum_far_plane (float): The far clipping plane
+            enabled (bool): If True, the camera view UI is enabled and the cameras will be rendered.
+                If False, the camera view UI is disabled and the cameras will not be rendered.
+        """
+
+        if cam_to_world_matrices is None or projection_matrices is None:
             raise ValueError("Both camera_to_world_matrices and projection_matrices must be provided.")
-        view: CameraViewCpp = self._impl.add_camera_view(name, camera_to_world_matrices, projection_matrices)
+
+        view: CameraViewCpp = self._impl.add_camera_view(
+            name, cam_to_world_matrices, projection_matrices, frustum_near_plane, frustum_far_plane
+        )
+        view.visible = enabled
+        view.axis_length = axis_length
+        view.axis_thickness = axis_thickness
+        view.frustum_line_width = frustum_line_width
+        view.frustum_scale = frustum_scale
+        if len(frustum_color) != 3 or any(c < 0.0 or c > 1.0 for c in frustum_color):
+            raise ValueError(f"Frustum color must be a sequence of three floats in [0, 1], got {frustum_color}")
+        view.frustum_color = (float(frustum_color[0]), float(frustum_color[1]), float(frustum_color[2]))
         return CameraView(view, CameraView.__PRIVATE__)
 
     @property

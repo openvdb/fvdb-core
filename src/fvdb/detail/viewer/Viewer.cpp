@@ -9,6 +9,7 @@
 #include <nanovdb_editor/putil/Raster.h>
 #include <nanovdb_editor/putil/Raster.hpp>
 
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 
@@ -33,6 +34,9 @@ pNanoLogPrint(pnanovdb_compute_log_level_t level, const char *format, ...) {
 }
 
 namespace fvdb::detail::viewer {
+
+constexpr float DEFAULT_CAMERA_FOV_RADIANS  = 60.f * M_PI / 180.f;
+constexpr float DEFAULT_CAMERA_ASPECT_RATIO = 4.f / 3.f;
 
 void
 Viewer::updateCamera() {
@@ -274,7 +278,9 @@ Viewer::setCameraProjectionType(GaussianSplat3d::ProjectionType mode) {
 CameraView &
 Viewer::addCameraView(const std::string &name,
                       const torch::Tensor &cameraToWorldMatrices,
-                      const torch::Tensor &projectionMatrices) {
+                      const torch::Tensor &projectionMatrices,
+                      float frustumNear,
+                      float frustumFar) {
     TORCH_CHECK(cameraToWorldMatrices.dim() == 3 && cameraToWorldMatrices.size(1) == 4 &&
                     cameraToWorldMatrices.size(2) == 4,
                 "camera_to_world_matrices must have shape [N, 4, 4]");
@@ -291,49 +297,43 @@ Viewer::addCameraView(const std::string &name,
 
     for (int i = 0; i < (int)it->second.mView.num_cameras; i++) {
         torch::Tensor c2w = cameraToWorldMatrices.index({i}).contiguous().cpu();
-        float px          = c2w[0][3].item<float>();
-        float py          = c2w[1][3].item<float>();
-        float pz          = c2w[2][3].item<float>();
+
+        float px = c2w[0][3].item<float>();
+        float py = c2w[1][3].item<float>();
+        float pz = c2w[2][3].item<float>();
 
         float zx = c2w[0][2].item<float>();
         float zy = c2w[1][2].item<float>();
         float zz = c2w[2][2].item<float>();
-        float dx = -zx, dy = -zy, dz = -zz;
 
         float ux = c2w[0][1].item<float>();
         float uy = c2w[1][1].item<float>();
         float uz = c2w[2][1].item<float>();
 
+        // NanoVDB editor camera
+        // - state.position: orbit center (c2w translation)
+        // - state.eye_direction: vector from center to camera (-forward)
+        // - state.eye_up: camera up
+        // - state.eye_distance_from_position: orbit radius (not needed for frustum rendering)
+
         pnanovdb_camera_state_default(&it->second.mView.states[i], PNANOVDB_FALSE);
 
-        it->second.mView.states[i].eye_up.x = ux;
-        it->second.mView.states[i].eye_up.y = uy;
-        it->second.mView.states[i].eye_up.z = uz;
-
-        it->second.mView.states[i].position.x = px;
-        it->second.mView.states[i].position.y = py;
-        it->second.mView.states[i].position.z = pz;
-
-        it->second.mView.states[i].eye_direction.x = dx;
-        it->second.mView.states[i].eye_direction.y = dy;
-        it->second.mView.states[i].eye_direction.z = dz;
+        it->second.mView.states[i].position                   = {px, py, pz};
+        it->second.mView.states[i].eye_direction              = {zx, zy, zz};
+        it->second.mView.states[i].eye_up                     = {ux, uy, uz};
+        it->second.mView.states[i].eye_distance_from_position = 1.f;
 
         pnanovdb_camera_config_default(&it->second.mView.configs[i]);
+        it->second.mView.configs[i].is_orthographic = PNANOVDB_FALSE;
+        it->second.mView.configs[i].is_reverse_z    = PNANOVDB_TRUE;
 
-        torch::Tensor M     = projectionMatrices.index({i}).contiguous().cpu();
-        float near          = 0.1f; // assume near plane is 0.1
-        float far           = M[2][2].item<float>() * near / (M[2][2].item<float>() - 1.f);
-        float fov           = 2.0f * std::atan(1.0f / M[1][1].item<float>());
-        float aspectRatio   = M[0][0].item<float>() / M[1][1].item<float>();
-        bool isOrthographic = M[2][2].item<float>() == 0.f;
+        // Used for frustum visualization
+        it->second.mView.configs[i].near_plane = frustumNear;
+        it->second.mView.configs[i].far_plane  = frustumFar;
 
-        it->second.mView.configs[i].near_plane = std::min(near, far);
-        it->second.mView.configs[i].far_plane  = std::max(near, far);
-
-        it->second.mView.configs[i].fov_angle_y  = fov;
-        it->second.mView.configs[i].aspect_ratio = std::max(aspectRatio, 0.f);
-        it->second.mView.configs[i].is_orthographic =
-            isOrthographic ? PNANOVDB_TRUE : PNANOVDB_FALSE;
+        // TODO (@phapalova) This will be properly set with images support
+        it->second.mView.configs[i].fov_angle_y  = DEFAULT_CAMERA_FOV_RADIANS;
+        it->second.mView.configs[i].aspect_ratio = DEFAULT_CAMERA_ASPECT_RATIO;
     }
 
     mEditor.editor.add_camera_view(&mEditor.editor, &it->second.mView);

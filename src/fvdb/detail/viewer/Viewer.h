@@ -52,7 +52,9 @@ class Viewer {
     GaussianSplat3dView &addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splats);
     CameraView &addCameraView(const std::string &name,
                               const torch::Tensor &cameraToWorldMatrices,
-                              const torch::Tensor &projectionMatrices);
+                              const torch::Tensor &projectionMatrices,
+                              float frustumNear,
+                              float frustumFar);
 
     std::tuple<float, float, float> cameraOrbitCenter() const;
     void setCameraOrbitCenter(float ox, float oy, float oz);
