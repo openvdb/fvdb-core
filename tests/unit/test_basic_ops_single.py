@@ -353,7 +353,7 @@ class TestBasicOpsSingle(unittest.TestCase):
                     off = torch.tensor([[i - 1, j - 1, k - 1]]).to(randvox)
                     nh_ijk = randvox + off
                     idx = grid.ijk_to_index(nh_ijk)
-                    mask = grid.coords_in_active_voxel(nh_ijk)
+                    mask = grid.coords_in_grid(nh_ijk)
                     gt_nhood[:, i, j, k] = torch.where(mask, idx, -torch.ones_like(idx))
 
         nhood = grid.neighbor_indexes(randvox, 1, 0)
@@ -613,7 +613,7 @@ class TestBasicOpsSingle(unittest.TestCase):
 
         all_coords = torch.cat([outside_random_coords, inside_coords])
 
-        pred_mask = grid.coords_in_active_voxel(all_coords)
+        pred_mask = grid.coords_in_grid(all_coords)
         target_mask = torch.ones(all_coords.shape[0], dtype=torch.bool).to(device)
         target_mask[:num_outside] = False
 
@@ -634,7 +634,7 @@ class TestBasicOpsSingle(unittest.TestCase):
 
         all_world_points = grid.grid_to_world(all_coords.to(dtype))
 
-        pred_mask = grid.points_in_active_voxel(all_world_points)
+        pred_mask = grid.points_in_grid(all_world_points)
         target_mask = torch.ones(all_coords.shape[0], dtype=torch.bool).to(device)
         target_mask[:num_outside] = False
 
@@ -666,7 +666,7 @@ class TestBasicOpsSingle(unittest.TestCase):
             subdiv_factor = i + 2
             mask = torch.rand(grids[i].num_voxels, device=device) > 0.5
 
-            grids.append(grids[-1].subdivided_grid(subdiv_factor, mask))
+            grids.append(grids[-1].refined_grid(subdiv_factor, mask))
             self.assertEqual(int(mask.sum().item()) * subdiv_factor**3, grids[-1].num_voxels)
 
         grids = [grid]
@@ -674,7 +674,7 @@ class TestBasicOpsSingle(unittest.TestCase):
             mask = torch.rand(grids[i].num_voxels, device=device) > 0.5
 
             nsubvox = subdiv_factor[0] * subdiv_factor[1] * subdiv_factor[2]
-            grids.append(grids[-1].subdivided_grid(subdiv_factor, mask))
+            grids.append(grids[-1].refined_grid(subdiv_factor, mask))
             self.assertEqual(int(mask.sum().item()) * nsubvox, grids[-1].num_voxels)
         if device == "cuda":
             torch.cuda.synchronize()
@@ -748,7 +748,7 @@ class TestBasicOpsSingle(unittest.TestCase):
 
             mask = torch.ones(grid.num_voxels, dtype=torch.bool).to(device)
 
-            feats_fine, grid_fine = grid.subdivide(subdiv_factor, feats, mask=mask)
+            feats_fine, grid_fine = grid.refine(subdiv_factor, feats, mask=mask)
             self.assertTrue(torch.allclose(grid_fine.voxel_size, grid.voxel_size / subvec))
             self.assertTrue(torch.allclose(grid_fine.origin, grid.origin - 0.5 * grid_fine.voxel_size * fac_sub_one))
 
@@ -795,7 +795,7 @@ class TestBasicOpsSingle(unittest.TestCase):
 
             mask = torch.rand(grid.num_voxels).to(device) > 0.5
 
-            feats_fine, grid_fine = grid.subdivide(subdiv_factor, feats, mask=mask)
+            feats_fine, grid_fine = grid.refine(subdiv_factor, feats, mask=mask)
             self.assertTrue(torch.allclose(grid_fine.voxel_size, grid.voxel_size / subvec))
             self.assertTrue(torch.allclose(grid_fine.origin, grid.origin - 0.5 * grid_fine.voxel_size * fac_sub_one))
 
@@ -1275,7 +1275,7 @@ class TestBasicOpsSingle(unittest.TestCase):
     def test_subdivide_empty_grid(self, device, dtype):
         grid = Grid.from_dense([32, 32, 32], [0, 0, 0], voxel_size=1.0 / 32, origin=[0, 0, 0], device=device)
         values = torch.randn(grid.num_voxels, 17, device=device, dtype=dtype)
-        values, subgrid = grid.subdivide(1, values, mask=torch.zeros(grid.num_voxels, dtype=torch.bool, device=device))
+        values, subgrid = grid.refine(1, values, mask=torch.zeros(grid.num_voxels, dtype=torch.bool, device=device))
         self.assertTrue(subgrid.num_voxels == 0)
         self.assertTrue(values.shape[0] == 0)
         self.assertTrue(values.shape[1] == 17)
