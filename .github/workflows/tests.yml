@@ -95,7 +95,6 @@ jobs:
       - name: Merge PR branch into base
         run: git merge pr_branch
 
-
       # - name: Simulate merge for push events
       #   if: github.event_name == 'push'
       #   run: |
