@@ -87,23 +87,31 @@ jobs:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
+          ref: ${{ github.event.pull_request.base.ref }}
 
-      - name: Simulate merge for push events
-        if: github.event_name == 'push'
-        run: |
-          echo "Push event detected - simulating merge with target branch"
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global --add safe.directory "$(pwd)"
+      - name: Fetch PR branch
+        run: git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
-          # Get the target branch (main in this case, since push is only on main)
-          TARGET_BRANCH="main"
-          CURRENT_COMMIT="${{ github.sha }}"
+      - name: Merge PR branch into base
+        run: git merge pr_branch
 
-          echo "Creating merge simulation: merging $CURRENT_COMMIT into $TARGET_BRANCH"
-          git fetch origin $TARGET_BRANCH
-          git checkout $TARGET_BRANCH
-          git merge --no-ff $CURRENT_COMMIT --message "CI: Simulating merge of $CURRENT_COMMIT into $TARGET_BRANCH"
+
+      # - name: Simulate merge for push events
+      #   if: github.event_name == 'push'
+      #   run: |
+      #     echo "Push event detected - simulating merge with target branch"
+      #     git config --global user.name "github-actions[bot]"
+      #     git config --global user.email "github-actions[bot]@users.noreply.github.com"
+      #     git config --global --add safe.directory "$(pwd)"
+
+      #     # Get the target branch (main in this case, since push is only on main)
+      #     TARGET_BRANCH="main"
+      #     CURRENT_COMMIT="${{ github.sha }}"
+
+      #     echo "Creating merge simulation: merging $CURRENT_COMMIT into $TARGET_BRANCH"
+      #     git fetch origin $TARGET_BRANCH
+      #     git checkout $TARGET_BRANCH
+      #     git merge --no-ff $CURRENT_COMMIT --message "CI: Simulating merge of $CURRENT_COMMIT into $TARGET_BRANCH"
 
       - name: Set up fvdb_build Conda env
         uses: mamba-org/setup-micromamba@v2
@@ -203,6 +211,18 @@ jobs:
         shell: bash -el {0}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for all branches
+          # For pull requests, this automatically checks out the merge commit
+          # For pushes, this checks out the pushed commit
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Fetch PR branch
+        run: git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+
+      - name: Merge PR branch into base
+        run: git merge pr_branch
+
       - name: Set up fvdb_test Conda env
         uses: mamba-org/setup-micromamba@v2
         with:
@@ -256,6 +276,18 @@ jobs:
         shell: bash -el {0}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for all branches
+          # For pull requests, this automatically checks out the merge commit
+          # For pushes, this checks out the pushed commit
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Fetch PR branch
+        run: git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+
+      - name: Merge PR branch into base
+        run: git merge pr_branch
+
       - name: Set up fvdb_test Conda env
         uses: mamba-org/setup-micromamba@v2
         with:
@@ -298,6 +330,18 @@ jobs:
         shell: bash -el {0}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for all branches
+          # For pull requests, this automatically checks out the merge commit
+          # For pushes, this checks out the pushed commit
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Fetch PR branch
+        run: git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+
+      - name: Merge PR branch into base
+        run: git merge pr_branch
+
       - name: Set up fvdb_test Conda env
         uses: mamba-org/setup-micromamba@v2
         with:

@@ -129,7 +129,7 @@ class UpsamplingNearest(nn.Module):
         mask: JaggedTensor | None = None,
         fine_grid: GridBatch | None = None,
     ) -> tuple[JaggedTensor, GridBatch]:
-        return coarse_grid.subdivide(self.scale_factor, coarse_data, mask, fine_grid=fine_grid)
+        return coarse_grid.refine(self.scale_factor, coarse_data, mask, fine_grid=fine_grid)
 
 
 # ------------------------------------------------------------------------------------------------
