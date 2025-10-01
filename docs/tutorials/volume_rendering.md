@@ -580,8 +580,8 @@ def main():
 
                 # Subdivide
                 if epoch > 0:
-                    sh_features, sub_grid = dual_grid.subdivide(2, sh_features.view(sh_features.shape[0], -1), mask=vox_density > 0.25)
-                    o_features, sub_grid = dual_grid.subdivide(2, o_features.unsqueeze(-1), mask=vox_density > 0.25)
+                    sh_features, sub_grid = dual_grid.refine(2, sh_features.view(sh_features.shape[0], -1), mask=vox_density > 0.25)
+                    o_features, sub_grid = dual_grid.refine(2, o_features.unsqueeze(-1), mask=vox_density > 0.25)
                     o_features = o_features.jdata.squeeze(-1)
                     sh_features = sh_features.jdata.reshape(sh_features.rshape[0], 3, -1)
                     sh_features.requires_grad = True
