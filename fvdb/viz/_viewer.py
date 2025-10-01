@@ -11,7 +11,7 @@ from .._Cpp import GaussianSplat3d as GaussianSplat3dCpp
 from .._Cpp import GaussianSplat3dView as GaussianSplat3dViewCpp
 from .._Cpp import Viewer as ViewerCpp
 from ..gaussian_splatting import GaussianSplat3d
-from ..types import NumericMaxRank1, to_Vec3f
+from ..types import NumericMaxRank1, NumericMaxRank3, to_Mat44fBatch, to_Vec3f
 from ._camera_view import CameraView
 from ._gaussian_splat_3d_view import GaussianSplat3dView
 
@@ -76,8 +76,8 @@ class Viewer:
     def add_camera_view(
         self,
         name: str,
-        cam_to_world_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
+        cam_to_world_matrices: NumericMaxRank3,
+        projection_matrices: torch.Tensor | None = None,
         axis_length: float = 0.3,
         axis_thickness: float = 2.0,
         frustum_line_width: float = 2.0,
@@ -92,8 +92,8 @@ class Viewer:
 
         Args:
             name (str): The name of the camera view.
-            cam_to_world_matrix (torch.Tensor): The 4x4 camera to world transformation matrix.
-            projection_matrix (torch.Tensor): The 3x3 projection matrix.
+            cam_to_world_matrix (NumericMaxRank3): The 4x4 camera to world transformation matrix.
+            projection_matrix (torch.Tensor | None): The 3x3 projection matrix.
             axis_length (float): The length of the axis lines in the camera frustum view.
             axis_thickness (float): The thickness (in world coordinates) of the axis lines in the camera frustum view.
             frustum_line_width (float): The width (in pixels) of the frustum lines in the camera frustum view.
@@ -109,6 +109,8 @@ class Viewer:
             raise ValueError("Both camera_to_world_matrices and projection_matrices must be provided.")
         if len(frustum_color) != 3 or any(c < 0.0 or c > 1.0 for c in frustum_color):
             raise ValueError(f"Frustum color must be a sequence of three floats in [0, 1], got {frustum_color}")
+
+        cam_to_world_matrices = to_Mat44fBatch(cam_to_world_matrices)
 
         view: CameraViewCpp = self._impl.add_camera_view(
             name, cam_to_world_matrices, projection_matrices, frustum_near_plane, frustum_far_plane

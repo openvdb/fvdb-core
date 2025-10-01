@@ -7,7 +7,7 @@ from typing import Any
 import torch
 
 from .._Cpp import CameraView as CameraViewCpp
-from ..types import NumericMaxRank1, to_Vec3f
+from ..types import NumericMaxRank1, NumericScalarNative, to_Vec3f
 
 
 class CameraView:
@@ -112,12 +112,12 @@ class CameraView:
         return self._view.frustum_scale
 
     @frustum_scale.setter
-    def frustum_scale(self, scale: float):
+    def frustum_scale(self, scale: NumericScalarNative):
         """
         Set the scale factor applied to the frustum visualization.
 
         Args:
-            scale (float): The scale factor to apply to the frustum visualization.
+            scale (NumericScalarNative): The scale factor to apply to the frustum visualization.
         """
         self._view.frustum_scale = scale
 
