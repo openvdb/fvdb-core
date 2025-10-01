@@ -90,7 +90,11 @@ jobs:
           ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Fetch PR branch
-        run: git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$(pwd)"
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
       - name: Merge PR branch into base
         run: git merge pr_branch
@@ -217,8 +221,11 @@ jobs:
           ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Fetch PR branch
-        run: git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
-
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$(pwd)"
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
       - name: Merge PR branch into base
         run: git merge pr_branch
 
@@ -282,7 +289,11 @@ jobs:
           ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Fetch PR branch
-        run: git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$(pwd)"
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
       - name: Merge PR branch into base
         run: git merge pr_branch
@@ -336,7 +347,11 @@ jobs:
           ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Fetch PR branch
-        run: git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$(pwd)"
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
       - name: Merge PR branch into base
         run: git merge pr_branch

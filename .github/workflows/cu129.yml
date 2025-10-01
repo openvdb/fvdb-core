@@ -71,14 +71,19 @@ jobs:
           # For pushes, this checks out the pushed commit
           ref: ${{ github.event.pull_request.base.ref }}
 
+      - name: Apt update and install git and wget
+        run: apt update && apt install -y git wget
       - name: Fetch PR branch
-        run: git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$(pwd)"
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
       - name: Merge PR branch into base
         run: git merge pr_branch
 
-      - name: Apt update and install git and wget
-        run: apt update && apt install -y git wget
+
       # - name: Simulate merge for push events
       #   if: github.event_name == 'push'
       #   run: |
@@ -225,14 +230,19 @@ jobs:
           # For pushes, this checks out the pushed commit
           ref: ${{ github.event.pull_request.base.ref }}
 
+      - name: Apt update and install git and wget
+        run: apt update && apt install -y git wget
       - name: Fetch PR branch
-        run: git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$(pwd)"
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
       - name: Merge PR branch into base
         run: git merge pr_branch
 
-      - name: Apt update and install git and wget
-        run: apt update && apt install -y git wget
+
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
         with:
@@ -316,14 +326,18 @@ jobs:
           # For pushes, this checks out the pushed commit
           ref: ${{ github.event.pull_request.base.ref }}
 
+      - name: Apt update and install git and wget
+        run: apt update && apt install -y git wget
       - name: Fetch PR branch
-        run: git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$(pwd)"
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
       - name: Merge PR branch into base
         run: git merge pr_branch
 
-      - name: Apt update and install git and wget
-        run: apt update && apt install -y git wget
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
         with:
@@ -393,14 +407,18 @@ jobs:
           # For pushes, this checks out the pushed commit
           ref: ${{ github.event.pull_request.base.ref }}
 
+      - name: Apt update and install git and wget
+        run: apt update && apt install -y git wget
       - name: Fetch PR branch
-        run: git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$(pwd)"
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
       - name: Merge PR branch into base
         run: git merge pr_branch
 
-      - name: Apt update and install git and wget
-        run: apt update && apt install -y git wget
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
         with:
