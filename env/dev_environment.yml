@@ -65,7 +65,6 @@ dependencies:
   - pyyaml
   - scikit-learn
   - srt
-  # - torchvision # torchvision is not available for pytorch 2.8.0 yet
   - tyro
   - utm
   - viser
@@ -78,3 +77,5 @@ dependencies:
     - dlnr_lite
     - einops
     - oiio-static-python
+    - --index-url https://download.pytorch.org/whl/cu129
+    - torchvision # NOTE: torchvision is not available on conda-forge for pytorch 2.8.0 yet

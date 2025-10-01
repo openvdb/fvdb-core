@@ -34,7 +34,6 @@ dependencies:
   - py-opencv>=4.10[build=headless*]
   - pyyaml
   - scikit-learn
-  # - torchvision # torchvision is not available for pytorch 2.8.0 yet
   - tyro
   - viser
   - pip:
@@ -42,3 +41,5 @@ dependencies:
     - https://nksr.s3.ap-northeast-1.amazonaws.com/dev-whls/pt28cu129/torchsparse-2.1.0-cp312-cp312-linux_x86_64.whl
     - https://nksr.s3.ap-northeast-1.amazonaws.com/dev-whls/pt28cu129/torchsparse_20-2.0.0b0-cp312-cp312-linux_x86_64.whl
     - https://nksr.s3.ap-northeast-1.amazonaws.com/dev-whls/pt28cu129/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl
+    - --index-url https://download.pytorch.org/whl/cu129
+    - torchvision # NOTE: torchvision is not available on conda-forge for pytorch 2.8.0 yet
