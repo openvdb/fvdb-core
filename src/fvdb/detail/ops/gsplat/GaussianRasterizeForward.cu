@@ -9,6 +9,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <nanovdb/math/Math.h>
 
@@ -483,10 +484,8 @@ launchRasterizeForwardKernels(
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
-        uint32_t deviceTileCount =
-            (tileCount + c10::cuda::device_count() - 1) / c10::cuda::device_count();
-        const uint32_t deviceTileOffset = deviceTileCount * deviceId;
-        deviceTileCount                 = std::min(deviceTileCount, tileCount - deviceTileOffset);
+        uint32_t deviceTileOffset, deviceTileCount;
+        std::tie(deviceTileOffset, deviceTileCount) = deviceOffsetAndCount(tileCount, deviceId);
 
         if (deviceTileCount) {
             auto args = RasterizeForwardArgs<ScalarType, NUM_CHANNELS, IS_PACKED>(means2d,

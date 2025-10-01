@@ -8,6 +8,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <ATen/cuda/Atomic.cuh>
 #include <c10/cuda/CUDAGuard.h>
@@ -1240,10 +1241,8 @@ callRasterizeBackwardPrivateUse1(
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
-        uint32_t deviceTileCount =
-            (tileCount + c10::cuda::device_count() - 1) / c10::cuda::device_count();
-        const uint32_t deviceTileOffset = deviceTileCount * deviceId;
-        deviceTileCount                 = std::min(deviceTileCount, tileCount - deviceTileOffset);
+        uint32_t deviceTileOffset, deviceTileCount;
+        std::tie(deviceTileOffset, deviceTileCount) = deviceOffsetAndCount(tileCount, deviceId);
 
         if (deviceTileCount) {
             RasterizeBackwardArgs<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED> args(

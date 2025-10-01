@@ -7,6 +7,8 @@
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
+#include <nanovdb/util/cuda/Util.h>
+
 #include <c10/cuda/CUDAGuard.h>
 
 #include <cub/cub.cuh>
@@ -666,8 +668,8 @@ radixSortAsync(KeyT *keysIn,
         KeyT *deviceKeysOut          = keysOut + offsets[deviceId];
         ValueT *deviceValuesOut      = valuesOut + offsets[deviceId];
 
-        C10_CUDA_CHECK(
-            cudaMemPrefetchAsync(deviceKeysIn, counts[deviceId] * sizeof(KeyT), deviceId, stream));
+        C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+            deviceKeysIn, counts[deviceId] * sizeof(KeyT), deviceId, stream));
 
         // TODO: Add begin and end bit support
         void *deviceTempStorage = nullptr;

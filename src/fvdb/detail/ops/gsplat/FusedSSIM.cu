@@ -26,6 +26,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/ops/gsplat/FusedSSIM.h>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/types.h>
@@ -611,10 +612,9 @@ fusedSSIMPrivateUse1(
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
-        auto localBlockCount =
-            (globalBlockCount + c10::cuda::device_count() - 1) / c10::cuda::device_count();
-        auto localBlockOffset = deviceId * localBlockCount;
-        localBlockCount       = std::min(localBlockCount, globalBlockCount - localBlockOffset);
+        int localBlockOffset, localBlockCount;
+        std::tie(localBlockOffset, localBlockCount) =
+            deviceOffsetAndCount(globalBlockCount, deviceId);
 
         if (localBlockCount) {
             // Launch config
@@ -686,10 +686,9 @@ fusedSSIMBackwardPrivateUse1(double C1,
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
-        auto localBlockCount =
-            (globalBlockCount + c10::cuda::device_count() - 1) / c10::cuda::device_count();
-        auto localBlockOffset = deviceId * localBlockCount;
-        localBlockCount       = std::min(localBlockCount, globalBlockCount - localBlockOffset);
+        int localBlockOffset, localBlockCount;
+        std::tie(localBlockOffset, localBlockCount) =
+            deviceOffsetAndCount(globalBlockCount, deviceId);
 
         if (localBlockCount) {
             // Launch config
