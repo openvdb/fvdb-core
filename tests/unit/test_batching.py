@@ -326,7 +326,7 @@ class TestBatching(unittest.TestCase):
         self.assertEqual(gd.total_voxels, 0)
         gc = gridbatch.coarsened_grid(2)
         self.assertEqual(gc.total_voxels, 0)
-        gs = gridbatch.subdivided_grid(2)
+        gs = gridbatch.refined_grid(2)
         self.assertEqual(gs.total_voxels, 0)
         self.assertEqual(gridbatch.grid_count, 1)
         self.assertEqual(gridbatch.num_voxels.numel(), 1)
