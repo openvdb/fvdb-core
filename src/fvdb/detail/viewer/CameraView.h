@@ -35,7 +35,10 @@ class CameraView {
         mView.name = mName.c_str();
     }
 
-    ~CameraView() { delete[] mView.states; }
+    ~CameraView() {
+        delete[] mView.states;
+        delete[] mView.configs;
+    }
 
     const std::string &
     getName() const {
@@ -67,15 +70,6 @@ class CameraView {
     void
     setAxisThickness(const float thickness) {
         mView.axis_thickness = thickness;
-    }
-
-    float
-    getAxisScale() const {
-        return mView.axis_scale;
-    }
-    void
-    setAxisScale(const float scale) {
-        mView.axis_scale = scale;
     }
 
     float

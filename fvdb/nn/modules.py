@@ -121,7 +121,7 @@ class UpsamplingNearest(nn.Module):
         else:
             fine_grid, fine_kmap = None, None
 
-        new_feature, new_grid = input.grid.subdivide(self.scale_factor, input.data, mask, fine_grid=fine_grid)
+        new_feature, new_grid = input.grid.refine(self.scale_factor, input.data, mask, fine_grid=fine_grid)
         return VDBTensor(new_grid, new_feature, kmap=fine_kmap)
 
     def extra_repr(self) -> str:
