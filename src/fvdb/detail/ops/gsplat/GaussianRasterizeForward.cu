@@ -510,6 +510,55 @@ launchRasterizeForwardKernels(
                                                                                   tilePixelCumsum,
                                                                                   pixelMap);
 
+            auto firstLinearTileIdx = deviceTileOffset;
+            auto lastLinearTileIdx  = deviceTileOffset + deviceTileCount;
+
+            int32_t firstCameraId = firstLinearTileIdx / (tileExtentH * tileExtentW);
+            int32_t firstTileRow  = (firstLinearTileIdx / tileExtentW) % tileExtentH;
+            int32_t firstTileCol  = firstLinearTileIdx % tileExtentW;
+
+            int32_t lastCameraId = lastLinearTileIdx / (tileExtentH * tileExtentW);
+            int32_t lastTileRow  = (lastLinearTileIdx / tileExtentW) % tileExtentH;
+            int32_t lastTileCol  = lastLinearTileIdx % tileExtentW;
+
+            int32_t firstGaussianIdInDevice =
+                tileOffsets.accessor<int32_t, 3>()[firstCameraId][firstTileRow][firstTileCol];
+            int32_t lastGaussianIdInDevice =
+                (deviceId == c10::cuda::device_count() - 1)
+                    ? tileGaussianIds.size(0)
+                    : tileOffsets.accessor<int32_t, 3>()[lastCameraId][lastTileRow][lastTileCol];
+
+            TORCH_CHECK(means2d.is_contiguous());
+            TORCH_CHECK(conics.is_contiguous());
+            TORCH_CHECK(opacities.is_contiguous());
+            TORCH_CHECK(features.is_contiguous());
+            nanovdb::util::cuda::memPrefetchAsync(
+                means2d.const_data_ptr<ScalarType>() + firstGaussianIdInDevice * means2d.stride(0),
+                (lastGaussianIdInDevice - firstGaussianIdInDevice + 1) * means2d.stride(0) *
+                    sizeof(ScalarType),
+                deviceId,
+                stream);
+            nanovdb::util::cuda::memPrefetchAsync(
+                conics.const_data_ptr<ScalarType>() + firstGaussianIdInDevice * conics.stride(0),
+                (lastGaussianIdInDevice - firstGaussianIdInDevice + 1) * conics.stride(0) *
+                    sizeof(ScalarType),
+                deviceId,
+                stream);
+            nanovdb::util::cuda::memPrefetchAsync(
+                opacities.const_data_ptr<ScalarType>() +
+                    firstGaussianIdInDevice * opacities.stride(0),
+                (lastGaussianIdInDevice - firstGaussianIdInDevice + 1) * opacities.stride(0) *
+                    sizeof(ScalarType),
+                deviceId,
+                stream);
+            nanovdb::util::cuda::memPrefetchAsync(
+                features.const_data_ptr<ScalarType>() +
+                    firstGaussianIdInDevice * features.stride(0),
+                (lastGaussianIdInDevice - firstGaussianIdInDevice + 1) * features.stride(0) *
+                    sizeof(ScalarType),
+                deviceId,
+                stream);
+
             // Thread blocks cooperatively cache a tile of Gaussians in shared memory
             const uint32_t sharedMem = getSharedMemRequirements<ScalarType>(tileSize);
 
