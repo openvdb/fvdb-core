@@ -255,7 +255,7 @@ class TestSample(unittest.TestCase):
         small_features.requires_grad = True
         small_features_vdb = fvdb.read_from_dense_xyzc(small_features.permute(3, 2, 1, 0).contiguous().unsqueeze(0))
 
-        fvdb_big = fvdb.subdivided_grid(scale)
+        fvdb_big = fvdb.refined_grid(scale)
         big_pos = fvdb_big.grid_to_world(fvdb_big.ijk.type(dtype)).jdata
         self.assertEqual(big_pos.dtype, dtype)
         big_features_vdb = fvdb.sample_trilinear(JaggedTensor(big_pos), small_features_vdb).jdata
@@ -277,9 +277,9 @@ class TestSample(unittest.TestCase):
             torch.allclose(gv, gp, atol=atol, rtol=rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
         )
         small_features_vdb = fvdb.read_from_dense_xyzc(small_features.permute(3, 2, 1, 0).contiguous().unsqueeze(0))
-        fvdb_big = fvdb.subdivided_grid(scale)
+        fvdb_big = fvdb.refined_grid(scale)
         big_pos = fvdb_big.grid_to_world(fvdb_big.ijk.type(dtype)).jdata
-        big_features_vdb, _ = fvdb.subdivide(scale, small_features_vdb, fine_grid=fvdb_big)
+        big_features_vdb, _ = fvdb.refine(scale, small_features_vdb, fine_grid=fvdb_big)
         fv = fvdb_big.write_to_dense_xyzc(big_features_vdb).squeeze(0).permute(3, 2, 1, 0)
         fv.backward(grad_out)
         gv = small_features.grad.clone()
