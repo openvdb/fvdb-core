@@ -260,7 +260,7 @@ class TestBasicOps(unittest.TestCase):
             torch.randn(grid_batch.total_voxels, device=device)
         ) > 0.5  # random mask that selects voxels randomly from different grids
         random_mask = grid_batch.jagged_like(random_mask)
-        filtered_grid_batch = grid_batch.subdivided_grid(1, random_mask)
+        filtered_grid_batch = grid_batch.refined_grid(1, random_mask)
         sum = 0
         for i in range(batch_size):
             si = grid_batch.joffsets[i]
@@ -288,24 +288,6 @@ class TestBasicOps(unittest.TestCase):
         self.assertFalse(grid.is_same(grid2))
         self.assertNotEqual(grid.address, grid2.address)
 
-        data = grid.jagged_like(torch.randn(grid.total_voxels, 8, device=device))
-        vdbt = fvnn.VDBTensor(grid, data)
-        spconv = fvnn.SparseConv3d(8, 16, 4, 1).to(device)
-        outvdbt = spconv(vdbt)
-        self.assertTrue(outvdbt.grid.is_same(grid))
-        self.assertEqual(outvdbt.grid.address, grid.address)
-        self.assertFalse(outvdbt.grid.is_same(grid2))
-        self.assertNotEqual(outvdbt.grid.address, grid2.address)
-
-        vdbt2 = fvnn.VDBTensor(grid2, data)
-        outvdbt2 = spconv(vdbt2)
-        self.assertTrue(outvdbt2.grid.is_same(grid2))
-        self.assertEqual(outvdbt2.grid.address, grid2.address)
-        self.assertFalse(outvdbt2.grid.is_same(grid))
-        self.assertNotEqual(outvdbt2.grid.address, grid.address)
-        self.assertFalse(outvdbt.grid.is_same(outvdbt2.grid))
-        self.assertNotEqual(outvdbt.grid.address, outvdbt2.grid.address)
-
     @parameterized.expand(all_device_dtype_combos)
     def test_voxel_neighborhood(self, device, dtype):
         randvox = torch.randint(0, 256, size=(10_000, 3), dtype=torch.int32).to(device)
@@ -322,7 +304,7 @@ class TestBasicOps(unittest.TestCase):
                     off = torch.tensor([[i - 1, j - 1, k - 1]]).to(randvox)
                     nh_ijk = randvox + off
                     idx = grid.ijk_to_index(fvdb.JaggedTensor(nh_ijk)).jdata
-                    mask = grid.coords_in_active_voxel(fvdb.JaggedTensor(nh_ijk)).jdata
+                    mask = grid.coords_in_grid(fvdb.JaggedTensor(nh_ijk)).jdata
                     gt_nhood[:, i, j, k] = torch.where(mask, idx, -torch.ones_like(idx))
 
         nhood = grid.neighbor_indexes(fvdb.JaggedTensor(randvox), 1, 0).jdata
@@ -639,7 +621,7 @@ class TestBasicOps(unittest.TestCase):
 
         all_coords = torch.cat([outside_random_coords, inside_coords])
 
-        pred_mask = grid.coords_in_active_voxel(fvdb.JaggedTensor(all_coords)).jdata
+        pred_mask = grid.coords_in_grid(fvdb.JaggedTensor(all_coords)).jdata
         target_mask = torch.ones(all_coords.shape[0], dtype=torch.bool).to(device)
         target_mask[:num_outside] = False
 
@@ -660,7 +642,7 @@ class TestBasicOps(unittest.TestCase):
 
         all_world_points = grid.grid_to_world(fvdb.JaggedTensor(all_coords.to(dtype))).jdata
 
-        pred_mask = grid.points_in_active_voxel(fvdb.JaggedTensor(all_world_points)).jdata
+        pred_mask = grid.points_in_grid(fvdb.JaggedTensor(all_world_points)).jdata
         target_mask = torch.ones(all_coords.shape[0], dtype=torch.bool).to(device)
         target_mask[:num_outside] = False
 
@@ -729,7 +711,7 @@ class TestBasicOps(unittest.TestCase):
             subdiv_factor = i + 2
             mask = torch.rand(grids[i].total_voxels, device=device) > 0.5
 
-            grids.append(grids[-1].subdivided_grid(subdiv_factor, fvdb.JaggedTensor(mask)))
+            grids.append(grids[-1].refined_grid(subdiv_factor, fvdb.JaggedTensor(mask)))
             self.assertEqual(int(mask.sum().item()) * subdiv_factor**3, grids[-1].total_voxels)
 
         grids = [grid]
@@ -737,7 +719,7 @@ class TestBasicOps(unittest.TestCase):
             mask = torch.rand(grids[i].total_voxels, device=device) > 0.5
 
             nsubvox = subdiv_factor[0] * subdiv_factor[1] * subdiv_factor[2]
-            grids.append(grids[-1].subdivided_grid(subdiv_factor, fvdb.JaggedTensor(mask)))
+            grids.append(grids[-1].refined_grid(subdiv_factor, fvdb.JaggedTensor(mask)))
             self.assertEqual(int(mask.sum().item()) * nsubvox, grids[-1].total_voxels)
         if device == "cuda":
             torch.cuda.synchronize()
@@ -811,9 +793,7 @@ class TestBasicOps(unittest.TestCase):
 
             mask = torch.ones(grid.total_voxels, dtype=torch.bool).to(device)
 
-            feats_fine, grid_fine = grid.subdivide(
-                subdiv_factor, fvdb.JaggedTensor(feats), mask=fvdb.JaggedTensor(mask)
-            )
+            feats_fine, grid_fine = grid.refine(subdiv_factor, fvdb.JaggedTensor(feats), mask=fvdb.JaggedTensor(mask))
             self.assertTrue(torch.allclose(grid_fine.voxel_sizes[0], grid.voxel_sizes[0] / subvec))
             self.assertTrue(
                 torch.allclose(grid_fine.origins[0], grid.origins[0] - 0.5 * grid_fine.voxel_sizes[0] * fac_sub_one)
@@ -862,9 +842,7 @@ class TestBasicOps(unittest.TestCase):
 
             mask = torch.rand(grid.total_voxels).to(device) > 0.5
 
-            feats_fine, grid_fine = grid.subdivide(
-                subdiv_factor, fvdb.JaggedTensor(feats), mask=fvdb.JaggedTensor(mask)
-            )
+            feats_fine, grid_fine = grid.refine(subdiv_factor, fvdb.JaggedTensor(feats), mask=fvdb.JaggedTensor(mask))
             self.assertTrue(torch.allclose(grid_fine.voxel_sizes[0], grid.voxel_sizes[0] / subvec))
             self.assertTrue(
                 torch.allclose(grid_fine.origins[0], grid.origins[0] - 0.5 * grid_fine.voxel_sizes[0] * fac_sub_one)
@@ -1682,7 +1660,7 @@ class TestBasicOps(unittest.TestCase):
     def test_subdivide_empty_grid(self, device, dtype):
         grid = GridBatch.from_dense(1, [32, 32, 32], [0, 0, 0], voxel_sizes=1.0 / 32, origins=[0, 0, 0], device=device)
         values = torch.randn(grid.total_voxels, 17, device=device, dtype=dtype)
-        values, subgrid = grid.subdivide(
+        values, subgrid = grid.refine(
             1,
             fvdb.JaggedTensor(values),
             mask=fvdb.JaggedTensor(torch.zeros(grid.total_voxels, dtype=torch.bool, device=device)),
@@ -1690,25 +1668,6 @@ class TestBasicOps(unittest.TestCase):
         self.assertTrue(subgrid.total_voxels == 0)
         self.assertTrue(values.rshape[0] == 0)
         self.assertTrue(values.rshape[1] == 17)
-
-    @parameterized.expand(all_device_dtype_combos + bfloat16_combos)
-    def test_conv_empty_grid(self, device, dtype):
-        grid = GridBatch.from_dense(1, [32, 32, 32], [0, 0, 0], voxel_sizes=1.0 / 32, origins=[0, 0, 0], device=device)
-        values_in = torch.randn(grid.total_voxels, 17, device=device, dtype=dtype)
-        values, subgrid = grid.subdivide(
-            1,
-            fvdb.JaggedTensor(values_in),
-            mask=fvdb.JaggedTensor(torch.zeros(grid.total_voxels, dtype=torch.bool, device=device)),
-        )
-        self.assertTrue(subgrid.total_voxels == 0)
-        self.assertTrue(values.rshape[0] == 0)
-        self.assertTrue(values.rshape[1] == 17)
-
-        kmap, _ = grid.sparse_conv_kernel_map(3, 1, target_grid=subgrid)
-        kmap.build_gather_scatter()
-        res = kmap.sparse_conv_3d(values_in, torch.randn(17, 17, 3, 3, 3))
-        self.assertTrue(res.rshape[0] == 0)
-        self.assertTrue(res.rshape[1] == 17)
 
     @parameterized.expand(all_device_dtype_combos)
     def test_bbox_attrs(self, device, dtype):

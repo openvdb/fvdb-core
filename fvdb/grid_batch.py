@@ -54,7 +54,6 @@ from .types import (
 
 if TYPE_CHECKING:
     from .grid import Grid
-    from .sparse_conv_pack_info import SparseConvPackInfo
 
 
 class GridBatch:
@@ -512,7 +511,7 @@ class GridBatch:
         """
         return GridBatch(impl=self._impl.contiguous())
 
-    def conv_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 0) -> "GridBatch":
+    def conv_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> "GridBatch":
         """
         Return a batch of grids representing the convolution of this batch with a given kernel.
 
@@ -526,11 +525,11 @@ class GridBatch:
             conv_grid (GridBatch): A GridBatch representing the convolution of this grid batch.
         """
         kernel_size = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
-        stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.NON_NEGATIVE)
+        stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE)
 
         return GridBatch(impl=self._impl.conv_grid(kernel_size, stride))
 
-    def coords_in_active_voxel(self, ijk: JaggedTensor) -> JaggedTensor:
+    def coords_in_grid(self, ijk: JaggedTensor) -> JaggedTensor:
         """
         Check if voxel coordinates are in active voxels.
 
@@ -1166,7 +1165,7 @@ class GridBatch:
         """
         return self._impl.origin_at(bi)
 
-    def points_in_active_voxel(self, points: JaggedTensor) -> JaggedTensor:
+    def points_in_grid(self, points: JaggedTensor) -> JaggedTensor:
         """
         Check if world-space points are located within active voxels.
 
@@ -1389,39 +1388,6 @@ class GridBatch:
         """
         return self._impl.sparse_conv_halo(input, weight, variant)
 
-    def sparse_conv_kernel_map(
-        self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1, target_grid: "GridBatch | None" = None
-    ) -> tuple["SparseConvPackInfo", "GridBatch"]:
-        """
-        Map sparse convolution kernel to target grid.
-
-        Args:
-            kernel_size (NumericMaxRank1): Size of the convolution kernel.
-                broadcastable to shape (3,), integer dtype
-            stride (NumericMaxRank1): Stride of the convolution.
-                broadcastable to shape (3,), integer dtype
-            target_grid (GridBatch | None): Target grid to map the kernel to.
-                If None, the kernel is mapped to the current grid.
-
-        Returns:
-            tuple[SparseConvPackInfo, GridBatch]: A tuple containing:
-                - SparseConvPackInfo: Information about the sparse convolution kernel.
-                - GridBatch: The target grid.
-        """
-        # Import here to avoid circular dependency
-        from .sparse_conv_pack_info import SparseConvPackInfo
-
-        kernel_size = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
-        stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.NON_NEGATIVE)
-
-        target_impl = target_grid._impl if target_grid is not None else None
-
-        sparse_impl, grid_impl = self._impl.sparse_conv_kernel_map(kernel_size, stride, target_impl)
-        return (
-            SparseConvPackInfo(impl=sparse_impl),
-            GridBatch(impl=grid_impl),
-        )
-
     def splat_bezier(self, points: JaggedTensor, points_data: JaggedTensor) -> JaggedTensor:
         """
         Splat point features onto voxels using Bézier interpolation.
@@ -1462,7 +1428,7 @@ class GridBatch:
         """
         return self._impl.splat_trilinear(points, points_data)
 
-    def subdivide(
+    def refine(
         self,
         subdiv_factor: NumericMaxRank1,
         data: JaggedTensor,
@@ -1470,10 +1436,17 @@ class GridBatch:
         fine_grid: "GridBatch | None" = None,
     ) -> tuple[JaggedTensor, "GridBatch"]:
         """
-        Subdivide grid using nearest neighbor interpolation.
+        Return a refined version of the input grid batch and associated data.
 
-        Increases the resolution of the grid by the specified subdivision factor,
-        filling in new voxels using nearest neighbor interpolation of the existing data.
+        Each grid in the output is a higher-resolution version of the corresponding grid
+        in the input, created by subdividing each voxel by the specified factor.
+        The associated data with each voxel in the output is copied from the associated
+        data of the corresponding parent voxel in the input grid.
+
+        _i.e_, if the input grid has a single voxel at index (i, j, k) with associated data D,
+        and the subdiv_factor is (2, 2, 2), then the output grid will have voxels
+        at indices (2i + di, 2j + dj, 2k + dk) for di, dj, dk in {0, 1},
+        each with associated data D.
 
         Args:
             subdiv_factor (NumericMaxRank1): Factor by which to subdivide the grid.
@@ -1495,16 +1468,18 @@ class GridBatch:
         result_data, result_grid_impl = self._impl.subdivide(subdiv_factor, data, mask, fine_grid_impl)
         return result_data, GridBatch(impl=result_grid_impl)
 
-    def subdivided_grid(
+    def refined_grid(
         self,
         subdiv_factor: NumericMaxRank1,
         mask: JaggedTensor | None = None,
     ) -> "GridBatch":
         """
-        Return a subdivided version of the grid structure.
+        Return a refined version of the grid batch.
 
-        Creates a new grid with higher resolution by subdividing existing voxels.
-        Only the grid structure is returned, not the data.
+        Each grid in the output is a higher-resolution version of the corresponding grid
+        in the input, created by subdividing each voxel by the specified factor.
+        This is similar to the `refine` method, but only the grid structure is returned,
+        not the data.
 
         Args:
             subdiv_factor (NumericMaxRank1): Factor by which to subdivide the grid.

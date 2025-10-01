@@ -84,8 +84,7 @@ from .grid import (
     save_grid,
 )
 
-# Import SparseConvPackInfo from sparse_conv_pack_info.py
-from .sparse_conv_pack_info import SparseConvPackInfo
+from .convolution_plan import ConvolutionPlan
 from .gaussian_splatting import GaussianSplat3d
 
 # The following import needs to come after the GridBatch and JaggedTensor imports
@@ -108,24 +107,6 @@ def jcat(things_to_cat, dim=None):
         return GridBatch(impl=cpp_result)
     elif isinstance(things_to_cat[0], JaggedTensor):
         return _Cpp.jcat(things_to_cat, dim)
-    elif isinstance(things_to_cat[0], nn.VDBTensor):
-        if dim == 0:
-            raise ValueError("VDBTensor concatenation does not support dim=0")
-        grids = [t.grid for t in things_to_cat]
-        data = [t.data for t in things_to_cat]
-        # Check if grids contain wrapped GridBatch objects
-        if grids and isinstance(grids[0], GridBatch):
-            # Extract C++ implementations
-            cpp_grids = [g._gridbatch for g in grids]
-            grid_result = _Cpp.jcat(cpp_grids) if dim == None else cpp_grids[0]
-            # Wrap back in GridBatch if concatenated
-            if dim == None:
-                grid_result = GridBatch(impl=grid_result)
-            else:
-                grid_result = grids[0]
-        else:
-            grid_result = GridBatch(impl=_Cpp.jcat(grids)) if dim == None else grids[0]
-        return nn.VDBTensor(grid_result, _Cpp.jcat(data, dim))
     else:
         raise TypeError("jcat() can only cat GridBatch, JaggedTensor, or VDBTensor")
 
@@ -137,9 +118,8 @@ __version_info__ = tuple(map(int, __version__.split(".")))
 __all__ = [
     "GridBatch",
     "JaggedTensor",
-    "SparseConvPackInfo",
-    "ConvPackBackend",
     "GaussianSplat3d",
+    "ConvolutionPlan",
     "load_gridbatch",
     "save_gridbatch",
     "jcat",

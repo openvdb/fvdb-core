@@ -320,7 +320,7 @@ jobs:
       - name: Run tests
         run: |
             micromamba activate fvdb_test
-            pytest --markdown-docs docs
+            pytest --markdown-docs docs --ignore-glob="**/wip/**"
 
   ##############################################################################
   # STOP FVDB TESTS GPU RUNNER

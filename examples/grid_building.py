@@ -8,7 +8,7 @@ import numpy as np
 import point_cloud_utils as pcu
 import polyscope as ps
 import torch
-from fvdb.nn import VDBTensor
+from fvdb.types import DeviceIdentifier, resolve_device
 from fvdb.utils.examples import load_car_1_mesh, load_car_2_mesh
 
 import fvdb
@@ -96,14 +96,20 @@ def build_from_mesh(mesh_1_vf, mesh_2_vf):
     ps.show()
 
 
-def build_from_dense():
-    grid = fvdb.GridBatch.from_dense(num_grids=1, dense_dims=[32, 32, 32], device="cuda")
+def build_from_dense(device: DeviceIdentifier | None = None):
+    device = resolve_device(device)
 
-    # Easy way to initialize a VDBTensor from a torch 3D tensor [B, D, H, W, C]
-    dense_data = torch.ones(2, 32, 32, 32, 16).cuda()
-    sparse_data = fvdb.nn.vdbtensor_from_dense(dense_data, voxel_sizes=[0.1] * 3)
-    dense_data_back = sparse_data.to_dense()
-    assert torch.all(dense_data == dense_data_back)
+    batch_size = 2
+    dense_dims = [32, 32, 32]
+    voxel_sizes = [0.1] * 3
+    origins = [0.0] * 3
+
+    grid = fvdb.GridBatch.from_dense(
+        num_grids=batch_size, dense_dims=dense_dims, voxel_sizes=voxel_sizes, origins=origins, device=device
+    )
+
+    features_flat = torch.ones(grid.total_voxels, 16, device=device)
+    features = grid.jagged_like(features_flat)
 
     # Visualization
     grid_mesh = pcu.voxel_grid_geometry(

@@ -30,6 +30,17 @@ all_device_dtype_combos = [
 ]
 
 
+all_device_dtype_combos_no_backend = [
+    ["cuda", torch.float16],
+    ["cpu", torch.float32],
+    ["cuda", torch.float32],
+    ["cpu", torch.float64],
+    ["cuda", torch.float64],
+]
+
+bfloat16_combos = [["cuda", torch.bfloat16]]
+
+
 def _cpu_can_run_conv3d_backward(dtype: torch.dtype) -> bool:
     """Probe actual runtime support by executing a tiny conv3d backward on CPU.
 
@@ -70,6 +81,26 @@ def build_spconv(grid, kernel_size, stride, backend):
 
 
 class TestConv(unittest.TestCase):
+
+    @parameterized.expand(all_device_dtype_combos_no_backend + bfloat16_combos)
+    def test_conv_empty_grid(self, device, dtype):
+        grid = GridBatch.from_dense(1, [32, 32, 32], [0, 0, 0], voxel_sizes=1.0 / 32, origins=[0, 0, 0], device=device)
+        values_in = torch.randn(grid.total_voxels, 17, device=device, dtype=dtype)
+        values, subgrid = grid.subdivide(
+            1,
+            fvdb.JaggedTensor(values_in),
+            mask=fvdb.JaggedTensor(torch.zeros(grid.total_voxels, dtype=torch.bool, device=device)),
+        )
+        self.assertTrue(subgrid.total_voxels == 0)
+        self.assertTrue(values.rshape[0] == 0)
+        self.assertTrue(values.rshape[1] == 17)
+
+        kmap, _ = grid.sparse_conv_kernel_map(3, 1, target_grid=subgrid)
+        kmap.build_gather_scatter()
+        res = kmap.sparse_conv_3d(values_in, torch.randn(17, 17, 3, 3, 3))
+        self.assertTrue(res.rshape[0] == 0)
+        self.assertTrue(res.rshape[1] == 17)
+
     @parameterized.expand(all_device_dtype_combos)
     def test_conv_vs_torch_dense_simple(self, device, dtype, backend):
         torch.random.manual_seed(0)
