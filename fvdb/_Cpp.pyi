@@ -977,8 +977,8 @@ class Viewer:
     def add_camera_view(
         self,
         name: str,
-        camera_to_world_matrices: typing.Sequence[torch.Tensor | np.ndarray] | torch.Tensor | np.ndarray,
-        projection_matrices: typing.Sequence[torch.Tensor | np.ndarray] | torch.Tensor | np.ndarray,
+        camera_to_world_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
         frustum_near_plane: float = 0.1,
         frustum_far_plane: float = 1000.0,
     ) -> CameraView: ...
