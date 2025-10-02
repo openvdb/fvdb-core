@@ -240,7 +240,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertTrue(torch.equal(pruned_grid_batch.ijk.jdata, expected_grid.ijk.jdata))
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_subdivide_1x_with_mask(self, device, dtype):
+    def test_refine_1x_with_mask(self, device, dtype):
         def get_point_list(npc: list, device: torch.device | str) -> list[torch.Tensor]:
             batch_size = len(npc)
             plist = []
@@ -693,7 +693,7 @@ class TestBasicOps(unittest.TestCase):
 
         primal_mask = grid.cubes_intersect_grid(p, -voxel_size / 2, voxel_size / 2).jdata
         dual_mask = grid_d.cubes_intersect_grid(p).jdata
-        # gt_dual_mask = grid_d.points_in_active_voxel(p).jdata
+        # gt_dual_mask = grid_d.points_in_grid(p).jdata
         self.assertTrue(torch.all(primal_mask == dual_mask))
 
         # # TODO: (@Caenorst) not sure what we are testing here
@@ -718,7 +718,7 @@ class TestBasicOps(unittest.TestCase):
         # _ = grid_d.cubes_intersect_grid(p, -1, 1).jdata
 
     @parameterized.expand(all_device_dtype_combos + bfloat16_combos)
-    def test_subdivided_grid(self, device, dtype):
+    def test_refined_grid(self, device, dtype):
         p = torch.randn(100, 3, device=device, dtype=torch.float)
         vox_size = 0.1
         grid = GridBatch.from_points(fvdb.JaggedTensor(p), voxel_sizes=vox_size, origins=(0.0, 0.0, 0.0))
@@ -789,7 +789,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertEqual(predicted_ijk_set, expected_ijk_set)
 
     @parameterized.expand(all_device_dtype_combos + bfloat16_combos)
-    def test_subdivide(self, device, dtype):
+    def test_refine(self, device, dtype):
         p = torch.randn(100, 3, device=device, dtype=torch.float)
         vox_size = 0.01
 
@@ -838,7 +838,7 @@ class TestBasicOps(unittest.TestCase):
             self.assertTrue(torch.all(feats_grad_thru_subdiv == feats.grad))
 
     @parameterized.expand(all_device_dtype_combos + bfloat16_combos)
-    def test_subdivide_with_mask(self, device, dtype):
+    def test_refine_with_mask(self, device, dtype):
         p = torch.randn(100, 3, device=device, dtype=torch.float)
         vox_size = 0.01
         subdiv_factor = 4
@@ -1675,7 +1675,7 @@ class TestBasicOps(unittest.TestCase):
                 # ps.show()
 
     @parameterized.expand(all_device_dtype_combos + bfloat16_combos)
-    def test_subdivide_empty_grid(self, device, dtype):
+    def test_refine_empty_grid(self, device, dtype):
         grid = GridBatch.from_dense(1, [32, 32, 32], [0, 0, 0], voxel_sizes=1.0 / 32, origins=[0, 0, 0], device=device)
         values = torch.randn(grid.total_voxels, 17, device=device, dtype=dtype)
         values, subgrid = grid.refine(

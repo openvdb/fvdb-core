@@ -475,20 +475,20 @@ bind_grid_batch(py::module &m) {
                 Returns:
                     coarsened_grid (GridBatch): A GridBatch representing the coarsened version of this grid batch.
                 )_FVDB_")
-        .def("subdivided_grid",
-             &fvdb::GridBatch::subdivided_grid,
+        .def("refined_grid",
+             &fvdb::GridBatch::refined_grid,
              py::arg("subdiv_factor"),
              py::arg("mask") = nullptr,
              R"_FVDB_(
-                Subdivide the grid batch into a finer grid batch.
+                Refine the grid batch into a finer grid batch.
                 Each voxel [i, j, k] in this grid batch maps to voxels `[i * subdivFactor, j * subdivFactor, k * subdivFactor]` in the fine batch.
 
                 Args:
-                    subdiv_factor (int or 3-tuple of ints): How much to subdivide by (i,e, `(2,2,2)` means subdivide each voxel into 2^3 voxels).
-                    mask (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 3]` of booleans indicating which voxels to subdivide.
+                    subdiv_factor (int or 3-tuple of ints): How much to refine by (i,e, `(2,2,2)` means refine each voxel into 2^3 voxels).
+                    mask (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 3]` of booleans indicating which voxels to refine.
 
                 Returns:
-                    subdivided_grid (GridBatch): A GridBatch representing the subdivided version of this grid batch.
+                    refined_grid (GridBatch): A GridBatch representing the refined version of this grid batch.
                 )_FVDB_")
         .def("clipped_grid",
              &fvdb::GridBatch::clipped_grid,
@@ -632,32 +632,32 @@ bind_grid_batch(py::module &m) {
              py::arg("stride")      = 0,
              py::arg("coarse_grid") = nullptr)
 
-        .def("subdivide",
-             &fvdb::GridBatch::subdivide,
+        .def("refine",
+             &fvdb::GridBatch::refine,
              py::arg("subdiv_factor"),
              py::arg("data"),
              py::arg("mask")      = nullptr,
              py::arg("fine_grid") = nullptr,
              R"_FVDB_(
-                Subdivide the grid batch and associated data tensor into a finer GridBatch and data tensor using nearest neighbor sampling.
+                Refine the grid batch and associated data tensor into a finer GridBatch and data tensor using nearest neighbor sampling.
                 Each voxel [i, j, k] in this grid batch maps to voxels `[i * subdivFactor, j * subdivFactor, k * subdivFactor]` in the fine batch.
                 Each data value in the subdividided data tensor inherits its parent value
 
                 Args:
-                    subdiv_factor (int or 3-tuple of ints): How much to subdivide by (i,e, `(2,2,2)` means subdivide each voxel into 2^3 voxels).
+                    subdiv_factor (int or 3-tuple of ints): How much to refine by (i,e, `(2,2,2)` means refine each voxel into 2^3 voxels).
                     data (JaggedTensor): A JaggedTensor of shape `[B, -1, *]` containing data associated with this batch of grids.
-                    mask (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 3]` of booleans indicating which voxels to subdivide.
+                    mask (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 3]` of booleans indicating which voxels to refine.
                     fine_grid (GridBatch): An optional fine grid used to specify the output. This is mainly used
                         for memory efficiency so you can chache grids. If you don't pass it in, we'll just create it for you.
 
                 Returns:
                     fine_data (JaggedTensor): A JaggedTensor of shape `[B, -1, *]` of data associated with the fine grid batch.
-                    fine_grid (GridBatch): A GridBatch representing the subdivided version of this grid batch.
+                    fine_grid (GridBatch): A GridBatch representing the refined version of this grid batch.
                 )_FVDB_")
 
         // Grid intersects/contains objects
-        .def("points_in_active_voxel",
-             &fvdb::GridBatch::points_in_active_voxel,
+        .def("points_in_grid",
+             &fvdb::GridBatch::points_in_grid,
              py::arg("points"),
              R"_FVDB_(
             Given a set of points, return a JaggedTensor of booleans indicating which points are in active voxels.
@@ -666,10 +666,10 @@ bind_grid_batch(py::module &m) {
                 points (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 3]` of point positions.
 
             Returns:
-                points_in_active_voxel (JaggedTensor): A JaggedTensor of shape `[num_grids, -1]` of booleans indicating which points are in active voxels.
+                points_in_grid (JaggedTensor): A JaggedTensor of shape `[num_grids, -1]` of booleans indicating which points are in active voxels.
         )_FVDB_")
-        .def("coords_in_active_voxel",
-             &fvdb::GridBatch::coords_in_active_voxel,
+        .def("coords_in_grid",
+             &fvdb::GridBatch::coords_in_grid,
              py::arg("ijk"),
              R"_FVDB_(
             Given a set of ijk coordinates, return a JaggedTensor of booleans indicating which coordinates are active in this gridbatch
@@ -678,7 +678,7 @@ bind_grid_batch(py::module &m) {
                 ijk (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 3]` of integer ijk coordinates.
 
             Returns:
-                coords_in_active_voxel (JaggedTensor): A JaggedTensor of shape `[num_grids, -1]` of booleans indicating which coordinates are in the grid.
+                coords_in_grid (JaggedTensor): A JaggedTensor of shape `[num_grids, -1]` of booleans indicating which coordinates are in the grid.
         )_FVDB_")
         .def("cubes_intersect_grid",
              &fvdb::GridBatch::cubes_intersect_grid,

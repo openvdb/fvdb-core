@@ -65,7 +65,7 @@ def sample_trilinear_naive(pts, corner_feats, grid):
     unique_ijk, ijk_idx = torch.unique(nearest_ijk.reshape(-1, 3), dim=0, return_inverse=True)
     corner_feats_indices = grid.ijk_to_index(nearest_ijk.reshape(-1, 3)).jdata.reshape(-1, 8)
     sel_corner_feats = corner_feats[corner_feats_indices]
-    sel_corner_feats[~grid.coords_in_active_voxel(nearest_ijk.reshape(-1, 3)).jdata.reshape(-1, 8)] = 0.0
+    sel_corner_feats[~grid.coords_in_grid(nearest_ijk.reshape(-1, 3)).jdata.reshape(-1, 8)] = 0.0
     uvws = torch.abs(grid_pts.unsqueeze(1) - nearest_ijk.to(pts.dtype))
 
     trilinear_weights = torch.prod(1.0 - uvws, dim=-1)
@@ -100,7 +100,7 @@ def sample_bezier_naive(pts, corner_feats, grid):
     unique_ijk, ijk_idx = torch.unique(nearest_ijk.reshape(-1, 3), dim=0, return_inverse=True)
     corner_feats_indices = grid.ijk_to_index(nearest_ijk.reshape(-1, 3)).jdata.reshape(-1, 27)
     sel_corner_feats = corner_feats[corner_feats_indices]
-    sel_corner_feats[~grid.coords_in_active_voxel(nearest_ijk.reshape(-1, 3)).jdata.reshape(-1, 27)] = 0.0
+    sel_corner_feats[~grid.coords_in_grid(nearest_ijk.reshape(-1, 3)).jdata.reshape(-1, 27)] = 0.0
     bz_dir = _bezier(nearest_ijk.to(pts.dtype) - grid_pts.unsqueeze(1))
     bz_weights = torch.prod(bz_dir, dim=-1)
     interpolated_feats = bz_weights.unsqueeze(-1) * sel_corner_feats.to(pts.dtype)
@@ -142,7 +142,7 @@ def splat_trilinear_naive(pts, feats, grid):
     sum_interpolated_feats = torch.zeros((unique_ijk.shape[0], feats_dim), device=device, dtype=pts.dtype)
     sum_interpolated_feats.index_add_(0, ijk_idx, interpolated_feats.reshape(-1, feats_dim))
     output = torch.zeros((grid.ijk.jdata.shape[0], feats_dim), device=device, dtype=dtype)
-    mask = grid.coords_in_active_voxel(unique_ijk).jdata
+    mask = grid.coords_in_grid(unique_ijk).jdata
     sum_interpolated_feats = sum_interpolated_feats[mask]
     valid_ijk = grid.ijk_to_index(unique_ijk[mask]).jdata
     output[valid_ijk] = sum_interpolated_feats.to(dtype)
@@ -171,7 +171,7 @@ def splat_bezier_naive(pts, feats, grid):
     sum_interpolated_feats = torch.zeros((unique_ijk.shape[0], feats_dim), device=device, dtype=pts.dtype)
     sum_interpolated_feats.index_add_(0, ijk_idx, interpolated_feats.reshape(-1, feats_dim))
     output = torch.zeros((grid.ijk.jdata.shape[0], feats_dim), device=device, dtype=dtype)
-    mask = grid.coords_in_active_voxel(unique_ijk).jdata
+    mask = grid.coords_in_grid(unique_ijk).jdata
     sum_interpolated_feats = sum_interpolated_feats[mask]
     valid_ijk = grid.ijk_to_index(unique_ijk[mask]).jdata
     output[valid_ijk] = sum_interpolated_feats.to(dtype)
