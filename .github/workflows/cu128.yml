@@ -82,13 +82,17 @@ jobs:
         run: apt update && apt install -y git wget
       - name: Fetch PR branch
         run: |
+          cd $GITHUB_WORKSPACE
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$(pwd)"
           git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
       - name: Merge PR branch into base
-        run: git merge pr_branch
+        run: |
+          cd $GITHUB_WORKSPACE
+          git merge pr_branch
 
       # - name: Simulate merge for push events
       #   if: github.event_name == 'push'
@@ -243,13 +247,17 @@ jobs:
         run: apt update && apt install -y git wget
       - name: Fetch PR branch
         run: |
+          cd $GITHUB_WORKSPACE
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$(pwd)"
           git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
       - name: Merge PR branch into base
-        run: git merge pr_branch
+        run: |
+          cd $GITHUB_WORKSPACE
+          git merge pr_branch
 
 
       - name: Install uv
@@ -338,13 +346,17 @@ jobs:
         run: apt update && apt install -y git wget
       - name: Fetch PR branch
         run: |
+          cd $GITHUB_WORKSPACE
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$(pwd)"
           git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
       - name: Merge PR branch into base
-        run: git merge pr_branch
+        run: |
+          cd $GITHUB_WORKSPACE
+          git merge pr_branch
 
 
       - name: Install uv
@@ -420,13 +432,17 @@ jobs:
 
       - name: Fetch PR branch
         run: |
+          cd $GITHUB_WORKSPACE
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$(pwd)"
           git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
       - name: Merge PR branch into base
-        run: git merge pr_branch
+        run: |
+          cd $GITHUB_WORKSPACE
+          git merge pr_branch
 
       - name: Apt update and install git and wget
         run: apt update && apt install -y git wget
