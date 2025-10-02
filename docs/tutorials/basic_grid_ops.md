@@ -106,7 +106,7 @@ pts = fvdb.JaggedTensor([
 ])
 
 # Get a mask indicating which points lie in the grid
-mask = grid.points_in_active_voxel(pts)
+mask = grid.points_in_grid(pts)
 ```
 
 We visualize the points which intersect the grid (yellow points intersect and purple points do not).
@@ -143,7 +143,7 @@ for b, b_grid in enumerate(grid.bboxes):
 
 pts = fvdb.JaggedTensor(rand_idx_pts)
 
-coords_in_grid = grid.coords_in_active_voxel(pts)
+coords_in_grid = grid.coords_in_grid(pts)
 ```
 
 We visualize the coordinates which intersect the grid (yellow coordinates intersect and purple coordinates do not).
@@ -508,7 +508,7 @@ We visualize the original grid with values of the mesh normals as features, the 
 
 Subdividing a grid has the effect of increasing the resolution of the grid by a constant factor (and can be performed anisotropically for different factors in each `xyz` spatial dimension).
 
-The most straightforward way to use the `subdivide` method is to provide an integer value for the subdivision factor.  This will result in a grid that is `subdiv_factor` times the resolution of the original grid in each spatial dimension.
+The most straightforward way to use the `refine` method is to provide an integer value for the subdivision factor.  This will result in a grid that is `subdiv_factor` times the resolution of the original grid in each spatial dimension.
 
 ```python
 import os
@@ -543,23 +543,23 @@ grid = fvdb.GridBatch.from_points(points, voxel_sizes=vox_size)
 # Splat the normals into the grid with trilinear interpolation
 vox_normals = grid.splat_trilinear(points, normals)
 
-# Subdivide by a constant factor of 2
-subdiv_normals, subdiv_grid = grid.subdivide(2, vox_normals)
+# Refine by a constant factor of 2
+subdiv_normals, subdiv_grid = grid.refine(2, vox_normals)
 ```
 
 Here we visualize the original grid on the right and the grid after subdivision by a factor of 2 on the left.
 
-![](../imgs/fig/subdivide.png)
+![](../imgs/fig/refine.png)
 
 
 In practice, in a deep neural network like a U-Net architecture, the resolution of the grid can be decreased early in the network and then the grid's features need to be concatenated with features of the grid after its resolution is increased again.  When working with traditional, dense 2D or 3D data, cropping any mismatched outputs is straightforward to be able to concatenate these features.  However, in a sparse 3D grid, this is not straightforward and it's entirely unclear how to align the features.
 
-Take this simple example to illustrate the difficulties created by changing the grid topology in this way.  We take the grid created from our mesh, perform Pooling by a factor of 2 and then try to Subdivide by an equal factor of 2 to invert the Pooling operation.
+Take this simple example to illustrate the difficulties created by changing the grid topology in this way.  We take the grid created from our mesh, perform Pooling by a factor of 2 and then try to Refine by an equal factor of 2 to invert the Pooling operation.
 
 ```python continuation
 max_normals, max_grid = grid.max_pool(2, vox_normals)
 
-subdiv_normals, subdiv_grid = max_grid.subdivide(2, max_normals)
+subdiv_normals, subdiv_grid = max_grid.refine(2, max_normals)
 ```
 
 
@@ -570,13 +570,13 @@ Let's visualize these results from left to right of the original grid, the grid 
 
 Notice how we have not obtained the topology of the original grid and have obtained a grid with many more voxels than the original.
 
-To correctly invert the Pooling operation, we can provide the `subdivide` function with a `fine_grid` optional argument which describes the topology we want the grid to have after the subdivision.  The original grid before the Pooling operation can be used as this `fine_grid`.
+To correctly invert the Pooling operation, we can provide the `refine` function with a `fine_grid` optional argument which describes the topology we want the grid to have after the subdivision.  The original grid before the Pooling operation can be used as this `fine_grid`.
 
 ```python continuation
 max_normals, max_grid = grid.max_pool(2, vox_normals)
 
 # Providing the original grid as our fine_grid target
-subdiv_normals, subdiv_grid = max_grid.subdivide(2, max_normals, fine_grid=grid)
+subdiv_normals, subdiv_grid = max_grid.refine(2, max_normals, fine_grid=grid)
 ```
 
 ![](../imgs/fig/subdiv_pool_correct.png)
@@ -584,17 +584,17 @@ subdiv_normals, subdiv_grid = max_grid.subdivide(2, max_normals, fine_grid=grid)
 
 Note the matching topology of the grid after the Subdivision operation to the original grid (though the features are different due to the Pooling operation).
 
-One other useful feature of the `subdivide` operator is that this operation can be *masked* so that subdivision is only performed on a subset of the voxels in the grid.
+One other useful feature of the `refine` operator is that this operation can be *masked* so that subdivision is only performed on a subset of the voxels in the grid.
 
-The optional `mask` argument to `subdivide` is a `JaggedTensor` of boolean values that indicates which voxels should be subdivided.  Given this `mask` is simply a `JaggedTensor`, this operation can be made differentiable in a neural network and the `subdivide` operator can be learned.
+The optional `mask` argument to `refine` is a `JaggedTensor` of boolean values that indicates which voxels should be refined.  Given this `mask` is simply a `JaggedTensor`, this operation can be made differentiable in a neural network and the `refine` operator can be learned.
 
-Let's illustrate a very simple example of how to use the `mask` argument to only subdivide the voxels which have a feature value greater than a certain threshold.
+Let's illustrate a very simple example of how to use the `mask` argument to only refine the voxels which have a feature value greater than a certain threshold.
 
 ```python continuation
-# Mask the grid with the normals where only the normals with a value greater than 0.5 on the x-axis are subdivided
+# Mask the grid with the normals where only the normals with a value greater than 0.5 on the x-axis are refined
 mask = vox_normals.jdata[:, 0] > 0.5
 
-subdiv_normals, subdiv_grid = grid.subdivide(2, vox_normals, mask=mask)
+subdiv_normals, subdiv_grid = grid.refine(2, vox_normals, mask=mask)
 ```
 
 ![](../imgs/fig/subdiv_mask.png)

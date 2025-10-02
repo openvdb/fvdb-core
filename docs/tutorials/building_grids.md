@@ -162,7 +162,7 @@ grid_dual = grid_primal.dual_grid()
 
 ### Subdividing and Coarsening a grid
 
-The grid could be subdivided or coarsened with a subdivision/coarsening factor provided:
+The grid could be refined or coarsened with a subdivision/coarsening factor provided:
 
 ```python
 import fvdb
@@ -172,7 +172,7 @@ coords_1, _ = load_happy_mesh(mode='vf')
 
 grid = fvdb.GridBatch.from_points(fvdb.JaggedTensor([coords_1]))
 
-grid_subdivided = grid.subdivided_grid(2)
+grid_refined = grid.refined_grid(2)
 grid_coarsened = grid.coarsened_grid(2)
 ```
 
