@@ -141,6 +141,14 @@ TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6+PTX" ./build.sh install
 
 **:warning: Note:** Compilation can be very memory-consuming. As part of our build script, we set the `CMAKE_BUILD_PARALLEL_LEVEL` environment variable to control compilation job parallelism with a value that we find works well for most machines (allowing for one job every 2.5GB of memory) but this can be overridden by setting the `CMAKE_BUILD_PARALLEL_LEVEL` environment variable to a different value.
 
+** Note:** To save time and trouble on repeated clean builds, configure your `CPM_SOURCE_CACHE`. Add the following to your shell configuration (e.g. `.bashrc`)
+
+```shell
+export CPM_SOURCE_CACHE=$HOME/.cache/CPM
+```
+
+If this is not set, CMake Package Manager (CPM) will cache in the fVDB build directory. Keeping the cache outside of the build directory allows build-time dependencies
+to be reused across fvdb clean-build cycles and saves build time. [See the CPM documentation for more detail](https://github.com/cpm-cmake/CPM.cmake?tab=readme-ov-file#cpm_source_cache)
 
 You can either perform an install:
 ```shell
