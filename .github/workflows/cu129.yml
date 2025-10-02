@@ -64,15 +64,15 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
+      - name: Apt update and install git and wget
+        run: apt update && apt install -y git wget
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
-
-      - name: Apt update and install git and wget
-        run: apt update && apt install -y git wget
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
         run: |
@@ -229,15 +229,15 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
+      - name: Apt update and install git and wget
+        run: apt update && apt install -y git wget
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
-
-      - name: Apt update and install git and wget
-        run: apt update && apt install -y git wget
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
         run: |
@@ -331,15 +331,15 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
+      - name: Apt update and install git and wget
+        run: apt update && apt install -y git wget
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
-
-      - name: Apt update and install git and wget
-        run: apt update && apt install -y git wget
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
         run: |
@@ -418,15 +418,15 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
+      - name: Apt update and install git and wget
+        run: apt update && apt install -y git wget
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
-
-      - name: Apt update and install git and wget
-        run: apt update && apt install -y git wget
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
         run: |
