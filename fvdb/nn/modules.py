@@ -220,7 +220,10 @@ class SparseConv3d(_SparseConv3dBase):
         plan: ConvolutionPlan,
     ) -> JaggedTensor:
         if not plan.valid_usage(self.in_channels, self.out_channels, self.kernel_size, self.stride, transposed=False):
-            raise ValueError("Invalid usage of the convolution plan")
+            raise ValueError(
+                "Convolution plan used with a SparseConv3d module that had "
+                "mismatched input/output channels, kernel size, or stride, or transposition"
+            )
 
         out_data = plan.execute(data, self.weight)
 
