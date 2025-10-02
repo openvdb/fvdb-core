@@ -319,7 +319,7 @@ GaussianSplat3d::projectGaussiansImpl(const torch::Tensor &worldToCameraMatrices
     const auto projectionResults =
         detail::autograd::ProjectGaussians::apply(mMeans,
                                                   mQuats,
-                                                  scales(),
+                                                  mLogScales,
                                                   worldToCameraMatrices,
                                                   projectionMatrices,
                                                   settings.imageWidth,

@@ -80,7 +80,7 @@ projectionBackwardKernel(const int32_t offset,
                          const T *__restrict__ means,              // [N, 3]
                          const T *__restrict__ covars,             // [N, 6] optional
                          const T *__restrict__ quats,              // [N, 4] optional
-                         const T *__restrict__ scales,             // [N, 3] optional
+                         const T *__restrict__ logScales,          // [N, 3] optional
                          const T *__restrict__ worldToCamMatrices, // [C, 4, 4]
                          const T *__restrict__ projectionMatrices, // [C, 3, 3]
                          const int32_t imageWidth,
@@ -167,11 +167,13 @@ projectionBackwardKernel(const int32_t offset,
                                        covars[5]  // 3rd row
         );
     } else {
-        // compute from quaternions and scales
+        // compute from quaternions and logScales
         quats += gId * 4;
-        scales += gId * 3;
+        logScales += gId * 3;
         quat  = nanovdb::math::Vec4<T>(quats[0], quats[1], quats[2], quats[3]);
-        scale = nanovdb::math::Vec3<T>(scales[0], scales[1], scales[2]);
+        scale = nanovdb::math::Vec3<T>(::cuda::std::exp(logScales[0]),
+                                       ::cuda::std::exp(logScales[1]),
+                                       ::cuda::std::exp(logScales[2]));
 
         covar = quaternionAndScaleToCovariance<T>(quat, scale);
     }
@@ -296,7 +298,7 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
     // fwd inputs
     const torch::Tensor &means,                       // [N, 3]
     const torch::Tensor &quats,                       // [N, 4]
-    const torch::Tensor &scales,                      // [N, 3]
+    const torch::Tensor &logScales,                   // [N, 3]
     const torch::Tensor &worldToCamMatrices,          // [C, 4, 4]
     const torch::Tensor &projectionMatrices,          // [C, 3, 3]
     const at::optional<torch::Tensor> &compensations, // [N, 6] optional
@@ -329,7 +331,7 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
         GSPLAT_CHECK_INPUT(covars.value());
     } else {
         GSPLAT_CHECK_INPUT(quats);
-        GSPLAT_CHECK_INPUT(scales);
+        GSPLAT_CHECK_INPUT(logScales);
     }
     GSPLAT_CHECK_INPUT(worldToCamMatrices);
     GSPLAT_CHECK_INPUT(projectionMatrices);
@@ -356,7 +358,7 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
         dLossDCovars = torch::zeros_like(covars.value());
     } else {
         dLossDQuats  = torch::zeros_like(quats);
-        dLossDScales = torch::zeros_like(scales);
+        dLossDScales = torch::zeros_like(logScales);
     }
     torch::Tensor dLossDWorldToCamMatrices;
     if (worldToCamMatricesRequiresGrad) {
@@ -373,7 +375,7 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
                 means.data_ptr<float>(),
                 covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
                 covars.has_value() ? nullptr : quats.data_ptr<float>(),
-                covars.has_value() ? nullptr : scales.data_ptr<float>(),
+                covars.has_value() ? nullptr : logScales.data_ptr<float>(),
                 worldToCamMatrices.data_ptr<float>(),
                 projectionMatrices.data_ptr<float>(),
                 imageWidth,
@@ -403,7 +405,7 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
                 means.data_ptr<float>(),
                 covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
                 covars.has_value() ? nullptr : quats.data_ptr<float>(),
-                covars.has_value() ? nullptr : scales.data_ptr<float>(),
+                covars.has_value() ? nullptr : logScales.data_ptr<float>(),
                 worldToCamMatrices.data_ptr<float>(),
                 projectionMatrices.data_ptr<float>(),
                 imageWidth,
@@ -476,7 +478,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
     // fwd inputs
     const torch::Tensor &means,                       // [N, 3]
     const torch::Tensor &quats,                       // [N, 4]
-    const torch::Tensor &scales,                      // [N, 3]
+    const torch::Tensor &logScales,                   // [N, 3]
     const torch::Tensor &worldToCamMatrices,          // [C, 4, 4]
     const torch::Tensor &projectionMatrices,          // [C, 3, 3]
     const at::optional<torch::Tensor> &compensations, // [N, 6] optional
@@ -511,7 +513,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
         dLossDCovars = torch::zeros_like(covars.value());
     } else {
         dLossDQuats  = torch::zeros_like(quats);
-        dLossDScales = torch::zeros_like(scales);
+        dLossDScales = torch::zeros_like(logScales);
     }
     torch::Tensor dLossDWorldToCamMatrices;
     if (worldToCamMatricesRequiresGrad) {
@@ -536,7 +538,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                     means.data_ptr<float>(),
                     covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
                     covars.has_value() ? nullptr : quats.data_ptr<float>(),
-                    covars.has_value() ? nullptr : scales.data_ptr<float>(),
+                    covars.has_value() ? nullptr : logScales.data_ptr<float>(),
                     worldToCamMatrices.data_ptr<float>(),
                     projectionMatrices.data_ptr<float>(),
                     imageWidth,
@@ -566,7 +568,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                         means.data_ptr<float>(),
                         covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
                         covars.has_value() ? nullptr : quats.data_ptr<float>(),
-                        covars.has_value() ? nullptr : scales.data_ptr<float>(),
+                        covars.has_value() ? nullptr : logScales.data_ptr<float>(),
                         worldToCamMatrices.data_ptr<float>(),
                         projectionMatrices.data_ptr<float>(),
                         imageWidth,
@@ -674,7 +676,7 @@ dispatchGaussianProjectionBackward<torch::kCPU>(
     // fwd inputs
     const torch::Tensor &means,                       // [N, 3]
     const torch::Tensor &quats,                       // [N, 4]
-    const torch::Tensor &scales,                      // [N, 3]
+    const torch::Tensor &logScales,                   // [N, 3]
     const torch::Tensor &worldToCamMatrices,          // [C, 4, 4]
     const torch::Tensor &projectionMatrices,          // [C, 3, 3]
     const at::optional<torch::Tensor> &compensations, // [N, 6] optional

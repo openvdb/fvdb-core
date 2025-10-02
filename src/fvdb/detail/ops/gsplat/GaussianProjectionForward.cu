@@ -41,7 +41,7 @@ template <typename T, bool Ortho> struct ProjectionForward {
     // Inputs
     fvdb::TorchRAcc64<T, 2> mMeansAcc;              // [N, 3]
     fvdb::TorchRAcc64<T, 2> mQuatsAcc;              // [N, 4]
-    fvdb::TorchRAcc64<T, 2> mScalesAcc;             // [N, 3]
+    fvdb::TorchRAcc64<T, 2> mLogScalesAcc;          // [N, 3]
     fvdb::TorchRAcc32<T, 3> mWorldToCamMatricesAcc; // [C, 4, 4]
     fvdb::TorchRAcc32<T, 3> mProjectionMatricesAcc; // [C, 3, 3]
 
@@ -68,7 +68,7 @@ template <typename T, bool Ortho> struct ProjectionForward {
                       const bool calcCompensations,
                       const torch::Tensor &means,              // [N, 3]
                       const torch::Tensor &quats,              // [N, 4]
-                      const torch::Tensor &scales,             // [N, 3]
+                      const torch::Tensor &logScales,          // [N, 3]
                       const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
                       const torch::Tensor &projectionMatrices, // [C, 3, 3]
                       torch::Tensor outRadii,                  // [C, N]
@@ -81,7 +81,7 @@ template <typename T, bool Ortho> struct ProjectionForward {
           mRadiusClip(radiusClip),
           mMeansAcc(means.packed_accessor64<T, 2, torch::RestrictPtrTraits>()),
           mQuatsAcc(quats.packed_accessor64<T, 2, torch::RestrictPtrTraits>()),
-          mScalesAcc(scales.packed_accessor64<T, 2, torch::RestrictPtrTraits>()),
+          mLogScalesAcc(logScales.packed_accessor64<T, 2, torch::RestrictPtrTraits>()),
           mWorldToCamMatricesAcc(
               worldToCamMatrices.packed_accessor32<T, 3, torch::RestrictPtrTraits>()),
           mProjectionMatricesAcc(
@@ -92,9 +92,9 @@ template <typename T, bool Ortho> struct ProjectionForward {
           mOutConicsAcc(outConics.packed_accessor64<T, 3, torch::RestrictPtrTraits>()),
           mOutCompensationsAcc(outCompensations.defined() ? outCompensations.data_ptr<T>()
                                                           : nullptr) {
-        mMeansAcc  = means.packed_accessor64<T, 2, torch::RestrictPtrTraits>();
-        mQuatsAcc  = quats.packed_accessor64<T, 2, torch::RestrictPtrTraits>();
-        mScalesAcc = scales.packed_accessor64<T, 2, torch::RestrictPtrTraits>();
+        mMeansAcc     = means.packed_accessor64<T, 2, torch::RestrictPtrTraits>();
+        mQuatsAcc     = quats.packed_accessor64<T, 2, torch::RestrictPtrTraits>();
+        mLogScalesAcc = logScales.packed_accessor64<T, 2, torch::RestrictPtrTraits>();
         mWorldToCamMatricesAcc =
             worldToCamMatrices.packed_accessor32<T, 3, torch::RestrictPtrTraits>();
         mProjectionMatricesAcc =
@@ -109,11 +109,13 @@ template <typename T, bool Ortho> struct ProjectionForward {
         //                 covarAcc[1], covarAcc[3], covarAcc[4], // 2nd row
         //                 covarAcc[2], covarAcc[4], covarAcc[5]  // 3rd row
         //     );
-        const auto quatAcc  = mQuatsAcc[gid];
-        const auto scaleAcc = mScalesAcc[gid];
+        const auto quatAcc     = mQuatsAcc[gid];
+        const auto logScaleAcc = mLogScalesAcc[gid];
         return quaternionAndScaleToCovariance<T>(
             Vec4(quatAcc[0], quatAcc[1], quatAcc[2], quatAcc[3]),
-            Vec3(scaleAcc[0], scaleAcc[1], scaleAcc[2]));
+            Vec3(::cuda::std::exp(logScaleAcc[0]),
+                 ::cuda::std::exp(logScaleAcc[1]),
+                 ::cuda::std::exp(logScaleAcc[2])));
     }
 
     inline __device__ void
@@ -249,7 +251,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 dispatchGaussianProjectionForward<torch::kCUDA>(
     const torch::Tensor &means,              // [N, 3]
     const torch::Tensor &quats,              // [N, 4]
-    const torch::Tensor &scales,             // [N, 3]
+    const torch::Tensor &logScales,          // [N, 3]
     const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
     const torch::Tensor &projectionMatrices, // [C, 3, 3]
     const int64_t imageWidth,
@@ -264,7 +266,7 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
 
     TORCH_CHECK_VALUE(means.is_cuda(), "means must be a CUDA tensor");
     TORCH_CHECK_VALUE(quats.is_cuda(), "quats must be a CUDA tensor");
-    TORCH_CHECK_VALUE(scales.is_cuda(), "scales must be a CUDA tensor");
+    TORCH_CHECK_VALUE(logScales.is_cuda(), "logScales must be a CUDA tensor");
     TORCH_CHECK_VALUE(worldToCamMatrices.is_cuda(), "worldToCamMatrices must be a CUDA tensor");
     TORCH_CHECK_VALUE(projectionMatrices.is_cuda(), "projectionMatrices must be a CUDA tensor");
 
@@ -304,7 +306,7 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
                                                             calcCompensations,
                                                             means,
                                                             quats,
-                                                            scales,
+                                                            logScales,
                                                             worldToCamMatrices,
                                                             projectionMatrices,
                                                             outRadii,
@@ -326,7 +328,7 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
                                                              calcCompensations,
                                                              means,
                                                              quats,
-                                                             scales,
+                                                             logScales,
                                                              worldToCamMatrices,
                                                              projectionMatrices,
                                                              outRadii,
@@ -347,7 +349,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 dispatchGaussianProjectionForward<torch::kPrivateUse1>(
     const torch::Tensor &means,              // [N, 3]
     const torch::Tensor &quats,              // [N, 4]
-    const torch::Tensor &scales,             // [N, 3]
+    const torch::Tensor &logScales,          // [N, 3]
     const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
     const torch::Tensor &projectionMatrices, // [C, 3, 3]
     const int64_t imageWidth,
@@ -360,7 +362,7 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
     const bool ortho) {
     TORCH_CHECK_VALUE(means.is_privateuseone(), "means must be a PrivateUse1 tensor");
     TORCH_CHECK_VALUE(quats.is_privateuseone(), "quats must be a PrivateUse1 tensor");
-    TORCH_CHECK_VALUE(scales.is_privateuseone(), "scales must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(logScales.is_privateuseone(), "logScales must be a PrivateUse1 tensor");
     TORCH_CHECK_VALUE(worldToCamMatrices.is_privateuseone(),
                       "worldToCamMatrices must be a PrivateUse1 tensor");
     TORCH_CHECK_VALUE(projectionMatrices.is_privateuseone(),
@@ -406,7 +408,7 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
                                                                 calcCompensations,
                                                                 means,
                                                                 quats,
-                                                                scales,
+                                                                logScales,
                                                                 worldToCamMatrices,
                                                                 projectionMatrices,
                                                                 outRadii,
@@ -428,7 +430,7 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
                                                                  calcCompensations,
                                                                  means,
                                                                  quats,
-                                                                 scales,
+                                                                 logScales,
                                                                  worldToCamMatrices,
                                                                  projectionMatrices,
                                                                  outRadii,
@@ -453,7 +455,7 @@ template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchGaussianProjectionForward<torch::kCPU>(const torch::Tensor &means,              // [N, 3]
                                                const torch::Tensor &quats,              // [N, 4]
-                                               const torch::Tensor &scales,             // [N, 3]
+                                               const torch::Tensor &logScales,          // [N, 3]
                                                const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
                                                const torch::Tensor &projectionMatrices, // [C, 3, 3]
                                                const int64_t imageWidth,
