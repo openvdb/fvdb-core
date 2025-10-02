@@ -22,6 +22,8 @@ usage() {
   echo "Build Modifiers (for 'install' and 'wheel' build types, typically passed after build_type):"
   echo "  gtests         Enable building tests (sets FVDB_BUILD_TESTS=ON)."
   echo "  benchmarks     Enable building benchmarks (sets FVDB_BUILD_BENCHMARKS=ON)."
+  echo "  editor_skip    Skip building and installing the nanovdb_editor dependency (sets NANOVDB_EDITOR_SKIP=ON)."
+  echo "  editor_force   Force rebuild of the nanovdb_editor dependency (sets NANOVDB_EDITOR_FORCE=ON)."
   echo "  debug          Build in debug mode with full debug symbols and no optimizations."
   echo "  verbose        Enable verbose build output for pip and CMake."
   echo ""
@@ -136,6 +138,10 @@ CONFIG_SETTINGS=""
 PASS_THROUGH_ARGS=""
 CUDA_ARCH_LIST_ARG="default"
 
+# Default values for nanovdb_editor build options
+NANOVDB_EDITOR_SKIP=OFF
+NANOVDB_EDITOR_FORCE=OFF
+
 while (( "$#" )); do
   is_config_arg_handled=false
   if [[ "$BUILD_TYPE" == "install" || "$BUILD_TYPE" == "wheel" ]]; then
@@ -154,6 +160,14 @@ while (( "$#" )); do
     elif [[ "$1" == "debug" ]]; then
       echo "Enabling debug build"
       CONFIG_SETTINGS+=" --config-settings=cmake.build-type=debug"
+      is_config_arg_handled=true
+    elif [[ "$1" == "editor_skip" ]]; then
+      echo "Detected 'editor_skip' flag for $BUILD_TYPE build. Enabling NANOVDB_EDITOR_SKIP."
+      NANOVDB_EDITOR_SKIP=ON
+      is_config_arg_handled=true
+    elif [[ "$1" == "editor_force" ]]; then
+      echo "Detected 'editor_force' flag for $BUILD_TYPE build. Enabling NANOVDB_EDITOR_FORCE."
+      NANOVDB_EDITOR_FORCE=ON
       is_config_arg_handled=true
     fi
   fi
@@ -177,6 +191,9 @@ while (( "$#" )); do
   fi
   shift
 done
+
+CONFIG_SETTINGS+=" --config-settings=cmake.define.NANOVDB_EDITOR_SKIP=$NANOVDB_EDITOR_SKIP"
+CONFIG_SETTINGS+=" --config-settings=cmake.define.NANOVDB_EDITOR_FORCE=$NANOVDB_EDITOR_FORCE"
 
 # Construct PIP_ARGS with potential CMake args and other pass-through args
 export PIP_ARGS="--no-build-isolation$CONFIG_SETTINGS$PASS_THROUGH_ARGS"
