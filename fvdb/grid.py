@@ -507,7 +507,7 @@ class Grid:
                 active voxels. Shape: (num_queries,).
         """
         jagged_ijk = JaggedTensor(ijk)
-        return self._impl.coords_in_active_voxel(jagged_ijk).jdata
+        return self._impl.coords_in_grid(jagged_ijk).jdata
 
     def cpu(self) -> "Grid":
         """
@@ -1173,7 +1173,7 @@ class Grid:
                 Shape: (num_points,).
         """
         jagged_points = JaggedTensor(points)
-        return self._impl.points_in_active_voxel(jagged_points).jdata
+        return self._impl.points_in_grid(jagged_points).jdata
 
     def pruned_grid(self, mask: torch.Tensor) -> "Grid":
         """
@@ -1533,19 +1533,19 @@ class Grid:
         each with associated data D.
 
         Args:
-            subdiv_factor (NumericMaxRank1): Factor by which to subdivide the grid,
+            subdiv_factor (NumericMaxRank1): Factor by which to refine the grid,
                 broadcastable to shape (3,), integer dtype
-            data (torch.Tensor): Voxel data to subdivide.
+            data (torch.Tensor): Voxel data to refine.
                 Shape: (total_voxels, channels).
             mask (torch.Tensor, optional): Boolean mask indicating which
-                voxels to subdivide. If None, all voxels are subdivided.
+                voxels to refine. If None, all voxels are refined.
             fine_grid (Grid, optional): Pre-allocated fine grid to use for output.
                 If None, a new grid is created.
 
         Returns:
             tuple[torch.Tensor, Grid]: A tuple containing:
-                - The subdivided data as a torch.Tensor
-                - The fine Grid containing the subdivided structure
+                - The refined data as a torch.Tensor
+                - The fine Grid containing the refined structure
         """
         subdiv_factor = to_Vec3iBroadcastable(subdiv_factor, value_constraint=ValueConstraint.POSITIVE)
         jagged_data = JaggedTensor(data)
@@ -1553,7 +1553,7 @@ class Grid:
 
         fine_grid_impl = fine_grid._impl if fine_grid else None
 
-        result_data, result_grid_impl = self._impl.subdivide(subdiv_factor, jagged_data, jagged_mask, fine_grid_impl)
+        result_data, result_grid_impl = self._impl.refine(subdiv_factor, jagged_data, jagged_mask, fine_grid_impl)
         return result_data.jdata, Grid(impl=result_grid_impl)
 
     def refined_grid(
@@ -1569,19 +1569,19 @@ class Grid:
         This is similar to the `refine` method, but only the grid structure is returned,
         not the data.
         Args:
-            subdiv_factor (NumericMaxRank1): Factor by which to subdivide the grid,
+            subdiv_factor (NumericMaxRank1): Factor by which to refine the grid,
                 broadcastable to shape (3,), integer dtype
             mask (torch.Tensor, optional): Boolean mask indicating which
-                voxels to subdivide. If None, all voxels are subdivided.
+                voxels to refine. If None, all voxels are refined.
 
         Returns:
-            Grid: A new Grid with subdivided structure.
+            Grid: A new Grid with refined structure.
         """
 
         subdiv_factor = to_Vec3iBroadcastable(subdiv_factor, value_constraint=ValueConstraint.POSITIVE)
         jagged_mask = JaggedTensor(mask) if mask is not None else None
 
-        return Grid(impl=self._impl.subdivided_grid(subdiv_factor, mask=jagged_mask))
+        return Grid(impl=self._impl.refined_grid(subdiv_factor, mask=jagged_mask))
 
     def to(self, target: "str | torch.device | torch.Tensor | JaggedTensor | Grid") -> "Grid":
         """

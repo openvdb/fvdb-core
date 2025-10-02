@@ -271,7 +271,7 @@ class GaussianSplatOptimizer:
 
         # Now split the Gaussians
         if n_split > 0:
-            self.subdivide_gaussians(mask=is_split, split_factor=split_factor)
+            self.refine_gaussians(mask=is_split, split_factor=split_factor)
         return n_dupli, n_split
 
     @torch.no_grad()
@@ -296,7 +296,7 @@ class GaussianSplatOptimizer:
         return int(n_prune)
 
     @torch.no_grad()
-    def subdivide_gaussians(self, mask: torch.Tensor, split_factor: int = 2):
+    def refine_gaussians(self, mask: torch.Tensor, split_factor: int = 2):
         """Split the Gaussian with the given mask.
 
         Args:
