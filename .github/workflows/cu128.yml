@@ -76,11 +76,12 @@ jobs:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
-          ref: ${{ github.event.pull_request.base.ref }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
 
       - name: Apt update and install git and wget
         run: apt update && apt install -y git wget
       - name: Fetch PR branch
+        if: github.event_name == 'pull_request_target'
         run: |
           cd $GITHUB_WORKSPACE
           git config --global user.name "github-actions[bot]"
@@ -90,6 +91,7 @@ jobs:
           git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
       - name: Merge PR branch into base
+        if: github.event_name == 'pull_request_target'
         run: |
           cd $GITHUB_WORKSPACE
           git merge pr_branch
@@ -241,11 +243,12 @@ jobs:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
-          ref: ${{ github.event.pull_request.base.ref }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
 
       - name: Apt update and install git and wget
         run: apt update && apt install -y git wget
       - name: Fetch PR branch
+        if: github.event_name == 'pull_request_target'
         run: |
           cd $GITHUB_WORKSPACE
           git config --global user.name "github-actions[bot]"
@@ -255,6 +258,7 @@ jobs:
           git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
       - name: Merge PR branch into base
+        if: github.event_name == 'pull_request_target'
         run: |
           cd $GITHUB_WORKSPACE
           git merge pr_branch
@@ -341,10 +345,11 @@ jobs:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
-          ref: ${{ github.event.pull_request.base.ref }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
       - name: Apt update and install git and wget
         run: apt update && apt install -y git wget
       - name: Fetch PR branch
+        if: github.event_name == 'pull_request_target'
         run: |
           cd $GITHUB_WORKSPACE
           git config --global user.name "github-actions[bot]"
@@ -354,6 +359,7 @@ jobs:
           git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
       - name: Merge PR branch into base
+        if: github.event_name == 'pull_request_target'
         run: |
           cd $GITHUB_WORKSPACE
           git merge pr_branch
@@ -428,9 +434,13 @@ jobs:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
-          ref: ${{ github.event.pull_request.base.ref }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+
+      - name: Apt update and install git and wget
+        run: apt update && apt install -y git wget
 
       - name: Fetch PR branch
+        if: github.event_name == 'pull_request_target'
         run: |
           cd $GITHUB_WORKSPACE
           git config --global user.name "github-actions[bot]"
@@ -440,12 +450,10 @@ jobs:
           git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
       - name: Merge PR branch into base
+        if: github.event_name == 'pull_request_target'
         run: |
           cd $GITHUB_WORKSPACE
           git merge pr_branch
-
-      - name: Apt update and install git and wget
-        run: apt update && apt install -y git wget
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
         with:
