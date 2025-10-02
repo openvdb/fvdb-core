@@ -130,7 +130,7 @@ convIJKForGrid(const GridBatchImpl &batchHdl,
     TORCH_CHECK(batchHdl.device().is_cuda(), "GridBatchImpl must be on CUDA device");
     TORCH_CHECK(batchHdl.device().has_index(), "GridBatchImpl must have a valid index");
 
-    if (stride == nanovdb::Coord(1) || stride == kernelSize) {
+    if (kernelSize == nanovdb::Coord(1) || stride == kernelSize) {
         return dispatchCoarseIJKForFineGrid<torch::kCUDA>(batchHdl, nanovdb::Coord(stride));
     }
 
@@ -193,7 +193,7 @@ dispatchBuildGridForConv<torch::kCPU>(const GridBatchImpl &baseBatchHdl,
                                       const nanovdb::Coord &kernelSize,
                                       const nanovdb::Coord &stride) {
     using GridT = nanovdb::ValueOnIndex;
-    if (stride == nanovdb::Coord(1) || stride == kernelSize) {
+    if (kernelSize == nanovdb::Coord(1) || stride == kernelSize) {
         return buildCoarseGridFromFineGridCPU(baseBatchHdl, stride);
     }
 

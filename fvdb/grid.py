@@ -52,7 +52,6 @@ from .types import (
 
 if TYPE_CHECKING:
     from .grid_batch import GridBatch
-    from .sparse_conv_pack_info import SparseConvPackInfo
 
 
 class Grid:
@@ -477,7 +476,7 @@ class Grid:
         """
         return Grid(impl=self._impl.contiguous())
 
-    def conv_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 0) -> "Grid":
+    def conv_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> "Grid":
         """
         Return a grid representing the convolution of this grid with a given kernel.
 
@@ -491,7 +490,7 @@ class Grid:
             conv_grid (Grid): A Grid representing the convolution of this grid.
         """
         kernel_size = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
-        stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.NON_NEGATIVE)
+        stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE)
         return Grid(impl=self._impl.conv_grid(kernel_size, stride))
 
     def coords_in_grid(self, ijk: torch.Tensor) -> torch.Tensor:
@@ -1436,35 +1435,6 @@ class Grid:
         """
         jagged_input = JaggedTensor(input)
         return self._impl.sparse_conv_halo(jagged_input, weight, variant).jdata
-
-    def sparse_conv_kernel_map(
-        self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1, target_grid: "Grid | None" = None
-    ) -> tuple["SparseConvPackInfo", "Grid"]:
-        """
-        Map sparse convolution kernel to target grid.
-
-        Args:
-            kernel_size (NumericMaxRank1): Size of the convolution kernel,
-                broadcastable to shape (3,), integer dtype
-            stride (NumericMaxRank1): Stride of the convolution,
-                broadcastable to shape (3,), integer dtype
-            target_grid (Grid | None): Target grid to map the kernel to.
-                If None, the kernel is mapped to the current grid.
-
-        Returns:
-            tuple[SparseConvPackInfo, Grid]: A tuple containing:
-                - SparseConvPackInfo: Information about the sparse convolution kernel.
-                - Grid: The target grid.
-        """
-        # Import here to avoid circular dependency
-        from .sparse_conv_pack_info import SparseConvPackInfo
-
-        kernel_size = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
-        stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.NON_NEGATIVE)
-        target_impl = target_grid._impl if target_grid is not None else None
-
-        sparse_impl, grid_impl = self._impl.sparse_conv_kernel_map(kernel_size, stride, target_impl)
-        return (SparseConvPackInfo(impl=sparse_impl), Grid(impl=grid_impl))
 
     def splat_bezier(self, points: torch.Tensor, points_data: torch.Tensor) -> torch.Tensor:
         """

@@ -63,4 +63,5 @@
         "reportPrivateImportUsage": "none"
     },
     "cursorpyright.analysis.typeCheckingMode": "basic",
+    "python.REPL.enableREPLSmartSend": false,
 }

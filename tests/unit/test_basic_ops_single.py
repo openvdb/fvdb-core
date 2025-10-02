@@ -373,7 +373,11 @@ class TestBasicOpsSingle(unittest.TestCase):
         pred_dual_coordinates = grid.world_to_grid(pts)
 
         self.assertTrue(
-            torch.allclose(pred_dual_coordinates, target_dual_coordinates, atol=dtype_to_atol(dtype)),
+            torch.allclose(
+                pred_dual_coordinates,
+                target_dual_coordinates,
+                atol=dtype_to_atol(dtype),
+            ),
             f"max_diff = {torch.abs(pred_dual_coordinates - target_dual_coordinates).max()}",
         )
 
@@ -389,7 +393,13 @@ class TestBasicOpsSingle(unittest.TestCase):
         target_primal_coordinates = (pts - vox_origin) / vox_size
         pred_primal_coordinates = grid.world_to_grid(pts)
 
-        self.assertTrue(torch.allclose(target_primal_coordinates, pred_primal_coordinates, atol=dtype_to_atol(dtype)))
+        self.assertTrue(
+            torch.allclose(
+                target_primal_coordinates,
+                pred_primal_coordinates,
+                atol=dtype_to_atol(dtype),
+            )
+        )
 
     @parameterized.expand(all_device_dtype_combos)
     def test_world_to_dual_grad(self, device, dtype):
@@ -415,7 +425,13 @@ class TestBasicOpsSingle(unittest.TestCase):
         target_dual_coordinates = ((pts - vox_origin) / vox_size) + 0.5
         target_dual_coordinates.backward(grad_out)
 
-        self.assertTrue(torch.allclose(pred_dual_coordinates, target_dual_coordinates, atol=dtype_to_atol(dtype)))
+        self.assertTrue(
+            torch.allclose(
+                pred_dual_coordinates,
+                target_dual_coordinates,
+                atol=dtype_to_atol(dtype),
+            )
+        )
         self.assertTrue(torch.allclose(pts.grad, pred_grad, atol=dtype_to_atol(dtype)))
 
     @parameterized.expand(all_device_dtype_combos)
@@ -442,7 +458,13 @@ class TestBasicOpsSingle(unittest.TestCase):
         target_primal_coordinates = (pts - vox_origin) / vox_size
         target_primal_coordinates.backward(grad_out)
 
-        self.assertTrue(torch.allclose(target_primal_coordinates, pred_primal_coordinates, atol=dtype_to_atol(dtype)))
+        self.assertTrue(
+            torch.allclose(
+                target_primal_coordinates,
+                pred_primal_coordinates,
+                atol=dtype_to_atol(dtype),
+            )
+        )
         # diff_idxs = torch.where(~torch.isclose(pts.grad, pred_grad, atol=dtype_to_atol(dtype)))
         self.assertTrue(torch.allclose(pts.grad, pred_grad, atol=dtype_to_atol(dtype)))
 
@@ -555,17 +577,31 @@ class TestBasicOpsSingle(unittest.TestCase):
         pred_primal_coordinates = grid.world_to_grid(pts)
 
         self.assertTrue(
-            torch.allclose(target_primal_coordinates, pred_primal_coordinates, atol=dtype_to_atol(dtype)),
+            torch.allclose(
+                target_primal_coordinates,
+                pred_primal_coordinates,
+                atol=dtype_to_atol(dtype),
+            ),
             f"Max diff = {torch.max(torch.abs(target_primal_coordinates- pred_primal_coordinates)).item()}",
         )
 
         target_dual_coordinates = ((pts - vox_origin) / vox_size) + 0.5
         pred_dual_coordinates = grid_d.world_to_grid(pts)
-        self.assertTrue(torch.allclose(pred_dual_coordinates, target_dual_coordinates, atol=dtype_to_atol(dtype)))
+        self.assertTrue(
+            torch.allclose(
+                pred_dual_coordinates,
+                target_dual_coordinates,
+                atol=dtype_to_atol(dtype),
+            )
+        )
 
         pred_primal_coordinates_dd = grid_dd.world_to_grid(pts)
         self.assertTrue(
-            torch.allclose(target_primal_coordinates, pred_primal_coordinates_dd, atol=dtype_to_atol(dtype))
+            torch.allclose(
+                target_primal_coordinates,
+                pred_primal_coordinates_dd,
+                atol=dtype_to_atol(dtype),
+            )
         )
 
     @parameterized.expand(all_device_dtype_combos)
@@ -709,7 +745,11 @@ class TestBasicOpsSingle(unittest.TestCase):
 
         expected_ijk_set = set(
             {
-                (expected_ijk[i, 0].item(), expected_ijk[i, 1].item(), expected_ijk[i, 2].item())
+                (
+                    expected_ijk[i, 0].item(),
+                    expected_ijk[i, 1].item(),
+                    expected_ijk[i, 2].item(),
+                )
                 for i in range(expected_ijk.shape[0])
             }
         )
@@ -718,7 +758,11 @@ class TestBasicOpsSingle(unittest.TestCase):
 
         predicted_ijk_set = set(
             {
-                (predicted_ijk[i, 0].item(), predicted_ijk[i, 1].item(), predicted_ijk[i, 2].item())
+                (
+                    predicted_ijk[i, 0].item(),
+                    predicted_ijk[i, 1].item(),
+                    predicted_ijk[i, 2].item(),
+                )
                 for i in range(predicted_ijk.shape[0])
             }
         )
@@ -750,7 +794,12 @@ class TestBasicOpsSingle(unittest.TestCase):
 
             feats_fine, grid_fine = grid.refine(subdiv_factor, feats, mask=mask)
             self.assertTrue(torch.allclose(grid_fine.voxel_size, grid.voxel_size / subvec))
-            self.assertTrue(torch.allclose(grid_fine.origin, grid.origin - 0.5 * grid_fine.voxel_size * fac_sub_one))
+            self.assertTrue(
+                torch.allclose(
+                    grid_fine.origin,
+                    grid.origin - 0.5 * grid_fine.voxel_size * fac_sub_one,
+                )
+            )
 
             fine_to_coarse_ijk = (grid_fine.ijk / subvec).floor()
             fine_to_coarse_idx = grid.ijk_to_index(fine_to_coarse_ijk.to(torch.int32))
@@ -797,7 +846,12 @@ class TestBasicOpsSingle(unittest.TestCase):
 
             feats_fine, grid_fine = grid.refine(subdiv_factor, feats, mask=mask)
             self.assertTrue(torch.allclose(grid_fine.voxel_size, grid.voxel_size / subvec))
-            self.assertTrue(torch.allclose(grid_fine.origin, grid.origin - 0.5 * grid_fine.voxel_size * fac_sub_one))
+            self.assertTrue(
+                torch.allclose(
+                    grid_fine.origin,
+                    grid.origin - 0.5 * grid_fine.voxel_size * fac_sub_one,
+                )
+            )
 
             fine_to_coarse_ijk = (grid_fine.ijk / subvec).floor()
             fine_to_coarse_idx = grid.ijk_to_index(fine_to_coarse_ijk.to(torch.int32))
@@ -839,11 +893,17 @@ class TestBasicOpsSingle(unittest.TestCase):
             if isinstance(pool_factor, int):
                 self.assertTrue(torch.allclose(grid_coarse.voxel_size, grid.voxel_size * pool_factor))
                 self.assertTrue(
-                    torch.allclose(grid_coarse.origin, grid.origin + 0.5 * grid.voxel_size * (pool_factor - 1))
+                    torch.allclose(
+                        grid_coarse.origin,
+                        grid.origin + 0.5 * grid.voxel_size * (pool_factor - 1),
+                    )
                 )
             else:
                 self.assertTrue(
-                    torch.allclose(grid_coarse.voxel_size, grid.voxel_size * torch.tensor(pool_factor).to(device))
+                    torch.allclose(
+                        grid_coarse.voxel_size,
+                        grid.voxel_size * torch.tensor(pool_factor).to(device),
+                    )
                 )
                 self.assertTrue(
                     torch.allclose(
@@ -1059,8 +1119,12 @@ class TestBasicOpsSingle(unittest.TestCase):
         pts = torch.randn(10000, 3).to(device=device, dtype=dtype)
         grid = Grid.from_points(pts, vox_size, vox_origin, device=device).dilated_grid(1)
 
-        for builder in [build_from_ijk, build_from_pts, build_from_pts_nn, build_from_dense]:
-
+        for builder in [
+            build_from_ijk,
+            build_from_pts,
+            build_from_pts_nn,
+            build_from_dense,
+        ]:
             # Value error because of negative voxel size
             with self.assertRaises(ValueError):
                 grid = builder(-vox_size, [0.01] * 3)
@@ -1153,7 +1217,6 @@ class TestBasicOpsSingle(unittest.TestCase):
 
     @parameterized.expand(all_device_dtype_combos)
     def test_no_use_after_free_on_backward(self, device, dtype):
-
         grid, grid_d, p = make_grid_and_point_data(device, dtype)
 
         # Primal
@@ -1273,30 +1336,22 @@ class TestBasicOpsSingle(unittest.TestCase):
 
     @parameterized.expand(all_device_dtype_combos + bfloat16_combos)
     def test_refine_empty_grid(self, device, dtype):
-        grid = Grid.from_dense([32, 32, 32], [0, 0, 0], voxel_size=1.0 / 32, origin=[0, 0, 0], device=device)
+        grid = Grid.from_dense(
+            [32, 32, 32],
+            [0, 0, 0],
+            voxel_size=1.0 / 32,
+            origin=[0, 0, 0],
+            device=device,
+        )
         values = torch.randn(grid.num_voxels, 17, device=device, dtype=dtype)
-        values, subgrid = grid.refine(1, values, mask=torch.zeros(grid.num_voxels, dtype=torch.bool, device=device))
+        values, subgrid = grid.refine(
+            1,
+            values,
+            mask=torch.zeros(grid.num_voxels, dtype=torch.bool, device=device),
+        )
         self.assertTrue(subgrid.num_voxels == 0)
         self.assertTrue(values.shape[0] == 0)
         self.assertTrue(values.shape[1] == 17)
-
-    # @parameterized.expand(all_device_dtype_combos + bfloat16_combos)
-    # def test_conv_empty_grid(self, device, dtype):
-    #     grid = GridBatch(device=device)
-    #     grid.set_from_dense_grid(1, [32, 32, 32], [0, 0, 0], voxel_sizes=1.0 / 32, origins=[0, 0, 0])
-    #     values_in = torch.randn(grid.total_voxels, 17, device=device, dtype=dtype)
-    #     values, subgrid = grid.refine(
-    #         1, values_in, mask=torch.zeros(grid.total_voxels, dtype=torch.bool, device=device)
-    #     )
-    #     self.assertTrue(subgrid.total_voxels == 0)
-    #     self.assertTrue(values.rshape[0] == 0)
-    #     self.assertTrue(values.rshape[1] == 17)
-
-    #     kmap, _ = grid.sparse_conv_kernel_map(3, 1, target_grid=subgrid)
-    #     kmap.build_gather_scatter()
-    #     res = kmap.sparse_conv_3d(values_in, torch.randn(17, 17, 3, 3, 3))
-    #     self.assertTrue(res.rshape[0] == 0)
-    #     self.assertTrue(res.rshape[1] == 17)
 
     @parameterized.expand(all_device_dtype_combos)
     def test_zero_voxels_grid_construction(self, device, dtype):
@@ -1325,20 +1380,37 @@ class TestBasicOpsSingle(unittest.TestCase):
         print(f"Empty grid bbox: {grid.bbox}")
         self.assertTrue(torch.equal(grid.bbox, torch.zeros(2, 3, dtype=torch.float32, device=device)))
 
-        grid = Grid.from_dense([32, 32, 32], [0, 0, 0], voxel_size=1.0 / 32, origin=[0, 0, 0], device=device)
+        grid = Grid.from_dense(
+            [32, 32, 32],
+            [0, 0, 0],
+            voxel_size=1.0 / 32,
+            origin=[0, 0, 0],
+            device=device,
+        )
         self.assertTrue(torch.equal(grid.bbox, torch.tensor([[0, 0, 0], [31, 31, 31]], device=device)))
         self.assertTrue(torch.equal(grid.dual_bbox, torch.tensor([[0, 0, 0], [32, 32, 32]], device=device)))
 
     @parameterized.expand(all_device_dtype_combos)
     def test_clip_grid(self, device, dtype):
-
-        grid = Grid.from_dense([32, 32, 32], [0, 0, 0], voxel_size=1.0 / 32, origin=[0, 0, 0], device=device)
+        grid = Grid.from_dense(
+            [32, 32, 32],
+            [0, 0, 0],
+            voxel_size=1.0 / 32,
+            origin=[0, 0, 0],
+            device=device,
+        )
         values_in = torch.randn(grid.num_voxels, 17, device=device, dtype=dtype)
         clipped_data, clipped_grid = grid.clip(values_in, [0, 0, 0], [5, 5, 5])
         self.assertTrue(clipped_grid.num_voxels == 6**3)
         self.assertTrue(clipped_data.shape[0] == 6**3)
 
-        grid = Grid.from_dense([32, 32, 32], [-2, -2, -2], voxel_size=1.0 / 32, origin=[0, 0, 0], device=device)
+        grid = Grid.from_dense(
+            [32, 32, 32],
+            [-2, -2, -2],
+            voxel_size=1.0 / 32,
+            origin=[0, 0, 0],
+            device=device,
+        )
         values_in = torch.randn(grid.num_voxels, 17, device=device, dtype=dtype)
         clipped_data, clipped_grid = grid.clip(values_in, [-2, -2, -2], [5, 5, 5])
         self.assertTrue(clipped_grid.num_voxels == 8**3)
@@ -1346,8 +1418,20 @@ class TestBasicOpsSingle(unittest.TestCase):
 
         # Test gradients through clip
         num_features = 17
-        grid = Grid.from_dense([32, 32, 32], [0, 0, 0], voxel_size=1.0 / 32, origin=[0, 0, 0], device=device)
-        features = torch.randn(grid.num_voxels, num_features, device=device, dtype=dtype, requires_grad=True)
+        grid = Grid.from_dense(
+            [32, 32, 32],
+            [0, 0, 0],
+            voxel_size=1.0 / 32,
+            origin=[0, 0, 0],
+            device=device,
+        )
+        features = torch.randn(
+            grid.num_voxels,
+            num_features,
+            device=device,
+            dtype=dtype,
+            requires_grad=True,
+        )
 
         clipped_features, clipped_grid = grid.clip(features, [0, 0, 0], [5, 5, 5])
 

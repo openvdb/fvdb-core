@@ -476,7 +476,7 @@ jobs:
       - name: Run tests
         run: |
           source .venv/bin/activate
-          pytest --markdown-docs docs
+          pytest --markdown-docs docs --ignore-glob="**/wip/**"
 
       - name: Cleanup
         if: always()

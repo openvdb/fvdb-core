@@ -288,24 +288,6 @@ class TestBasicOps(unittest.TestCase):
         self.assertFalse(grid.is_same(grid2))
         self.assertNotEqual(grid.address, grid2.address)
 
-        data = grid.jagged_like(torch.randn(grid.total_voxels, 8, device=device))
-        vdbt = fvnn.VDBTensor(grid, data)
-        spconv = fvnn.SparseConv3d(8, 16, 4, 1).to(device)
-        outvdbt = spconv(vdbt)
-        self.assertTrue(outvdbt.grid.is_same(grid))
-        self.assertEqual(outvdbt.grid.address, grid.address)
-        self.assertFalse(outvdbt.grid.is_same(grid2))
-        self.assertNotEqual(outvdbt.grid.address, grid2.address)
-
-        vdbt2 = fvnn.VDBTensor(grid2, data)
-        outvdbt2 = spconv(vdbt2)
-        self.assertTrue(outvdbt2.grid.is_same(grid2))
-        self.assertEqual(outvdbt2.grid.address, grid2.address)
-        self.assertFalse(outvdbt2.grid.is_same(grid))
-        self.assertNotEqual(outvdbt2.grid.address, grid.address)
-        self.assertFalse(outvdbt.grid.is_same(outvdbt2.grid))
-        self.assertNotEqual(outvdbt.grid.address, outvdbt2.grid.address)
-
     @parameterized.expand(all_device_dtype_combos)
     def test_voxel_neighborhood(self, device, dtype):
         randvox = torch.randint(0, 256, size=(10_000, 3), dtype=torch.int32).to(device)
@@ -1686,25 +1668,6 @@ class TestBasicOps(unittest.TestCase):
         self.assertTrue(subgrid.total_voxels == 0)
         self.assertTrue(values.rshape[0] == 0)
         self.assertTrue(values.rshape[1] == 17)
-
-    @parameterized.expand(all_device_dtype_combos + bfloat16_combos)
-    def test_conv_empty_grid(self, device, dtype):
-        grid = GridBatch.from_dense(1, [32, 32, 32], [0, 0, 0], voxel_sizes=1.0 / 32, origins=[0, 0, 0], device=device)
-        values_in = torch.randn(grid.total_voxels, 17, device=device, dtype=dtype)
-        values, subgrid = grid.refine(
-            1,
-            fvdb.JaggedTensor(values_in),
-            mask=fvdb.JaggedTensor(torch.zeros(grid.total_voxels, dtype=torch.bool, device=device)),
-        )
-        self.assertTrue(subgrid.total_voxels == 0)
-        self.assertTrue(values.rshape[0] == 0)
-        self.assertTrue(values.rshape[1] == 17)
-
-        kmap, _ = grid.sparse_conv_kernel_map(3, 1, target_grid=subgrid)
-        kmap.build_gather_scatter()
-        res = kmap.sparse_conv_3d(values_in, torch.randn(17, 17, 3, 3, 3))
-        self.assertTrue(res.rshape[0] == 0)
-        self.assertTrue(res.rshape[1] == 17)
 
     @parameterized.expand(all_device_dtype_combos)
     def test_bbox_attrs(self, device, dtype):

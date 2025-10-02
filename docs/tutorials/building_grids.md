@@ -120,23 +120,6 @@ grid = fvdb.GridBatch.from_dense(num_grids=1, dense_dims=[32, 32, 32], device="c
 
 ![build_from_dense.png](../imgs/fig/build_from_dense.png)
 
-If you are comparing the performance of dense pytorch 3D tensors vs sparse grids, it is usually very helpful to build the exact same input (including grid and features). In `fvdb.nn`, we provide a thin wrapper class `VDBTensor` that works like a `torch.Tensor`, yet enclosing the grid topology. To convert data back and forth from dense PyTorch `Tensor`s, we could do:
-
-```python
-import torch
-import fvdb
-from fvdb.nn import VDBTensor
-
-# Easy way to initialize a VDBTensor from a torch 3D tensor [B, D, H, W, C]
-dense_data = torch.ones(2, 32, 32, 32, 16).cuda()
-sparse_data = fvdb.nn.vdbtensor_from_dense(dense_data, voxel_sizes=[0.1] * 3)
-dense_data_back = sparse_data.to_dense()
-assert torch.all(dense_data == dense_data_back)
-```
-
-Here `sparse_data` will be a `fvdb.nn.VDBTensor` class, containing both `feature` and `grid` attribute.
-Such a class could be fed into all the neural network components available in `fvdb.nn`.
-
 ## Deriving from other grids
 
 ### Dual grid
