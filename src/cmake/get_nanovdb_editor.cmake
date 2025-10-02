@@ -134,11 +134,11 @@ if (NOT NANOVDB_EDITOR_FORCE)
     if(NOT CPM_PACKAGE_nanovdb_editor_VERSION)
         message(STATUS "Using local nanovdb_editor repository ${CPM_PACKAGE_nanovdb_editor_SOURCE_DIR}; will build wheel")
     else()
-        file(GLOB REQUESTED_WHEELS "${NANOVDB_EDITOR_WHEEL_DIR}/nanovdb_editor-*${NANOVDB_EDITOR_VERSION}*.whl")
+        file(GLOB REQUESTED_WHEELS "${NANOVDB_EDITOR_WHEEL_DIR}/nanovdb_editor-*${NANOVDB_EDITOR_LATEST_VERSION}*.whl")
         list(LENGTH REQUESTED_WHEELS NUM_REQUESTED_WHEELS)
         if(NUM_REQUESTED_WHEELS GREATER 0)
             list(GET REQUESTED_WHEELS 0 REQUESTED_WHEEL)
-            message(STATUS "Found wheel in dist for requested version ${NANOVDB_EDITOR_VERSION}: ${REQUESTED_WHEEL}")
+            message(STATUS "Found wheel in dist for requested version ${NANOVDB_EDITOR_LATEST_VERSION}: ${REQUESTED_WHEEL}")
             execute_process(
                 COMMAND bash -lc "
                 ${Python3_EXECUTABLE} -m pip install --force-reinstall ${REQUESTED_WHEEL}
@@ -170,7 +170,7 @@ endif()
 message(STATUS "Removing existing nanovdb_editor wheel from ${NANOVDB_EDITOR_WHEEL_DIR}...")
 file(GLOB NANOVDB_EDITOR_WHEELS "${NANOVDB_EDITOR_WHEEL_DIR}/nanovdb_editor*.whl")
 foreach(wheel_file ${NANOVDB_EDITOR_WHEELS})
-    file(REMOVE ${wheel_file})
+    file(REMOVE "${wheel_file}")
 endforeach()
 # Ensure the wheel directory exists
 file(MAKE_DIRECTORY ${NANOVDB_EDITOR_WHEEL_DIR})
@@ -193,7 +193,7 @@ execute_process(
         -Clogging.level=WARNING \
         -Ccmake.define.NANOVDB_EDITOR_USE_GLFW=OFF \
         -Ccmake.define.NANOVDB_EDITOR_BUILD_TESTS=OFF \
-        --config-settings=cmake.build-type=Debug \
+        --config-settings=cmake.build-type=Release \
         -v \
         --no-build-isolation
     ${Python3_EXECUTABLE} -m pip install --force-reinstall ${NANOVDB_EDITOR_WHEEL_DIR}/nanovdb_editor*.whl
@@ -206,7 +206,7 @@ execute_process(
 if(NOT build_result EQUAL 0)
     message(FATAL_ERROR "nanovdb_editor wheel build failed.\nSTDOUT:\n${build_output}\n\nSTDERR:\n${build_error}")
 else()
-    message(STATUS ${build_output})
+    message(STATUS "${build_output}")
 
     get_installed_nanovdb_editor_dir(NANOVDB_EDITOR_INCLUDE_DIR NANOVDB_EDITOR_INSTALLED)
     if(NOT NANOVDB_EDITOR_INSTALLED)
