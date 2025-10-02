@@ -64,8 +64,7 @@ target_include_directories(_Cpp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${TORCH_INCLUDE_DIRS}
     ${nanovdb_SOURCE_DIR}/nanovdb
-    ${nanovdb_editor_SOURCE_DIR})
-
+    ${NANOVDB_EDITOR_INCLUDE_DIR})
 target_link_libraries(_Cpp PRIVATE
     ${TORCH_PYTHON_LIBRARY}
     ${TORCH_LIBRARIES}

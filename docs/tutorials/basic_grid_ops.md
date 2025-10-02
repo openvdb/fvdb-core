@@ -543,18 +543,18 @@ grid = fvdb.GridBatch.from_points(points, voxel_sizes=vox_size)
 # Splat the normals into the grid with trilinear interpolation
 vox_normals = grid.splat_trilinear(points, normals)
 
-# Subdivide by a constant factor of 2
+# Refine by a constant factor of 2
 subdiv_normals, subdiv_grid = grid.refine(2, vox_normals)
 ```
 
 Here we visualize the original grid on the right and the grid after subdivision by a factor of 2 on the left.
 
-![](../imgs/fig/subdivide.png)
+![](../imgs/fig/refine.png)
 
 
 In practice, in a deep neural network like a U-Net architecture, the resolution of the grid can be decreased early in the network and then the grid's features need to be concatenated with features of the grid after its resolution is increased again.  When working with traditional, dense 2D or 3D data, cropping any mismatched outputs is straightforward to be able to concatenate these features.  However, in a sparse 3D grid, this is not straightforward and it's entirely unclear how to align the features.
 
-Take this simple example to illustrate the difficulties created by changing the grid topology in this way.  We take the grid created from our mesh, perform Pooling by a factor of 2 and then try to Subdivide by an equal factor of 2 to invert the Pooling operation.
+Take this simple example to illustrate the difficulties created by changing the grid topology in this way.  We take the grid created from our mesh, perform Pooling by a factor of 2 and then try to Refine by an equal factor of 2 to invert the Pooling operation.
 
 ```python continuation
 max_normals, max_grid = grid.max_pool(2, vox_normals)
@@ -586,12 +586,12 @@ Note the matching topology of the grid after the Subdivision operation to the or
 
 One other useful feature of the `refine` operator is that this operation can be *masked* so that subdivision is only performed on a subset of the voxels in the grid.
 
-The optional `mask` argument to `refine` is a `JaggedTensor` of boolean values that indicates which voxels should be subdivided.  Given this `mask` is simply a `JaggedTensor`, this operation can be made differentiable in a neural network and the `refine` operator can be learned.
+The optional `mask` argument to `refine` is a `JaggedTensor` of boolean values that indicates which voxels should be refined.  Given this `mask` is simply a `JaggedTensor`, this operation can be made differentiable in a neural network and the `refine` operator can be learned.
 
-Let's illustrate a very simple example of how to use the `mask` argument to only subdivide the voxels which have a feature value greater than a certain threshold.
+Let's illustrate a very simple example of how to use the `mask` argument to only refine the voxels which have a feature value greater than a certain threshold.
 
 ```python continuation
-# Mask the grid with the normals where only the normals with a value greater than 0.5 on the x-axis are subdivided
+# Mask the grid with the normals where only the normals with a value greater than 0.5 on the x-axis are refined
 mask = vox_normals.jdata[:, 0] > 0.5
 
 subdiv_normals, subdiv_grid = grid.refine(2, vox_normals, mask=mask)

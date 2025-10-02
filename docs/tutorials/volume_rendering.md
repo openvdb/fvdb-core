@@ -578,7 +578,7 @@ def main():
                 vox_density, vox_color = evaluate_density_and_color(dual_grid, sh_features, o_features,
                                                                     torch.ones_like(vox_ctrs), vox_ctrs)
 
-                # Subdivide
+                # Refine
                 if epoch > 0:
                     sh_features, sub_grid = dual_grid.refine(2, sh_features.view(sh_features.shape[0], -1), mask=vox_density > 0.25)
                     o_features, sub_grid = dual_grid.refine(2, o_features.unsqueeze(-1), mask=vox_density > 0.25)
@@ -589,7 +589,7 @@ def main():
                     resolution *= 2.0
                     ray_step_size /= 2.0
 
-                    print(f"Subdivided grid with {dual_grid.total_voxels} to {sub_grid.total_voxels}")
+                    print(f"Refined grid with {dual_grid.total_voxels} to {sub_grid.total_voxels}")
                     dual_grid = sub_grid
                     primal_grid = sub_grid
 

@@ -541,7 +541,7 @@ class GridBatch:
             JaggedTensor: Boolean mask indicating which coordinates correspond to
                 active voxels. Shape: (batch_size, num_queries).
         """
-        return self._impl.coords_in_active_voxel(ijk)
+        return self._impl.coords_in_grid(ijk)
 
     def cpu(self) -> "GridBatch":
         """
@@ -1179,7 +1179,7 @@ class GridBatch:
             JaggedTensor: Boolean mask indicating which points are in active voxels.
                 Shape: (batch_size, num_points,).
         """
-        return self._impl.points_in_active_voxel(points)
+        return self._impl.points_in_grid(points)
 
     def ray_implicit_intersection(
         self,
@@ -1449,23 +1449,23 @@ class GridBatch:
         each with associated data D.
 
         Args:
-            subdiv_factor (NumericMaxRank1): Factor by which to subdivide the grid.
+            subdiv_factor (NumericMaxRank1): Factor by which to refine the grid.
                 broadcastable to shape (3,), integer dtype
-            data (JaggedTensor): Voxel data to subdivide.
+            data (JaggedTensor): Voxel data to refine.
                 Shape: (batch_size, total_voxels, channels).
-            mask (JaggedTensor | None): Boolean mask indicating which voxels to subdivide.
-                If None, all voxels are subdivided.
+            mask (JaggedTensor | None): Boolean mask indicating which voxels to refine.
+                If None, all voxels are refined.
             fine_grid (GridBatch | None): Pre-allocated fine grid to use for output.
                 If None, a new grid is created.
 
         Returns:
             tuple[JaggedTensor, GridBatch]: A tuple containing:
-                - The subdivided data as a JaggedTensor
-                - The fine GridBatch containing the subdivided structure
+                - The refined data as a JaggedTensor
+                - The fine GridBatch containing the refined structure
         """
         subdiv_factor = to_Vec3iBroadcastable(subdiv_factor, value_constraint=ValueConstraint.POSITIVE)
         fine_grid_impl = fine_grid._impl if fine_grid else None
-        result_data, result_grid_impl = self._impl.subdivide(subdiv_factor, data, mask, fine_grid_impl)
+        result_data, result_grid_impl = self._impl.refine(subdiv_factor, data, mask, fine_grid_impl)
         return result_data, GridBatch(impl=result_grid_impl)
 
     def refined_grid(
@@ -1482,16 +1482,16 @@ class GridBatch:
         not the data.
 
         Args:
-            subdiv_factor (NumericMaxRank1): Factor by which to subdivide the grid.
+            subdiv_factor (NumericMaxRank1): Factor by which to refine the grid.
                 broadcastable to shape (3,), integer dtype
-            mask (JaggedTensor | None): Boolean mask indicating which voxels to subdivide.
-                If None, all voxels are subdivided.
+            mask (JaggedTensor | None): Boolean mask indicating which voxels to refine.
+                If None, all voxels are refined.
 
         Returns:
-            GridBatch: A new GridBatch with subdivided structure.
+            GridBatch: A new GridBatch with refined structure.
         """
         subdiv_factor = to_Vec3iBroadcastable(subdiv_factor, value_constraint=ValueConstraint.POSITIVE)
-        return GridBatch(impl=self._impl.subdivided_grid(subdiv_factor, mask=mask))
+        return GridBatch(impl=self._impl.refined_grid(subdiv_factor, mask=mask))
 
     def to(self, target: "str | torch.device | torch.Tensor | JaggedTensor | GridBatch") -> "GridBatch":
         """

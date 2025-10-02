@@ -32,7 +32,7 @@ def main():
         torch.cuda.synchronize()
     logging.info(f"Done in {time.time() - start}s!")
 
-    logging.info("Building subdivided grids")
+    logging.info("Building refined grids")
     start = time.time()
     for i in range(2):
         subdiv_factor = i + 1
