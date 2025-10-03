@@ -1956,6 +1956,48 @@ class GridBatch:
     def ijk(self) -> JaggedTensor:
         return self._impl.ijk
 
+    def serialize_encode(self, order_type: str = "z") -> JaggedTensor:
+        """
+        Return the Morton codes for active voxels in this grid batch.
+        
+        Morton codes provide a space-filling curve that maps 3D coordinates to 1D integers,
+        preserving spatial locality. This is useful for serialization, sorting, and 
+        spatial data structures.
+
+        Returns:
+            JaggedTensor: A JaggedTensor of shape `[num_grids, -1, 1]` containing
+                the Morton codes for each active voxel in the batch.
+        """
+        return self._impl.serialize_encode(order_type)
+
+    def permute(self, order_type: str = "z") -> JaggedTensor:
+        """
+        Get permutation indices to sort voxels by spatial order.
+        
+        This method computes Morton codes for all active voxels and returns the indices
+        that would sort them according to the specified ordering. This is useful for
+        spatially coherent data access patterns and cache optimization.
+
+        Args:
+            order_type (str): The type of spatial ordering to use:
+                - "z": Regular Z-order curve (xyz bit interleaving, default)
+                - "z-trans": Transposed Z-order curve (zyx bit interleaving)
+                - "morton": Alias for "z" (for backward compatibility)
+                - "ascending": Alias for "z"
+                - "descending": Sort Morton codes in descending order
+
+        Returns:
+            JaggedTensor: A JaggedTensor of shape `[num_grids, -1, 1]` containing
+                the permutation indices. Use these indices to reorder voxel data for spatial coherence.
+                
+        Example:
+            >>> z_indices = grid_batch.permute("z")  # Regular xyz z-order
+            >>> z_trans_indices = grid_batch.permute("z-trans")  # Transposed zyx z-order
+            >>> # Use indices to reorder some voxel data
+            >>> reordered_data = voxel_data.jdata[z_indices.jdata.squeeze(-1)]
+        """
+        return self._impl.permute(order_type)
+
     @property
     def jidx(self) -> torch.Tensor:
         if self.has_zero_grids:

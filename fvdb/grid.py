@@ -1835,6 +1835,40 @@ class Grid:
     def ijk(self) -> torch.Tensor:
         return self._impl.ijk.jdata
 
+    def serialize_encode(self, order_type: str = "z") -> torch.Tensor:
+        """
+        Return the Morton codes for active voxels in this grid.
+        
+        Morton codes provide a space-filling curve that maps 3D coordinates to 1D integers,
+        preserving spatial locality. This is useful for serialization, sorting, and 
+        spatial data structures.
+
+        Returns:
+            torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
+                the Morton codes for each active voxel.
+        """
+        return self._impl.serialize_encode(order_type).jdata
+
+    def permute(self, order_type: str = "z") -> torch.Tensor:
+        """
+        Get permutation indices to sort voxels by spatial order.
+        
+        This method computes Morton codes for all active voxels and returns the indices
+        that would sort them according to the specified ordering. This is useful for
+        spatially coherent data access patterns and cache optimization.
+
+        Args:
+            order_type (str): The type of spatial ordering to use:
+                - "morton": Morton Z-order curve (default, ascending)
+                - "ascending": Sort Morton codes in ascending order (same as "morton")
+                - "descending": Sort Morton codes in descending order
+
+        Returns:
+            torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
+                the permutation indices. Use these indices to reorder voxel data for spatial coherence.
+        """
+        return self._impl.permute(order_type).jdata
+
     @property
     def num_bytes(self) -> int:
         return self._impl.total_bytes
