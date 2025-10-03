@@ -503,12 +503,12 @@ fusedSSIMCUDA(
     dim3 block(BLOCK_X, BLOCK_Y);
 
     // Output SSIM map
-    auto ssim_map = torch::zeros_like(img1, img1.options()).contiguous();
+    auto ssim_map = torch::empty_like(img1, img1.options()).contiguous();
 
     // Optionally allocate derivative Tensors
-    auto dm_dmu1       = train ? torch::zeros_like(img1) : torch::empty({0}, img1.options());
-    auto dm_dsigma1_sq = train ? torch::zeros_like(img1) : torch::empty({0}, img1.options());
-    auto dm_dsigma12   = train ? torch::zeros_like(img1) : torch::empty({0}, img1.options());
+    auto dm_dmu1       = train ? torch::empty_like(img1) : torch::empty({0}, img1.options());
+    auto dm_dsigma1_sq = train ? torch::empty_like(img1) : torch::empty({0}, img1.options());
+    auto dm_dsigma12   = train ? torch::empty_like(img1) : torch::empty({0}, img1.options());
 
     fusedSSIMKernel<<<grid, block, 0, stream>>>(0,
                                                 B,
@@ -555,7 +555,7 @@ fusedSSIMBackwardCUDA(double C1,
     TORCH_CHECK_VALUE(img2.scalar_type() == torch::kFloat,
                       "Fused SSIM only supports float32 images");
 
-    auto dL_dimg1 = torch::zeros_like(img1);
+    auto dL_dimg1 = torch::empty_like(img1);
 
     dim3 grid(((W + BLOCK_X - 1) / BLOCK_X) * ((H + BLOCK_Y - 1) / BLOCK_Y) * B);
     dim3 block(BLOCK_X, BLOCK_Y);
@@ -599,12 +599,12 @@ fusedSSIMPrivateUse1(
                       "Fused SSIM only supports float32 images");
 
     // Output SSIM map
-    auto ssim_map = torch::zeros_like(img1, img1.options()).contiguous();
+    auto ssim_map = torch::empty_like(img1, img1.options()).contiguous();
 
     // Optionally allocate derivative Tensors
-    auto dm_dmu1       = train ? torch::zeros_like(img1) : torch::empty({0}, img1.options());
-    auto dm_dsigma1_sq = train ? torch::zeros_like(img1) : torch::empty({0}, img1.options());
-    auto dm_dsigma12   = train ? torch::zeros_like(img1) : torch::empty({0}, img1.options());
+    auto dm_dmu1       = train ? torch::empty_like(img1) : torch::empty({0}, img1.options());
+    auto dm_dsigma1_sq = train ? torch::empty_like(img1) : torch::empty({0}, img1.options());
+    auto dm_dsigma12   = train ? torch::empty_like(img1) : torch::empty({0}, img1.options());
 
     auto img1_ = img1.contiguous();
     auto img2_ = img2.contiguous();
@@ -614,19 +614,29 @@ fusedSSIMPrivateUse1(
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
+        constexpr size_t kAlignment = kPageSize / (sizeof(float) * BLOCK_X * BLOCK_Y);
         int localBlockOffset, localBlockCount;
         std::tie(localBlockOffset, localBlockCount) =
-            deviceOffsetAndCount(globalBlockCount, deviceId);
+            alignedChunk(kAlignment, globalBlockCount, deviceId);
 
         if (localBlockCount) {
             auto localElementOffset = localBlockOffset * BLOCK_X * BLOCK_Y * CH;
-            auto localElementCount = localBlockCount * BLOCK_X * BLOCK_Y * CH;
+            auto localElementCount  = localBlockCount * BLOCK_X * BLOCK_Y * CH;
             if (localElementOffset + localElementCount > img1_.numel()) {
                 localElementOffset = std::min(localElementOffset, static_cast<int>(img1_.numel()));
-                localElementCount = std::min(localElementCount, static_cast<int>(img1_.numel()) - localElementOffset);
+                localElementCount  = std::min(localElementCount,
+                                             static_cast<int>(img1_.numel()) - localElementOffset);
             }
-            nanovdb::util::cuda::memPrefetchAsync(img1_.const_data_ptr<float>() + localElementOffset, localElementCount * sizeof(float), deviceId, stream);
-            nanovdb::util::cuda::memPrefetchAsync(img2_.const_data_ptr<float>() + localElementOffset, localElementCount * sizeof(float), deviceId, stream);
+            nanovdb::util::cuda::memPrefetchAsync(img1_.const_data_ptr<float>() +
+                                                      localElementOffset,
+                                                  localElementCount * sizeof(float),
+                                                  deviceId,
+                                                  stream);
+            nanovdb::util::cuda::memPrefetchAsync(img2_.const_data_ptr<float>() +
+                                                      localElementOffset,
+                                                  localElementCount * sizeof(float),
+                                                  deviceId,
+                                                  stream);
 
             // Launch config
             dim3 grid(localBlockCount);
@@ -682,7 +692,7 @@ fusedSSIMBackwardPrivateUse1(double C1,
     TORCH_CHECK_VALUE(img2.scalar_type() == torch::kFloat,
                       "Fused SSIM only supports float32 images");
 
-    auto dL_dimg1 = torch::zeros_like(img1);
+    auto dL_dimg1 = torch::empty_like(img1);
 
     auto img1_ = img1.contiguous();
     auto img2_ = img2.contiguous();
@@ -697,23 +707,49 @@ fusedSSIMBackwardPrivateUse1(double C1,
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
+        constexpr size_t kAlignment = kPageSize / (sizeof(float) * BLOCK_X * BLOCK_Y);
         int localBlockOffset, localBlockCount;
         std::tie(localBlockOffset, localBlockCount) =
-            deviceOffsetAndCount(globalBlockCount, deviceId);
+            alignedChunk(kAlignment, globalBlockCount, deviceId);
 
         if (localBlockCount) {
             auto localElementOffset = localBlockOffset * BLOCK_X * BLOCK_Y * CH;
-            auto localElementCount = localBlockCount * BLOCK_X * BLOCK_Y * CH;
+            auto localElementCount  = localBlockCount * BLOCK_X * BLOCK_Y * CH;
             if (localElementOffset + localElementCount > img1_.numel()) {
                 localElementOffset = std::min(localElementOffset, static_cast<int>(img1_.numel()));
-                localElementCount = std::min(localElementCount, static_cast<int>(img1_.numel()) - localElementOffset);
+                localElementCount  = std::min(localElementCount,
+                                             static_cast<int>(img1_.numel()) - localElementOffset);
             }
-            nanovdb::util::cuda::memPrefetchAsync(img1_.const_data_ptr<float>() + localElementOffset, localElementCount * sizeof(float), deviceId, stream);
-            nanovdb::util::cuda::memPrefetchAsync(img2_.const_data_ptr<float>() + localElementOffset, localElementCount * sizeof(float), deviceId, stream);
-            nanovdb::util::cuda::memPrefetchAsync(dL_dmap_.const_data_ptr<float>() + localElementOffset, localElementCount * sizeof(float), deviceId, stream);
-            nanovdb::util::cuda::memPrefetchAsync(dm_dmu1_.const_data_ptr<float>() + localElementOffset, localElementCount * sizeof(float), deviceId, stream);
-            nanovdb::util::cuda::memPrefetchAsync(dm_dsigma1_sq_.const_data_ptr<float>() + localElementOffset, localElementCount * sizeof(float), deviceId, stream);
-            nanovdb::util::cuda::memPrefetchAsync(dm_dsigma12_.const_data_ptr<float>() + localElementOffset, localElementCount * sizeof(float), deviceId, stream);
+            nanovdb::util::cuda::memPrefetchAsync(img1_.const_data_ptr<float>() +
+                                                      localElementOffset,
+                                                  localElementCount * sizeof(float),
+                                                  deviceId,
+                                                  stream);
+            nanovdb::util::cuda::memPrefetchAsync(img2_.const_data_ptr<float>() +
+                                                      localElementOffset,
+                                                  localElementCount * sizeof(float),
+                                                  deviceId,
+                                                  stream);
+            nanovdb::util::cuda::memPrefetchAsync(dL_dmap_.const_data_ptr<float>() +
+                                                      localElementOffset,
+                                                  localElementCount * sizeof(float),
+                                                  deviceId,
+                                                  stream);
+            nanovdb::util::cuda::memPrefetchAsync(dm_dmu1_.const_data_ptr<float>() +
+                                                      localElementOffset,
+                                                  localElementCount * sizeof(float),
+                                                  deviceId,
+                                                  stream);
+            nanovdb::util::cuda::memPrefetchAsync(dm_dsigma1_sq_.const_data_ptr<float>() +
+                                                      localElementOffset,
+                                                  localElementCount * sizeof(float),
+                                                  deviceId,
+                                                  stream);
+            nanovdb::util::cuda::memPrefetchAsync(dm_dsigma12_.const_data_ptr<float>() +
+                                                      localElementOffset,
+                                                  localElementCount * sizeof(float),
+                                                  deviceId,
+                                                  stream);
 
             // Launch config
             dim3 grid(localBlockCount);

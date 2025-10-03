@@ -15,6 +15,10 @@
 #include <thrust/binary_search.h>
 #include <thrust/universal_vector.h>
 
+namespace fvdb {
+namespace detail {
+namespace ops {
+
 namespace {
 
 #define NUM_THREADS 256
@@ -1132,10 +1136,6 @@ gaussianTileIntersectionPrivateUse1Impl(
 }
 
 } // namespace
-
-namespace fvdb {
-namespace detail {
-namespace ops {
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor>
