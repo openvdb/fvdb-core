@@ -5,7 +5,7 @@ requires = [
 build-backend = "scikit_build_core.build"
 
 [project]
-name = "fvdb"
+name = "fvdb-core"
 version = "0.2.1"
 license = { text = "Apache-2.0" }
 
