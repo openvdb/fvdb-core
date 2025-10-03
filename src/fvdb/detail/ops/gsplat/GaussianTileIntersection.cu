@@ -11,6 +11,10 @@
 #include <cub/cub.cuh>
 #include <thrust/binary_search.h>
 
+namespace fvdb {
+namespace detail {
+namespace ops {
+
 namespace {
 
 #define NUM_THREADS 256
@@ -560,10 +564,6 @@ gaussianTileIntersectionCUDAImpl(
 }
 
 } // namespace
-
-namespace fvdb {
-namespace detail {
-namespace ops {
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor>
