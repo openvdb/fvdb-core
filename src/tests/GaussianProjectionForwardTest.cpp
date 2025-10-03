@@ -169,7 +169,7 @@ TEST_F(GaussianProjectionForwardTestFixture, TestPerspectiveProjection) {
     const auto [radii, means2d, depths, conics, compensations] =
         fvdb::detail::ops::dispatchGaussianProjectionForward<torch::kCUDA>(means,
                                                                            quats,
-                                                                           scales,
+                                                                           torch::log(scales),
                                                                            viewmats,
                                                                            Ks,
                                                                            imageWidth,
@@ -184,7 +184,9 @@ TEST_F(GaussianProjectionForwardTestFixture, TestPerspectiveProjection) {
     EXPECT_TRUE(torch::allclose(means2d, expectedMeans2d));
     EXPECT_TRUE(torch::allclose(radii, expectedRadii));
     EXPECT_TRUE(torch::allclose(depths, expectedDepths));
-    EXPECT_TRUE(torch::allclose(conics, expectedConics));
+    // rtol=1e-4 and atol=1e-4 accounts for the fact that the test data used log(scales) instead of
+    // scales so there is some numerical drift
+    EXPECT_TRUE(torch::allclose(conics, expectedConics, 1e-6, 1e-4));
 }
 
 TEST_F(GaussianProjectionForwardTestFixture, TestOrthographicProjection) {
@@ -193,7 +195,7 @@ TEST_F(GaussianProjectionForwardTestFixture, TestOrthographicProjection) {
     const auto [radii, means2d, depths, conics, compensations] =
         fvdb::detail::ops::dispatchGaussianProjectionForward<torch::kCUDA>(means,
                                                                            quats,
-                                                                           scales,
+                                                                           torch::log(scales),
                                                                            viewmats,
                                                                            Ks,
                                                                            imageWidth,
@@ -213,6 +215,8 @@ TEST_F(GaussianProjectionForwardTestFixture, TestOrthographicProjection) {
     EXPECT_TRUE(torch::allclose(radii, expectedRadii));
     EXPECT_TRUE(torch::allclose(depths.index({radiiNonZeroMask}),
                                 expectedDepths.index({radiiNonZeroMask})));
-    EXPECT_TRUE(torch::allclose(conics.index({radiiNonZeroMask}),
-                                expectedConics.index({radiiNonZeroMask})));
+    // rtol=1e-4 and atol=1e-4 accounts for the fact that the test data used log(scales) instead of
+    // scales so there is some numerical drift
+    EXPECT_TRUE(torch::allclose(
+        conics.index({radiiNonZeroMask}), expectedConics.index({radiiNonZeroMask}), 1e-6, 1e-4));
 }
