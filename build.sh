@@ -12,6 +12,7 @@ usage() {
   echo "                   install    - Build and install the package (default)."
   echo "                   wheel      - Build the Python wheel."
   echo "                   ctest      - Run tests (requires tests to be built)."
+  echo "                   docstest   - Run pytest markdown documentation tests."
   echo ""
   echo "Options:"
   echo "  -h, --help     Display this help message and exit."
@@ -124,7 +125,7 @@ _first_arg_val="$1"
 BUILD_TYPE="install" # Default build type
 
 if [[ -n "$_first_arg_val" ]]; then
-  if [[ "$_first_arg_val" == "install" || "$_first_arg_val" == "wheel" || "$_first_arg_val" == "ctest" ]]; then
+  if [[ "$_first_arg_val" == "install" || "$_first_arg_val" == "wheel" || "$_first_arg_val" == "ctest" || "$_first_arg_val" == "docstest" ]]; then
     BUILD_TYPE="$_first_arg_val"
     shift # Consume the build_type argument
   else
@@ -201,7 +202,7 @@ export PIP_ARGS="--no-build-isolation$CONFIG_SETTINGS$PASS_THROUGH_ARGS"
 # Detect and export CUDA architectures early so builds pick it up
 set_cuda_arch_list "$CUDA_ARCH_LIST_ARG"
 
-if [ "$BUILD_TYPE" != "ctest" ]; then
+if [ "$BUILD_TYPE" != "ctest" ] && [ "$BUILD_TYPE" != "docstest" ]; then
     setup_parallel_build_jobs
 fi
 
@@ -276,8 +277,15 @@ elif [ "$BUILD_TYPE" == "ctest" ]; then
     echo "ctest finished with exit code $CTEST_EXIT_CODE."
     exit $CTEST_EXIT_CODE
 
+elif [ "$BUILD_TYPE" == "docstest" ]; then
+    echo "Running pytest markdown documentation tests..."
+    pytest --markdown-docs ./docs --ignore-glob="**/wip/**"
+    PYTEST_EXIT_CODE=$?
+    echo "pytest markdown tests finished with exit code $PYTEST_EXIT_CODE."
+    exit $PYTEST_EXIT_CODE
+
 else
     echo "Invalid build/run type: $BUILD_TYPE"
-    echo "Valid build/run types are: wheel, install, ctest"
+    echo "Valid build/run types are: wheel, install, ctest, docstest"
     exit 1
 fi
