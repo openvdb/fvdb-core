@@ -78,6 +78,7 @@ class Viewer:
         name: str,
         cam_to_world_matrices: NumericMaxRank3,
         projection_matrices: torch.Tensor | None = None,
+        image_sizes: torch.Tensor | None = None,
         axis_length: float = 0.3,
         axis_thickness: float = 2.0,
         frustum_line_width: float = 2.0,
@@ -94,6 +95,7 @@ class Viewer:
             name (str): The name of the camera view.
             cam_to_world_matrix (NumericMaxRank3): The 4x4 camera to world transformation matrix.
             projection_matrix (torch.Tensor | None): The 3x3 projection matrix.
+            image_sizes (torch.Tensor | None): The image sizes as a tensor of shape (N, 2) where N is the number of cameras.
             axis_length (float): The length of the axis lines in the camera frustum view.
             axis_thickness (float): The thickness (in world coordinates) of the axis lines in the camera frustum view.
             frustum_line_width (float): The width (in pixels) of the frustum lines in the camera frustum view.
@@ -113,7 +115,7 @@ class Viewer:
         cam_to_world_matrices = to_Mat44fBatch(cam_to_world_matrices)
 
         view: CameraViewCpp = self._impl.add_camera_view(
-            name, cam_to_world_matrices, projection_matrices, frustum_near_plane, frustum_far_plane
+            name, cam_to_world_matrices, projection_matrices, image_sizes, frustum_near_plane, frustum_far_plane
         )
         view.visible = enabled
         view.axis_length = axis_length
