@@ -1,15 +1,21 @@
 # *ƒ*(VDB)
 
 
-This repository contains the code for *f*VDB, a framework for encoding and operating on *sparse voxel hierarchies* of features in PyTorch. A sparse voxel hierarchy is a coarse-to-fine hierarchy of sparse voxel grids such that every fine voxel is contained within some coarse voxel. The image below illustrates an example. *f*VDB supports using PyTorch Tensors to represent features at the corners and centers of voxels in a hierarchy and enables a number of differentiable operations on these Tensors (*e.g.* trilinear interpolation, convolution, splatting, ray tracing).
+This repository contains the code for [__*f*VDB__](https://arxiv.org/abs/2407.01781), a deep learning framework that works with PyTorch for constructing and operating on *sparse volumetric data* discretized on three-dimensional grids.
 
 <p align="center">
   <img src="docs/imgs/fvdb_teaser.png" style="width: 40%;"alt="fVDB Teaser">
   <!-- <img src="docs/imgs/readme/av_screenshot.png" style="width: 100%;"alt="fVDB Teaser"> -->
-  <figcaption style="text-align: center; font-style: italic;">An example of a sparse voxel hierarchy with 3 levels. Each fine voxel is contained within exactly one coarse voxel.</figcaption>
+  <figcaption style="text-align: center; font-style: italic;">An example of a batch of 3 sparse voxel grids of differing voxel sizes.<br>The features of the voxels represent a signed distance field of a dragon at different resolutions.</figcaption>
 </p>
 
-*f*VDB was first developed by the [NVIDIA High-Fidelity Physics Research Group](https://research.nvidia.com/labs/prl/) (a part of the NVIDIA Spatial Intelligence Lab) and continues to be developed with the OpenVDB community to suit the growing needs for a robust framework for spatial intelligence research and applications.  Please review [the paper](https://research.nvidia.com/labs/prl/publication/williams2024fvdb/) for more details and kindly consider [citing it in your work](#references) if you find it useful.
+## About *f*VDB
+
+*f*VDB utilizes __NanoVDB__ as the underlying data structure for building and manipulating sparse voxel grids. NanoVDB is an implemenation of __OpenVDB__ that is optimized for modern GPUs. More information about NanoVDB can be found [in the OpenVDB documentation](https://www.openvdb.org).
+
+*f*VDB supports using PyTorch Tensors to represent N-dimensional features at the corners or centers of voxels in NanoVDB grids and enables a number of differentiable operations on these Tensors (*e.g.* trilinear interpolation, convolution, attention, splatting, ray tracing). Please refer to [the paper](https://arxiv.org/abs/2407.01781) for more details; citation information [provided below](#references).
+
+*f*VDB was first developed by the [NVIDIA High-Fidelity Physics Research Group](https://research.nvidia.com/labs/prl/) (a part of the NVIDIA Spatial Intelligence Lab) and continues to be developed with the OpenVDB community to suit the growing needs for a robust framework for spatial intelligence research and applications.
 
 ## Learning to Use *f*VDB
 
