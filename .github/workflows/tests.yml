@@ -1,7 +1,7 @@
 name: fVDB Unit Tests
 
 on:
-  pull_request_target:
+  pull_request:
     branches:
       - '**'
     paths-ignore:
@@ -76,7 +76,7 @@ jobs:
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
-        CONDA_OVERRIDE_CUDA: "12.8"  # this is to build an environment on machines that lack a CUDA device and needs to match the CUDA version in the build_environment.yml file
+        CONDA_OVERRIDE_CUDA: "12.9"  # this is to build an environment on machines that lack a CUDA device and needs to be >= the CUDA version in the build_environment.yml file
       options: --rm
     defaults:
       run:
