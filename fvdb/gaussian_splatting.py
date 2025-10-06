@@ -441,7 +441,7 @@ class GaussianSplat3d:
         Note: To read the opacities, see the `opacities` property (which is read-only).
 
         Returns:
-            torch.Tensor: A tensor of shape (N, 3) where N is the number
+            torch.Tensor: A tensor of shape (N,) where N is the number
                 of Gaussians (see `num_gaussians`). Each row represents the logit of the opacity of a Gaussian in 3D space.
         """
         return self._impl.logit_opacities

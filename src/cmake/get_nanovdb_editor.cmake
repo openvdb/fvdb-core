@@ -13,7 +13,7 @@
 option(NANOVDB_EDITOR_FORCE "Force rebuild of nanovdb_editor wheel" OFF)
 option(NANOVDB_EDITOR_SKIP "Skip nanovdb_editor wheel build" OFF)
 
-set(NANOVDB_EDITOR_TAG f4b728027d9b57505e171e973518e6f77cf3c4c8)
+set(NANOVDB_EDITOR_TAG 798cd8195c795b8063fa9a3298f85d684b1a034c)
 set(NANOVDB_EDITOR_VERSION 0.0.2)
 
 # If skip is set, get the latest tagged version to prevent unnecessary rebuilds each hash update

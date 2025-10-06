@@ -59,13 +59,13 @@ class CameraView:
         return self._view.axis_length
 
     @axis_length.setter
-    def axis_length(self, length: float):
+    def axis_length(self, length: NumericScalarNative):
         """
         Set the length of the axes drawn at each camera origin in world units.
         Args:
-            length (float): The length of the axes.
+            length (NumericScalarNative): The length of the axes.
         """
-        self._view.axis_length = length
+        self._view.axis_length = float(length)
 
     @property
     def axis_thickness(self) -> float:
@@ -78,14 +78,14 @@ class CameraView:
         return self._view.axis_thickness
 
     @axis_thickness.setter
-    def axis_thickness(self, thickness: float):
+    def axis_thickness(self, thickness: NumericScalarNative):
         """
         Set the thickness of the axes drawn at each camera origin in world units.
 
         Args:
-            thickness (float): The thickness of the axes.
+            thickness (NumericScalarNative): The thickness of the axes.
         """
-        self._view.axis_thickness = thickness
+        self._view.axis_thickness = float(thickness)
 
     @property
     def frustum_line_width(self) -> float:
@@ -95,14 +95,14 @@ class CameraView:
         return self._view.frustum_line_width
 
     @frustum_line_width.setter
-    def frustum_line_width(self, width: float):
+    def frustum_line_width(self, width: NumericScalarNative):
         """
         Set the line width of the frustum in the camera frustum view.
 
         Args:
-            width (float): The line width of the frustum in world units.
+            width (NumericScalarNative): The line width of the frustum in world units.
         """
-        self._view.frustum_line_width = width
+        self._view.frustum_line_width = float(width)
 
     @property
     def frustum_scale(self) -> float:
@@ -119,7 +119,7 @@ class CameraView:
         Args:
             scale (NumericScalarNative): The scale factor to apply to the frustum visualization.
         """
-        self._view.frustum_scale = scale
+        self._view.frustum_scale = float(scale)
 
     @property
     def frustum_color(self) -> torch.Tensor:
