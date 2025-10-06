@@ -14,7 +14,7 @@ WORKDIR /workspace
 # force this CUDA version to be used to build the docker container because `docker build` does not
 # expose the GPU to the docker build process for it to be detected
 # fVDB team NOTE!!! We've tried removing this ENV line and it doesn't work, container build fails.
-ENV CONDA_OVERRIDE_CUDA=12.8
+ENV CONDA_OVERRIDE_CUDA=12.9
 COPY env/dev_environment.yml /tmp/
 RUN  conda env create -f /tmp/dev_environment.yml
 
