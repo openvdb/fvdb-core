@@ -29,10 +29,6 @@ bind_viewer(py::module &m) {
                       &fvdb::detail::viewer::CameraView::getAxisThickness,
                       &fvdb::detail::viewer::CameraView::setAxisThickness,
                       "The axis thickness for the gizmo")
-        .def_property("axis_scale",
-                      &fvdb::detail::viewer::CameraView::getAxisScale,
-                      &fvdb::detail::viewer::CameraView::setAxisScale,
-                      "The axis scale for the gizmo, default is 1.0")
         .def_property("frustum_line_width",
                       &fvdb::detail::viewer::CameraView::getFrustumLineWidth,
                       &fvdb::detail::viewer::CameraView::setFrustumLineWidth,
@@ -160,11 +156,16 @@ bind_viewer(py::module &m) {
              py::arg("mode"),
              "Set the camera mode (perspective or orthographic)")
         .def("add_camera_view",
-             py::overload_cast<const std::string &, const torch::Tensor &, const torch::Tensor &>(
-                 &fvdb::detail::viewer::Viewer::addCameraView),
+             py::overload_cast<const std::string &,
+                               const torch::Tensor &,
+                               const torch::Tensor &,
+                               float,
+                               float>(&fvdb::detail::viewer::Viewer::addCameraView),
              py::arg("name"),
              py::arg("camera_to_world_matrices"),
              py::arg("projection_matrices"),
+             py::arg("frustum_near_plane") = 0.1,
+             py::arg("frustum_far_plane")  = 100.,
              py::return_value_policy::reference_internal,
              "Add a named camera view from camera/world and projection matrices");
 }

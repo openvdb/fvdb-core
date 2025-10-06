@@ -106,7 +106,7 @@ pts = fvdb.JaggedTensor([
 ])
 
 # Get a mask indicating which points lie in the grid
-mask = grid.points_in_active_voxel(pts)
+mask = grid.points_in_grid(pts)
 ```
 
 We visualize the points which intersect the grid (yellow points intersect and purple points do not).
@@ -143,7 +143,7 @@ for b, b_grid in enumerate(grid.bboxes):
 
 pts = fvdb.JaggedTensor(rand_idx_pts)
 
-coords_in_grid = grid.coords_in_active_voxel(pts)
+coords_in_grid = grid.coords_in_grid(pts)
 ```
 
 We visualize the coordinates which intersect the grid (yellow coordinates intersect and purple coordinates do not).
@@ -508,7 +508,7 @@ We visualize the original grid with values of the mesh normals as features, the 
 
 Subdividing a grid has the effect of increasing the resolution of the grid by a constant factor (and can be performed anisotropically for different factors in each `xyz` spatial dimension).
 
-The most straightforward way to use the `subdivide` method is to provide an integer value for the subdivision factor.  This will result in a grid that is `subdiv_factor` times the resolution of the original grid in each spatial dimension.
+The most straightforward way to use the `refine` method is to provide an integer value for the subdivision factor.  This will result in a grid that is `subdiv_factor` times the resolution of the original grid in each spatial dimension.
 
 ```python
 import os
@@ -543,23 +543,23 @@ grid = fvdb.GridBatch.from_points(points, voxel_sizes=vox_size)
 # Splat the normals into the grid with trilinear interpolation
 vox_normals = grid.splat_trilinear(points, normals)
 
-# Subdivide by a constant factor of 2
-subdiv_normals, subdiv_grid = grid.subdivide(2, vox_normals)
+# Refine by a constant factor of 2
+subdiv_normals, subdiv_grid = grid.refine(2, vox_normals)
 ```
 
 Here we visualize the original grid on the right and the grid after subdivision by a factor of 2 on the left.
 
-![](../imgs/fig/subdivide.png)
+![](../imgs/fig/refine.png)
 
 
 In practice, in a deep neural network like a U-Net architecture, the resolution of the grid can be decreased early in the network and then the grid's features need to be concatenated with features of the grid after its resolution is increased again.  When working with traditional, dense 2D or 3D data, cropping any mismatched outputs is straightforward to be able to concatenate these features.  However, in a sparse 3D grid, this is not straightforward and it's entirely unclear how to align the features.
 
-Take this simple example to illustrate the difficulties created by changing the grid topology in this way.  We take the grid created from our mesh, perform Pooling by a factor of 2 and then try to Subdivide by an equal factor of 2 to invert the Pooling operation.
+Take this simple example to illustrate the difficulties created by changing the grid topology in this way.  We take the grid created from our mesh, perform Pooling by a factor of 2 and then try to Refine by an equal factor of 2 to invert the Pooling operation.
 
 ```python continuation
 max_normals, max_grid = grid.max_pool(2, vox_normals)
 
-subdiv_normals, subdiv_grid = max_grid.subdivide(2, max_normals)
+subdiv_normals, subdiv_grid = max_grid.refine(2, max_normals)
 ```
 
 
@@ -570,13 +570,13 @@ Let's visualize these results from left to right of the original grid, the grid 
 
 Notice how we have not obtained the topology of the original grid and have obtained a grid with many more voxels than the original.
 
-To correctly invert the Pooling operation, we can provide the `subdivide` function with a `fine_grid` optional argument which describes the topology we want the grid to have after the subdivision.  The original grid before the Pooling operation can be used as this `fine_grid`.
+To correctly invert the Pooling operation, we can provide the `refine` function with a `fine_grid` optional argument which describes the topology we want the grid to have after the subdivision.  The original grid before the Pooling operation can be used as this `fine_grid`.
 
 ```python continuation
 max_normals, max_grid = grid.max_pool(2, vox_normals)
 
 # Providing the original grid as our fine_grid target
-subdiv_normals, subdiv_grid = max_grid.subdivide(2, max_normals, fine_grid=grid)
+subdiv_normals, subdiv_grid = max_grid.refine(2, max_normals, fine_grid=grid)
 ```
 
 ![](../imgs/fig/subdiv_pool_correct.png)
@@ -584,17 +584,17 @@ subdiv_normals, subdiv_grid = max_grid.subdivide(2, max_normals, fine_grid=grid)
 
 Note the matching topology of the grid after the Subdivision operation to the original grid (though the features are different due to the Pooling operation).
 
-One other useful feature of the `subdivide` operator is that this operation can be *masked* so that subdivision is only performed on a subset of the voxels in the grid.
+One other useful feature of the `refine` operator is that this operation can be *masked* so that subdivision is only performed on a subset of the voxels in the grid.
 
-The optional `mask` argument to `subdivide` is a `JaggedTensor` of boolean values that indicates which voxels should be subdivided.  Given this `mask` is simply a `JaggedTensor`, this operation can be made differentiable in a neural network and the `subdivide` operator can be learned.
+The optional `mask` argument to `refine` is a `JaggedTensor` of boolean values that indicates which voxels should be refined.  Given this `mask` is simply a `JaggedTensor`, this operation can be made differentiable in a neural network and the `refine` operator can be learned.
 
-Let's illustrate a very simple example of how to use the `mask` argument to only subdivide the voxels which have a feature value greater than a certain threshold.
+Let's illustrate a very simple example of how to use the `mask` argument to only refine the voxels which have a feature value greater than a certain threshold.
 
 ```python continuation
-# Mask the grid with the normals where only the normals with a value greater than 0.5 on the x-axis are subdivided
+# Mask the grid with the normals where only the normals with a value greater than 0.5 on the x-axis are refined
 mask = vox_normals.jdata[:, 0] > 0.5
 
-subdiv_normals, subdiv_grid = grid.subdivide(2, vox_normals, mask=mask)
+subdiv_normals, subdiv_grid = grid.refine(2, vox_normals, mask=mask)
 ```
 
 ![](../imgs/fig/subdiv_mask.png)
@@ -723,144 +723,3 @@ tensor([[[ 0.0200,  0.0000,  0.0000,  0.0000],
          [ 0.2000, -0.2000,  0.2000,  1.0000]]])
 ```
 
-
-## Convolution
-
-Convolving the features of a `GridBatch` can be accomplished with either a high-level `torch.nn.Module` derived class provided by `fvdb.nn` or with more low-level methods available with `GridBatch`, we will illustrate both techniques.
-
-### High-level Usage with `fvdb.nn`
-
-`fvdb.nn.SparseConv3d` provides a high-level `torch.nn.Module` class for convolution on `fvdb` classes that is an analogue to the use of `torch.nn.Conv3d`.  Using this module is the recommended functionality for performing convolution with `fvdb` because it not only manages functionality such as initializing the weights of the convolution and calling appropriate backend implementation functions but it also provides certain backend optimizations which will be illustrated in the [Low-level usage](#low-level-usage-with-gridbatch) section.
-
-One thing to note is `fvdb.nn.SparseConv3d` operates on a class that wraps a `GridBatch` and `JaggedTensor` together into a convenience object, `fvdb.VDBTensor`, which is used by all the `fvdb.nn` modules.
-
-A simple example of using `fvdb.nn.SparseConv3d` is as follows:
-
-```python
-import fvdb
-import fvdb.nn as fvdbnn
-from fvdb.utils.examples import load_car_1_mesh
-import torch
-import numpy as np
-import point_cloud_utils as pcu
-
-num_pts = 10_000
-vox_size = 0.02
-
-mesh_load_funcs = [load_car_1_mesh]
-
-points = []
-normals = []
-
-for func in mesh_load_funcs:
-    pts, nms = func(mode="vn")
-    pmt = torch.randperm(pts.shape[0])[:num_pts]
-    pts, nms = pts[pmt], nms[pmt]
-    points.append(pts)
-    normals.append(nms)
-
-# JaggedTensors of points and normals
-points = fvdb.JaggedTensor(points)
-normals = fvdb.JaggedTensor(normals)
-
-# Create a grid
-grid = fvdb.GridBatch.from_points(points, voxel_sizes=vox_size)
-
-# Splat the normals into the grid with trilinear interpolation
-vox_normals = grid.splat_trilinear(points, normals)
-
-# VDBTensor is a simple wrapper of a grid and a feature tensor
-vdbtensor = fvdbnn.VDBTensor(grid, vox_normals)
-
-# fvdb.nn.SparseConv3d is a convenient torch.nn.Module implementing the fVDB convolution
-conv = fvdbnn.SparseConv3d(in_channels=3, out_channels=3, kernel_size=3, stride=1, bias=False).to(vdbtensor.device)
-
-output = conv(vdbtensor)
-```
-Let's visualize the original grid with normals visualized as colours alongside the result of these features after a convolution initialized with random weights:
-![](../imgs/fig/simple_conv.png)
-
-For stride values greater than 1, the output of the convolution will be a grid with a smaller resolution than the input grid (similar in topological effect to the output of a Pooling operator).  Let's illustrate this:
-
-```python continuation
-# We would expect for stride=2 that the output grid would have half the resolution (or twice the world-space size) of the input grid
-conv = fvdbnn.SparseConv3d(in_channels=3, out_channels=3, kernel_size=3, stride=2, bias=False).to(vdbtensor.device)
-
-output = conv(vdbtensor)
-```
-
-![](../imgs/fig/stride_conv.png)
-
-
-Transposed convolution can be performed with `fvdb.nn.SparseConv3d` which can increase the resolution of the grid.  It only really makes sense to perform transposed sparse convolution with a target grid topology we wish to produce with this operation (see the [Pooling Operators](#maxmean-pooling) for an explanation).  Therefore, an `out_grid` argument must be provided in this case to specify the target grid topology:
-
-```python continuation
-# Tranposed convolution operator, stride=2
-transposed_conv = fvdbnn.SparseConv3d(in_channels=3, out_channels=3, kernel_size=3, stride=2, bias=False, transposed=True).to(vdbtensor.device)
-
-# Note the use of the `out_grid` argument to specify the target grid topology
-transposed_output = transposed_conv(output, out_grid=vdbtensor.grid)
-```
-
-Here we visuzlie the original grid, the grid after strided convolution and the grid after transposed convolution inverts the topological operation of the strided convolution to produce the same topology as the original grid with the features convolved by our two layers:
-
-![](../imgs/fig/transposed_stride_conv.png)
-
-
-### Low-level Usage with `GridBatch`
-
-The [high-level `fvdb.nn.SparseConv3d` class](#high-level-convolution-with-fvdbnn) wraps several pieces of `GridBatch` functionality to provide a convenient `torch.nn.Module` for convolution.  However, for a more low-level approach that accomplishes the same outcome, the `GridBatch` class itself can be the starting point for performing convolution on the grid and its features.  We will illustrate this approach for completeness, though we do recommend the use of the `fvdb.nn.SparseConv3d` Module for most use-cases.
-
-Using the `GridBatch` convolution functions directly requires a little more knowledge about the implementation under-the-hood.  Due to the nature of a sparse grid, in order to make convolution performant, it is useful to pre-compute a mapping of which features in the input grid will contribute to the values of the output grid when convolved by a kernel of a particular dimension and stride.  This mapping structure is called a 'kernel map'.
-
-The kernel map, as well as the functionality for using it to compute the convolution, is contained within a `fvdb.SparseConvPackInfo` class which can be constructed by `GridBatch.sparse_conv_kernel_map`.  A `fvdb.SparseConvPackInfo` must perform a pre-computation of the kernel map based on the style expected by the backend implementation of the convolution utilized by `fvdb.SparseConvPackInfo.sparse_conv_3d`.  Here is an example of how to construct a `fvdb.SparseConvPackInfo` and use it to perform a convolution:
-
-```python
-import fvdb
-import fvdb.nn as fvdbnn
-from fvdb.utils.examples import load_car_1_mesh
-import torch
-import numpy as np
-import point_cloud_utils as pcu
-
-num_pts = 10_000
-vox_size = 0.02
-
-mesh_load_funcs = [load_car_1_mesh]
-
-points = []
-normals = []
-
-for func in mesh_load_funcs:
-    pts, nms = func(mode="vn")
-    pmt = torch.randperm(pts.shape[0])[:num_pts]
-    pts, nms = pts[pmt], nms[pmt]
-    points.append(pts)
-    normals.append(nms)
-
-# JaggedTensors of points and normals
-points = fvdb.JaggedTensor(points)
-normals = fvdb.JaggedTensor(normals)
-
-# Create a grid
-grid = fvdb.GridBatch.from_points(points, voxel_sizes=vox_size)
-
-# Splat the normals into the grid with trilinear interpolation
-vox_normals = grid.splat_trilinear(points, normals)\
-
-# Create the kernel map (housed in a SparseConvPackInfo) and the output grid's topology based on the kernel parameters
-sparse_conv_packinfo, out_grid = grid.sparse_conv_kernel_map(kernel_size=3, stride=1)
-
-# The kernel map must be pre-computed based on the backend implementation we plan on using, here we use gather/scatter, the default implementation
-sparse_conv_packinfo.build_gather_scatter()
-
-# Create random weights for our convolution kernel of size 3x3x3 that takes 3 input channels and produces 3 output channels
-kernel_weights = torch.randn(3, 3, 3, 3, 3, device=grid.device)
-
-# Perform convolution on the normals colours.  Gather/scatter is used as the backend, it is the default
-conv_vox_normals = sparse_conv_packinfo.sparse_conv_3d(vox_normals, weights=kernel_weights, backend=fvdb.ConvPackBackend.GATHER_SCATTER)
-```
-Here we visualize the output of our convolution alongside the original grid with normals visualized as colours:
-![](../imgs/fig/gridbatch_conv.png)
-
-The kernel map can potentially be expensive to compute, so it is often useful to re-use the `SparseConvPackInfo` in the same network to perform a convolution on other features or with different weights.  This optimization is something `fvdb.nn.SparseConv3d` attempts to do where appropriate and is one reason we recommend using `fvdb.nn.SparseConv3d` over this low-level approach.

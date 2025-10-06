@@ -19,7 +19,7 @@ ProjectGaussians::VariableList
 ProjectGaussians::forward(ProjectGaussians::AutogradContext *ctx,
                           const ProjectGaussians::Variable &means,
                           const ProjectGaussians::Variable &quats,
-                          const ProjectGaussians::Variable &scales,
+                          const ProjectGaussians::Variable &logScales,
                           const ProjectGaussians::Variable &worldToCamMatrices,
                           const ProjectGaussians::Variable &projectionMatrices,
                           const uint32_t imageWidth,
@@ -41,7 +41,7 @@ ProjectGaussians::forward(ProjectGaussians::AutogradContext *ctx,
     auto variables   = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
         return ops::dispatchGaussianProjectionForward<DeviceTag>(means,
                                                                  quats,
-                                                                 scales,
+                                                                 logScales,
                                                                  worldToCamMatrices,
                                                                  projectionMatrices,
                                                                  imageWidth,
@@ -81,7 +81,7 @@ ProjectGaussians::forward(ProjectGaussians::AutogradContext *ctx,
         Variable compensations = std::get<4>(variables);
         ctx->save_for_backward({means,
                                 quats,
-                                scales,
+                                logScales,
                                 worldToCamMatrices,
                                 projectionMatrices,
                                 radii,
@@ -90,7 +90,7 @@ ProjectGaussians::forward(ProjectGaussians::AutogradContext *ctx,
         return {radii, means2d, depths, conics, compensations};
     } else {
         ctx->save_for_backward(
-            {means, quats, scales, worldToCamMatrices, projectionMatrices, radii, conics});
+            {means, quats, logScales, worldToCamMatrices, projectionMatrices, radii, conics});
         return {radii, means2d, depths, conics};
     }
 }
@@ -121,7 +121,7 @@ ProjectGaussians::backward(ProjectGaussians::AutogradContext *ctx,
     VariableList saved          = ctx->get_saved_variables();
     Variable means              = saved.at(0);
     Variable quats              = saved.at(1);
-    Variable scales             = saved.at(2);
+    Variable logScales          = saved.at(2);
     Variable worldToCamMatrices = saved.at(3);
     Variable projectionMatrices = saved.at(4);
     Variable radii              = saved.at(5);
@@ -161,7 +161,7 @@ ProjectGaussians::backward(ProjectGaussians::AutogradContext *ctx,
     auto variables = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
         return ops::dispatchGaussianProjectionBackward<DeviceTag>(means,
                                                                   quats,
-                                                                  scales,
+                                                                  logScales,
                                                                   worldToCamMatrices,
                                                                   projectionMatrices,
                                                                   compensations,

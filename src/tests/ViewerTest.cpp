@@ -24,22 +24,32 @@ TEST(Viewer, ViewerTest) {
 
     fvdb::detail::viewer::GaussianSplat3dView &view =
         viewer.addGaussianSplat3d("test_view", splats);
+    view.setFar(1000000.0f);
 
-    torch::Tensor cameraToWorld =
-        torch::tensor({{{0.9990f, 0.0422f, 0.0123f, 0.6324f},
-                        {0.0000f, 0.2805f, -0.9599f, 0.9302f},
-                        {-0.0440f, 0.9589f, 0.2802f, -0.0052f},
-                        {0.0000f, 0.0000f, 0.0000f, 1.0000f}}},
-                      torch::TensorOptions().dtype(torch::kFloat32).device(device));
+    torch::Tensor cameraToWorld = std::get<torch::Tensor>(metadata.at("camera_to_world_matrices"));
+    torch::Tensor projectionMat = std::get<torch::Tensor>(metadata.at("projection_matrices"));
 
-    torch::Tensor projectionMat = torch::tensor(
-        {{{1.7321f, 0.0000f, 0.0000f}, {0.0000f, 1.7321f, 0.0000f}, {0.0000f, 0.0000f, 1.0010f}}},
-        torch::TensorOptions().dtype(torch::kFloat32).device(device));
+    float frustumNear = 0.3f;
+    float frustumFar  = 1.0f;
 
-    fvdb::detail::viewer::CameraView &cameraView =
-        viewer.addCameraView("test_camera_view", cameraToWorld, projectionMat);
+    fvdb::detail::viewer::CameraView &cameraView = viewer.addCameraView(
+        "test_camera_view", cameraToWorld, projectionMat, frustumNear, frustumFar);
 
-    cameraView.setFrustumScale(1.2f);
+    const float axisLength = 0.5f;
+    cameraView.setAxisLength(axisLength);
+    ASSERT_FLOAT_EQ(cameraView.getAxisLength(), axisLength);
+
+    const float axisThickness = 0.0125f;
+    cameraView.setAxisThickness(axisThickness);
+    ASSERT_FLOAT_EQ(cameraView.getAxisThickness(), axisThickness);
+
+    const float frustumLineWidth = 2.0f;
+    cameraView.setFrustumLineWidth(frustumLineWidth);
+    ASSERT_FLOAT_EQ(cameraView.getFrustumLineWidth(), frustumLineWidth);
+
+    const float frustumScale = 1.f;
+    cameraView.setFrustumScale(frustumScale);
+    ASSERT_FLOAT_EQ(cameraView.getFrustumScale(), frustumScale);
 #else
     const int N = 1000;
     torch::Device device(torch::kCUDA);
@@ -55,7 +65,6 @@ TEST(Viewer, ViewerTest) {
 
     fvdb::detail::viewer::GaussianSplat3dView &view =
         viewer.addGaussianSplat3d("test_view", splats);
-#endif
 
     const float testNear = 0.5f;
     view.setNear(testNear);
@@ -80,8 +89,9 @@ TEST(Viewer, ViewerTest) {
     const int testShDegree = 1;
     view.setShDegreeToUse(testShDegree);
     ASSERT_EQ(view.getShDegreeToUse(), testShDegree);
+#endif
 
 #ifdef LOCAL_TESTING
-    std::this_thread::sleep_for(std::chrono::seconds(100));
+    std::this_thread::sleep_for(std::chrono::seconds(10000));
 #endif
 }
