@@ -114,15 +114,22 @@ bind_grid_batch(py::module &m) {
              &fvdb::GridBatch::serialize_encode,
              py::arg("order_type"),
              R"_FVDB_(
-            Return the Morton codes for active voxels in this grid batch.
+            Return the space-filling curve codes for active voxels in this grid batch.
             
-            Morton codes provide a space-filling curve that maps 3D coordinates to 1D integers,
+            Space-filling curves provide a mapping from 3D coordinates to 1D integers,
             preserving spatial locality. This is useful for serialization, sorting, and 
             spatial data structures.
 
+            Args:
+                order_type (str): The type of ordering to use:
+                    - "z": Regular Z-order curve (xyz bit interleaving)
+                    - "z-trans": Transposed Z-order curve (zyx bit interleaving)  
+                    - "hilbert": Regular Hilbert curve (xyz)
+                    - "hilbert-trans": Transposed Hilbert curve (zyx)
+
             Returns:
-                morton_codes (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 1]` containing
-                    the Morton codes for each active voxel in the batch.
+                codes (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 1]` containing
+                    the space-filling curve codes for each active voxel in the batch.
         )_FVDB_")
         .def("permute",
              &fvdb::GridBatch::permute,

@@ -1096,37 +1096,41 @@ JaggedTensor
 GridBatch::permute(const std::string &order_type) const {
     c10::DeviceGuard guard(device());
     
-    // Parse order type and determine Morton code type and sort order
-    std::string morton_order = "z";  // Default z-order (xyz)
+    // Parse order type and determine space-filling curve type and sort order
+    std::string curve_order = "z";  // Default z-order (xyz)
     
     if (order_type == "z") {
-        morton_order = "z";
+        curve_order = "z";
     } else if (order_type == "z-trans") {
-        morton_order = "z-trans";
+        curve_order = "z-trans";
+    } else if (order_type == "hilbert") {
+        curve_order = "hilbert";
+    } else if (order_type == "hilbert-trans") {
+        curve_order = "hilbert-trans";
     } else {
         TORCH_CHECK(false, "Invalid order_type: ", order_type, 
-                    ". Valid options are 'z', or 'z-trans'.");
+                    ". Valid options are 'z', 'z-trans', 'hilbert', or 'hilbert-trans'.");
     }
     
-    // Get Morton codes for sorting
-    JaggedTensor morton_codes = serialize_encode(morton_order);
+    // Get space-filling curve codes for sorting
+    JaggedTensor curve_codes = serialize_encode(curve_order);
     
     // Create output tensor for permutation indices
     auto opts = torch::TensorOptions().dtype(torch::kInt64).device(device());
     std::vector<int64_t> shape = {mImpl->totalVoxels()};
     torch::Tensor permutation_indices = torch::empty(shape, opts);
     
-    // Sort Morton codes and get permutation indices for each grid
+    // Sort space-filling curve codes and get permutation indices for each grid
     int64_t offset = 0;
     for (int64_t grid_idx = 0; grid_idx < mImpl->batchSize(); ++grid_idx) {
         int64_t num_voxels = mImpl->numVoxelsAt(grid_idx);
         if (num_voxels == 0) continue;
         
-        // Extract Morton codes for this grid
-        torch::Tensor grid_morton_codes = morton_codes.jdata().narrow(0, offset, num_voxels);
+        // Extract space-filling curve codes for this grid
+        torch::Tensor grid_curve_codes = curve_codes.jdata().narrow(0, offset, num_voxels);
         
         // Sort and get indices
-        auto sort_result = torch::sort(grid_morton_codes.squeeze(-1), /*dim=*/0);
+        auto sort_result = torch::sort(grid_curve_codes.squeeze(-1), /*dim=*/0);
         torch::Tensor sorted_values = std::get<0>(sort_result);
         torch::Tensor indices = std::get<1>(sort_result);
         

@@ -17,7 +17,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-/// @brief Per-voxel callback which computes the Morton code for each active voxel in a batch of grids
+/// @brief Per-voxel callback which computes the space-filling curve code (Morton or Hilbert) for each active voxel in a batch of grids
 template <template <typename T, int32_t D> typename TorchAccessor>
 __hostdev__ inline void
 serializeEncodeVoxelCallback(int64_t batchIdx,
@@ -42,35 +42,50 @@ serializeEncodeVoxelCallback(int64_t batchIdx,
         int32_t offset_j = bboxMin[1];
         int32_t offset_k = bboxMin[2];
         
-        // Compute Morton code with offset to ensure non-negative coordinates
-        uint64_t morton_code;
-        if (order_type == 1) {  // ORDER_TYPE_Z_TRANS
-            // Transposed z-order: swap coordinates zyx
-            morton_code = utils::morton_with_offset(
-                ijk[2], ijk[1], ijk[0],
-                static_cast<uint32_t>(-offset_k), 
-                static_cast<uint32_t>(-offset_j), 
-                static_cast<uint32_t>(-offset_i)
-            );
-        } else {  // ORDER_TYPE_Z (default)
-            // Regular z-order: xyz
-            morton_code = utils::morton_with_offset(
+        // Compute Morton or Hilbert code with offset to ensure non-negative coordinates
+        uint64_t space_filling_code;
+        if (order_type == ORDER_TYPE_Z) {  // ORDER_TYPE_Z (default) - Regular z-order: xyz
+            space_filling_code = utils::morton_with_offset(
                 ijk[0], ijk[1], ijk[2],
                 static_cast<uint32_t>(-offset_i), 
                 static_cast<uint32_t>(-offset_j), 
                 static_cast<uint32_t>(-offset_k)
             );
+        } else if (order_type == ORDER_TYPE_Z_TRANS) {  // Transposed z-order: zyx
+            space_filling_code = utils::morton_with_offset(
+                ijk[2], ijk[1], ijk[0], // TODO: Check if I need to swap xz or xy? 
+                static_cast<uint32_t>(-offset_k), 
+                static_cast<uint32_t>(-offset_j), 
+                static_cast<uint32_t>(-offset_i)
+            );
+        } else if (order_type == ORDER_TYPE_HILBERT) {  // Regular Hilbert curve: xyz
+            space_filling_code = utils::hilbert_with_offset(
+                ijk[0], ijk[1], ijk[2],
+                static_cast<uint32_t>(-offset_i), 
+                static_cast<uint32_t>(-offset_j), 
+                static_cast<uint32_t>(-offset_k)
+            );
+        } else if (order_type == ORDER_TYPE_HILBERT_TRANS) {  // Transposed Hilbert curve: zyx
+            space_filling_code = utils::hilbert_with_offset(
+                ijk[2], ijk[1], ijk[0],
+                static_cast<uint32_t>(-offset_k), 
+                static_cast<uint32_t>(-offset_j), 
+                static_cast<uint32_t>(-offset_i)
+            );
+        } else {
+            // Invalid order type - use assert for device code
+            space_filling_code = 0;
         }
         
-        outMortonCodes[idx][0] = static_cast<int64_t>(morton_code);
+        outMortonCodes[idx][0] = static_cast<int64_t>(space_filling_code);
     }
 }
 
-/// @brief Get the Morton codes for active voxels in a batch of grids
+/// @brief Get the space-filling curve codes for active voxels in a batch of grids
 /// @param gridBatch The batch of grids
-/// @param outMortonCodes Tensor which will contain the output Morton codes
+/// @param outMortonCodes Tensor which will contain the output space-filling curve codes
 /// @param bboxMinCoords Array of bounding box minimum coordinates for each grid
-/// @param order_type Integer representing the order type (0=z, 1=z-trans, etc.)
+/// @param order_type Integer representing the order type (0=z, 1=z-trans, 2=hilbert, 3=hilbert-trans)
 template <torch::DeviceType DeviceTag>
 void
 GetSerializeEncode(const GridBatchImpl &gridBatch, 
@@ -112,11 +127,11 @@ GetSerializeEncode(const GridBatchImpl &gridBatch,
     }
 }
 
-/// @brief Get the Morton codes for active voxels in a batch of grids
+/// @brief Get the space-filling curve codes for active voxels in a batch of grids
 /// @tparam DeviceTag Which device to run on
-/// @param gridBatch The batch of grids to get the Morton codes for
-/// @param order_type The type of z-order to use ("z" for xyz, "z-trans" for zyx)
-/// @return A JaggedTensor of shape [B, -1, 1] of Morton codes for active voxels
+/// @param gridBatch The batch of grids to get the space-filling curve codes for
+/// @param order_type The type of ordering to use ("z" for xyz z-order, "z-trans" for zyx z-order, "hilbert" for xyz Hilbert curve, "hilbert-trans" for zyx Hilbert curve)
+/// @return A JaggedTensor of shape [B, -1, 1] of space-filling curve codes for active voxels
 template <torch::DeviceType DeviceTag>
 JaggedTensor
 SerializeEncode(const GridBatchImpl &gridBatch, const std::string &order_type) {
@@ -130,9 +145,13 @@ SerializeEncode(const GridBatchImpl &gridBatch, const std::string &order_type) {
         order_type_int = ORDER_TYPE_Z;  // Regular xyz z-order
     } else if (order_type == "z-trans") {
         order_type_int = ORDER_TYPE_Z_TRANS;  // Transposed zyx z-order
+    } else if (order_type == "hilbert") {
+        order_type_int = ORDER_TYPE_HILBERT;  // Regular xyz Hilbert curve
+    } else if (order_type == "hilbert-trans") {
+        order_type_int = ORDER_TYPE_HILBERT_TRANS;  // Transposed zyx Hilbert curve
     } else {
         // raise an error
-        throw std::runtime_error("Invalid order_type: " + order_type + ". Valid options are 'z' or 'z-trans'.");
+        throw std::runtime_error("Invalid order_type: " + order_type + ". Valid options are 'z', 'z-trans', 'hilbert', or 'hilbert-trans'.");
     }
     
     // Get bounding box minimum coordinates for offset calculation
