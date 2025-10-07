@@ -18,6 +18,7 @@ def _parse_device_string(device_string: str | torch.device) -> torch.device: ...
 # The following import needs to come after the GridBatch and JaggedTensor imports
 # immediately above in order to avoid a circular dependency error.
 from . import nn
+from ._convolution_plan import ConvolutionPlan
 from ._Cpp import (
     ConvPackBackend,
     JaggedTensor,
@@ -31,10 +32,9 @@ from ._Cpp import (
     scaled_dot_product_attention,
     volume_render,
 )
-from .convolution_plan import ConvolutionPlan
-from .gaussian_splatting import GaussianSplat3d
-from .grid import Grid, load_grid, save_grid
-from .grid_batch import GridBatch, load_gridbatch, save_gridbatch
+from ._gaussian_splat_3d import GaussianSplat3d
+from ._grid import Grid, load_grid, save_grid
+from ._grid_batch import GridBatch, load_gridbatch, save_gridbatch
 
 @overload
 def jcat(grid_batches: Sequence[GridBatch]) -> GridBatch: ...
@@ -44,6 +44,7 @@ def jcat(jagged_tensors: Sequence[JaggedTensorOrTensor], dim: int | None = None)
 def jcat(jagged_tensors: Sequence[JaggedTensor], dim: int | None = None) -> JaggedTensor: ...
 
 __all__ = [
+    "ConvPackBackend",
     "GridBatch",
     "JaggedTensor",
     "ConvolutionPlan",

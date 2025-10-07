@@ -3,40 +3,14 @@
 #
 from __future__ import annotations
 
-from typing import Sequence
+import ctypes
+import importlib.util as _importlib_util
+import pathlib
 
 import torch
-import ctypes
-import pathlib
-import importlib.util as _importlib_util
 
 if torch.cuda.is_available():
     torch.cuda.init()
-
-
-def _parse_device_string(device_or_device_string: str | torch.device) -> torch.device:
-    """
-    Parses a device string and returns a torch.device object. For CUDA devices
-    without an explicit index, uses the current CUDA device. If the input is a torch.device
-    object, it is returned unmodified.
-
-     Args:
-         device_string (str | torch.device):
-             A device string (e.g., "cpu", "cuda", "cuda:0") or a torch.device object.
-             If a string is provided, it should be a valid device identifier.
-
-     Returns:
-         torch.device: The parsed device object with proper device index set if a string is passed
-         in otherwise returns the input torch.device object.
-    """
-    if isinstance(device_or_device_string, torch.device):
-        return device_or_device_string
-    if not isinstance(device_or_device_string, str):
-        raise TypeError(f"Expected a string or torch.device, but got {type(device_or_device_string)}")
-    device = torch.device(device_or_device_string)
-    if device.type == "cuda" and device.index is None:
-        device = torch.device("cuda", torch.cuda.current_device())
-    return device
 
 
 # Load NanoVDB Editor shared libraries so symbols are globally available before importing the pybind module.
@@ -71,21 +45,21 @@ from ._Cpp import (
 )
 
 # Import GridBatch and gridbatch_from_* functions from grid_batch.py
-from .grid_batch import (
+from ._grid_batch import (
     GridBatch,
     load_gridbatch,
     save_gridbatch,
 )
 
 
-from .grid import (
+from ._grid import (
     Grid,
     load_grid,
     save_grid,
 )
 
-from .convolution_plan import ConvolutionPlan
-from .gaussian_splatting import GaussianSplat3d
+from ._convolution_plan import ConvolutionPlan
+from ._gaussian_splat_3d import GaussianSplat3d
 
 # The following import needs to come after the GridBatch and JaggedTensor imports
 # immediately above in order to avoid a circular dependency error.
@@ -116,6 +90,7 @@ from .version import __version__
 __version_info__ = tuple(map(int, __version__.split(".")))
 
 __all__ = [
+    "ConvPackBackend",
     "GridBatch",
     "JaggedTensor",
     "GaussianSplat3d",

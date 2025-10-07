@@ -3,8 +3,8 @@
 import torch
 
 from .._Cpp import JaggedTensor
-from ..grid import Grid
-from ..grid_batch import GridBatch
+from .._grid import Grid
+from .._grid_batch import GridBatch
 
 
 def grid_edge_network(grid: Grid) -> tuple[torch.Tensor, torch.Tensor]:

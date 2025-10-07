@@ -53,7 +53,7 @@ from .types import (
 )
 
 if TYPE_CHECKING:
-    from .grid import Grid
+    from ._grid import Grid
 
 
 class GridBatch:

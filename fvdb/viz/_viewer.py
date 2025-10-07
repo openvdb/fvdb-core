@@ -10,7 +10,7 @@ from .._Cpp import CameraView as CameraViewCpp
 from .._Cpp import GaussianSplat3d as GaussianSplat3dCpp
 from .._Cpp import GaussianSplat3dView as GaussianSplat3dViewCpp
 from .._Cpp import Viewer as ViewerCpp
-from ..gaussian_splatting import GaussianSplat3d
+from .._gaussian_splat_3d import GaussianSplat3d
 from ..types import NumericMaxRank1, NumericMaxRank3, to_Mat44fBatch, to_Vec3f
 from ._camera_view import CameraView
 from ._gaussian_splat_3d_view import GaussianSplat3dView
@@ -115,7 +115,12 @@ class Viewer:
         cam_to_world_matrices = to_Mat44fBatch(cam_to_world_matrices)
 
         view: CameraViewCpp = self._impl.add_camera_view(
-            name, cam_to_world_matrices, projection_matrices, image_sizes, frustum_near_plane, frustum_far_plane
+            name,
+            cam_to_world_matrices,
+            projection_matrices,
+            image_sizes if image_sizes is not None else torch.empty([0, 2], dtype=torch.int32),
+            frustum_near_plane,
+            frustum_far_plane,
         )
         view.visible = enabled
         view.axis_length = axis_length
