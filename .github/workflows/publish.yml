@@ -77,10 +77,6 @@ jobs:
           fetch-depth: 0 # Fetch all history for all branches
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
 
-      - name: Install perl
-        run: |
-          apt-get install -y perl
-
       - name: Generate release_environment.yml
         run: |
           cp env/build_environment.yml release_environment.yml
@@ -140,7 +136,8 @@ jobs:
 
       - name: Rename wheel
         run: |
-          python scripts/rename_wheels.py ${{ matrix.torch-version }} `perl -E '"${{ matrix.cuda-version }}" =~ /^(\d+)\.(\d+)/; say "cu$1$2"'`
+          CUDA_TAG=$(echo "${{ matrix.cuda-version }}" | awk -F. '{printf "cu%01d%01d", $1, $2}')
+          python scripts/rename_wheels.py ${{ matrix.torch-version }} "$CUDA_TAG"
         shell:
           bash -el {0}
 
