@@ -128,7 +128,7 @@ jobs:
       - name: Build fvdb
         run: |
           micromamba activate fvdb_release
-          ./build.sh wheel verbose --cuda-arch-list '7.5+PTX,8.0,9.0,10.0,12.0'
+          ./build.sh wheel verbose --cuda-arch-list '7.5;8.0;9.0;10.0;12.0+PTX'
 
       - name: Get Version
         run: |
