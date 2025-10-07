@@ -139,7 +139,8 @@ jobs:
       - name: Rename wheel
         run: |
           CUDA_TAG=$(echo "${{ matrix.cuda-version }}" | awk -F. '{printf "cu%01d%01d", $1, $2}')
-          python scripts/rename_wheels.py ${{ matrix.torch-version }} "$CUDA_TAG" "dist/fvdb-*.whl"
+          PYTORCH_TAG=$(echo "${{ matrix.torch-version }}" | awk -F. '{printf "torch%01d%01d", $1, $2}')
+          python scripts/rename_wheels.py "$PYTORCH_TAG" "$CUDA_TAG" "dist/fvdb-*.whl"
         shell:
           bash -el {0}
 
