@@ -620,23 +620,23 @@ fusedSSIMPrivateUse1(
             alignedChunk(kAlignment, globalBlockCount, deviceId);
 
         if (localBlockCount) {
-            auto localElementOffset = localBlockOffset * BLOCK_X * BLOCK_Y * CH;
-            auto localElementCount  = localBlockCount * BLOCK_X * BLOCK_Y * CH;
-            if (localElementOffset + localElementCount > img1_.numel()) {
-                localElementOffset = std::min(localElementOffset, static_cast<int>(img1_.numel()));
-                localElementCount  = std::min(localElementCount,
-                                             static_cast<int>(img1_.numel()) - localElementOffset);
-            }
-            nanovdb::util::cuda::memPrefetchAsync(img1_.const_data_ptr<float>() +
-                                                      localElementOffset,
-                                                  localElementCount * sizeof(float),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(img2_.const_data_ptr<float>() +
-                                                      localElementOffset,
-                                                  localElementCount * sizeof(float),
-                                                  deviceId,
-                                                  stream);
+            // auto localElementOffset = localBlockOffset * BLOCK_X * BLOCK_Y * CH;
+            // auto localElementCount  = localBlockCount * BLOCK_X * BLOCK_Y * CH;
+            // if (localElementOffset + localElementCount > img1_.numel()) {
+            //     localElementOffset = std::min(localElementOffset, static_cast<int>(img1_.numel()));
+            //     localElementCount  = std::min(localElementCount,
+            //                                  static_cast<int>(img1_.numel()) - localElementOffset);
+            // }
+            // nanovdb::util::cuda::memPrefetchAsync(img1_.const_data_ptr<float>() +
+            //                                           localElementOffset,
+            //                                       localElementCount * sizeof(float),
+            //                                       deviceId,
+            //                                       stream);
+            // nanovdb::util::cuda::memPrefetchAsync(img2_.const_data_ptr<float>() +
+            //                                           localElementOffset,
+            //                                       localElementCount * sizeof(float),
+            //                                       deviceId,
+            //                                       stream);
 
             // Launch config
             dim3 grid(localBlockCount);
@@ -713,43 +713,43 @@ fusedSSIMBackwardPrivateUse1(double C1,
             alignedChunk(kAlignment, globalBlockCount, deviceId);
 
         if (localBlockCount) {
-            auto localElementOffset = localBlockOffset * BLOCK_X * BLOCK_Y * CH;
-            auto localElementCount  = localBlockCount * BLOCK_X * BLOCK_Y * CH;
-            if (localElementOffset + localElementCount > img1_.numel()) {
-                localElementOffset = std::min(localElementOffset, static_cast<int>(img1_.numel()));
-                localElementCount  = std::min(localElementCount,
-                                             static_cast<int>(img1_.numel()) - localElementOffset);
-            }
-            nanovdb::util::cuda::memPrefetchAsync(img1_.const_data_ptr<float>() +
-                                                      localElementOffset,
-                                                  localElementCount * sizeof(float),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(img2_.const_data_ptr<float>() +
-                                                      localElementOffset,
-                                                  localElementCount * sizeof(float),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(dL_dmap_.const_data_ptr<float>() +
-                                                      localElementOffset,
-                                                  localElementCount * sizeof(float),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(dm_dmu1_.const_data_ptr<float>() +
-                                                      localElementOffset,
-                                                  localElementCount * sizeof(float),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(dm_dsigma1_sq_.const_data_ptr<float>() +
-                                                      localElementOffset,
-                                                  localElementCount * sizeof(float),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(dm_dsigma12_.const_data_ptr<float>() +
-                                                      localElementOffset,
-                                                  localElementCount * sizeof(float),
-                                                  deviceId,
-                                                  stream);
+            // auto localElementOffset = localBlockOffset * BLOCK_X * BLOCK_Y * CH;
+            // auto localElementCount  = localBlockCount * BLOCK_X * BLOCK_Y * CH;
+            // if (localElementOffset + localElementCount > img1_.numel()) {
+            //     localElementOffset = std::min(localElementOffset, static_cast<int>(img1_.numel()));
+            //     localElementCount  = std::min(localElementCount,
+            //                                  static_cast<int>(img1_.numel()) - localElementOffset);
+            // }
+            // nanovdb::util::cuda::memPrefetchAsync(img1_.const_data_ptr<float>() +
+            //                                           localElementOffset,
+            //                                       localElementCount * sizeof(float),
+            //                                       deviceId,
+            //                                       stream);
+            // nanovdb::util::cuda::memPrefetchAsync(img2_.const_data_ptr<float>() +
+            //                                           localElementOffset,
+            //                                       localElementCount * sizeof(float),
+            //                                       deviceId,
+            //                                       stream);
+            // nanovdb::util::cuda::memPrefetchAsync(dL_dmap_.const_data_ptr<float>() +
+            //                                           localElementOffset,
+            //                                       localElementCount * sizeof(float),
+            //                                       deviceId,
+            //                                       stream);
+            // nanovdb::util::cuda::memPrefetchAsync(dm_dmu1_.const_data_ptr<float>() +
+            //                                           localElementOffset,
+            //                                       localElementCount * sizeof(float),
+            //                                       deviceId,
+            //                                       stream);
+            // nanovdb::util::cuda::memPrefetchAsync(dm_dsigma1_sq_.const_data_ptr<float>() +
+            //                                           localElementOffset,
+            //                                       localElementCount * sizeof(float),
+            //                                       deviceId,
+            //                                       stream);
+            // nanovdb::util::cuda::memPrefetchAsync(dm_dsigma12_.const_data_ptr<float>() +
+            //                                           localElementOffset,
+            //                                       localElementCount * sizeof(float),
+            //                                       deviceId,
+            //                                       stream);
 
             // Launch config
             dim3 grid(localBlockCount);

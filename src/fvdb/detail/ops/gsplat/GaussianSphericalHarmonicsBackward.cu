@@ -620,6 +620,7 @@ dispatchSphericalHarmonicsBackward<torch::kPrivateUse1>(
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
         }
+
         return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
     }
 }

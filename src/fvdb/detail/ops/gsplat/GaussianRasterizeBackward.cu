@@ -60,7 +60,7 @@ struct RasterizeBackwardArgs {
         const uint32_t imageOriginW,
         const uint32_t imageOriginH,
         const uint32_t tileSize,
-        const uint32_t cameraOffset,
+        const uint32_t blockOffset,
         const torch::Tensor &tileOffsets,          // [C, numTilesH, numTilesW]
         const torch::Tensor &tileGaussianIds,      // [totalIntersections]
         const fvdb::JaggedTensor &renderedAlphas,  // {C, [AP_i, 1]} or {1, [C, H, W, 1]}
@@ -89,7 +89,7 @@ struct RasterizeBackwardArgs {
                      imageOriginW,
                      imageOriginH,
                      tileSize,
-                     cameraOffset,
+                     blockOffset,
                      tileOffsets,
                      tileGaussianIds,
                      activeTiles,
@@ -1274,54 +1274,51 @@ callRasterizeBackwardPrivateUse1(
                 tilePixelCumsum,
                 pixelMap);
 
-            auto firstLinearTileIdx = deviceTileOffset;
-            auto lastLinearTileIdx  = deviceTileOffset + deviceTileCount;
-
-            int32_t firstCameraId = firstLinearTileIdx / (tileExtentH * tileExtentW);
-            int32_t firstTileRow  = (firstLinearTileIdx / tileExtentW) % tileExtentH;
-            int32_t firstTileCol  = firstLinearTileIdx % tileExtentW;
-
-            int32_t lastCameraId = lastLinearTileIdx / (tileExtentH * tileExtentW);
-            int32_t lastTileRow  = (lastLinearTileIdx / tileExtentW) % tileExtentH;
-            int32_t lastTileCol  = lastLinearTileIdx % tileExtentW;
-
-            int32_t firstGaussianIdInDevice =
-                tileOffsets.accessor<int32_t, 3>()[firstCameraId][firstTileRow][firstTileCol];
-            int32_t lastGaussianIdInDevice =
-                (deviceId == c10::cuda::device_count() - 1)
-                    ? tileGaussianIds.size(0)
-                    : tileOffsets.accessor<int32_t, 3>()[lastCameraId][lastTileRow][lastTileCol];
-
             TORCH_CHECK(means2d.is_contiguous());
             TORCH_CHECK(conics.is_contiguous());
             TORCH_CHECK(opacities.is_contiguous());
             TORCH_CHECK(features.is_contiguous());
-            nanovdb::util::cuda::memPrefetchAsync(
-                means2d.const_data_ptr<ScalarType>() + firstGaussianIdInDevice * means2d.stride(0),
-                (lastGaussianIdInDevice - firstGaussianIdInDevice + 1) * means2d.stride(0) *
-                    sizeof(ScalarType),
-                deviceId,
-                stream);
-            nanovdb::util::cuda::memPrefetchAsync(
-                conics.const_data_ptr<ScalarType>() + firstGaussianIdInDevice * conics.stride(0),
-                (lastGaussianIdInDevice - firstGaussianIdInDevice + 1) * conics.stride(0) *
-                    sizeof(ScalarType),
-                deviceId,
-                stream);
-            nanovdb::util::cuda::memPrefetchAsync(
-                opacities.const_data_ptr<ScalarType>() +
-                    firstGaussianIdInDevice * opacities.stride(0),
-                (lastGaussianIdInDevice - firstGaussianIdInDevice + 1) * opacities.stride(0) *
-                    sizeof(ScalarType),
-                deviceId,
-                stream);
-            nanovdb::util::cuda::memPrefetchAsync(
-                features.const_data_ptr<ScalarType>() +
-                    firstGaussianIdInDevice * features.stride(0),
-                (lastGaussianIdInDevice - firstGaussianIdInDevice + 1) * features.stride(0) *
-                    sizeof(ScalarType),
-                deviceId,
-                stream);
+
+            nanovdb::util::cuda::memPrefetchAsync(means2d.const_data_ptr<ScalarType>(),
+                                                  means2d.numel() * sizeof(ScalarType),
+                                                  deviceId,
+                                                  stream);
+            nanovdb::util::cuda::memPrefetchAsync(conics.const_data_ptr<ScalarType>(),
+                                                  conics.numel() * sizeof(ScalarType),
+                                                  deviceId,
+                                                  stream);
+            nanovdb::util::cuda::memPrefetchAsync(opacities.const_data_ptr<ScalarType>(),
+                                                  opacities.numel() * sizeof(ScalarType),
+                                                  deviceId,
+                                                  stream);
+            nanovdb::util::cuda::memPrefetchAsync(features.const_data_ptr<ScalarType>(),
+                                                  features.numel() * sizeof(ScalarType),
+                                                  deviceId,
+                                                  stream);
+
+            nanovdb::util::cuda::memPrefetchAsync(outDLossDMeans2d.const_data_ptr<ScalarType>(),
+                                                  outDLossDMeans2d.numel() * sizeof(ScalarType),
+                                                  deviceId,
+                                                  stream);
+            nanovdb::util::cuda::memPrefetchAsync(outDLossDConics.const_data_ptr<ScalarType>(),
+                                                  outDLossDConics.numel() * sizeof(ScalarType),
+                                                  deviceId,
+                                                  stream);
+            nanovdb::util::cuda::memPrefetchAsync(outDLossDFeatures.const_data_ptr<ScalarType>(),
+                                                  outDLossDFeatures.numel() * sizeof(ScalarType),
+                                                  deviceId,
+                                                  stream);
+            nanovdb::util::cuda::memPrefetchAsync(outDLossDOpacities.const_data_ptr<ScalarType>(),
+                                                  outDLossDOpacities.numel() * sizeof(ScalarType),
+                                                  deviceId,
+                                                  stream);
+            if (absGrad) {
+                nanovdb::util::cuda::memPrefetchAsync(
+                    outDLossDMeans2dAbs.const_data_ptr<ScalarType>(),
+                    outDLossDMeans2dAbs.numel() * sizeof(ScalarType),
+                    deviceId,
+                    stream);
+            }
 
             const size_t numChannels =
                 (NUM_SHARED_CHANNELS == NUM_CHANNELS) ? NUM_CHANNELS : NUM_SHARED_CHANNELS + 1;
