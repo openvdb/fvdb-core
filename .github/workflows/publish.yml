@@ -68,8 +68,8 @@ jobs:
       fail-fast: false
       matrix:
         # support version based on: https://download.pytorch.org/whl/torch/
-        # '3.12', '3.13']
-        python-version: ['3.10', '3.11']
+        # , '3.11', '3.12', '3.13']
+        python-version: ['3.10']
         torch-version: ['2.8']
         cuda-version: ['12.9']
     steps:
@@ -156,6 +156,10 @@ jobs:
     needs:
     - fvdb-build
     runs-on: ubuntu-latest
+
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/fvdb-core
 
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
