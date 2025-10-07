@@ -1,0 +1,187 @@
+name: Publish fVDB to PyPI
+
+on:
+  pull_request:
+    branches:
+      - '**'
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  deployments: read
+  pull-requests: read
+  issues: read
+  # Need ID token write permission to use OIDC
+  id-token: write
+
+jobs:
+  start-build-runner:
+    name: Start CPU-only EC2 runner for build
+    runs-on: ubuntu-latest
+    outputs:
+      label: ${{ steps.start-build-runner.outputs.label }}
+      ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
+          aws-region: us-east-2
+      - name: Start EC2 runner
+        id: start-build-runner
+        uses: machulav/ec2-github-runner@v2.4.1
+        with:
+          mode: start
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          ec2-image-id: ami-0e14a711dad782a70
+          ec2-instance-type: m6a.8xlarge
+          subnet-id: subnet-03f2320d6e6e0005b
+          security-group-id: sg-0cd08bd89d6212223
+  fvdb-build:
+    name: fVDB Build
+    needs: start-build-runner # required to start the main job when the runner is ready
+    runs-on: ${{ needs.start-build-runner.outputs.label }} # run the job on the newly created runner
+    container:
+      image: aswf/ci-openvdb:2024-clang17.2
+      env:
+        PYTHONPATH: ""
+        CPM_SOURCE_CACHE: "/__w/cpm_cache"
+        CONDA_OVERRIDE_CUDA: "12.9"  # this is to build an environment on machines that lack a CUDA device and needs to be >= the CUDA version in the build_environment.yml file
+      options: --rm
+    defaults:
+      run:
+        shell: bash -el {0}
+    strategy:
+      fail-fast: false
+      matrix:
+        # support version based on: https://download.pytorch.org/whl/torch/
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+        torch-version: ['2.8']
+        cuda-version: ['12.9']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for all branches
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+
+      - name: Install perl
+        run: |
+          apt-get install -y perl
+
+      - name: Generate release_environment.yml
+        run: |
+          cp env/build_environment.yml release_environment.yml
+          sed -i "s/cuda-version=.*/cuda-version=${{ matrix.cuda-version }}/" release_environment.yml
+          sed -i "s/pytorch-gpu=.*/pytorch-gpu=${{ matrix.torch-version }}.0/" release_environment.yml
+          sed -i "s/python=.*/python=${{ matrix.python-version }}/" release_environment.yml
+          sed -i "s/name: fvdb_build/name: fvdb_release/" release_environment.yml
+
+      - name: Fetch PR branch
+        if: github.event_name == 'pull_request_target'
+        run: |
+          cd $GITHUB_WORKSPACE
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$(pwd)"
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+
+      - name: Merge PR branch into base
+        if: github.event_name == 'pull_request_target'
+        run: |
+          cd $GITHUB_WORKSPACE
+          git merge pr_branch
+
+      # - name: Simulate merge for push events
+      #   if: github.event_name == 'push'
+      #   run: |
+      #     echo "Push event detected - simulating merge with target branch"
+      #     git config --global user.name "github-actions[bot]"
+      #     git config --global user.email "github-actions[bot]@users.noreply.github.com"
+      #     git config --global --add safe.directory "$(pwd)"
+
+      #     # Get the target branch (main in this case, since push is only on main)
+      #     TARGET_BRANCH="main"
+      #     CURRENT_COMMIT="${{ github.sha }}"
+
+      #     echo "Creating merge simulation: merging $CURRENT_COMMIT into $TARGET_BRANCH"
+      #     git fetch origin $TARGET_BRANCH
+      #     git checkout $TARGET_BRANCH
+      #     git merge --no-ff $CURRENT_COMMIT --message "CI: Simulating merge of $CURRENT_COMMIT into $TARGET_BRANCH"
+
+      - name: Set up fvdb_release Conda env
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          post-cleanup: 'all'
+          environment-name: fvdb_release
+          environment-file: release_environment.yml
+
+      - name: Build fvdb
+        run: |
+          micromamba activate fvdb_build
+          ./build.sh wheel verbose --cuda-arch-list '7.5+PTX,8.0,9.0,10.0,12.0'
+
+      - name: Get Version
+        run: |
+          echo "VERSION=$(cat pyproject.toml | grep 'version' | cut -d '=' -f 2 | tr -d '\"')" >> $GITHUB_ENV
+
+      - name: Rename wheel
+        run: |
+          python scripts/rename_wheels.py ${{ matrix.torch-version }} `perl -E '"${{ matrix.cuda-version }}" =~ /^(\d+)\.(\d+)/; say "cu$1$2"'`
+        shell:
+          bash -el {0}
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: fvdb-publish-package
+          path: dist/*.whl
+          retention-days: 2
+
+
+  publish-to-testpypi:
+    name: Publish Python 🐍 distribution 📦 to TestPyPI
+    needs:
+    - fvdb-build
+    runs-on: ubuntu-latest
+
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/<package-name>
+
+    permissions:
+      id-token: write  # IMPORTANT: mandatory for trusted publishing
+
+    steps:
+      - name: Download all the dists
+        uses: actions/download-artifact@v4
+        with:
+          name: fvdb-publish-package
+          path: dist/
+      - name: Publish distribution 📦 to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  fvdb-build-stop-runner:
+    name: Stop CPU-only EC2 runner for build
+    needs:
+      - start-build-runner # required to get output from the start-build-runner job
+      - fvdb-build # required to wait when the main job is done
+    runs-on: ubuntu-latest
+    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
+          aws-region: us-east-2
+      - name: Stop EC2 runner
+        uses: machulav/ec2-github-runner@v2.4.1
+        with:
+          mode: stop
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          label: ${{ needs.start-build-runner.outputs.label }}
+          ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
