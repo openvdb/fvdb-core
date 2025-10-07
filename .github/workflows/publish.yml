@@ -144,7 +144,7 @@ jobs:
       - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
-          name: fvdb-publish-package
+          name: fvdb-publish-package-${{ matrix.python-version }}-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
           path: dist/*.whl
           retention-days: 2
 
@@ -155,10 +155,6 @@ jobs:
     - fvdb-build
     runs-on: ubuntu-latest
 
-    environment:
-      name: testpypi
-      url: https://test.pypi.org/p/<package-name>
-
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
 
@@ -166,8 +162,9 @@ jobs:
       - name: Download all the dists
         uses: actions/download-artifact@v4
         with:
-          name: fvdb-publish-package
-          path: dist/
+          pattern: fvdb-publish-package-*
+          path: dist
+          merge-multiple: true
       - name: Publish distribution 📦 to TestPyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
