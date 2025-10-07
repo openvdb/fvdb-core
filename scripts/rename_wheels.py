@@ -9,8 +9,9 @@ import sys
 
 torch_version = sys.argv[1]
 cuda_version = sys.argv[2]
+wheel_glob = sys.argv[3] if len(sys.argv) > 3 else "dist/*.whl"
 
-wheels = glob.glob("dist/*.whl")
+wheels = glob.glob(wheel_glob)
 for wheel in wheels:
     wheel = os.path.basename(wheel)
     filename, ext = os.path.splitext(wheel)
