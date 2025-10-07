@@ -127,7 +127,7 @@ jobs:
           environment-name: fvdb_build
           environment-file: env/build_environment.yml
 
-      - name: Buid fvdb
+      - name: Build fvdb
         run: |
           micromamba activate fvdb_build
           ./build.sh wheel verbose gtests benchmarks --cuda-arch-list '8.9+PTX'
