@@ -617,7 +617,7 @@ fusedSSIMPrivateUse1(
         constexpr size_t kAlignment = kPageSize / (sizeof(float) * BLOCK_X * BLOCK_Y);
         int localBlockOffset, localBlockCount;
         std::tie(localBlockOffset, localBlockCount) =
-            alignedChunk(kAlignment, globalBlockCount, deviceId);
+            deviceAlignedChunk(kAlignment, globalBlockCount, deviceId);
 
         if (localBlockCount) {
             // auto localElementOffset = localBlockOffset * BLOCK_X * BLOCK_Y * CH;
@@ -710,7 +710,7 @@ fusedSSIMBackwardPrivateUse1(double C1,
         constexpr size_t kAlignment = kPageSize / (sizeof(float) * BLOCK_X * BLOCK_Y);
         int localBlockOffset, localBlockCount;
         std::tie(localBlockOffset, localBlockCount) =
-            alignedChunk(kAlignment, globalBlockCount, deviceId);
+            deviceAlignedChunk(kAlignment, globalBlockCount, deviceId);
 
         if (localBlockCount) {
             // auto localElementOffset = localBlockOffset * BLOCK_X * BLOCK_Y * CH;

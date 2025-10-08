@@ -485,7 +485,7 @@ launchRasterizeForwardKernels(
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
         uint32_t deviceTileOffset, deviceTileCount;
-        std::tie(deviceTileOffset, deviceTileCount) = deviceOffsetAndCount(tileCount, deviceId);
+        std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
 
         if (deviceTileCount) {
             auto args = RasterizeForwardArgs<ScalarType, NUM_CHANNELS, IS_PACKED>(means2d,
