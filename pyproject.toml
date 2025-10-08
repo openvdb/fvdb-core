@@ -17,6 +17,10 @@ build.verbose = false
 # Can override from command line using -C cmake.define.OPTION=value
 define.FVDB_BUILD_TESTS = false
 define.FVDB_BUILD_BENCHMARKS = false
+define.FVDB_INSTALL_DEV = false
+
+[tool.scikit-build.install]
+components = ["PythonModule"]
 
 # This is so that the WIP tests are not run
 [tool.pytest.ini_options]

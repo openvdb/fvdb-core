@@ -215,15 +215,20 @@ target_link_libraries(fvdb PUBLIC
     ${Python3_LIBRARIES})
 
 # Install rules
-install(TARGETS fvdb
-    EXPORT fvdb-targets
-    LIBRARY DESTINATION lib)
+# Install of development artifacts (headers and system-level lib) is optional
+option(FVDB_INSTALL_DEV "Install headers and system-level lib for development" ON)
 
-# Use pattern exclusion to prevent recursion
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/fvdb/
-    DESTINATION include
-    FILES_MATCHING PATTERN "*.h"
-    PATTERN "*/*" EXCLUDE)
+if(FVDB_INSTALL_DEV)
+    install(TARGETS fvdb
+        EXPORT fvdb-targets
+        LIBRARY DESTINATION lib)
+
+    # Use pattern exclusion to prevent recursion
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/fvdb/
+        DESTINATION include
+        FILES_MATCHING PATTERN "*.h"
+        PATTERN "*/*" EXCLUDE)
+endif()
 
 # Add tests subdirectory if tests are enabled
 if(FVDB_BUILD_TESTS)

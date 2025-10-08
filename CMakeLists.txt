@@ -87,13 +87,10 @@ target_compile_definitions(_Cpp PRIVATE
 # Configure the pybind11 module with PyTorch compatibility settings
 configure_torch_pybind11(_Cpp)
 
+# Only install the Python package artifacts; the core lib is installed as part of the Python module
 install(TARGETS _Cpp fvdb
-    LIBRARY
-    DESTINATION fvdb
-    COMPONENT PythonModule
-    RUNTIME
-    DESTINATION fvdb
-    COMPONENT PythonModule)
+    LIBRARY DESTINATION fvdb COMPONENT PythonModule
+    RUNTIME DESTINATION fvdb COMPONENT PythonModule)
 
 # Add at the beginning after project() call:
 set(VERSION_PY_PATH "${CMAKE_CURRENT_SOURCE_DIR}/fvdb/version.py")
