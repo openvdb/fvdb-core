@@ -107,7 +107,8 @@ forEachLeafPrivateUse1(int64_t numChannels,
         cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
 
         size_t deviceLeafOffset, deviceLeafCount;
-        std::tie(deviceLeafOffset, deviceLeafCount) = fvdb::detail::deviceChunk(leafCount, deviceId);
+        std::tie(deviceLeafOffset, deviceLeafCount) =
+            fvdb::detail::deviceChunk(leafCount, deviceId);
 
         const auto deviceLeafChannelCount  = deviceLeafCount * numChannels;
         const auto deviceLeafChannelOffset = deviceLeafOffset * numChannels;
@@ -153,7 +154,8 @@ forEachVoxelPrivateUse1(int64_t numChannels,
         cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
 
         size_t deviceLeafOffset, deviceLeafCount;
-        std::tie(deviceLeafOffset, deviceLeafCount) = fvdb::detail::deviceChunk(leafCount, deviceId);
+        std::tie(deviceLeafOffset, deviceLeafCount) =
+            fvdb::detail::deviceChunk(leafCount, deviceId);
 
         const auto deviceLeafVoxelChannelCount  = deviceLeafCount * VOXELS_PER_LEAF * numChannels;
         const auto deviceLeafVoxelChannelOffset = deviceLeafOffset * VOXELS_PER_LEAF * numChannels;
@@ -192,10 +194,11 @@ forEachJaggedElementChannelPrivateUse1(int64_t numChannels,
 
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        cudaStream_t stream    = c10::cuda::getCurrentCUDAStream(deviceId).stream();
+        cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
 
         size_t deviceElementOffset, deviceElementCount;
-        std::tie(deviceElementOffset, deviceElementCount) = fvdb::detail::deviceChunk(jaggedTensor.element_count(), deviceId);
+        std::tie(deviceElementOffset, deviceElementCount) =
+            fvdb::detail::deviceChunk(jaggedTensor.element_count(), deviceId);
 
         const int64_t deviceNumBlocks = GET_BLOCKS(deviceElementCount, DEFAULT_BLOCK_DIM);
         if (deviceNumBlocks > 0) {
