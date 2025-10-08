@@ -53,6 +53,7 @@ class Viewer {
     CameraView &addCameraView(const std::string &name,
                               const torch::Tensor &cameraToWorldMatrices,
                               const torch::Tensor &projectionMatrices,
+                              const torch::Tensor &imageSizes,
                               float frustumNear,
                               float frustumFar);
 

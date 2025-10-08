@@ -278,6 +278,7 @@ CameraView &
 Viewer::addCameraView(const std::string &name,
                       const torch::Tensor &cameraToWorldMatrices,
                       const torch::Tensor &projectionMatrices,
+                      const torch::Tensor &imageSizes,
                       float frustumNear,
                       float frustumFar) {
     TORCH_CHECK(cameraToWorldMatrices.dim() == 3 && cameraToWorldMatrices.size(1) == 4 &&
@@ -287,15 +288,23 @@ Viewer::addCameraView(const std::string &name,
                     projectionMatrices.size(2) == 3,
                 "projection_matrices must have shape [N, 3, 3]");
 
+    const int64_t numCameras = cameraToWorldMatrices.size(0);
+    if (imageSizes.numel() != 0) {
+        TORCH_CHECK(imageSizes.dim() == 2 && imageSizes.size(0) == numCameras &&
+                        imageSizes.size(1) == 2,
+                    "image_sizes must have shape [N, 2] if provided");
+    }
+
     auto [it, inserted] = mCameraViews.emplace(
         std::piecewise_construct, std::forward_as_tuple(name), std::forward_as_tuple(name));
 
-    it->second.mView.num_cameras = cameraToWorldMatrices.size(0);
+    it->second.mView.num_cameras = numCameras;
     it->second.mView.states      = new pnanovdb_camera_state_t[it->second.mView.num_cameras];
     it->second.mView.configs     = new pnanovdb_camera_config_t[it->second.mView.num_cameras];
 
     for (int i = 0; i < (int)it->second.mView.num_cameras; i++) {
         torch::Tensor c2w = cameraToWorldMatrices.index({i}).contiguous().cpu();
+        torch::Tensor K   = projectionMatrices.index({i}).contiguous().cpu();
 
         float px = c2w[0][3].item<float>();
         float py = c2w[1][3].item<float>();
@@ -330,9 +339,24 @@ Viewer::addCameraView(const std::string &name,
         it->second.mView.configs[i].near_plane = frustumNear;
         it->second.mView.configs[i].far_plane  = frustumFar;
 
-        // TODO (@phapalova) This will be properly set with images support
-        it->second.mView.configs[i].fov_angle_y  = DEFAULT_CAMERA_FOV_RADIANS;
-        it->second.mView.configs[i].aspect_ratio = DEFAULT_CAMERA_ASPECT_RATIO;
+        // Set perspective parameters from image sizes when available
+        float fy      = K[1][1].item<float>();
+        float width   = 0.f;
+        float height  = 0.f;
+        bool haveDims = imageSizes.numel() != 0;
+        if (haveDims) {
+            torch::Tensor dims = imageSizes.index({i}).contiguous().cpu();
+            height             = dims[0].item<float>();
+            width              = dims[1].item<float>();
+        }
+
+        if (haveDims && height > 0.f && fy > 0.f) {
+            it->second.mView.configs[i].fov_angle_y  = 2.f * std::atan(0.5f * height / fy);
+            it->second.mView.configs[i].aspect_ratio = width / height;
+        } else {
+            it->second.mView.configs[i].fov_angle_y  = DEFAULT_CAMERA_FOV_RADIANS;
+            it->second.mView.configs[i].aspect_ratio = DEFAULT_CAMERA_ASPECT_RATIO;
+        }
     }
 
     mEditor.editor.add_camera_view(&mEditor.editor, &it->second.mView);
