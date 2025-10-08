@@ -160,8 +160,11 @@ jobs:
           fi
           # Show wheel sizes and verify compression
           ls -lh dist/
-          echo "Wheel contents:"
-          unzip -l dist/fvdb_core-*.whl | head -20
+          echo "Wheel contents (full list):"
+          unzip -l dist/fvdb_core-*.whl
+          echo ""
+          echo "Largest files in wheel:"
+          unzip -l dist/fvdb_core-*.whl | sort -k1 -n -r | head -30
 
       - name: Get Version
         run: |
