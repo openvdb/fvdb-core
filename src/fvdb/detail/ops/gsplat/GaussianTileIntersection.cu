@@ -13,7 +13,6 @@
 
 #include <cub/cub.cuh>
 #include <thrust/binary_search.h>
-#include <thrust/universal_vector.h>
 
 namespace fvdb {
 namespace detail {
@@ -1035,11 +1034,14 @@ gaussianTileIntersectionPrivateUse1Impl(
         torch::Tensor keys_sorted = torch::empty_like(intersection_keys);
         torch::Tensor vals_sorted = torch::empty_like(intersection_values);
 
-        thrust::universal_vector<ptrdiff_t> device_intersection_offsets(c10::cuda::device_count());
-        thrust::universal_vector<size_t> device_intersection_counts(c10::cuda::device_count());
+        torch::Tensor device_intersection_offsets =
+            torch::empty({c10::cuda::device_count()}, means2d.options().dtype(torch::kInt64));
+        torch::Tensor device_intersection_counts =
+            torch::empty({c10::cuda::device_count()}, means2d.options().dtype(torch::kInt64));
+        torch::Tensor merge_intervals =
+            torch::empty({2 * c10::cuda::device_count()}, means2d.options().dtype(torch::kInt64));
 
-        thrust::universal_vector<cudaEvent_t> events(c10::cuda::device_count());
-        thrust::universal_vector<ptrdiff_t> merge_intervals(2 * c10::cuda::device_count());
+        std::vector<cudaEvent_t> events(c10::cuda::device_count());
 
         // Compute a joffsets tensor that stores the offsets into the sorted Gaussian
         // intersections
@@ -1079,15 +1081,24 @@ gaussianTileIntersectionPrivateUse1Impl(
                 intersection_keys.data_ptr<int64_t>(),
                 intersection_values.data_ptr<int32_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
+            C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
         }
 
-        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-            c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
+        {
+            C10_CUDA_CHECK(cudaSetDevice(0));
+            auto stream = c10::cuda::getCurrentCUDAStream(0);
+            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+                C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+            }
+            C10_CUDA_CHECK(cudaEventRecord(events[0], stream));
         }
 
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
-            std::tie(device_intersection_offsets[deviceId], device_intersection_counts[deviceId]) =
+            auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[0]));
+            std::tie(device_intersection_offsets.data_ptr<int64_t>()[deviceId],
+                     device_intersection_counts.data_ptr<int64_t>()[deviceId]) =
                 deviceOffsetAndCount(total_intersections, deviceId);
         }
 
@@ -1096,13 +1107,18 @@ gaussianTileIntersectionPrivateUse1Impl(
                        intersection_values.data_ptr<int32_t>(),
                        vals_sorted.data_ptr<int32_t>(),
                        total_intersections,
-                       merge_intervals.data().get(),
-                       device_intersection_offsets.data().get(),
-                       device_intersection_counts.data().get(),
-                       events.data().get());
+                       merge_intervals.data_ptr<int64_t>(),
+                       device_intersection_offsets.const_data_ptr<int64_t>(),
+                       device_intersection_counts.const_data_ptr<int64_t>(),
+                       events.data());
 
-        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-            c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
+        {
+            C10_CUDA_CHECK(cudaSetDevice(0));
+            auto stream = c10::cuda::getCurrentCUDAStream(0);
+            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+                C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+            }
+            C10_CUDA_CHECK(cudaEventRecord(events[0], stream));
         }
 
         TORCH_CHECK(!is_sparse, "Sparse tile offsets are not implemented for mGPU");
@@ -1110,12 +1126,14 @@ gaussianTileIntersectionPrivateUse1Impl(
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[0]));
 
             const int NUM_BLOCKS_2 =
-                (device_intersection_counts[deviceId] + NUM_THREADS - 1) / NUM_THREADS;
+                (device_intersection_counts.const_data_ptr<int64_t>()[deviceId] + NUM_THREADS - 1) /
+                NUM_THREADS;
             compute_tile_offsets<<<NUM_BLOCKS_2, NUM_THREADS, 0, stream>>>(
-                device_intersection_offsets[deviceId],
-                device_intersection_counts[deviceId],
+                device_intersection_offsets.const_data_ptr<int64_t>()[deviceId],
+                device_intersection_counts.const_data_ptr<int64_t>()[deviceId],
                 total_intersections,
                 num_cameras,
                 total_tiles,
