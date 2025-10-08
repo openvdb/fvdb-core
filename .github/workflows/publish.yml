@@ -139,10 +139,12 @@ jobs:
           auditwheel repair dist/fvdb_core-*.whl -w dist/ \
             --exclude libcuda.so.1 \
             --exclude libcudart.so.12 \
+            --exclude libcufile.so.1 \
             --exclude libnvrtc.so.12 \
             --exclude libnvToolsExt.so.1 \
             --exclude libcublas.so.12 \
             --exclude libcublasLt.so.12 \
+            --exclude libcudnn.so.9 \
             --exclude libcufft.so.11 \
             --exclude libcurand.so.10 \
             --exclude libcusolver.so.11 \
@@ -151,8 +153,14 @@ jobs:
             --exclude libtorch.so \
             --exclude libtorch_cpu.so \
             --exclude libtorch_cuda.so \
+            --exclude libtorch_python.so \
             --exclude libc10.so \
             --exclude libc10_cuda.so \
+            --exclude libmkl_core.so.2 \
+            --exclude libmkl_intel_lp64.so.2 \
+            --exclude libmkl_intel_thread.so.2 \
+            --exclude libomp.so \
+            --exclude libprotobuf.so.31 \
             || echo "auditwheel failed, keeping original wheel"
           # Remove original linux_x86_64 wheel if repair succeeded
           if ls dist/fvdb_core-*-manylinux*.whl 1> /dev/null 2>&1; then
