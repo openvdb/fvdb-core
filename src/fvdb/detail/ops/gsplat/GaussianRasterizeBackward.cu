@@ -1242,7 +1242,7 @@ callRasterizeBackwardPrivateUse1(
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
         uint32_t deviceTileOffset, deviceTileCount;
-        std::tie(deviceTileOffset, deviceTileCount) = deviceOffsetAndCount(tileCount, deviceId);
+        std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
 
         if (deviceTileCount) {
             RasterizeBackwardArgs<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED> args(

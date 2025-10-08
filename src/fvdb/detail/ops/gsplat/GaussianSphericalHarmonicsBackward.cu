@@ -559,7 +559,7 @@ dispatchSphericalHarmonicsBackward<torch::kPrivateUse1>(
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
             int64_t elementOffset, elementCount;
-            std::tie(elementOffset, elementCount) = deviceOffsetAndCount(N * C, deviceId);
+            std::tie(elementOffset, elementCount) = deviceChunk(N * C, deviceId);
             elementCount *= D;
             elementOffset *= D;
 
@@ -600,7 +600,7 @@ dispatchSphericalHarmonicsBackward<torch::kPrivateUse1>(
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
             int64_t elementOffset, elementCount;
-            std::tie(elementOffset, elementCount) = deviceOffsetAndCount(N * C, deviceId);
+            std::tie(elementOffset, elementCount) = deviceChunk(N * C, deviceId);
             elementCount *= D;
             elementOffset *= D;
 

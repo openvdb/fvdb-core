@@ -993,7 +993,7 @@ gaussianTileIntersectionPrivateUse1Impl(
 
         int64_t device_gaussian_offset, device_gaussian_count;
         std::tie(device_gaussian_offset, device_gaussian_count) =
-            deviceOffsetAndCount(total_gaussians, deviceId);
+            deviceChunk(total_gaussians, deviceId);
 
         // Count the number of tiles each Gaussian intersects, store in tiles_per_gaussian_cumsum
         const int NUM_BLOCKS = (device_gaussian_count + NUM_THREADS - 1) / NUM_THREADS;
@@ -1060,7 +1060,7 @@ gaussianTileIntersectionPrivateUse1Impl(
 
             int64_t device_gaussian_offset, device_gaussian_count;
             std::tie(device_gaussian_offset, device_gaussian_count) =
-                deviceOffsetAndCount(total_gaussians, deviceId);
+                deviceChunk(total_gaussians, deviceId);
 
             const int NUM_BLOCKS = (device_gaussian_count + NUM_THREADS - 1) / NUM_THREADS;
             compute_gaussian_tile_intersections<scalar_t><<<NUM_BLOCKS, NUM_THREADS, 0, stream>>>(
@@ -1099,7 +1099,7 @@ gaussianTileIntersectionPrivateUse1Impl(
             C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[0]));
             std::tie(device_intersection_offsets.data_ptr<int64_t>()[deviceId],
                      device_intersection_counts.data_ptr<int64_t>()[deviceId]) =
-                deviceOffsetAndCount(total_intersections, deviceId);
+                deviceChunk(total_intersections, deviceId);
         }
 
         radixSortAsync(intersection_keys.data_ptr<int64_t>(),

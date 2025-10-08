@@ -393,7 +393,7 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
         int64_t deviceProblemOffset, deviceProblemSize;
-        std::tie(deviceProblemOffset, deviceProblemSize) = deviceOffsetAndCount(C * N, deviceId);
+        std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(C * N, deviceId);
 
         const size_t NUM_BLOCKS     = GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM);
         const size_t SHARD_MEM_SIZE = C * (9 + 9 + 3) * sizeof(scalar_t);

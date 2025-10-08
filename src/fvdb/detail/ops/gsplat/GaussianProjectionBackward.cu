@@ -525,8 +525,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
             int64_t deviceProblemOffset, deviceProblemSize;
-            std::tie(deviceProblemOffset, deviceProblemSize) =
-                deviceOffsetAndCount(C * N, deviceId);
+            std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(C * N, deviceId);
             const size_t NUM_BLOCKS = GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM);
 
             if (ortho) {
@@ -611,8 +610,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                     auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
                     int64_t deviceProblemOffset, deviceProblemSize;
-                    std::tie(deviceProblemOffset, deviceProblemSize) =
-                        deviceOffsetAndCount(N, deviceId);
+                    std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
                     const size_t NUM_BLOCKS = GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM);
 
                     computeGradientState<float, true><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
@@ -640,8 +638,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                     auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
                     int64_t deviceProblemOffset, deviceProblemSize;
-                    std::tie(deviceProblemOffset, deviceProblemSize) =
-                        deviceOffsetAndCount(N, deviceId);
+                    std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
                     const size_t NUM_BLOCKS = GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM);
 
                     computeGradientState<float, false>

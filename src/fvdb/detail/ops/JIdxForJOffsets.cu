@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/JIdxForJOffsets.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <c10/cuda/CUDAGuard.h>
 
@@ -90,11 +91,11 @@ dispatchJIdxForJOffsets<torch::kPrivateUse1>(torch::Tensor joffsets, int64_t num
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
 
-        auto deviceJOffsetsCount =
-            ((joffsets.size(0) - 1) + c10::cuda::device_count() - 1) / c10::cuda::device_count();
-        auto deviceJOffsetsStart = deviceId * deviceJOffsetsCount;
-        auto deviceJOffsetsEnd   = (deviceId + 1) * deviceJOffsetsCount;
-        deviceJOffsetsEnd        = std::min(deviceJOffsetsEnd, joffsets.size(0) - 1);
+        size_t deviceJOffsetsStart, deviceJOffsetsCount;
+        std::tie(deviceJOffsetsStart, deviceJOffsetsCount) =
+            deviceChunk(joffsets.size(0) - 1, deviceId);
+        size_t deviceJOffsetsEnd = deviceJOffsetsStart + deviceJOffsetsCount;
+
         for (auto i = deviceJOffsetsStart; i < deviceJOffsetsEnd; ++i) {
             auto start = joffsets[i].item<fvdb::JOffsetsType>();
             auto end   = joffsets[i + 1].item<fvdb::JOffsetsType>();
