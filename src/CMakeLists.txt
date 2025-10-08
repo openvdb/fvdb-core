@@ -197,14 +197,15 @@ target_compile_options(fvdb PRIVATE
     "-DNANOVDB_USE_BLOSC"
     "-fvisibility=default"
     "-Wall"
+    "-Werror"
     >
     $<$<COMPILE_LANGUAGE:CUDA>:
     "-Wno-unknown-pragmas"
     "--extended-lambda"
-    "-lineinfo"
     "-Xfatbin=-compress-all"
     "-fvisibility=default"
-    "-Xcompiler=-Wall"
+    "-Werror=all-warnings"
+    "-Xcompiler=-Wall,-Werror"
     ${TORCH_CUDA_COMMON_FLAGS}
     >)
 
