@@ -35,7 +35,7 @@ jobs:
   start-build-runner:
     name: Start CPU-only EC2 runner for build
     runs-on: ubuntu-latest
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') }}
+    if: ${{ !((github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') || contains(github.event.head_commit.message, '[reuse]')) }}
     outputs:
       label: ${{ steps.start-build-runner.outputs.label }}
       ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
@@ -59,7 +59,7 @@ jobs:
   fvdb-build:
     name: fVDB Build
     needs: start-build-runner # required to start the main job when the runner is ready
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') }}
+    if: ${{ !((github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') || contains(github.event.head_commit.message, '[reuse]')) }}
     runs-on: ${{ needs.start-build-runner.outputs.label }} # run the job on the newly created runner
     container:
       image: aswf/ci-openvdb:2024-clang17.2
@@ -129,6 +129,14 @@ jobs:
           ./build.sh wheel verbose --cuda-arch-list '12.0+PTX'
       # '7.5;8.0;9.0;10.0;12.0+PTX'
 
+      - name: Repair wheel for manylinux
+        run: |
+          micromamba activate fvdb_release
+          pip install auditwheel patchelf
+          auditwheel repair dist/fvdb_core-*.whl --plat manylinux_2_28_x86_64 -w dist/
+          rm dist/fvdb_core-*-linux_x86_64.whl
+          ls -lh dist/
+
       - name: Get Version
         run: |
           echo "VERSION=$(cat pyproject.toml | grep 'version' | cut -d '=' -f 2 | tr -d '\"')" >> $GITHUB_ENV
@@ -143,7 +151,7 @@ jobs:
 
   reuse-artifacts:
     name: Reuse artifacts from last successful run
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true' }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') || contains(github.event.head_commit.message, '[reuse]') }}
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts from last successful run
@@ -201,7 +209,7 @@ jobs:
       - start-build-runner # required to get output from the start-build-runner job
       - fvdb-build # required to wait when the main job is done
     runs-on: ubuntu-latest
-    if: ${{ always() && !(github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') }}
+    if: ${{ always() && !((github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') || contains(github.event.head_commit.message, '[reuse]')) }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
