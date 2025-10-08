@@ -214,6 +214,11 @@ target_link_libraries(fvdb PRIVATE
 target_link_libraries(fvdb PUBLIC
     ${Python3_LIBRARIES})
 
+# Strip symbols in non-Debug builds to reduce wheel size
+if(NOT (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo"))
+    target_link_options(fvdb PRIVATE "-s")
+endif()
+
 # Install rules
 # Install of development artifacts (headers and system-level lib) is optional
 option(FVDB_INSTALL_DEV "Install headers and system-level lib for development" ON)
