@@ -41,6 +41,7 @@ jobs:
       ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
     strategy: &matrix-strategy
       fail-fast: false
+      max-parallel: 4
       matrix:
         python-version: ['3.10', '3.11', '3.12', '3.13']
         torch-version: ['2.8']
@@ -61,12 +62,13 @@ jobs:
           ec2-instance-type: m6a.8xlarge
           subnet-id: subnet-03f2320d6e6e0005b
           security-group-id: sg-0cd08bd89d6212223
+          label: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
 
   fvdb-build:
     name: fVDB Build
     needs: start-build-runner # required to start the main job when the runner is ready
     if: ${{ !((github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') || contains(github.event.head_commit.message, '[reuse]')) }}
-    runs-on: ${{ needs.start-build-runner.outputs.label }} # run the job on the newly created runner
+    runs-on: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }} # run the job on the newly created runner
     container:
       image: aswf/ci-openvdb:2024-clang17.2
       env:
@@ -266,5 +268,5 @@ jobs:
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          label: ${{ needs.start-build-runner.outputs.label }}
+          label: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
           ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
