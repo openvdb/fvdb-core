@@ -11,14 +11,17 @@
 namespace fvdb::detail::viewer {
 
 GaussianSplat3dView::GaussianSplat3dView(const std::string &name, const Viewer &viewer)
-    : mViewName(name) {
-    mParams.near_plane_override = 0;
-    mParams.far_plane_override  = 0;
-    mParams.eps2d               = 0.3f;
-    mParams.min_radius_2d       = 0.f;
-    mParams.tile_size           = 16u;
-    mParams.sh_degree_override  = -1;
-    mParams.data_type           = PNANOVDB_REFLECT_DATA_TYPE(pnanovdb_raster_shader_params_t);
+    : mName(name) {
+    mGaussianData                        = nullptr;
+    mParams.near_plane_override          = 0;
+    mParams.far_plane_override           = 0;
+    mParams.eps2d                        = 0.3f;
+    mParams.min_radius_2d                = 0.f;
+    mParams.tile_size                    = 16u;
+    mParams.sh_degree_override           = -1;
+    mParams.sh_stride_rgbrgbrgb_override = 1u;
+    mParams.name                         = mName.c_str();
+    mParams.data_type = PNANOVDB_REFLECT_DATA_TYPE(pnanovdb_raster_shader_params_t);
 }
 
 } // namespace fvdb::detail::viewer

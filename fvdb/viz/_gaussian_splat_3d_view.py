@@ -71,6 +71,28 @@ class GaussianSplat3dView:
         self._view.min_radius_2d = radius
 
     @property
+    def eps_2d(self) -> float:
+        """
+        Get the 2D epsilon value used for rendering splats.
+
+        Returns:
+            float: The 2D epsilon value.
+        """
+        return self._view.eps_2d
+
+    @eps_2d.setter
+    def eps_2d(self, eps: float):
+        """
+        Set the 2D epsilon value used for rendering splats.
+
+        Args:
+            eps (float): The 2D epsilon value.
+        """
+        if eps < 0.0:
+            raise ValueError(f"Epsilon must be non-negative, got {eps}")
+        self._view.eps_2d = eps
+
+    @property
     def sh_degree_to_use(self) -> int:
         """
         Get the degree of spherical harmonics to use when rendering colors.
@@ -90,6 +112,46 @@ class GaussianSplat3dView:
             degree (int): The degree of spherical harmonics to use.
         """
         self._view.sh_degree_to_use = degree
+
+    @property
+    def sh_stride_rgb_rgb_rgb(self) -> bool:
+        """
+        Get whether the spherical harmonics coefficients are stored in interleaved RGB format.
+
+        Returns:
+            bool: True if the spherical harmonics coefficients are stored in interleaved RGB format, False otherwise.
+        """
+        return self._view.sh_stride_rgb_rgb_rgb
+
+    @sh_stride_rgb_rgb_rgb.setter
+    def sh_stride_rgb_rgb_rgb(self, value: bool):
+        """
+        Set whether the spherical harmonics coefficients are stored in interleaved RGB format.
+
+        Args:
+            value (bool): True if the spherical harmonics coefficients are stored in interleaved RGB format, False otherwise.
+        """
+        self._view.sh_stride_rgb_rgb_rgb = value
+
+    @property
+    def sh_stride_rrr_ggg_bbb(self) -> bool:
+        """
+        Get whether the spherical harmonics coefficients are stored in planar RRR GGG BBB format.
+
+        Returns:
+            bool: True if the spherical harmonics coefficients are stored in planar RRR GGG BBB format, False otherwise.
+        """
+        return self._view.sh_stride_rrr_ggg_bbb
+
+    @sh_stride_rrr_ggg_bbb.setter
+    def sh_stride_rrr_ggg_bbb(self, value: bool):
+        """
+        Set whether the spherical harmonics coefficients are stored in planar RRR GGG BBB format.
+
+        Args:
+            value (bool): True if the spherical harmonics coefficients are stored in planar RRR GGG BBB format, False otherwise.
+        """
+        self._view.sh_stride_rrr_ggg_bbb = value
 
     @property
     def near(self) -> float:

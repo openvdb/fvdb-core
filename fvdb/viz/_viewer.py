@@ -66,10 +66,6 @@ class Viewer:
         view.min_radius_2d = min_radius_2d
         view.eps_2d = eps_2d
         view.antialias = antialias
-        if sh_degree_to_use >= 0:
-            sh_degree_to_use = max(0, min(gaussian_splat_3d.sh_degree, sh_degree_to_use))
-        else:
-            sh_degree_to_use = gaussian_splat_3d.sh_degree
         view.sh_degree_to_use = sh_degree_to_use
         return GaussianSplat3dView(view, GaussianSplat3dView.__PRIVATE__)
 

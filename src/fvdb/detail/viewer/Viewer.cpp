@@ -7,7 +7,6 @@
 #include <c10/util/Exception.h>
 
 #include <nanovdb_editor/putil/Raster.h>
-#include <nanovdb_editor/putil/Raster.hpp>
 
 #include <cmath>
 #include <cstdarg>
@@ -40,7 +39,7 @@ constexpr float DEFAULT_CAMERA_ASPECT_RATIO = 4.f / 3.f;
 
 void
 Viewer::updateCamera() {
-    mEditor.editor.add_camera(&mEditor.editor, &mEditor.camera);
+    mEditor.editor.update_camera(&mEditor.editor, &mEditor.camera);
 }
 
 Viewer::Viewer(const std::string &ipAddress, const int port, const bool verbose)
@@ -75,11 +74,10 @@ Viewer::Viewer(const std::string &ipAddress, const int port, const bool verbose)
     if (raster_context == nullptr) {
         throw std::runtime_error("Failed to create raster context");
     }
-    mEditor.editor.raster_ctx      = raster_context; // destroyed by editor
-    mEditor.rasterShaderParamsType = PNANOVDB_REFLECT_DATA_TYPE(pnanovdb_raster_shader_params_t);
+    mEditor.raster_ctx = raster_context;
 
     pnanovdb_camera_init(&mEditor.camera);
-    mEditor.editor.add_camera(&mEditor.editor, &mEditor.camera);
+    mEditor.editor.update_camera(&mEditor.editor, &mEditor.camera);
 
     mEditor.config            = {};
     mEditor.config.ip_address = mIpAddress.c_str();
@@ -94,11 +92,20 @@ Viewer::Viewer(const std::string &ipAddress, const int port, const bool verbose)
 
 Viewer::~Viewer() {
     stopServer();
-    pnanovdb_editor_free(&mEditor.editor);
+
+    // Clear views before unloading editor to ensure proper cleanup order
+    mSplat3dViews.clear();
+    mCameraViews.clear();
+
+    pnanovdb_compute_queue_t *queue =
+        mEditor.compute.device_interface.get_compute_queue(mEditor.device);
+
+    mEditor.raster.destroy_context(mEditor.raster.compute, queue, mEditor.raster_ctx);
 
     mEditor.compute.device_interface.destroy_device(mEditor.deviceManager, mEditor.device);
     mEditor.compute.device_interface.destroy_device_manager(mEditor.deviceManager);
 
+    pnanovdb_editor_free(&mEditor.editor);
     pnanovdb_raster_free(&mEditor.raster);
     pnanovdb_compute_free(&mEditor.compute);
     pnanovdb_compiler_free(&mEditor.compiler);
@@ -106,9 +113,18 @@ Viewer::~Viewer() {
 
 fvdb::detail::viewer::GaussianSplat3dView &
 Viewer::addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splats) {
+    pnanovdb_compute_queue_t *queue =
+        mEditor.compute.device_interface.get_compute_queue(mEditor.device);
+
+    std::shared_ptr<pnanovdb_raster_gaussian_data_t> oldData;
+    auto itPrev = mSplat3dViews.find(name);
+    if (itPrev != mSplat3dViews.end()) {
+        oldData = itPrev->second.mGaussianData;
+        mSplat3dViews.erase(itPrev);
+    }
+
     auto [it, inserted] = mSplat3dViews.emplace(
         std::piecewise_construct, std::forward_as_tuple(name), std::forward_as_tuple(name, *this));
-    // Load splats into viewer
 
     // Get the various tensors to pass to the viewer
     torch::Tensor means          = splats.means();
@@ -138,36 +154,44 @@ Viewer::addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splat
     pnanovdb_compute_array_t *arrays[] = {
         means_arr, logitOpacities_arr, quats_arr, logScales_arr, sh_arr};
 
-    pnanovdb_compute_queue_t *queue =
-        mEditor.compute.device_interface.get_compute_queue(mEditor.device);
-
-    pnanovdb_raster_gaussian_data_t *gaussian_data = nullptr;
-    pnanovdb_raster::get_gaussian_data(&mEditor.raster,
-                                       &mEditor.compute,
-                                       queue,
-                                       arrays,
-                                       &gaussian_data,
-                                       nullptr,
-                                       &mEditor.editor.raster_ctx);
-    if (gaussian_data == nullptr) {
+    // Load splats into viewer
+    pnanovdb_raster_gaussian_data_t *pGaussianData = nullptr;
+    mEditor.raster.create_gaussian_data_from_arrays(&mEditor.raster,
+                                                    &mEditor.compute,
+                                                    queue,
+                                                    arrays,
+                                                    5u,
+                                                    &pGaussianData,
+                                                    &it->second.mParams,
+                                                    &mEditor.raster_ctx);
+    if (pGaussianData == nullptr) {
         throw std::runtime_error("Failed to create gaussian data");
     }
+    // printf("Created gaussian data - %p\n", pGaussianData);
 
-    mEditor.editor.add_gaussian_data(&mEditor.editor, &mEditor.raster, queue, gaussian_data);
-    mEditor.editor.add_shader_params(
-        &mEditor.editor, &it->second.mParams, mEditor.rasterShaderParamsType);
-    it->second.mSyncCallback = [this](bool set_data) {
-        mEditor.editor.sync_shader_params(&mEditor.editor,
-                                          mEditor.rasterShaderParamsType,
-                                          set_data ? PNANOVDB_TRUE : PNANOVDB_FALSE);
+    mEditor.editor.add_gaussian_data(&mEditor.editor, mEditor.raster_ctx, queue, pGaussianData);
+
+    it->second.mGaussianData = std::shared_ptr<pnanovdb_raster_gaussian_data_t>(
+        pGaussianData, [this](pnanovdb_raster_gaussian_data_t *ptr) {
+            if (ptr && mEditor.device) {
+                pnanovdb_compute_queue_t *computeQueue =
+                    mEditor.compute.device_interface.get_compute_queue(mEditor.device);
+                if (computeQueue) {
+                    mEditor.raster.destroy_gaussian_data(mEditor.raster.compute, computeQueue, ptr);
+                    // printf("Destroyed gaussian data - %p\n", ptr);
+                }
+            }
+        });
+
+    pnanovdb_raster_shader_params_t *params = &it->second.mParams;
+    it->second.mSyncCallback                = [this, params](bool set_data) {
+        mEditor.editor.sync_shader_params(
+            &mEditor.editor, params, set_data ? PNANOVDB_TRUE : PNANOVDB_FALSE);
     };
-    it->second.mSyncCallback(true); // initial sync
 
-    mEditor.compute.destroy_array(means_arr);
-    mEditor.compute.destroy_array(quats_arr);
-    mEditor.compute.destroy_array(logScales_arr);
-    mEditor.compute.destroy_array(logitOpacities_arr);
-    mEditor.compute.destroy_array(sh_arr);
+    for (pnanovdb_compute_array_t *arr: arrays) {
+        mEditor.compute.destroy_array(arr);
+    }
 
     return it->second;
 }
@@ -287,6 +311,11 @@ Viewer::addCameraView(const std::string &name,
     TORCH_CHECK(projectionMatrices.dim() == 3 && projectionMatrices.size(1) == 3 &&
                     projectionMatrices.size(2) == 3,
                 "projection_matrices must have shape [N, 3, 3]");
+
+    auto itPrev = mCameraViews.find(name);
+    if (itPrev != mCameraViews.end()) {
+        mCameraViews.erase(itPrev);
+    }
 
     const int64_t numCameras = cameraToWorldMatrices.size(0);
     if (imageSizes.numel() != 0) {
