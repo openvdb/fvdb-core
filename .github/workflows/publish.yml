@@ -13,6 +13,10 @@ on:
         description: "Branch to build"
         required: true
         default: "main"
+      reuse_artifacts:
+        description: "Reuse artifacts from last successful run (skip build)"
+        required: false
+        default: "false"
 
 # Allow subsequent pushes to the same PR or REF to cancel any previous jobs.
 concurrency:
@@ -31,6 +35,7 @@ jobs:
   start-build-runner:
     name: Start CPU-only EC2 runner for build
     runs-on: ubuntu-latest
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') }}
     outputs:
       label: ${{ steps.start-build-runner.outputs.label }}
       ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
@@ -50,9 +55,11 @@ jobs:
           ec2-instance-type: m6a.8xlarge
           subnet-id: subnet-03f2320d6e6e0005b
           security-group-id: sg-0cd08bd89d6212223
+
   fvdb-build:
     name: fVDB Build
     needs: start-build-runner # required to start the main job when the runner is ready
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') }}
     runs-on: ${{ needs.start-build-runner.outputs.label }} # run the job on the newly created runner
     container:
       image: aswf/ci-openvdb:2024-clang17.2
@@ -102,23 +109,6 @@ jobs:
           cd $GITHUB_WORKSPACE
           git merge pr_branch
 
-      # - name: Simulate merge for push events
-      #   if: github.event_name == 'push'
-      #   run: |
-      #     echo "Push event detected - simulating merge with target branch"
-      #     git config --global user.name "github-actions[bot]"
-      #     git config --global user.email "github-actions[bot]@users.noreply.github.com"
-      #     git config --global --add safe.directory "$(pwd)"
-
-      #     # Get the target branch (main in this case, since push is only on main)
-      #     TARGET_BRANCH="main"
-      #     CURRENT_COMMIT="${{ github.sha }}"
-
-      #     echo "Creating merge simulation: merging $CURRENT_COMMIT into $TARGET_BRANCH"
-      #     git fetch origin $TARGET_BRANCH
-      #     git checkout $TARGET_BRANCH
-      #     git merge --no-ff $CURRENT_COMMIT --message "CI: Simulating merge of $CURRENT_COMMIT into $TARGET_BRANCH"
-
       - name: Set up fvdb_release Conda env
         uses: mamba-org/setup-micromamba@v2
         with:
@@ -126,12 +116,12 @@ jobs:
           environment-name: fvdb_release
           environment-file: release_environment.yml
 
-      - name: Set local version for variant
-        run: |
-          CUDA_TAG="$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
-          TORCH_TAG="$(echo "${{ matrix.torch-version }}" | tr -d '.')"
-          sed -i -E 's/^version\s*=\s*"([^"]+)"/version = "\1+torch'"${TORCH_TAG}"'.cu'"${CUDA_TAG}"'"/' pyproject.toml
-          grep '^version' pyproject.toml
+      # - name: Set local version for variant
+      #   run: |
+      #     CUDA_TAG="$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
+      #     TORCH_TAG="$(echo "${{ matrix.torch-version }}" | tr -d '.')"
+      #     sed -i -E 's/^version\s*=\s*"([^"]+)"/version = "\1+torch'"${TORCH_TAG}"'.cu'"${CUDA_TAG}"'"/' pyproject.toml
+      #     grep '^version' pyproject.toml
 
       - name: Build fvdb
         run: |
@@ -142,8 +132,7 @@ jobs:
       - name: Get Version
         run: |
           echo "VERSION=$(cat pyproject.toml | grep 'version' | cut -d '=' -f 2 | tr -d '\"')" >> $GITHUB_ENV
-
-
+          echo "fvdb_core VERSION=${{ env.VERSION }}"
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
@@ -152,11 +141,38 @@ jobs:
           path: dist/fvdb_core-*.whl
           retention-days: 2
 
+  reuse-artifacts:
+    name: Reuse artifacts from last successful run
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts from last successful run
+        uses: dawidd6/action-download-artifact@v2
+        with:
+          workflow: .github/workflows/publish.yml
+          workflow_conclusion: success
+          branch: main
+          name: fvdb-publish-package-.*
+          name_is_regexp: true
+          path: dist
+
+      - name: List downloaded wheels
+        run: |
+          find dist -type f -name "*.whl" -print || true
+
+      - name: Upload reused wheels as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fvdb-publish-package-reused
+          path: dist/**/*.whl
+          retention-days: 2
 
   publish-to-testpypi:
     name: Publish Python 🐍 distribution 📦 to TestPyPI
     needs:
-    - fvdb-build
+      - fvdb-build
+      - reuse-artifacts
+    if: ${{ (needs.fvdb-build.result == 'success') || (needs.reuse-artifacts.result == 'success') }}
     runs-on: ubuntu-latest
 
     environment:
@@ -185,7 +201,7 @@ jobs:
       - start-build-runner # required to get output from the start-build-runner job
       - fvdb-build # required to wait when the main job is done
     runs-on: ubuntu-latest
-    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
+    if: ${{ always() && !(github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
