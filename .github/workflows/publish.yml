@@ -172,7 +172,7 @@ jobs:
     needs:
       - fvdb-build
       - reuse-artifacts
-    if: ${{ (needs.fvdb-build.result == 'success') || (needs.reuse-artifacts.result == 'success') }}
+    if: ${{ !cancelled() && (needs.fvdb-build.result == 'success' || needs.reuse-artifacts.result == 'success') }}
     runs-on: ubuntu-latest
 
     environment:
