@@ -126,6 +126,13 @@ jobs:
           environment-name: fvdb_release
           environment-file: release_environment.yml
 
+      - name: Set local version for variant
+        run: |
+          CUDA_TAG="$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
+          TORCH_TAG="$(echo "${{ matrix.torch-version }}" | tr -d '.')"
+          sed -i -E 's/^version\s*=\s*"([^"]+)"/version = "\1+torch'"${TORCH_TAG}"'.cu'"${CUDA_TAG}"'"/' pyproject.toml
+          grep '^version' pyproject.toml
+
       - name: Build fvdb
         run: |
           micromamba activate fvdb_release
@@ -136,19 +143,13 @@ jobs:
         run: |
           echo "VERSION=$(cat pyproject.toml | grep 'version' | cut -d '=' -f 2 | tr -d '\"')" >> $GITHUB_ENV
 
-      - name: Rename wheel
-        run: |
-          CUDA_TAG=$(echo "${{ matrix.cuda-version }}" | awk -F. '{printf "cu%01d%01d", $1, $2}')
-          PYTORCH_TAG=$(echo "${{ matrix.torch-version }}" | awk -F. '{printf "torch%01d%01d", $1, $2}')
-          python scripts/rename_wheels.py "$PYTORCH_TAG" "$CUDA_TAG" "dist/fvdb-*.whl"
-        shell:
-          bash -el {0}
+
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
           name: fvdb-publish-package-${{ matrix.python-version }}-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
-          path: dist/*.whl
+          path: dist/fvdb-core-*.whl
           retention-days: 2
 
 
