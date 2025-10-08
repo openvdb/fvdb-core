@@ -42,6 +42,9 @@ define.CMAKE_BUILD_TYPE = "Release"
 [tool.scikit-build.install]
 components = ["PythonModule"]
 
+[tool.scikit-build.wheel]
+packages = ["fvdb"]
+
 # This is so that the WIP tests are not run
 [tool.pytest.ini_options]
 testpaths = ["tests"]
