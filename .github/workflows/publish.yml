@@ -115,6 +115,19 @@ jobs:
           environment-name: fvdb_release
           environment-file: release_environment.yml
 
+      - name: Add a post-release to version (used for testing on TestPyPI)
+        run: |
+          VERSION_LINE=$(grep '^version *= *"' pyproject.toml)
+          VERSION=$(echo "$VERSION_LINE" | sed -E 's/^version *= *"([^"]+)".*/\1/')
+          if [ "${GITHUB_RUN_NUMBER:-${{ github.run_number }}}" -gt 1 ]; then
+            NEW_VERSION="${VERSION}.post${GITHUB_RUN_NUMBER:-${{ github.run_number }}}"
+            sed -i -E "s/^version *= *\"[^\"]+\"/version = \"${NEW_VERSION}\"/" pyproject.toml
+            echo "Updated version to $NEW_VERSION"
+          else
+            echo "Version unchanged: $VERSION"
+          fi
+          grep '^version' pyproject.toml
+
       # TODO: may use this when we create a custom package index
       # - name: Set local version for variant
       #   run: |
