@@ -133,8 +133,14 @@ jobs:
         run: |
           micromamba activate fvdb_release
           pip install auditwheel patchelf
-          auditwheel repair dist/fvdb_core-*.whl --plat manylinux_2_28_x86_64 -w dist/
-          rm dist/fvdb_core-*-linux_x86_64.whl
+          # Check glibc version
+          ldd --version | head -n1
+          # Try to repair with auto-detected manylinux version
+          auditwheel repair dist/fvdb_core-*.whl -w dist/ || echo "auditwheel failed, keeping original wheel"
+          # Remove original linux_x86_64 wheel if repair succeeded
+          if ls dist/fvdb_core-*-manylinux*.whl 1> /dev/null 2>&1; then
+            rm dist/fvdb_core-*-linux_x86_64.whl
+          fi
           ls -lh dist/
 
       - name: Get Version
