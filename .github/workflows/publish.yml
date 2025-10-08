@@ -135,13 +135,33 @@ jobs:
           pip install auditwheel patchelf
           # Check glibc version
           ldd --version | head -n1
-          # Try to repair with auto-detected manylinux version
-          auditwheel repair dist/fvdb_core-*.whl -w dist/ || echo "auditwheel failed, keeping original wheel"
+          # Exclude CUDA, PyTorch, and other system libraries to keep wheel size down
+          auditwheel repair dist/fvdb_core-*.whl -w dist/ \
+            --exclude libcuda.so.1 \
+            --exclude libcudart.so.12 \
+            --exclude libnvrtc.so.12 \
+            --exclude libnvToolsExt.so.1 \
+            --exclude libcublas.so.12 \
+            --exclude libcublasLt.so.12 \
+            --exclude libcufft.so.11 \
+            --exclude libcurand.so.10 \
+            --exclude libcusolver.so.11 \
+            --exclude libcusparse.so.12 \
+            --exclude libnvJitLink.so.12 \
+            --exclude libtorch.so \
+            --exclude libtorch_cpu.so \
+            --exclude libtorch_cuda.so \
+            --exclude libc10.so \
+            --exclude libc10_cuda.so \
+            || echo "auditwheel failed, keeping original wheel"
           # Remove original linux_x86_64 wheel if repair succeeded
           if ls dist/fvdb_core-*-manylinux*.whl 1> /dev/null 2>&1; then
             rm dist/fvdb_core-*-linux_x86_64.whl
           fi
+          # Show wheel sizes and verify compression
           ls -lh dist/
+          echo "Wheel contents:"
+          unzip -l dist/fvdb_core-*.whl | head -20
 
       - name: Get Version
         run: |
