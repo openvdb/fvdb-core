@@ -102,4 +102,4 @@ set(VERSION_PY_PATH "${CMAKE_CURRENT_SOURCE_DIR}/fvdb/version.py")
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/fvdb/version.py.in" "${VERSION_PY_PATH}" @ONLY)
 
 # Make sure version.py is included in the installation
-install(FILES "${VERSION_PY_PATH}" DESTINATION fvdb)
+install(FILES "${VERSION_PY_PATH}" DESTINATION fvdb COMPONENT PythonModule)
