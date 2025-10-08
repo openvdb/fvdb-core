@@ -7,9 +7,6 @@
 
 #include <c10/cuda/CUDAException.h>
 
-#include <cute/algorithm/copy.hpp>
-#include <cute/atom/copy_atom.hpp>
-#include <cute/atom/mma_atom.hpp>
 #include <cute/tensor.hpp>
 
 #include <string>
