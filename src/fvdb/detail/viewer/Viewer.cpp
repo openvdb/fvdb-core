@@ -113,9 +113,6 @@ Viewer::~Viewer() {
 
 fvdb::detail::viewer::GaussianSplat3dView &
 Viewer::addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splats) {
-    pnanovdb_compute_queue_t *queue =
-        mEditor.compute.device_interface.get_compute_queue(mEditor.device);
-
     std::shared_ptr<pnanovdb_raster_gaussian_data_t> oldData;
     auto itPrev = mSplat3dViews.find(name);
     if (itPrev != mSplat3dViews.end()) {
@@ -154,6 +151,9 @@ Viewer::addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splat
     pnanovdb_compute_array_t *arrays[] = {
         means_arr, logitOpacities_arr, quats_arr, logScales_arr, sh_arr};
 
+    pnanovdb_compute_queue_t *queue =
+        mEditor.compute.device_interface.get_device_queue(mEditor.device);
+
     // Load splats into viewer
     pnanovdb_raster_gaussian_data_t *pGaussianData = nullptr;
     mEditor.raster.create_gaussian_data_from_arrays(&mEditor.raster,
@@ -174,10 +174,10 @@ Viewer::addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splat
     it->second.mGaussianData = std::shared_ptr<pnanovdb_raster_gaussian_data_t>(
         pGaussianData, [this](pnanovdb_raster_gaussian_data_t *ptr) {
             if (ptr && mEditor.device) {
-                pnanovdb_compute_queue_t *computeQueue =
-                    mEditor.compute.device_interface.get_compute_queue(mEditor.device);
-                if (computeQueue) {
-                    mEditor.raster.destroy_gaussian_data(mEditor.raster.compute, computeQueue, ptr);
+                pnanovdb_compute_queue_t *deviceQueue =
+                    mEditor.compute.device_interface.get_device_queue(mEditor.device);
+                if (deviceQueue) {
+                    mEditor.raster.destroy_gaussian_data(mEditor.raster.compute, deviceQueue, ptr);
                     // printf("Destroyed gaussian data - %p\n", ptr);
                 }
             }
