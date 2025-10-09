@@ -7,6 +7,8 @@ on:
   push:
     branches:
       - main
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       branch:
@@ -17,6 +19,10 @@ on:
         description: "Reuse artifacts from last successful run (skip build)"
         required: false
         default: "false"
+      publish_target:
+        description: "Publish target: testpypi | none"
+        required: false
+        default: "testpypi"
 
 # Allow subsequent pushes to the same PR or REF to cancel any previous jobs.
 concurrency:
@@ -130,13 +136,13 @@ jobs:
           fi
           grep '^version' pyproject.toml
 
-      # TODO: may use this when we create a custom package index
-      # - name: Set local version for variant
-      #   run: |
-      #     CUDA_TAG="$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
-      #     TORCH_TAG="$(echo "${{ matrix.torch-version }}" | tr -d '.')"
-      #     sed -i -E 's/^version\s*=\s*"([^"]+)"/version = "\1+torch'"${TORCH_TAG}"'.cu'"${CUDA_TAG}"'"/' pyproject.toml
-      #     grep '^version' pyproject.toml
+      - name: Add local version for S3 publish
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3' }}
+        run: |
+          TORCH_TAG="$(echo "${{ matrix.torch-version }}" | tr -d '.')"
+          CUDA_TAG="$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
+          sed -i -E 's/^version\s*=\s*"([^"]+)"/version = "\1+pt'"${TORCH_TAG}"'.cu'"${CUDA_TAG}"'"/' pyproject.toml
+          grep '^version' pyproject.toml
 
       - name: Build fvdb
         run: |
@@ -144,6 +150,7 @@ jobs:
           ./build.sh wheel verbose --cuda-arch-list '7.5;8.0;9.0;10.0;12.0+PTX'
 
       - name: Repair wheel for manylinux
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') }}
         run: |
           micromamba activate fvdb_release
           pip install auditwheel patchelf
@@ -221,8 +228,8 @@ jobs:
           path: dist/**/*.whl
           retention-days: 2
 
-  publish-to-testpypi:
-    name: Publish Python 🐍 distribution 📦 to TestPyPI
+  publish-dist:
+    name: Publish Python 🐍 distribution 📦
     needs:
       - fvdb-build
       - reuse-artifacts
@@ -230,8 +237,8 @@ jobs:
     runs-on: ubuntu-latest
 
     environment:
-      name: testpypi
-      url: https://test.pypi.org/p/fvdb-core
+      name: ${{ (github.event_name == 'release' && 'pypi') || 'testpypi' }}
+      url: ${{ (github.event_name == 'release' && 'https://pypi.org/p/fvdb-core') || 'https://test.pypi.org/p/fvdb-core' }}
 
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
@@ -243,11 +250,95 @@ jobs:
           pattern: fvdb-publish-package-*
           path: dist
           merge-multiple: true
-      - name: Publish distribution 📦 to TestPyPI
+      - name: Publish distribution 📦
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          repository-url: https://test.pypi.org/legacy/
+          repository-url: ${{ (github.event_name == 'release' && 'https://upload.pypi.org/legacy/') || (github.event_name == 'workflow_dispatch' && inputs.publish_target == 'testpypi' && 'https://test.pypi.org/legacy/') || 'https://test.pypi.org/legacy/' }}
           verbose: true
+
+  publish-to-s3:
+    name: Publish wheels to custom S3 Simple Index
+    needs:
+      - fvdb-build
+      - reuse-artifacts
+    if: ${{ !cancelled() && (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3')) && (needs.fvdb-build.result == 'success' || needs.reuse-artifacts.result == 'success') }}
+    runs-on: ubuntu-latest
+    env:
+      S3_BUCKET: fvdb-packages
+      SIMPLE_PREFIX: simple
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
+          aws-region: us-east-2
+
+      - name: Download all built wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: fvdb-publish-package-*
+          path: dist
+          merge-multiple: true
+
+      - name: Determine normalized project name
+        id: proj
+        run: |
+          PROJECT_NAME=$(grep '^name\s*=\s*"' pyproject.toml | head -n1 | sed -E 's/^name\s*=\s*"([^"]+)".*/\1/')
+          NORM=$(echo "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[-_.]+/-/g')
+          echo "project_name=$PROJECT_NAME" >> $GITHUB_OUTPUT
+          echo "normalized=$NORM" >> $GITHUB_OUTPUT
+          echo "Project: $PROJECT_NAME, Normalized: $NORM"
+
+      - name: Upload wheels to S3 project directory
+        run: |
+          set -euo pipefail
+          DEST="s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/"
+          echo "Uploading wheels to $DEST"
+          shopt -s nullglob
+          for whl in dist/*.whl; do
+            echo "Uploading $whl"
+            aws s3 cp "$whl" "$DEST" --only-show-errors
+          done
+
+      - name: Generate project index.html
+        run: |
+          set -euo pipefail
+          OUTDIR="dist/index-gen/${{ steps.proj.outputs.normalized }}"
+          mkdir -p "$OUTDIR"
+          INDEX_FILE="$OUTDIR/index.html"
+          TITLE="Links for ${{ steps.proj.outputs.project_name }}"
+          {
+            echo "<!DOCTYPE html>";
+            echo "<html><head><meta charset=\"utf-8\"><title>${TITLE}</title></head><body>";
+            echo "<h1>${TITLE}</h1>";
+            for whl in dist/*.whl; do
+              base=$(basename "$whl")
+              sha=$(sha256sum "$whl" | awk '{print $1}')
+              echo "<a href=\"${base}#sha256=${sha}\">${base}</a><br/>";
+            done;
+            echo "</body></html>";
+          } > "$INDEX_FILE"
+          aws s3 cp "$INDEX_FILE" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/index.html" --content-type text/html --only-show-errors
+
+      - name: Generate root simple index.html
+        run: |
+          set -euo pipefail
+          TMPDIR=$(mktemp -d)
+          ROOT_INDEX="$TMPDIR/index.html"
+          echo "Building root simple index from s3://${S3_BUCKET}/${SIMPLE_PREFIX}/"
+          # List existing project prefixes
+          projects=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/" | awk '{print $2}' | sed 's:/$::')
+          TITLE="Simple index"
+          {
+            echo "<!DOCTYPE html>";
+            echo "<html><head><meta charset=\"utf-8\"><title>${TITLE}</title></head><body>";
+            echo "<h1>${TITLE}</h1>";
+            for p in $projects; do
+              echo "<a href=\"${p}/\">${p}</a><br/>";
+            done;
+            echo "</body></html>";
+          } > "$ROOT_INDEX"
+          aws s3 cp "$ROOT_INDEX" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/index.html" --content-type text/html --only-show-errors
 
   fvdb-build-stop-runner:
     name: Stop CPU-only EC2 runner for build
