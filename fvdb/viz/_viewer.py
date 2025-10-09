@@ -17,7 +17,7 @@ from ._gaussian_splat_3d_view import GaussianSplat3dView
 
 
 class Viewer:
-    def __init__(self, ip_address: str = "127.0.0.1", port: int = 8888, verbose: bool = False):
+    def __init__(self, ip_address="127.0.0.1", port: int = 8080, verbose: bool = False):
         """
         Create a new `Viewer` running a server at the specified IP address and port.
 
@@ -25,14 +25,16 @@ class Viewer:
         this will throw an Exception.
 
         Args:
-            ip_address (str): The IP address to bind the viewer server to. Default is "127.0.0.1"
-            port (int): The port to bind the viewer server to. Default is 8888.
+            ip_address (str): The IP address to bind the viewer server to. Default is "127.0.0.1".
+            port (int): The port to bind the viewer server to. Default is 8080.
+            verbose (bool): If True, the viewer will print verbose output to the console. Default is False.
         """
         if not isinstance(port, int) or port < 0 or port > 65535:
             raise ValueError(f"Port must be an integer between 0 and 65535, got {port}")
 
         self._impl = ViewerCpp(ip_address=ip_address, port=port, verbose=verbose)
 
+    @torch.no_grad()
     def add_gaussian_splat_3d(
         self,
         name: str,
@@ -73,6 +75,7 @@ class Viewer:
         view.sh_degree_to_use = sh_degree_to_use
         return GaussianSplat3dView(view, GaussianSplat3dView.__PRIVATE__)
 
+    @torch.no_grad()
     def add_camera_view(
         self,
         name: str,
@@ -115,7 +118,12 @@ class Viewer:
         cam_to_world_matrices = to_Mat44fBatch(cam_to_world_matrices)
 
         view: CameraViewCpp = self._impl.add_camera_view(
-            name, cam_to_world_matrices, projection_matrices, image_sizes, frustum_near_plane, frustum_far_plane
+            name,
+            cam_to_world_matrices,
+            projection_matrices,
+            image_sizes if image_sizes is not None else torch.Tensor([]),
+            frustum_near_plane,
+            frustum_far_plane,
         )
         view.visible = enabled
         view.axis_length = axis_length
@@ -275,23 +283,24 @@ class Viewer:
             raise ValueError(f"Far clipping plane distance must be positive, got {far}")
         self._impl.set_camera_far(far)
 
+    @torch.no_grad()
     def set_camera_lookat(
         self,
-        camera_origin: NumericMaxRank1,
-        lookat_point: NumericMaxRank1,
-        up_direction: NumericMaxRank1 = [0.0, 1.0, 0.0],
+        eye: NumericMaxRank1,
+        center: NumericMaxRank1,
+        up: NumericMaxRank1 = [0.0, 1.0, 0.0],
     ):
         """
         Set the camera pose from a camera origin, a lookat point, and an up direction.
 
         Args:
-            camera_origin (NumericMaxRank1): A tensor-like object of shape (3,) representing the camera position in world coordinates.
-            lookat_point (NumericMaxRank1): A tensor-like object of shape (3,) representing the point the camera is looking at.
-            up_direction (NumericMaxRank1): A tensor-like object of shape (3,) representing the up direction of the camera.
+            eye (NumericMaxRank1): A tensor-like object of shape (3,) representing the camera position in world coordinates.
+            center (NumericMaxRank1): A tensor-like object of shape (3,) representing the point the camera is looking at.
+            up (NumericMaxRank1): A tensor-like object of shape (3,) representing the up direction of the camera.
         """
-        camera_origin_vec3f = to_Vec3f(camera_origin).cpu().numpy()
-        lookat_point_vec3f = to_Vec3f(lookat_point).cpu().numpy()
-        up_direction_vec3f = to_Vec3f(up_direction).cpu().numpy()
+        camera_origin_vec3f = to_Vec3f(eye).cpu().numpy()
+        lookat_point_vec3f = to_Vec3f(center).cpu().numpy()
+        up_direction_vec3f = to_Vec3f(up).cpu().numpy()
         view_direction_vec3f = lookat_point_vec3f - camera_origin_vec3f
         orbit_radius = float(np.linalg.norm(view_direction_vec3f))
 
