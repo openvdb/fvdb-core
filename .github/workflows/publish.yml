@@ -38,6 +38,26 @@ permissions:
   id-token: write
 
 jobs:
+  pr-flags:
+    name: Determine PR flags
+    runs-on: ubuntu-latest
+    outputs:
+      s3: ${{ steps.flags.outputs.s3 }}
+    steps:
+      - name: Compute S3 flag from PR commits
+        id: flags
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const isPR = context.eventName === 'pull_request';
+            let s3 = false;
+            if (isPR) {
+              const {owner, repo} = context.repo;
+              const prNumber = context.payload.pull_request.number;
+              const commit = await github.rest.repos.getCommit({ owner, repo, ref: sha });
+              s3 = /\[s3\]/i.test(commit.data.commit.message || '');
+            }
+            core.setOutput('s3', s3 ? 'true' : 'false');
   start-build-runner:
     name: Start CPU-only EC2 runner for build
     runs-on: ubuntu-latest
@@ -72,7 +92,7 @@ jobs:
 
   fvdb-build:
     name: fVDB Build
-    needs: start-build-runner # required to start the main job when the runner is ready
+    needs: [start-build-runner, pr-flags] # start when runner is ready and flags computed
     if: ${{ !((github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') || contains(github.event.head_commit.message, '[reuse]')) }}
     runs-on: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }} # run the job on the newly created runner
     container:
@@ -137,7 +157,7 @@ jobs:
           grep '^version' pyproject.toml
 
       - name: Add local version for S3 publish
-        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[s3]')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[s3]')) }}
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.s3 == 'true') }}
         run: |
           TORCH_TAG="$(echo "${{ matrix.torch-version }}" | tr -d '.')"
           CUDA_TAG="$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
@@ -150,7 +170,7 @@ jobs:
           ./build.sh wheel verbose --cuda-arch-list '7.5;8.0;9.0;10.0;12.0+PTX'
 
       - name: Repair wheel for manylinux
-        if: ${{ !((github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[s3]')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[s3]'))) }}
+        if: ${{ !((github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.s3 == 'true')) }}
         run: |
           micromamba activate fvdb_release
           pip install auditwheel patchelf
@@ -259,14 +279,12 @@ jobs:
   # Test publishing to S3
   publish-to-s3:
     name: Publish wheels to custom S3 Simple Index
-    needs:
-      - fvdb-build
-      - reuse-artifacts
-    if: ${{ !cancelled() && (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[s3]')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[s3]'))) && (needs.fvdb-build.result == 'success' || needs.reuse-artifacts.result == 'success') }}
+    needs: [pr-flags, fvdb-build, reuse-artifacts]
+    if: ${{ !cancelled() && ((github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.s3 == 'true')) && (needs.fvdb-build.result == 'success' || needs.reuse-artifacts.result == 'success') }}
     runs-on: ubuntu-latest
     env:
       S3_BUCKET: fvdb-packages
-      SIMPLE_PREFIX: ${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[s3]'))) && 'simple-staging' || 'simple' }}
+      SIMPLE_PREFIX: ${{ (github.event_name == 'pull_request') && 'simple-staging' || 'simple' }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
