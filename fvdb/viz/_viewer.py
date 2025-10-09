@@ -17,7 +17,7 @@ from ._gaussian_splat_3d_view import GaussianSplat3dView
 
 
 class Viewer:
-    def __init__(self, ip_address="0.0.0.0", port: int = 8080, verbose: bool = False):
+    def __init__(self, ip_address="127.0.0.1", port: int = 8080, verbose: bool = False):
         """
         Create a new `Viewer` running a server at the specified IP address and port.
 
@@ -25,7 +25,7 @@ class Viewer:
         this will throw an Exception.
 
         Args:
-            ip_address (str): The IP address to bind the viewer server to. Default is "0.0.0.0".
+            ip_address (str): The IP address to bind the viewer server to. Default is "127.0.0.1".
             port (int): The port to bind the viewer server to. Default is 8080.
             verbose (bool): If True, the viewer will print verbose output to the console. Default is False.
         """
