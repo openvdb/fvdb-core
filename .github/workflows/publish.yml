@@ -15,10 +15,6 @@ on:
         description: "Branch to build"
         required: true
         default: "main"
-      reuse_artifacts:
-        description: "Reuse artifacts from last successful run (skip build)"
-        required: false
-        default: "false"
       publish_target:
         description: "Publish target: testpypi | none"
         required: false
@@ -43,7 +39,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       s3: ${{ steps.flags.outputs.s3 }}
-      reuse: ${{ steps.flags.outputs.reuse }}
     steps:
       - name: Compute flags from PR head commit
         id: flags
@@ -59,15 +54,11 @@ jobs:
               const commit = await github.rest.repos.getCommit({ owner, repo, ref: sha });
               const msg = (commit.data.commit.message || '').toString();
               s3 = /\[s3\]/i.test(msg);
-              reuse = /\[reuse\]/i.test(msg);
             }
             core.setOutput('s3', s3 ? 'true' : 'false');
-            core.setOutput('reuse', reuse ? 'true' : 'false');
   start-build-runner:
     name: Start CPU-only EC2 runner for build
     runs-on: ubuntu-latest
-    needs: [pr-flags]
-    if: ${{ !((github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.reuse == 'true')) }}
     outputs:
       label: ${{ steps.start-build-runner.outputs.label }}
       ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
@@ -99,7 +90,6 @@ jobs:
   fvdb-build:
     name: fVDB Build
     needs: [start-build-runner, pr-flags] # start when runner is ready and flags computed
-    if: ${{ !((github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.reuse == 'true') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[reuse]'))) }}
     runs-on: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }} # run the job on the newly created runner
     container:
       image: aswf/ci-openvdb:2024-clang17.2
@@ -228,39 +218,11 @@ jobs:
           path: dist/fvdb_core-*.whl
           retention-days: 2
 
-  reuse-artifacts:
-    name: Reuse artifacts from last successful run
-    needs: [pr-flags]
-    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.reuse == 'true') }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download artifacts from last successful run
-        uses: dawidd6/action-download-artifact@v2
-        with:
-          workflow: .github/workflows/publish.yml
-          workflow_conclusion: success
-          branch: main
-          name: fvdb-publish-package-.*
-          name_is_regexp: true
-          path: dist
-
-      - name: List downloaded wheels
-        run: |
-          find dist -type f -name "*.whl" -print || true
-
-      - name: Upload reused wheels as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: fvdb-publish-package-reused
-          path: dist/**/*.whl
-          retention-days: 2
-
   publish-dist:
     name: Publish Python 🐍 distribution 📦
     needs:
-      - fvdb-build
-      - reuse-artifacts
-    if: ${{ !cancelled() && (needs.fvdb-build.result == 'success' || needs.reuse-artifacts.result == 'success') && !((github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.s3 == 'true')) }}
+      - fvdb-buildf
+    if: ${{ !cancelled() && (needs.fvdb-build.result == 'success') && !((github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.s3 ==  'true')) }}
     runs-on: ubuntu-latest
 
     environment:
@@ -285,8 +247,8 @@ jobs:
 
   publish-to-s3:
     name: Publish wheels to custom S3 Simple Index
-    needs: [pr-flags, fvdb-build, reuse-artifacts]
-    if: ${{ !cancelled() && ((github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.s3 == 'true')) && (needs.fvdb-build.result == 'success' || needs.reuse-artifacts.result == 'success') }}
+    needs: [pr-flags, fvdb-build]
+    if: ${{ !cancelled() && ((github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.s3 == 'true')) && (needs.fvdb-build.result == 'success') }}
     runs-on: ubuntu-latest
     env:
       S3_BUCKET: fvdb-packages
@@ -380,7 +342,6 @@ jobs:
       - start-build-runner # required to get output from the start-build-runner job
       - fvdb-build # required to wait when the main job is done
     runs-on: ubuntu-latest
-    if: ${{ always() && !((github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') || contains(github.event.head_commit.message, '[reuse]')) }}
     strategy: *matrix-strategy
     steps:
       - name: Configure AWS credentials
