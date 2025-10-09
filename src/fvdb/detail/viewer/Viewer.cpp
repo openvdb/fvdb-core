@@ -24,8 +24,33 @@ pNanoLogPrint(pnanovdb_compute_log_level_t level, const char *format, ...) {
         prefix = "Warning";
     } else if (level == PNANOVDB_COMPUTE_LOG_LEVEL_INFO) {
         prefix = "Info";
+    } else if (level == PNANOVDB_COMPUTE_LOG_LEVEL_DEBUG) {
+        va_end(args);
+        return;
     }
-    printf("%s: ", prefix);
+    printf("Viewer %s: ", prefix);
+    vprintf(format, args);
+    printf("\n");
+
+    va_end(args);
+}
+
+inline void
+pNanoLogPrintVerbose(pnanovdb_compute_log_level_t level, const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+
+    const char *prefix = "Unknown";
+    if (level == PNANOVDB_COMPUTE_LOG_LEVEL_ERROR) {
+        prefix = "Error";
+    } else if (level == PNANOVDB_COMPUTE_LOG_LEVEL_WARNING) {
+        prefix = "Warning";
+    } else if (level == PNANOVDB_COMPUTE_LOG_LEVEL_INFO) {
+        prefix = "Info";
+    } else if (level == PNANOVDB_COMPUTE_LOG_LEVEL_DEBUG) {
+        prefix = "Debug";
+    }
+    printf("Viewer %s: ", prefix);
     vprintf(format, args);
     printf("\n");
 
@@ -51,7 +76,7 @@ Viewer::Viewer(const std::string &ipAddress, const int port, const bool verbose)
     pnanovdb_compute_load(&mEditor.compute, &mEditor.compiler);
 
     mEditor.deviceDesc           = {};
-    mEditor.deviceDesc.log_print = verbose ? pNanoLogPrint : nullptr;
+    mEditor.deviceDesc.log_print = verbose ? pNanoLogPrintVerbose : pNanoLogPrint;
 
     mEditor.deviceManager = mEditor.compute.device_interface.create_device_manager(PNANOVDB_FALSE);
     mEditor.device =
@@ -79,11 +104,12 @@ Viewer::Viewer(const std::string &ipAddress, const int port, const bool verbose)
     pnanovdb_camera_init(&mEditor.camera);
     mEditor.editor.update_camera(&mEditor.editor, &mEditor.camera);
 
-    mEditor.config            = {};
-    mEditor.config.ip_address = mIpAddress.c_str();
-    mEditor.config.port       = port;
-    mEditor.config.headless   = PNANOVDB_TRUE;
-    mEditor.config.streaming  = PNANOVDB_TRUE;
+    mEditor.config                 = {};
+    mEditor.config.ip_address      = mIpAddress.c_str();
+    mEditor.config.port            = port;
+    mEditor.config.headless        = PNANOVDB_TRUE;
+    mEditor.config.streaming       = PNANOVDB_TRUE;
+    mEditor.config.ui_profile_name = "viewer";
 
     mIsEditorRunning = false;
 

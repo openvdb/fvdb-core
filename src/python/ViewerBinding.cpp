@@ -69,14 +69,10 @@ bind_viewer(py::module &m) {
             &fvdb::detail::viewer::GaussianSplat3dView::getShDegreeToUse,
             &fvdb::detail::viewer::GaussianSplat3dView::setShDegreeToUse,
             "The spherical harmonics degree used to render this Gaussian scene. A value of 0 means all available spherical harmonics are used.")
-        .def_property("sh_stride_rgb_rgb_rgb",
+        .def_property("rgb_rgb_rgb_sh",
                       &fvdb::detail::viewer::GaussianSplat3dView::isShStrideRgbRgbRgb,
                       &fvdb::detail::viewer::GaussianSplat3dView::setShStrideRgbRgbRgb,
                       "Whether the spherical harmonics data is stored in RGBRGB... order.")
-        .def_property("sh_stride_rrr_ggg_bbb",
-                      &fvdb::detail::viewer::GaussianSplat3dView::isShStrideRrrGggBbb,
-                      &fvdb::detail::viewer::GaussianSplat3dView::setShStrideRrrGggBbb,
-                      "Whether the spherical harmonics data is stored in RRRRGGGGBBBB order.")
         .def_property("near",
                       &fvdb::detail::viewer::GaussianSplat3dView::getNear,
                       &fvdb::detail::viewer::GaussianSplat3dView::setNear,

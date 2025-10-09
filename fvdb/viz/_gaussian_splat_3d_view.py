@@ -1,9 +1,15 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 
+from enum import Enum
 from typing import Any
 
 from .._Cpp import GaussianSplat3dView as GaussianSplat3dViewCpp
+
+
+class ShOrderingMode(str, Enum):
+    RGB_RGB_RGB = "rgb_rgb_rgb"
+    RRR_GGG_BBB = "rrr_ggg_bbb"
 
 
 class GaussianSplat3dView:
@@ -114,44 +120,32 @@ class GaussianSplat3dView:
         self._view.sh_degree_to_use = degree
 
     @property
-    def sh_stride_rgb_rgb_rgb(self) -> bool:
+    def sh_ordering_mode(self) -> ShOrderingMode:
         """
-        Get whether the spherical harmonics coefficients are stored in interleaved RGB format.
+        Get the spherical harmonics ordering mode used for rendering colors.
 
         Returns:
-            bool: True if the spherical harmonics coefficients are stored in interleaved RGB format, False otherwise.
+            ShOrderingMode: The spherical harmonics ordering mode.
         """
-        return self._view.sh_stride_rgb_rgb_rgb
+        if self._view.rgb_rgb_rgb_sh:
+            return ShOrderingMode.RRR_GGG_BBB
+        else:
+            return ShOrderingMode.RGB_RGB_RGB
 
-    @sh_stride_rgb_rgb_rgb.setter
-    def sh_stride_rgb_rgb_rgb(self, value: bool):
+    @sh_ordering_mode.setter
+    def sh_ordering_mode(self, mode: ShOrderingMode):
         """
-        Set whether the spherical harmonics coefficients are stored in interleaved RGB format.
-
-        Args:
-            value (bool): True if the spherical harmonics coefficients are stored in interleaved RGB format, False otherwise.
-        """
-        self._view.sh_stride_rgb_rgb_rgb = value
-
-    @property
-    def sh_stride_rrr_ggg_bbb(self) -> bool:
-        """
-        Get whether the spherical harmonics coefficients are stored in planar RRR GGG BBB format.
-
-        Returns:
-            bool: True if the spherical harmonics coefficients are stored in planar RRR GGG BBB format, False otherwise.
-        """
-        return self._view.sh_stride_rrr_ggg_bbb
-
-    @sh_stride_rrr_ggg_bbb.setter
-    def sh_stride_rrr_ggg_bbb(self, value: bool):
-        """
-        Set whether the spherical harmonics coefficients are stored in planar RRR GGG BBB format.
+        Set the spherical harmonics ordering mode used for rendering colors.
 
         Args:
-            value (bool): True if the spherical harmonics coefficients are stored in planar RRR GGG BBB format, False otherwise.
+            mode (ShOrderingMode): The spherical harmonics ordering mode.
         """
-        self._view.sh_stride_rrr_ggg_bbb = value
+        if mode == ShOrderingMode.RRR_GGG_BBB:
+            self._view.rgb_rgb_rgb_sh = False
+        elif mode == ShOrderingMode.RGB_RGB_RGB:
+            self._view.rgb_rgb_rgb_sh = True
+        else:
+            raise ValueError(f"Invalid ShOrderingMode: {mode}")
 
     @property
     def near(self) -> float:

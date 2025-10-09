@@ -127,17 +127,6 @@ class GaussianSplat3dView {
         mParams.sh_stride_rgbrgbrgb_override = value ? 1u : 0u;
         syncSet();
     }
-
-    const bool
-    isShStrideRrrGggBbb() const {
-        syncGet();
-        return (mParams.sh_stride_rgbrgbrgb_override == 0u);
-    }
-    void
-    setShStrideRrrGggBbb(bool value) {
-        mParams.sh_stride_rgbrgbrgb_override = value ? 0u : 1u;
-        syncSet();
-    }
 };
 
 } // namespace fvdb::detail::viewer
