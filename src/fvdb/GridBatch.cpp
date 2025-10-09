@@ -310,10 +310,10 @@ GridBatch::avg_pool(Vec3iOrScalar pool_factor,
 }
 
 std::pair<JaggedTensor, GridBatch>
-GridBatch::subdivide(Vec3iOrScalar subdiv_factor,
-                     const JaggedTensor &data,
-                     const std::optional<JaggedTensor> mask,
-                     std::optional<GridBatch> fine_grid) const {
+GridBatch::refine(Vec3iOrScalar subdiv_factor,
+                  const JaggedTensor &data,
+                  const std::optional<JaggedTensor> mask,
+                  std::optional<GridBatch> fine_grid) const {
     c10::DeviceGuard guard(device());
     TORCH_CHECK_VALUE(
         data.ldim() == 1,
@@ -333,7 +333,7 @@ GridBatch::subdivide(Vec3iOrScalar subdiv_factor,
     if (fine_grid.has_value()) {
         fineGrid = fine_grid.value().mImpl;
     } else {
-        fineGrid = subdivided_grid(subdiv_factor, mask).mImpl;
+        fineGrid = refined_grid(subdiv_factor, mask).mImpl;
     }
 
     torch::Tensor subdivData = detail::autograd::UpsampleGrid::apply(
@@ -642,8 +642,7 @@ GridBatch::coarsened_grid(Vec3iOrScalar branch_factor) const {
 }
 
 GridBatch
-GridBatch::subdivided_grid(Vec3iOrScalar subdiv_factor,
-                           const std::optional<JaggedTensor> mask) const {
+GridBatch::refined_grid(Vec3iOrScalar subdiv_factor, const std::optional<JaggedTensor> mask) const {
     GridBatch result;
     const nanovdb::Coord subdivFactorCoord = subdiv_factor.value();
     result.mImpl                           = mImpl->upsample(subdivFactorCoord, mask);
@@ -990,7 +989,7 @@ GridBatch::neighbor_indexes(const JaggedTensor &ijk, int32_t extent, int32_t bit
 }
 
 JaggedTensor
-GridBatch::points_in_active_voxel(const JaggedTensor &points) const {
+GridBatch::points_in_grid(const JaggedTensor &points) const {
     c10::DeviceGuard guard(device());
     TORCH_CHECK_VALUE(
         points.ldim() == 1,
@@ -1035,7 +1034,7 @@ GridBatch::cubes_in_grid(const JaggedTensor &cube_centers,
 }
 
 JaggedTensor
-GridBatch::coords_in_active_voxel(const JaggedTensor &ijk) const {
+GridBatch::coords_in_grid(const JaggedTensor &ijk) const {
     c10::DeviceGuard guard(device());
     TORCH_CHECK_VALUE(
         ijk.ldim() == 1,

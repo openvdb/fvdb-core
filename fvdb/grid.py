@@ -52,7 +52,6 @@ from .types import (
 
 if TYPE_CHECKING:
     from .grid_batch import GridBatch
-    from .sparse_conv_pack_info import SparseConvPackInfo
 
 
 class Grid:
@@ -477,7 +476,7 @@ class Grid:
         """
         return Grid(impl=self._impl.contiguous())
 
-    def conv_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 0) -> "Grid":
+    def conv_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> "Grid":
         """
         Return a grid representing the convolution of this grid with a given kernel.
 
@@ -491,10 +490,10 @@ class Grid:
             conv_grid (Grid): A Grid representing the convolution of this grid.
         """
         kernel_size = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
-        stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.NON_NEGATIVE)
+        stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE)
         return Grid(impl=self._impl.conv_grid(kernel_size, stride))
 
-    def coords_in_active_voxel(self, ijk: torch.Tensor) -> torch.Tensor:
+    def coords_in_grid(self, ijk: torch.Tensor) -> torch.Tensor:
         """
         Check if voxel coordinates are in active voxels.
 
@@ -507,7 +506,7 @@ class Grid:
                 active voxels. Shape: (num_queries,).
         """
         jagged_ijk = JaggedTensor(ijk)
-        return self._impl.coords_in_active_voxel(jagged_ijk).jdata
+        return self._impl.coords_in_grid(jagged_ijk).jdata
 
     def cpu(self) -> "Grid":
         """
@@ -1158,7 +1157,7 @@ class Grid:
         jagged_ijk = JaggedTensor(ijk)
         return self._impl.neighbor_indexes(jagged_ijk, extent, bitshift).jdata
 
-    def points_in_active_voxel(self, points: torch.Tensor) -> torch.Tensor:
+    def points_in_grid(self, points: torch.Tensor) -> torch.Tensor:
         """
         Check if world-space points are located within active voxels.
 
@@ -1173,7 +1172,7 @@ class Grid:
                 Shape: (num_points,).
         """
         jagged_points = JaggedTensor(points)
-        return self._impl.points_in_active_voxel(jagged_points).jdata
+        return self._impl.points_in_grid(jagged_points).jdata
 
     def pruned_grid(self, mask: torch.Tensor) -> "Grid":
         """
@@ -1437,35 +1436,6 @@ class Grid:
         jagged_input = JaggedTensor(input)
         return self._impl.sparse_conv_halo(jagged_input, weight, variant).jdata
 
-    def sparse_conv_kernel_map(
-        self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1, target_grid: "Grid | None" = None
-    ) -> tuple["SparseConvPackInfo", "Grid"]:
-        """
-        Map sparse convolution kernel to target grid.
-
-        Args:
-            kernel_size (NumericMaxRank1): Size of the convolution kernel,
-                broadcastable to shape (3,), integer dtype
-            stride (NumericMaxRank1): Stride of the convolution,
-                broadcastable to shape (3,), integer dtype
-            target_grid (Grid | None): Target grid to map the kernel to.
-                If None, the kernel is mapped to the current grid.
-
-        Returns:
-            tuple[SparseConvPackInfo, Grid]: A tuple containing:
-                - SparseConvPackInfo: Information about the sparse convolution kernel.
-                - Grid: The target grid.
-        """
-        # Import here to avoid circular dependency
-        from .sparse_conv_pack_info import SparseConvPackInfo
-
-        kernel_size = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
-        stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.NON_NEGATIVE)
-        target_impl = target_grid._impl if target_grid is not None else None
-
-        sparse_impl, grid_impl = self._impl.sparse_conv_kernel_map(kernel_size, stride, target_impl)
-        return (SparseConvPackInfo(impl=sparse_impl), Grid(impl=grid_impl))
-
     def splat_bezier(self, points: torch.Tensor, points_data: torch.Tensor) -> torch.Tensor:
         """
         Splat point features onto voxels using Bézier interpolation.
@@ -1512,7 +1482,7 @@ class Grid:
 
         return self._impl.splat_trilinear(jagged_points, jagged_points_data).jdata
 
-    def subdivide(
+    def refine(
         self,
         subdiv_factor: NumericMaxRank1,
         data: torch.Tensor,
@@ -1520,25 +1490,32 @@ class Grid:
         fine_grid: "Grid | None" = None,
     ) -> tuple[torch.Tensor, "Grid"]:
         """
-        Subdivide grid using nearest neighbor interpolation.
+        Return a refined version of the input grid and associated data.
 
-        Increases the resolution of the grid by the specified subdivision factor,
-        filling in new voxels using nearest neighbor interpolation of the existing data.
+        The output grid is a higher-resolution version of the input grid,
+        created by subdividing each voxel by the specified factor.
+        The associated data with each voxel in the output is copied from the associated
+        data of the corresponding parent voxel in the input grid.
+
+        _i.e_, if the input grid has a single voxel at index (i, j, k) with associated data D,
+        and the subdiv_factor is (2, 2, 2), then the output grid will have voxels
+        at indices (2i + di, 2j + dj, 2k + dk) for di, dj, dk in {0, 1},
+        each with associated data D.
 
         Args:
-            subdiv_factor (NumericMaxRank1): Factor by which to subdivide the grid,
+            subdiv_factor (NumericMaxRank1): Factor by which to refine the grid,
                 broadcastable to shape (3,), integer dtype
-            data (torch.Tensor): Voxel data to subdivide.
+            data (torch.Tensor): Voxel data to refine.
                 Shape: (total_voxels, channels).
             mask (torch.Tensor, optional): Boolean mask indicating which
-                voxels to subdivide. If None, all voxels are subdivided.
+                voxels to refine. If None, all voxels are refined.
             fine_grid (Grid, optional): Pre-allocated fine grid to use for output.
                 If None, a new grid is created.
 
         Returns:
             tuple[torch.Tensor, Grid]: A tuple containing:
-                - The subdivided data as a torch.Tensor
-                - The fine Grid containing the subdivided structure
+                - The refined data as a torch.Tensor
+                - The fine Grid containing the refined structure
         """
         subdiv_factor = to_Vec3iBroadcastable(subdiv_factor, value_constraint=ValueConstraint.POSITIVE)
         jagged_data = JaggedTensor(data)
@@ -1546,34 +1523,35 @@ class Grid:
 
         fine_grid_impl = fine_grid._impl if fine_grid else None
 
-        result_data, result_grid_impl = self._impl.subdivide(subdiv_factor, jagged_data, jagged_mask, fine_grid_impl)
+        result_data, result_grid_impl = self._impl.refine(subdiv_factor, jagged_data, jagged_mask, fine_grid_impl)
         return result_data.jdata, Grid(impl=result_grid_impl)
 
-    def subdivided_grid(
+    def refined_grid(
         self,
         subdiv_factor: NumericMaxRank1,
         mask: torch.Tensor | None = None,
     ) -> "Grid":
         """
-        Return a subdivided version of the grid structure.
+        Return a refined version of the grid.
 
-        Creates a new grid with higher resolution by subdividing existing voxels.
-        Only the grid structure is returned, not the data.
-
+        The output grid is a higher-resolution version of the input grid,
+        created by subdividing each voxel by the specified factor.
+        This is similar to the `refine` method, but only the grid structure is returned,
+        not the data.
         Args:
-            subdiv_factor (NumericMaxRank1): Factor by which to subdivide the grid,
+            subdiv_factor (NumericMaxRank1): Factor by which to refine the grid,
                 broadcastable to shape (3,), integer dtype
             mask (torch.Tensor, optional): Boolean mask indicating which
-                voxels to subdivide. If None, all voxels are subdivided.
+                voxels to refine. If None, all voxels are refined.
 
         Returns:
-            Grid: A new Grid with subdivided structure.
+            Grid: A new Grid with refined structure.
         """
 
         subdiv_factor = to_Vec3iBroadcastable(subdiv_factor, value_constraint=ValueConstraint.POSITIVE)
         jagged_mask = JaggedTensor(mask) if mask is not None else None
 
-        return Grid(impl=self._impl.subdivided_grid(subdiv_factor, mask=jagged_mask))
+        return Grid(impl=self._impl.refined_grid(subdiv_factor, mask=jagged_mask))
 
     def to(self, target: "str | torch.device | torch.Tensor | JaggedTensor | Grid") -> "Grid":
         """

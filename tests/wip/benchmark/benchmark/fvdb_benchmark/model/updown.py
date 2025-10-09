@@ -1,13 +1,13 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
+import fvdb.nn as fvdbnn
 import torch.nn as nn
 from fvdb_benchmark.utils import encode_range_name
 from fvdb_benchmark.wrapper import Wrapper
 from torch.profiler import record_function
 
 import fvdb
-import fvdb.nn as fvdbnn
 
 
 class UpDown(nn.Module):
@@ -27,7 +27,7 @@ class UpDown(nn.Module):
         if self.backend == "fvdb":
             with record_function(encode_range_name("grid_creation", self.backend, {})):
                 assert isinstance(x, fvdbnn.VDBTensor)
-                up_grid = x.grid.subdivided_grid(self.factor)
+                up_grid = x.grid.refined_grid(self.factor)
                 up_kwargs = {"ref_fine_data": up_grid}
                 down_kargs = {"ref_coarse_data": x.grid}
         else:

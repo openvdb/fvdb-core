@@ -4,7 +4,10 @@
 
 from typing import Any
 
+import torch
+
 from .._Cpp import CameraView as CameraViewCpp
+from ..types import NumericMaxRank1, NumericScalarNative, to_Vec3f
 
 
 class CameraView:
@@ -56,13 +59,13 @@ class CameraView:
         return self._view.axis_length
 
     @axis_length.setter
-    def axis_length(self, length: float):
+    def axis_length(self, length: NumericScalarNative):
         """
         Set the length of the axes drawn at each camera origin in world units.
         Args:
-            length (float): The length of the axes.
+            length (NumericScalarNative): The length of the axes.
         """
-        self._view.axis_length = length
+        self._view.axis_length = float(length)
 
     @property
     def axis_thickness(self) -> float:
@@ -75,35 +78,70 @@ class CameraView:
         return self._view.axis_thickness
 
     @axis_thickness.setter
-    def axis_thickness(self, thickness: float):
+    def axis_thickness(self, thickness: NumericScalarNative):
         """
         Set the thickness of the axes drawn at each camera origin in world units.
 
         Args:
-            thickness (float): The thickness of the axes.
+            thickness (NumericScalarNative): The thickness of the axes.
         """
-        self._view.axis_thickness = thickness
-
-    @property
-    def axis_scale(self) -> float:
-        return self._view.axis_scale
-
-    @axis_scale.setter
-    def axis_scale(self, scale: float):
-        self._view.axis_scale = scale
+        self._view.axis_thickness = float(thickness)
 
     @property
     def frustum_line_width(self) -> float:
+        """
+        Get the line width of the frustum in the camera frustum view.
+        """
         return self._view.frustum_line_width
 
     @frustum_line_width.setter
-    def frustum_line_width(self, width: float):
-        self._view.frustum_line_width = width
+    def frustum_line_width(self, width: NumericScalarNative):
+        """
+        Set the line width of the frustum in the camera frustum view.
+
+        Args:
+            width (NumericScalarNative): The line width of the frustum in world units.
+        """
+        self._view.frustum_line_width = float(width)
 
     @property
     def frustum_scale(self) -> float:
+        """
+        Get the scale factor applied to the frustum visualization.
+        """
         return self._view.frustum_scale
 
     @frustum_scale.setter
-    def frustum_scale(self, scale: float):
-        self._view.frustum_scale = scale
+    def frustum_scale(self, scale: NumericScalarNative):
+        """
+        Set the scale factor applied to the frustum visualization.
+
+        Args:
+            scale (NumericScalarNative): The scale factor to apply to the frustum visualization.
+        """
+        self._view.frustum_scale = float(scale)
+
+    @property
+    def frustum_color(self) -> torch.Tensor:
+        """
+        Get the color of the frustum lines as a tensor of shape (3,) with values in [0, 1].
+
+        Returns:
+            torch.Tensor: The color of the frustum lines.
+        """
+        r, g, b = self._view.frustum_color
+        return torch.tensor([r, g, b], dtype=torch.float32)
+
+    @frustum_color.setter
+    def frustum_color(self, color: NumericMaxRank1):
+        """
+        Set the color of the frustum lines.
+
+        Args:
+            color (NumericMaxRank1): A tensor-like object of shape (3,) representing the color of the frustum lines
+                with values in [0, 1].
+        """
+        color_vec3f = to_Vec3f(color).cpu().numpy().tolist()
+        if any(c < 0.0 or c > 1.0 for c in color_vec3f):
+            raise ValueError(f"Frustum color components must be in [0, 1], got {color_vec3f}")
+        self._view.frustum_color = tuple(color_vec3f)

@@ -99,7 +99,7 @@ def make_grid_and_point_data(
         primal_pts = grid.grid_to_world(grid.ijk.double())
         samples = torch.cat([primal_pts] * expand, dim=0)
         samples += torch.randn_like(samples) * grid.voxel_size
-        mask = grid.points_in_active_voxel(samples)
+        mask = grid.points_in_grid(samples)
         found = not (torch.all(mask) or torch.all(~mask))
 
     samples = samples.to(dtype)

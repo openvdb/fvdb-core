@@ -77,7 +77,7 @@ def main():
     grid = Grid.from_points(p, vox_size, vox_origin)
     dual_index = grid.dual_grid()
 
-    mask = grid.points_in_active_voxel(torch.from_numpy(gpts).to(dtype).to(device)).cpu().numpy()
+    mask = grid.points_in_grid(torch.from_numpy(gpts).to(dtype).to(device)).cpu().numpy()
     vol_pts = torch.from_numpy(gpts[mask]).to(device=device, dtype=dtype)
     vol_sdf = torch.from_numpy(sdf[mask]).to(device=device, dtype=dtype).unsqueeze(-1)
 

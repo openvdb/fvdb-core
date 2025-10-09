@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: psf/black@stable
         with:
-          options: "--check --diff --verbose --target-version=py311 --line-length=120"
+          options: "--check --diff --verbose --target-version=py311 --line-length=120 --extend-exclude='wip/'"
           src: "./"
           version: "~= 24.0"
 
@@ -68,7 +68,7 @@ jobs:
     - name: test
       run: |
           set +e
-          git grep -n -I -E '^.+[ ]+$' -- ':!*.wlt'
+          git grep -n -I -E '^.+[ ]+$' -- ':!*.wlt' ':!*/wip/*'
           test $? -eq 1
 
   # Search for any tabs excluding meeting notes, image files and a few others
@@ -81,5 +81,5 @@ jobs:
     - name: test
       run: |
           set +e
-          git grep -n "	" -- ':!*/codestyle.yml' ':!*.svg' ':!*.cmd' ':!*.png' ':!*.wlt' ':!*.jpg' ':!*.gif' ':!*.mp4' ':!*.pt' ':!*.pth' ':!*.nvdb' ':!*.npz' ':!*.gitmodules'
+          git grep -n "	" -- ':!*/codestyle.yml' ':!*.svg' ':!*.cmd' ':!*.png' ':!*.wlt' ':!*.jpg' ':!*.gif' ':!*.mp4' ':!*.pt' ':!*.pth' ':!*.nvdb' ':!*.npz' ':!*.gitmodules' ':!*/wip/*'
           test $? -eq 1

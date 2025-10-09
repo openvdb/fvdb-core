@@ -174,7 +174,7 @@ target_include_directories(fvdb PUBLIC
     ${TORCH_INCLUDE_DIRS}
     ${Python3_INCLUDE_DIRS}
     ${nvtx3_SOURCE_DIR}/include
-    ${nanovdb_editor_SOURCE_DIR})
+    ${NANOVDB_EDITOR_INCLUDE_DIR})
 target_include_directories(fvdb PRIVATE
     ${TORCH_SOURCE_INCLUDE_DIRS}
     ${tinyply_SOURCE_DIR}/source)

@@ -32,12 +32,12 @@ def main():
         torch.cuda.synchronize()
     logging.info(f"Done in {time.time() - start}s!")
 
-    logging.info("Building subdivided grids")
+    logging.info("Building refined grids")
     start = time.time()
     for i in range(2):
         subdiv_factor = i + 1
         mask = torch.rand(grids[i].num_voxels, device=device) > 0.5
-        grids.append(grids[-1].subdivided_grid(subdiv_factor, mask))
+        grids.append(grids[-1].refined_grid(subdiv_factor, mask))
         assert mask.sum().item() * subdiv_factor**3 == grids[-1].num_voxels
     if device == "cuda":
         torch.cuda.synchronize()
