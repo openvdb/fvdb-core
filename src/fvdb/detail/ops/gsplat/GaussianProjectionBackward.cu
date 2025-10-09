@@ -593,11 +593,35 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
 
-        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-            c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-        }
-
         if (outNormalizeddLossdMeans2dNormAccum.has_value()) {
+            std::vector<cudaEvent_t> events(c10::cuda::device_count());
+            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+                C10_CUDA_CHECK(cudaSetDevice(deviceId));
+                auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+                C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
+                C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+            }
+
+            {
+                C10_CUDA_CHECK(cudaSetDevice(0));
+                auto stream = c10::cuda::getCurrentCUDAStream(0);
+                for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+                    C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+                }
+                C10_CUDA_CHECK(cudaEventRecord(events[0], stream));
+            }
+
+            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+                C10_CUDA_CHECK(cudaSetDevice(deviceId));
+                auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+                C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[0]));
+            }
+
+            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+                C10_CUDA_CHECK(cudaSetDevice(deviceId));
+                C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
+            }
+
             float *outNormalizeddLossdMeans2dNormAccumPtr =
                 outNormalizeddLossdMeans2dNormAccum.value().data_ptr<float>();
             int32_t *outGradientStepCountsPtr = outGradientStepCounts.value().data_ptr<int32_t>();
@@ -627,11 +651,6 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                         outGradientStepCountsPtr);
                     C10_CUDA_KERNEL_LAUNCH_CHECK();
                 }
-
-                for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-                    c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-                }
-
             } else {
                 for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
                     C10_CUDA_CHECK(cudaSetDevice(deviceId));
@@ -656,11 +675,11 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                             outGradientStepCountsPtr);
                     C10_CUDA_KERNEL_LAUNCH_CHECK();
                 }
-
-                for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-                    c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-                }
             }
+        }
+
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
         }
     }
     return std::make_tuple(

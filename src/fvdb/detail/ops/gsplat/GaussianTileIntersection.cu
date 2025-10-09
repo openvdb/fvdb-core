@@ -1056,7 +1056,7 @@ gaussianTileIntersectionPrivateUse1Impl(
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-            cudaEventCreate(&events[deviceId], cudaEventDisableTiming);
+            C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
 
             int64_t device_gaussian_offset, device_gaussian_count;
             std::tie(device_gaussian_offset, device_gaussian_count) =
@@ -1146,7 +1146,7 @@ gaussianTileIntersectionPrivateUse1Impl(
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-            cudaEventDestroy(events[deviceId]);
+            C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
         }
 
         return std::make_tuple(tile_joffsets, vals_sorted);
