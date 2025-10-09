@@ -137,7 +137,7 @@ jobs:
           grep '^version' pyproject.toml
 
       - name: Add local version for S3 publish
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3' }}
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[s3]')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[s3]')) }}
         run: |
           TORCH_TAG="$(echo "${{ matrix.torch-version }}" | tr -d '.')"
           CUDA_TAG="$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
@@ -150,7 +150,7 @@ jobs:
           ./build.sh wheel verbose --cuda-arch-list '7.5;8.0;9.0;10.0;12.0+PTX'
 
       - name: Repair wheel for manylinux
-        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') }}
+        if: ${{ !((github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[s3]')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[s3]'))) }}
         run: |
           micromamba activate fvdb_release
           pip install auditwheel patchelf
@@ -262,11 +262,11 @@ jobs:
     needs:
       - fvdb-build
       - reuse-artifacts
-    if: ${{ !cancelled() && (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3')) && (needs.fvdb-build.result == 'success' || needs.reuse-artifacts.result == 'success') }}
+    if: ${{ !cancelled() && (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[s3]')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[s3]'))) && (needs.fvdb-build.result == 'success' || needs.reuse-artifacts.result == 'success') }}
     runs-on: ubuntu-latest
     env:
       S3_BUCKET: fvdb-packages
-      SIMPLE_PREFIX: simple
+      SIMPLE_PREFIX: ${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[s3]'))) && 'simple-staging' || 'simple' }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
