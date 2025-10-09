@@ -276,7 +276,6 @@ jobs:
           repository-url: ${{ (github.event_name == 'release' && 'https://upload.pypi.org/legacy/') || (github.event_name == 'workflow_dispatch' && inputs.publish_target == 'testpypi' && 'https://test.pypi.org/legacy/') || 'https://test.pypi.org/legacy/' }}
           verbose: true
 
-  # Test publishing to S3
   publish-to-s3:
     name: Publish wheels to custom S3 Simple Index
     needs: [pr-flags, fvdb-build, reuse-artifacts]
