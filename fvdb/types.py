@@ -1116,6 +1116,50 @@ def to_Vec3fBatchBroadcastable(
     )
 
 
+def to_Vec2i(
+    x: NumericMaxRank1,
+    dtype: torch.dtype = torch.int64,
+    value_constraint: ValueConstraint = ValueConstraint.NONE,
+) -> torch.Tensor:
+    """
+    Converts a NumericMaxRank1 to a Vec2i tensor, reshaped to (2,).
+
+    Args:
+        x (NumericMaxRank1): The input tensor.
+        dtype (torch.dtype): The integer dtype of the output tensor. Defaults to torch.int64.
+        value_constraint: Constraint on the value of the scalar.
+            default: ValueConstraint.NONE
+            if ValueConstraint.NON_NEGATIVE, the scalar must be non-negative
+            if ValueConstraint.POSITIVE, the scalar must be positive
+
+    Returns:
+        A torch.Tensor of dtype dtype.
+    """
+    return to_IntegerTensorBroadcastableRank1(x, (2,), dtype, value_constraint=value_constraint, do_broadcast_to=True)
+
+
+def to_Vec2f(
+    x: NumericMaxRank1,
+    dtype: torch.dtype = torch.float32,
+    value_constraint: ValueConstraint = ValueConstraint.NONE,
+) -> torch.Tensor:
+    """
+    Converts a NumericMaxRank1 to a Vec2f tensor, reshaped to (2,).
+
+    Args:
+        x (NumericMaxRank1): The input tensor.
+        dtype (torch.dtype): The integer dtype of the output tensor. Defaults to torch.int64.
+        value_constraint: Constraint on the value of the scalar.
+            default: ValueConstraint.NONE
+            if ValueConstraint.NON_NEGATIVE, the scalar must be non-negative
+            if ValueConstraint.POSITIVE, the scalar must be positive
+
+    Returns:
+        A torch.Tensor of dtype dtype.
+    """
+    return to_FloatingTensorBroadcastableRank1(x, (2,), dtype, value_constraint=value_constraint, do_broadcast_to=True)
+
+
 def to_Vec3i(
     x: NumericMaxRank1,
     dtype: torch.dtype = torch.int64,
