@@ -25,7 +25,7 @@ EvaluateSphericalHarmonics::forward(
     FVDB_FUNC_RANGE_WITH_NAME("EvaluateSphericalHarmonics::forward");
     const Variable viewDirectionsValue = viewDirections.value_or(torch::Tensor());
     const Variable shNCoeffsValue      = shNCoeffs.value_or(torch::Tensor());
-    const Variable renderQuantities    = FVDB_DISPATCH_KERNEL_DEVICE(sh0Coeffs.device(), [&]() {
+    const Variable renderQuantities    = FVDB_DISPATCH_KERNEL(sh0Coeffs.device(), [&]() {
         return ops::dispatchSphericalHarmonicsForward<DeviceTag>(
             shDegreeToUse, numCameras, viewDirectionsValue, sh0Coeffs, shNCoeffsValue, radii);
     });
@@ -56,7 +56,7 @@ EvaluateSphericalHarmonics::backward(EvaluateSphericalHarmonics::AutogradContext
     const int numGaussians           = static_cast<int>(ctx->saved_data["numGaussians"].toInt());
     const bool computeDLossDViewDirs = ctx->needs_input_grad(1);
 
-    auto variables           = FVDB_DISPATCH_KERNEL_DEVICE(dLossdColors.device(), [&]() {
+    auto variables           = FVDB_DISPATCH_KERNEL(dLossdColors.device(), [&]() {
         return ops::dispatchSphericalHarmonicsBackward<DeviceTag>(shDegreeToUse,
                                                                   numCameras,
                                                                   numGaussians,

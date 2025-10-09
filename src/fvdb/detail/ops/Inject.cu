@@ -5,6 +5,7 @@
 #include <fvdb/detail/GridBatchImpl.h>
 #include <fvdb/detail/TorchDeviceBuffer.h>
 #include <fvdb/detail/ops/Inject.h>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
 #include <fvdb/detail/utils/nanovdb/ActiveVoxelIterator.h>
 
 #include <nanovdb/NanoVDB.h>
@@ -308,10 +309,8 @@ dispatchInject<torch::kPrivateUse1>(const GridBatchImpl &dstGridBatch,
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
 
-            auto deviceSrcLeafCount =
-                (srcLeafCount + c10::cuda::device_count() - 1) / c10::cuda::device_count();
-            const auto deviceSrcLeafOffset = deviceSrcLeafCount * deviceId;
-            deviceSrcLeafCount = std::min(deviceSrcLeafCount, srcLeafCount - deviceSrcLeafOffset);
+            size_t deviceSrcLeafOffset, deviceSrcLeafCount;
+            std::tie(deviceSrcLeafOffset, deviceSrcLeafCount) = deviceChunk(srcLeafCount, deviceId);
 
             AT_DISPATCH_V2(
                 src.scalar_type(),
