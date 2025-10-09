@@ -221,7 +221,7 @@ jobs:
   publish-dist:
     name: Publish Python 🐍 distribution 📦
     needs:
-      - fvdb-buildf
+      - fvdb-build
     if: ${{ !cancelled() && (needs.fvdb-build.result == 'success') && !((github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.s3 ==  'true')) }}
     runs-on: ubuntu-latest
 
