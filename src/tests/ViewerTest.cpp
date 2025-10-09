@@ -18,38 +18,78 @@ TEST(Viewer, ViewerTest) {
     fvdb::detail::viewer::Viewer viewer = fvdb::detail::viewer::Viewer("127.0.0.1", 8080, false);
 
 #ifdef LOCAL_TESTING
-    std::string ply_path = "";
+    std::string ply_paths[] = {};
+
+    std::string view_names[] = {};
+
     torch::Device device(torch::kCUDA);
-    auto [splats, metadata] = fvdb::detail::io::loadGaussianPly(ply_path, device);
 
-    fvdb::detail::viewer::GaussianSplat3dView &view =
-        viewer.addGaussianSplat3d("test_view", splats);
-    view.setFar(1000000.0f);
+    std::vector<
+        std::tuple<fvdb::GaussianSplat3d,
+                   std::unordered_map<std::string, fvdb::GaussianSplat3d::PlyMetadataTypes>>>
+        loadedData;
 
-    torch::Tensor cameraToWorld = std::get<torch::Tensor>(metadata.at("camera_to_world_matrices"));
-    torch::Tensor projectionMat = std::get<torch::Tensor>(metadata.at("projection_matrices"));
+    for (size_t i = 0; i < std::size(ply_paths) && i < std::size(view_names); ++i) {
+        const std::string &ply_path = ply_paths[i];
 
-    float frustumNear = 0.3f;
-    float frustumFar  = 1.0f;
+        printf("Loading splats from %s\n", ply_path.c_str());
+        auto loaded = fvdb::detail::io::loadGaussianPly(ply_path, device);
+        loadedData.push_back(loaded);
+    }
 
-    fvdb::detail::viewer::CameraView &cameraView = viewer.addCameraView(
-        "test_camera_view", cameraToWorld, projectionMat, frustumNear, frustumFar);
+    int N = 100;
 
-    const float axisLength = 0.5f;
-    cameraView.setAxisLength(axisLength);
-    ASSERT_FLOAT_EQ(cameraView.getAxisLength(), axisLength);
+    for (int i = 0; i < N; ++i) {
+        printf("Iteration %d / %d\n", i + 1, N);
+        for (size_t i = 0; i < std::size(ply_paths) && i < std::size(view_names); ++i) {
+            const std::string &ply_path  = ply_paths[i];
+            const std::string &view_name = view_names[i];
 
-    const float axisThickness = 0.0125f;
-    cameraView.setAxisThickness(axisThickness);
-    ASSERT_FLOAT_EQ(cameraView.getAxisThickness(), axisThickness);
+            auto [splats, metadata] = loadedData[i];
 
-    const float frustumLineWidth = 2.0f;
-    cameraView.setFrustumLineWidth(frustumLineWidth);
-    ASSERT_FLOAT_EQ(cameraView.getFrustumLineWidth(), frustumLineWidth);
+            printf("Adding splats from %s\n", ply_path.c_str());
+            fvdb::detail::viewer::GaussianSplat3dView &view =
+                viewer.addGaussianSplat3d(view_name, splats);
+            view.setFar(1.f);
 
-    const float frustumScale = 1.f;
-    cameraView.setFrustumScale(frustumScale);
-    ASSERT_FLOAT_EQ(cameraView.getFrustumScale(), frustumScale);
+            torch::Tensor cameraToWorld =
+                std::get<torch::Tensor>(metadata.at("camera_to_world_matrices"));
+            torch::Tensor projectionMat =
+                std::get<torch::Tensor>(metadata.at("projection_matrices"));
+
+            if (cameraToWorld._is_zerotensor() || projectionMat._is_zerotensor()) {
+                continue;
+            }
+
+            torch::Tensor imageSizes;
+            if (metadata.find("image_sizes") != metadata.end()) {
+                imageSizes = std::get<torch::Tensor>(metadata.at("image_sizes"));
+            } else {
+                imageSizes = torch::empty({0}, device);
+            }
+
+            fvdb::detail::viewer::CameraView &cameraView = viewer.addCameraView(
+                view_name, cameraToWorld, projectionMat, imageSizes, 0.f, 0.5f);
+
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+
+            const float axisLength = 0.5f;
+            cameraView.setAxisLength(axisLength);
+            ASSERT_FLOAT_EQ(cameraView.getAxisLength(), axisLength);
+
+            const float axisThickness = 0.0125f;
+            cameraView.setAxisThickness(axisThickness);
+            ASSERT_FLOAT_EQ(cameraView.getAxisThickness(), axisThickness);
+
+            const float frustumLineWidth = 2.0f;
+            cameraView.setFrustumLineWidth(frustumLineWidth);
+            ASSERT_FLOAT_EQ(cameraView.getFrustumLineWidth(), frustumLineWidth);
+
+            const float frustumScale = 1.f;
+            cameraView.setFrustumScale(frustumScale);
+            ASSERT_FLOAT_EQ(cameraView.getFrustumScale(), frustumScale);
+        }
+    }
 #else
     const int N = 1000;
     torch::Device device(torch::kCUDA);

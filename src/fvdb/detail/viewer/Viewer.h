@@ -29,7 +29,7 @@ class Viewer {
         pnanovdb_camera_t camera;
         pnanovdb_editor_t editor;
         pnanovdb_editor_config_t config;
-        const pnanovdb_reflect_data_type_t *rasterShaderParamsType;
+        pnanovdb_raster_context_t *raster_ctx;
     };
 
     EditorContext mEditor;
