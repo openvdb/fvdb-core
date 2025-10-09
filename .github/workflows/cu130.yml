@@ -374,7 +374,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/test/cu130
+          uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/test/cu130 --index-strategy unsafe-best-match
           uv pip install torch-scatter -f https://data.pyg.org/whl/torch-2.8.0+cu129.html
           source .venv/bin/activate
           TORCH_CUDA_ARCH_LIST="8.9+PTX" pip install -v git+https://github.com/heiwang1997/torchsparse.git
@@ -460,7 +460,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/test/cu130
+          uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/test/cu130 --index-strategy unsafe-best-match
 
       - name: Download package
         uses: actions/download-artifact@v4
