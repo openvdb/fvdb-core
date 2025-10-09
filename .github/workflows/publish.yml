@@ -44,7 +44,7 @@ jobs:
     outputs:
       s3: ${{ steps.flags.outputs.s3 }}
     steps:
-      - name: Compute S3 flag from PR commits
+      - name: Compute S3 flag from PR head commit
         id: flags
         uses: actions/github-script@v7
         with:
@@ -53,7 +53,7 @@ jobs:
             let s3 = false;
             if (isPR) {
               const {owner, repo} = context.repo;
-              const prNumber = context.payload.pull_request.number;
+              const sha = context.payload.pull_request.head.sha;
               const commit = await github.rest.repos.getCommit({ owner, repo, ref: sha });
               s3 = /\[s3\]/i.test(commit.data.commit.message || '');
             }
