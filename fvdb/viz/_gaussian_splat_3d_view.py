@@ -1,9 +1,15 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 
+from enum import Enum
 from typing import Any
 
 from .._Cpp import GaussianSplat3dView as GaussianSplat3dViewCpp
+
+
+class ShOrderingMode(str, Enum):
+    RGB_RGB_RGB = "rgb_rgb_rgb"
+    RRR_GGG_BBB = "rrr_ggg_bbb"
 
 
 class GaussianSplat3dView:
@@ -71,6 +77,28 @@ class GaussianSplat3dView:
         self._view.min_radius_2d = radius
 
     @property
+    def eps_2d(self) -> float:
+        """
+        Get the 2D epsilon value used for rendering splats.
+
+        Returns:
+            float: The 2D epsilon value.
+        """
+        return self._view.eps_2d
+
+    @eps_2d.setter
+    def eps_2d(self, eps: float):
+        """
+        Set the 2D epsilon value used for rendering splats.
+
+        Args:
+            eps (float): The 2D epsilon value.
+        """
+        if eps < 0.0:
+            raise ValueError(f"Epsilon must be non-negative, got {eps}")
+        self._view.eps_2d = eps
+
+    @property
     def sh_degree_to_use(self) -> int:
         """
         Get the degree of spherical harmonics to use when rendering colors.
@@ -90,6 +118,34 @@ class GaussianSplat3dView:
             degree (int): The degree of spherical harmonics to use.
         """
         self._view.sh_degree_to_use = degree
+
+    @property
+    def sh_ordering_mode(self) -> ShOrderingMode:
+        """
+        Get the spherical harmonics ordering mode used for rendering colors.
+
+        Returns:
+            ShOrderingMode: The spherical harmonics ordering mode.
+        """
+        if self._view.rgb_rgb_rgb_sh:
+            return ShOrderingMode.RRR_GGG_BBB
+        else:
+            return ShOrderingMode.RGB_RGB_RGB
+
+    @sh_ordering_mode.setter
+    def sh_ordering_mode(self, mode: ShOrderingMode):
+        """
+        Set the spherical harmonics ordering mode used for rendering colors.
+
+        Args:
+            mode (ShOrderingMode): The spherical harmonics ordering mode.
+        """
+        if mode == ShOrderingMode.RRR_GGG_BBB:
+            self._view.rgb_rgb_rgb_sh = False
+        elif mode == ShOrderingMode.RGB_RGB_RGB:
+            self._view.rgb_rgb_rgb_sh = True
+        else:
+            raise ValueError(f"Invalid ShOrderingMode: {mode}")
 
     @property
     def near(self) -> float:

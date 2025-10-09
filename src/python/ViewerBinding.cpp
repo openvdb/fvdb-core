@@ -69,6 +69,10 @@ bind_viewer(py::module &m) {
             &fvdb::detail::viewer::GaussianSplat3dView::getShDegreeToUse,
             &fvdb::detail::viewer::GaussianSplat3dView::setShDegreeToUse,
             "The spherical harmonics degree used to render this Gaussian scene. A value of 0 means all available spherical harmonics are used.")
+        .def_property("rgb_rgb_rgb_sh",
+                      &fvdb::detail::viewer::GaussianSplat3dView::isShStrideRgbRgbRgb,
+                      &fvdb::detail::viewer::GaussianSplat3dView::setShStrideRgbRgbRgb,
+                      "Whether the spherical harmonics data is stored in RGBRGB... order.")
         .def_property("near",
                       &fvdb::detail::viewer::GaussianSplat3dView::getNear,
                       &fvdb::detail::viewer::GaussianSplat3dView::setNear,
@@ -164,8 +168,8 @@ bind_viewer(py::module &m) {
                                float>(&fvdb::detail::viewer::Viewer::addCameraView),
              py::arg("name"),
              py::arg("camera_to_world_matrices"),
-             py::arg("image_sizes"),
              py::arg("projection_matrices"),
+             py::arg("image_sizes"),
              py::arg("frustum_near_plane") = 0.1,
              py::arg("frustum_far_plane")  = 100.,
              py::return_value_policy::reference_internal,
