@@ -43,25 +43,30 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       s3: ${{ steps.flags.outputs.s3 }}
+      reuse: ${{ steps.flags.outputs.reuse }}
     steps:
-      - name: Compute S3 flag from PR head commit
+      - name: Compute flags from PR head commit
         id: flags
         uses: actions/github-script@v7
         with:
           script: |
             const isPR = context.eventName === 'pull_request';
             let s3 = false;
+            let reuse = false;
             if (isPR) {
               const {owner, repo} = context.repo;
               const sha = context.payload.pull_request.head.sha;
               const commit = await github.rest.repos.getCommit({ owner, repo, ref: sha });
-              s3 = /\[s3\]/i.test(commit.data.commit.message || '');
+              const msg = (commit.data.commit.message || '').toString();
+              s3 = /\[s3\]/i.test(msg);
+              reuse = /\[reuse\]/i.test(msg);
             }
             core.setOutput('s3', s3 ? 'true' : 'false');
+            core.setOutput('reuse', reuse ? 'true' : 'false');
   start-build-runner:
     name: Start CPU-only EC2 runner for build
     runs-on: ubuntu-latest
-    if: ${{ !((github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') || contains(github.event.head_commit.message, '[reuse]')) }}
+    if: ${{ !((github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.reuse == 'true') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[reuse]'))) }}
     outputs:
       label: ${{ steps.start-build-runner.outputs.label }}
       ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
@@ -93,7 +98,7 @@ jobs:
   fvdb-build:
     name: fVDB Build
     needs: [start-build-runner, pr-flags] # start when runner is ready and flags computed
-    if: ${{ !((github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') || contains(github.event.head_commit.message, '[reuse]')) }}
+    if: ${{ !((github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.reuse == 'true') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[reuse]'))) }}
     runs-on: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }} # run the job on the newly created runner
     container:
       image: aswf/ci-openvdb:2024-clang17.2
@@ -224,7 +229,7 @@ jobs:
 
   reuse-artifacts:
     name: Reuse artifacts from last successful run
-    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') || contains(github.event.head_commit.message, '[reuse]') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.reuse_artifacts == 'true') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.reuse == 'true') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[reuse]')) }}
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts from last successful run
@@ -253,7 +258,7 @@ jobs:
     needs:
       - fvdb-build
       - reuse-artifacts
-    if: ${{ !cancelled() && (needs.fvdb-build.result == 'success' || needs.reuse-artifacts.result == 'success') }}
+    if: ${{ !cancelled() && (needs.fvdb-build.result == 'success' || needs.reuse-artifacts.result == 'success') && !((github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.s3 == 'true')) }}
     runs-on: ubuntu-latest
 
     environment:
@@ -298,19 +303,28 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Determine normalized project name
+      - name: Determine normalized project name from wheel
         id: proj
         run: |
-          PROJECT_NAME=$(grep '^name\s*=\s*"' pyproject.toml | head -n1 | sed -E 's/^name\s*=\s*"([^"]+)".*/\1/')
-          NORM=$(echo "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[-_.]+/-/g')
-          echo "project_name=$PROJECT_NAME" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          shopt -s nullglob
+          FIRST_WHL=$(ls dist/*.whl | head -n1)
+          if [ -z "${FIRST_WHL:-}" ]; then
+            echo "No wheels found in dist/" >&2; exit 1
+          fi
+          BASE=$(basename "$FIRST_WHL")
+          PROJECT=${BASE%%-*}
+          NORM=$(echo "$PROJECT" | tr '[:upper:]' '[:lower:]' | sed -E 's/[-_.]+/-/g')
+          echo "project_name=$PROJECT" >> $GITHUB_OUTPUT
           echo "normalized=$NORM" >> $GITHUB_OUTPUT
-          echo "Project: $PROJECT_NAME, Normalized: $NORM"
+          echo "Project: $PROJECT, Normalized: $NORM"
 
       - name: Upload wheels to S3 project directory
         run: |
           set -euo pipefail
-          DEST="s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/"
+          DEST="s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}"
+          # Ensure trailing slash exactly once
+          DEST="${DEST%/}/"
           echo "Uploading wheels to $DEST"
           shopt -s nullglob
           for whl in dist/*.whl; do
