@@ -77,6 +77,15 @@ class Viewer {
 
     void setCameraProjectionType(GaussianSplat3d::ProjectionType mode);
     GaussianSplat3d::ProjectionType cameraProjectionType() const;
+
+    std::string
+    ipAddress() const {
+        return mIpAddress;
+    };
+    int
+    port() const {
+        return mPort;
+    };
 };
 
 } // namespace fvdb::detail::viewer
