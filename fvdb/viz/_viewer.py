@@ -23,10 +23,8 @@ _running_viewers = dict()
 class Viewer:
     def __init__(self, name: str = "default", port: int = 8080, ip_address="127.0.0.1", verbose: bool = False):
         """
-        Create a new `Viewer` running a server at the specified IP address and port.
-
-        If there is already a viewer server running at the specified address and port,
-        this will throw an Exception.
+        Create a `Viewer` with the given name running a server at the specified IP address and port.
+        If a viewer was previously created with the same name, this will return a reference to the existing viewer.
 
         Args:
             name (str): The name of the viewer instance. Default is "default". This name is used to
