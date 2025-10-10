@@ -8,6 +8,7 @@
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 #include <fvdb/detail/utils/MortonCode.h>
+#include <fvdb/detail/utils/Hilbert.h>
 
 #include <c10/cuda/CUDAException.h>
 #include <cuda_runtime.h>
