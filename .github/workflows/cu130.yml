@@ -1,4 +1,4 @@
-name: fVDB CUDA 12.9.1 Build and Test
+name: fVDB CUDA 13.0.1 Build and Test
 
 on:
   pull_request_target:
@@ -26,6 +26,9 @@ permissions:
   id-token: write
 
 jobs:
+  ##############################################################################
+  # START FVDB BUILD RUNNER
+  ##############################################################################
   start-build-runner:
     name: Start CPU-only EC2 runner for build
     runs-on: ubuntu-latest
@@ -48,13 +51,17 @@ jobs:
           ec2-instance-type: m6a.8xlarge
           subnet-id: subnet-03f2320d6e6e0005b
           security-group-id: sg-0cd08bd89d6212223
+
+  ##############################################################################
+  # BUILD FVDB
+  ##############################################################################
   fvdb-build:
     if: ${{ !startsWith(github.event.pull_request.title, 'Draft:') }}
     name: fVDB Build
     needs: start-build-runner
     runs-on: ${{ needs.start-build-runner.outputs.label }}
     container:
-      image: nvidia/cuda:12.9.1-cudnn-devel-ubuntu22.04
+      image: nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
@@ -88,7 +95,6 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE
           git merge pr_branch
-
 
       # - name: Simulate merge for push events
       #   if: github.event_name == 'push'
@@ -131,7 +137,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu129
+          uv pip install --no-cache-dir -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/test/cu130
 
       - name: Build fvdb
         run: |
@@ -163,6 +169,10 @@ jobs:
           echo "Cleaning up /__w/_temp directory"
           rm -rf /__w/_temp/*
           echo "Cleanup completed"
+
+  ##############################################################################
+  # STOP FVDB BUILD RUNNER
+  ##############################################################################
   fvdb-build-stop-runner:
     name: Stop CPU-only EC2 runner for build
     needs:
@@ -214,13 +224,12 @@ jobs:
   ##############################################################################
   # RUN FVDB GTESTS
   ##############################################################################
-
   fvdb-gtests:
     needs: start-tests-gpu-runner # required to start the main job when the runner is ready
     name: fVDB GTests
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: nvidia/cuda:12.9.1-cudnn-devel-ubuntu22.04
+      image: nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
@@ -279,7 +288,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu129
+          uv pip install --no-cache-dir -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/test/cu130
 
       - name: Download package with nanovdb_editor
         uses: actions/download-artifact@v4
@@ -323,7 +332,7 @@ jobs:
     name: fVDB PyTests
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: nvidia/cuda:12.9.1-cudnn-devel-ubuntu22.04
+      image: nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04
       env:
         PYTHONPATH: ""
       options: --rm
@@ -340,6 +349,7 @@ jobs:
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
         run: |
@@ -374,10 +384,10 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu129
-          uv pip install torch-scatter -f https://data.pyg.org/whl/torch-2.8.0+cu129.html
-          source .venv/bin/activate
-          TORCH_CUDA_ARCH_LIST="8.9+PTX" pip install -v git+https://github.com/heiwang1997/torchsparse.git
+          uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/test/cu130 --index-strategy unsafe-best-match
+          uv pip install --no-cache-dir setuptools
+          TORCH_CUDA_ARCH_LIST="8.9+PTX" uv pip install -v --no-build-isolation git+https://github.com/rusty1s/pytorch_scatter.git
+          TORCH_CUDA_ARCH_LIST="8.9+PTX" uv pip install -v --no-build-isolation git+https://github.com/heiwang1997/torchsparse.git
 
       - name: Download package
         uses: actions/download-artifact@v4
@@ -402,6 +412,7 @@ jobs:
           echo "Cleaning up /__w/_temp directory"
           rm -rf /__w/_temp/*
           echo "Cleanup completed"
+
   ##############################################################################
   # RUN FVDB DOCUMENTATION TESTS
   ##############################################################################
@@ -410,7 +421,7 @@ jobs:
     name: fVDB Documentation Tests
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: nvidia/cuda:12.9.1-cudnn-devel-ubuntu22.04
+      image: nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04
       env:
         PYTHONPATH: ""
       options: --rm
@@ -427,6 +438,7 @@ jobs:
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
         run: |
@@ -442,7 +454,6 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE
           git merge pr_branch
-
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
         with:
@@ -460,7 +471,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu129
+          uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/test/cu130 --index-strategy unsafe-best-match
 
       - name: Download package
         uses: actions/download-artifact@v4
@@ -484,6 +495,7 @@ jobs:
           echo "Cleaning up /__w/_temp directory"
           rm -rf /__w/_temp/*
           echo "Cleanup completed"
+
   ##############################################################################
   # STOP FVDB TESTS GPU RUNNER
   ##############################################################################

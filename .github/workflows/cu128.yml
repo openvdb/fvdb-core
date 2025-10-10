@@ -366,7 +366,6 @@ jobs:
           cd $GITHUB_WORKSPACE
           git merge pr_branch
 
-
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
         with:
@@ -386,9 +385,8 @@ jobs:
         run: |
           uv venv
           uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
-          uv pip install torch-scatter -f https://data.pyg.org/whl/torch-2.7.0+cu128.html
-          source .venv/bin/activate
-          TORCH_CUDA_ARCH_LIST="8.9+PTX" pip install -v git+https://github.com/heiwang1997/torchsparse.git
+          uv pip install torch-scatter -f https://data.pyg.org/whl/torch-2.8.0+cu128.html
+          TORCH_CUDA_ARCH_LIST="8.9+PTX" uv pip install -v --no-build-isolation git+https://github.com/heiwang1997/torchsparse.git
 
       - name: Download package
         uses: actions/download-artifact@v4
@@ -413,7 +411,6 @@ jobs:
           echo "Cleaning up /__w/_temp directory"
           rm -rf /__w/_temp/*
           echo "Cleanup completed"
-
 
   ##############################################################################
   # RUN FVDB DOCUMENTATION TESTS
