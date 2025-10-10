@@ -10,13 +10,31 @@
 
 #include <c10/cuda/CUDAFunctions.h>
 
-template <typename index_t>
-inline std::tuple<index_t, index_t>
-deviceOffsetAndCount(index_t count, c10::DeviceIndex deviceId) {
-    auto deviceCount        = (count + c10::cuda::device_count() - 1) / c10::cuda::device_count();
-    const auto deviceOffset = deviceCount * deviceId;
-    deviceCount             = std::min(deviceCount, count - deviceOffset);
-    return std::make_tuple(deviceOffset, deviceCount);
+namespace fvdb {
+
+namespace detail {
+
+static constexpr size_t kPageSize = 1u << 21;
+
+inline std::tuple<size_t, size_t>
+deviceAlignedChunk(size_t alignment, size_t size, c10::DeviceIndex device) {
+    size_t chunkSize = alignment * ((size + alignment * c10::cuda::device_count() - 1) /
+                                    (c10::cuda::device_count() * alignment));
+    auto chunkOffset = chunkSize * device;
+    if (chunkOffset + chunkSize > size) {
+        chunkOffset = std::min(chunkOffset, size);
+        chunkSize   = std::min(chunkSize, size - chunkOffset);
+    }
+    return std::make_tuple(chunkOffset, chunkSize);
 }
+
+inline std::tuple<size_t, size_t>
+deviceChunk(size_t size, c10::DeviceIndex device) {
+    return deviceAlignedChunk(1, size, device);
+}
+
+} // namespace detail
+
+} // namespace fvdb
 
 #endif // FVDB_DETAIL_UTILS_CUDA_UTILS_CUH

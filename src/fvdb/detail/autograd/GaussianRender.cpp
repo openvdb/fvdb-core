@@ -38,7 +38,7 @@ ProjectGaussians::forward(ProjectGaussians::AutogradContext *ctx,
     TORCH_CHECK(worldToCamMatrices.dim() == 3, "worldToCamMatrices must have shape (C, 4, 4)");
     TORCH_CHECK(projectionMatrices.dim() == 3, "projectionMatrices must have shape (C, 3, 3)");
 
-    auto variables   = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
+    auto variables   = FVDB_DISPATCH_KERNEL(means.device(), [&]() {
         return ops::dispatchGaussianProjectionForward<DeviceTag>(means,
                                                                  quats,
                                                                  logScales,
@@ -158,7 +158,7 @@ ProjectGaussians::backward(ProjectGaussians::AutogradContext *ctx,
                 ? std::optional<at::Tensor>(ctx->saved_data["outGradientStepCount"].toTensor())
                 : std::nullopt);
     }();
-    auto variables = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
+    auto variables = FVDB_DISPATCH_KERNEL(means.device(), [&]() {
         return ops::dispatchGaussianProjectionBackward<DeviceTag>(means,
                                                                   quats,
                                                                   logScales,
@@ -224,7 +224,7 @@ RasterizeGaussiansToPixels::forward(
     // const int C = means2d.size(0);
     // const int N = means2d.size(1);
 
-    auto variables          = FVDB_DISPATCH_KERNEL_DEVICE(means2d.device(), [&]() {
+    auto variables          = FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
         return ops::dispatchGaussianRasterizeForward<DeviceTag>(means2d,
                                                                 conics,
                                                                 colors,
@@ -291,7 +291,7 @@ RasterizeGaussiansToPixels::backward(RasterizeGaussiansToPixels::AutogradContext
     const int imageOriginH = (int)ctx->saved_data["imageOriginH"].toInt();
     const bool absgrad     = ctx->saved_data["absgrad"].toBool();
 
-    auto variables = FVDB_DISPATCH_KERNEL_DEVICE(means2d.device(), [&]() {
+    auto variables = FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
         return ops::dispatchGaussianRasterizeBackward<DeviceTag>(means2d,
                                                                  conics,
                                                                  colors,

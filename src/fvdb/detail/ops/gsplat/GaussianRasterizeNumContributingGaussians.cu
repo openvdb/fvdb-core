@@ -59,6 +59,7 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeNumContributingGa
                      imageOriginW,
                      imageOriginH,
                      tileSize,
+                     0,
                      tileOffsets,
                      tileGaussianIds,
                      activeTiles,
@@ -301,7 +302,7 @@ launchRasterizeNumContributingGaussiansForwardKernel(
     const dim3 blockDim = {settings.tileSize, settings.tileSize, 1};
     const dim3 gridDim  = activeTiles.has_value() // sparse mode
                               ? dim3(activeTiles.value().size(0), 1, 1)
-                              : dim3(C, tileExtentH, tileExtentW);
+                              : dim3(C * tileExtentH * tileExtentW, 1, 1);
     auto args =
         RasterizeNumContributingGaussiansArgs<ScalarType, IS_PACKED>(means2d,
                                                                      conics,
