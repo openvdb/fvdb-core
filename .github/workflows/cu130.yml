@@ -376,7 +376,7 @@ jobs:
           uv venv
           uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/test/cu130 --index-strategy unsafe-best-match
           source .venv/bin/activate
-          TORCH_CUDA_ARCH_LIST="8.9+PTX" pip install -v git+https://github.com/rusty1s/pytorch_scatter.git --extra-index-url https://download.pytorch.org/whl/test/cu130 --index-strategy unsafe-best-match
+          TORCH_CUDA_ARCH_LIST="8.9+PTX" pip install -v git+https://github.com/rusty1s/pytorch_scatter.git --extra-index-url https://download.pytorch.org/whl/test/cu130
           TORCH_CUDA_ARCH_LIST="8.9+PTX" pip install -v git+https://github.com/heiwang1997/torchsparse.git
 
       - name: Download package
