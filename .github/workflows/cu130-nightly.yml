@@ -1,4 +1,4 @@
-name: fVDB Nightly Build and Tests -- CUDA 12.9.1
+name: fVDB Nightly Build and Tests -- CUDA 13.0.1
 
 # on:
 #   schedule:
@@ -19,7 +19,7 @@ jobs:
     runs-on:
       - self-hosted
     container:
-      image: nvidia/cuda:12.9.1-cudnn-devel-ubuntu22.04
+      image: nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
@@ -123,7 +123,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r fvdb/env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu129
+          uv pip install --no-cache-dir -r fvdb/env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/test/cu130
 
       - name: Build fvdb
         run: |
@@ -163,7 +163,7 @@ jobs:
     runs-on:
       - self-hosted
     container:
-      image: nvidia/cuda:12.9.1-cudnn-devel-ubuntu22.04
+      image: nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04
       env:
         PYTHONPATH: ""
       options: --rm
@@ -259,7 +259,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r fvdb/env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu129
+          uv pip install --no-cache-dir -r fvdb/env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/test/cu130
 
       - name: Download package
         uses: actions/download-artifact@v4
