@@ -1,7 +1,7 @@
 name: fVDB CUDA 13.0.1 Build and Test
 
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - '**'
     paths-ignore:
@@ -26,6 +26,9 @@ permissions:
   id-token: write
 
 jobs:
+  ##############################################################################
+  # START FVDB BUILD RUNNER
+  ##############################################################################
   start-build-runner:
     name: Start CPU-only EC2 runner for build
     runs-on: ubuntu-latest
@@ -48,6 +51,10 @@ jobs:
           ec2-instance-type: m6a.8xlarge
           subnet-id: subnet-03f2320d6e6e0005b
           security-group-id: sg-0cd08bd89d6212223
+
+  ##############################################################################
+  # BUILD FVDB
+  ##############################################################################
   fvdb-build:
     if: ${{ !startsWith(github.event.pull_request.title, 'Draft:') }}
     name: fVDB Build
@@ -72,9 +79,9 @@ jobs:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.ref }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
       - name: Fetch PR branch
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request_target'
         run: |
           cd $GITHUB_WORKSPACE
           git config --global user.name "github-actions[bot]"
@@ -84,11 +91,10 @@ jobs:
           git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
       - name: Merge PR branch into base
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request_target'
         run: |
           cd $GITHUB_WORKSPACE
           git merge pr_branch
-
 
       # - name: Simulate merge for push events
       #   if: github.event_name == 'push'
@@ -163,6 +169,10 @@ jobs:
           echo "Cleaning up /__w/_temp directory"
           rm -rf /__w/_temp/*
           echo "Cleanup completed"
+
+  ##############################################################################
+  # STOP FVDB BUILD RUNNER
+  ##############################################################################
   fvdb-build-stop-runner:
     name: Stop CPU-only EC2 runner for build
     needs:
@@ -214,7 +224,6 @@ jobs:
   ##############################################################################
   # RUN FVDB GTESTS
   ##############################################################################
-
   fvdb-gtests:
     needs: start-tests-gpu-runner # required to start the main job when the runner is ready
     name: fVDB GTests
@@ -237,9 +246,9 @@ jobs:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.ref }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
       - name: Fetch PR branch
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request_target'
         run: |
           cd $GITHUB_WORKSPACE
           git config --global user.name "github-actions[bot]"
@@ -249,7 +258,7 @@ jobs:
           git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
       - name: Merge PR branch into base
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request_target'
         run: |
           cd $GITHUB_WORKSPACE
           git merge pr_branch
@@ -339,9 +348,10 @@ jobs:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.ref }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+
       - name: Fetch PR branch
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request_target'
         run: |
           cd $GITHUB_WORKSPACE
           git config --global user.name "github-actions[bot]"
@@ -351,7 +361,7 @@ jobs:
           git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
       - name: Merge PR branch into base
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request_target'
         run: |
           cd $GITHUB_WORKSPACE
           git merge pr_branch
@@ -402,6 +412,7 @@ jobs:
           echo "Cleaning up /__w/_temp directory"
           rm -rf /__w/_temp/*
           echo "Cleanup completed"
+
   ##############################################################################
   # RUN FVDB DOCUMENTATION TESTS
   ##############################################################################
@@ -426,9 +437,10 @@ jobs:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.ref }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+
       - name: Fetch PR branch
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request_target'
         run: |
           cd $GITHUB_WORKSPACE
           git config --global user.name "github-actions[bot]"
@@ -438,11 +450,10 @@ jobs:
           git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
       - name: Merge PR branch into base
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request_target'
         run: |
           cd $GITHUB_WORKSPACE
           git merge pr_branch
-
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
         with:
@@ -484,6 +495,7 @@ jobs:
           echo "Cleaning up /__w/_temp directory"
           rm -rf /__w/_temp/*
           echo "Cleanup completed"
+
   ##############################################################################
   # STOP FVDB TESTS GPU RUNNER
   ##############################################################################
