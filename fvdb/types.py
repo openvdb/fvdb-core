@@ -1295,6 +1295,104 @@ def to_Vec3fBatch(
     )
 
 
+def to_Mat33f(
+    x: NumericMaxRank2,
+    dtype: torch.dtype = torch.float32,
+    value_constraint: ValueConstraint = ValueConstraint.NONE,
+) -> torch.Tensor:
+    """
+    Converts a NumericMaxRank2 to a Mat33f tensor, reshaped to (3, 3).
+
+    Args:
+        x (NumericMaxRank2): The input tensor.
+        dtype (torch.dtype): The floating dtype of the output tensor. Defaults to torch.float32.
+        value_constraint: Constraint on the value of the scalar.
+            default: ValueConstraint.NONE
+            if ValueConstraint.NON_NEGATIVE, the scalar must be non-negative
+            if ValueConstraint.POSITIVE, the scalar must be positive
+
+    Returns:
+        A torch.Tensor of dtype dtype and shape (3, 3).
+    """
+    return to_FloatingTensorBroadcastableRank2(
+        x, (3, 3), dtype, value_constraint=value_constraint, do_broadcast_to=True
+    )
+
+
+def to_Mat33fBroadcastable(
+    x: NumericMaxRank2,
+    dtype: torch.dtype = torch.float32,
+    value_constraint: ValueConstraint = ValueConstraint.NONE,
+) -> torch.Tensor:
+    """
+    Converts a NumericMaxRank2 to a Mat33f tensor that respects the shape of the input without reshaping,
+    but verifies that it can be broadcasted to the shape (3, 3).
+
+    Args:
+        x (NumericMaxRank2): The input tensor.
+        dtype (torch.dtype): The floating dtype of the output tensor. Defaults to torch.float32.
+        value_constraint: Constraint on the value of the scalar.
+            default: ValueConstraint.NONE
+            if ValueConstraint.NON_NEGATIVE, the scalar must be non-negative
+            if ValueConstraint.POSITIVE, the scalar must be positive
+
+    Returns:
+        A torch.Tensor of dtype dtype and shape (3, 3).
+    """
+    return to_FloatingTensorBroadcastableRank2(
+        x, (3, 3), dtype, value_constraint=value_constraint, do_broadcast_to=False
+    )
+
+
+def to_Mat33fBatch(
+    x: NumericMaxRank3,
+    dtype: torch.dtype = torch.float32,
+    value_constraint: ValueConstraint = ValueConstraint.NONE,
+) -> torch.Tensor:
+    """
+    Converts a NumericMaxRank3 to a Mat33fBatch tensor, reshaped to the broadcast of the input shape and (1, 3, 3).
+
+    Args:
+        x (NumericMaxRank3): The input tensor.
+        dtype (torch.dtype): The floating dtype of the output tensor. Defaults to torch.float32.
+        value_constraint: Constraint on the value of the scalar.
+            default: ValueConstraint.NONE
+            if ValueConstraint.NON_NEGATIVE, the scalar must be non-negative
+            if ValueConstraint.POSITIVE, the scalar must be positive
+
+    Returns:
+        A torch.Tensor of dtype dtype and shape reshaped to the broadcast of the input shape and (1, 4, 4).
+    """
+    return to_FloatingTensorBroadcastableRank3(
+        x, (1, 3, 3), dtype, value_constraint=value_constraint, do_broadcast_to=True
+    )
+
+
+def to_Mat33fBatchBroadcastable(
+    x: NumericMaxRank3,
+    dtype: torch.dtype = torch.float32,
+    value_constraint: ValueConstraint = ValueConstraint.NONE,
+) -> torch.Tensor:
+    """
+    Converts a NumericMaxRank2 to a Mat33f tensor that respects the shape of the input without reshaping,
+    but verifies that it can be broadcasted to the shape (1, 3, 3).
+
+    Args:
+        x (NumericMaxRank3): The input tensor.
+        dtype (torch.dtype): The floating dtype of the output tensor. Defaults to torch.float32.
+        value_constraint: Constraint on the value of the scalar.
+            default: ValueConstraint.NONE
+            if ValueConstraint.NON_NEGATIVE, the scalar must be non-negative
+            if ValueConstraint.POSITIVE, the scalar must be positive
+
+    Returns:
+        A torch.Tensor of dtype dtype and shape broadcastable to (1, 3, 3).
+    """
+    return to_FloatingTensorBroadcastableRank3(
+        x, (1, 3, 3), dtype, value_constraint=value_constraint, do_broadcast_to=False
+    )
+
+
 def to_Mat44f(
     x: NumericMaxRank2,
     dtype: torch.dtype = torch.float32,
