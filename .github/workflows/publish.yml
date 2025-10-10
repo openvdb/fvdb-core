@@ -162,7 +162,7 @@ jobs:
           grep '^version' pyproject.toml
 
       - name: Build fvdb
-        run: |
+        run: | #  '7.5;8.0;9.0;10.0;12.0+PTX'
           micromamba activate fvdb_release
           ./build.sh wheel verbose --cuda-arch-list '8.0'
 
