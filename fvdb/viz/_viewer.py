@@ -1,6 +1,8 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
+import logging
+import warnings
 from typing import Sequence
 
 import numpy as np
@@ -15,9 +17,11 @@ from ..types import NumericMaxRank1, NumericMaxRank3, to_Mat44fBatch, to_Vec3f
 from ._camera_view import CameraView
 from ._gaussian_splat_3d_view import GaussianSplat3dView
 
+_running_viewers = dict()
+
 
 class Viewer:
-    def __init__(self, ip_address="127.0.0.1", port: int = 8080, verbose: bool = False):
+    def __init__(self, name: str = "default", port: int = 8080, ip_address="127.0.0.1", verbose: bool = False):
         """
         Create a new `Viewer` running a server at the specified IP address and port.
 
@@ -25,14 +29,48 @@ class Viewer:
         this will throw an Exception.
 
         Args:
+            name (str): The name of the viewer instance. Default is "default". This name is used to
+                identify the viewer instance in the global registry of running viewers.
             ip_address (str): The IP address to bind the viewer server to. Default is "127.0.0.1".
             port (int): The port to bind the viewer server to. Default is 8080.
             verbose (bool): If True, the viewer will print verbose output to the console. Default is False.
         """
+        self._logger = logging.getLogger(f"{self.__class__.__module__}.{self.__class__.__name__}")
+        self._name = name
+        if name in _running_viewers:
+            assert isinstance(_running_viewers[name], dict)  # for mypy
+            self._impl = _running_viewers[name]["viewer"]
+            self._logger.debug(f"Found existing viewer with refcount {_running_viewers[name]['refcount']}")
+            _running_viewers[name]["refcount"] += 1
+            self._logger.debug(f"Incremented refcount to {_running_viewers[name]['refcount']}")
+            if self._impl.ip_address() != ip_address:
+                warnings.warn(
+                    f"You requested a viewer with name '{name}' at IP address '{ip_address}', but a viewer with that name is already running at IP address '{self._impl.ip_address()}'. Using the existing viewer."
+                )
+            if self._impl.port() != port:
+                warnings.warn(
+                    f"You requested a viewer with name '{name}' at port '{port}', but a viewer with that name is already running at port '{self._impl.port()}'. Using the existing viewer."
+                )
+            self._logger.info(f"Returning existing viewer running on {self.ip_address}:{self.port}...")
+            return
+
         if not isinstance(port, int) or port < 0 or port > 65535:
             raise ValueError(f"Port must be an integer between 0 and 65535, got {port}")
 
-        self._impl = ViewerCpp(ip_address=ip_address, port=port, verbose=verbose)
+        _running_viewers[name] = {"viewer": ViewerCpp(ip_address=ip_address, port=port, verbose=verbose), "refcount": 1}
+        self._impl = _running_viewers[name]["viewer"]
+
+        self._logger.info(f"Viewer running on {self.ip_address}:{self.port}...")
+
+    def __del__(self):
+        if not self._name in _running_viewers:
+            return
+        else:
+            _running_viewers[self._name]["refcount"] -= 1
+            self._logger.debug(f"Decremented refcount to {_running_viewers[self._name]['refcount']}")
+            if _running_viewers[self._name]["refcount"] <= 0:
+                self._logger.debug("Refcount is zero, deleting viewer...")
+                del _running_viewers[self._name]
 
     @torch.no_grad()
     def add_gaussian_splat_3d(
@@ -70,6 +108,26 @@ class Viewer:
         view.antialias = antialias
         view.sh_degree_to_use = sh_degree_to_use
         return GaussianSplat3dView(view, GaussianSplat3dView.__PRIVATE__)
+
+    @property
+    def port(self) -> int:
+        """
+        The port the viewer server is listening on.
+
+        Returns:
+            int: The port number.
+        """
+        return self._impl.port()
+
+    @property
+    def ip_address(self) -> str:
+        """
+        The IP address the viewer server is listening on.
+
+        Returns:
+            str: The IP address.
+        """
+        return self._impl.ip_address()
 
     @torch.no_grad()
     def add_camera_view(
