@@ -204,6 +204,7 @@ target_compile_options(fvdb PRIVATE
     "-Xfatbin=-compress-all"
     "-fvisibility=default"
     "-Werror=all-warnings"
+    "--threads=$ENV{NVCC_THREADS}"
     "-Xcompiler=-Wall,-Werror"
     ${TORCH_CUDA_COMMON_FLAGS}
     >)
