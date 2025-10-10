@@ -36,7 +36,7 @@ set(FVDB_BINDINGS_CPP_FILES
     src/python/ViewerBinding.cpp)
 
 # Build library
-Python3_add_library(_Cpp ${FVDB_BINDINGS_CPP_FILES})
+Python3_add_library(_Cpp ${FVDB_BINDINGS_CPP_FILES} MODULE)
 if (DEFINED TORCH_PYBIND11_INCLUDE_DIR)
     target_link_libraries(_Cpp PUBLIC torch_pybind11_headers)
 else()
