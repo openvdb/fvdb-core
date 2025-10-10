@@ -1,7 +1,7 @@
 name: fVDB CUDA 12.8.1 Build and Test
 
 on:
-  pull_request_target:
+  pull_request:
     branches:
       - '**'
     paths-ignore:
@@ -386,9 +386,8 @@ jobs:
         run: |
           uv venv
           uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
-          uv pip install torch-scatter -f https://data.pyg.org/whl/torch-2.7.0+cu128.html
-          source .venv/bin/activate
-          TORCH_CUDA_ARCH_LIST="8.9+PTX" pip install -v git+https://github.com/heiwang1997/torchsparse.git
+          uv pip install torch-scatter -f https://data.pyg.org/whl/torch-2.8.0+cu128.html
+          TORCH_CUDA_ARCH_LIST="8.9+PTX" uv pip install -v --no-build-isolation git+https://github.com/heiwang1997/torchsparse.git
 
       - name: Download package
         uses: actions/download-artifact@v4
