@@ -98,6 +98,14 @@ bind_viewer(py::module &m) {
                                                          // parent
             "Register a Gaussian splat 3D view with the viewer (accepts Python or C++ GaussianSplat3d)")
 
+        .def("ip_address",
+             &fvdb::detail::viewer::Viewer::ipAddress,
+             "The IP address the viewer server is listening on.")
+
+        .def("port",
+             &fvdb::detail::viewer::Viewer::port,
+             "The port the viewer server is listening on.")
+
         .def("camera_orbit_center",
              &fvdb::detail::viewer::Viewer::cameraOrbitCenter,
              "Get the point about which the camera orbits")
