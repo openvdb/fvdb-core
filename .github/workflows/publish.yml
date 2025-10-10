@@ -1,12 +1,12 @@
 name: Publish fVDB Pip Package
 
 on:
-  # pull_request:
-  #   branches:
-  #     - '**'
-  # push:
-  #   branches:
-  #     - main
+  pull_request:
+    branches:
+      - '**'
+  push:
+    branches:
+      - main
   release:
     types: [published]
   workflow_dispatch:
