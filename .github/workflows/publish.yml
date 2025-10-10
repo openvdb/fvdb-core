@@ -141,6 +141,7 @@ jobs:
           environment-file: release_environment.yml
 
       - name: Add a post-release to version (used for testing on TestPyPI)
+        if: ${{ ((inputs.publish_target == 'testpypi') || (needs.pr-flags.outputs.s3 == 'false')) }}
         run: |
           VERSION_LINE=$(grep '^version *= *"' pyproject.toml)
           VERSION=$(echo "$VERSION_LINE" | sed -E 's/^version *= *"([^"]+)".*/\1/')
