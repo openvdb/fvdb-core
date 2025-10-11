@@ -305,14 +305,23 @@ jobs:
           mkdir -p "$OUTDIR"
           INDEX_FILE="$OUTDIR/index.html"
           TITLE="Links for ${{ steps.proj.outputs.project_name }}"
+          # List wheels from S3 to ensure index matches what's actually uploaded and previous versions
+          wheels=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/" | grep '\.whl$' | awk '{print $4}')
           {
             echo "<!DOCTYPE html>";
             echo "<html><head><meta charset=\"utf-8\"><title>${TITLE}</title></head><body>";
             echo "<h1>${TITLE}</h1>";
-            for whl in dist/*.whl; do
-              base=$(basename "$whl")
-              sha=$(sha256sum "$whl" | awk '{print $1}')
-              echo "<a href=\"${base}#sha256=${sha}\">${base}</a><br/>";
+            for whl in $wheels; do
+              # Get SHA256 from S3 ETag or compute from local file if available
+              if [ -f "dist/$whl" ]; then
+                sha=$(sha256sum "dist/$whl" | awk '{print $1}')
+              else
+                # Download temporarily to compute hash
+                aws s3 cp "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/$whl" "/tmp/$whl" --only-show-errors
+                sha=$(sha256sum "/tmp/$whl" | awk '{print $1}')
+                rm "/tmp/$whl"
+              fi
+              echo "<a href=\"${whl}#sha256=${sha}\">${whl}</a><br/>";
             done;
             echo "</body></html>";
           } > "$INDEX_FILE"
