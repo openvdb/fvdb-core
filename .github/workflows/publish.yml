@@ -60,14 +60,11 @@ jobs:
   start-build-runner:
     name: Start CPU-only EC2 runner for build
     runs-on: ubuntu-latest
-    outputs:
-      label: ${{ steps.start-build-runner.outputs.label }}
-      ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
     strategy: &matrix-strategy
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 2  # Reduced to avoid GitHub API rate limits when registering runners
       matrix:
-        python-version: ['3.10', 3.11', '3.12', '3.13']
+        python-version: ['3.10', '3.11', '3.12', '3.13']
         torch-version: ['2.8']
         cuda-version: ['12.9']
     steps:
@@ -367,4 +364,3 @@ jobs:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
           label: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
-          ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
