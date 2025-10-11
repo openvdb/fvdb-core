@@ -66,6 +66,12 @@ jobs:
         torch-version: ['2.8']
         cuda-version: ['12.9']
     steps:
+      - name: Stagger job starts to avoid API rate limits
+        run: |
+          # Random delay between 0 and 15 seconds to stagger runner registrations
+          DELAY=$((RANDOM % 16))
+          echo "Delaying start by ${DELAY} seconds for Python ${{ matrix.python-version }}"
+          sleep $DELAY
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
