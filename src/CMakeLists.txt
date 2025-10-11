@@ -212,16 +212,26 @@ target_compile_options(fvdb PRIVATE
 target_link_libraries(fvdb PRIVATE
     ${TORCH_LIBRARIES} tinyply cudnn_frontend cudnn cutlass blosc::blosc)
 
-# Install rules
-install(TARGETS fvdb
-    EXPORT fvdb-targets
-    LIBRARY DESTINATION lib)
+# Strip symbols in non-Debug builds to reduce wheel size
+if(NOT (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo"))
+    target_link_options(fvdb PRIVATE "-s")
+endif()
 
-# Use pattern exclusion to prevent recursion
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/fvdb/
-    DESTINATION include
-    FILES_MATCHING PATTERN "*.h"
-    PATTERN "*/*" EXCLUDE)
+# Install rules
+# Install of development artifacts (headers and system-level lib) is optional
+option(FVDB_INSTALL_DEV "Install headers and system-level lib for development" ON)
+
+if(FVDB_INSTALL_DEV)
+    install(TARGETS fvdb
+        EXPORT fvdb-targets
+        LIBRARY DESTINATION lib)
+
+    # Use pattern exclusion to prevent recursion
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/fvdb/
+        DESTINATION include
+        FILES_MATCHING PATTERN "*.h"
+        PATTERN "*/*" EXCLUDE)
+endif()
 
 # Add tests subdirectory if tests are enabled
 if(FVDB_BUILD_TESTS)

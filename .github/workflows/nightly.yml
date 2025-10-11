@@ -101,7 +101,7 @@ jobs:
           activate-environment: fvdb_build
           environment-file: fvdb/env/build_environment.yml
 
-      - name: Buid fvdb
+      - name: Build fvdb
         run: |
           cd fvdb;
           TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6+PTX" conda run --no-capture-output -n fvdb_build ./build.sh wheel verbose gtests benchmarks

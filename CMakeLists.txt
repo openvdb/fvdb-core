@@ -88,17 +88,19 @@ target_compile_definitions(_Cpp PRIVATE
 # Configure the pybind11 module with PyTorch compatibility settings
 configure_torch_pybind11(_Cpp)
 
+# Strip symbols in non-Debug builds to reduce wheel size
+if(NOT (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo"))
+    target_link_options(_Cpp PRIVATE "-s")
+endif()
+
+# Only install the Python package artifacts; the core lib is installed as part of the Python module
 install(TARGETS _Cpp fvdb
-    LIBRARY
-    DESTINATION fvdb
-    COMPONENT PythonModule
-    RUNTIME
-    DESTINATION fvdb
-    COMPONENT PythonModule)
+    LIBRARY DESTINATION fvdb COMPONENT PythonModule
+    RUNTIME DESTINATION fvdb COMPONENT PythonModule)
 
 # Add at the beginning after project() call:
 set(VERSION_PY_PATH "${CMAKE_CURRENT_SOURCE_DIR}/fvdb/version.py")
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/fvdb/version.py.in" "${VERSION_PY_PATH}" @ONLY)
 
 # Make sure version.py is included in the installation
-install(FILES "${VERSION_PY_PATH}" DESTINATION fvdb)
+install(FILES "${VERSION_PY_PATH}" DESTINATION fvdb COMPONENT PythonModule)
