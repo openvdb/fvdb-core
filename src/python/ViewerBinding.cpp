@@ -178,8 +178,8 @@ bind_viewer(py::module &m) {
              py::arg("camera_to_world_matrices"),
              py::arg("projection_matrices"),
              py::arg("image_sizes"),
-             py::arg("frustum_near_plane") = 0.1,
-             py::arg("frustum_far_plane")  = 100.,
+             py::arg("frustum_near_plane"),
+             py::arg("frustum_far_plane"),
              py::return_value_policy::reference_internal,
              "Add a named camera view from camera/world and projection matrices");
 }
