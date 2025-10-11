@@ -357,9 +357,27 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
+      - name: Find EC2 instance ID by label
+        id: find-instance
+        run: |
+          LABEL="ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"
+          echo "Looking for instance with label: $LABEL"
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=$LABEL" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
+            --query 'Reservations[0].Instances[0].InstanceId' \
+            --output text)
+          if [ "$INSTANCE_ID" == "None" ] || [ -z "$INSTANCE_ID" ]; then
+            echo "No instance found with label $LABEL"
+            echo "instance-id=" >> $GITHUB_OUTPUT
+          else
+            echo "Found instance: $INSTANCE_ID"
+            echo "instance-id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          fi
       - name: Stop EC2 runner
+        if: steps.find-instance.outputs.instance-id != ''
         uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
           label: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+          ec2-instance-id: ${{ steps.find-instance.outputs.instance-id }}
