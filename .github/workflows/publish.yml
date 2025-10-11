@@ -83,6 +83,14 @@ jobs:
           subnet-id: subnet-03f2320d6e6e0005b
           security-group-id: sg-0cd08bd89d6212223
           label: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+          aws-resource-tags: >
+            [
+              {"Key": "RunnerLabel", "Value": "ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"},
+              {"Key": "PythonVersion", "Value": "${{ matrix.python-version }}"},
+              {"Key": "TorchVersion", "Value": "${{ matrix.torch-version }}"},
+              {"Key": "CudaVersion", "Value": "${{ matrix.cuda-version }}"},
+              {"Key": "GitHubRunId", "Value": "${{ github.run_id }}"}
+            ]
 
   fvdb-build:
     name: fVDB Build
@@ -361,14 +369,18 @@ jobs:
         id: find-instance
         run: |
           LABEL="ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"
-          echo "Looking for instance with label: $LABEL"
+          echo "Looking for instance with RunnerLabel: $LABEL"
+
+          # Query by the custom RunnerLabel tag we set during instance creation
           INSTANCE_ID=$(aws ec2 describe-instances \
-            --filters "Name=tag:Name,Values=$LABEL" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
+            --filters "Name=tag:RunnerLabel,Values=$LABEL" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
             --query 'Reservations[0].Instances[0].InstanceId' \
             --output text)
+
           if [ "$INSTANCE_ID" == "None" ] || [ -z "$INSTANCE_ID" ]; then
-            echo "No instance found with label $LABEL"
+            echo "ERROR: No instance found with RunnerLabel=$LABEL"
             echo "instance-id=" >> $GITHUB_OUTPUT
+            exit 1
           else
             echo "Found instance: $INSTANCE_ID"
             echo "instance-id=$INSTANCE_ID" >> $GITHUB_OUTPUT
