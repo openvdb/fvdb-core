@@ -974,8 +974,9 @@ class GaussianSplat3d:
                 H is the height of the rendered images, W is the width of the rendered images, and D is the
                 number of channels (e.g., RGB, RGBD, etc.).
             alpha_images (torch.Tensor): A tensor of shape (C, H, W, 1) where C is the number of cameras,
-                H is the height of the rendered images, and W is the width of the rendered images.
-                Each element represents the alpha value (opacity) at that pixel in the rendered image.
+                H is the height of the images, and W is the width of the images.
+                Each element represents the alpha value (opacity) at a pixel such that 0 <= alpha < 1,
+                and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
         return self._impl.render_from_projected_gaussians(
             projected_gaussians=projected_gaussians,
@@ -1026,8 +1027,9 @@ class GaussianSplat3d:
                 H is the height of the depth maps, and W is the width of the depth maps.
                 Each element represents the depth value at that pixel in the depth map.
             alpha_images (torch.Tensor): A tensor of shape (C, H, W, 1) where C is the number of cameras,
-                H is the height of the depth maps, and W is the width of the depth maps.
-                Each element represents the alpha value (opacity) at that pixel in the depth map.
+                H is the height of the images, and W is the width of the images.
+                Each element represents the alpha value (opacity) at a pixel such that 0 <= alpha < 1,
+                and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
         return self._impl.render_depths(
             world_to_camera_matrices=world_to_camera_matrices,
@@ -1085,7 +1087,8 @@ class GaussianSplat3d:
                 channels (e.g., 3 for RGB).
             alpha_images (torch.Tensor): A tensor of shape (C, H, W, 1) where C is the number of cameras,
                 H is the height of the images, and W is the width of the images.
-                Each element represents the alpha value (opacity) at that pixel in the depth map.
+                Each element represents the alpha value (opacity) at a pixel such that 0 <= alpha < 1,
+                and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
         return self._impl.render_images(
             world_to_camera_matrices=world_to_camera_matrices,
@@ -1147,7 +1150,8 @@ class GaussianSplat3d:
                 The last channel contains the depth values.
             alpha_images (torch.Tensor): A tensor of shape (C, H, W, 1) where C is the number of cameras,
                 H is the height of the images, and W is the width of the images.
-                Each element represents the alpha value (opacity) at that pixel in the depth map.
+                Each element represents the alpha value (opacity) at a pixel such that 0 <= alpha < 1,
+                and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
         return self._impl.render_images_and_depths(
             world_to_camera_matrices=world_to_camera_matrices,
