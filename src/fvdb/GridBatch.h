@@ -472,6 +472,24 @@ struct GridBatch : torch::CustomClassHolder {
     /// @return A JaggedTensor of voxel coordinates indexed by this grid batch (shape [B, -1, 3])
     JaggedTensor ijk() const;
 
+    /// @brief Return the space-filling curve codes for active voxels in this grid batch with specific order type
+    /// @param order_type The type of ordering to use:
+    ///                   - "z": Regular Z-order curve (xyz bit interleaving)
+    ///                   - "z-trans": Transposed Z-order curve (zyx bit interleaving)  
+    ///                   - "hilbert": Regular Hilbert curve (xyz)
+    ///                   - "hilbert-trans": Transposed Hilbert curve (zyx)
+    /// @return A JaggedTensor of space-filling curve codes for active voxels (shape [B, -1, 1])
+    JaggedTensor serialize_encode(const std::string &order_type) const;
+
+    /// @brief Get permutation indices to sort voxels by spatial order
+    /// @param order_type The type of spatial ordering to use:
+    ///                   - "z": Regular Z-order curve (xyz bit interleaving, default)
+    ///                   - "z-trans": Transposed Z-order curve (zyx bit interleaving)
+    ///                   - "hilbert": Regular Hilbert curve (xyz)
+    ///                   - "hilbert-trans": Transposed Hilbert curve (zyx)
+    /// @return A JaggedTensor of permutation indices (shape [B, -1])
+    JaggedTensor permute(const std::string &order_type) const;
+
     /// @brief Find the intersection between a collection of rays and the zero level set of a scalar
     /// field
     ///        at each voxel in the grid batch

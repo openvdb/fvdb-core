@@ -110,6 +110,52 @@ bind_grid_batch(py::module &m) {
             "ijk",
             &fvdb::GridBatch::ijk,
             "A [num_grids, -1, 3] JaggedTensor of the ijk coordinates of each voxel in this batch.")
+        .def("serialize_encode",
+             &fvdb::GridBatch::serialize_encode,
+             py::arg("order_type"),
+             R"_FVDB_(
+            Return the space-filling curve codes for active voxels in this grid batch.
+            
+            Space-filling curves provide a mapping from 3D coordinates to 1D integers,
+            preserving spatial locality. This is useful for serialization, sorting, and 
+            spatial data structures.
+
+            Args:
+                order_type (str): The type of ordering to use:
+                    - "z": Regular Z-order curve (xyz bit interleaving)
+                    - "z-trans": Transposed Z-order curve (zyx bit interleaving)  
+                    - "hilbert": Regular Hilbert curve (xyz)
+                    - "hilbert-trans": Transposed Hilbert curve (zyx)
+
+            Returns:
+                codes (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 1]` containing
+                    the space-filling curve codes for each active voxel in the batch.
+        )_FVDB_")
+        .def("permute",
+             &fvdb::GridBatch::permute,
+             py::arg("order_type"),
+             R"_FVDB_(
+            Get permutation indices to sort voxels by spatial order.
+            
+            This method computes Morton codes for all active voxels and returns the indices
+            that would sort them according to the specified ordering. This is useful for
+            spatially coherent data access patterns and cache optimization.
+
+            Args:
+                order_type (str): The type of spatial ordering to use:
+                    - "z": Regular Z-order curve (xyz bit interleaving, default)
+                    - "z-trans": Transposed Z-order curve (zyx bit interleaving)
+
+            Returns:
+                permutation_indices (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 1]` containing
+                    the permutation indices. Use these indices to reorder voxel data for spatial coherence.
+                    
+            Example:
+                >>> z_indices = grid_batch.permute("z")  # Regular xyz z-order
+                >>> z_trans_indices = grid_batch.permute("z-trans")  # Transposed zyx z-order
+                >>> # Use indices to reorder some voxel data
+                >>> reordered_data = voxel_data.jdata[z_indices.jdata.squeeze(-1)]
+        )_FVDB_")
         .def_property_readonly(
             "viz_edge_network",
             [](const fvdb::GridBatch &self) { return self.viz_edge_network(false); },
