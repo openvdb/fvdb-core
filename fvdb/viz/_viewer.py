@@ -70,6 +70,38 @@ class Viewer:
                 self._logger.debug("Refcount is zero, deleting viewer...")
                 del _running_viewers[self._name]
 
+    def _show_in_notebook_if_available(self) -> bool:
+        """
+        If running in a Jupyter notebook, display the viewer in an iframe.
+
+        Returns:
+            bool: True if the viewer was displayed in a Jupyter notebook, False otherwise.
+        """
+        try:
+            from IPython import get_ipython
+            from IPython.display import IFrame, display
+
+            if get_ipython() is not None:
+                display(IFrame(src=f"http://{self.ip_address}:{self.port}", width="100%", height="600px"))
+                return True
+        except ImportError:
+            pass
+        return False
+
+    def show(self, force_browser: bool = False):
+        """
+        Open the viewer in a new browser window or tab, or in an iframe if running in a Jupyter notebook.
+
+        Args:
+            force_browser (bool): If True, always open the viewer in a new browser window or tab,
+                even if running in a Jupyter notebook. Default is False.
+        """
+        import webbrowser
+
+        if not force_browser and self._show_in_notebook_if_available():
+            return
+        webbrowser.open_new_tab(f"http://{self.ip_address}:{self.port}")
+
     @torch.no_grad()
     def add_gaussian_splat_3d(
         self,

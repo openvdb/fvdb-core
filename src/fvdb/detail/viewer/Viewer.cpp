@@ -225,7 +225,6 @@ Viewer::addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splat
 void
 Viewer::startServer() {
     if (!mIsEditorRunning) {
-        printf("Starting NanoVDB Editor server at %s:%d\n", mIpAddress.c_str(), mPort);
         mEditor.editor.start(&mEditor.editor, mEditor.device, &mEditor.config);
         mIsEditorRunning = true;
     }
