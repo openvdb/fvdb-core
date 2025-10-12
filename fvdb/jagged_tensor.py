@@ -11,13 +11,18 @@ TODO(): Add more documentation.
 """
 
 import typing
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Sequence, cast
 
 import numpy as np
 import torch
 
 from . import _parse_device_string
 from ._Cpp import JaggedTensor as JaggedTensorCpp
+from ._Cpp import jempty as jempty_cpp
+from ._Cpp import jones as jones_cpp
+from ._Cpp import jrand as jrand_cpp
+from ._Cpp import jrandn as jrandn_cpp
+from ._Cpp import jzeros as jzeros_cpp
 from .types import (
     DeviceIdentifier,
     NumericMaxRank1,
@@ -51,7 +56,7 @@ class JaggedTensor:
 
     def __init__(
         self,
-        tensors: torch.Tensor | list[torch.Tensor] | list[list[torch.Tensor]] | None = None,
+        tensors: torch.Tensor | Sequence[torch.Tensor] | Sequence[Sequence[torch.Tensor]] | None = None,
         *,
         impl: JaggedTensorCpp | None = None,
     ) -> None:
@@ -63,10 +68,33 @@ class JaggedTensor:
             if tensors is None:
                 raise ValueError("Must provide either tensors or impl")
 
-            if not isinstance(tensors, (torch.Tensor, list)):
-                raise TypeError("tensors must be a torch.Tensor or a list (or list of lists) of torch.Tensor")
+            if not isinstance(tensors, (torch.Tensor, list, tuple)):
+                raise TypeError(
+                    "tensors must be a torch.Tensor or a sequence (or sequence of sequences) of torch.Tensor"
+                )
 
-            self._impl = JaggedTensorCpp(tensors)
+            # Convert sequences to lists for C++ binding compatibility
+            if isinstance(tensors, torch.Tensor):
+                self._impl = JaggedTensorCpp(tensors)
+            elif isinstance(tensors, (list, tuple)):
+                # Check if it's a sequence of sequences
+                if tensors and isinstance(tensors[0], (list, tuple)):
+                    # Convert nested sequences to lists
+                    converted: list[list[torch.Tensor]] = [
+                        list(inner) if isinstance(inner, tuple) else cast(list[torch.Tensor], inner)
+                        for inner in tensors
+                    ]
+                    if isinstance(tensors, tuple):
+                        converted = list(converted)
+                    self._impl = JaggedTensorCpp(converted)
+                else:
+                    # Simple sequence of tensors
+                    converted_flat: list[torch.Tensor] = (
+                        list(tensors) if isinstance(tensors, tuple) else cast(list[torch.Tensor], tensors)  # type: ignore
+                    )
+                    self._impl = JaggedTensorCpp(converted_flat)
+            else:
+                self._impl = JaggedTensorCpp(tensors)
 
     # ============================================================
     #                  JaggedTensor from_* constructors
@@ -77,11 +105,11 @@ class JaggedTensor:
         return cls(tensors=data)
 
     @classmethod
-    def from_list_of_tensors(cls, tensors: list[torch.Tensor]) -> "JaggedTensor":
+    def from_list_of_tensors(cls, tensors: Sequence[torch.Tensor]) -> "JaggedTensor":
         return cls(tensors=tensors)
 
     @classmethod
-    def from_list_of_lists_of_tensors(cls, tensors: list[list[torch.Tensor]]) -> "JaggedTensor":
+    def from_list_of_lists_of_tensors(cls, tensors: Sequence[Sequence[torch.Tensor]]) -> "JaggedTensor":
         return cls(tensors=tensors)
 
     @classmethod
@@ -156,8 +184,9 @@ class JaggedTensor:
     def jmin(self, dim: int = 0, keepdim: bool = False) -> list["JaggedTensor"]:
         return [JaggedTensor(impl=impl) for impl in self._impl.jmin(dim, keepdim)]
 
-    def jreshape(self, lshape: list[int] | list[list[int]]) -> "JaggedTensor":
-        return JaggedTensor(impl=self._impl.jreshape(lshape))
+    def jreshape(self, lshape: Sequence[int] | Sequence[Sequence[int]]) -> "JaggedTensor":
+        lshape_cpp = _convert_to_list(lshape)
+        return JaggedTensor(impl=self._impl.jreshape(lshape_cpp))
 
     def jreshape_as(self, other: "JaggedTensor | torch.Tensor") -> "JaggedTensor":
         if isinstance(other, JaggedTensor):
@@ -244,10 +273,11 @@ class JaggedTensor:
                 raise TypeError("other must be a torch.Tensor, int, or float")
             return JaggedTensor(impl=self._impl >= other)
 
-    def __getitem__(
-        self, index: "int | slice | torch.Tensor | list[int] | list[slice] | JaggedTensor"
-    ) -> "JaggedTensor":
-        return JaggedTensor(impl=self._impl[index])
+    def __getitem__(self, index: Any) -> "JaggedTensor":
+        if isinstance(index, JaggedTensor):
+            return JaggedTensor(impl=self._impl[index._impl])
+        else:
+            return JaggedTensor(impl=self._impl[index])
 
     def __gt__(self, other: "torch.Tensor | JaggedTensor | int | float") -> "JaggedTensor":
         if isinstance(other, JaggedTensor):
@@ -470,3 +500,74 @@ class JaggedTensor:
     # Weirdly, unless we put this last, it messes up static type checking.
     def int(self) -> "JaggedTensor":
         return JaggedTensor(impl=self._impl.int())
+
+
+def _convert_to_list(seq: Sequence[int] | Sequence[Sequence[int]]) -> list[int] | list[list[int]]:
+    """Helper to convert Sequence types to list types for C++ binding compatibility."""
+    if isinstance(seq, (list, tuple)):
+        if seq and isinstance(seq[0], (list, tuple)):
+            # Nested sequence - convert inner sequences to lists
+            converted: list[list[int]] = [
+                list(inner) if isinstance(inner, tuple) else cast(list[int], inner) for inner in seq
+            ]
+            return list(converted) if isinstance(seq, tuple) else converted
+        else:
+            # Simple sequence of ints
+            return list(seq) if isinstance(seq, tuple) else cast(list[int], seq)  # type: ignore
+    else:
+        return cast(list[int], seq)
+
+
+def jempty(
+    lsizes: Sequence[int] | Sequence[Sequence[int]],
+    rsizes: Sequence[int] | None = None,
+    device: torch.device | str | None = None,
+    dtype: torch.dtype | None = None,
+) -> JaggedTensor:
+    lsizes_cpp = _convert_to_list(lsizes)
+    rsizes_cpp: list[int] | None = list(rsizes) if rsizes is not None and isinstance(rsizes, tuple) else rsizes  # type: ignore
+    return JaggedTensor(impl=jempty_cpp(lsizes_cpp, rsizes_cpp, dtype, device))  # type: ignore
+
+
+def jrand(
+    lsizes: Sequence[int] | Sequence[Sequence[int]],
+    rsizes: Sequence[int] | None = None,
+    device: torch.device | str | None = None,
+    dtype: torch.dtype | None = None,
+) -> JaggedTensor:
+    lsizes_cpp = _convert_to_list(lsizes)
+    rsizes_cpp: list[int] | None = list(rsizes) if rsizes is not None and isinstance(rsizes, tuple) else rsizes  # type: ignore
+    return JaggedTensor(impl=jrand_cpp(lsizes_cpp, rsizes_cpp, dtype, device))  # type: ignore
+
+
+def jrandn(
+    lsizes: Sequence[int] | Sequence[Sequence[int]],
+    rsizes: Sequence[int] | None = None,
+    device: torch.device | str | None = None,
+    dtype: torch.dtype | None = None,
+) -> JaggedTensor:
+    lsizes_cpp = _convert_to_list(lsizes)
+    rsizes_cpp: list[int] | None = list(rsizes) if rsizes is not None and isinstance(rsizes, tuple) else rsizes  # type: ignore
+    return JaggedTensor(impl=jrandn_cpp(lsizes_cpp, rsizes_cpp, dtype, device))  # type: ignore
+
+
+def jones(
+    lsizes: Sequence[int] | Sequence[Sequence[int]],
+    rsizes: Sequence[int] | None = None,
+    device: torch.device | str | None = None,
+    dtype: torch.dtype | None = None,
+) -> JaggedTensor:
+    lsizes_cpp = _convert_to_list(lsizes)
+    rsizes_cpp: list[int] | None = list(rsizes) if rsizes is not None and isinstance(rsizes, tuple) else rsizes  # type: ignore
+    return JaggedTensor(impl=jones_cpp(lsizes_cpp, rsizes_cpp, dtype, device))  # type: ignore
+
+
+def jzeros(
+    lsizes: Sequence[int] | Sequence[Sequence[int]],
+    rsizes: Sequence[int] | None = None,
+    device: torch.device | str | None = None,
+    dtype: torch.dtype | None = None,
+) -> JaggedTensor:
+    lsizes_cpp = _convert_to_list(lsizes)
+    rsizes_cpp: list[int] | None = list(rsizes) if rsizes is not None and isinstance(rsizes, tuple) else rsizes  # type: ignore
+    return JaggedTensor(impl=jzeros_cpp(lsizes_cpp, rsizes_cpp, dtype, device))  # type: ignore

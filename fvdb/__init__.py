@@ -61,17 +61,19 @@ from ._Cpp import ConvPackBackend
 from ._Cpp import (
     scaled_dot_product_attention,
     config,
-    jrand,
-    jrandn,
-    jones,
-    jzeros,
-    jempty,
     volume_render,
     gaussian_render_jagged,
 )
 
 # Import JaggedTensor from jagged_tensor.py
-from .jagged_tensor import JaggedTensor
+from .jagged_tensor import (
+    JaggedTensor,
+    jrand,
+    jrandn,
+    jones,
+    jzeros,
+    jempty,
+)
 
 # Import GridBatch and gridbatch_from_* functions from grid_batch.py
 from .grid_batch import (
@@ -109,9 +111,9 @@ def jcat(things_to_cat, dim=None):
         # Wrap the result back in a GridBatch
         return GridBatch(impl=cpp_result)
     elif isinstance(things_to_cat[0], JaggedTensor):
-        return _Cpp.jcat(things_to_cat, dim)
+        return _Cpp.jcat([thing._impl for thing in things_to_cat], dim)
     else:
-        raise TypeError("jcat() can only cat GridBatch, JaggedTensor, or VDBTensor")
+        raise TypeError("jcat() can only cat GridBatch or JaggedTensor")
 
 
 from .version import __version__
