@@ -36,7 +36,8 @@ import torch
 from . import _parse_device_string
 from ._Cpp import ConvPackBackend
 from ._Cpp import GridBatch as GridBatchCpp
-from ._Cpp import JaggedTensor
+from ._Cpp import JaggedTensor as JaggedTensorCpp
+from .jagged_tensor import JaggedTensor
 from .types import (
     DeviceIdentifier,
     NumericMaxRank1,
@@ -216,7 +217,7 @@ class Grid:
         origin = to_Vec3f(origin)
 
         grid_impl = GridBatchCpp(device=resolved_device)
-        grid_impl.set_from_ijk(jagged_ijk, voxel_size, origin)
+        grid_impl.set_from_ijk(jagged_ijk._impl, voxel_size, origin)
         return cls(impl=grid_impl)
 
     @classmethod
@@ -254,7 +255,7 @@ class Grid:
         origin = to_Vec3f(origin)
 
         grid_impl = GridBatchCpp(device=resolved_device)
-        grid_impl.set_from_mesh(jagged_mesh_vertices, jagged_mesh_faces, voxel_size, origin)
+        grid_impl.set_from_mesh(jagged_mesh_vertices._impl, jagged_mesh_faces._impl, voxel_size, origin)
         return cls(impl=grid_impl)
 
     @classmethod
@@ -288,7 +289,7 @@ class Grid:
         origin = to_Vec3f(origin)
 
         grid_impl = GridBatchCpp(device=resolved_device)
-        grid_impl.set_from_nearest_voxels_to_points(jagged_points, voxel_size, origin)
+        grid_impl.set_from_nearest_voxels_to_points(jagged_points._impl, voxel_size, origin)
         return cls(impl=grid_impl)
 
     @classmethod
@@ -322,7 +323,7 @@ class Grid:
         origin = to_Vec3f(origin)
 
         grid_impl = GridBatchCpp(device=resolved_device)
-        grid_impl.set_from_points(jagged_points, voxel_size, origin)
+        grid_impl.set_from_points(jagged_points._impl, voxel_size, origin)
         return cls(impl=grid_impl)
 
     @classmethod
@@ -396,7 +397,7 @@ class Grid:
         stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.NON_NEGATIVE)
         coarse_grid_impl = coarse_grid._impl if coarse_grid else None
 
-        result_data, result_grid_impl = self._impl.avg_pool(pool_factor, jagged_data, stride, coarse_grid_impl)
+        result_data, result_grid_impl = self._impl.avg_pool(pool_factor, jagged_data._impl, stride, coarse_grid_impl)
         return result_data.jdata, Grid(impl=cast(GridBatchCpp, result_grid_impl))
 
     def clip(
@@ -424,7 +425,7 @@ class Grid:
         ijk_min = to_Vec3iBroadcastable(ijk_min)
         ijk_max = to_Vec3iBroadcastable(ijk_max)
 
-        result_features, result_grid_impl = self._impl.clip(jagged_features, ijk_min, ijk_max)
+        result_features, result_grid_impl = self._impl.clip(jagged_features._impl, ijk_min, ijk_max)
         return result_features.jdata, Grid(impl=result_grid_impl)
 
     def clipped_grid(
@@ -506,7 +507,7 @@ class Grid:
                 active voxels. Shape: (num_queries,).
         """
         jagged_ijk = JaggedTensor(ijk)
-        return self._impl.coords_in_grid(jagged_ijk).jdata
+        return self._impl.coords_in_grid(jagged_ijk._impl).jdata
 
     def cpu(self) -> "Grid":
         """
@@ -545,7 +546,7 @@ class Grid:
         cube_min = to_Vec3fBroadcastable(cube_min)
         cube_max = to_Vec3fBroadcastable(cube_max)
 
-        return self._impl.cubes_in_grid(jagged_cube_centers, cube_min, cube_max).jdata
+        return self._impl.cubes_in_grid(jagged_cube_centers._impl, cube_min, cube_max).jdata
 
     def cubes_intersect_grid(
         self,
@@ -574,7 +575,7 @@ class Grid:
         jagged_cube_centers = JaggedTensor(cube_centers)
         cube_min = to_Vec3fBroadcastable(cube_min)
         cube_max = to_Vec3fBroadcastable(cube_max)
-        return self._impl.cubes_intersect_grid(jagged_cube_centers, cube_min, cube_max).jdata
+        return self._impl.cubes_intersect_grid(jagged_cube_centers._impl, cube_min, cube_max).jdata
 
     def cuda(self) -> "Grid":
         """
@@ -627,7 +628,7 @@ class Grid:
             torch.Tensor: World coordinates. Shape: (num_points, 3).
         """
         jagged_ijk = JaggedTensor(ijk)
-        return self._impl.grid_to_world(jagged_ijk).jdata
+        return self._impl.grid_to_world(jagged_ijk._impl).jdata
 
     def has_same_address_and_grid_count(self, other: Any) -> bool:
         """
@@ -656,7 +657,7 @@ class Grid:
                 Shape: (num_queries,).
         """
         jagged_ijk = JaggedTensor(ijk)
-        return self._impl.ijk_to_index(jagged_ijk).jdata
+        return self._impl.ijk_to_index(jagged_ijk._impl).jdata
 
     def ijk_to_inv_index(self, ijk: torch.Tensor) -> torch.Tensor:
         """
@@ -671,7 +672,7 @@ class Grid:
                 Shape: (num_queries,).
         """
         jagged_ijk = JaggedTensor(ijk)
-        return self._impl.ijk_to_inv_index(jagged_ijk).jdata
+        return self._impl.ijk_to_inv_index(jagged_ijk._impl).jdata
 
     def inject_from(
         self,
@@ -710,7 +711,7 @@ class Grid:
 
         jagged_dst = JaggedTensor(dst)
 
-        src_grid._impl.inject_to(self._impl, jagged_src, jagged_dst)
+        src_grid._impl.inject_to(self._impl, jagged_src._impl, jagged_dst._impl)
 
         return jagged_dst.jdata
 
@@ -825,7 +826,7 @@ class Grid:
             )
         else:
             jagged_dst = JaggedTensor(dst)
-        self._impl.inject_to(dst_grid._impl, jagged_src, jagged_dst)
+        self._impl.inject_to(dst_grid._impl, jagged_src._impl, jagged_dst._impl)
         return jagged_dst.jdata
 
     def integrate_tsdf(
@@ -910,8 +911,8 @@ class Grid:
             truncation_distance,
             projection_matrix.unsqueeze(0),
             cam_to_world_matrix.unsqueeze(0),
-            jagged_tsdf,
-            jagged_weights,
+            jagged_tsdf._impl,
+            jagged_weights._impl,
             depth_image.unsqueeze(0),
             weight_image.unsqueeze(0) if weight_image is not None else None,
         )
@@ -1029,9 +1030,9 @@ class Grid:
             truncation_distance,
             projection_matrix.unsqueeze(0),
             cam_to_world_matrix.unsqueeze(0),
-            jagged_tsdf,
-            jagged_features,
-            jagged_weights,
+            jagged_tsdf._impl,
+            jagged_features._impl,
+            jagged_weights._impl,
             depth_image.unsqueeze(0),
             feature_image.unsqueeze(0),
             weight_image.unsqueeze(0) if weight_image is not None else None,
@@ -1083,7 +1084,7 @@ class Grid:
                 - Vertex normals (computed from gradients). Shape: (num_vertices, 3).
         """
         jagged_field = JaggedTensor(field)
-        verts, indices, normals = self._impl.marching_cubes(jagged_field, level)
+        verts, indices, normals = self._impl.marching_cubes(jagged_field._impl, level)
         return verts.jdata, indices.jdata, normals.jdata
 
     def max_pool(
@@ -1120,7 +1121,7 @@ class Grid:
         stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.NON_NEGATIVE)
         coarse_grid_impl = coarse_grid._impl if coarse_grid else None
 
-        result_data, result_grid_impl = self._impl.max_pool(pool_factor, jagged_data, stride, coarse_grid_impl)
+        result_data, result_grid_impl = self._impl.max_pool(pool_factor, jagged_data._impl, stride, coarse_grid_impl)
         return result_data.jdata, Grid(impl=result_grid_impl)
 
     def merged_grid(self, other: "Grid") -> "Grid":
@@ -1155,7 +1156,7 @@ class Grid:
             torch.Tensor: Linear indices of neighboring voxels.
         """
         jagged_ijk = JaggedTensor(ijk)
-        return self._impl.neighbor_indexes(jagged_ijk, extent, bitshift).jdata
+        return self._impl.neighbor_indexes(jagged_ijk._impl, extent, bitshift).jdata
 
     def points_in_grid(self, points: torch.Tensor) -> torch.Tensor:
         """
@@ -1172,7 +1173,7 @@ class Grid:
                 Shape: (num_points,).
         """
         jagged_points = JaggedTensor(points)
-        return self._impl.points_in_grid(jagged_points).jdata
+        return self._impl.points_in_grid(jagged_points._impl).jdata
 
     def pruned_grid(self, mask: torch.Tensor) -> "Grid":
         """
@@ -1188,7 +1189,7 @@ class Grid:
             GridBatch: A new GridBatch containing only voxels where mask is True.
         """
         jagged_mask = JaggedTensor(mask)
-        return Grid(impl=self._impl.pruned_grid(jagged_mask))
+        return Grid(impl=self._impl.pruned_grid(jagged_mask._impl))
 
     def ray_implicit_intersection(
         self,
@@ -1220,7 +1221,7 @@ class Grid:
         jagged_grid_scalars = JaggedTensor(grid_scalars)
 
         return self._impl.ray_implicit_intersection(
-            jagged_ray_origins, jagged_ray_directions, jagged_grid_scalars, eps
+            jagged_ray_origins._impl, jagged_ray_directions._impl, jagged_grid_scalars._impl, eps
         ).jdata
 
     def rays_intersect_voxels(
@@ -1314,7 +1315,7 @@ class Grid:
         """
         jagged_points = JaggedTensor(points)
         jagged_voxel_data = JaggedTensor(voxel_data)
-        return self._impl.sample_bezier(jagged_points, jagged_voxel_data).jdata
+        return self._impl.sample_bezier(jagged_points._impl, jagged_voxel_data._impl).jdata
 
     def sample_bezier_with_grad(
         self, points: torch.Tensor, voxel_data: torch.Tensor
@@ -1340,7 +1341,7 @@ class Grid:
         jagged_points = JaggedTensor(points)
         jagged_voxel_data = JaggedTensor(voxel_data)
 
-        result_data, result_grad = self._impl.sample_bezier_with_grad(jagged_points, jagged_voxel_data)
+        result_data, result_grad = self._impl.sample_bezier_with_grad(jagged_points._impl, jagged_voxel_data._impl)
         return result_data.jdata, result_grad.jdata
 
     def sample_trilinear(self, points: torch.Tensor, voxel_data: torch.Tensor) -> torch.Tensor:
@@ -1363,7 +1364,7 @@ class Grid:
         jagged_points = JaggedTensor(points)
         jagged_voxel_data = JaggedTensor(voxel_data)
 
-        return self._impl.sample_trilinear(jagged_points, jagged_voxel_data).jdata
+        return self._impl.sample_trilinear(jagged_points._impl, jagged_voxel_data._impl).jdata
 
     def sample_trilinear_with_grad(
         self, points: torch.Tensor, voxel_data: torch.Tensor
@@ -1389,7 +1390,7 @@ class Grid:
         jagged_points = JaggedTensor(points)
         jagged_voxel_data = JaggedTensor(voxel_data)
 
-        result_data, result_grad = self._impl.sample_trilinear_with_grad(jagged_points, jagged_voxel_data)
+        result_data, result_grad = self._impl.sample_trilinear_with_grad(jagged_points._impl, jagged_voxel_data._impl)
         return result_data.jdata, result_grad.jdata
 
     def segments_along_rays(
@@ -1415,7 +1416,11 @@ class Grid:
         jagged_ray_origins = JaggedTensor(ray_origins)
         jagged_ray_directions = JaggedTensor(ray_directions)
 
-        return self._impl.segments_along_rays(jagged_ray_origins, jagged_ray_directions, max_segments, eps)[0]
+        return JaggedTensor(
+            impl=self._impl.segments_along_rays(
+                jagged_ray_origins._impl, jagged_ray_directions._impl, max_segments, eps
+            )[0]
+        )
 
     def sparse_conv_halo(self, input: torch.Tensor, weight: torch.Tensor, variant: int = 8) -> torch.Tensor:
         """
@@ -1434,7 +1439,7 @@ class Grid:
             torch.Tensor: Output features after convolution.
         """
         jagged_input = JaggedTensor(input)
-        return self._impl.sparse_conv_halo(jagged_input, weight, variant).jdata
+        return self._impl.sparse_conv_halo(jagged_input._impl, weight, variant).jdata
 
     def splat_bezier(self, points: torch.Tensor, points_data: torch.Tensor) -> torch.Tensor:
         """
@@ -1457,7 +1462,7 @@ class Grid:
         jagged_points = JaggedTensor(points)
         jagged_points_data = JaggedTensor(points_data)
 
-        return self._impl.splat_bezier(jagged_points, jagged_points_data).jdata
+        return self._impl.splat_bezier(jagged_points._impl, jagged_points_data._impl).jdata
 
     def splat_trilinear(self, points: torch.Tensor, points_data: torch.Tensor) -> torch.Tensor:
         """
@@ -1480,7 +1485,7 @@ class Grid:
         jagged_points = JaggedTensor(points)
         jagged_points_data = JaggedTensor(points_data)
 
-        return self._impl.splat_trilinear(jagged_points, jagged_points_data).jdata
+        return self._impl.splat_trilinear(jagged_points._impl, jagged_points_data._impl).jdata
 
     def refine(
         self,
@@ -1519,11 +1524,13 @@ class Grid:
         """
         subdiv_factor = to_Vec3iBroadcastable(subdiv_factor, value_constraint=ValueConstraint.POSITIVE)
         jagged_data = JaggedTensor(data)
-        jagged_mask = JaggedTensor(mask) if mask is not None else None
+        jagged_mask_impl = JaggedTensor(mask)._impl if mask is not None else None
 
         fine_grid_impl = fine_grid._impl if fine_grid else None
 
-        result_data, result_grid_impl = self._impl.refine(subdiv_factor, jagged_data, jagged_mask, fine_grid_impl)
+        result_data, result_grid_impl = self._impl.refine(
+            subdiv_factor, jagged_data._impl, jagged_mask_impl, fine_grid_impl
+        )
         return result_data.jdata, Grid(impl=result_grid_impl)
 
     def refined_grid(
@@ -1549,9 +1556,9 @@ class Grid:
         """
 
         subdiv_factor = to_Vec3iBroadcastable(subdiv_factor, value_constraint=ValueConstraint.POSITIVE)
-        jagged_mask = JaggedTensor(mask) if mask is not None else None
+        jagged_mask_impl = JaggedTensor(mask)._impl if mask is not None else None
 
-        return Grid(impl=self._impl.refined_grid(subdiv_factor, mask=jagged_mask))
+        return Grid(impl=self._impl.refined_grid(subdiv_factor, mask=jagged_mask_impl))
 
     def to(self, target: "str | torch.device | torch.Tensor | JaggedTensor | Grid") -> "Grid":
         """
@@ -1628,17 +1635,19 @@ class Grid:
         jagged_t_min = JaggedTensor(t_min)
         jagged_t_max = JaggedTensor(t_max)
 
-        return self._impl.uniform_ray_samples(
-            jagged_ray_origins,
-            jagged_ray_directions,
-            jagged_t_min,
-            jagged_t_max,
-            step_size,
-            cone_angle,
-            include_end_segments,
-            return_midpoints,
-            eps,
-        )[0]
+        return JaggedTensor(
+            impl=self._impl.uniform_ray_samples(
+                jagged_ray_origins._impl,
+                jagged_ray_directions._impl,
+                jagged_t_min._impl,
+                jagged_t_max._impl,
+                step_size,
+                cone_angle,
+                include_end_segments,
+                return_midpoints,
+                eps,
+            )[0]
+        )
 
     def voxels_along_rays(
         self,
@@ -1675,9 +1684,9 @@ class Grid:
         jagged_ray_directions = JaggedTensor(ray_directions)
 
         voxels, times = self._impl.voxels_along_rays(
-            jagged_ray_origins, jagged_ray_directions, max_voxels, eps, return_ijk, True
+            jagged_ray_origins._impl, jagged_ray_directions._impl, max_voxels, eps, return_ijk, True
         )
-        return voxels[0], times[0]
+        return JaggedTensor(impl=voxels[0]), JaggedTensor(impl=times[0])
 
     def world_to_grid(self, points: torch.Tensor) -> torch.Tensor:
         """
@@ -1696,7 +1705,7 @@ class Grid:
                 Can contain fractional values.
         """
         jagged_points = JaggedTensor(points)
-        return self._impl.world_to_grid(jagged_points).jdata
+        return self._impl.world_to_grid(jagged_points._impl).jdata
 
     def write_to_dense_xyzc(
         self,
@@ -1734,7 +1743,7 @@ class Grid:
             if grid_size is not None
             else None
         )
-        return self._impl.write_to_dense_xyzc(jagged_sparse_data, min_coord, grid_size).squeeze(0)
+        return self._impl.write_to_dense_xyzc(jagged_sparse_data._impl, min_coord, grid_size).squeeze(0)
 
     def write_to_dense_czyx(
         self,
@@ -1772,7 +1781,7 @@ class Grid:
             if grid_size is not None
             else None
         )
-        return self._impl.write_to_dense_czyx(jagged_sparse_data, min_coord, grid_size).squeeze(0)
+        return self._impl.write_to_dense_czyx(jagged_sparse_data._impl, min_coord, grid_size).squeeze(0)
 
     # ============================================================
     #                        Properties
@@ -1944,11 +1953,11 @@ def save_grid(
     """
     from ._Cpp import save as _save
 
-    jagged_data = JaggedTensor(data) if data is not None else None
+    jagged_data_impl = JaggedTensor(data)._impl if data is not None else None
 
     # Handle the overloaded signature - if name is provided, use it
     if name is not None:
-        _save(path, grid._impl, jagged_data, name, compressed, verbose)
+        _save(path, grid._impl, jagged_data_impl, name, compressed, verbose)
     else:
         # Default case with empty names list
-        _save(path, grid._impl, jagged_data, [], compressed, verbose)
+        _save(path, grid._impl, jagged_data_impl, [], compressed, verbose)

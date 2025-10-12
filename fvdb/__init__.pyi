@@ -20,7 +20,6 @@ def _parse_device_string(device_string: str | torch.device) -> torch.device: ...
 from . import nn
 from ._Cpp import (
     ConvPackBackend,
-    JaggedTensor,
     config,
     gaussian_render_jagged,
     jempty,
@@ -35,6 +34,7 @@ from .convolution_plan import ConvolutionPlan
 from .gaussian_splatting import GaussianSplat3d
 from .grid import Grid, load_grid, save_grid
 from .grid_batch import GridBatch, load_gridbatch, save_gridbatch
+from .jagged_tensor import JaggedTensor
 
 @overload
 def jcat(grid_batches: Sequence[GridBatch]) -> GridBatch: ...
