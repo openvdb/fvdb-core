@@ -3,12 +3,12 @@
 #
 from __future__ import annotations
 
+import ctypes
+import importlib.util as _importlib_util
+import pathlib
 from typing import Sequence
 
 import torch
-import ctypes
-import pathlib
-import importlib.util as _importlib_util
 
 if torch.cuda.is_available():
     torch.cuda.init()
@@ -57,7 +57,7 @@ if _spec is not None and _spec.origin is not None:
 
 # isort: off
 from . import _Cpp  # Import the module to use in jcat
-from ._Cpp import JaggedTensor, ConvPackBackend
+from ._Cpp import ConvPackBackend
 from ._Cpp import (
     scaled_dot_product_attention,
     config,
@@ -69,6 +69,9 @@ from ._Cpp import (
     volume_render,
     gaussian_render_jagged,
 )
+
+# Import JaggedTensor from jagged_tensor.py
+from .jagged_tensor import JaggedTensor
 
 # Import GridBatch and gridbatch_from_* functions from grid_batch.py
 from .grid_batch import (

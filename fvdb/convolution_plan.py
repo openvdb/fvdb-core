@@ -17,6 +17,7 @@ from fvdb.types import JaggedTensorOrTensor, NumericMaxRank1, ValueConstraint, t
 from fvdb import Grid, GridBatch, JaggedTensor
 
 from ._Cpp import ConvPackBackend
+from ._Cpp import JaggedTensor as JaggedTensorCpp
 from ._Cpp import SparseConvPackInfo as SparseConvPackInfoCpp
 
 _CUTLASS_SUPPORTED_CHANNELS: tuple[tuple[int, int], ...] = (
@@ -572,9 +573,9 @@ class ConvolutionPlan:
             result = self._execute_dense(data, weights)
         else:
             if self._transposed:
-                result = self._pack_info.sparse_transpose_conv_3d(data, weights, self._backend)
+                result = JaggedTensor(impl=self._pack_info.sparse_transpose_conv_3d(data._impl, weights, self._backend))
             else:
-                result = self._pack_info.sparse_conv_3d(data, weights, self._backend)
+                result = JaggedTensor(impl=self._pack_info.sparse_conv_3d(data._impl, weights, self._backend))
 
         if is_flat:
             return result.jdata
@@ -785,7 +786,7 @@ class ConvolutionPlan:
         if isinstance(data, torch.Tensor):
             data = JaggedTensor(data)
 
-        return self._pack_info.source_grid.sparse_conv_halo(data, weights, 8)
+        return JaggedTensor(impl=self._pack_info.source_grid.sparse_conv_halo(data._impl, weights, 8))
 
     def _execute_dense(self, data: JaggedTensorOrTensor, weights: torch.Tensor) -> JaggedTensor:
         source_grid = self._pack_info.source_grid
@@ -797,14 +798,14 @@ class ConvolutionPlan:
 
         min_coord = source_grid.ijk.jdata.min(dim=0).values
         # BWHDC -> BCDHW
-        dense_feature = source_grid.write_to_dense_czyx(data, min_coord=min_coord)
+        dense_feature = source_grid.write_to_dense_czyx(data._impl, min_coord=min_coord)
         if self._transposed:
             dense_feature = torch.nn.functional.conv_transpose3d(dense_feature, weights, padding=1, stride=1)
         else:
             dense_feature = torch.nn.functional.conv3d(dense_feature, weights, padding=1, stride=1)
         # BCDHW -> BWHDC
         dense_feature = dense_feature.contiguous()
-        return source_grid.read_from_dense_czyx(dense_feature, dense_origins=min_coord)
+        return JaggedTensor(impl=source_grid.read_from_dense_czyx(dense_feature, dense_origins=min_coord))
 
 
 # These tests are to validate that the type-checking is happy. They won't actually run because

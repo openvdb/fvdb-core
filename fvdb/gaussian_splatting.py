@@ -8,9 +8,11 @@ import torch
 
 from . import JaggedTensor
 from ._Cpp import GaussianSplat3d as GaussianSplat3dCpp
-from ._Cpp import JaggedTensor, ProjectedGaussianSplats
+from ._Cpp import JaggedTensor as JaggedTensorCpp
+from ._Cpp import ProjectedGaussianSplats
 from .grid import Grid
 from .grid_batch import GridBatch
+from .jagged_tensor import JaggedTensor
 from .types import DeviceIdentifier, cast_check, resolve_device
 
 
@@ -1393,7 +1395,7 @@ class GaussianSplat3d:
             pixels_to_render_jagged = JaggedTensor(tensors)
 
             result_num_contributing_gaussians, result_alphas = self._impl.sparse_render_num_contributing_gaussians(
-                pixels_to_render=pixels_to_render_jagged,
+                pixels_to_render=pixels_to_render_jagged._impl,
                 world_to_camera_matrices=world_to_camera_matrices,
                 projection_matrices=projection_matrices,
                 image_width=image_width,
@@ -1416,7 +1418,7 @@ class GaussianSplat3d:
         else:
             # Already a JaggedTensor, call C++ implementation directly
             return self._impl.sparse_render_num_contributing_gaussians(
-                pixels_to_render=pixels_to_render,
+                pixels_to_render=pixels_to_render._impl,
                 world_to_camera_matrices=world_to_camera_matrices,
                 projection_matrices=projection_matrices,
                 image_width=image_width,
@@ -1679,7 +1681,7 @@ class GaussianSplat3d:
 
             result_ids, result_weights = self._impl.sparse_render_top_contributing_gaussian_ids(
                 num_samples=num_samples,
-                pixels_to_render=pixels_to_render_jagged,
+                pixels_to_render=pixels_to_render_jagged._impl,
                 world_to_camera_matrices=world_to_camera_matrices,
                 projection_matrices=projection_matrices,
                 image_width=image_width,
@@ -1701,9 +1703,9 @@ class GaussianSplat3d:
             return dense_ids, dense_weights
         else:
             # Already a JaggedTensor, call C++ implementation directly
-            return self._impl.sparse_render_top_contributing_gaussian_ids(
+            result_ids_impl, result_weights_impl = self._impl.sparse_render_top_contributing_gaussian_ids(
                 num_samples=num_samples,
-                pixels_to_render=pixels_to_render,
+                pixels_to_render=pixels_to_render._impl,
                 world_to_camera_matrices=world_to_camera_matrices,
                 projection_matrices=projection_matrices,
                 image_width=image_width,
@@ -1716,6 +1718,7 @@ class GaussianSplat3d:
                 eps_2d=eps_2d,
                 antialias=antialias,
             )
+            return JaggedTensor(impl=result_ids_impl), JaggedTensor(impl=result_weights_impl)
 
     def reset_accumulated_gradient_state(self) -> None:
         """

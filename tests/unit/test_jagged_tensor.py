@@ -295,7 +295,7 @@ class TestJaggedTensor(unittest.TestCase):
         jt, _ = self.mklol(7, 4, 8, device, dtype)
         with tempfile.NamedTemporaryFile() as tmp:
             torch.save(jt, tmp.name)
-            jt2: fvdb.JaggedTensor = torch.load(tmp.name, weights_only=False)
+            jt2 = fvdb.JaggedTensor(impl=torch.load(tmp.name, weights_only=False))
             self.assertTrue(torch.all(jt.jdata == jt2.jdata))
             self.assertTrue(torch.all(jt.joffsets == jt2.joffsets))
             self.assertTrue(torch.all(jt.jidx == jt2.jidx))
@@ -306,7 +306,7 @@ class TestJaggedTensor(unittest.TestCase):
         jt = fvdb.JaggedTensor([torch.randn(100 + np.random.randint(10), 3, 2).to(device).to(dtype) for _ in range(10)])
         with tempfile.NamedTemporaryFile() as tmp:
             torch.save(jt, tmp.name)
-            jt2: fvdb.JaggedTensor = torch.load(tmp.name, weights_only=False)
+            jt2 = fvdb.JaggedTensor(impl=torch.load(tmp.name, weights_only=False))
             self.assertTrue(torch.all(jt.jdata == jt2.jdata))
             self.assertTrue(torch.all(jt.joffsets == jt2.joffsets))
             self.assertTrue(torch.all(jt.jidx == jt2.jidx))
@@ -317,7 +317,7 @@ class TestJaggedTensor(unittest.TestCase):
         jt = fvdb.JaggedTensor([torch.rand(1024, 9, 9, 9)])
         with tempfile.NamedTemporaryFile() as tmp:
             torch.save(jt, tmp.name)
-            jt2: fvdb.JaggedTensor = torch.load(tmp.name, weights_only=False)
+            jt2 = fvdb.JaggedTensor(impl=torch.load(tmp.name, weights_only=False))
             self.assertTrue(torch.all(jt.jdata == jt2.jdata))
             self.assertTrue(torch.all(jt.joffsets == jt2.joffsets))
             self.assertTrue(torch.all(jt.jidx == jt2.jidx))

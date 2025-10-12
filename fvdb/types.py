@@ -12,7 +12,7 @@ import numpy
 import numpy as np
 import torch
 
-from ._Cpp import JaggedTensor
+from .jagged_tensor import JaggedTensor
 
 Numeric = int | float
 
