@@ -655,6 +655,8 @@ radixSortAsync(KeyT *keysIn,
                ValueT *valuesIn,
                ValueT *valuesOut,
                NumItemsT numItems,
+               int beginBit,
+               int endBit,
                OffsetT *mergeIntervals,
                const OffsetT *offsets,
                const CountT *counts,
@@ -683,8 +685,8 @@ radixSortAsync(KeyT *keysIn,
                                         deviceValuesIn,
                                         deviceValuesOut,
                                         counts[deviceId],
-                                        0,
-                                        sizeof(KeyT) * 8,
+                                        beginBit,
+                                        endBit,
                                         stream);
         C10_CUDA_CHECK(cudaMallocAsync(&deviceTempStorage, tempStorageBytes, stream));
         cub::DeviceRadixSort::SortPairs(deviceTempStorage,
@@ -694,8 +696,8 @@ radixSortAsync(KeyT *keysIn,
                                         deviceValuesIn,
                                         deviceValuesOut,
                                         counts[deviceId],
-                                        0,
-                                        sizeof(KeyT) * 8,
+                                        beginBit,
+                                        endBit,
                                         stream);
         C10_CUDA_CHECK(cudaFreeAsync(deviceTempStorage, stream));
         C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
@@ -1102,11 +1104,14 @@ gaussianTileIntersectionPrivateUse1Impl(
                 deviceChunk(total_intersections, deviceId);
         }
 
+        const int32_t num_bits = 32 + num_cam_id_bits + num_tile_id_bits;
         radixSortAsync(intersection_keys.data_ptr<int64_t>(),
                        keys_sorted.data_ptr<int64_t>(),
                        intersection_values.data_ptr<int32_t>(),
                        vals_sorted.data_ptr<int32_t>(),
                        total_intersections,
+                       0,
+                       num_bits,
                        merge_intervals.data_ptr<int64_t>(),
                        device_intersection_offsets.const_data_ptr<int64_t>(),
                        device_intersection_counts.const_data_ptr<int64_t>(),
