@@ -102,17 +102,19 @@ jobs:
     needs: [start-build-runner, pr-flags] # start when runner is ready and flags computed
     runs-on: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }} # run the job on the newly created runner
     container:
-      image: aswf/ci-openvdb:2024-clang17.2
+      image: nvidia/cuda:12.9.0-cudnn-devel-ubuntu22.04
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
-        CONDA_OVERRIDE_CUDA: "12.9"  # this is to build an environment on machines that lack a CUDA device and needs to be >= the CUDA version in the build_environment.yml file
+        FORCE_CUDA: 1
       options: --rm
     defaults:
       run:
         shell: bash -el {0}
     strategy: *matrix-strategy
     steps:
+      - name: Apt update and install git and wget
+        run: apt update && apt install -y git wget
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Fetch all history for all branches
@@ -145,6 +147,13 @@ jobs:
           python-version: '${{ matrix.python-version }}'
         env:
           AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
+
+      - name: Install CMake
+        run: >
+          wget -nv https://github.com/Kitware/CMake/releases/download/v4.0.3/cmake-4.0.3-linux-x86_64.sh &&
+          mkdir /opt/cmake &&
+          sh cmake-4.0.3-linux-x86_64.sh --prefix=/usr/local --skip-license &&
+          cmake --version
 
       - name: Install apt dependencies
         run: apt install -y zlib1g-dev libpng-dev pkg-config
