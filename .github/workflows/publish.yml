@@ -118,14 +118,6 @@ jobs:
           fetch-depth: 0 # Fetch all history for all branches
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
 
-      - name: Generate release_environment.yml
-        run: |
-          cp env/build_environment.yml release_environment.yml
-          sed -i "s/cuda-version=.*/cuda-version=${{ matrix.cuda-version }}/" release_environment.yml
-          sed -i "s/pytorch-gpu=.*/pytorch-gpu=${{ matrix.torch-version }}.0/" release_environment.yml
-          sed -i "s/python=.*/python=${{ matrix.python-version }}/" release_environment.yml
-          sed -i "s/name: fvdb_build/name: fvdb_release/" release_environment.yml
-
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
         run: |
@@ -142,12 +134,30 @@ jobs:
           cd $GITHUB_WORKSPACE
           git merge pr_branch
 
-      - name: Set up fvdb_release Conda env
-        uses: mamba-org/setup-micromamba@v2
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
         with:
-          post-cleanup: 'all'
-          environment-name: fvdb_release
-          environment-file: release_environment.yml
+          version: "0.7.5"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '${{ matrix.python-version }}'
+        env:
+          AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
+
+      - name: Install apt dependencies
+        run: apt install -y zlib1g-dev libpng-dev pkg-config
+
+      - name: Install pip dependencies
+        run: |
+          # Convert CUDA version from 12.9 to cu129 format for PyTorch index
+          CUDA_TAG="cu$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
+          TORCH_VERSION="${{ matrix.torch-version }}"
+          echo "Installing PyTorch ${TORCH_VERSION} for ${CUDA_TAG}"
+          uv venv
+          # Install build requirements with explicit PyTorch version (explicit version takes precedence)
+          uv pip install --no-cache-dir torch==${TORCH_VERSION}.0 -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
 
       - name: Add a post-release to version (used for testing on TestPyPI)
         if: ${{ ((inputs.publish_target == 'testpypi') || (needs.pr-flags.outputs.s3 == 'false')) }}
@@ -173,13 +183,13 @@ jobs:
 
       - name: Build fvdb
         run: |
-          micromamba activate fvdb_release
+          source .venv/bin/activate
           ./build.sh wheel verbose --cuda-arch-list '7.5;8.0;9.0;10.0;12.0+PTX'
 
       - name: Repair wheel for manylinux
         if: ${{ !((github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.s3 == 'true')) }}
         run: |
-          micromamba activate fvdb_release
+          source .venv/bin/activate
           pip install auditwheel patchelf
           # Check glibc version
           ldd --version | head -n1
