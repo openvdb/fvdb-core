@@ -18,9 +18,12 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_blosc.cmake)
 # Build options
 option(FVDB_BUILD_TESTS "Configure CMake to build tests" ON)
 option(FVDB_BUILD_BENCHMARKS "Configure CMake to build (google & nvbench) benchmarks" OFF)
+option(FVDB_STRIP_SYMBOLS "Strip symbols from the build" OFF)
 
 message(STATUS "FVDB: Configure CMake to build tests: ${FVDB_BUILD_TESTS}")
 message(STATUS "FVDB: Configure CMake to build (google & nvbench) benchmarks: ${FVDB_BUILD_BENCHMARKS}")
+message(STATUS "FVDB_STRIP_SYMBOLS: ${FVDB_STRIP_SYMBOLS}")
+
 
 # Generate compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -213,7 +216,7 @@ target_link_libraries(fvdb PRIVATE
     ${TORCH_LIBRARIES} tinyply cudnn_frontend cudnn cutlass blosc::blosc)
 
 # Strip symbols in non-Debug builds to reduce wheel size
-if(NOT (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo"))
+if(NOT (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo") AND FVDB_STRIP_SYMBOLS)
     target_link_options(fvdb PRIVATE "-s")
 endif()
 

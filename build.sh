@@ -26,6 +26,7 @@ usage() {
   echo "  editor_skip    Skip building and installing the nanovdb_editor dependency (sets NANOVDB_EDITOR_SKIP=ON)."
   echo "  editor_force   Force rebuild of the nanovdb_editor dependency (sets NANOVDB_EDITOR_FORCE=ON)."
   echo "  debug          Build in debug mode with full debug symbols and no optimizations."
+  echo "  strip_symbols  Strip symbols from the build (will be ignored if debug is enabled)."
   echo "  verbose        Enable verbose build output for pip and CMake."
   echo ""
   echo "  Any modifier arguments not matching above are passed through to pip."
@@ -173,6 +174,10 @@ while (( "$#" )); do
     elif [[ "$1" == "debug" ]]; then
       echo "Enabling debug build"
       CONFIG_SETTINGS+=" --config-settings=cmake.build-type=debug"
+      is_config_arg_handled=true
+    elif [[ "$1" == "strip_symbols" ]]; then
+      echo "Enabling strip symbols build"
+      CONFIG_SETTINGS+=" --config-settings=cmake.define.FVDB_STRIP_SYMBOLS=ON"
       is_config_arg_handled=true
     elif [[ "$1" == "editor_skip" ]]; then
       echo "Detected 'editor_skip' flag for $BUILD_TYPE build. Enabling NANOVDB_EDITOR_SKIP."

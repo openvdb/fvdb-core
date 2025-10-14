@@ -6,6 +6,9 @@ cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
 # Set global download timeout to 600 seconds (10 minutes)
 set(CMAKE_DOWNLOAD_TIMEOUT 600 CACHE STRING "Time allowed for downloads in seconds")
 
+option(FVDB_STRIP_SYMBOLS "Strip symbols from the build" OFF)
+message(STATUS "FVDB_STRIP_SYMBOLS: ${FVDB_STRIP_SYMBOLS}")
+
 project(${SKBUILD_PROJECT_NAME} VERSION ${SKBUILD_PROJECT_VERSION} LANGUAGES CXX)
 
 find_package(Python3 COMPONENTS Development Interpreter)
@@ -89,7 +92,7 @@ target_compile_definitions(_Cpp PRIVATE
 configure_torch_pybind11(_Cpp)
 
 # Strip symbols in non-Debug builds to reduce wheel size
-if(NOT (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo"))
+if(NOT (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo") AND FVDB_STRIP_SYMBOLS)
     target_link_options(_Cpp PRIVATE "-s")
 endif()
 
