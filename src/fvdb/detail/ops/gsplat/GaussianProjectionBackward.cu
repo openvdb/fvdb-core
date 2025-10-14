@@ -104,8 +104,9 @@ projectionBackwardKernel(const int32_t offset,
 ) {
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
-    if (idx >= count)
+    if (idx >= count) {
         return;
+    }
     idx += offset;
     if (radii[idx] <= 0) {
         return;
