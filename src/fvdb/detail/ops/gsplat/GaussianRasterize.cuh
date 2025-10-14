@@ -64,6 +64,9 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
     using ScalarAccessor                           = TorchRAcc64<ScalarType, NUM_OUTER_DIMS>;
     using VectorAccessor                           = TorchRAcc64<ScalarType, NUM_OUTER_DIMS + 1>;
 
+    // 0 for the kCUDA/single GPU case. For kPrivateUse1/multi-GPU, we distribute the blocks in the
+    // single GPU case amongst multiple GPUs and mBlockOffset translates the per-device block index
+    // into the corresponding global block index that is unique across all GPUs.
     uint32_t mBlockOffset;
     uint32_t mNumCameras;
     uint32_t mNumGaussiansPerCamera;
