@@ -217,5 +217,3 @@ else()
     endif()
     message(STATUS "NANOVDB_EDITOR_INCLUDE_DIR: ${NANOVDB_EDITOR_INCLUDE_DIR}")
 endif()
-
-

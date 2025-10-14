@@ -26,6 +26,7 @@ usage() {
   echo "  editor_skip    Skip building and installing the nanovdb_editor dependency (sets NANOVDB_EDITOR_SKIP=ON)."
   echo "  editor_force   Force rebuild of the nanovdb_editor dependency (sets NANOVDB_EDITOR_FORCE=ON)."
   echo "  debug          Build in debug mode with full debug symbols and no optimizations."
+  echo "  strip_symbols  Strip symbols from the build (will be ignored if debug is enabled)."
   echo "  verbose        Enable verbose build output for pip and CMake."
   echo ""
   echo "  Any modifier arguments not matching above are passed through to pip."
@@ -174,6 +175,10 @@ while (( "$#" )); do
       echo "Enabling debug build"
       CONFIG_SETTINGS+=" --config-settings=cmake.build-type=debug"
       is_config_arg_handled=true
+    elif [[ "$1" == "strip_symbols" ]]; then
+      echo "Enabling strip symbols build"
+      CONFIG_SETTINGS+=" --config-settings=cmake.define.FVDB_STRIP_SYMBOLS=ON"
+      is_config_arg_handled=true
     elif [[ "$1" == "editor_skip" ]]; then
       echo "Detected 'editor_skip' flag for $BUILD_TYPE build. Enabling NANOVDB_EDITOR_SKIP."
       NANOVDB_EDITOR_SKIP=ON
@@ -221,12 +226,12 @@ fi
 # if the user specified 'wheel' as the build type, then we will build the wheel
 if [ "$BUILD_TYPE" == "wheel" ]; then
     echo "Build wheel"
-    echo "pip wheel . --wheel-dir dist/ $PIP_ARGS"
-    pip wheel . --wheel-dir dist/ $PIP_ARGS
+    echo "pip wheel . --no-deps --wheel-dir dist/ $PIP_ARGS"
+    pip wheel . --no-deps --wheel-dir dist/ $PIP_ARGS
 elif [ "$BUILD_TYPE" == "install" ]; then
     echo "Build and install package"
-    echo "pip install --force-reinstall $PIP_ARGS ."
-    pip install --force-reinstall $PIP_ARGS .
+    echo "pip install --no-deps --force-reinstall $PIP_ARGS ."
+    pip install --no-deps --force-reinstall $PIP_ARGS .
 # TODO: Fix editable install
 # else
 #     echo "Build and install editable package"
