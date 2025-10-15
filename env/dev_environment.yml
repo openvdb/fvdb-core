@@ -78,4 +78,4 @@ dependencies:
     - dlnr_lite
     - einops
     - oiio-static-python
-    - torchvision --index-url https://download.pytorch.org/whl/cu129 # NOTE: torchvision is not available on conda-forge for pytorch 2.8.0 yet
+    - torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu129 # NOTE: torchvision is not available on conda-forge for pytorch 2.8.0 yet
