@@ -187,9 +187,14 @@ class Viewer:
 
         Args:
             name (str): The name of the camera view.
-            camera_to_world_matrices (NumericMaxRank3): The 4x4 camera to world transformation matrix.
-            projection_matrices (NumericMaxRank3 | None): The 3x3 projection matrix.
+            camera_to_world_matrices (NumericMaxRank3): The 4x4 camera to world transformation matrices (one per camera) encoded
+                as a tensor-like object of shape (N, 4, 4) where N is the number of cameras.
+            projection_matrices (NumericMaxRank3 | None): The 3x3 projection matrices (one per camera) encoded
+                as a tensor-like object of shape (N, 3, 3) where N is the number of cameras.
             image_sizes (NumericMaxRank2 | None): The image sizes as a tensor of shape (N, 2) where N is the number of cameras.
+                such that height_i, width_i = image_sizes[i] is the resolution of the i-th camera.
+                If None, the image sizes will be inferred from the projection matrices assuming square pixels and
+                that the principal point is at the center of the image.
             axis_length (float): The length of the axis lines in the camera frustum view.
             axis_thickness (float): The thickness (in world coordinates) of the axis lines in the camera frustum view.
             frustum_line_width (float): The width (in pixels) of the frustum lines in the camera frustum view.
