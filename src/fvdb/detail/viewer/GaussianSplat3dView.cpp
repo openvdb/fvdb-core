@@ -13,8 +13,6 @@ namespace fvdb::detail::viewer {
 GaussianSplat3dView::GaussianSplat3dView(const std::string &name, const Viewer &viewer)
     : mName(name) {
     mGaussianData                        = nullptr;
-    mParams.near_plane_override          = 0;
-    mParams.far_plane_override           = 0;
     mParams.eps2d                        = 0.3f;
     mParams.min_radius_2d                = 0.f;
     mParams.tile_size                    = 16u;

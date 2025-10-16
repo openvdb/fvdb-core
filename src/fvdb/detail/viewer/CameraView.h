@@ -31,7 +31,7 @@ class CameraView {
 
   public:
     explicit CameraView(const std::string &name) : mName(name) {
-        pnanovdb_debug_camera_default(&mView);
+        pnanovdb_camera_view_default(&mView);
         mView.name = mName.c_str();
     }
 
