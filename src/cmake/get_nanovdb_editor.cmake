@@ -12,14 +12,15 @@
 
 option(NANOVDB_EDITOR_FORCE "Force rebuild of nanovdb_editor wheel" OFF)
 option(NANOVDB_EDITOR_SKIP "Skip nanovdb_editor wheel build" OFF)
+option(NANOVDB_EDITOR_BUILD_TYPE "Build type for nanovdb_editor (Release/Debug)" "Release")
 
 # For fVDB main use nanovdb-editor main
-set(NANOVDB_EDITOR_TAG 8511610cec76ad9ff8af12d59903119f121569b0)
-set(NANOVDB_EDITOR_VERSION 0.0.4)   # version at this commit
+set(NANOVDB_EDITOR_TAG eb9ef7c41322788f93e58eff1b76a4fe1b04f5ae)
+set(NANOVDB_EDITOR_VERSION 0.0.5)   # version at this commit
 
 # If skip is set, get the latest tagged version to prevent unnecessary rebuilds each hash update
 if(NANOVDB_EDITOR_SKIP)
-    set(NANOVDB_EDITOR_VERSION 0.0.4)   # latest tagged version
+    set(NANOVDB_EDITOR_VERSION 0.0.5)   # latest tagged version
     set(NANOVDB_EDITOR_TAG v${NANOVDB_EDITOR_VERSION})
 endif()
 
@@ -232,7 +233,7 @@ execute_process(
         -Ccmake.define.NANOVDB_EDITOR_BUILD_TESTS=OFF \
         -Ccmake.define.NANOVDB_EDITOR_COMMIT_HASH=${NANOVDB_EDITOR_COMMIT_HASH} \
         -Ccmake.define.NANOVDB_EDITOR_FVDB_COMMIT_HASH=${FVDB_COMMIT_HASH} \
-        --config-settings=cmake.build-type=Release \
+        --config-settings=cmake.build-type=${NANOVDB_EDITOR_BUILD_TYPE} \
         -v \
         --no-build-isolation
     ${Python3_EXECUTABLE} -m pip install --force-reinstall ${NANOVDB_EDITOR_WHEEL_DIR}/nanovdb_editor*.whl

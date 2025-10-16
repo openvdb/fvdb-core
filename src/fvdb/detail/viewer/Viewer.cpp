@@ -156,7 +156,6 @@ Viewer::addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splat
     torch::Tensor logitOpacities = splats.logitOpacities();
     torch::Tensor sh0            = splats.sh0();
     torch::Tensor shN            = splats.shN();
-    torch::Tensor sh             = torch::cat({sh0, shN}, 1);
 
     auto makeComputeArray = [this](const torch::Tensor &tensor) -> pnanovdb_compute_array_t * {
         torch::Tensor contig = tensor.cpu().contiguous();
@@ -172,10 +171,11 @@ Viewer::addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splat
     pnanovdb_compute_array_t *quats_arr          = makeComputeArray(quats);
     pnanovdb_compute_array_t *logScales_arr      = makeComputeArray(logScales);
     pnanovdb_compute_array_t *logitOpacities_arr = makeComputeArray(logitOpacities);
-    pnanovdb_compute_array_t *sh_arr             = makeComputeArray(sh);
+    pnanovdb_compute_array_t *sh0_arr            = makeComputeArray(sh0);
+    pnanovdb_compute_array_t *shN_arr            = makeComputeArray(shN);
 
     pnanovdb_compute_array_t *arrays[] = {
-        means_arr, logitOpacities_arr, quats_arr, logScales_arr, sh_arr};
+        means_arr, logitOpacities_arr, quats_arr, logScales_arr, sh0_arr, shN_arr};
 
     pnanovdb_compute_queue_t *queue =
         mEditor.compute.device_interface.get_device_queue(mEditor.device);
@@ -186,7 +186,7 @@ Viewer::addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splat
                                                     &mEditor.compute,
                                                     queue,
                                                     arrays,
-                                                    5u,
+                                                    6u,
                                                     &pGaussianData,
                                                     &it->second.mParams,
                                                     &mEditor.raster_ctx);
