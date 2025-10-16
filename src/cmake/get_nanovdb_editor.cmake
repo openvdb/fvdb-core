@@ -13,11 +13,13 @@
 option(NANOVDB_EDITOR_FORCE "Force rebuild of nanovdb_editor wheel" OFF)
 option(NANOVDB_EDITOR_SKIP "Skip nanovdb_editor wheel build" OFF)
 
-set(NANOVDB_EDITOR_TAG 188ba462b31e58d093c3380e6a81f52c85425933)
-set(NANOVDB_EDITOR_VERSION 0.0.3)
+# For fVDB main use nanovdb-editor main
+set(NANOVDB_EDITOR_TAG 8511610cec76ad9ff8af12d59903119f121569b0)
+set(NANOVDB_EDITOR_VERSION 0.0.4)
 
 # If skip is set, get the latest tagged version to prevent unnecessary rebuilds each hash update
 if(NANOVDB_EDITOR_SKIP)
+    set(NANOVDB_EDITOR_VERSION 0.0.3)
     set(NANOVDB_EDITOR_TAG v${NANOVDB_EDITOR_VERSION})
 endif()
 
@@ -177,10 +179,43 @@ file(MAKE_DIRECTORY ${NANOVDB_EDITOR_WHEEL_DIR})
 # Ensure the build directory used by scikit-build exists; this is where the nested build writes
 file(MAKE_DIRECTORY ${nanovdb_editor_BINARY_DIR})
 
+find_package(Git QUIET)
 if(NOT CPM_PACKAGE_nanovdb_editor_VERSION)
     message(STATUS "Using local nanovdb_editor repository: ${nanovdb_editor_SOURCE_DIR}")
+    set(NANOVDB_EDITOR_COMMIT_HASH "unknown")
+    if(GIT_FOUND)
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} -C ${nanovdb_editor_SOURCE_DIR} rev-parse --short HEAD
+            OUTPUT_VARIABLE NANOVDB_EDITOR_COMMIT_HASH
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+            RESULT_VARIABLE _nanovdb_rev_result
+        )
+        if(NOT _nanovdb_rev_result EQUAL 0)
+            set(NANOVDB_EDITOR_COMMIT_HASH "unknown")
+        endif()
+    endif()
+    if(NANOVDB_EDITOR_COMMIT_HASH STREQUAL "unknown" AND DEFINED NANOVDB_EDITOR_TAG)
+        set(NANOVDB_EDITOR_COMMIT_HASH ${NANOVDB_EDITOR_TAG})
+    endif()
+    message(STATUS "NanoVDB Editor build: ${NANOVDB_EDITOR_COMMIT_HASH}")
 else()
     message(STATUS "Using nanovdb_editor version: ${CPM_PACKAGE_nanovdb_editor_VERSION} from ${nanovdb_editor_SOURCE_DIR}")
+    set(NANOVDB_EDITOR_COMMIT_HASH ${NANOVDB_EDITOR_TAG})
+endif()
+
+set(FVDB_COMMIT_HASH "unknown")
+if(GIT_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} -C ${CMAKE_SOURCE_DIR} rev-parse --short HEAD
+        OUTPUT_VARIABLE FVDB_COMMIT_HASH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE _fvdb_rev_result
+    )
+    if(NOT _fvdb_rev_result EQUAL 0)
+        set(FVDB_COMMIT_HASH "unknown")
+    endif()
 endif()
 
 message(STATUS "Building nanovdb_editor wheel version ${NANOVDB_EDITOR_LATEST_VERSION} to ${NANOVDB_EDITOR_WHEEL_DIR}...")
@@ -193,6 +228,8 @@ execute_process(
         -Clogging.level=WARNING \
         -Ccmake.define.NANOVDB_EDITOR_USE_GLFW=OFF \
         -Ccmake.define.NANOVDB_EDITOR_BUILD_TESTS=OFF \
+        -Ccmake.define.NANOVDB_EDITOR_COMMIT_HASH=${NANOVDB_EDITOR_COMMIT_HASH} \
+        -Ccmake.define.NANOVDB_EDITOR_FVDB_COMMIT_HASH=${FVDB_COMMIT_HASH} \
         --config-settings=cmake.build-type=Release \
         -v \
         --no-build-isolation
