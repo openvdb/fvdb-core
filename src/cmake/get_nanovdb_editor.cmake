@@ -15,11 +15,11 @@ option(NANOVDB_EDITOR_SKIP "Skip nanovdb_editor wheel build" OFF)
 
 # For fVDB main use nanovdb-editor main
 set(NANOVDB_EDITOR_TAG 8511610cec76ad9ff8af12d59903119f121569b0)
-set(NANOVDB_EDITOR_VERSION 0.0.4)
+set(NANOVDB_EDITOR_VERSION 0.0.4)   # version at this commit
 
 # If skip is set, get the latest tagged version to prevent unnecessary rebuilds each hash update
 if(NANOVDB_EDITOR_SKIP)
-    set(NANOVDB_EDITOR_VERSION 0.0.4)
+    set(NANOVDB_EDITOR_VERSION 0.0.4)   # latest tagged version
     set(NANOVDB_EDITOR_TAG v${NANOVDB_EDITOR_VERSION})
 endif()
 
@@ -120,7 +120,7 @@ message(STATUS "Latest nanovdb_editor version: ${NANOVDB_EDITOR_LATEST_VERSION}"
 # Directory where locally built wheels are stored (project root /dist)
 set(NANOVDB_EDITOR_WHEEL_DIR ${CMAKE_SOURCE_DIR}/dist)
 
-# If not forcing a rebuild, check for installed version and compare with latest wheel version on nanovdb-editor repo; skip build if up-to-date
+# If not forcing a rebuild, check for installed version and compare with the latest wheel version on nanovdb-editor repo; skip build if up-to-date
 if (NOT NANOVDB_EDITOR_FORCE)
     if(NANOVDB_EDITOR_INSTALLED_VERSION VERSION_GREATER_EQUAL NANOVDB_EDITOR_LATEST_VERSION)
         message(STATUS "Installed nanovdb_editor is up-to-date; skipping build")
@@ -131,19 +131,19 @@ else()
     message(STATUS "NANOVDB_EDITOR_FORCE is set; rebuilding nanovdb_editor wheel")
 endif()
 
-# If not forcing a rebuild, check for requested version wheel in /dist; build when version empty (local repo) or not found
+# If not forcing a rebuild, check for the latest version wheel in /dist; build when version empty (local repo) or not found
 if (NOT NANOVDB_EDITOR_FORCE)
     if(NOT CPM_PACKAGE_nanovdb_editor_VERSION)
         message(STATUS "Using local nanovdb_editor repository ${CPM_PACKAGE_nanovdb_editor_SOURCE_DIR}; will build wheel")
     else()
-        file(GLOB REQUESTED_WHEELS "${NANOVDB_EDITOR_WHEEL_DIR}/nanovdb_editor-*${NANOVDB_EDITOR_LATEST_VERSION}*.whl")
-        list(LENGTH REQUESTED_WHEELS NUM_REQUESTED_WHEELS)
-        if(NUM_REQUESTED_WHEELS GREATER 0)
-            list(GET REQUESTED_WHEELS 0 REQUESTED_WHEEL)
-            message(STATUS "Found wheel in dist for requested version ${NANOVDB_EDITOR_LATEST_VERSION}: ${REQUESTED_WHEEL}")
+        file(GLOB LATEST_WHEELS "${NANOVDB_EDITOR_WHEEL_DIR}/nanovdb_editor-*${NANOVDB_EDITOR_LATEST_VERSION}*.whl")
+        list(LENGTH LATEST_WHEELS NUM_LATEST_WHEELS)
+        if(NUM_LATEST_WHEELS GREATER 0)
+            list(GET LATEST_WHEELS 0 LATEST_WHEEL)
+            message(STATUS "Found wheel in dist for the latest version ${NANOVDB_EDITOR_LATEST_VERSION}: ${LATEST_WHEEL}")
             execute_process(
                 COMMAND bash -lc "
-                ${Python3_EXECUTABLE} -m pip install --force-reinstall ${REQUESTED_WHEEL}
+                ${Python3_EXECUTABLE} -m pip install --force-reinstall ${LATEST_WHEEL}
                 "
                 WORKING_DIRECTORY ${nanovdb_editor_BINARY_DIR}
                 RESULT_VARIABLE install_result
@@ -163,7 +163,7 @@ if (NOT NANOVDB_EDITOR_FORCE)
                 return()
             endif()
         else()
-            message(STATUS "No wheel found in dist for requested version ${NANOVDB_EDITOR_VERSION}; will build wheel")
+            message(STATUS "No wheel found in dist for the latest version ${NANOVDB_EDITOR_LATEST_VERSION}; will build wheel")
         endif()
     endif()
 endif()
