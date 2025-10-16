@@ -19,7 +19,7 @@ set(NANOVDB_EDITOR_VERSION 0.0.4)
 
 # If skip is set, get the latest tagged version to prevent unnecessary rebuilds each hash update
 if(NANOVDB_EDITOR_SKIP)
-    set(NANOVDB_EDITOR_VERSION 0.0.3)
+    set(NANOVDB_EDITOR_VERSION 0.0.4)
     set(NANOVDB_EDITOR_TAG v${NANOVDB_EDITOR_VERSION})
 endif()
 
