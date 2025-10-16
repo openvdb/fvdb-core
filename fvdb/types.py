@@ -1206,6 +1206,36 @@ def to_Vec2fBatch(
     )
 
 
+def to_VecNb(
+    x: NumericMaxRank1,
+    n: int,
+    dtype: torch.dtype = torch.bool,
+) -> torch.Tensor:
+    """
+    Converts a NumericMaxRank1 to a VecNb tensor, reshaped to (n,).
+
+    Args:
+        x (NumericMaxRank1): The input tensor.
+        n (int): The size of the vector.
+        dtype (torch.dtype): The boolean dtype of the output tensor. Defaults to torch.bool.
+
+    Returns:
+        A torch.Tensor of dtype dtype.
+    """
+    if n <= 0:
+        raise ValueError(f"Expected n to be positive, got {n}")
+    return to_GenericTensorBroadcastableRank1(
+        x,
+        (n,),
+        dtype,
+        allowed_torch_dtypes=(torch.bool,),
+        allowed_numpy_dtypes=(np.bool_, bool),
+        dtype_category="bool",
+        value_constraint=ValueConstraint.NONE,
+        do_broadcast_to=True,
+    )
+
+
 def to_VecNi(
     x: NumericMaxRank1,
     n: int,
