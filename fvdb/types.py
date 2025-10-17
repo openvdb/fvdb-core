@@ -47,8 +47,13 @@ Index = int | slice | type(Ellipsis) | None
 
 GridIdentifier = str | int | list[str] | list[int] | tuple[str, ...] | tuple[int, ...]
 
-LShapeSpec = Iterable[int] | Iterable[Iterable[int]]
-RShapeSpec = Iterable[int]
+LShapeRank1 = Sequence[int]
+LShapeRank2 = Sequence[Sequence[int]]
+LShapeSpec = LShapeRank1 | LShapeRank2
+RShapeSpec = Sequence[int]
+
+ListOfTensors = list[torch.Tensor]
+ListOfListsOfTensors = list[list[torch.Tensor]]
 
 JaggedTensorOrTensor = JaggedTensor | torch.Tensor
 
@@ -172,30 +177,28 @@ def is_GridIdentifier(x: Any) -> bool:
     return False
 
 
-def is_LShapeSpec(x: Any) -> bool:
-    try:
-        if hasattr(x, "__iter__") and not isinstance(x, (str, bytes)):
-            # Check if it's Iterable[int]
-            if all(isinstance(item, int) for item in x):
-                return True
-            # Check if it's Iterable[Iterable[int]]
-            if all(
-                hasattr(item, "__iter__")
-                and not isinstance(item, (str, bytes))
-                and all(isinstance(i, int) for i in item)
-                for item in x
-            ):
-                return True
-    except (TypeError, ValueError):
-        pass
-    return False
+def is_LShapeRank1(x: Any) -> TypeGuard[LShapeRank1]:
+    return isinstance(x, Sequence) and all(isinstance(item, int) for item in x)
 
 
-def is_RShapeSpec(x: Any) -> bool:
-    try:
-        return hasattr(x, "__iter__") and not isinstance(x, (str, bytes)) and all(isinstance(item, int) for item in x)
-    except (TypeError, ValueError):
-        return False
+def is_LShapeRank2(x: Any) -> TypeGuard[LShapeRank2]:
+    return isinstance(x, Sequence) and all(is_LShapeRank1(item) for item in x)
+
+
+def is_LShapeSpec(x: Any) -> TypeGuard[LShapeSpec]:
+    return is_LShapeRank1(x) or is_LShapeRank2(x)
+
+
+def is_RShapeSpec(x: Any) -> TypeGuard[RShapeSpec]:
+    return isinstance(x, Sequence) and all(isinstance(item, int) for item in x)
+
+
+def is_ListOfTensors(x: Any) -> TypeGuard[ListOfTensors]:
+    return isinstance(x, list) and all(isinstance(item, torch.Tensor) for item in x)
+
+
+def is_ListOfListsOfTensors(x: Any) -> TypeGuard[ListOfListsOfTensors]:
+    return isinstance(x, list) and all(is_ListOfTensors(item) for item in x)
 
 
 def is_JaggedTensorOrTensor(x: Any) -> bool:

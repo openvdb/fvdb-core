@@ -9,6 +9,20 @@ from typing import List
 import numpy as np
 import torch
 import torch_scatter
+from fvdb.types import (
+    ListOfListsOfTensors,
+    ListOfTensors,
+    LShapeRank1,
+    LShapeRank2,
+    LShapeSpec,
+    RShapeSpec,
+    is_ListOfListsOfTensors,
+    is_ListOfTensors,
+    is_LShapeRank1,
+    is_LShapeRank2,
+    is_LShapeSpec,
+    is_RShapeSpec,
+)
 from fvdb.utils.tests import get_fvdb_test_data_path, probabilistic_test
 from parameterized import parameterized
 
@@ -69,16 +83,18 @@ class TestJaggedTensor(unittest.TestCase):
             res.append(res_i)
         return fvdb.JaggedTensor(res), res
 
-    def check_lshape(self, jt: fvdb.JaggedTensor, lt: List[torch.Tensor] | List[List[torch.Tensor]]):
+    def check_lshape(self, jt: fvdb.JaggedTensor, lt: ListOfTensors | ListOfListsOfTensors):
         self.assertEqual(len(jt), len(lt))
         if jt.ldim == 1:
+            assert is_ListOfTensors(lt)
             for i in range(len(jt)):
                 self.assertEqual(jt.lshape[i], lt[i].shape[0])
         elif jt.ldim == 2:
+            assert is_ListOfListsOfTensors(lt)
             for i, jti in enumerate(jt):
                 self.assertEqual(len(jti), len(lt[i]))
-                assert isinstance(jt.lshape, list)
-                assert isinstance(jti.lshape, list)
+                assert is_LShapeRank2(jt.lshape)
+                assert is_LShapeRank1(jti.lshape)
                 for j in range(len(jti)):
                     assert isinstance(jt.lshape[i], list)
                     self.assertEqual(jt.lshape[i][j], lt[i][j].shape[0])
@@ -295,7 +311,8 @@ class TestJaggedTensor(unittest.TestCase):
         jt, _ = self.mklol(7, 4, 8, device, dtype)
         with tempfile.NamedTemporaryFile() as tmp:
             torch.save(jt, tmp.name)
-            jt2: fvdb.JaggedTensor = torch.load(tmp.name, weights_only=False)
+            jt2 = torch.load(tmp.name, weights_only=False)
+            assert isinstance(jt2, fvdb.JaggedTensor)
             self.assertTrue(torch.all(jt.jdata == jt2.jdata))
             self.assertTrue(torch.all(jt.joffsets == jt2.joffsets))
             self.assertTrue(torch.all(jt.jidx == jt2.jidx))
@@ -306,7 +323,8 @@ class TestJaggedTensor(unittest.TestCase):
         jt = fvdb.JaggedTensor([torch.randn(100 + np.random.randint(10), 3, 2).to(device).to(dtype) for _ in range(10)])
         with tempfile.NamedTemporaryFile() as tmp:
             torch.save(jt, tmp.name)
-            jt2: fvdb.JaggedTensor = torch.load(tmp.name, weights_only=False)
+            jt2 = torch.load(tmp.name, weights_only=False)
+            assert isinstance(jt2, fvdb.JaggedTensor)
             self.assertTrue(torch.all(jt.jdata == jt2.jdata))
             self.assertTrue(torch.all(jt.joffsets == jt2.joffsets))
             self.assertTrue(torch.all(jt.jidx == jt2.jidx))
@@ -317,7 +335,8 @@ class TestJaggedTensor(unittest.TestCase):
         jt = fvdb.JaggedTensor([torch.rand(1024, 9, 9, 9)])
         with tempfile.NamedTemporaryFile() as tmp:
             torch.save(jt, tmp.name)
-            jt2: fvdb.JaggedTensor = torch.load(tmp.name, weights_only=False)
+            jt2 = torch.load(tmp.name, weights_only=False)
+            assert isinstance(jt2, fvdb.JaggedTensor)
             self.assertTrue(torch.all(jt.jdata == jt2.jdata))
             self.assertTrue(torch.all(jt.joffsets == jt2.joffsets))
             self.assertTrue(torch.all(jt.jidx == jt2.jidx))
@@ -335,7 +354,9 @@ class TestJaggedTensor(unittest.TestCase):
 
         jt3 = jt1.jflatten(dim=0)
         lshape1 = jt1.lshape
+        assert is_LShapeRank2(lshape1)
         lshape3 = jt3.lshape
+        assert is_LShapeRank1(lshape3)
         count = 0
         for i, inner1 in enumerate(jt1):
             for j, inner2 in enumerate(inner1):
@@ -345,7 +366,9 @@ class TestJaggedTensor(unittest.TestCase):
 
         jt3 = jt1.jflatten(dim=-2)
         lshape1 = jt1.lshape
+        assert is_LShapeRank2(lshape1)
         lshape3 = jt3.lshape
+        assert is_LShapeRank1(lshape3)
         count = 0
         for i, inner1 in enumerate(jt1):
             for j, inner2 in enumerate(inner1):
@@ -355,9 +378,13 @@ class TestJaggedTensor(unittest.TestCase):
 
         jt4 = jt2.jflatten(dim=1)
         lshape2 = jt2.lshape
+        assert is_LShapeRank2(lshape2)
         lshape4 = jt4.lshape
+        assert is_LShapeRank1(lshape4)
         for i, inner1 in enumerate(jt2):
-            data1 = torch.cat(inner1.unbind(), dim=0)
+            unbound = inner1.unbind()
+            assert is_ListOfTensors(unbound)
+            data1 = torch.cat(tuple(unbound), dim=0)
             data2 = jt4[i].jdata
             self.assertTrue(torch.all(data1 == data2))
             self.assertEqual(lshape4[i], np.sum(lshape2[i]))
@@ -366,7 +393,9 @@ class TestJaggedTensor(unittest.TestCase):
         lshape2 = jt2.lshape
         lshape4 = jt4.lshape
         for i, inner1 in enumerate(jt2):
-            data1 = torch.cat(inner1.unbind(), dim=0)
+            unbound = inner1.unbind()
+            assert is_ListOfTensors(unbound)
+            data1 = torch.cat(unbound, dim=0)
             data2 = jt4[i].jdata
             self.assertTrue(torch.all(data1 == data2))
             self.assertEqual(lshape4[i], np.sum(lshape2[i]))
@@ -384,12 +413,16 @@ class TestJaggedTensor(unittest.TestCase):
         jt3 = jt1.jflatten(dim=0)
         self.assertEqual(len(jt3.lshape), 1)
         self.assertEqual(jt3.lshape[0], np.sum(jt1.lshape))
-        self.assertTrue(torch.all(jt3.unbind()[0] == jt1.jdata))
+        unbound = jt3.unbind()
+        assert is_ListOfTensors(unbound)
+        self.assertTrue(torch.all(unbound[0] == jt1.jdata))
 
         jt3 = jt1.jflatten(dim=-1)
         self.assertEqual(len(jt3.lshape), 1)
         self.assertEqual(jt3.lshape[0], np.sum(jt1.lshape))
-        self.assertTrue(torch.all(jt3.unbind()[0] == jt1.jdata))
+        unbound = jt3.unbind()
+        assert is_ListOfTensors(unbound)
+        self.assertTrue(torch.all(unbound[0] == jt1.jdata))
 
         with self.assertRaises(IndexError):
             jt3 = jt1.jflatten(dim=1)
@@ -708,7 +741,7 @@ class TestJaggedTensor(unittest.TestCase):
         randpts = fvdb.JaggedTensor(pts_list)
         randpts_b = fvdb.JaggedTensor([torch.rand_like(x) + 1e-5 for x in pts_list])
 
-        pts_list_2 = [pts_list[i.item()] for i in torch.randperm(len(pts_list))]
+        pts_list_2 = [pts_list[i] for i in torch.randperm(len(pts_list)).tolist()]
         randpts_c = fvdb.JaggedTensor(pts_list_2)
 
         self.check_lshape(randpts, pts_list)
@@ -1014,6 +1047,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.check_lshape(randpts_a, pts_list_a)
 
         lshape_a = randpts_a.lshape
+        assert is_LShapeRank2(lshape_a)
         lshape_b = []
         for l in lshape_a:
             lshape_b.extend(l)
@@ -1025,7 +1059,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.all(randpts_c.jdata == randpts_a.jdata))
 
         lshape_a = randpts_a.lshape
-        lshape_b = [lshape_a[i.item()] for i in torch.randperm(len(lshape_a))]
+        lshape_b = [lshape_a[i] for i in torch.randperm(len(lshape_a)).tolist()]
         randpts_c = randpts_a.jreshape(lshape_b)
         self.check_lshape(randpts_c, randpts_c.unbind())
         self.assertEqual(randpts_c.lshape, lshape_b)
@@ -1512,9 +1546,9 @@ class TestJaggedTensor(unittest.TestCase):
                                 idx_ours = min_idx_ours[i][j].jdata[0][a][b].item()
                                 idx_i = min_idx_i[a][b].item()
                                 self.assertEqual(jt[i][j].jdata[idx_i, a, b], data_list[i][j][idx_i, a, b])
-                                self.assertEqual(jt[i][j].jdata[idx_ours, a, b], data_list[i][j][idx_ours, a, b])
+                                self.assertEqual(jt[i][j].jdata[idx_ours, a, b], data_list[i][j][idx_ours, a, b])  # type: ignore
                                 self.assertEqual(jt[i][j].jdata[idx_i, a, b], data_list[i][j][idx_ours, a, b])
-                                self.assertEqual(jt[i][j].jdata[idx_ours, a, b], data_list[i][j][idx_i, a, b])
+                                self.assertEqual(jt[i][j].jdata[idx_ours, a, b], data_list[i][j][idx_i, a, b])  # type: ignore
                 else:
                     self.assertTrue(
                         torch.all(min_idx_ours[i][j].jdata == min_idx_i).item(),
@@ -1586,9 +1620,9 @@ class TestJaggedTensor(unittest.TestCase):
                                 idx_ours = max_idx_ours[i][j].jdata[0][a][b].item()
                                 idx_i = max_idx_i[a][b].item()
                                 self.assertEqual(jt[i][j].jdata[idx_i, a, b], data_list[i][j][idx_i, a, b])
-                                self.assertEqual(jt[i][j].jdata[idx_ours, a, b], data_list[i][j][idx_ours, a, b])
+                                self.assertEqual(jt[i][j].jdata[idx_ours, a, b], data_list[i][j][idx_ours, a, b])  # type: ignore
                                 self.assertEqual(jt[i][j].jdata[idx_i, a, b], data_list[i][j][idx_ours, a, b])
-                                self.assertEqual(jt[i][j].jdata[idx_ours, a, b], data_list[i][j][idx_i, a, b])
+                                self.assertEqual(jt[i][j].jdata[idx_ours, a, b], data_list[i][j][idx_i, a, b])  # type: ignore
                 else:
                     self.assertTrue(
                         torch.all(max_idx_ours[i][j].jdata == max_idx_i).item(),
@@ -1732,6 +1766,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.check_lshape(jt, lt)
 
         lt2 = jt.unbind()
+        assert is_ListOfTensors(lt2)
         self.check_lshape(jt, lt2)
         self.assertEqual(len(lt), len(lt2))
         for i, lti in enumerate(lt):
