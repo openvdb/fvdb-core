@@ -5,20 +5,23 @@
 #include <fvdb/detail/ops/SerializeEncode.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Hilbert.h>
+#include <fvdb/detail/utils/MortonCode.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
-#include <fvdb/detail/utils/MortonCode.h>
-#include <fvdb/detail/utils/Hilbert.h>
 
 #include <c10/cuda/CUDAException.h>
+
 #include <cuda_runtime.h>
+
 #include <vector>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-/// @brief Per-voxel callback which computes the space-filling curve code (Morton or Hilbert) for each active voxel in a batch of grids
+/// @brief Per-voxel callback which computes the space-filling curve code (Morton or Hilbert) for
+/// each active voxel in a batch of grids
 template <template <typename T, int32_t D> typename TorchAccessor>
 __hostdev__ inline void
 serializeEncodeVoxelCallback(int64_t batchIdx,
@@ -26,7 +29,7 @@ serializeEncodeVoxelCallback(int64_t batchIdx,
                              int64_t voxelIdx,
                              GridBatchImpl::Accessor gridAccessor,
                              TorchAccessor<int64_t, 2> outMortonCodes,
-                             const nanovdb::Coord* bboxMinCoords,
+                             const nanovdb::Coord *bboxMinCoords,
                              int order_type) {
     const nanovdb::OnIndexGrid *grid = gridAccessor.grid(batchIdx);
     const typename nanovdb::OnIndexGrid::LeafNodeType &leaf =
@@ -39,49 +42,49 @@ serializeEncodeVoxelCallback(int64_t batchIdx,
 
         // Get bounding box minimum for this batch to use as offset
         const nanovdb::Coord &bboxMin = bboxMinCoords[batchIdx];
-        int32_t offset_i = bboxMin[0];
-        int32_t offset_j = bboxMin[1];
-        int32_t offset_k = bboxMin[2];
+        int32_t offset_i              = bboxMin[0];
+        int32_t offset_j              = bboxMin[1];
+        int32_t offset_k              = bboxMin[2];
 
         // Compute Morton or Hilbert code with offset to ensure non-negative coordinates
         uint64_t space_filling_code;
         switch (static_cast<SpaceFillingCurveType>(order_type)) {
-            case SpaceFillingCurveType::ZOrder:  // Regular z-order: xyz
-                space_filling_code = utils::morton_with_offset(
-                    ijk[0], ijk[1], ijk[2],
-                    static_cast<uint32_t>(-offset_i),
-                    static_cast<uint32_t>(-offset_j),
-                    static_cast<uint32_t>(-offset_k)
-                );
-                break;
-            case SpaceFillingCurveType::ZOrderTransposed:  // Transposed z-order: zyx
-                space_filling_code = utils::morton_with_offset(
-                    ijk[2], ijk[1], ijk[0],
-                    static_cast<uint32_t>(-offset_k),
-                    static_cast<uint32_t>(-offset_j),
-                    static_cast<uint32_t>(-offset_i)
-                );
-                break;
-            case SpaceFillingCurveType::Hilbert:  // Regular Hilbert curve: xyz
-                space_filling_code = utils::hilbert_with_offset(
-                    ijk[0], ijk[1], ijk[2],
-                    static_cast<uint32_t>(-offset_i),
-                    static_cast<uint32_t>(-offset_j),
-                    static_cast<uint32_t>(-offset_k)
-                );
-                break;
-            case SpaceFillingCurveType::HilbertTransposed:  // Transposed Hilbert curve: zyx
-                space_filling_code = utils::hilbert_with_offset(
-                    ijk[2], ijk[1], ijk[0],
-                    static_cast<uint32_t>(-offset_k),
-                    static_cast<uint32_t>(-offset_j),
-                    static_cast<uint32_t>(-offset_i)
-                );
-                break;
-            default:
-                // Invalid order type - use assert for device code
-                space_filling_code = 0;
-                break;
+        case SpaceFillingCurveType::ZOrder: // Regular z-order: xyz
+            space_filling_code = utils::morton_with_offset(ijk[0],
+                                                           ijk[1],
+                                                           ijk[2],
+                                                           static_cast<uint32_t>(-offset_i),
+                                                           static_cast<uint32_t>(-offset_j),
+                                                           static_cast<uint32_t>(-offset_k));
+            break;
+        case SpaceFillingCurveType::ZOrderTransposed: // Transposed z-order: zyx
+            space_filling_code = utils::morton_with_offset(ijk[2],
+                                                           ijk[1],
+                                                           ijk[0],
+                                                           static_cast<uint32_t>(-offset_k),
+                                                           static_cast<uint32_t>(-offset_j),
+                                                           static_cast<uint32_t>(-offset_i));
+            break;
+        case SpaceFillingCurveType::Hilbert: // Regular Hilbert curve: xyz
+            space_filling_code = utils::hilbert_with_offset(ijk[0],
+                                                            ijk[1],
+                                                            ijk[2],
+                                                            static_cast<uint32_t>(-offset_i),
+                                                            static_cast<uint32_t>(-offset_j),
+                                                            static_cast<uint32_t>(-offset_k));
+            break;
+        case SpaceFillingCurveType::HilbertTransposed: // Transposed Hilbert curve: zyx
+            space_filling_code = utils::hilbert_with_offset(ijk[2],
+                                                            ijk[1],
+                                                            ijk[0],
+                                                            static_cast<uint32_t>(-offset_k),
+                                                            static_cast<uint32_t>(-offset_j),
+                                                            static_cast<uint32_t>(-offset_i));
+            break;
+        default:
+            // Invalid order type - use assert for device code
+            space_filling_code = 0;
+            break;
         }
 
         outMortonCodes[idx][0] = static_cast<int64_t>(space_filling_code);
@@ -92,12 +95,13 @@ serializeEncodeVoxelCallback(int64_t batchIdx,
 /// @param gridBatch The batch of grids
 /// @param outMortonCodes Tensor which will contain the output space-filling curve codes
 /// @param bboxMinCoords Array of bounding box minimum coordinates for each grid
-/// @param order_type Integer representing the order type (0=z, 1=z-trans, 2=hilbert, 3=hilbert-trans)
+/// @param order_type Integer representing the order type (0=z, 1=z-trans, 2=hilbert,
+/// 3=hilbert-trans)
 template <torch::DeviceType DeviceTag>
 void
 GetSerializeEncode(const GridBatchImpl &gridBatch,
                    torch::Tensor &outMortonCodes,
-                   const nanovdb::Coord* bboxMinCoords,
+                   const nanovdb::Coord *bboxMinCoords,
                    int order_type) {
     auto outCodesAcc = tensorAccessor<DeviceTag, int64_t, 2>(outMortonCodes);
 
@@ -160,11 +164,12 @@ SerializeEncode(const GridBatchImpl &gridBatch, SpaceFillingCurveType order_type
     }
 
     // For GPU execution, we need to copy the data to device
-    nanovdb::Coord* bboxMinPtr = nullptr;
+    nanovdb::Coord *bboxMinPtr = nullptr;
     if constexpr (DeviceTag == torch::kCUDA || DeviceTag == torch::kPrivateUse1) {
         // Allocate device memory and copy
         cudaMalloc(&bboxMinPtr, bboxMinCoords.size() * sizeof(nanovdb::Coord));
-        cudaMemcpy(bboxMinPtr, bboxMinCoords.data(),
+        cudaMemcpy(bboxMinPtr,
+                   bboxMinCoords.data(),
                    bboxMinCoords.size() * sizeof(nanovdb::Coord),
                    cudaMemcpyHostToDevice);
     } else {
@@ -183,19 +188,22 @@ SerializeEncode(const GridBatchImpl &gridBatch, SpaceFillingCurveType order_type
 
 template <>
 JaggedTensor
-dispatchSerializeEncode<torch::kCUDA>(const GridBatchImpl &gridBatch, SpaceFillingCurveType order_type) {
+dispatchSerializeEncode<torch::kCUDA>(const GridBatchImpl &gridBatch,
+                                      SpaceFillingCurveType order_type) {
     return SerializeEncode<torch::kCUDA>(gridBatch, order_type);
 }
 
 template <>
 JaggedTensor
-dispatchSerializeEncode<torch::kCPU>(const GridBatchImpl &gridBatch, SpaceFillingCurveType order_type) {
+dispatchSerializeEncode<torch::kCPU>(const GridBatchImpl &gridBatch,
+                                     SpaceFillingCurveType order_type) {
     return SerializeEncode<torch::kCPU>(gridBatch, order_type);
 }
 
 template <>
 JaggedTensor
-dispatchSerializeEncode<torch::kPrivateUse1>(const GridBatchImpl &gridBatch, SpaceFillingCurveType order_type) {
+dispatchSerializeEncode<torch::kPrivateUse1>(const GridBatchImpl &gridBatch,
+                                             SpaceFillingCurveType order_type) {
     return SerializeEncode<torch::kPrivateUse1>(gridBatch, order_type);
 }
 

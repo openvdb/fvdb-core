@@ -472,16 +472,20 @@ struct GridBatch : torch::CustomClassHolder {
     /// @return A JaggedTensor of voxel coordinates indexed by this grid batch (shape [B, -1, 3])
     JaggedTensor ijk() const;
 
-    /// @brief Return the space-filling curve codes for active voxels in this grid batch with specific order type
+    /// @brief Return the space-filling curve codes for active voxels in this grid batch with
+    /// specific order type
     /// @param order_type The type of space-filling curve to use for encoding
     /// @return A JaggedTensor of space-filling curve codes for active voxels (shape [B, -1, 1])
-    JaggedTensor serialize_encode(SpaceFillingCurveType order_type = SpaceFillingCurveType::ZOrder) const;
+    JaggedTensor
+    serialize_encode(SpaceFillingCurveType order_type = SpaceFillingCurveType::ZOrder) const;
 
-    /// @brief Return Morton codes (Z-order curve) for active voxels in this grid batch (xyz bit interleaving)
+    /// @brief Return Morton codes (Z-order curve) for active voxels in this grid batch (xyz bit
+    /// interleaving)
     /// @return A JaggedTensor of Morton codes for active voxels (shape [B, -1, 1])
     JaggedTensor encode_morton() const;
 
-    /// @brief Return transposed Morton codes (Z-order curve) for active voxels in this grid batch (zyx bit interleaving)
+    /// @brief Return transposed Morton codes (Z-order curve) for active voxels in this grid batch
+    /// (zyx bit interleaving)
     /// @return A JaggedTensor of transposed Morton codes for active voxels (shape [B, -1, 1])
     JaggedTensor encode_morton_zyx() const;
 
@@ -492,7 +496,6 @@ struct GridBatch : torch::CustomClassHolder {
     /// @brief Return transposed Hilbert curve codes for active voxels in this grid batch (zyx)
     /// @return A JaggedTensor of transposed Hilbert codes for active voxels (shape [B, -1, 1])
     JaggedTensor encode_hilbert_zyx() const;
-
 
     /// @brief Find the intersection between a collection of rays and the zero level set of a scalar
     /// field

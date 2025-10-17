@@ -10,10 +10,10 @@ namespace fvdb {
 
 /// @brief Enum class for space-filling curve encoding types
 enum class SpaceFillingCurveType {
-    ZOrder,         ///< Regular z-order curve (xyz)
-    ZOrderTransposed,  ///< Transposed z-order curve (zyx)
-    Hilbert,       ///< Regular Hilbert curve (xyz)
-    HilbertTransposed  ///< Transposed Hilbert curve (zyx)
+    ZOrder,           ///< Regular z-order curve (xyz)
+    ZOrderTransposed, ///< Transposed z-order curve (zyx)
+    Hilbert,          ///< Regular Hilbert curve (xyz)
+    HilbertTransposed ///< Transposed Hilbert curve (zyx)
 };
 
 // These are union types that can be constructed from nanovdb types, torch tensors, std::vectors,

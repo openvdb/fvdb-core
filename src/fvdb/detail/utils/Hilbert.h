@@ -124,13 +124,17 @@ hilbert_order21_index(uint32_t i, uint32_t j, uint32_t k) {
 /// @param offset_k Offset to make k non-negative
 /// @return 63-bit Hilbert index
 __hostdev__ inline uint64_t
-hilbert_with_offset(int32_t const i, int32_t const j, int32_t const k,
-                    uint32_t const offset_i, uint32_t const offset_j, uint32_t const offset_k) {
+hilbert_with_offset(int32_t const i,
+                    int32_t const j,
+                    int32_t const k,
+                    uint32_t const offset_i,
+                    uint32_t const offset_j,
+                    uint32_t const offset_k) {
     // Add offsets to ensure non-negative coordinates
     uint32_t x = static_cast<uint32_t>(i + static_cast<int32_t>(offset_i));
     uint32_t y = static_cast<uint32_t>(j + static_cast<int32_t>(offset_j));
     uint32_t z = static_cast<uint32_t>(k + static_cast<int32_t>(offset_k));
-    
+
     return hilbert_order21_index(x, y, z);
 }
 
