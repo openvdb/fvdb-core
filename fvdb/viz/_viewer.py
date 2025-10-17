@@ -20,21 +20,23 @@ from ..types import (
     to_Mat44fBatch,
     to_Vec2fBatch,
     to_Vec3f,
+    to_Vec3fBatch,
 )
 from ._camera_view import CameraView
 from ._gaussian_splat_3d_view import GaussianSplat3dView
+from ._point_cloud_view import PointCloudView
 
 _running_viewers = dict()
 
 
 class Viewer:
-    def __init__(self, name: str = "default", port: int = 8080, ip_address="127.0.0.1", verbose: bool = False):
+    def __init__(self, name: str = "fVDB Viewer", port: int = 8080, ip_address="127.0.0.1", verbose: bool = False):
         """
         Create a `Viewer` with the given name running a server at the specified IP address and port.
         If a viewer was previously created with the same name, this will return a reference to the existing viewer.
 
         Args:
-            name (str): The name of the viewer instance. Default is "default". This name is used to
+            name (str): The name of the viewer instance. Default is "fVDB Viewer". This name is used to
                 identify the viewer instance in the global registry of running viewers.
             ip_address (str): The IP address to bind the viewer server to. Default is "127.0.0.1".
             port (int): The port to bind the viewer server to. Default is 8080.
@@ -110,6 +112,79 @@ class Viewer:
         webbrowser.open_new_tab(f"http://{self.ip_address}:{self.port}")
 
     @torch.no_grad()
+    def add_point_cloud(
+        self,
+        name: str,
+        points: NumericMaxRank2,
+        colors: NumericMaxRank2,
+        point_size: float,
+    ):
+        """
+        Add a point cloud with colors and world-space radii to the viewer and return a view for it.
+
+        .. note::
+
+            Colors must be in the range ``[0, 1]``.
+            You can pass in a single color as a tuple of 3 floats to color all points the same.
+
+        .. note::
+
+            You can pass in a single radius as a float to use the same radius for all points.
+
+        Args:
+            name (str): The name of the point cloud added to the viewer. If a point cloud with the same name
+                already exists in the viewer, it will be replaced.
+            points (NumericMaxRank2): The 3D points of the point cloud as a tensor-like object of shape ``(N, 3)``
+                where ``N`` is the number of points.
+            colors (NumericMaxRank2): The colors of the points as a tensor-like object of shape ``(N, 3)`` where ``N`` is the number of points.
+                Alternatively, you can pass in a single color as a tensor-like object of shape ``(3,)`` to color all points the same.
+            point_size (float): The screen-space size (in pixels) of the points when rendering.
+
+        Returns:
+            point_cloud_view (GaussianSplat3dView): A view for the point cloud added to the scene.
+        """
+        points = to_Vec3fBatch(points).cpu()
+        colors = to_Vec3fBatch(colors).cpu()
+        if colors.shape[0] == 1:
+            colors = colors.repeat(points.shape[0], 1)
+
+        if colors.shape[0] != points.shape[0]:
+            raise ValueError(
+                f"Colors must be a tuple of 3 floats tensor with the same number of elements as points. Got {colors.shape[0]} colors and {points.shape[0]} points."
+            )
+
+        if colors.min() < 0.0 or colors.max() > 1.0:
+            raise ValueError("Colors must be in the range [0, 1].")
+
+        def _rgb_to_sh(rgb: torch.Tensor) -> torch.Tensor:
+            C0 = 0.28209479177387814
+            return (rgb - 0.5) / C0
+
+        means = points
+        quats = torch.zeros((points.shape[0], 4), dtype=torch.float32)
+        quats[:, 0] = 1.0  # identity rotation
+        logit_opacities = torch.full((points.shape[0],), 10.0, dtype=torch.float32)
+        log_scales = torch.full((points.shape[0], 3), -20.0, dtype=torch.float32)  # since scales are exp(log_scale)
+        sh0 = _rgb_to_sh(colors)
+        shN = torch.zeros((points.shape[0], 0, 3), dtype=torch.float32)
+
+        gs_impl = GaussianSplat3d(
+            means=means,
+            quats=quats,
+            log_scales=log_scales,
+            logit_opacities=logit_opacities,
+            sh0=sh0,
+            shN=shN,
+        )._impl
+        view: GaussianSplat3dViewCpp = self._impl.add_gaussian_splat_3d(name=name, gaussian_splat_3d=gs_impl)
+        view.tile_size = 16
+        view.min_radius_2d = 0.0
+        view.eps_2d = point_size / 2.0  # point size is diameter
+        view.antialias = False
+        view.sh_degree_to_use = 0
+        return PointCloudView(view, PointCloudView.__PRIVATE__)
+
+    @torch.no_grad()
     def add_gaussian_splat_3d(
         self,
         name: str,
@@ -121,7 +196,7 @@ class Viewer:
         sh_degree_to_use: int = -1,
     ) -> GaussianSplat3dView:
         """
-        Add a `GaussianSplat3d` to the viewer and return a view for it.
+        Add a :class:`fvdb.GaussianSplat3d` to the viewer and return a view for it.
 
         Args:
             name (str): The name of the Gaussian splat 3D scene. This must be unique among all
@@ -135,7 +210,7 @@ class Viewer:
                 If -1, the maximum degree supported by the Gaussian splat 3D scene is used. Default is -1.
 
         Returns:
-            GaussianSplat3dView: A view for the added Gaussian splat 3D scene.
+            gaussian_splat_3d_view (GaussianSplat3dView): A view for the Gaussian splats added to the scene.
         """
         gs_impl: GaussianSplat3dCpp = gaussian_splat_3d._impl
         view: GaussianSplat3dViewCpp = self._impl.add_gaussian_splat_3d(name=name, gaussian_splat_3d=gs_impl)
