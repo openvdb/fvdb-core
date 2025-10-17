@@ -1835,27 +1835,6 @@ class Grid:
     def ijk(self) -> torch.Tensor:
         return self._impl.ijk.jdata
 
-    def serialize_encode(self, order_type: str = "z") -> torch.Tensor:
-        """
-        Return the space-filling curve codes for active voxels in this grid.
-
-        Space-filling curves provide a mapping from 3D coordinates to 1D integers,
-        preserving spatial locality. This is useful for serialization, sorting, and
-        spatial data structures.
-
-        Args:
-            order_type (str): The type of ordering to use:
-                - "z": Regular Z-order curve (xyz bit interleaving)
-                - "z-trans": Transposed Z-order curve (zyx bit interleaving)
-                - "hilbert": Regular Hilbert curve (xyz)
-                - "hilbert-trans": Transposed Hilbert curve (zyx)
-
-        Returns:
-            torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
-                the space-filling curve codes for each active voxel.
-        """
-        return self._impl.serialize_encode(order_type).jdata
-
     def encode_morton(self) -> torch.Tensor:
         """
         Return Morton codes (Z-order curve) for active voxels in this grid.

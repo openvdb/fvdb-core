@@ -1086,14 +1086,6 @@ GridBatch::ijk() const {
 }
 
 JaggedTensor
-GridBatch::serialize_encode(SpaceFillingCurveType order_type) const {
-    c10::DeviceGuard guard(device());
-    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
-        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(*mImpl, order_type);
-    });
-}
-
-JaggedTensor
 GridBatch::encode_morton() const {
     c10::DeviceGuard guard(device());
     return FVDB_DISPATCH_KERNEL(this->device(), [&]() {

@@ -1956,27 +1956,6 @@ class GridBatch:
     def ijk(self) -> JaggedTensor:
         return self._impl.ijk
 
-    def serialize_encode(self, order_type: str = "z") -> JaggedTensor:
-        """
-        Return the space-filling curve codes for active voxels in this grid batch.
-
-        Space-filling curves provide a mapping from 3D coordinates to 1D integers,
-        preserving spatial locality. This is useful for serialization, sorting, and
-        spatial data structures.
-
-        Args:
-            order_type (str): The type of ordering to use:
-                - "z": Regular Z-order curve (xyz bit interleaving)
-                - "z-trans": Transposed Z-order curve (zyx bit interleaving)
-                - "hilbert": Regular Hilbert curve (xyz)
-                - "hilbert-trans": Transposed Hilbert curve (zyx)
-
-        Returns:
-            JaggedTensor: A JaggedTensor of shape `[num_grids, -1, 1]` containing
-                the space-filling curve codes for each active voxel in the batch.
-        """
-        return self._impl.serialize_encode(order_type)
-
     def encode_morton(self) -> JaggedTensor:
         """
         Return Morton codes (Z-order curve) for active voxels in this grid batch.
