@@ -43,7 +43,7 @@ jobs:
           aws-region: us-east-2
       - name: Start EC2 runner
         id: start-build-runner
-        uses: machulav/ec2-github-runner@v2
+        uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -137,7 +137,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/test/cu130
+          uv pip install --no-cache-dir -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
 
       - name: Build fvdb
         run: |
@@ -187,7 +187,7 @@ jobs:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
       - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2
+        uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -212,7 +212,7 @@ jobs:
           aws-region: us-east-2
       - name: Start EC2 GPU runner
         id: start-tests-gpu-runner
-        uses: machulav/ec2-github-runner@v2
+        uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -288,7 +288,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/test/cu130
+          uv pip install --no-cache-dir -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
 
       - name: Download package with nanovdb_editor
         uses: actions/download-artifact@v4
@@ -384,7 +384,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/test/cu130 --index-strategy unsafe-best-match
+          uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130 --index-strategy unsafe-best-match
           uv pip install --no-cache-dir setuptools
           TORCH_CUDA_ARCH_LIST="8.9+PTX" uv pip install -v --no-build-isolation git+https://github.com/rusty1s/pytorch_scatter.git
           TORCH_CUDA_ARCH_LIST="8.9+PTX" uv pip install -v --no-build-isolation git+https://github.com/heiwang1997/torchsparse.git
@@ -471,7 +471,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/test/cu130 --index-strategy unsafe-best-match
+          uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130 --index-strategy unsafe-best-match
 
       - name: Download package
         uses: actions/download-artifact@v4
@@ -515,7 +515,7 @@ jobs:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
       - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2
+        uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}

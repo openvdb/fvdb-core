@@ -50,7 +50,8 @@ TEST(Viewer, ViewerTest) {
             printf("Adding splats from %s\n", ply_path.c_str());
             fvdb::detail::viewer::GaussianSplat3dView &view =
                 viewer.addGaussianSplat3d(view_name, splats);
-            view.setFar(1.f);
+
+            view.setShDegreeToUse(3);
 
             torch::Tensor cameraToWorld =
                 std::get<torch::Tensor>(metadata.at("camera_to_world_matrices"));
@@ -105,14 +106,6 @@ TEST(Viewer, ViewerTest) {
 
     fvdb::detail::viewer::GaussianSplat3dView &view =
         viewer.addGaussianSplat3d("test_view", splats);
-
-    const float testNear = 0.5f;
-    view.setNear(testNear);
-    ASSERT_FLOAT_EQ(view.getNear(), testNear);
-
-    const float testFar = 1000000.0f;
-    view.setFar(testFar);
-    ASSERT_FLOAT_EQ(view.getFar(), testFar);
 
     const float testEps2d = 0.5f;
     view.setEps2d(testEps2d);

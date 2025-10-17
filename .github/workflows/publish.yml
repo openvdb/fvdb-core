@@ -1,0 +1,413 @@
+name: Publish fVDB Pip Package
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to build"
+        required: true
+        default: "main"
+      publish_target:
+        description: "Publish target: testpypi | s3 | none"
+        required: false
+        default: "testpypi"
+
+# Allow subsequent pushes to the same PR or REF to cancel any previous jobs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  deployments: read
+  pull-requests: read
+  issues: read
+  # Need ID token write permission to use OIDC
+  id-token: write
+
+jobs:
+  pr-flags:
+    name: Determine PR flags
+    runs-on: ubuntu-latest
+    outputs:
+      s3: ${{ steps.flags.outputs.s3 }}
+    steps:
+      - name: Compute flags from PR head commit
+        id: flags
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const isPR = context.eventName === 'pull_request';
+            let s3 = false;
+            let reuse = false;
+            if (isPR) {
+              const {owner, repo} = context.repo;
+              const sha = context.payload.pull_request.head.sha;
+              const commit = await github.rest.repos.getCommit({ owner, repo, ref: sha });
+              const msg = (commit.data.commit.message || '').toString();
+              s3 = /\[s3\]/i.test(msg);
+            }
+            core.setOutput('s3', s3 ? 'true' : 'false');
+  start-build-runner:
+    name: Start CPU-only EC2 runner for build
+    runs-on: ubuntu-latest
+    strategy: &matrix-strategy
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+        torch-version: ['2.8']
+        cuda-version: ['12.9']
+    steps:
+      - name: Stagger job starts to avoid API rate limits
+        run: |
+          # Random delay between 0 and 15 seconds to stagger runner registrations
+          DELAY=$((RANDOM % 16))
+          echo "Delaying start by ${DELAY} seconds for Python ${{ matrix.python-version }}"
+          sleep $DELAY
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
+          aws-region: us-east-2
+      - name: Start EC2 runner
+        id: start-build-runner
+        uses: machulav/ec2-github-runner@v2.4.3
+        with:
+          mode: start
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          ec2-image-id: ami-0e14a711dad782a70
+          ec2-instance-type: m6a.8xlarge
+          subnet-id: subnet-03f2320d6e6e0005b
+          security-group-id: sg-0cd08bd89d6212223
+          label: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+          aws-resource-tags: >
+            [
+              {"Key": "RunnerLabel", "Value": "ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"},
+              {"Key": "PythonVersion", "Value": "${{ matrix.python-version }}"},
+              {"Key": "TorchVersion", "Value": "${{ matrix.torch-version }}"},
+              {"Key": "CudaVersion", "Value": "${{ matrix.cuda-version }}"},
+              {"Key": "GitHubRunId", "Value": "${{ github.run_id }}"}
+            ]
+
+  fvdb-build:
+    name: fVDB Build
+    needs: [start-build-runner, pr-flags] # start when runner is ready and flags computed
+    runs-on: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }} # run the job on the newly created runner
+    container:
+      image: nvidia/cuda:12.9.0-cudnn-devel-ubuntu22.04
+      env:
+        PYTHONPATH: ""
+        CPM_SOURCE_CACHE: "/__w/cpm_cache"
+        FORCE_CUDA: 1
+      options: --rm
+    defaults:
+      run:
+        shell: bash -el {0}
+    strategy: *matrix-strategy
+    steps:
+      - name: Apt update and install git and wget
+        run: apt update && apt install -y git wget
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for all branches
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+
+      - name: Fetch PR branch
+        if: github.event_name == 'pull_request_target'
+        run: |
+          cd $GITHUB_WORKSPACE
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$(pwd)"
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+
+      - name: Merge PR branch into base
+        if: github.event_name == 'pull_request_target'
+        run: |
+          cd $GITHUB_WORKSPACE
+          git merge pr_branch
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        with:
+          version: "0.7.5"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '${{ matrix.python-version }}'
+        env:
+          AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
+
+      - name: Install CMake
+        run: >
+          wget -nv https://github.com/Kitware/CMake/releases/download/v4.0.3/cmake-4.0.3-linux-x86_64.sh &&
+          mkdir /opt/cmake &&
+          sh cmake-4.0.3-linux-x86_64.sh --prefix=/usr/local --skip-license &&
+          cmake --version
+
+      - name: Install apt dependencies
+        run: apt install -y zlib1g-dev libpng-dev pkg-config
+
+      - name: Install pip dependencies
+        run: |
+          # Convert CUDA version from 12.9 to cu129 format for PyTorch index
+          CUDA_TAG="cu$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
+          TORCH_VERSION="${{ matrix.torch-version }}"
+          echo "Installing PyTorch ${TORCH_VERSION} for ${CUDA_TAG}"
+          uv venv
+          # Install build requirements with explicit PyTorch version (explicit version takes precedence)
+          uv pip install --no-cache-dir torch==${TORCH_VERSION}.0 -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
+
+      - name: Add a post-release to version (used for testing on TestPyPI)
+        if: ${{ ((inputs.publish_target == 'testpypi') || (needs.pr-flags.outputs.s3 == 'false')) }}
+        run: |
+          VERSION_LINE=$(grep '^version *= *"' pyproject.toml)
+          VERSION=$(echo "$VERSION_LINE" | sed -E 's/^version *= *"([^"]+)".*/\1/')
+          if [ "${GITHUB_RUN_NUMBER:-${{ github.run_number }}}" -gt 1 ]; then
+            NEW_VERSION="${VERSION}.post${GITHUB_RUN_NUMBER:-${{ github.run_number }}}"
+            sed -i -E "s/^version *= *\"[^\"]+\"/version = \"${NEW_VERSION}\"/" pyproject.toml
+            echo "Updated version to $NEW_VERSION"
+          else
+            echo "Version unchanged: $VERSION"
+          fi
+          grep '^version' pyproject.toml
+
+      - name: Add local version for S3 publish
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.s3 == 'true') }}
+        run: |
+          TORCH_TAG="$(echo "${{ matrix.torch-version }}" | tr -d '.')"
+          CUDA_TAG="$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
+          sed -i -E 's/^version\s*=\s*"([^"]+)"/version = "\1+pt'"${TORCH_TAG}"'.cu'"${CUDA_TAG}"'"/' pyproject.toml
+          grep '^version' pyproject.toml
+
+      - name: Build fvdb
+        run: |
+          source .venv/bin/activate
+          ./build.sh wheel strip_symbols verbose --cuda-arch-list '7.5;8.0;9.0;10.0;12.0+PTX'
+
+      - name: Repair wheel for manylinux
+        if: ${{ !((github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.s3 == 'true')) }}
+        run: |
+          source .venv/bin/activate
+          pip install auditwheel patchelf
+          # Check glibc version
+          ldd --version | head -n1
+          # Exclude CUDA, PyTorch, and other system libraries to keep wheel size down
+          auditwheel repair dist/fvdb_core-*.whl -w dist/ \
+            --exclude libcuda.so.1 \
+            --exclude libcudart.so.12 \
+            --exclude libcufile.so.1 \
+            --exclude libnvrtc.so.12 \
+            --exclude libnvToolsExt.so.1 \
+            --exclude libcublas.so.12 \
+            --exclude libcublasLt.so.12 \
+            --exclude libcudnn.so.9 \
+            --exclude libcufft.so.11 \
+            --exclude libcurand.so.10 \
+            --exclude libcusolver.so.11 \
+            --exclude libcusparse.so.12 \
+            --exclude libnvJitLink.so.12 \
+            --exclude libtorch.so \
+            --exclude libtorch_cpu.so \
+            --exclude libtorch_cuda.so \
+            --exclude libtorch_python.so \
+            --exclude libc10.so \
+            --exclude libc10_cuda.so \
+            --exclude libmkl_core.so.2 \
+            --exclude libmkl_intel_lp64.so.2 \
+            --exclude libmkl_intel_thread.so.2 \
+            --exclude libomp.so \
+            --exclude libprotobuf.so.31 \
+            || echo "auditwheel failed, keeping original wheel"
+          # Remove original linux_x86_64 wheel if repair succeeded
+          if ls dist/fvdb_core-*-manylinux*.whl 1> /dev/null 2>&1; then
+            rm dist/fvdb_core-*-linux_x86_64.whl
+          fi
+          # Show wheel sizes and verify compression
+          ls -lh dist/
+          echo "Wheel contents (full list):"
+          unzip -l dist/fvdb_core-*.whl
+          echo ""
+          echo "Largest files in wheel:"
+          unzip -l dist/fvdb_core-*.whl | sort -k1 -n -r | head -30
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: fvdb-publish-package-${{ matrix.python-version }}-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
+          path: dist/fvdb_core-*.whl
+          retention-days: 2
+
+  publish-dist:
+    name: Publish Python 🐍 distribution 📦
+    needs:
+      - fvdb-build
+    if: ${{ !cancelled() && (needs.fvdb-build.result == 'success') && !((github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.s3 ==  'true')) }}
+    runs-on: ubuntu-latest
+
+    environment:
+      name: ${{ (github.event_name == 'release' && 'pypi') || 'testpypi' }}
+      url: ${{ (github.event_name == 'release' && 'https://pypi.org/p/fvdb-core') || 'https://test.pypi.org/p/fvdb-core' }}
+
+    permissions:
+      id-token: write  # IMPORTANT: mandatory for trusted publishing
+
+    steps:
+      - name: Download all the dists
+        uses: actions/download-artifact@v4
+        with:
+          pattern: fvdb-publish-package-*
+          path: dist
+          merge-multiple: true
+      - name: Publish distribution 📦
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: ${{ (github.event_name == 'release' && 'https://upload.pypi.org/legacy/') || (github.event_name == 'workflow_dispatch' && inputs.publish_target == 'testpypi' && 'https://test.pypi.org/legacy/') || 'https://test.pypi.org/legacy/' }}
+          verbose: true
+
+  publish-to-s3:
+    name: Publish wheels to custom S3 Simple Index
+    needs: [pr-flags, fvdb-build]
+    if: ${{ !cancelled() && ((github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.s3 == 'true')) && (needs.fvdb-build.result == 'success') }}
+    runs-on: ubuntu-latest
+    env:
+      S3_BUCKET: fvdb-packages
+      SIMPLE_PREFIX: ${{ (github.event_name == 'pull_request') && 'simple-staging' || 'simple' }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
+          aws-region: us-east-2
+
+      - name: Download all built wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: fvdb-publish-package-*
+          path: dist
+          merge-multiple: true
+
+      - name: Determine normalized project name from wheel
+        id: proj
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          FIRST_WHL=$(ls dist/*.whl | head -n1)
+          if [ -z "${FIRST_WHL:-}" ]; then
+            echo "No wheels found in dist/" >&2; exit 1
+          fi
+          BASE=$(basename "$FIRST_WHL")
+          PROJECT=${BASE%%-*}
+          NORM=$(echo "$PROJECT" | tr '[:upper:]' '[:lower:]' | sed -E 's/[-_.]+/-/g')
+          echo "project_name=$PROJECT" >> $GITHUB_OUTPUT
+          echo "normalized=$NORM" >> $GITHUB_OUTPUT
+          echo "Project: $PROJECT, Normalized: $NORM"
+
+      - name: Upload wheels to S3 project directory
+        run: |
+          set -euo pipefail
+          DEST="s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}"
+          # Ensure trailing slash exactly once
+          DEST="${DEST%/}/"
+          echo "Uploading wheels to $DEST"
+          shopt -s nullglob
+          for whl in dist/*.whl; do
+            echo "Uploading $whl"
+            aws s3 cp "$whl" "$DEST" --only-show-errors
+          done
+
+      - name: Generate project index.html
+        run: |
+          set -euo pipefail
+          OUTDIR="dist/index-gen/${{ steps.proj.outputs.normalized }}"
+          mkdir -p "$OUTDIR"
+          INDEX_FILE="$OUTDIR/index.html"
+          TITLE="Links for ${{ steps.proj.outputs.project_name }}"
+          # List wheels from S3 to ensure index matches what's actually uploaded and previous versions
+          wheels=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/" | grep '\.whl$' | awk '{print $4}')
+          {
+            echo "<!DOCTYPE html>";
+            echo "<html><head><meta charset=\"utf-8\"><title>${TITLE}</title></head><body>";
+            echo "<h1>${TITLE}</h1>";
+            for whl in $wheels; do
+              # Get SHA256 from S3 ETag or compute from local file if available
+              if [ -f "dist/$whl" ]; then
+                sha=$(sha256sum "dist/$whl" | awk '{print $1}')
+              else
+                # Download temporarily to compute hash
+                aws s3 cp "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/$whl" "/tmp/$whl" --only-show-errors
+                sha=$(sha256sum "/tmp/$whl" | awk '{print $1}')
+                rm "/tmp/$whl"
+              fi
+              echo "<a href=\"${whl}#sha256=${sha}\">${whl}</a><br/>";
+            done;
+            echo "</body></html>";
+          } > "$INDEX_FILE"
+          aws s3 cp "$INDEX_FILE" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/index.html" --content-type text/html --only-show-errors
+
+      - name: Generate root simple index.html
+        run: |
+          set -euo pipefail
+          TMPDIR=$(mktemp -d)
+          ROOT_INDEX="$TMPDIR/index.html"
+          echo "Building root simple index from s3://${S3_BUCKET}/${SIMPLE_PREFIX}/"
+          # List existing project prefixes
+          projects=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/" | awk '{print $2}' | sed 's:/$::')
+          TITLE="Simple index"
+          {
+            echo "<!DOCTYPE html>";
+            echo "<html><head><meta charset=\"utf-8\"><title>${TITLE}</title></head><body>";
+            echo "<h1>${TITLE}</h1>";
+            for p in $projects; do
+              echo "<a href=\"${p}/\">${p}</a><br/>";
+            done;
+            echo "</body></html>";
+          } > "$ROOT_INDEX"
+          aws s3 cp "$ROOT_INDEX" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/index.html" --content-type text/html --only-show-errors
+
+  fvdb-build-stop-runner:
+    name: Stop CPU-only EC2 runner for build
+    needs:
+      - start-build-runner # required to get output from the start-build-runner job
+      - fvdb-build # required to wait when the main job is done
+    runs-on: ubuntu-latest
+    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
+    strategy: *matrix-strategy
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
+          aws-region: us-east-2
+      - name: Find EC2 instance ID by label
+        id: find-instance
+        run: |
+          LABEL="ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"
+          echo "Looking for instance with RunnerLabel: $LABEL"
+
+          # Query by the custom RunnerLabel tag we set during instance creation
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:RunnerLabel,Values=$LABEL" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
+            --query 'Reservations[0].Instances[0].InstanceId' \
+            --output text)
+
+          if [ "$INSTANCE_ID" == "None" ] || [ -z "$INSTANCE_ID" ]; then
+            echo "ERROR: No instance found with RunnerLabel=$LABEL"
+            echo "instance-id=" >> $GITHUB_OUTPUT
+            exit 1
+          else
+            echo "Found instance: $INSTANCE_ID"
+            echo "instance-id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          fi
+      - name: Stop EC2 runner
+        if: steps.find-instance.outputs.instance-id != ''
+        uses: machulav/ec2-github-runner@v2.4.3
+        with:
+          mode: stop
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          label: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+          ec2-instance-id: ${{ steps.find-instance.outputs.instance-id }}

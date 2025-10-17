@@ -519,7 +519,7 @@ dispatchSparseConvolutionHalo<torch::kPrivateUse1>(const GridBatchImpl &batchHdl
 
         auto hostGridAccessor = batchHdl.hostAccessor();
         size_t deviceLeafOffset, deviceNumLeaves;
-        std::tie(deviceLeafOffset, deviceNumLeaves) = deviceOffsetAndCount(numLeaves, deviceId);
+        std::tie(deviceLeafOffset, deviceNumLeaves) = deviceChunk(numLeaves, deviceId);
         if (deviceNumLeaves) {
             // Query the first and last leaf processed by each GPU. The start index of the first
             // leaf and end index of the last leaf provides us with a very good heuristic for the
@@ -555,7 +555,7 @@ dispatchSparseConvolutionHalo<torch::kPrivateUse1>(const GridBatchImpl &batchHdl
         cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
 
         size_t deviceLeafOffset, deviceNumLeaves;
-        std::tie(deviceLeafOffset, deviceNumLeaves) = deviceOffsetAndCount(numLeaves, deviceId);
+        std::tie(deviceLeafOffset, deviceNumLeaves) = deviceChunk(numLeaves, deviceId);
         if (deviceNumLeaves) {
             if (variant == 8) {
                 stencilConvHaloKernel<<<M * N * deviceNumLeaves, 1024, 0, stream>>>(

@@ -42,30 +42,6 @@ class GaussianSplat3dView {
   public:
     GaussianSplat3dView(const std::string &name, const Viewer &viewer);
 
-    const float
-    getNear() const {
-        float nearPlane = mParams.near_plane_override;
-        syncGet();
-        return nearPlane;
-    }
-    void
-    setNear(const float near) {
-        mParams.near_plane_override = near;
-        syncSet();
-    }
-
-    const float
-    getFar() const {
-        float farPlane = mParams.far_plane_override;
-        syncGet();
-        return farPlane;
-    }
-    void
-    setFar(const float far) {
-        mParams.far_plane_override = far;
-        syncSet();
-    }
-
     const size_t
     getTileSize() const {
         syncGet();

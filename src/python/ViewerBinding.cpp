@@ -72,15 +72,7 @@ bind_viewer(py::module &m) {
         .def_property("rgb_rgb_rgb_sh",
                       &fvdb::detail::viewer::GaussianSplat3dView::isShStrideRgbRgbRgb,
                       &fvdb::detail::viewer::GaussianSplat3dView::setShStrideRgbRgbRgb,
-                      "Whether the spherical harmonics data is stored in RGBRGB... order.")
-        .def_property("near",
-                      &fvdb::detail::viewer::GaussianSplat3dView::getNear,
-                      &fvdb::detail::viewer::GaussianSplat3dView::setNear,
-                      "The near clipping plane for this Gaussian scene.")
-        .def_property("far",
-                      &fvdb::detail::viewer::GaussianSplat3dView::getFar,
-                      &fvdb::detail::viewer::GaussianSplat3dView::setFar,
-                      "The far clipping plane for this Gaussian scene.");
+                      "Whether the spherical harmonics data is stored in RGBRGB... order.");
 
     py::class_<fvdb::detail::viewer::Viewer>(
         m, "Viewer", "A viewer for displaying 3D data including Gaussian splats")
