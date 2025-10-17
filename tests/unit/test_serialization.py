@@ -8,7 +8,7 @@ from parameterized import parameterized
 
 from fvdb import GridBatch, JaggedTensor
 from fvdb.utils.tests import dtype_to_atol
-from fvdb.utils.tests.grid_utils import create_test_grid_batch
+from fvdb.utils.tests.grid_utils import make_grid_batch_and_jagged_point_data
 
 all_device_dtype_combos = [
     ["cuda", torch.float16],
@@ -28,15 +28,9 @@ class TestSerialization(unittest.TestCase):
     def test_morton_permutation(self, device, dtype):
         """Test Morton order permutations (xyz and zyx variants)."""
         # Create a test grid batch with known active voxels
-        batch_size = 2
-        grid_size = 8
-
         # Create a grid batch with some active voxels
-        grid_batch = create_test_grid_batch(
-            batch_size=batch_size,
-            grid_size=grid_size,
-            device=device,
-            density=0.3  # 30% of voxels will be active
+        grid_batch, _, _ = make_grid_batch_and_jagged_point_data(
+            device=device, dtype=dtype, include_boundary_points=True
         )
 
         # Get permutation indices for both Morton orderings
@@ -51,8 +45,8 @@ class TestSerialization(unittest.TestCase):
                 continue
 
             # Extract permutation indices for this grid
-            grid_perm = morton_perm.jdata[offset:offset + num_voxels].squeeze(-1)
-            grid_perm_zyx = morton_zyx_perm.jdata[offset:offset + num_voxels].squeeze(-1)
+            grid_perm = morton_perm.jdata[offset : offset + num_voxels].squeeze(-1)
+            grid_perm_zyx = morton_zyx_perm.jdata[offset : offset + num_voxels].squeeze(-1)
 
             # Verify permutations contain all indices
             expected_indices = torch.arange(offset, offset + num_voxels, device=device)
@@ -60,8 +54,8 @@ class TestSerialization(unittest.TestCase):
             self.assertTrue(torch.sort(grid_perm_zyx)[0].equal(expected_indices))
 
             # Get Morton codes
-            morton_codes = grid_batch.encode_morton().jdata[offset:offset + num_voxels]
-            morton_zyx_codes = grid_batch.encode_morton_zyx().jdata[offset:offset + num_voxels]
+            morton_codes = grid_batch.encode_morton().jdata[offset : offset + num_voxels]
+            morton_zyx_codes = grid_batch.encode_morton_zyx().jdata[offset : offset + num_voxels]
 
             # Verify codes are sorted after applying permutation
             sorted_codes = morton_codes[grid_perm - offset]
@@ -72,20 +66,13 @@ class TestSerialization(unittest.TestCase):
 
             offset += num_voxels
 
-
     @parameterized.expand(all_device_dtype_combos)
     def test_hilbert_permutation(self, device, dtype):
         """Test Hilbert curve permutations (xyz and zyx variants)."""
         # Create a test grid batch with known active voxels
-        batch_size = 2
-        grid_size = 8
-
         # Create a grid batch with some active voxels
-        grid_batch = create_test_grid_batch(
-            batch_size=batch_size,
-            grid_size=grid_size,
-            device=device,
-            density=0.3  # 30% of voxels will be active
+        grid_batch, _, _ = make_grid_batch_and_jagged_point_data(
+            device=device, dtype=dtype, include_boundary_points=True
         )
 
         # Get permutation indices for both Hilbert orderings
@@ -100,8 +87,8 @@ class TestSerialization(unittest.TestCase):
                 continue
 
             # Extract permutation indices for this grid
-            grid_perm = hilbert_perm.jdata[offset:offset + num_voxels].squeeze(-1)
-            grid_perm_zyx = hilbert_zyx_perm.jdata[offset:offset + num_voxels].squeeze(-1)
+            grid_perm = hilbert_perm.jdata[offset : offset + num_voxels].squeeze(-1)
+            grid_perm_zyx = hilbert_zyx_perm.jdata[offset : offset + num_voxels].squeeze(-1)
 
             # Verify permutations contain all indices
             expected_indices = torch.arange(offset, offset + num_voxels, device=device)
@@ -109,8 +96,8 @@ class TestSerialization(unittest.TestCase):
             self.assertTrue(torch.sort(grid_perm_zyx)[0].equal(expected_indices))
 
             # Get Hilbert codes
-            hilbert_codes = grid_batch.encode_hilbert().jdata[offset:offset + num_voxels]
-            hilbert_zyx_codes = grid_batch.encode_hilbert_zyx().jdata[offset:offset + num_voxels]
+            hilbert_codes = grid_batch.encode_hilbert().jdata[offset : offset + num_voxels]
+            hilbert_zyx_codes = grid_batch.encode_hilbert_zyx().jdata[offset : offset + num_voxels]
 
             # Verify codes are sorted after applying permutation
             sorted_codes = hilbert_codes[grid_perm - offset]
@@ -121,21 +108,13 @@ class TestSerialization(unittest.TestCase):
 
             offset += num_voxels
 
-
     @parameterized.expand(all_device_dtype_combos)
     def test_permutation_validity(self, device, dtype):
         """Test that permutation indices are valid (complete and unique)."""
-        batch_size = 3
-        grid_size = 16
-
-        # Create grid batch with varying densities
-        densities = [0.1, 0.5, 0.8]  # Test different sparsity levels
-        for density in densities:
-            grid_batch = create_test_grid_batch(
-                batch_size=batch_size,
-                grid_size=grid_size,
-                device=device,
-                density=density
+        # Create multiple grid batches to test different configurations
+        for _ in range(3):
+            grid_batch, _, _ = make_grid_batch_and_jagged_point_data(
+                device=device, dtype=dtype, include_boundary_points=True
             )
 
             # Test all permutation types
@@ -143,7 +122,7 @@ class TestSerialization(unittest.TestCase):
                 grid_batch.permutation_morton(),
                 grid_batch.permutation_morton_zyx(),
                 grid_batch.permutation_hilbert(),
-                grid_batch.permutation_hilbert_zyx()
+                grid_batch.permutation_hilbert_zyx(),
             ]
 
             for perm in permutations:
@@ -154,7 +133,7 @@ class TestSerialization(unittest.TestCase):
                         continue
 
                     # Extract permutation indices for this grid
-                    grid_perm = perm.jdata[offset:offset + num_voxels].squeeze(-1)
+                    grid_perm = perm.jdata[offset : offset + num_voxels].squeeze(-1)
 
                     # Verify indices are within valid range
                     self.assertTrue(torch.all(grid_perm >= offset))
@@ -168,6 +147,7 @@ class TestSerialization(unittest.TestCase):
                     self.assertTrue(torch.sort(grid_perm)[0].equal(expected_indices))
 
                     offset += num_voxels
+
 
 if __name__ == "__main__":
     unittest.main()
