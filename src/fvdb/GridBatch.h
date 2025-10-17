@@ -473,13 +473,9 @@ struct GridBatch : torch::CustomClassHolder {
     JaggedTensor ijk() const;
 
     /// @brief Return the space-filling curve codes for active voxels in this grid batch with specific order type
-    /// @param order_type The type of ordering to use:
-    ///                   - "z": Regular Z-order curve (xyz bit interleaving)
-    ///                   - "z-trans": Transposed Z-order curve (zyx bit interleaving)  
-    ///                   - "hilbert": Regular Hilbert curve (xyz)
-    ///                   - "hilbert-trans": Transposed Hilbert curve (zyx)
+    /// @param order_type The type of space-filling curve to use for encoding
     /// @return A JaggedTensor of space-filling curve codes for active voxels (shape [B, -1, 1])
-    JaggedTensor serialize_encode(const std::string &order_type) const;
+    JaggedTensor serialize_encode(SpaceFillingCurveType order_type = SpaceFillingCurveType::ZOrder) const;
 
     /// @brief Return Morton codes (Z-order curve) for active voxels in this grid batch (xyz bit interleaving)
     /// @return A JaggedTensor of Morton codes for active voxels (shape [B, -1, 1])

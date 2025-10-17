@@ -6,6 +6,7 @@
 
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/Types.h>
 
 #include <torch/types.h>
 
@@ -13,14 +14,8 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-// Order type constants for serialize encode
-constexpr int ORDER_TYPE_Z = 0;        // Regular z-order (xyz)
-constexpr int ORDER_TYPE_Z_TRANS = 1;  // Transposed z-order (zyx)
-constexpr int ORDER_TYPE_HILBERT = 2;  // Regular Hilbert curve (xyz)
-constexpr int ORDER_TYPE_HILBERT_TRANS = 3;  // Transposed Hilbert curve (zyx)
-
 template <torch::DeviceType>
-JaggedTensor dispatchSerializeEncode(const GridBatchImpl &gridBatch, const std::string &order_type = "z");
+JaggedTensor dispatchSerializeEncode(const GridBatchImpl &gridBatch, SpaceFillingCurveType order_type = SpaceFillingCurveType::ZOrder);
 
 } // namespace ops
 } // namespace detail

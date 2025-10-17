@@ -1085,7 +1085,7 @@ GridBatch::ijk() const {
 }
 
 JaggedTensor
-GridBatch::serialize_encode(const std::string &order_type) const {
+GridBatch::serialize_encode(SpaceFillingCurveType order_type) const {
     c10::DeviceGuard guard(device());
     return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
         return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(*mImpl, order_type);
@@ -1096,7 +1096,7 @@ JaggedTensor
 GridBatch::encode_morton() const {
     c10::DeviceGuard guard(device());
     return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
-        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(*mImpl, "z");
+        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(*mImpl, SpaceFillingCurveType::ZOrder);
     });
 }
 
@@ -1104,7 +1104,7 @@ JaggedTensor
 GridBatch::encode_morton_zyx() const {
     c10::DeviceGuard guard(device());
     return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
-        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(*mImpl, "z-trans");
+        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(*mImpl, SpaceFillingCurveType::ZOrderTransposed);
     });
 }
 
@@ -1112,7 +1112,7 @@ JaggedTensor
 GridBatch::encode_hilbert() const {
     c10::DeviceGuard guard(device());
     return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
-        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(*mImpl, "hilbert");
+        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(*mImpl, SpaceFillingCurveType::Hilbert);
     });
 }
 
@@ -1120,7 +1120,7 @@ JaggedTensor
 GridBatch::encode_hilbert_zyx() const {
     c10::DeviceGuard guard(device());
     return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
-        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(*mImpl, "hilbert-trans");
+        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(*mImpl, SpaceFillingCurveType::HilbertTransposed);
     });
 }
 
