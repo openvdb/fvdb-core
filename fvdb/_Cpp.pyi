@@ -7,6 +7,11 @@ from typing import ClassVar, overload
 import torch
 
 from .types import (
+    DeviceIdentifier,
+    ListOfListsOfTensors,
+    ListOfTensors,
+    LShapeSpec,
+    RShapeSpec,
     Vec3d,
     Vec3dBatch,
     Vec3dBatchOrScalar,
@@ -598,7 +603,7 @@ class JaggedTensor:
     def to(self, device: str) -> JaggedTensor: ...
     def type(self, arg0: torch.dtype) -> JaggedTensor: ...
     def type_as(self, arg0: JaggedTensor | torch.Tensor) -> JaggedTensor: ...
-    def unbind(self) -> list[torch.Tensor] | list[list[torch.Tensor]]: ...
+    def unbind(self) -> ListOfTensors | ListOfListsOfTensors: ...
     @overload
     def __add__(self, other: torch.Tensor) -> JaggedTensor: ...
     @overload
@@ -1034,183 +1039,43 @@ def gridbatch_from_points(
 def jcat(grid_batches: list[GridBatch]) -> GridBatch: ...
 @overload
 def jcat(jagged_tensors: list[JaggedTensor | torch.Tensor], dim: int | None = ...) -> JaggedTensor: ...
-@overload
 def jempty(
-    lshape: list[int],
-    rshape: list[int] | None = ...,
+    lshape: LShapeSpec,
+    rshape: RShapeSpec | None = ...,
     dtype: torch.dtype | None = ...,
-    device: torch.device | None = ...,
+    device: DeviceIdentifier | None = ...,
     requires_grad: bool = ...,
     pin_memory: bool = ...,
 ) -> JaggedTensor: ...
-@overload
-def jempty(
-    lshape: list[int],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: str | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jempty(
-    lshape: list[list[int]],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: torch.device | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jempty(
-    lshape: list[list[int]],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: str | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
 def jones(
-    lshape: list[int],
-    rshape: list[int] | None = ...,
+    lshape: LShapeSpec,
+    rshape: RShapeSpec | None = ...,
     dtype: torch.dtype | None = ...,
-    device: torch.device | None = ...,
+    device: DeviceIdentifier | None = ...,
     requires_grad: bool = ...,
     pin_memory: bool = ...,
 ) -> JaggedTensor: ...
-@overload
-def jones(
-    lshape: list[int],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: str | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jones(
-    lshape: list[list[int]],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: torch.device | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jones(
-    lshape: list[list[int]],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: str | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
 def jrand(
-    lshape: list[int],
-    rshape: list[int] | None = ...,
+    lshape: LShapeSpec,
+    rshape: RShapeSpec | None = ...,
     dtype: torch.dtype | None = ...,
-    device: torch.device | None = ...,
+    device: DeviceIdentifier | None = ...,
     requires_grad: bool = ...,
     pin_memory: bool = ...,
 ) -> JaggedTensor: ...
-@overload
-def jrand(
-    lshape: list[int],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: str | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jrand(
-    lshape: list[list[int]],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: torch.device | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jrand(
-    lshape: list[list[int]],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: str | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
 def jrandn(
-    lshape: list[int],
-    rshape: list[int] | None = ...,
+    lshape: LShapeSpec,
+    rshape: RShapeSpec | None = ...,
     dtype: torch.dtype | None = ...,
-    device: torch.device | None = ...,
+    device: DeviceIdentifier | None = ...,
     requires_grad: bool = ...,
     pin_memory: bool = ...,
 ) -> JaggedTensor: ...
-@overload
-def jrandn(
-    lshape: list[int],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: str | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jrandn(
-    lshape: list[list[int]],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: torch.device | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jrandn(
-    lshape: list[list[int]],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: str | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
 def jzeros(
-    lshape: list[int],
-    rshape: list[int] | None = ...,
+    lshape: LShapeSpec,
+    rshape: RShapeSpec | None = ...,
     dtype: torch.dtype | None = ...,
-    device: torch.device | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jzeros(
-    lshape: list[int],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: str | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jzeros(
-    lshape: list[list[int]],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: torch.device | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jzeros(
-    lshape: list[list[int]],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: str | None = ...,
+    device: DeviceIdentifier | None = ...,
     requires_grad: bool = ...,
     pin_memory: bool = ...,
 ) -> JaggedTensor: ...
