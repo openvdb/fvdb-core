@@ -1093,55 +1093,37 @@ GridBatch::serialize_encode(const std::string &order_type) const {
 }
 
 JaggedTensor
-GridBatch::permute(const std::string &order_type) const {
+GridBatch::encode_morton() const {
     c10::DeviceGuard guard(device());
-    
-    // Parse order type and determine space-filling curve type and sort order
-    std::string curve_order = "z";  // Default z-order (xyz)
-    
-    if (order_type == "z") {
-        curve_order = "z";
-    } else if (order_type == "z-trans") {
-        curve_order = "z-trans";
-    } else if (order_type == "hilbert") {
-        curve_order = "hilbert";
-    } else if (order_type == "hilbert-trans") {
-        curve_order = "hilbert-trans";
-    } else {
-        TORCH_CHECK(false, "Invalid order_type: ", order_type, 
-                    ". Valid options are 'z', 'z-trans', 'hilbert', or 'hilbert-trans'.");
-    }
-    
-    // Get space-filling curve codes for sorting
-    JaggedTensor curve_codes = serialize_encode(curve_order);
-    
-    // Create output tensor for permutation indices
-    auto opts = torch::TensorOptions().dtype(torch::kInt64).device(device());
-    std::vector<int64_t> shape = {mImpl->totalVoxels()};
-    torch::Tensor permutation_indices = torch::empty(shape, opts);
-    
-    // Sort space-filling curve codes and get permutation indices for each grid
-    int64_t offset = 0;
-    for (int64_t grid_idx = 0; grid_idx < mImpl->batchSize(); ++grid_idx) {
-        int64_t num_voxels = mImpl->numVoxelsAt(grid_idx);
-        if (num_voxels == 0) continue;
-        
-        // Extract space-filling curve codes for this grid
-        torch::Tensor grid_curve_codes = curve_codes.jdata().narrow(0, offset, num_voxels);
-        
-        // Sort and get indices
-        auto sort_result = torch::sort(grid_curve_codes.squeeze(-1), /*dim=*/0);
-        torch::Tensor sorted_values = std::get<0>(sort_result);
-        torch::Tensor indices = std::get<1>(sort_result);
-        
-        // Store indices with offset
-        permutation_indices.narrow(0, offset, num_voxels) = indices + offset;
-        
-        offset += num_voxels;
-    }
-    
-    return mImpl->jaggedTensor(permutation_indices.unsqueeze(-1));
+    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
+        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(*mImpl, "z");
+    });
 }
+
+JaggedTensor
+GridBatch::encode_morton_zyx() const {
+    c10::DeviceGuard guard(device());
+    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
+        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(*mImpl, "z-trans");
+    });
+}
+
+JaggedTensor
+GridBatch::encode_hilbert() const {
+    c10::DeviceGuard guard(device());
+    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
+        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(*mImpl, "hilbert");
+    });
+}
+
+JaggedTensor
+GridBatch::encode_hilbert_zyx() const {
+    c10::DeviceGuard guard(device());
+    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
+        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(*mImpl, "hilbert-trans");
+    });
+}
+
 
 std::vector<JaggedTensor>
 GridBatch::viz_edge_network(bool returnVoxelCoordinates) const {

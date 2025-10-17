@@ -131,30 +131,54 @@ bind_grid_batch(py::module &m) {
                 codes (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 1]` containing
                     the space-filling curve codes for each active voxel in the batch.
         )_FVDB_")
-        .def("permute",
-             &fvdb::GridBatch::permute,
-             py::arg("order_type"),
+        .def("encode_morton",
+             &fvdb::GridBatch::encode_morton,
              R"_FVDB_(
-            Get permutation indices to sort voxels by spatial order.
+            Return Morton codes (Z-order curve) for active voxels in this grid batch.
             
-            This method computes Morton codes for all active voxels and returns the indices
-            that would sort them according to the specified ordering. This is useful for
-            spatially coherent data access patterns and cache optimization.
-
-            Args:
-                order_type (str): The type of spatial ordering to use:
-                    - "z": Regular Z-order curve (xyz bit interleaving, default)
-                    - "z-trans": Transposed Z-order curve (zyx bit interleaving)
+            Morton codes use xyz bit interleaving to create a space-filling curve that
+            preserves spatial locality. This is useful for serialization, sorting, and 
+            spatial data structures.
 
             Returns:
-                permutation_indices (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 1]` containing
-                    the permutation indices. Use these indices to reorder voxel data for spatial coherence.
-                    
-            Example:
-                >>> z_indices = grid_batch.permute("z")  # Regular xyz z-order
-                >>> z_trans_indices = grid_batch.permute("z-trans")  # Transposed zyx z-order
-                >>> # Use indices to reorder some voxel data
-                >>> reordered_data = voxel_data.jdata[z_indices.jdata.squeeze(-1)]
+                codes (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 1]` containing
+                    the Morton codes for each active voxel in the batch.
+        )_FVDB_")
+        .def("encode_morton_zyx",
+             &fvdb::GridBatch::encode_morton_zyx,
+             R"_FVDB_(
+            Return transposed Morton codes (Z-order curve) for active voxels in this grid batch.
+            
+            Transposed Morton codes use zyx bit interleaving to create a space-filling curve.
+            This variant can provide better spatial locality for certain access patterns.
+
+            Returns:
+                codes (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 1]` containing
+                    the transposed Morton codes for each active voxel in the batch.
+        )_FVDB_")
+        .def("encode_hilbert",
+             &fvdb::GridBatch::encode_hilbert,
+             R"_FVDB_(
+            Return Hilbert curve codes for active voxels in this grid batch.
+            
+            Hilbert curves provide better spatial locality than Morton codes by ensuring
+            that nearby points in 3D space are also nearby in the 1D curve ordering.
+
+            Returns:
+                codes (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 1]` containing
+                    the Hilbert codes for each active voxel in the batch.
+        )_FVDB_")
+        .def("encode_hilbert_zyx",
+             &fvdb::GridBatch::encode_hilbert_zyx,
+             R"_FVDB_(
+            Return transposed Hilbert curve codes for active voxels in this grid batch.
+            
+            Transposed Hilbert curves use zyx ordering instead of xyz. This variant can
+            provide better spatial locality for certain access patterns.
+
+            Returns:
+                codes (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 1]` containing
+                    the transposed Hilbert codes for each active voxel in the batch.
         )_FVDB_")
         .def_property_readonly(
             "viz_edge_network",

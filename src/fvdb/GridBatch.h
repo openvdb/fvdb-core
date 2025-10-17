@@ -481,14 +481,22 @@ struct GridBatch : torch::CustomClassHolder {
     /// @return A JaggedTensor of space-filling curve codes for active voxels (shape [B, -1, 1])
     JaggedTensor serialize_encode(const std::string &order_type) const;
 
-    /// @brief Get permutation indices to sort voxels by spatial order
-    /// @param order_type The type of spatial ordering to use:
-    ///                   - "z": Regular Z-order curve (xyz bit interleaving, default)
-    ///                   - "z-trans": Transposed Z-order curve (zyx bit interleaving)
-    ///                   - "hilbert": Regular Hilbert curve (xyz)
-    ///                   - "hilbert-trans": Transposed Hilbert curve (zyx)
-    /// @return A JaggedTensor of permutation indices (shape [B, -1])
-    JaggedTensor permute(const std::string &order_type) const;
+    /// @brief Return Morton codes (Z-order curve) for active voxels in this grid batch (xyz bit interleaving)
+    /// @return A JaggedTensor of Morton codes for active voxels (shape [B, -1, 1])
+    JaggedTensor encode_morton() const;
+
+    /// @brief Return transposed Morton codes (Z-order curve) for active voxels in this grid batch (zyx bit interleaving)
+    /// @return A JaggedTensor of transposed Morton codes for active voxels (shape [B, -1, 1])
+    JaggedTensor encode_morton_zyx() const;
+
+    /// @brief Return Hilbert curve codes for active voxels in this grid batch (xyz)
+    /// @return A JaggedTensor of Hilbert codes for active voxels (shape [B, -1, 1])
+    JaggedTensor encode_hilbert() const;
+
+    /// @brief Return transposed Hilbert curve codes for active voxels in this grid batch (zyx)
+    /// @return A JaggedTensor of transposed Hilbert codes for active voxels (shape [B, -1, 1])
+    JaggedTensor encode_hilbert_zyx() const;
+
 
     /// @brief Find the intersection between a collection of rays and the zero level set of a scalar
     /// field

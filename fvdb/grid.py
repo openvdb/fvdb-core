@@ -1837,37 +1837,117 @@ class Grid:
 
     def serialize_encode(self, order_type: str = "z") -> torch.Tensor:
         """
-        Return the Morton codes for active voxels in this grid.
+        Return the space-filling curve codes for active voxels in this grid.
         
-        Morton codes provide a space-filling curve that maps 3D coordinates to 1D integers,
+        Space-filling curves provide a mapping from 3D coordinates to 1D integers,
         preserving spatial locality. This is useful for serialization, sorting, and 
+        spatial data structures.
+
+        Args:
+            order_type (str): The type of ordering to use:
+                - "z": Regular Z-order curve (xyz bit interleaving)
+                - "z-trans": Transposed Z-order curve (zyx bit interleaving)  
+                - "hilbert": Regular Hilbert curve (xyz)
+                - "hilbert-trans": Transposed Hilbert curve (zyx)
+
+        Returns:
+            torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
+                the space-filling curve codes for each active voxel.
+        """
+        return self._impl.serialize_encode(order_type).jdata
+
+    def encode_morton(self) -> torch.Tensor:
+        """
+        Return Morton codes (Z-order curve) for active voxels in this grid.
+        
+        Morton codes use xyz bit interleaving to create a space-filling curve that
+        preserves spatial locality. This is useful for serialization, sorting, and 
         spatial data structures.
 
         Returns:
             torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
                 the Morton codes for each active voxel.
         """
-        return self._impl.serialize_encode(order_type).jdata
+        return self._impl.encode_morton().jdata
+
+    def encode_morton_zyx(self) -> torch.Tensor:
+        """
+        Return transposed Morton codes (Z-order curve) for active voxels in this grid.
+        
+        Transposed Morton codes use zyx bit interleaving to create a space-filling curve.
+        This variant can provide better spatial locality for certain access patterns.
+
+        Returns:
+            torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
+                the transposed Morton codes for each active voxel.
+        """
+        return self._impl.encode_morton_zyx().jdata
+
+    def encode_hilbert(self) -> torch.Tensor:
+        """
+        Return Hilbert curve codes for active voxels in this grid.
+        
+        Hilbert curves provide better spatial locality than Morton codes by ensuring
+        that nearby points in 3D space are also nearby in the 1D curve ordering.
+
+        Returns:
+            torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
+                the Hilbert codes for each active voxel.
+        """
+        return self._impl.encode_hilbert().jdata
+
+    def encode_hilbert_zyx(self) -> torch.Tensor:
+        """
+        Return transposed Hilbert curve codes for active voxels in this grid.
+        
+        Transposed Hilbert curves use zyx ordering instead of xyz. This variant can
+        provide better spatial locality for certain access patterns.
+
+        Returns:
+            torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
+                the transposed Hilbert codes for each active voxel.
+        """
+        return self._impl.encode_hilbert_zyx().jdata
 
     def permute(self, order_type: str = "z") -> torch.Tensor:
         """
         Get permutation indices to sort voxels by spatial order.
         
-        This method computes Morton codes for all active voxels and returns the indices
+        This method computes space-filling curve codes for all active voxels and returns the indices
         that would sort them according to the specified ordering. This is useful for
         spatially coherent data access patterns and cache optimization.
 
         Args:
             order_type (str): The type of spatial ordering to use:
-                - "morton": Morton Z-order curve (default, ascending)
-                - "ascending": Sort Morton codes in ascending order (same as "morton")
-                - "descending": Sort Morton codes in descending order
+                - "z": Regular Z-order curve (xyz bit interleaving, default)
+                - "z-trans": Transposed Z-order curve (zyx bit interleaving)
+                - "hilbert": Regular Hilbert curve (xyz)
+                - "hilbert-trans": Transposed Hilbert curve (zyx)
 
         Returns:
             torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
                 the permutation indices. Use these indices to reorder voxel data for spatial coherence.
         """
-        return self._impl.permute(order_type).jdata
+        # Get space-filling curve codes using the appropriate encode method
+        if order_type == "z":
+            curve_codes = self.encode_morton()
+        elif order_type == "z-trans":
+            curve_codes = self.encode_morton_zyx()
+        elif order_type == "hilbert":
+            curve_codes = self.encode_hilbert()
+        elif order_type == "hilbert-trans":
+            curve_codes = self.encode_hilbert_zyx()
+        else:
+            raise ValueError(f"Invalid order_type: {order_type}. Valid options are 'z', 'z-trans', 'hilbert', or 'hilbert-trans'.")
+        
+        # Get the curve codes as a flat tensor
+        curve_data = curve_codes.squeeze(-1)  # Shape: [num_voxels]
+        
+        # Sort and get indices
+        _, indices = torch.sort(curve_data, dim=0)
+        
+        # Return indices as a tensor with shape [num_voxels, 1]
+        return indices.unsqueeze(-1)
 
     @property
     def num_bytes(self) -> int:

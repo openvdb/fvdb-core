@@ -1977,7 +1977,61 @@ class GridBatch:
         """
         return self._impl.serialize_encode(order_type)
 
-    def permute(self, order_type: str = "z") -> JaggedTensor:
+    def encode_morton(self) -> JaggedTensor:
+        """
+        Return Morton codes (Z-order curve) for active voxels in this grid batch.
+        
+        Morton codes use xyz bit interleaving to create a space-filling curve that
+        preserves spatial locality. This is useful for serialization, sorting, and 
+        spatial data structures.
+
+        Returns:
+            JaggedTensor: A JaggedTensor of shape `[num_grids, -1, 1]` containing
+                the Morton codes for each active voxel in the batch.
+        """
+        return self._impl.encode_morton()
+
+    def encode_morton_zyx(self) -> JaggedTensor:
+        """
+        Return transposed Morton codes (Z-order curve) for active voxels in this grid batch.
+        
+        Transposed Morton codes use zyx bit interleaving to create a space-filling curve.
+        This variant can provide better spatial locality for certain access patterns.
+
+        Returns:
+            JaggedTensor: A JaggedTensor of shape `[num_grids, -1, 1]` containing
+                the transposed Morton codes for each active voxel in the batch.
+        """
+        return self._impl.encode_morton_zyx()
+
+    def encode_hilbert(self) -> JaggedTensor:
+        """
+        Return Hilbert curve codes for active voxels in this grid batch.
+        
+        Hilbert curves provide better spatial locality than Morton codes by ensuring
+        that nearby points in 3D space are also nearby in the 1D curve ordering.
+
+        Returns:
+            JaggedTensor: A JaggedTensor of shape `[num_grids, -1, 1]` containing
+                the Hilbert codes for each active voxel in the batch.
+        """
+        return self._impl.encode_hilbert()
+
+    def encode_hilbert_zyx(self) -> JaggedTensor:
+        """
+        Return transposed Hilbert curve codes for active voxels in this grid batch.
+        
+        Transposed Hilbert curves use zyx ordering instead of xyz. This variant can
+        provide better spatial locality for certain access patterns.
+
+        Returns:
+            JaggedTensor: A JaggedTensor of shape `[num_grids, -1, 1]` containing
+                the transposed Hilbert codes for each active voxel in the batch.
+        """
+        return self._impl.encode_hilbert_zyx()
+
+    @torch.no_grad()
+    def permute(self, curve_codes: JaggedTensor) -> JaggedTensor:
         """
         Get permutation indices to sort voxels by spatial order.
         
@@ -2004,7 +2058,59 @@ class GridBatch:
             >>> # Use indices to reorder some voxel data
             >>> reordered_data = voxel_data.jdata[z_indices.jdata.squeeze(-1)]
         """
-        return self._impl.permute(order_type)
+                
+        # Get the curve codes as a flat tensor
+        curve_data = curve_codes.jdata.squeeze(-1)  # Shape: [total_voxels]
+        
+        # Create output tensor for permutation indices
+        # permutation_indices = torch.empty_like(curve_data, dtype=torch.long)
+        permutation_indices = torch.empty_like(curve_data, dtype=torch.long)
+        
+        # Sort curve codes and get permutation indices for each grid
+        offset = 0
+        for grid_idx in range(self.grid_count):
+            num_voxels = self.num_voxels_at(grid_idx)
+            if num_voxels == 0:
+                continue
+                
+            # Extract curve codes for this grid
+            grid_curve_codes = curve_data[offset:offset + num_voxels]
+            
+            # Sort and get indices
+            _, indices = torch.sort(grid_curve_codes, dim=0)
+            
+            # Store indices with offset
+            permutation_indices[offset:offset + num_voxels] = indices + offset
+            
+            offset += num_voxels
+        
+        # Return as JaggedTensor with the same structure as the input
+        return self.jagged_like(permutation_indices.unsqueeze(-1))
+
+
+    def permutation_hilbert(self) -> JaggedTensor:
+        """
+        Return permutation indices to sort voxels by Hilbert curve order.
+        """
+        return self.permute(self.encode_hilbert())
+
+    def permutation_hilbert_zyx(self) -> JaggedTensor:
+        """
+        Return permutation indices to sort voxels by transposed Hilbert curve order.
+        """
+        return self.permute(self.encode_hilbert_zyx())
+
+    def permutation_morton(self) -> JaggedTensor:
+        """
+        Return permutation indices to sort voxels by Morton curve order.
+        """
+        return self.permute(self.encode_morton())
+
+    def permutation_morton_zyx(self) -> JaggedTensor:
+        """
+        Return permutation indices to sort voxels by transposed Morton curve order.
+        """
+        return self.permute(self.encode_morton_zyx())
 
     @property
     def jidx(self) -> torch.Tensor:
