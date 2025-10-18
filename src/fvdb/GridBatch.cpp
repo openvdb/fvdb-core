@@ -31,6 +31,7 @@
 #include <fvdb/detail/ops/RayImplicitIntersection.h>
 #include <fvdb/detail/ops/SampleRaysUniform.h>
 #include <fvdb/detail/ops/SegmentsAlongRays.h>
+#include <fvdb/detail/ops/SerializeEncode.h>
 #include <fvdb/detail/ops/VoxelNeighborhood.h>
 #include <fvdb/detail/ops/VoxelsAlongRays.h>
 #include <fvdb/detail/ops/convolution/pack_info/BrickHaloBuffer.h>
@@ -39,6 +40,9 @@
 #include <fvdb/detail/utils/Utils.h>
 
 #include <torch/types.h>
+
+#include <tuple>
+#include <vector>
 
 namespace fvdb {
 
@@ -1077,6 +1081,42 @@ GridBatch::ijk() const {
     c10::DeviceGuard guard(device());
     return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
         return fvdb::detail::ops::dispatchActiveGridCoords<DeviceTag>(*mImpl);
+    });
+}
+
+JaggedTensor
+GridBatch::encode_morton() const {
+    c10::DeviceGuard guard(device());
+    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
+        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(*mImpl,
+                                                                     SpaceFillingCurveType::ZOrder);
+    });
+}
+
+JaggedTensor
+GridBatch::encode_morton_zyx() const {
+    c10::DeviceGuard guard(device());
+    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
+        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
+            *mImpl, SpaceFillingCurveType::ZOrderTransposed);
+    });
+}
+
+JaggedTensor
+GridBatch::encode_hilbert() const {
+    c10::DeviceGuard guard(device());
+    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
+        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
+            *mImpl, SpaceFillingCurveType::Hilbert);
+    });
+}
+
+JaggedTensor
+GridBatch::encode_hilbert_zyx() const {
+    c10::DeviceGuard guard(device());
+    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
+        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
+            *mImpl, SpaceFillingCurveType::HilbertTransposed);
     });
 }
 

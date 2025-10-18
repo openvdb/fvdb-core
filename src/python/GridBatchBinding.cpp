@@ -110,6 +110,55 @@ bind_grid_batch(py::module &m) {
             "ijk",
             &fvdb::GridBatch::ijk,
             "A [num_grids, -1, 3] JaggedTensor of the ijk coordinates of each voxel in this batch.")
+        .def("encode_morton",
+             &fvdb::GridBatch::encode_morton,
+             R"_FVDB_(
+            Return Morton codes (Z-order curve) for active voxels in this grid batch.
+
+            Morton codes use xyz bit interleaving to create a space-filling curve that
+            preserves spatial locality. This is useful for serialization, sorting, and
+            spatial data structures.
+
+            Returns:
+                codes (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 1]` containing
+                    the Morton codes for each active voxel in the batch.
+        )_FVDB_")
+        .def("encode_morton_zyx",
+             &fvdb::GridBatch::encode_morton_zyx,
+             R"_FVDB_(
+            Return transposed Morton codes (Z-order curve) for active voxels in this grid batch.
+
+            Transposed Morton codes use zyx bit interleaving to create a space-filling curve.
+            This variant can provide better spatial locality for certain access patterns.
+
+            Returns:
+                codes (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 1]` containing
+                    the transposed Morton codes for each active voxel in the batch.
+        )_FVDB_")
+        .def("encode_hilbert",
+             &fvdb::GridBatch::encode_hilbert,
+             R"_FVDB_(
+            Return Hilbert curve codes for active voxels in this grid batch.
+
+            Hilbert curves provide better spatial locality than Morton codes by ensuring
+            that nearby points in 3D space are also nearby in the 1D curve ordering.
+
+            Returns:
+                codes (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 1]` containing
+                    the Hilbert codes for each active voxel in the batch.
+        )_FVDB_")
+        .def("encode_hilbert_zyx",
+             &fvdb::GridBatch::encode_hilbert_zyx,
+             R"_FVDB_(
+            Return transposed Hilbert curve codes for active voxels in this grid batch.
+
+            Transposed Hilbert curves use zyx ordering instead of xyz. This variant can
+            provide better spatial locality for certain access patterns.
+
+            Returns:
+                codes (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 1]` containing
+                    the transposed Hilbert codes for each active voxel in the batch.
+        )_FVDB_")
         .def_property_readonly(
             "viz_edge_network",
             [](const fvdb::GridBatch &self) { return self.viz_edge_network(false); },
