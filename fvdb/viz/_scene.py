@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import logging
-import warnings
-import webbrowser
 
 import numpy as np
 import torch
@@ -25,7 +23,7 @@ from ._point_cloud_view import PointCloudView
 from ._viewer_server import _get_viewer_server_cpp
 
 
-def get_scene(name: str):
+def get_scene(name: str = "fVDB Scene") -> "Scene":
     """
     Get a :class:`fvdb.viz.Scene` by name from the viewer server. If the scene does not exist,
     this function creates a new scene with the given name.
