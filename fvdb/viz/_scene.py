@@ -25,6 +25,20 @@ from ._point_cloud_view import PointCloudView
 from ._viewer_server import _get_viewer_server_cpp
 
 
+def get_scene(name: str):
+    """
+    Get a :class:`fvdb.viz.Scene` by name from the viewer server. If the scene does not exist,
+    this function creates a new scene with the given name.
+
+    Args:
+        name (str): The name of the scene to get.
+
+    Returns:
+        scene (fvdb.viz.Scene): The scene with the given name.
+    """
+    return Scene(name)
+
+
 class Scene:
     def __init__(self, name: str):
         self._name = name
