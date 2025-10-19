@@ -50,7 +50,8 @@ class Viewer {
     Viewer(const std::string &ipAddress, const int port, const bool verbose = false);
     ~Viewer();
 
-    GaussianSplat3dView &addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splats);
+    GaussianSplat3dView &addGaussianSplat3dView(const std::string &name,
+                                                const GaussianSplat3d &splats);
     CameraView &addCameraView(const std::string &name,
                               const torch::Tensor &cameraToWorldMatrices,
                               const torch::Tensor &projectionMatrices,

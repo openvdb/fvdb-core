@@ -83,7 +83,7 @@ bind_viewer(py::module &m) {
              "Create a new Viewer instance")
         .def(
             "add_gaussian_splat_3d_view",
-            &fvdb::detail::viewer::Viewer::addGaussianSplat3d,
+            &fvdb::detail::viewer::Viewer::addGaussianSplat3dView,
             py::arg("name"),
             py::arg("gaussian_splat_3d"),
             py::return_value_policy::reference_internal, // preserve reference; tie lifetime to

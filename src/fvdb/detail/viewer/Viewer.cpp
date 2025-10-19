@@ -141,7 +141,7 @@ Viewer::~Viewer() {
 }
 
 fvdb::detail::viewer::GaussianSplat3dView &
-Viewer::addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splats) {
+Viewer::addGaussianSplat3dView(const std::string &name, const GaussianSplat3d &splats) {
     std::shared_ptr<pnanovdb_raster_gaussian_data_t> oldData;
     auto itPrev = mSplat3dViews.find(name);
     if (itPrev != mSplat3dViews.end()) {
