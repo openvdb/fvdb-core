@@ -17,7 +17,7 @@ def _parse_device_string(device_string: str | torch.device) -> torch.device: ...
 
 # The following import needs to come after the GridBatch and JaggedTensor imports
 # immediately above in order to avoid a circular dependency error.
-from . import nn
+from . import nn, viz
 from ._Cpp import (
     ConvPackBackend,
     JaggedTensor,
@@ -63,4 +63,5 @@ __all__ = [
     "Grid",
     "load_grid",
     "save_grid",
+    "viz",
 ]
