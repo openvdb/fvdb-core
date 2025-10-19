@@ -8,10 +8,6 @@ import webbrowser
 import numpy as np
 import torch
 
-from .._Cpp import CameraView as CameraViewCpp
-from .._Cpp import GaussianSplat3d as GaussianSplat3dCpp
-from .._Cpp import GaussianSplat3dView as GaussianSplat3dViewCpp
-from .._Cpp import Viewer as ViewerCpp
 from ..gaussian_splatting import GaussianSplat3d
 from ..types import (
     NumericMaxRank1,
@@ -23,105 +19,17 @@ from ..types import (
     to_Vec3f,
     to_Vec3fBatch,
 )
-from ._camera_view import CameraView
+from ._camera_view import CamerasView
 from ._gaussian_splat_3d_view import GaussianSplat3dView
 from ._point_cloud_view import PointCloudView
-
-# Global viewer server. Create by calling init()
-_viewer_server_cpp: ViewerCpp | None = None
-
-
-def _get_viewer_server_cpp() -> ViewerCpp:
-    """
-    Get the global viewer server C++ instance or raise a :class:`RuntimeError` if it is not initialized.
-
-    Returns:
-        ViewerCpp: The global viewer server C++ instance.
-
-    """
-    global _viewer_server_cpp
-    if _viewer_server_cpp is None:
-        raise RuntimeError("Viewer server is not initialized. Call fvdb.viz.init() first.")
-    return _viewer_server_cpp
-
-
-def init(ip_address: str = "127.0.0.1", port: int = 8080, verbose: bool = False):
-    """
-    Initialize the viewer web-server on the given IP address and port. You must call this function
-    first before visualizing any scenes.
-
-    Example usage:
-
-    .. code-block:: python
-
-        import fvdb
-        fvdb.viz.init(ip_address="127.0.0.1", port=8080)
-
-        scene = fvdb.viz.Scene("My Scene")
-        scene.add_point_cloud(...)
-
-    .. note::
-
-        If the viewer server is already initialized, this function will do nothing and
-        will print a warning message.
-
-    Args:
-        ip_address (str): The IP address to bind the viewer server to. Default is ``"127.0.0.1"``.
-        port (int): The port to bind the viewer server to. Default is ``8080``.
-        verbose (bool): If True, the viewer server will print verbose output to the console. Default is ``False``.
-    """
-    global _viewer_server_cpp
-    if _viewer_server_cpp is None:
-        _viewer_server_cpp = ViewerCpp(ip_address=ip_address, port=port, verbose=verbose)
-    else:
-        warnings.warn(
-            f"Viewer server is already initialized with IP = {_viewer_server_cpp.ip_address()} and port = {_viewer_server_cpp.port()}."
-        )
-
-
-def show():
-    """
-    Show an interactive viewer in the browser or inline in a Jupyter notebook.
-
-    Example usage:
-
-    .. code-block:: python
-
-        import fvdb
-
-        fvdb.viz.init(ip_address="127.0.0.1", port=8080)
-
-        scene = fvdb.viz.Scene("My Scene")
-        scene.add_point_cloud(...)
-
-        fvdb.viz.show()
-
-    .. note::
-        You must call :func:`fvdb.viz.init()` before calling this function. If the viewer server
-        is not initialized, this function will raise a RuntimeError.
-    """
-    viewer_server = _get_viewer_server_cpp()
-    viewer_server_ip: str = viewer_server.ip_address()
-    viewer_server_port: int = viewer_server.port()
-    url = f"http://{viewer_server_ip}:{viewer_server_port}"
-
-    try:
-        from IPython import get_ipython
-        from IPython.display import IFrame, display
-
-        if get_ipython() is not None:
-            display(IFrame(src=url, width="100%", height="600px"))
-            return
-    except ImportError:
-        pass
-
-    webbrowser.open_new_tab(url)
+from ._viewer_server import _get_viewer_server_cpp
 
 
 class Scene:
     def __init__(self, name: str):
         self._name = name
         self._logger = logging.getLogger(f"{self.__class__.__module__}.{self.__class__.__name__}")
+        # TODO: Register scene with name in the viewer and use the returned scene ID.
         _get_viewer_server_cpp()
 
     @torch.no_grad()
@@ -157,8 +65,6 @@ class Scene:
             point_cloud_view (GaussianSplat3dView): A view for the point cloud added to the scene.
         """
 
-        server = _get_viewer_server_cpp()
-
         points = to_Vec3fBatch(points).cpu()
         colors = to_Vec3fBatch(colors).cpu()
         if colors.shape[0] == 1:
@@ -172,33 +78,14 @@ class Scene:
         if colors.min() < 0.0 or colors.max() > 1.0:
             raise ValueError("Colors must be in the range [0, 1].")
 
-        def _rgb_to_sh(rgb: torch.Tensor) -> torch.Tensor:
-            C0 = 0.28209479177387814
-            return (rgb - 0.5) / C0
-
-        means = points
-        quats = torch.zeros((points.shape[0], 4), dtype=torch.float32)
-        quats[:, 0] = 1.0  # identity rotation
-        logit_opacities = torch.full((points.shape[0],), 10.0, dtype=torch.float32)
-        log_scales = torch.full((points.shape[0], 3), -20.0, dtype=torch.float32)  # since scales are exp(log_scale)
-        sh0 = _rgb_to_sh(colors)
-        shN = torch.zeros((points.shape[0], 0, 3), dtype=torch.float32)
-
-        gs_impl = GaussianSplat3d(
-            means=means,
-            quats=quats,
-            log_scales=log_scales,
-            logit_opacities=logit_opacities,
-            sh0=sh0,
-            shN=shN,
-        )._impl
-        view: GaussianSplat3dViewCpp = server.add_gaussian_splat_3d(name=name, gaussian_splat_3d=gs_impl)
-        view.tile_size = 16
-        view.min_radius_2d = 0.0
-        view.eps_2d = point_size / 2.0  # point size is diameter
-        view.antialias = False
-        view.sh_degree_to_use = 0
-        return PointCloudView(view, PointCloudView.__PRIVATE__)
+        return PointCloudView(
+            scene_name=self._name,
+            name=name,
+            positions=points,
+            colors=colors,
+            point_size=point_size,
+            _private=PointCloudView.__PRIVATE__,
+        )
 
     @torch.no_grad()
     def add_gaussian_splat_3d(
@@ -228,18 +115,20 @@ class Scene:
         Returns:
             gaussian_splat_3d_view (GaussianSplat3dView): A view for the Gaussian splats added to the scene.
         """
-        server = _get_viewer_server_cpp()
-        gs_impl: GaussianSplat3dCpp = gaussian_splat_3d._impl
-        view: GaussianSplat3dViewCpp = server.add_gaussian_splat_3d(name=name, gaussian_splat_3d=gs_impl)
-        view.tile_size = tile_size
-        view.min_radius_2d = min_radius_2d
-        view.eps_2d = eps_2d
-        view.antialias = antialias
-        view.sh_degree_to_use = sh_degree_to_use
-        return GaussianSplat3dView(view, GaussianSplat3dView.__PRIVATE__)
+        return GaussianSplat3dView(
+            scene_name=self._name,
+            name=name,
+            gaussian_splat_3d=gaussian_splat_3d._impl,
+            tile_size=tile_size,
+            min_radius_2d=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+            sh_degree_to_use=sh_degree_to_use,
+            _private=GaussianSplat3dView.__PRIVATE__,
+        )
 
     @torch.no_grad()
-    def add_camera_view(
+    def add_cameras(
         self,
         name: str,
         camera_to_world_matrices: NumericMaxRank3,
@@ -253,9 +142,9 @@ class Scene:
         frustum_near_plane: float = 0,
         frustum_far_plane: float = 0.5,
         enabled: bool = True,
-    ) -> CameraView:
+    ) -> CamerasView:
         """
-        Add :class:`~fvdb.viz.CameraView` to this :class:`Scene` and return the added camera view.
+        Add :class:`~fvdb.viz.CamerasView` to this :class:`Scene` and return the added camera view.
 
         Args:
             name (str): The name of the camera view.
@@ -278,35 +167,33 @@ class Scene:
             enabled (bool): If True, the camera view UI is enabled and the cameras will be rendered.
                 If False, the camera view UI is disabled and the cameras will not be rendered.
         """
-
-        server = _get_viewer_server_cpp()
-
         if camera_to_world_matrices is None or projection_matrices is None:
             raise ValueError("Both camera_to_world_matrices and projection_matrices must be provided.")
 
-        frustum_color = to_Vec3f(frustum_color).cpu().numpy()
+        r, g, b = to_Vec3f(frustum_color).cpu().numpy().tolist()
+        frustum_color = (r, g, b)
         if any(c < 0.0 or c > 1.0 for c in frustum_color):
             raise ValueError(f"Frustum color must be a sequence of three floats in [0, 1], got {frustum_color}")
 
         camera_to_world_matrices = to_Mat44fBatch(camera_to_world_matrices)
         projection_matrices = to_Mat33fBatch(projection_matrices)
         image_sizes = to_Vec2fBatch(image_sizes) if image_sizes is not None else torch.Tensor([])
-
-        view: CameraViewCpp = server.add_camera_view(
-            name,
-            camera_to_world_matrices,
-            projection_matrices,
-            image_sizes,
-            frustum_near_plane,
-            frustum_far_plane,
+        return CamerasView(
+            scene_name=self._name,
+            name=name,
+            camera_to_world_matrices=camera_to_world_matrices,
+            projection_matrices=projection_matrices,
+            image_sizes=image_sizes,
+            axis_length=axis_length,
+            axis_thickness=axis_thickness,
+            frustum_line_width=frustum_line_width,
+            frustum_scale=frustum_scale,
+            frustum_color=frustum_color,
+            frustum_near_plane=frustum_near_plane,
+            frustum_far_plane=frustum_far_plane,
+            enabled=enabled,
+            _private=CamerasView.__PRIVATE__,
         )
-        view.visible = enabled
-        view.axis_length = axis_length
-        view.axis_thickness = axis_thickness
-        view.frustum_line_width = frustum_line_width
-        view.frustum_scale = frustum_scale
-        view.frustum_color = (float(frustum_color[0]), float(frustum_color[1]), float(frustum_color[2]))
-        return CameraView(view, CameraView.__PRIVATE__)
 
     @property
     def camera_orbit_center(self) -> torch.Tensor:

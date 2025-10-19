@@ -82,13 +82,22 @@ bind_viewer(py::module &m) {
              py::arg("verbose"),
              "Create a new Viewer instance")
         .def(
-            "add_gaussian_splat_3d",
+            "add_gaussian_splat_3d_view",
             &fvdb::detail::viewer::Viewer::addGaussianSplat3d,
             py::arg("name"),
             py::arg("gaussian_splat_3d"),
             py::return_value_policy::reference_internal, // preserve reference; tie lifetime to
                                                          // parent
             "Register a Gaussian splat 3D view with the viewer (accepts Python or C++ GaussianSplat3d)")
+        .def("has_gaussian_splat_3d_view",
+             &fvdb::detail::viewer::Viewer::hasGaussianSplat3dView,
+             py::arg("name"),
+             "Check if a Gaussian splat 3D view with the given name exists")
+        .def("get_gaussian_splat_3d_view",
+             &fvdb::detail::viewer::Viewer::getGaussianSplat3dView,
+             py::arg("name"),
+             py::return_value_policy::reference_internal,
+             "Get a Gaussian splat 3D view by name")
 
         .def("ip_address",
              &fvdb::detail::viewer::Viewer::ipAddress,
@@ -173,5 +182,14 @@ bind_viewer(py::module &m) {
              py::arg("frustum_near_plane"),
              py::arg("frustum_far_plane"),
              py::return_value_policy::reference_internal,
-             "Add a named camera view from camera/world and projection matrices");
+             "Add a named camera view from camera/world and projection matrices")
+        .def("has_camera_view",
+             &fvdb::detail::viewer::Viewer::hasCameraView,
+             py::arg("name"),
+             "Check if a camera view with the given name exists")
+        .def("get_camera_view",
+             &fvdb::detail::viewer::Viewer::getCameraView,
+             py::arg("name"),
+             py::return_value_policy::reference_internal,
+             "Get a camera view by name");
 }

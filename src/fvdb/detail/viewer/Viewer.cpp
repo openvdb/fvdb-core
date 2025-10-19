@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+#include "fvdb/detail/viewer/GaussianSplat3dView.h"
+
 #include <fvdb/detail/viewer/Viewer.h>
 
 #include <c10/util/Exception.h>
@@ -11,6 +13,7 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <optional>
 
 inline void
 pNanoLogPrint(pnanovdb_compute_log_level_t level, const char *format, ...) {
