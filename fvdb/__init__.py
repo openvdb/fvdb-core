@@ -3,12 +3,12 @@
 #
 from __future__ import annotations
 
+import ctypes
+import importlib.util as _importlib_util
+import pathlib
 from typing import Sequence
 
 import torch
-import ctypes
-import pathlib
-import importlib.util as _importlib_util
 
 if torch.cuda.is_available():
     torch.cuda.init()
@@ -93,6 +93,9 @@ from . import nn
 
 # isort: on
 
+# Make these available without an explicit submodule import
+from . import utils, viz
+
 
 def jcat(things_to_cat, dim=None):
     if len(things_to_cat) == 0:
@@ -135,4 +138,7 @@ __all__ = [
     "Grid",
     "load_grid",
     "save_grid",
+    "viz",
+    "nn",
+    "utils",
 ]
