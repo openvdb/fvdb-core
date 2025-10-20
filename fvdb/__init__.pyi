@@ -15,9 +15,10 @@ from .types import JaggedTensorOrTensor
 
 def _parse_device_string(device_string: str | torch.device) -> torch.device: ...
 
+# Make these available without an explicit submodule import
 # The following import needs to come after the GridBatch and JaggedTensor imports
 # immediately above in order to avoid a circular dependency error.
-from . import nn, viz
+from . import nn, utils, viz
 from ._Cpp import (
     ConvPackBackend,
     JaggedTensor,
@@ -63,5 +64,7 @@ __all__ = [
     "Grid",
     "load_grid",
     "save_grid",
+    "nn",
+    "utils",
     "viz",
 ]

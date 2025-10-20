@@ -94,6 +94,9 @@ from . import viz
 
 # isort: on
 
+# Make these available without an explicit submodule import
+from . import utils, viz
+
 
 def jcat(things_to_cat, dim=None):
     if len(things_to_cat) == 0:
@@ -137,4 +140,6 @@ __all__ = [
     "load_grid",
     "save_grid",
     "viz",
+    "nn",
+    "utils",
 ]
