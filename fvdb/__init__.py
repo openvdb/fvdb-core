@@ -89,12 +89,10 @@ from .gaussian_splatting import GaussianSplat3d
 
 # The following import needs to come after the GridBatch and JaggedTensor imports
 # immediately above in order to avoid a circular dependency error.
-from . import nn
+# Make these available without an explicit submodule import
+from . import nn, viz, utils
 
 # isort: on
-
-# Make these available without an explicit submodule import
-from . import utils, viz
 
 
 def jcat(things_to_cat, dim=None):
