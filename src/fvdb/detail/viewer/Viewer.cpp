@@ -13,7 +13,6 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
-#include <optional>
 
 inline void
 pNanoLogPrint(pnanovdb_compute_log_level_t level, const char *format, ...) {
