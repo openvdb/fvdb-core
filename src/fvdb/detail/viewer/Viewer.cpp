@@ -348,7 +348,9 @@ Viewer::addCameraView(const std::string &name,
     if (imageSizes.numel() != 0) {
         TORCH_CHECK(imageSizes.dim() == 2 && imageSizes.size(0) == numCameras &&
                         imageSizes.size(1) == 2,
-                    "image_sizes must have shape [N, 2] if provided");
+                    "image_sizes must have shape [N, 2] if provided. Got ",
+                    imageSizes.sizes(),
+                    " instead.");
     }
 
     auto [it, inserted] = mCameraViews.emplace(
