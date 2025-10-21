@@ -343,8 +343,8 @@ jobs:
           INDEX_FILE="$OUTDIR/index.html"
           TITLE="Links for ${{ steps.proj.outputs.project_name }}"
           # List wheels from S3 to ensure index matches what's actually uploaded and previous versions
-          # Use grep -E and || true to handle case where no wheels exist yet
-          wheels=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/" | grep -E '\.whl$' || true | awk '{print $4}')
+          # Use grep -E and || true to handle case where no wheels exist yet, then extract filename (field 4)
+          wheels=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/" | { grep -E '\.whl$' || true; } | awk '{print $4}')
 
           echo "Found wheels in S3:"
           echo "$wheels"
