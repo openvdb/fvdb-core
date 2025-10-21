@@ -445,9 +445,7 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
         }
     }
 
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-    }
+    mergeStreams();
     return std::make_tuple(outRadii, outMeans2d, outDepths, outConics, outCompensations);
 }
 

@@ -199,9 +199,7 @@ dispatchGaussianNanInfMask<torch::kPrivateUse1>(const fvdb::JaggedTensor &means,
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-    }
+    mergeStreams();
 
     return means.jagged_like(outValid);
 }

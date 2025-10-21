@@ -1237,9 +1237,12 @@ callRasterizeBackwardPrivateUse1(
     const uint32_t tileExtentW = tileOffsets.size(2);
     uint32_t tileCount =
         activeTiles.has_value() ? activeTiles.value().size(0) : C * tileExtentH * tileExtentW;
+
+    std::vector<cudaEvent_t> events(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
 
         uint32_t deviceTileOffset, deviceTileCount;
         std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
@@ -1278,6 +1281,10 @@ callRasterizeBackwardPrivateUse1(
             TORCH_CHECK(conics.is_contiguous());
             TORCH_CHECK(opacities.is_contiguous());
             TORCH_CHECK(features.is_contiguous());
+
+            if (deviceId > 0) {
+                cudaStreamWaitEvent(stream, events[deviceId - 1]);
+            }
 
             nanovdb::util::cuda::memPrefetchAsync(means2d.const_data_ptr<ScalarType>(),
                                                   means2d.numel() * sizeof(ScalarType),
@@ -1343,10 +1350,18 @@ callRasterizeBackwardPrivateUse1(
                 <<<gridDim, blockDim, sharedMemSize, stream>>>(args);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
+
+        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
     }
 
-    for (const auto device_index: c10::irange(c10::cuda::device_count())) {
-        c10::cuda::getCurrentCUDAStream(device_index).synchronize();
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[c10::cuda::device_count() - 1]));
+    }
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
     }
 
     return std::make_tuple(outDLossDMeans2dAbs,

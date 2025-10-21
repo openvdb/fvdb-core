@@ -407,9 +407,7 @@ dispatchSphericalHarmonicsForward<torch::kPrivateUse1>(
         }
     }
 
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-    }
+    mergeStreams();
     return renderQuantities;
 }
 
