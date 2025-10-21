@@ -38,6 +38,7 @@
 #include <fvdb/detail/ops/convolution/pack_info/ConvolutionKernelMap.h>
 #include <fvdb/detail/ops/convolution/pack_info/IGEMMBitOperations.h>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
 
 #include <torch/types.h>
 
@@ -1086,38 +1087,42 @@ GridBatch::ijk() const {
 }
 
 JaggedTensor
-GridBatch::encode_morton() const {
+GridBatch::morton(const torch::Tensor &offset) const {
     c10::DeviceGuard guard(device());
+    const nanovdb::Coord offsetCoord = tensorToCoord(offset);
     return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
-        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(*mImpl,
-                                                                     SpaceFillingCurveType::ZOrder);
+        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
+            *mImpl, SpaceFillingCurveType::ZOrder, offsetCoord);
     });
 }
 
 JaggedTensor
-GridBatch::encode_morton_zyx() const {
+GridBatch::morton_zyx(const torch::Tensor &offset) const {
     c10::DeviceGuard guard(device());
+    const nanovdb::Coord offsetCoord = tensorToCoord(offset);
     return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
         return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
-            *mImpl, SpaceFillingCurveType::ZOrderTransposed);
+            *mImpl, SpaceFillingCurveType::ZOrderTransposed, offsetCoord);
     });
 }
 
 JaggedTensor
-GridBatch::encode_hilbert() const {
+GridBatch::hilbert(const torch::Tensor &offset) const {
     c10::DeviceGuard guard(device());
+    const nanovdb::Coord offsetCoord = tensorToCoord(offset);
     return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
         return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
-            *mImpl, SpaceFillingCurveType::Hilbert);
+            *mImpl, SpaceFillingCurveType::Hilbert, offsetCoord);
     });
 }
 
 JaggedTensor
-GridBatch::encode_hilbert_zyx() const {
+GridBatch::hilbert_zyx(const torch::Tensor &offset) const {
     c10::DeviceGuard guard(device());
+    const nanovdb::Coord offsetCoord = tensorToCoord(offset);
     return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
         return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
-            *mImpl, SpaceFillingCurveType::HilbertTransposed);
+            *mImpl, SpaceFillingCurveType::HilbertTransposed, offsetCoord);
     });
 }
 

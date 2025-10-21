@@ -1835,7 +1835,7 @@ class Grid:
     def ijk(self) -> torch.Tensor:
         return self._impl.ijk.jdata
 
-    def encode_morton(self) -> torch.Tensor:
+    def morton(self, offset: torch.Tensor | None = None) -> torch.Tensor:
         """
         Return Morton codes (Z-order curve) for active voxels in this grid.
 
@@ -1843,50 +1843,74 @@ class Grid:
         preserves spatial locality. This is useful for serialization, sorting, and
         spatial data structures.
 
+        Args:
+            offset: Optional offset to apply to voxel coordinates before encoding.
+                If None, uses the negative minimum coordinate across all voxels.
+
         Returns:
             torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
                 the Morton codes for each active voxel.
         """
-        return self._impl.encode_morton().jdata
+        if offset is None:
+            offset = -torch.min(self.ijk, dim=0).values
+        return self._impl.morton(offset).jdata
 
-    def encode_morton_zyx(self) -> torch.Tensor:
+    def morton_zyx(self, offset: torch.Tensor | None = None) -> torch.Tensor:
         """
         Return transposed Morton codes (Z-order curve) for active voxels in this grid.
 
         Transposed Morton codes use zyx bit interleaving to create a space-filling curve.
         This variant can provide better spatial locality for certain access patterns.
 
+        Args:
+            offset: Optional offset to apply to voxel coordinates before encoding.
+                If None, uses the negative minimum coordinate across all voxels.
+
         Returns:
             torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
                 the transposed Morton codes for each active voxel.
         """
-        return self._impl.encode_morton_zyx().jdata
+        if offset is None:
+            offset = -torch.min(self.ijk, dim=0).values
+        return self._impl.morton_zyx(offset).jdata
 
-    def encode_hilbert(self) -> torch.Tensor:
+    def hilbert(self, offset: torch.Tensor | None = None) -> torch.Tensor:
         """
         Return Hilbert curve codes for active voxels in this grid.
 
         Hilbert curves provide better spatial locality than Morton codes by ensuring
         that nearby points in 3D space are also nearby in the 1D curve ordering.
 
+        Args:
+            offset: Optional offset to apply to voxel coordinates before encoding.
+                If None, uses the negative minimum coordinate across all voxels.
+
         Returns:
             torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
                 the Hilbert codes for each active voxel.
         """
-        return self._impl.encode_hilbert().jdata
+        if offset is None:
+            offset = -torch.min(self.ijk, dim=0).values
+        return self._impl.hilbert(offset).jdata
 
-    def encode_hilbert_zyx(self) -> torch.Tensor:
+    def hilbert_zyx(self, offset: torch.Tensor | None = None) -> torch.Tensor:
         """
         Return transposed Hilbert curve codes for active voxels in this grid.
 
         Transposed Hilbert curves use zyx ordering instead of xyz. This variant can
         provide better spatial locality for certain access patterns.
 
+        Args:
+            offset: Optional offset to apply to voxel coordinates before encoding.
+                If None, uses the negative minimum coordinate across all voxels.
+
         Returns:
             torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
                 the transposed Hilbert codes for each active voxel.
         """
-        return self._impl.encode_hilbert_zyx().jdata
+        if offset is None:
+            offset = -torch.min(self.ijk, dim=0).values
+        return self._impl.hilbert_zyx(offset).jdata
 
     def permute(self, curve_codes: torch.Tensor) -> torch.Tensor:
         """
@@ -1921,7 +1945,7 @@ class Grid:
             torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
                 the permutation indices for Morton (Z-order) curve ordering.
         """
-        return self.permute(self.encode_morton())
+        return self.permute(self.morton())
 
     def permutation_morton_zyx(self) -> torch.Tensor:
         """
@@ -1931,7 +1955,7 @@ class Grid:
             torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
                 the permutation indices for transposed Morton (Z-order) curve ordering.
         """
-        return self.permute(self.encode_morton_zyx())
+        return self.permute(self.morton_zyx())
 
     def permutation_hilbert(self) -> torch.Tensor:
         """
@@ -1941,7 +1965,7 @@ class Grid:
             torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
                 the permutation indices for Hilbert curve ordering.
         """
-        return self.permute(self.encode_hilbert())
+        return self.permute(self.hilbert())
 
     def permutation_hilbert_zyx(self) -> torch.Tensor:
         """
@@ -1951,7 +1975,7 @@ class Grid:
             torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
                 the permutation indices for transposed Hilbert curve ordering.
         """
-        return self.permute(self.encode_hilbert_zyx())
+        return self.permute(self.hilbert_zyx())
 
     @property
     def num_bytes(self) -> int:

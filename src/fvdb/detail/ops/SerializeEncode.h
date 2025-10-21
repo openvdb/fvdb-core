@@ -8,6 +8,8 @@
 #include <fvdb/Types.h>
 #include <fvdb/detail/GridBatchImpl.h>
 
+#include <nanovdb/NanoVDB.h>
+
 #include <torch/types.h>
 
 namespace fvdb {
@@ -15,9 +17,9 @@ namespace detail {
 namespace ops {
 
 template <torch::DeviceType>
-JaggedTensor
-dispatchSerializeEncode(const GridBatchImpl &gridBatch,
-                        SpaceFillingCurveType order_type = SpaceFillingCurveType::ZOrder);
+JaggedTensor dispatchSerializeEncode(const GridBatchImpl &gridBatch,
+                                     SpaceFillingCurveType order_type,
+                                     const nanovdb::Coord &offset);
 
 } // namespace ops
 } // namespace detail

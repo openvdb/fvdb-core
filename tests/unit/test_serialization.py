@@ -54,8 +54,8 @@ class TestSerialization(unittest.TestCase):
             self.assertTrue(torch.sort(grid_perm_zyx)[0].equal(expected_indices))
 
             # Get Morton codes
-            morton_codes = grid_batch.encode_morton().jdata[offset : offset + num_voxels]
-            morton_zyx_codes = grid_batch.encode_morton_zyx().jdata[offset : offset + num_voxels]
+            morton_codes = grid_batch.morton().jdata[offset : offset + num_voxels]
+            morton_zyx_codes = grid_batch.morton_zyx().jdata[offset : offset + num_voxels]
 
             # Verify codes are sorted after applying permutation
             sorted_codes = morton_codes[grid_perm - offset]
@@ -96,8 +96,8 @@ class TestSerialization(unittest.TestCase):
             self.assertTrue(torch.sort(grid_perm_zyx)[0].equal(expected_indices))
 
             # Get Hilbert codes
-            hilbert_codes = grid_batch.encode_hilbert().jdata[offset : offset + num_voxels]
-            hilbert_zyx_codes = grid_batch.encode_hilbert_zyx().jdata[offset : offset + num_voxels]
+            hilbert_codes = grid_batch.hilbert().jdata[offset : offset + num_voxels]
+            hilbert_zyx_codes = grid_batch.hilbert_zyx().jdata[offset : offset + num_voxels]
 
             # Verify codes are sorted after applying permutation
             sorted_codes = hilbert_codes[grid_perm - offset]
