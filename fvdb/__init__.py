@@ -3,12 +3,12 @@
 #
 from __future__ import annotations
 
+import ctypes
+import importlib.util as _importlib_util
+import pathlib
 from typing import Sequence
 
 import torch
-import ctypes
-import pathlib
-import importlib.util as _importlib_util
 
 if torch.cuda.is_available():
     torch.cuda.init()
@@ -89,7 +89,8 @@ from .gaussian_splatting import GaussianSplat3d
 
 # The following import needs to come after the GridBatch and JaggedTensor imports
 # immediately above in order to avoid a circular dependency error.
-from . import nn
+# Make these available without an explicit submodule import
+from . import nn, viz, utils
 
 # isort: on
 
@@ -135,4 +136,7 @@ __all__ = [
     "Grid",
     "load_grid",
     "save_grid",
+    "viz",
+    "nn",
+    "utils",
 ]

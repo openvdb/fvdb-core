@@ -12,21 +12,21 @@ namespace fvdb {
 namespace detail {
 namespace autograd {
 
-ReadFromDenseXyzc::variable_list
-ReadFromDenseXyzc::forward(AutogradContext *ctx,
-                           c10::intrusive_ptr<GridBatchImpl> grid,
-                           Variable denseData,
-                           const Vec3iBatch &denseOrigins) {
-    TORCH_CHECK_VALUE(denseData.dim() > 4, "dense data must have shape [B, W, H, D, *]");
+ReadFromDenseCminor::variable_list
+ReadFromDenseCminor::forward(AutogradContext *ctx,
+                             c10::intrusive_ptr<GridBatchImpl> grid,
+                             Variable denseData,
+                             const Vec3iBatch &denseOrigins) {
+    TORCH_CHECK_VALUE(denseData.dim() > 4, "dense data must have shape [B, X, Y, Z, C]");
     TORCH_CHECK_VALUE(denseData.size(0) == grid->batchSize(),
-                      "dense data must have shape [B, W, H, D, *]");
+                      "dense data must have shape [B, X, Y, Z, *]");
     TORCH_CHECK_VALUE(denseData.is_contiguous(), "sparse_data must be contiguous");
     grid->checkDevice(denseData);
 
     // Non empty
     grid->checkNonEmptyGrid();
 
-    // [B, W, H, D, -1]
+    // [B, X, Y, Z, -1]
     torch::Tensor denseDataReshape = featureCoalescedView(denseData, 4);
 
     // [N, -1]
@@ -40,10 +40,10 @@ ReadFromDenseXyzc::forward(AutogradContext *ctx,
             .to(denseData.device());
 
     FVDB_DISPATCH_KERNEL(grid->device(), [&]() {
-        ops::dispatchReadFromDenseXyzc<DeviceTag>(*grid, denseDataReshape, denseOriginsI32, ret);
+        ops::dispatchReadFromDenseCminor<DeviceTag>(*grid, denseDataReshape, denseOriginsI32, ret);
     });
 
-    // Reshape [B, N, -1] to [B, N, *] given [B, W, H, D, *]
+    // Reshape [B, N, -1] to [B, N, *] given [B, X, Y, Z, *]
     torch::Tensor retReshape = ret.view(spliceShape({grid->totalVoxels()}, denseData, 4));
 
     // Save shape information for backward
@@ -63,8 +63,8 @@ ReadFromDenseXyzc::forward(AutogradContext *ctx,
     return variable_list({retReshape}); // [N, *]
 }
 
-ReadFromDenseXyzc::variable_list
-ReadFromDenseXyzc::backward(AutogradContext *ctx, variable_list grad_output) {
+ReadFromDenseCminor::variable_list
+ReadFromDenseCminor::backward(AutogradContext *ctx, variable_list grad_output) {
     // Use data saved in forward
     torch::Tensor denseOrigins         = ctx->saved_data["dense_origin"].toTensor(); // [B, 3]
     nanovdb::Coord gridSize            = tensorToCoord(ctx->saved_data["grid_size"].toTensor());
@@ -77,10 +77,10 @@ ReadFromDenseXyzc::backward(AutogradContext *ctx, variable_list grad_output) {
     torch::Tensor gradOutReshape = featureCoalescedView(gradOut); // [N, -1]
     torch::Tensor ret            = torch::zeros(
         {grid->batchSize(), gridSize[0], gridSize[1], gridSize[2], gradOutReshape.size(1)},
-        denseDataOpts);                                // [B, W, H, D, -1]
+        denseDataOpts);                                // [B, X, Y, Z, -1]
 
     FVDB_DISPATCH_KERNEL(grid->device(), [&]() {
-        ops::dispatchReadIntoDenseXyzc<DeviceTag>(*grid, gradOutReshape, denseOrigins, ret);
+        ops::dispatchReadIntoDenseCminor<DeviceTag>(*grid, gradOutReshape, denseOrigins, ret);
     });
 
     torch::Tensor retReshape = ret.view(finalShapeTensor); // [B, W, H, D, *]
@@ -88,14 +88,14 @@ ReadFromDenseXyzc::backward(AutogradContext *ctx, variable_list grad_output) {
     return {torch::Tensor(), retReshape, torch::Tensor()};
 }
 
-ReadFromDenseCzyx::variable_list
-ReadFromDenseCzyx::forward(AutogradContext *ctx,
-                           c10::intrusive_ptr<GridBatchImpl> grid,
-                           Variable denseData,
-                           const Vec3iBatch &denseOrigins) {
-    TORCH_CHECK_VALUE(denseData.dim() > 4, "dense data must have shape [B, * D, H, W]");
+ReadFromDenseCmajor::variable_list
+ReadFromDenseCmajor::forward(AutogradContext *ctx,
+                             c10::intrusive_ptr<GridBatchImpl> grid,
+                             Variable denseData,
+                             const Vec3iBatch &denseOrigins) {
+    TORCH_CHECK_VALUE(denseData.dim() > 4, "dense data must have shape [B, *, X, Y, Z]");
     TORCH_CHECK_VALUE(denseData.size(0) == grid->batchSize(),
-                      "dense data must have shape [B, *, D, H, W]");
+                      "dense data must have shape [B, *, X, Y, Z]");
     TORCH_CHECK_VALUE(denseData.is_contiguous(), "sparse_data must be contiguous");
     grid->checkDevice(denseData);
 
@@ -104,14 +104,14 @@ ReadFromDenseCzyx::forward(AutogradContext *ctx,
     auto const feature_rank = denseData.dim() - 4;
     TORCH_CHECK_VALUE(feature_rank > 0, "feature_rank must be greater than 0");
 
-    // [B, -1, D, H, W]
+    // [B, -1, X, Y, Z]
     torch::Tensor denseDataReshape = featureCoalescedViewTrailing(denseData, 1, 3);
 
     auto const batch_count   = denseDataReshape.size(0); // B
     auto const feature_count = denseDataReshape.size(1); // F
-    auto const dense_depth   = denseDataReshape.size(2); // D
-    auto const dense_height  = denseDataReshape.size(3); // H
-    auto const dense_width   = denseDataReshape.size(4); // W
+    auto const dense_x       = denseDataReshape.size(2); // X
+    auto const dense_y       = denseDataReshape.size(3); // Y
+    auto const dense_z       = denseDataReshape.size(4); // Z
     auto const voxel_count   = grid->totalVoxels();      // N
 
     // [N, -1]
@@ -124,10 +124,10 @@ ReadFromDenseCzyx::forward(AutogradContext *ctx,
             .to(denseData.device());
 
     FVDB_DISPATCH_KERNEL(grid->device(), [&]() {
-        ops::dispatchReadFromDenseCzyx<DeviceTag>(*grid, denseDataReshape, denseOriginsI32, ret);
+        ops::dispatchReadFromDenseCmajor<DeviceTag>(*grid, denseDataReshape, denseOriginsI32, ret);
     });
 
-    // Reshape [N, -1] to [N, *] given [B, *, D, H, W]
+    // Reshape [N, -1] to [N, *] given [B, *, X, Y, Z]
     std::vector<int64_t> retShapeVec;
     retShapeVec.push_back(voxel_count);
     for (int i = 0; i < feature_rank; ++i) {
@@ -138,8 +138,7 @@ ReadFromDenseCzyx::forward(AutogradContext *ctx,
 
     // Save shape information for backward
     ctx->saved_data["dense_origin"] = denseOriginsI32;
-    ctx->saved_data["grid_size"] =
-        coordToTensor(nanovdb::Coord(dense_width, dense_height, dense_depth));
+    ctx->saved_data["grid_size"]    = coordToTensor(nanovdb::Coord(dense_x, dense_y, dense_z));
     ctx->saved_data["grid"]         = grid;
     ctx->saved_data["dummy_tensor"] = torch::empty({0}, denseData.options());
     torch::Tensor retShape =
@@ -153,8 +152,8 @@ ReadFromDenseCzyx::forward(AutogradContext *ctx,
     return variable_list({retReshape}); // [N, *]
 }
 
-ReadFromDenseCzyx::variable_list
-ReadFromDenseCzyx::backward(AutogradContext *ctx, variable_list grad_output) {
+ReadFromDenseCmajor::variable_list
+ReadFromDenseCmajor::backward(AutogradContext *ctx, variable_list grad_output) {
     // Use data saved in forward
     torch::Tensor denseOrigins         = ctx->saved_data["dense_origin"].toTensor(); // [B, 3]
     nanovdb::Coord gridSize            = tensorToCoord(ctx->saved_data["grid_size"].toTensor());
@@ -166,14 +165,14 @@ ReadFromDenseCzyx::backward(AutogradContext *ctx, variable_list grad_output) {
     Variable gradOut             = grad_output.at(0);             // [N, *]
     torch::Tensor gradOutReshape = featureCoalescedView(gradOut); // [N, -1]
     torch::Tensor ret            = torch::zeros(
-        {grid->batchSize(), gradOutReshape.size(1), gridSize[2], gridSize[1], gridSize[0]},
-        denseDataOpts);                                // [B, -1, D, H, W]
+        {grid->batchSize(), gradOutReshape.size(1), gridSize[0], gridSize[1], gridSize[2]},
+        denseDataOpts);                                // [B, -1, X, Y, Z]
 
     FVDB_DISPATCH_KERNEL(grid->device(), [&]() {
-        ops::dispatchReadIntoDenseCzyx<DeviceTag>(*grid, gradOutReshape, denseOrigins, ret);
+        ops::dispatchReadIntoDenseCmajor<DeviceTag>(*grid, gradOutReshape, denseOrigins, ret);
     });
 
-    torch::Tensor retReshape = ret.view(finalShapeTensor); // [B, *, D, H, W]
+    torch::Tensor retReshape = ret.view(finalShapeTensor); // [B, *, X, Y, Z]
 
     return {torch::Tensor(), retReshape, torch::Tensor()};
 }

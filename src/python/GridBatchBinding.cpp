@@ -386,8 +386,8 @@ bind_grid_batch(py::module &m) {
                 )_FVDB_")
 
         // Interface with dense grids
-        .def("write_to_dense_xyzc",
-             &fvdb::GridBatch::write_to_dense_xyzc,
+        .def("write_to_dense_cminor",
+             &fvdb::GridBatch::write_to_dense_cminor,
              py::arg("sparse_data"),
              py::arg("min_coord") = nullptr,
              py::arg("grid_size") = nullptr,
@@ -403,8 +403,8 @@ bind_grid_batch(py::module &m) {
                     dense_data (torch.Tensor): A tensor of shape `[num_grids, size_x, size_y, size_z, *]` of values indexed by this grid batch.
              )_FVDB_")
 
-        .def("write_to_dense_czyx",
-             &fvdb::GridBatch::write_to_dense_czyx,
+        .def("write_to_dense_cmajor",
+             &fvdb::GridBatch::write_to_dense_cmajor,
              py::arg("sparse_data"),
              py::arg("min_coord") = nullptr,
              py::arg("grid_size") = nullptr,
@@ -417,11 +417,11 @@ bind_grid_batch(py::module &m) {
                    grid_size (list of ints): The dimensions of the dense grid to read into `[size_x, size_y, size_z]`
 
                Returns:
-                   dense_data (torch.Tensor): A tensor of shape `[num_grids, *, size_z, size_y, size_x]` of values indexed by this grid batch.
+                   dense_data (torch.Tensor): A tensor of shape `[num_grids, *, size_x, size_y, size_z]` of values indexed by this grid batch.
             )_FVDB_")
 
-        .def("read_from_dense_xyzc",
-             &fvdb::GridBatch::read_from_dense_xyzc,
+        .def("read_from_dense_cminor",
+             &fvdb::GridBatch::read_from_dense_cminor,
              py::arg("dense_data"),
              py::arg("dense_origins") = torch::zeros(3, torch::kInt32),
              R"_FVDB_(
@@ -435,15 +435,15 @@ bind_grid_batch(py::module &m) {
                         sparse_data (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, *]` of values indexed by this grid batch.
                 )_FVDB_")
 
-        .def("read_from_dense_czyx",
-             &fvdb::GridBatch::read_from_dense_czyx,
+        .def("read_from_dense_cmajor",
+             &fvdb::GridBatch::read_from_dense_cmajor,
              py::arg("dense_data"),
              py::arg("dense_origins") = torch::zeros(3, torch::kInt32),
              R"_FVDB_(
                     Read the data in a dense tensor into a JaggedTensor indexed by this batch of grids. Non-indexed values are ignored.
 
                     Args:
-                        dense_data (torch.Tensor): A tensor of shape `[num_grids, *, size_z, size_y, size_x, *]` of values to be read from.
+                        dense_data (torch.Tensor): A tensor of shape `[num_grids, *, size_x, size_y, size_z, *]` of values to be read from.
                         dense_origins (list of floats): The ijk coordinate corresponding to `dense_data[*, 0, 0, 0]`.
 
                     Returns:
