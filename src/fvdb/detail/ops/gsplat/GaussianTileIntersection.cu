@@ -674,32 +674,22 @@ radixSortAsync(KeyT *keysIn,
 
         C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
             deviceKeysIn, counts[deviceId] * sizeof(KeyT), deviceId, stream));
+        C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+            deviceValuesIn, counts[deviceId] * sizeof(ValueT), deviceId, stream));
+        C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+            deviceKeysOut, counts[deviceId] * sizeof(KeyT), deviceId, stream));
+        C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+            deviceValuesOut, counts[deviceId] * sizeof(ValueT), deviceId, stream));
 
-        // TODO: Add begin and end bit support
-        void *deviceTempStorage = nullptr;
-        size_t tempStorageBytes = 0;
-        cub::DeviceRadixSort::SortPairs(deviceTempStorage,
-                                        tempStorageBytes,
-                                        deviceKeysIn,
-                                        deviceKeysOut,
-                                        deviceValuesIn,
-                                        deviceValuesOut,
-                                        counts[deviceId],
-                                        beginBit,
-                                        endBit,
-                                        stream);
-        C10_CUDA_CHECK(cudaMallocAsync(&deviceTempStorage, tempStorageBytes, stream));
-        cub::DeviceRadixSort::SortPairs(deviceTempStorage,
-                                        tempStorageBytes,
-                                        deviceKeysIn,
-                                        deviceKeysOut,
-                                        deviceValuesIn,
-                                        deviceValuesOut,
-                                        counts[deviceId],
-                                        beginBit,
-                                        endBit,
-                                        stream);
-        C10_CUDA_CHECK(cudaFreeAsync(deviceTempStorage, stream));
+        CUB_WRAPPER(cub::DeviceRadixSort::SortPairs,
+                    deviceKeysIn,
+                    deviceKeysOut,
+                    deviceValuesIn,
+                    deviceValuesOut,
+                    counts[deviceId],
+                    beginBit,
+                    endBit,
+                    stream);
         C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
     }
 
@@ -714,158 +704,172 @@ radixSortAsync(KeyT *keysIn,
     for (int deviceExponent = 0; deviceExponent < log2DeviceCount; ++deviceExponent) {
         std::swap(keysIn, keysOut);
         std::swap(valuesIn, valuesOut);
-        const int deviceIncrement = 1 << deviceExponent;
+        const int deviceInc   = 1 << deviceExponent;
+        const int deviceCount = static_cast<int>(c10::cuda::device_count());
 
-        std::vector<std::thread> threads;
-        for (int leftDeviceId = 0; leftDeviceId < static_cast<int>(c10::cuda::device_count());
-             leftDeviceId += 2 * deviceIncrement) {
-            threads.emplace_back([&, leftDeviceId]() {
-                const int rightDeviceId = leftDeviceId + deviceIncrement;
+        for (int leftDeviceId = 0; leftDeviceId < deviceCount; leftDeviceId += 2 * deviceInc) {
+            const int rightDeviceId = leftDeviceId + deviceInc;
 
-                CountT leftDeviceItemCount = 0;
-                for (int deviceId = leftDeviceId; deviceId < rightDeviceId; ++deviceId)
-                    leftDeviceItemCount += counts[deviceId];
+            CountT leftDeviceItemCount = 0;
+            for (int deviceId = leftDeviceId; deviceId < rightDeviceId; ++deviceId)
+                leftDeviceItemCount += counts[deviceId];
 
-                CountT rightDeviceItemCount = 0;
-                for (int deviceId = rightDeviceId; deviceId < rightDeviceId + deviceIncrement;
-                     ++deviceId)
-                    rightDeviceItemCount += counts[deviceId];
+            CountT rightDeviceItemCount = 0;
+            for (int deviceId = rightDeviceId; deviceId < rightDeviceId + deviceInc; ++deviceId)
+                rightDeviceItemCount += counts[deviceId];
 
-                const KeyT *leftDeviceKeysIn     = keysIn + offsets[leftDeviceId];
-                const ValueT *leftDeviceValuesIn = valuesIn + offsets[leftDeviceId];
-                const KeyT *rightDeviceKeysIn =
-                    keysIn + offsets[leftDeviceId] + leftDeviceItemCount;
-                const ValueT *rightDeviceValuesIn =
-                    valuesIn + offsets[leftDeviceId] + leftDeviceItemCount;
+            const KeyT *leftDeviceKeysIn     = keysIn + offsets[leftDeviceId];
+            const ValueT *leftDeviceValuesIn = valuesIn + offsets[leftDeviceId];
+            const KeyT *rightDeviceKeysIn    = keysIn + offsets[leftDeviceId] + leftDeviceItemCount;
+            const ValueT *rightDeviceValuesIn =
+                valuesIn + offsets[leftDeviceId] + leftDeviceItemCount;
 
-                // Wait on the prior sort to finish on both devices before computing the median
-                // across both devices
-                auto mergePathSubfunc = [&](int deviceId, int otherDeviceId, int intervalIndex) {
-                    C10_CUDA_CHECK(cudaSetDevice(deviceId));
+            // Wait on the prior sort to finish on both devices before computing the median across
+            // both devices
+            auto mergePathSubfunc = [&](int deviceId, int otherDeviceId, int intervalIndex) {
+                C10_CUDA_CHECK(cudaSetDevice(deviceId));
 
-                    C10_CUDA_CHECK(cudaStreamWaitEvent(c10::cuda::getCurrentCUDAStream(deviceId),
-                                                       events[otherDeviceId]));
-                    mergePathKernel<<<1, 1, 0, c10::cuda::getCurrentCUDAStream(deviceId)>>>(
-                        leftDeviceKeysIn,
-                        leftDeviceItemCount,
-                        rightDeviceKeysIn,
-                        rightDeviceItemCount,
-                        leftIntervals + deviceId,
-                        rightIntervals + deviceId,
-                        intervalIndex);
-                    C10_CUDA_CHECK(cudaEventRecord(events[deviceId],
-                                                   c10::cuda::getCurrentCUDAStream(deviceId)));
-                };
-                mergePathSubfunc(leftDeviceId, rightDeviceId, 0);
-                mergePathSubfunc(rightDeviceId, leftDeviceId, 1);
-
-                C10_CUDA_CHECK(cudaEventSynchronize(events[leftDeviceId]));
-                C10_CUDA_CHECK(cudaEventSynchronize(events[rightDeviceId]));
-
-                // Merge the pairs less than the median to the left device
-                {
-                    C10_CUDA_CHECK(cudaSetDevice(leftDeviceId));
-                    auto leftStream = c10::cuda::getCurrentCUDAStream(leftDeviceId);
-
-                    const KeyT *leftKeysIn     = leftDeviceKeysIn + leftIntervals[leftDeviceId];
-                    const ValueT *leftValuesIn = leftDeviceValuesIn + leftIntervals[leftDeviceId];
-                    CountT leftCount = leftIntervals[rightDeviceId] - leftIntervals[leftDeviceId];
-
-                    const KeyT *rightKeysIn = rightDeviceKeysIn + rightIntervals[leftDeviceId];
-                    const ValueT *rightValuesIn =
-                        rightDeviceValuesIn + rightIntervals[leftDeviceId];
-                    CountT rightCount =
-                        rightIntervals[rightDeviceId] - rightIntervals[leftDeviceId];
-
-                    OffsetT outputOffset = offsets[leftDeviceId] + leftIntervals[leftDeviceId] +
-                                           rightIntervals[leftDeviceId];
-
-                    void *deviceTempStorage = nullptr;
-                    size_t tempStorageBytes = 0;
-                    cub::DeviceMerge::MergePairs(deviceTempStorage,
-                                                 tempStorageBytes,
-                                                 leftKeysIn,
-                                                 leftValuesIn,
-                                                 leftCount,
-                                                 rightKeysIn,
-                                                 rightValuesIn,
-                                                 rightCount,
-                                                 keysOut + outputOffset,
-                                                 valuesOut + outputOffset,
-                                                 {},
-                                                 leftStream);
-                    C10_CUDA_CHECK(
-                        cudaMallocAsync(&deviceTempStorage, tempStorageBytes, leftStream));
-                    cub::DeviceMerge::MergePairs(deviceTempStorage,
-                                                 tempStorageBytes,
-                                                 leftKeysIn,
-                                                 leftValuesIn,
-                                                 leftCount,
-                                                 rightKeysIn,
-                                                 rightValuesIn,
-                                                 rightCount,
-                                                 keysOut + outputOffset,
-                                                 valuesOut + outputOffset,
-                                                 {},
-                                                 leftStream);
-                    C10_CUDA_CHECK(cudaFreeAsync(deviceTempStorage, leftStream));
-                    C10_CUDA_CHECK(cudaEventRecord(events[leftDeviceId], leftStream));
-                };
-
-                // Merge the pairs greater than/equal to the median to the right device
-                {
-                    C10_CUDA_CHECK(cudaSetDevice(rightDeviceId));
-                    auto rightStream = c10::cuda::getCurrentCUDAStream(rightDeviceId);
-
-                    const KeyT *leftKeysIn     = leftDeviceKeysIn + leftIntervals[rightDeviceId];
-                    const ValueT *leftValuesIn = leftDeviceValuesIn + leftIntervals[rightDeviceId];
-                    CountT leftCount           = leftDeviceItemCount - leftIntervals[rightDeviceId];
-
-                    const KeyT *rightKeysIn = rightDeviceKeysIn + rightIntervals[rightDeviceId];
-                    const ValueT *rightValuesIn =
-                        rightDeviceValuesIn + rightIntervals[rightDeviceId];
-                    CountT rightCount = rightDeviceItemCount - rightIntervals[rightDeviceId];
-
-                    OffsetT outputOffset = offsets[leftDeviceId] + leftIntervals[rightDeviceId] +
-                                           rightIntervals[rightDeviceId];
-
-                    void *deviceTempStorage = nullptr;
-                    size_t tempStorageBytes = 0;
-                    cub::DeviceMerge::MergePairs(deviceTempStorage,
-                                                 tempStorageBytes,
-                                                 leftKeysIn,
-                                                 leftValuesIn,
-                                                 leftCount,
-                                                 rightKeysIn,
-                                                 rightValuesIn,
-                                                 rightCount,
-                                                 keysOut + outputOffset,
-                                                 valuesOut + outputOffset,
-                                                 {},
-                                                 rightStream);
-                    C10_CUDA_CHECK(
-                        cudaMallocAsync(&deviceTempStorage, tempStorageBytes, rightStream));
-                    cub::DeviceMerge::MergePairs(deviceTempStorage,
-                                                 tempStorageBytes,
-                                                 leftKeysIn,
-                                                 leftValuesIn,
-                                                 leftCount,
-                                                 rightKeysIn,
-                                                 rightValuesIn,
-                                                 rightCount,
-                                                 keysOut + outputOffset,
-                                                 valuesOut + outputOffset,
-                                                 {},
-                                                 rightStream);
-                    C10_CUDA_CHECK(cudaFreeAsync(deviceTempStorage, rightStream));
-                    C10_CUDA_CHECK(cudaEventRecord(events[rightDeviceId], rightStream));
-                };
-
-                C10_CUDA_CHECK(cudaEventSynchronize(events[leftDeviceId]));
-                C10_CUDA_CHECK(cudaEventSynchronize(events[rightDeviceId]));
-            });
+                C10_CUDA_CHECK(cudaStreamWaitEvent(c10::cuda::getCurrentCUDAStream(deviceId),
+                                                   events[otherDeviceId]));
+                mergePathKernel<<<1, 1, 0, c10::cuda::getCurrentCUDAStream(deviceId)>>>(
+                    leftDeviceKeysIn,
+                    leftDeviceItemCount,
+                    rightDeviceKeysIn,
+                    rightDeviceItemCount,
+                    leftIntervals + deviceId,
+                    rightIntervals + deviceId,
+                    intervalIndex);
+                C10_CUDA_CHECK(
+                    cudaEventRecord(events[deviceId], c10::cuda::getCurrentCUDAStream(deviceId)));
+            };
+            mergePathSubfunc(leftDeviceId, rightDeviceId, 0);
+            mergePathSubfunc(rightDeviceId, leftDeviceId, 1);
         }
-        std::for_each(threads.begin(), threads.end(), [](std::thread &t) { t.join(); });
+
+        for (int leftDeviceId = 0; leftDeviceId < deviceCount; leftDeviceId += 2 * deviceInc) {
+            const int rightDeviceId = leftDeviceId + deviceInc;
+
+            CountT leftDeviceItemCount = 0;
+            for (int deviceId = leftDeviceId; deviceId < rightDeviceId; ++deviceId)
+                leftDeviceItemCount += counts[deviceId];
+
+            CountT rightDeviceItemCount = 0;
+            for (int deviceId = rightDeviceId; deviceId < rightDeviceId + deviceInc; ++deviceId)
+                rightDeviceItemCount += counts[deviceId];
+
+            const KeyT *leftDeviceKeysIn     = keysIn + offsets[leftDeviceId];
+            const ValueT *leftDeviceValuesIn = valuesIn + offsets[leftDeviceId];
+            const KeyT *rightDeviceKeysIn    = keysIn + offsets[leftDeviceId] + leftDeviceItemCount;
+            const ValueT *rightDeviceValuesIn =
+                valuesIn + offsets[leftDeviceId] + leftDeviceItemCount;
+
+            C10_CUDA_CHECK(cudaEventSynchronize(events[leftDeviceId]));
+            C10_CUDA_CHECK(cudaEventSynchronize(events[rightDeviceId]));
+
+            // Merge the pairs less than the median to the left device
+            {
+                C10_CUDA_CHECK(cudaSetDevice(leftDeviceId));
+                auto leftStream = c10::cuda::getCurrentCUDAStream(leftDeviceId);
+
+                const KeyT *leftKeysIn     = leftDeviceKeysIn + leftIntervals[leftDeviceId];
+                const ValueT *leftValuesIn = leftDeviceValuesIn + leftIntervals[leftDeviceId];
+                CountT leftCount = leftIntervals[rightDeviceId] - leftIntervals[leftDeviceId];
+
+                const KeyT *rightKeysIn     = rightDeviceKeysIn + rightIntervals[leftDeviceId];
+                const ValueT *rightValuesIn = rightDeviceValuesIn + rightIntervals[leftDeviceId];
+                CountT rightCount = rightIntervals[rightDeviceId] - rightIntervals[leftDeviceId];
+
+                OffsetT outputOffset = offsets[leftDeviceId] + leftIntervals[leftDeviceId] +
+                                       rightIntervals[leftDeviceId];
+
+                C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+                    leftKeysIn, leftCount * sizeof(KeyT), leftDeviceId, leftStream));
+                C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+                    leftValuesIn, leftCount * sizeof(ValueT), leftDeviceId, leftStream));
+                C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+                    rightKeysIn, rightCount * sizeof(KeyT), leftDeviceId, leftStream));
+                C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+                    rightValuesIn, rightCount * sizeof(ValueT), leftDeviceId, leftStream));
+                C10_CUDA_CHECK(
+                    nanovdb::util::cuda::memPrefetchAsync(keysOut + outputOffset,
+                                                          (leftCount + rightCount) * sizeof(KeyT),
+                                                          leftDeviceId,
+                                                          leftStream));
+                C10_CUDA_CHECK(
+                    nanovdb::util::cuda::memPrefetchAsync(valuesOut + outputOffset,
+                                                          (leftCount + rightCount) * sizeof(ValueT),
+                                                          leftDeviceId,
+                                                          leftStream));
+
+                CUB_WRAPPER(cub::DeviceMerge::MergePairs,
+                            leftKeysIn,
+                            leftValuesIn,
+                            leftCount,
+                            rightKeysIn,
+                            rightValuesIn,
+                            rightCount,
+                            keysOut + outputOffset,
+                            valuesOut + outputOffset,
+                            {},
+                            leftStream);
+                C10_CUDA_CHECK(cudaEventRecord(events[leftDeviceId], leftStream));
+            };
+
+            // Merge the pairs greater than/equal to the median to the right device
+            {
+                C10_CUDA_CHECK(cudaSetDevice(rightDeviceId));
+                auto rightStream = c10::cuda::getCurrentCUDAStream(rightDeviceId);
+
+                const KeyT *leftKeysIn     = leftDeviceKeysIn + leftIntervals[rightDeviceId];
+                const ValueT *leftValuesIn = leftDeviceValuesIn + leftIntervals[rightDeviceId];
+                CountT leftCount           = leftDeviceItemCount - leftIntervals[rightDeviceId];
+
+                const KeyT *rightKeysIn     = rightDeviceKeysIn + rightIntervals[rightDeviceId];
+                const ValueT *rightValuesIn = rightDeviceValuesIn + rightIntervals[rightDeviceId];
+                CountT rightCount           = rightDeviceItemCount - rightIntervals[rightDeviceId];
+
+                OffsetT outputOffset = offsets[leftDeviceId] + leftIntervals[rightDeviceId] +
+                                       rightIntervals[rightDeviceId];
+
+                C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+                    leftKeysIn, leftCount * sizeof(KeyT), rightDeviceId, rightStream));
+                C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+                    leftValuesIn, leftCount * sizeof(ValueT), rightDeviceId, rightStream));
+                C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+                    rightKeysIn, rightCount * sizeof(KeyT), rightDeviceId, rightStream));
+                C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+                    rightValuesIn, rightCount * sizeof(ValueT), rightDeviceId, rightStream));
+                C10_CUDA_CHECK(
+                    nanovdb::util::cuda::memPrefetchAsync(keysOut + outputOffset,
+                                                          (leftCount + rightCount) * sizeof(KeyT),
+                                                          rightDeviceId,
+                                                          rightStream));
+                C10_CUDA_CHECK(
+                    nanovdb::util::cuda::memPrefetchAsync(valuesOut + outputOffset,
+                                                          (leftCount + rightCount) * sizeof(ValueT),
+                                                          rightDeviceId,
+                                                          rightStream));
+
+                CUB_WRAPPER(cub::DeviceMerge::MergePairs,
+                            leftKeysIn,
+                            leftValuesIn,
+                            leftCount,
+                            rightKeysIn,
+                            rightValuesIn,
+                            rightCount,
+                            keysOut + outputOffset,
+                            valuesOut + outputOffset,
+                            {},
+                            rightStream);
+                C10_CUDA_CHECK(cudaEventRecord(events[rightDeviceId], rightStream));
+            };
+        }
+
+        for (int leftDeviceId = 0; leftDeviceId < deviceCount; leftDeviceId += 2 * deviceInc) {
+            const int rightDeviceId = leftDeviceId + deviceInc;
+            C10_CUDA_CHECK(cudaEventSynchronize(events[leftDeviceId]));
+            C10_CUDA_CHECK(cudaEventSynchronize(events[rightDeviceId]));
+        }
     }
 
     // There is no merging required for a single device so we simply copy the sorted result to the
