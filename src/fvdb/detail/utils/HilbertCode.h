@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
-// 
+//
 // Hilbert curve implementation provided by Christopher Horvath
-// 
+//
 #ifndef FVDB_DETAIL_UTILS_HILBERTCODE_H
 #define FVDB_DETAIL_UTILS_HILBERTCODE_H
 

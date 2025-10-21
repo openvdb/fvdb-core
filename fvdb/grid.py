@@ -1916,7 +1916,7 @@ class Grid:
     def permutation_morton(self) -> torch.Tensor:
         """
         Return permutation indices to sort voxels by Morton curve order.
-        
+
         Returns:
             torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
                 the permutation indices for Morton (Z-order) curve ordering.
@@ -1926,7 +1926,7 @@ class Grid:
     def permutation_morton_zyx(self) -> torch.Tensor:
         """
         Return permutation indices to sort voxels by transposed Morton curve order.
-        
+
         Returns:
             torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
                 the permutation indices for transposed Morton (Z-order) curve ordering.
@@ -1936,7 +1936,7 @@ class Grid:
     def permutation_hilbert(self) -> torch.Tensor:
         """
         Return permutation indices to sort voxels by Hilbert curve order.
-        
+
         Returns:
             torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
                 the permutation indices for Hilbert curve ordering.
@@ -1946,7 +1946,7 @@ class Grid:
     def permutation_hilbert_zyx(self) -> torch.Tensor:
         """
         Return permutation indices to sort voxels by transposed Hilbert curve order.
-        
+
         Returns:
             torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
                 the permutation indices for transposed Hilbert curve ordering.
