@@ -40,7 +40,7 @@ jobs:
         with:
           script: |
             const isPR = context.eventName === 'pull_request';
-            let s3 = false;
+            let s3 = '${{ inputs.publish_target }}' == 's3';
             let reuse = false;
             if (isPR) {
               const {owner, repo} = context.repo;
