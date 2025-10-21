@@ -170,7 +170,7 @@ class TestGenerateHermitImpulsesDense(unittest.TestCase):
         kernel_size = [6, 4, 6]
         impulse_value = 1.5
         coords_batch, vals_batch = generate_hermit_impulses_dense_batch(
-            batch_size, num_candidates, volume_shape, kernel_size, impulse_value, device=device
+            batch_size, num_candidates, volume_shape, kernel_size, impulse_value=impulse_value, device=device
         )
 
         # Check batch output shape

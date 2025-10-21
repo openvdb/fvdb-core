@@ -205,6 +205,8 @@ def generate_chebyshev_spaced_ijk(
     num_candidates: int,
     volume_shape: NumericMaxRank1,
     min_separation: NumericMaxRank1,
+    *,
+    avoid_borders: bool = False,
     dtype: torch.dtype = torch.int32,
     device: DeviceIdentifier | None = None,
 ) -> torch.Tensor:
@@ -220,6 +222,10 @@ def generate_chebyshev_spaced_ijk(
     for operations with a cubic footprint, such as a standard 3D convolution,
     where `min_separation` would typically be the kernel size.
 
+    If `avoid_borders` is True, the function will avoid generating points that
+    are too close to the borders of the volume. It will use half the min_separation
+    as the border size.
+
     Args:
         num_candidates (int): The number of random candidate points to generate
             and test. The final number of points returned will be less than or
@@ -228,6 +234,10 @@ def generate_chebyshev_spaced_ijk(
             volume from which to sample points.
         min_separation (NumericMaxRank1): The minimum required separation between
             any two points, measured by Chebyshev distance.
+        avoid_borders (bool): Whether to avoid generating points that are too close to the borders of the volume.
+            If True, the function will use half the min_separation as the border size.
+        dtype (torch.dtype): The data type of the coordinates.
+        device (DeviceIdentifier): The device to generate the coordinates on.
 
     Returns:
         torch.Tensor: A list of accepted (i, j, k) coordinates.
@@ -239,12 +249,18 @@ def generate_chebyshev_spaced_ijk(
     num_candidates = int(num_candidates)
     I, J, K = volume_shape.tolist()
 
+    if avoid_borders:
+        border_size = min_separation // 2
+        Bi, Bj, Bk = border_size.tolist()
+    else:
+        Bi, Bj, Bk = 0, 0, 0
+
     # Generate tensor of random coordinates within the volume
     candidates = torch.stack(
         [
-            torch.randint(0, I, (num_candidates,), dtype=dtype, device="cpu"),
-            torch.randint(0, J, (num_candidates,), dtype=dtype, device="cpu"),
-            torch.randint(0, K, (num_candidates,), dtype=dtype, device="cpu"),
+            Bi + torch.randint(0, I - 2 * Bi, (num_candidates,), dtype=dtype, device="cpu"),
+            Bj + torch.randint(0, J - 2 * Bj, (num_candidates,), dtype=dtype, device="cpu"),
+            Bk + torch.randint(0, K - 2 * Bk, (num_candidates,), dtype=dtype, device="cpu"),
         ],
         dim=1,
     )
@@ -269,6 +285,8 @@ def generate_chebyshev_spaced_ijk_batch(
     num_candidates: int,
     volume_shapes: NumericMaxRank2,
     min_separations: NumericMaxRank2,
+    *,
+    avoid_borders: bool = False,
     dtype: torch.dtype = torch.int32,
     device: DeviceIdentifier | None = None,
 ) -> JaggedTensor:
@@ -291,6 +309,10 @@ def generate_chebyshev_spaced_ijk_batch(
         min_separations (NumericMaxRank2): The minimum required separation
             between points for each batch item, measured by Chebyshev distance.
             Can be a single value broadcasted to all batches or different per batch.
+        avoid_borders (bool): Whether to avoid generating points that are too close to the borders of the volume.
+            If True, the function will use half the min_separation as the border size.
+        dtype (torch.dtype): The data type of the coordinates.
+        device (DeviceIdentifier): The device to generate the coordinates on.
 
     Returns:
         JaggedTensor: A jagged tensor containing the accepted (i, j, k) coordinates
@@ -301,7 +323,14 @@ def generate_chebyshev_spaced_ijk_batch(
 
     return JaggedTensor(
         [
-            generate_chebyshev_spaced_ijk(num_candidates, volume_shapes[i], min_separations[i], dtype, device)
+            generate_chebyshev_spaced_ijk(
+                num_candidates,
+                volume_shapes[i],
+                min_separations[i],
+                avoid_borders=avoid_borders,
+                dtype=dtype,
+                device=device,
+            )
             for i in range(batch_size)
         ]
     )
@@ -351,7 +380,7 @@ def generate_hermit_impulses_dense(
 
     vals = torch.zeros(dense_shape, device=device, dtype=dtype)
     impulse_coords = generate_chebyshev_spaced_ijk(
-        num_candidates, volume_shape, kernel_size, dtype=torch.long, device=device
+        num_candidates, volume_shape, kernel_size, avoid_borders=True, dtype=torch.long, device=device
     )
 
     assert isinstance(impulse_coords, torch.Tensor)
@@ -366,6 +395,7 @@ def generate_hermit_impulses_dense_batch(
     num_candidates: int,
     volume_shape: NumericMaxRank1,
     kernel_size: NumericMaxRank1,
+    *,
     impulse_value: NumericMaxRank1 = 1,
     dtype: torch.dtype = torch.float32,
     device: DeviceIdentifier | None = None,
@@ -392,6 +422,8 @@ def generate_hermit_impulses_dense_batch(
         impulse_value (NumericMaxRank1): The value(s) to place at each impulse
             location. Can be a scalar or tensor to support multi-channel data.
             Defaults to 1.
+        dtype (torch.dtype): The data type of the coordinates.
+        device (DeviceIdentifier): The device to generate the coordinates on.
 
     Returns:
         tuple[JaggedTensor, torch.Tensor]: A tuple containing:
@@ -415,6 +447,7 @@ def generate_hermit_impulses_dense_batch(
         num_candidates,
         [volume_shape.tolist()] * batch_size,
         [kernel_size.tolist()] * batch_size,
+        avoid_borders=True,
         dtype=torch.long,
         device=device,
     )

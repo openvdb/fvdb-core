@@ -43,6 +43,7 @@ def _validate_impulse_convolution(
     convolved: torch.Tensor,
     kernel_size: tuple,
     test_case: unittest.TestCase,
+    check_bounds: bool,
 ) -> None:
     """
     Validate that a convolution of an impulse at a specific coordinate produces the expected kernel.
@@ -56,6 +57,7 @@ def _validate_impulse_convolution(
         convolved: The result of the convolution
         kernel_size: The size of the kernel as a tuple
         test_case: The unittest.TestCase instance for assertions
+        check_bounds: Whether to check that the bounds of the non-zero region exactly match the expected bounds
     """
     # Extract the region around the impulse coordinate where the kernel should appear
     # The kernel is centered at the impulse coordinate
@@ -65,19 +67,20 @@ def _validate_impulse_convolution(
     start_coords = tuple(max(0, impulse_coord[i].item() - kernel_half[i]) for i in range(3))
     end_coords = tuple(min(convolved.shape[i + 1], impulse_coord[i].item() + kernel_half[i] + 1) for i in range(3))
 
-    # The non-zero region of convolved should be exactly inside the bounds we just computed.
-    # Check that the bounds of the non-zero region exactly match the expected bounds
-    non_zero_mask = convolved[0] != 0
-    non_zero_coords = torch.nonzero(non_zero_mask)
+    if check_bounds:
+        # The non-zero region of convolved should be exactly inside the bounds we just computed.
+        # Check that the bounds of the non-zero region exactly match the expected bounds
+        non_zero_mask = convolved[0] != 0
+        non_zero_coords = torch.nonzero(non_zero_mask)
 
-    if non_zero_coords.shape[0] > 0:
-        # Find the actual bounds of the non-zero region
-        actual_start_coords = tuple(non_zero_coords[:, dim].min().item() for dim in range(3))
-        actual_end_coords = tuple(non_zero_coords[:, dim].max().item() + 1 for dim in range(3))
+        if non_zero_coords.shape[0] > 0:
+            # Find the actual bounds of the non-zero region
+            actual_start_coords = tuple(non_zero_coords[:, dim].min().item() for dim in range(3))
+            actual_end_coords = tuple(non_zero_coords[:, dim].max().item() + 1 for dim in range(3))
 
-        # The actual bounds should exactly match the expected bounds
-        test_case.assertEqual(actual_start_coords, start_coords)
-        test_case.assertEqual(actual_end_coords, end_coords)
+            # The actual bounds should exactly match the expected bounds
+            test_case.assertEqual(actual_start_coords, start_coords)
+            test_case.assertEqual(actual_end_coords, end_coords)
 
     # Extract the convolved region around the impulse
     convolved_region = convolved[
@@ -128,8 +131,6 @@ class TestConvGroundTruth(unittest.TestCase):
         kernel = fourier_anti_symmetric_kernel(self.KERNEL_SIZE, dtype=dtype, device=device)
         self.assertFalse(has_any_symmetry(kernel))
 
-        kernel_sum = torch.sum(kernel).item()
-
         kernel_with_channels = kernel.reshape(1, 1, *self.KERNEL_SIZE)
 
         # Do a single convolution
@@ -153,6 +154,7 @@ class TestConvGroundTruth(unittest.TestCase):
             convolved=convolved,
             kernel_size=self.KERNEL_SIZE,
             test_case=self,
+            check_bounds=True,
         )
 
     @parameterized.expand(all_device_dtype_combos)
@@ -179,3 +181,30 @@ class TestConvGroundTruth(unittest.TestCase):
 
         # Test that the total value of the impulse field matches the total number of impulses
         self.assertEqual(round(total_value), num_impulses)
+
+        # Get a kernel and convolve the impulse field with it
+        kernel = fourier_anti_symmetric_kernel(self.KERNEL_SIZE, dtype=dtype, device=device)
+        self.assertFalse(has_any_symmetry(kernel))
+
+        impulse_field_with_channel = impulse_field.reshape(1, *self.VOLUME_SHAPE)
+        kernel_with_channels = kernel.reshape(1, 1, *self.KERNEL_SIZE)
+
+        _backend_setting = torch.backends.cudnn.allow_tf32
+        # Disable TF32 for consistent precision across CPU and CUDA
+        torch.backends.cudnn.allow_tf32 = False
+        convolved = torch.nn.functional.conv3d(
+            input=impulse_field_with_channel, weight=kernel_with_channels, padding="same"
+        )
+        self.assertEqual(impulse_field_with_channel.shape, convolved.shape)
+        torch.backends.cudnn.allow_tf32 = _backend_setting
+
+        for i in range(num_impulses):
+            impulse_coord = impulse_coords[i]
+            _validate_impulse_convolution(
+                impulse_coord=impulse_coord,
+                kernel=kernel,
+                convolved=convolved,
+                kernel_size=self.KERNEL_SIZE,
+                test_case=self,
+                check_bounds=False,
+            )
