@@ -1,0 +1,151 @@
+name: fvdb-core Documentation
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to build"
+        required: true
+        default: "main"
+
+# Allow subsequent pushes to the same PR or REF to cancel any previous jobs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  deployments: read
+  pull-requests: read
+  issues: read
+  # Need ID token write permission to use OIDC
+  id-token: write
+  pages: write
+
+jobs:
+  ##############################################################################
+  # BUILD FVDB
+  ##############################################################################
+  start-build-runner:
+    name: Start CPU-only EC2 runner for build
+    runs-on: ubuntu-latest
+    outputs:
+      label: ${{ steps.start-build-runner.outputs.label }}
+      ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
+          aws-region: us-east-2
+      - name: Start EC2 runner
+        id: start-build-runner
+        uses: machulav/ec2-github-runner@v2.4.1
+        with:
+          mode: start
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          ec2-image-id: ami-0e14a711dad782a70
+          ec2-instance-type: m6a.8xlarge
+          subnet-id: subnet-03f2320d6e6e0005b
+          security-group-id: sg-0cd08bd89d6212223
+
+  fvdb-core-build-docs:
+    name: fvdb-core Build and Docs
+    needs: start-build-runner # required to start the main job when the runner is ready
+    runs-on: ${{ needs.start-build-runner.outputs.label }} # run the job on the newly created runner
+    container:
+      image: aswf/ci-openvdb:2024-clang17.2
+      env:
+        PYTHONPATH: ""
+        CPM_SOURCE_CACHE: "/__w/cpm_cache"
+        CONDA_OVERRIDE_CUDA: "12.8"  # this is to build an environment on machines that lack a CUDA device and needs to match the CUDA version in the build_environment.yml file
+      options: --rm
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for all branches
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+          # For pull requests, this automatically checks out the merge commit
+          # For pushes, this checks out the pushed commit
+
+      - name: Fetch PR branch
+        if: github.event_name == 'pull_request_target'
+        run: |
+          cd $GITHUB_WORKSPACE
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$(pwd)"
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+
+      - name: Merge PR branch into base
+        if: github.event_name == 'pull_request_target'
+        run: |
+          cd $GITHUB_WORKSPACE
+          git merge pr_branch
+
+      - name: Set up fvdb Conda env
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          post-cleanup: 'all'
+          environment-name: fvdb
+          environment-file: env/dev_environment.yml
+
+      - name: Build fvdb
+        run: |
+          echo "Building fvdb"
+          micromamba activate fvdb
+          ./build.sh install verbose --cuda-arch-list '8.9+PTX'
+
+      - name: Build docs
+        run: |
+          micromamba activate fvdb
+          which pip
+          pip install -e .
+          which sphinx-build
+          sphinx-build docs/ -E -a _docs_build
+
+      - name: Upload static files as artifact
+        id: deployment
+        uses: actions/upload-pages-artifact@v3 # or specific "vX.X.X" version tag for this action
+        with:
+          path: _docs_build/
+
+  # Deployment job
+  deploy-fvdb-core-docs:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: fvdb-core-build-docs
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  fvdb-build-stop-runner:
+    name: Stop CPU-only EC2 runner for build
+    needs:
+      - start-build-runner # required to get output from the start-build-runner job
+      - fvdb-reality-capture-build-docs # required to wait when the main job is done
+    runs-on: ubuntu-latest
+    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
+          aws-region: us-east-2
+      - name: Stop EC2 runner
+        uses: machulav/ec2-github-runner@v2.4.1
+        with:
+          mode: stop
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          label: ${{ needs.start-build-runner.outputs.label }}
+          ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: _build/
+          force_orphan: true
