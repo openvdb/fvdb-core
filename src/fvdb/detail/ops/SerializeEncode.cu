@@ -5,7 +5,7 @@
 #include <fvdb/detail/ops/SerializeEncode.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
-#include <fvdb/detail/utils/Hilbert.h>
+#include <fvdb/detail/utils/HilbertCode.h>
 #include <fvdb/detail/utils/MortonCode.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>

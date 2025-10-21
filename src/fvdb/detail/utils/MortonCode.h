@@ -1,6 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
-//
+// 
+// Morton curve implementation by Christopher Horvath
+// 
 #ifndef FVDB_DETAIL_UTILS_MORTONCODE_H
 #define FVDB_DETAIL_UTILS_MORTONCODE_H
 

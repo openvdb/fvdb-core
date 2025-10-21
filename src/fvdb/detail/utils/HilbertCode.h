@@ -1,8 +1,10 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
-//
-#ifndef FVDB_DETAIL_UTILS_HILBERT_H
-#define FVDB_DETAIL_UTILS_HILBERT_H
+// 
+// Hilbert curve implementation provided by Christopher Horvath
+// 
+#ifndef FVDB_DETAIL_UTILS_HILBERTCODE_H
+#define FVDB_DETAIL_UTILS_HILBERTCODE_H
 
 #include <nanovdb/util/Util.h>
 
@@ -142,4 +144,4 @@ hilbert_with_offset(int32_t const i,
 } // namespace detail
 } // namespace fvdb
 
-#endif // FVDB_DETAIL_UTILS_HILBERT_H
+#endif // FVDB_DETAIL_UTILS_HILBERTCODE_H
