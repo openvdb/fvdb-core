@@ -30,7 +30,14 @@ _running_viewers = dict()
 
 
 class Viewer:
-    def __init__(self, name: str = "fVDB Viewer", port: int = 8080, ip_address="127.0.0.1", verbose: bool = False):
+    def __init__(
+        self,
+        name: str = "fVDB Viewer",
+        port: int = 8080,
+        ip_address: str = "127.0.0.1",
+        device_id: int = 0,
+        verbose: bool = False,
+    ):
         """
         Create a `Viewer` with the given name running a server at the specified IP address and port.
         If a viewer was previously created with the same name, this will return a reference to the existing viewer.
@@ -38,8 +45,9 @@ class Viewer:
         Args:
             name (str): The name of the viewer instance. Default is "fVDB Viewer". This name is used to
                 identify the viewer instance in the global registry of running viewers.
-            ip_address (str): The IP address to bind the viewer server to. Default is "127.0.0.1".
             port (int): The port to bind the viewer server to. Default is 8080.
+            ip_address (str): The IP address to bind the viewer server to. Default is "127.0.0.1".
+            device_id (int): The ID of the device to use for rendering. Default is 0.
             verbose (bool): If True, the viewer will print verbose output to the console. Default is False.
         """
         self._logger = logging.getLogger(f"{self.__class__.__module__}.{self.__class__.__name__}")
@@ -64,7 +72,10 @@ class Viewer:
         if not isinstance(port, int) or port < 0 or port > 65535:
             raise ValueError(f"Port must be an integer between 0 and 65535, got {port}")
 
-        _running_viewers[name] = {"viewer": ViewerCpp(ip_address=ip_address, port=port, verbose=verbose), "refcount": 1}
+        _running_viewers[name] = {
+            "viewer": ViewerCpp(ip_address=ip_address, port=port, device_id=device_id, verbose=verbose),
+            "refcount": 1,
+        }
         self._impl = _running_viewers[name]["viewer"]
 
         self._logger.info(f"Viewer running on {self.ip_address}:{self.port}...")
