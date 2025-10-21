@@ -2009,7 +2009,6 @@ class GridBatch:
         """
         return self._impl.encode_hilbert_zyx()
 
-    @torch.no_grad()
     def permute(self, curve_codes: JaggedTensor) -> JaggedTensor:
         """
         Get permutation indices to sort voxels by spatial order.
@@ -2066,18 +2065,6 @@ class GridBatch:
         # Return as JaggedTensor with the same structure as the input
         return self.jagged_like(permutation_indices.unsqueeze(-1))
 
-    def permutation_hilbert(self) -> JaggedTensor:
-        """
-        Return permutation indices to sort voxels by Hilbert curve order.
-        """
-        return self.permute(self.encode_hilbert())
-
-    def permutation_hilbert_zyx(self) -> JaggedTensor:
-        """
-        Return permutation indices to sort voxels by transposed Hilbert curve order.
-        """
-        return self.permute(self.encode_hilbert_zyx())
-
     def permutation_morton(self) -> JaggedTensor:
         """
         Return permutation indices to sort voxels by Morton curve order.
@@ -2089,6 +2076,18 @@ class GridBatch:
         Return permutation indices to sort voxels by transposed Morton curve order.
         """
         return self.permute(self.encode_morton_zyx())
+
+    def permutation_hilbert(self) -> JaggedTensor:
+        """
+        Return permutation indices to sort voxels by Hilbert curve order.
+        """
+        return self.permute(self.encode_hilbert())
+
+    def permutation_hilbert_zyx(self) -> JaggedTensor:
+        """
+        Return permutation indices to sort voxels by transposed Hilbert curve order.
+        """
+        return self.permute(self.encode_hilbert_zyx())
 
     @property
     def jidx(self) -> torch.Tensor:

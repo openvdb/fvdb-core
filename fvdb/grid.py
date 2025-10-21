@@ -1888,39 +1888,22 @@ class Grid:
         """
         return self._impl.encode_hilbert_zyx().jdata
 
-    def permute(self, order_type: str = "z") -> torch.Tensor:
+    def permute(self, curve_codes: torch.Tensor) -> torch.Tensor:
         """
         Get permutation indices to sort voxels by spatial order.
 
-        This method computes space-filling curve codes for all active voxels and returns the indices
-        that would sort them according to the specified ordering. This is useful for
+        This method takes space-filling curve codes for all active voxels and returns the indices
+        that would sort them according to the curve ordering. This is useful for
         spatially coherent data access patterns and cache optimization.
 
         Args:
-            order_type (str): The type of spatial ordering to use:
-                - "z": Regular Z-order curve (xyz bit interleaving, default)
-                - "z-trans": Transposed Z-order curve (zyx bit interleaving)
-                - "hilbert": Regular Hilbert curve (xyz)
-                - "hilbert-trans": Transposed Hilbert curve (zyx)
+            curve_codes (torch.Tensor): Curve codes for each voxel.
+                Shape: (num_voxels, 1).
 
         Returns:
             torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
                 the permutation indices. Use these indices to reorder voxel data for spatial coherence.
         """
-        # Get space-filling curve codes using the appropriate encode method
-        if order_type == "z":
-            curve_codes = self.encode_morton()
-        elif order_type == "z-trans":
-            curve_codes = self.encode_morton_zyx()
-        elif order_type == "hilbert":
-            curve_codes = self.encode_hilbert()
-        elif order_type == "hilbert-trans":
-            curve_codes = self.encode_hilbert_zyx()
-        else:
-            raise ValueError(
-                f"Invalid order_type: {order_type}. Valid options are 'z', 'z-trans', 'hilbert', or 'hilbert-trans'."
-            )
-
         # Get the curve codes as a flat tensor
         curve_data = curve_codes.squeeze(-1)  # Shape: [num_voxels]
 
@@ -1929,6 +1912,46 @@ class Grid:
 
         # Return indices as a tensor with shape [num_voxels, 1]
         return indices.unsqueeze(-1)
+
+    def permutation_morton(self) -> torch.Tensor:
+        """
+        Return permutation indices to sort voxels by Morton curve order.
+        
+        Returns:
+            torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
+                the permutation indices for Morton (Z-order) curve ordering.
+        """
+        return self.permute(self.encode_morton())
+
+    def permutation_morton_zyx(self) -> torch.Tensor:
+        """
+        Return permutation indices to sort voxels by transposed Morton curve order.
+        
+        Returns:
+            torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
+                the permutation indices for transposed Morton (Z-order) curve ordering.
+        """
+        return self.permute(self.encode_morton_zyx())
+
+    def permutation_hilbert(self) -> torch.Tensor:
+        """
+        Return permutation indices to sort voxels by Hilbert curve order.
+        
+        Returns:
+            torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
+                the permutation indices for Hilbert curve ordering.
+        """
+        return self.permute(self.encode_hilbert())
+
+    def permutation_hilbert_zyx(self) -> torch.Tensor:
+        """
+        Return permutation indices to sort voxels by transposed Hilbert curve order.
+        
+        Returns:
+            torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
+                the permutation indices for transposed Hilbert curve ordering.
+        """
+        return self.permute(self.encode_hilbert_zyx())
 
     @property
     def num_bytes(self) -> int:
