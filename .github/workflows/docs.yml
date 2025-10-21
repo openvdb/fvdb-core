@@ -103,8 +103,6 @@ jobs:
       - name: Build docs
         run: |
           micromamba activate fvdb
-          which pip
-          pip install -e .
           which sphinx-build
           sphinx-build docs/ -E -a _docs_build
 
