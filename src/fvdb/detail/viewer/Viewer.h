@@ -25,10 +25,9 @@ class Viewer {
         pnanovdb_compute_device_desc_t deviceDesc;
         pnanovdb_compute_device_manager_t *deviceManager;
         pnanovdb_compute_device_t *device;
-        pnanovdb_raster_t raster;
-        pnanovdb_camera_t camera;
         pnanovdb_editor_t editor;
         pnanovdb_editor_config_t config;
+        pnanovdb_camera_t camera;
     };
 
     EditorContext mEditor;
@@ -37,10 +36,12 @@ class Viewer {
     int mPort;
     std::string mCurrentSceneName;
 
+    // Views are currently shared by all scenes and need to have unique names
     std::map<std::string, GaussianSplat3dView> mSplat3dViews;
     std::map<std::string, CameraView> mCameraViews;
 
     void updateCamera(const std::string &scene_name);
+    void getCamera(const std::string &scene_name);
 
     void startServer();
     void stopServer();
@@ -48,6 +49,12 @@ class Viewer {
   public:
     Viewer(const std::string &ipAddress, const int port, const bool verbose = false);
     ~Viewer();
+
+    void addScene(const std::string &scene_name)
+    {
+        pnanovdb_camera_init(&mEditor.camera);
+        updateCamera(scene_name);
+    }
 
     pnanovdb_editor_token_t *
     getToken(const std::string &name) const {
@@ -91,27 +98,27 @@ class Viewer {
         return it->second;
     }
 
-    std::tuple<float, float, float> cameraOrbitCenter(const std::string &scene_name) const;
+    std::tuple<float, float, float> cameraOrbitCenter(const std::string &scene_name);
     void setCameraOrbitCenter(const std::string &scene_name, float ox, float oy, float oz);
 
-    std::tuple<float, float, float> cameraUpDirection(const std::string &scene_name) const;
+    std::tuple<float, float, float> cameraUpDirection(const std::string &scene_name);
     void setCameraUpDirection(const std::string &scene_name, float ux, float uy, float uz);
 
-    std::tuple<float, float, float> cameraViewDirection(const std::string &scene_name) const;
+    std::tuple<float, float, float> cameraViewDirection(const std::string &scene_name);
     void setCameraViewDirection(const std::string &scene_name, float dx, float dy, float dz);
 
-    float cameraOrbitRadius(const std::string &scene_name) const;
+    float cameraOrbitRadius(const std::string &scene_name);
     void setCameraOrbitRadius(const std::string &scene_name, float radius);
 
-    float cameraNear(const std::string &scene_name) const;
+    float cameraNear(const std::string &scene_name);
     void setCameraNear(const std::string &scene_name, float near);
 
-    float cameraFar(const std::string &scene_name) const;
+    float cameraFar(const std::string &scene_name);
     void setCameraFar(const std::string &scene_name, float far);
 
     void setCameraProjectionType(const std::string &scene_name,
                                  GaussianSplat3d::ProjectionType mode);
-    GaussianSplat3d::ProjectionType cameraProjectionType(const std::string &scene_name) const;
+    GaussianSplat3d::ProjectionType cameraProjectionType(const std::string &scene_name);
 
     std::string
     ipAddress() const {

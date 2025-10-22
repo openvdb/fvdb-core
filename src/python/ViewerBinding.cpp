@@ -108,6 +108,11 @@ bind_viewer(py::module &m) {
              &fvdb::detail::viewer::Viewer::port,
              "The port the viewer server is listening on.")
 
+        .def("add_scene",
+             &fvdb::detail::viewer::Viewer::addScene,
+             py::arg("scene_name"),
+             "Add a new scene to the viewer")
+
         .def("camera_orbit_center",
              &fvdb::detail::viewer::Viewer::cameraOrbitCenter,
              py::arg("scene_name"),

@@ -72,6 +72,16 @@ Viewer::updateCamera(const std::string &scene_name) {
     mEditor.editor.update_camera_2(&mEditor.editor, sceneToken, &mEditor.camera);
 }
 
+void
+Viewer::getCamera(const std::string &scene_name) {
+    pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
+    pnanovdb_camera_t *camera           = mEditor.editor.get_camera(&mEditor.editor, sceneToken);
+    if (camera) {
+        // copy POD data
+        mEditor.camera = *camera;
+    }
+}
+
 Viewer::Viewer(const std::string &ipAddress, const int port, const bool verbose)
     : mIpAddress(ipAddress), mPort(port) {
     mEditor.compiler = {};
@@ -109,7 +119,6 @@ Viewer::setSceneName(const std::string &scene_name) {
 Viewer::~Viewer() {
     stopServer();
 
-    // Clear views before unloading editor to ensure proper cleanup order
     mSplat3dViews.clear();
     mCameraViews.clear();
 
@@ -117,7 +126,6 @@ Viewer::~Viewer() {
     mEditor.compute.device_interface.destroy_device_manager(mEditor.deviceManager);
 
     pnanovdb_editor_free(&mEditor.editor);
-    pnanovdb_raster_free(&mEditor.raster);
     pnanovdb_compute_free(&mEditor.compute);
     pnanovdb_compiler_free(&mEditor.compiler);
 }
@@ -127,11 +135,8 @@ Viewer::addGaussianSplat3dView(const std::string &scene_name,
                                const std::string &name,
                                const GaussianSplat3d &splats) {
     std::shared_ptr<pnanovdb_raster_gaussian_data_t> oldData;
-    pnanovdb_editor_token_t *oldSceneToken;
     auto itPrev = mSplat3dViews.find(name);
     if (itPrev != mSplat3dViews.end()) {
-        oldData       = itPrev->second.mGaussianData;
-        oldSceneToken = itPrev->second.mSceneToken;
         mSplat3dViews.erase(itPrev);
     }
 
@@ -179,11 +184,6 @@ Viewer::addGaussianSplat3dView(const std::string &scene_name,
     pnanovdb_editor_token_t *nameToken  = mEditor.editor.get_token(name.c_str());
     pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
 
-    // If this view existed previously, remove the old data first
-    if (oldData) {
-        mEditor.editor.remove(&mEditor.editor, oldSceneToken, nameToken);
-    }
-
     // Add to editor using token-based API
     mEditor.editor.add_gaussian_data_2(&mEditor.editor, sceneToken, nameToken, &desc);
 
@@ -230,7 +230,7 @@ Viewer::stopServer() {
 }
 
 std::tuple<float, float, float>
-Viewer::cameraOrbitCenter(const std::string &scene_name) const {
+Viewer::cameraOrbitCenter(const std::string &scene_name) {
     (void)scene_name;
     return std::make_tuple(mEditor.camera.state.position.x,
                            mEditor.camera.state.position.y,
@@ -245,7 +245,7 @@ Viewer::setCameraOrbitCenter(const std::string &scene_name, float x, float y, fl
 }
 
 float
-Viewer::cameraOrbitRadius(const std::string &scene_name) const {
+Viewer::cameraOrbitRadius(const std::string &scene_name) {
     (void)scene_name;
     return mEditor.camera.state.eye_distance_from_position;
 }
@@ -256,7 +256,7 @@ Viewer::setCameraOrbitRadius(const std::string &scene_name, float radius) {
 }
 
 std::tuple<float, float, float>
-Viewer::cameraViewDirection(const std::string &scene_name) const {
+Viewer::cameraViewDirection(const std::string &scene_name) {
     (void)scene_name;
     return std::make_tuple(mEditor.camera.state.eye_direction.x,
                            mEditor.camera.state.eye_direction.y,
@@ -271,8 +271,8 @@ Viewer::setCameraViewDirection(const std::string &scene_name, float x, float y, 
 }
 
 std::tuple<float, float, float>
-Viewer::cameraUpDirection(const std::string &scene_name) const {
-    (void)scene_name;
+Viewer::cameraUpDirection(const std::string &scene_name) {
+    getCamera(scene_name);
     return std::make_tuple(mEditor.camera.state.eye_up.x,
                            mEditor.camera.state.eye_up.y,
                            mEditor.camera.state.eye_up.z);
@@ -286,8 +286,8 @@ Viewer::setCameraUpDirection(const std::string &scene_name, float x, float y, fl
 }
 
 float
-Viewer::cameraNear(const std::string &scene_name) const {
-    (void)scene_name;
+Viewer::cameraNear(const std::string &scene_name) {
+    getCamera(scene_name);
     return mEditor.camera.config.near_plane;
 }
 void
@@ -297,8 +297,8 @@ Viewer::setCameraNear(const std::string &scene_name, float near) {
 }
 
 float
-Viewer::cameraFar(const std::string &scene_name) const {
-    (void)scene_name;
+Viewer::cameraFar(const std::string &scene_name) {
+    getCamera(scene_name);
     return mEditor.camera.config.far_plane;
 }
 void
@@ -308,8 +308,8 @@ Viewer::setCameraFar(const std::string &scene_name, float far) {
 }
 
 GaussianSplat3d::ProjectionType
-Viewer::cameraProjectionType(const std::string &scene_name) const {
-    (void)scene_name;
+Viewer::cameraProjectionType(const std::string &scene_name) {
+    getCamera(scene_name);
     return mEditor.camera.config.is_orthographic ? GaussianSplat3d::ProjectionType::ORTHOGRAPHIC
                                                  : GaussianSplat3d::ProjectionType::PERSPECTIVE;
 }
@@ -339,8 +339,6 @@ Viewer::addCameraView(const std::string &scene_name,
 
     auto itPrev = mCameraViews.find(name);
     if (itPrev != mCameraViews.end()) {
-        pnanovdb_editor_token_t *nameTokenPrev = mEditor.editor.get_token(name.c_str());
-        mEditor.editor.remove(&mEditor.editor, itPrev->second.mSceneToken, nameTokenPrev);
         mCameraViews.erase(itPrev);
     }
 

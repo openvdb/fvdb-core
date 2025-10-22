@@ -42,7 +42,8 @@ class Scene:
         self._name = name
         self._logger = logging.getLogger(f"{self.__class__.__module__}.{self.__class__.__name__}")
         # TODO: Register scene with name in the viewer and use the returned scene ID.
-        _get_viewer_server_cpp()
+        server = _get_viewer_server_cpp()
+        server.add_scene(name)
 
     @torch.no_grad()
     def add_point_cloud(
