@@ -56,7 +56,7 @@ if _spec is not None and _spec.origin is not None:
         pass
 
 # isort: off
-from . import _Cpp  # Import the module to use in jcat
+from ._Cpp import jcat as _jcat_cpp
 from ._Cpp import JaggedTensor, ConvPackBackend
 from ._Cpp import (
     scaled_dot_product_attention,
@@ -103,7 +103,7 @@ def jcat(things_to_cat, dim=None):
             raise ValueError("GridBatch concatenation does not support dim argument")
         # Extract the C++ implementations from the GridBatch wrappers
         cpp_grids = [g._gridbatch for g in things_to_cat]
-        cpp_result = _Cpp.jcat(cpp_grids)
+        cpp_result = _jcat_cpp(cpp_grids)
         # Wrap the result back in a GridBatch
         return GridBatch(impl=cpp_result)
     elif isinstance(things_to_cat[0], JaggedTensor):

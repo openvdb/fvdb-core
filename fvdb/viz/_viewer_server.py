@@ -15,7 +15,7 @@ def _get_viewer_server_cpp() -> ViewerCpp:
     Get the global viewer server C++ instance or raise a :class:`RuntimeError` if it is not initialized.
 
     Returns:
-        ViewerCpp: The global viewer server C++ instance.
+        viewer_server (ViewerCpp): The global viewer server C++ instance.
 
     """
     global _viewer_server_cpp
@@ -24,7 +24,7 @@ def _get_viewer_server_cpp() -> ViewerCpp:
     return _viewer_server_cpp
 
 
-def init(ip_address: str = "127.0.0.1", port: int = 8080, verbose: bool = False):
+def init(ip_address: str = "127.0.0.1", port: int = 8080, verbose: bool = False) -> None:
     """
     Initialize the viewer web-server on the given IP address and port. You must call this function
     first before visualizing any scenes.
@@ -34,10 +34,16 @@ def init(ip_address: str = "127.0.0.1", port: int = 8080, verbose: bool = False)
     .. code-block:: python
 
         import fvdb
+
+        # Initialize the viewer server on localhost:8080
         fvdb.viz.init(ip_address="127.0.0.1", port=8080)
 
+        # Add a scene to the viewer with a point cloud in the scene
         scene = fvdb.viz.Scene("My Scene")
         scene.add_point_cloud(...)
+
+        # Show the viewer in the browser or inline in a Jupyter notebook
+        fvdb.viz.show()
 
     .. note::
 
@@ -68,11 +74,14 @@ def show():
 
         import fvdb
 
+        # Initialize the viewer server on localhost:8080
         fvdb.viz.init(ip_address="127.0.0.1", port=8080)
 
+        # Add a scene to the viewer with a point cloud in the scene
         scene = fvdb.viz.Scene("My Scene")
         scene.add_point_cloud(...)
 
+        # Show the viewer in the browser or inline in a Jupyter notebook
         fvdb.viz.show()
 
     .. note::
