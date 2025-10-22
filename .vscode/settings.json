@@ -11,7 +11,7 @@
     "C_Cpp.errorSquiggles": "enabledIfIncludesResolve",
     "C_Cpp.autocomplete": "default",
     "C_Cpp.default.compilerPath": "${env:CONDA_PREFIX}/envs/fvdb/bin/x86_64-conda-linux-gnu-c++",
-    "terminal.integrated.defaultLocation": "default",
+    "terminal.integrated.defaultLocation": "editor",
     "cmake.environment": {
         "PATH": "${env:CONDA_PREFIX}/envs/fvdb/bin:${env:PATH}"
     },
