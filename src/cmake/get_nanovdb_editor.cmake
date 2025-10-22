@@ -20,7 +20,7 @@ set(NANOVDB_EDITOR_VERSION 0.0.5)   # version at this commit
 
 # If skip is set, get the latest tagged version to prevent unnecessary rebuilds each hash update
 if(NANOVDB_EDITOR_SKIP)
-    set(NANOVDB_EDITOR_VERSION 0.0.5)   # latest tagged version
+    set(NANOVDB_EDITOR_VERSION 0.0.7)   # latest tagged version
     set(NANOVDB_EDITOR_TAG v${NANOVDB_EDITOR_VERSION})
 endif()
 

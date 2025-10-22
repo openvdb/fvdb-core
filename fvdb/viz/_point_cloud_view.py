@@ -79,7 +79,9 @@ class PointCloudView:
             sh0=sh0,
             shN=shN,
         )._impl
-        view: GaussianSplat3dViewCpp = server.add_gaussian_splat_3d_view(name=name, gaussian_splat_3d=gs_impl)
+        view: GaussianSplat3dViewCpp = server.add_gaussian_splat_3d_view(
+            scene_name=scene_name, name=name, gaussian_splat_3d=gs_impl
+        )
         view.tile_size = 16
         view.min_radius_2d = 0.0
         view.eps_2d = point_size / 2.0  # point size is diameter

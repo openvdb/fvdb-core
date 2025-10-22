@@ -23,6 +23,7 @@ class GaussianSplat3dView {
     GaussianSplat3dView &operator=(const GaussianSplat3dView &) = delete;
 
     std::string mName;
+    pnanovdb_editor_token_t *mSceneToken;
 
     void
     syncSet() {

@@ -20,6 +20,7 @@ GaussianSplat3dView::GaussianSplat3dView(const std::string &name, const Viewer &
     mParams.sh_stride_rgbrgbrgb_override = 0u;
     mParams.name                         = mName.c_str();
     mParams.data_type = PNANOVDB_REFLECT_DATA_TYPE(pnanovdb_raster_shader_params_t);
+    mSceneToken       = nullptr;
 }
 
 } // namespace fvdb::detail::viewer
