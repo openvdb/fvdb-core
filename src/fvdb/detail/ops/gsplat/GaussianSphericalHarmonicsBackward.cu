@@ -582,9 +582,7 @@ dispatchSphericalHarmonicsBackward<torch::kPrivateUse1>(
                 computeDLossDViewDirs ? dLossDViewDirs.data_ptr<scalar_t>() : nullptr);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
-        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-            c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-        }
+        mergeStreams();
 
         return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
     } else {
@@ -617,9 +615,7 @@ dispatchSphericalHarmonicsBackward<torch::kPrivateUse1>(
                 dLossDSh0Coeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
-        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-            c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-        }
+        mergeStreams();
 
         return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
     }

@@ -660,9 +660,7 @@ fusedSSIMPrivateUse1(
         }
     }
 
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-    }
+    mergeStreams();
 
     return std::make_tuple(ssim_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12);
 }
@@ -774,9 +772,7 @@ fusedSSIMBackwardPrivateUse1(double C1,
         }
     }
 
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-    }
+    mergeStreams();
 
     return dL_dimg1;
 }
