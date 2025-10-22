@@ -47,7 +47,10 @@ class Viewer {
     void stopServer();
 
   public:
-    Viewer(const std::string &ipAddress, const int port, const bool verbose = false);
+    Viewer(const std::string &ipAddress,
+           const int port,
+           const int device_id,
+           const bool verbose = false);
     ~Viewer();
 
     GaussianSplat3dView &addGaussianSplat3dView(const std::string &name,
