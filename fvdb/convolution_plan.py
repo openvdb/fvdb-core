@@ -169,8 +169,8 @@ class ConvolutionPlan:
         kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
-        if not _vec_is_all(kernel_size, kernel_size[0].item()):
-            raise NotImplementedError("Non-uniform kernel sizes are not currently supported")
+        # if not _vec_is_all(kernel_size, kernel_size[0].item()):
+        #    raise NotImplementedError("Non-uniform kernel sizes are not currently supported")
         if not _vec_is_all(stride, stride[0].item()):
             raise NotImplementedError("Non-uniform strides are not currently supported")
 

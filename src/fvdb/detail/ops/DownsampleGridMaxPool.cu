@@ -68,17 +68,17 @@ maxPoolVoxelCallback(int32_t batchIdx,
 
 template <typename Dtype, template <typename T, int32_t D> typename TensorAccessor>
 __hostdev__ inline void
-maxPoolBackardVoxelCallback(int32_t batchIdx,
-                            int32_t leafIdx,
-                            int32_t voxelIdx,
-                            int32_t channelIdx,
-                            GridBatchImpl::Accessor coarseBatchAccessor,
-                            GridBatchImpl::Accessor fineBatchAccessor,
-                            const TensorAccessor<Dtype, 2> fineData,
-                            const TensorAccessor<Dtype, 2> coarseGradOut,
-                            TensorAccessor<Dtype, 2> outFineGradIn,
-                            nanovdb::Coord poolingFactor,
-                            nanovdb::Coord stride) {
+maxPoolBackwardVoxelCallback(int32_t batchIdx,
+                             int32_t leafIdx,
+                             int32_t voxelIdx,
+                             int32_t channelIdx,
+                             GridBatchImpl::Accessor coarseBatchAccessor,
+                             GridBatchImpl::Accessor fineBatchAccessor,
+                             const TensorAccessor<Dtype, 2> fineData,
+                             const TensorAccessor<Dtype, 2> coarseGradOut,
+                             TensorAccessor<Dtype, 2> outFineGradIn,
+                             nanovdb::Coord poolingFactor,
+                             nanovdb::Coord stride) {
     const nanovdb::OnIndexGrid *coarseGrid = coarseBatchAccessor.grid(batchIdx);
     const nanovdb::OnIndexGrid *fineGrid   = fineBatchAccessor.grid(batchIdx);
     const typename nanovdb::OnIndexGrid::LeafNodeType &coarseLeaf =
@@ -263,17 +263,17 @@ DownsampleGridMaxPoolBackward(const GridBatchImpl &coarseBatchHdl,
                                          int32_t voxelIdx,
                                          int32_t channelIdx,
                                          GridBatchImpl::Accessor coarseBatchAccessor) {
-                    maxPoolBackardVoxelCallback<scalar_t, TorchRAcc32>(batchIdx,
-                                                                       leafIdx,
-                                                                       voxelIdx,
-                                                                       channelIdx,
-                                                                       coarseBatchAccessor,
-                                                                       fineBatchAcc,
-                                                                       fineDataAcc,
-                                                                       coarseGradOutAcc,
-                                                                       outFineGradInAcc,
-                                                                       poolingFactor,
-                                                                       stride);
+                    maxPoolBackwardVoxelCallback<scalar_t, TorchRAcc32>(batchIdx,
+                                                                        leafIdx,
+                                                                        voxelIdx,
+                                                                        channelIdx,
+                                                                        coarseBatchAccessor,
+                                                                        fineBatchAcc,
+                                                                        fineDataAcc,
+                                                                        coarseGradOutAcc,
+                                                                        outFineGradInAcc,
+                                                                        poolingFactor,
+                                                                        stride);
                 };
                 forEachVoxelCUDA(384, fineData.size(1), coarseBatchHdl, cb);
             } else if constexpr (DeviceTag == torch::kPrivateUse1) {
@@ -282,17 +282,17 @@ DownsampleGridMaxPoolBackward(const GridBatchImpl &coarseBatchHdl,
                                          int32_t voxelIdx,
                                          int32_t channelIdx,
                                          GridBatchImpl::Accessor coarseBatchAccessor) {
-                    maxPoolBackardVoxelCallback<scalar_t, TorchRAcc32>(batchIdx,
-                                                                       leafIdx,
-                                                                       voxelIdx,
-                                                                       channelIdx,
-                                                                       coarseBatchAccessor,
-                                                                       fineBatchAcc,
-                                                                       fineDataAcc,
-                                                                       coarseGradOutAcc,
-                                                                       outFineGradInAcc,
-                                                                       poolingFactor,
-                                                                       stride);
+                    maxPoolBackwardVoxelCallback<scalar_t, TorchRAcc32>(batchIdx,
+                                                                        leafIdx,
+                                                                        voxelIdx,
+                                                                        channelIdx,
+                                                                        coarseBatchAccessor,
+                                                                        fineBatchAcc,
+                                                                        fineDataAcc,
+                                                                        coarseGradOutAcc,
+                                                                        outFineGradInAcc,
+                                                                        poolingFactor,
+                                                                        stride);
                 };
                 forEachVoxelPrivateUse1(fineData.size(1), coarseBatchHdl, cb);
             } else {
@@ -301,17 +301,17 @@ DownsampleGridMaxPoolBackward(const GridBatchImpl &coarseBatchHdl,
                               int32_t voxelIdx,
                               int32_t channelIdx,
                               GridBatchImpl::Accessor coarseBatchAccessor) {
-                    maxPoolBackardVoxelCallback<scalar_t, TorchAcc>(batchIdx,
-                                                                    leafIdx,
-                                                                    voxelIdx,
-                                                                    channelIdx,
-                                                                    coarseBatchAccessor,
-                                                                    fineBatchAcc,
-                                                                    fineDataAcc,
-                                                                    coarseGradOutAcc,
-                                                                    outFineGradInAcc,
-                                                                    poolingFactor,
-                                                                    stride);
+                    maxPoolBackwardVoxelCallback<scalar_t, TorchAcc>(batchIdx,
+                                                                     leafIdx,
+                                                                     voxelIdx,
+                                                                     channelIdx,
+                                                                     coarseBatchAccessor,
+                                                                     fineBatchAcc,
+                                                                     fineDataAcc,
+                                                                     coarseGradOutAcc,
+                                                                     outFineGradInAcc,
+                                                                     poolingFactor,
+                                                                     stride);
                 };
                 forEachVoxelCPU(fineData.size(1), coarseBatchHdl, cb);
             }
