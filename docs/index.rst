@@ -84,6 +84,7 @@ spatial intelligence research and applications.
    :caption: API References
 
    api/convolution_plan
+   api/gaussian_splat_3d
    api/grid
    api/grid_batch
    api/jagged_tensor
