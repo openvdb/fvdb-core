@@ -3,4 +3,4 @@
 
 .. autoclass:: fvdb.GaussianSplat3d
    :members:
-   :special-members: __init__, __getitem__, __setitem__
+   :special-members: __getitem__, __setitem__

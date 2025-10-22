@@ -85,7 +85,8 @@ from .grid import (
 )
 
 from .convolution_plan import ConvolutionPlan
-from .gaussian_splatting import GaussianSplat3d
+from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
+from .enums import ProjectionType, ShOrderingMode
 
 # The following import needs to come after the GridBatch and JaggedTensor imports
 # immediately above in order to avoid a circular dependency error.
@@ -120,6 +121,7 @@ __all__ = [
     "GridBatch",
     "JaggedTensor",
     "GaussianSplat3d",
+    "ProjectedGaussianSplats",
     "ConvolutionPlan",
     "load_gridbatch",
     "save_gridbatch",

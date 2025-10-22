@@ -71,7 +71,7 @@ class PointCloudView:
         sh0 = _rgb_to_sh(colors)
         shN = torch.zeros((positions.shape[0], 0, 3), dtype=torch.float32)
 
-        gs_impl = GaussianSplat3d(
+        gs_impl = GaussianSplat3d.from_tensors(
             means=means,
             quats=quats,
             log_scales=log_scales,

@@ -57,6 +57,8 @@ ListOfListsOfTensors = list[list[torch.Tensor]]
 
 JaggedTensorOrTensor = JaggedTensor | torch.Tensor
 
+JaggedTensorOrTensorTypeVar = TypeVar("JaggedTensorOrTensorTypeVar", JaggedTensor, torch.Tensor)
+
 # New type for GridBatch indexing
 GridBatchIndex = int | np.integer | slice | list[bool] | list[int] | torch.Tensor
 

@@ -71,7 +71,7 @@ class BaseGaussianTestCase(unittest.TestCase):
         sh_0 = sh_coeffs[:, 0, :].unsqueeze(1).clone()
         sh_n = sh_coeffs[:, 1:, :].clone()
 
-        self.gs3d = GaussianSplat3d(
+        self.gs3d = GaussianSplat3d.from_tensors(
             means=means,
             quats=quats,
             log_scales=torch.log(scales),
@@ -83,7 +83,7 @@ class BaseGaussianTestCase(unittest.TestCase):
 
         nan_mean = means.clone()
         nan_mean[0] = torch.tensor([float("nan"), float("nan"), float("nan")], device=self.device)
-        self.nan_gs3d = GaussianSplat3d(
+        self.nan_gs3d = GaussianSplat3d.from_tensors(
             means=nan_mean,
             quats=quats,
             log_scales=torch.log(scales),
@@ -105,7 +105,7 @@ class TestGaussianSplatCat(BaseGaussianTestCase):
 
         self.run_backward = self.run_backward
 
-        self.gs3d1 = GaussianSplat3d(
+        self.gs3d1 = GaussianSplat3d.from_tensors(
             means=self.gs3d.means.clone(),
             quats=self.gs3d.quats.clone(),
             log_scales=self.gs3d.log_scales.clone(),
@@ -116,7 +116,7 @@ class TestGaussianSplatCat(BaseGaussianTestCase):
             accumulate_mean_2d_gradients=self.gs3d.accumulate_mean_2d_gradients,
             detach=True,  # Detach to avoid gradients from the original Gaussian Splat
         )
-        self.gs3d2 = GaussianSplat3d(
+        self.gs3d2 = GaussianSplat3d.from_tensors(
             means=self.gs3d.means.clone() + 0.1,
             quats=self.gs3d.quats.clone() + 0.01,
             log_scales=self.gs3d.log_scales.clone() + 0.01,
@@ -126,7 +126,7 @@ class TestGaussianSplatCat(BaseGaussianTestCase):
             accumulate_max_2d_radii=self.gs3d.accumulate_max_2d_radii,
             accumulate_mean_2d_gradients=self.gs3d.accumulate_mean_2d_gradients,
         )
-        self.gs3d3 = GaussianSplat3d(
+        self.gs3d3 = GaussianSplat3d.from_tensors(
             means=self.gs3d.means.clone() + 0.2,
             quats=self.gs3d.quats.clone() + 0.02,
             log_scales=self.gs3d.log_scales.clone() + 0.02,
@@ -487,7 +487,7 @@ class TestGaussianSplatIndexSet(BaseGaussianTestCase):
 
     def make_src_and_dst(self, indices, src_acc_grad_mean_2d, dst_acc_grad_mean_2d, acc_max_2d_radii):
         # Create a destination Gaussian Splat (matching self.gs3d) that requires gradients
-        dst = GaussianSplat3d(
+        dst = GaussianSplat3d.from_tensors(
             means=self.gs3d.means,
             quats=self.gs3d.quats,
             log_scales=self.gs3d.log_scales,
@@ -502,7 +502,7 @@ class TestGaussianSplatIndexSet(BaseGaussianTestCase):
         # Create a source Gaussian Splat with half the Gaussians of the destination
         # and make sure it requires gradients
         num_src_gs = int(indices.sum().item()) if indices.dtype == torch.bool else int(indices.numel())
-        src = GaussianSplat3d(
+        src = GaussianSplat3d.from_tensors(
             means=torch.randn(num_src_gs, 3, device=self.device),
             quats=torch.randn(num_src_gs, 4, device=self.device),
             log_scales=torch.randn(num_src_gs, 3, device=self.device),
@@ -844,7 +844,7 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
     ) -> GaussianSplat3d:
         # Create a GaussianSplat3d instance with gradients that matches self.gs3d
         shN = torch.empty((self.gs3d.num_gaussians, 0, 3), device=self.device) if empty_shN else self.gs3d.shN
-        gs3d = GaussianSplat3d(
+        gs3d = GaussianSplat3d.from_tensors(
             means=self.gs3d.means,
             quats=self.gs3d.quats,
             log_scales=self.gs3d.log_scales,
@@ -1132,7 +1132,7 @@ class TestLoadAndSavePly(BaseGaussianTestCase):
     def test_load_ply_with_no_shN(self):
         tf = tempfile.NamedTemporaryFile(delete=True, suffix=".ply")
         shN_empty = torch.empty((self.gs3d.num_gaussians, 0, 3), device=self.device)
-        gs3d_no_shN = GaussianSplat3d(
+        gs3d_no_shN = GaussianSplat3d.from_tensors(
             means=self.gs3d.means,
             quats=self.gs3d.quats,
             log_scales=self.gs3d.log_scales,
@@ -1383,7 +1383,7 @@ class TestGaussianRender(BaseGaussianTestCase):
         radii = proj_res.radii
         means2d = proj_res.means2d
         depths = proj_res.render_quantities[..., -1]
-        conics = proj_res.conics
+        conics = proj_res.inv_covar_2d
 
         if self.save_regression_data:
             torch.save(radii, "regression_radii.pt")
@@ -1573,7 +1573,7 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
         sh0 = torch.randn(means3d.shape[0], 1, 3, device=means3d.device)
         shN = torch.randn(means3d.shape[0], 1, 3, device=means3d.device)
 
-        gs3d = GaussianSplat3d(means3d, quats, log_scales, logit_opacities, sh0, shN)
+        gs3d = GaussianSplat3d.from_tensors(means3d, quats, log_scales, logit_opacities, sh0, shN)
 
         # Test render num contributing gaussians
         num_contributing_gaussians, alphas = gs3d.render_num_contributing_gaussians(
@@ -1711,7 +1711,7 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
         sh0 = torch.randn(means3d.shape[0], 1, 3, device=means3d.device)
         shN = torch.randn(means3d.shape[0], 1, 3, device=means3d.device)
 
-        gs3d = GaussianSplat3d(means3d, quats, log_scales, logit_opacities, sh0, shN)
+        gs3d = GaussianSplat3d.from_tensors(means3d, quats, log_scales, logit_opacities, sh0, shN)
 
         # Test render num contributing gaussians
         num_contributing_gaussians, alphas = gs3d.render_num_contributing_gaussians(

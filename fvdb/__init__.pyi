@@ -33,7 +33,8 @@ from ._Cpp import (
     volume_render,
 )
 from .convolution_plan import ConvolutionPlan
-from .gaussian_splatting import GaussianSplat3d
+from .enums import ProjectionType, ShOrderingMode
+from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
 from .grid import Grid, load_grid, save_grid
 from .grid_batch import GridBatch, load_gridbatch, save_gridbatch
 
@@ -49,6 +50,9 @@ __all__ = [
     "JaggedTensor",
     "ConvolutionPlan",
     "GaussianSplat3d",
+    "ProjectedGaussianSplats",
+    "ProjectionType",
+    "ShOrderingMode",
     "load_gridbatch",
     "save_gridbatch",
     "jcat",
