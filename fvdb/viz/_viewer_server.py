@@ -24,7 +24,7 @@ def _get_viewer_server_cpp() -> ViewerCpp:
     return _viewer_server_cpp
 
 
-def init(ip_address: str = "127.0.0.1", port: int = 8080, verbose: bool = False):
+def init(ip_address: str = "127.0.0.1", port: int = 8080, vk_device_id: int = 0, verbose: bool = False):
     """
     Initialize the viewer web-server on the given IP address and port. You must call this function
     first before visualizing any scenes.
@@ -47,11 +47,12 @@ def init(ip_address: str = "127.0.0.1", port: int = 8080, verbose: bool = False)
     Args:
         ip_address (str): The IP address to bind the viewer server to. Default is ``"127.0.0.1"``.
         port (int): The port to bind the viewer server to. Default is ``8080``.
+        vk_device_id (int): The Vulkan device ID to use for rendering. Default is ``0``.
         verbose (bool): If True, the viewer server will print verbose output to the console. Default is ``False``.
     """
     global _viewer_server_cpp
     if _viewer_server_cpp is None:
-        _viewer_server_cpp = ViewerCpp(ip_address=ip_address, port=port, verbose=verbose)
+        _viewer_server_cpp = ViewerCpp(ip_address=ip_address, port=port, device_id=vk_device_id, verbose=verbose)
     else:
         warnings.warn(
             f"Viewer server is already initialized with IP = {_viewer_server_cpp.ip_address()} and port = {_viewer_server_cpp.port()}."
