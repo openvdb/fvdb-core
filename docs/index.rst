@@ -54,6 +54,7 @@ The videos below show fVDB being used for large-scale 3D reconstruction and simu
 
 About fVDB
 --------------
+
 fVDB was first developed by the NVIDIA High-Fidelity Physics Research Group within
 the `NVIDIA Spatial Intelligence Lab <https://research.nvidia.com/labs/sil/>`_, and continues to be
 developed with the OpenVDB community to suit the growing needs for a robust framework for
@@ -82,9 +83,12 @@ spatial intelligence research and applications.
    :maxdepth: 1
    :caption: API References
 
+   api/convolution_plan
+   api/gaussian_splat_3d
    api/grid
    api/grid_batch
    api/jagged_tensor
+   api/viz
 
 .. toctree::
    :maxdepth: 2

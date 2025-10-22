@@ -1,4 +1,4 @@
-Grid
+``fvdb.Grid``
 ===============
 
 .. autoclass:: fvdb.Grid
