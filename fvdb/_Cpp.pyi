@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import typing
+from enum import Enum
 from typing import ClassVar, overload
 
 import torch
@@ -51,6 +52,10 @@ class ConvPackBackend:
     def value(self) -> int: ...
 
 class GaussianSplat3d:
+    class ProjectionType(Enum):
+        PERSPECTIVE = ...
+        ORTHOGRAPHIC = ...
+
     log_scales: torch.Tensor
     logit_opacities: torch.Tensor
     means: torch.Tensor
@@ -111,7 +116,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
         antialias: bool = ...,
@@ -124,7 +129,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         sh_degree_to_use: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -138,7 +143,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         sh_degree_to_use: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -152,7 +157,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -175,7 +180,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         sh_degree_to_use: int = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
@@ -190,7 +195,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         sh_degree_to_use: int = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
@@ -205,7 +210,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -220,7 +225,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -235,7 +240,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -251,7 +256,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -985,7 +990,7 @@ class Viewer:
     def camera_far(self) -> float: ...
     def set_camera_far(self, far: float) -> None: ...
     def camera_projection_type(self) -> str: ...
-    def set_camera_projection_type(self, projection_type: str) -> None: ...
+    def set_camera_projection_type(self, projection_type: GaussianSplat3d.ProjectionType) -> None: ...
     def add_camera_view(
         self,
         name: str,

@@ -370,7 +370,7 @@ class GaussianSplat3d:
 
         gs_impl, metadata = GaussianSplat3dCpp.from_ply(filename=filename, device=device)
 
-        return cls(impl=gs_impl), metadata
+        return cls(impl=gs_impl, _private=cls.__PRIVATE__), metadata
 
     @overload
     def __getitem__(self, index: slice) -> "GaussianSplat3d": ...
@@ -381,7 +381,6 @@ class GaussianSplat3d:
     def __getitem__(self, index: slice | torch.Tensor) -> "GaussianSplat3d":
         """
         Select Gaussians using either an integer index tensor, a boolean mask tensor, or a slice.
-
 
         .. note::
 
