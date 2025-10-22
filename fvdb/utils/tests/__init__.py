@@ -111,7 +111,7 @@ def _clone_git_repo(git_url: str, git_tag: str, repo_name: str) -> Tuple[Path, g
             raise ValueError(f"A path {repo_path} exists but is not a git repo")
     else:
         repo = git.repo.Repo.clone_from(git_url, repo_path)
-    repo.remotes.origin.fetch()
+    repo.remotes.origin.fetch(tags=True)
     repo.git.checkout(git_tag)
 
     return repo_path, repo

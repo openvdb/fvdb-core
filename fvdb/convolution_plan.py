@@ -796,15 +796,15 @@ class ConvolutionPlan:
             data = JaggedTensor(data)
 
         min_coord = source_grid.ijk.jdata.min(dim=0).values
-        # BWHDC -> BCDHW
-        dense_feature = source_grid.write_to_dense_czyx(data, min_coord=min_coord)
+        # BXYZC -> BCXYZ
+        dense_feature = source_grid.write_to_dense_cmajor(data, min_coord=min_coord)
         if self._transposed:
             dense_feature = torch.nn.functional.conv_transpose3d(dense_feature, weights, padding=1, stride=1)
         else:
             dense_feature = torch.nn.functional.conv3d(dense_feature, weights, padding=1, stride=1)
-        # BCDHW -> BWHDC
+        # BCXYZ -> BXYZC
         dense_feature = dense_feature.contiguous()
-        return source_grid.read_from_dense_czyx(dense_feature, dense_origins=min_coord)
+        return source_grid.read_from_dense_cmajor(dense_feature, dense_origins=min_coord)
 
 
 # These tests are to validate that the type-checking is happy. They won't actually run because
