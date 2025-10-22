@@ -83,6 +83,7 @@ spatial intelligence research and applications.
    :maxdepth: 1
    :caption: API References
 
+   api/convolution_plan
    api/grid
    api/grid_batch
    api/jagged_tensor
