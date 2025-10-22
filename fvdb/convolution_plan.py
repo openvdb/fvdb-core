@@ -139,7 +139,7 @@ class ConvolutionPlan:
     ) -> "ConvolutionPlan":
         """
         Create a :class:`ConvolutionPlan` for convolution on batches of grids. *i.e.* convolution where the input
-        and output domains are both :class:`fvdb.GridBatch`es.
+        and output domains are both of type :class:`fvdb.GridBatch`.
 
         The plan returned by this method is optimized for running convolution on a batch of grids simultaneously and in parallel,
         which is more efficient than processing individual grids separately when you have a batch of data.
@@ -221,7 +221,7 @@ class ConvolutionPlan:
         """
         Create a :class:`ConvolutionPlan` for *transposed* convolution on batches of grids.
         *i.e.* transposed convolution where the input
-        and output domains are both :class:`fvdb.GridBatch`es.
+        and output domains are both of type :class:`fvdb.GridBatch`.
 
         Transposed convolution (also known as deconvolution) is commonly used for
         upsampling operations, such as in decoder networks or generative models.
@@ -298,7 +298,7 @@ class ConvolutionPlan:
     ) -> "ConvolutionPlan":
         """
         Create a :class:`ConvolutionPlan` for convolution on a single grid. *i.e.* convolution where the input
-        and output domains are both :class:`fvdb.Grid`s.
+        and output domains are both of type :class:`fvdb.Grid`.
 
         This method creates a plan for processing a single grid, which is suitable
         when you have individual grids rather than batched data (for that case, use :meth:`from_grid_batch`).
@@ -379,7 +379,7 @@ class ConvolutionPlan:
     ) -> "ConvolutionPlan":
         """
         Create a :class:`ConvolutionPlan` for *transposed* convolution on a single grid. *i.e.* transposed convolution where the input
-        and output domains are both :class:`fvdb.Grid`s.
+        and output domains are both of type :class:`fvdb.Grid`.
 
         Transposed convolution (also known as deconvolution) is commonly used for
         upsampling operations, such as in decoder networks or generative models.
@@ -527,40 +527,10 @@ class ConvolutionPlan:
         )
 
     @overload
-    def execute(self, data: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
-        """
-        Execute this :class:`ConvolutionPlan` with input data and weights for a single grid.
-
-        The plan must have been previously created for a single grid using :meth:`from_grid()`.
-
-
-        Args:
-            data (torch.Tensor): Input features for each voxel in the source grid. A tensor of shape ``(num_input_voxels, in_channels)``.
-            weights (torch.Tensor): Convolution kernel weights. A tensor of shape ``(out_channels, in_channels, kernel_size[0], kernel_size[1], kernel_size[2])``.
-
-
-        Returns:
-            output_features (torch.Tensor): Output features after convolution.
-                A tensor with shape ``(total_output_voxels, out_channels)``.
-        """
+    def execute(self, data: torch.Tensor, weights: torch.Tensor) -> torch.Tensor: ...
 
     @overload
-    def execute(self, data: JaggedTensor, weights: torch.Tensor) -> JaggedTensor:
-        """
-        Execute this :class:`ConvolutionPlan` with the input data and weights for a batch of grids.
-
-        The plan must have been previously created for a batch of grids using :meth:`from_grid_batch()`.
-
-        Args:
-            data (JaggedTensor): :class:`~fvdb.JaggedTensor` of input features for each voxel
-                across multiple grids in the batch with shape ``(batch_size, num_voxels_in_input_grid_b, in_channels)``
-            weights (torch.Tensor): Convolution kernel weights.
-                    A :class:`torch.Tensor` with shape  ``(out_channels, in_channels, kernel_size[0], kernel_size[1], kernel_size[2])``
-
-        Returns:
-            output_features (JaggedTensor): Output features after convolution for each grid in the batch.
-                A :class:`~fvdb.JaggedTensor` with shape: ``(batch_size, num_voxels_in_output_grid_b, out_channels)``
-        """
+    def execute(self, data: JaggedTensor, weights: torch.Tensor) -> JaggedTensor: ...
 
     def execute(self, data: JaggedTensor | torch.Tensor, weights: torch.Tensor) -> JaggedTensorOrTensor:
         """
@@ -592,8 +562,8 @@ class ConvolutionPlan:
 
         Returns:
             output_features (torch.Tensor | JaggedTensor): Convolved features with the same type as input:
-            *(i)* :class:`torch.Tensor` with shape ``(total_output_voxels, out_channels)`` for single grids **or**
-            *(ii)* :class:`~fvdb.JaggedTensor` with shape ``(batch_size, output_voxels_per_grid, out_channels)`` for batches
+                *(i)* :class:`torch.Tensor` with shape ``(total_output_voxels, out_channels)`` for single grids **or**
+                *(ii)* :class:`~fvdb.JaggedTensor` with shape ``(batch_size, output_voxels_per_grid, out_channels)`` for batches
 
         Raises:
             ValueError: If the channel pair ``(in_channels, out_channels)`` from the weights
