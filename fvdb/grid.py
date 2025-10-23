@@ -1505,9 +1505,8 @@ class Grid:
         Sample data in a :class:`torch.Tensor` associated with this :class:`Grid` at world-space
         points using Bézier interpolation.
 
-        This method interpolates data at voxel centers in continuous world-space positions using cubic Bézier
-        interpolation. This provides smoother interpolation than trilinear but is more
-        computationally expensive.
+        This method uses Bézier interpolation to interpolate data values at arbitrary continuous
+        positions in world space, based on values defined at voxel centers.
 
         .. note::
 
@@ -1545,9 +1544,9 @@ class Grid:
         Sample data in a :class:`torch.Tensor` associated with this :class:`Grid` at world-space
         points using Bézier interpolation, and return the sampled values and their spatial gradients at those points.
 
-        This method interpolates data at voxel centers in continuous world-space positions using cubic Bézier
-        interpolation. This provides smoother interpolation than trilinear but is more
-        computationally expensive.
+        This method uses Bézier interpolation to interpolate data values at arbitrary continuous
+        positions in world space, based on values defined at voxel centers. It returns both the interpolated data
+        and the gradients of the interpolated data with respect to the world coordinates.
 
         .. note::
 
@@ -1588,8 +1587,8 @@ class Grid:
         Sample data in a :class:`torch.Tensor` associated with this :class:`Grid` at world-space
         points using trilinear interpolation.
 
-        This method interpolates data at voxel centers in continuous world-space positions using trilinear
-        interpolation.
+        This method uses trilinear interpolation to interpolate data values at arbitrary continuous
+        positions in world space, based on values defined at voxel centers.
 
         .. note::
 
@@ -1628,8 +1627,9 @@ class Grid:
         Sample data in a :class:`torch.Tensor` associated with this :class:`Grid` at world-space
         points using trilinear interpolation, and return the sampled values and their spatial gradients at those points.
 
-        This method interpolates data at voxel centers in continuous world-space positions using trilinear
-        interpolation.
+        This method uses trilinear interpolation to interpolate data values at arbitrary continuous
+        positions in world space, based on values defined at voxel centers. It returns both the interpolated data
+        and the gradients of the interpolated data with respect to the world coordinates.
 
         .. note::
 
