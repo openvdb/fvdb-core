@@ -349,9 +349,13 @@ Viewer::addCameraView(const std::string &scene_name,
                     " instead.");
     }
 
-    pnanovdb_editor_token_t *nameToken = mEditor.editor.get_token(name.c_str());
+    auto itPrev = mCameraViews.find(name);
+    if (itPrev != mCameraViews.end()) {
+        mCameraViews.erase(itPrev);
+    }
 
-    auto [it, inserted] = mCameraViews.emplace(std::piecewise_construct,
+    pnanovdb_editor_token_t *nameToken = mEditor.editor.get_token(name.c_str());
+    auto [it, inserted]                = mCameraViews.emplace(std::piecewise_construct,
                                                std::forward_as_tuple(name),
                                                std::forward_as_tuple(name, nameToken));
 
@@ -414,11 +418,6 @@ Viewer::addCameraView(const std::string &scene_name,
             it->second.mView.configs[i].fov_angle_y  = DEFAULT_CAMERA_FOV_RADIANS;
             it->second.mView.configs[i].aspect_ratio = DEFAULT_CAMERA_ASPECT_RATIO;
         }
-    }
-
-    auto itPrev = mCameraViews.find(name);
-    if (itPrev != mCameraViews.end()) {
-        mCameraViews.erase(itPrev);
     }
 
     pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
