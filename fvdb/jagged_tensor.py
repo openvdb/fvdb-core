@@ -11,7 +11,7 @@ TODO(): Add more documentation.
 """
 
 import typing
-from typing import TYPE_CHECKING, Any, Sequence, cast
+from typing import TYPE_CHECKING, Any, Sequence, cast, overload
 
 import numpy as np
 import torch
@@ -502,6 +502,12 @@ class JaggedTensor:
         return JaggedTensor(impl=self._impl.int())
 
 
+@overload
+def _convert_to_list(seq: Sequence[int]) -> list[int]: ...
+@overload
+def _convert_to_list(seq: Sequence[Sequence[int]]) -> list[list[int]]: ...
+
+
 def _convert_to_list(seq: Sequence[int] | Sequence[Sequence[int]]) -> list[int] | list[list[int]]:
     """Helper to convert Sequence types to list types for C++ binding compatibility."""
     if isinstance(seq, (list, tuple)):
@@ -521,53 +527,68 @@ def _convert_to_list(seq: Sequence[int] | Sequence[Sequence[int]]) -> list[int] 
 def jempty(
     lsizes: Sequence[int] | Sequence[Sequence[int]],
     rsizes: Sequence[int] | None = None,
+    *,
     device: torch.device | str | None = None,
     dtype: torch.dtype | None = None,
+    requires_grad: bool = False,
+    pin_memory: bool = False,
 ) -> JaggedTensor:
-    lsizes_cpp = _convert_to_list(lsizes)
-    rsizes_cpp: list[int] | None = list(rsizes) if rsizes is not None and isinstance(rsizes, tuple) else rsizes  # type: ignore
-    return JaggedTensor(impl=jempty_cpp(lsizes_cpp, rsizes_cpp, dtype, device))  # type: ignore
+    lsizes_cpp: list[int] | list[list[int]] = _convert_to_list(lsizes)
+    rsizes_cpp: list[int] | None = _convert_to_list(rsizes) if rsizes is not None else None
+    return JaggedTensor(impl=jempty_cpp(lsizes_cpp, rsizes_cpp, dtype, device, requires_grad, pin_memory))
 
 
 def jrand(
     lsizes: Sequence[int] | Sequence[Sequence[int]],
     rsizes: Sequence[int] | None = None,
+    *,
     device: torch.device | str | None = None,
     dtype: torch.dtype | None = None,
+    requires_grad: bool = False,
+    pin_memory: bool = False,
 ) -> JaggedTensor:
-    lsizes_cpp = _convert_to_list(lsizes)
-    rsizes_cpp: list[int] | None = list(rsizes) if rsizes is not None and isinstance(rsizes, tuple) else rsizes  # type: ignore
-    return JaggedTensor(impl=jrand_cpp(lsizes_cpp, rsizes_cpp, dtype, device))  # type: ignore
+    lsizes_cpp: list[int] | list[list[int]] = _convert_to_list(lsizes)
+    rsizes_cpp: list[int] | None = _convert_to_list(rsizes) if rsizes is not None else None
+    return JaggedTensor(impl=jrand_cpp(lsizes_cpp, rsizes_cpp, dtype, device, requires_grad, pin_memory))
 
 
 def jrandn(
     lsizes: Sequence[int] | Sequence[Sequence[int]],
     rsizes: Sequence[int] | None = None,
+    *,
     device: torch.device | str | None = None,
     dtype: torch.dtype | None = None,
+    requires_grad: bool = False,
+    pin_memory: bool = False,
 ) -> JaggedTensor:
-    lsizes_cpp = _convert_to_list(lsizes)
-    rsizes_cpp: list[int] | None = list(rsizes) if rsizes is not None and isinstance(rsizes, tuple) else rsizes  # type: ignore
-    return JaggedTensor(impl=jrandn_cpp(lsizes_cpp, rsizes_cpp, dtype, device))  # type: ignore
+    lsizes_cpp: list[int] | list[list[int]] = _convert_to_list(lsizes)
+    rsizes_cpp: list[int] | None = _convert_to_list(rsizes) if rsizes is not None else None
+    return JaggedTensor(impl=jrandn_cpp(lsizes_cpp, rsizes_cpp, dtype, device, requires_grad, pin_memory))
 
 
 def jones(
     lsizes: Sequence[int] | Sequence[Sequence[int]],
     rsizes: Sequence[int] | None = None,
+    *,
     device: torch.device | str | None = None,
     dtype: torch.dtype | None = None,
+    requires_grad: bool = False,
+    pin_memory: bool = False,
 ) -> JaggedTensor:
-    lsizes_cpp = _convert_to_list(lsizes)
-    rsizes_cpp: list[int] | None = list(rsizes) if rsizes is not None and isinstance(rsizes, tuple) else rsizes  # type: ignore
-    return JaggedTensor(impl=jones_cpp(lsizes_cpp, rsizes_cpp, dtype, device))  # type: ignore
+    lsizes_cpp: list[int] | list[list[int]] = _convert_to_list(lsizes)
+    rsizes_cpp: list[int] | None = _convert_to_list(rsizes) if rsizes is not None else None
+    return JaggedTensor(impl=jones_cpp(lsizes_cpp, rsizes_cpp, dtype, device, requires_grad, pin_memory))
 
 
 def jzeros(
     lsizes: Sequence[int] | Sequence[Sequence[int]],
     rsizes: Sequence[int] | None = None,
+    *,
     device: torch.device | str | None = None,
     dtype: torch.dtype | None = None,
+    requires_grad: bool = False,
+    pin_memory: bool = False,
 ) -> JaggedTensor:
-    lsizes_cpp = _convert_to_list(lsizes)
-    rsizes_cpp: list[int] | None = list(rsizes) if rsizes is not None and isinstance(rsizes, tuple) else rsizes  # type: ignore
-    return JaggedTensor(impl=jzeros_cpp(lsizes_cpp, rsizes_cpp, dtype, device))  # type: ignore
+    lsizes_cpp: list[int] | list[list[int]] = _convert_to_list(lsizes)
+    rsizes_cpp: list[int] | None = _convert_to_list(rsizes) if rsizes is not None else None
+    return JaggedTensor(impl=jzeros_cpp(lsizes_cpp, rsizes_cpp, dtype, device, requires_grad, pin_memory))

@@ -727,6 +727,7 @@ class GridBatch:
             JaggedTensor: Linear indices for each coordinate, or -1 if not active.
                 Shape: (batch_size, num_queries).
         """
+        assert isinstance(ijk, JaggedTensor), "ijk must be a JaggedTensor"
         return JaggedTensor(impl=self._impl.ijk_to_index(ijk._impl, cumulative))
 
     def ijk_to_inv_index(self, ijk: JaggedTensor, cumulative: bool = False) -> JaggedTensor:
