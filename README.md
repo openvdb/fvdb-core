@@ -109,7 +109,7 @@ In order to extract an artifact from the container such as the Python wheel, que
 
 #### **OPTION 3** Python Virtual Environment
 
-Using a Python virtual environment enables you to use your system provided compiler and CUDA toolkit. This can be especially useful if you are using ƒVDB in conjunction with other Python packages, especially ones that have been build from source. Start by installing GCC, the CUDA Toolkit, and cuDNN.
+Using a Python virtual environment enables you to use your system provided compiler and CUDA toolkit. This can be especially useful if you are using ƒVDB in conjunction with other Python packages, especially packages that have been built from source. Start by installing GCC, the CUDA Toolkit, and cuDNN.
 
 Then, create a Python virtual environment, install the requisite dependencies, and build:
 
