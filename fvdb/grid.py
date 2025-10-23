@@ -26,6 +26,7 @@ Grid supports operations like convolution, pooling, interpolation, ray casting,
 mesh extraction, and coordinate transformations on sparse voxel data.
 """
 
+import pathlib
 from collections.abc import Iterator
 from types import ClassMethodDescriptorType
 from typing import TYPE_CHECKING, Any, Sequence, cast, overload
@@ -201,15 +202,21 @@ class Grid:
     @classmethod
     def from_grid_batch(cls, grid_batch: "GridBatch", index: int = 0) -> "Grid":
         """
-        Create a single grid from one grid in a :class:`GridBatch`. If ``index`` exceeds the number
+        Extract a :class:`Grid` from one grid in a :class:`GridBatch`. If ``index`` exceeds the number
         of grids in the batch (minus one), an error is raised.
 
+        .. note::
+
+            The resulting :class:`Grid` will share the same underlying data as the :class:`GridBatch`,
+            but have different metadata. Thus, :meth:`is_contiguous()` will return ``False`` on the resulting
+            :class:`Grid` if the :class:`GridBatch` contains multiple grids.
+
         Args:
-            grid_batch (GridBatch): The :class:`GridBatch` to create the grid from.
+            grid_batch (GridBatch): The :class:`GridBatch` to extract a :class:`Grid` from.
             index (int): The index of the :class:`Grid` to extract from the :class:`GridBatch`. Defaults to 0.
 
         Returns:
-            Grid: A new :class:`Grid` object matching the index-th grid in the :class:`GridBatch`.
+            grid (Grid): A new :class:`Grid` object matching the index-th grid in the :class:`GridBatch`.
         """
         grid_impl = grid_batch.index_int(index)._impl
         assert grid_impl is not None
@@ -235,7 +242,7 @@ class Grid:
             device (DeviceIdentifier | None): Device to create the grid on. Defaults to None, which inherits from ``ijk``.
 
         Returns:
-            Grid: A new :class:`Grid` object.
+            grid (Grid): A new :class:`Grid` object.
         """
         resolved_device = resolve_device(device, inherit_from=ijk)
 
@@ -257,7 +264,8 @@ class Grid:
         device: DeviceIdentifier | None = None,
     ) -> "Grid":
         """
-        Create a grid by voxelizing a triangle mesh.
+        Create a new :class:`Grid` by voxelizing the *surface* of a triangle mesh. *i.e* voxels that intersect
+        the surface of the mesh will be contained in the resulting :class:`Grid`.
 
         .. note:: This method works well but will be made much faster and memory efficient in the next release.
 
@@ -269,7 +277,7 @@ class Grid:
             device (DeviceIdentifier | None): Device to create the grid on. Defaults to ``None``, which inherits from ``mesh_vertices``.
 
         Returns:
-            Grid: A new :class:`Grid` object with voxels covering the mesh.
+            grid (Grid): A new :class:`Grid` object with voxels covering the surface of the input mesh.
         """
         resolved_device = resolve_device(device, inherit_from=mesh_vertices)
 
@@ -281,6 +289,88 @@ class Grid:
         grid_impl = GridBatchCpp(device=resolved_device)
         grid_impl.set_from_mesh(jagged_mesh_vertices._impl, jagged_mesh_faces._impl, voxel_size, origin)
         return cls(impl=grid_impl)
+
+    # Load and save functions
+    @overload
+    @classmethod
+    def from_nanovdb(
+        cls,
+        path: pathlib.Path | str,
+        *,
+        device: DeviceIdentifier = "cpu",
+        verbose: bool = False,
+    ) -> "tuple[Grid, torch.Tensor, str]": ...
+
+    @overload
+    @classmethod
+    def from_nanovdb(
+        cls,
+        path: pathlib.Path | str,
+        *,
+        index: int,
+        device: DeviceIdentifier = "cpu",
+        verbose: bool = False,
+    ) -> "tuple[Grid, torch.Tensor, str]": ...
+
+    @overload
+    @classmethod
+    def from_nanovdb(
+        cls,
+        path: pathlib.Path | str,
+        *,
+        name: str,
+        device: DeviceIdentifier = "cpu",
+        verbose: bool = False,
+    ) -> "tuple[Grid, torch.Tensor, str]": ...
+
+    @classmethod
+    def from_nanovdb(
+        cls,
+        path: pathlib.Path | str,
+        *,
+        index: int | None = None,
+        name: str | None = None,
+        device: DeviceIdentifier = "cpu",
+        verbose: bool = False,
+    ) -> "tuple[Grid, torch.Tensor, str]":
+        """
+        Load a :class:`Grid` from a .nvdb file.
+
+        Args:
+            path (str): The path to the .nvdb file to load
+            index (int | None): Optional single index to load from the file (mutually exclusive with other selectors)
+            name (str | None): Optional single name to load from the file (mutually exclusive with other selectors)
+            device (DeviceIdentifier): Which device to load the grid on
+            verbose (bool): If set to true, print information about the loaded grid
+
+        Returns:
+            grid (Grid): The loaded :class:`Grid`.
+            data (torch.Tensor): A :class:`torch.Tensor` containing the data associated with the grid, with shape ``(grid.num_voxels, channels*)``.
+            name (str): The name of the loaded grid.
+        """
+        from ._Cpp import load as _load
+
+        if isinstance(path, pathlib.Path):
+            path = str(path)
+
+        resolved_device = resolve_device(device)
+
+        # Check that only one selector is provided
+        selectors = [index is not None, name is not None]
+        if sum(selectors) > 1:
+            raise ValueError("Only one of index or name can be specified")
+
+        # Call the appropriate overload
+        if index is not None:
+            grid_impl, data, names_out = _load(path, index, resolved_device, verbose)
+        elif name is not None:
+            grid_impl, data, names_out = _load(path, name, resolved_device, verbose)
+        else:
+            # Load the first grid
+            grid_impl, data, names_out = _load(path, 0, resolved_device, verbose)
+
+        # Wrap the Grid implementation with the Python wrapper
+        return Grid(impl=grid_impl.index_int(0)), data.jdata, names_out[0]
 
     @classmethod
     def from_nearest_voxels_to_points(
@@ -300,7 +390,7 @@ class Grid:
             device (DeviceIdentifier | None): Device to create the grid on. Defaults to ``None``, which inherits from ``points``.
 
         Returns:
-            Grid: A new :class:`Grid` object.
+            grid (Grid): A new :class:`Grid` object.
         """
         resolved_device = resolve_device(device, inherit_from=points)
 
@@ -330,7 +420,7 @@ class Grid:
             device (DeviceIdentifier | None): Device to create the grid on. Defaults to ``None``, which inherits from ``points``.
 
         Returns:
-            Grid: A new :class:`Grid` object.
+            grid (Grid): A new :class:`Grid` object.
         """
         resolved_device = resolve_device(device, inherit_from=points)
 
@@ -408,7 +498,7 @@ class Grid:
             pool_factor (NumericMaxRank1): The factor by which to downsample the grid, broadcastable to shape ``(3,)``, integer dtype
             data (torch.Tensor): The voxel data to pool. A :class:`torch.Tensor` with shape ``(total_voxels, channels)``.
             stride (NumericMaxRank1): The stride to use when pooling. If ``0`` (default), broadcastable to shape ``(3,)``, integer dtype
-            coarse_grid (Grid, optional): Pre-allocated coarse grid to use for output. If ``None``, a new grid is created.
+            coarse_grid (Grid, optional): Pre-allocated coarse grid to use for output. If ``None``, a new :class:`Grid` is created.
 
         Returns:
             pooled_data (torch.Tensor): A tensor containing the pooled voxel data with shape ``(coarse_total_voxels, channels)``.
@@ -773,7 +863,7 @@ class Grid:
     ):
         """
         Inject data associated with a set of source voxel coordinates to a
-        :class:`torch.Tensor` corresponding to voxels in this grid.
+        :class:`torch.Tensor` associated with this grid.
 
         .. note::
 
@@ -1102,15 +1192,13 @@ class Grid:
 
     def is_contiguous(self) -> bool:
         """
-        Check if the grid data is stored contiguously in memory.
-
-        .. note::
-
-            This method always returns ``True`` for grids with a single voxel. It exists
-            solely for API compatibility with :class:`GridBatch`.
+        Check if the grid data is stored contiguously in memory. This is generally ``True`` for
+        :class:`Grid` since it represents a single grid, though can be ``False`` if you
+        constructed the :class:`Grid` using :meth:`from_grid_batch` on a :class:`GridBatch` with more
+        than one grid.
 
         Returns:
-            is_contiguous (bool): ``True``.
+            is_contiguous (bool): ``True`` if all the data for this grid is stored contiguously in memory, ``False`` otherwise.
         """
         return self._impl.is_contiguous()
 
@@ -1177,7 +1265,7 @@ class Grid:
             pool_factor (NumericMaxRank1): The factor by which to downsample the grid, broadcastable to shape ``(3,)``, integer dtype
             data (torch.Tensor): The voxel data to pool. A :class:`torch.Tensor` with shape ``(total_voxels, channels)``.
             stride (NumericMaxRank1): The stride to use when pooling. If ``0`` (default), broadcastable to shape ``(3,)``, integer dtype
-            coarse_grid (Grid, optional): Pre-allocated coarse grid to use for output. If ``None``, a new grid is created.
+            coarse_grid (Grid, optional): Pre-allocated coarse grid to use for output. If ``None``, a new :class:`Grid` is created.
 
         Returns:
             pooled_data (torch.Tensor): A tensor containing the pooled voxel data with shape ``(coarse_total_voxels, channels)``.
@@ -1322,7 +1410,7 @@ class Grid:
 
     def read_from_dense_cminor(self, dense_data: torch.Tensor, dense_origin: NumericMaxRank1 = 0) -> torch.Tensor:
         """
-        Read values from a dense :class:`torch.Tensor` into a :class:`torch.Tensor` corresponding to voxels in this :class:`Grid`.
+        Read values from a dense :class:`torch.Tensor` into a :class:`torch.Tensor` associated with this :class:`Grid`.
 
         This is the "C Minor" (channels minor) version, which assumes the ``dense_data`` is in XYZC order. *i.e* the
         dense tensor has shape ``[dense_size_x, dense_size_y, dense_size_z, channels*]``.
@@ -1334,6 +1422,10 @@ class Grid:
         .. seealso::
 
             :meth:`read_from_dense_cmajor` for the "C Major" (channels major) version, which assumes the ``dense_data`` is in CXYZ order.
+
+        .. seealso::
+
+            :meth:`write_to_dense_cminor` for writing data to a dense tensor in C Minor order.
 
         Args:
             dense_data (torch.Tensor): Dense :class:`torch.Tensor` to read from. Shape: ``(dense_size_x, dense_size_y, dense_size_z, channels*)``.
@@ -1349,9 +1441,9 @@ class Grid:
 
     def read_from_dense_cmajor(self, dense_data: torch.Tensor, dense_origin: NumericMaxRank1 = 0) -> torch.Tensor:
         """
-        Read values from a dense :class:`torch.Tensor` into a :class:`torch.Tensor` corresponding to voxels in this :class:`Grid`.
+        Read values from a dense :class:`torch.Tensor` into a :class:`torch.Tensor` associated with this :class:`Grid`.
 
-        This is the "C Minor" (channels minor) version, which assumes the ``dense_data`` is in XYZC order. *i.e* the
+        This is the "C Major" (channels major) version, which assumes the ``dense_data`` is in CXYZ order. *i.e* the
         dense tensor has shape ``[channels*, dense_size_x, dense_size_y, dense_size_z]``.
 
         .. note::
@@ -1546,8 +1638,9 @@ class Grid:
         inside, and ``t_end`` is the distance when the ray exits the grid.
 
         Args:
-            ray_origins (torch.Tensor): Origin of each ray. Shape: ``(num_rays, 3)``.
-            ray_directions (torch.Tensor): Direction of each ray. Shape: ``(num_rays, 3)``.
+            ray_origins (torch.Tensor): Starting points of rays in world space. A :class:`torch.Tensor` with shape ``(num_rays, 3)``.
+            ray_directions (torch.Tensor): Direction vectors of rays. A :class:`torch.Tensor` with shape: ``(num_rays, 3)``.
+                Note that the intersection distances are returned as a multiple of the ray direction length.
             max_segments (int): Maximum number of segments to return per-ray.
             eps (float): Small epsilon value which can help with numerical stability. Default is ``0.0``.
 
@@ -1652,27 +1745,35 @@ class Grid:
         fine_grid: "Grid | None" = None,
     ) -> tuple[torch.Tensor, "Grid"]:
         """
-        Return a refined version of the input grid and associated data.
+        Refine data associated with this :class:`Grid` into a higher-resolution grid by subdividing each voxel.
+        *i.e* for each voxel, ``(i, j, k)`` in this :class:`Grid`, copy the data associated with that voxel to
+        the voxels ``(subdiv_factor[0]*i + di, subdiv_factor[1]*j + dj, subdiv_factor[2]*k + dk)``
+        for ``di, dj, dk`` in ``{0, ..., subdiv_factor - 1}`` in the output data associated with ``fine_grid``, if
+        the that voxel exists.
 
-        The output grid is a higher-resolution version of the input grid,
-        created by subdividing each voxel by the specified factor.
-        The associated data with each voxel in the output is copied from the associated
-        data of the corresponding parent voxel in the input grid.
+        .. note::
 
-        _i.e_, if the input grid has a single voxel at index (i, j, k) with associated data D,
-        and the subdiv_factor is (2, 2, 2), then the output grid will have voxels
-        at indices (2i + di, 2j + dj, 2k + dk) for di, dj, dk in {0, 1},
-        each with associated data D.
+            If you pass ``fine_grid = None``, this method will create a new fine grid with its
+            voxel size divided by the ``subdiv_factor`` and its origin adjusted accordingly.
+
+        .. note::
+
+            You can skip copying data at certain voxels in this :class:`Grid` by passing a boolean ``mask`` of shape ``(self.num_voxels,)``.
+            Only data at voxels corresponding to ``True`` values in the mask will be refined.
+
+        .. note::
+
+            This method supports backpropagation through the refinement operation.
+
+        .. seealso::
+
+            :meth:`refined_grid` for obtaining a refined version of the grid structure without refining data.
 
         Args:
-            subdiv_factor (NumericMaxRank1): Factor by which to refine the grid,
-                broadcastable to shape (3,), integer dtype
-            data (torch.Tensor): Voxel data to refine.
-                Shape: (total_voxels, channels).
-            mask (torch.Tensor, optional): Boolean mask indicating which
-                voxels to refine. If None, all voxels are refined.
-            fine_grid (Grid, optional): Pre-allocated fine grid to use for output.
-                If None, a new grid is created.
+            subdiv_factor (NumericMaxRank1): Refinement factor between this :class:`Grid` and the fine grid, broadcastable to shape ``(3,)``, integer dtype
+            data (torch.Tensor): Voxel data to refine. A :class:`torch.Tensor` of shape ``(total_voxels, channels)``.
+            mask (torch.Tensor, optional): Boolean mask of shape ``(self.num_voxels,)``indicating which voxels in the input :class:`Grid` to refine. If ``None``, data associated with all input voxels are refined.
+            fine_grid (Grid, optional): Pre-allocated fine grid to use for output. If ``None``, a new grid is created.
 
         Returns:
             tuple[torch.Tensor, Grid]: A tuple containing:
@@ -1696,17 +1797,22 @@ class Grid:
         mask: torch.Tensor | None = None,
     ) -> "Grid":
         """
-        Return a refined version of the grid.
+        Return a refined version of the grid. *i.e* each voxel in this :class:`Grid` is subdivided
+        by the specified ``subdiv_factor`` to create a higher-resolution grid.
 
-        The output grid is a higher-resolution version of the input grid,
-        created by subdividing each voxel by the specified factor.
-        This is similar to the `refine` method, but only the grid structure is returned,
-        not the data.
+        .. note::
+
+            You can skip refining certain voxels in this :class:`Grid` by passing a boolean
+            ``mask`` of shape ``(self.num_voxels,)``. Only voxels corresponding to ``True``
+            values in the mask will be refined.
+
+        .. seealso::
+
+            :meth:`refine` for copying data from a coarse :class:`Grid` to a refined :class:`Grid`.
+
         Args:
-            subdiv_factor (NumericMaxRank1): Factor by which to refine the grid,
-                broadcastable to shape (3,), integer dtype
-            mask (torch.Tensor, optional): Boolean mask indicating which
-                voxels to refine. If None, all voxels are refined.
+            subdiv_factor (NumericMaxRank1): Factor by which to refine this :class:`Grid`, broadcastable to shape ``(3,)``, integer dtype
+            mask (torch.Tensor, optional): Boolean mask indicating which voxels to refine. If ``None``, all voxels are refined.
 
         Returns:
             Grid: A new Grid with refined structure.
@@ -1717,20 +1823,53 @@ class Grid:
 
         return Grid(impl=self._impl.refined_grid(subdiv_factor, mask=jagged_mask_impl))
 
-    def to(self, target: "str | torch.device | torch.Tensor | JaggedTensor | Grid") -> "Grid":
+    def save_nanovdb(
+        self,
+        path: str | pathlib.Path,
+        data: torch.Tensor | None = None,
+        name: str | None = None,
+        compressed: bool = False,
+        verbose: bool = False,
+    ) -> None:
         """
-        Move grid batch to a target device or match device of target object.
+        Save this :class:`Grid` and optional data associated with it to a .nvdb file.
+
+        The grid is saved in the NanoVDB format, which can be loaded by other
+        applications that support OpenVDB/NanoVDB.
 
         Args:
-            target: Target to determine device. Can be:
-                - str: Device string (e.g., "cuda", "cpu")
-                - torch.device: PyTorch device object
-                - torch.Tensor: Match device of this tensor
-                - JaggedTensor: Match device of this JaggedTensor
-                - Grid: Match device of this Grid
+            path (str | pathlib.Path): The file path to save to. Should have .nvdb extension.
+            data (torch.Tensor, optional): Voxel data to save with the grid.
+                Shape: ``(self.num_voxels, channels)``. If ``None``, only grid structure is saved.
+            name (str, optional): Optional name for the grid
+            compressed (bool): Whether to compress the data using Blosc compression.
+                Default is ``False``.
+            verbose (bool): Whether to print information about the saved grids.
+                Default is ``False``.
+        """
+        from ._Cpp import save as _save
+
+        if isinstance(path, pathlib.Path):
+            path = str(path)
+
+        jagged_data_impl = JaggedTensor(data)._impl if data is not None else None
+
+        # Handle the overloaded signature - if name is provided, use it
+        if name is not None:
+            _save(path, self._impl, jagged_data_impl, name, compressed, verbose)
+        else:
+            # Default case with empty names list
+            _save(path, self._impl, jagged_data_impl, [], compressed, verbose)
+
+    def to(self, target: "str | torch.device | torch.Tensor | JaggedTensor | Grid") -> "Grid":
+        """
+        Move grid batch to a target device or to match the device of an object (*e.g.* another :class:`Grid`, a :class:`JaggedTensor`, a :class:`torch.Tensor`, etc.).
+
+        Args:
+            target (str | torch.device | torch.Tensor | JaggedTensor | Grid): Target object to determine the device.
 
         Returns:
-            Grid: A new Grid on the target device.
+            grid (Grid): A new :class:`Grid` on the target device or this :class:`Grid` if the target device is the same as ``self.device``.
         """
         if isinstance(target, str):
             device = _parse_device_string(target)
@@ -1759,33 +1898,44 @@ class Grid:
         eps: float = 0.0,
     ) -> JaggedTensor:
         """
-        Generate uniform samples along rays within the grid.
+        Generate uniformly spaced samples along rays intersecting this :class:`Grid`.
 
-        Creates sample points at regular intervals along rays, but only for segments
-        that intersect with active voxels. Useful for volume rendering and ray marching.
+        This method creates sample points at regular intervals along rays, but only for segments
+        that intersect with active voxels. The uniform samples start at
+        ``ray_origins + ray_directions * t_min`` and end at ``ray_origins + ray_directions * t_max``,
+        with spacing defined by ``step_size``, and only include samples which lie within the grid.
+
+        If ``cone_angle`` is greater than zero, the method uses cone tracing to adjust the
+        sampling rate based on the distance from the ray origin, allowing for adaptive sampling.
+
+        .. note::
+
+            The returned samples are represented as a :class:`~fvdb.JaggedTensor`, where each
+            element contains either the start and end distance of each sample segment along the ray
+            or the midpoint of each sample segment if ``return_midpoints`` is ``True``.
+
+        .. note::
+
+            If ``include_end_segments`` is ``True``, partial segments at the start and end of each ray
+            that do not fit the full ``step_size`` will be included.
 
         Args:
-            ray_origins (torch.Tensor): Starting points of rays in world space.
-                Shape: (num_rays, 3).
-            ray_directions (torch.Tensor): Direction vectors of rays (should be normalized).
-                Shape: (num_rays, 3).
-            t_min (torch.Tensor): Minimum distance along rays to start sampling.
-                Shape: (num_rays,).
-            t_max (torch.Tensor): Maximum distance along rays to stop sampling.
-                Shape: (num_rays,).
+            ray_origins (torch.Tensor): Starting points of rays in world space. A :class:`torch.Tensor` with shape ``(num_rays, 3)``.
+            ray_directions (torch.Tensor): Direction vectors of rays. A :class:`torch.Tensor` with shape: ``(num_rays, 3)``.
+                Note that the intersection distances are returned as a multiple of the ray direction length.
+            t_min (torch.Tensor): Minimum distance along rays to start sampling. A :class:`~torch.Tensor` of shape ``(num_rays,)``.
+            t_max (torch.Tensor): Maximum distance along rays to stop sampling. A :class:`~torch.Tensor` of shape ``(num_rays,)``.
             step_size (float): Distance between samples along each ray.
             cone_angle (float): Cone angle for cone tracing (in radians). Default is 0.0.
-            include_end_segments (bool): Whether to include partial segments at ray ends.
-                Default is True.
-            return_midpoints (bool): Whether to return segment midpoints instead of start points.
-                Default is False.
-            eps (float): Epsilon value for numerical stability. Default is 0.0.
+            include_end_segments (bool): Whether to include partial segments at ray ends. Default is ``True``.
+            return_midpoints (bool): Whether to return segment midpoints instead of start points *i.e* if this value is ``True``, the samples will lie halfway between each step. Default is ``False``.
+            eps (float): Epsilon value which can improve numerical stability. Default is ``0.0``.
 
         Returns:
-            torch.Tensor: containing the samples along the rays. i.e. a torch.Tensor
-              with lshape [S_{0}, ..., S_{N_0}] and eshape (2,) or (1,) representing the
-              start and end distance of each sample or the midpoint
-              of each sample if return_midpoints is true.
+            samples (JaggedTensor): A :class:`~fvdb.JaggedTensor` containing the samples along each ray.
+                The :class:`~fvdb.JaggedTensor` has shape: ``(num_rays, num_samples_per_ray,)``,
+                where ``num_samples_per_ray`` varies per ray. Each sample in ``samples[r]`` is a
+                distance along the ray ``ray_origins + ray_directions * t``.
         """
         jagged_ray_origins = JaggedTensor(ray_origins)
         jagged_ray_directions = JaggedTensor(ray_directions)
@@ -1812,30 +1962,36 @@ class Grid:
         ray_directions: torch.Tensor,
         max_voxels: int,
         eps: float = 0.0,
-        return_ijk: bool = True,
+        return_ijk: bool = False,
     ) -> tuple[JaggedTensor, JaggedTensor]:
         """
-        Enumerate voxels intersected by rays.
+        Enumerate the indices of voxels in this :class:`Grid` intersected by a set of rays in the
+        order of their intersection.
 
-        Finds all active voxels that are intersected by the given rays using a
-        DDA (Digital Differential Analyzer) algorithm.
+        .. note::
+
+            If instead of index coordinates, you want voxel coordinates (*i.e.* ``(i, j, k)``),
+            set ``return_ijk=True``.
 
         Args:
-            ray_origins (torch.Tensor): Starting points of rays in world space.
-                Shape: (num_rays, 3).
-            ray_directions (torch.Tensor): Direction vectors of rays (should be normalized).
-                Shape: (num_rays, 3).
+            ray_origins (torch.Tensor): Starting points of rays in world space. A :class:`torch.Tensor` with shape ``(num_rays, 3)``.
+            ray_directions (torch.Tensor): Direction vectors of rays. A :class:`torch.Tensor` with shape: ``(num_rays, 3)``.
+                Note that the intersection distances are returned as a multiple of the ray direction length.
             max_voxels (int): Maximum number of voxels to return per ray.
-            eps (float): Epsilon value for numerical stability. Default is 0.0.
-            return_ijk (bool): Whether to return voxel indices. If False, returns
-                linear indices instead. Default is True.
+            eps (float): Small epsilon value which can help with numerical stability. Default is ``0.0``.
+            return_ijk (bool): Whether to return voxel coordinates instead of index coordinates. If ``False``, returns
+                linear indices instead. Default is ``False``.
 
         Returns:
-            A pair of torch.Tensors containing the voxels (or voxel indices) intersected by the rays. i.e.:
-                - voxels: A torch.Tensor with lshape [V_{0}, ..., V_{N_0}]
-                          and eshape (3,) or (,) containing the ijk coordinates or indices of the voxels
-                - times: A torch.Tensor with lshape [T_{0}, ..., T_{N_0}]
-                          and eshape (2,) containinng the entry and exit distance along the ray of each voxel
+            voxels (JaggedTensor): The voxel indices (or voxel coordinates) intersected by the rays. This is a
+                :class:`~fvdb.JaggedTensor` with shape: ``(num_rays, num_voxels_per_ray,)``,
+                where ``num_voxels_per_ray`` varies per ray up to ``max_voxels``. Each element contains either the linear index of the voxel
+                or the ``(i, j, k)`` coordinates of the voxel if ``return_ijk=True``.
+                *Note:* If ``return_ijk=True``, ``voxels`` will have shape: ``(num_rays, num_voxels_per_ray, 3)``.
+            distances (JaggedTensor): The entry and exit distances along each ray for each intersected voxel. This is a
+                :class:`~fvdb.JaggedTensor` with shape: ``(num_rays, num_voxels_per_ray, 2)``,
+                where ``num_voxels_per_ray`` varies per ray up to ``max_voxels``. Each element contains a pair of distances
+                ``(t_entry, t_exit)``, representing where the ray enters and exits the voxel along its direction.
         """
         jagged_ray_origins = JaggedTensor(ray_origins)
         jagged_ray_directions = JaggedTensor(ray_directions)
@@ -1847,18 +2003,23 @@ class Grid:
 
     def world_to_grid(self, points: torch.Tensor) -> torch.Tensor:
         """
-        Convert world coordinates to grid (index) coordinates.
+        Convert world space coordinates to voxel space coordinates using the
+        world to grid transformation of this :class:`Grid`.
 
-        Transforms positions in world space to their corresponding voxel indices
-        using the grid's origin and voxel size. The resulting coordinates can be
-        fractional for use in interpolation.
+        .. note::
+
+            This method supports backpropagation through the transformation operation.
+
+        .. seealso::
+
+            :meth:`grid_to_world` for the inverse transformation, and :meth:`grid_to_world_matrix` and :meth:`world_to_grid_matrix` for
+            the actual transformation matrices.
 
         Args:
-            points (torch.Tensor): World-space positions to convert.
-                Shape: (num_points, 3).
+            points (torch.Tensor): World-space positions to convert. A :class:`torch.Tensor` with shape ``(num_points, 3)``.
 
         Returns:
-            torch.Tensor: Grid coordinates. Shape: (num_points, 3).
+            voxel_points (torch.Tensor): Grid coordinates. A :class:`torch.Tensor` with shape ``(num_points, 3)``.
                 Can contain fractional values.
         """
         jagged_points = JaggedTensor(points)
@@ -1871,29 +2032,47 @@ class Grid:
         grid_size: NumericMaxRank1 | None = None,
     ) -> torch.Tensor:
         """
-        Write sparse voxel data to a dense tensor.
+        Write values from :class:`torch.Tensor` associated with this :class:`Grid` into a
+        dense :class:`torch.Tensor`.
 
-        This is the "C Minor" (channels minor) version.
+        This is the "C Minor" (channels minor) version, which assumes the ``dense_data`` is in XYZC order. *i.e* the
+        dense tensor has shape ``[dense_size_x, dense_size_y, dense_size_z, channels*]``.
 
-        Data is written to a dense tensor with XYZC order shape:
-        - [dense_size_x, dense_size_y, dense_size_z, channels*]
+        This method creates the dense tensor to return, and fills it with values from the sparse grid
+        within the range defined by ``min_coord`` and ``grid_size``.
+        Voxels not present in the sparse grid are filled with zeros. *.i.e.* this method will copy
+        all the voxel values in the range ``[min_coord, min_coord + grid_size)`` into a dense tensor
+        of shape ``[dense_size_x, dense_size_y, dense_size_z, channels*]``, such that ``min_coord``
+        maps to index ``(0, 0, 0)`` in the dense tensor, and ``min_coord + grid_size - 1`` maps to index
+        ``(dense_size_x - 1, dense_size_y - 1, dense_size_z - 1)`` in the dense tensor.
 
-        Creates a dense tensor and fills it with values from the sparse grid.
-        Voxels not present in the sparse grid are filled with zeros.
+        .. note::
+
+            This method supports backpropagation through the write operation.
+
+        .. seealso::
+
+            :meth:`read_from_dense_cmajor` for reading from a dense tensor in "C Major" order,
+            which assumes the dense tensor has shape ``[channels*, dense_size_x, dense_size_y, dense_size_z]``.
+
+        .. seealso::
+
+            :meth:`write_to_dense_cmajor` for writing to a dense tensor in "C Major" order.
 
         Args:
-            sparse_data (JaggedTensor or torch.Tensor): Sparse voxel features to write.
-                Shape: (total_voxels, channels).
-            min_coord (NumericMaxRank1|None, optional): Minimum coordinates the grid
-                If None, computed from the grid bounds.
-                broadcastable to shape (3,), integer dtype
-            grid_size (NumericMaxRank1|None, optional): Size of the output dense tensor.
-                If None, computed to fit all active voxels.
-                broadcastable to shape (3,), integer dtype
+            sparse_data (torch.Tensor): A :class:`torch.Tensor` of data associated with this :class:`Grid` with
+                shape ``(self.num_voxels, channels*)``.
+            min_coord (NumericMaxRank1|None): Minimum voxel coordinate to read from the :class:`Grid`
+                into the output dense tensor, broadcastable to shape ``(3,)``, integer dtype, or ``None``.
+                If set to ``None``, this will be the minimum voxel coordinate of this :class:`Grid`'s bounding box.
+            grid_size (NumericMaxRank1|None): Size of the output dense tensor, broadcastable to
+                shape ``(3,)``, integer dtype, or ``None``. If ``None``, computed to fit all active
+                voxels starting from ``min_coord``. *i.e.* if ``min_coord`` is ``(2, 2, 2)`` and the
+                maximum active voxel in the grid is ``(5, 5, 5)``, the computed ``grid_size`` will be ``(4, 4, 4)``.
 
         Returns:
-            torch.Tensor: Dense tensor containing the sparse data.
-                Shape: (dense_size_x, dense_size_y, dense_size_z, channels*)
+            dense_data (torch.Tensor): Dense :class:`torch.Tensor` containing the sparse data with
+                shape ``(dense_size_x, dense_size_y, dense_size_z, channels*)``.
         """
         jagged_sparse_data = JaggedTensor(sparse_data)
         min_coord = to_Vec3iBroadcastable(min_coord) if min_coord is not None else None
@@ -1912,29 +2091,47 @@ class Grid:
         grid_size: NumericMaxRank1 | None = None,
     ) -> torch.Tensor:
         """
-        Write sparse voxel data to a dense tensor.
+        Write values from :class:`torch.Tensor` associated with this :class:`Grid` into a
+        dense :class:`torch.Tensor`.
 
-        This is the "C Major" (channels major) version.
+        This is the "C Major" (channels major) version, which assumes the ``dense_data`` is in CXYZ order. *i.e* the
+        dense tensor has shape ``[channels*, dense_size_x, dense_size_y, dense_size_z]``.
 
-        Data is written to a dense tensor with CXYZ order shape:
-        - [channels*, dense_size_x, dense_size_y, dense_size_z]
+        This method creates the dense tensor to return, and fills it with values from the sparse grid
+        within the range defined by ``min_coord`` and ``grid_size``.
+        Voxels not present in the sparse grid are filled with zeros. *.i.e.* this method will copy
+        all the voxel values in the range ``[min_coord, min_coord + grid_size)`` into a dense tensor
+        of shape ``[dense_size_x, dense_size_y, dense_size_z, channels*]``, such that ``min_coord``
+        maps to index ``(0, 0, 0)`` in the dense tensor, and ``min_coord + grid_size - 1`` maps to index
+        ``(dense_size_x - 1, dense_size_y - 1, dense_size_z - 1)`` in the dense tensor.
 
-        Creates a dense tensor and fills it with values from the sparse grid.
-        Voxels not present in the sparse grid are filled with zeros.
+        .. note::
+
+            This method supports backpropagation through the write operation.
+
+        .. seealso::
+
+            :meth:`read_from_dense_cmajor` for reading from a dense tensor in "C Major" order,
+            which assumes the dense tensor has shape ``[channels*, dense_size_x, dense_size_y, dense_size_z]``.
+
+        .. seealso::
+
+            :meth:`write_to_dense_cminor` for writing to a dense tensor in "C Minor" order.
 
         Args:
-            sparse_data (JaggedTensor or torch.Tensor): Sparse voxel features to write.
-                Shape: (total_voxels, channels).
-            min_coord (NumericMaxRank1|None, optional): Minimum coordinates the grid
-                If None, computed from the grid bounds.
-                broadcastable to shape (3,), integer dtype
-            grid_size (NumericMaxRank1|None, optional): Size of the output dense tensor.
-                If None, computed to fit all active voxels.
-                broadcastable to shape (3,), integer dtype
+            sparse_data (torch.Tensor): A :class:`torch.Tensor` of data associated with this :class:`Grid` with
+                shape ``(self.num_voxels, channels*)``.
+            min_coord (NumericMaxRank1|None): Minimum voxel coordinate to read from the :class:`Grid`
+                into the output dense tensor, broadcastable to shape ``(3,)``, integer dtype, or ``None``.
+                If set to ``None``, this will be the minimum voxel coordinate of this :class:`Grid`'s bounding box.
+            grid_size (NumericMaxRank1|None): Size of the output dense tensor, broadcastable to
+                shape ``(3,)``, integer dtype, or ``None``. If ``None``, computed to fit all active
+                voxels starting from ``min_coord``. *i.e.* if ``min_coord`` is ``(2, 2, 2)`` and the
+                maximum active voxel in the grid is ``(5, 5, 5)``, the computed ``grid_size`` will be ``(4, 4, 4)``.
 
         Returns:
-            torch.Tensor: Dense tensor containing the sparse data.
-                Shape: (channels*, dense_size_x, dense_size_y, dense_size_z)
+            dense_data (torch.Tensor): Dense :class:`torch.Tensor` containing the sparse data with
+                shape ``(channels*, dense_size_x, dense_size_y, dense_size_z)``.
         """
         jagged_sparse_data = JaggedTensor(sparse_data)
         min_coord = to_Vec3iBroadcastable(min_coord) if min_coord is not None else None
@@ -2127,113 +2324,3 @@ class Grid:
     def _gridbatch(self):
         # Access underlying GridBatchCpp - use sparingly during migration
         return self._impl
-
-
-# Load and save functions
-@overload
-def load_grid(
-    path: str,
-    *,
-    device: DeviceIdentifier = "cpu",
-    verbose: bool = False,
-) -> tuple[Grid, torch.Tensor, str]: ...
-
-
-@overload
-def load_grid(
-    path: str,
-    *,
-    index: int,
-    device: DeviceIdentifier = "cpu",
-    verbose: bool = False,
-) -> tuple[Grid, torch.Tensor, str]: ...
-
-
-@overload
-def load_grid(
-    path: str,
-    *,
-    name: str,
-    device: DeviceIdentifier = "cpu",
-    verbose: bool = False,
-) -> tuple[Grid, torch.Tensor, str]: ...
-
-
-def load_grid(
-    path: str,
-    *,
-    index: int | None = None,
-    name: str | None = None,
-    device: DeviceIdentifier = "cpu",
-    verbose: bool = False,
-) -> tuple[Grid, torch.Tensor, str]:
-    """Load a grid from a .nvdb file.
-
-    Args:
-        path: The path to the .nvdb file to load
-        index: Optional single index to load from the file (mutually exclusive with other selectors)
-        name: Optional single name to load from the file (mutually exclusive with other selectors)
-        device: Which device to load the grid on
-        verbose: If set to true, print information about the loaded grid
-
-    Returns:
-        A tuple (grid, data, name) where grid is a Grid containing the loaded
-        grid, data is a torch.Tensor containing the data of the grid, and name is the name of the grid
-    """
-    from ._Cpp import load as _load
-
-    resolved_device = resolve_device(device)
-
-    # Check that only one selector is provided
-    selectors = [index is not None, name is not None]
-    if sum(selectors) > 1:
-        raise ValueError("Only one of index or name can be specified")
-
-    # Call the appropriate overload
-    if index is not None:
-        grid_impl, data, names_out = _load(path, index, resolved_device, verbose)
-    elif name is not None:
-        grid_impl, data, names_out = _load(path, name, resolved_device, verbose)
-    else:
-        # Load the first grid
-        grid_impl, data, names_out = _load(path, 0, resolved_device, verbose)
-
-    # Wrap the Grid implementation with the Python wrapper
-    return Grid(impl=grid_impl.index_int(0)), data.jdata, names_out[0]
-
-
-def save_grid(
-    path: str,
-    grid: Grid,
-    data: torch.Tensor | None = None,
-    name: str | None = None,
-    compressed: bool = False,
-    verbose: bool = False,
-) -> None:
-    """
-    Save a grid and optional voxel data to a .nvdb file.
-
-    Saves sparse grid in the NanoVDB format, which can be loaded by other
-    applications that support OpenVDB/NanoVDB.
-
-    Args:
-        path (str): The file path to save to. Should have .nvdb extension.
-        grid (Grid): The grid to save.
-        data (torch.Tensor, optional): Voxel data to save with the gris.
-            Shape: (total_voxels, channels). If None, only grid structure is saved.
-        name (str, optional): Optional name for the grid
-        compressed (bool): Whether to compress the data using Blosc compression.
-            Default is False.
-        verbose (bool): Whether to print information about the saved grids.
-            Default is False.
-    """
-    from ._Cpp import save as _save
-
-    jagged_data_impl = JaggedTensor(data)._impl if data is not None else None
-
-    # Handle the overloaded signature - if name is provided, use it
-    if name is not None:
-        _save(path, grid._impl, jagged_data_impl, name, compressed, verbose)
-    else:
-        # Default case with empty names list
-        _save(path, grid._impl, jagged_data_impl, [], compressed, verbose)

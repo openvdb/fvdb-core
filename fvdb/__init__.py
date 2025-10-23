@@ -83,11 +83,7 @@ from .grid_batch import (
 )
 
 
-from .grid import (
-    Grid,
-    load_grid,
-    save_grid,
-)
+from .grid import Grid
 
 
 def scaled_dot_product_attention(
@@ -193,8 +189,6 @@ __all__ = [
     "volume_render",
     "gaussian_render_jagged",
     "Grid",
-    "load_grid",
-    "save_grid",
     "viz",
     "nn",
     "utils",
