@@ -27,17 +27,12 @@ mesh extraction, and coordinate transformations on sparse voxel data.
 """
 
 import pathlib
-from collections.abc import Iterator
-from types import ClassMethodDescriptorType
-from typing import TYPE_CHECKING, Any, Sequence, cast, overload
+from typing import TYPE_CHECKING, Any, cast, overload
 
-import numpy as np
 import torch
 
 from . import _parse_device_string
-from ._Cpp import ConvPackBackend
 from ._Cpp import GridBatch as GridBatchCpp
-from ._Cpp import JaggedTensor as JaggedTensorCpp
 from .jagged_tensor import JaggedTensor
 from .types import (
     DeviceIdentifier,
@@ -46,7 +41,6 @@ from .types import (
     resolve_device,
     to_Vec3f,
     to_Vec3fBatch,
-    to_Vec3fBatchBroadcastable,
     to_Vec3fBroadcastable,
     to_Vec3i,
     to_Vec3iBroadcastable,
@@ -67,13 +61,43 @@ class Grid:
 
     A :class:`Grid` does not store
     data itself, but rather the structure (or topology) of the sparse voxel grid. Voxel data
-    (e.g., features, colors, densities) are stored separately as :class:`torch.Tensor` objects,
-    which a grid can be used to index into. This allows multiple grids to share the same data
+    (e.g., features, colors, densities) are stored separately as :class:`torch.Tensor` associated with
+    the grid. This separation allows for flexibility in the type and number of channels of data with
+    which a grid can be used to index into. This also allows multiple grids to share the same data
     storage if desired.
 
-    The grid is stored in a sparse format using `NanoVDB <https://github.com/AcademySoftwareFoundation/openvdb/tree/feature/nanovdb>`_
-    where only active (non-empty) voxels are allocated, making it extremely memory efficient for representing large volumes with sparse
-    occupancy.
+    When using a :class:`Grid`, voxel coordinates, there are three important coordinate systems to be aware of:
+
+    - **World Space**: The continuous 3D coordinate system in which the grid exists.
+    - **Voxel Space**: The discrete voxel index system, where each voxel is identified by its integer indices (i, j, k).
+    - **Index Space**: The linear indexing of active voxels in the grid's internal storage.
+
+    At its core, a :class:`Grid` uses a very fast mapping from voxel space into index space to perform operations on a :class:`torch.Tensor` of
+    data associated with the grid. This mapping allows for efficient access and manipulation of voxel data. For example:
+
+    .. code-block:: python
+
+        voxel_coords = torch.tensor([[8, 7, 6], [1, 2, 3], [4, 5, 6]], device="cuda")  # Voxel space coordinates
+
+        # Create a Grid containing the voxels (8, 7, 6), (1, 2, 3), and (4, 5, 6) such that the voxels
+        # have a world space size of 1x1x1, and where the [0, 0, 0] voxel in voxel space is at world space origin (0, 0, 0).
+        grid = Grid.from_ijk(voxel_coords, voxel_size=1.0, origin=0.0, device="cuda")
+
+        # Create some data associated with the grid - here we have 3 voxels and 2 channels per voxel
+        voxel_data = torch.randn(grid.num_voxels, 2, device="cuda")  # Index space data
+
+        # Map voxel space coordinates to index space
+        indices = grid.ijk_to_index(voxel_coords)  # Shape: (3,)
+
+        # Access the data for the specified voxel coordinates
+        selected_data = voxel_data[indices]  # Shape: (3, 2)
+
+
+    .. note::
+
+        The grid is stored in a sparse format using `NanoVDB <https://github.com/AcademySoftwareFoundation/openvdb/tree/feature/nanovdb>`_
+        where only active (non-empty) voxels are allocated, making it extremely memory efficient for representing large volumes with sparse
+        occupancy.
 
     .. note::
 
@@ -239,7 +263,7 @@ class Grid:
             ijk (torch.Tensor): Voxel coordinates to populate. A :class:`torch.Tensor` with shape ``(num_voxels, 3)`` with integer coordinates.
             voxel_size (NumericMaxRank1): Size of each voxel, broadcastable to shape ``(3,)``, floating dtype
             origin (NumericMaxRank1): Origin of the grid. *i.e.* the world-space position of the center of the ``[0,0,0]`` voxel, broadcastable to shape ``(3,)``, floating dtype
-            device (DeviceIdentifier | None): Device to create the grid on. Defaults to None, which inherits from ``ijk``.
+            device (DeviceIdentifier | None): Device to create the grid on. Defaults to None, which inherits the device of ``ijk``.
 
         Returns:
             grid (Grid): A new :class:`Grid` object.
@@ -274,7 +298,7 @@ class Grid:
             mesh_faces (torch.Tensor): Faces of the mesh. A :class:`torch.Tensor` with shape ``(num_faces, 3)``.
             voxel_size (NumericMaxRank1): Size of each voxel, broadcastable to shape ``(3,)``, floating dtype
             origin (NumericMaxRank1): Origin of the grid. *i.e.* the world-space position of the center of the ``[0,0,0]`` voxel, broadcastable to shape ``(3,)``, floating dtype
-            device (DeviceIdentifier | None): Device to create the grid on. Defaults to ``None``, which inherits from ``mesh_vertices``.
+            device (DeviceIdentifier | None): Device to create the grid on. Defaults to ``None``, which inherits the device of ``mesh_vertices``.
 
         Returns:
             grid (Grid): A new :class:`Grid` object with voxels covering the surface of the input mesh.
@@ -387,7 +411,7 @@ class Grid:
             points (torch.Tensor): Points to populate the grid from. A :class:`torch.Tensor` with shape ``(num_points, 3)``.
             voxel_size (NumericMaxRank1): Size of each voxel, broadcastable to shape ``(3,)``, floating dtype
             origin (NumericMaxRank1): Origin of the grid, broadcastable to shape ``(3,)``, floating dtype
-            device (DeviceIdentifier | None): Device to create the grid on. Defaults to ``None``, which inherits from ``points``.
+            device (DeviceIdentifier | None): Device to create the grid on. Defaults to ``None``, which inherits the device of ``points``.
 
         Returns:
             grid (Grid): A new :class:`Grid` object.
@@ -417,7 +441,7 @@ class Grid:
             points (torch.Tensor): Points to populate the grid from. A :class:`torch.Tensor` with shape ``(num_points, 3)``.
             voxel_size (NumericMaxRank1): Size of each voxel, broadcastable to shape ``(3,)``, floating dtype
             origin (NumericMaxRank1): Origin of the grid, broadcastable to shape ``(3,)``, floating dtype
-            device (DeviceIdentifier | None): Device to create the grid on. Defaults to ``None``, which inherits from ``points``.
+            device (DeviceIdentifier | None): Device to create the grid on. Defaults to ``None``, which inherits the device of ``points``.
 
         Returns:
             grid (Grid): A new :class:`Grid` object.
@@ -448,7 +472,7 @@ class Grid:
             origin (NumericMaxRank1): Origin of the grid, broadcastable to shape ``(3,)``, floating dtype. Defaults to ``0``.
 
         Returns:
-            Grid: A new :class:`Grid` object with zero voxels.
+            grid (Grid): A new :class:`Grid` object with zero voxels.
 
         Examples:
 
@@ -593,7 +617,7 @@ class Grid:
 
     def conv_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> "Grid":
         """
-        Return a :class:`Grid` representing the active voxels at the output of a convolution applied this :class:`Grid` with a given kernel.
+        Return a :class:`Grid` representing the active voxels at the output of a convolution applied to this :class:`Grid` with a given kernel.
 
         Args:
             kernel_size (NumericMaxRank1): The size of the kernel to convolve with, broadcastable to shape ``(3,)``, integer dtype
@@ -815,7 +839,7 @@ class Grid:
 
         .. note::
 
-            The copy occurs in voxel space, the grid-to-world transform is not applied.
+            The copy occurs in voxel space, the voxel-to-world transform is not applied.
 
         .. note::
 
@@ -1317,8 +1341,8 @@ class Grid:
     def points_in_grid(self, points: torch.Tensor) -> torch.Tensor:
         """
         Check if world-space points are located within active voxels. This method applies the
-        world-to-grid transform of this :class:`Grid` to each point, then checks if the resulting
-        grid coordinates correspond to active voxels.
+        world-to-voxel transform of this :class:`Grid` to each point, then checks if the resulting
+        voxel coordinates correspond to active voxels.
 
         Args:
             points (torch.Tensor): World-space points to test. A :class:`torch.Tensor` with shape ``(num_queries, 3)``.
@@ -1505,7 +1529,7 @@ class Grid:
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Sample data in a :class:`torch.Tensor` associated with this :class:`Grid` at world-space
-        points using Bézier interpolation, and return the spatial gradients at those points.
+        points using Bézier interpolation, and return the sampled values and their spatial gradients at those points.
 
         This method interpolates data at voxel centers in continuous world-space positions using cubic Bézier
         interpolation. This provides smoother interpolation than trilinear but is more
@@ -1588,7 +1612,7 @@ class Grid:
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Sample data in a :class:`torch.Tensor` associated with this :class:`Grid` at world-space
-        points using trilinear interpolation, and return the spatial gradients at those points.
+        points using trilinear interpolation, and return the sampled values and their spatial gradients at those points.
 
         This method interpolates data at voxel centers in continuous world-space positions using trilinear
         interpolation.
@@ -1666,7 +1690,9 @@ class Grid:
 
         .. note::
 
-            Halo convolution only supports convolving when the input and output grids are the same.
+            Halo convolution only supports convolving when the input and output grid topology match, thus
+            this method does not accept an output grid. *i.e.* the output features will be associated with
+            this :class:`Grid`.
 
         Args:
             input (torch.Tensor): Input features for each voxel in this :class:`Grid`.
@@ -1753,7 +1779,7 @@ class Grid:
 
         .. note::
 
-            If you pass ``fine_grid = None``, this method will create a new fine grid with its
+            If you pass ``fine_grid = None``, this method will create a new fine :class:`Grid` with its
             voxel size divided by the ``subdiv_factor`` and its origin adjusted accordingly.
 
         .. note::
@@ -1773,7 +1799,7 @@ class Grid:
             subdiv_factor (NumericMaxRank1): Refinement factor between this :class:`Grid` and the fine grid, broadcastable to shape ``(3,)``, integer dtype
             data (torch.Tensor): Voxel data to refine. A :class:`torch.Tensor` of shape ``(total_voxels, channels)``.
             mask (torch.Tensor, optional): Boolean mask of shape ``(self.num_voxels,)``indicating which voxels in the input :class:`Grid` to refine. If ``None``, data associated with all input voxels are refined.
-            fine_grid (Grid, optional): Pre-allocated fine grid to use for output. If ``None``, a new grid is created.
+            fine_grid (Grid, optional): Pre-allocated fine :class:`Grid` to use for output. If ``None``, a new :class:`Grid` is created.
 
         Returns:
             tuple[torch.Tensor, Grid]: A tuple containing:
@@ -1797,7 +1823,7 @@ class Grid:
         mask: torch.Tensor | None = None,
     ) -> "Grid":
         """
-        Return a refined version of the grid. *i.e* each voxel in this :class:`Grid` is subdivided
+        Return a refined version of this :class:`Grid`. *i.e* each voxel in this :class:`Grid` is subdivided
         by the specified ``subdiv_factor`` to create a higher-resolution grid.
 
         .. note::
@@ -1815,7 +1841,7 @@ class Grid:
             mask (torch.Tensor, optional): Boolean mask indicating which voxels to refine. If ``None``, all voxels are refined.
 
         Returns:
-            Grid: A new Grid with refined structure.
+            grid (Grid): A new :class:`Grid` with refined structure.
         """
 
         subdiv_factor = to_Vec3iBroadcastable(subdiv_factor, value_constraint=ValueConstraint.POSITIVE)
@@ -1844,7 +1870,7 @@ class Grid:
             name (str, optional): Optional name for the grid
             compressed (bool): Whether to compress the data using Blosc compression.
                 Default is ``False``.
-            verbose (bool): Whether to print information about the saved grids.
+            verbose (bool): Whether to print information about the saved grid.
                 Default is ``False``.
         """
         from ._Cpp import save as _save
@@ -1863,7 +1889,7 @@ class Grid:
 
     def to(self, target: "str | torch.device | torch.Tensor | JaggedTensor | Grid") -> "Grid":
         """
-        Move grid batch to a target device or to match the device of an object (*e.g.* another :class:`Grid`, a :class:`JaggedTensor`, a :class:`torch.Tensor`, etc.).
+        Move this :class:`Grid` to a target device or to match the device of an object (*e.g.* another :class:`Grid`, a :class:`JaggedTensor`, a :class:`torch.Tensor`, etc.).
 
         Args:
             target (str | torch.device | torch.Tensor | JaggedTensor | Grid): Target object to determine the device.
@@ -2004,7 +2030,7 @@ class Grid:
     def world_to_grid(self, points: torch.Tensor) -> torch.Tensor:
         """
         Convert world space coordinates to voxel space coordinates using the
-        world to grid transformation of this :class:`Grid`.
+        world-to-voxel transformation of this :class:`Grid`.
 
         .. note::
 
@@ -2226,12 +2252,12 @@ class Grid:
     @property
     def grid_to_world_matrix(self) -> torch.Tensor:
         """
-        The grid-to-world transformation matrix for this :class:`Grid`, which
+        The voxel-to-world transformation matrix for this :class:`Grid`, which
         transforms voxel space coordinates to world space coordinates.
 
         Returns:
             grid_to_world_matrix (torch.Tensor): A ``(4, 4)``-shaped tensor representing the
-                grid-to-world transformation matrix.
+                voxel-to-world transformation matrix.
         """
         return self._impl.grid_to_world_matrices[0]
 
@@ -2310,12 +2336,12 @@ class Grid:
     @property
     def world_to_grid_matrix(self) -> torch.Tensor:
         """
-        The world-to-grid transformation matrix for this :class:`Grid`, which
+        The world-to-voxel transformation matrix for this :class:`Grid`, which
         transforms world space coordinates to voxel space coordinates.
 
         Returns:
             world_to_grid_matrix (torch.Tensor): A ``(4, 4)``-shaped tensor representing the
-                world-to-grid transformation matrix.
+                world-to-voxel transformation matrix.
         """
         return self._impl.world_to_grid_matrices[0]
 
