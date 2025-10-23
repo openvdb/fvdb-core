@@ -2,9 +2,8 @@ Welcome to ƒVDB!
 =================
 
 fVDB is a Python library of data structures and algorithms for building high-performance and large-domain
-spatial applications on the GPU in `PyTorch <https://pytorch.org/>`_.  fVDB builds on top of the The
-Academy Software Foundation's `OpenVDB <https://www.openvdb.org>`_ and its GPU-friendly
-implementation, `NanoVDB <https://dl.acm.org/doi/abs/10.1145/3450623.3464653>`_.
+spatial applications using `NanoVDB <https://dl.acm.org/doi/abs/10.1145/3450623.3464653>`_ on the GPU
+in `PyTorch <https://pytorch.org/>`_.
 Applications of fVDB include 3D deep learning, computer graphics/vision, robotics, and scientific computing.
 
 .. raw:: html
