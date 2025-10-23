@@ -25,7 +25,7 @@ During the project's initial development stages, it is necessary to [run the bui
 
 |   PyTorch      | Python      | CUDA |
 | -------------- | ----------- | ------------ |
-|  2.8.0-2.9.0   | 3.10 - 3.12 | 12.8 - 13.0 |
+|  2.8.0-2.9.0   | 3.10 - 3.13 | 12.8 - 13.0 |
 
 
 
