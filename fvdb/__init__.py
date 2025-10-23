@@ -177,6 +177,8 @@ __all__ = [
     "JaggedTensor",
     "GaussianSplat3d",
     "ProjectedGaussianSplats",
+    "ProjectionType",
+    "ShOrderingMode",
     "ConvolutionPlan",
     "load_gridbatch",
     "save_gridbatch",

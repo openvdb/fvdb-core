@@ -1,4 +1,4 @@
-``fvdb.ConvolutionPlan``
+Sparse Convolution
 ==========================
 
 .. autoclass:: fvdb.ConvolutionPlan

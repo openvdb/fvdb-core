@@ -243,6 +243,71 @@ class ProjectedGaussianSplats:
 
 
 class GaussianSplat3d:
+    """
+    An efficient data structure representing a Gaussian splat radiance field in 3D space.
+
+    A :class:`GaussianSplat3d` instance contains a set of 3D Gaussian splats, each defined by its mean position,
+    orientation (quaternion), scale, opacity, and spherical harmonics coefficients for color representation.
+
+    Together, these define a radiance field which can be volume rendered to produce images and depths from
+    arbitrary viewpoints. This class provides a variety of methods for rendering and manipulating Gaussian splats radiance fields.
+    These include:
+
+    - Rendering images with arbitrary channels using spherical harmonics for view-dependent color
+      representation (:meth:`render_images`, :meth:`render_images_and_depths`).
+    - Rendering depth maps (:meth:`render_depths`, :meth:`render_images_and_depths`).
+    - Rendering features at arbitrary sparse pixel locations (:meth:`sparse_render_features`).
+    - Rendering depths at arbitrary sparse pixel locations (:meth:`sparse_render_depths`).
+    - Computing which gaussians contribute to each pixel in an image plane
+      (:meth:`render_num_contributing_gaussians`, :meth:`render_top_contributing_gaussian_ids`).
+    - Computing the set of Gaussians which contribute to a set of sparse pixel locations
+      (:meth:`sparse_render_num_contributing_gaussians`, :meth:`sparse_render_top_contributing_gaussian_ids`).
+    - Saving and loading Gaussian splat data to/from PLY files (:meth:`save_to_ply`, :meth:`from_ply`).
+    - Slicing, indexing, and masking Gaussians to create new :class:`GaussianSplat3d` instances.
+    - Concatenating multiple :class:`GaussianSplat3d` instances into a single instance (:meth:`cat`).
+
+    Background
+    -----------
+
+    Mathematically, the radiance field represented by a :class:`GaussianSplat3d` is defined as a sum of anisotropic 3D Gaussians,
+    with view-dependent features represented using spherical harmonics. The radiance field :math:`R(x, v)` accepts as
+    input a 3D position :math:`x \\in \\mathbb{R}^3` and a viewing direction :math:`v \\in \\mathbb{S}^2`, and is defined as:
+
+    .. math::
+
+        R(x, v) = \\sum_{i=1}^{N} o_i \\cdot \\alpha_i(x) \\cdot SH(v; C_i)
+
+        \\alpha_i(x) = \\exp\\left(-\\frac{1}{2}(x - \\mu_i)^T \\Sigma_i^{-1} (x - \\mu_i)\\right)
+
+        \\Sigma_i = R(q_i)^T \\cdot \\text{diag}(S_i) \\cdot R(q_i)
+
+    where:
+
+    - :math:`N` is the number of Gaussians (see :attr:`num_gaussians`).
+    - :math:`\\mu_i \\in \\mathbb{R}^3` is the mean of the i-th Gaussian (see :attr:`means`).
+    - :math:`\\Sigma_i \\in \\mathbb{R}^{3 \\times 3}` is the covariance matrix of the i-th Gaussian,
+      defined by its scale diagonal scale :math:`S_i \\in \\mathbb{R}^3` (see :attr:`scales`) and orientation
+      quaternion :math:`q_i \\in \\mathbb{R}^4` (see :attr:`quats`).
+    - :math:`o_i \\in [0, 1]` is the opacity of the i-th Gaussian (see :attr:`opacities`).
+    - :math:`SH(v; C_i)` is the spherical harmonics function evaluated at direction :math:`v` with coefficients :math:`C_i`.
+    - :math:`R(q_i)` is the rotation matrix corresponding to the quaternion :math:`q_i`.
+
+    To render images from a :class:`GaussianSplat3d`, you volume render the radiance field using
+
+    .. math::
+
+        I(u, v) = \\int_{t \\in r(u, v)} T(t) R(r(t), d) dt
+
+    where :math:`r(u, v)` is the camera ray through pixel :math:`(u, v)`, :math:`d` is the viewing direction of the ray,
+    and :math:`T(t) = \\exp\\left(-\\int_{0}^{t} R(r(s), s) ds\\right)` is the accumulated transmittance along the ray up to distance :math:`t`.
+
+    and to render depths you compute
+
+    .. math::
+
+        D(u, v) = \\int_{t \\in r(u, v)} t \\cdot T(t) \\sum_{i=1}^{N} o_i \\cdot \\alpha_i(r(t), d) dt
+
+    """
 
     PLY_VERSION_STRING = "fvdb_ply 1.0.0"
     """

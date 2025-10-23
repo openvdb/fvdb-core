@@ -1,4 +1,11 @@
 fvdb.utils
 ==================
 
-.. autofunction:: fvdb.utils.build_ext.FVDBExtension
+.. autofunction:: fvdb.utils.fvdbCudaExtension
+
+
+``fvdb.utils.metrics``
+--------------------------
+
+.. automodule:: fvdb.utils.metrics
+    :members:

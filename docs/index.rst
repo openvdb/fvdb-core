@@ -86,12 +86,12 @@ spatial intelligence research and applications.
    :maxdepth: 1
    :caption: API References
 
-   api/convolution_plan
-   api/gaussian_splat_3d
-   api/grid
-   api/grid_batch
+   api/sparse_convolution
+   api/sparse_grids
+   api/gaussian_splatting
    api/jagged_tensor
    api/viz
+   api/enums
 
 .. toctree::
    :maxdepth: 2
