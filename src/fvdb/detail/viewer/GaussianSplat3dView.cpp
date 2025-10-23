@@ -17,7 +17,7 @@ GaussianSplat3dView::GaussianSplat3dView(const std::string &name, const Viewer &
     mParams.tile_size                    = 16u;
     mParams.sh_degree_override           = -1;
     mParams.sh_stride_rgbrgbrgb_override = 0u;
-    mParams.name                         = mName.c_str();
+    mParams.name                         = viewer.getToken(name.c_str())->str;
     mParams.data_type = PNANOVDB_REFLECT_DATA_TYPE(pnanovdb_raster_shader_params_t);
     mSceneToken       = nullptr;
 }
