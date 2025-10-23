@@ -592,7 +592,7 @@ Let's illustrate a very simple example of how to use the `mask` argument to only
 
 ```python continuation
 # Mask the grid with the normals where only the normals with a value greater than 0.5 on the x-axis are refined
-mask = vox_normals.jdata[:, 0] > 0.5
+mask = fvdb.JaggedTensor(vox_normals.jdata[:, 0] > 0.5)
 
 subdiv_normals, subdiv_grid = grid.refine(2, vox_normals, mask=mask)
 ```

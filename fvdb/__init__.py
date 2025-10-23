@@ -57,17 +57,22 @@ if _spec is not None and _spec.origin is not None:
 
 # isort: off
 from ._Cpp import jcat as _jcat_cpp
-from ._Cpp import JaggedTensor, ConvPackBackend
+from ._Cpp import ConvPackBackend
+from ._Cpp import scaled_dot_product_attention as _scaled_dot_product_attention_cpp
+from ._Cpp import gaussian_render_jagged as _gaussian_render_jagged_cpp
 from ._Cpp import (
-    scaled_dot_product_attention,
     config,
+    volume_render,
+)
+
+# Import JaggedTensor from jagged_tensor.py
+from .jagged_tensor import (
+    JaggedTensor,
     jrand,
     jrandn,
     jones,
     jzeros,
     jempty,
-    volume_render,
-    gaussian_render_jagged,
 )
 
 # Import GridBatch and gridbatch_from_* functions from grid_batch.py
@@ -84,14 +89,60 @@ from .grid import (
     save_grid,
 )
 
+
+def scaled_dot_product_attention(
+    query: JaggedTensor, key: JaggedTensor, value: JaggedTensor, scale: float
+) -> JaggedTensor:
+    return JaggedTensor(impl=_scaled_dot_product_attention_cpp(query._impl, key._impl, value._impl, scale))
+
+
+def gaussian_render_jagged(
+    means: JaggedTensor,  # [N1 + N2 + ..., 3]
+    quats: JaggedTensor,  # [N1 + N2 + ..., 4]
+    scales: JaggedTensor,  # [N1 + N2 + ..., 3]
+    opacities: JaggedTensor,  # [N1 + N2 + ...]
+    sh_coeffs: JaggedTensor,  # [N1 + N2 + ..., K, 3]
+    viewmats: JaggedTensor,  # [C1 + C2 + ..., 4, 4]
+    Ks: JaggedTensor,  # [C1 + C2 + ..., 3, 3]
+    image_width: int,
+    image_height: int,
+    near_plane: float = 0.01,
+    far_plane: float = 1e10,
+    sh_degree_to_use: int = -1,
+    tile_size: int = 16,
+    radius_clip: float = 0.0,
+    eps2d: float = 0.3,
+    antialias: bool = False,
+    render_depth_channel: bool = False,
+    return_debug_info: bool = False,
+    ortho: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+    return _gaussian_render_jagged_cpp(
+        means=means._impl,
+        quats=quats._impl,
+        scales=scales._impl,
+        opacities=opacities._impl,
+        sh_coeffs=sh_coeffs._impl,
+        viewmats=viewmats._impl,
+        Ks=Ks._impl,
+        image_width=image_width,
+        image_height=image_height,
+        near_plane=near_plane,
+        far_plane=far_plane,
+        sh_degree_to_use=sh_degree_to_use,
+        tile_size=tile_size,
+        radius_clip=radius_clip,
+        eps2d=eps2d,
+        antialias=antialias,
+        render_depth_channel=render_depth_channel,
+        return_debug_info=return_debug_info,
+        ortho=ortho,
+    )
+
+
 from .convolution_plan import ConvolutionPlan
 from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
 from .enums import ProjectionType, ShOrderingMode
-
-# The following import needs to come after the GridBatch and JaggedTensor imports
-# immediately above in order to avoid a circular dependency error.
-# Make these available without an explicit submodule import
-from . import nn, viz, utils
 
 # isort: on
 
@@ -108,11 +159,15 @@ def jcat(things_to_cat, dim=None):
         # Wrap the result back in a GridBatch
         return GridBatch(impl=cpp_result)
     elif isinstance(things_to_cat[0], JaggedTensor):
-        return _Cpp.jcat(things_to_cat, dim)
+        return _jcat_cpp([thing._impl for thing in things_to_cat], dim)
     else:
-        raise TypeError("jcat() can only cat GridBatch, JaggedTensor, or VDBTensor")
+        raise TypeError("jcat() can only cat GridBatch or JaggedTensor")
 
 
+# The following import needs to come after all classes and functions are defined
+# in order to avoid a circular dependency error.
+# Make these available without an explicit submodule import
+from . import nn, utils, viz
 from .version import __version__
 
 __version_info__ = tuple(map(int, __version__.split(".")))

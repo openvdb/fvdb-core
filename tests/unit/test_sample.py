@@ -151,7 +151,7 @@ def splat_trilinear_naive(pts: JaggedTensor, feats: torch.Tensor, grid: GridBatc
     output = torch.zeros((grid.ijk.jdata.shape[0], feats_dim), device=device, dtype=dtype)
     mask = grid.coords_in_grid(JaggedTensor(unique_ijk)).jdata
     sum_interpolated_feats = sum_interpolated_feats[mask]
-    valid_ijk = grid.ijk_to_index(unique_ijk[mask]).jdata
+    valid_ijk = grid.ijk_to_index(JaggedTensor(unique_ijk[mask])).jdata
     output[valid_ijk] = sum_interpolated_feats.to(dtype)
     return output
 
@@ -184,7 +184,7 @@ def splat_bezier_naive(pts: JaggedTensor, feats: torch.Tensor, grid: GridBatch) 
     output = torch.zeros((grid.ijk.jdata.shape[0], feats_dim), device=device, dtype=dtype)
     mask = grid.coords_in_grid(JaggedTensor(unique_ijk)).jdata
     sum_interpolated_feats = sum_interpolated_feats[mask]
-    valid_ijk = grid.ijk_to_index(unique_ijk[mask]).jdata
+    valid_ijk = grid.ijk_to_index(JaggedTensor(unique_ijk[mask])).jdata
     output[valid_ijk] = sum_interpolated_feats.to(dtype)
     return output
 

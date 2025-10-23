@@ -12,11 +12,12 @@ from dataclasses import dataclass
 from typing import Any, overload
 
 import torch
-from fvdb.types import JaggedTensorOrTensor, NumericMaxRank1, ValueConstraint, to_Vec3i
+from fvdb.types import NumericMaxRank1, ValueConstraint, to_Vec3i
 
 from fvdb import Grid, GridBatch, JaggedTensor
 
 from ._Cpp import ConvPackBackend
+from ._Cpp import JaggedTensor as JaggedTensorCpp
 from ._Cpp import SparseConvPackInfo as SparseConvPackInfoCpp
 
 _CUTLASS_SUPPORTED_CHANNELS: tuple[tuple[int, int], ...] = (
@@ -532,7 +533,7 @@ class ConvolutionPlan:
     @overload
     def execute(self, data: JaggedTensor, weights: torch.Tensor) -> JaggedTensor: ...
 
-    def execute(self, data: JaggedTensor | torch.Tensor, weights: torch.Tensor) -> JaggedTensorOrTensor:
+    def execute(self, data: JaggedTensor | torch.Tensor, weights: torch.Tensor) -> JaggedTensor | torch.Tensor:
         """
         Execute this :class:`ConvolutionPlan` with the input data and weights.
 
@@ -611,9 +612,9 @@ class ConvolutionPlan:
             result = self._execute_dense(data, weights)
         else:
             if self._transposed:
-                result = self._pack_info.sparse_transpose_conv_3d(data, weights, self._backend)
+                result = JaggedTensor(impl=self._pack_info.sparse_transpose_conv_3d(data._impl, weights, self._backend))
             else:
-                result = self._pack_info.sparse_conv_3d(data, weights, self._backend)
+                result = JaggedTensor(impl=self._pack_info.sparse_conv_3d(data._impl, weights, self._backend))
 
         if is_flat:
             return result.jdata
@@ -833,7 +834,11 @@ class ConvolutionPlan:
             # TODO(chorvath): training has to be set to True because we can't change it later.
             # This is a bug, issue #9.
             pack_info.build_implicit_gemm(
-                sorted=False, split_mask_num=1, training=True, split_mask_num_bwd=3, use_tf32=allow_tf32
+                sorted=False,
+                split_mask_num=1,
+                training=True,
+                split_mask_num_bwd=3,
+                use_tf32=allow_tf32,
             )
             return ConvPackBackend.IGEMM
 
@@ -843,7 +848,11 @@ class ConvolutionPlan:
             # TODO(chorvath): training has to be set to True because we can't change it later.
             # This is a bug, issue #9.
             pack_info.build_implicit_gemm(
-                sorted=True, split_mask_num=1, training=True, split_mask_num_bwd=3, use_tf32=allow_tf32
+                sorted=True,
+                split_mask_num=1,
+                training=True,
+                split_mask_num_bwd=3,
+                use_tf32=allow_tf32,
             )
             return ConvPackBackend.IGEMM
 
@@ -853,22 +862,26 @@ class ConvolutionPlan:
             # TODO(chorvath): training has to be set to True because we can't change it later.
             # This is a bug, issue #9.
             pack_info.build_implicit_gemm(
-                sorted=True, split_mask_num=3, training=True, split_mask_num_bwd=3, use_tf32=allow_tf32
+                sorted=True,
+                split_mask_num=3,
+                training=True,
+                split_mask_num_bwd=3,
+                use_tf32=allow_tf32,
             )
             return ConvPackBackend.IGEMM
 
         else:
             raise NotImplementedError(f"Backend {backend} is not supported")
 
-    def _execute_halo(self, data: JaggedTensorOrTensor, weights: torch.Tensor) -> JaggedTensor:
+    def _execute_halo(self, data: JaggedTensor | torch.Tensor, weights: torch.Tensor) -> JaggedTensor:
         assert not self._transposed, "Halo backend does not support transposed convolution."
 
         if isinstance(data, torch.Tensor):
             data = JaggedTensor(data)
 
-        return self._pack_info.source_grid.sparse_conv_halo(data, weights, 8)
+        return JaggedTensor(impl=self._pack_info.source_grid.sparse_conv_halo(data._impl, weights, 8))
 
-    def _execute_dense(self, data: JaggedTensorOrTensor, weights: torch.Tensor) -> JaggedTensor:
+    def _execute_dense(self, data: JaggedTensor | torch.Tensor, weights: torch.Tensor) -> JaggedTensor:
         source_grid = self._pack_info.source_grid
         target_grid = self._pack_info.target_grid
         assert source_grid.is_same(target_grid)
@@ -878,14 +891,14 @@ class ConvolutionPlan:
 
         min_coord = source_grid.ijk.jdata.min(dim=0).values
         # BXYZC -> BCXYZ
-        dense_feature = source_grid.write_to_dense_cmajor(data, min_coord=min_coord)
+        dense_feature = source_grid.write_to_dense_cmajor(data._impl, min_coord=min_coord)
         if self._transposed:
             dense_feature = torch.nn.functional.conv_transpose3d(dense_feature, weights, padding=1, stride=1)
         else:
             dense_feature = torch.nn.functional.conv3d(dense_feature, weights, padding=1, stride=1)
         # BCXYZ -> BXYZC
         dense_feature = dense_feature.contiguous()
-        return source_grid.read_from_dense_cmajor(dense_feature, dense_origins=min_coord)
+        return JaggedTensor(impl=source_grid.read_from_dense_cmajor(dense_feature, dense_origins=min_coord))
 
 
 # These tests are to validate that the type-checking is happy. They won't actually run because
@@ -936,5 +949,4 @@ def _grid_batch_test_for_typing():
     out_2: torch.Tensor = plan.execute(out_1, weights_2)
 
     out_3: torch.Tensor = plan_t.execute(out_2, weights_3)
-    out_4: torch.Tensor = plan_t.execute(out_3, weights_4)
     out_4: torch.Tensor = plan_t.execute(out_3, weights_4)
