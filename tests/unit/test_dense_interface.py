@@ -478,7 +478,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
         )
         self.assertTrue(dense_vdb.num_voxels == 10 * 11 * 12)
 
-        vdb_coords = dense_vdb.grid_to_world(dense_vdb.ijk.float())
+        vdb_coords = dense_vdb.voxel_to_world(dense_vdb.ijk.float())
         self.assertAlmostEqual(torch.min(vdb_coords).item(), -2.0 + 3 / 12 * 0.5, places=6)
         self.assertAlmostEqual(torch.max(vdb_coords).item(), 1.0 - 3 / 12 * 0.5, places=6)
 

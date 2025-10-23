@@ -479,7 +479,7 @@ class TestBasicOpsSingle(unittest.TestCase):
         grid = Grid.from_points(pts, vox_size, vox_origin, device=device).dilated_grid(1)
 
         target_world_pts = (grid_pts * vox_size) + vox_origin
-        pred_world_pts = grid.grid_to_world(grid_pts)
+        pred_world_pts = grid.voxel_to_world(grid_pts)
 
         self.assertTrue(torch.allclose(target_world_pts, pred_world_pts, atol=dtype_to_atol(dtype)))
 
@@ -494,7 +494,7 @@ class TestBasicOpsSingle(unittest.TestCase):
         grid = Grid.from_points(pts, vox_size, vox_origin, device=device).dilated_grid(1).dual_grid()
 
         target_world_pts = ((grid_pts - 0.5) * vox_size) + vox_origin
-        pred_world_pts = grid.grid_to_world(grid_pts)
+        pred_world_pts = grid.voxel_to_world(grid_pts)
 
         self.assertTrue(torch.allclose(target_world_pts, pred_world_pts, atol=dtype_to_atol(dtype)))
 
@@ -509,7 +509,7 @@ class TestBasicOpsSingle(unittest.TestCase):
 
         grid = Grid.from_points(pts, vox_size, vox_origin, device=device).dilated_grid(1)
 
-        pred_world_pts = grid.grid_to_world(grid_pts)
+        pred_world_pts = grid.voxel_to_world(grid_pts)
         grad_out = torch.rand_like(pred_world_pts)
         pred_world_pts.backward(grad_out)
 
@@ -537,7 +537,7 @@ class TestBasicOpsSingle(unittest.TestCase):
 
         grid = Grid.from_points(pts, vox_size, vox_origin, device=device).dilated_grid(1).dual_grid()
 
-        pred_world_pts = grid.grid_to_world(grid_pts)
+        pred_world_pts = grid.voxel_to_world(grid_pts)
         grad_out = torch.rand_like(pred_world_pts)
         pred_world_pts.backward(grad_out)
 
@@ -668,7 +668,7 @@ class TestBasicOpsSingle(unittest.TestCase):
 
         all_coords = torch.cat([outside_random_coords, inside_coords])
 
-        all_world_points = grid.grid_to_world(all_coords.to(dtype))
+        all_world_points = grid.voxel_to_world(all_coords.to(dtype))
 
         pred_mask = grid.points_in_grid(all_world_points)
         target_mask = torch.ones(all_coords.shape[0], dtype=torch.bool).to(device)

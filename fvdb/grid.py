@@ -735,7 +735,7 @@ class Grid:
         """
         return Grid(impl=self._impl.dual_grid(exclude_border))
 
-    def grid_to_world(self, ijk: torch.Tensor) -> torch.Tensor:
+    def voxel_to_world(self, ijk: torch.Tensor) -> torch.Tensor:
         """
         Transform a set of grid-space coordinates to their corresponding positions in world space
         using this :class:`Grid`'s origin and voxel size.
