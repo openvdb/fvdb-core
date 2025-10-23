@@ -89,14 +89,16 @@ from .grid import (
     save_grid,
 )
 
+
+def scaled_dot_product_attention(
+    query: JaggedTensor, key: JaggedTensor, value: JaggedTensor, scale: float
+) -> JaggedTensor:
+    return JaggedTensor(impl=_scaled_dot_product_attention_cpp(query._impl, key._impl, value._impl, scale))
+
+
 from .convolution_plan import ConvolutionPlan
 from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
 from .enums import ProjectionType, ShOrderingMode
-
-# The following import needs to come after the GridBatch and JaggedTensor imports
-# immediately above in order to avoid a circular dependency error.
-# Make these available without an explicit submodule import
-from . import nn, viz, utils
 
 # isort: on
 
@@ -113,17 +115,15 @@ def jcat(things_to_cat, dim=None):
         # Wrap the result back in a GridBatch
         return GridBatch(impl=cpp_result)
     elif isinstance(things_to_cat[0], JaggedTensor):
-        return _Cpp.jcat([thing._impl for thing in things_to_cat], dim)
+        return _jcat_cpp([thing._impl for thing in things_to_cat], dim)
     else:
         raise TypeError("jcat() can only cat GridBatch or JaggedTensor")
 
 
-def scaled_dot_product_attention(
-    query: JaggedTensor, key: JaggedTensor, value: JaggedTensor, scale: float
-) -> JaggedTensor:
-    return JaggedTensor(impl=_scaled_dot_product_attention_cpp(query._impl, key._impl, value._impl, scale))
-
-
+# The following import needs to come after all classes and functions are defined
+# in order to avoid a circular dependency error.
+# Make these available without an explicit submodule import
+from . import nn, utils, viz
 from .version import __version__
 
 __version_info__ = tuple(map(int, __version__.split(".")))
