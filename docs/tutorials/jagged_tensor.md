@@ -46,7 +46,7 @@ print(f"Element shape: {jt.rshape}")  # (3,)
 
 fVDB provides factory functions similar to PyTorch's tensor creation functions:
 
-```python
+```python continuation
 # Create jagged tensor filled with random values
 jt_rand = fvdb.jrand(lsizes=[100, 150, 120], rsizes=[3])
 # lsizes: list of sizes for each tensor in the batch
@@ -66,7 +66,7 @@ jt_randn = fvdb.jrandn(lsizes=[100, 150, 120], rsizes=[3])
 
 If you already have flattened data and indexing information:
 
-```python
+```python continuation
 # Flattened data: 370 total elements
 data = torch.randn(370, 3)
 
@@ -79,7 +79,7 @@ jt = fvdb.JaggedTensor.from_data_and_indices(data, indices, num_tensors=3)
 
 Or using offsets:
 
-```python
+```python continuation
 # Offsets marking boundaries: [0, 100, 250, 370]
 offsets = torch.tensor([0, 100, 250, 370])
 
@@ -92,7 +92,7 @@ jt = fvdb.JaggedTensor.from_data_and_offsets(data, offsets)
 
 The `jdata` property provides access to the flattened concatenated tensor:
 
-```python
+```python continuation
 jt = fvdb.JaggedTensor([torch.randn(100, 3), torch.randn(150, 3)])
 
 # Access the underlying flattened data
@@ -106,7 +106,7 @@ jt.jdata *= 2.0
 
 You can index into a `JaggedTensor` to extract individual tensors:
 
-```python
+```python continuation
 jt = fvdb.JaggedTensor([torch.randn(100, 3), torch.randn(150, 3), torch.randn(120, 3)])
 
 # Access the first tensor (returns a JaggedTensor with one element)
@@ -127,7 +127,7 @@ for i, tensor in enumerate(jt):
 
 To convert a `JaggedTensor` back to a list of regular PyTorch tensors:
 
-```python
+```python continuation
 jt = fvdb.JaggedTensor([torch.randn(100, 3), torch.randn(150, 3)])
 
 # Get list of individual tensors
@@ -145,10 +145,7 @@ A key feature of `JaggedTensor` is its integration with PyTorch's function dispa
 
 ### The Type Safety Problem
 
-```python
-import torch
-import fvdb
-
+```python continuation
 jt = fvdb.JaggedTensor([torch.randn(100, 3), torch.randn(150, 3)])
 
 # This works at RUNTIME due to __torch_function__
@@ -174,7 +171,7 @@ Both approaches produce identical results at runtime, but `fvdb.relu()` provides
 
 Elementwise operations apply to each element independently, preserving the jagged structure:
 
-```python
+```python continuation
 jt = fvdb.JaggedTensor([torch.randn(100, 3), torch.randn(150, 3)])
 
 # Activation functions
@@ -201,7 +198,7 @@ safe = fvdb.nan_to_num(jt)      # Replace NaN/inf with numbers
 
 Some operations have in-place variants (ending with `_`):
 
-```python
+```python continuation
 jt = fvdb.JaggedTensor([torch.randn(100, 3), torch.randn(150, 3)])
 
 # In-place ReLU (modifies jt directly)
@@ -215,7 +212,7 @@ torch.relu_(jt)  # type: ignore
 
 Binary operations work between two `JaggedTensor`s, or between a `JaggedTensor` and a scalar:
 
-```python
+```python continuation
 jt1 = fvdb.JaggedTensor([torch.randn(100, 3), torch.randn(150, 3)])
 jt2 = fvdb.JaggedTensor([torch.randn(100, 3), torch.randn(150, 3)])
 
@@ -243,7 +240,7 @@ min_jt = fvdb.minimum(jt1, jt2)   # Elementwise minimum
 
 Comparison operations return boolean `JaggedTensor`s:
 
-```python
+```python continuation
 jt1 = fvdb.JaggedTensor([torch.randn(100, 3), torch.randn(150, 3)])
 jt2 = fvdb.JaggedTensor([torch.randn(100, 3), torch.randn(150, 3)])
 
@@ -268,7 +265,7 @@ selected = fvdb.where(gt_mask, jt1, jt2)
 
 Reductions that preserve the leading (flattened) dimension work seamlessly:
 
-```python
+```python continuation
 # Create JaggedTensor with shape [100, 10, 3] and [150, 10, 3]
 jt = fvdb.JaggedTensor([torch.randn(100, 10, 3), torch.randn(150, 10, 3)])
 print(jt.jdata.shape)  # torch.Size([250, 10, 3])
@@ -309,7 +306,7 @@ min_indices = fvdb.argmin(jt, dim=-1)  # Indices of min values
 
 All fvdb functions return the same type as their input, enabling seamless chaining:
 
-```python
+```python continuation
 jt = fvdb.JaggedTensor([torch.randn(100, 3), torch.randn(150, 3)])
 
 # Chain multiple operations (all type-safe!)
@@ -339,7 +336,7 @@ While PyTorch functions preserve the jagged structure, sometimes you need to ope
 
 Sum along the jagged dimension to reduce varying-length tensors:
 
-```python
+```python continuation
 jt = fvdb.JaggedTensor([torch.randn(100, 3), torch.randn(150, 3), torch.randn(120, 3)])
 print(jt.jdata.shape)  # torch.Size([370, 3])
 
@@ -353,7 +350,7 @@ print(summed.num_tensors)  # 3
 
 ### Jagged Max/Min: jmax(), jmin()
 
-```python
+```python continuation
 jt = fvdb.JaggedTensor([torch.randn(100, 3), torch.randn(150, 3)])
 
 # Max along jagged dimension (returns values and indices)
@@ -366,7 +363,7 @@ print(max_indices.jdata.shape)  # torch.Size([2, 3])
 
 Reshape the jagged structure:
 
-```python
+```python continuation
 jt = fvdb.JaggedTensor([torch.randn(100, 3), torch.randn(150, 3)])
 
 # Reshape to different jagged sizes
@@ -379,7 +376,7 @@ print(reshaped.num_tensors)  # 4
 
 Flatten nested jagged structures:
 
-```python
+```python continuation
 # Create nested jagged structure
 nested = fvdb.JaggedTensor([[torch.randn(10, 3), torch.randn(20, 3)],
                              [torch.randn(15, 3)]])
@@ -395,10 +392,7 @@ print(flattened.num_tensors)  # 3
 
 Here's a complete example demonstrating JaggedTensor usage for batch processing point clouds:
 
-```python
-import torch
-import fvdb
-
+```python continuation
 # Load or generate point clouds with different numbers of points
 # (simulating 3 different scenes)
 points_scene1 = torch.randn(1523, 3, device="cuda")  # Scene 1: 1523 points
@@ -462,7 +456,7 @@ Here's a decision guide:
 
 ### Pattern 1: Batch Processing with Variable Sizes
 
-```python
+```python continuation
 def process_batch(data_list):
     """Process a batch of variable-size data efficiently."""
     # Bundle into JaggedTensor for efficient GPU processing
@@ -521,9 +515,7 @@ result = jt.jsum(dim=0)  # Correctly reduces jagged dimension
 
 `JaggedTensor` is the foundation for `GridBatch` operations in fVDB. When working with sparse voxel grids, you'll frequently encounter jagged tensors as inputs and outputs:
 
-```python
-import fvdb
-
+```python continuation
 # Create point clouds (using JaggedTensor)
 points = fvdb.JaggedTensor([torch.randn(1000, 3), torch.randn(1500, 3)])
 
