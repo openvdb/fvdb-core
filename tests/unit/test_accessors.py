@@ -34,7 +34,7 @@ class TestAccessors(unittest.TestCase):
         self.assertIsInstance(read_jagged_data, JaggedTensor)
 
         grid = Grid.from_points(sparse_points, voxel_size=0.1, origin=0.0)
-        read_tensor_data = grid.read_from_dense_cminor(dense_grid, dense_origin)
+        read_tensor_data = grid.inject_from_dense_cminor(dense_grid, dense_origin)
         self.assertIsInstance(read_tensor_data, torch.Tensor)
 
     @parameterized.expand(all_device_combos)

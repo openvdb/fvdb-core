@@ -1438,9 +1438,9 @@ class Grid:
         )
         return (ray_times.joffsets[1:] - ray_times.joffsets[:-1]) > 0
 
-    def read_from_dense_cminor(self, dense_data: torch.Tensor, dense_origin: NumericMaxRank1 = 0) -> torch.Tensor:
+    def inject_from_dense_cminor(self, dense_data: torch.Tensor, dense_origin: NumericMaxRank1 = 0) -> torch.Tensor:
         """
-        Read values from a dense :class:`torch.Tensor` into a :class:`torch.Tensor` associated with this :class:`Grid`.
+        Inject values from a dense :class:`torch.Tensor` into a :class:`torch.Tensor` associated with this :class:`Grid`.
 
         This is the "C Minor" (channels minor) version, which assumes the ``dense_data`` is in XYZC order. *i.e* the
         dense tensor has shape ``[dense_size_x, dense_size_y, dense_size_z, channels*]``.
@@ -1451,7 +1451,7 @@ class Grid:
 
         .. seealso::
 
-            :meth:`read_from_dense_cmajor` for the "C Major" (channels major) version, which assumes the ``dense_data`` is in CXYZ order.
+            :meth:`inject_from_dense_cmajor` for the "C Major" (channels major) version, which assumes the ``dense_data`` is in CXYZ order.
 
         .. seealso::
 
@@ -1469,9 +1469,9 @@ class Grid:
         dense_origin = to_Vec3i(dense_origin)
         return self._impl.read_from_dense_cminor(dense_data.unsqueeze(0), dense_origin).jdata
 
-    def read_from_dense_cmajor(self, dense_data: torch.Tensor, dense_origin: NumericMaxRank1 = 0) -> torch.Tensor:
+    def inject_from_dense_cmajor(self, dense_data: torch.Tensor, dense_origin: NumericMaxRank1 = 0) -> torch.Tensor:
         """
-        Read values from a dense :class:`torch.Tensor` into a :class:`torch.Tensor` associated with this :class:`Grid`.
+        Inject values from a dense :class:`torch.Tensor` into a :class:`torch.Tensor` associated with this :class:`Grid`.
 
         This is the "C Major" (channels major) version, which assumes the ``dense_data`` is in CXYZ order. *i.e* the
         dense tensor has shape ``[channels*, dense_size_x, dense_size_y, dense_size_z]``.
@@ -1479,6 +1479,14 @@ class Grid:
         .. note::
 
             This method supports backpropagation through the read operation.
+
+        .. seealso::
+
+            :meth:`inject_from_dense_cminor` for the "C Minor" (channels minor) version, which assumes the ``dense_data`` is in XYZC order.
+
+        .. seealso::
+
+            :meth:`write_to_dense_cmajor` for writing data to a dense tensor in "C Major" order.
 
         Args:
             dense_data (torch.Tensor): Dense :class:`torch.Tensor` to read from. Shape: ``(channels*, dense_size_x, dense_size_y, dense_size_z)``.
@@ -2084,7 +2092,7 @@ class Grid:
 
         .. seealso::
 
-            :meth:`read_from_dense_cmajor` for reading from a dense tensor in "C Major" order,
+            :meth:`inject_from_dense_cmajor` for reading from a dense tensor in "C Major" order,
             which assumes the dense tensor has shape ``[channels*, dense_size_x, dense_size_y, dense_size_z]``.
 
         .. seealso::
@@ -2143,7 +2151,7 @@ class Grid:
 
         .. seealso::
 
-            :meth:`read_from_dense_cmajor` for reading from a dense tensor in "C Major" order,
+            :meth:`inject_from_dense_cmajor` for reading from a dense tensor in "C Major" order,
             which assumes the dense tensor has shape ``[channels*, dense_size_x, dense_size_y, dense_size_z]``.
 
         .. seealso::

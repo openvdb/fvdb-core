@@ -490,7 +490,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
                     vdb_f = vdb_feature[dense_vdb.ijk_to_index(torch.tensor([[i, j, k]], device=device))]
                     dense_f = dense_feature[i, j, k, :]
                     self.assertTrue(torch.allclose(vdb_f, dense_f))
-        vdb_feature2 = dense_vdb.read_from_dense_cminor(dense_feature)
+        vdb_feature2 = dense_vdb.inject_from_dense_cminor(dense_feature)
         self.assertTrue(torch.allclose(vdb_feature, vdb_feature2))
 
     @parameterized.expand(all_device_dtype_combos)
@@ -527,7 +527,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             target_sparse = torch.zeros(grid.num_voxels, *feat_shape, device=device, dtype=dtype)
             target_sparse[grid_index] = random_grid.view(-1, *feat_shape)[offset]
 
-            pred_sparse = grid.read_from_dense_cminor(random_grid, dense_origin)
+            pred_sparse = grid.inject_from_dense_cminor(random_grid, dense_origin)
 
             self.assertEqual(torch.abs(target_sparse - pred_sparse).max().item(), 0.0)
             self.assertTrue(torch.all(target_sparse == pred_sparse))
@@ -566,7 +566,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             target_sparse = torch.zeros(grid.num_voxels, *feat_shape, device=device, dtype=dtype)
             target_sparse[grid_index] = random_grid.view(-1, *feat_shape)[offset]
 
-            pred_sparse = grid.read_from_dense_cminor(random_grid, dense_origin)
+            pred_sparse = grid.inject_from_dense_cminor(random_grid, dense_origin)
 
             self.assertEqual(torch.abs(target_sparse - pred_sparse).max().item(), 0.0)
             self.assertTrue(torch.all(target_sparse == pred_sparse))
@@ -611,7 +611,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             loss_copy = target_sparse.sum()
             loss_copy.backward()
 
-            pred_sparse = grid.read_from_dense_cminor(random_grid, dense_origin)
+            pred_sparse = grid.inject_from_dense_cminor(random_grid, dense_origin)
             loss = pred_sparse.sum()
             loss.backward()
 
@@ -852,8 +852,8 @@ class TestDenseInterfaceSingle(unittest.TestCase):
                 assert conv_to_default_permute_order == (1, 2, 3, 0)
             dense_default = dense_conv.permute(*conv_to_default_permute_order).contiguous()
 
-            sparse_conv = grid.read_from_dense_cmajor(dense_conv, min_coord)
-            sparse_default = grid.read_from_dense_cminor(dense_default, min_coord)
+            sparse_conv = grid.inject_from_dense_cmajor(dense_conv, min_coord)
+            sparse_default = grid.inject_from_dense_cminor(dense_default, min_coord)
 
             self.assertEqual(sparse_conv.shape, (total_voxels, *eshape))
             self.assertEqual(sparse_default.shape, (total_voxels, *eshape))
