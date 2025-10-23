@@ -99,7 +99,7 @@ When you are ready to build ƒVDB, run the following command within the docker c
 docker run -it --mount type=bind,src="$(pwd)",target=/workspace fvdb-devel bash
 cd /workspace;
 pip install -r env/build_requirements.txt
-TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6+PTX" \
+TORCH_CUDA_ARCH_LIST="7.5;8.0;9.0;10.0;12.0+PTX" \
 ./build.sh install -v
 ```
 
@@ -117,7 +117,7 @@ Then, create a Python virtual environment, install the requisite dependencies, a
 python -m venv fvdb
 source fvdb/bin/activate
 pip install -r env/build_requirements.txt
-TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6+PTX" ./build.sh install -v
+TORCH_CUDA_ARCH_LIST="7.5;8.0;9.0;10.0;12.0+PTX" ./build.sh install -v
 ```
 Note: adjust the TORCH_CUDA_ARCH_LIST to suit your needs. If you are building just to run on a single machine, including only the present GPU architecture(s) reduces build time.
 ---
