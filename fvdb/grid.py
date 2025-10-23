@@ -2038,7 +2038,7 @@ class Grid:
 
         .. seealso::
 
-            :meth:`grid_to_world` for the inverse transformation, and :meth:`grid_to_world_matrix` and :meth:`world_to_grid_matrix` for
+            :meth:`grid_to_world` for the inverse transformation, and :meth:`voxel_to_world_matrix` and :meth:`world_to_voxel_matrix` for
             the actual transformation matrices.
 
         Args:
@@ -2250,13 +2250,13 @@ class Grid:
             return self._impl.dual_bbox_at(0)
 
     @property
-    def grid_to_world_matrix(self) -> torch.Tensor:
+    def voxel_to_world_matrix(self) -> torch.Tensor:
         """
         The voxel-to-world transformation matrix for this :class:`Grid`, which
         transforms voxel space coordinates to world space coordinates.
 
         Returns:
-            grid_to_world_matrix (torch.Tensor): A ``(4, 4)``-shaped tensor representing the
+            voxel_to_world_matrix (torch.Tensor): A ``(4, 4)``-shaped tensor representing the
                 voxel-to-world transformation matrix.
         """
         return self._impl.grid_to_world_matrices[0]
@@ -2334,13 +2334,13 @@ class Grid:
         return self._impl.voxel_size_at(0)
 
     @property
-    def world_to_grid_matrix(self) -> torch.Tensor:
+    def world_to_voxel_matrix(self) -> torch.Tensor:
         """
         The world-to-voxel transformation matrix for this :class:`Grid`, which
         transforms world space coordinates to voxel space coordinates.
 
         Returns:
-            world_to_grid_matrix (torch.Tensor): A ``(4, 4)``-shaped tensor representing the
+            world_to_voxel_matrix (torch.Tensor): A ``(4, 4)``-shaped tensor representing the
                 world-to-voxel transformation matrix.
         """
         return self._impl.world_to_grid_matrices[0]
