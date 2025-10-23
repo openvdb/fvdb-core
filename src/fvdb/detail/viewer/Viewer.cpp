@@ -191,20 +191,19 @@ Viewer::addGaussianSplat3dView(const std::string &scene_name,
     // Add to editor using token-based API
     mEditor.editor.add_gaussian_data_2(&mEditor.editor, sceneToken, nameToken, &desc);
 
+    it->second.mSceneToken = sceneToken;
+
     // Set up parameter synchronization using map/unmap against named object
     it->second.mSyncCallback = [this, sceneToken, nameToken, viewPtr = &it->second](bool set_data) {
-        void *paramsPtr =
-            mEditor.editor.map_params(&mEditor.editor,
-                                      sceneToken,
-                                      nameToken,
-                                      PNANOVDB_REFLECT_DATA_TYPE(pnanovdb_raster_shader_params_t));
+        void *paramsPtr = mEditor.editor.map_params(
+            &mEditor.editor, sceneToken, nameToken, viewPtr->mParams.data_type);
         if (!paramsPtr) {
             return;
         }
         if (set_data) {
-            std::memcpy(paramsPtr, &viewPtr->mParams, sizeof(pnanovdb_raster_shader_params_t));
+            std::memcpy(paramsPtr, &viewPtr->mParams, viewPtr->mParams.data_type->element_size);
         } else {
-            std::memcpy(&viewPtr->mParams, paramsPtr, sizeof(pnanovdb_raster_shader_params_t));
+            std::memcpy(&viewPtr->mParams, paramsPtr, viewPtr->mParams.data_type->element_size);
         }
         mEditor.editor.unmap_params(&mEditor.editor, sceneToken, nameToken);
     };
@@ -340,6 +339,11 @@ Viewer::addCameraView(const std::string &scene_name,
                     projectionMatrices.size(2) == 3,
                 "projection_matrices must have shape [N, 3, 3]");
 
+    auto itPrev = mCameraViews.find(name);
+    if (itPrev != mCameraViews.end()) {
+        mCameraViews.erase(itPrev);
+    }
+
     const int64_t numCameras = cameraToWorldMatrices.size(0);
     if (imageSizes.numel() != 0) {
         TORCH_CHECK(imageSizes.dim() == 2 && imageSizes.size(0) == numCameras &&
@@ -349,16 +353,14 @@ Viewer::addCameraView(const std::string &scene_name,
                     " instead.");
     }
 
-    auto itPrev = mCameraViews.find(name);
-    if (itPrev != mCameraViews.end()) {
-        mCameraViews.erase(itPrev);
-    }
+    pnanovdb_editor_token_t *nameToken  = mEditor.editor.get_token(name.c_str());
+    pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
 
-    pnanovdb_editor_token_t *nameToken = mEditor.editor.get_token(name.c_str());
-    auto [it, inserted]                = mCameraViews.emplace(std::piecewise_construct,
+    auto [it, inserted] = mCameraViews.emplace(std::piecewise_construct,
                                                std::forward_as_tuple(name),
                                                std::forward_as_tuple(name, nameToken));
 
+    it->second.mSceneToken       = sceneToken;
     it->second.mView.num_cameras = numCameras;
     it->second.mView.states      = new pnanovdb_camera_state_t[it->second.mView.num_cameras];
     it->second.mView.configs     = new pnanovdb_camera_config_t[it->second.mView.num_cameras];
@@ -420,10 +422,8 @@ Viewer::addCameraView(const std::string &scene_name,
         }
     }
 
-    pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
-
     mEditor.editor.add_camera_view_2(&mEditor.editor, sceneToken, &it->second.mView);
-    it->second.mSceneToken = sceneToken;
+
     return it->second;
 }
 
