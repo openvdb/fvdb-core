@@ -2027,7 +2027,7 @@ class Grid:
         )
         return JaggedTensor(impl=voxels[0]), JaggedTensor(impl=times[0])
 
-    def world_to_grid(self, points: torch.Tensor) -> torch.Tensor:
+    def world_to_voxel(self, points: torch.Tensor) -> torch.Tensor:
         """
         Convert world space coordinates to voxel space coordinates using the
         world-to-voxel transformation of this :class:`Grid`.

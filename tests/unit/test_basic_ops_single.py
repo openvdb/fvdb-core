@@ -370,7 +370,7 @@ class TestBasicOpsSingle(unittest.TestCase):
         grid = Grid.from_points(pts, vox_size, vox_origin, device=device).dilated_grid(1).dual_grid()
 
         target_dual_coordinates = ((pts - vox_origin) / vox_size) + 0.5
-        pred_dual_coordinates = grid.world_to_grid(pts)
+        pred_dual_coordinates = grid.world_to_voxel(pts)
 
         self.assertTrue(
             torch.allclose(
@@ -391,7 +391,7 @@ class TestBasicOpsSingle(unittest.TestCase):
         grid = Grid.from_points(pts, vox_size, vox_origin, device=device).dilated_grid(1)
 
         target_primal_coordinates = (pts - vox_origin) / vox_size
-        pred_primal_coordinates = grid.world_to_grid(pts)
+        pred_primal_coordinates = grid.world_to_voxel(pts)
 
         self.assertTrue(
             torch.allclose(
@@ -411,7 +411,7 @@ class TestBasicOpsSingle(unittest.TestCase):
 
         grid = Grid.from_points(pts, vox_size, vox_origin, device=device).dilated_grid(1).dual_grid()
 
-        pred_dual_coordinates = grid.world_to_grid(pts)
+        pred_dual_coordinates = grid.world_to_voxel(pts)
         grad_out = torch.rand_like(pred_dual_coordinates)
         pred_dual_coordinates.backward(grad_out)
 
@@ -444,7 +444,7 @@ class TestBasicOpsSingle(unittest.TestCase):
 
         grid = Grid.from_points(pts, vox_size, vox_origin, device=device).dilated_grid(1)
 
-        pred_primal_coordinates = grid.world_to_grid(pts)
+        pred_primal_coordinates = grid.world_to_voxel(pts)
         grad_out = torch.rand_like(pred_primal_coordinates)
         pred_primal_coordinates.backward(grad_out)
 
@@ -574,7 +574,7 @@ class TestBasicOpsSingle(unittest.TestCase):
         self.assertTrue(torch.all(dual_origin == grid_dd.dual_grid().origin))
 
         target_primal_coordinates = (pts - vox_origin) / vox_size
-        pred_primal_coordinates = grid.world_to_grid(pts)
+        pred_primal_coordinates = grid.world_to_voxel(pts)
 
         self.assertTrue(
             torch.allclose(
@@ -586,7 +586,7 @@ class TestBasicOpsSingle(unittest.TestCase):
         )
 
         target_dual_coordinates = ((pts - vox_origin) / vox_size) + 0.5
-        pred_dual_coordinates = grid_d.world_to_grid(pts)
+        pred_dual_coordinates = grid_d.world_to_voxel(pts)
         self.assertTrue(
             torch.allclose(
                 pred_dual_coordinates,
@@ -595,7 +595,7 @@ class TestBasicOpsSingle(unittest.TestCase):
             )
         )
 
-        pred_primal_coordinates_dd = grid_dd.world_to_grid(pts)
+        pred_primal_coordinates_dd = grid_dd.world_to_voxel(pts)
         self.assertTrue(
             torch.allclose(
                 target_primal_coordinates,
@@ -725,7 +725,7 @@ class TestBasicOpsSingle(unittest.TestCase):
         if p.dtype == torch.half:
             p = p.float()
 
-        expected_ijk = torch.floor(grid.world_to_grid(p))
+        expected_ijk = torch.floor(grid.world_to_voxel(p))
         offsets = torch.tensor(
             [
                 [0, 0, 0],
