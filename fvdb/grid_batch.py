@@ -26,15 +26,13 @@ mesh extraction, and coordinate transformations on sparse voxel data.
 """
 
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any, Sequence, cast, overload
+from typing import TYPE_CHECKING, Any, cast, overload
 
 import numpy as np
 import torch
 
 from . import _parse_device_string
-from ._Cpp import ConvPackBackend
 from ._Cpp import GridBatch as GridBatchCpp
-from ._Cpp import JaggedTensor as JaggedTensorCpp
 from .jagged_tensor import JaggedTensor
 from .types import (
     DeviceIdentifier,
@@ -43,12 +41,10 @@ from .types import (
     NumericMaxRank2,
     ValueConstraint,
     resolve_device,
-    to_Vec3f,
     to_Vec3fBatch,
     to_Vec3fBatchBroadcastable,
     to_Vec3fBroadcastable,
     to_Vec3i,
-    to_Vec3iBatch,
     to_Vec3iBatchBroadcastable,
     to_Vec3iBroadcastable,
 )
@@ -61,12 +57,12 @@ class GridBatch:
     """
     A batch of sparse voxel grids with support for efficient operations.
 
-    GridBatch represents a collection of sparse 3D voxel grids that can be processed
+    `~fvdb.GridBatch` represents a collection of sparse 3D voxel grids that can be processed
     together efficiently on GPU. Each grid in the batch can have different resolutions,
     origins, and voxel sizes. The class provides methods for common operations like
     sampling, convolution, pooling, and other operations.
 
-    A GridBatch may contain zero grids, in which case it has no voxel sizes nor origins
+    A `~fvdb.GridBatch` may contain zero grids, in which case it has no voxel sizes nor origins
     that can be queried. It may also contain one or more empty grids, which means grids that
     have zero voxels. An empty grid still has a voxel size and origin, which can be queried.
 
@@ -77,8 +73,8 @@ class GridBatch:
     Note:
         For creating grid batches with actual content, use the classmethods:
         - GridBatch.from_dense() for dense data
-        - GridBatch.from_dense_axis_aligned_bounds() for dense defined by bounds
-        - GridBatch.from_grid() for building from a Grid() instance
+        - GridBatch.from_dense_axis_aligned_bounds() for dense data defined by bounds
+        - GridBatch.from_grid() for building from a `~fvdb.Grid` instance
         - GridBatch.from_ijk() for voxel coordinates
         - GridBatch.from_mesh() for triangle meshes
         - GridBatch.from_nearest_voxels_to_points() for nearest voxel mapping
@@ -86,10 +82,10 @@ class GridBatch:
         - GridBatch.from_zero_grids() for zero grids
         - GridBatch.from_zero_voxels() for one or more empty grids (zero voxels)
 
-        The GridBatch constructor is for internal use only, always use the classmethods.
+        The `~fvdb.GridBatch` constructor is for internal use only, always use the classmethods.
 
     Attributes:
-        max_grids_per_batch (int): Maximum number of grids that can be stored in a single batch.
+        max_grids_per_batch (int): Maximum number of grids that can be stored in a single `~fvdb.GridBatch`.
     """
 
     # Class variable
@@ -97,7 +93,7 @@ class GridBatch:
 
     def __init__(self, *, impl: GridBatchCpp):
         """
-        Constructor for internal use only. - use the Grid.from_* classmethods instead.
+        Constructor for internal use only. - use the `~fvdb.GridBatch.from_*` classmethods instead.
         """
         self._impl = impl
 
@@ -117,19 +113,23 @@ class GridBatch:
         device: DeviceIdentifier | None = None,
     ) -> "GridBatch":
         """
-        A dense grid has a voxel for every coordinate in an axis-aligned box of Vec3,
-        which can in turn be mapped to a world-space box.
+        Create a `~fvdb.GridBatch` representing a batch of dense grids.
 
-        for each grid in the batch, the dense grid is defined by:
-        - dense_dims: the size of the dense grid (shape [3,] = [W, H, D])
-        - ijk_min: the minimum voxel index for each grid in the batch (Vec3i)
-        - voxel_sizes: the world-space size of each voxel (Vec3d or scalar)
-        - origins: the world-space coordinate of the 0,0,0 voxel of each grid
-        - mask: indicates which voxels are "active" in the resulting grid.
+        A dense grid has a voxel for every coordinate in an axis-aligned box of
+        `~fvdb.types.Vec3i`, which can in turn be mapped to a world-space box.
 
-        The voxel sizes and world space origins can be per-grid or per-batch.
-        The ijk-min and sizes are the same for all grids in the batch.
-        The mask is the same for all grids in the batch.
+        For each grid in the batch, the dense grid is defined by:
+        - `dense_dims`: the size of the dense grid (shape [3,] = [W, H, D])
+        - `ijk_min`: the minimum voxel index for each grid in the batch (`~fvdb.types.Vec3i`)
+        - `voxel_sizes`: the world-space size of each voxel (`~fvdb.types.Vec3d` or scalar)
+        - `origins`: the world-space coordinate of the 0,0,0 voxel of each grid
+        - `mask`: indicates which voxels are "active" in the resulting grid.
+
+        .. note::
+
+        The `voxel_sizes` and world space `origins` can be per-grid or per-batch.
+        The `ijk_min` and `dense_dims` are the same for all grids in the batch.
+        The `mask` is the same for all grids in the batch.
 
         Args:
             num_grids (int): Number of grids to populate.
@@ -146,7 +146,16 @@ class GridBatch:
                 Defaults to None, which inherits from mask, or uses "cpu" if mask is None.
 
         Returns:
-            GridBatch: A new GridBatch object.
+            grid_batch (GridBatch): A new `~fvdb.GridBatch` object.
+
+        Examples:
+            >>> grid_batch = fvdb.GridBatch.from_dense(num_grids=5, dense_dims=[10, 10, 10], voxel_sizes=[1.0, 1.0, 1.0], origins=[0.0, 0.0, 0.0], mask=None, device="cuda")
+            >>> print(grid_batch.grid_count)
+            5
+            >>> print(grid_batch.voxel_sizes)
+            tensor([[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]])
+            >>> print(grid_batch.origins)
+            tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
         """
         resolved_device = resolve_device(device, inherit_from=mask)
 
@@ -169,6 +178,41 @@ class GridBatch:
         voxel_center: bool = False,
         device: DeviceIdentifier = "cpu",
     ) -> "GridBatch":
+        """
+        Create a `~fvdb.GridBatch` representing a batch of dense grids defined by axis-aligned bounds.
+
+        A dense grid has a voxel for every coordinate in an axis-aligned box of
+        `~fvdb.types.Vec3i`, which can in turn be mapped to a world-space box.
+
+        For every grid in the batch, the dense grid is defined by:
+        - `dense_dims`: the size of the dense grid (shape [3,] = [W, H, D])
+        - `bounds_min`: the minimum world-space coordinate for each grid in the batch (`~fvdb.types.Vec3f`)
+        - `bounds_max`: the maximum world-space coordinate for each grid in the batch (`~fvdb.types.Vec3f`)
+
+        Args:
+            num_grids (int): Number of grids to populate.
+            dense_dims (NumericMaxRank1): Dimensions for all grids in the batch broadcastable to
+                shape (3,), integer dtype
+            bounds_min (NumericMaxRank1): Minimum world-space coordinate for all grids in the batch
+                broadcastable to shape (3,), floating dtype
+            bounds_max (NumericMaxRank1): Maximum world-space coordinate for all grids in the batch
+                broadcastable to shape (3,), floating dtype
+            voxel_center (bool): Whether the bounds are defined by the voxel centers or the voxel corners.
+            device (DeviceIdentifier): Device to create the grid on. Defaults to "cpu".
+
+        Returns:
+            grid_batch (GridBatch): A new `~fvdb.GridBatch` object.
+
+        Examples:
+            >>> grid_batch = fvdb.GridBatch.from_dense_axis_aligned_bounds(num_grids=5, dense_dims=[10, 10, 10], bounds_min=[-1.0, -1.0, -1.0], bounds_max=[1.0, 1.0, 1.0], voxel_center=False, device="cuda")
+            >>> print(grid_batch.grid_count)
+            5
+            >>> print(grid_batch.voxel_sizes)
+            tensor([[0.2, 0.2, 0.2], [0.2, 0.2, 0.2], [0.2, 0.2, 0.2], [0.2, 0.2, 0.2], [0.2, 0.2, 0.2]])
+            >>> print(grid_batch.origins)
+            tensor([[-.9, -.9, -.9], [-.9, -.9, -.9], [-.9, -.9, -.9], [-.9, -.9, -.9], [-.9, -.9, -.9]])
+        """
+
         dense_dims = to_Vec3iBroadcastable(dense_dims, value_constraint=ValueConstraint.POSITIVE)
         bounds_min = to_Vec3fBroadcastable(bounds_min)
         bounds_max = to_Vec3fBroadcastable(bounds_max)
@@ -194,7 +238,7 @@ class GridBatch:
             grid (Grid): The grid to create the grid batch from.
 
         Returns:
-            GridBatch: A new GridBatch object.
+            grid_batch (GridBatch): A new `~fvdb.GridBatch` object.
         """
         return cls(impl=grid._impl)
 
