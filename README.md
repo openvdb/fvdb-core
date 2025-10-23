@@ -119,7 +119,7 @@ source fvdb/bin/activate
 pip install -r env/build_requirements.txt
 TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6+PTX" ./build.sh install -v
 ```
-
+Note: adjust the TORCH_CUDA_ARCH_LIST to suit your needs. If you are building just to run on a single machine, including only the present GPU architecture(s) reduces build time.
 ---
 
 ### Building *f*VDB
