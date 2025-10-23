@@ -21,35 +21,34 @@ Lastly, our [documentation](docs) provides deeper details on the concepts as wel
 
 ## Installing *f*VDB
 
-During the project's initial development stages, it is necessary to [run the build steps](#building-fvdb-from-source) to install ƒVDB. Eventually, ƒVDB will be provided as a pre-built, installable package from anaconda.  We support building the latest ƒVDB version for the following dependent library configurations:
+During the project's initial development stages, it is necessary to [run the build steps](#building-fvdb-from-source) to install ƒVDB. Eventually, ƒVDB will be provided as a pre-built, installable package. We support building the latest ƒVDB version for the following library configurations:
 
 |   PyTorch      | Python      | CUDA |
 | -------------- | ----------- | ------------ |
-|  2.4.0-2.4.1   | 3.10 - 3.12 | 12.1 - 12.4 |
+|  2.8.0-2.9.0   | 3.10 - 3.12 | 12.8 - 13.0 |
 
 
 
 ** Notes:**
-* Linux is the only platform currently supported (Ubuntu >= 20.04 recommended).
+* Linux is the only platform currently supported (Ubuntu >= 22.04 recommended).
 * A CUDA-capable GPU with Ampere architecture or newer (i.e. compute capability >=8.0) is recommended to run the CUDA-accelerated operations in ƒVDB.  A GPU with compute capabililty >=7.0 (Volta architecture) is the minimum requirement but some operations and data types are not supported.
 
 
 ## Building *f*VDB from Source
 
 ### Environment Management
-ƒVDB is a Python library implemented as a C++ Pytorch extension.  Of course you can build ƒVDB in whatever environment suits you, but we provide three paths to constructing reliable environments for building and running ƒVDB. These are separate options,
-choose only one. They're not intended to be used together.
+ƒVDB is a Python library implemented as a C++ PyTorch extension.  Of course you can build ƒVDB in whatever environment suits you, but we provide three distinct paths to constructing reliable environments for building and running ƒVDB. These are separate options and are not intended to be used together.
 
-1. **RECOMMENDED** [conda](#option-1-setting-up-a-conda-environment-recommended)
-2. Using [docker](#option-2-setting-up-a-docker-container)
-3. Python virtual environment. [venv](#option-3-setting-up-a-python-virtual-environment)
+1. **RECOMMENDED** [conda](#option-1-conda-environment-recommended)
+2. Using [Docker](#option-2-docker-container)
+3. [Python virtual environment](#option-3-python-virtual-environment)
 
 `conda` tends to be more flexible since reconfiguring toolchains and modules to suit your larger project can be dynamic, but at the same time this can be a more brittle experience compared to using a virtualized `docker` container.  Using `conda` is generally recommended for development and testing, while using `docker` is recommended for CI/CD and deployment.
 
 ---
 
 
-#### **OPTION 1** Setting up a Conda Environment (Recommended)
+#### **OPTION 1** Conda Environment (Recommended)
 
 *f*VDB can be used with any Conda distribution installed on your system. Below is an installation guide using
 [miniforge](https://github.com/conda-forge/miniforge). You can skip steps 1-3 if you already have a Conda installation.
@@ -84,54 +83,41 @@ conda activate fvdb
 
 ---
 
-#### **OPTION 2** Setting up a Docker Container
+#### **OPTION 2** Docker Container
 
-Running a docker container is a great way to ensure that you have a consistent environment for building and running ƒVDB.
+Running a Docker container ensures that you have a consistent environment for building and running ƒVDB. Start by installing Docker and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 
-Our provided [`Dockerfile`](Dockerfile) constructs a Docker image which is ready to build ƒVDB.  The docker image is configured to install miniforge and the `fvdb` conda environment with all the dependencies needed to build and run ƒVDB.
+Our provided [`Dockerfile`](Dockerfile) constructs a container that pre-installs the dependencies needed to build and run ƒVDB.
 
-Building and starting the docker image is done by running the following command from the fvdb directory:
+In the fvdb-core directory, build the Docker image:
 ```shell
-docker compose run --rm fvdb-dev
+docker build -t fvdb-devel .
 ```
-
 
 When you are ready to build ƒVDB, run the following command within the docker container.  `TORCH_CUDA_ARCH_LIST` specifies which CUDA architectures to build for.
 ```shell
-conda activate fvdb;
+docker run -it --mount type=bind,src="$(pwd)",target=/workspace fvdb-devel bash
 cd /workspace;
+pip install -r env/build_requirements.txt
 TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6+PTX" \
-./build.sh install verbose
+./build.sh install -v
 ```
 
-If you've built an artifact that you want to extract from the container, with "wheel" being the
-most useful... The built wheel can be extracted from the running docker image using `docker cp`, given the
-ID of the running image. For example:
-
-```shell
-docker cp fvdb-fvdb-dev-run-0123456789ab:/workspace/dist/fvdb-0.2.1-cp312-cp312-linux_x86_64.whl .
-```
-
-where `0123456789ab` is the ID of the running docker container, obtained via `docker ps`.
-
-Additional information about the ƒVDB docker setup, with troubleshooting for common errors, can be found
-here: [`ƒVDB Docker`](docs/markdown/docker_readme.md)
+In order to extract an artifact from the container such as the Python wheel, query the container ID using `docker ps` and copy the artifact using `docker cp`.
 
 ---
 
-#### **OPTION 3** Setting up a Python virtual environment
+#### **OPTION 3** Python Virtual Environment
 
-Create a python virtual environment and then proceed to install the exact version of PyTorch that corresponds to your CUDA version. Finally, install the rest of the build requirements.
+Using a Python virtual environment enables you to use your system provided compiler and CUDA toolkit. This can be especially useful if you are using ƒVDB in conjunction with other Python packages, especially ones that have been build from source. Start by installing GCC, the CUDA Toolkit, and cuDNN.
+
+Then, create a Python virtual environment, install the requisite dependencies, and build:
 
 ```shell
 python -m venv fvdb
 source fvdb/bin/activate
-pip install -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu129
-```
-
-When you're ready to build fVDB, run the following command after activating the Python virtual environment
-```shell
-TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6+PTX" ./build.sh install
+pip install -r env/build_requirements.txt
+TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6+PTX" ./build.sh install -v
 ```
 
 ---
