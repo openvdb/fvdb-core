@@ -4,10 +4,7 @@
 #ifndef FVDB_DETAIL_VIEWER_CAMERAVIEW_H
 #define FVDB_DETAIL_VIEWER_CAMERAVIEW_H
 
-// clang-format off
-#include <nanovdb_editor/putil/Reflect.h>
-#include <nanovdb_editor/putil/Camera.h>
-// clang-format on
+#include <nanovdb_editor/putil/Editor.h>
 
 #include <string>
 #include <tuple>
@@ -25,14 +22,15 @@ class CameraView {
     CameraView &operator=(const CameraView &) = delete;
 
     std::string mName;
+    pnanovdb_editor_token_t *mSceneToken = nullptr;
 
   protected:
     pnanovdb_camera_view_t mView;
 
   public:
-    explicit CameraView(const std::string &name) : mName(name) {
+    explicit CameraView(const std::string &name, pnanovdb_editor_token_t *nameToken) : mName(name) {
         pnanovdb_camera_view_default(&mView);
-        mView.name = mName.c_str();
+        mView.name = nameToken;
     }
 
     ~CameraView() {

@@ -105,3 +105,34 @@ def show():
         pass
 
     webbrowser.open_new_tab(url)
+
+
+def reset():
+    """
+    Reset the viewer server state. This will clear all scenes and views and ads back the default scene.
+    """
+    viewer_server = _get_viewer_server_cpp()
+    viewer_server.reset()
+
+
+def remove_scene(scene_name: str):
+    """
+    Remove a scene from the viewer server.
+
+    Args:
+        scene_name (str): The name of the scene to remove.
+    """
+    viewer_server = _get_viewer_server_cpp()
+    viewer_server.remove_scene(scene_name)
+
+
+def remove_view(scene_name: str, name: str):
+    """
+    Remove a view from the viewer server.
+
+    Args:
+        scene_name (str): The name of the scene view belongs to.
+        name (str): The name of the view to remove.
+    """
+    viewer_server = _get_viewer_server_cpp()
+    viewer_server.remove_view(scene_name, name)
