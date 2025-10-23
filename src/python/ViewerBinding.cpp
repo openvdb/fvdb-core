@@ -109,10 +109,23 @@ bind_viewer(py::module &m) {
              &fvdb::detail::viewer::Viewer::port,
              "The port the viewer server is listening on.")
 
+        .def("reset", &fvdb::detail::viewer::Viewer::reset, "Reset the viewer server state")
+
         .def("add_scene",
              &fvdb::detail::viewer::Viewer::addScene,
              py::arg("scene_name"),
              "Add a new scene to the viewer")
+
+        .def("remove_scene",
+             &fvdb::detail::viewer::Viewer::removeScene,
+             py::arg("scene_name"),
+             "Remove a scene from the viewer")
+
+        .def("remove_view",
+             &fvdb::detail::viewer::Viewer::removeView,
+             py::arg("scene_name"),
+             py::arg("name"),
+             "Remove a view from a scene")
 
         .def("camera_orbit_center",
              &fvdb::detail::viewer::Viewer::cameraOrbitCenter,
@@ -214,9 +227,5 @@ bind_viewer(py::module &m) {
              &fvdb::detail::viewer::Viewer::getCameraView,
              py::arg("name"),
              py::return_value_policy::reference_internal,
-             "Get a camera view by name")
-        .def("set_scene_name",
-             &fvdb::detail::viewer::Viewer::setSceneName,
-             py::arg("scene_name"),
-             "Set the current scene name");
+             "Get a camera view by name");
 }
