@@ -621,7 +621,7 @@ class GaussianSplat3d:
         Returns:
             gaussian_splat (GaussianSplat3d): An instance of :class:`GaussianSplat3d` initialized with the provided state dictionary.
         """
-        return cls(impl=GaussianSplat3dCpp.from_state_dict(state_dict))
+        return cls(impl=GaussianSplat3dCpp.from_state_dict(state_dict), _private=cls.__PRIVATE__)
 
     @property
     def device(self) -> torch.device:
