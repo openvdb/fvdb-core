@@ -1,4 +1,4 @@
-name: fvdb
+name: fvdb-workshop
 channels:
   - conda-forge
   - nodefaults
