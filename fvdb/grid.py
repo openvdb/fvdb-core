@@ -1249,9 +1249,11 @@ class Grid:
         )
         return (ray_times.joffsets[1:] - ray_times.joffsets[:-1]) > 0
 
-    def read_from_dense_xyzc(self, dense_data: torch.Tensor, dense_origin: NumericMaxRank1 = 0) -> torch.Tensor:
+    def read_from_dense_cminor(self, dense_data: torch.Tensor, dense_origin: NumericMaxRank1 = 0) -> torch.Tensor:
         """
         Read values from a dense tensor into sparse grid structure.
+
+        This is the "C Minor" (channels minor) version.
 
         Data is read from a dense tensor with XYZC order shape:
         - [dense_size_x, dense_size_y, dense_size_z, channels*]
@@ -1270,21 +1272,23 @@ class Grid:
                 Shape: (total_voxels, channels).
         """
         dense_origin = to_Vec3i(dense_origin)
-        return self._impl.read_from_dense_xyzc(dense_data.unsqueeze(0), dense_origin).jdata
+        return self._impl.read_from_dense_cminor(dense_data.unsqueeze(0), dense_origin).jdata
 
-    def read_from_dense_czyx(self, dense_data: torch.Tensor, dense_origin: NumericMaxRank1 = 0) -> torch.Tensor:
+    def read_from_dense_cmajor(self, dense_data: torch.Tensor, dense_origin: NumericMaxRank1 = 0) -> torch.Tensor:
         """
         Read values from a dense tensor into sparse grid structure.
 
-        Data is read from a dense tensor with CZYX order shape:
-        - [channels*, dense_size_z, dense_size_y, dense_size_x]
+        This is the "C Major" (channels major) version.
+
+        Data is read from a dense tensor with CXYZ order shape:
+        - [channels*, dense_size_x, dense_size_y, dense_size_z]
 
         Extracts values from a dense tensor at locations corresponding to active voxels
         in the sparse grid. Useful for converting dense data to sparse representation.
 
         Args:
             dense_data (torch.Tensor): Dense tensor to read from.
-                Shape: (channels*, dense_size_z, dense_size_y, dense_size_x).
+                Shape: (channels*, dense_size_x, dense_size_y, dense_size_z).
             dense_origins (NumericMaxRank1, optional): Origin of the dense tensor in
                 grid index space, broadcastable to shape (3,), integer dtype
 
@@ -1293,7 +1297,7 @@ class Grid:
                 Shape: (total_voxels, channels).
         """
         dense_origin = to_Vec3i(dense_origin)
-        return self._impl.read_from_dense_czyx(dense_data.unsqueeze(0), dense_origin).jdata
+        return self._impl.read_from_dense_cmajor(dense_data.unsqueeze(0), dense_origin).jdata
 
     def sample_bezier(self, points: torch.Tensor, voxel_data: torch.Tensor) -> torch.Tensor:
         """
@@ -1707,7 +1711,7 @@ class Grid:
         jagged_points = JaggedTensor(points)
         return self._impl.world_to_grid(jagged_points._impl).jdata
 
-    def write_to_dense_xyzc(
+    def write_to_dense_cminor(
         self,
         sparse_data: torch.Tensor,
         min_coord: NumericMaxRank1 | None = None,
@@ -1715,6 +1719,8 @@ class Grid:
     ) -> torch.Tensor:
         """
         Write sparse voxel data to a dense tensor.
+
+        This is the "C Minor" (channels minor) version.
 
         Data is written to a dense tensor with XYZC order shape:
         - [dense_size_x, dense_size_y, dense_size_z, channels*]
@@ -1743,9 +1749,10 @@ class Grid:
             if grid_size is not None
             else None
         )
-        return self._impl.write_to_dense_xyzc(jagged_sparse_data._impl, min_coord, grid_size).squeeze(0)
 
-    def write_to_dense_czyx(
+        return self._impl.write_to_dense_cminor(jagged_sparse_data._impl, min_coord, grid_size).squeeze(0)
+
+    def write_to_dense_cmajor(
         self,
         sparse_data: torch.Tensor,
         min_coord: NumericMaxRank1 | None = None,
@@ -1754,8 +1761,10 @@ class Grid:
         """
         Write sparse voxel data to a dense tensor.
 
-        Data is written to a dense tensor with CZYX order shape:
-        - [channels*, dense_size_z, dense_size_y, dense_size_x]
+        This is the "C Major" (channels major) version.
+
+        Data is written to a dense tensor with CXYZ order shape:
+        - [channels*, dense_size_x, dense_size_y, dense_size_z]
 
         Creates a dense tensor and fills it with values from the sparse grid.
         Voxels not present in the sparse grid are filled with zeros.
@@ -1772,7 +1781,7 @@ class Grid:
 
         Returns:
             torch.Tensor: Dense tensor containing the sparse data.
-                Shape: (channels*, dense_size_z, dense_size_y, dense_size_x)
+                Shape: (channels*, dense_size_x, dense_size_y, dense_size_z)
         """
         jagged_sparse_data = JaggedTensor(sparse_data)
         min_coord = to_Vec3iBroadcastable(min_coord) if min_coord is not None else None
@@ -1781,7 +1790,8 @@ class Grid:
             if grid_size is not None
             else None
         )
-        return self._impl.write_to_dense_czyx(jagged_sparse_data._impl, min_coord, grid_size).squeeze(0)
+
+        return self._impl.write_to_dense_cmajor(jagged_sparse_data._impl, min_coord, grid_size).squeeze(0)
 
     # ============================================================
     #                        Properties

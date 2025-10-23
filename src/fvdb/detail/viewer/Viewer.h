@@ -14,6 +14,7 @@
 #include <nanovdb_editor/putil/Editor.h>
 
 #include <map>
+#include <optional>
 #include <string>
 
 namespace fvdb::detail::viewer {
@@ -46,16 +47,46 @@ class Viewer {
     void stopServer();
 
   public:
-    Viewer(const std::string &ipAddress, const int port, const bool verbose = false);
+    Viewer(const std::string &ipAddress,
+           const int port,
+           const int device_id,
+           const bool verbose = false);
     ~Viewer();
 
-    GaussianSplat3dView &addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splats);
+    GaussianSplat3dView &addGaussianSplat3dView(const std::string &name,
+                                                const GaussianSplat3d &splats);
     CameraView &addCameraView(const std::string &name,
                               const torch::Tensor &cameraToWorldMatrices,
                               const torch::Tensor &projectionMatrices,
                               const torch::Tensor &imageSizes,
                               float frustumNear,
                               float frustumFar);
+
+    bool
+    hasGaussianSplat3dView(const std::string &name) const {
+        return mSplat3dViews.find(name) != mSplat3dViews.end();
+    }
+    bool
+    hasCameraView(const std::string &name) const {
+        return mCameraViews.find(name) != mCameraViews.end();
+    }
+
+    GaussianSplat3dView &
+    getGaussianSplat3dView(const std::string &name) {
+        const auto it      = mSplat3dViews.find(name);
+        const bool hasView = it != mSplat3dViews.end();
+        TORCH_CHECK(hasView, "No GaussianSplat3dView with name '", name, "' found");
+
+        return it->second;
+    }
+    CameraView &
+    getCameraView(const std::string &name) {
+        const auto it      = mCameraViews.find(name);
+        const bool hasView = it != mCameraViews.end();
+        TORCH_CHECK(hasView, "No CameraView with name '", name, "' found");
+
+        return it->second;
+    }
 
     std::tuple<float, float, float> cameraOrbitCenter() const;
     void setCameraOrbitCenter(float ox, float oy, float oz);

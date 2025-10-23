@@ -1580,7 +1580,9 @@ class TestBasicOps(unittest.TestCase):
         grid = GridBatch.from_dense(
             1, [sphere_sdf.shape[i] for i in range(3)], [0] * 3, voxel_sizes=1.0 / N, origins=[0] * 3, device=device
         )
-        sdf_p = grid.read_from_dense_xyzc(sphere_sdf.unsqueeze(-1).unsqueeze(0)).jdata.squeeze()  # permuted sdf values
+        sdf_p = grid.read_from_dense_cminor(
+            sphere_sdf.unsqueeze(-1).unsqueeze(0)
+        ).jdata.squeeze()  # permuted sdf values
 
         # Intersect rays with the SDF
         isect = grid.ray_implicit_intersection(
@@ -1639,7 +1641,7 @@ class TestBasicOps(unittest.TestCase):
                 origins=[0] * 3,
                 device=device,
             )
-            sdf_p = grid.read_from_dense_xyzc(sphere_sdf)  # permuted sdf values
+            sdf_p = grid.read_from_dense_cminor(sphere_sdf)  # permuted sdf values
 
             for level in [0.0, 0.2, -0.2]:
                 v, f, _ = grid.marching_cubes(sdf_p, level)

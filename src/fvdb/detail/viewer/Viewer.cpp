@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+#include "fvdb/detail/viewer/GaussianSplat3dView.h"
+
 #include <fvdb/detail/viewer/Viewer.h>
 
 #include <c10/util/Exception.h>
@@ -67,7 +69,10 @@ Viewer::updateCamera() {
     mEditor.editor.update_camera(&mEditor.editor, &mEditor.camera);
 }
 
-Viewer::Viewer(const std::string &ipAddress, const int port, const bool verbose)
+Viewer::Viewer(const std::string &ipAddress,
+               const int port,
+               const int device_id,
+               const bool verbose)
     : mIpAddress(ipAddress), mPort(port) {
     mEditor.compiler = {};
     pnanovdb_compiler_load(&mEditor.compiler);
@@ -75,8 +80,9 @@ Viewer::Viewer(const std::string &ipAddress, const int port, const bool verbose)
     mEditor.compute = {};
     pnanovdb_compute_load(&mEditor.compute, &mEditor.compiler);
 
-    mEditor.deviceDesc           = {};
-    mEditor.deviceDesc.log_print = verbose ? pNanoLogPrintVerbose : pNanoLogPrint;
+    mEditor.deviceDesc              = {};
+    mEditor.deviceDesc.device_index = device_id;
+    mEditor.deviceDesc.log_print    = verbose ? pNanoLogPrintVerbose : pNanoLogPrint;
 
     mEditor.deviceManager = mEditor.compute.device_interface.create_device_manager(PNANOVDB_FALSE);
     mEditor.device =
@@ -138,7 +144,7 @@ Viewer::~Viewer() {
 }
 
 fvdb::detail::viewer::GaussianSplat3dView &
-Viewer::addGaussianSplat3d(const std::string &name, const GaussianSplat3d &splats) {
+Viewer::addGaussianSplat3dView(const std::string &name, const GaussianSplat3d &splats) {
     std::shared_ptr<pnanovdb_raster_gaussian_data_t> oldData;
     auto itPrev = mSplat3dViews.find(name);
     if (itPrev != mSplat3dViews.end()) {
@@ -346,7 +352,9 @@ Viewer::addCameraView(const std::string &name,
     if (imageSizes.numel() != 0) {
         TORCH_CHECK(imageSizes.dim() == 2 && imageSizes.size(0) == numCameras &&
                         imageSizes.size(1) == 2,
-                    "image_sizes must have shape [N, 2] if provided");
+                    "image_sizes must have shape [N, 2] if provided. Got ",
+                    imageSizes.sizes(),
+                    " instead.");
     }
 
     auto [it, inserted] = mCameraViews.emplace(

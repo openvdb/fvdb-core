@@ -345,48 +345,48 @@ GridBatch::refine(Vec3iOrScalar subdiv_factor,
 }
 
 JaggedTensor
-GridBatch::read_from_dense_xyzc(const torch::Tensor &dense_data,
-                                const Vec3iBatch &dense_origins) const {
+GridBatch::read_from_dense_cminor(const torch::Tensor &dense_data,
+                                  const Vec3iBatch &dense_origins) const {
     c10::DeviceGuard guard(device());
     torch::Tensor retData =
-        detail::autograd::ReadFromDenseXyzc::apply(mImpl, dense_data, dense_origins)[0];
+        detail::autograd::ReadFromDenseCminor::apply(mImpl, dense_data, dense_origins)[0];
     return mImpl->jaggedTensor(retData);
 }
 
 JaggedTensor
-GridBatch::read_from_dense_czyx(const torch::Tensor &dense_data,
-                                const Vec3iBatch &dense_origins) const {
+GridBatch::read_from_dense_cmajor(const torch::Tensor &dense_data,
+                                  const Vec3iBatch &dense_origins) const {
     c10::DeviceGuard guard(device());
     torch::Tensor retData =
-        detail::autograd::ReadFromDenseCzyx::apply(mImpl, dense_data, dense_origins)[0];
+        detail::autograd::ReadFromDenseCmajor::apply(mImpl, dense_data, dense_origins)[0];
     return mImpl->jaggedTensor(retData);
 }
 
 torch::Tensor
-GridBatch::write_to_dense_xyzc(const JaggedTensor &sparse_data,
-                               const std::optional<Vec3iBatch> &min_coord,
-                               const std::optional<Vec3i> &grid_size) const {
+GridBatch::write_to_dense_cminor(const JaggedTensor &sparse_data,
+                                 const std::optional<Vec3iBatch> &min_coord,
+                                 const std::optional<Vec3i> &grid_size) const {
     c10::DeviceGuard guard(device());
     TORCH_CHECK_VALUE(
         sparse_data.ldim() == 1,
         "Expected sparse_data to have 1 list dimension, i.e. be a single list of coordinate values, but got",
         sparse_data.ldim(),
         "list dimensions");
-    return detail::autograd::ReadIntoDenseXyzc::apply(
+    return detail::autograd::ReadIntoDenseCminor::apply(
         mImpl, sparse_data.jdata(), min_coord, grid_size)[0];
 }
 
 torch::Tensor
-GridBatch::write_to_dense_czyx(const JaggedTensor &sparse_data,
-                               const std::optional<Vec3iBatch> &min_coord,
-                               const std::optional<Vec3i> &grid_size) const {
+GridBatch::write_to_dense_cmajor(const JaggedTensor &sparse_data,
+                                 const std::optional<Vec3iBatch> &min_coord,
+                                 const std::optional<Vec3i> &grid_size) const {
     c10::DeviceGuard guard(device());
     TORCH_CHECK_VALUE(
         sparse_data.ldim() == 1,
         "Expected sparse_data to have 1 list dimension, i.e. be a single list of coordinate values, but got",
         sparse_data.ldim(),
         "list dimensions");
-    return detail::autograd::ReadIntoDenseCzyx::apply(
+    return detail::autograd::ReadIntoDenseCmajor::apply(
         mImpl, sparse_data.jdata(), min_coord, grid_size)[0];
 }
 

@@ -56,10 +56,10 @@ if _spec is not None and _spec.origin is not None:
         pass
 
 # isort: off
-from . import _Cpp  # Import the module to use in jcat
+from ._Cpp import jcat as _jcat_cpp
 from ._Cpp import ConvPackBackend
+from ._Cpp import scaled_dot_product_attention as _scaled_dot_product_attention_cpp
 from ._Cpp import (
-    scaled_dot_product_attention,
     config,
     volume_render,
     gaussian_render_jagged,
@@ -90,11 +90,13 @@ from .grid import (
 )
 
 from .convolution_plan import ConvolutionPlan
-from .gaussian_splatting import GaussianSplat3d
+from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
+from .enums import ProjectionType, ShOrderingMode
 
 # The following import needs to come after the GridBatch and JaggedTensor imports
 # immediately above in order to avoid a circular dependency error.
-from . import nn
+# Make these available without an explicit submodule import
+from . import nn, viz, utils
 
 # isort: on
 
@@ -107,13 +109,19 @@ def jcat(things_to_cat, dim=None):
             raise ValueError("GridBatch concatenation does not support dim argument")
         # Extract the C++ implementations from the GridBatch wrappers
         cpp_grids = [g._gridbatch for g in things_to_cat]
-        cpp_result = _Cpp.jcat(cpp_grids)
+        cpp_result = _jcat_cpp(cpp_grids)
         # Wrap the result back in a GridBatch
         return GridBatch(impl=cpp_result)
     elif isinstance(things_to_cat[0], JaggedTensor):
         return _Cpp.jcat([thing._impl for thing in things_to_cat], dim)
     else:
         raise TypeError("jcat() can only cat GridBatch or JaggedTensor")
+
+
+def scaled_dot_product_attention(
+    query: JaggedTensor, key: JaggedTensor, value: JaggedTensor, scale: float
+) -> JaggedTensor:
+    return JaggedTensor(impl=_scaled_dot_product_attention_cpp(query._impl, key._impl, value._impl, scale))
 
 
 from .version import __version__
@@ -124,6 +132,7 @@ __all__ = [
     "GridBatch",
     "JaggedTensor",
     "GaussianSplat3d",
+    "ProjectedGaussianSplats",
     "ConvolutionPlan",
     "load_gridbatch",
     "save_gridbatch",
@@ -140,4 +149,7 @@ __all__ = [
     "Grid",
     "load_grid",
     "save_grid",
+    "viz",
+    "nn",
+    "utils",
 ]

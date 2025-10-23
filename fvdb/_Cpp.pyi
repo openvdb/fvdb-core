@@ -2,11 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import typing
+from enum import Enum
 from typing import ClassVar, overload
 
 import torch
 
 from .types import (
+    DeviceIdentifier,
+    ListOfListsOfTensors,
+    ListOfTensors,
+    LShapeSpec,
+    RShapeSpec,
     Vec3d,
     Vec3dBatch,
     Vec3dBatchOrScalar,
@@ -46,6 +52,10 @@ class ConvPackBackend:
     def value(self) -> int: ...
 
 class GaussianSplat3d:
+    class ProjectionType(Enum):
+        PERSPECTIVE = ...
+        ORTHOGRAPHIC = ...
+
     log_scales: torch.Tensor
     logit_opacities: torch.Tensor
     means: torch.Tensor
@@ -106,7 +116,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
         antialias: bool = ...,
@@ -119,7 +129,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         sh_degree_to_use: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -133,7 +143,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         sh_degree_to_use: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -147,7 +157,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -170,7 +180,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         sh_degree_to_use: int = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
@@ -185,7 +195,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         sh_degree_to_use: int = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
@@ -200,7 +210,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -215,12 +225,12 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
         antialias: bool = ...,
-    ) -> tuple[torch.Tensor, torch.Tensor]: ...
+    ) -> tuple[JaggedTensor, JaggedTensor]: ...
     def render_top_contributing_gaussian_ids(
         self,
         num_samples: int,
@@ -230,7 +240,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -246,7 +256,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -367,8 +377,8 @@ class GridBatch:
     def ray_implicit_intersection(
         self, ray_origins: JaggedTensor, ray_directions: JaggedTensor, grid_scalars: JaggedTensor, eps: float = 0.0
     ) -> JaggedTensor: ...
-    def read_from_dense_xyzc(self, dense_data: torch.Tensor, dense_origins: Vec3i | None = None) -> JaggedTensor: ...
-    def read_from_dense_czyx(self, dense_data: torch.Tensor, dense_origins: Vec3i | None = None) -> JaggedTensor: ...
+    def read_from_dense_cminor(self, dense_data: torch.Tensor, dense_origins: Vec3i | None = None) -> JaggedTensor: ...
+    def read_from_dense_cmajor(self, dense_data: torch.Tensor, dense_origins: Vec3i | None = None) -> JaggedTensor: ...
     def sample_bezier(self, points: JaggedTensor, voxel_data: JaggedTensor) -> JaggedTensor: ...
     def sample_bezier_with_grad(
         self, points: JaggedTensor, voxel_data: JaggedTensor
@@ -460,13 +470,13 @@ class GridBatch:
         cumulative: bool = False,
     ) -> tuple[JaggedTensor, JaggedTensor]: ...
     def world_to_grid(self, points: JaggedTensor) -> JaggedTensor: ...
-    def write_to_dense_xyzc(
+    def write_to_dense_cminor(
         self,
         sparse_data: JaggedTensor,
         min_coord: Vec3iBatch | None = ...,
         grid_size: Vec3i | None = ...,
     ) -> torch.Tensor: ...
-    def write_to_dense_czyx(
+    def write_to_dense_cmajor(
         self,
         sparse_data: JaggedTensor,
         min_coord: Vec3iBatch | None = ...,
@@ -598,7 +608,7 @@ class JaggedTensor:
     def to(self, device: str) -> JaggedTensor: ...
     def type(self, arg0: torch.dtype) -> JaggedTensor: ...
     def type_as(self, arg0: JaggedTensor | torch.Tensor) -> JaggedTensor: ...
-    def unbind(self) -> list[torch.Tensor] | list[list[torch.Tensor]]: ...
+    def unbind(self) -> ListOfTensors | ListOfListsOfTensors: ...
     @overload
     def __add__(self, other: torch.Tensor) -> JaggedTensor: ...
     @overload
@@ -818,7 +828,7 @@ class ProjectedGaussianSplats:
     @property
     def opacities(self) -> torch.Tensor: ...
     @property
-    def projection_type(self) -> str: ...
+    def projection_type(self) -> GaussianSplat3d.ProjectionType: ...
     @property
     def radii(self) -> torch.Tensor: ...
     @property
@@ -961,10 +971,12 @@ class CameraView:
     def frustum_color(self, value: tuple[float, float, float]) -> None: ...
 
 class Viewer:
-    def __init__(self, ip_address: str, port: int, verbose: bool) -> None: ...
+    def __init__(self, ip_address: str, port: int, device_id: int, verbose: bool) -> None: ...
     def port(self) -> int: ...
     def ip_address(self) -> str: ...
-    def add_gaussian_splat_3d(self, name: str, gaussian_splat_3d: GaussianSplat3d) -> GaussianSplat3dView: ...
+    def add_gaussian_splat_3d_view(self, name: str, gaussian_splat_3d: GaussianSplat3d) -> GaussianSplat3dView: ...
+    def has_gaussian_splat_3d_view(self, name: str) -> bool: ...
+    def get_gaussian_splat_3d_view(self, name: str) -> GaussianSplat3dView: ...
     def camera_orbit_center(self) -> tuple[float, float, float]: ...
     def set_camera_orbit_center(self, ox: float, oy: float, oz: float) -> None: ...
     def camera_orbit_radius(self) -> float: ...
@@ -978,7 +990,7 @@ class Viewer:
     def camera_far(self) -> float: ...
     def set_camera_far(self, far: float) -> None: ...
     def camera_projection_type(self) -> str: ...
-    def set_camera_projection_type(self, projection_type: str) -> None: ...
+    def set_camera_projection_type(self, projection_type: GaussianSplat3d.ProjectionType) -> None: ...
     def add_camera_view(
         self,
         name: str,
@@ -988,6 +1000,8 @@ class Viewer:
         frustum_near_plane: float = 0.1,
         frustum_far_plane: float = 1000.0,
     ) -> CameraView: ...
+    def has_camera_view(self, name: str) -> bool: ...
+    def get_camera_view(self, name: str) -> CameraView: ...
 
 class config:
     enable_ultra_sparse_acceleration: ClassVar[bool] = ...
@@ -1034,183 +1048,43 @@ def gridbatch_from_points(
 def jcat(grid_batches: list[GridBatch]) -> GridBatch: ...
 @overload
 def jcat(jagged_tensors: list[JaggedTensor | torch.Tensor], dim: int | None = ...) -> JaggedTensor: ...
-@overload
 def jempty(
-    lshape: list[int],
-    rshape: list[int] | None = ...,
+    lshape: LShapeSpec,
+    rshape: RShapeSpec | None = ...,
     dtype: torch.dtype | None = ...,
-    device: torch.device | None = ...,
+    device: DeviceIdentifier | None = ...,
     requires_grad: bool = ...,
     pin_memory: bool = ...,
 ) -> JaggedTensor: ...
-@overload
-def jempty(
-    lshape: list[int],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: str | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jempty(
-    lshape: list[list[int]],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: torch.device | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jempty(
-    lshape: list[list[int]],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: str | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
 def jones(
-    lshape: list[int],
-    rshape: list[int] | None = ...,
+    lshape: LShapeSpec,
+    rshape: RShapeSpec | None = ...,
     dtype: torch.dtype | None = ...,
-    device: torch.device | None = ...,
+    device: DeviceIdentifier | None = ...,
     requires_grad: bool = ...,
     pin_memory: bool = ...,
 ) -> JaggedTensor: ...
-@overload
-def jones(
-    lshape: list[int],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: str | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jones(
-    lshape: list[list[int]],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: torch.device | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jones(
-    lshape: list[list[int]],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: str | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
 def jrand(
-    lshape: list[int],
-    rshape: list[int] | None = ...,
+    lshape: LShapeSpec,
+    rshape: RShapeSpec | None = ...,
     dtype: torch.dtype | None = ...,
-    device: torch.device | None = ...,
+    device: DeviceIdentifier | None = ...,
     requires_grad: bool = ...,
     pin_memory: bool = ...,
 ) -> JaggedTensor: ...
-@overload
-def jrand(
-    lshape: list[int],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: str | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jrand(
-    lshape: list[list[int]],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: torch.device | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jrand(
-    lshape: list[list[int]],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: str | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
 def jrandn(
-    lshape: list[int],
-    rshape: list[int] | None = ...,
+    lshape: LShapeSpec,
+    rshape: RShapeSpec | None = ...,
     dtype: torch.dtype | None = ...,
-    device: torch.device | None = ...,
+    device: DeviceIdentifier | None = ...,
     requires_grad: bool = ...,
     pin_memory: bool = ...,
 ) -> JaggedTensor: ...
-@overload
-def jrandn(
-    lshape: list[int],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: str | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jrandn(
-    lshape: list[list[int]],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: torch.device | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jrandn(
-    lshape: list[list[int]],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: str | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
 def jzeros(
-    lshape: list[int],
-    rshape: list[int] | None = ...,
+    lshape: LShapeSpec,
+    rshape: RShapeSpec | None = ...,
     dtype: torch.dtype | None = ...,
-    device: torch.device | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jzeros(
-    lshape: list[int],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: str | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jzeros(
-    lshape: list[list[int]],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: torch.device | None = ...,
-    requires_grad: bool = ...,
-    pin_memory: bool = ...,
-) -> JaggedTensor: ...
-@overload
-def jzeros(
-    lshape: list[list[int]],
-    rshape: list[int] | None = ...,
-    dtype: torch.dtype | None = ...,
-    device: str | None = ...,
+    device: DeviceIdentifier | None = ...,
     requires_grad: bool = ...,
     pin_memory: bool = ...,
 ) -> JaggedTensor: ...

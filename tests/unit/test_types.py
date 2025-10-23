@@ -8,11 +8,15 @@ import numpy as np
 import torch
 from fvdb.types import (  # Type guard functions; Type definitions; Conversion functions; Helper function
     DeviceIdentifier,
+    ListOfListsOfTensors,
+    ListOfTensors,
     NumericMaxRank1,
     NumericMaxRank2,
     NumericScalar,
     NumericScalarNative,
     ValueConstraint,
+    is_ListOfListsOfTensors,
+    is_ListOfTensors,
     is_NumericMaxRank1,
     is_NumericMaxRank2,
     is_NumericScalar,
@@ -51,6 +55,31 @@ class TestTypesRedux(unittest.TestCase):
         else:
             b_device = torch.device("cpu")
         self.assertEqual(a_device, b_device)
+
+    # ========== List of Tensors Tests ==========
+
+    def test_is_ListOfTensors(self):
+        """Test is_ListOfTensors type guard"""
+        self.assertTrue(is_ListOfTensors([torch.tensor(1), torch.tensor(2), torch.tensor(3)]))
+        self.assertFalse(is_ListOfTensors(torch.tensor([1, 2, 3])))
+        self.assertFalse(is_ListOfTensors(np.array([1, 2, 3])))
+        self.assertFalse(is_ListOfTensors([[1, 2], [3, 4]]))
+        self.assertFalse(is_ListOfTensors(torch.tensor([[1, 2], [3, 4]])))
+
+    def test_is_ListOfListsOfTensors(self):
+        """Test is_ListOfListsOfTensors type guard"""
+        self.assertTrue(
+            is_ListOfListsOfTensors(
+                [
+                    [torch.tensor(1), torch.tensor(2), torch.tensor(3)],
+                    [torch.tensor(4), torch.tensor(5), torch.tensor(6)],
+                ]
+            )
+        )
+        self.assertFalse(is_ListOfListsOfTensors(torch.tensor([[1, 2, 3], [4, 5, 6]])))
+        self.assertFalse(is_ListOfListsOfTensors(np.array([[1, 2, 3], [4, 5, 6]])))
+        self.assertFalse(is_ListOfListsOfTensors([[1, 2], [3, 4]]))
+        self.assertFalse(is_ListOfListsOfTensors(torch.tensor([[1, 2], [3, 4]])))
 
     # ========== Type Guard Tests ==========
 

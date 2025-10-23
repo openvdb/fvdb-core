@@ -15,9 +15,10 @@ from .types import JaggedTensorOrTensor
 
 def _parse_device_string(device_string: str | torch.device) -> torch.device: ...
 
+# Make these available without an explicit submodule import
 # The following import needs to come after the GridBatch and JaggedTensor imports
 # immediately above in order to avoid a circular dependency error.
-from . import nn
+from . import nn, utils, viz
 from ._Cpp import (
     ConvPackBackend,
     config,
@@ -31,7 +32,8 @@ from ._Cpp import (
     volume_render,
 )
 from .convolution_plan import ConvolutionPlan
-from .gaussian_splatting import GaussianSplat3d
+from .enums import ProjectionType, ShOrderingMode
+from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
 from .grid import Grid, load_grid, save_grid
 from .grid_batch import GridBatch, load_gridbatch, save_gridbatch
 from .jagged_tensor import JaggedTensor
@@ -48,6 +50,9 @@ __all__ = [
     "JaggedTensor",
     "ConvolutionPlan",
     "GaussianSplat3d",
+    "ProjectedGaussianSplats",
+    "ProjectionType",
+    "ShOrderingMode",
     "load_gridbatch",
     "save_gridbatch",
     "jcat",
@@ -63,4 +68,7 @@ __all__ = [
     "Grid",
     "load_grid",
     "save_grid",
+    "nn",
+    "utils",
+    "viz",
 ]
