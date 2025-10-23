@@ -2038,7 +2038,7 @@ class Grid:
 
         .. seealso::
 
-            :meth:`grid_to_world` for the inverse transformation, and :meth:`voxel_to_world_matrix` and :meth:`world_to_voxel_matrix` for
+            :meth:`voxel_to_world` for the inverse transformation, and :meth:`voxel_to_world_matrix` and :meth:`world_to_voxel_matrix` for
             the actual transformation matrices.
 
         Args:
