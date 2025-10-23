@@ -203,11 +203,10 @@ Viewer::addGaussianSplat3dView(const std::string &scene_name,
         }
         if (set_data) {
             std::memcpy(paramsPtr, &viewPtr->mParams, sizeof(pnanovdb_raster_shader_params_t));
-            mEditor.editor.unmap_params(&mEditor.editor, sceneToken, nameToken);
         } else {
             std::memcpy(&viewPtr->mParams, paramsPtr, sizeof(pnanovdb_raster_shader_params_t));
-            // Read path does not require unmap
         }
+        mEditor.editor.unmap_params(&mEditor.editor, sceneToken, nameToken);
     };
 
     for (pnanovdb_compute_array_t *arr: arrays) {
@@ -341,11 +340,6 @@ Viewer::addCameraView(const std::string &scene_name,
                     projectionMatrices.size(2) == 3,
                 "projection_matrices must have shape [N, 3, 3]");
 
-    auto itPrev = mCameraViews.find(name);
-    if (itPrev != mCameraViews.end()) {
-        mCameraViews.erase(itPrev);
-    }
-
     const int64_t numCameras = cameraToWorldMatrices.size(0);
     if (imageSizes.numel() != 0) {
         TORCH_CHECK(imageSizes.dim() == 2 && imageSizes.size(0) == numCameras &&
@@ -420,6 +414,11 @@ Viewer::addCameraView(const std::string &scene_name,
             it->second.mView.configs[i].fov_angle_y  = DEFAULT_CAMERA_FOV_RADIANS;
             it->second.mView.configs[i].aspect_ratio = DEFAULT_CAMERA_ASPECT_RATIO;
         }
+    }
+
+    auto itPrev = mCameraViews.find(name);
+    if (itPrev != mCameraViews.end()) {
+        mCameraViews.erase(itPrev);
     }
 
     pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
