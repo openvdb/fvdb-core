@@ -3,7 +3,6 @@
 //
 #include <fvdb/detail/ops/convolution/backend/SparseConvolutionGroundTruth.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
-// #include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <ATen/Dispatch_v2.h>
 #include <ATen/cuda/CUDAContext.h>
@@ -34,14 +33,114 @@ grid_from_grid_batch(BatchGridAccessor grid_batch, int64_t batch_index) {
     return grid_ptr->getAccessor();
 }
 
-template <typename GridAccessor> inline __hostdev__ int64_t
+template <typename... Types>
+struct Accumulation_type_helper;
+
+template <typename T>
+struct Accumulation_type_helper<T> {
+    using value_type = at::acc_type<T, true>;
+};
+
+template <typename T, typename... Ts>
+struct Accumulation_type_helper<T, Ts...> {
+    // other_count = sizeof...(Ts)
+    // if constexpr (other_count < 1) { ... }
+
+    using S = typename Accumulation_type_helper<Ts...>::value_type;
+    // Get the type that results from adding T to the Rest type
+    using value_type = decltype(std::declval<T>() + std::declval<S>());
+};
+
+template <typename... Types>
+using Accumulation_t = typename Accumulation_type_helper<Types...>::value_type;
+
+
+
+
+template <typename Src_grid, Src, Wgt, Dst_grid, Dst>
+__hostdev__ inline void
+process_dst_leaf(Src_grid src_grid,
+                 Src src_features,
+                 Wgt weights,
+                 Dst_grid dst_grid,
+                 Dst dst_features,
+
+                 int32_t dst_leaf_index,
+                 int32_t dst_voxel_index,
+
+                 Int3 const& kernel_size,
+                 Int3 const& stride) {
+    using S = typename Src::value_type;
+    using W = typename Wgt::value_type;
+    using D = typename Dst::value_type;
+    using A = Accumulation_t<S, W, D>;
+
+    auto const& dst_leaf = leaf_node_at(src_grid, dst_leaf_index);
+
+    auto out = static_cast<A>(0);
+
+}
+
+
+                 int32_t batch_index,
+                 int32_t dst_leaf_index,
+                     int32_t dst_voxel_index,
+                     int32_t _unused_channel_index,
+                     GridBatchImpl::Accessor coarseBatchAccessor,
+                     GridBatchImpl::Accessor fineBatchAccessor,
+                     const TensorAccessor<Dtype, 2> fineData,
+                     TensorAccessor<Dtype, 2> outCoarseData,
+                     nanovdb::Coord poolingFactor,
+                     nanovdb::Coord stride,
+                     Dtype avgFactor) {
+    using accscalar_t                      = at::acc_type<Dtype, true>;
+    const nanovdb::OnIndexGrid *coarseGrid = coarseBatchAccessor.grid(batchIdx);
+    const nanovdb::OnIndexGrid *fineGrid   = fineBatchAccessor.grid(batchIdx);
+    const typename nanovdb::OnIndexGrid::LeafNodeType &coarseLeaf =
+        coarseGrid->tree().template getFirstNode<0>()[leafIdx];
+    const auto fineGridAcc         = fineGrid->getAccessor();
+    const int64_t coarseBaseOffset = coarseBatchAccessor.voxelOffset(batchIdx);
+    const int64_t fineBaseOffset   = fineBatchAccessor.voxelOffset(batchIdx);
+    const int64_t coarseVoxelIndex = coarseLeaf.getValue(voxelIdx);
+
+    if (coarseVoxelIndex == 0) {
+        return;
+    }
+    const nanovdb::Coord coarseIjk = coarseLeaf.offsetToGlobalCoord(voxelIdx);
+    const nanovdb::Coord fineIjk0(
+        coarseIjk[0] * stride[0], coarseIjk[1] * stride[1], coarseIjk[2] * stride[2]);
+    const int64_t coarseIndex = coarseVoxelIndex - static_cast<int64_t>(1) + coarseBaseOffset;
+    accscalar_t avgValue      = static_cast<accscalar_t>(0.0);
+
+    for (nanovdb::Coord::ValueType i = 0; i < poolingFactor[0]; i += 1) {
+        for (nanovdb::Coord::ValueType j = 0; j < poolingFactor[1]; j += 1) {
+            for (nanovdb::Coord::ValueType k = 0; k < poolingFactor[2]; k += 1) {
+                nanovdb::Coord fineIjk = fineIjk0 + nanovdb::Coord(i, j, k);
+                if (!fineGridAcc.isActive(fineIjk)) {
+                    continue;
+                }
+                const int64_t fineIndex =
+                    (int64_t)fineGridAcc.getValue(fineIjk) + fineBaseOffset - 1;
+                avgValue += static_cast<accscalar_t>(fineData[fineIndex][channelIdx]);
+            }
+        }
+    }
+
+    outCoarseData[coarseIndex][channelIdx] = static_cast<Dtype>(avgValue) * avgFactor;
+}
+
+
 
 } // End anonymous namespace
 
 // GPU Implementation using GridBatchImpl
 template <typename scalar_t>
 __global__ void
-sparseConvGroundTruthKernel(scalar_t const *input_features, // (B, src_active_voxels, inC)
+sparseConvGroundTruthKernel(
+
+
+
+    scalar_t const *input_features, // (B, src_active_voxels, inC)
                             scalar_t *output_features,      // (B, dst_active_voxels, outC)
                             scalar_t const *weights,        // (outC, inC, Axis0, Axis1, Axis2)
                             BatchGridAccessor src_grid_acc,
