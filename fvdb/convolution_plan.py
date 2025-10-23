@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, overload
 
 import torch
-from fvdb.types import JaggedTensorOrTensor, NumericMaxRank1, ValueConstraint, to_Vec3i
+from fvdb.types import NumericMaxRank1, ValueConstraint, to_Vec3i
 
 from fvdb import Grid, GridBatch, JaggedTensor
 
@@ -533,7 +533,7 @@ class ConvolutionPlan:
     @overload
     def execute(self, data: JaggedTensor, weights: torch.Tensor) -> JaggedTensor: ...
 
-    def execute(self, data: JaggedTensor | torch.Tensor, weights: torch.Tensor) -> JaggedTensorOrTensor:
+    def execute(self, data: JaggedTensor | torch.Tensor, weights: torch.Tensor) -> JaggedTensor | torch.Tensor:
         """
         Execute this :class:`ConvolutionPlan` with the input data and weights.
 
@@ -873,7 +873,7 @@ class ConvolutionPlan:
         else:
             raise NotImplementedError(f"Backend {backend} is not supported")
 
-    def _execute_halo(self, data: JaggedTensorOrTensor, weights: torch.Tensor) -> JaggedTensor:
+    def _execute_halo(self, data: JaggedTensor | torch.Tensor, weights: torch.Tensor) -> JaggedTensor:
         assert not self._transposed, "Halo backend does not support transposed convolution."
 
         if isinstance(data, torch.Tensor):
@@ -881,7 +881,7 @@ class ConvolutionPlan:
 
         return JaggedTensor(impl=self._pack_info.source_grid.sparse_conv_halo(data._impl, weights, 8))
 
-    def _execute_dense(self, data: JaggedTensorOrTensor, weights: torch.Tensor) -> JaggedTensor:
+    def _execute_dense(self, data: JaggedTensor | torch.Tensor, weights: torch.Tensor) -> JaggedTensor:
         source_grid = self._pack_info.source_grid
         target_grid = self._pack_info.target_grid
         assert source_grid.is_same(target_grid)

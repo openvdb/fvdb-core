@@ -14,12 +14,7 @@ from ._Cpp import ProjectedGaussianSplats as ProjectedGaussianSplatsCpp
 from .grid import Grid
 from .grid_batch import GridBatch
 from .jagged_tensor import JaggedTensor
-from .types import (
-    DeviceIdentifier,
-    JaggedTensorOrTensorTypeVar,
-    cast_check,
-    resolve_device,
-)
+from .types import DeviceIdentifier, cast_check, resolve_device
 
 
 class ProjectedGaussianSplats:
@@ -1919,7 +1914,7 @@ class GaussianSplat3d:
 
     def sparse_render_num_contributing_gaussians(
         self,
-        pixels_to_render: JaggedTensorOrTensorTypeVar,
+        pixels_to_render: JaggedTensor | torch.Tensor,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
         image_width: int,
@@ -1931,7 +1926,7 @@ class GaussianSplat3d:
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
         antialias: bool = False,
-    ) -> tuple[JaggedTensorOrTensorTypeVar, JaggedTensorOrTensorTypeVar]:
+    ) -> tuple[JaggedTensor | torch.Tensor, JaggedTensor | torch.Tensor]:
         """
         Renders the number of Gaussians which contribute to each pixel specified in the input.
 
@@ -2121,7 +2116,7 @@ class GaussianSplat3d:
     def sparse_render_top_contributing_gaussian_ids(
         self,
         num_samples: int,
-        pixels_to_render: JaggedTensorOrTensorTypeVar,
+        pixels_to_render: JaggedTensor | torch.Tensor,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
         image_width: int,
@@ -2133,7 +2128,7 @@ class GaussianSplat3d:
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
         antialias: bool = False,
-    ) -> tuple[JaggedTensorOrTensorTypeVar, JaggedTensorOrTensorTypeVar]:
+    ) -> tuple[JaggedTensor | torch.Tensor, JaggedTensor | torch.Tensor]:
         """
         Renders the ids of the top ``num_samples`` contributing Gaussians in the specified set of
         pixels across ``C`` camera views. **i.e.** the ids of the most opaque Gaussians contributing

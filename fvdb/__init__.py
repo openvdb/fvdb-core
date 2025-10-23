@@ -59,10 +59,10 @@ if _spec is not None and _spec.origin is not None:
 from ._Cpp import jcat as _jcat_cpp
 from ._Cpp import ConvPackBackend
 from ._Cpp import scaled_dot_product_attention as _scaled_dot_product_attention_cpp
+from ._Cpp import gaussian_render_jagged as _gaussian_render_jagged_cpp
 from ._Cpp import (
     config,
     volume_render,
-    gaussian_render_jagged,
 )
 
 # Import JaggedTensor from jagged_tensor.py
@@ -94,6 +94,50 @@ def scaled_dot_product_attention(
     query: JaggedTensor, key: JaggedTensor, value: JaggedTensor, scale: float
 ) -> JaggedTensor:
     return JaggedTensor(impl=_scaled_dot_product_attention_cpp(query._impl, key._impl, value._impl, scale))
+
+
+def gaussian_render_jagged(
+    means: JaggedTensor,  # [N1 + N2 + ..., 3]
+    quats: JaggedTensor,  # [N1 + N2 + ..., 4]
+    scales: JaggedTensor,  # [N1 + N2 + ..., 3]
+    opacities: JaggedTensor,  # [N1 + N2 + ...]
+    sh_coeffs: JaggedTensor,  # [N1 + N2 + ..., K, 3]
+    viewmats: JaggedTensor,  # [C1 + C2 + ..., 4, 4]
+    Ks: JaggedTensor,  # [C1 + C2 + ..., 3, 3]
+    image_width: int,
+    image_height: int,
+    near_plane: float = 0.01,
+    far_plane: float = 1e10,
+    sh_degree_to_use: int = -1,
+    tile_size: int = 16,
+    radius_clip: float = 0.0,
+    eps2d: float = 0.3,
+    antialias: bool = False,
+    render_depth_channel: bool = False,
+    return_debug_info: bool = False,
+    ortho: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+    return _gaussian_render_jagged_cpp(
+        means=means._impl,
+        quats=quats._impl,
+        scales=scales._impl,
+        opacities=opacities._impl,
+        sh_coeffs=sh_coeffs._impl,
+        viewmats=viewmats._impl,
+        Ks=Ks._impl,
+        image_width=image_width,
+        image_height=image_height,
+        near_plane=near_plane,
+        far_plane=far_plane,
+        sh_degree_to_use=sh_degree_to_use,
+        tile_size=tile_size,
+        radius_clip=radius_clip,
+        eps2d=eps2d,
+        antialias=antialias,
+        render_depth_channel=render_depth_channel,
+        return_debug_info=return_debug_info,
+        ortho=ortho,
+    )
 
 
 from .convolution_plan import ConvolutionPlan
