@@ -472,6 +472,28 @@ struct GridBatch : torch::CustomClassHolder {
     /// @return A JaggedTensor of voxel coordinates indexed by this grid batch (shape [B, -1, 3])
     JaggedTensor ijk() const;
 
+    /// @brief Return Morton codes (Z-order curve) for active voxels in this grid batch (xyz bit
+    /// interleaving)
+    /// @param offset Offset to apply to voxel coordinates before encoding
+    /// @return A JaggedTensor of Morton codes for active voxels (shape [B, -1, 1])
+    JaggedTensor morton(const torch::Tensor &offset) const;
+
+    /// @brief Return transposed Morton codes (Z-order curve) for active voxels in this grid batch
+    /// (zyx bit interleaving)
+    /// @param offset Offset to apply to voxel coordinates before encoding
+    /// @return A JaggedTensor of transposed Morton codes for active voxels (shape [B, -1, 1])
+    JaggedTensor morton_zyx(const torch::Tensor &offset) const;
+
+    /// @brief Return Hilbert curve codes for active voxels in this grid batch (xyz)
+    /// @param offset Offset to apply to voxel coordinates before encoding
+    /// @return A JaggedTensor of Hilbert codes for active voxels (shape [B, -1, 1])
+    JaggedTensor hilbert(const torch::Tensor &offset) const;
+
+    /// @brief Return transposed Hilbert curve codes for active voxels in this grid batch (zyx)
+    /// @param offset Offset to apply to voxel coordinates before encoding
+    /// @return A JaggedTensor of transposed Hilbert codes for active voxels (shape [B, -1, 1])
+    JaggedTensor hilbert_zyx(const torch::Tensor &offset) const;
+
     /// @brief Find the intersection between a collection of rays and the zero level set of a scalar
     /// field
     ///        at each voxel in the grid batch
