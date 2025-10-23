@@ -23,6 +23,7 @@ class GaussianSplat3dView {
     GaussianSplat3dView &operator=(const GaussianSplat3dView &) = delete;
 
     std::string mName;
+    pnanovdb_editor_token_t *mSceneToken;
 
     void
     syncSet() {
@@ -35,7 +36,6 @@ class GaussianSplat3dView {
     }
 
   protected:
-    std::shared_ptr<pnanovdb_raster_gaussian_data_t> mGaussianData;
     pnanovdb_raster_shader_params_t mParams;
     std::function<void(bool)> mSyncCallback;
 

@@ -42,7 +42,8 @@ class Scene:
         self._name = name
         self._logger = logging.getLogger(f"{self.__class__.__module__}.{self.__class__.__name__}")
         # TODO: Register scene with name in the viewer and use the returned scene ID.
-        _get_viewer_server_cpp()
+        server = _get_viewer_server_cpp()
+        server.add_scene(name)
 
     @torch.no_grad()
     def add_point_cloud(
@@ -222,7 +223,7 @@ class Scene:
             center (torch.Tensor): A tensor of shape ``(3,)`` representing the camera orbit center in world coordinates.
         """
         server = _get_viewer_server_cpp()
-        ox, oy, oz = server.camera_orbit_center()
+        ox, oy, oz = server.camera_orbit_center(self._name)
         return torch.tensor([ox, oy, oz], dtype=torch.float32)
 
     @camera_orbit_center.setter
@@ -241,7 +242,7 @@ class Scene:
         """
         server = _get_viewer_server_cpp()
         center_vec3f = to_Vec3f(center).cpu().numpy().tolist()
-        server.set_camera_orbit_center(*center_vec3f)
+        server.set_camera_orbit_center(self._name, *center_vec3f)
 
     @property
     def camera_orbit_radius(self) -> float:
@@ -258,7 +259,7 @@ class Scene:
             radius (float): The radius of the camera orbit.
         """
         server = _get_viewer_server_cpp()
-        return server.camera_orbit_radius()
+        return server.camera_orbit_radius(self._name)
 
     @camera_orbit_radius.setter
     def camera_orbit_radius(self, radius: float):
@@ -277,7 +278,7 @@ class Scene:
         if radius <= 0.0:
             raise ValueError(f"Radius must be positive, got {radius}")
         server = _get_viewer_server_cpp()
-        server.set_camera_orbit_radius(radius)
+        server.set_camera_orbit_radius(self._name, radius)
 
     @property
     def camera_orbit_direction(self) -> torch.Tensor:
@@ -295,7 +296,7 @@ class Scene:
                 center to the camera position.
         """
         server = _get_viewer_server_cpp()
-        dx, dy, dz = server.camera_view_direction()
+        dx, dy, dz = server.camera_view_direction(self._name)
         return torch.tensor([dx, dy, dz], dtype=torch.float32)
 
     @camera_orbit_direction.setter
@@ -318,7 +319,7 @@ class Scene:
         if np.linalg.norm(dir_vec3f) < 1e-6:
             raise ValueError("Camera orbit direction cannot be a zero vector.")
         dir_vec3f /= np.linalg.norm(dir_vec3f)
-        server.set_camera_view_direction(*dir_vec3f)
+        server.set_camera_view_direction(self._name, *dir_vec3f)
 
     @property
     def camera_up_direction(self) -> torch.Tensor:
@@ -329,7 +330,7 @@ class Scene:
             up (torch.Tensor): A tensor of shape ``(3,)`` representing the up vector of the camera.
         """
         server = _get_viewer_server_cpp()
-        ux, uy, uz = server.camera_up_direction()
+        ux, uy, uz = server.camera_up_direction(self._name)
         return torch.tensor([ux, uy, uz], dtype=torch.float32)
 
     @camera_up_direction.setter
@@ -345,7 +346,7 @@ class Scene:
         if np.linalg.norm(up_vec3f) < 1e-6:
             raise ValueError("Camera up direction cannot be a zero vector.")
         up_vec3f /= np.linalg.norm(up_vec3f)
-        server.set_camera_up_direction(*up_vec3f)
+        server.set_camera_up_direction(self._name, *up_vec3f)
 
     @property
     def camera_near(self) -> float:
@@ -357,7 +358,7 @@ class Scene:
             near (float): The near clipping plane distance.
         """
         server = _get_viewer_server_cpp()
-        return server.camera_near()
+        return server.camera_near(self._name)
 
     @camera_near.setter
     def camera_near(self, near: float):
@@ -371,7 +372,7 @@ class Scene:
         server = _get_viewer_server_cpp()
         if near <= 0.0:
             raise ValueError(f"Near clipping plane distance must be positive, got {near}")
-        server.set_camera_near(near)
+        server.set_camera_near(self._name, near)
 
     @property
     def camera_far(self) -> float:
@@ -383,7 +384,7 @@ class Scene:
             far (float): The far clipping plane distance.
         """
         server = _get_viewer_server_cpp()
-        return server.camera_far()
+        return server.camera_far(self._name)
 
     @camera_far.setter
     def camera_far(self, far: float):
@@ -397,7 +398,7 @@ class Scene:
         if far <= 0.0:
             raise ValueError(f"Far clipping plane distance must be positive, got {far}")
         server = _get_viewer_server_cpp()
-        server.set_camera_far(far)
+        server.set_camera_far(self._name, far)
 
     @torch.no_grad()
     def set_camera_lookat(
@@ -436,7 +437,7 @@ class Scene:
         if abs(dot_product) > 0.999:
             raise ValueError("View direction and up direction cannot be parallel or anti-parallel.")
 
-        server.set_camera_orbit_center(*lookat_point_vec3f)
-        server.set_camera_view_direction(*view_direction_vec3f)
-        server.set_camera_orbit_radius(orbit_radius)
-        server.set_camera_up_direction(*up_direction_vec3f)
+        server.set_camera_orbit_center(self._name, *lookat_point_vec3f)
+        server.set_camera_view_direction(self._name, *view_direction_vec3f)
+        server.set_camera_orbit_radius(self._name, orbit_radius)
+        server.set_camera_up_direction(self._name, *up_direction_vec3f)
