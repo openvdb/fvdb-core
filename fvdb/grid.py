@@ -740,6 +740,12 @@ class Grid:
         Transform a set of grid-space coordinates to their corresponding positions in world space
         using this :class:`Grid`'s origin and voxel size.
 
+        .. seealso::
+
+            :meth:`world_to_voxel` for the inverse transformation, and :meth:`voxel_to_world_matrix` and :meth:`world_to_voxel_matrix` for
+            the actual transformation matrices.
+
+
         Args:
             ijk (torch.Tensor): A tensor of coordinates to convert. Shape: ``(num_points, 3)``. Can be fractional for interpolation.
 
