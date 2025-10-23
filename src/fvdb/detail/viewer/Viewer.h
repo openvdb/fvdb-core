@@ -53,8 +53,8 @@ class Viewer {
            const bool verbose = false);
     ~Viewer();
 
-    void addScene(const std::string &scene_name)
-    {
+    void
+    addScene(const std::string &scene_name) {
         pnanovdb_camera_init(&mEditor.camera);
         updateCamera(scene_name);
     }
