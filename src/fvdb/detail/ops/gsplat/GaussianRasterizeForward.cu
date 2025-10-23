@@ -555,9 +555,7 @@ launchRasterizeForwardKernels(
         }
     }
 
-    for (const auto device_index: c10::irange(c10::cuda::device_count())) {
-        c10::cuda::getCurrentCUDAStream(device_index).synchronize();
-    }
+    mergeStreams();
 
     // In dense mode, we need to reshape the output tensors to the original image size
     // because they are packed into a single JaggedTensor so that the output code is the same

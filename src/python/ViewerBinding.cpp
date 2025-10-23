@@ -76,9 +76,10 @@ bind_viewer(py::module &m) {
 
     py::class_<fvdb::detail::viewer::Viewer>(
         m, "Viewer", "A viewer for displaying 3D data including Gaussian splats")
-        .def(py::init<const std::string &, const int, const bool>(),
+        .def(py::init<const std::string &, const int, const int, const bool>(),
              py::arg("ip_address"),
              py::arg("port"),
+             py::arg("device_id"),
              py::arg("verbose"),
              "Create a new Viewer instance")
         .def(

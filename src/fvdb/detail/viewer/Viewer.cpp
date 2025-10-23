@@ -82,7 +82,10 @@ Viewer::getCamera(const std::string &scene_name) {
     }
 }
 
-Viewer::Viewer(const std::string &ipAddress, const int port, const bool verbose)
+Viewer::Viewer(const std::string &ipAddress,
+               const int port,
+               const int device_id,
+               const bool verbose)
     : mIpAddress(ipAddress), mPort(port) {
     mEditor.compiler = {};
     pnanovdb_compiler_load(&mEditor.compiler);
@@ -90,8 +93,9 @@ Viewer::Viewer(const std::string &ipAddress, const int port, const bool verbose)
     mEditor.compute = {};
     pnanovdb_compute_load(&mEditor.compute, &mEditor.compiler);
 
-    mEditor.deviceDesc           = {};
-    mEditor.deviceDesc.log_print = verbose ? pNanoLogPrintVerbose : pNanoLogPrint;
+    mEditor.deviceDesc              = {};
+    mEditor.deviceDesc.device_index = device_id;
+    mEditor.deviceDesc.log_print    = verbose ? pNanoLogPrintVerbose : pNanoLogPrint;
 
     mEditor.deviceManager = mEditor.compute.device_interface.create_device_manager(PNANOVDB_FALSE);
     mEditor.device =

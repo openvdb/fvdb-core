@@ -301,7 +301,7 @@ class SimpleUNetUp(nn.Module):
         data = self.batch_norm(data, coarse_grid)
 
         # Increase the resolution by a factor of 2
-        return coarse_grid.subdivide(subdiv_factor=2, data=data, fine_grid=fine_grid)[0]
+        return coarse_grid.refine(subdiv_factor=2, data=data, fine_grid=fine_grid)[0]
 
 
 @fvnn_module
