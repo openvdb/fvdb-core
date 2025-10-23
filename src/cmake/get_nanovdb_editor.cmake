@@ -15,7 +15,7 @@ option(NANOVDB_EDITOR_SKIP "Skip nanovdb_editor wheel build" OFF)
 set(NANOVDB_EDITOR_BUILD_TYPE "Release" CACHE STRING "Build type for nanovdb_editor (Release/Debug)")
 
 # For fVDB main use nanovdb-editor main
-set(NANOVDB_EDITOR_TAG f71090f9c45f11fb57ee640c5bca63086cfcf8b6)
+set(NANOVDB_EDITOR_TAG 5132a9ae4f74098a990e729139ca73fea1e4b807)
 set(NANOVDB_EDITOR_VERSION 0.0.7)   # version at this commit
 
 # If skip is set, get the latest tagged version to prevent unnecessary rebuilds each hash update

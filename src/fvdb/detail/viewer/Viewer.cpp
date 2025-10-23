@@ -115,10 +115,6 @@ Viewer::Viewer(const std::string &ipAddress,
 
     startServer();
 }
-void
-Viewer::setSceneName(const std::string &scene_name) {
-    mCurrentSceneName = scene_name;
-}
 
 Viewer::~Viewer() {
     stopServer();
@@ -132,6 +128,53 @@ Viewer::~Viewer() {
     pnanovdb_editor_free(&mEditor.editor);
     pnanovdb_compute_free(&mEditor.compute);
     pnanovdb_compiler_free(&mEditor.compiler);
+}
+
+void
+Viewer::reset() {
+    mEditor.editor.reset(&mEditor.editor);
+
+    mCameraViews.clear();
+    mSplat3dViews.clear();
+}
+
+void
+Viewer::addScene(const std::string &scene_name) {
+    pnanovdb_camera_init(&mEditor.camera);
+    updateCamera(scene_name);
+}
+
+void
+Viewer::removeScene(const std::string &scene_name) {
+    pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
+    mEditor.editor.remove(&mEditor.editor, sceneToken, nullptr);
+
+    // Erase all camera views belonging to the removed scene
+    for (auto it = mCameraViews.begin(); it != mCameraViews.end();) {
+        if (it->second.mSceneToken == sceneToken) {
+            it = mCameraViews.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    // Erase all splat 3d views belonging to the removed scene
+    for (auto it = mSplat3dViews.begin(); it != mSplat3dViews.end();) {
+        if (it->second.mSceneToken == sceneToken) {
+            it = mSplat3dViews.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void
+Viewer::removeView(const std::string &scene_name, const std::string &name) {
+    pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
+    pnanovdb_editor_token_t *viewToken  = mEditor.editor.get_token(name.c_str());
+    mEditor.editor.remove(&mEditor.editor, sceneToken, viewToken);
+
+    mCameraViews.erase(name);
+    mSplat3dViews.erase(name);
 }
 
 fvdb::detail::viewer::GaussianSplat3dView &

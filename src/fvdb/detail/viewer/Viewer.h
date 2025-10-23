@@ -53,11 +53,15 @@ class Viewer {
            const bool verbose = false);
     ~Viewer();
 
-    void
-    addScene(const std::string &scene_name) {
-        pnanovdb_camera_init(&mEditor.camera);
-        updateCamera(scene_name);
-    }
+    void reset();
+
+    void setSceneName(const std::string &scene_name);
+
+    void addScene(const std::string &scene_name);
+
+    void removeScene(const std::string &scene_name);
+
+    void removeView(const std::string &scene_name, const std::string &view_name);
 
     pnanovdb_editor_token_t *
     getToken(const std::string &name) const {
@@ -131,8 +135,6 @@ class Viewer {
     port() const {
         return mPort;
     };
-
-    void setSceneName(const std::string &scene_name);
 };
 
 } // namespace fvdb::detail::viewer

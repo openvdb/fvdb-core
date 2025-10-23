@@ -45,6 +45,21 @@ class Scene:
         server = _get_viewer_server_cpp()
         server.add_scene(name)
 
+    def __del__(self):
+        """
+        Delete the scene. This will remove the scene and its views from the viewer.
+        """
+        server = _get_viewer_server_cpp()
+        server.remove_scene(self._name)
+
+    def reset(self):
+        """
+        Reset the scene. This will reset viewer server state and clear all views in the scene.
+        """
+        server = _get_viewer_server_cpp()
+        server.reset()
+        server.add_scene(self._name)
+
     @torch.no_grad()
     def add_point_cloud(
         self,
