@@ -483,7 +483,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
         self.assertAlmostEqual(torch.max(vdb_coords).item(), 1.0 - 3 / 12 * 0.5, places=6)
 
         vdb_feature = torch.randn((dense_vdb.num_voxels, 4), device=device, dtype=dtype)
-        dense_feature = dense_vdb.write_to_dense_cminor(vdb_feature)
+        dense_feature = dense_vdb.inject_to_dense_cminor(vdb_feature)
         for i in range(10):
             for j in range(11):
                 for k in range(12):
@@ -660,7 +660,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             idx = write_ijk[:, 0] * crop_size[1] * crop_size[2] + write_ijk[:, 1] * crop_size[2] + write_ijk[:, 2]
             target_crop.view(-1, sparse_data.shape[-1])[idx] = sparse_data[keep_mask]
 
-            pred_crop = grid.write_to_dense_cminor(sparse_data, crop_min, crop_size)
+            pred_crop = grid.inject_to_dense_cminor(sparse_data, crop_min, crop_size)
 
             self.assertTrue(torch.all(pred_crop == target_crop))
 
@@ -702,7 +702,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             idx = write_ijk[:, 0] * crop_size[1] * crop_size[2] + write_ijk[:, 1] * crop_size[2] + write_ijk[:, 2]
             target_crop.view(-1, *sparse_data.shape[1:])[idx] = sparse_data[keep_mask]
 
-            pred_crop = grid.write_to_dense_cminor(sparse_data, crop_min, crop_size)
+            pred_crop = grid.inject_to_dense_cminor(sparse_data, crop_min, crop_size)
 
             self.assertTrue(torch.all(pred_crop == target_crop))
 
@@ -750,7 +750,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             loss_copy = target_crop.sum()
             loss_copy.backward()
 
-            pred_crop = grid.write_to_dense_cminor(sparse_data, crop_min, crop_size)
+            pred_crop = grid.inject_to_dense_cminor(sparse_data, crop_min, crop_size)
             loss = pred_crop.sum()
             loss.backward()
 
@@ -773,8 +773,8 @@ class TestDenseInterfaceSingle(unittest.TestCase):
         for eshape in [(3,), (5, 7)]:
             sparse_data = torch.randn((total_voxels, *eshape), device=device, dtype=dtype)
 
-            dense_default = grid.write_to_dense_cminor(sparse_data, min_coord, dense_size)
-            dense_conv = grid.write_to_dense_cmajor(sparse_data, min_coord, dense_size)
+            dense_default = grid.inject_to_dense_cminor(sparse_data, min_coord, dense_size)
+            dense_conv = grid.inject_to_dense_cmajor(sparse_data, min_coord, dense_size)
 
             self.assertEqual(dense_default.shape, (dims[0], dims[1], dims[2], *eshape))
             self.assertEqual(dense_conv.shape, (*eshape, dims[0], dims[1], dims[2]))
@@ -812,8 +812,8 @@ class TestDenseInterfaceSingle(unittest.TestCase):
         for eshape in [(3,), (5, 7)]:
             sparse_data = torch.randn((total_voxels, *eshape), device=device, dtype=dtype)
 
-            dense_default = grid.write_to_dense_cminor(sparse_data, min_coord, dense_size)
-            dense_conv = grid.write_to_dense_cmajor(sparse_data, min_coord, dense_size)
+            dense_default = grid.inject_to_dense_cminor(sparse_data, min_coord, dense_size)
+            dense_conv = grid.inject_to_dense_cmajor(sparse_data, min_coord, dense_size)
 
             self.assertEqual(dense_default.shape, (dims[0], dims[1], dims[2], *eshape))
             self.assertEqual(dense_conv.shape, (*eshape, dims[0], dims[1], dims[2]))

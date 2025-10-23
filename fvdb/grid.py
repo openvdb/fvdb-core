@@ -1455,7 +1455,7 @@ class Grid:
 
         .. seealso::
 
-            :meth:`write_to_dense_cminor` for writing data to a dense tensor in C Minor order.
+            :meth:`inject_to_dense_cminor` for writing data to a dense tensor in C Minor order.
 
         Args:
             dense_data (torch.Tensor): Dense :class:`torch.Tensor` to read from. Shape: ``(dense_size_x, dense_size_y, dense_size_z, channels*)``.
@@ -1486,7 +1486,7 @@ class Grid:
 
         .. seealso::
 
-            :meth:`write_to_dense_cmajor` for writing data to a dense tensor in "C Major" order.
+            :meth:`inject_to_dense_cmajor` for writing data to a dense tensor in "C Major" order.
 
         Args:
             dense_data (torch.Tensor): Dense :class:`torch.Tensor` to read from. Shape: ``(channels*, dense_size_x, dense_size_y, dense_size_z)``.
@@ -2065,14 +2065,14 @@ class Grid:
         jagged_points = JaggedTensor(points)
         return self._impl.world_to_grid(jagged_points._impl).jdata
 
-    def write_to_dense_cminor(
+    def inject_to_dense_cminor(
         self,
         sparse_data: torch.Tensor,
         min_coord: NumericMaxRank1 | None = None,
         grid_size: NumericMaxRank1 | None = None,
     ) -> torch.Tensor:
         """
-        Write values from :class:`torch.Tensor` associated with this :class:`Grid` into a
+        Inject values from :class:`torch.Tensor` associated with this :class:`Grid` into a
         dense :class:`torch.Tensor`.
 
         This is the "C Minor" (channels minor) version, which assumes the ``dense_data`` is in XYZC order. *i.e* the
@@ -2097,7 +2097,7 @@ class Grid:
 
         .. seealso::
 
-            :meth:`write_to_dense_cmajor` for writing to a dense tensor in "C Major" order.
+            :meth:`inject_to_dense_cmajor` for writing to a dense tensor in "C Major" order.
 
         Args:
             sparse_data (torch.Tensor): A :class:`torch.Tensor` of data associated with this :class:`Grid` with
@@ -2124,7 +2124,7 @@ class Grid:
 
         return self._impl.write_to_dense_cminor(jagged_sparse_data._impl, min_coord, grid_size).squeeze(0)
 
-    def write_to_dense_cmajor(
+    def inject_to_dense_cmajor(
         self,
         sparse_data: torch.Tensor,
         min_coord: NumericMaxRank1 | None = None,
@@ -2156,7 +2156,7 @@ class Grid:
 
         .. seealso::
 
-            :meth:`write_to_dense_cminor` for writing to a dense tensor in "C Minor" order.
+            :meth:`inject_to_dense_cminor` for writing to a dense tensor in "C Minor" order.
 
         Args:
             sparse_data (torch.Tensor): A :class:`torch.Tensor` of data associated with this :class:`Grid` with
