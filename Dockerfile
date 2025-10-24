@@ -3,8 +3,6 @@ FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
 # Set environment variables to prevent interactive prompts during installation.
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN sed -i 's/archive.ubuntu.com/mirrors.ocf.berkeley.edu/g' /etc/apt/sources.list
-
 # Install Python
 RUN apt-get update && \
     apt-get install -y python3-pip python3-dev python3-venv python-is-python3 wget git ninja-build vim libxcb1-dev libx11-dev libgl-dev pkgconf && \
