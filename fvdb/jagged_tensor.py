@@ -615,7 +615,7 @@ class JaggedTensor:
 
         .. code-block:: python
 
-                # Create a jagged tensor from a list of tensors of each of shape (L_i, D)
+            # Create a jagged tensor from a list of tensors of each of shape (L_i, D)
             jt = JaggedTensor.from_list_of_lists_of_tensors([t1, t2, t3])
 
             # Compute the minimum along the jagged dimension (dim=0)
