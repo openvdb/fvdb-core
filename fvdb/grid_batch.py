@@ -1165,7 +1165,7 @@ class GridBatch:
         Inject data from this grid to a destination grid.
         This method copies sidecar data for voxels in this grid to a sidecar corresponding to voxels in the destination grid.
 
-        The copy occurs in "index-space", the grid-to-world transform is not applied.
+        The copy occurs in "voxel-space", the voxel-to-world transform is not applied.
 
         If you pass in the destination data (`dst`), it will be modified in-place.
         If `dst` is None, a new JaggedTensor will be created with the same element shape as src
