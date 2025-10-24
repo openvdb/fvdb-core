@@ -1018,9 +1018,7 @@ gaussianTileIntersectionPrivateUse1Impl(
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-    }
+    mergeStreams();
 
     // In place cumulative sum to get the total number of intersections
     torch::cumsum_out(tiles_per_gaussian_cumsum, tiles_per_gaussian_cumsum, 0, torch::kInt32);
@@ -1153,10 +1151,10 @@ gaussianTileIntersectionPrivateUse1Impl(
         }
 
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-            C10_CUDA_CHECK(cudaSetDevice(deviceId));
-            c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
             cudaEventDestroy(events[deviceId]);
         }
+
+        mergeStreams();
 
         return std::make_tuple(tile_joffsets, vals_sorted);
     }

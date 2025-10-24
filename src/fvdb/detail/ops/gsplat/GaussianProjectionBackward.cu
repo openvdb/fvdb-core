@@ -594,9 +594,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
 
-        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-            c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-        }
+        mergeStreams();
 
         if (outNormalizeddLossdMeans2dNormAccum.has_value()) {
             float *outNormalizeddLossdMeans2dNormAccumPtr =
@@ -629,9 +627,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                     C10_CUDA_KERNEL_LAUNCH_CHECK();
                 }
 
-                for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-                    c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-                }
+                mergeStreams();
 
             } else {
                 for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
@@ -658,9 +654,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                     C10_CUDA_KERNEL_LAUNCH_CHECK();
                 }
 
-                for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-                    c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-                }
+                mergeStreams();
             }
         }
     }

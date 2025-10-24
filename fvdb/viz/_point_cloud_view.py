@@ -71,7 +71,7 @@ class PointCloudView:
         sh0 = _rgb_to_sh(colors)
         shN = torch.zeros((positions.shape[0], 0, 3), dtype=torch.float32)
 
-        gs_impl = GaussianSplat3d(
+        gs_impl = GaussianSplat3d.from_tensors(
             means=means,
             quats=quats,
             log_scales=log_scales,
@@ -79,7 +79,9 @@ class PointCloudView:
             sh0=sh0,
             shN=shN,
         )._impl
-        view: GaussianSplat3dViewCpp = server.add_gaussian_splat_3d_view(name=name, gaussian_splat_3d=gs_impl)
+        view: GaussianSplat3dViewCpp = server.add_gaussian_splat_3d_view(
+            scene_name=scene_name, name=name, gaussian_splat_3d=gs_impl
+        )
         view.tile_size = 16
         view.min_radius_2d = 0.0
         view.eps_2d = point_size / 2.0  # point size is diameter

@@ -40,7 +40,7 @@ jobs:
         with:
           script: |
             const isPR = context.eventName === 'pull_request';
-            let s3 = false;
+            let s3 = '${{ inputs.publish_target }}' == 's3';
             let reuse = false;
             if (isPR) {
               const {owner, repo} = context.repo;
@@ -315,10 +315,25 @@ jobs:
           DEST="${DEST%/}/"
           echo "Uploading wheels to $DEST"
           shopt -s nullglob
+          upload_failed=0
           for whl in dist/*.whl; do
             echo "Uploading $whl"
-            aws s3 cp "$whl" "$DEST" --only-show-errors
+            if aws s3 cp "$whl" "$DEST"; then
+              echo "✓ Successfully uploaded $whl"
+            else
+              echo "✗ FAILED to upload $whl"
+              upload_failed=1
+            fi
           done
+          if [ $upload_failed -eq 1 ]; then
+            echo "ERROR: One or more wheel uploads failed"
+            exit 1
+          fi
+          echo "All wheels uploaded successfully"
+
+          # Brief delay to ensure S3 consistency for subsequent listing
+          echo "Waiting 2 seconds for S3 consistency..."
+          sleep 2
 
       - name: Generate project index.html
         run: |
@@ -328,26 +343,57 @@ jobs:
           INDEX_FILE="$OUTDIR/index.html"
           TITLE="Links for ${{ steps.proj.outputs.project_name }}"
           # List wheels from S3 to ensure index matches what's actually uploaded and previous versions
-          wheels=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/" | grep '\.whl$' | awk '{print $4}')
+          # Use grep -E and || true to handle case where no wheels exist yet, then extract filename (field 4)
+          wheels=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/" | { grep -E '\.whl$' || true; } | awk '{print $4}')
+
+          echo "Found wheels in S3:"
+          echo "$wheels"
+
+          if [ -z "$wheels" ]; then
+            echo "WARNING: No wheels found in S3 at s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/"
+            echo "This may indicate an upload failure or timing issue"
+          fi
+
           {
             echo "<!DOCTYPE html>";
             echo "<html><head><meta charset=\"utf-8\"><title>${TITLE}</title></head><body>";
             echo "<h1>${TITLE}</h1>";
+            wheel_count=0
             for whl in $wheels; do
+              wheel_count=$((wheel_count + 1))
+              echo "Processing wheel ${wheel_count}: $whl" >&2
               # Get SHA256 from S3 ETag or compute from local file if available
               if [ -f "dist/$whl" ]; then
                 sha=$(sha256sum "dist/$whl" | awk '{print $1}')
+                echo "  ✓ Computed SHA256 from local file: ${sha:0:16}..." >&2
               else
                 # Download temporarily to compute hash
-                aws s3 cp "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/$whl" "/tmp/$whl" --only-show-errors
-                sha=$(sha256sum "/tmp/$whl" | awk '{print $1}')
-                rm "/tmp/$whl"
+                echo "  → Downloading $whl to compute hash..." >&2
+                if aws s3 cp "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/$whl" "/tmp/$whl" --only-show-errors; then
+                  sha=$(sha256sum "/tmp/$whl" | awk '{print $1}')
+                  rm "/tmp/$whl"
+                  echo "  ✓ Computed SHA256 from S3 file: ${sha:0:16}..." >&2
+                else
+                  echo "  ✗ ERROR: Failed to download $whl from S3" >&2
+                  exit 1
+                fi
               fi
-              echo "<a href=\"${whl}#sha256=${sha}\">${whl}</a><br/>";
+              html_line="<a href=\"${whl}#sha256=${sha}\">${whl}</a><br/>"
+              echo "  Adding HTML: $html_line" >&2
+              echo "$html_line";
             done;
             echo "</body></html>";
           } > "$INDEX_FILE"
+
+          echo ""
+          echo "Total wheels processed: $wheel_count"
+
+          echo "Generated index.html:"
+          cat "$INDEX_FILE"
+
+          echo "Uploading index.html to S3..."
           aws s3 cp "$INDEX_FILE" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/index.html" --content-type text/html --only-show-errors
+          echo "Index uploaded successfully"
 
       - name: Generate root simple index.html
         run: |

@@ -32,10 +32,12 @@ dependencies:
   - linkify-it-py
   - make
   - matplotlib
+  - msgpack-python
   - myst-parser
   - ninja
   - numpy
   - openssl
+  - openusd
   - pandas
   - parameterized
   - pip
@@ -59,7 +61,6 @@ dependencies:
   - zlib
     ## 3dgs
   - gdal
-  - open3d
   - pillow
   - pyproj
   - pyyaml

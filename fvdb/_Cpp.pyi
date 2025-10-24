@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import typing
+from enum import Enum
 from typing import ClassVar, overload
 
 import torch
@@ -51,6 +52,10 @@ class ConvPackBackend:
     def value(self) -> int: ...
 
 class GaussianSplat3d:
+    class ProjectionType(Enum):
+        PERSPECTIVE = ...
+        ORTHOGRAPHIC = ...
+
     log_scales: torch.Tensor
     logit_opacities: torch.Tensor
     means: torch.Tensor
@@ -111,7 +116,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
         antialias: bool = ...,
@@ -124,7 +129,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         sh_degree_to_use: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -138,7 +143,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         sh_degree_to_use: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -152,7 +157,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -175,7 +180,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         sh_degree_to_use: int = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
@@ -190,7 +195,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         sh_degree_to_use: int = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
@@ -205,7 +210,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -220,12 +225,12 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
         antialias: bool = ...,
-    ) -> tuple[torch.Tensor, torch.Tensor]: ...
+    ) -> tuple[JaggedTensor, JaggedTensor]: ...
     def render_top_contributing_gaussian_ids(
         self,
         num_samples: int,
@@ -235,7 +240,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -251,7 +256,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: str = ...,
+        projection_type: ProjectionType = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -823,7 +828,7 @@ class ProjectedGaussianSplats:
     @property
     def opacities(self) -> torch.Tensor: ...
     @property
-    def projection_type(self) -> str: ...
+    def projection_type(self) -> GaussianSplat3d.ProjectionType: ...
     @property
     def radii(self) -> torch.Tensor: ...
     @property
@@ -966,34 +971,47 @@ class CameraView:
     def frustum_color(self, value: tuple[float, float, float]) -> None: ...
 
 class Viewer:
-    def __init__(self, ip_address: str, port: int, verbose: bool) -> None: ...
+    def __init__(self, ip_address: str, port: int, device_id: int, verbose: bool) -> None: ...
     def port(self) -> int: ...
     def ip_address(self) -> str: ...
-    def add_gaussian_splat_3d_view(self, name: str, gaussian_splat_3d: GaussianSplat3d) -> GaussianSplat3dView: ...
+    def reset(self) -> None: ...
+    def add_scene(self, scene_name: str) -> None: ...
+    def remove_scene(self, scene_name: str) -> None: ...
+    def remove_view(self, scene_name: str, name: str) -> None: ...
+    def add_gaussian_splat_3d_view(
+        self, scene_name: str, name: str, gaussian_splat_3d: GaussianSplat3d
+    ) -> GaussianSplat3dView: ...
     def has_gaussian_splat_3d_view(self, name: str) -> bool: ...
     def get_gaussian_splat_3d_view(self, name: str) -> GaussianSplat3dView: ...
-    def camera_orbit_center(self) -> tuple[float, float, float]: ...
-    def set_camera_orbit_center(self, ox: float, oy: float, oz: float) -> None: ...
-    def camera_orbit_radius(self) -> float: ...
-    def set_camera_orbit_radius(self, radius: float) -> None: ...
-    def camera_view_direction(self) -> tuple[float, float, float]: ...
-    def set_camera_view_direction(self, dx: float, dy: float, dz: float) -> None: ...
-    def camera_up_direction(self) -> tuple[float, float, float]: ...
-    def set_camera_up_direction(self, ux: float, uy: float, uz: float) -> None: ...
-    def camera_near(self) -> float: ...
-    def set_camera_near(self, near: float) -> None: ...
-    def camera_far(self) -> float: ...
-    def set_camera_far(self, far: float) -> None: ...
-    def camera_projection_type(self) -> str: ...
-    def set_camera_projection_type(self, projection_type: str) -> None: ...
+    def camera_orbit_center(self, scene_name: str) -> tuple[float, float, float]: ...
+    def set_camera_orbit_center(self, scene_name: str, ox: float, oy: float, oz: float) -> None: ...
+    def camera_orbit_radius(self, scene_name: str) -> float: ...
+    def set_camera_orbit_radius(self, scene_name: str, radius: float) -> None: ...
+    def camera_view_direction(self, scene_name: str) -> tuple[float, float, float]: ...
+    def set_camera_view_direction(self, scene_name: str, dx: float, dy: float, dz: float) -> None: ...
+    def camera_up_direction(self, scene_name: str) -> tuple[float, float, float]: ...
+    def set_camera_up_direction(self, scene_name: str, ux: float, uy: float, uz: float) -> None: ...
+    def camera_near(self, scene_name: str) -> float: ...
+    def set_camera_near(self, scene_name: str, near: float) -> None: ...
+    def camera_far(self, scene_name: str) -> float: ...
+    def set_camera_far(self, scene_name: str, far: float) -> None: ...
+    def camera_projection_type(self, scene_name: str) -> str: ...
+    def set_camera_projection_type(self, scene_name: str, projection_type: GaussianSplat3d.ProjectionType) -> None: ...
     def add_camera_view(
         self,
+        scene_name: str,
         name: str,
         camera_to_world_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
         image_sizes: torch.Tensor,
-        frustum_near_plane: float = 0.1,
-        frustum_far_plane: float = 1000.0,
+        frustum_near_plane: float,
+        frustum_far_plane: float,
+        axis_length: float,
+        axis_thickness: float,
+        frustum_line_width: float,
+        frustum_scale: float,
+        frustum_color: tuple[float, float, float],
+        visible: bool,
     ) -> CameraView: ...
     def has_camera_view(self, name: str) -> bool: ...
     def get_camera_view(self, name: str) -> CameraView: ...

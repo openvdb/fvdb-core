@@ -55,7 +55,7 @@ source_suffix = [".rst", ".md"]
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "wip"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "wip", "tutorials/wip/"]
 
 autodoc_default_options = {"undoc-members": "forward, extra_repr"}
 
@@ -69,7 +69,7 @@ html_theme = "sphinx_rtd_theme"
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-# html_static_path = ['imgs']
+html_static_path = ["imgs"]
 
 
 # -- Custom hooks ------------------------------------------------------------
@@ -88,4 +88,5 @@ def process_signature(app, what, name, obj, options, signature, return_annotatio
 
 
 def setup(app):
-    app.connect("autodoc-process-signature", process_signature)
+    pass
+    # app.connect("autodoc-process-signature", process_signature)

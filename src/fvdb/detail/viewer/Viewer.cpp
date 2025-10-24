@@ -4,6 +4,7 @@
 
 #include "fvdb/detail/viewer/GaussianSplat3dView.h"
 
+#include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/Viewer.h>
 
 #include <c10/util/Exception.h>
@@ -13,6 +14,7 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 
 inline void
 pNanoLogPrint(pnanovdb_compute_log_level_t level, const char *format, ...) {
@@ -65,11 +67,25 @@ constexpr float DEFAULT_CAMERA_FOV_RADIANS  = 60.f * M_PI / 180.f;
 constexpr float DEFAULT_CAMERA_ASPECT_RATIO = 4.f / 3.f;
 
 void
-Viewer::updateCamera() {
-    mEditor.editor.update_camera(&mEditor.editor, &mEditor.camera);
+Viewer::updateCamera(const std::string &scene_name) {
+    pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
+    mEditor.editor.update_camera_2(&mEditor.editor, sceneToken, &mEditor.camera);
 }
 
-Viewer::Viewer(const std::string &ipAddress, const int port, const bool verbose)
+void
+Viewer::getCamera(const std::string &scene_name) {
+    pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
+    pnanovdb_camera_t *camera           = mEditor.editor.get_camera(&mEditor.editor, sceneToken);
+    if (camera) {
+        // copy POD data
+        mEditor.camera = *camera;
+    }
+}
+
+Viewer::Viewer(const std::string &ipAddress,
+               const int port,
+               const int device_id,
+               const bool verbose)
     : mIpAddress(ipAddress), mPort(port) {
     mEditor.compiler = {};
     pnanovdb_compiler_load(&mEditor.compiler);
@@ -77,8 +93,9 @@ Viewer::Viewer(const std::string &ipAddress, const int port, const bool verbose)
     mEditor.compute = {};
     pnanovdb_compute_load(&mEditor.compute, &mEditor.compiler);
 
-    mEditor.deviceDesc           = {};
-    mEditor.deviceDesc.log_print = verbose ? pNanoLogPrintVerbose : pNanoLogPrint;
+    mEditor.deviceDesc              = {};
+    mEditor.deviceDesc.device_index = device_id;
+    mEditor.deviceDesc.log_print    = verbose ? pNanoLogPrintVerbose : pNanoLogPrint;
 
     mEditor.deviceManager = mEditor.compute.device_interface.create_device_manager(PNANOVDB_FALSE);
     mEditor.device =
@@ -86,25 +103,6 @@ Viewer::Viewer(const std::string &ipAddress, const int port, const bool verbose)
 
     mEditor.editor = {};
     pnanovdb_editor_load(&mEditor.editor, &mEditor.compute, &mEditor.compiler);
-
-    pnanovdb_compute_queue_t *queue =
-        mEditor.compute.device_interface.get_compute_queue(mEditor.device);
-    if (queue == nullptr) {
-        throw std::runtime_error("Failed to get compute queue");
-    }
-
-    // init raster
-    mEditor.raster = {};
-    pnanovdb_raster_load(&mEditor.raster, &mEditor.compute);
-    pnanovdb_raster_context_t *raster_context =
-        mEditor.raster.create_context(&mEditor.compute, queue);
-    if (raster_context == nullptr) {
-        throw std::runtime_error("Failed to create raster context");
-    }
-    mEditor.raster_ctx = raster_context;
-
-    pnanovdb_camera_init(&mEditor.camera);
-    mEditor.editor.update_camera(&mEditor.editor, &mEditor.camera);
 
     mEditor.config                 = {};
     mEditor.config.ip_address      = mIpAddress.c_str();
@@ -121,30 +119,71 @@ Viewer::Viewer(const std::string &ipAddress, const int port, const bool verbose)
 Viewer::~Viewer() {
     stopServer();
 
-    // Clear views before unloading editor to ensure proper cleanup order
     mSplat3dViews.clear();
     mCameraViews.clear();
-
-    pnanovdb_compute_queue_t *queue =
-        mEditor.compute.device_interface.get_compute_queue(mEditor.device);
-
-    mEditor.raster.destroy_context(mEditor.raster.compute, queue, mEditor.raster_ctx);
 
     mEditor.compute.device_interface.destroy_device(mEditor.deviceManager, mEditor.device);
     mEditor.compute.device_interface.destroy_device_manager(mEditor.deviceManager);
 
     pnanovdb_editor_free(&mEditor.editor);
-    pnanovdb_raster_free(&mEditor.raster);
     pnanovdb_compute_free(&mEditor.compute);
     pnanovdb_compiler_free(&mEditor.compiler);
 }
 
+void
+Viewer::reset() {
+    mEditor.editor.reset(&mEditor.editor);
+
+    mCameraViews.clear();
+    mSplat3dViews.clear();
+}
+
+void
+Viewer::addScene(const std::string &scene_name) {
+    pnanovdb_camera_init(&mEditor.camera);
+    updateCamera(scene_name);
+}
+
+void
+Viewer::removeScene(const std::string &scene_name) {
+    pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
+    mEditor.editor.remove(&mEditor.editor, sceneToken, nullptr);
+
+    // Erase all camera views belonging to the removed scene
+    for (auto it = mCameraViews.begin(); it != mCameraViews.end();) {
+        if (it->second.mSceneToken == sceneToken) {
+            it = mCameraViews.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    // Erase all splat 3d views belonging to the removed scene
+    for (auto it = mSplat3dViews.begin(); it != mSplat3dViews.end();) {
+        if (it->second.mSceneToken == sceneToken) {
+            it = mSplat3dViews.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void
+Viewer::removeView(const std::string &scene_name, const std::string &name) {
+    pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
+    pnanovdb_editor_token_t *viewToken  = mEditor.editor.get_token(name.c_str());
+    mEditor.editor.remove(&mEditor.editor, sceneToken, viewToken);
+
+    mCameraViews.erase(name);
+    mSplat3dViews.erase(name);
+}
+
 fvdb::detail::viewer::GaussianSplat3dView &
-Viewer::addGaussianSplat3dView(const std::string &name, const GaussianSplat3d &splats) {
+Viewer::addGaussianSplat3dView(const std::string &scene_name,
+                               const std::string &name,
+                               const GaussianSplat3d &splats) {
     std::shared_ptr<pnanovdb_raster_gaussian_data_t> oldData;
     auto itPrev = mSplat3dViews.find(name);
     if (itPrev != mSplat3dViews.end()) {
-        oldData = itPrev->second.mGaussianData;
         mSplat3dViews.erase(itPrev);
     }
 
@@ -179,42 +218,37 @@ Viewer::addGaussianSplat3dView(const std::string &name, const GaussianSplat3d &s
     pnanovdb_compute_array_t *arrays[] = {
         means_arr, logitOpacities_arr, quats_arr, logScales_arr, sh0_arr, shN_arr};
 
-    pnanovdb_compute_queue_t *queue =
-        mEditor.compute.device_interface.get_device_queue(mEditor.device);
-
     // Load splats into viewer
-    pnanovdb_raster_gaussian_data_t *pGaussianData = nullptr;
-    mEditor.raster.create_gaussian_data_from_arrays(&mEditor.raster,
-                                                    &mEditor.compute,
-                                                    queue,
-                                                    arrays,
-                                                    6u,
-                                                    &pGaussianData,
-                                                    &it->second.mParams,
-                                                    &mEditor.raster_ctx);
-    if (pGaussianData == nullptr) {
-        throw std::runtime_error("Failed to create gaussian data");
-    }
-    // printf("Created gaussian data - %p\n", pGaussianData);
+    pnanovdb_editor_gaussian_data_desc_t desc = {};
+    desc.means                                = means_arr;
+    desc.opacities                            = logitOpacities_arr;
+    desc.quaternions                          = quats_arr;
+    desc.scales                               = logScales_arr;
+    desc.sh_0                                 = sh0_arr;
+    desc.sh_n                                 = shN_arr;
 
-    mEditor.editor.add_gaussian_data(&mEditor.editor, mEditor.raster_ctx, queue, pGaussianData);
+    // Get token for this object name
+    pnanovdb_editor_token_t *nameToken  = mEditor.editor.get_token(name.c_str());
+    pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
 
-    it->second.mGaussianData = std::shared_ptr<pnanovdb_raster_gaussian_data_t>(
-        pGaussianData, [this](pnanovdb_raster_gaussian_data_t *ptr) {
-            if (ptr && mEditor.device) {
-                pnanovdb_compute_queue_t *deviceQueue =
-                    mEditor.compute.device_interface.get_device_queue(mEditor.device);
-                if (deviceQueue) {
-                    mEditor.raster.destroy_gaussian_data(mEditor.raster.compute, deviceQueue, ptr);
-                    // printf("Destroyed gaussian data - %p\n", ptr);
-                }
-            }
-        });
+    // Add to editor using token-based API
+    mEditor.editor.add_gaussian_data_2(&mEditor.editor, sceneToken, nameToken, &desc);
 
-    pnanovdb_raster_shader_params_t *params = &it->second.mParams;
-    it->second.mSyncCallback                = [this, params](bool set_data) {
-        mEditor.editor.sync_shader_params(
-            &mEditor.editor, params, set_data ? PNANOVDB_TRUE : PNANOVDB_FALSE);
+    it->second.mSceneToken = sceneToken;
+
+    // Set up parameter synchronization using map/unmap against named object
+    it->second.mSyncCallback = [this, sceneToken, nameToken, viewPtr = &it->second](bool set_data) {
+        void *paramsPtr = mEditor.editor.map_params(
+            &mEditor.editor, sceneToken, nameToken, viewPtr->mParams.data_type);
+        if (!paramsPtr) {
+            return;
+        }
+        if (set_data) {
+            std::memcpy(paramsPtr, &viewPtr->mParams, viewPtr->mParams.data_type->element_size);
+        } else {
+            std::memcpy(&viewPtr->mParams, paramsPtr, viewPtr->mParams.data_type->element_size);
+        }
+        mEditor.editor.unmap_params(&mEditor.editor, sceneToken, nameToken);
     };
 
     for (pnanovdb_compute_array_t *arr: arrays) {
@@ -241,97 +275,112 @@ Viewer::stopServer() {
 }
 
 std::tuple<float, float, float>
-Viewer::cameraOrbitCenter() const {
+Viewer::cameraOrbitCenter(const std::string &scene_name) {
+    (void)scene_name;
     return std::make_tuple(mEditor.camera.state.position.x,
                            mEditor.camera.state.position.y,
                            mEditor.camera.state.position.z);
 }
 void
-Viewer::setCameraOrbitCenter(float x, float y, float z) {
+Viewer::setCameraOrbitCenter(const std::string &scene_name, float x, float y, float z) {
     mEditor.camera.state.position.x = x;
     mEditor.camera.state.position.y = y;
     mEditor.camera.state.position.z = z;
-    updateCamera();
+    updateCamera(scene_name);
 }
 
 float
-Viewer::cameraOrbitRadius() const {
+Viewer::cameraOrbitRadius(const std::string &scene_name) {
+    (void)scene_name;
     return mEditor.camera.state.eye_distance_from_position;
 }
 void
-Viewer::setCameraOrbitRadius(float radius) {
+Viewer::setCameraOrbitRadius(const std::string &scene_name, float radius) {
     mEditor.camera.state.eye_distance_from_position = radius;
-    updateCamera();
+    updateCamera(scene_name);
 }
 
 std::tuple<float, float, float>
-Viewer::cameraViewDirection() const {
+Viewer::cameraViewDirection(const std::string &scene_name) {
+    (void)scene_name;
     return std::make_tuple(mEditor.camera.state.eye_direction.x,
                            mEditor.camera.state.eye_direction.y,
                            mEditor.camera.state.eye_direction.z);
 }
 void
-Viewer::setCameraViewDirection(float x, float y, float z) {
+Viewer::setCameraViewDirection(const std::string &scene_name, float x, float y, float z) {
     mEditor.camera.state.eye_direction.x = x;
     mEditor.camera.state.eye_direction.y = y;
     mEditor.camera.state.eye_direction.z = z;
-    updateCamera();
+    updateCamera(scene_name);
 }
 
 std::tuple<float, float, float>
-Viewer::cameraUpDirection() const {
+Viewer::cameraUpDirection(const std::string &scene_name) {
+    getCamera(scene_name);
     return std::make_tuple(mEditor.camera.state.eye_up.x,
                            mEditor.camera.state.eye_up.y,
                            mEditor.camera.state.eye_up.z);
 }
 void
-Viewer::setCameraUpDirection(float x, float y, float z) {
+Viewer::setCameraUpDirection(const std::string &scene_name, float x, float y, float z) {
     mEditor.camera.state.eye_up.x = x;
     mEditor.camera.state.eye_up.y = y;
     mEditor.camera.state.eye_up.z = z;
-    updateCamera();
+    updateCamera(scene_name);
 }
 
 float
-Viewer::cameraNear() const {
+Viewer::cameraNear(const std::string &scene_name) {
+    getCamera(scene_name);
     return mEditor.camera.config.near_plane;
 }
 void
-Viewer::setCameraNear(float near) {
+Viewer::setCameraNear(const std::string &scene_name, float near) {
     mEditor.camera.config.near_plane = near;
-    updateCamera();
+    updateCamera(scene_name);
 }
 
 float
-Viewer::cameraFar() const {
+Viewer::cameraFar(const std::string &scene_name) {
+    getCamera(scene_name);
     return mEditor.camera.config.far_plane;
 }
 void
-Viewer::setCameraFar(float far) {
+Viewer::setCameraFar(const std::string &scene_name, float far) {
     mEditor.camera.config.far_plane = far;
-    updateCamera();
+    updateCamera(scene_name);
 }
 
 GaussianSplat3d::ProjectionType
-Viewer::cameraProjectionType() const {
+Viewer::cameraProjectionType(const std::string &scene_name) {
+    getCamera(scene_name);
     return mEditor.camera.config.is_orthographic ? GaussianSplat3d::ProjectionType::ORTHOGRAPHIC
                                                  : GaussianSplat3d::ProjectionType::PERSPECTIVE;
 }
 void
-Viewer::setCameraProjectionType(GaussianSplat3d::ProjectionType mode) {
+Viewer::setCameraProjectionType(const std::string &scene_name,
+                                GaussianSplat3d::ProjectionType mode) {
     mEditor.camera.config.is_orthographic =
         (mode == GaussianSplat3d::ProjectionType::ORTHOGRAPHIC) ? PNANOVDB_TRUE : PNANOVDB_FALSE;
 
-    updateCamera();
+    updateCamera(scene_name);
 }
 
 CameraView &
-Viewer::addCameraView(const std::string &name,
+Viewer::addCameraView(const std::string &scene_name,
+                      const std::string &name,
                       const torch::Tensor &cameraToWorldMatrices,
                       const torch::Tensor &projectionMatrices,
                       const torch::Tensor &imageSizes,
                       float frustumNear,
-                      float frustumFar) {
+                      float frustumFar,
+                      float axisLength,
+                      float axisThickness,
+                      float frustumLineWidth,
+                      float frustumScale,
+                      const std::tuple<float, float, float> &frustumColor,
+                      bool visible) {
     TORCH_CHECK(cameraToWorldMatrices.dim() == 3 && cameraToWorldMatrices.size(1) == 4 &&
                     cameraToWorldMatrices.size(2) == 4,
                 "camera_to_world_matrices must have shape [N, 4, 4]");
@@ -353,9 +402,14 @@ Viewer::addCameraView(const std::string &name,
                     " instead.");
     }
 
-    auto [it, inserted] = mCameraViews.emplace(
-        std::piecewise_construct, std::forward_as_tuple(name), std::forward_as_tuple(name));
+    pnanovdb_editor_token_t *nameToken  = mEditor.editor.get_token(name.c_str());
+    pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
 
+    auto [it, inserted] = mCameraViews.emplace(std::piecewise_construct,
+                                               std::forward_as_tuple(name),
+                                               std::forward_as_tuple(name, nameToken));
+
+    it->second.mSceneToken       = sceneToken;
     it->second.mView.num_cameras = numCameras;
     it->second.mView.states      = new pnanovdb_camera_state_t[it->second.mView.num_cameras];
     it->second.mView.configs     = new pnanovdb_camera_config_t[it->second.mView.num_cameras];
@@ -417,7 +471,17 @@ Viewer::addCameraView(const std::string &name,
         }
     }
 
-    mEditor.editor.add_camera_view(&mEditor.editor, &it->second.mView);
+    // Set visualization parameters
+    it->second.setAxisLength(axisLength);
+    it->second.setAxisThickness(axisThickness);
+    it->second.setFrustumLineWidth(frustumLineWidth);
+    it->second.setFrustumScale(frustumScale);
+    it->second.setFrustumColor(
+        std::get<0>(frustumColor), std::get<1>(frustumColor), std::get<2>(frustumColor));
+    it->second.setVisible(visible);
+
+    mEditor.editor.add_camera_view_2(&mEditor.editor, sceneToken, &it->second.mView);
+
     return it->second;
 }
 

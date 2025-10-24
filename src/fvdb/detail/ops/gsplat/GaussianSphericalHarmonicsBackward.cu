@@ -39,10 +39,10 @@ evalShFunctionVJP(const int64_t degree,                     // degree of SH to b
                   const int64_t gi,                         // gaussian index
                   const int64_t c,                          // render channel
                   const typename Vec3Type<T>::type &dir,    // [3]
-                  const torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits> coeffsN,
+                  const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> coeffsN,
                   const T *dLossDRenderQuantities,          // [D]
-                  torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits> dLossDSh0Coeffs,
-                  torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits> dLossDShNCoeffs,
+                  torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> dLossDSh0Coeffs,
+                  torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> dLossDShNCoeffs,
                   typename Vec3Type<T>::type *dLossDViewDir // [3] optional
 ) {
     T dLossDRenderQuantitiesLocal = dLossDRenderQuantities[c];
@@ -287,13 +287,13 @@ computeShBackward(
     const int64_t K,
     const int64_t D,
     const int64_t shDegreeToUse,
-    const torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits> viewDirs,     // [C, N, 3]
-    const torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits> shNCoeffs,    // [K-1, N, D]
+    const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> viewDirs,     // [C, N, 3]
+    const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> shNCoeffs,    // [K-1, N, D]
     const int *__restrict__ radii,                                                    // [C, N]
-    const torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits>
+    const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits>
         dLossDRenderQuantities,                                                       // [C, N, D]
-    torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits> outDLossDSh0Coeffs, // [N, 1, D]
-    torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits> outDLossDShNCoeffs, // [N, K-1, D]
+    torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> outDLossDSh0Coeffs, // [N, 1, D]
+    torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> outDLossDShNCoeffs, // [N, K-1, D]
     T *__restrict__ outDLossDViewDirs // [C, N, 3] optiondl
 ) {
     // parallelize over C * N * D
@@ -345,10 +345,10 @@ computeShDiffuseOnlyBackward(
     const int64_t C,
     const int64_t N,
     const int64_t D,
-    const torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits>
+    const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits>
         dLossDRenderQuantities,                                                      // [C, N, D]
     const int *__restrict__ radii,                                                   // [C, N]
-    torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits> outDLossDSh0Coeffs // [N, 1, D]
+    torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> outDLossDSh0Coeffs // [N, 1, D]
 ) {
     // parallelize over C * N * D
     auto idx = blockIdx.x * blockDim.x + threadIdx.x; // cidx * N * D + gidx * D + c
@@ -453,12 +453,12 @@ dispatchSphericalHarmonicsBackward<torch::kCUDA>(
             K,
             D,
             shDegreeToUse,
-            viewDirs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-            shNCoeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            viewDirs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+            shNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
             radiiPtr,
-            dLossDRenderQuantities.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-            dLossDSh0Coeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-            dLossDShNCoeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            dLossDRenderQuantities.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+            dLossDSh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+            dLossDShNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
             computeDLossDViewDirs ? dLossDViewDirs.data_ptr<scalar_t>() : nullptr);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
 
@@ -477,9 +477,9 @@ dispatchSphericalHarmonicsBackward<torch::kCUDA>(
             C,
             N,
             D,
-            dLossDRenderQuantities.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            dLossDRenderQuantities.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
             radiiPtr,
-            dLossDSh0Coeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>());
+            dLossDSh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
         return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
     }
@@ -573,18 +573,16 @@ dispatchSphericalHarmonicsBackward<torch::kPrivateUse1>(
                 K,
                 D,
                 shDegreeToUse,
-                viewDirs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-                shNCoeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+                viewDirs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+                shNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
                 radiiPtr,
-                dLossDRenderQuantities.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-                dLossDSh0Coeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-                dLossDShNCoeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+                dLossDRenderQuantities.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+                dLossDSh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+                dLossDShNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
                 computeDLossDViewDirs ? dLossDViewDirs.data_ptr<scalar_t>() : nullptr);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
-        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-            c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-        }
+        mergeStreams();
 
         return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
     } else {
@@ -612,14 +610,12 @@ dispatchSphericalHarmonicsBackward<torch::kPrivateUse1>(
                 C,
                 N,
                 D,
-                dLossDRenderQuantities.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+                dLossDRenderQuantities.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
                 radiiPtr,
-                dLossDSh0Coeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>());
+                dLossDSh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
-        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-            c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-        }
+        mergeStreams();
 
         return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
     }

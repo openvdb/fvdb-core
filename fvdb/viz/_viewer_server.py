@@ -15,7 +15,7 @@ def _get_viewer_server_cpp() -> ViewerCpp:
     Get the global viewer server C++ instance or raise a :class:`RuntimeError` if it is not initialized.
 
     Returns:
-        ViewerCpp: The global viewer server C++ instance.
+        viewer_server (ViewerCpp): The global viewer server C++ instance.
 
     """
     global _viewer_server_cpp
@@ -24,7 +24,7 @@ def _get_viewer_server_cpp() -> ViewerCpp:
     return _viewer_server_cpp
 
 
-def init(ip_address: str = "127.0.0.1", port: int = 8080, verbose: bool = False):
+def init(ip_address: str = "127.0.0.1", port: int = 8080, vk_device_id: int = 0, verbose: bool = False):
     """
     Initialize the viewer web-server on the given IP address and port. You must call this function
     first before visualizing any scenes.
@@ -34,10 +34,16 @@ def init(ip_address: str = "127.0.0.1", port: int = 8080, verbose: bool = False)
     .. code-block:: python
 
         import fvdb
+
+        # Initialize the viewer server on localhost:8080
         fvdb.viz.init(ip_address="127.0.0.1", port=8080)
 
+        # Add a scene to the viewer with a point cloud in the scene
         scene = fvdb.viz.Scene("My Scene")
         scene.add_point_cloud(...)
+
+        # Show the viewer in the browser or inline in a Jupyter notebook
+        fvdb.viz.show()
 
     .. note::
 
@@ -47,11 +53,12 @@ def init(ip_address: str = "127.0.0.1", port: int = 8080, verbose: bool = False)
     Args:
         ip_address (str): The IP address to bind the viewer server to. Default is ``"127.0.0.1"``.
         port (int): The port to bind the viewer server to. Default is ``8080``.
+        vk_device_id (int): The Vulkan device ID to use for rendering. Default is ``0``.
         verbose (bool): If True, the viewer server will print verbose output to the console. Default is ``False``.
     """
     global _viewer_server_cpp
     if _viewer_server_cpp is None:
-        _viewer_server_cpp = ViewerCpp(ip_address=ip_address, port=port, verbose=verbose)
+        _viewer_server_cpp = ViewerCpp(ip_address=ip_address, port=port, device_id=vk_device_id, verbose=verbose)
     else:
         warnings.warn(
             f"Viewer server is already initialized with IP = {_viewer_server_cpp.ip_address()} and port = {_viewer_server_cpp.port()}."
@@ -68,11 +75,14 @@ def show():
 
         import fvdb
 
+        # Initialize the viewer server on localhost:8080
         fvdb.viz.init(ip_address="127.0.0.1", port=8080)
 
+        # Add a scene to the viewer with a point cloud in the scene
         scene = fvdb.viz.Scene("My Scene")
         scene.add_point_cloud(...)
 
+        # Show the viewer in the browser or inline in a Jupyter notebook
         fvdb.viz.show()
 
     .. note::
@@ -95,3 +105,34 @@ def show():
         pass
 
     webbrowser.open_new_tab(url)
+
+
+def reset():
+    """
+    Reset the viewer server state. This will clear all scenes and views and ads back the default scene.
+    """
+    viewer_server = _get_viewer_server_cpp()
+    viewer_server.reset()
+
+
+def remove_scene(scene_name: str):
+    """
+    Remove a scene from the viewer server.
+
+    Args:
+        scene_name (str): The name of the scene to remove.
+    """
+    viewer_server = _get_viewer_server_cpp()
+    viewer_server.remove_scene(scene_name)
+
+
+def remove_view(scene_name: str, name: str):
+    """
+    Remove a view from the viewer server.
+
+    Args:
+        scene_name (str): The name of the scene view belongs to.
+        name (str): The name of the view to remove.
+    """
+    viewer_server = _get_viewer_server_cpp()
+    viewer_server.remove_view(scene_name, name)

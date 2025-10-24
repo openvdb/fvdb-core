@@ -6,13 +6,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from enum import Enum, auto
-from typing import Any, Sequence, TypeGuard, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Sequence, TypeGuard, TypeVar, cast
 
 import numpy
 import numpy as np
 import torch
 
-from ._Cpp import JaggedTensor
+if TYPE_CHECKING:
+    from .jagged_tensor import JaggedTensor
 
 Numeric = int | float
 
@@ -55,7 +56,9 @@ RShapeSpec = Sequence[int]
 ListOfTensors = list[torch.Tensor]
 ListOfListsOfTensors = list[list[torch.Tensor]]
 
-JaggedTensorOrTensor = JaggedTensor | torch.Tensor
+# JaggedTensorOrTensor = "JaggedTensor | torch.Tensor"
+
+# JaggedTensorOrTensorTypeVar = TypeVar("JaggedTensorOrTensorTypeVar", bound="JaggedTensor | torch.Tensor")
 
 # New type for GridBatch indexing
 GridBatchIndex = int | np.integer | slice | list[bool] | list[int] | torch.Tensor
@@ -202,6 +205,8 @@ def is_ListOfListsOfTensors(x: Any) -> TypeGuard[ListOfListsOfTensors]:
 
 
 def is_JaggedTensorOrTensor(x: Any) -> bool:
+    from .jagged_tensor import JaggedTensor
+
     return isinstance(x, (JaggedTensor, torch.Tensor))
 
 
@@ -334,13 +339,16 @@ def resolve_device(device_id: DeviceIdentifier | None, inherit_from: Any = None)
         return device
 
     # device_id is None - inherit from inherit_from
-    if inherit_from is not None and isinstance(inherit_from, (torch.Tensor, JaggedTensor)):
-        return inherit_from.device  # Preserve original device without normalization
-    elif hasattr(inherit_from, "device") and isinstance(inherit_from.device, torch.device):
-        return inherit_from.device
-    else:
-        # Python objects, NumPy objects, None, etc. -> use CPU
-        return torch.device("cpu")
+    if inherit_from is not None:
+        from .jagged_tensor import JaggedTensor
+
+        if isinstance(inherit_from, (torch.Tensor, JaggedTensor)):
+            return inherit_from.device  # Preserve original device without normalization
+        elif hasattr(inherit_from, "device") and isinstance(inherit_from.device, torch.device):
+            return inherit_from.device
+
+    # Python objects, NumPy objects, None, etc. -> use CPU
+    return torch.device("cpu")
 
 
 # ============================================================
