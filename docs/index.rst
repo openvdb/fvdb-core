@@ -40,17 +40,16 @@ The videos below show fVDB being used for large-scale 3D reconstruction, simulat
 .. raw:: html
 
    <p style="text-align: center; font-weight: bold; font-style: italic; text-decoration: underline; font-size: medium; text-decoration-skip-ink: none; margin-bottom: 0.5em;">
-   fVDB being used to reconstruct radiance fields and TSDF volumes from images and points</p>
+   fVDB being used to reconstruct radiance (25 million splats) fields and TSDF volumes (100 million voxels) from images and points</p>
   <video autoplay loop controls muted width="90%" style="display: block; margin: 0 auto;">
      <source src="https://fvdb-data.s3.us-east-2.amazonaws.com/fvdb-reality-capture/spot_airport_480p.mp4" type="video/mp4" />
   </video>
 
    <br>
-
    <p style="text-align: center; font-weight: bold; font-style: italic; text-decoration: underline; font-size: medium; text-decoration-skip-ink: none; margin-bottom: 0.5em;">
-   fVDB being used to visualize large scale volumetric data in a web browser</p>
+   fVDB being used to process a sparse SDF on a grid with 181 million voxels. Visualized in a browser.</p>
   <video autoplay loop controls muted width="90%" style="display: block; margin: 0 auto;">
-     <source src="https://fvdb-data.s3.us-east-2.amazonaws.com/fvdb-reality-capture/large_recon_480p.mp4" type="video/mp4" />
+     <source src="https://fvdb-data.s3.us-east-2.amazonaws.com/fvdb-reality-capture/crawler_480p.mp4" type="video/mp4" />
   </video>
 
 |
@@ -71,11 +70,7 @@ spatial intelligence research and applications.
 
 .. toctree::
    :maxdepth: 1
-   :caption: Basic Concepts
-
-.. toctree::
-   :maxdepth: 1
-   :caption: API References
+   :caption: Documentation
 
    api/jagged_tensor
    api/convolution_plan
