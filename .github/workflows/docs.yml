@@ -108,14 +108,14 @@ jobs:
           pushd fvdb-reality-capture
           pip install -e .
           popd
-          
+
       - name: Build docs
         run: |
           micromamba activate fvdb
           which sphinx-build
           sphinx-build docs/ -E -a _docs_build
           sphinx-build fvdb-reality-capture/docs -E -a _docs_build/reality-capture
-          
+
 
       - name: Upload static files as artifact
         id: deployment
