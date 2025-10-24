@@ -219,12 +219,8 @@ __all__ = [
     "ShOrderingMode",
     "ConvolutionPlan",
     # GridBatch operations
-    "load_gridbatch",
-    "save_gridbatch",
     # Grid operations
     "Grid",
-    "load_grid",
-    "save_grid",
     # JaggedTensor operations
     "jcat",
     "jrand",
