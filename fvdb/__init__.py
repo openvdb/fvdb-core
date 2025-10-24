@@ -83,11 +83,7 @@ from .grid_batch import (
 )
 
 
-from .grid import (
-    Grid,
-    load_grid,
-    save_grid,
-)
+from .grid import Grid
 
 
 def scaled_dot_product_attention(
@@ -225,6 +221,8 @@ __all__ = [
     "JaggedTensor",
     "GaussianSplat3d",
     "ProjectedGaussianSplats",
+    "ProjectionType",
+    "ShOrderingMode",
     "ConvolutionPlan",
     # GridBatch operations
     "load_gridbatch",

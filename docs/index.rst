@@ -71,30 +71,18 @@ spatial intelligence research and applications.
 
 .. toctree::
    :maxdepth: 1
-   :caption: Tutorials
-
-   tutorials/basic_concepts
-   tutorials/building_grids
-   tutorials/basic_grid_ops
-   tutorials/ray_tracing
-   tutorials/simple_unet
-   tutorials/io
-   tutorials/volume_rendering
+   :caption: Basic Concepts
 
 .. toctree::
    :maxdepth: 1
    :caption: API References
 
-   api/convolution_plan
-   api/gaussian_splat_3d
-   api/grid
-   api/grid_batch
    api/jagged_tensor
+   api/convolution_plan
+   api/sparse_grids
+   api/gaussian_splatting
    api/viz
-
-.. toctree::
-   :maxdepth: 2
-
+   api/enums
    api/nn
    api/utils
 
