@@ -63,9 +63,9 @@ convolutionKernelMapCPU(const GridBatchImpl::Accessor &sourceGridBatchAcc,
                         const nanovdb::Coord &kernelSize,
                         const nanovdb::Coord &stride,
                         torch::TensorAccessor<int, 2> outKernelMap) {
-    const nanovdb::Coord kernelStart({(int)std::floor(-kernelSize.x() / 2.0 + 1),
-                                      (int)std::floor(-kernelSize.y() / 2.0 + 1),
-                                      (int)std::floor(-kernelSize.z() / 2.0 + 1)});
+    const nanovdb::Coord kernelStart({(int)std::floor(-kernelSize[0] / 2.0 + 1),
+                                      (int)std::floor(-kernelSize[1] / 2.0 + 1),
+                                      (int)std::floor(-kernelSize[2] / 2.0 + 1)});
 
     for (int64_t bi = 0; bi < sourceGridBatchAcc.batchSize(); bi += 1) {
         const auto *sourceGrid = sourceGridBatchAcc.grid(bi);
@@ -78,16 +78,18 @@ convolutionKernelMapCPU(const GridBatchImpl::Accessor &sourceGridBatchAcc,
 
         for (auto it = ActiveVoxelIterator<-1>(targetGrid->tree(), targetBaseOffset); it.isValid();
              it++) {
-            // Note that stride and kernelSize is in DHW
             const nanovdb::Coord sCoord(
-                it->first.x() * stride.z(), it->first.y() * stride.y(), it->first.z() * stride.x());
+                it->first[0] * stride[0],
+                it->first[1] * stride[1],
+                it->first[2] * stride[2]);
+
             // Center kernel is in the middle -- allows for acceleration in Conv.
             int kIdx = 0;
-            for (int kz = kernelStart.z(); kz < kernelStart.z() + kernelSize.z(); ++kz) {
-                for (int ky = kernelStart.y(); ky < kernelStart.y() + kernelSize.y(); ++ky) {
-                    for (int kx = kernelStart.x(); kx < kernelStart.x() + kernelSize.x();
-                         ++kx, ++kIdx) {
-                        const nanovdb::Coord &sOffset = sCoord + nanovdb::Coord(kz, ky, kx);
+            for (int k0 = kernelStart[0]; k0 < kernelStart[0] + kernelSize[0]; ++k0) {
+                for (int k1 = kernelStart[1]; k1 < kernelStart[1] + kernelSize[1]; ++k1) {
+                    for (int k2 = kernelStart[2]; k2 < kernelStart[2] + kernelSize[2];
+                         ++k2, ++kIdx) {
+                        const nanovdb::Coord &sOffset = sCoord + nanovdb::Coord(k0, k1, k2);
                         if (sourceAcc.isActive(sOffset)) {
                             outKernelMap[it->second][kIdx] =
                                 sourceAcc.getValue(sOffset) - 1 + sourceBaseOffset;
