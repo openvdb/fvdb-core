@@ -651,7 +651,7 @@ class GridBatch:
         """
         Create a :class:`fvdb.GridBatch` with one or more zero-voxel grids on a specific device.
 
-        An zero-voxel grid batch does not mean there are zero grids. It means that the grids have
+        A zero-voxel grid batch does not mean there are zero grids. It means that the grids have
         zero voxels. This constructor will create as many zero-voxel grids as the batch size
         of ``voxel_sizes`` and ``origins``, defaulting to 1 grid, though for that case, you should use
         the single-grid :class:`fvdb.Grid` constructor instead.
@@ -739,7 +739,7 @@ class GridBatch:
 
         Returns:
             bbox (torch.Tensor): A tensor of shape ``(2, 3)`` containing the minimum and maximum
-                coordinates of the bounding box in index space.
+                coordinates of the bounding box in voxel space.
         """
         # There's a quirk with zero-voxel grids that we handle here.
         if self.has_zero_voxels_at(bi):
@@ -760,8 +760,8 @@ class GridBatch:
 
         Args:
             features (JaggedTensor): The voxel features to clip. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, total_voxels, channels)``.
-            ijk_min (NumericMaxRank2): Minimum bounds in index space for each grid, broadcastable to shape ``(batch_size, 3)``, integer dtype
-            ijk_max (NumericMaxRank2): Maximum bounds in index space for each grid, broadcastable to shape ``(batch_size, 3)``, integer dtype
+            ijk_min (NumericMaxRank2): Minimum bounds in voxel space for each grid, broadcastable to shape ``(batch_size, 3)``, integer dtype
+            ijk_max (NumericMaxRank2): Maximum bounds in voxel space for each grid, broadcastable to shape ``(batch_size, 3)``, integer dtype
 
         Returns:
             clipped_features (JaggedTensor): A :class:`fvdb.JaggedTensor` containing the clipped voxel features with shape ``(batch_size, clipped_total_voxels, channels)``.
@@ -783,8 +783,8 @@ class GridBatch:
         Each voxel ``[i, j, k]`` in each grid of the input batch is included in the output if it lies within ``ijk_min`` and ``ijk_max`` for that grid.
 
         Args:
-            ijk_min (NumericMaxRank2): Index space minimum bound of the clip region for each grid, broadcastable to shape ``(batch_size, 3)``, integer dtype
-            ijk_max (NumericMaxRank2): Index space maximum bound of the clip region for each grid, broadcastable to shape ``(batch_size, 3)``, integer dtype
+            ijk_min (NumericMaxRank2): Voxel space minimum bound of the clip region for each grid, broadcastable to shape ``(batch_size, 3)``, integer dtype
+            ijk_max (NumericMaxRank2): Voxel space maximum bound of the clip region for each grid, broadcastable to shape ``(batch_size, 3)``, integer dtype
 
         Returns:
             clipped_grid (GridBatch): A :class:`GridBatch` representing the clipped version of this grid batch.
@@ -956,7 +956,7 @@ class GridBatch:
 
         Returns:
             dual_bbox (torch.Tensor): A tensor of shape ``(2, 3)`` containing the minimum and maximum
-                coordinates of the dual bounding box in index space.
+                coordinates of the dual bounding box in voxel space.
         """
         if self.has_zero_voxels_at(bi):
             return torch.zeros((2, 3), dtype=torch.int32, device=self.device)
@@ -1118,7 +1118,7 @@ class GridBatch:
         Inject data from source voxel coordinates to a sidecar for this grid.
 
         Args:
-            src_ijk (JaggedTensor): Voxel coordinates in index space from which to copy data.
+            src_ijk (JaggedTensor): Voxel coordinates in voxel space from which to copy data.
                 Shape: ``(B, num_src_voxels, 3)``.
             src (JaggedTensor): Source data to inject. Must match the shape of the destination.
                 Shape: ``(B, num_src_voxels, *)``.
@@ -1326,15 +1326,13 @@ class GridBatch:
 
     def is_same(self, other: "GridBatch") -> bool:
         """
-        Check if two grid batches have the same structure.
-
-        Compares the voxel structure, dimensions, and origins of two grid batches.
+        Check if two grid batches share the same underlying data in memory.
 
         Args:
             other (GridBatch): The other grid batch to compare with.
 
         Returns:
-            is_same (bool): True if the grids have identical structure, False otherwise.
+            is_same (bool): True if the grid batches have the same underlying data in memory, False otherwise.
         """
         return self._impl.is_same(other._impl)
 
@@ -1438,10 +1436,8 @@ class GridBatch:
 
     def neighbor_indexes(self, ijk: JaggedTensor, extent: int, bitshift: int = 0) -> JaggedTensor:
         """
-        Get indices of neighbors in N-ring neighborhood.
-
-        Finds the linear indices of all voxels within a specified neighborhood ring
-        around the given voxel coordinates.
+        Get indexes of neighboring voxels in this :class:`GridBatch` in an N-ring neighborhood of each
+        voxel coordinate in ``ijk``.
 
         Args:
             ijk (JaggedTensor): Voxel coordinates to find neighbors for.
@@ -1450,7 +1446,9 @@ class GridBatch:
             bitshift (int): Bit shift value for encoding. Default is 0.
 
         Returns:
-            neighbor_indices (JaggedTensor): Linear indices of neighboring voxels.
+            neighbor_indexes (JaggedTensor): A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_queries, N)``
+                containing the linear indexes of neighboring voxels for each voxel coordinate in ``ijk``
+                in the input. If some neighbors are not active in the grid, their indexes will be ``-1``.
         """
         return JaggedTensor(impl=self._impl.neighbor_indexes(ijk._impl, extent, bitshift))
 
@@ -1777,8 +1775,7 @@ class GridBatch:
         Returns:
             ray_segments (JaggedTensor): A JaggedTensor containing the samples along the rays with lshape
                 ``[[S_{0,0}, ..., S_{0,N_0}], ..., [S_{B,0}, ..., S_{B,N_B}]]`` and eshape
-                ``(2,)`` or ``(1,)`` representing the start and end distance of each sample or the midpoint
-                of each sample if return_midpoints is true.
+                ``(2,)`` representing the start and end distance of each segment.
         """
         return JaggedTensor(
             impl=self._impl.segments_along_rays(ray_origins._impl, ray_directions._impl, max_segments, eps)
