@@ -323,7 +323,7 @@ class TestBasicOps(unittest.TestCase):
         grid = grid.dual_grid()
 
         target_dual_coordinates = ((pts - vox_origin) / vox_size) + 0.5
-        pred_dual_coordinates = grid.world_to_grid(fvdb.JaggedTensor(pts)).jdata
+        pred_dual_coordinates = grid.world_to_voxel(fvdb.JaggedTensor(pts)).jdata
 
         self.assertTrue(
             torch.allclose(pred_dual_coordinates, target_dual_coordinates, atol=dtype_to_atol(dtype)),
@@ -341,7 +341,7 @@ class TestBasicOps(unittest.TestCase):
         grid = grid.dilated_grid(1)
 
         target_primal_coordinates = (pts - vox_origin) / vox_size
-        pred_primal_coordinates = grid.world_to_grid(fvdb.JaggedTensor(pts)).jdata
+        pred_primal_coordinates = grid.world_to_voxel(fvdb.JaggedTensor(pts)).jdata
 
         self.assertTrue(torch.allclose(target_primal_coordinates, pred_primal_coordinates, atol=dtype_to_atol(dtype)))
 
@@ -357,7 +357,7 @@ class TestBasicOps(unittest.TestCase):
         grid = grid.dilated_grid(1)
         grid = grid.dual_grid()
 
-        pred_dual_coordinates = grid.world_to_grid(fvdb.JaggedTensor(pts)).jdata
+        pred_dual_coordinates = grid.world_to_voxel(fvdb.JaggedTensor(pts)).jdata
         grad_out = torch.rand_like(pred_dual_coordinates)
         pred_dual_coordinates.backward(grad_out)
 
@@ -385,7 +385,7 @@ class TestBasicOps(unittest.TestCase):
         grid = GridBatch.from_points(fvdb.JaggedTensor(pts), voxel_sizes=vox_size, origins=vox_origin)
         grid = grid.dilated_grid(1)
 
-        pred_primal_coordinates = grid.world_to_grid(fvdb.JaggedTensor(pts)).jdata
+        pred_primal_coordinates = grid.world_to_voxel(fvdb.JaggedTensor(pts)).jdata
         grad_out = torch.rand_like(pred_primal_coordinates)
         pred_primal_coordinates.backward(grad_out)
 
@@ -415,7 +415,7 @@ class TestBasicOps(unittest.TestCase):
         grid = grid.dilated_grid(1)
 
         target_world_pts = (grid_pts * vox_size) + vox_origin
-        pred_world_pts = grid.grid_to_world(fvdb.JaggedTensor(grid_pts)).jdata
+        pred_world_pts = grid.voxel_to_world(fvdb.JaggedTensor(grid_pts)).jdata
 
         self.assertTrue(torch.allclose(target_world_pts, pred_world_pts, atol=dtype_to_atol(dtype)))
 
@@ -432,7 +432,7 @@ class TestBasicOps(unittest.TestCase):
         grid = grid.dual_grid()
 
         target_world_pts = ((grid_pts - 0.5) * vox_size) + vox_origin
-        pred_world_pts = grid.grid_to_world(fvdb.JaggedTensor(grid_pts)).jdata
+        pred_world_pts = grid.voxel_to_world(fvdb.JaggedTensor(grid_pts)).jdata
 
         self.assertTrue(torch.allclose(target_world_pts, pred_world_pts, atol=dtype_to_atol(dtype)))
 
@@ -448,7 +448,7 @@ class TestBasicOps(unittest.TestCase):
         grid = GridBatch.from_points(fvdb.JaggedTensor(pts), voxel_sizes=vox_size, origins=vox_origin)
         grid = grid.dilated_grid(1)
 
-        pred_world_pts = grid.grid_to_world(fvdb.JaggedTensor(grid_pts)).jdata
+        pred_world_pts = grid.voxel_to_world(fvdb.JaggedTensor(grid_pts)).jdata
         grad_out = torch.rand_like(pred_world_pts)
         pred_world_pts.backward(grad_out)
 
@@ -478,7 +478,7 @@ class TestBasicOps(unittest.TestCase):
         grid = grid.dilated_grid(1)
         grid = grid.dual_grid()
 
-        pred_world_pts = grid.grid_to_world(fvdb.JaggedTensor(grid_pts)).jdata
+        pred_world_pts = grid.voxel_to_world(fvdb.JaggedTensor(grid_pts)).jdata
         grad_out = torch.rand_like(pred_world_pts)
         pred_world_pts.backward(grad_out)
 
@@ -516,7 +516,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertTrue(torch.all(dual_origin == grid_dd.dual_grid().origins[0]))
 
         target_primal_coordinates = (pts - vox_origin) / vox_size
-        pred_primal_coordinates = grid.world_to_grid(fvdb.JaggedTensor(pts)).jdata
+        pred_primal_coordinates = grid.world_to_voxel(fvdb.JaggedTensor(pts)).jdata
 
         self.assertTrue(
             torch.allclose(target_primal_coordinates, pred_primal_coordinates, atol=dtype_to_atol(dtype)),
@@ -524,10 +524,10 @@ class TestBasicOps(unittest.TestCase):
         )
 
         target_dual_coordinates = ((pts - vox_origin) / vox_size) + 0.5
-        pred_dual_coordinates = grid_d.world_to_grid(fvdb.JaggedTensor(pts)).jdata
+        pred_dual_coordinates = grid_d.world_to_voxel(fvdb.JaggedTensor(pts)).jdata
         self.assertTrue(torch.allclose(pred_dual_coordinates, target_dual_coordinates, atol=dtype_to_atol(dtype)))
 
-        pred_primal_coordinates_dd = grid_dd.world_to_grid(fvdb.JaggedTensor(pts)).jdata
+        pred_primal_coordinates_dd = grid_dd.world_to_voxel(fvdb.JaggedTensor(pts)).jdata
         self.assertTrue(
             torch.allclose(target_primal_coordinates, pred_primal_coordinates_dd, atol=dtype_to_atol(dtype))
         )
@@ -640,7 +640,7 @@ class TestBasicOps(unittest.TestCase):
 
         all_coords = torch.cat([outside_random_coords, inside_coords])
 
-        all_world_points = grid.grid_to_world(fvdb.JaggedTensor(all_coords.to(dtype))).jdata
+        all_world_points = grid.voxel_to_world(fvdb.JaggedTensor(all_coords.to(dtype))).jdata
 
         pred_mask = grid.points_in_grid(fvdb.JaggedTensor(all_world_points)).jdata
         target_mask = torch.ones(all_coords.shape[0], dtype=torch.bool).to(device)
@@ -734,7 +734,7 @@ class TestBasicOps(unittest.TestCase):
         if p.dtype == torch.half:
             p = p.float()
 
-        expected_ijk = torch.floor(grid.world_to_grid(fvdb.JaggedTensor(p)).jdata)
+        expected_ijk = torch.floor(grid.world_to_voxel(fvdb.JaggedTensor(p)).jdata)
         offsets = torch.tensor(
             [
                 [0, 0, 0],
@@ -1275,7 +1275,7 @@ class TestBasicOps(unittest.TestCase):
         grid = grid.dual_grid()
 
         target_dual_coordinates = ((pts - vox_origin) / vox_size) + 0.5
-        pred_dual_coordinates = grid.world_to_grid(fvdb.JaggedTensor(pts)).jdata
+        pred_dual_coordinates = grid.world_to_voxel(fvdb.JaggedTensor(pts)).jdata
         self.assertTrue(torch.allclose(pred_dual_coordinates, target_dual_coordinates, atol=dtype_to_atol(dtype)))
         self.assertEqual(grid.device.type, torch.device(device).type)
 
@@ -1284,8 +1284,8 @@ class TestBasicOps(unittest.TestCase):
         target_dual_coordinates = ((pts - vox_origin) / vox_size) + 0.5
         if torch.device(device).type != to_device.type:
             with self.assertRaises(Exception):
-                pred_dual_coordinates = grid2.world_to_grid(fvdb.JaggedTensor(pts)).jdata
-        pred_dual_coordinates = grid2.world_to_grid(fvdb.JaggedTensor(pts.to(to_device))).jdata
+                pred_dual_coordinates = grid2.world_to_voxel(fvdb.JaggedTensor(pts)).jdata
+        pred_dual_coordinates = grid2.world_to_voxel(fvdb.JaggedTensor(pts.to(to_device))).jdata
         self.assertTrue(
             torch.allclose(pred_dual_coordinates, target_dual_coordinates.to(to_device), atol=dtype_to_atol(dtype))
         )
@@ -1296,8 +1296,8 @@ class TestBasicOps(unittest.TestCase):
         target_dual_coordinates = ((pts - vox_origin) / vox_size) + 0.5
         if torch.device(device).type != to_device.type:
             with self.assertRaises(Exception):
-                pred_dual_coordinates = grid2.world_to_grid(fvdb.JaggedTensor(pts)).jdata
-        pred_dual_coordinates = grid2.world_to_grid(fvdb.JaggedTensor(pts.to(to_device))).jdata
+                pred_dual_coordinates = grid2.world_to_voxel(fvdb.JaggedTensor(pts)).jdata
+        pred_dual_coordinates = grid2.world_to_voxel(fvdb.JaggedTensor(pts.to(to_device))).jdata
         self.assertTrue(
             torch.allclose(pred_dual_coordinates, target_dual_coordinates.to(to_device), atol=dtype_to_atol(dtype))
         )
@@ -1580,7 +1580,7 @@ class TestBasicOps(unittest.TestCase):
         grid = GridBatch.from_dense(
             1, [sphere_sdf.shape[i] for i in range(3)], [0] * 3, voxel_sizes=1.0 / N, origins=[0] * 3, device=device
         )
-        sdf_p = grid.read_from_dense_cminor(
+        sdf_p = grid.inject_from_dense_cminor(
             sphere_sdf.unsqueeze(-1).unsqueeze(0)
         ).jdata.squeeze()  # permuted sdf values
 
@@ -1641,7 +1641,7 @@ class TestBasicOps(unittest.TestCase):
                 origins=[0] * 3,
                 device=device,
             )
-            sdf_p = grid.read_from_dense_cminor(sphere_sdf)  # permuted sdf values
+            sdf_p = grid.inject_from_dense_cminor(sphere_sdf)  # permuted sdf values
 
             for level in [0.0, 0.2, -0.2]:
                 v, f, _ = grid.marching_cubes(sdf_p, level)

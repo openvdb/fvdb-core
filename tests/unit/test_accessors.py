@@ -30,7 +30,7 @@ class TestAccessors(unittest.TestCase):
         sparse_points = torch.tensor([[0, 0, 0], [1, 1, 1]], dtype=torch.float16, device=device)
         grid_batch = GridBatch.from_points(JaggedTensor(sparse_points), voxel_sizes=0.1, origins=0.0)
 
-        read_jagged_data = grid_batch.read_from_dense_cminor(dense_grid, dense_origin)
+        read_jagged_data = grid_batch.inject_from_dense_cminor(dense_grid, dense_origin)
         self.assertIsInstance(read_jagged_data, JaggedTensor)
 
         grid = Grid.from_points(sparse_points, voxel_size=0.1, origin=0.0)
@@ -45,7 +45,7 @@ class TestAccessors(unittest.TestCase):
         grid_batch = GridBatch.from_points(JaggedTensor(zero_points), voxel_sizes=0.1, origins=0.0)
 
         sparse_data = torch.tensor([[0], [0]], dtype=torch.float16, device=device)
-        grid_batch.write_to_dense_cminor(JaggedTensor(sparse_data), dense_origin, (RESOLUTION, RESOLUTION, RESOLUTION))
+        grid_batch.inject_to_dense_cminor(JaggedTensor(sparse_data), dense_origin, (RESOLUTION, RESOLUTION, RESOLUTION))
 
         grid = Grid.from_points(zero_points, voxel_size=0.1, origin=0.0)
         grid.inject_to_dense_cminor(sparse_data, dense_origin, (RESOLUTION, RESOLUTION, RESOLUTION))
