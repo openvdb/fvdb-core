@@ -68,6 +68,7 @@ spatial intelligence research and applications.
    :hidden:
 
    self
+   installation
 
 .. toctree::
    :maxdepth: 1
