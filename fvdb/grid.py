@@ -20,7 +20,7 @@ Class-methods for creating Grid objects from various sources:
 - :meth:`Grid.from_zero_voxels()` for a single grid with zero voxels
 
 Module-level functions for loading and saving grids:
-- load_grid/save_grid: Load and save grids to/from .nvdb files
+- from_nanovdb/save_nanovdb: Load and save grids to/from .nvdb files
 
 Grid supports operations like convolution, pooling, interpolation, ray casting,
 mesh extraction, and coordinate transformations on sparse voxel data.

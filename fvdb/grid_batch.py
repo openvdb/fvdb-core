@@ -21,7 +21,7 @@ Class-methods for creating GridBatch objects from various sources:
 - :meth:`GridBatch.from_nearest_voxels_to_points()`: for a grid batch from nearest voxels to points
 
 Module-level functions for loading and saving grid batches:
-- load_gridbatch/save_gridbatch: Load and save grid batches to/from .nvdb files
+- from_nanovdb/save_nanovdb: Load and save grid batches to/from .nvdb files
 
 GridBatch supports operations like convolution, pooling, interpolation, ray casting,
 mesh extraction, and coordinate transformations on sparse voxel data.
@@ -87,20 +87,22 @@ class GridBatch:
     .. code-block:: python
 
         voxel_coords = torch.tensor([[8, 7, 6], [1, 2, 3], [4, 5, 6]], device="cuda")  # Voxel space coordinates
-        batch_voxel_coords = fvdb.JaggedTensor([voxel_coords, voxel_coords + 44, voxel_coords - 44]) # Voxel space coordinates for 3 grids in the batch
+        batch_voxel_coords = fvdb.JaggedTensor(
+            [voxel_coords, voxel_coords + 44, voxel_coords - 44]
+        )  # Voxel space coordinates for 3 grids in the batch
 
         # Create a GridBatch containing 3 grids with the 3 sets of voxel coordinates such that the voxels
         # have a world space size of 1x1x1, and where the [0, 0, 0] voxel in voxel space of each grid is at world space origin (0, 0, 0).
-        grid_batch = GridBatch.from_ijk(batch_voxel_coords, voxel_size=1.0, origin=0.0, device="cuda")
+        grid_batch = fvdb.GridBatch.from_ijk(batch_voxel_coords, voxel_sizes=1.0, origins=0.0, device="cuda")
 
         # Create some data associated with the grids - here we have 9 voxels and 2 channels per voxel
-        voxel_data = torch.randn(grid.num_voxels, 2, device="cuda")  # Index space data
+        voxel_data = torch.randn(grid_batch.total_voxels, 2, device="cuda")  # Index space data
 
         # Map voxel space coordinates to index space
-        indices = grid.ijk_to_index(voxel_coords)  # Shape: (3,)
+        indices = grid_batch.ijk_to_index(batch_voxel_coords, cumulative=True).jdata  # Shape: (9,)
 
         # Access the data for the specified voxel coordinates
-        selected_data = voxel_data[indices]  # Shape: (3, 2)
+        selected_data = voxel_data[indices]  # Shape: (9, 2)
 
     .. note::
 
@@ -110,26 +112,28 @@ class GridBatch:
 
     .. note::
 
-        The grid is stored in a sparse format using `NanoVDB <https://github.com/AcademySoftwareFoundation/openvdb/tree/feature/nanovdb>`_
+        The grids are stored in a sparse format using `NanoVDB <https://github.com/AcademySoftwareFoundation/openvdb/tree/feature/nanovdb>`_
         where only active (non-empty) voxels are allocated, making it extremely memory efficient for representing large volumes with sparse
         occupancy.
 
-    Note:
-        For creating grid batches with actual content, use the classmethods:
-        - GridBatch.from_dense() for dense data
-        - GridBatch.from_dense_axis_aligned_bounds() for dense data defined by bounds
-        - GridBatch.from_grid() for building from a `~fvdb.Grid` instance
-        - GridBatch.from_ijk() for voxel coordinates
-        - GridBatch.from_mesh() for triangle meshes
-        - GridBatch.from_nearest_voxels_to_points() for nearest voxel mapping
-        - GridBatch.from_points() for point clouds
-        - GridBatch.from_zero_grids() for zero grids
-        - GridBatch.from_zero_voxels() for one or more empty grids (zero voxels)
+    .. note::
 
-        The `~fvdb.GridBatch` constructor is for internal use only, always use the classmethods.
+        The :class:`GridBatch` constructor is for internal use only, To create a :class:`GridBatch` with actual content, use the classmethods:
+
+            - :meth:`from_zero_grids()`: for an empty grid batch where grid-count = 0.
+            - :meth:`from_zero_voxels()`: for a grid batch where each grid has zero voxels.
+            - :meth:`from_dense()`: for a grid batch where each grid is dense data
+            - :meth:`from_dense_axis_aligned_bounds()`: for a grid batch where each grid is dense data defined by axis-aligned bounds
+            - :meth:`from_grid()`: for a grid batch from a single :class:`Grid` instance
+            - :meth:`from_ijk()`: for a grid batch from explicit voxel coordinates
+            - :meth:`from_mesh()`: for a grid batch from triangle meshes
+            - :meth:`from_points()`: for a grid batch from point clouds
+            - :meth:`from_nearest_voxels_to_points()`: for a grid batch from nearest voxels to points
 
     Attributes:
-        max_grids_per_batch (int): Maximum number of grids that can be stored in a single `~fvdb.GridBatch`.
+        max_grids_per_batch (int): Maximum number of grids that can be stored in a single :class:`fvdb.GridBatch`.
+
+
     """
 
     # Class variable
