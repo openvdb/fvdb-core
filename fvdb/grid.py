@@ -10,6 +10,7 @@ Classes:
 - Grid: A single sparse voxel grid with support for efficient operations
 
 Class-methods for creating Grid objects from various sources:
+
 - :meth:`Grid.from_dense()` for dense data
 - :meth:`Grid.from_dense_axis_aligned_bounds()` for dense defined by axis-aligned bounds
 - :meth:`Grid.from_grid_batch()` for a single grid from a grid batch
@@ -19,8 +20,8 @@ Class-methods for creating Grid objects from various sources:
 - :meth:`Grid.from_points()` for point clouds
 - :meth:`Grid.from_zero_voxels()` for a single grid with zero voxels
 
-Module-level functions for loading and saving grids:
-- load_grid/save_grid: Load and save grids to/from .nvdb files
+Class/Instance-methods for loading and saving grids:
+- from_nanovdb/save_nanovdb: Load and save grids to/from .nvdb files
 
 Grid supports operations like convolution, pooling, interpolation, ray casting,
 mesh extraction, and coordinate transformations on sparse voxel data.
@@ -66,7 +67,7 @@ class Grid:
     which a grid can be used to index into. This also allows multiple grids to share the same data
     storage if desired.
 
-    When using a :class:`Grid`, voxel coordinates, there are three important coordinate systems to be aware of:
+    When using a :class:`Grid`'s voxel coordinates, there are three important coordinate systems to be aware of:
 
     - **World Space**: The continuous 3D coordinate system in which the grid exists.
     - **Voxel Space**: The discrete voxel index system, where each voxel is identified by its integer indices (i, j, k).
@@ -589,7 +590,6 @@ class Grid:
     def coarsened_grid(self, coarsening_factor: NumericMaxRank1) -> "Grid":
         """
         Return a :class:`Grid` representing the coarsened version of this grid.
-        Each voxel ``[i, j, k]`` in the input is included in the output if it lies within ``ijk_min`` and ``ijk_max``.
 
         Args:
             coarsening_factor (NumericMaxRank1): The factor by which to coarsen the grid,
@@ -737,12 +737,12 @@ class Grid:
 
     def voxel_to_world(self, ijk: torch.Tensor) -> torch.Tensor:
         """
-        Transform a set of grid-space coordinates to their corresponding positions in world space
+        Transform a set of voxel-space coordinates to their corresponding positions in world space
         using this :class:`Grid`'s origin and voxel size.
 
         .. seealso::
 
-            :meth:`world_to_voxel` for the inverse transformation, and :meth:`voxel_to_world_matrix` and :meth:`world_to_voxel_matrix` for
+            :meth:`world_to_voxel` for the inverse transformation, and :attr:`voxel_to_world_matrix` and :attr:`world_to_voxel_matrix` for
             the actual transformation matrices.
 
 
@@ -974,7 +974,7 @@ class Grid:
 
             If you pass in destination data, ``dst``, then ``dst`` will be modified in-place.
             If ``dst`` is ``None``, a new :class:`torch.Tensor` will be created with the
-            shape ``(self.num_voxels, *src.shape[1:])`` and filled with ``default_value``
+            shape ``(dst_grid.num_voxels, *src.shape[1:])`` and filled with ``default_value``
             for any voxels that do not have corresponding data in ``src``.
 
         .. note::
@@ -1028,7 +1028,7 @@ class Grid:
 
         Args:
             truncation_distance (float): Maximum distance to truncate TSDF values (in world units).
-            projection_matrix (torch.Tensor): Camera projection matrix. A tensor-like object with ``shape: (4, 4)``.
+            projection_matrix (torch.Tensor): Camera projection matrix. A tensor-like object with ``shape: (3, 3)``.
             cam_to_world_matrix (torch.Tensor): Camera to world transformation matrix. A tensor-like object with ``shape: (4, 4)``.
             tsdf (torch.Tensor): Current TSDF values for each voxel. A :class:`torch.Tensor` with shape: ``(self.num_voxels, 1)``.
             weights (torch.Tensor): Current integration weights for each voxel.
@@ -1120,7 +1120,7 @@ class Grid:
 
         Args:
             truncation_distance (float): Maximum distance to truncate TSDF values (in world units).
-            projection_matrix (torch.Tensor): Camera projection matrix. A tensor-like object with ``shape: (4, 4)``.
+            projection_matrix (torch.Tensor): Camera projection matrix. A tensor-like object with ``shape: (3, 3)``.
             cam_to_world_matrix (torch.Tensor): Camera to world transformation matrix. A tensor-like object with ``shape: (4, 4)``.
             features (torch.Tensor): Current feature values associated with each voxel in this :class:`Grid`.
                 A :class:`torch.Tensor` with shape ``(total_voxels, feature_dim)``.
@@ -1325,7 +1325,7 @@ class Grid:
 
     def neighbor_indexes(self, ijk: torch.Tensor, extent: int, bitshift: int = 0) -> torch.Tensor:
         """
-        Get indices of neighboring voxels in this :class:`Grid` in an N-ring neighborhood of each
+        Get indexes of neighboring voxels in this :class:`Grid` in an N-ring neighborhood of each
         voxel coordinate in ``ijk``.
 
         Args:
@@ -1337,9 +1337,9 @@ class Grid:
                 Default is 0.
 
         Returns:
-            neighbor_indices (torch.Tensor): A :class:`torch.Tensor` of shape ``(num_queries, N)``
-                containing the linear indices of neighboring voxels for each voxel coordinate in ``ijk``
-                in the input. If some neighbors are not active in the grid, their indices will be ``-1``.
+            neighbor_indexes (torch.Tensor): A :class:`torch.Tensor` of shape ``(num_queries, N)``
+                containing the linear indexes of neighboring voxels for each voxel coordinate in ``ijk``
+                in the input. If some neighbors are not active in the grid, their indexes will be ``-1``.
         """
         jagged_ijk = JaggedTensor(ijk)
         return self._impl.neighbor_indexes(jagged_ijk._impl, extent, bitshift).jdata
@@ -1459,7 +1459,7 @@ class Grid:
 
         Args:
             dense_data (torch.Tensor): Dense :class:`torch.Tensor` to read from. Shape: ``(dense_size_x, dense_size_y, dense_size_z, channels*)``.
-            dense_origins (NumericMaxRank1, optional): Origin of the dense tensor in
+            dense_origin (NumericMaxRank1, optional): Origin of the dense tensor in
                 voxel space, broadcastable to shape ``(3,)``, integer dtype
 
         Returns:
@@ -1490,7 +1490,7 @@ class Grid:
 
         Args:
             dense_data (torch.Tensor): Dense :class:`torch.Tensor` to read from. Shape: ``(channels*, dense_size_x, dense_size_y, dense_size_z)``.
-            dense_origins (NumericMaxRank1, optional): Origin of the dense tensor in
+            dense_origin (NumericMaxRank1, optional): Origin of the dense tensor in
                 voxel space, broadcastable to shape ``(3,)``, integer dtype
 
         Returns:
@@ -1656,7 +1656,7 @@ class Grid:
         Returns:
             interpolated_data (torch.Tensor): Interpolated data at each point. Shape: ``(num_queries, channels*)``.
             interpolation_gradients (torch.Tensor): Gradients of the interpolated data with respect to world coordinates.
-                This is the spatial gradient of the Bézier interpolation at each point.
+                This is the spatial gradient of the trilinear interpolation at each point.
                 Shape: ``(num_queries, 3, channels*)``.
         """
         jagged_points = JaggedTensor(points)
@@ -2052,7 +2052,7 @@ class Grid:
 
         .. seealso::
 
-            :meth:`voxel_to_world` for the inverse transformation, and :meth:`voxel_to_world_matrix` and :meth:`world_to_voxel_matrix` for
+            :meth:`voxel_to_world` for the inverse transformation, and :attr:`voxel_to_world_matrix` and :attr:`world_to_voxel_matrix` for
             the actual transformation matrices.
 
         Args:
@@ -2072,7 +2072,7 @@ class Grid:
         grid_size: NumericMaxRank1 | None = None,
     ) -> torch.Tensor:
         """
-        Inject values from :class:`torch.Tensor` associated with this :class:`Grid` into a
+        Write values from a :class:`torch.Tensor` associated with this :class:`Grid` into a
         dense :class:`torch.Tensor`.
 
         This is the "C Minor" (channels minor) version, which assumes the ``dense_data`` is in XYZC order. *i.e* the
@@ -2092,8 +2092,8 @@ class Grid:
 
         .. seealso::
 
-            :meth:`inject_from_dense_cmajor` for reading from a dense tensor in "C Major" order,
-            which assumes the dense tensor has shape ``[channels*, dense_size_x, dense_size_y, dense_size_z]``.
+            :meth:`inject_from_dense_cminor` for reading from a dense tensor in "C Minor" order,
+            which assumes the dense tensor has shape ``[dense_size_x, dense_size_y, dense_size_z, channels*]``.
 
         .. seealso::
 
@@ -2131,7 +2131,7 @@ class Grid:
         grid_size: NumericMaxRank1 | None = None,
     ) -> torch.Tensor:
         """
-        Write values from :class:`torch.Tensor` associated with this :class:`Grid` into a
+        Write values from a :class:`torch.Tensor` associated with this :class:`Grid` into a
         dense :class:`torch.Tensor`.
 
         This is the "C Major" (channels major) version, which assumes the ``dense_data`` is in CXYZ order. *i.e* the
@@ -2141,7 +2141,7 @@ class Grid:
         within the range defined by ``min_coord`` and ``grid_size``.
         Voxels not present in the sparse grid are filled with zeros. *.i.e.* this method will copy
         all the voxel values in the range ``[min_coord, min_coord + grid_size)`` into a dense tensor
-        of shape ``[dense_size_x, dense_size_y, dense_size_z, channels*]``, such that ``min_coord``
+        of shape ``[channels*, dense_size_x, dense_size_y, dense_size_z]``, such that ``min_coord``
         maps to index ``(0, 0, 0)`` in the dense tensor, and ``min_coord + grid_size - 1`` maps to index
         ``(dense_size_x - 1, dense_size_y - 1, dense_size_z - 1)`` in the dense tensor.
 
@@ -2207,7 +2207,7 @@ class Grid:
 
         .. note::
 
-            The bounding box is inclusive of the minimum voxel and the the maximum voxel.
+            The bounding box is inclusive of the minimum voxel and the maximum voxel.
 
             *e.g.* if you have a grid with a single voxel at index ``(0, 0, 0)``, the bounding box will be
             ``[[0, 0, 0], [0, 0, 0]]``.
@@ -2247,7 +2247,7 @@ class Grid:
 
         .. note::
 
-            The bounding box is inclusive of the minimum voxel and the the maximum voxel.
+            The bounding box is inclusive of the minimum voxel and the maximum voxel.
 
             *e.g.* if you have a grid with a single voxel at index ``(0, 0, 0)``, the dual grid will contain voxels
             at indices ``(0, 0, 0), (0, 0, 1), (0, 1, 0), ..., (1, 1, 1)``, and the bounding box will be
