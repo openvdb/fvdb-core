@@ -118,7 +118,7 @@ class GridBatch:
 
     .. note::
 
-        The :class:`GridBatch` constructor is for internal use only, To create a :class:`GridBatch` with actual content, use the classmethods:
+        The :class:`GridBatch` constructor is for internal use only. To create a :class:`GridBatch` with actual content, use the classmethods:
 
             - :meth:`from_zero_grids()`: for an empty grid batch where grid-count = 0.
             - :meth:`from_zero_voxels()`: for a grid batch where each grid has zero voxels.
@@ -370,7 +370,7 @@ class GridBatch:
         device: DeviceIdentifier | None = None,
     ) -> "GridBatch":
         """
-        Create a :class:`fvdb.GridBatch` by voxelizing the *surface* of a set of triangle meshes. *i.e* voxels that intersect
+        Create a :class:`fvdb.GridBatch` by voxelizing the *surface* of a set of triangle meshes. *i.e.* voxels that intersect
         the surface of the meshes will be contained in the resulting :class:`fvdb.GridBatch`.
 
         Args:
@@ -492,8 +492,8 @@ class GridBatch:
             verbose: If set to true, print information about the loaded grids
 
         Returns:
-            gridbatch (GridBatch): A GridBatch containing the loaded grids.
-            data (JaggedTensor): A JaggedTensor containing the data of the grids.
+            grid_batch (GridBatch): A :class:`fvdb.GridBatch` containing the loaded grids.
+            data (JaggedTensor): A :class:`fvdb.JaggedTensor` containing the data of the grids.
             names (list[str]): A list of strings containing the name of each grid.
         """
         from ._Cpp import load as _load
@@ -1540,7 +1540,7 @@ class GridBatch:
         """
         Inject values from a dense :class:`torch.Tensor` into a :class:`fvdb.JaggedTensor` associated with this :class:`GridBatch`.
 
-        This is the "C Minor" (channels minor) version, which assumes the ``dense_data`` is in XYZC order. *i.e* the
+        This is the "C Minor" (channels minor) version, which assumes the ``dense_data`` is in XYZC order. *i.e.* the
         dense tensor has shape ``[batch_size, dense_size_x, dense_size_y, dense_size_z, channels*]``.
 
         .. note::
@@ -1572,7 +1572,7 @@ class GridBatch:
         """
         Inject values from a dense :class:`torch.Tensor` into a :class:`fvdb.JaggedTensor` associated with this :class:`GridBatch`.
 
-        This is the "C Major" (channels major) version, which assumes the ``dense_data`` is in CXYZ order. *i.e* the
+        This is the "C Major" (channels major) version, which assumes the ``dense_data`` is in CXYZ order. *i.e.* the
         dense tensor has shape ``[batch_size, channels*, dense_size_x, dense_size_y, dense_size_z]``.
 
         .. note::
@@ -1859,7 +1859,7 @@ class GridBatch:
     ) -> tuple[JaggedTensor, "GridBatch"]:
         """
         Refine data associated with this :class:`GridBatch` into higher-resolution grids by subdividing each voxel.
-        *i.e* for each voxel, ``(i, j, k)`` in each grid of this :class:`GridBatch`, copy the data associated with that voxel to
+        *i.e.* for each voxel, ``(i, j, k)`` in each grid of this :class:`GridBatch`, copy the data associated with that voxel to
         the voxels ``(subdiv_factor[0]*i + di, subdiv_factor[1]*j + dj, subdiv_factor[2]*k + dk)``
         for ``di, dj, dk`` in ``{0, ..., subdiv_factor - 1}`` in the output data associated with ``fine_grid``, if
         that voxel exists in the fine grid.
@@ -1904,7 +1904,7 @@ class GridBatch:
         mask: JaggedTensor | None = None,
     ) -> "GridBatch":
         """
-        Return a refined version of this :class:`GridBatch`. *i.e* each voxel in each grid is subdivided
+        Return a refined version of this :class:`GridBatch`. *i.e.* each voxel in each grid is subdivided
         by the specified ``subdiv_factor`` to create higher-resolution grids.
 
         .. note::
@@ -2172,7 +2172,7 @@ class GridBatch:
         Write values from a :class:`fvdb.JaggedTensor` associated with this :class:`GridBatch` into a
         dense :class:`torch.Tensor`.
 
-        This is the "C Minor" (channels minor) version, which assumes the ``dense_data`` is in XYZC order. *i.e* the
+        This is the "C Minor" (channels minor) version, which assumes the ``dense_data`` is in XYZC order. *i.e.* the
         dense tensor has shape ``[batch_size, dense_size_x, dense_size_y, dense_size_z, channels*]``.
 
         This method creates the dense tensor to return, and fills it with values from the sparse grids
@@ -2221,7 +2221,7 @@ class GridBatch:
         Write values from a :class:`fvdb.JaggedTensor` associated with this :class:`GridBatch` into a
         dense :class:`torch.Tensor`.
 
-        This is the "C Major" (channels major) version, which assumes the ``dense_data`` is in CXYZ order. *i.e* the
+        This is the "C Major" (channels major) version, which assumes the ``dense_data`` is in CXYZ order. *i.e.* the
         dense tensor has shape ``[batch_size, channels*, dense_size_x, dense_size_y, dense_size_z]``.
 
         This method creates the dense tensor to return, and fills it with values from the sparse grids
