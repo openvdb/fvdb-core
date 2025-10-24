@@ -73,7 +73,6 @@ spatial intelligence research and applications.
    :maxdepth: 1
    :caption: Basic Concepts
 
-
 .. toctree::
    :maxdepth: 1
    :caption: API References
