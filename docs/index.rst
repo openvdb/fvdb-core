@@ -63,7 +63,7 @@ developed with the OpenVDB community to suit the growing needs for a robust fram
 spatial intelligence research and applications.
 
 
-fVDB Reality Capture Toolkbox
+fVDB Reality Capture Toolbox
 --------------------------------
 
 In addition to the core fVDB library, we also provide the `fVDB Reality Capture <https://fvdb.ai/fvdb-reality-capture>`_ toolbox,
