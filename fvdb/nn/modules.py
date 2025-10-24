@@ -46,6 +46,17 @@ class AvgPool(nn.Module):
         For target voxels that are not covered by any source voxels, the
         output feature will be set to zero.
 
+    .. seealso::
+
+        :meth:`fvdb.GridBatch.avg_pool` for details on the average pooling operation.
+
+    .. seealso::
+
+        :class:`fvdb.nn.MaxPool` for max pooling.
+
+    Args:
+        kernel_size (NumericMaxRank1): the size of the window to take the average over
+        stride (NumericMaxRank1, optional): the stride of the window. Default value is :attr:`kernel_size`
     """
 
     def __init__(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 | None = None):
@@ -113,6 +124,18 @@ class MaxPool(nn.Module):
         For target voxels that are not covered by any source voxels, the
         output feature will be set to zero.
 
+    .. seealso::
+
+        :meth:`fvdb.GridBatch.max_pool` for details on the max pooling operation.
+
+    .. seealso::
+
+        :class:`fvdb.nn.AvgPool` for average pooling.
+
+    Args:
+        kernel_size (NumericMaxRank1): the size of the window to take the max over, broadcastable to (3,)
+        stride (NumericMaxRank1, optional): the stride of the window. Default value is :attr:`kernel_size`
+
     """
 
     def __init__(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 | None = None):
@@ -178,6 +201,14 @@ class UpsamplingNearest(nn.Module):
     Refines a :class:`JaggedTensor` of features associated with a coarse :class:`fvdb.GridBatch`
     to a fine :class:`GridBatch` using nearest-neighbor upsampling.
     *i.e.* each voxel in the coarse grid expands to a cube of voxels in the fine grid.
+
+    .. seealso::
+
+        :meth:`fvdb.GridBatch.refine` for details on the refinement operation.
+
+    .. seealso::
+
+        :class:`fvdb.nn.AvgPool` and :class:`fvdb.nn.MaxPool` for downsampling operations.
 
     Args:
         scale_factor (NumericMaxRank1): the upsampling factor, broadcastable to (3,)
@@ -283,6 +314,14 @@ class SparseConv3d(_SparseConv3dBase):
     :class:`fvdb.GridBatch`. This allows for efficient sparse convolution operations
     without explicitly constructing dense tensors.
 
+    .. seealso::
+
+        :class:`fvdb.ConvolutionPlan` for details on creating and using convolution plans.
+
+    .. seealso::
+
+        :class:`fvdb.SparseConvTranspose3d` for the transposed version of this module.
+
     Args:
         in_channels (int): Number of channels in the input :class:`JaggedTensor`.
         out_channels (int): Number of channels in the output :class:`JaggedTensor`.
@@ -304,7 +343,7 @@ class SparseConv3d(_SparseConv3dBase):
             plan (ConvolutionPlan): The convolution plan defining the mapping between input and output grids.
 
         Returns:
-            JaggedTensor: The result of the sparse convolution.
+            result (JaggedTensor): The result of the sparse convolution.
         """
         if not plan.valid_usage(self.in_channels, self.out_channels, self.kernel_size, self.stride, transposed=False):
             raise ValueError(
@@ -331,6 +370,14 @@ class SparseConvTranspose3d(_SparseConv3dBase):
     :class:`fvdb.GridBatch`. This allows for efficient sparse convolution operations
     without explicitly constructing dense tensors.
 
+    .. seealso::
+
+        :class:`fvdb.ConvolutionPlan` for details on creating and using convolution plans.
+
+    .. seealso::
+
+        :class:`fvdb.nn.SparseConv3d` for the non-transposed version of this module.
+
     Args:
         in_channels (int): Number of channels in the input :class:`JaggedTensor`.
         out_channels (int): Number of channels in the output :class:`JaggedTensor`.
@@ -352,7 +399,7 @@ class SparseConvTranspose3d(_SparseConv3dBase):
             plan (ConvolutionPlan): The convolution plan defining the mapping between input and output grids.
 
         Returns:
-            JaggedTensor: The result of the sparse transposed convolution.
+            result (JaggedTensor): The result of the sparse transposed convolution.
         """
         if not plan.valid_usage(self.in_channels, self.out_channels, self.kernel_size, self.stride, transposed=True):
             raise ValueError(
@@ -392,7 +439,7 @@ class GroupNorm(nn.GroupNorm):
             grid (GridBatch): The grid batch corresponding to ``data``.
 
         Returns:
-            JaggedTensor: The result of the group normalization.
+            result (JaggedTensor): The result of the group normalization.
         """
         num_channels = data.jdata.size(1)
         assert num_channels == self.num_channels, "Input feature should have the same number of channels as GroupNorm"
@@ -420,6 +467,10 @@ class BatchNorm(nn.BatchNorm1d):
     Applies Batch Normalization over a :class:`JaggedTensor` batch of features associated with a :class:`GridBatch`.
     See :class:`~torch.nn.BatchNorm1d` for detailed information on Batch Normalization.
 
+    .. seealso::
+
+        :class:`fvdb.nn.SyncBatchNorm` for distributed batch normalization across multiple processes.
+
     Args:
         num_features (int): number of features in the input :class:`JaggedTensor`
         eps (float, optional): a value added to the denominator for numerical stability. Default: 1e-5.
@@ -442,7 +493,7 @@ class BatchNorm(nn.BatchNorm1d):
             grid (GridBatch): The grid batch corresponding to ``data``.
 
         Returns:
-            JaggedTensor: The result of the batch normalization.
+            result (JaggedTensor): The result of the batch normalization.
         """
         num_channels = data.jdata.size(1)
         assert num_channels == self.num_features, "Input feature should have the same number of channels as BatchNorm"
@@ -461,6 +512,10 @@ class SyncBatchNorm(nn.SyncBatchNorm):
         :meth:`fvdb.nn.SyncBatchNorm.convert_sync_batchnorm()` to convert
         :attr:`BatchNorm` layer to :class:`SyncBatchNorm` before wrapping
         Network with DDP.
+
+    .. seealso::
+
+        :class:`fvdb.nn.BatchNorm` for non-distributed batch normalization.
 
     Args:
         num_features (int): number of features in the input :class:`JaggedTensor`
@@ -485,7 +540,7 @@ class SyncBatchNorm(nn.SyncBatchNorm):
             grid (GridBatch): The grid batch corresponding to ``data``.
 
         Returns:
-            JaggedTensor: The result of the synchronized batch normalization.
+            result (JaggedTensor): The result of the synchronized batch normalization.
         """
         num_channels = data.jdata.size(1)
         assert num_channels == self.num_features, "Input feature should have the same number of channels as BatchNorm"
@@ -503,7 +558,7 @@ class SyncBatchNorm(nn.SyncBatchNorm):
             process_group: process group to scope synchronization, default is the whole world.
 
         Returns:
-            torch.nn.Module:  The original module with the converted :attr:`fvdb.nn.SyncBatchNorm` layers.
+            sync_batch_norm (torch.nn.Module):  The original module with the converted :attr:`fvdb.nn.SyncBatchNorm` layers.
 
         Example::
 
