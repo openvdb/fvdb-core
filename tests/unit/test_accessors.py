@@ -34,7 +34,7 @@ class TestAccessors(unittest.TestCase):
         self.assertIsInstance(read_jagged_data, JaggedTensor)
 
         grid = Grid.from_points(sparse_points, voxel_size=0.1, origin=0.0)
-        read_tensor_data = grid.read_from_dense_cminor(dense_grid, dense_origin)
+        read_tensor_data = grid.inject_from_dense_cminor(dense_grid, dense_origin)
         self.assertIsInstance(read_tensor_data, torch.Tensor)
 
     @parameterized.expand(all_device_combos)
@@ -48,7 +48,7 @@ class TestAccessors(unittest.TestCase):
         grid_batch.write_to_dense_cminor(JaggedTensor(sparse_data), dense_origin, (RESOLUTION, RESOLUTION, RESOLUTION))
 
         grid = Grid.from_points(zero_points, voxel_size=0.1, origin=0.0)
-        grid.write_to_dense_cminor(sparse_data, dense_origin, (RESOLUTION, RESOLUTION, RESOLUTION))
+        grid.inject_to_dense_cminor(sparse_data, dense_origin, (RESOLUTION, RESOLUTION, RESOLUTION))
 
 
 if __name__ == "__main__":

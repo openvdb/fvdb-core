@@ -1,4 +1,4 @@
-``fvdb.viz``
+Visualization
 ===============================
 
 .. automodule:: fvdb.viz

@@ -84,6 +84,7 @@ class CamerasView:
         self._name = name
 
         view: CameraViewCpp = server.add_camera_view(
+            scene_name=scene_name,
             name=name,
             camera_to_world_matrices=camera_to_world_matrices,
             projection_matrices=projection_matrices,

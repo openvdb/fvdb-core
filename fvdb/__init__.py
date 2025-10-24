@@ -83,11 +83,7 @@ from .grid_batch import (
 )
 
 
-from .grid import (
-    Grid,
-    load_grid,
-    save_grid,
-)
+from .grid import Grid
 
 
 def scaled_dot_product_attention(
@@ -144,6 +140,53 @@ from .convolution_plan import ConvolutionPlan
 from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
 from .enums import ProjectionType, ShOrderingMode
 
+# Import torch-compatible functions that work with both Tensor and JaggedTensor
+from .torch_jagged import (
+    # Unary operations
+    relu,
+    relu_,
+    sigmoid,
+    tanh,
+    exp,
+    log,
+    sqrt,
+    floor,
+    ceil,
+    round,
+    nan_to_num,
+    clamp,
+    # Binary operations
+    add,
+    sub,
+    mul,
+    true_divide,
+    floor_divide,
+    remainder,
+    pow,
+    maximum,
+    minimum,
+    # Comparisons
+    eq,
+    ne,
+    lt,
+    le,
+    gt,
+    ge,
+    where,
+    # Reductions
+    sum,
+    mean,
+    amax,
+    amin,
+    argmax,
+    argmin,
+    all,
+    any,
+    norm,
+    var,
+    std,
+)
+
 # isort: on
 
 
@@ -173,26 +216,75 @@ from .version import __version__
 __version_info__ = tuple(map(int, __version__.split(".")))
 
 __all__ = [
+    # Core classes
     "GridBatch",
     "JaggedTensor",
     "GaussianSplat3d",
     "ProjectedGaussianSplats",
+    "ProjectionType",
+    "ShOrderingMode",
     "ConvolutionPlan",
+    # GridBatch operations
     "load_gridbatch",
     "save_gridbatch",
+    # Grid operations
+    "Grid",
+    "load_grid",
+    "save_grid",
+    # JaggedTensor operations
     "jcat",
-    "scaled_dot_product_attention",
-    "config",
     "jrand",
     "jrandn",
     "jones",
     "jzeros",
     "jempty",
+    # Specialized operations
+    "scaled_dot_product_attention",
     "volume_render",
     "gaussian_render_jagged",
-    "Grid",
-    "load_grid",
-    "save_grid",
+    # Torch-compatible functions (work with both Tensor and JaggedTensor)
+    "relu",
+    "relu_",
+    "sigmoid",
+    "tanh",
+    "exp",
+    "log",
+    "sqrt",
+    "floor",
+    "ceil",
+    "round",
+    "nan_to_num",
+    "clamp",
+    "add",
+    "sub",
+    "mul",
+    "true_divide",
+    "floor_divide",
+    "remainder",
+    "pow",
+    "maximum",
+    "minimum",
+    "eq",
+    "ne",
+    "lt",
+    "le",
+    "gt",
+    "ge",
+    "where",
+    "sum",
+    "mean",
+    "amax",
+    "amin",
+    "argmax",
+    "argmin",
+    "all",
+    "any",
+    "norm",
+    "var",
+    "std",
+    # Config
+    "config",
+    # Submodules
     "viz",
     "nn",
     "utils",

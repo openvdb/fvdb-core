@@ -27,8 +27,8 @@ evalShFunction(const int64_t degree,                      // degree of SH to be 
                const int64_t gi,                          // gaussian index
                const int64_t c,                           // render channel
                const typename Vec3Type<T>::type &viewDir, // [D]
-               const torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits> sh0Coeffs,
-               const torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits> shNCoeffs) {
+               const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> sh0Coeffs,
+               const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> shNCoeffs) {
     const T cSH0 = sh0Coeffs[gi][0][c];
 
     T result = T(0.2820947917738781) * cSH0;
@@ -141,9 +141,9 @@ computeSh(
     const int64_t N,
     const int64_t D,
     const int64_t shDegreeToUse,
-    const torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits> viewDirs,  // [C, N, 3]
-    const torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits> sh0Coeffs, // [1, N, D]
-    const torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits> shNCoeffs, // [K-1, N, D]
+    const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> viewDirs,  // [C, N, 3]
+    const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> sh0Coeffs, // [1, N, D]
+    const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> shNCoeffs, // [K-1, N, D]
     const int *__restrict__ radii,                                                 // [C, N]
     T *__restrict__ outRenderQuantities                                            // [C, N, D]
 ) {
@@ -177,7 +177,7 @@ computeShDiffuseOnly(const int64_t offset,
                      const int64_t C,
                      const int64_t N,
                      const int64_t D,
-                     const torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits> sh0Coeffs,
+                     const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> sh0Coeffs,
                      const int *__restrict__ radii, // [C, N]
                      T *__restrict__ outRenderQuantities) {
     // parallelize over C * N * D
@@ -279,9 +279,9 @@ dispatchSphericalHarmonicsForward<torch::kCUDA>(const int64_t shDegreeToUse,
             N,
             D,
             shDegreeToUse,
-            viewDirs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-            sh0Coeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-            shNCoeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            viewDirs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+            sh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+            shNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
             radiiPtr,
             renderQuantities.data_ptr<scalar_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
@@ -292,7 +292,7 @@ dispatchSphericalHarmonicsForward<torch::kCUDA>(const int64_t shDegreeToUse,
             C,
             N,
             D,
-            sh0Coeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            sh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
             radiiPtr,
             renderQuantities.data_ptr<scalar_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
@@ -387,9 +387,9 @@ dispatchSphericalHarmonicsForward<torch::kPrivateUse1>(
                 N,
                 D,
                 shDegreeToUse,
-                viewDirs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-                sh0Coeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-                shNCoeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+                viewDirs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+                sh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+                shNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
                 radiiPtr,
                 renderQuantities.data_ptr<scalar_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
@@ -400,7 +400,7 @@ dispatchSphericalHarmonicsForward<torch::kPrivateUse1>(
                 C,
                 N,
                 D,
-                sh0Coeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+                sh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
                 radiiPtr,
                 renderQuantities.data_ptr<scalar_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
