@@ -48,7 +48,7 @@ are provided.
 Install fvdb_core using the following pip command.
 
 ```
-pip install fvdb_core==0.3.0+pt28.cu129 --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple" torch==2.8.0
+pip install fvdb_core==0.3.0+pt28.cu129 --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple" torch==2.8.0 --extra-index-url https://download.pytorch.org/whl/cu129
 ```
 
 ## Building *f*VDB from Source
