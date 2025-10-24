@@ -331,7 +331,7 @@ class GridBatch:
         only one voxel will be created at that coordinate.
 
         Args:
-            ijk (JaggedTensor): Per-grid voxel coordinates to populate. Shape: ``(batch_size, num_voxels, 3)``
+            ijk (JaggedTensor): Per-grid voxel coordinates to populate. Shape: ``(batch_size, num_voxels_for_grid_b, 3)``
                 with integer coordinates.
             voxel_sizes (NumericMaxRank2): Size of each voxel, per-grid; broadcastable to shape ``(batch_size, 3)``,
                 floating dtype
@@ -378,8 +378,8 @@ class GridBatch:
         the surface of the meshes will be contained in the resulting :class:`fvdb.GridBatch`.
 
         Args:
-            mesh_vertices (JaggedTensor): Per-grid mesh vertex positions. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_vertices, 3)``.
-            mesh_faces (JaggedTensor): Per-grid mesh face indices. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_faces, 3)``.
+            mesh_vertices (JaggedTensor): Per-grid mesh vertex positions. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_vertices_for_grid_b, 3)``.
+            mesh_faces (JaggedTensor): Per-grid mesh face indices. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_faces_for_grid_b, 3)``.
             voxel_sizes (NumericMaxRank2): Size of each voxel, per-grid; broadcastable to shape ``(batch_size, 3)``,
                 floating dtype
             origins (NumericMaxRank2): World-space coordinate of the center of the ``[0,0,0]`` voxel, per-grid;
@@ -537,7 +537,7 @@ class GridBatch:
         Create grids by adding the eight nearest voxels to every input point.
 
         Args:
-            points (JaggedTensor): Per-grid point positions to populate the grid from. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points, 3)``.
+            points (JaggedTensor): Per-grid point positions to populate the grid from. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3)``.
             voxel_sizes (NumericMaxRank2): Size of each voxel, per-grid; broadcastable to shape ``(batch_size, 3)``,
                 floating dtype
             origins (NumericMaxRank2): World-space coordinate of the center of the ``[0,0,0]`` voxel, per-grid;
@@ -591,7 +591,7 @@ class GridBatch:
         Create a batch of grids from a batch of point clouds.
 
         Args:
-            points (JaggedTensor): Per-grid point positions to populate the grid from. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points, 3)``.
+            points (JaggedTensor): Per-grid point positions to populate the grid from. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3)``.
             voxel_sizes (NumericMaxRank2): Size of each voxel, per-grid; broadcastable to shape ``(batch_size, 3)``,
                 floating dtype
             origins (NumericMaxRank2): World-space coordinate of the center of the ``[0,0,0]`` voxel, per-grid;
@@ -850,10 +850,10 @@ class GridBatch:
         Check which voxel-space coordinates lie on active voxels for each grid.
 
         Args:
-            ijk (JaggedTensor): Per-grid voxel coordinates to test. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_queries, 3)`` with integer dtype.
+            ijk (JaggedTensor): Per-grid voxel coordinates to test. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_queries_for_grid_b, 3)`` with integer dtype.
 
         Returns:
-            mask (JaggedTensor): Boolean mask per-grid indicating which coordinates map to active voxels. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_queries)``.
+            mask (JaggedTensor): Boolean mask per-grid indicating which coordinates map to active voxels. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_queries_for_grid_b)``.
         """
         return JaggedTensor(impl=self._impl.coords_in_grid(ijk._impl))
 
@@ -877,7 +877,7 @@ class GridBatch:
 
         Args:
             cube_centers (JaggedTensor): Centers of the cubes in world coordinates.
-                A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_cubes, 3)``.
+                A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_cubes_for_grid_b, 3)``.
             cube_min (NumericMaxRank1): Minimum offsets from center defining cube bounds,
                 broadcastable to shape ``(3,)``, floating dtype
             cube_max (NumericMaxRank1): Maximum offsets from center defining cube bounds,
@@ -885,7 +885,7 @@ class GridBatch:
 
         Returns:
             mask (JaggedTensor): Boolean mask indicating which cubes are fully contained in the grid.
-                A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_cubes)``.
+                A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_cubes_for_grid_b)``.
         """
         cube_min = to_Vec3fBroadcastable(cube_min)
         cube_max = to_Vec3fBroadcastable(cube_max)
@@ -903,7 +903,7 @@ class GridBatch:
 
         Args:
             cube_centers (JaggedTensor): Centers of the cubes in world coordinates.
-                A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_cubes, 3)``.
+                A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_cubes_for_grid_b, 3)``.
             cube_min (NumericMaxRank1): Minimum offsets from center defining cube bounds,
                 broadcastable to shape ``(3,)``, floating dtype
             cube_max (NumericMaxRank1): Maximum offsets from center defining cube bounds,
@@ -911,7 +911,7 @@ class GridBatch:
 
         Returns:
             mask (JaggedTensor): Boolean mask indicating which cubes intersect the grid.
-                A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_cubes)``.
+                A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_cubes_for_grid_b)``.
         """
         cube_min = to_Vec3fBroadcastable(cube_min)
         cube_max = to_Vec3fBroadcastable(cube_max)
@@ -1001,10 +1001,10 @@ class GridBatch:
             the actual transformation matrices.
 
         Args:
-            ijk (JaggedTensor): A :class:`fvdb.JaggedTensor` of coordinates to convert. Shape: ``(batch_size, num_points, 3)``. Can be fractional for interpolation.
+            ijk (JaggedTensor): A :class:`fvdb.JaggedTensor` of coordinates to convert. Shape: ``(batch_size, num_points_for_grid_b, 3)``. Can be fractional for interpolation.
 
         Returns:
-            world_coords (JaggedTensor): World coordinates. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points, 3)``.
+            world_coords (JaggedTensor): World coordinates. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3)``.
         """
         return JaggedTensor(impl=self._impl.grid_to_world(ijk._impl))
 
@@ -1037,12 +1037,12 @@ class GridBatch:
         Returns ``-1`` for coordinates that don't correspond to active voxels.
 
         Args:
-            ijk (JaggedTensor): Per-grid voxel coordinates to convert. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_queries, 3)`` with integer dtype.
+            ijk (JaggedTensor): Per-grid voxel coordinates to convert. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_queries_for_grid_b, 3)`` with integer dtype.
             cumulative (bool): If ``True``, return indices cumulative across the whole batch; otherwise per-grid.
 
         Returns:
             indices (JaggedTensor): Linear indices for each coordinate, or ``-1`` if not active.
-                A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_queries)``.
+                A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_queries_for_grid_b)``.
         """
         assert isinstance(ijk, JaggedTensor), "ijk must be a JaggedTensor"
         return JaggedTensor(impl=self._impl.ijk_to_index(ijk._impl, cumulative))
@@ -1054,13 +1054,13 @@ class GridBatch:
 
         Args:
             ijk (JaggedTensor): Voxel coordinates to convert. A :class:`fvdb.JaggedTensor`
-                with shape ``(batch_size, num_queries, 3)`` with integer coordinates.
+                with shape ``(batch_size, num_queries_for_grid_b, 3)`` with integer coordinates.
             cumulative (bool): If ``True``, returns cumulative indices across the entire batch.
                 If ``False``, returns per-grid indices. Default is ``False``.
 
         Returns:
             inv_map (JaggedTensor): Inverse permutation for :meth:`ijk_to_index`.
-                A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_queries)``.
+                A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_queries_for_grid_b)``.
         """
         return JaggedTensor(impl=self._impl.ijk_to_inv_index(ijk._impl, cumulative))
 
@@ -1374,9 +1374,9 @@ class GridBatch:
             level (float): The isovalue to extract the surface at. Default is ``0.0``.
 
         Returns:
-            vertex_positions (JaggedTensor): Vertex positions of the meshes. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_vertices, 3)``.
-            face_indices (JaggedTensor): Triangle face indices. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_faces, 3)``.
-            vertex_normals (JaggedTensor): Vertex normals (computed from gradients). A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_vertices, 3)``.
+            vertex_positions (JaggedTensor): Vertex positions of the meshes. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_vertices_for_grid_b, 3)``.
+            face_indices (JaggedTensor): Triangle face indices. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_faces_for_grid_b, 3)``.
+            vertex_normals (JaggedTensor): Vertex normals (computed from gradients). A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_vertices_for_grid_b, 3)``.
         """
         result_vertices_impl, result_indices_impl, result_normals_impl = self._impl.marching_cubes(field._impl, level)
         return (
@@ -1451,12 +1451,12 @@ class GridBatch:
 
         Args:
             ijk (JaggedTensor): Voxel coordinates to find neighbors for.
-                Shape: ``(batch_size, num_queries, 3)`` with integer coordinates.
+                Shape: ``(batch_size, num_queries_for_grid_b, 3)`` with integer coordinates.
             extent (int): Size of the neighborhood ring (N-ring).
             bitshift (int): Bit shift value for encoding. Default is 0.
 
         Returns:
-            neighbor_indexes (JaggedTensor): A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_queries, N)``
+            neighbor_indexes (JaggedTensor): A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_queries_for_grid_b, N)``
                 containing the linear indexes of neighboring voxels for each voxel coordinate in ``ijk``
                 in the input. If some neighbors are not active in the grid, their indexes will be ``-1``.
         """
@@ -1509,11 +1509,11 @@ class GridBatch:
 
         Args:
             points (JaggedTensor): World-space points to test.
-                Shape: ``(batch_size, num_points, 3)``.
+                Shape: ``(batch_size, num_points_for_grid_b, 3)``.
 
         Returns:
             mask (JaggedTensor): Boolean mask indicating which points are in active voxels.
-                Shape: ``(batch_size, num_points,)``.
+                Shape: ``(batch_size, num_points_for_grid_b,)``.
         """
         return JaggedTensor(impl=self._impl.points_in_grid(points._impl))
 
@@ -1532,9 +1532,9 @@ class GridBatch:
 
         Args:
             ray_origins (JaggedTensor): Starting points of rays in world space.
-                Shape: ``(batch_size, num_rays, 3)``.
+                Shape: ``(batch_size, num_rays_for_grid_b, 3)``.
             ray_directions (JaggedTensor): Direction vectors of rays.
-                Shape: ``(batch_size, num_rays, 3)``. Should be normalized.
+                Shape: ``(batch_size, num_rays_for_grid_b, 3)``. Should be normalized.
             grid_scalars (JaggedTensor): Scalar field values at each voxel.
                 Shape: ``(batch_size, total_voxels, 1)``.
             eps (float): Epsilon value for numerical stability. Default is 0.0.
@@ -1636,12 +1636,12 @@ class GridBatch:
             :meth:`sample_bezier_with_grad` for Bézier interpolation which also returns spatial gradients.
 
         Args:
-            points (JaggedTensor): World-space points to sample at. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points, 3)``.
+            points (JaggedTensor): World-space points to sample at. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3)``.
             voxel_data (JaggedTensor): Data associated with each voxel in this :class:`GridBatch`.
                 A :class:`fvdb.JaggedTensor` with shape ``(batch_size, total_voxels, channels*)``.
 
         Returns:
-            interpolated_data (JaggedTensor): Interpolated data at each point. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points, channels*)``.
+            interpolated_data (JaggedTensor): Interpolated data at each point. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, channels*)``.
         """
         return JaggedTensor(impl=self._impl.sample_bezier(points._impl, voxel_data._impl))
 
@@ -1674,15 +1674,15 @@ class GridBatch:
             :meth:`sample_trilinear_with_grad` for trilinear interpolation with spatial gradients.
 
         Args:
-            points (JaggedTensor): World-space points to sample at. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points, 3)``.
+            points (JaggedTensor): World-space points to sample at. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3)``.
             voxel_data (JaggedTensor): Data associated with each voxel in this :class:`GridBatch`.
                 A :class:`fvdb.JaggedTensor` with shape ``(batch_size, total_voxels, channels*)``.
 
         Returns:
-            interpolated_data (JaggedTensor): Interpolated data at each point. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points, channels*)``.
+            interpolated_data (JaggedTensor): Interpolated data at each point. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, channels*)``.
             interpolation_gradients (JaggedTensor): Gradients of the interpolated data with respect to world coordinates.
                 This is the spatial gradient of the Bézier interpolation at each point.
-                A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points, 3, channels*)``.
+                A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3, channels*)``.
         """
         result_data_impl, result_grad_impl = self._impl.sample_bezier_with_grad(points._impl, voxel_data._impl)
         return JaggedTensor(impl=result_data_impl), JaggedTensor(impl=result_grad_impl)
@@ -1713,12 +1713,12 @@ class GridBatch:
             :meth:`sample_trilinear_with_grad` for trilinear interpolation which also returns spatial gradients.
 
         Args:
-            points (JaggedTensor): World-space points to sample at. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points, 3)``.
+            points (JaggedTensor): World-space points to sample at. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3)``.
             voxel_data (JaggedTensor): Data associated with each voxel in this :class:`GridBatch`.
                 A :class:`fvdb.JaggedTensor` with shape ``(batch_size, total_voxels, channels*)``.
 
         Returns:
-            interpolated_data (JaggedTensor): Interpolated data at each point. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points, channels*)``.
+            interpolated_data (JaggedTensor): Interpolated data at each point. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, channels*)``.
         """
         return JaggedTensor(impl=self._impl.sample_trilinear(points._impl, voxel_data._impl))
 
@@ -1751,15 +1751,15 @@ class GridBatch:
             :meth:`sample_bezier_with_grad` for Bézier interpolation with spatial gradients.
 
         Args:
-            points (JaggedTensor): World-space points to sample at. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points, 3)``.
+            points (JaggedTensor): World-space points to sample at. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3)``.
             voxel_data (JaggedTensor): Data associated with each voxel in this :class:`GridBatch`.
                 A :class:`fvdb.JaggedTensor` with shape ``(batch_size, total_voxels, channels*)``.
 
         Returns:
-            interpolated_data (JaggedTensor): Interpolated data at each point. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points, channels*)``.
+            interpolated_data (JaggedTensor): Interpolated data at each point. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, channels*)``.
             interpolation_gradients (JaggedTensor): Gradients of the interpolated data with respect to world coordinates.
                 This is the spatial gradient of the trilinear interpolation at each point.
-                A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points, 3, channels*)``.
+                A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3, channels*)``.
         """
         result_data_impl, result_grad_impl = self._impl.sample_trilinear_with_grad(points._impl, voxel_data._impl)
         return JaggedTensor(impl=result_data_impl), JaggedTensor(impl=result_grad_impl)
@@ -1776,9 +1776,9 @@ class GridBatch:
 
         Args:
             ray_origins (JaggedTensor): Origin of each ray.
-                Shape: ``(batch_size, num_rays, 3)``.
+                Shape: ``(batch_size, num_rays_for_grid_b, 3)``.
             ray_directions (JaggedTensor): Direction of each ray.
-                Shape: ``(batch_size, num_rays, 3)``.
+                Shape: ``(batch_size, num_rays_for_grid_b, 3)``.
             max_segments (int): Maximum number of segments to enumerate.
             eps (float): Small epsilon value to avoid numerical issues.
 
@@ -1828,9 +1828,9 @@ class GridBatch:
             This method supports backpropagation through the splatting operation.
 
         Args:
-            points (JaggedTensor): World-space positions of points used to splat data. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points, 3)``.
+            points (JaggedTensor): World-space positions of points used to splat data. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3)``.
             points_data (JaggedTensor): Data associated with each point to splat into the grids.
-                A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points, channels*)``.
+                A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, channels*)``.
 
         Returns:
             splatted_features (JaggedTensor): Accumulated features at each voxel after splatting.
@@ -1853,9 +1853,9 @@ class GridBatch:
             This method supports backpropagation through the splatting operation.
 
         Args:
-            points (JaggedTensor): World-space positions of points used to splat data. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points, 3)``.
+            points (JaggedTensor): World-space positions of points used to splat data. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3)``.
             points_data (JaggedTensor): Data associated with each point to splat into the grids.
-                A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points, channels*)``.
+                A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, channels*)``.
 
         Returns:
             splatted_features (JaggedTensor): Accumulated features at each voxel after splatting.
@@ -2038,13 +2038,13 @@ class GridBatch:
 
         Args:
             ray_origins (JaggedTensor): Starting points of rays in world space.
-                Shape: ``(batch_size, num_rays, 3)``.
+                Shape: ``(batch_size, num_rays_for_grid_b, 3)``.
             ray_directions (JaggedTensor): Direction vectors of rays (should be normalized).
-                Shape: ``(batch_size, num_rays, 3)``.
+                Shape: ``(batch_size, num_rays_for_grid_b, 3)``.
             t_min (JaggedTensor): Minimum distance along rays to start sampling.
-                Shape: ``(batch_size, num_rays)``.
+                Shape: ``(batch_size, num_rays_for_grid_b)``.
             t_max (JaggedTensor): Maximum distance along rays to stop sampling.
-                Shape: ``(batch_size, num_rays)``.
+                Shape: ``(batch_size, num_rays_for_grid_b)``.
             step_size (float): Distance between samples along each ray.
             cone_angle (float): Cone angle for cone tracing (in radians). Default is 0.0.
             include_end_segments (bool): Whether to include partial segments at ray ends.
@@ -2132,9 +2132,9 @@ class GridBatch:
 
         Args:
             ray_origins (JaggedTensor): Starting points of rays in world space.
-                Shape: ``(batch_size, num_rays, 3)``.
+                Shape: ``(batch_size, num_rays_for_grid_b, 3)``.
             ray_directions (JaggedTensor): Direction vectors of rays (should be normalized).
-                Shape: ``(batch_size, num_rays, 3)``.
+                Shape: ``(batch_size, num_rays_for_grid_b, 3)``.
             max_voxels (int): Maximum number of voxels to return per ray.
             eps (float): Epsilon value for numerical stability. Default is 0.0.
             return_ijk (bool): Whether to return voxel indices. If False, returns
@@ -2167,10 +2167,10 @@ class GridBatch:
             the actual transformation matrices.
 
         Args:
-            points (JaggedTensor): Per-grid world-space positions to convert. Shape: ``(batch_size, num_points, 3)``.
+            points (JaggedTensor): Per-grid world-space positions to convert. Shape: ``(batch_size, num_points_for_grid_b, 3)``.
 
         Returns:
-            voxel_points (JaggedTensor): Grid coordinates. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points, 3)``.
+            voxel_points (JaggedTensor): Grid coordinates. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3)``.
                 Can contain fractional values.
         """
         return JaggedTensor(impl=self._impl.world_to_grid(points._impl))
