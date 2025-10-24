@@ -7,7 +7,7 @@ Applications of fVDB include 3D deep learning, computer graphics/vision, robotic
 
 
 <p align="center">
-  <img src="docs/imgs/fvdb_teaser.jpg" style="width: 90%;"alt="fVDB Teaser">
+  <img src="docs/imgs/fvdb_teaser.jpg" style="width: 90%;" alt="fVDB Teaser">
 </p>
 
 
@@ -41,7 +41,7 @@ If the [pre-built packages](https://fvdb.ai/installation.html) do not meet your 
 
 ### Environment Management
 
-ƒVDB is a Python library implemented as a C++ Pytorch extension. We provide three paths to
+ƒVDB is a Python library implemented as a C++ PyTorch extension. We provide three paths to
 constructing reliable environments for building and running ƒVDB. These are separate options not
 intended to be used together (however with modification you can of course use, for example, a conda
 or pip environment inside a docker container).
@@ -250,4 +250,4 @@ Please consider citing this when using *f*VDB in a project. You can use the cita
 
 ## Contact
 
-For questions or feedback, plesae use the [GitHub Issues](https://github.com/openvdb/fvdb-core/issues) for this repository.
+For questions or feedback, please use the [GitHub Issues](https://github.com/openvdb/fvdb-core/issues) for this repository.
