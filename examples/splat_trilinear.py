@@ -34,8 +34,8 @@ def main():
 
     gp = index.ijk
     gd = index_dual.ijk
-    gp = index.grid_to_world(gp.type(dtype))
-    gd = index_dual.grid_to_world(gd.type(dtype))
+    gp = index.voxel_to_world(gp.type(dtype))
+    gd = index_dual.voxel_to_world(gd.type(dtype))
 
     p, n = p.cpu(), n.cpu()
     nsplat = nsplat.cpu()

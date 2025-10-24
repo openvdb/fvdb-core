@@ -28,7 +28,9 @@
 
 
 from typing import NamedTuple
+
 import torch
+
 import fvdb
 
 allowed_padding = ["same", "valid"]
@@ -76,7 +78,7 @@ def fused_ssim(img1, img2, padding="same", train=True):
 
     img1 = img1.contiguous()
     map = FusedSSIMMap.apply(C1, C2, img1, img2, padding, train)
-    return map.mean()
+    return map.mean()  # type: ignore
 
 
 from typing import Literal
@@ -92,12 +94,12 @@ def ssim(
     Compute the Structural Similarity Index (SSIM) between two images.
 
     Args:
-        img1 (torch.Tensor): A batch of images of shape (B, C, H, W)
-        img2 (torch.Tensor): A batch of images of shape (B, C, H, W)
-        padding (str): The padding to use for the images ("same" or "valid"). Default is "same".
-        train (bool): Whether or not to compute the gradient of the SSIM. Default is True.
+        img1 (torch.Tensor): A batch of images of shape ``(B, C, H, W)``
+        img2 (torch.Tensor): A batch of images of shape ``(B, C, H, W)``
+        padding (str): The padding to use for the images (``"same"`` or ``"valid"``). Default is ``"same"``.
+        train (bool): Whether or not to compute the gradients through the SSIM loss. Default is ``True``.
 
     Returns:
-        torch.Tensor: The SSIM between the two images.
+        ssim (torch.Tensor): The average SSIM between each image over the batch.
     """
     return fused_ssim(img1, img2, padding, train)

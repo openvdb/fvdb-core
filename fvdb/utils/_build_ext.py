@@ -2,13 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import os
+from typing import Any, Sequence
 
+import setuptools
 from torch.utils import cpp_extension
 
 import fvdb
 
 
-def FVDBExtension(name, sources, *args, **kwargs):
+def fvdbCudaExtension(name: str, sources: Sequence[str], *args: Any, **kwargs: Any) -> setuptools.Extension:
     """
     Utility function for creating pytorch extensions that depend on fvdb. You then have access to all fVDB's internal
     headers to program with. Example usage:
@@ -24,11 +26,15 @@ def FVDBExtension(name, sources, *args, **kwargs):
                 libraries=['mylib'],
             )
 
-    :param name: The name of the extension.
-    :param sources: The list of source files.
-    :param args: Other arguments to pass to :func:`torch.utils.cpp_extension.CppExtension`.
-    :param kwargs: Other keyword arguments to pass to :func:`torch.utils.cpp_extension.CppExtension`.
-    :return: A :class:`torch.utils.cpp_extension.CppExtension` object.
+    Args:
+        name (str): The name of the extension.
+        sources (Sequence[str]): The list of source files.
+        args (list[Any]): Other arguments to pass to :func:`torch.utils.cpp_extension.CppExtension`.
+        kwargs (dict): Other keyword arguments to pass to :func:`torch.utils.cpp_extension.CppExtension`.
+
+    Returns:
+       cpp_extension (setuptools.Extension) A :class:`setuptools.Extension` object which can be used
+           to build a PyTorch C++ extension that depends on fVDB.
     """
 
     libraries = kwargs.get("libraries", [])
