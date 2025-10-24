@@ -13,6 +13,7 @@ readme = "README.md"
 dependencies = [
     # Require torch; users will choose the correct CUDA build from PyTorch's index
     "torch>=2.8,<2.10",
+    "numpy",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
