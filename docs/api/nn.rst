@@ -1,5 +1,5 @@
-fvdb.nn
-=========
+Neural Network Layers and Blocks
+===================================
 
 .. autoclass:: fvdb.nn.MaxPool
 .. autoclass:: fvdb.nn.AvgPool

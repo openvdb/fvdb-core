@@ -106,7 +106,7 @@ class Grid:
 
     .. note::
 
-        The :class:`Grid` constructor is for internal use only, To create :class:`Grid`s with actual content, use the classmethods:
+        The :class:`Grid` constructor is for internal use only, To create a :class:`Grid` with actual content, use the classmethods:
 
         - :meth:`from_dense()` for dense data
         - :meth:`from_dense_axis_aligned_bounds()` for dense defined by axis-aligned bounds
@@ -1234,7 +1234,7 @@ class Grid:
 
     def is_same(self, other: "Grid") -> bool:
         """
-        Check if two :class:`Grid`s share the same underlying data in memory.
+        Check if two :class:`Grid`\'s share the same underlying data in memory.
 
         Args:
             other (Grid): The other :class:`Grid` to compare with.

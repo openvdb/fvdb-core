@@ -160,20 +160,6 @@ class JaggedTensor:
         - JaggedTensor.from_data_and_indices() for pre-computed flat format
         - JaggedTensor.from_data_and_offsets() for pre-computed flat format with offsets
 
-    Attributes:
-        jdata (torch.Tensor): Flattened data tensor containing all elements
-        jidx (torch.Tensor): Indices mapping each element to its parent tensor
-        joffsets (torch.Tensor): Offsets marking boundaries between tensors
-        jlidx (torch.Tensor): List indices for nested jagged structures
-        requires_grad (bool): Whether the tensor requires gradient computation
-        device (torch.device): Device where the tensor is stored
-        dtype (torch.dtype): Data type of the tensor elements
-        num_tensors (int): Number of tensors in the sequence
-        ldim (int): Dimensionality of the jagged (leading) structure
-        edim (int): Dimensionality of the element (regular) structure
-        lshape (list[int] | list[list[int]]): Shape(s) of the jagged dimension(s)
-        eshape (list[int]): Shape of the element dimensions
-        rshape (tuple[int, ...]): Shape of the regular (trailing) dimensions
     """
 
     def __init__(
@@ -1236,71 +1222,170 @@ class JaggedTensor:
 
     @property
     def jdata(self) -> torch.Tensor:
+        """
+        Flattened data tensor containing all elements.
+
+        Returns:
+            torch.Tensor: The data tensor.
+        """
         return self._impl.jdata
 
     @jdata.setter
     def jdata(self, value: torch.Tensor) -> None:
+        """
+        Set the flattened data tensor.
+
+        Args:
+            value (torch.Tensor): New data tensor to set.
+        """
         self._impl.jdata = value
 
     @property
     def requires_grad(self) -> bool:
+        """
+        Whether the tensor requires gradient computation
+
+        Returns:
+            bool: True if gradients are tracked, False otherwise.
+        """
         return self._impl.requires_grad
 
     @requires_grad.setter
     def requires_grad(self, value: bool) -> None:
+        """
+        Set whether the tensor requires gradient computation.
+
+        Args:
+            value (bool): True to require gradients, False otherwise.
+        """
         # self._impl.set_requires_grad(value)
         self._impl.requires_grad = value
 
     @property
     def device(self) -> torch.device:
+        """
+        Device where the tensor is stored.
+
+        Returns:
+            torch.device: The device of the JaggedTensor.
+        """
         return self._impl.device
 
     @property
     def dtype(self) -> torch.dtype:
+        """
+        Data type of the tensor elements.
+
+        Returns:
+            torch.dtype: The data type of the JaggedTensor.
+        """
         return self._impl.dtype
 
     @property
     def edim(self) -> int:
+        """
+        Dimensionality of the element (regular) structure.
+
+        Returns:
+            int: The dimensionality of the element structure.
+        """
         return self._impl.edim
 
     @property
     def eshape(self) -> list[int]:
+        """
+        Shape of the element dimensions.
+
+        Returns:
+            list[int]: The shape of the element dimensions.
+        """
         return self._impl.eshape
 
     @property
     def is_cpu(self) -> bool:
+        """
+        Whether the tensor is stored on the CPU.
+
+        Returns:
+            bool: True if on CPU, False otherwise.
+        """
         return self._impl.is_cpu
 
     @property
     def is_cuda(self) -> bool:
+        """
+        Whether the tensor is stored on a CUDA device.
+
+        Returns:
+            bool: True if on CUDA, False otherwise.
+        """
         return self._impl.is_cuda
 
     @property
     def jidx(self) -> torch.Tensor:
+        """
+        Indices for the jagged dimension.
+
+        Returns:
+            torch.Tensor: The jagged indices tensor.
+        """
         return self._impl.jidx
 
     @property
     def jlidx(self) -> torch.Tensor:
+        """
+        List indices for nested jagged structures.
+
+        Returns:
+            torch.Tensor: The jagged list indices tensor.
+        """
         return self._impl.jlidx
 
     @property
     def joffsets(self) -> torch.Tensor:
+        """
+        Offsets marking boundaries between tensors.
+
+        Returns:
+            torch.Tensor: The jagged offsets tensor.
+        """
         return self._impl.joffsets
 
     @property
     def ldim(self) -> int:
+        """
+        Dimensionality of the jagged (leading) structure.
+
+        Returns:
+            int: The dimensionality of the jagged structure.
+        """
         return self._impl.ldim
 
     @property
     def lshape(self) -> list[int] | list[list[int]]:
+        """
+        List structure shape(s) of the jagged dimensions.
+
+        Returns:
+            list[int] | list[list[int]]: The jagged structure shapes.
+        """
         return self._impl.lshape
 
     @property
     def num_tensors(self) -> int:
+        """
+        Return the number of tensors in the jagged sequence.
+
+        Returns:
+            int: Number of tensors in the JaggedTensor.
+        """
         return self._impl.num_tensors
 
     @property
     def rshape(self) -> tuple[int, ...]:
+        """
+        Return the shape of the jdata (ravelled data) tensor.
+        """
         return self._impl.rshape
 
     # Weirdly, unless we put this last, it messes up static type checking.

@@ -1,4 +1,4 @@
-fvdb.utils
+Utilities
 ==================
 
 .. autofunction:: fvdb.utils.fvdbCudaExtension
