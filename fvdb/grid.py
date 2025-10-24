@@ -10,6 +10,7 @@ Classes:
 - Grid: A single sparse voxel grid with support for efficient operations
 
 Class-methods for creating Grid objects from various sources:
+
 - :meth:`Grid.from_dense()` for dense data
 - :meth:`Grid.from_dense_axis_aligned_bounds()` for dense defined by axis-aligned bounds
 - :meth:`Grid.from_grid_batch()` for a single grid from a grid batch

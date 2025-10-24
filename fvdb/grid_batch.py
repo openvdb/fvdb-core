@@ -10,6 +10,7 @@ Classes:
 - GridBatch: A batch of sparse voxel grids with support for efficient operations
 
 Class-methods for creating GridBatch objects from various sources:
+
 - :meth:`GridBatch.from_zero_grids()`: for an empty grid batch where grid-count = 0.
 - :meth:`GridBatch.from_zero_voxels()`: for a grid batch where each grid has zero voxels.
 - :meth:`GridBatch.from_dense()`: for a grid batch where each grid is dense data
@@ -65,7 +66,7 @@ class GridBatch:
     sampling, convolution, pooling, dilation, union, etc. It also provides more advanced features
     such as marching cubes, TSDF fusion, and fast ray marching.
 
-    A :class:`GridBatch` can be thought of as a collection of :class:`Grid` instances and,
+    A :class:`GridBatch` can be thought of as a mini-batch of :class:`Grid` instances and,
     like the :class:`Grid`, does not collect the sparse voxel grids' data but only collects
     their structure (or topology). Voxel data (e.g., features, colors, densities) for the
     collection of grids is stored separately as an :class:`JaggedTensor` associated with
@@ -73,7 +74,7 @@ class GridBatch:
     channels of data with which a grid can be used to index into. This also allows multiple grids to
     share the same data storage if desired.
 
-    When using a :class:`GridBatch`'s voxel coordinates, there are three important coordinate systems
+    When using a :class:`GridBatch`, there are three important coordinate systems
     to be aware of:
 
     - **World Space**: The continuous 3D coordinate system in which each grid in the batch exists.
@@ -81,8 +82,10 @@ class GridBatch:
     - **Index Space**: The linear indexing of active voxels in each grid's internal storage.
 
 
-    At its core, a :class:`Grid` uses a very fast mapping from voxel space into index space to perform operations on a :class:`torch.Tensor` of
-    data associated with the grid. This mapping allows for efficient access and manipulation of voxel data. For example:
+    At its core, a :class:`GridBatch` uses a very fast mapping from each grid's voxel space into
+    index space to perform operations on a :class:`fvdb.JaggedTensor` of data associated with the
+    grids in the batch. This mapping allows for efficient access and manipulation of voxel data.
+    For example:
 
     .. code-block:: python
 
@@ -166,6 +169,7 @@ class GridBatch:
         A dense grid has a voxel for every coordinate in an axis-aligned box.
 
         For each grid in the batch, the dense grid is defined by:
+
         - dense_dims: the size of the dense grids (shape ``[3,] = [W, H, D]``)
         - ijk_min: the minimum voxel index for the grid (shape ``[3,] = [i_min, j_min, k_min]``)
         - voxel_sizes: the world-space size of each voxel (shape ``[3,] = [sx, sy, sz]``)
@@ -584,7 +588,7 @@ class GridBatch:
         device: DeviceIdentifier | None = None,
     ) -> "GridBatch":
         """
-        Create a batch of grids from point clouds.
+        Create a batch of grids from a batch of point clouds.
 
         Args:
             points (JaggedTensor): Per-grid point positions to populate the grid from. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points, 3)``.
@@ -952,6 +956,10 @@ class GridBatch:
         Get the dual bounding box of a specific grid in the batch.
 
         The dual grid has voxel centers at the corners of the primal grid voxels.
+
+        .. seealso::
+
+            :meth:`dual_grid` to compute the actual dual grid.
 
         Args:
             bi (int): The batch index of the grid.
@@ -2174,7 +2182,7 @@ class GridBatch:
         grid_size: NumericMaxRank1 | None = None,
     ) -> torch.Tensor:
         """
-        Write values from a :class:`fvdb.JaggedTensor` associated with this :class:`GridBatch` into a
+        Inject values from a :class:`fvdb.JaggedTensor` associated with this :class:`GridBatch` into a
         dense :class:`torch.Tensor`.
 
         This is the "C Minor" (channels minor) version, which assumes the ``dense_data`` is in XYZC order. *i.e.* the
@@ -2223,7 +2231,7 @@ class GridBatch:
         grid_size: NumericMaxRank1 | None = None,
     ) -> torch.Tensor:
         """
-        Write values from a :class:`fvdb.JaggedTensor` associated with this :class:`GridBatch` into a
+        Inject values from a :class:`fvdb.JaggedTensor` associated with this :class:`GridBatch` into a
         dense :class:`torch.Tensor`.
 
         This is the "C Major" (channels major) version, which assumes the ``dense_data`` is in CXYZ order. *i.e.* the
