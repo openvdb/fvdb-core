@@ -1127,6 +1127,10 @@ class GridBatch:
         """
         Inject data from source voxel coordinates to a sidecar for this grid.
 
+        .. note::
+
+            This method supports backpropagation through the injection operation.
+
         Args:
             src_ijk (JaggedTensor): Voxel coordinates in voxel space from which to copy data.
                 Shape: ``(B, num_src_voxels, 3)``.
@@ -1180,6 +1184,10 @@ class GridBatch:
         If you pass in the destination data (`dst`), it will be modified in-place.
         If `dst` is None, a new JaggedTensor will be created with the same element shape as src
         and filled with `default_value` for any voxels that do not have corresponding data in `src`.
+
+        .. note::
+
+            This method supports backpropagation through the injection operation.
 
         Args:
             dst_grid (GridBatch): The destination grid to inject data into.
