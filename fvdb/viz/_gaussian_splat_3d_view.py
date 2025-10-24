@@ -69,7 +69,7 @@ class GaussianSplat3dView:
         self._scene_name = scene_name
         self._name = name
         server = _get_viewer_server_cpp()
-        view = server.add_gaussian_splat_3d_view(name=name, gaussian_splat_3d=gaussian_splat_3d)
+        view = server.add_gaussian_splat_3d_view(scene_name=scene_name, name=name, gaussian_splat_3d=gaussian_splat_3d)
 
         if sh_ordering_mode not in (ShOrderingMode.RGB_RGB_RGB, ShOrderingMode.RRR_GGG_BBB):
             raise ValueError(f"Invalid ShOrderingMode: {sh_ordering_mode}")

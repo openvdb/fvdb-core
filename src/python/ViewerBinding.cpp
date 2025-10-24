@@ -85,6 +85,7 @@ bind_viewer(py::module &m) {
         .def(
             "add_gaussian_splat_3d_view",
             &fvdb::detail::viewer::Viewer::addGaussianSplat3dView,
+            py::arg("scene_name"),
             py::arg("name"),
             py::arg("gaussian_splat_3d"),
             py::return_value_policy::reference_internal, // preserve reference; tie lifetime to
@@ -108,11 +109,31 @@ bind_viewer(py::module &m) {
              &fvdb::detail::viewer::Viewer::port,
              "The port the viewer server is listening on.")
 
+        .def("reset", &fvdb::detail::viewer::Viewer::reset, "Reset the viewer server state")
+
+        .def("add_scene",
+             &fvdb::detail::viewer::Viewer::addScene,
+             py::arg("scene_name"),
+             "Add a new scene to the viewer")
+
+        .def("remove_scene",
+             &fvdb::detail::viewer::Viewer::removeScene,
+             py::arg("scene_name"),
+             "Remove a scene from the viewer")
+
+        .def("remove_view",
+             &fvdb::detail::viewer::Viewer::removeView,
+             py::arg("scene_name"),
+             py::arg("name"),
+             "Remove a view from a scene")
+
         .def("camera_orbit_center",
              &fvdb::detail::viewer::Viewer::cameraOrbitCenter,
+             py::arg("scene_name"),
              "Get the point about which the camera orbits")
         .def("set_camera_orbit_center",
              &fvdb::detail::viewer::Viewer::setCameraOrbitCenter,
+             py::arg("scene_name"),
              py::arg("x"),
              py::arg("y"),
              py::arg("z"),
@@ -120,17 +141,21 @@ bind_viewer(py::module &m) {
 
         .def("camera_orbit_radius",
              &fvdb::detail::viewer::Viewer::cameraOrbitRadius,
+             py::arg("scene_name"),
              "Get the camera orbit radius")
         .def("set_camera_orbit_radius",
              &fvdb::detail::viewer::Viewer::setCameraOrbitRadius,
+             py::arg("scene_name"),
              py::arg("radius"),
              "Set the camera orbit radius (must be positive)")
 
         .def("camera_up_direction",
              &fvdb::detail::viewer::Viewer::cameraUpDirection,
+             py::arg("scene_name"),
              "Get the camera up vector")
         .def("set_camera_up_direction",
              &fvdb::detail::viewer::Viewer::setCameraUpDirection,
+             py::arg("scene_name"),
              py::arg("ux"),
              py::arg("uy"),
              py::arg("uz"),
@@ -138,9 +163,11 @@ bind_viewer(py::module &m) {
 
         .def("camera_view_direction",
              &fvdb::detail::viewer::Viewer::cameraViewDirection,
+             py::arg("scene_name"),
              "Get the camera view direction")
         .def("set_camera_view_direction",
              &fvdb::detail::viewer::Viewer::setCameraViewDirection,
+             py::arg("scene_name"),
              py::arg("dx"),
              py::arg("dy"),
              py::arg("dz"),
@@ -148,34 +175,42 @@ bind_viewer(py::module &m) {
 
         .def("camera_near",
              &fvdb::detail::viewer::Viewer::cameraNear,
+             py::arg("scene_name"),
              "Get the camera near clipping plane")
         .def("set_camera_near",
              &fvdb::detail::viewer::Viewer::setCameraNear,
+             py::arg("scene_name"),
              py::arg("near"),
              "Set the camera near clipping plane")
 
         .def("camera_far",
              &fvdb::detail::viewer::Viewer::cameraFar,
+             py::arg("scene_name"),
              "Get the camera far clipping plane")
         .def("set_camera_far",
              &fvdb::detail::viewer::Viewer::setCameraFar,
+             py::arg("scene_name"),
              py::arg("far"),
              "Set the camera far clipping plane")
 
         .def("camera_projection_type",
              &fvdb::detail::viewer::Viewer::cameraProjectionType,
+             py::arg("scene_name"),
              "The camera mode (perspective or orthographic)")
         .def("set_camera_projection_type",
              &fvdb::detail::viewer::Viewer::setCameraProjectionType,
+             py::arg("scene_name"),
              py::arg("mode"),
              "Set the camera mode (perspective or orthographic)")
         .def("add_camera_view",
              py::overload_cast<const std::string &,
+                               const std::string &,
                                const torch::Tensor &,
                                const torch::Tensor &,
                                const torch::Tensor &,
                                float,
                                float>(&fvdb::detail::viewer::Viewer::addCameraView),
+             py::arg("scene_name"),
              py::arg("name"),
              py::arg("camera_to_world_matrices"),
              py::arg("projection_matrices"),
