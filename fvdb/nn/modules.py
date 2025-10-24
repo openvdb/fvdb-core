@@ -553,9 +553,9 @@ class SyncBatchNorm(nn.SyncBatchNorm):
         Helper function to convert :attr:`fvdb.nn.BatchNorm` layer in the model to :attr:`fvdb.nn.SyncBatchNorm` layer.
 
         Args:
-            module: Module for which all :attr:`fvdb.nn.BatchNorm` layers will be converted to
+            module (nn.Module): Module for which all :attr:`fvdb.nn.BatchNorm` layers will be converted to
                 :attr:`fvdb.nn.SyncBatchNorm` layers.
-            process_group: process group to scope synchronization, default is the whole world.
+            process_group (Any): process group to scope synchronization, default is the whole world.
 
         Returns:
             sync_batch_norm (torch.nn.Module):  The original module with the converted :attr:`fvdb.nn.SyncBatchNorm` layers.
