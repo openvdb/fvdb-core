@@ -737,12 +737,12 @@ class Grid:
 
     def voxel_to_world(self, ijk: torch.Tensor) -> torch.Tensor:
         """
-        Transform a set of grid-space coordinates to their corresponding positions in world space
+        Transform a set of voxel-space coordinates to their corresponding positions in world space
         using this :class:`Grid`'s origin and voxel size.
 
         .. seealso::
 
-            :meth:`world_to_voxel` for the inverse transformation, and :meth:`voxel_to_world_matrix` and :meth:`world_to_voxel_matrix` for
+            :meth:`world_to_voxel` for the inverse transformation, and :attr:`voxel_to_world_matrix` and :attr:`world_to_voxel_matrix` for
             the actual transformation matrices.
 
 
@@ -1459,7 +1459,7 @@ class Grid:
 
         Args:
             dense_data (torch.Tensor): Dense :class:`torch.Tensor` to read from. Shape: ``(dense_size_x, dense_size_y, dense_size_z, channels*)``.
-            dense_origins (NumericMaxRank1, optional): Origin of the dense tensor in
+            dense_origin (NumericMaxRank1, optional): Origin of the dense tensor in
                 voxel space, broadcastable to shape ``(3,)``, integer dtype
 
         Returns:
@@ -1490,7 +1490,7 @@ class Grid:
 
         Args:
             dense_data (torch.Tensor): Dense :class:`torch.Tensor` to read from. Shape: ``(channels*, dense_size_x, dense_size_y, dense_size_z)``.
-            dense_origins (NumericMaxRank1, optional): Origin of the dense tensor in
+            dense_origin (NumericMaxRank1, optional): Origin of the dense tensor in
                 voxel space, broadcastable to shape ``(3,)``, integer dtype
 
         Returns:
@@ -2052,7 +2052,7 @@ class Grid:
 
         .. seealso::
 
-            :meth:`voxel_to_world` for the inverse transformation, and :meth:`voxel_to_world_matrix` and :meth:`world_to_voxel_matrix` for
+            :meth:`voxel_to_world` for the inverse transformation, and :attr:`voxel_to_world_matrix` and :attr:`world_to_voxel_matrix` for
             the actual transformation matrices.
 
         Args:
@@ -2072,7 +2072,7 @@ class Grid:
         grid_size: NumericMaxRank1 | None = None,
     ) -> torch.Tensor:
         """
-        Inject values from :class:`torch.Tensor` associated with this :class:`Grid` into a
+        Write values from a :class:`torch.Tensor` associated with this :class:`Grid` into a
         dense :class:`torch.Tensor`.
 
         This is the "C Minor" (channels minor) version, which assumes the ``dense_data`` is in XYZC order. *i.e* the
@@ -2092,8 +2092,8 @@ class Grid:
 
         .. seealso::
 
-            :meth:`inject_from_dense_cmajor` for reading from a dense tensor in "C Major" order,
-            which assumes the dense tensor has shape ``[channels*, dense_size_x, dense_size_y, dense_size_z]``.
+            :meth:`inject_from_dense_cminor` for reading from a dense tensor in "C Minor" order,
+            which assumes the dense tensor has shape ``[dense_size_x, dense_size_y, dense_size_z, channels*]``.
 
         .. seealso::
 
@@ -2131,7 +2131,7 @@ class Grid:
         grid_size: NumericMaxRank1 | None = None,
     ) -> torch.Tensor:
         """
-        Write values from :class:`torch.Tensor` associated with this :class:`Grid` into a
+        Write values from a :class:`torch.Tensor` associated with this :class:`Grid` into a
         dense :class:`torch.Tensor`.
 
         This is the "C Major" (channels major) version, which assumes the ``dense_data`` is in CXYZ order. *i.e* the
