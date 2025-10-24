@@ -267,6 +267,114 @@ class GridBatch:
         grid_batch_impl.set_from_mesh(mesh_vertices._impl, mesh_faces._impl, voxel_sizes, origins)
         return cls(impl=grid_batch_impl)
 
+    # Load and save functions
+    @overload
+    @classmethod
+    def from_nanovdb(
+        cls,
+        path: str,
+        *,
+        device: DeviceIdentifier = "cpu",
+        verbose: bool = False,
+    ) -> "tuple[GridBatch, JaggedTensor, list[str]]": ...
+
+    @overload
+    @classmethod
+    def from_nanovdb(
+        cls,
+        path: str,
+        *,
+        indices: list[int],
+        device: DeviceIdentifier = "cpu",
+        verbose: bool = False,
+    ) -> "tuple[GridBatch, JaggedTensor, list[str]]": ...
+
+    @overload
+    @classmethod
+    def from_nanovdb(
+        cls,
+        path: str,
+        *,
+        index: int,
+        device: DeviceIdentifier = "cpu",
+        verbose: bool = False,
+    ) -> "tuple[GridBatch, JaggedTensor, list[str]]": ...
+
+    @overload
+    @classmethod
+    def from_nanovdb(
+        cls,
+        path: str,
+        *,
+        names: list[str],
+        device: DeviceIdentifier = "cpu",
+        verbose: bool = False,
+    ) -> "tuple[GridBatch, JaggedTensor, list[str]]": ...
+
+    @overload
+    @classmethod
+    def from_nanovdb(
+        cls,
+        path: str,
+        *,
+        name: str,
+        device: DeviceIdentifier = "cpu",
+        verbose: bool = False,
+    ) -> "tuple[GridBatch, JaggedTensor, list[str]]": ...
+
+    @classmethod
+    def from_nanovdb(
+        cls,
+        path: str,
+        *,
+        indices: list[int] | None = None,
+        index: int | None = None,
+        names: list[str] | None = None,
+        name: str | None = None,
+        device: DeviceIdentifier = "cpu",
+        verbose: bool = False,
+    ) -> "tuple[GridBatch, JaggedTensor, list[str]]":
+        """Load a grid batch from a .nvdb file.
+
+        Args:
+            path: The path to the .nvdb file to load
+            indices: Optional list of indices to load from the file (mutually exclusive with other selectors)
+            index: Optional single index to load from the file (mutually exclusive with other selectors)
+            names: Optional list of names to load from the file (mutually exclusive with other selectors)
+            name: Optional single name to load from the file (mutually exclusive with other selectors)
+            device: Which device to load the grid batch on
+            verbose: If set to true, print information about the loaded grids
+
+        Returns:
+            A tuple (gridbatch, data, names) where gridbatch is a GridBatch containing the loaded
+            grids, data is a JaggedTensor containing the data of the grids, and names is a list of
+            strings containing the name of each grid
+        """
+        from ._Cpp import load as _load
+
+        device = resolve_device(device)
+
+        # Check that only one selector is provided
+        selectors = [indices is not None, index is not None, names is not None, name is not None]
+        if sum(selectors) > 1:
+            raise ValueError("Only one of indices, index, names, or name can be specified")
+
+        # Call the appropriate overload
+        if indices is not None:
+            grid_impl, data_impl, names_out = _load(path, indices, device, verbose)
+        elif index is not None:
+            grid_impl, data_impl, names_out = _load(path, index, device, verbose)
+        elif names is not None:
+            grid_impl, data_impl, names_out = _load(path, names, device, verbose)
+        elif name is not None:
+            grid_impl, data_impl, names_out = _load(path, name, device, verbose)
+        else:
+            # Load all grids
+            grid_impl, data_impl, names_out = _load(path, device, verbose)
+
+        # Wrap the GridBatch implementation with the Python wrapper
+        return cls(impl=grid_impl), JaggedTensor(impl=data_impl), names_out
+
     @classmethod
     def from_nearest_voxels_to_points(
         cls,
@@ -673,7 +781,7 @@ class GridBatch:
             impl=self._impl.dual_grid(exclude_border),
         )
 
-    def grid_to_world(self, ijk: JaggedTensor) -> JaggedTensor:
+    def voxel_to_world(self, ijk: JaggedTensor) -> JaggedTensor:
         """
         Convert grid (index) coordinates to world coordinates.
 
@@ -1219,7 +1327,7 @@ class GridBatch:
             impl=self._impl.ray_implicit_intersection(ray_origins._impl, ray_directions._impl, grid_scalars._impl, eps)
         )
 
-    def read_from_dense_cminor(self, dense_data: torch.Tensor, dense_origins: NumericMaxRank1 = 0) -> JaggedTensor:
+    def inject_from_dense_cminor(self, dense_data: torch.Tensor, dense_origins: NumericMaxRank1 = 0) -> JaggedTensor:
         """
         Read values from a dense tensor into sparse grid structure.
 
@@ -1245,7 +1353,7 @@ class GridBatch:
 
         return JaggedTensor(impl=self._impl.read_from_dense_cminor(dense_data, dense_origins))
 
-    def read_from_dense_cmajor(self, dense_data: torch.Tensor, dense_origins: NumericMaxRank1 = 0) -> JaggedTensor:
+    def inject_from_dense_cmajor(self, dense_data: torch.Tensor, dense_origins: NumericMaxRank1 = 0) -> JaggedTensor:
         """
         Read values from a dense tensor into sparse grid structure.
 
@@ -1541,6 +1649,56 @@ class GridBatch:
         else:
             raise TypeError(f"Unsupported type for to(): {type(target)}")
 
+    def save_nanovdb(
+        self,
+        path: str,
+        data: JaggedTensor | None = None,
+        names: list[str] | str | None = None,
+        name: str | None = None,
+        compressed: bool = False,
+        verbose: bool = False,
+    ) -> None:
+        """
+        Save a grid batch and optional voxel data to a .nvdb file.
+
+        Saves sparse grids in the NanoVDB format, which can be loaded by other
+        applications that support OpenVDB/NanoVDB.
+
+        Args:
+            path (str): The file path to save to. Should have .nvdb extension.
+            data (JaggedTensor | None): Voxel data to save with the grids.
+                Shape: (batch_size, total_voxels, channels). If None, only grid structure is saved.
+            names (list[str] | str | None): Names for each grid in the batch.
+                If a single string, it's used as the name for all grids.
+            name (str | None): Alternative way to specify a single name for all grids.
+                Takes precedence over names parameter.
+            compressed (bool): Whether to compress the data using Blosc compression.
+                Default is False.
+            verbose (bool): Whether to print information about the saved grids.
+                Default is False.
+
+        Note:
+            The parameters 'names' and 'name' are mutually exclusive ways to specify
+            grid names. Use 'name' for a single name applied to all grids, or 'names'
+            for individual names per grid.
+        """
+        from ._Cpp import save as _save
+
+        # Handle the overloaded signature - if name is provided, use it
+        data_impl = data._impl if data else None
+        if name is not None:
+            _save(path, self._impl, data_impl, name, compressed, verbose)
+        elif names is not None:
+            if isinstance(names, str):
+                # Handle case where names is actually a single name
+                _save(path, self._impl, data_impl, names, compressed, verbose)
+            else:
+                # Handle case where names is a list
+                _save(path, self._impl, data_impl, names, compressed, verbose)
+        else:
+            # Default case with empty names list
+            _save(path, self._impl, data_impl, [], compressed, verbose)
+
     def uniform_ray_samples(
         self,
         ray_origins: JaggedTensor,
@@ -1677,7 +1835,7 @@ class GridBatch:
         )
         return JaggedTensor(impl=result_voxels_impl), JaggedTensor(impl=result_times_impl)
 
-    def world_to_grid(self, points: JaggedTensor) -> JaggedTensor:
+    def world_to_voxel(self, points: JaggedTensor) -> JaggedTensor:
         """
         Convert world coordinates to grid (index) coordinates.
 
@@ -1695,7 +1853,7 @@ class GridBatch:
         """
         return JaggedTensor(impl=self._impl.world_to_grid(points._impl))
 
-    def write_to_dense_cminor(
+    def inject_to_dense_cminor(
         self,
         sparse_data: JaggedTensor,
         min_coord: NumericMaxRank2 | None = None,
@@ -1731,7 +1889,7 @@ class GridBatch:
 
         return self._impl.write_to_dense_cminor(sparse_data._impl, min_coord, grid_size)
 
-    def write_to_dense_cmajor(
+    def inject_to_dense_cmajor(
         self,
         sparse_data: JaggedTensor,
         min_coord: NumericMaxRank2 | None = None,
@@ -1945,7 +2103,7 @@ class GridBatch:
         return self._impl.grid_count
 
     @property
-    def grid_to_world_matrices(self) -> torch.Tensor:
+    def voxel_to_world_matrices(self) -> torch.Tensor:
         if self.has_zero_grids:
             return torch.empty((0, 4, 4), dtype=torch.float32, device=self.device)
         else:
@@ -2037,7 +2195,7 @@ class GridBatch:
             return self._impl.voxel_sizes
 
     @property
-    def world_to_grid_matrices(self) -> torch.Tensor:
+    def world_to_voxel_matrices(self) -> torch.Tensor:
         if self.has_zero_grids:
             return torch.empty((0, 4, 4), dtype=torch.float32, device=self.device)
         else:
@@ -2048,157 +2206,3 @@ class GridBatch:
     def _gridbatch(self):
         # Access underlying GridBatchCpp - use sparingly during migration
         return self._impl
-
-
-# Load and save functions
-@overload
-def load_gridbatch(
-    path: str,
-    *,
-    device: DeviceIdentifier = "cpu",
-    verbose: bool = False,
-) -> tuple[GridBatch, JaggedTensor, list[str]]: ...
-
-
-@overload
-def load_gridbatch(
-    path: str,
-    *,
-    indices: list[int],
-    device: DeviceIdentifier = "cpu",
-    verbose: bool = False,
-) -> tuple[GridBatch, JaggedTensor, list[str]]: ...
-
-
-@overload
-def load_gridbatch(
-    path: str,
-    *,
-    index: int,
-    device: DeviceIdentifier = "cpu",
-    verbose: bool = False,
-) -> tuple[GridBatch, JaggedTensor, list[str]]: ...
-
-
-@overload
-def load_gridbatch(
-    path: str,
-    *,
-    names: list[str],
-    device: DeviceIdentifier = "cpu",
-    verbose: bool = False,
-) -> tuple[GridBatch, JaggedTensor, list[str]]: ...
-
-
-@overload
-def load_gridbatch(
-    path: str,
-    *,
-    name: str,
-    device: DeviceIdentifier = "cpu",
-    verbose: bool = False,
-) -> tuple[GridBatch, JaggedTensor, list[str]]: ...
-
-
-def load_gridbatch(
-    path: str,
-    *,
-    indices: list[int] | None = None,
-    index: int | None = None,
-    names: list[str] | None = None,
-    name: str | None = None,
-    device: DeviceIdentifier = "cpu",
-    verbose: bool = False,
-) -> tuple[GridBatch, JaggedTensor, list[str]]:
-    """Load a grid batch from a .nvdb file.
-
-    Args:
-        path: The path to the .nvdb file to load
-        indices: Optional list of indices to load from the file (mutually exclusive with other selectors)
-        index: Optional single index to load from the file (mutually exclusive with other selectors)
-        names: Optional list of names to load from the file (mutually exclusive with other selectors)
-        name: Optional single name to load from the file (mutually exclusive with other selectors)
-        device: Which device to load the grid batch on
-        verbose: If set to true, print information about the loaded grids
-
-    Returns:
-        A tuple (gridbatch, data, names) where gridbatch is a GridBatch containing the loaded
-        grids, data is a JaggedTensor containing the data of the grids, and names is a list of
-        strings containing the name of each grid
-    """
-    from ._Cpp import load as _load
-
-    device = resolve_device(device)
-
-    # Check that only one selector is provided
-    selectors = [indices is not None, index is not None, names is not None, name is not None]
-    if sum(selectors) > 1:
-        raise ValueError("Only one of indices, index, names, or name can be specified")
-
-    # Call the appropriate overload
-    if indices is not None:
-        grid_impl, data_impl, names_out = _load(path, indices, device, verbose)
-    elif index is not None:
-        grid_impl, data_impl, names_out = _load(path, index, device, verbose)
-    elif names is not None:
-        grid_impl, data_impl, names_out = _load(path, names, device, verbose)
-    elif name is not None:
-        grid_impl, data_impl, names_out = _load(path, name, device, verbose)
-    else:
-        # Load all grids
-        grid_impl, data_impl, names_out = _load(path, device, verbose)
-
-    # Wrap the GridBatch implementation with the Python wrapper
-    return GridBatch(impl=grid_impl), JaggedTensor(impl=data_impl), names_out
-
-
-def save_gridbatch(
-    path: str,
-    grid_batch: GridBatch,
-    data: JaggedTensor | None = None,
-    names: list[str] | str | None = None,
-    name: str | None = None,
-    compressed: bool = False,
-    verbose: bool = False,
-) -> None:
-    """
-    Save a grid batch and optional voxel data to a .nvdb file.
-
-    Saves sparse grids in the NanoVDB format, which can be loaded by other
-    applications that support OpenVDB/NanoVDB.
-
-    Args:
-        path (str): The file path to save to. Should have .nvdb extension.
-        grid_batch (GridBatch): The grid batch to save.
-        data (JaggedTensor | None): Voxel data to save with the grids.
-            Shape: (batch_size, total_voxels, channels). If None, only grid structure is saved.
-        names (list[str] | str | None): Names for each grid in the batch.
-            If a single string, it's used as the name for all grids.
-        name (str | None): Alternative way to specify a single name for all grids.
-            Takes precedence over names parameter.
-        compressed (bool): Whether to compress the data using Blosc compression.
-            Default is False.
-        verbose (bool): Whether to print information about the saved grids.
-            Default is False.
-
-    Note:
-        The parameters 'names' and 'name' are mutually exclusive ways to specify
-        grid names. Use 'name' for a single name applied to all grids, or 'names'
-        for individual names per grid.
-    """
-    from ._Cpp import save as _save
-
-    # Handle the overloaded signature - if name is provided, use it
-    data_impl = data._impl if data else None
-    if name is not None:
-        _save(path, grid_batch._impl, data_impl, name, compressed, verbose)
-    elif names is not None:
-        if isinstance(names, str):
-            # Handle case where names is actually a single name
-            _save(path, grid_batch._impl, data_impl, names, compressed, verbose)
-        else:
-            # Handle case where names is a list
-            _save(path, grid_batch._impl, data_impl, names, compressed, verbose)
-    else:
-        # Default case with empty names list
-        _save(path, grid_batch._impl, data_impl, [], compressed, verbose)

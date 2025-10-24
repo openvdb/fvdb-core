@@ -75,14 +75,8 @@ from .jagged_tensor import (
     jempty,
 )
 
-# Import GridBatch and gridbatch_from_* functions from grid_batch.py
-from .grid_batch import (
-    GridBatch,
-    load_gridbatch,
-    save_gridbatch,
-)
-
-
+# Import GridBatch and Grid
+from .grid_batch import GridBatch
 from .grid import Grid
 
 

@@ -137,7 +137,7 @@ class TestConv(unittest.TestCase):
         vdb_kernels.grad.zero_()
 
         # # Dense convolution & backward
-        dense_features = grid.write_to_dense_cminor(JaggedTensor(vdb_features)).squeeze(0).permute(3, 2, 1, 0)
+        dense_features = grid.inject_to_dense_cminor(JaggedTensor(vdb_features)).squeeze(0).permute(3, 2, 1, 0)
         out_dense_features_ref = torch.nn.functional.conv3d(
             dense_features, vdb_kernels, padding=(kernel_size - 1) // 2, stride=stride
         )
@@ -427,7 +427,7 @@ class TestConv(unittest.TestCase):
         vdb_kernels.requires_grad = True
 
         # Dense convolution & backward
-        dense_features = grid.write_to_dense_cminor(JaggedTensor(vdb_features)).squeeze(0).permute(3, 2, 1, 0)
+        dense_features = grid.inject_to_dense_cminor(JaggedTensor(vdb_features)).squeeze(0).permute(3, 2, 1, 0)
         out_dense_features_ref = torch.nn.functional.conv3d(
             dense_features, vdb_kernels, padding=(kernel_size - 1) // 2, stride=stride
         )
@@ -534,7 +534,7 @@ class TestConv(unittest.TestCase):
         vdb_kernels.requires_grad = True
 
         # Dense convolution & backward
-        dense_features = grid.write_to_dense_cminor(JaggedTensor(vdb_features)).squeeze(0).permute(3, 2, 1, 0)
+        dense_features = grid.inject_to_dense_cminor(JaggedTensor(vdb_features)).squeeze(0).permute(3, 2, 1, 0)
         out_dense_features_ref = torch.nn.functional.conv3d(
             dense_features,
             vdb_kernels,
@@ -657,7 +657,7 @@ class TestConv(unittest.TestCase):
 
         # Sparse convolution & backward
         out_vdb_features = kmap.sparse_transpose_conv_3d(vdb_features, vdb_kernels, symbol)
-        out_dense_features = source_grid.write_to_dense_cminor(out_vdb_features).squeeze(0).permute(3, 2, 1, 0)
+        out_dense_features = source_grid.inject_to_dense_cminor(out_vdb_features).squeeze(0).permute(3, 2, 1, 0)
         out_grad = torch.rand_like(out_dense_features)
         # TODO: Hack to compare with PyTorch with even filter size
         # out_dense_features = out_dense_features[:, :31, :31, :31]

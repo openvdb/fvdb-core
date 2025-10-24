@@ -477,7 +477,7 @@ class TestRayMarching(unittest.TestCase):
         gsize = 8
         grid, _, _ = make_dense_grid_batch_and_jagged_point_data(gsize, device, dtype)
 
-        grid_centers = grid.grid_to_world(grid.ijk.float()).jdata
+        grid_centers = grid.voxel_to_world(grid.ijk.float()).jdata
         camera_origin_inside = torch.mean(grid_centers, dim=0)
         camera_origin_outside = camera_origin_inside - torch.tensor([0.0, 0.0, 4.0]).to(grid.device)
 
