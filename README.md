@@ -1,4 +1,4 @@
-# *ƒ*(VDB)
+# *ƒ*VDB
 
 fVDB is a Python library of data structures and algorithms for building high-performance and large-domain
 spatial applications using [NanoVDB](https://dl.acm.org/doi/abs/10.1145/3450623.3464653) on the GPU
