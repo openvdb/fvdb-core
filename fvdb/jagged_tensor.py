@@ -151,7 +151,7 @@ class JaggedTensor:
 
     The :class:`JaggedTensor` data structure consists of the following components:
 
-        - **:attr:`jdata`**: The flattened data tensor containing all elements
+        - :attr:`jdata`: The flattened data tensor containing all elements
         - Indexing structures (:attr:`jidx`, :attr:`joffsets`, :attr:`jlidx`) to track element boundaries
         - Shape information (:attr:`lshape`, :attr:`eshape`, :attr:`rshape`) describing the structure
 
