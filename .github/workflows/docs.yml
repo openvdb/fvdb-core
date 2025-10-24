@@ -100,11 +100,22 @@ jobs:
           micromamba activate fvdb
           ./build.sh install verbose --cuda-arch-list '8.9+PTX'
 
+      - name: Clone and build fvdb-reality-capture
+        run: |
+          echo "Cloning fvdb-reality-capture"
+          pwd
+          git clone https://github.com/openvdb/fvdb-reality-capture.git
+          pushd fvdb-reality-capture
+          pip install -e .
+          popd
+
       - name: Build docs
         run: |
           micromamba activate fvdb
           which sphinx-build
           sphinx-build docs/ -E -a _docs_build
+          sphinx-build fvdb-reality-capture/docs -E -a _docs_build/reality-capture
+
 
       - name: Upload static files as artifact
         id: deployment

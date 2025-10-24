@@ -91,14 +91,21 @@ class CamerasView:
             image_sizes=image_sizes,
             frustum_near_plane=frustum_near_plane,
             frustum_far_plane=frustum_far_plane,
+            axis_length=axis_length,
+            axis_thickness=axis_thickness,
+            frustum_line_width=frustum_line_width,
+            frustum_scale=frustum_scale,
+            frustum_color=frustum_color,
+            visible=enabled,
         )
 
-        view.axis_length = axis_length
-        view.axis_thickness = axis_thickness
-        view.frustum_line_width = frustum_line_width
-        view.frustum_scale = frustum_scale
-        view.frustum_color = frustum_color
-        view.visible = enabled
+        # TODO: needs adjustments on editor's side
+        # view.axis_length = axis_length
+        # view.axis_thickness = axis_thickness
+        # view.frustum_line_width = frustum_line_width
+        # view.frustum_scale = frustum_scale
+        # view.frustum_color = frustum_color
+        # view.visible = enabled
 
     @property
     def enabled(self) -> bool:

@@ -1004,8 +1004,14 @@ class Viewer:
         camera_to_world_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
         image_sizes: torch.Tensor,
-        frustum_near_plane: float = 0.1,
-        frustum_far_plane: float = 1000.0,
+        frustum_near_plane: float,
+        frustum_far_plane: float,
+        axis_length: float,
+        axis_thickness: float,
+        frustum_line_width: float,
+        frustum_scale: float,
+        frustum_color: tuple[float, float, float],
+        visible: bool,
     ) -> CameraView: ...
     def has_camera_view(self, name: str) -> bool: ...
     def get_camera_view(self, name: str) -> CameraView: ...
