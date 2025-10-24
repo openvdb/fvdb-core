@@ -42,13 +42,13 @@ minimum requirement but some operations and data types are not supported.
 
 ### Package Installation with pip
 
-Currently, pip wheels are built with PyTorch 2.8 and CUDA 12.8 only. Versions for Python 3.10-3.13
+Currently, pip wheels are built with PyTorch 2.8.0 and CUDA 12.9 only. Versions for Python 3.10-3.13
 are provided.
 
 Install fvdb_core using the following pip command.
 
 ```
-pip install fvdb_core==0.3.0+pt28.cu129 --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple" torch==2.8
+pip install fvdb_core==0.3.0+pt28.cu129 --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple" torch==2.8.0
 ```
 
 ## Building *f*VDB from Source
