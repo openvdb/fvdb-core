@@ -732,14 +732,16 @@ class GridBatch:
 
     def bbox_at(self, bi: int) -> torch.Tensor:
         """
-        Get the bounding box of a specific :class:`fvdb.Grid` in the batch.
+        Get the bounding box of the bi^th grid in the batch.
 
         Args:
             bi (int): The batch index of the grid.
 
         Returns:
-            bbox (torch.Tensor): A tensor of shape ``(2, 3)`` containing the minimum and maximum
-                coordinates of the bounding box in voxel space.
+            bbox (torch.Tensor): A tensor of shape ``(2, 3)`` where
+                ``bbox = [[bmin_i, bmin_j, bmin_k], [bmax_i, bmax_j, bmax_k]]`` is the half-open
+                bounding box such that ``bmin <= ijk < bmax`` for all active voxels ``ijk`` in the
+                ``bi``-th grid.
         """
         # There's a quirk with zero-voxel grids that we handle here.
         if self.has_zero_voxels_at(bi):
@@ -1792,11 +1794,14 @@ class GridBatch:
             input (JaggedTensor): Input features for each voxel.
                 Shape: ``(batch_size, total_voxels, in_channels)``.
             weight (torch.Tensor): Convolution weights.
-            variant (int): Variant of the halo implementation to use.
-                Default is 8.
+            variant (int): Variant of the halo implementation to use. Currently ``8`` and ``64``
+                are supported. Default is ``8``.
 
         Returns:
             output (JaggedTensor): Output features after convolution.
+
+        .. note::
+            Currently only 3x3x3 kernels are supported.
         """
         return JaggedTensor(impl=self._impl.sparse_conv_halo(input._impl, weight, variant))
 
