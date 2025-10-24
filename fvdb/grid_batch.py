@@ -2,21 +2,23 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 """
-Sparse grid batch data structure and operations for FVDB.
+Batch of sparse grids data structure and operations for FVDB.
 
-This module provides the core GridBatch class for managing sparse voxel grids:
+This module provides the core GridBatch class for managing batches of sparse voxel grids:
 
 Classes:
 - GridBatch: A batch of sparse voxel grids with support for efficient operations
 
 Class-methods for creating GridBatch objects from various sources:
-- from_zero_grids: Create a grid batch with grid-count = 0.
-- from_empty: Create one or more grids with zero voxels.
-- from_dense: Create from dense grid dimensions
-- from_ijk: Create from explicit voxel coordinates
-- from_mesh: Create from triangle meshes
-- from_points: Create from point clouds
-- from_nearest_voxels_to_points: Create from nearest voxels to points
+- :meth:`GridBatch.from_zero_grids()`: for an empty grid batch where grid-count = 0.
+- :meth:`GridBatch.from_zero_voxels()`: for a grid batch where each grid has zero voxels.
+- :meth:`GridBatch.from_dense()`: for a grid batch where each grid is dense data
+- :meth:`GridBatch.from_dense_axis_aligned_bounds()`: for a grid batch where each grid is dense data defined by axis-aligned bounds
+- :meth:`GridBatch.from_grid()`: for a grid batch from a single :class:`Grid` instance
+- :meth:`GridBatch.from_ijk()`: for a grid batch from explicit voxel coordinates
+- :meth:`GridBatch.from_mesh()`: for a grid batch from triangle meshes
+- :meth:`GridBatch.from_points()`: for a grid batch from point clouds
+- :meth:`GridBatch.from_nearest_voxels_to_points()`: for a grid batch from nearest voxels to points
 
 Module-level functions for loading and saving grid batches:
 - load_gridbatch/save_gridbatch: Load and save grid batches to/from .nvdb files
@@ -57,18 +59,60 @@ class GridBatch:
     """
     A batch of sparse voxel grids with support for efficient operations.
 
-    `~fvdb.GridBatch` represents a collection of sparse 3D voxel grids that can be processed
+    :class:`GridBatch` represents a collection of sparse 3D voxel grids that can be processed
     together efficiently on GPU. Each grid in the batch can have different resolutions,
     origins, and voxel sizes. The class provides methods for common operations like
-    sampling, convolution, pooling, and other operations.
+    sampling, convolution, pooling, dilation, union, etc. It also provides more advanced features
+    such as marching cubes, TSDF fusion, and fast ray marching.
 
-    A `~fvdb.GridBatch` may contain zero grids, in which case it has no voxel sizes nor origins
-    that can be queried. It may also contain one or more empty grids, which means grids that
-    have zero voxels. An empty grid still has a voxel size and origin, which can be queried.
+    A :class:`GridBatch` can be thought of as a collection of :class:`Grid` instances and,
+    like the :class:`Grid`, does not collect the sparse voxel grids' data but only collects
+    their structure (or topology). Voxel data (e.g., features, colors, densities) are for the
+    collection of grids isstored separately as an :class:`JaggedTensor` associated with
+    the :class:`GridBatch`. This separation allows for flexibility in the type and number of
+    channels of data with which a grid can be used to index into. This also allows multiple grids to
+    share the same data storage if desired.
 
-    The grids are stored in a sparse format where only active (non-empty) voxels are
-    allocated, making it memory efficient for representing large volumes with sparse
-    occupancy.
+    When using a :class:`GridBatch`'s voxel coordinates, there are three important coordinate systems
+    to be aware of:
+
+    - **World Space**: The continuous 3D coordinate system in which each grid in the batch exists.
+    - **Voxel Space**: The discrete voxel index system of each grid in the batch, where each voxel is identified by its integer indices (i, j, k).
+    - **Index Space**: The linear indexing of active voxels in each grid's internal storage.
+
+
+    At its core, a :class:`Grid` uses a very fast mapping from voxel space into index space to perform operations on a :class:`torch.Tensor` of
+    data associated with the grid. This mapping allows for efficient access and manipulation of voxel data. For example:
+
+    .. code-block:: python
+
+        voxel_coords = torch.tensor([[8, 7, 6], [1, 2, 3], [4, 5, 6]], device="cuda")  # Voxel space coordinates
+        batch_voxel_coords = fvdb.JaggedTensor([voxel_coords, voxel_coords + 44, voxel_coords - 44]) # Voxel space coordinates for 3 grids in the batch
+
+        # Create a GridBatch containing 3 grids with the 3 sets of voxel coordinates such that the voxels
+        # have a world space size of 1x1x1, and where the [0, 0, 0] voxel in voxel space of each grid is at world space origin (0, 0, 0).
+        grid_batch = GridBatch.from_ijk(batch_voxel_coords, voxel_size=1.0, origin=0.0, device="cuda")
+
+        # Create some data associated with the grids - here we have 9 voxels and 2 channels per voxel
+        voxel_data = torch.randn(grid.num_voxels, 2, device="cuda")  # Index space data
+
+        # Map voxel space coordinates to index space
+        indices = grid.ijk_to_index(voxel_coords)  # Shape: (3,)
+
+        # Access the data for the specified voxel coordinates
+        selected_data = voxel_data[indices]  # Shape: (3, 2)
+
+    .. note::
+
+        A :class:`GridBatch` may contain zero grids, in which case it has no voxel sizes nor origins
+        that can be queried. It may also contain one or more empty grids, which means grids that
+        have zero voxels. An empty grid still has a voxel size and origin, which can be queried.
+
+    .. note::
+
+        The grid is stored in a sparse format using `NanoVDB <https://github.com/AcademySoftwareFoundation/openvdb/tree/feature/nanovdb>`_
+        where only active (non-empty) voxels are allocated, making it extremely memory efficient for representing large volumes with sparse
+        occupancy.
 
     Note:
         For creating grid batches with actual content, use the classmethods:

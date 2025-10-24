@@ -66,7 +66,7 @@ class Grid:
     which a grid can be used to index into. This also allows multiple grids to share the same data
     storage if desired.
 
-    When using a :class:`Grid`, voxel coordinates, there are three important coordinate systems to be aware of:
+    When using a :class:`Grid`'s voxel coordinates, there are three important coordinate systems to be aware of:
 
     - **World Space**: The continuous 3D coordinate system in which the grid exists.
     - **Voxel Space**: The discrete voxel index system, where each voxel is identified by its integer indices (i, j, k).
