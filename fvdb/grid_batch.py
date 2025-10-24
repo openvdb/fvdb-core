@@ -232,13 +232,21 @@ class GridBatch:
     @classmethod
     def from_grid(cls, grid: "Grid") -> "GridBatch":
         """
-        Create a grid batch of batch size 1 from a single grid.
+        Create a `~fvdb.GridBatch` of batch size 1 from a single `~fvdb.Grid`.
 
         Args:
-            grid (Grid): The grid to create the grid batch from.
+            grid (Grid): The `~fvdb.Grid` to create the grid batch from.
 
         Returns:
             grid_batch (GridBatch): A new `~fvdb.GridBatch` object.
+
+        Examples:
+            >>> grid = fvdb.Grid.from_ijk(ijk=torch.tensor([[0, 0, 0], [0, 0, 1], [0, 1, 0], [1, 0, 0], [1, 1, 0], [1, 0, 1], [0, 1, 1], [1, 1, 1]]), voxel_sizes=[1.0, 1.0, 1.0], origins=[0.0, 0.0, 0.0], device="cuda")
+            >>> grid_batch = fvdb.GridBatch.from_grid(grid)
+            >>> print(grid_batch.grid_count)
+            1
+            >>> print(grid_batch.ijk.jdata)
+            tensor([[0, 0, 0], [0, 0, 1], [0, 1, 0], [1, 0, 0], [1, 1, 0], [1, 0, 1], [0, 1, 1], [1, 1, 1]])
         """
         return cls(impl=grid._impl)
 
@@ -251,7 +259,7 @@ class GridBatch:
         device: DeviceIdentifier | None = None,
     ) -> "GridBatch":
         """
-        Create a grid batch from voxel coordinates.
+        Create a `~fvdb.GridBatch` from voxel coordinates.
 
         Args:
             ijk (torch.Tensor): Voxel coordinates to populate.
@@ -264,7 +272,14 @@ class GridBatch:
                 Defaults to None, which inherits from ijk.
 
         Returns:
-            Grid: A new Grid object.
+            grid_batch (GridBatch): A new `~fvdb.GridBatch` object.
+
+        Examples:
+            >>> grid_batch = fvdb.GridBatch.from_ijk(ijk=torch.tensor([[0, 0, 0], [0, 0, 1], [0, 1, 0], [1, 0, 0], [1, 1, 0], [1, 0, 1], [0, 1, 1], [1, 1, 1]]), voxel_sizes=[1.0, 1.0, 1.0], origins=[0.0, 0.0, 0.0], device="cuda")
+            >>> print(grid_batch.grid_count)
+            1
+            >>> print(grid_batch.ijk.jdata)
+            tensor([[0, 0, 0], [0, 0, 1], [0, 1, 0], [1, 0, 0], [1, 1, 0], [1, 0, 1], [0, 1, 1], [1, 1, 1]])
         """
         resolved_device = resolve_device(device, inherit_from=ijk)
 
@@ -285,7 +300,7 @@ class GridBatch:
         device: DeviceIdentifier | None = None,
     ) -> "GridBatch":
         """
-        Create a grid batch from triangle meshes.
+        Create a `~fvdb.GridBatch` from triangle meshes.
 
         Args:
             mesh_vertices (JaggedTensor): Vertices of the mesh.
@@ -301,6 +316,15 @@ class GridBatch:
 
         Returns:
             GridBatch: A new GridBatch object.
+
+        Examples:
+            >>> mesh_vertices = fvdb.JaggedTensor(torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [0.0, 1.0, 1.0], [1.0, 1.0, 1.0]]))
+            >>> mesh_faces = fvdb.JaggedTensor(torch.tensor([[0, 1, 2], [1, 3, 2], [4, 5, 6], [5, 7, 6], [0, 1, 4], [1, 5, 4], [2, 3, 6], [3, 7, 6], [0, 2, 4], [2, 6, 4], [1, 3, 5], [3, 7, 5]]))
+            >>> grid_batch = fvdb.GridBatch.from_mesh(mesh_vertices, mesh_faces, voxel_sizes=[1.0, 1.0, 1.0], origins=[0.0, 0.0, 0.0])
+            >>> print(grid_batch.grid_count)
+            1
+            >>> print(grid_batch.ijk.jdata)
+            tensor([[0, 0, 0], [0, 0, 1], [0, 1, 0], [1, 0, 0], [1, 1, 0], [1, 0, 1], [0, 1, 1], [1, 1, 1]])
         """
         resolved_device = resolve_device(device, inherit_from=mesh_vertices)
 
@@ -320,7 +344,7 @@ class GridBatch:
         device: DeviceIdentifier | None = None,
     ) -> "GridBatch":
         """
-        Create a grid batch from the nearest voxels to a set of points.
+        Create a `~fvdb.GridBatch` from the nearest voxels to a set of points.
 
         Args:
             points (JaggedTensor): Points to populate the grid from, per-grid
@@ -333,7 +357,24 @@ class GridBatch:
                 Defaults to None, which inherits from points.
 
         Returns:
-            GridBatch: A new GridBatch object.
+            grid_batch (GridBatch): A new `~fvdb.GridBatch` object.
+
+        Examples:
+            >>> points = fvdb.JaggedTensor(torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [0.0, 1.0, 1.0], [1.0, 1.0, 1.0]]))
+            >>> grid_batch = fvdb.GridBatch.from_nearest_voxels_to_points(points, voxel_sizes=[1.0, 1.0, 1.0], origins=[0.0, 0.0, 0.0])
+            >>> print(grid_batch.grid_count)
+            1
+            >>> print(grid_batch.ijk.jdata)
+            tensor([[0, 0, 0], [0, 0, 1], [0, 0, 2],
+                    [0, 1, 0], [0, 1, 1], [0, 1, 2],
+                    [0, 2, 0], [0, 2, 1], [0, 2, 2],
+                    [1, 0, 0], [1, 0, 1], [1, 0, 2],
+                    [1, 1, 0], [1, 1, 1], [1, 1, 2],
+                    [1, 2, 0], [1, 2, 1], [1, 2, 2],
+                    [2, 0, 0], [2, 0, 1], [2, 0, 2],
+                    [2, 1, 0], [2, 1, 1], [2, 1, 2],
+                    [2, 2, 0], [2, 2, 1], [2, 2, 2]], dtype=torch.int32)
+
         """
         resolved_device = resolve_device(device, inherit_from=points)
 
@@ -353,7 +394,7 @@ class GridBatch:
         device: DeviceIdentifier | None = None,
     ) -> "GridBatch":
         """
-        Create a grid batch from a point cloud.
+        Create a `~fvdb.GridBatch` from a point cloud.
 
         Args:
             points (JaggedTensor): Points to populate the grid from, per-grid
@@ -366,7 +407,15 @@ class GridBatch:
                 Defaults to None, which inherits from points.
 
         Returns:
-            GridBatch: A new GridBatch object.
+            grid_batch (GridBatch): A new `~fvdb.GridBatch` object.
+
+        Examples:
+            >>> points = fvdb.JaggedTensor(torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [0.0, 1.0, 1.0], [1.0, 1.0, 1.0]]))
+            >>> grid_batch = fvdb.GridBatch.from_points(points, voxel_sizes=[1.0, 1.0, 1.0], origins=[0.0, 0.0, 0.0])
+            >>> print(grid_batch.grid_count)
+            1
+            >>> print(grid_batch.ijk.jdata)
+            tensor([[0, 0, 0], [0, 0, 1], [0, 1, 0], [1, 0, 0], [1, 1, 0], [1, 0, 1], [0, 1, 1], [1, 1, 1]])
         """
         resolved_device = resolve_device(device, inherit_from=points)
 
@@ -380,9 +429,21 @@ class GridBatch:
     @classmethod
     def from_zero_grids(cls, device: DeviceIdentifier = "cpu") -> "GridBatch":
         """
-        Create a new GridBatch with zero grids. It retains its device identifier, but
+        Create a `~fvdb.GridBatch` with zero grids. It retains its device identifier, but
         has no other information like voxel size or origin or bounding box. It will report
-        grid_count == 0
+        grid_count == 0.
+
+        Args:
+            device (DeviceIdentifier): The device to create the GridBatch on.
+                Can be a string (e.g., "cuda", "cpu")or a torch.device object. Defaults to "cpu".
+
+        Returns:
+            grid_batch (GridBatch): A new `~fvdb.GridBatch` object.
+
+        Examples:
+            >>> grid_batch = fvdb.GridBatch.from_zero_grids("cuda")
+            >>> print(grid_batch.grid_count)
+            0
         """
         return cls(impl=GridBatchCpp(device=resolve_device(device)))
 
@@ -391,12 +452,12 @@ class GridBatch:
         cls, device: DeviceIdentifier = "cpu", voxel_sizes: NumericMaxRank2 = 1, origins: NumericMaxRank2 = 0
     ) -> "GridBatch":
         """
-        Create a GridBatch with one or more zero-voxel grids on a specific device.
+        Create a `~fvdb.GridBatch` with one or more zero-voxel grids on a specific device.
 
         An zero-voxel grid batch does not mean there are zero grids. It means that the grids have
         zero voxels. This constructor will create as many zero-voxel grids as the batch size
         of voxel_sizes and origins, defaulting to 1 grid, though for that case, you should use
-        the single-grid Grid constructor instead.
+        the single-grid `~fvdb.Grid` constructor instead.
 
         Args:
             device (DeviceIdentifier): The device to create the GridBatch on.
@@ -408,7 +469,7 @@ class GridBatch:
 
 
         Returns:
-            GridBatch: A new zero-voxel GridBatch object.
+            grid_batch (GridBatch): A new `~fvdb.GridBatch` object with zero-voxel grids.
 
         Examples:
             >>> grid_batch = GridBatch.from_zero_voxels("cuda", 1, 0)  # string
