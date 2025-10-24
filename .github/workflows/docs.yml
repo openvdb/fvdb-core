@@ -98,7 +98,7 @@ jobs:
         run: |
           echo "Building fvdb"
           micromamba activate fvdb
-          ./build.sh install verbose --cuda-arch-list '8.9+PTX'
+          ./build.sh install verbose --cuda-arch-list '8.9+PTX' -e
 
       - name: Clone and build fvdb-reality-capture
         run: |
