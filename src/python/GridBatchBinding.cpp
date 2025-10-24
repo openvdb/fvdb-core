@@ -14,7 +14,7 @@
 
 void
 bind_grid_batch(py::module &m) {
-    py::class_<fvdb::GridBatch>(m, "GridBatch", "A batch of sparse VDB grids.")
+    py::class_<fvdb::GridBatch>(m, "GridBatch")
         .def(py::init<const torch::Device &>(), py::arg("device") = torch::kCPU)
         .def(py::init([](const std::string &device) {
                  return fvdb::GridBatch(fvdb::parseDeviceString(device));
@@ -51,153 +51,63 @@ bind_grid_batch(py::module &m) {
              py::arg("voxel_sizes"),
              py::arg("grid_origins"))
         // Properties
-        .def_property_readonly("total_voxels",
-                               &fvdb::GridBatch::total_voxels,
-                               "The total number of voxels indexed by this batch of grids.")
-        .def_property_readonly("total_bbox", &fvdb::GridBatch::total_bbox, R"_FVDB_(
-            A tensor, total_bbox, of shape [2, 3] where total_bbox = `[[bmin_i, bmin_j, bmin_z=k],
-              [bmax_i, bmax_j, bmax_k]]` is the bounding box such that `bmin <= ijk < bmax` for all voxels
-              ijk in the batch.
-        )_FVDB_")
+        .def_property_readonly("total_voxels", &fvdb::GridBatch::total_voxels)
+        .def_property_readonly("total_bbox", &fvdb::GridBatch::total_bbox)
         .def_property_readonly_static(
             "max_grids_per_batch",
-            [](py::object) -> int64_t { return fvdb::GridBatch::MAX_GRIDS_PER_BATCH; },
-            "The maximum number of grids that can be stored in a single batch.")
+            [](py::object) -> int64_t { return fvdb::GridBatch::MAX_GRIDS_PER_BATCH; })
+        .def_property_readonly("device", &fvdb::GridBatch::device)
+        .def_property_readonly("grid_count", &fvdb::GridBatch::grid_count)
+        .def_property_readonly("num_voxels", &fvdb::GridBatch::num_voxels)
+        .def_property_readonly("cum_voxels", &fvdb::GridBatch::cum_voxels)
         .def_property_readonly(
-            "device", &fvdb::GridBatch::device, "The device on which this grid is stored.")
-        .def_property_readonly("grid_count",
-                               &fvdb::GridBatch::grid_count,
-                               "The number of grids indexed by this batch.")
-        .def_property_readonly(
-            "num_voxels",
-            &fvdb::GridBatch::num_voxels,
-            "An integer tensor containing the number of voxels per grid indexed by this batch.")
-        .def_property_readonly("cum_voxels", &fvdb::GridBatch::cum_voxels, R"_FVDB_(
-            An integer tensor containing the cumulative number of voxels indexed by the grids in this batch.
-              i.e. `[nvox_0, nvox_0+nvox_1, nvox_0+nvox_1+nvox_2, ...]`
-        )_FVDB_")
-        .def_property_readonly(
-            "origins",
-            [](const fvdb::GridBatch &self) { return self.origins(torch::kFloat32); },
-            "A [num_grids, 3] tensor of world space origins for each grid in this batch.")
+            "origins", [](const fvdb::GridBatch &self) { return self.origins(torch::kFloat32); })
         .def_property_readonly(
             "voxel_sizes",
-            [](const fvdb::GridBatch &self) { return self.voxel_sizes(torch::kFloat32); },
-            "A [num_grids, 3] tensor of voxel sizes for each grid in this batch.")
-        .def_property_readonly("total_bytes",
-                               &fvdb::GridBatch::total_bytes,
-                               "The total number of bytes used by this batch of grids.")
-        .def_property_readonly(
-            "num_bytes",
-            &fvdb::GridBatch::num_bytes,
-            "A [num_grids] tensor of the number of bytes used by each grid in this batch.")
-        .def_property_readonly("total_leaf_nodes",
-                               &fvdb::GridBatch::total_leaf_nodes,
-                               "The total number of leaf nodes used by this batch of grids.")
-        .def_property_readonly(
-            "num_leaf_nodes",
-            &fvdb::GridBatch::num_leaf_nodes,
-            "A [num_grids] tensor of the number of leaf nodes used by each grid in this batch.")
-        .def_property_readonly(
-            "jidx",
-            &fvdb::GridBatch::jidx,
-            "A [total_voxels,] tensor of the jagged index of each voxel in this batch.")
-        .def_property_readonly(
-            "joffsets",
-            &fvdb::GridBatch::joffsets,
-            "A [num_grids+1,] tensor of the jagged offsets of each grid in this batch.")
-        .def_property_readonly(
-            "ijk",
-            &fvdb::GridBatch::ijk,
-            "A [num_grids, -1, 3] JaggedTensor of the ijk coordinates of each voxel in this batch.")
+            [](const fvdb::GridBatch &self) { return self.voxel_sizes(torch::kFloat32); })
+        .def_property_readonly("total_bytes", &fvdb::GridBatch::total_bytes)
+        .def_property_readonly("num_bytes", &fvdb::GridBatch::num_bytes)
+        .def_property_readonly("total_leaf_nodes", &fvdb::GridBatch::total_leaf_nodes)
+        .def_property_readonly("num_leaf_nodes", &fvdb::GridBatch::num_leaf_nodes)
+        .def_property_readonly("jidx", &fvdb::GridBatch::jidx)
+        .def_property_readonly("joffsets", &fvdb::GridBatch::joffsets)
+        .def_property_readonly("ijk", &fvdb::GridBatch::ijk)
         .def_property_readonly(
             "viz_edge_network",
             [](const fvdb::GridBatch &self) { return self.viz_edge_network(false); },
             "A pair of JaggedTensors `(gv, ge)` of shape [num_grids, -1, 3] and [num_grids, -1, 2] where `gv` are the corner positions of each voxel and `ge` are edge indices indexing into `gv`. This property is useful for visualizing the grid.")
-        .def_property_readonly(
-            "grid_to_world_matrices",
-            [](const fvdb::GridBatch &self) {
-                return self.grid_to_world_matrices(torch::kFloat32);
-            },
-            "A [num_grids, 4, 4] tensor of the grid to world transformation matrices for each grid in this batch.")
-        .def_property_readonly(
-            "world_to_grid_matrices",
-            [](const fvdb::GridBatch &self) {
-                return self.world_to_grid_matrices(torch::kFloat32);
-            },
-            "A [num_grids, 4, 4] tensor of the world to grid transformation matrices for each grid in this batch.")
-        .def_property_readonly(
-            "bbox",
-            &fvdb::GridBatch::bbox,
-            "A [num_grids, 2, 3] tensor of the bounding box of each grid in this batch where `bbox[i, 0]` is the minimimum ijk coordinate of the i^th grid, and `bbox[i, 1]` is the maximum ijk coordinate.")
-        .def_property_readonly(
-            "dual_bbox",
-            &fvdb::GridBatch::dual_bbox,
-            "A [num_grids, 2, 3] tensor of the bounding box of the dual of each grid in this batch where bbox[i, 0] is the minimimum ijk coordinate of the i^th dual grid, and bbox[i, 1] is the maximum ijk coordinate.")
-        .def_property_readonly("address",
-                               &fvdb::GridBatch::address,
-                               "The memory address of the underlying C++ GridBatch object.")
+        .def_property_readonly("grid_to_world_matrices",
+                               [](const fvdb::GridBatch &self) {
+                                   return self.grid_to_world_matrices(torch::kFloat32);
+                               })
+        .def_property_readonly("world_to_grid_matrices",
+                               [](const fvdb::GridBatch &self) {
+                                   return self.world_to_grid_matrices(torch::kFloat32);
+                               })
+        .def_property_readonly("bbox", &fvdb::GridBatch::bbox)
+        .def_property_readonly("dual_bbox", &fvdb::GridBatch::dual_bbox)
+        .def_property_readonly("address", &fvdb::GridBatch::address)
 
         // Read a property for a single grid in the batch
-        .def(
-            "voxel_size_at",
-            [](const fvdb::GridBatch &self, int64_t bi) {
-                return self.voxel_size_at(bi, torch::kFloat32);
-            },
-            "Get the voxel size of the bi^th grid in the batch.")
-        .def(
-            "origin_at",
-            [](const fvdb::GridBatch &self, int64_t bi) {
-                return self.origin_at(bi, torch::kFloat32);
-            },
-            "Get the origin of the bi^th grid in the batch.")
-        .def("num_voxels_at",
-             &fvdb::GridBatch::num_voxels_at,
-             "Get the number of voxels in the bi^th grid in the batch.")
-        .def(
-            "cum_voxels_at",
-            &fvdb::GridBatch::cum_voxels_at,
-            "Get the cumulative number of voxels in the bi^th grid in the batch. i.e. `nvox_0+nvox_1+...+nvox_i`")
-        .def("bbox_at",
-             &fvdb::GridBatch::bbox_at,
-             R"_FVDB_(
-            Get the bounding box (in voxel coordinates) of the bi^th grid in the batch.
-
-            Args:
-                bi (int): The index of the grid to get the bounding box of.
-
-            Returns:
-                bbox (torch.Tensor): A tensor, bbox, of shape [2, 3] where bbox = [[bmin_i, bmin_j, bmin_z=k],
-                  [bmax_i, bmax_j, bmax_k]] is the bi^th bounding box such that bmin <= ijk < bmax for all voxels
-                  ijk in the bi^th grid.
-        )_FVDB_",
-             py::arg("bi"))
-        .def(
-            "dual_bbox_at",
-            &fvdb::GridBatch::dual_bbox_at,
-            "Get the bounding box (in voxel coordinates) of the dual of the bi^th grid in the batch.")
+        .def("voxel_size_at",
+             [](const fvdb::GridBatch &self, int64_t bi) {
+                 return self.voxel_size_at(bi, torch::kFloat32);
+             })
+        .def("origin_at",
+             [](const fvdb::GridBatch &self, int64_t bi) {
+                 return self.origin_at(bi, torch::kFloat32);
+             })
+        .def("num_voxels_at", &fvdb::GridBatch::num_voxels_at)
+        .def("cum_voxels_at", &fvdb::GridBatch::cum_voxels_at)
+        .def("bbox_at", &fvdb::GridBatch::bbox_at, py::arg("bi"))
+        .def("dual_bbox_at", &fvdb::GridBatch::dual_bbox_at)
 
         // Create a jagged tensor with the same offsets as this grid batch
-        .def("jagged_like",
-             &fvdb::GridBatch::jagged_like,
-             py::arg("data"),
-             R"_FVDB_(
-            Create a JaggedTensor with the same offsets as this grid batch.
-
-            Args:
-                data (torch.Tensor): A tensor of shape `[total_voxels, *]` to be converted to a JaggedTensor.
-
-            Returns:
-                jagged_data (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, *]` with the same offsets as this grid batch.
-            )_FVDB_")
+        .def("jagged_like", &fvdb::GridBatch::jagged_like, py::arg("data"))
 
         // Deal with contiguity
-        .def("contiguous",
-             &fvdb::GridBatch::contiguous,
-             "Return a contiguous copy of this grid batch.")
-        .def("is_contiguous",
-             &fvdb::GridBatch::is_contiguous,
-             "Whether this grid batch is contiguous.")
+        .def("contiguous", &fvdb::GridBatch::contiguous)
+        .def("is_contiguous", &fvdb::GridBatch::is_contiguous)
 
         // Array indexing
         .def(
@@ -227,89 +137,31 @@ bind_grid_batch(py::module &m) {
             "index_tensor",
             [](const fvdb::GridBatch &self, torch::Tensor bi) { return self.index(bi); },
             py::arg("index"))
-        .def(
-            "__getitem__",
-            [](const fvdb::GridBatch &self, int64_t bi) { return self.index(bi); },
-            R"_FVDB_(
-            Get the i^th grid in the batch.
-
-            Args:
-                bi (int): The index of the grid to get.
-
-            Returns:
-                grid (Grid): The i^th grid in the batch.)_FVDB_")
-        .def(
-            "__getitem__",
-            [](const fvdb::GridBatch &self, pybind11::slice slice) {
-                ssize_t start, stop, step, len;
-                if (!slice.compute(self.grid_count(), &start, &stop, &step, &len)) {
-                    TORCH_CHECK_INDEX(false, "Invalid slice ", py::repr(slice).cast<std::string>());
-                }
-                TORCH_CHECK_INDEX(step != 0, "step cannot be 0");
-                return self.index(start, stop, step);
-            },
-            R"_FVDB_(
-            Get a slice of grids in the batch.
-
-            Args:
-                slice (slice): The slice of grids to get.
-
-            Returns:
-                grids (GridBatch): A GridBatch containing the sliced grids.)_FVDB_")
-        .def(
-            "__getitem__",
-            [](const fvdb::GridBatch &self, std::vector<bool> bi) { return self.index(bi); },
-            R"_FVDB_(
-            Get a slice of grids in the batch from a boolean mask.
-
-            Args:
-                bi (list of bools): A list of bools indicating which grids to get.
-
-            Returns:
-                grids (GridBatch): A GridBatch containing the sliced grids.)_FVDB_")
-        .def(
-            "__getitem__",
-            [](const fvdb::GridBatch &self, std::vector<int64_t> bi) { return self.index(bi); },
-            R"_FVDB_(
-            Get a slice of grids in the batch from a list of indices.
-
-            Args:
-                bi (list of ints): A list of indices indicating which grids to get.
-
-            Returns:
-                grids (GridBatch): A GridBatch containing the sliced grids.)_FVDB_")
-        .def(
-            "__getitem__",
-            [](const fvdb::GridBatch &self, torch::Tensor bi) { return self.index(bi); },
-            R"_FVDB_(
-            Get a slice of grids in the batch from a tensor of indices.
-
-            Args:
-                bi (torch.Tensor): A tensor of indices indicating which grids to get.
-
-            Returns:
-                grids (GridBatch): A GridBatch containing the sliced grids.)_FVDB_")
+        .def("__getitem__", [](const fvdb::GridBatch &self, int64_t bi) { return self.index(bi); })
+        .def("__getitem__",
+             [](const fvdb::GridBatch &self, pybind11::slice slice) {
+                 ssize_t start, stop, step, len;
+                 if (!slice.compute(self.grid_count(), &start, &stop, &step, &len)) {
+                     TORCH_CHECK_INDEX(
+                         false, "Invalid slice ", py::repr(slice).cast<std::string>());
+                 }
+                 TORCH_CHECK_INDEX(step != 0, "step cannot be 0");
+                 return self.index(start, stop, step);
+             })
+        .def("__getitem__",
+             [](const fvdb::GridBatch &self, std::vector<bool> bi) { return self.index(bi); })
+        .def("__getitem__",
+             [](const fvdb::GridBatch &self, std::vector<int64_t> bi) { return self.index(bi); })
+        .def("__getitem__",
+             [](const fvdb::GridBatch &self, torch::Tensor bi) { return self.index(bi); })
 
         // length
-        .def("__len__", &fvdb::GridBatch::grid_count, "The number of grids in this batch.")
+        .def("__len__", &fvdb::GridBatch::grid_count)
 
         // Setting transformation
-        .def("set_global_origin",
-             &fvdb::GridBatch::set_global_origin,
-             py::arg("origin"),
-             R"_FVDB_(
-            Set the origin of all grids in this batch.
-
-            Args:
-                origin (list of floats): The new global origin of this batch of grids.)_FVDB_")
-        .def("set_global_voxel_size",
-             &fvdb::GridBatch::set_global_voxel_size,
-             py::arg("voxel_size"),
-             R"_FVDB_(
-            Set the voxel size of all grids in this batch.
-
-            Args:
-                voxel_size (list of floats): The new global voxel size of this batch of grids.)_FVDB_")
+        .def("set_global_origin", &fvdb::GridBatch::set_global_origin, py::arg("origin"))
+        .def(
+            "set_global_voxel_size", &fvdb::GridBatch::set_global_voxel_size, py::arg("voxel_size"))
 
         // Grid construction
         .def("set_from_mesh",
@@ -317,28 +169,12 @@ bind_grid_batch(py::module &m) {
              py::arg("mesh_vertices"),
              py::arg("mesh_faces"),
              py::arg("voxel_sizes") = 1.0,
-             py::arg("origins")     = torch::zeros(3, torch::kInt32),
-             R"_FVDB_(
-            Set the voxels in this grid batch to those which intersect a given triangle mesh
-
-            Args:
-                mesh_vertices (JaggedTensor): A JaggedTensor of shape [num_grids, -1, 3] of mesh vertex positions.
-                mesh_faces (JaggedTensor): A JaggedTensor of shape [num_grids, -1, 3] of integer indexes into `mesh_vertices` specifying the faces of each mesh.
-                voxel_sizes (float, list, tensor): Either a float or triple specifyng the voxel size of all the grids in the batch or a tensor of shape [num_grids, 3] specifying the voxel size for each grid.
-                origins (float, list, tensor): Either a float or triple specifyng the world space origin of all the grids in the batch or a tensor of shape [num_grids, 3] specifying the world space origin for each grid.)_FVDB_")
+             py::arg("origins")     = torch::zeros(3, torch::kInt32))
         .def("set_from_points",
              &fvdb::GridBatch::set_from_points,
              py::arg("points"),
              py::arg("voxel_sizes") = 1.0,
-             py::arg("origins")     = torch::zeros(3, torch::kInt32),
-             R"_FVDB_(
-            Set the voxels in this grid batch to those which contain a point in a given point cloud (with optional padding)
-
-            Args:
-                points (JaggedTensor): A JaggedTensor of shape [num_grids, -1, 3] of point positions.
-                mesh_faces (JaggedTensor): A JaggedTensor of shape [num_grids, -1, 3] of integer indexes into `mesh_vertices` specifying the faces of each mesh.
-                voxel_sizes (float, list, tensor): Either a float or triple specifyng the voxel size of all the grids in the batch or a tensor of shape [num_grids, 3] specifying the voxel size for each grid.
-                origins (float, list, tensor): Either a float or triple specifyng the world space origin of all the grids in the batch or a tensor of shape [num_grids, 3] specifying the world space origin for each grid.)_FVDB_")
+             py::arg("origins")     = torch::zeros(3, torch::kInt32))
         .def("set_from_dense_grid",
              &fvdb::GridBatch::set_from_dense_grid,
              py::arg("num_grids"),
@@ -346,245 +182,62 @@ bind_grid_batch(py::module &m) {
              py::arg("ijk_min")     = torch::zeros(3, torch::kInt32),
              py::arg("voxel_sizes") = 1.0,
              py::arg("origins")     = torch::zeros(3),
-             py::arg("mask")        = nullptr,
-             R"_FVDB_(
-                    Set the voxels in this grid batch to a dense grid with shape [num_grids, width, height, depth], otpionally masking out certain voxels
-
-                    Args:
-                        num_grids (int): The number of grids in the batch
-                        dense_dims (triple of ints): The dimensions of the dense grid `[width, height, depth]`
-                        ijk_min (triple of ints): Index space minimum bound of the dense grid.
-                        voxel_sizes (float, list, tensor): Either a float or triple specifyng the voxel size of all the grids in the batch or a tensor of shape [num_grids, 3] specifying the voxel size for each grid.
-                        origins (float, list, tensor): Either a float or triple specifyng the world space origin of all the grids in the batch or a tensor of shape [num_grids, 3] specifying the world space origin for each grid.
-                        mask (torch.Tensor): A tensor of shape [num_grids, width, height, depth] of booleans indicating which voxels to include/exclude.
-                )_FVDB_")
+             py::arg("mask")        = nullptr)
         .def("set_from_ijk",
              &fvdb::GridBatch::set_from_ijk,
              py::arg("ijk"),
              py::arg("voxel_sizes") = 1.0,
-             py::arg("origins")     = torch::zeros(3),
-             R"_FVDB_(
-                    Set the voxels in this grid batch to those specified by a given set of ijk coordinates (with optional padding)
-
-                    Args:
-                        ijk (JaggedTensor): A JaggedTensor of shape [num_grids, -1, 3] of ijk coordinates.
-                        voxel_sizes (float, list, tensor): Either a float or triple specifyng the voxel size of all the grids in the batch or a tensor of shape [num_grids, 3] specifying the voxel size for each grid.
-                        origins (float, list, tensor): Either a float or triple specifyng the world space origin of all the grids in the batch or a tensor of shape [num_grids, 3] specifying the world space origin for each grid.
-                )_FVDB_")
+             py::arg("origins")     = torch::zeros(3))
         .def("set_from_nearest_voxels_to_points",
              &fvdb::GridBatch::set_from_nearest_voxels_to_points,
              py::arg("points"),
              py::arg("voxel_sizes") = 1.0,
-             py::arg("origins")     = torch::zeros(3),
-             R"_FVDB_(
-                    Set the voxels in this grid batch to the nearest voxel to each point in a given point cloud
-
-                    Args:
-                        points (JaggedTensor): A JaggedTensor of shape [num_grids, -1, 3] of point positions.
-                        voxel_sizes (float, list, tensor): Either a float or triple specifyng the voxel size of all the grids in the batch or a tensor of shape [num_grids, 3] specifying the voxel size for each grid.
-                        origins (float, list, tensor): Either a float or triple specifyng the world space origin of all the grids in the batch or a tensor of shape [num_grids, 3] specifying the world space origin for each grid.
-                )_FVDB_")
+             py::arg("origins")     = torch::zeros(3))
 
         // Interface with dense grids
         .def("write_to_dense_cminor",
              &fvdb::GridBatch::write_to_dense_cminor,
              py::arg("sparse_data"),
              py::arg("min_coord") = nullptr,
-             py::arg("grid_size") = nullptr,
-             R"_FVDB_(
-                Read the data in a tensor indexed by this batch of grids into a dense tensor, setting non indexed values to zero.
-
-                Args:
-                    sparse_data (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, *]` of values indexed by this grid batch.
-                    min_coord (list of ints): Index space minimum bound of the dense grid.
-                    grid_size (list of ints): The dimensions of the dense grid to read into `[size_x, size_y, size_z]`
-
-                Returns:
-                    dense_data (torch.Tensor): A tensor of shape `[num_grids, size_x, size_y, size_z, *]` of values indexed by this grid batch.
-             )_FVDB_")
+             py::arg("grid_size") = nullptr)
 
         .def("write_to_dense_cmajor",
              &fvdb::GridBatch::write_to_dense_cmajor,
              py::arg("sparse_data"),
              py::arg("min_coord") = nullptr,
-             py::arg("grid_size") = nullptr,
-             R"_FVDB_(
-               Read the data in a tensor indexed by this batch of grids into a dense tensor, setting non indexed values to zero.
-
-               Args:
-                   sparse_data (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, *]` of values indexed by this grid batch.
-                   min_coord (list of ints): Index space minimum bound of the dense grid.
-                   grid_size (list of ints): The dimensions of the dense grid to read into `[size_x, size_y, size_z]`
-
-               Returns:
-                   dense_data (torch.Tensor): A tensor of shape `[num_grids, *, size_x, size_y, size_z]` of values indexed by this grid batch.
-            )_FVDB_")
+             py::arg("grid_size") = nullptr)
 
         .def("read_from_dense_cminor",
              &fvdb::GridBatch::read_from_dense_cminor,
              py::arg("dense_data"),
-             py::arg("dense_origins") = torch::zeros(3, torch::kInt32),
-             R"_FVDB_(
-                    Read the data in a dense tensor into a JaggedTensor indexed by this batch of grids. Non-indexed values are ignored.
-
-                    Args:
-                        dense_data (torch.Tensor): A tensor of shape `[num_grids, size_x, size_y, size_z, *]` of values to be read from.
-                        dense_origins (list of floats): The ijk coordinate corresponding to `dense_data[*, 0, 0, 0]`.
-
-                    Returns:
-                        sparse_data (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, *]` of values indexed by this grid batch.
-                )_FVDB_")
+             py::arg("dense_origins") = torch::zeros(3, torch::kInt32))
 
         .def("read_from_dense_cmajor",
              &fvdb::GridBatch::read_from_dense_cmajor,
              py::arg("dense_data"),
-             py::arg("dense_origins") = torch::zeros(3, torch::kInt32),
-             R"_FVDB_(
-                    Read the data in a dense tensor into a JaggedTensor indexed by this batch of grids. Non-indexed values are ignored.
-
-                    Args:
-                        dense_data (torch.Tensor): A tensor of shape `[num_grids, *, size_x, size_y, size_z, *]` of values to be read from.
-                        dense_origins (list of floats): The ijk coordinate corresponding to `dense_data[*, 0, 0, 0]`.
-
-                    Returns:
-                        sparse_data (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, *]` of values indexed by this grid batch.
-                )_FVDB_")
+             py::arg("dense_origins") = torch::zeros(3, torch::kInt32))
 
         // Derived grids
-        .def("dual_grid", &fvdb::GridBatch::dual_grid, py::arg("exclude_border") = false, R"_FVDB_(
-                Return a batch of grids representing the dual of this batch.
-                i.e. The centers of the dual grid correspond to the corners of this grid batch. The `[i, j, k]` coordinate of the dual grid corresponds to the bottom/left/back
-                corner of the `[i, j, k]` voxel in this grid batch.
-
-                Args:
-                    exclude_border (bool): Whether to exclude the border of the grid batch when computing the dual grid
-
-                Returns:
-                    dual_grid (GridBatch): A GridBatch representing the dual of this grid batch.
-             )_FVDB_")
-        .def("coarsened_grid",
-             &fvdb::GridBatch::coarsened_grid,
-             py::arg("coarsening_factor"),
-             R"_FVDB_(
-                Return a batch of grids representing the coarsened version of this batch.
-                Each voxel `[i, j, k]` in this grid batch maps to voxel `[i / branchFactor, j / branchFactor, k / branchFactor]` in the coarse batch.
-
-                Args:
-                    coarsening_factor (int or 3-tuple of ints): How much to coarsen by (i,e, `(2,2,2)` means take every other voxel from start of window).
-
-                Returns:
-                    coarsened_grid (GridBatch): A GridBatch representing the coarsened version of this grid batch.
-                )_FVDB_")
+        .def("dual_grid", &fvdb::GridBatch::dual_grid, py::arg("exclude_border") = false)
+        .def("coarsened_grid", &fvdb::GridBatch::coarsened_grid, py::arg("coarsening_factor"))
         .def("refined_grid",
              &fvdb::GridBatch::refined_grid,
              py::arg("subdiv_factor"),
-             py::arg("mask") = nullptr,
-             R"_FVDB_(
-                Refine the grid batch into a finer grid batch.
-                Each voxel [i, j, k] in this grid batch maps to voxels `[i * subdivFactor, j * subdivFactor, k * subdivFactor]` in the fine batch.
-
-                Args:
-                    subdiv_factor (int or 3-tuple of ints): How much to refine by (i,e, `(2,2,2)` means refine each voxel into 2^3 voxels).
-                    mask (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 3]` of booleans indicating which voxels to refine.
-
-                Returns:
-                    refined_grid (GridBatch): A GridBatch representing the refined version of this grid batch.
-                )_FVDB_")
-        .def("clipped_grid",
-             &fvdb::GridBatch::clipped_grid,
-             py::arg("ijk_min"),
-             py::arg("ijk_max"),
-             R"_FVDB_(
-                Return a batch of grids representing the clipped version of this batch.
-                Each voxel `[i, j, k]` in the input batch is included in the output if it lies within `ijk_min` and `ijk_max`.
-
-                Args:
-                    ijk_min (list of int triplets): Index space minimum bound of the clip region.
-                    ijk_max (list of int triplets): Index space maximum bound of the clip region.
-
-                Returns:
-                    clipped_grid (GridBatch): A GridBatch representing the clipped version of this grid batch.
-                )_FVDB_")
-        .def("conv_grid",
-             &fvdb::GridBatch::conv_grid,
-             py::arg("kernel_size"),
-             py::arg("stride"),
-             R"_FVDB_(
-                Return a batch of grids representing the convolution of this batch with a given kernel.
-                Each voxel `[i, j, k]` in the output batch is the sum of the voxels in the input batch `[i * stride, j * stride, k * stride]` to `[i * stride + kernel_size, j * stride + kernel_size, k * stride + kernel_size]`.
-
-                Args:
-                    kernel_size (int or 3-tuple of ints): The size of the kernel to convolve with.
-                    stride (int or 3-tuple of ints): The stride to use when convolving.
-
-                Returns:
-                    conv_grid (GridBatch): A GridBatch representing the convolution of this grid batch.
-             )_FVDB_")
-        .def("dilated_grid",
-             &fvdb::GridBatch::dilated_grid,
-             py::arg("dilation"),
-             R"_FVDB_(
-                Return a batch of grids representing the dilated version of this batch.
-
-                Args:
-                    dilation (int): How much to dilate by
-
-                Returns:
-                    dilated_grid (GridBatch): A GridBatch representing the dilated version of this grid batch.
-             )_FVDB_")
-        .def("merged_grid",
-             &fvdb::GridBatch::merged_grid,
-             py::arg("other"),
-             R"_FVDB_(
-                   Return a batch of grids representing the merged version of this batch with another
-
-                   Args:
-                       other (GridBatch): Second GridBatch to merge with this
-
-                   Returns:
-                       merged_grid (GridBatch): A GridBatch representing the merged version of this one and the one provided as argument
-                )_FVDB_")
-        .def("pruned_grid",
-             &fvdb::GridBatch::pruned_grid,
-             py::arg("mask"),
-             R"_FVDB_(
-                       Return a batch of grids representing the pruned version of this batch based on provided mask
-
-                       Args:
-                           mask (JaggedTensor): Boolean mask of voxels to retain
-
-                       Returns:
-                           pruned_grid (GridBatch): A GridBatch representing the pruned version of this grid under the provided mask
-                    )_FVDB_")
+             py::arg("mask") = nullptr)
+        .def("clipped_grid", &fvdb::GridBatch::clipped_grid, py::arg("ijk_min"), py::arg("ijk_max"))
+        .def("conv_grid", &fvdb::GridBatch::conv_grid, py::arg("kernel_size"), py::arg("stride"))
+        .def("dilated_grid", &fvdb::GridBatch::dilated_grid, py::arg("dilation"))
+        .def("merged_grid", &fvdb::GridBatch::merged_grid, py::arg("other"))
+        .def("pruned_grid", &fvdb::GridBatch::pruned_grid, py::arg("mask"))
         .def("inject_to",
              &fvdb::GridBatch::inject_to,
              py::arg("dst_grid"),
              py::arg("src"),
-             py::arg("dst"),
-             R"_FVDB_(
-                                  Injects a sidecar of data from the present gridbatch to a provided destination
-
-                                  Args:
-                                      dst_grid (GridBatch): Destination gridbatch to inject into
-                                      src (JaggedTensor): Source sidecar (corresponding to this gridbatch)
-                                      dst (JaggedTensor): Destination sidecar (corresponding to the destination gridbatch given as input)
-                               )_FVDB_")
+             py::arg("dst"))
 
         // Clipping to a bounding box
         .def("clip",
              &fvdb::GridBatch::clip,
-             R"_FVDB_(
-            Return a batch of grids representing the clipped version of this batch of grids and corresponding features.
-
-            Args:
-                features (JaggedTensor): A JaggedTensor of shape `[B, -1, *]` containing features associated with this batch of grids.
-                ijk_min (list of int triplets): Index space minimum bound of the clip region.
-                ijk_max (list of int triplets): Index space maximum bound of the clip region.
-
-            Returns:
-                clipped_features (JaggedTensor): a JaggedTensor of shape `[B, -1, *]` of clipped data.
-                clipped_grid (GridBatch): the clipped grid batch.
-            )_FVDB_",
              py::arg("features"),
              py::arg("ijk_min"),
              py::arg("ijk_max"))
@@ -592,20 +245,6 @@ bind_grid_batch(py::module &m) {
         // Upsampling and pooling
         .def("max_pool",
              &fvdb::GridBatch::max_pool,
-             R"_FVDB_(
-            Downsample this batch of grids using maxpooling.
-
-            Args:
-                pool_factor (int or 3-tuple of ints): How much to pool by (i,e, `(2,2,2)` means take max over 2x2x2 from start of window).
-                data (JaggedTensor): Data at each voxel in this grid to be downsampled (JaggedTensor of shape `[B, -1, *]`).
-                stride (int): The stride to use when pooling
-                coarse_grid (GridBatch, optional): An optional coarse grid used to specify the output. This is mainly used
-                    for memory efficiency so you can chache grids. If you don't pass it in, we'll just create it for you.
-
-            Returns:
-                coarse_data (JaggedTensor): a JaggedTensor of shape `[B, -1, *]` of downsampled data.
-                coarse_grid (GridBatch): the downsampled grid batch.
-            )_FVDB_",
              py::arg("pool_factor"),
              py::arg("data"),
              py::arg("stride")      = 0,
@@ -613,20 +252,6 @@ bind_grid_batch(py::module &m) {
 
         .def("avg_pool",
              &fvdb::GridBatch::avg_pool,
-             R"_FVDB_(
-            Downsample this batch of grids using average pooling.
-
-            Args:
-                pool_factor (int or 3-tuple of ints): How much to pool by (i,e, `(2,2,2)` means take average over 2x2x2 from start of window).
-                data (JaggedTensor): Data at each voxel in this grid to be downsampled (JaggedTensor of shape `[B, -1, *]`).
-                stride (int): The stride to use when pooling
-                coarse_grid (GridBatch, optional): An optional coarse grid used to specify the output. This is mainly used
-                    for memory efficiency so you can chache grids. If you don't pass it in, we'll just create it for you.
-
-            Returns:
-                coarse_data (JaggedTensor): a JaggedTensor of shape `[B, -1, *]` of downsampled data.
-                coarse_grid (GridBatch): the downsampled grid batch.
-        )_FVDB_",
              py::arg("pool_factor"),
              py::arg("data"),
              py::arg("stride")      = 0,
@@ -637,81 +262,21 @@ bind_grid_batch(py::module &m) {
              py::arg("subdiv_factor"),
              py::arg("data"),
              py::arg("mask")      = nullptr,
-             py::arg("fine_grid") = nullptr,
-             R"_FVDB_(
-                Refine the grid batch and associated data tensor into a finer GridBatch and data tensor using nearest neighbor sampling.
-                Each voxel [i, j, k] in this grid batch maps to voxels `[i * subdivFactor, j * subdivFactor, k * subdivFactor]` in the fine batch.
-                Each data value in the subdividided data tensor inherits its parent value
-
-                Args:
-                    subdiv_factor (int or 3-tuple of ints): How much to refine by (i,e, `(2,2,2)` means refine each voxel into 2^3 voxels).
-                    data (JaggedTensor): A JaggedTensor of shape `[B, -1, *]` containing data associated with this batch of grids.
-                    mask (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 3]` of booleans indicating which voxels to refine.
-                    fine_grid (GridBatch): An optional fine grid used to specify the output. This is mainly used
-                        for memory efficiency so you can chache grids. If you don't pass it in, we'll just create it for you.
-
-                Returns:
-                    fine_data (JaggedTensor): A JaggedTensor of shape `[B, -1, *]` of data associated with the fine grid batch.
-                    fine_grid (GridBatch): A GridBatch representing the refined version of this grid batch.
-                )_FVDB_")
+             py::arg("fine_grid") = nullptr)
 
         // Grid intersects/contains objects
-        .def("points_in_grid",
-             &fvdb::GridBatch::points_in_grid,
-             py::arg("points"),
-             R"_FVDB_(
-            Given a set of points, return a JaggedTensor of booleans indicating which points are in active voxels.
-
-            Args:
-                points (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 3]` of point positions.
-
-            Returns:
-                points_in_grid (JaggedTensor): A JaggedTensor of shape `[num_grids, -1]` of booleans indicating which points are in active voxels.
-        )_FVDB_")
-        .def("coords_in_grid",
-             &fvdb::GridBatch::coords_in_grid,
-             py::arg("ijk"),
-             R"_FVDB_(
-            Given a set of ijk coordinates, return a JaggedTensor of booleans indicating which coordinates are active in this gridbatch
-
-            Args:
-                ijk (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 3]` of integer ijk coordinates.
-
-            Returns:
-                coords_in_grid (JaggedTensor): A JaggedTensor of shape `[num_grids, -1]` of booleans indicating which coordinates are in the grid.
-        )_FVDB_")
+        .def("points_in_grid", &fvdb::GridBatch::points_in_grid, py::arg("points"))
+        .def("coords_in_grid", &fvdb::GridBatch::coords_in_grid, py::arg("ijk"))
         .def("cubes_intersect_grid",
              &fvdb::GridBatch::cubes_intersect_grid,
              py::arg("cube_centers"),
              py::arg("cube_min") = 0.0,
-             py::arg("cube_max") = 0.0,
-             R"_FVDB_(
-            Given a set of cube centers and extents, return a JaggedTensor of booleans indicating whether cubes intersect active voxels.
-
-            Args:
-                cube_centers (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 3]` of cube centers.
-                cube_min (float or triple of floats): The minimum extent of each cube (all cubes have the same size).
-                cube_max (float or triple of floats): The maximum extent of the cube (all cubes have the same size).
-
-            Returns:
-                cubes_intersect_grid (JaggedTensor): A JaggedTensor of shape `[num_grids, -1]` of booleans indicating whether cubes intersect active voxels.
-        )_FVDB_")
+             py::arg("cube_max") = 0.0)
         .def("cubes_in_grid",
              &fvdb::GridBatch::cubes_in_grid,
              py::arg("cube_centers"),
              py::arg("cube_min") = 0.0,
-             py::arg("cube_max") = 0.0,
-             R"_FVDB_(
-            Given a set of cube centers and extents, return a JaggedTensor of booleans indicating whether cubes fully reside in active voxels.
-
-            Args:
-                cube_centers (JaggedTensor): A JaggedTensor of shape `[num_grids, -1, 3]` of cube centers.
-                cube_min (float or triple of floats): The minimum extent of each cube (all cubes have the same size).
-                cube_max (float or triple of floats): The maximum extent of the cube (all cubes have the same size).
-
-            Returns:
-                cubes_intersect_grid (JaggedTensor): A JaggedTensor of shape `[num_grids, -1]` of booleans indicating whether cubes fully reside in active voxels.
-        )_FVDB_")
+             py::arg("cube_max") = 0.0)
 
         // Indexing functions
         .def("ijk_to_index",
@@ -796,17 +361,6 @@ bind_grid_batch(py::module &m) {
         // Convolution
         .def("sparse_conv_halo",
              &fvdb::GridBatch::sparse_conv_halo,
-             R"_FVDB_(
-            Perform in-grid convolution using fast Halo Buffer method. Currently only supports 3x3x3 kernels.
-
-            Args:
-                input (JaggedTensor): A JaggedTensor of shape `[B, -1, *]` containing features associated with this batch of grids.
-                weight (torch.Tensor): A tensor of shape `[O, I, 3, 3, 3]` containing the convolution kernel.
-                variant (int): Which variant of the Halo Buffer method to use. Currently 8 and 64 are supported.
-
-            Returns:
-                out (JaggedTensor): a JaggedTensor of shape `[B, -1, *]` of convolved data.
-        )_FVDB_",
              py::arg("input"),
              py::arg("weight"),
              py::arg("variant") = 8)
@@ -847,14 +401,7 @@ bind_grid_batch(py::module &m) {
 
         // .def("clone", &fvdb::GridBatch::clone) // TODO: We totally want this
 
-        .def("is_same", &fvdb::GridBatch::is_same, py::arg("other"), R"_FVDB_(
-            Check if this grid batch refers to the same underlying NanoVDB grid as another GridBatch.
-
-            Args:
-                other (GridBatch): The other grid batch to compare to.
-
-            Returns:
-                is_same (bool): Whether the two grid batches are the same.")_FVDB_")
+        .def("is_same", &fvdb::GridBatch::is_same, py::arg("other"))
         .def(
             "sparse_conv_kernel_map",
             [](fvdb::GridBatch &self,
