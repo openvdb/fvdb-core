@@ -77,7 +77,13 @@ class Viewer {
                               const torch::Tensor &projectionMatrices,
                               const torch::Tensor &imageSizes,
                               float frustumNear,
-                              float frustumFar);
+                              float frustumFar,
+                              float axisLength,
+                              float axisThickness,
+                              float frustumLineWidth,
+                              float frustumScale,
+                              const std::tuple<float, float, float> &frustumColor,
+                              bool visible);
 
     bool
     hasGaussianSplat3dView(const std::string &name) const {

@@ -374,7 +374,13 @@ Viewer::addCameraView(const std::string &scene_name,
                       const torch::Tensor &projectionMatrices,
                       const torch::Tensor &imageSizes,
                       float frustumNear,
-                      float frustumFar) {
+                      float frustumFar,
+                      float axisLength,
+                      float axisThickness,
+                      float frustumLineWidth,
+                      float frustumScale,
+                      const std::tuple<float, float, float> &frustumColor,
+                      bool visible) {
     TORCH_CHECK(cameraToWorldMatrices.dim() == 3 && cameraToWorldMatrices.size(1) == 4 &&
                     cameraToWorldMatrices.size(2) == 4,
                 "camera_to_world_matrices must have shape [N, 4, 4]");
@@ -464,6 +470,15 @@ Viewer::addCameraView(const std::string &scene_name,
             it->second.mView.configs[i].aspect_ratio = DEFAULT_CAMERA_ASPECT_RATIO;
         }
     }
+
+    // Set visualization parameters
+    it->second.setAxisLength(axisLength);
+    it->second.setAxisThickness(axisThickness);
+    it->second.setFrustumLineWidth(frustumLineWidth);
+    it->second.setFrustumScale(frustumScale);
+    it->second.setFrustumColor(
+        std::get<0>(frustumColor), std::get<1>(frustumColor), std::get<2>(frustumColor));
+    it->second.setVisible(visible);
 
     mEditor.editor.add_camera_view_2(&mEditor.editor, sceneToken, &it->second.mView);
 
