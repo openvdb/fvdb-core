@@ -139,7 +139,7 @@ class GridBatch:
 
     """
 
-    # Class variable
+    #: :meta private: # NOTE: This is here for sphinx to not complain that the attribute is double defined in the class and in the class documentation.
     max_grids_per_batch: int = GridBatchCpp.max_grids_per_batch
 
     def __init__(self, *, impl: GridBatchCpp):
