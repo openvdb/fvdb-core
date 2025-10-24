@@ -73,7 +73,6 @@ spatial intelligence research and applications.
    :maxdepth: 1
    :caption: Tutorials
 
-   tutorials/installation
    tutorials/basic_concepts
    tutorials/building_grids
    tutorials/basic_grid_ops
