@@ -30,7 +30,7 @@ The following table specifies the minimum NVIDIA driver versions and GPU archite
 Installation from pre-built wheels
 -------------------------------------
 To get started, run the appropriate pip install command for your Pytorch/CUDA versions. This command will install
-the correct version of `fvdb-core` if it is not already installed.
+the correct version of ``fvdb-core`` if it is not already installed.
 
 
 PyTorch 2.8.0 + CUDA 12.8
