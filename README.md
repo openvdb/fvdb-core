@@ -226,7 +226,7 @@ The main source code for fVDB lives in the [src](src) directory. There are sever
 
 ## References
 
-Please consider citing this when using *f*VDB in a project. You can use the citation BibTeX:
+Please consider citing the following technical paper, presented at ACM SIGGRAPH 2024, when adopting *f*VDB in your project:
 
 ```bibtex
 @article{williams2024fvdb,
