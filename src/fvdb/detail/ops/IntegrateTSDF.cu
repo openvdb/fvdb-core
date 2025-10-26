@@ -137,42 +137,6 @@ integrateTSDFKernel(const ScalarDataType truncationMargin,
 
     const auto batchSize = projMats.size(0);
 
-    // Grab pointers to the transformation matrices in shared memory
-    extern __shared__ uint8_t sharedData[];
-    Mat3T *sharedProjMats       = reinterpret_cast<Mat3T *>(sharedData);
-    Mat4T *sharedWorldToCamMats = reinterpret_cast<Mat4T *>(sharedData + batchSize * sizeof(Mat3T));
-    Mat3T *sharedInvProjMats =
-        reinterpret_cast<Mat3T *>(sharedData + batchSize * (sizeof(Mat3T) + sizeof(Mat4T)));
-    Mat4T *sharedCamToWorldMats = reinterpret_cast<Mat4T *>(
-        sharedData + batchSize * (sizeof(Mat3T) + sizeof(Mat4T) + sizeof(Mat3T)));
-
-    const auto sharedMat3x3NumElements = batchSize * 3 * 3;
-    const auto sharedMat4x4NumElements = batchSize * 4 * 4;
-
-    // Load view and projection matrices into shared memory
-    if (threadIdx.x < sharedMat3x3NumElements) {
-        const auto batchIdx                      = threadIdx.x / 9;
-        const auto rowIdx                        = (threadIdx.x % 9) / 3;
-        const auto colIdx                        = threadIdx.x % 3;
-        sharedProjMats[batchIdx][rowIdx][colIdx] = ScalarType(projMats[batchIdx][rowIdx][colIdx]);
-    } else if (threadIdx.x < sharedMat3x3NumElements + sharedMat4x4NumElements) {
-        const auto baseIdx  = threadIdx.x - sharedMat3x3NumElements;
-        const auto batchIdx = baseIdx / 16;
-        const auto rowIdx   = (baseIdx % 16) / 4;
-        const auto colIdx   = baseIdx % 4;
-        sharedWorldToCamMats[batchIdx][rowIdx][colIdx] =
-            ScalarType(worldToCamMats[batchIdx][rowIdx][colIdx]);
-    } else if (threadIdx.x < 2 * sharedMat3x3NumElements + sharedMat4x4NumElements) {
-        const auto baseIdx  = threadIdx.x - sharedMat3x3NumElements - sharedMat4x4NumElements;
-        const auto batchIdx = baseIdx / 9;
-        const auto rowIdx   = (baseIdx % 9) / 3;
-        const auto colIdx   = baseIdx % 3;
-        sharedInvProjMats[batchIdx][rowIdx][colIdx] =
-            ScalarType(invProjMats[batchIdx][rowIdx][colIdx]);
-    }
-
-    __syncthreads();
-
     // Parallelize over all voxels in the leaf nodes (whether enabled or not)
     const auto problemSize = unionGridAcc.totalLeaves() * VOXELS_PER_LEAF;
     for (auto idx = blockIdx.x * blockDim.x + threadIdx.x; idx < problemSize;
@@ -214,13 +178,28 @@ integrateTSDFKernel(const ScalarDataType truncationMargin,
         const Vec3T voxelWorldPos = unionGridAcc.primalTransform(batchIdx).applyInv<ScalarType>(
             ScalarType(ijk[0]), ScalarType(ijk[1]), ScalarType(ijk[2]));
 
+        Mat3T projMat;
+        for (auto rowIdx = 0; rowIdx < 3; ++rowIdx)
+            for (auto colIdx = 0; colIdx < 3; ++colIdx)
+                projMat[rowIdx][colIdx] = projMats[batchIdx][rowIdx][colIdx];
+
+        Mat3T invProjMat;
+        for (auto rowIdx = 0; rowIdx < 3; ++rowIdx)
+            for (auto colIdx = 0; colIdx < 3; ++colIdx)
+                invProjMat[rowIdx][colIdx] = invProjMats[batchIdx][rowIdx][colIdx];
+
+        Mat4T worldToCamMat;
+        for (auto rowIdx = 0; rowIdx < 4; ++rowIdx)
+            for (auto colIdx = 0; colIdx < 4; ++colIdx)
+                worldToCamMat[rowIdx][colIdx] = worldToCamMats[batchIdx][rowIdx][colIdx];
+
         const Vec4T voxelWorldPosHomogeneous = {
             voxelWorldPos[0], voxelWorldPos[1], voxelWorldPos[2], ScalarType(1.0)};
-        const Vec4T voxelPosCamSpace    = sharedWorldToCamMats[batchIdx] * voxelWorldPosHomogeneous;
+        const Vec4T voxelPosCamSpace    = worldToCamMat * voxelWorldPosHomogeneous;
         const Vec3T voxelPosCamSpace3d  = {voxelPosCamSpace[0] / voxelPosCamSpace[3],
                                            voxelPosCamSpace[1] / voxelPosCamSpace[3],
                                            voxelPosCamSpace[2] / voxelPosCamSpace[3]};
-        const Vec3T voxelPosProjSpace   = sharedProjMats[batchIdx] * voxelPosCamSpace3d;
+        const Vec3T voxelPosProjSpace   = projMat * voxelPosCamSpace3d;
         const Vec3T voxelPosScreenSpace = {voxelPosProjSpace[0] / voxelPosProjSpace[2],
                                            voxelPosProjSpace[1] / voxelPosProjSpace[2],
                                            ScalarType(1.0)};
@@ -270,7 +249,7 @@ integrateTSDFKernel(const ScalarDataType truncationMargin,
         const Vec3T voxelScreenSpacePosHomogeneous = {
             ScalarType(voxelPosScreenSpaceX), ScalarType(voxelPosScreenSpaceY), ScalarType(1.0)};
         const Vec3T unprojectedPixelPosCamSpace =
-            (sharedInvProjMats[batchIdx] * voxelScreenSpacePosHomogeneous) * pixelDepth;
+            (invProjMat * voxelScreenSpacePosHomogeneous) * pixelDepth;
 
         // const ScalarType zDiff = unprojectedPixelPosCamSpace[2] - voxelPosCamSpace3d[2];
         const ScalarType zDiff = pixelDepth - voxelPosCamSpace3d[2];
@@ -454,8 +433,7 @@ doIntegrate(const float truncationMargin,
             const auto numSharedScalars        = 2 * batchSize * 3 * 3 + batchSize * 4 * 4;
             const auto problemSize =
                 std::max(numUnionLeaves * VOXELS_PER_LEAF, uint64_t(numSharedScalars));
-            const auto sharedMemSize = 2 * batchSize * sizeof(Mat3T) + batchSize * sizeof(Mat4T);
-            const auto numBlocks     = GET_BLOCKS(problemSize, DEFAULT_BLOCK_DIM);
+            const auto numBlocks = GET_BLOCKS(problemSize, DEFAULT_BLOCK_DIM);
 
             const auto dtype                = tsdf.scalar_type();
             const auto projMatsCasted       = projectionMatrices.to(dtype);
@@ -465,19 +443,11 @@ doIntegrate(const float truncationMargin,
 
             at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(tsdf.device().index());
 
-            if (cudaFuncSetAttribute(integrateTSDFKernel<scalar_t>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     sharedMemSize) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         sharedMemSize,
-                         " bytes), try lowering tile_size.");
-            }
-
             // Special case for uint8 features
             // We don't need to do anything special here, but we need to ensure that the
             // kernel is called with the correct scalar type.
             DISPATCH_FEATURE_TYPE([&]() {
-                integrateTSDFKernel<<<numBlocks, DEFAULT_BLOCK_DIM, sharedMemSize, stream>>>(
+                integrateTSDFKernel<<<numBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
                     scalar_t(truncationMargin),
                     imageWidth,
                     imageHeight,
