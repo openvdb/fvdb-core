@@ -72,7 +72,7 @@ SparseConvolutionKernelMap::forward(AutogradContext *ctx,
         kWidth[0] = kernels.size(2);
         kWidth[1] = kernels.size(3);
         kWidth[2] = kernels.size(4);
-        kernels = kernels.permute({2, 3, 4, 1, 0}).reshape({-1, inC, outC}).contiguous();
+        kernels   = kernels.permute({2, 3, 4, 1, 0}).reshape({-1, inC, outC}).contiguous();
     } else {
         TORCH_CHECK_VALUE(inFeatures.size(0) == sizes[1],
                           "The number of input features must match the number of voxels");
