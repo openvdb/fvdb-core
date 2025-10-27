@@ -35,16 +35,16 @@ convolutionKernelMapVoxelCallback(int32_t batchIdx,
 
         const nanovdb::Coord tCoord = leaf.offsetToGlobalCoord(voxelIdx);
         const nanovdb::Coord sCoord(
-            tCoord.x() * stride.z(), tCoord.y() * stride.y(), tCoord.z() * stride.x());
+            tCoord.x() * stride.x(), tCoord.y() * stride.y(), tCoord.z() * stride.z());
 
         const int64_t targetOffset = targetBaseOffset + leaf.getValue(voxelIdx) - 1;
 
         int kIdx = 0;
-        for (int kz = kernelStart.z(); kz < kernelStart.z() + kernelSize.z(); ++kz) {
+        for (int kx = kernelStart.x(); kx < kernelStart.x() + kernelSize.x(); ++kx) {
             for (int ky = kernelStart.y(); ky < kernelStart.y() + kernelSize.y(); ++ky) {
-                for (int kx = kernelStart.x(); kx < kernelStart.x() + kernelSize.x();
-                     ++kx, ++kIdx) {
-                    const nanovdb::Coord sOffset = sCoord + nanovdb::Coord(kz, ky, kx);
+                for (int kz = kernelStart.z(); kz < kernelStart.z() + kernelSize.z();
+                     ++kz, ++kIdx) {
+                    const nanovdb::Coord sOffset = sCoord + nanovdb::Coord(kx, ky, kz);
                     if (sourceAcc.isActive(sOffset)) {
                         kmap[targetOffset][kIdx] =
                             sourceBaseOffset + sourceAcc.getValue(sOffset) - 1;
@@ -80,14 +80,14 @@ convolutionKernelMapCPU(const GridBatchImpl::Accessor &sourceGridBatchAcc,
              it++) {
             // Note that stride and kernelSize is in DHW
             const nanovdb::Coord sCoord(
-                it->first.x() * stride.z(), it->first.y() * stride.y(), it->first.z() * stride.x());
+                it->first.x() * stride.x(), it->first.y() * stride.y(), it->first.z() * stride.z());
             // Center kernel is in the middle -- allows for acceleration in Conv.
             int kIdx = 0;
             for (int kz = kernelStart.z(); kz < kernelStart.z() + kernelSize.z(); ++kz) {
                 for (int ky = kernelStart.y(); ky < kernelStart.y() + kernelSize.y(); ++ky) {
                     for (int kx = kernelStart.x(); kx < kernelStart.x() + kernelSize.x();
                          ++kx, ++kIdx) {
-                        const nanovdb::Coord &sOffset = sCoord + nanovdb::Coord(kz, ky, kx);
+                        const nanovdb::Coord &sOffset = sCoord + nanovdb::Coord(kx, ky, kz);
                         if (sourceAcc.isActive(sOffset)) {
                             outKernelMap[it->second][kIdx] =
                                 sourceAcc.getValue(sOffset) - 1 + sourceBaseOffset;

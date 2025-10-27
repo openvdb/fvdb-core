@@ -24,8 +24,6 @@ SparseConvolutionKernelMap::forward(AutogradContext *ctx,
     TORCH_CHECK(packInfo.neighborMap().has_value() && packInfo.neighborSizes().has_value(),
                 "Neighbor map must be built for sparse convolution");
 
-    TORCH_CHECK(false, "CJH Testing!!!")
-
     torch::Tensor nbmaps          = packInfo.neighborMap().value();
     torch::Tensor nbsizes         = packInfo.neighborSizes().value();
     const std::vector<int> sizes  = {(int)packInfo.sourceGrid().total_voxels(),
@@ -74,7 +72,7 @@ SparseConvolutionKernelMap::forward(AutogradContext *ctx,
         kWidth[0] = kernels.size(2);
         kWidth[1] = kernels.size(3);
         kWidth[2] = kernels.size(4);
-        kernels   = kernels.permute({4, 3, 2, 1, 0}).reshape({-1, inC, outC}).contiguous();
+        kernels = kernels.permute({2, 3, 4, 1, 0}).reshape({-1, inC, outC}).contiguous();
     } else {
         TORCH_CHECK_VALUE(inFeatures.size(0) == sizes[1],
                           "The number of input features must match the number of voxels");
@@ -91,7 +89,7 @@ SparseConvolutionKernelMap::forward(AutogradContext *ctx,
         kWidth[0] = kernels.size(2);
         kWidth[1] = kernels.size(3);
         kWidth[2] = kernels.size(4);
-        kernels   = kernels.permute({4, 3, 2, 0, 1}).reshape({-1, inC, outC}).contiguous();
+        kernels   = kernels.permute({2, 3, 4, 0, 1}).reshape({-1, inC, outC}).contiguous();
     }
 
     // Save for backward
