@@ -447,14 +447,16 @@ doIntegrate(const float truncationMargin,
         tsdf.scalar_type(),
         "integrateTSDFKernel",
         AT_WRAP([&]() {
-            using Mat3T                        = nanovdb::math::Mat3<scalar_t>;
-            using Mat4T                        = nanovdb::math::Mat4<scalar_t>;
+            using shared_scalar_t = typename OpType<scalar_t>::type;
+            using SharedMat3T      = nanovdb::math::Mat3<shared_scalar_t>;
+            using SharedMat4T      = nanovdb::math::Mat4<shared_scalar_t>;
             constexpr uint64_t VOXELS_PER_LEAF = nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES;
             const auto numUnionLeaves          = unionGrid.totalLeaves();
-            const auto numSharedScalars        = 2 * batchSize * 3 * 3 + batchSize * 4 * 4;
+            const auto numSharedScalars        = 2 * batchSize * 3 * 3 + 2 * batchSize * 4 * 4;
             const auto problemSize =
                 std::max(numUnionLeaves * VOXELS_PER_LEAF, uint64_t(numSharedScalars));
-            const auto sharedMemSize = 2 * batchSize * sizeof(Mat3T) + batchSize * sizeof(Mat4T);
+            const auto sharedMemSize =
+                2 * batchSize * sizeof(SharedMat3T) + 2 * batchSize * sizeof(SharedMat4T);
             const auto numBlocks     = GET_BLOCKS(problemSize, DEFAULT_BLOCK_DIM);
 
             const auto dtype                = tsdf.scalar_type();
