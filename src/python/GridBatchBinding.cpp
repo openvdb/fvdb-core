@@ -73,9 +73,9 @@ bind_grid_batch(py::module &m) {
         .def_property_readonly("joffsets", &fvdb::GridBatch::joffsets)
         .def_property_readonly("ijk", &fvdb::GridBatch::ijk)
         .def("morton",
-            &fvdb::GridBatch::morton,
-            py::arg("offset"),
-            R"_FVDB_(
+             &fvdb::GridBatch::morton,
+             py::arg("offset"),
+             R"_FVDB_(
            Return Morton codes (Z-order curve) for active voxels in this grid batch.
 
            Morton codes use xyz bit interleaving to create a space-filling curve that
@@ -90,9 +90,9 @@ bind_grid_batch(py::module &m) {
                    the Morton codes for each active voxel in the batch.
         )_FVDB_")
         .def("morton_zyx",
-                &fvdb::GridBatch::morton_zyx,
-                py::arg("offset"),
-                R"_FVDB_(
+             &fvdb::GridBatch::morton_zyx,
+             py::arg("offset"),
+             R"_FVDB_(
             Return transposed Morton codes (Z-order curve) for active voxels in this grid batch.
 
             Transposed Morton codes use zyx bit interleaving to create a space-filling curve.
@@ -106,9 +106,9 @@ bind_grid_batch(py::module &m) {
                     the transposed Morton codes for each active voxel in the batch.
         )_FVDB_")
         .def("hilbert",
-                &fvdb::GridBatch::hilbert,
-                py::arg("offset"),
-                R"_FVDB_(
+             &fvdb::GridBatch::hilbert,
+             py::arg("offset"),
+             R"_FVDB_(
             Return Hilbert curve codes for active voxels in this grid batch.
 
             Hilbert curves provide better spatial locality than Morton codes by ensuring
@@ -122,9 +122,9 @@ bind_grid_batch(py::module &m) {
                     the Hilbert codes for each active voxel in the batch.
         )_FVDB_")
         .def("hilbert_zyx",
-                &fvdb::GridBatch::hilbert_zyx,
-                py::arg("offset"),
-                R"_FVDB_(
+             &fvdb::GridBatch::hilbert_zyx,
+             py::arg("offset"),
+             R"_FVDB_(
             Return transposed Hilbert curve codes for active voxels in this grid batch.
 
             Transposed Hilbert curves use zyx ordering instead of xyz. This variant can
