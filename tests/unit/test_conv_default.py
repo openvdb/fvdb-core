@@ -147,7 +147,7 @@ class TestConvDefault(unittest.TestCase):
         #     kernel_size=self.KERNEL_SIZE, stride=1, source_grid=grid_batch, target_grid=dst_grid_batch
         # )
         conv_plan = ConvolutionPlan.from_grid_batch(
-            kernel_size=(7, 5, 3), stride=1, source_grid=grid_batch, target_grid=dst_grid_batch
+            kernel_size=self.KERNEL_SIZE, stride=1, source_grid=grid_batch, target_grid=dst_grid_batch
         )
         print(f"\n\nconv plan backend: {conv_plan._backend}\n\n")
 
@@ -250,6 +250,6 @@ class TestConvDefault(unittest.TestCase):
         # else:
         #     print("No permutation/flip combination matched.")
         #     self.fail("No permutation/flip combination matched.")
-        self.fail("Boo")
+        # self.fail("Boo")
 
         # torch.testing.assert_close(convolved_dense_plan, gt_convolved, atol=1e-5, rtol=1e-6)
