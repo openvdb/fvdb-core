@@ -6,11 +6,15 @@ cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
 # Set global download timeout to 600 seconds (10 minutes)
 set(CMAKE_DOWNLOAD_TIMEOUT 600 CACHE STRING "Time allowed for downloads in seconds")
 
+option(FVDB_STRIP_SYMBOLS "Strip symbols from the build" OFF)
+message(STATUS "FVDB_STRIP_SYMBOLS: ${FVDB_STRIP_SYMBOLS}")
+
 project(${SKBUILD_PROJECT_NAME} VERSION ${SKBUILD_PROJECT_VERSION} LANGUAGES CXX)
 
 find_package(Python3 COMPONENTS Development Interpreter)
 
-message(STATUS "CMAKE_BUILD_PARALLEL_LEVEL: ${CMAKE_BUILD_PARALLEL_LEVEL}")
+message(STATUS "CMAKE_BUILD_PARALLEL_LEVEL: $ENV{CMAKE_BUILD_PARALLEL_LEVEL}")
+message(STATUS "NVCC_THREADS: $ENV{NVCC_THREADS}")
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_cpm.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_nvtx.cmake)
@@ -18,7 +22,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_torch.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_pybind11.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_nanovdb.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/configure_torch_pybind11.cmake)
-include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_fused_ssim.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_nanovdb_editor.cmake)
 
 # Generate compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -29,12 +33,14 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/src/)
 # Source files
 set(FVDB_BINDINGS_CPP_FILES
     src/python/Bindings.cpp
+    src/python/FusedSSIMBinding.cpp
     src/python/GaussianSplatBinding.cpp
     src/python/GridBatchBinding.cpp
-    src/python/JaggedTensorBinding.cpp)
+    src/python/JaggedTensorBinding.cpp
+    src/python/ViewerBinding.cpp)
 
 # Build library
-Python3_add_library(_Cpp ${FVDB_BINDINGS_CPP_FILES})
+Python3_add_library(_Cpp ${FVDB_BINDINGS_CPP_FILES} MODULE)
 if (DEFINED TORCH_PYBIND11_INCLUDE_DIR)
     target_link_libraries(_Cpp PUBLIC torch_pybind11_headers)
 else()
@@ -60,8 +66,9 @@ set_target_properties(_Cpp PROPERTIES
 
 target_include_directories(_Cpp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${TORCH_INCLUDE_DIRS})
-
+    ${TORCH_INCLUDE_DIRS}
+    ${nanovdb_SOURCE_DIR}/nanovdb
+    ${NANOVDB_EDITOR_INCLUDE_DIR})
 target_link_libraries(_Cpp PRIVATE
     ${TORCH_PYTHON_LIBRARY}
     ${TORCH_LIBRARIES}
@@ -84,17 +91,19 @@ target_compile_definitions(_Cpp PRIVATE
 # Configure the pybind11 module with PyTorch compatibility settings
 configure_torch_pybind11(_Cpp)
 
+# Strip symbols in non-Debug builds to reduce wheel size
+if(NOT (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo") AND FVDB_STRIP_SYMBOLS)
+    target_link_options(_Cpp PRIVATE "-s")
+endif()
+
+# Only install the Python package artifacts; the core lib is installed as part of the Python module
 install(TARGETS _Cpp fvdb
-    LIBRARY
-    DESTINATION fvdb
-    COMPONENT PythonModule
-    RUNTIME
-    DESTINATION fvdb
-    COMPONENT PythonModule)
+    LIBRARY DESTINATION fvdb COMPONENT PythonModule
+    RUNTIME DESTINATION fvdb COMPONENT PythonModule)
 
 # Add at the beginning after project() call:
 set(VERSION_PY_PATH "${CMAKE_CURRENT_SOURCE_DIR}/fvdb/version.py")
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/fvdb/version.py.in" "${VERSION_PY_PATH}" @ONLY)
 
 # Make sure version.py is included in the installation
-install(FILES "${VERSION_PY_PATH}" DESTINATION fvdb)
+install(FILES "${VERSION_PY_PATH}" DESTINATION fvdb COMPONENT PythonModule)

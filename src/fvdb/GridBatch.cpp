@@ -315,10 +315,10 @@ GridBatch::avg_pool(Vec3iOrScalar pool_factor,
 }
 
 std::pair<JaggedTensor, GridBatch>
-GridBatch::subdivide(Vec3iOrScalar subdiv_factor,
-                     const JaggedTensor &data,
-                     const std::optional<JaggedTensor> mask,
-                     std::optional<GridBatch> fine_grid) const {
+GridBatch::refine(Vec3iOrScalar subdiv_factor,
+                  const JaggedTensor &data,
+                  const std::optional<JaggedTensor> mask,
+                  std::optional<GridBatch> fine_grid) const {
     c10::DeviceGuard guard(device());
     TORCH_CHECK_VALUE(
         data.ldim() == 1,
@@ -338,7 +338,7 @@ GridBatch::subdivide(Vec3iOrScalar subdiv_factor,
     if (fine_grid.has_value()) {
         fineGrid = fine_grid.value().mImpl;
     } else {
-        fineGrid = subdivided_grid(subdiv_factor, mask).mImpl;
+        fineGrid = refined_grid(subdiv_factor, mask).mImpl;
     }
 
     torch::Tensor subdivData = detail::autograd::UpsampleGrid::apply(
@@ -350,48 +350,48 @@ GridBatch::subdivide(Vec3iOrScalar subdiv_factor,
 }
 
 JaggedTensor
-GridBatch::read_from_dense_xyzc(const torch::Tensor &dense_data,
-                                const Vec3iBatch &dense_origins) const {
+GridBatch::read_from_dense_cminor(const torch::Tensor &dense_data,
+                                  const Vec3iBatch &dense_origins) const {
     c10::DeviceGuard guard(device());
     torch::Tensor retData =
-        detail::autograd::ReadFromDenseXyzc::apply(mImpl, dense_data, dense_origins)[0];
+        detail::autograd::ReadFromDenseCminor::apply(mImpl, dense_data, dense_origins)[0];
     return mImpl->jaggedTensor(retData);
 }
 
 JaggedTensor
-GridBatch::read_from_dense_czyx(const torch::Tensor &dense_data,
-                                const Vec3iBatch &dense_origins) const {
+GridBatch::read_from_dense_cmajor(const torch::Tensor &dense_data,
+                                  const Vec3iBatch &dense_origins) const {
     c10::DeviceGuard guard(device());
     torch::Tensor retData =
-        detail::autograd::ReadFromDenseCzyx::apply(mImpl, dense_data, dense_origins)[0];
+        detail::autograd::ReadFromDenseCmajor::apply(mImpl, dense_data, dense_origins)[0];
     return mImpl->jaggedTensor(retData);
 }
 
 torch::Tensor
-GridBatch::write_to_dense_xyzc(const JaggedTensor &sparse_data,
-                               const std::optional<Vec3iBatch> &min_coord,
-                               const std::optional<Vec3i> &grid_size) const {
+GridBatch::write_to_dense_cminor(const JaggedTensor &sparse_data,
+                                 const std::optional<Vec3iBatch> &min_coord,
+                                 const std::optional<Vec3i> &grid_size) const {
     c10::DeviceGuard guard(device());
     TORCH_CHECK_VALUE(
         sparse_data.ldim() == 1,
         "Expected sparse_data to have 1 list dimension, i.e. be a single list of coordinate values, but got",
         sparse_data.ldim(),
         "list dimensions");
-    return detail::autograd::ReadIntoDenseXyzc::apply(
+    return detail::autograd::ReadIntoDenseCminor::apply(
         mImpl, sparse_data.jdata(), min_coord, grid_size)[0];
 }
 
 torch::Tensor
-GridBatch::write_to_dense_czyx(const JaggedTensor &sparse_data,
-                               const std::optional<Vec3iBatch> &min_coord,
-                               const std::optional<Vec3i> &grid_size) const {
+GridBatch::write_to_dense_cmajor(const JaggedTensor &sparse_data,
+                                 const std::optional<Vec3iBatch> &min_coord,
+                                 const std::optional<Vec3i> &grid_size) const {
     c10::DeviceGuard guard(device());
     TORCH_CHECK_VALUE(
         sparse_data.ldim() == 1,
         "Expected sparse_data to have 1 list dimension, i.e. be a single list of coordinate values, but got",
         sparse_data.ldim(),
         "list dimensions");
-    return detail::autograd::ReadIntoDenseCzyx::apply(
+    return detail::autograd::ReadIntoDenseCmajor::apply(
         mImpl, sparse_data.jdata(), min_coord, grid_size)[0];
 }
 
@@ -647,8 +647,7 @@ GridBatch::coarsened_grid(Vec3iOrScalar branch_factor) const {
 }
 
 GridBatch
-GridBatch::subdivided_grid(Vec3iOrScalar subdiv_factor,
-                           const std::optional<JaggedTensor> mask) const {
+GridBatch::refined_grid(Vec3iOrScalar subdiv_factor, const std::optional<JaggedTensor> mask) const {
     GridBatch result;
     const nanovdb::Coord subdivFactorCoord = subdiv_factor.value();
     result.mImpl                           = mImpl->upsample(subdivFactorCoord, mask);
@@ -995,7 +994,7 @@ GridBatch::neighbor_indexes(const JaggedTensor &ijk, int32_t extent, int32_t bit
 }
 
 JaggedTensor
-GridBatch::points_in_active_voxel(const JaggedTensor &points) const {
+GridBatch::points_in_grid(const JaggedTensor &points) const {
     c10::DeviceGuard guard(device());
     TORCH_CHECK_VALUE(
         points.ldim() == 1,
@@ -1040,7 +1039,7 @@ GridBatch::cubes_in_grid(const JaggedTensor &cube_centers,
 }
 
 JaggedTensor
-GridBatch::coords_in_active_voxel(const JaggedTensor &ijk) const {
+GridBatch::coords_in_grid(const JaggedTensor &ijk) const {
     c10::DeviceGuard guard(device());
     TORCH_CHECK_VALUE(
         ijk.ldim() == 1,

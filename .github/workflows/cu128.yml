@@ -1,7 +1,7 @@
 name: fVDB CUDA 12.8.1 Build and Test
 
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - '**'
     paths-ignore:
@@ -43,7 +43,7 @@ jobs:
           aws-region: us-east-2
       - name: Start EC2 runner
         id: start-build-runner
-        uses: machulav/ec2-github-runner@v2
+        uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -71,28 +71,47 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
+      - name: Apt update and install git and wget
+        run: apt update && apt install -y git wget
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Fetch all history for all branches
-      - name: Apt update and install git and wget
-        run: apt update && apt install -y git wget
-      - name: Simulate merge for push events
-        if: github.event_name == 'push'
+          # For pull requests, this automatically checks out the merge commit
+          # For pushes, this checks out the pushed commit
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+      - name: Fetch PR branch
+        if: github.event_name == 'pull_request_target'
         run: |
-          echo "Push event detected - simulating merge with target branch"
+          cd $GITHUB_WORKSPACE
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$(pwd)"
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
-          # Get the target branch (main in this case, since push is only on main)
-          TARGET_BRANCH="main"
-          CURRENT_COMMIT="${{ github.sha }}"
+      - name: Merge PR branch into base
+        if: github.event_name == 'pull_request_target'
+        run: |
+          cd $GITHUB_WORKSPACE
+          git merge pr_branch
 
-          echo "Creating merge simulation: merging $CURRENT_COMMIT into $TARGET_BRANCH"
-          git fetch origin $TARGET_BRANCH
-          git checkout $TARGET_BRANCH
-          git merge --no-ff $CURRENT_COMMIT --message "CI: Simulating merge of $CURRENT_COMMIT into $TARGET_BRANCH"
-      #### End of git merge
+      # - name: Simulate merge for push events
+      #   if: github.event_name == 'push'
+      #   run: |
+      #     echo "Push event detected - simulating merge with target branch"
+      #     git config --global user.name "github-actions[bot]"
+      #     git config --global user.email "github-actions[bot]@users.noreply.github.com"
+      #     git config --global --add safe.directory "$(pwd)"
+
+      #     # Get the target branch (main in this case, since push is only on main)
+      #     TARGET_BRANCH="main"
+      #     CURRENT_COMMIT="${{ github.sha }}"
+
+      #     echo "Creating merge simulation: merging $CURRENT_COMMIT into $TARGET_BRANCH"
+      #     git fetch origin $TARGET_BRANCH
+      #     git checkout $TARGET_BRANCH
+      #     git merge --no-ff $CURRENT_COMMIT --message "CI: Simulating merge of $CURRENT_COMMIT into $TARGET_BRANCH"
 
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
@@ -113,7 +132,7 @@ jobs:
           cmake --version
 
       - name: Install apt dependencies
-        run: apt install -y zlib1g-dev libpng-dev
+        run: apt install -y zlib1g-dev libpng-dev pkg-config
 
       - name: Install pip dependencies
         run: |
@@ -168,7 +187,7 @@ jobs:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
       - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2
+        uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -193,11 +212,11 @@ jobs:
           aws-region: us-east-2
       - name: Start EC2 GPU runner
         id: start-tests-gpu-runner
-        uses: machulav/ec2-github-runner@v2
+        uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          ec2-image-id: ami-02a3849573bf21f3e
+          ec2-image-id: ami-0f5c0b65fde08ae43
           ec2-instance-type: g6.2xlarge # 8 CPU-core, L4 GPU
           subnet-id: subnet-03f2320d6e6e0005b
           security-group-id: sg-0cd08bd89d6212223
@@ -219,9 +238,32 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
-      - uses: actions/checkout@v4
       - name: Apt update and install git and wget
         run: apt update && apt install -y git wget
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for all branches
+          # For pull requests, this automatically checks out the merge commit
+          # For pushes, this checks out the pushed commit
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+      - name: Fetch PR branch
+        if: github.event_name == 'pull_request_target'
+        run: |
+          cd $GITHUB_WORKSPACE
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$(pwd)"
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+
+      - name: Merge PR branch into base
+        if: github.event_name == 'pull_request_target'
+        run: |
+          cd $GITHUB_WORKSPACE
+          git merge pr_branch
+
+
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
         with:
@@ -241,12 +283,23 @@ jobs:
           cmake --version
 
       - name: Install apt dependencies
-        run: apt install -y zlib1g-dev libpng-dev
+        run: apt install -y zlib1g-dev libpng-dev mesa-vulkan-drivers vulkan-tools
 
       - name: Install pip dependencies
         run: |
           uv venv
           uv pip install --no-cache-dir -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+
+      - name: Download package with nanovdb_editor
+        uses: actions/download-artifact@v4
+        with:
+            name: fvdb-test-package
+            path: ./dist
+
+      - name: Install nanovdb_editor
+        run: |
+            source .venv/bin/activate
+            pip install ./dist/nanovdb_editor*.whl
 
       - name: Download gtests
         uses: actions/download-artifact@v4
@@ -287,9 +340,32 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
-      - uses: actions/checkout@v4
       - name: Apt update and install git and wget
         run: apt update && apt install -y git wget
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for all branches
+          # For pull requests, this automatically checks out the merge commit
+          # For pushes, this checks out the pushed commit
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+
+      - name: Fetch PR branch
+        if: github.event_name == 'pull_request_target'
+        run: |
+          cd $GITHUB_WORKSPACE
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$(pwd)"
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+
+      - name: Merge PR branch into base
+        if: github.event_name == 'pull_request_target'
+        run: |
+          cd $GITHUB_WORKSPACE
+          git merge pr_branch
+
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
         with:
@@ -309,9 +385,9 @@ jobs:
         run: |
           uv venv
           uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
-          uv pip install torch-scatter -f https://data.pyg.org/whl/torch-2.7.0+cu128.html
-          source .venv/bin/activate
-          TORCH_CUDA_ARCH_LIST="8.9+PTX" pip install -v git+https://github.com/heiwang1997/torchsparse.git
+          uv pip install --no-cache-dir setuptools
+          TORCH_CUDA_ARCH_LIST="8.9+PTX" uv pip install -v --no-build-isolation git+https://github.com/rusty1s/pytorch_scatter.git
+          TORCH_CUDA_ARCH_LIST="8.9+PTX" uv pip install -v --no-build-isolation git+https://github.com/heiwang1997/torchsparse.git
 
       - name: Download package
         uses: actions/download-artifact@v4
@@ -337,7 +413,6 @@ jobs:
           rm -rf /__w/_temp/*
           echo "Cleanup completed"
 
-
   ##############################################################################
   # RUN FVDB DOCUMENTATION TESTS
   ##############################################################################
@@ -354,9 +429,31 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
-      - uses: actions/checkout@v4
       - name: Apt update and install git and wget
         run: apt update && apt install -y git wget
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for all branches
+          # For pull requests, this automatically checks out the merge commit
+          # For pushes, this checks out the pushed commit
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+
+      - name: Fetch PR branch
+        if: github.event_name == 'pull_request_target'
+        run: |
+          cd $GITHUB_WORKSPACE
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$(pwd)"
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+
+      - name: Merge PR branch into base
+        if: github.event_name == 'pull_request_target'
+        run: |
+          cd $GITHUB_WORKSPACE
+          git merge pr_branch
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
         with:
@@ -390,7 +487,7 @@ jobs:
       - name: Run tests
         run: |
           source .venv/bin/activate
-          pytest --markdown-docs docs
+          pytest --markdown-docs docs --ignore-glob="**/wip/**"
 
       - name: Cleanup
         if: always()
@@ -418,7 +515,7 @@ jobs:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
       - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2
+        uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}

@@ -81,10 +81,10 @@ class TestIO(unittest.TestCase):
 
         with tempfile.NamedTemporaryFile() as temp:
             if name:
-                fvdb.save_gridbatch(temp.name, grid, data, name=name, compressed=compressed)
+                grid.save_nanovdb(temp.name, data, name=name, compressed=compressed)
             else:
-                fvdb.save_gridbatch(temp.name, grid, data, names=names, compressed=compressed)
-            grid2, data2, names2 = fvdb.load_gridbatch(temp.name, device=device)
+                grid.save_nanovdb(temp.name, data, names=names, compressed=compressed)
+            grid2, data2, names2 = fvdb.GridBatch.from_nanovdb(temp.name, device=device)
 
             if name:
                 names = [name] * batch_size
@@ -138,8 +138,8 @@ class TestIO(unittest.TestCase):
         grid = fvdb.GridBatch.from_ijk(grid_ijk)
 
         with tempfile.NamedTemporaryFile() as temp:
-            fvdb.save_gridbatch(temp.name, grid, names=names, compressed=True)
-            grid2, data2, names2 = fvdb.load_gridbatch(temp.name, device=device)
+            grid.save_nanovdb(temp.name, names=names, compressed=True)
+            grid2, data2, names2 = fvdb.GridBatch.from_nanovdb(temp.name, device=device)
 
             names = [""] * batch_size
 
@@ -173,9 +173,9 @@ class TestIO(unittest.TestCase):
     def test_load_gridbatch_basic(self):
         datadir = get_fvdb_test_data_path()
         # Load an uncompressed gridbatch
-        grids, data, names = fvdb.load_gridbatch(str(datadir / "io" / "batch.nvdb"))
+        grids, data, names = fvdb.GridBatch.from_nanovdb(str(datadir / "io" / "batch.nvdb"))
         # Load a blosc-compressed gridbatch
-        grids, data, names = fvdb.load_gridbatch(str(datadir / "io" / "smoke-blosc.nvdb"))
+        grids, data, names = fvdb.GridBatch.from_nanovdb(str(datadir / "io" / "smoke-blosc.nvdb"))
 
     @parameterized.expand(["cpu", "cuda"])
     def test_name_too_long_raises(self, device):
@@ -186,7 +186,7 @@ class TestIO(unittest.TestCase):
             )
             grid = fvdb.GridBatch.from_ijk(grid_ijk)
             with self.assertRaises(ValueError):
-                fvdb.save_gridbatch("temp.nvdb", grid, grid_ijk, compressed=True, names=["a" * 1000] * batch_size)
+                grid.save_nanovdb("temp.nvdb", grid_ijk, compressed=True, names=["a" * 1000] * batch_size)
 
     @parameterized.expand(["cpu", "cuda"])
     def test_bad_length_raises(self, device):
@@ -203,7 +203,7 @@ class TestIO(unittest.TestCase):
                 self.assertEqual(grid_data.jdata.shape[0], grid.total_voxels)
             with tempfile.NamedTemporaryFile() as temp:
                 with self.assertRaises(ValueError):
-                    fvdb.save_gridbatch(temp.name, grid, grid_data, compressed=True, names=["a"] * batch_size)
+                    grid.save_nanovdb(temp.name, grid_data, compressed=True, names=["a"] * batch_size)
 
             sizes = [np.random.randint(100, 200) for _ in range(batch_size)]
             grid_ijk = fvdb.JaggedTensor([torch.randint(-512, 512, (sizes[i], 3)) for i in range(batch_size)]).to(
@@ -220,7 +220,7 @@ class TestIO(unittest.TestCase):
                 self.assertEqual(grid_data.jdata.shape[0], grid.total_voxels)
             with tempfile.NamedTemporaryFile() as temp:
                 with self.assertRaises(ValueError):
-                    fvdb.save_gridbatch(temp.name, grid, grid_data, compressed=True, names=["a"] * batch_size)
+                    grid.save_nanovdb(temp.name, grid_data, compressed=True, names=["a"] * batch_size)
 
     @parameterized.expand(["cpu", "cuda"])
     def test_bad_device_raises(self, device):
@@ -235,7 +235,7 @@ class TestIO(unittest.TestCase):
                 [torch.rand(int(grid.num_voxels[i].item())).to(bad_device) for i in range(batch_size)]
             )
             with self.assertRaises(ValueError):
-                fvdb.save_gridbatch("temp.nvdb", grid, grid_data, compressed=True, names=["a"] * batch_size)
+                grid.save_nanovdb("temp.nvdb", grid_data, compressed=True, names=["a"] * batch_size)
 
     @parameterized.expand(["cpu", "cuda"])
     def test_bad_names_raises(self, device):
@@ -251,7 +251,7 @@ class TestIO(unittest.TestCase):
             names = ["aaa"] * (batch_size + 1)
             with tempfile.NamedTemporaryFile() as temp:
                 with self.assertRaises(ValueError):
-                    fvdb.save_gridbatch(temp.name, grid, grid_data, compressed=True, names=names)
+                    grid.save_nanovdb(temp.name, grid_data, compressed=True, names=names)
 
     @parameterized.expand(["cpu", "cuda"])
     def test_nonexistent_name_raises(self, device):
@@ -263,13 +263,13 @@ class TestIO(unittest.TestCase):
             grid = fvdb.GridBatch.from_ijk(grid_ijk)
             # data = fvdb.JaggedTensor([torch.rand(grid.num_voxels[i].item()).to(device) for i in range(batch_size)])
             with tempfile.NamedTemporaryFile() as temp:
-                fvdb.save_gridbatch(temp.name, grid, compressed=True, names=[f"a_{i}" for i in range(batch_size)])
+                grid.save_nanovdb(temp.name, compressed=True, names=[f"a_{i}" for i in range(batch_size)])
 
                 with self.assertRaises(IndexError):
-                    fvdb.load_gridbatch(temp.name, device=device, names=["a_0", "b", "a_1", "a_0"])
+                    fvdb.GridBatch.from_nanovdb(temp.name, device=device, names=["a_0", "b", "a_1", "a_0"])
 
                 with self.assertRaises(IndexError):
-                    fvdb.load_gridbatch(temp.name, device=device, name="c")
+                    fvdb.GridBatch.from_nanovdb(temp.name, device=device, name="c")
 
     @parameterized.expand(["cpu", "cuda"])
     def test_one_voxel_grids(self, device):
@@ -281,8 +281,8 @@ class TestIO(unittest.TestCase):
             grid = fvdb.GridBatch.from_ijk(grid_ijk)
             data = fvdb.JaggedTensor([torch.rand(1).squeeze().to(device)] * batch_size)
             with tempfile.NamedTemporaryFile() as temp:
-                fvdb.save_gridbatch(temp.name, grid, data, compressed=False)
-                grid2, data2, names = fvdb.load_gridbatch(temp.name, device=device)
+                grid.save_nanovdb(temp.name, data, compressed=False)
+                grid2, data2, names = fvdb.GridBatch.from_nanovdb(temp.name, device=device)
                 self.assertTrue(torch.all(grid2.ijk.jdata == grid.ijk.jdata))
                 self.assertTrue(torch.all(data2.jdata == data.jdata))
 
@@ -293,8 +293,8 @@ class TestIO(unittest.TestCase):
             grid = fvdb.GridBatch.from_ijk(grid_ijk)
             data = fvdb.JaggedTensor([torch.rand(1).unsqueeze(-1).unsqueeze(-1).to(device)] * batch_size)
             with tempfile.NamedTemporaryFile() as temp:
-                fvdb.save_gridbatch(temp.name, grid, data, compressed=False)
-                grid2, data2, names = fvdb.load_gridbatch(temp.name, device=device)
+                grid.save_nanovdb(temp.name, data, compressed=False)
+                grid2, data2, names = fvdb.GridBatch.from_nanovdb(temp.name, device=device)
                 self.assertTrue(torch.all(grid2.ijk.jdata == grid.ijk.jdata))
                 self.assertTrue(torch.all(data2.jdata == data.jdata))
 
@@ -313,16 +313,16 @@ class TestIO(unittest.TestCase):
 
         with tempfile.NamedTemporaryFile() as temp:
             # test saving index grids by themselves which will be written as a NanoVDB index grid
-            fvdb.save_gridbatch(temp.name, test_grid)
-            test_grid_from_file, _, _ = fvdb.load_gridbatch(temp.name, device=device)
+            test_grid.save_nanovdb(temp.name)
+            test_grid_from_file, _, _ = fvdb.GridBatch.from_nanovdb(temp.name, device=device)
 
             self.assertTrue(torch.all(test_grid.voxel_sizes == test_grid_from_file.voxel_sizes))
             self.assertTrue(torch.all(test_grid.origins == test_grid_from_file.origins))
 
             # test saving index grids with data of a channel size which will be written as a NanoVDB data grid
             data = test_grid.jagged_like(torch.rand(test_grid.total_voxels, 3, device=device))
-            fvdb.save_gridbatch(temp.name, test_grid, data)
-            test_grid_from_file, data_from_file, _ = fvdb.load_gridbatch(temp.name, device=device)
+            test_grid.save_nanovdb(temp.name, data)
+            test_grid_from_file, data_from_file, _ = fvdb.GridBatch.from_nanovdb(temp.name, device=device)
 
             self.assertTrue(torch.all(test_grid.voxel_sizes == test_grid_from_file.voxel_sizes))
             self.assertTrue(torch.all(test_grid.origins == test_grid_from_file.origins))

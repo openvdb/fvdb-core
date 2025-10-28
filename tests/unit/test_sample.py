@@ -23,8 +23,8 @@ all_device_dtype_combos = [
 ]
 
 
-def trilinear_sample_pytorch(fvdb, p, features, is_dual: bool):
-    dual_features_grid = fvdb.write_to_dense_xyzc(features).squeeze(0).permute(3, 2, 1, 0).unsqueeze(0)
+def trilinear_sample_pytorch(grid: GridBatch, p: JaggedTensor, features: JaggedTensor, is_dual: bool) -> torch.Tensor:
+    dual_features_grid = grid.inject_to_dense_cminor(features).squeeze(0).permute(3, 2, 1, 0).unsqueeze(0)
     p_in = p.jdata.reshape(1, 1, 1, -1, 3)  # [1, 1, 1, N, 3]
     res = (
         torch.nn.functional.grid_sample(dual_features_grid, p_in, mode="bilinear", align_corners=is_dual)
@@ -34,21 +34,24 @@ def trilinear_sample_pytorch(fvdb, p, features, is_dual: bool):
     return res
 
 
-def upsample_pytorch(small_features, scale: int, mode: str):
+def upsample_pytorch(small_features: torch.Tensor, scale: int, mode: str) -> torch.Tensor:
     # Two differences with nn.UpsamplingBilinear:
     #   1. align_corners = True
     #   2. Boundary padding instead of zero padding.
     feat = small_features.unsqueeze(0)
     feat = torch.nn.functional.pad(feat, (1, 1, 1, 1, 1, 1), mode="constant", value=0.0)
     big_features = torch.nn.functional.interpolate(
-        feat, scale_factor=scale, mode=mode, align_corners=False if mode == "trilinear" else None
+        feat,
+        scale_factor=scale,
+        mode=mode,
+        align_corners=False if mode == "trilinear" else None,
     )
     big_features = big_features[0][:, scale:-scale, scale:-scale, scale:-scale]
 
     return big_features
 
 
-def sample_trilinear_naive(pts, corner_feats, grid):
+def sample_trilinear_naive(pts: JaggedTensor, corner_feats: torch.Tensor, grid: GridBatch) -> torch.Tensor:
     device = corner_feats.device
     dtype = corner_feats.dtype
     feats_dim = corner_feats.shape[-1]
@@ -56,16 +59,16 @@ def sample_trilinear_naive(pts, corner_feats, grid):
     if pts.dtype == torch.half:
         pts = pts.to(torch.float)
 
-    grid_pts = grid.world_to_grid(pts).jdata
+    grid_pts = grid.world_to_voxel(pts).jdata
     nearest_ijk = torch.floor(grid_pts)
 
     offsets = torch.tensor(list(itertools.product([0, 1], [0, 1], [0, 1])), device=device, dtype=torch.long)
 
     nearest_ijk = nearest_ijk.unsqueeze(1).long() + offsets.unsqueeze(0)
     unique_ijk, ijk_idx = torch.unique(nearest_ijk.reshape(-1, 3), dim=0, return_inverse=True)
-    corner_feats_indices = grid.ijk_to_index(nearest_ijk.reshape(-1, 3)).jdata.reshape(-1, 8)
+    corner_feats_indices = grid.ijk_to_index(JaggedTensor(nearest_ijk.reshape(-1, 3))).jdata.reshape(-1, 8)
     sel_corner_feats = corner_feats[corner_feats_indices]
-    sel_corner_feats[~grid.coords_in_active_voxel(nearest_ijk.reshape(-1, 3)).jdata.reshape(-1, 8)] = 0.0
+    sel_corner_feats[~grid.coords_in_grid(JaggedTensor(nearest_ijk.reshape(-1, 3))).jdata.reshape(-1, 8)] = 0.0
     uvws = torch.abs(grid_pts.unsqueeze(1) - nearest_ijk.to(pts.dtype))
 
     trilinear_weights = torch.prod(1.0 - uvws, dim=-1)
@@ -83,7 +86,7 @@ def _bezier(x: torch.Tensor):
     return m1 * b1 + m2 * b2 + m3 * b3
 
 
-def sample_bezier_naive(pts, corner_feats, grid):
+def sample_bezier_naive(pts: JaggedTensor, corner_feats: torch.Tensor, grid: GridBatch) -> torch.Tensor:
     device = corner_feats.device
     dtype = corner_feats.dtype
     feats_dim = corner_feats.shape[-1]
@@ -91,23 +94,27 @@ def sample_bezier_naive(pts, corner_feats, grid):
     if pts.dtype == torch.half:
         pts = pts.to(torch.float)
 
-    grid_pts = grid.world_to_grid(pts).jdata
+    grid_pts = grid.world_to_voxel(pts).jdata
     nearest_ijk = torch.round(grid_pts)
 
-    offsets = torch.tensor(list(itertools.product([-1, 0, 1], [-1, 0, 1], [-1, 0, 1])), device=device, dtype=torch.long)
+    offsets = torch.tensor(
+        list(itertools.product([-1, 0, 1], [-1, 0, 1], [-1, 0, 1])),
+        device=device,
+        dtype=torch.long,
+    )
 
     nearest_ijk = nearest_ijk.unsqueeze(1).long() + offsets.unsqueeze(0)
     unique_ijk, ijk_idx = torch.unique(nearest_ijk.reshape(-1, 3), dim=0, return_inverse=True)
-    corner_feats_indices = grid.ijk_to_index(nearest_ijk.reshape(-1, 3)).jdata.reshape(-1, 27)
+    corner_feats_indices = grid.ijk_to_index(JaggedTensor(nearest_ijk.reshape(-1, 3))).jdata.reshape(-1, 27)
     sel_corner_feats = corner_feats[corner_feats_indices]
-    sel_corner_feats[~grid.coords_in_active_voxel(nearest_ijk.reshape(-1, 3)).jdata.reshape(-1, 27)] = 0.0
+    sel_corner_feats[~grid.coords_in_grid(JaggedTensor(nearest_ijk.reshape(-1, 3))).jdata.reshape(-1, 27)] = 0.0
     bz_dir = _bezier(nearest_ijk.to(pts.dtype) - grid_pts.unsqueeze(1))
     bz_weights = torch.prod(bz_dir, dim=-1)
     interpolated_feats = bz_weights.unsqueeze(-1) * sel_corner_feats.to(pts.dtype)
     return torch.sum(interpolated_feats, dim=1).to(dtype)
 
 
-def splat_trilinear_naive(pts, feats, grid):
+def splat_trilinear_naive(pts: JaggedTensor, feats: torch.Tensor, grid: GridBatch) -> torch.Tensor:
     device = feats.device
     dtype = feats.dtype
     feats_dim = feats.shape[-1]
@@ -115,7 +122,7 @@ def splat_trilinear_naive(pts, feats, grid):
     if pts.dtype == torch.half:
         pts = pts.to(torch.float)
 
-    grid_pts = grid.world_to_grid(pts).jdata
+    grid_pts = grid.world_to_voxel(pts).jdata
     nearest_ijk = torch.floor(grid_pts)
     offsets = torch.tensor(
         [
@@ -142,14 +149,14 @@ def splat_trilinear_naive(pts, feats, grid):
     sum_interpolated_feats = torch.zeros((unique_ijk.shape[0], feats_dim), device=device, dtype=pts.dtype)
     sum_interpolated_feats.index_add_(0, ijk_idx, interpolated_feats.reshape(-1, feats_dim))
     output = torch.zeros((grid.ijk.jdata.shape[0], feats_dim), device=device, dtype=dtype)
-    mask = grid.coords_in_active_voxel(unique_ijk).jdata
+    mask = grid.coords_in_grid(JaggedTensor(unique_ijk)).jdata
     sum_interpolated_feats = sum_interpolated_feats[mask]
-    valid_ijk = grid.ijk_to_index(unique_ijk[mask]).jdata
+    valid_ijk = grid.ijk_to_index(JaggedTensor(unique_ijk[mask])).jdata
     output[valid_ijk] = sum_interpolated_feats.to(dtype)
     return output
 
 
-def splat_bezier_naive(pts, feats, grid):
+def splat_bezier_naive(pts: JaggedTensor, feats: torch.Tensor, grid: GridBatch) -> torch.Tensor:
     device = feats.device
     dtype = feats.dtype
     feats_dim = feats.shape[-1]
@@ -157,23 +164,27 @@ def splat_bezier_naive(pts, feats, grid):
     if pts.dtype == torch.half:
         pts = pts.to(torch.float)
 
-    grid_pts = grid.world_to_grid(pts).jdata
+    grid_pts = grid.world_to_voxel(pts).jdata
     nearest_ijk = torch.round(grid_pts)
 
-    offsets = torch.tensor(list(itertools.product([-1, 0, 1], [-1, 0, 1], [-1, 0, 1])), device=device, dtype=torch.long)
+    offsets = torch.tensor(
+        list(itertools.product([-1, 0, 1], [-1, 0, 1], [-1, 0, 1])),
+        device=device,
+        dtype=torch.long,
+    )
 
     nearest_ijk = nearest_ijk.unsqueeze(1).long() + offsets.unsqueeze(0)
     unique_ijk, ijk_idx = torch.unique(nearest_ijk.reshape(-1, 3), dim=0, return_inverse=True)
-    corner_feats_indices = grid.ijk_to_index(nearest_ijk.reshape(-1, 3)).jdata.reshape(-1, 27)
+    corner_feats_indices = grid.ijk_to_index(JaggedTensor(nearest_ijk.reshape(-1, 3))).jdata.reshape(-1, 27)
     bz_dir = _bezier(nearest_ijk.to(pts.dtype) - grid_pts.unsqueeze(1))
     bz_weights = torch.prod(bz_dir, dim=-1)
     interpolated_feats = bz_weights.unsqueeze(-1) * feats.unsqueeze(-2).to(pts.dtype)
     sum_interpolated_feats = torch.zeros((unique_ijk.shape[0], feats_dim), device=device, dtype=pts.dtype)
     sum_interpolated_feats.index_add_(0, ijk_idx, interpolated_feats.reshape(-1, feats_dim))
     output = torch.zeros((grid.ijk.jdata.shape[0], feats_dim), device=device, dtype=dtype)
-    mask = grid.coords_in_active_voxel(unique_ijk).jdata
+    mask = grid.coords_in_grid(JaggedTensor(unique_ijk)).jdata
     sum_interpolated_feats = sum_interpolated_feats[mask]
-    valid_ijk = grid.ijk_to_index(unique_ijk[mask]).jdata
+    valid_ijk = grid.ijk_to_index(JaggedTensor(unique_ijk[mask])).jdata
     output[valid_ijk] = sum_interpolated_feats.to(dtype)
     return output
 
@@ -194,42 +205,50 @@ class TestSample(unittest.TestCase):
         else:
             atol = 1e-5
             rtol = 1e-8
-        fvdb, fvdb_d, p = make_dense_grid_batch_and_jagged_point_data(7, device, dtype)
+        grid, grid_d, p = make_dense_grid_batch_and_jagged_point_data(7, device, dtype)
 
         # Primal
-        primal_features = torch.rand((fvdb.total_voxels, 4), device=device, dtype=dtype)
+        primal_features = torch.rand((grid.total_voxels, 4), device=device, dtype=dtype)
         primal_features.requires_grad = True
-        fv = fvdb.sample_trilinear(p, JaggedTensor(primal_features)).jdata.squeeze()
+        fv = grid.sample_trilinear(p, JaggedTensor(primal_features)).jdata.squeeze()
         grad_out = torch.rand_like(fv) + 0.1
         fv.backward(grad_out)
         assert primal_features.grad is not None
         gv = primal_features.grad.clone()
         primal_features.grad.zero_()
-        fp = trilinear_sample_pytorch(fvdb, p, primal_features, is_dual=False)
+        fp = trilinear_sample_pytorch(grid, p, JaggedTensor(primal_features), is_dual=False)
         fp.backward(grad_out)
         gp = primal_features.grad.clone()
 
-        self.assertTrue(torch.allclose(fv, fp, atol=atol, rtol=rtol), f"Max error is {torch.max(torch.abs(fv - fp))}")
         self.assertTrue(
-            torch.allclose(gv, gp, atol=atol, rtol=rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
+            torch.allclose(fv, fp, atol=atol, rtol=rtol),
+            f"Max error is {torch.max(torch.abs(fv - fp))}",
+        )
+        self.assertTrue(
+            torch.allclose(gv, gp, atol=atol, rtol=rtol),
+            f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
         # Dual
-        dual_features = torch.rand((fvdb_d.total_voxels, 4), device=device, dtype=dtype)
+        dual_features = torch.rand((grid_d.total_voxels, 4), device=device, dtype=dtype)
         dual_features.requires_grad = True
-        fv = fvdb_d.sample_trilinear(p, JaggedTensor(dual_features)).jdata.squeeze()
+        fv = grid_d.sample_trilinear(p, JaggedTensor(dual_features)).jdata.squeeze()
         grad_out = torch.rand_like(fv) + 0.1
         fv.backward(grad_out)
         assert dual_features.grad is not None
         gv = dual_features.grad.clone()
         dual_features.grad.zero_()
-        fp = trilinear_sample_pytorch(fvdb_d, p, dual_features, is_dual=True)
+        fp = trilinear_sample_pytorch(grid_d, p, JaggedTensor(dual_features), is_dual=True)
         fp.backward(grad_out)
         gp = dual_features.grad.clone()
 
-        self.assertTrue(torch.allclose(fv, fp, atol=atol, rtol=rtol), f"Max error is {torch.max(torch.abs(fv - fp))}")
         self.assertTrue(
-            torch.allclose(gv, gp, atol=atol, rtol=rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
+            torch.allclose(fv, fp, atol=atol, rtol=rtol),
+            f"Max error is {torch.max(torch.abs(fv - fp))}",
+        )
+        self.assertTrue(
+            torch.allclose(gv, gp, atol=atol, rtol=rtol),
+            f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
     @parameterized.expand(all_device_dtype_combos)
@@ -243,7 +262,7 @@ class TestSample(unittest.TestCase):
 
         nvox = 7
         scale = 2
-        fvdb = GridBatch.from_dense_axis_aligned_bounds(
+        grid = GridBatch.from_dense_axis_aligned_bounds(
             num_grids=1,
             dense_dims=[nvox] * 3,
             bounds_min=0,
@@ -253,13 +272,13 @@ class TestSample(unittest.TestCase):
 
         small_features = torch.rand((1, nvox, nvox, nvox), device=device, dtype=dtype)
         small_features.requires_grad = True
-        small_features_vdb = fvdb.read_from_dense_xyzc(small_features.permute(3, 2, 1, 0).contiguous().unsqueeze(0))
+        small_features_vdb = grid.inject_from_dense_cminor(small_features.permute(3, 2, 1, 0).contiguous().unsqueeze(0))
 
-        fvdb_big = fvdb.subdivided_grid(scale)
-        big_pos = fvdb_big.grid_to_world(fvdb_big.ijk.type(dtype)).jdata
+        grid_big = grid.refined_grid(scale)
+        big_pos = grid_big.voxel_to_world(grid_big.ijk.type(dtype)).jdata
         self.assertEqual(big_pos.dtype, dtype)
-        big_features_vdb = fvdb.sample_trilinear(JaggedTensor(big_pos), small_features_vdb).jdata
-        fv = fvdb_big.write_to_dense_xyzc(JaggedTensor(big_features_vdb)).squeeze(0).permute(3, 2, 1, 0)
+        big_features_vdb = grid.sample_trilinear(JaggedTensor(big_pos), small_features_vdb).jdata
+        fv = grid_big.inject_to_dense_cminor(JaggedTensor(big_features_vdb)).squeeze(0).permute(3, 2, 1, 0)
         grad_out = torch.rand_like(fv) + 0.1
         fv.backward(grad_out)
         assert small_features.grad is not None
@@ -272,15 +291,19 @@ class TestSample(unittest.TestCase):
         gp = small_features.grad.clone()
         small_features.grad.zero_()
 
-        self.assertTrue(torch.allclose(fv, fp, atol=atol, rtol=rtol), f"Max error is {torch.max(torch.abs(fv - fp))}")
         self.assertTrue(
-            torch.allclose(gv, gp, atol=atol, rtol=rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
+            torch.allclose(fv, fp, atol=atol, rtol=rtol),
+            f"Max error is {torch.max(torch.abs(fv - fp))}",
         )
-        small_features_vdb = fvdb.read_from_dense_xyzc(small_features.permute(3, 2, 1, 0).contiguous().unsqueeze(0))
-        fvdb_big = fvdb.subdivided_grid(scale)
-        big_pos = fvdb_big.grid_to_world(fvdb_big.ijk.type(dtype)).jdata
-        big_features_vdb, _ = fvdb.subdivide(scale, small_features_vdb, fine_grid=fvdb_big)
-        fv = fvdb_big.write_to_dense_xyzc(big_features_vdb).squeeze(0).permute(3, 2, 1, 0)
+        self.assertTrue(
+            torch.allclose(gv, gp, atol=atol, rtol=rtol),
+            f"Max grad error is {torch.max(torch.abs(gv - gp))}",
+        )
+        small_features_vdb = grid.inject_from_dense_cminor(small_features.permute(3, 2, 1, 0).contiguous().unsqueeze(0))
+        grid_big = grid.refined_grid(scale)
+        big_pos = grid_big.voxel_to_world(grid_big.ijk.type(dtype)).jdata
+        big_features_vdb, _ = grid.refine(scale, small_features_vdb, fine_grid=grid_big)
+        fv = grid_big.inject_to_dense_cminor(big_features_vdb).squeeze(0).permute(3, 2, 1, 0)
         fv.backward(grad_out)
         gv = small_features.grad.clone()
         small_features.grad.zero_()
@@ -289,9 +312,13 @@ class TestSample(unittest.TestCase):
         fp.backward(grad_out)
         gp = small_features.grad.clone()
 
-        self.assertTrue(torch.allclose(fv, fp, atol=atol, rtol=rtol), f"Max error is {torch.max(torch.abs(fv - fp))}")
         self.assertTrue(
-            torch.allclose(gv, gp, atol=atol, rtol=rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
+            torch.allclose(fv, fp, atol=atol, rtol=rtol),
+            f"Max error is {torch.max(torch.abs(fv - fp))}",
+        )
+        self.assertTrue(
+            torch.allclose(gv, gp, atol=atol, rtol=rtol),
+            f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
     @parameterized.expand(all_device_dtype_combos)
@@ -319,9 +346,13 @@ class TestSample(unittest.TestCase):
         fp.backward(grad_out)
         gp = primal_features.grad.clone()
         primal_features.grad.zero_()
-        self.assertTrue(torch.allclose(fv, fp, atol=atol, rtol=rtol), f"Max error is {torch.max(torch.abs(fv - fp))}")
         self.assertTrue(
-            torch.allclose(gv, gp, atol=atol, rtol=rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
+            torch.allclose(fv, fp, atol=atol, rtol=rtol),
+            f"Max error is {torch.max(torch.abs(fv - fp))}",
+        )
+        self.assertTrue(
+            torch.allclose(gv, gp, atol=atol, rtol=rtol),
+            f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
         # Dual
@@ -336,9 +367,13 @@ class TestSample(unittest.TestCase):
         fp = sample_trilinear_naive(p, dual_features, grid_d)
         fp.backward(grad_out)
         gp = dual_features.grad.clone()
-        self.assertTrue(torch.allclose(fv, fp, atol=atol, rtol=rtol), f"Max error is {torch.max(torch.abs(fv - fp))}")
         self.assertTrue(
-            torch.allclose(gv, gp, atol=atol, rtol=rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
+            torch.allclose(fv, fp, atol=atol, rtol=rtol),
+            f"Max error is {torch.max(torch.abs(fv - fp))}",
+        )
+        self.assertTrue(
+            torch.allclose(gv, gp, atol=atol, rtol=rtol),
+            f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
     @parameterized.expand(all_device_dtype_combos)
@@ -369,10 +404,12 @@ class TestSample(unittest.TestCase):
         gp = primal_features.grad.clone()
         primal_features.grad.zero_()
         self.assertTrue(
-            torch.allclose(fv.jdata, fp, atol=atol, rtol=rtol), f"Max error is {torch.max(torch.abs(fv.jdata - fp))}"
+            torch.allclose(fv.jdata, fp, atol=atol, rtol=rtol),
+            f"Max error is {torch.max(torch.abs(fv.jdata - fp))}",
         )
         self.assertTrue(
-            torch.allclose(gv, gp, atol=atol, rtol=rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
+            torch.allclose(gv, gp, atol=atol, rtol=rtol),
+            f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
         # Dual
@@ -388,10 +425,12 @@ class TestSample(unittest.TestCase):
         fp.backward(grad_out)
         gp = dual_features.grad.clone()
         self.assertTrue(
-            torch.allclose(fv.jdata, fp, atol=atol, rtol=rtol), f"Max error is {torch.max(torch.abs(fv.jdata - fp))}"
+            torch.allclose(fv.jdata, fp, atol=atol, rtol=rtol),
+            f"Max error is {torch.max(torch.abs(fv.jdata - fp))}",
         )
         self.assertTrue(
-            torch.allclose(gv, gp, atol=atol, rtol=rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
+            torch.allclose(gv, gp, atol=atol, rtol=rtol),
+            f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
     @parameterized.expand(all_device_dtype_combos)
@@ -426,10 +465,12 @@ class TestSample(unittest.TestCase):
         primal_features.grad.zero_()
 
         self.assertTrue(
-            torch.allclose(fv, fp, atol=f_atol, rtol=f_rtol), f"Max error is {torch.max(torch.abs(fv - fp))}"
+            torch.allclose(fv, fp, atol=f_atol, rtol=f_rtol),
+            f"Max error is {torch.max(torch.abs(fv - fp))}",
         )
         self.assertTrue(
-            torch.allclose(gv, gp, atol=g_atol, rtol=g_rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
+            torch.allclose(gv, gp, atol=g_atol, rtol=g_rtol),
+            f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
         # Dual
@@ -448,10 +489,12 @@ class TestSample(unittest.TestCase):
         dual_features.grad.zero_()
 
         self.assertTrue(
-            torch.allclose(fv, fp, atol=f_atol, rtol=f_rtol), f"Max error is {torch.max(torch.abs(fv - fp))}"
+            torch.allclose(fv, fp, atol=f_atol, rtol=f_rtol),
+            f"Max error is {torch.max(torch.abs(fv - fp))}",
         )
         self.assertTrue(
-            torch.allclose(gv, gp, atol=g_atol, rtol=g_rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
+            torch.allclose(gv, gp, atol=g_atol, rtol=g_rtol),
+            f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
     @parameterized.expand(all_device_dtype_combos)
@@ -487,10 +530,12 @@ class TestSample(unittest.TestCase):
         primal_features.grad.zero_()
 
         self.assertTrue(
-            torch.allclose(fv, fp, atol=f_atol, rtol=f_rtol), f"Max error is {torch.max(torch.abs(fv - fp))}"
+            torch.allclose(fv, fp, atol=f_atol, rtol=f_rtol),
+            f"Max error is {torch.max(torch.abs(fv - fp))}",
         )
         self.assertTrue(
-            torch.allclose(gv, gp, atol=g_atol, rtol=g_rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
+            torch.allclose(gv, gp, atol=g_atol, rtol=g_rtol),
+            f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
         # Dual
@@ -510,10 +555,12 @@ class TestSample(unittest.TestCase):
         dual_features.grad.zero_()
 
         self.assertTrue(
-            torch.allclose(fv, fp, atol=f_atol, rtol=f_rtol), f"Max error is {torch.max(torch.abs(fv - fp))}"
+            torch.allclose(fv, fp, atol=f_atol, rtol=f_rtol),
+            f"Max error is {torch.max(torch.abs(fv - fp))}",
         )
         self.assertTrue(
-            torch.allclose(gv, gp, atol=g_atol, rtol=g_rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
+            torch.allclose(gv, gp, atol=g_atol, rtol=g_rtol),
+            f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
     @parameterized.expand(all_device_dtype_combos)
@@ -542,9 +589,13 @@ class TestSample(unittest.TestCase):
         assert primal_features.grad is not None
         gp = primal_features.grad.clone()
 
-        self.assertTrue(torch.allclose(fv, fp, atol=atol, rtol=rtol), f"Max error is {torch.max(torch.abs(fv - fp))}")
         self.assertTrue(
-            torch.allclose(gv, gp, atol=atol, rtol=rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
+            torch.allclose(fv, fp, atol=atol, rtol=rtol),
+            f"Max error is {torch.max(torch.abs(fv - fp))}",
+        )
+        self.assertTrue(
+            torch.allclose(gv, gp, atol=atol, rtol=rtol),
+            f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
         # Dual
@@ -561,9 +612,13 @@ class TestSample(unittest.TestCase):
         fp.backward(grad_out)
         gp = dual_features.grad.clone()
 
-        self.assertTrue(torch.allclose(fv, fp, atol=atol, rtol=rtol), f"Max error is {torch.max(torch.abs(fv - fp))}")
         self.assertTrue(
-            torch.allclose(gv, gp, atol=atol, rtol=rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
+            torch.allclose(fv, fp, atol=atol, rtol=rtol),
+            f"Max error is {torch.max(torch.abs(fv - fp))}",
+        )
+        self.assertTrue(
+            torch.allclose(gv, gp, atol=atol, rtol=rtol),
+            f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
     @parameterized.expand(all_device_dtype_combos)
@@ -593,9 +648,13 @@ class TestSample(unittest.TestCase):
         assert primal_features.grad is not None
         gp = primal_features.grad.clone()
 
-        self.assertTrue(torch.allclose(fv, fp, atol=atol, rtol=rtol), f"Max error is {torch.max(torch.abs(fv - fp))}")
         self.assertTrue(
-            torch.allclose(gv, gp, atol=atol, rtol=rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
+            torch.allclose(fv, fp, atol=atol, rtol=rtol),
+            f"Max error is {torch.max(torch.abs(fv - fp))}",
+        )
+        self.assertTrue(
+            torch.allclose(gv, gp, atol=atol, rtol=rtol),
+            f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
         # Dual
@@ -613,9 +672,13 @@ class TestSample(unittest.TestCase):
         fp.backward(grad_out)
         gp = dual_features.grad.clone()
 
-        self.assertTrue(torch.allclose(fv, fp, atol=atol, rtol=rtol), f"Max error is {torch.max(torch.abs(fv - fp))}")
         self.assertTrue(
-            torch.allclose(gv, gp, atol=atol, rtol=rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
+            torch.allclose(fv, fp, atol=atol, rtol=rtol),
+            f"Max error is {torch.max(torch.abs(fv - fp))}",
+        )
+        self.assertTrue(
+            torch.allclose(gv, gp, atol=atol, rtol=rtol),
+            f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
     @parameterized.expand(all_device_dtype_combos)
@@ -649,10 +712,12 @@ class TestSample(unittest.TestCase):
         gp = primal_features.grad.clone()
 
         self.assertTrue(
-            torch.allclose(fv, fp, atol=f_atol, rtol=f_rtol), f"Max error is {torch.max(torch.abs(fv - fp))}"
+            torch.allclose(fv, fp, atol=f_atol, rtol=f_rtol),
+            f"Max error is {torch.max(torch.abs(fv - fp))}",
         )
         self.assertTrue(
-            torch.allclose(gv, gp, atol=g_atol, rtol=g_rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
+            torch.allclose(gv, gp, atol=g_atol, rtol=g_rtol),
+            f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
         # Dual
@@ -670,10 +735,12 @@ class TestSample(unittest.TestCase):
         gp = dual_features.grad.clone()
 
         self.assertTrue(
-            torch.allclose(fv, fp, atol=f_atol, rtol=f_rtol), f"Max error is {torch.max(torch.abs(fv - fp))}"
+            torch.allclose(fv, fp, atol=f_atol, rtol=f_rtol),
+            f"Max error is {torch.max(torch.abs(fv - fp))}",
         )
         self.assertTrue(
-            torch.allclose(gv, gp, atol=g_atol, rtol=g_rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
+            torch.allclose(gv, gp, atol=g_atol, rtol=g_rtol),
+            f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
     @parameterized.expand(all_device_dtype_combos)
@@ -708,10 +775,12 @@ class TestSample(unittest.TestCase):
         gp = primal_features.grad.clone()
 
         self.assertTrue(
-            torch.allclose(fv, fp, atol=f_atol, rtol=f_rtol), f"Max error is {torch.max(torch.abs(fv - fp))}"
+            torch.allclose(fv, fp, atol=f_atol, rtol=f_rtol),
+            f"Max error is {torch.max(torch.abs(fv - fp))}",
         )
         self.assertTrue(
-            torch.allclose(gv, gp, atol=g_atol, rtol=g_rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
+            torch.allclose(gv, gp, atol=g_atol, rtol=g_rtol),
+            f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
         # Dual
@@ -730,10 +799,12 @@ class TestSample(unittest.TestCase):
         gp = dual_features.grad.clone()
 
         self.assertTrue(
-            torch.allclose(fv, fp, atol=f_atol, rtol=f_rtol), f"Max error is {torch.max(torch.abs(fv - fp))}"
+            torch.allclose(fv, fp, atol=f_atol, rtol=f_rtol),
+            f"Max error is {torch.max(torch.abs(fv - fp))}",
         )
         self.assertTrue(
-            torch.allclose(gv, gp, atol=g_atol, rtol=g_rtol), f"Max grad error is {torch.max(torch.abs(gv - gp))}"
+            torch.allclose(gv, gp, atol=g_atol, rtol=g_rtol),
+            f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
     @parameterized.expand(all_device_dtype_combos)
@@ -764,8 +835,14 @@ class TestSample(unittest.TestCase):
         fp.backward(grad_out)
         assert points_data.grad is not None
         gp = points_data.grad.clone()
-        self.assertTrue(torch.allclose(fv, fp, atol=fatol, rtol=frtol), f"Max error is {torch.max(torch.abs(fv - fp))}")
-        self.assertTrue(torch.allclose(gv, gp, atol=gatol, rtol=grtol), f"Max error is {torch.max(torch.abs(gv - gp))}")
+        self.assertTrue(
+            torch.allclose(fv, fp, atol=fatol, rtol=frtol),
+            f"Max error is {torch.max(torch.abs(fv - fp))}",
+        )
+        self.assertTrue(
+            torch.allclose(gv, gp, atol=gatol, rtol=grtol),
+            f"Max error is {torch.max(torch.abs(gv - gp))}",
+        )
 
     @parameterized.expand(all_device_dtype_combos)
     def test_splat_bezier_vs_brute(self, device, dtype):
@@ -795,8 +872,14 @@ class TestSample(unittest.TestCase):
         fp.backward(grad_out)
         assert points_data.grad is not None
         gp = points_data.grad.clone()
-        self.assertTrue(torch.allclose(fv, fp, atol=fatol, rtol=frtol), f"Max error is {torch.max(torch.abs(fv - fp))}")
-        self.assertTrue(torch.allclose(gv, gp, atol=gatol, rtol=grtol), f"Max error is {torch.max(torch.abs(gv - gp))}")
+        self.assertTrue(
+            torch.allclose(fv, fp, atol=fatol, rtol=frtol),
+            f"Max error is {torch.max(torch.abs(fv - fp))}",
+        )
+        self.assertTrue(
+            torch.allclose(gv, gp, atol=gatol, rtol=grtol),
+            f"Max error is {torch.max(torch.abs(gv - gp))}",
+        )
 
 
 if __name__ == "__main__":

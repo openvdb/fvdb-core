@@ -6,7 +6,7 @@ dependencies:
   - blas=*=mkl
   - ca-certificates
   - certifi
-  - cuda-version=12.8
+  - cuda-version=12.9
   - git
   - gitpython
   - ipython
@@ -18,12 +18,13 @@ dependencies:
   - pandas
   - parameterized
   - pip
+  - pkg-config
   - polyscope
   - pybind11=2.13.6
   - pyrender
   - pytest-benchmark
   - python=3.12
-  - pytorch-gpu=2.7.0
+  - pytorch-gpu=2.8.0
   - sparsehash
   - tensorboard
   - tqdm
@@ -33,11 +34,11 @@ dependencies:
   - py-opencv>=4.10[build=headless*]
   - pyyaml
   - scikit-learn
-  - torchvision
   - tyro
   - viser
   - pip:
     - point-cloud-utils
-    - https://nksr.s3.ap-northeast-1.amazonaws.com/dev-whls/pt27cu128/torchsparse-2.1.0-cp312-cp312-linux_x86_64.whl
-    - https://nksr.s3.ap-northeast-1.amazonaws.com/dev-whls/pt27cu128/torchsparse_20-2.0.0b0-cp312-cp312-linux_x86_64.whl
-    - https://nksr.s3.ap-northeast-1.amazonaws.com/dev-whls/pt27cu128/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl
+    - https://nksr.s3.ap-northeast-1.amazonaws.com/dev-whls/pt28cu129/torchsparse-2.1.0-cp312-cp312-linux_x86_64.whl
+    - https://nksr.s3.ap-northeast-1.amazonaws.com/dev-whls/pt28cu129/torchsparse_20-2.0.0b0-cp312-cp312-linux_x86_64.whl
+    - https://nksr.s3.ap-northeast-1.amazonaws.com/dev-whls/pt28cu129/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl
+    - torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu129 # NOTE: torchvision is not available on conda-forge for pytorch 2.8.0 yet

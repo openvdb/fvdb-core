@@ -3,12 +3,6 @@ on:
     pull_request:
       branches:
         - '**'
-      paths-ignore:
-          - 'CODEOWNERS'
-          - '**.md'
-          - 'docs/**'
-          - 'env/**'
-          - 'notebooks/**'
 
 # Allow subsequent pushes to the same PR or REF to cancel any previous jobs.
 concurrency:
@@ -17,18 +11,18 @@ concurrency:
 
 jobs:
   test-python-black-lint:
-    name: Check Python code style with black
+    name: Python code style (black)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: psf/black@stable
         with:
-          options: "--check --verbose --target-version=py311 --line-length=120"
+          options: "--check --diff --verbose --target-version=py311 --line-length=120 --extend-exclude='wip/'"
           src: "./"
           version: "~= 24.0"
 
   test-cpp-clang-format-lint:
-    name: Check C++ code style with clang-format
+    name: C++ code style (clang-format)
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -40,7 +34,7 @@ jobs:
         style: file
 
   include-guards:
-    name: Check include guards
+    name: Include guards
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -49,11 +43,10 @@ jobs:
         path: 'src/'
 
   check-spdx-identifiers:
-    name: Check SPDX identifiers
+    name: SPDX identifiers
     runs-on: ubuntu-latest
     steps:
-    - name: checkout
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
     - uses: enarx/spdx@master
       with:
         licenses: |-
@@ -62,23 +55,25 @@ jobs:
   # Search the git repository for any trailing spaces excluding auto-generated wlt files
   # NOTE: Migrated from openvdb whitespace.yml
   trailingspaces:
+    name: Trailing spaces
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     - name: test
       run: |
           set +e
-          git grep -n -I -E '^.+[ ]+$' -- ':!*.wlt'
+          git grep -n -I -E '^.+[ ]+$' -- ':!*.wlt' ':!*/wip/*'
           test $? -eq 1
 
   # Search for any tabs excluding meeting notes, image files and a few others
   # NOTE: Migrated from openvdb whitespace.yml
   spacesnottabs:
+    name: Spaces not tabs
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     - name: test
       run: |
           set +e
-          git grep -n "	" -- ':!*/codestyle.yml' ':!*.svg' ':!*.cmd' ':!*.png' ':!*.wlt' ':!*.jpg' ':!*.gif' ':!*.mp4' ':!*.pt' ':!*.pth' ':!*.nvdb' ':!*.npz' ':!*.gitmodules'
+          git grep -n "	" -- ':!*/codestyle.yml' ':!*.svg' ':!*.cmd' ':!*.png' ':!*.wlt' ':!*.jpg' ':!*.gif' ':!*.mp4' ':!*.pt' ':!*.pth' ':!*.nvdb' ':!*.npz' ':!*.gitmodules' ':!*/wip/*'
           test $? -eq 1

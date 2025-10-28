@@ -4,6 +4,7 @@
 import logging
 import time
 
+import fvdb.viz as fviz
 import polyscope as ps
 import torch
 from fvdb.utils.examples import load_dragon_mesh
@@ -31,12 +32,12 @@ def main():
         torch.cuda.synchronize()
     logging.info(f"Done in {time.time() - start}s!")
 
-    logging.info("Building subdivided grids")
+    logging.info("Building refined grids")
     start = time.time()
     for i in range(2):
         subdiv_factor = i + 1
         mask = torch.rand(grids[i].num_voxels, device=device) > 0.5
-        grids.append(grids[-1].subdivided_grid(subdiv_factor, mask))
+        grids.append(grids[-1].refined_grid(subdiv_factor, mask))
         assert mask.sum().item() * subdiv_factor**3 == grids[-1].num_voxels
     if device == "cuda":
         torch.cuda.synchronize()
@@ -51,12 +52,12 @@ def main():
         dual_index = index.dual_grid()
         gp = index.ijk
         gd = dual_index.ijk
-        dual_v, dual_e = index.viz_edge_network
+        dual_v, dual_e = fviz.grid_edge_network(index)
 
         dual_v = dual_v.cpu()
         dual_e = dual_e.cpu()
-        gp = index.grid_to_world(gp.to(dtype)).cpu()
-        gd = dual_index.grid_to_world(gd.to(dtype)).cpu()
+        gp = index.voxel_to_world(gp.to(dtype)).cpu()
+        gd = dual_index.voxel_to_world(gd.to(dtype)).cpu()
         gp, gd = gp.cpu(), gd.cpu()
 
         ps.register_curve_network(f"grid edges {i}", dual_v.cpu(), dual_e.cpu(), enabled=True, radius=0.0005)

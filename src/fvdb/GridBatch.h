@@ -237,7 +237,7 @@ struct GridBatch : torch::CustomClassHolder {
              Vec3iOrScalar stride                 = 0,
              std::optional<GridBatch> coarse_grid = std::nullopt) const;
 
-    /// @brief Subdivide this batch of grids using nearest neighbor interpolation
+    /// @brief Refine this batch of grids using nearest neighbor interpolation
     /// @param subdiv_factor How much to upsample by (i,e, (2,2,2) means upsample by 2x2x2)
     /// @param data Data at each voxel in this grid to be upsampled (JaggedTensor of shape [B, -1,
     /// *])
@@ -250,30 +250,30 @@ struct GridBatch : torch::CustomClassHolder {
     /// upsampled data and
     ///         fineGrid is a GridBatch representing the upsampled grid batch
     std::pair<JaggedTensor, GridBatch>
-    subdivide(Vec3iOrScalar subdiv_factor,
-              const JaggedTensor &data,
-              const std::optional<JaggedTensor> mask = std::nullopt,
-              std::optional<GridBatch> fine_grid     = std::nullopt) const;
+    refine(Vec3iOrScalar subdiv_factor,
+           const JaggedTensor &data,
+           const std::optional<JaggedTensor> mask = std::nullopt,
+           std::optional<GridBatch> fine_grid     = std::nullopt) const;
 
     /// @brief Read the values from a dense tensor of the voxels at the specified coordinates
-    /// @param dense_data A dense tensor of shape [B, X, Y, Z, C*]
+    /// @param dense_data A dense tensor of shape [B, X, Y, Z, C]
     /// @param dense_origins A tensor of shape [B, 3] or [3,] specifying the voxel coordinate(s) of
     /// the origin of the dense tensor i.e. [:, 0, 0, 0]
     /// @return A JaggedTensor with shape [B, -1, *] containing the values at the specified
     /// coordinates
     JaggedTensor
-    read_from_dense_xyzc(const torch::Tensor &dense_data,
-                         const Vec3iBatch &dense_origins = torch::zeros(3, torch::kInt32)) const;
+    read_from_dense_cminor(const torch::Tensor &dense_data,
+                           const Vec3iBatch &dense_origins = torch::zeros(3, torch::kInt32)) const;
 
     /// @brief Read the values from a dense tensor of the voxels at the specified coordinates
-    /// @param dense_data A dense tensor of shape [B, C*, X, Y, Z]
+    /// @param dense_data A dense tensor of shape [B, C, X, Y, Z]
     /// @param dense_origins A tensor of shape [B, 3] or [3,] specifying the voxel coordinate(s) of
     /// the origin of the dense tensor i.e. [:, 0, 0, 0]
     /// @return A JaggedTensor with shape [B, -1, *] containing the values at the specified
     /// coordinates
     JaggedTensor
-    read_from_dense_czyx(const torch::Tensor &dense_data,
-                         const Vec3iBatch &dense_origins = torch::zeros(3, torch::kInt32)) const;
+    read_from_dense_cmajor(const torch::Tensor &dense_data,
+                           const Vec3iBatch &dense_origins = torch::zeros(3, torch::kInt32)) const;
 
     /// @brief Read the values from a JaggedTensor indexed by this batch into a dense tensor
     /// @param sparse_data A JaggedTensor of shape [B, -1, *] containing one value per voxel in the
@@ -283,11 +283,11 @@ struct GridBatch : torch::CustomClassHolder {
     ///                  Defaults to the minimum coordinate of the batch.
     /// @param grid_size An optional grid size to read from the batch (in voxel coordinates).
     ///                  Defaults to the total size of a grid containing the whole batch.
-    /// @return A dense tensor of shape [B, X, Y, Z, C*] containing the values at the specified
+    /// @return A dense tensor of shape [B, X, Y, Z, C] containing the values at the specified
     /// coordinates (and zero elsewhere)
-    torch::Tensor write_to_dense_xyzc(const JaggedTensor &sparse_data,
-                                      const std::optional<Vec3iBatch> &min_coord = std::nullopt,
-                                      const std::optional<Vec3i> &grid_size = std::nullopt) const;
+    torch::Tensor write_to_dense_cminor(const JaggedTensor &sparse_data,
+                                        const std::optional<Vec3iBatch> &min_coord = std::nullopt,
+                                        const std::optional<Vec3i> &grid_size = std::nullopt) const;
 
     /// @brief Read the values from a JaggedTensor indexed by this batch into a dense tensor
     /// @param sparse_data A JaggedTensor of shape [B, -1, *] containing one value per voxel in the
@@ -297,11 +297,11 @@ struct GridBatch : torch::CustomClassHolder {
     ///                  Defaults to the minimum coordinate of the batch.
     /// @param grid_size An optional grid size to read from the batch (in voxel coordinates).
     ///                  Defaults to the total size of a grid containing the whole batch.
-    /// @return A dense tensor of shape [B, C*, X, Y, Z] containing the values at the specified
+    /// @return A dense tensor of shape [B, C, X, Y, Z] containing the values at the specified
     /// coordinates (and zero elsewhere)
-    torch::Tensor write_to_dense_czyx(const JaggedTensor &sparse_data,
-                                      const std::optional<Vec3iBatch> &min_coord = std::nullopt,
-                                      const std::optional<Vec3i> &grid_size = std::nullopt) const;
+    torch::Tensor write_to_dense_cmajor(const JaggedTensor &sparse_data,
+                                        const std::optional<Vec3iBatch> &min_coord = std::nullopt,
+                                        const std::optional<Vec3i> &grid_size = std::nullopt) const;
 
     /// @brief Convert grid coordinates to world coordinates
     /// @param ijk A JaggedTensor of grid coordinates with shape [B, -1, 3] (one point set per grid
@@ -410,7 +410,7 @@ struct GridBatch : torch::CustomClassHolder {
     /// @return A JaggedTensor of booleans with shape [B, -1] (one boolean per point)
     ///         where the [bi, i]^th entry is true if points[bi, i] lies inside the bi^th grid in
     ///         the batch
-    JaggedTensor points_in_active_voxel(const JaggedTensor &points) const;
+    JaggedTensor points_in_grid(const JaggedTensor &points) const;
 
     /// @brief Return whether the cube with corners at cube_min and cube_max centered at each point
     /// in world space intersect the grid batch
@@ -444,7 +444,7 @@ struct GridBatch : torch::CustomClassHolder {
     /// @return A JaggedTensor of booleans with shape [B, -1] (one boolean per coordinate)
     ///         where the [bi, i]^th entry is true if coords[bi, i] lies inside the bi^th grid in
     ///         the batch
-    JaggedTensor coords_in_active_voxel(const JaggedTensor &ijk) const;
+    JaggedTensor coords_in_grid(const JaggedTensor &ijk) const;
 
     /// @brief Return the integer offset of each ijk value in the grid batch
     /// @param ijk A JaggedTensor of ijk coordinates with shape [B, -1, 3] (one coordinate set per
@@ -611,15 +611,15 @@ struct GridBatch : torch::CustomClassHolder {
     /// @return A GridBatch representing the coarsened version of this batch.
     GridBatch coarsened_grid(Vec3iOrScalar coarsening_factor) const;
 
-    /// @brief Subdivide the grid batch into a finer grid batch.
+    /// @brief Refine the grid batch into a finer grid batch.
     ///        Each voxel [i, j, k] in this grid batch maps to voxels [i * subdivFactor, j *
     ///        subdivFactor, k * subdivFactor] in the fine batch.
-    /// @param subdiv_factor The factor by which to subdivide the grid batch
+    /// @param subdiv_factor The factor by which to refine the grid batch
     /// @param mask An optional JaggedTensor of shape [B, -1] of boolean values indicating which
-    /// voxels to subdivide
-    /// @return A GridBatch representing the subdivided version of this batch.
-    GridBatch subdivided_grid(Vec3iOrScalar subdiv_factor,
-                              const std::optional<JaggedTensor> mask = std::nullopt) const;
+    /// voxels to refine
+    /// @return A GridBatch representing the refined version of this batch.
+    GridBatch refined_grid(Vec3iOrScalar subdiv_factor,
+                           const std::optional<JaggedTensor> mask = std::nullopt) const;
 
     /// @brief Return a batch of grids representing the clipped version of this batch of grids.
     /// @param ijk_min Index space minimum bound of the clip region.

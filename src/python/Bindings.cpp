@@ -15,6 +15,7 @@
 void bind_grid_batch(py::module &m);
 void bind_jagged_tensor(py::module &m);
 void bind_gaussian_splat3d(py::module &m);
+void bind_viewer(py::module &m);
 
 #define __FVDB__BUILDER_INNER(FUNC_NAME, FUNC_STR, LSHAPE_TYPE)                           \
     m.def(                                                                                \
@@ -99,6 +100,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     bind_grid_batch(m);
     bind_jagged_tensor(m);
     bind_gaussian_splat3d(m);
+    bind_viewer(m);
 
     //
     // Utility functions
@@ -374,6 +376,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .value("IGEMM", fvdb::ConvPackBackend::IGEMM)
         .value("CUTLASS", fvdb::ConvPackBackend::CUTLASS)
         .value("LGGS", fvdb::ConvPackBackend::LGGS)
+        .value("HALO", fvdb::ConvPackBackend::HALO)
+        .value("DENSE", fvdb::ConvPackBackend::DENSE)
+        .value("MATMUL", fvdb::ConvPackBackend::MATMUL)
         .export_values();
 
     py::class_<fvdb::SparseConvPackInfo>(m, "SparseConvPackInfo")
@@ -456,9 +461,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("cpu", &fvdb::SparseConvPackInfo::cpu);
 }
 
-TORCH_LIBRARY(my_classes, m) {
+TORCH_LIBRARY(fvdb, m) {
     m.class_<fvdb::GridBatch>("GridBatch");
     m.class_<fvdb::JaggedTensor>("JaggedTensor");
     m.class_<fvdb::SparseConvPackInfo>("SparseConvPackInfo");
     m.class_<fvdb::detail::GridBatchImpl>("GridBatchImpl");
+
+    m.def(
+        "_fused_ssim(float C1, float C2, Tensor img1, Tensor img2, bool train) -> (Tensor, Tensor, Tensor, Tensor)");
+    m.def(
+        "_fused_ssim_backward(float C1, float C2, Tensor img1, Tensor img2, Tensor dL_dmap, Tensor dm_dmu1, Tensor dm_dsigma1_sq, Tensor dm_dsigma12) -> Tensor");
 }

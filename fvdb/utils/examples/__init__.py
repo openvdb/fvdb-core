@@ -3,78 +3,17 @@
 #
 import hashlib
 import logging
-import site
-import tempfile
 import timeit
 from pathlib import Path
 from typing import List, Tuple, Union
 
-import git
-import git.repo
 import numpy as np
 import point_cloud_utils as pcu
 import torch
 from fvdb.types import NumericMaxRank1, NumericMaxRank2
-from git.exc import InvalidGitRepositoryError
+from fvdb.utils.tests import get_fvdb_example_data_path as _get_fvdb_example_data_path
 
 from fvdb import Grid, GridBatch, JaggedTensor
-
-
-def _is_editable_install() -> bool:
-    # check we're not in a site package
-    module_path = Path(__file__).resolve()
-    for site_path in site.getsitepackages():
-        if str(module_path).startswith(site_path):
-            return False
-    # check if we're in the source directory
-    module_dir = module_path.parent.parent.parent.parent
-    return (module_dir / "setup.py").is_file()
-
-
-def _get_local_repo_path() -> Path:
-    if _is_editable_install():
-        external_dir = Path(__file__).resolve().parent.parent.parent.parent / "external"
-        if not external_dir.exists():
-            external_dir.mkdir()
-        local_repo_path = external_dir
-    else:
-        local_repo_path = Path(tempfile.gettempdir())
-
-    local_repo_path = local_repo_path / "fvdb_example_data"
-    return local_repo_path
-
-
-def _clone_fvdb_example_data():
-    def is_git_repo(repo_path: str):
-        is_repo = False
-        try:
-            _ = git.repo.Repo(repo_path)
-            is_repo = True
-        except InvalidGitRepositoryError:
-            is_repo = False
-
-        return is_repo
-
-    git_tag = "613c3a4e220eb45b9ae0271dca4808ab484ee134"
-    git_url = "https://github.com/voxel-foundation/fvdb-example-data.git"
-
-    repo_path = _get_local_repo_path()
-    if repo_path.exists() and repo_path.is_dir():
-        if is_git_repo(str(repo_path)):
-            repo = git.repo.Repo(repo_path)
-            repo.git.checkout(git_tag)
-        else:
-            raise ValueError(f"A path {repo_path} exists but is not a git repo")
-    else:
-        repo = git.repo.Repo.clone_from(git_url, repo_path)
-        repo.git.checkout(git_tag)
-
-    return repo_path, repo
-
-
-def _get_fvdb_example_data_path():
-    repo_path, _ = _clone_fvdb_example_data()
-    return repo_path
 
 
 def _get_md5_checksum(file_path: Path):

@@ -1,7 +1,7 @@
 name: fVDB Unit Tests
 
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - '**'
     paths-ignore:
@@ -59,7 +59,7 @@ jobs:
           aws-region: us-east-2
       - name: Start EC2 runner
         id: start-build-runner
-        uses: machulav/ec2-github-runner@v2.4.1
+        uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -76,7 +76,7 @@ jobs:
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
-        CONDA_OVERRIDE_CUDA: "12.8"  # this is to build an environment on machines that lack a CUDA device and needs to match the CUDA version in the build_environment.yml file
+        CONDA_OVERRIDE_CUDA: "12.9"  # this is to build an environment on machines that lack a CUDA device and needs to be >= the CUDA version in the build_environment.yml file
       options: --rm
     defaults:
       run:
@@ -85,37 +85,52 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Fetch all history for all branches
-          # For pull requests, this automatically checks out the merge commit
-          # For pushes, this checks out the pushed commit
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
 
-      - name: Simulate merge for push events
-        if: github.event_name == 'push'
+      - name: Fetch PR branch
+        if: github.event_name == 'pull_request_target'
         run: |
-          echo "Push event detected - simulating merge with target branch"
+          cd $GITHUB_WORKSPACE
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$(pwd)"
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
 
-          # Get the target branch (main in this case, since push is only on main)
-          TARGET_BRANCH="main"
-          CURRENT_COMMIT="${{ github.sha }}"
+      - name: Merge PR branch into base
+        if: github.event_name == 'pull_request_target'
+        run: |
+          cd $GITHUB_WORKSPACE
+          git merge pr_branch
 
-          echo "Creating merge simulation: merging $CURRENT_COMMIT into $TARGET_BRANCH"
-          git fetch origin $TARGET_BRANCH
-          git checkout $TARGET_BRANCH
-          git merge --no-ff $CURRENT_COMMIT --message "CI: Simulating merge of $CURRENT_COMMIT into $TARGET_BRANCH"
+      # - name: Simulate merge for push events
+      #   if: github.event_name == 'push'
+      #   run: |
+      #     echo "Push event detected - simulating merge with target branch"
+      #     git config --global user.name "github-actions[bot]"
+      #     git config --global user.email "github-actions[bot]@users.noreply.github.com"
+      #     git config --global --add safe.directory "$(pwd)"
+
+      #     # Get the target branch (main in this case, since push is only on main)
+      #     TARGET_BRANCH="main"
+      #     CURRENT_COMMIT="${{ github.sha }}"
+
+      #     echo "Creating merge simulation: merging $CURRENT_COMMIT into $TARGET_BRANCH"
+      #     git fetch origin $TARGET_BRANCH
+      #     git checkout $TARGET_BRANCH
+      #     git merge --no-ff $CURRENT_COMMIT --message "CI: Simulating merge of $CURRENT_COMMIT into $TARGET_BRANCH"
 
       - name: Set up fvdb_build Conda env
-        uses: conda-incubator/setup-miniconda@v3
+        uses: mamba-org/setup-micromamba@v2
         with:
-          miniforge-version: latest
-          conda-remove-defaults: "true"
-          activate-environment: fvdb_build
+          post-cleanup: 'all'
+          environment-name: fvdb_build
           environment-file: env/build_environment.yml
 
-      - name: Buid fvdb
+      - name: Build fvdb
         run: |
-          conda run --no-capture-output -n fvdb_build ./build.sh wheel verbose gtests benchmarks --cuda-arch-list '8.9+PTX'
+          micromamba activate fvdb_build
+          ./build.sh wheel verbose gtests benchmarks --cuda-arch-list '8.9+PTX'
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
@@ -136,13 +151,6 @@ jobs:
             path: fvdb-gtest.tar
             retention-days: 2
 
-      - name: Cleanup
-        if: always()
-        run: |
-          echo "Cleaning up /__w/_temp directory"
-          sudo rm -rf /__w/_temp/*
-          echo "Cleanup completed"
-
   fvdb-build-stop-runner:
     name: Stop CPU-only EC2 runner for build
     needs:
@@ -157,7 +165,7 @@ jobs:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
       - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2.4.1
+        uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -183,7 +191,7 @@ jobs:
           aws-region: us-east-2
       - name: Start EC2 GPU runner
         id: start-tests-gpu-runner
-        uses: machulav/ec2-github-runner@v2.4.1
+        uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -210,13 +218,43 @@ jobs:
         shell: bash -el {0}
     steps:
       - uses: actions/checkout@v4
-      - name: Set up fvdb_test Conda env
-        uses: conda-incubator/setup-miniconda@v3
         with:
-          miniforge-version: latest
-          conda-remove-defaults: "true"
-          activate-environment: fvdb_test
+          fetch-depth: 0 # Fetch all history for all branches
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+
+      - name: Fetch PR branch
+        if: github.event_name == 'pull_request_target'
+        run: |
+          cd $GITHUB_WORKSPACE
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$(pwd)"
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+      - name: Merge PR branch into base
+        if: github.event_name == 'pull_request_target'
+        run: |
+          cd $GITHUB_WORKSPACE
+          git merge pr_branch
+
+      - name: Set up fvdb_test Conda env
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          cache-environment: false
+          post-cleanup: 'all'
+          environment-name: fvdb_test
           environment-file: env/test_environment.yml
+
+      - name: Download package with nanovdb_editor
+        uses: actions/download-artifact@v4
+        with:
+            name: fvdb-test-package
+            path: ./dist
+
+      - name: Install nanovdb_editor
+        run: |
+            micromamba activate fvdb_test
+            pip install ./dist/nanovdb_editor*.whl
 
       - name: Download gtests
         uses: actions/download-artifact@v4
@@ -230,16 +268,9 @@ jobs:
 
       - name: Run tests
         run: |
-            conda activate fvdb_test
+            micromamba activate fvdb_test
             export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CONDA_PREFIX/lib
             ./build.sh ctest
-
-      - name: Cleanup
-        if: always()
-        run: |
-          echo "Cleaning up /__w/_temp directory"
-          sudo rm -rf /__w/_temp/*
-          echo "Cleanup completed"
 
   ##############################################################################
   # RUN FVDB UNIT TESTS
@@ -259,12 +290,32 @@ jobs:
         shell: bash -el {0}
     steps:
       - uses: actions/checkout@v4
-      - name: Set up fvdb_test Conda env
-        uses: conda-incubator/setup-miniconda@v3
         with:
-          miniforge-version: latest
-          conda-remove-defaults: "true"
-          activate-environment: fvdb_test
+          fetch-depth: 0 # Fetch all history for all branches
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+
+      - name: Fetch PR branch
+        if: github.event_name == 'pull_request_target'
+        run: |
+          cd $GITHUB_WORKSPACE
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$(pwd)"
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+
+      - name: Merge PR branch into base
+        if: github.event_name == 'pull_request_target'
+        run: |
+          cd $GITHUB_WORKSPACE
+          git merge pr_branch
+
+      - name: Set up fvdb_test Conda env
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          cache-environment: false
+          post-cleanup: 'all'
+          environment-name: fvdb_test
           environment-file: env/test_environment.yml
 
       - name: Download package
@@ -275,20 +326,14 @@ jobs:
 
       - name: Install package
         run: |
-            conda activate fvdb_test
+            micromamba activate fvdb_test
             pip install ./dist/*.whl
 
       - name: Run tests
         run: |
+            micromamba activate fvdb_test
             cd tests;
             pytest -v unit
-
-      - name: Cleanup
-        if: always()
-        run: |
-          echo "Cleaning up /__w/_temp directory"
-          sudo rm -rf /__w/_temp/*
-          echo "Cleanup completed"
 
   ##############################################################################
   # RUN FVDB DOCUMENTATION TESTS
@@ -307,12 +352,32 @@ jobs:
         shell: bash -el {0}
     steps:
       - uses: actions/checkout@v4
-      - name: Set up fvdb_test Conda env
-        uses: conda-incubator/setup-miniconda@v3
         with:
-          miniforge-version: latest
-          conda-remove-defaults: "true"
-          activate-environment: fvdb_test
+          fetch-depth: 0 # Fetch all history for all branches
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+
+      - name: Fetch PR branch
+        if: github.event_name == 'pull_request_target'
+        run: |
+          cd $GITHUB_WORKSPACE
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$(pwd)"
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+
+      - name: Merge PR branch into base
+        if: github.event_name == 'pull_request_target'
+        run: |
+          cd $GITHUB_WORKSPACE
+          git merge pr_branch
+
+      - name: Set up fvdb_test Conda env
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          cache-environment: false
+          post-cleanup: 'all'
+          environment-name: fvdb_test
           environment-file: env/test_environment.yml
 
       - name: Download package
@@ -323,19 +388,13 @@ jobs:
 
       - name: Install package
         run: |
-            conda activate fvdb_test
+            micromamba activate fvdb_test
             pip install ./dist/*.whl
 
       - name: Run tests
         run: |
-            pytest --markdown-docs docs
-
-      - name: Cleanup
-        if: always()
-        run: |
-          echo "Cleaning up /__w/_temp directory"
-          sudo rm -rf /__w/_temp/*
-          echo "Cleanup completed"
+            micromamba activate fvdb_test
+            pytest --markdown-docs docs --ignore-glob="**/wip/**"
 
   ##############################################################################
   # STOP FVDB TESTS GPU RUNNER
@@ -356,7 +415,7 @@ jobs:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
       - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2.4.1
+        uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}

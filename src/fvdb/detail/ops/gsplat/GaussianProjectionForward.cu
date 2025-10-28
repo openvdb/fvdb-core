@@ -6,6 +6,7 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <c10/cuda/CUDAGuard.h>
 
@@ -14,6 +15,8 @@
 namespace fvdb {
 namespace detail {
 namespace ops {
+
+namespace {
 
 template <typename T, bool Ortho> struct ProjectionForward {
     using Mat3 = nanovdb::math::Mat3<T>;
@@ -38,7 +41,7 @@ template <typename T, bool Ortho> struct ProjectionForward {
     // Inputs
     fvdb::TorchRAcc64<T, 2> mMeansAcc;              // [N, 3]
     fvdb::TorchRAcc64<T, 2> mQuatsAcc;              // [N, 4]
-    fvdb::TorchRAcc64<T, 2> mScalesAcc;             // [N, 3]
+    fvdb::TorchRAcc64<T, 2> mLogScalesAcc;          // [N, 3]
     fvdb::TorchRAcc32<T, 3> mWorldToCamMatricesAcc; // [C, 4, 4]
     fvdb::TorchRAcc32<T, 3> mProjectionMatricesAcc; // [C, 3, 3]
 
@@ -65,7 +68,7 @@ template <typename T, bool Ortho> struct ProjectionForward {
                       const bool calcCompensations,
                       const torch::Tensor &means,              // [N, 3]
                       const torch::Tensor &quats,              // [N, 4]
-                      const torch::Tensor &scales,             // [N, 3]
+                      const torch::Tensor &logScales,          // [N, 3]
                       const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
                       const torch::Tensor &projectionMatrices, // [C, 3, 3]
                       torch::Tensor outRadii,                  // [C, N]
@@ -78,7 +81,7 @@ template <typename T, bool Ortho> struct ProjectionForward {
           mRadiusClip(radiusClip),
           mMeansAcc(means.packed_accessor64<T, 2, torch::RestrictPtrTraits>()),
           mQuatsAcc(quats.packed_accessor64<T, 2, torch::RestrictPtrTraits>()),
-          mScalesAcc(scales.packed_accessor64<T, 2, torch::RestrictPtrTraits>()),
+          mLogScalesAcc(logScales.packed_accessor64<T, 2, torch::RestrictPtrTraits>()),
           mWorldToCamMatricesAcc(
               worldToCamMatrices.packed_accessor32<T, 3, torch::RestrictPtrTraits>()),
           mProjectionMatricesAcc(
@@ -89,15 +92,9 @@ template <typename T, bool Ortho> struct ProjectionForward {
           mOutConicsAcc(outConics.packed_accessor64<T, 3, torch::RestrictPtrTraits>()),
           mOutCompensationsAcc(outCompensations.defined() ? outCompensations.data_ptr<T>()
                                                           : nullptr) {
-        TORCH_CHECK_VALUE(means.is_cuda(), "means must be a CUDA tensor");
-        TORCH_CHECK_VALUE(quats.is_cuda(), "quats must be a CUDA tensor");
-        TORCH_CHECK_VALUE(scales.is_cuda(), "scales must be a CUDA tensor");
-        TORCH_CHECK_VALUE(worldToCamMatrices.is_cuda(), "worldToCamMatrices must be a CUDA tensor");
-        TORCH_CHECK_VALUE(projectionMatrices.is_cuda(), "projectionMatrices must be a CUDA tensor");
-
-        mMeansAcc  = means.packed_accessor64<T, 2, torch::RestrictPtrTraits>();
-        mQuatsAcc  = quats.packed_accessor64<T, 2, torch::RestrictPtrTraits>();
-        mScalesAcc = scales.packed_accessor64<T, 2, torch::RestrictPtrTraits>();
+        mMeansAcc     = means.packed_accessor64<T, 2, torch::RestrictPtrTraits>();
+        mQuatsAcc     = quats.packed_accessor64<T, 2, torch::RestrictPtrTraits>();
+        mLogScalesAcc = logScales.packed_accessor64<T, 2, torch::RestrictPtrTraits>();
         mWorldToCamMatricesAcc =
             worldToCamMatrices.packed_accessor32<T, 3, torch::RestrictPtrTraits>();
         mProjectionMatricesAcc =
@@ -112,11 +109,13 @@ template <typename T, bool Ortho> struct ProjectionForward {
         //                 covarAcc[1], covarAcc[3], covarAcc[4], // 2nd row
         //                 covarAcc[2], covarAcc[4], covarAcc[5]  // 3rd row
         //     );
-        const auto quatAcc  = mQuatsAcc[gid];
-        const auto scaleAcc = mScalesAcc[gid];
+        const auto quatAcc     = mQuatsAcc[gid];
+        const auto logScaleAcc = mLogScalesAcc[gid];
         return quaternionAndScaleToCovariance<T>(
             Vec4(quatAcc[0], quatAcc[1], quatAcc[2], quatAcc[3]),
-            Vec3(scaleAcc[0], scaleAcc[1], scaleAcc[2]));
+            Vec3(::cuda::std::exp(logScaleAcc[0]),
+                 ::cuda::std::exp(logScaleAcc[1]),
+                 ::cuda::std::exp(logScaleAcc[2])));
     }
 
     inline __device__ void
@@ -232,24 +231,27 @@ template <typename T, bool Ortho> struct ProjectionForward {
 
 template <typename T, bool Ortho>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
-projectionForwardKernel(ProjectionForward<T, Ortho> projectionForward) {
+projectionForwardKernel(int64_t offset,
+                        int64_t count,
+                        ProjectionForward<T, Ortho> projectionForward) {
     projectionForward.loadCamerasIntoSharedMemory();
     __syncthreads();
 
     // parallelize over C * N.
-    const auto problemSize = projectionForward.C * projectionForward.N;
-    for (auto idx = blockIdx.x * blockDim.x + threadIdx.x; idx < problemSize;
+    for (auto idx = blockIdx.x * blockDim.x + threadIdx.x; idx < count;
          idx += blockDim.x * gridDim.x) {
-        projectionForward.projectionForward(idx);
+        projectionForward.projectionForward(idx + offset);
     }
 }
+
+} // namespace
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchGaussianProjectionForward<torch::kCUDA>(
     const torch::Tensor &means,              // [N, 3]
     const torch::Tensor &quats,              // [N, 4]
-    const torch::Tensor &scales,             // [N, 3]
+    const torch::Tensor &logScales,          // [N, 3]
     const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
     const torch::Tensor &projectionMatrices, // [C, 3, 3]
     const int64_t imageWidth,
@@ -261,6 +263,13 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
     const bool calcCompensations,
     const bool ortho) {
     FVDB_FUNC_RANGE();
+
+    TORCH_CHECK_VALUE(means.is_cuda(), "means must be a CUDA tensor");
+    TORCH_CHECK_VALUE(quats.is_cuda(), "quats must be a CUDA tensor");
+    TORCH_CHECK_VALUE(logScales.is_cuda(), "logScales must be a CUDA tensor");
+    TORCH_CHECK_VALUE(worldToCamMatrices.is_cuda(), "worldToCamMatrices must be a CUDA tensor");
+    TORCH_CHECK_VALUE(projectionMatrices.is_cuda(), "projectionMatrices must be a CUDA tensor");
+
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means));
 
     const auto N                = means.size(0);              // number of gaussians
@@ -297,7 +306,7 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
                                                             calcCompensations,
                                                             means,
                                                             quats,
-                                                            scales,
+                                                            logScales,
                                                             worldToCamMatrices,
                                                             projectionMatrices,
                                                             outRadii,
@@ -306,7 +315,8 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
                                                             outConics,
                                                             outCompensations);
         projectionForwardKernel<scalar_t, true>
-            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(projectionForward);
+            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
+                0, C * N, projectionForward);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     } else {
         ProjectionForward<scalar_t, false> projectionForward(imageWidth,
@@ -318,7 +328,7 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
                                                              calcCompensations,
                                                              means,
                                                              quats,
-                                                             scales,
+                                                             logScales,
                                                              worldToCamMatrices,
                                                              projectionMatrices,
                                                              outRadii,
@@ -327,7 +337,8 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
                                                              outConics,
                                                              outCompensations);
         projectionForwardKernel<scalar_t, false>
-            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(projectionForward);
+            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
+                0, C * N, projectionForward);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
     return std::make_tuple(outRadii, outMeans2d, outDepths, outConics, outCompensations);
@@ -335,9 +346,114 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchGaussianProjectionForward<torch::kPrivateUse1>(
+    const torch::Tensor &means,              // [N, 3]
+    const torch::Tensor &quats,              // [N, 4]
+    const torch::Tensor &logScales,          // [N, 3]
+    const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
+    const torch::Tensor &projectionMatrices, // [C, 3, 3]
+    const int64_t imageWidth,
+    const int64_t imageHeight,
+    const float eps2d,
+    const float nearPlane,
+    const float farPlane,
+    const float radiusClip,
+    const bool calcCompensations,
+    const bool ortho) {
+    TORCH_CHECK_VALUE(means.is_privateuseone(), "means must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(quats.is_privateuseone(), "quats must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(logScales.is_privateuseone(), "logScales must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(worldToCamMatrices.is_privateuseone(),
+                      "worldToCamMatrices must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(projectionMatrices.is_privateuseone(),
+                      "projectionMatrices must be a PrivateUse1 tensor");
+
+    const auto N = means.size(0);              // number of gaussians
+    const auto C = worldToCamMatrices.size(0); // number of cameras
+
+    torch::Tensor outRadii   = torch::empty({C, N}, means.options().dtype(torch::kInt32));
+    torch::Tensor outMeans2d = torch::empty({C, N, 2}, means.options());
+    torch::Tensor outDepths  = torch::empty({C, N}, means.options());
+    torch::Tensor outConics  = torch::empty({C, N, 3}, means.options());
+    torch::Tensor outCompensations;
+    if (calcCompensations) {
+        // we dont want NaN to appear in this tensor, so we zero intialize it
+        outCompensations = torch::zeros({C, N}, means.options());
+    }
+
+    if (N == 0 || C == 0) {
+        // Early exit if there are no gaussians or cameras
+        return std::make_tuple(outRadii, outMeans2d, outDepths, outConics, outCompensations);
+    }
+
+    using scalar_t = float;
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+
+        int64_t deviceProblemOffset, deviceProblemSize;
+        std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(C * N, deviceId);
+
+        const size_t NUM_BLOCKS     = GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM);
+        const size_t SHARD_MEM_SIZE = C * (9 + 9 + 3) * sizeof(scalar_t);
+
+        if (ortho) {
+            ProjectionForward<scalar_t, true> projectionForward(imageWidth,
+                                                                imageHeight,
+                                                                eps2d,
+                                                                nearPlane,
+                                                                farPlane,
+                                                                radiusClip,
+                                                                calcCompensations,
+                                                                means,
+                                                                quats,
+                                                                logScales,
+                                                                worldToCamMatrices,
+                                                                projectionMatrices,
+                                                                outRadii,
+                                                                outMeans2d,
+                                                                outDepths,
+                                                                outConics,
+                                                                outCompensations);
+            projectionForwardKernel<scalar_t, true>
+                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
+                    deviceProblemOffset, deviceProblemSize, projectionForward);
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+        } else {
+            ProjectionForward<scalar_t, false> projectionForward(imageWidth,
+                                                                 imageHeight,
+                                                                 eps2d,
+                                                                 nearPlane,
+                                                                 farPlane,
+                                                                 radiusClip,
+                                                                 calcCompensations,
+                                                                 means,
+                                                                 quats,
+                                                                 logScales,
+                                                                 worldToCamMatrices,
+                                                                 projectionMatrices,
+                                                                 outRadii,
+                                                                 outMeans2d,
+                                                                 outDepths,
+                                                                 outConics,
+                                                                 outCompensations);
+            projectionForwardKernel<scalar_t, false>
+                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
+                    deviceProblemOffset, deviceProblemSize, projectionForward);
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+        }
+    }
+
+    mergeStreams();
+    return std::make_tuple(outRadii, outMeans2d, outDepths, outConics, outCompensations);
+}
+
+template <>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchGaussianProjectionForward<torch::kCPU>(const torch::Tensor &means,              // [N, 3]
                                                const torch::Tensor &quats,              // [N, 4]
-                                               const torch::Tensor &scales,             // [N, 3]
+                                               const torch::Tensor &logScales,          // [N, 3]
                                                const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
                                                const torch::Tensor &projectionMatrices, // [C, 3, 3]
                                                const int64_t imageWidth,

@@ -38,7 +38,7 @@ def make_dense_grid_and_point_data(
 
     grid_d = grid.dual_grid()
     assert grid_d.num_voxels == target_corners
-    dual_corners_xyz = grid_d.grid_to_world(grid_d.ijk.float())
+    dual_corners_xyz = grid_d.voxel_to_world(grid_d.ijk.float())
     assert torch.allclose(dual_corners_xyz.min(0)[0], -torch.ones(3).to(dual_corners_xyz))
     assert torch.allclose(dual_corners_xyz.max(0)[0], torch.ones(3).to(dual_corners_xyz))
 
@@ -96,10 +96,10 @@ def make_grid_and_point_data(
     while not found:
         # Do everything in double then cast so fp16 samples are
         # as close as possible from double and float
-        primal_pts = grid.grid_to_world(grid.ijk.double())
+        primal_pts = grid.voxel_to_world(grid.ijk.double())
         samples = torch.cat([primal_pts] * expand, dim=0)
         samples += torch.randn_like(samples) * grid.voxel_size
-        mask = grid.points_in_active_voxel(samples)
+        mask = grid.points_in_grid(samples)
         found = not (torch.all(mask) or torch.all(~mask))
 
     samples = samples.to(dtype)

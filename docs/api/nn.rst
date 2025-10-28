@@ -1,20 +1,24 @@
-fvdb.nn
-=======
+Neural Network Layers and Blocks
+===================================
 
-`fvdb.nn` is a collection of neural network layers to build sparse neural networks.
-
-.. autoclass:: fvdb.nn.VDBTensor
 .. autoclass:: fvdb.nn.MaxPool
 .. autoclass:: fvdb.nn.AvgPool
 .. autoclass:: fvdb.nn.UpsamplingNearest
-.. autoclass:: fvdb.nn.FillFromGrid
 .. autoclass:: fvdb.nn.SparseConv3d
+.. autoclass:: fvdb.nn.SparseConvTranspose3d
+.. autoclass:: fvdb.nn.BatchNorm
 .. autoclass:: fvdb.nn.GroupNorm
-.. autoclass:: fvdb.nn.Linear
-.. autoclass:: fvdb.nn.ReLU
-.. autoclass:: fvdb.nn.LeakyReLU
-.. autoclass:: fvdb.nn.SELU
-.. autoclass:: fvdb.nn.SiLU
-.. autoclass:: fvdb.nn.Tanh
-.. autoclass:: fvdb.nn.Sigmoid
-.. autoclass:: fvdb.nn.Dropout
+.. autoclass:: fvdb.nn.SyncBatchNorm
+
+U-Net Architecture Blocks
+---------------------------
+
+.. autoclass:: fvdb.nn.SimpleUNet
+.. autoclass:: fvdb.nn.SimpleUNetBasicBlock
+.. autoclass:: fvdb.nn.SimpleUNetBottleneck
+.. autoclass:: fvdb.nn.SimpleUNetConvBlock
+.. autoclass:: fvdb.nn.SimpleUNetDown
+.. autoclass:: fvdb.nn.SimpleUNetDownUp
+.. autoclass:: fvdb.nn.SimpleUNetPad
+.. autoclass:: fvdb.nn.SimpleUNetUnpad
+.. autoclass:: fvdb.nn.SimpleUNetUp

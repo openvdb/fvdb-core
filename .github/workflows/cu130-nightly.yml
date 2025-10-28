@@ -1,0 +1,305 @@
+name: fVDB Nightly Build and Tests -- CUDA 13.0.1
+
+# on:
+#   schedule:
+#     - cron: "01 15 * * *"  # Runs every day at 4am pacific/11am UTC
+#   workflow_dispatch:
+
+
+permissions:
+  contents: read
+  deployments: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  fvdb-build:
+    if: ${{ !startsWith(github.event.pull_request.title, 'Draft:') }}
+    name: fVDB Build
+    runs-on:
+      - self-hosted
+    container:
+      image: nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04
+      env:
+        PYTHONPATH: ""
+        CPM_SOURCE_CACHE: "/__w/cpm_cache"
+      options: --rm
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - name: Install GitHub CLI and jq
+        run: |
+          (type -p wget >/dev/null || (apt update && apt install wget -y)) \
+            && mkdir -p -m 755 /etc/apt/keyrings \
+            && out=$(mktemp) && wget -nv -O$out https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+            && cat $out | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+            && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+            && mkdir -p -m 755 /etc/apt/sources.list.d \
+            && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+            && apt update \
+            && apt install gh -y
+          which jq || apt install -y jq
+      ### Get the PR branch and apply changes to the target branch
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for all branches
+      - name: Determine the target branch of the PR
+        run: |
+          echo "Fetching pull request metadata..."
+          # Extract PR number from branch name if it follows pattern "pull-request/123"
+          BRANCH_NAME=${GITHUB_REF#refs/heads/}
+          echo "Branch name: $BRANCH_NAME"
+
+          # Setup GitHub CLI authentication
+          echo "${{ github.token }}" | gh auth login --with-token
+
+          # Get default branch from repository
+          echo "Getting default branch from repository..."
+          DEFAULT_BRANCH=$(gh repo view ${{ github.repository }} --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null || echo 'develop')
+          echo "Repository default branch is: $DEFAULT_BRANCH"
+
+          if [[ $BRANCH_NAME =~ pull-request/([0-9]+) ]]; then
+            PR_NUMBER=${BASH_REMATCH[1]}
+            echo "Found PR number from branch name: $PR_NUMBER"
+
+            echo "Using gh CLI to get PR details..."
+            # Get PR info using GitHub CLI and extract the base branch
+            PR_INFO=$(gh pr view $PR_NUMBER --json baseRefName --repo ${{ github.repository }} 2>/dev/null || echo '{"baseRefName":"'$DEFAULT_BRANCH'"}')
+            TARGET_BRANCH=$(echo "$PR_INFO" | jq -r '.baseRefName')
+
+            echo "Target branch is $TARGET_BRANCH"
+
+            if [ -z "$TARGET_BRANCH" ] || [ "$TARGET_BRANCH" = "null" ]; then
+              echo "Could not determine target branch, using default branch"
+              TARGET_BRANCH="$DEFAULT_BRANCH"
+            fi
+          else
+            echo "Branch doesn't match the expected pattern, using default branch"
+            TARGET_BRANCH="$DEFAULT_BRANCH"
+          fi
+
+          echo "Final TARGET_BRANCH=$TARGET_BRANCH"
+          echo "TARGET_BRANCH=$TARGET_BRANCH" >> $GITHUB_ENV
+      - name: Set up Git user
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Merge pushed branch into target branch
+        run: |
+          if [ -z "$TARGET_BRANCH" ]; then
+            echo "No pull request metadata found. Skipping merge."
+            exit 0
+          fi
+          git config --global --add safe.directory "$(pwd)"
+          git fetch origin $TARGET_BRANCH
+          git checkout $TARGET_BRANCH
+          git merge $GITHUB_REF --no-ff --message "Merging $GITHUB_REF into $TARGET_BRANCH"
+        env:
+          GITHUB_REF: ${{ github.ref }}
+      #### End of git merge
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        with:
+          version: "0.7.5"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+        env:
+          AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
+
+      - name: Install CMake
+        run: >
+          wget -nv https://github.com/Kitware/CMake/releases/download/v4.0.3/cmake-4.0.3-linux-x86_64.sh &&
+          mkdir /opt/cmake &&
+          sh cmake-4.0.3-linux-x86_64.sh --prefix=/usr/local --skip-license &&
+          cmake --version
+
+      - name: Install apt dependencies
+        run: apt install -y zlib1g-dev libpng-dev pkg-config
+
+      - name: Install pip dependencies
+        run: |
+          uv venv
+          uv pip install --no-cache-dir -r fvdb/env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
+
+      - name: Build fvdb
+        run: |
+          source .venv/bin/activate
+          cd fvdb;
+          ./build.sh wheel verbose gtests benchmarks --cuda-arch-list '8.0;8.6+PTX'
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+            name: fvdb-test-package
+            path: fvdb/dist/*.whl
+            retention-days: 2
+
+      #NOTE: This tar step is here because directly uploading the build directory
+      #      wasn't working due to losing executable permissions on the files.
+      - name: Tar build directory
+        run: tar -cvf fvdb-gtest.tar fvdb/build/
+
+      - name: Upload gtests
+        uses: actions/upload-artifact@v4
+        with:
+            name: fvdb-gtest
+            path: fvdb-gtest.tar
+            retention-days: 2
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up /__w/_temp directory"
+          rm -rf /__w/_temp/*
+          echo "Cleanup completed"
+
+  fvdb-benchmarks:
+    needs: [fvdb-build]
+    name: fVDB Continuous Benchmarking
+    runs-on:
+      - self-hosted
+    container:
+      image: nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04
+      env:
+        PYTHONPATH: ""
+      options: --rm
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - name: Install GitHub CLI and jq
+        run: |
+          (type -p wget >/dev/null || (apt update && apt install wget -y)) \
+            && mkdir -p -m 755 /etc/apt/keyrings \
+            && out=$(mktemp) && wget -nv -O$out https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+            && cat $out | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+            && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+            && mkdir -p -m 755 /etc/apt/sources.list.d \
+            && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+            && apt update \
+            && apt install gh -y
+          which jq || apt install -y jq
+      ### Get the PR branch and apply changes to the target branch
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for all branches
+      - name: Determine the target branch of the PR
+        run: |
+          echo "Fetching pull request metadata..."
+          # Extract PR number from branch name if it follows pattern "pull-request/123"
+          BRANCH_NAME=${GITHUB_REF#refs/heads/}
+          echo "Branch name: $BRANCH_NAME"
+
+          # Setup GitHub CLI authentication
+          echo "${{ github.token }}" | gh auth login --with-token
+
+          # Get default branch from repository
+          echo "Getting default branch from repository..."
+          DEFAULT_BRANCH=$(gh repo view ${{ github.repository }} --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null || echo 'develop')
+          echo "Repository default branch is: $DEFAULT_BRANCH"
+
+          if [[ $BRANCH_NAME =~ pull-request/([0-9]+) ]]; then
+            PR_NUMBER=${BASH_REMATCH[1]}
+            echo "Found PR number from branch name: $PR_NUMBER"
+
+            echo "Using gh CLI to get PR details..."
+            # Get PR info using GitHub CLI and extract the base branch
+            PR_INFO=$(gh pr view $PR_NUMBER --json baseRefName --repo ${{ github.repository }} 2>/dev/null || echo '{"baseRefName":"'$DEFAULT_BRANCH'"}')
+            TARGET_BRANCH=$(echo "$PR_INFO" | jq -r '.baseRefName')
+
+            echo "Target branch is $TARGET_BRANCH"
+
+            if [ -z "$TARGET_BRANCH" ] || [ "$TARGET_BRANCH" = "null" ]; then
+              echo "Could not determine target branch, using default branch"
+              TARGET_BRANCH="$DEFAULT_BRANCH"
+            fi
+          else
+            echo "Branch doesn't match the expected pattern, using default branch"
+            TARGET_BRANCH="$DEFAULT_BRANCH"
+          fi
+
+          echo "Final TARGET_BRANCH=$TARGET_BRANCH"
+          echo "TARGET_BRANCH=$TARGET_BRANCH" >> $GITHUB_ENV
+      - name: Set up Git user
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Merge pushed branch into target branch
+        run: |
+          if [ -z "$TARGET_BRANCH" ]; then
+            echo "No pull request metadata found. Skipping merge."
+            exit 0
+          fi
+          git config --global --add safe.directory "$(pwd)"
+          git fetch origin $TARGET_BRANCH
+          git checkout $TARGET_BRANCH
+          git merge $GITHUB_REF --no-ff --message "Merging $GITHUB_REF into $TARGET_BRANCH"
+        env:
+          GITHUB_REF: ${{ github.ref }}
+      #### End of git merge
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        with:
+          version: "0.7.5"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+        env:
+          AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
+
+      - name: Install apt dependencies
+        run: apt install -y zlib1g-dev libpng-dev
+
+      - name: Install pip dependencies
+        run: |
+          uv venv
+          uv pip install --no-cache-dir -r fvdb/env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
+
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+            name: fvdb-test-package
+            path: ./dist
+
+      - name: Install package
+        run: |
+          source .venv/bin/activate
+          pip install ./dist/*.whl
+
+      - name: Disable git ownership verification
+        run: |
+          git config --global --add safe.directory "$(pwd)"
+
+      - name: Run benchmarks
+        run: |
+          source .venv/bin/activate
+          cd fvdb/tests;
+          pytest benchmark --benchmark-json benchmark/output.json
+
+      - name: Store benchmark result
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+            name: Python Benchmark with pytest-benchmark
+            tool: 'pytest'
+            output-file-path: fvdb/tests/benchmark/output.json
+            # Use personal access token instead of GITHUB_TOKEN due to https://github.community/t/github-action-not-triggering-gh-pages-upon-push/16096
+            github-token: ${{ secrets.GITHUB_TOKEN }}
+            auto-push: true
+            # Show alert with commit comment on detecting possible performance regression
+            alert-threshold: '200%'
+            comment-on-alert: true
+            fail-on-alert: true
+            alert-comment-cc-users: '@NVIDIA-Omniverse/fvdb-dev'
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up /__w/_temp directory"
+          rm -rf /__w/_temp/*
+          echo "Cleanup completed"

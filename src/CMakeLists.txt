@@ -18,9 +18,12 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_blosc.cmake)
 # Build options
 option(FVDB_BUILD_TESTS "Configure CMake to build tests" ON)
 option(FVDB_BUILD_BENCHMARKS "Configure CMake to build (google & nvbench) benchmarks" OFF)
+option(FVDB_STRIP_SYMBOLS "Strip symbols from the build" OFF)
 
 message(STATUS "FVDB: Configure CMake to build tests: ${FVDB_BUILD_TESTS}")
 message(STATUS "FVDB: Configure CMake to build (google & nvbench) benchmarks: ${FVDB_BUILD_BENCHMARKS}")
+message(STATUS "FVDB_STRIP_SYMBOLS: ${FVDB_STRIP_SYMBOLS}")
+
 
 # Generate compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -60,7 +63,9 @@ set(FVDB_CPP_FILES
     fvdb/detail/io/LoadNanovdb.cpp
     fvdb/detail/io/SaveNanoVDB.cpp
     fvdb/detail/io/GaussianPlyIO.cpp
-    fvdb/detail/TorchDeviceBuffer.cpp)
+    fvdb/detail/TorchDeviceBuffer.cpp
+    fvdb/detail/viewer/Viewer.cpp
+    fvdb/detail/viewer/GaussianSplat3dView.cpp)
 
 set(FVDB_CU_FILES
     fvdb/detail/ops/IntegrateTSDF.cu
@@ -93,6 +98,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/VoxelNeighborhood.cu
     fvdb/detail/ops/SampleGridTrilinearWithGrad.cu
     fvdb/detail/ops/CoordsInGrid.cu
+    fvdb/detail/ops/gsplat/FusedSSIM.cu
     fvdb/detail/ops/gsplat/GaussianComputeNanInfMask.cu
     fvdb/detail/ops/gsplat/GaussianSplatSparse.cu
     fvdb/detail/ops/gsplat/GaussianProjectionJaggedBackward.cu
@@ -170,8 +176,8 @@ target_include_directories(fvdb PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${nanovdb_SOURCE_DIR}/nanovdb
     ${TORCH_INCLUDE_DIRS}
-    ${Python3_INCLUDE_DIRS}
-    ${nvtx3_SOURCE_DIR}/include)
+    ${nvtx3_SOURCE_DIR}/include
+    ${NANOVDB_EDITOR_INCLUDE_DIR})
 target_include_directories(fvdb PRIVATE
     ${TORCH_SOURCE_INCLUDE_DIRS}
     ${tinyply_SOURCE_DIR}/source)
@@ -202,25 +208,34 @@ target_compile_options(fvdb PRIVATE
     "-Xfatbin=-compress-all"
     "-fvisibility=default"
     "-Werror=all-warnings"
+    "--threads=$ENV{NVCC_THREADS}"
     "-Xcompiler=-Wall,-Werror"
     ${TORCH_CUDA_COMMON_FLAGS}
     >)
 
 target_link_libraries(fvdb PRIVATE
     ${TORCH_LIBRARIES} tinyply cudnn_frontend cudnn cutlass blosc::blosc)
-target_link_libraries(fvdb PUBLIC
-    ${Python3_LIBRARIES})
+
+# Strip symbols in non-Debug builds to reduce wheel size
+if(NOT (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo") AND FVDB_STRIP_SYMBOLS)
+    target_link_options(fvdb PRIVATE "-s")
+endif()
 
 # Install rules
-install(TARGETS fvdb
-    EXPORT fvdb-targets
-    LIBRARY DESTINATION lib)
+# Install of development artifacts (headers and system-level lib) is optional
+option(FVDB_INSTALL_DEV "Install headers and system-level lib for development" ON)
 
-# Use pattern exclusion to prevent recursion
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/fvdb/
-    DESTINATION include
-    FILES_MATCHING PATTERN "*.h"
-    PATTERN "*/*" EXCLUDE)
+if(FVDB_INSTALL_DEV)
+    install(TARGETS fvdb
+        EXPORT fvdb-targets
+        LIBRARY DESTINATION lib)
+
+    # Use pattern exclusion to prevent recursion
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/fvdb/
+        DESTINATION include
+        FILES_MATCHING PATTERN "*.h"
+        PATTERN "*/*" EXCLUDE)
+endif()
 
 # Add tests subdirectory if tests are enabled
 if(FVDB_BUILD_TESTS)

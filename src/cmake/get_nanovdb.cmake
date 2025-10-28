@@ -3,8 +3,8 @@
 
 CPMAddPackage(
     NAME nanovdb
-    GITHUB_REPOSITORY matthewdcong/openvdb-aswf
-    GIT_TAG 6f3f350dafc95f00f02d442b808e3838df6a30c6
+    GITHUB_REPOSITORY AcademySoftwareFoundation/openvdb
+    GIT_TAG 5f0432b3387c169212a009ddaa05fdd703016549
     SOURCE_SUBDIR nanovdb/nanovdb
     DOWNLOAD_ONLY YES
 )

@@ -265,9 +265,14 @@ loadGaussianPly(const std::string &filename, torch::Device device) {
     }
     torch::Tensor shNCoeffs; // (N, K-1, D)
     if (shNData && shNData->count > 0) {
+        // fVDB expected shNCoeffs to be ordered by basis, then channel. i.e. RRR...GGG...BBB...
+        // The PLY stores them by channel, then basis. i.e. RGBRGB... So we need to permute the
+        // axes.
         shNCoeffs = torch::from_blob(shNData->buffer.get(),
-                                     {static_cast<int64_t>(vertex_count), nShNBases, numChannels},
-                                     torch::kFloat32);
+                                     {static_cast<int64_t>(vertex_count), numChannels, nShNBases},
+                                     torch::kFloat32)
+                        .permute({0, 2, 1})
+                        .contiguous(); // to (N, K-1, D)
     } else {
         shNCoeffs =
             torch::empty({static_cast<int64_t>(vertex_count), 0, numChannels}, torch::kFloat32);
@@ -302,15 +307,14 @@ saveGaussianPly(const std::string &filename,
                 std::optional<std::unordered_map<std::string, PlyMetadataTypes>> trainingMetadata) {
     using namespace tinyply;
 
-    const fvdb::JaggedTensor validMask =
-        FVDB_DISPATCH_KERNEL_DEVICE(gaussians.means().device(), [&]() {
-            return detail::ops::dispatchGaussianNanInfMask<DeviceTag>(gaussians.means(),
-                                                                      gaussians.quats(),
-                                                                      gaussians.logScales(),
-                                                                      gaussians.logitOpacities(),
-                                                                      gaussians.sh0(),
-                                                                      gaussians.shN());
-        });
+    const fvdb::JaggedTensor validMask = FVDB_DISPATCH_KERNEL(gaussians.means().device(), [&]() {
+        return detail::ops::dispatchGaussianNanInfMask<DeviceTag>(gaussians.means(),
+                                                                  gaussians.quats(),
+                                                                  gaussians.logScales(),
+                                                                  gaussians.logitOpacities(),
+                                                                  gaussians.sh0(),
+                                                                  gaussians.shN());
+    });
 
     std::filebuf fb;
     fb.open(filename, std::ios::out | std::ios::binary);
@@ -340,6 +344,11 @@ saveGaussianPly(const std::string &filename,
             return torch::zeros({meansCPU.size(0), 0},
                                 gaussians.shN().options().device(torch::kCPU));
         } else {
+            // ShN has shape [N, K-1, D], meaning the spherical harmonic coefficients are ordered
+            // by basis, then channel. i.e. RGBRGB...
+            // Gaussian PLYs expect the coefficients to be ordered by channel, then basis. i.e.
+            // RR...GG...BB... So we permute the axes to [N, D, K-1] and then reshape to [N,
+            // D*(K-1)]
             return gaussians.shN()
                 .index({validMask.jdata(), torch::indexing::Slice(), torch::indexing::Ellipsis})
                 .cpu()

@@ -3,6 +3,9 @@
 #
 from __future__ import annotations
 
+import ctypes
+import importlib.util as _importlib_util
+import pathlib
 from typing import Sequence
 
 import torch
@@ -36,42 +39,147 @@ def _parse_device_string(device_or_device_string: str | torch.device) -> torch.d
     return device
 
 
+# Load NanoVDB Editor shared libraries so symbols are globally available before importing the pybind module.
+# This helps the dynamic linker resolve dependencies like libpnanovdb*.so when loading fvdb's extensions.
+_spec = _importlib_util.find_spec("nanovdb_editor")
+if _spec is not None and _spec.origin is not None:
+    try:
+        _libdir = pathlib.Path(_spec.origin).parent / "lib"
+        for _so in sorted(_libdir.glob("libpnanovdb*.so")):
+            try:
+                ctypes.CDLL(str(_so), mode=ctypes.RTLD_GLOBAL)
+            except OSError:
+                print(f"Failed to load {_so} from {_libdir}")
+                pass
+    except Exception:
+        print("Failed to load nanovdb_editor from", _libdir)
+        pass
+
 # isort: off
-from . import _Cpp  # Import the module to use in jcat
-from ._Cpp import JaggedTensor, ConvPackBackend
+from ._Cpp import jcat as _jcat_cpp
+from ._Cpp import ConvPackBackend
+from ._Cpp import scaled_dot_product_attention as _scaled_dot_product_attention_cpp
+from ._Cpp import gaussian_render_jagged as _gaussian_render_jagged_cpp
 from ._Cpp import (
-    scaled_dot_product_attention,
     config,
+    volume_render,
+)
+
+# Import JaggedTensor from jagged_tensor.py
+from .jagged_tensor import (
+    JaggedTensor,
     jrand,
     jrandn,
     jones,
     jzeros,
     jempty,
-    volume_render,
-    gaussian_render_jagged,
 )
 
-# Import GridBatch and gridbatch_from_* functions from grid_batch.py
-from .grid_batch import (
-    GridBatch,
-    load_gridbatch,
-    save_gridbatch,
+# Import GridBatch and Grid
+from .grid_batch import GridBatch
+from .grid import Grid
+
+
+def scaled_dot_product_attention(
+    query: JaggedTensor, key: JaggedTensor, value: JaggedTensor, scale: float
+) -> JaggedTensor:
+    return JaggedTensor(impl=_scaled_dot_product_attention_cpp(query._impl, key._impl, value._impl, scale))
+
+
+def gaussian_render_jagged(
+    means: JaggedTensor,  # [N1 + N2 + ..., 3]
+    quats: JaggedTensor,  # [N1 + N2 + ..., 4]
+    scales: JaggedTensor,  # [N1 + N2 + ..., 3]
+    opacities: JaggedTensor,  # [N1 + N2 + ...]
+    sh_coeffs: JaggedTensor,  # [N1 + N2 + ..., K, 3]
+    viewmats: JaggedTensor,  # [C1 + C2 + ..., 4, 4]
+    Ks: JaggedTensor,  # [C1 + C2 + ..., 3, 3]
+    image_width: int,
+    image_height: int,
+    near_plane: float = 0.01,
+    far_plane: float = 1e10,
+    sh_degree_to_use: int = -1,
+    tile_size: int = 16,
+    radius_clip: float = 0.0,
+    eps2d: float = 0.3,
+    antialias: bool = False,
+    render_depth_channel: bool = False,
+    return_debug_info: bool = False,
+    ortho: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+    return _gaussian_render_jagged_cpp(
+        means=means._impl,
+        quats=quats._impl,
+        scales=scales._impl,
+        opacities=opacities._impl,
+        sh_coeffs=sh_coeffs._impl,
+        viewmats=viewmats._impl,
+        Ks=Ks._impl,
+        image_width=image_width,
+        image_height=image_height,
+        near_plane=near_plane,
+        far_plane=far_plane,
+        sh_degree_to_use=sh_degree_to_use,
+        tile_size=tile_size,
+        radius_clip=radius_clip,
+        eps2d=eps2d,
+        antialias=antialias,
+        render_depth_channel=render_depth_channel,
+        return_debug_info=return_debug_info,
+        ortho=ortho,
+    )
+
+
+from .convolution_plan import ConvolutionPlan
+from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
+from .enums import ProjectionType, ShOrderingMode
+
+# Import torch-compatible functions that work with both Tensor and JaggedTensor
+from .torch_jagged import (
+    # Unary operations
+    relu,
+    relu_,
+    sigmoid,
+    tanh,
+    exp,
+    log,
+    sqrt,
+    floor,
+    ceil,
+    round,
+    nan_to_num,
+    clamp,
+    # Binary operations
+    add,
+    sub,
+    mul,
+    true_divide,
+    floor_divide,
+    remainder,
+    pow,
+    maximum,
+    minimum,
+    # Comparisons
+    eq,
+    ne,
+    lt,
+    le,
+    gt,
+    ge,
+    where,
+    # Reductions
+    sum,
+    mean,
+    amax,
+    amin,
+    argmax,
+    argmin,
+    all,
+    any,
+    norm,
+    var,
+    std,
 )
-
-
-from .grid import (
-    Grid,
-    load_grid,
-    save_grid,
-)
-
-# Import SparseConvPackInfo from sparse_conv_pack_info.py
-from .sparse_conv_pack_info import SparseConvPackInfo
-from .gaussian_splatting import GaussianSplat3d
-
-# The following import needs to come after the GridBatch and JaggedTensor imports
-# immediately above in order to avoid a circular dependency error.
-from . import nn
 
 # isort: on
 
@@ -84,56 +192,90 @@ def jcat(things_to_cat, dim=None):
             raise ValueError("GridBatch concatenation does not support dim argument")
         # Extract the C++ implementations from the GridBatch wrappers
         cpp_grids = [g._gridbatch for g in things_to_cat]
-        cpp_result = _Cpp.jcat(cpp_grids)
+        cpp_result = _jcat_cpp(cpp_grids)
         # Wrap the result back in a GridBatch
         return GridBatch(impl=cpp_result)
     elif isinstance(things_to_cat[0], JaggedTensor):
-        return _Cpp.jcat(things_to_cat, dim)
-    elif isinstance(things_to_cat[0], nn.VDBTensor):
-        if dim == 0:
-            raise ValueError("VDBTensor concatenation does not support dim=0")
-        grids = [t.grid for t in things_to_cat]
-        data = [t.data for t in things_to_cat]
-        # Check if grids contain wrapped GridBatch objects
-        if grids and isinstance(grids[0], GridBatch):
-            # Extract C++ implementations
-            cpp_grids = [g._gridbatch for g in grids]
-            grid_result = _Cpp.jcat(cpp_grids) if dim == None else cpp_grids[0]
-            # Wrap back in GridBatch if concatenated
-            if dim == None:
-                grid_result = GridBatch(impl=grid_result)
-            else:
-                grid_result = grids[0]
-        else:
-            grid_result = GridBatch(impl=_Cpp.jcat(grids)) if dim == None else grids[0]
-        return nn.VDBTensor(grid_result, _Cpp.jcat(data, dim))
+        return _jcat_cpp([thing._impl for thing in things_to_cat], dim)
     else:
-        raise TypeError("jcat() can only cat GridBatch, JaggedTensor, or VDBTensor")
+        raise TypeError("jcat() can only cat GridBatch or JaggedTensor")
 
 
+# The following import needs to come after all classes and functions are defined
+# in order to avoid a circular dependency error.
+# Make these available without an explicit submodule import
+from . import nn, utils, viz
 from .version import __version__
 
 __version_info__ = tuple(map(int, __version__.split(".")))
 
 __all__ = [
+    # Core classes
     "GridBatch",
     "JaggedTensor",
-    "SparseConvPackInfo",
-    "ConvPackBackend",
     "GaussianSplat3d",
-    "load_gridbatch",
-    "save_gridbatch",
+    "ProjectedGaussianSplats",
+    "ProjectionType",
+    "ShOrderingMode",
+    "ConvolutionPlan",
+    # GridBatch operations
+    # Grid operations
+    "Grid",
+    # JaggedTensor operations
     "jcat",
-    "scaled_dot_product_attention",
-    "config",
     "jrand",
     "jrandn",
     "jones",
     "jzeros",
     "jempty",
+    # Specialized operations
+    "scaled_dot_product_attention",
     "volume_render",
     "gaussian_render_jagged",
-    "Grid",
-    "load_grid",
-    "save_grid",
+    # Torch-compatible functions (work with both Tensor and JaggedTensor)
+    "relu",
+    "relu_",
+    "sigmoid",
+    "tanh",
+    "exp",
+    "log",
+    "sqrt",
+    "floor",
+    "ceil",
+    "round",
+    "nan_to_num",
+    "clamp",
+    "add",
+    "sub",
+    "mul",
+    "true_divide",
+    "floor_divide",
+    "remainder",
+    "pow",
+    "maximum",
+    "minimum",
+    "eq",
+    "ne",
+    "lt",
+    "le",
+    "gt",
+    "ge",
+    "where",
+    "sum",
+    "mean",
+    "amax",
+    "amin",
+    "argmax",
+    "argmin",
+    "all",
+    "any",
+    "norm",
+    "var",
+    "std",
+    # Config
+    "config",
+    # Submodules
+    "viz",
+    "nn",
+    "utils",
 ]

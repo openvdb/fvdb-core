@@ -46,7 +46,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertEqual(grids.cum_voxels.shape, (0,))
         self.assertEqual(grids.dual_bboxes.shape, (0, 2, 3))
         self.assertEqual(grids.grid_count, 0)
-        self.assertEqual(grids.grid_to_world_matrices.shape, (0, 4, 4))
+        self.assertEqual(grids.voxel_to_world_matrices.shape, (0, 4, 4))
         self.assertTrue(grids.has_zero_grids)
         self.assertEqual(grids.ijk.jdata.shape, (0, 3))
         self.assertEqual(grids.jidx.shape, (0,))
@@ -60,7 +60,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertEqual(grids.total_leaf_nodes, 0)
         self.assertEqual(grids.total_voxels, 0)
         self.assertEqual(grids.voxel_sizes.shape, (0, 3))
-        self.assertEqual(grids.world_to_grid_matrices.shape, (0, 4, 4))
+        self.assertEqual(grids.world_to_voxel_matrices.shape, (0, 4, 4))
 
     @parameterized.expand(["cuda", "cpu"])
     def test_building_zero_voxels_constructor(self, device):
@@ -74,7 +74,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertEqual(grids.cum_voxels.shape, (1,))
         self.assertEqual(grids.dual_bboxes.shape, (1, 2, 3))
         self.assertEqual(grids.grid_count, 1)
-        self.assertEqual(grids.grid_to_world_matrices.shape, (1, 4, 4))
+        self.assertEqual(grids.voxel_to_world_matrices.shape, (1, 4, 4))
         self.assertFalse(grids.has_zero_grids)
         self.assertEqual(grids.ijk.jdata.shape, (0, 3))
         self.assertEqual(grids.jidx.shape, (0,))
@@ -87,7 +87,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertEqual(grids.total_leaf_nodes, 0)
         self.assertEqual(grids.total_voxels, 0)
         self.assertEqual(grids.voxel_sizes.shape, (1, 3))
-        self.assertEqual(grids.world_to_grid_matrices.shape, (1, 4, 4))
+        self.assertEqual(grids.world_to_voxel_matrices.shape, (1, 4, 4))
         self.assertTrue(torch.allclose(grids.voxel_sizes, expected_voxel_sizes))
         self.assertTrue(torch.allclose(grids.origins, expected_origins))
 

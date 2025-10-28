@@ -5,9 +5,29 @@ requires = [
 build-backend = "scikit_build_core.build"
 
 [project]
-name = "fvdb"
-version = "0.2.1"
+name = "fvdb-core"
+version = "0.3.1"
 license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = [
+    # Require torch; users will choose the correct CUDA build from PyTorch's index
+    "torch>=2.8,<2.10",
+    "numpy",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: POSIX :: Linux",
+    # Informational: CUDA requirement surfaced via README; no official CUDA classifier
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Visualization",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+]
 
 [tool.scikit-build]
 build-dir = "build/{wheel_tag}-{build_type}"
@@ -17,3 +37,17 @@ build.verbose = false
 # Can override from command line using -C cmake.define.OPTION=value
 define.FVDB_BUILD_TESTS = false
 define.FVDB_BUILD_BENCHMARKS = false
+define.FVDB_INSTALL_DEV = false
+define.CMAKE_BUILD_TYPE = "Release"
+
+[tool.scikit-build.install]
+components = ["PythonModule"]
+
+[tool.scikit-build.wheel]
+packages = ["fvdb"]
+
+# This is so that the WIP tests are not run
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+norecursedirs = ["wip", ".*", "build", "dist"]

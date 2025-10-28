@@ -3,6 +3,7 @@
 #
 import uuid
 
+import fvdb.viz as fviz
 import numpy as np
 import point_cloud_utils as pcu
 import polyscope as ps
@@ -33,8 +34,8 @@ if __name__ == "__main__":
     grid_origin = fvdb.GridBatch.from_points(fvdb.JaggedTensor(p), voxel_sizes=[0.005] * 3, origins=[0.0] * 3)
     visualize_grid(grid_origin, 0.0)
 
-    grid_subdivided = grid_origin.subdivided_grid(2)
-    visualize_grid(grid_subdivided, 0.15)
+    grid_refined = grid_origin.refined_grid(2)
+    visualize_grid(grid_refined, 0.15)
 
     grid_coarsened = grid_origin.coarsened_grid(2)
     visualize_grid(grid_coarsened, 0.3)
@@ -43,7 +44,7 @@ if __name__ == "__main__":
 
     grid_dual = grid_origin.dual_grid()
 
-    grid_dual_gv, grid_dual_ge = grid_dual.viz_edge_network
+    grid_dual_gv, grid_dual_ge = fviz.gridbatch_edge_network(grid_dual)
     ps.remove_all_structures()
     visualize_grid(grid_origin, 0.0)
     ps.register_curve_network(

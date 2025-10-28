@@ -2,16 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import math
-from typing import Any, List, Optional, Sequence, Union
+from typing import Any, Sequence
 
 import torch
 import torch.nn as nn
+from fvdb.types import (
+    NumericMaxRank1,
+    NumericMaxRank2,
+    ValueConstraint,
+    to_Vec3i,
+    to_Vec3iBroadcastable,
+)
 from torch.profiler import record_function
 
 import fvdb
-from fvdb import GridBatch, JaggedTensor
-
-from .vdbtensor import VDBTensor
+from fvdb import ConvolutionPlan, Grid, GridBatch, JaggedTensor
 
 
 def fvnn_module(module):
@@ -26,216 +31,253 @@ def fvnn_module(module):
     return module
 
 
-GridOrVDBTensor = Union[fvdb.GridBatch, VDBTensor]
-ListOrInt = Union[int, List[int]]
+@fvnn_module
+class AvgPool(nn.Module):
+    """
+    Applies a 3D average pooling over an input :class:`JaggedTensor` of features
+    associated with a :class:`fvdb.GridBatch`.
+
+    Args:
+        kernel_size (NumericMaxRank1): the size of the window to take the average over, broadcastable to (3,)
+        stride (NumericMaxRank1, optional): the stride of the window. Default value is :attr:`kernel_size`
+
+    .. note::
+
+        For target voxels that are not covered by any source voxels, the
+        output feature will be set to zero.
+
+    .. seealso::
+
+        :meth:`fvdb.GridBatch.avg_pool` for details on the average pooling operation.
+
+    .. seealso::
+
+        :class:`fvdb.nn.MaxPool` for max pooling.
+
+    Args:
+        kernel_size (NumericMaxRank1): the size of the window to take the average over
+        stride (NumericMaxRank1, optional): the stride of the window. Default value is :attr:`kernel_size`
+    """
+
+    def __init__(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 | None = None):
+        super().__init__()
+        self._kernel_size = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
+        self._stride = (
+            to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE) if stride else self.kernel_size
+        )
+
+    @property
+    def kernel_size(self) -> torch.Tensor:
+        """
+        The size of the window (in voxels) to take the average over.
+
+        Returns:
+            kernel_size (torch.Tensor): The kernel size as a ``(3,)``-shaped :class:`torch.Tensor`.
+        """
+        return self._kernel_size
+
+    @property
+    def stride(self) -> torch.Tensor:
+        """
+        The stride of the window (in voxels) to take the average over.
+
+        Returns:
+            stride (torch.Tensor): The stride as a ``(3,)``-shaped :class:`torch.Tensor`.
+        """
+        return self._stride
+
+    def extra_repr(self) -> str:
+        return f"kernel_size={self.kernel_size}, stride={self.stride}"
+
+    def forward(
+        self, fine_data: JaggedTensor, fine_grid: GridBatch, coarse_grid: GridBatch | None = None
+    ) -> tuple[JaggedTensor, GridBatch]:
+        """
+        Apply 3D average pooling to the input :class:`JaggedTensor` of ``fine_data`` associated with
+        the :class:`fvdb.GridBatch` ``fine_grid``. If ``coarse_grid`` is provided, it will be used
+        to define the output grid structure; otherwise, a new coarsened grid will be created.
+
+        Args:
+            fine_data (JaggedTensor): Input features associated with ``fine_grid``.
+            fine_grid (GridBatch): The fine grid batch corresponding to ``fine_data``.
+            coarse_grid (GridBatch, optional): An optional coarse grid batch to define the output structure.
+
+        Returns:
+            pooled_data (JaggedTensor): The pooled features associated with the coarse grid.
+            coarse_grid (GridBatch): The coarse :class:`fvdb.GridBatch` after pooling.
+        """
+        return fine_grid.avg_pool(self.kernel_size, fine_data, stride=self.stride, coarse_grid=coarse_grid)
 
 
 @fvnn_module
 class MaxPool(nn.Module):
-    r"""Applies a 3D max pooling over an input signal.
+    """
+    Applies a 3D max pooling over an input :class:`JaggedTensor` of features
+    associated with a :class:`fvdb.GridBatch`.
 
     Args:
-        kernel_size: the size of the window to take a max over
-        stride: the stride of the window. Default value is :attr:`kernel_size`
+        kernel_size (NumericMaxRank1): the size of the window to take the max over, broadcastable to (3,)
+        stride (NumericMaxRank1, optional): the stride of the window. Default value is :attr:`kernel_size`
 
-    Note:
+    .. note::
+
         For target voxels that are not covered by any source voxels, the
         output feature will be set to zero.
 
-    """
+    .. seealso::
 
-    def __init__(self, kernel_size: ListOrInt, stride: Optional[ListOrInt] = None):
-        super().__init__()
-        self.kernel_size = kernel_size
-        self.stride = stride or self.kernel_size
+        :meth:`fvdb.GridBatch.max_pool` for details on the max pooling operation.
 
-    def forward(self, input: VDBTensor, ref_coarse_data: Optional[GridOrVDBTensor] = None) -> VDBTensor:
-        if isinstance(ref_coarse_data, VDBTensor):
-            coarse_grid, coarse_kmap = ref_coarse_data.grid, ref_coarse_data.kmap
-        elif isinstance(ref_coarse_data, fvdb.GridBatch):
-            coarse_grid, coarse_kmap = ref_coarse_data, None
-        else:
-            coarse_grid, coarse_kmap = None, None
+    .. seealso::
 
-        new_feature, new_grid = input.grid.max_pool(
-            self.kernel_size, input.data, stride=self.stride, coarse_grid=coarse_grid
-        )
-        new_feature.jdata[torch.isinf(new_feature.jdata)] = 0.0
-        return VDBTensor(new_grid, new_feature, kmap=coarse_kmap)
-
-    def extra_repr(self) -> str:
-        return "kernel_size={kernel_size}, stride={stride}".format(kernel_size=self.kernel_size, stride=self.stride)
-
-
-@fvnn_module
-class AvgPool(nn.Module):
-    r"""Applies a 3D average pooling over an input signal.
+        :class:`fvdb.nn.AvgPool` for average pooling.
 
     Args:
-        kernel_size: the size of the window to take average over
-        stride: the stride of the window. Default value is :attr:`kernel_size`
+        kernel_size (NumericMaxRank1): the size of the window to take the max over, broadcastable to (3,)
+        stride (NumericMaxRank1, optional): the stride of the window. Default value is :attr:`kernel_size`
 
     """
 
-    def __init__(self, kernel_size: ListOrInt, stride: Optional[ListOrInt] = None):
+    def __init__(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 | None = None):
         super().__init__()
-        self.kernel_size = kernel_size
-        self.stride = stride or self.kernel_size
-
-    def forward(self, input: VDBTensor, ref_coarse_data: Optional[GridOrVDBTensor] = None) -> VDBTensor:
-        if isinstance(ref_coarse_data, VDBTensor):
-            coarse_grid, coarse_kmap = ref_coarse_data.grid, ref_coarse_data.kmap
-        elif isinstance(ref_coarse_data, fvdb.GridBatch):
-            coarse_grid, coarse_kmap = ref_coarse_data, None
-        else:
-            coarse_grid, coarse_kmap = None, None
-
-        new_feature, new_grid = input.grid.avg_pool(
-            self.kernel_size, input.data, stride=self.stride, coarse_grid=coarse_grid
+        self._kernel_size = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
+        self._stride = (
+            to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE) if stride else self.kernel_size
         )
-        return VDBTensor(new_grid, new_feature, kmap=coarse_kmap)
+
+    @property
+    def kernel_size(self) -> torch.Tensor:
+        """
+        The size of the window (in voxels) to take the max over.
+
+        Returns:
+            kernel_size (torch.Tensor): The kernel size as a ``(3,)``-shaped :class:`torch.Tensor`.
+        """
+        return self._kernel_size
+
+    @property
+    def stride(self) -> torch.Tensor:
+        """
+        The stride of the window (in voxels) to take the max over.
+
+        Returns:
+            stride (torch.Tensor): The stride as a ``(3,)``-shaped :class:`torch.Tensor`.
+        """
+        return self._stride
 
     def extra_repr(self) -> str:
-        return "kernel_size={kernel_size}, stride={stride}".format(kernel_size=self.kernel_size, stride=self.stride)
+        return f"kernel_size={self.kernel_size}, stride={self.stride}"
+
+    def forward(
+        self, fine_data: JaggedTensor, fine_grid: GridBatch, coarse_grid: GridBatch | None = None
+    ) -> tuple[JaggedTensor, GridBatch]:
+        """
+        Apply 3D max pooling to the input :class:`JaggedTensor` of ``fine_data`` associated with
+        the :class:`fvdb.GridBatch` ``fine_grid``. If ``coarse_grid`` is provided, it will be used
+        to define the output grid structure; otherwise, a new coarsened grid will be created.
+
+        Args:
+            fine_data (JaggedTensor): Input features associated with ``fine_grid``.
+            fine_grid (GridBatch): The fine grid batch corresponding to ``fine_data``.
+            coarse_grid (GridBatch, optional): An optional coarse grid batch to define the output structure.
+
+        Returns:
+            pooled_data (JaggedTensor): The pooled features associated with the coarse grid.
+            coarse_grid (GridBatch): The coarse :class:`fvdb.GridBatch` after pooling.
+        """
+        new_coarse_data, new_coarse_grid = fine_grid.max_pool(
+            self.kernel_size, fine_data, stride=self.stride, coarse_grid=coarse_grid
+        )
+
+        # TODO(chorvath): If this is desired behavior, build into GridBatch directly.
+        new_coarse_data.jdata[torch.isinf(new_coarse_data.jdata)] = 0.0
+
+        return new_coarse_data, new_coarse_grid
 
 
 @fvnn_module
 class UpsamplingNearest(nn.Module):
-    r"""Upsamples the input by a given scale factor using nearest upsampling.
+    """
+    Refines a :class:`JaggedTensor` of features associated with a coarse :class:`fvdb.GridBatch`
+    to a fine :class:`GridBatch` using nearest-neighbor upsampling.
+    *i.e.* each voxel in the coarse grid expands to a cube of voxels in the fine grid.
+
+    .. seealso::
+
+        :meth:`fvdb.GridBatch.refine` for details on the refinement operation.
+
+    .. seealso::
+
+        :class:`fvdb.nn.AvgPool` and :class:`fvdb.nn.MaxPool` for downsampling operations.
 
     Args:
-        scale_factor: the upsampling factor
+        scale_factor (NumericMaxRank1): the upsampling factor, broadcastable to (3,)
     """
 
-    def __init__(self, scale_factor: ListOrInt):
+    def __init__(self, scale_factor: NumericMaxRank1):
         super().__init__()
-        self.scale_factor = scale_factor
+        self._scale_factor = to_Vec3iBroadcastable(scale_factor, value_constraint=ValueConstraint.POSITIVE)
 
-    def forward(
-        self, input: VDBTensor, mask: Optional[JaggedTensor] = None, ref_fine_data: Optional[GridOrVDBTensor] = None
-    ) -> VDBTensor:
-        if isinstance(ref_fine_data, VDBTensor):
-            fine_grid, fine_kmap = ref_fine_data.grid, ref_fine_data.kmap
-        elif isinstance(ref_fine_data, fvdb.GridBatch):
-            fine_grid, fine_kmap = ref_fine_data, None
-        else:
-            fine_grid, fine_kmap = None, None
+    @property
+    def scale_factor(self) -> torch.Tensor:
+        """
+        The upsampling factor (in voxels) for each dimension.
 
-        new_feature, new_grid = input.grid.subdivide(self.scale_factor, input.data, mask, fine_grid=fine_grid)
-        return VDBTensor(new_grid, new_feature, kmap=fine_kmap)
+        Returns:
+            scale_factor (torch.Tensor): The scale factor as a ``(3,)``-shaped :class:`torch.Tensor`.
+        """
+        return self._scale_factor
 
     def extra_repr(self) -> str:
-        return "scale_factor={scale_factor}".format(scale_factor=self.scale_factor)
+        return f"scale_factor={self.scale_factor}"
+
+    def forward(
+        self,
+        coarse_data: JaggedTensor,
+        coarse_grid: GridBatch,
+        mask: JaggedTensor | None = None,
+        fine_grid: GridBatch | None = None,
+    ) -> tuple[JaggedTensor, GridBatch]:
+        """
+        Apply nearest-neighbor upsampling to the input :class:`JaggedTensor` of ``coarse_data`` associated with
+        the :class:`fvdb.GridBatch` ``coarse_grid``. If ``fine_grid`` is provided, it will be used
+        to define the output grid structure; otherwise, a new refined grid will be created.
+
+        Args:
+            coarse_data (JaggedTensor): Input features associated with ``coarse_grid``.
+            coarse_grid (GridBatch): The coarse grid batch corresponding to ``coarse_data``.
+            mask (JaggedTensor, optional): An optional mask :class:`JaggedTensor` associated with ``fine_grid``.
+                If provided, only voxels where the mask is non-zero will be populated in the output.
+            fine_grid (GridBatch, optional): An optional fine grid batch to define the output structure.
+        Returns:
+            refined_data (JaggedTensor): The refined features associated with the fine grid.
+            fine_grid (GridBatch): The fine :class:`fvdb.GridBatch` after upsampling.
+        """
+        return coarse_grid.refine(self.scale_factor, coarse_data, mask, fine_grid=fine_grid)
 
 
-@fvnn_module
-class FillFromGrid(nn.Module):
-    r"""
-    Fill the content of input vdb-tensor to another grid.
-
-    Args:
-        default_value: the default value to fill in the new grid.
-    """
-
-    def __init__(self, default_value: float = 0.0) -> None:
-        super().__init__()
-        self.default_value = default_value
-
-    def forward(self, input: VDBTensor, other_data: Optional[GridOrVDBTensor] = None) -> VDBTensor:
-        if isinstance(other_data, VDBTensor):
-            other_grid, other_kmap = other_data.grid, other_data.kmap
-        elif isinstance(other_data, fvdb.GridBatch):
-            other_grid, other_kmap = other_data, None
-        else:
-            return input
-
-        new_feature = other_grid.inject_from(input.grid, input.data, default_value=self.default_value)
-        return VDBTensor(other_grid, new_feature, kmap=other_kmap)
-
-
-@fvnn_module
-class SparseConv3d(nn.Module):
-    r"""Applies a 3D convolution over an input signal composed of several input
-    planes, by performing a sparse convolution on the underlying VDB grid.
-
-    Args:
-        in_channels: number of channels in the input tensor
-        out_channels: number of channels produced by the convolution
-        kernel_size: size of the convolving kernel
-        stride: stride of the convolution. Default value is 1
-        bias: if ``True``, adds a learnable bias to the output. Default: ``True``
-        transposed: if ``True``, uses a transposed convolution operator
-    """
-
-    CUTLASS_SUPPORTED_CHANNELS = [
-        (32, 64),
-        (64, 128),
-        (128, 256),
-        (32, 32),
-        (64, 64),
-        (128, 128),
-        (256, 256),
-        (128, 64),
-        (64, 32),
-        (256, 128),
-        (384, 256),
-        (192, 128),
-        (256, 512),
-        (512, 256),
-        (512, 512),
-    ]
-
-    """
-    Backend for performing convolutions:
-      - "default": for now it is 'igemm_mode1'
-      - "legacy": the old slow implementation
-      - "me": MinkowskiEngine implementation
-      - "halo": 10x10x10 halo buffer implementation, stride 1, kernel 3
-      - "cutlass": 4x4x6 cutlass implementation, stride 1, kernel 3, forward only, limited channels support
-      - "lggs": kernel optimized for sparse structures
-      - "igemm_mode0": unsorted
-      - "igemm_mode1": sorted + split=1
-      - "igemm_mode2": sorted + split=3
-      - "dense": dense convolution
-    """
-    backend: str = "default"
-    allow_tf32: bool = True
-
+class _SparseConv3dBase(nn.Module):
     def __init__(
         self,
         in_channels: int,
         out_channels: int,
-        kernel_size: Union[int, Sequence] = 3,
-        stride: Union[int, Sequence] = 1,
+        kernel_size: NumericMaxRank1 = 3,
+        stride: NumericMaxRank1 = 1,
         bias: bool = True,
-        transposed: bool = False,
     ) -> None:
 
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
 
-        if isinstance(kernel_size, int):
-            kernel_size = (kernel_size,) * 3
-        assert len(kernel_size) == 3
+        self.kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
+        self.stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
-        if isinstance(stride, int):
-            stride = (stride,) * 3
-        assert len(stride) == 3
-
-        self.kernel_size = kernel_size
-        self.stride = stride
-        self.transposed = transposed
-
-        if self.transposed:
-            # Only change kernel size instead of module dict
-            out_channels, in_channels = in_channels, out_channels
-
-        self.kernel_volume = math.prod(self.kernel_size)
+        self.kernel_volume: int = int(torch.prod(self.kernel_size).item())
         if self.kernel_volume > 1:
             # Weight tensor is of shape (Do, Di, K0, K1, K2), but the underlying data is (K2, K1, K0, Di, Do)
             #   so we don't need to make a copy of the permuted tensor within the conv kernel.
-            weight_shape = [out_channels, in_channels] + list(self.kernel_size)
+            weight_shape = [out_channels, in_channels] + self.kernel_size.tolist()
             weight = torch.zeros(*weight_shape[::-1]).permute(4, 3, 2, 1, 0)
             self.weight = nn.Parameter(weight)
         else:
@@ -249,173 +291,161 @@ class SparseConv3d(nn.Module):
         self.reset_parameters()
 
     def extra_repr(self) -> str:
-        s = "{in_channels}, {out_channels}, kernel_size={kernel_size}"
-        if self.stride != (1, 1, 1):
-            s += ", stride={stride}"
+        s = f"{self.in_channels}, {self.out_channels}, kernel_size={self.kernel_size}, stride={self.stride}"
         if self.bias is None:
             s += ", bias=False"
-        if self.transposed:
-            s += ", transposed=True"
-        return s.format(**self.__dict__)
+        return s
 
     def reset_parameters(self) -> None:
-        std = 1 / math.sqrt((self.out_channels if self.transposed else self.in_channels) * self.kernel_volume)
+        std = 1 / math.sqrt(self.in_channels * self.kernel_volume)
         self.weight.data.uniform_(-std, std)
         if self.bias is not None:
             self.bias.data.uniform_(-std, std)
 
-    def _dispatch_conv(self, in_feature, in_grid, in_kmap, out_grid):
 
-        backend = self.backend
+@fvnn_module
+class SparseConv3d(_SparseConv3dBase):
+    """
+    A sparse 3D convolution module that operates on :class:`JaggedTensor` inputs
+    according to a provided :class:`ConvolutionPlan`.
 
-        sm_arch = torch.cuda.get_device_capability()[0] + torch.cuda.get_device_capability()[1] / 10
-        # tf32 requires compute capability >= 8.0 (Ampere)
-        if self.allow_tf32 and self.weight.is_cuda:
-            assert (
-                sm_arch >= 8
-            ), "TF32 requires GPU with compute capability >= 8.0. Please set fvdb.nn.SparseConv3d.allow_tf32 = False."
+    A :class:`ConvolutionPlan` defines the mapping of a sparse convolution operation
+    between data associated with an input :class:`fvdb.GridBatch` and an output
+    :class:`fvdb.GridBatch`. This allows for efficient sparse convolution operations
+    without explicitly constructing dense tensors.
 
-        # bf16 requires compute capability >= 8.0 (Ampere)
-        if self.weight.is_cuda and self.weight.dtype == torch.bfloat16:
-            assert sm_arch >= 8, "BF16 requires GPU with compute capability >= 8.0."
+    .. seealso::
 
-        # float16 requires compute capability >= 7.5 (Turing)
-        if self.weight.is_cuda and self.weight.dtype == torch.float16:
-            assert sm_arch >= 7.5, "FP16 requires GPU with compute capability >= 7.5."
+        :class:`fvdb.ConvolutionPlan` for details on creating and using convolution plans.
 
-        # cutlass, lggs, halo backends require compute capability >= 8.0 (Ampere)
-        if backend in ["cutlass", "lggs", "halo"]:
-            assert (
-                torch.cuda.get_device_capability()[0] >= 8
-            ), "cutlass, LGGS and Halo backends require GPU with compute capability >= 8.0."
+    .. seealso::
 
-        if backend == "cutlass" and (
-            (not self.weight.is_cuda) or (self.in_channels, self.out_channels) not in self.CUTLASS_SUPPORTED_CHANNELS
-        ):
-            print(
-                f"Cutlass backend does not support {self.in_channels} -> {self.out_channels} convolutions, falling back to default"
-            )
-            backend = "default"
+        :class:`fvdb.SparseConvTranspose3d` for the transposed version of this module.
 
-        if backend == "lggs" and ((self.in_channels, self.out_channels) not in [(128, 128)]):
-            print("LGGS backend only supports 128 to 128 convolution, falling back to default")
-            backend = "default"
-
-        if backend == "default":
-            if (not self.weight.is_cuda) or in_feature.dtype == torch.float64:
-                backend = "legacy"
-            else:
-                backend = "igemm_mode1"
-
-        if backend == "halo" and self.stride == (1, 1, 1) and self.kernel_size == (3, 3, 3):
-            assert out_grid is None or in_grid.is_same(out_grid)
-            return in_grid, in_grid.sparse_conv_halo(in_feature, self.weight, 8), None
-
-        elif backend == "dense" and self.stride == (1, 1, 1):
-            assert out_grid is None or in_grid.is_same(out_grid)
-            min_coord = in_grid.ijk.jdata.min(axis=0).values
-            # BWHDC -> BCDHW
-            dense_feature = in_grid.write_to_dense_czyx(in_feature, min_coord=min_coord)
-            dense_feature = torch.nn.functional.conv3d(dense_feature, self.weight, padding=1, stride=1)
-            # BCDHW -> BWHDC
-            dense_feature = dense_feature.contiguous()
-            dense_feature = in_grid.read_from_dense_czyx(dense_feature, dense_origins=min_coord)
-
-            return in_grid, dense_feature, None
-
-        else:
-            # Fallback to the default implementation
-            can_cache = self.stride == (1, 1, 1) and (out_grid is None or out_grid.is_same(in_grid))
-
-            if in_kmap is not None and in_kmap.kernel_size == self.kernel_size and can_cache:
-                kmap, out_grid = in_kmap, in_grid
-            else:
-                if self.transposed:
-                    assert out_grid is not None
-                    kmap, _ = out_grid.sparse_conv_kernel_map(self.kernel_size, self.stride, in_grid)
-                else:
-                    kmap, out_grid = in_grid.sparse_conv_kernel_map(self.kernel_size, self.stride, out_grid)
-
-            out_kmap = kmap if can_cache else None
-
-            backend = self._build_kmap_and_convert_backend(kmap, backend)
-
-            if not self.transposed:
-                out_feature = kmap.sparse_conv_3d(in_feature, self.weight, backend)
-            else:
-                out_feature = kmap.sparse_transpose_conv_3d(in_feature, self.weight, backend)
-
-            return out_grid, out_feature, out_kmap
-
-    def _build_kmap_and_convert_backend(self, kmap: fvdb.SparseConvPackInfo, backend: str) -> fvdb.ConvPackBackend:
-        if backend in ["legacy", "me"]:
-            kmap.build_gather_scatter(backend == "me")
-            return fvdb.ConvPackBackend.GATHER_SCATTER
-
-        elif backend == "cutlass":
-            kmap.build_cutlass(benchmark=False)
-            return fvdb.ConvPackBackend.CUTLASS
-
-        elif backend == "igemm_mode0":
-            kmap.build_implicit_gemm(
-                sorted=False, split_mask_num=1, training=self.training, split_mask_num_bwd=3, use_tf32=self.allow_tf32
-            )
-            return fvdb.ConvPackBackend.IGEMM
-
-        elif backend == "igemm_mode1":
-            kmap.build_implicit_gemm(
-                sorted=True, split_mask_num=1, training=self.training, split_mask_num_bwd=3, use_tf32=self.allow_tf32
-            )
-            return fvdb.ConvPackBackend.IGEMM
-
-        elif backend == "igemm_mode2":
-            kmap.build_implicit_gemm(
-                sorted=True, split_mask_num=3, training=self.training, split_mask_num_bwd=3, use_tf32=self.allow_tf32
-            )
-            return fvdb.ConvPackBackend.IGEMM
-
-        elif backend == "lggs":
-            kmap.build_lggs()
-            return fvdb.ConvPackBackend.LGGS
-
-        else:
-            raise NotImplementedError(f"Backend {backend} is not supported")
+    Args:
+        in_channels (int): Number of channels in the input :class:`JaggedTensor`.
+        out_channels (int): Number of channels in the output :class:`JaggedTensor`.
+        kernel_size (NumericMaxRank1, optional): Size of the convolution kernel, broadcastable to ``(3,)``. Default: 3
+        stride (NumericMaxRank1, optional): Stride of the convolution, broadcastable to ``(3,)``. Default: 1
+        bias (bool, optional): If True, adds a learnable bias to the output. Default: ``True``
+    """
 
     def forward(
         self,
-        input: VDBTensor,
-        out_grid: Optional[GridBatch] = None,
-    ) -> VDBTensor:
-        in_feature, in_grid, in_kmap = input.data, input.grid, input.kmap
+        data: JaggedTensor,
+        plan: ConvolutionPlan,
+    ) -> JaggedTensor:
+        """
+        Apply the sparse convolution to the input :class:`JaggedTensor` using the provided :class:`ConvolutionPlan`.
 
-        if self.kernel_size == (1, 1, 1) and self.stride == (1, 1, 1):
-            out_feature = in_feature.jdata.matmul(self.weight.transpose(0, 1))
-            out_feature = in_feature.jagged_like(out_feature)
-            out_grid, out_kmap = in_grid, in_kmap
+        Args:
+            data (JaggedTensor): Input features to be convolved.
+            plan (ConvolutionPlan): The convolution plan defining the mapping between input and output grids.
 
-        else:
-            out_grid, out_feature, out_kmap = self._dispatch_conv(in_feature, in_grid, in_kmap, out_grid)
+        Returns:
+            result (JaggedTensor): The result of the sparse convolution.
+        """
+        if not plan.valid_usage(self.in_channels, self.out_channels, self.kernel_size, self.stride, transposed=False):
+            raise ValueError(
+                "Convolution plan used with a SparseConv3d module that had "
+                "mismatched input/output channels, kernel size, or stride, or transposition"
+            )
+
+        out_data = plan.execute(data, self.weight)
 
         if self.bias is not None:
-            out_feature.jdata = out_feature.jdata + self.bias
+            out_data.jdata = out_data.jdata + self.bias
 
-        if out_grid is None:
-            raise ValueError("Failed to compute output grid. This is a bug in the implementation.")
-        return VDBTensor(out_grid, out_feature, out_kmap)
+        return out_data
+
+
+@fvnn_module
+class SparseConvTranspose3d(_SparseConv3dBase):
+    """
+    A sparse 3D transposed convolution module that operates on :class:`JaggedTensor` inputs
+    according to a provided :class:`ConvolutionPlan`.
+
+    A :class:`ConvolutionPlan` defines the mapping of a sparse convolution operation
+    between data associated with an input :class:`fvdb.GridBatch` and an output
+    :class:`fvdb.GridBatch`. This allows for efficient sparse convolution operations
+    without explicitly constructing dense tensors.
+
+    .. seealso::
+
+        :class:`fvdb.ConvolutionPlan` for details on creating and using convolution plans.
+
+    .. seealso::
+
+        :class:`fvdb.nn.SparseConv3d` for the non-transposed version of this module.
+
+    Args:
+        in_channels (int): Number of channels in the input :class:`JaggedTensor`.
+        out_channels (int): Number of channels in the output :class:`JaggedTensor`.
+        kernel_size (NumericMaxRank1, optional): Size of the convolution kernel, broadcastable to ``(3,)``. Default: 3
+        stride (NumericMaxRank1, optional): Stride of the convolution, broadcastable to ``(3,)``. Default: 1
+        bias (bool, optional): If True, adds a learnable bias to the output. Default: ``True``
+    """
+
+    def forward(
+        self,
+        data: JaggedTensor,
+        plan: ConvolutionPlan,
+    ) -> JaggedTensor:
+        """
+        Apply the sparse transposed convolution to the input :class:`JaggedTensor` using the provided :class:`ConvolutionPlan`.
+
+        Args:
+            data (JaggedTensor): Input features to be convolved.
+            plan (ConvolutionPlan): The convolution plan defining the mapping between input and output grids.
+
+        Returns:
+            result (JaggedTensor): The result of the sparse transposed convolution.
+        """
+        if not plan.valid_usage(self.in_channels, self.out_channels, self.kernel_size, self.stride, transposed=True):
+            raise ValueError(
+                "Convolution plan used with a SparseConvTranspose3d module that had "
+                "mismatched input/output channels, kernel size, or stride, or transposition"
+            )
+
+        out_data = plan.execute(data, self.weight)
+
+        if self.bias is not None:
+            out_data.jdata = out_data.jdata + self.bias
+
+        return out_data
 
 
 @fvnn_module
 class GroupNorm(nn.GroupNorm):
-    r"""Applies Group Normalization over a VDBTensor.
-    See :class:`~torch.nn.GroupNorm` for detailed information.
+    """
+    Applies Group Normalization over a :class:`JaggedTensor` batch of features associated with a :class:`GridBatch`.
+    See :class:`~torch.nn.GroupNorm` for detailed information on Group Normalization.
+
+    Args:
+        num_groups (int): number of groups to separate the channels into
+        num_channels (int): number of channels in the input :class:`JaggedTensor`
+        eps (float, optional): a value added to the denominator for numerical stability. Default: 1e-5.
+        affine (bool, optional): a boolean value that when set to ``True``, this module has learnable affine parameters. Default: ``True``
+        device (torch.device, optional): device on which the module is allocated. Default: ``None``
+        dtype (torch.dtype, optional): data type of the module parameters. Default: ``None``.
     """
 
-    def forward(self, input: VDBTensor) -> VDBTensor:
-        num_channels = input.data.jdata.size(1)
-        assert num_channels == self.num_channels, "Input feature should have the same number of channels as GroupNorm"
-        num_batches = input.grid.grid_count
+    def forward(self, data: JaggedTensor, grid: GridBatch) -> JaggedTensor:
+        """
+        Apply Group Normalization to the input :class:`JaggedTensor` using the provided :class:`GridBatch`.
 
-        flat_data, flat_offsets = input.data.jdata, input.data.joffsets
+        Args:
+            data (JaggedTensor): Input features to be normalized.
+            grid (GridBatch): The grid batch corresponding to ``data``.
+
+        Returns:
+            result (JaggedTensor): The result of the group normalization.
+        """
+        num_channels = data.jdata.size(1)
+        assert num_channels == self.num_channels, "Input feature should have the same number of channels as GroupNorm"
+        num_batches = grid.grid_count
+
+        flat_data, flat_offsets = data.jdata, data.joffsets
 
         result_data = torch.empty_like(flat_data)
 
@@ -428,68 +458,115 @@ class GroupNorm(nn.GroupNorm):
 
                 result_data[flat_offsets[b] : flat_offsets[b + 1]] = feat
 
-        return VDBTensor(input.grid, input.grid.jagged_like(result_data), input.kmap)
+        return grid.jagged_like(result_data)
 
 
 @fvnn_module
 class BatchNorm(nn.BatchNorm1d):
-    r"""Applies Batch Normalization over a VDBTensor.
-    See :class:`~torch.nn.BatchNorm1d` for detailed information.
+    """
+    Applies Batch Normalization over a :class:`JaggedTensor` batch of features associated with a :class:`GridBatch`.
+    See :class:`~torch.nn.BatchNorm1d` for detailed information on Batch Normalization.
+
+    .. seealso::
+
+        :class:`fvdb.nn.SyncBatchNorm` for distributed batch normalization across multiple processes.
+
+    Args:
+        num_features (int): number of features in the input :class:`JaggedTensor`
+        eps (float, optional): a value added to the denominator for numerical stability. Default: 1e-5.
+        momentum (float, optional): the value used for the running_mean and running_var computation. Default: 0.1
+        affine (bool, optional): a boolean value that when set to ``True``, this module has learnable affine parameters. Default: ``True``
+        track_running_stats (bool, optional): a boolean value that when set to ``True``, this module
+            tracks the running mean and variance, and when set to ``False``, this module does not
+            track such statistics and always uses batch statistics in both training and eval modes.
+            Default: ``True``
+        device (torch.device, optional): device on which the module is allocated. Default: ``None``
+        dtype (torch.dtype, optional): data type of the module parameters. Default: ``None``.
     """
 
-    def forward(self, input: VDBTensor) -> VDBTensor:
-        num_channels = input.data.jdata.size(1)
+    def forward(self, data: JaggedTensor, grid: GridBatch) -> JaggedTensor:
+        """
+        Apply Batch Normalization to the input :class:`JaggedTensor` using the provided :class:`GridBatch`.
+
+        Args:
+            data (JaggedTensor): Input features to be normalized.
+            grid (GridBatch): The grid batch corresponding to ``data``.
+
+        Returns:
+            result (JaggedTensor): The result of the batch normalization.
+        """
+        num_channels = data.jdata.size(1)
         assert num_channels == self.num_features, "Input feature should have the same number of channels as BatchNorm"
-        result_data = super().forward(input.data.jdata)
-        return VDBTensor(input.grid, input.grid.jagged_like(result_data), input.kmap)
+        result_data = super().forward(data.jdata)
+        return grid.jagged_like(result_data)
 
 
 @fvnn_module
 class SyncBatchNorm(nn.SyncBatchNorm):
-    r"""Applies distributed Batch Normalization over a VDBTensor.
-    See :class:`~torch.nn.SyncBatchNorm` for detailed information.
+    """
+    Applies distributed Batch Normalization over a :class:`JaggedTensor` batch of features associated with a :class:`GridBatch`.
+    See :class:`~torch.nn.SyncBatchNorm` for detailed information on distributed batch normalization.
 
-    Only supports :class:`~torch.nn.DistributedDataParallel` (DDP) with single GPU per process. Use
-    :meth:`fvdb.nn.SyncBatchNorm.convert_sync_batchnorm()` to convert
-    :attr:`BatchNorm` layer to :class:`SyncBatchNorm` before wrapping
-    Network with DDP.
+    .. note::
+        Only supports :class:`~torch.nn.DistributedDataParallel` (DDP) with single GPU per process. Use
+        :meth:`fvdb.nn.SyncBatchNorm.convert_sync_batchnorm()` to convert
+        :attr:`BatchNorm` layer to :class:`SyncBatchNorm` before wrapping
+        Network with DDP.
+
+    .. seealso::
+
+        :class:`fvdb.nn.BatchNorm` for non-distributed batch normalization.
+
+    Args:
+        num_features (int): number of features in the input :class:`JaggedTensor`
+        eps (float, optional): a value added to the denominator for numerical stability. Default: 1e-5.
+        momentum (float, optional): the value used for the running_mean and running_var computation. Default: 0.1
+        affine (bool, optional): a boolean value that when set to ``True``, this module has learnable affine parameters. Default: ``True``
+        track_running_stats (bool, optional): a boolean value that when set to ``True``, this module
+            tracks the running mean and variance, and when set to ``False``, this module does not
+            track such statistics and always uses batch statistics in both training and eval modes.
+            Default: ``True``
+        process_group (Any, optional): the process group to scope synchronization. Default: ``None``
+        device (torch.device, optional): device on which the module is allocated. Default: ``None``
+        dtype (torch.dtype, optional): data type of the module parameters. Default: ``None``.
     """
 
-    def forward(self, input: VDBTensor) -> VDBTensor:
-        """Layer forward pass.
+    def forward(self, data: JaggedTensor, grid: GridBatch) -> JaggedTensor:
+        """
+        Apply Synchronized Batch Normalization to the input :class:`JaggedTensor` using the provided :class:`GridBatch`.
 
         Args:
-            input: input VDBTensor.
+            data (JaggedTensor): Input features to be normalized.
+            grid (GridBatch): The grid batch corresponding to ``data``.
 
         Returns:
-            Output VDBTensor with batch norm applied to the feature dimension, across all ranks.
+            result (JaggedTensor): The result of the synchronized batch normalization.
         """
-        num_channels = input.data.jdata.size(1)
+        num_channels = data.jdata.size(1)
         assert num_channels == self.num_features, "Input feature should have the same number of channels as BatchNorm"
-        result_data = super().forward(input.data.jdata)
-        return VDBTensor(input.grid, input.grid.jagged_like(result_data), input.kmap)
+        result_data = super().forward(data.jdata)
+        return grid.jagged_like(result_data)
 
     @classmethod
     def convert_sync_batchnorm(cls, module: nn.Module, process_group: Any = None) -> nn.Module:
-        r"""Helper function to convert
-        :attr:`fvdb.nn.BatchNorm` layer in the model to
-        :attr:`fvdb.nn.SyncBatchNorm` layer.
+        """
+        Helper function to convert :attr:`fvdb.nn.BatchNorm` layer in the model to :attr:`fvdb.nn.SyncBatchNorm` layer.
 
         Args:
-            module: Module for which all :attr:`fvdb.nn.BatchNorm` layers will be converted to
+            module (nn.Module): Module for which all :attr:`fvdb.nn.BatchNorm` layers will be converted to
                 :attr:`fvdb.nn.SyncBatchNorm` layers.
-            process_group: process group to scope synchronization, default is the whole world.
+            process_group (Any): process group to scope synchronization, default is the whole world.
 
         Returns:
-            The original module with the converted :attr:`fvbdb.nn.SyncBatchNorm` layers.
+            sync_batch_norm (torch.nn.Module):  The original module with the converted :attr:`fvdb.nn.SyncBatchNorm` layers.
 
         Example::
 
             >>> # Network with fvdb.nn.SyncBatchNorm layer
-            >>> module = torch.nn.Sequential(
+            >>> module = fvdb.nn.Sequential(
             >>>            fvdb.nn.Linear(20, 100),
             >>>            fvdb.nn.BatchNorm(100)
-            >>>          ).cuda()
+            >>>          )
             >>> # creating process group (optional)
             >>> # process_ids is a list of int identifying rank ids.
             >>> process_group = torch.distributed.new_group(process_ids)
@@ -520,101 +597,3 @@ class SyncBatchNorm(nn.SyncBatchNorm):
             module_output.add_module(name, cls.convert_sync_batchnorm(child, process_group))
         del module
         return module_output
-
-
-# Non-linear Activations
-
-
-@fvnn_module
-class ElementwiseMixin:
-    def forward(self, input: VDBTensor) -> VDBTensor:
-        assert isinstance(input, VDBTensor), "Input should have type VDBTensor"
-        res = super().forward(input.data.jdata)  # type: ignore
-        return VDBTensor(input.grid, input.data.jagged_like(res), input.kmap)
-
-
-class ELU(ElementwiseMixin, nn.ELU):
-    r"""
-    Applies the Exponential Linear Unit function element-wise:
-    .. math::
-    \text{ELU}(x) = \begin{cases}
-    x, & \text{ if } x > 0\\
-    \alpha * (\exp(x) - 1), & \text{ if } x \leq 0
-    \end{cases}
-    """
-
-
-class CELU(ElementwiseMixin, nn.CELU):
-    r"""
-    Applies the CELU function element-wise.
-
-    .. math::
-        \text{CELU}(x) = \max(0,x) + \min(0, \alpha * (\exp(x/\alpha) - 1))
-    """
-
-
-class GELU(ElementwiseMixin, nn.GELU):
-    r"""
-    Applies the Gaussian Error Linear Units function.
-
-    .. math:: \text{GELU}(x) = x * \Phi(x)
-
-    where :math:`\Phi(x)` is the Cumulative Distribution Function for Gaussian Distribution.
-    """
-
-
-class Linear(ElementwiseMixin, nn.Linear):
-    r"""
-    Applies a linear transformation to the incoming data: :math:`y = xA^T + b`.
-    """
-
-
-class ReLU(ElementwiseMixin, nn.ReLU):
-    r"""
-    Applies the rectified linear unit function element-wise: :math:`\text{ReLU}(x) = (x)^+ = \max(0, x)`
-    """
-
-
-class LeakyReLU(ElementwiseMixin, nn.LeakyReLU):
-    r"""
-    Applies the element-wise function: :math:`\text{LeakyReLU}(x) = \max(0, x) + \text{negative\_slope} * \min(0, x)`
-    """
-
-
-class SELU(ElementwiseMixin, nn.SELU):
-    r"""
-    Applies element-wise, :math:`\text{SELU}(x) = \lambda \left\{
-    \begin{array}{lr}
-    x, & \text{if } x > 0 \\
-    \text{negative\_slope} \times e^x - \text{negative\_slope}, & \text{otherwise }
-    \end{array}
-    \right.`
-    """
-
-
-class SiLU(ElementwiseMixin, nn.SiLU):
-    r"""
-    Applies element-wise, :math:`\text{SiLU}(x) = x * \sigma(x)`, where :math:`\sigma(x)` is the sigmoid function.
-    """
-
-
-class Tanh(ElementwiseMixin, nn.Tanh):
-    r"""
-    Applies element-wise, :math:`\text{Tanh}(x) = \tanh(x) = \frac{e^x - e^{-x}} {e^x + e^{-x}}`
-    """
-
-
-class Sigmoid(ElementwiseMixin, nn.Sigmoid):
-    r"""
-    Applies element-wise, :math:`\text{Sigmoid}(x) = \frac{1}{1 + \exp(-x)}`
-    """
-
-
-# Dropout Layers
-
-
-class Dropout(ElementwiseMixin, nn.Dropout):
-    r"""
-    During training, randomly zeroes some of the elements of the input tensor with probability :attr:`p`
-    using samples from a Bernoulli distribution. The elements to zero are randomized on every forward call.
-    """

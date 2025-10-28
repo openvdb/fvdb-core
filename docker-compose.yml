@@ -2,12 +2,22 @@ version: '3'
 services:
   fvdb-dev:
     build:
-      context: ../
-      dockerfile: fvdb/Dockerfile
+      context: ./
+      dockerfile: Dockerfile
       args:
         MODE: dev
+    working_dir: /workspace
     volumes:
-      - ../:/openvdb
+      - type: bind
+        source: .
+        target: /workspace
+      # Keep build artifacts inside the container (not mirrored to host)
+      - type: volume
+        target: /workspace/build
+      - type: volume
+        target: /workspace/dist
+      - type: volume
+        target: /workspace/_skbuild
     # Uncomment and adjust the following as needed
     # ports:
     #   - "8888:8888"  # Example for Jupyter notebook
