@@ -25,7 +25,12 @@ author = "Contributors to the OpenVDB Project"
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ["sphinx.ext.autodoc", "sphinx.ext.viewcode", "sphinx.ext.napoleon", "myst_parser"]
+extensions = [
+    "sphinx.ext.autodoc",
+    "sphinx.ext.viewcode",
+    "sphinx.ext.napoleon",
+    "myst_parser",
+]
 
 myst_enable_extensions = [
     "amsmath",
@@ -65,6 +70,7 @@ autodoc_default_options = {"undoc-members": "forward, extra_repr"}
 # a list of builtin themes.
 #
 html_theme = "sphinx_rtd_theme"
+html_theme_options = {"analytics_id": "G-60P7VJJ09C"}  # Google Analytics ID
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
