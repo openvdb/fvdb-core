@@ -24,7 +24,7 @@ SparseConvolutionKernelMap::forward(AutogradContext *ctx,
     TORCH_CHECK(packInfo.neighborMap().has_value() && packInfo.neighborSizes().has_value(),
                 "Neighbor map must be built for sparse convolution");
 
-    TORCH_CHECK(false, "CJH Testing!!!")
+    // TORCH_CHECK(false, "CJH Testing!!!")
 
     torch::Tensor nbmaps          = packInfo.neighborMap().value();
     torch::Tensor nbsizes         = packInfo.neighborSizes().value();

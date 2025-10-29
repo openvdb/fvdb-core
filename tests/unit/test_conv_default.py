@@ -38,6 +38,74 @@ class TestConvDefault(unittest.TestCase):
         torch.random.manual_seed(2024)
 
     @parameterized.expand(all_device_dtype_combos)
+    def test_single_impulse_conv_grid(self, device: DeviceIdentifier, dtype: torch.dtype):
+        device = resolve_device(device)
+
+        coord = torch.tensor(self.SINGLE_COORD, device=device, dtype=torch.int32)
+        ijks = JaggedTensor(coord.unsqueeze(0))
+        grid_batch = GridBatch.from_ijk(ijks, device=device)
+
+        dst_grid_batch = grid_batch.conv_grid(kernel_size=self.KERNEL_SIZE, stride=1)
+        dst_ijks = dst_grid_batch.ijk.jdata
+
+        kernel_volume = math.prod(self.KERNEL_SIZE)
+        self.assertEqual(len(dst_ijks), kernel_volume)
+
+        # Extract the region around the impulse coordinate where the kernel should appear
+        # The kernel is centered at the impulse coordinate
+        kernel_half = tuple(k // 2 for k in self.KERNEL_SIZE)
+
+        # Define the slice boundaries for extracting the kernel region
+        start_coords = tuple(self.SINGLE_COORD[i] - kernel_half[i] for i in range(3))
+        end_coords = tuple(self.SINGLE_COORD[i] + kernel_half[i] + 1 for i in range(3))
+
+        # Find the actual bounds of the non-zero region
+        actual_start_coords = tuple(dst_ijks[:, dim].min().item() for dim in range(3))
+        actual_end_coords = tuple(dst_ijks[:, dim].max().item() + 1 for dim in range(3))
+
+        # The actual bounds should exactly match the expected bounds
+        self.assertEqual(actual_start_coords, start_coords)
+        self.assertEqual(actual_end_coords, end_coords)
+
+    @parameterized.expand(all_device_dtype_combos)
+    def test_single_impulse_activation_and_weights(self, device: DeviceIdentifier, dtype: torch.dtype):
+        device = resolve_device(device)
+
+        coord = torch.tensor(self.SINGLE_COORD, device=device, dtype=torch.int32)
+        ijks = JaggedTensor(coord.unsqueeze(0))
+        features = JaggedTensor(torch.ones((1, 1), device=device, dtype=dtype))
+        grid_batch = GridBatch.from_ijk(ijks, device=device)
+        dst_grid_batch = grid_batch.conv_grid(kernel_size=self.KERNEL_SIZE, stride=1)
+        dst_ijks = dst_grid_batch.ijk.jdata
+
+        kernel_half_width = tuple(k // 2 for k in self.KERNEL_SIZE)
+
+        conv_plan = ConvolutionPlan.from_grid_batch(
+            kernel_size=self.KERNEL_SIZE, stride=1, source_grid=grid_batch, target_grid=dst_grid_batch
+        )
+
+        kernel_volume = math.prod(self.KERNEL_SIZE)
+        self.assertEqual(len(dst_ijks), kernel_volume)
+
+        for k0 in range(self.KERNEL_SIZE[0]):
+            for k1 in range(self.KERNEL_SIZE[1]):
+                for k2 in range(self.KERNEL_SIZE[2]):
+                    c0 = self.SINGLE_COORD[0] + k0 - kernel_half_width[0]
+                    c1 = self.SINGLE_COORD[1] + k1 - kernel_half_width[1]
+                    c2 = self.SINGLE_COORD[2] + k2 - kernel_half_width[2]
+
+                    weights = torch.zeros((1, 1, *self.KERNEL_SIZE), device=device, dtype=dtype)
+                    weights[0, 0, k0, k1, k2] = 1
+                    self.assertEqual(weights.sum().item(), 1)
+
+                    convolved = conv_plan.execute(features, weights)
+                    convolved_flat = convolved.jdata
+                    self.assertEqual(convolved_flat.sum().item(), 1)
+
+                    print(f"Convolved shape: {convolved_flat.shape}")
+                    self.assertEqual(len(convolved_flat), len(dst_ijks))
+
+    @parameterized.expand(all_device_dtype_combos)
     def test_single_impulse(self, device: DeviceIdentifier, dtype: torch.dtype):
         device = resolve_device(device)
 
@@ -55,7 +123,7 @@ class TestConvDefault(unittest.TestCase):
         ijks = JaggedTensor(coord.unsqueeze(0))
         features = JaggedTensor(torch.ones((1, 1), device=device, dtype=dtype))
         grid_batch = GridBatch.from_ijk(ijks, device=device)
-        dense_field_from_grid_batch = grid_batch.write_to_dense_cmajor(
+        dense_field_from_grid_batch = grid_batch.inject_to_dense_cmajor(
             features, min_coord=(0, 0, 0), grid_size=self.SINGLE_VOLUME_SHAPE
         )
 
@@ -199,7 +267,7 @@ class TestConvDefault(unittest.TestCase):
 
         self.assertEqual(len(assoc_keys_set), len(assoc_values_set))
 
-        convolved_dense_plan = dst_grid_batch.write_to_dense_cmajor(
+        convolved_dense_plan = dst_grid_batch.inject_to_dense_cmajor(
             convolved_sparse_plan, min_coord=(0, 0, 0), grid_size=self.SINGLE_VOLUME_SHAPE
         )
         print(f"convolved_dense_plan.shape: {convolved_dense_plan.shape}")
