@@ -2296,6 +2296,83 @@ class Grid:
         """
         return self._impl.ijk.jdata
 
+    def morton(self, offset: torch.Tensor | None = None) -> torch.Tensor:
+        """
+        Return Morton codes (Z-order curve) for active voxels in this grid.
+
+        Morton codes use xyz bit interleaving to create a space-filling curve that
+        preserves spatial locality. This is useful for serialization, sorting, and
+        spatial data structures.
+
+        Args:
+            offset: Optional offset to apply to voxel coordinates before encoding.
+                If None, uses the negative minimum coordinate across all voxels.
+
+        Returns:
+            torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
+                the Morton codes for each active voxel.
+        """
+        if offset is None:
+            offset = -torch.min(self.ijk, dim=0).values
+        return self._impl.morton(offset).jdata
+
+    def morton_zyx(self, offset: torch.Tensor | None = None) -> torch.Tensor:
+        """
+        Return transposed Morton codes (Z-order curve) for active voxels in this grid.
+
+        Transposed Morton codes use zyx bit interleaving to create a space-filling curve.
+        This variant can provide better spatial locality for certain access patterns.
+
+        Args:
+            offset: Optional offset to apply to voxel coordinates before encoding.
+                If None, uses the negative minimum coordinate across all voxels.
+
+        Returns:
+            torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
+                the transposed Morton codes for each active voxel.
+        """
+        if offset is None:
+            offset = -torch.min(self.ijk, dim=0).values
+        return self._impl.morton_zyx(offset).jdata
+
+    def hilbert(self, offset: torch.Tensor | None = None) -> torch.Tensor:
+        """
+        Return Hilbert curve codes for active voxels in this grid.
+
+        Hilbert curves provide better spatial locality than Morton codes by ensuring
+        that nearby points in 3D space are also nearby in the 1D curve ordering.
+
+        Args:
+            offset: Optional offset to apply to voxel coordinates before encoding.
+                If None, uses the negative minimum coordinate across all voxels.
+
+        Returns:
+            torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
+                the Hilbert codes for each active voxel.
+        """
+        if offset is None:
+            offset = -torch.min(self.ijk, dim=0).values
+        return self._impl.hilbert(offset).jdata
+
+    def hilbert_zyx(self, offset: torch.Tensor | None = None) -> torch.Tensor:
+        """
+        Return transposed Hilbert curve codes for active voxels in this grid.
+
+        Transposed Hilbert curves use zyx ordering instead of xyz. This variant can
+        provide better spatial locality for certain access patterns.
+
+        Args:
+            offset: Optional offset to apply to voxel coordinates before encoding.
+                If None, uses the negative minimum coordinate across all voxels.
+
+        Returns:
+            torch.Tensor: A tensor of shape `[num_voxels, 1]` containing
+                the transposed Hilbert codes for each active voxel.
+        """
+        if offset is None:
+            offset = -torch.min(self.ijk, dim=0).values
+        return self._impl.hilbert_zyx(offset).jdata
+
     @property
     def num_bytes(self) -> int:
         """

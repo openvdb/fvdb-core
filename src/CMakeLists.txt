@@ -124,6 +124,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/PointsInGrid.cu
     fvdb/detail/ops/IjkToIndex.cu
     fvdb/detail/ops/ActiveGridGoords.cu
+    fvdb/detail/ops/SerializeEncode.cu
     fvdb/detail/ops/IjkToInvIndex.cu
     fvdb/detail/ops/ReadFromDense.cu
     fvdb/detail/ops/NearestIjkForPoints.cu
