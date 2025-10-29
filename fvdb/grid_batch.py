@@ -2585,6 +2585,95 @@ class GridBatch:
         """
         return JaggedTensor(impl=self._impl.ijk)
 
+    def morton(self, offset: NumericMaxRank1 | None = None) -> JaggedTensor:
+        """
+        Return Morton codes (Z-order curve) for active voxels in this grid batch.
+
+        Morton codes use xyz bit interleaving to create a space-filling curve that
+        preserves spatial locality. This is useful for serialization, sorting, and
+        spatial data structures.
+
+        Args:
+            offset: Optional offset to apply to voxel coordinates before encoding.
+                If None, uses the negative minimum coordinate across all voxels.
+
+        Returns:
+            JaggedTensor: A JaggedTensor of shape `[num_grids, -1, 1]` containing
+                the Morton codes for each active voxel in the batch.
+        """
+        if offset is None:
+            offset = -torch.min(self.ijk.jdata, dim=0).values
+        else:
+            offset = to_Vec3i(offset)
+
+        return self._impl.morton(offset)
+
+    def morton_zyx(self, offset: NumericMaxRank1 | None = None) -> JaggedTensor:
+        """
+        Return transposed Morton codes (Z-order curve) for active voxels in this grid batch.
+
+        Transposed Morton codes use zyx bit interleaving to create a space-filling curve.
+        This variant can provide better spatial locality for certain access patterns.
+
+        Args:
+            offset: Optional offset to apply to voxel coordinates before encoding.
+                If None, uses the negative minimum coordinate across all voxels.
+
+        Returns:
+            JaggedTensor: A JaggedTensor of shape `[num_grids, -1, 1]` containing
+                the transposed Morton codes for each active voxel in the batch.
+        """
+        if offset is None:
+            offset = -torch.min(self.ijk.jdata, dim=0).values
+        else:
+            offset = to_Vec3i(offset)
+
+        return self._impl.morton_zyx(offset)
+
+    def hilbert(self, offset: NumericMaxRank1 | None = None) -> JaggedTensor:
+        """
+        Return Hilbert curve codes for active voxels in this grid batch.
+
+        Hilbert curves provide better spatial locality than Morton codes by ensuring
+        that nearby points in 3D space are also nearby in the 1D curve ordering.
+
+        Args:
+            offset: Optional offset to apply to voxel coordinates before encoding.
+                If None, uses the negative minimum coordinate across all voxels.
+
+        Returns:
+            JaggedTensor: A JaggedTensor of shape `[num_grids, -1, 1]` containing
+                the Hilbert codes for each active voxel in the batch.
+        """
+        if offset is None:
+            offset = -torch.min(self.ijk.jdata, dim=0).values
+        else:
+            offset = to_Vec3i(offset)
+
+        return self._impl.hilbert(offset)
+
+    def hilbert_zyx(self, offset: NumericMaxRank1 | None = None) -> JaggedTensor:
+        """
+        Return transposed Hilbert curve codes for active voxels in this grid batch.
+
+        Transposed Hilbert curves use zyx ordering instead of xyz. This variant can
+        provide better spatial locality for certain access patterns.
+
+        Args:
+            offset: Optional offset to apply to voxel coordinates before encoding.
+                If None, uses the negative minimum coordinate across all voxels.
+
+        Returns:
+            JaggedTensor: A JaggedTensor of shape `[num_grids, -1, 1]` containing
+                the transposed Hilbert codes for each active voxel in the batch.
+        """
+        if offset is None:
+            offset = -torch.min(self.ijk.jdata, dim=0).values
+        else:
+            offset = to_Vec3i(offset)
+
+        return self._impl.hilbert_zyx(offset)
+
     @property
     def jidx(self) -> torch.Tensor:
         """
