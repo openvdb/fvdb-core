@@ -40,20 +40,20 @@ set(FVDB_BINDINGS_CPP_FILES
     src/python/ViewerBinding.cpp)
 
 # Build library
-Python3_add_library(_Cpp ${FVDB_BINDINGS_CPP_FILES} MODULE)
+Python3_add_library(_fvdb_cpp ${FVDB_BINDINGS_CPP_FILES} MODULE)
 if (DEFINED TORCH_PYBIND11_INCLUDE_DIR)
-    target_link_libraries(_Cpp PUBLIC torch_pybind11_headers)
+    target_link_libraries(_fvdb_cpp PUBLIC torch_pybind11_headers)
 else()
-    target_link_libraries(_Cpp PUBLIC pybind11::headers)
+    target_link_libraries(_fvdb_cpp PUBLIC pybind11::headers)
 endif()
-set_target_properties(_Cpp PROPERTIES
+set_target_properties(_fvdb_cpp PROPERTIES
     INTERPROCEDURAL_OPTIMIZATION ON
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN ON)
 
-target_link_options(_Cpp PRIVATE "-Wl,--no-as-needed")
+target_link_options(_fvdb_cpp PRIVATE "-Wl,--no-as-needed")
 
-set_target_properties(_Cpp PROPERTIES
+set_target_properties(_fvdb_cpp PROPERTIES
     BUILD_RPATH "\$ORIGIN"
     INSTALL_RPATH "\$ORIGIN"
     INSTALL_RPATH_USE_LINK_PATH FALSE
@@ -64,17 +64,17 @@ set_target_properties(_Cpp PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     INTERFACE_POSITION_INDEPENDENT_CODE ON)
 
-target_include_directories(_Cpp PUBLIC
+target_include_directories(_fvdb_cpp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${TORCH_INCLUDE_DIRS}
     ${nanovdb_SOURCE_DIR}/nanovdb
     ${NANOVDB_EDITOR_INCLUDE_DIR})
-target_link_libraries(_Cpp PRIVATE
+target_link_libraries(_fvdb_cpp PRIVATE
     ${TORCH_PYTHON_LIBRARY}
     ${TORCH_LIBRARIES}
     fvdb)
 
-target_compile_options(_Cpp PRIVATE
+target_compile_options(_fvdb_cpp PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:
     #"-Wno-unused-variable"
     "-fvisibility=hidden"
@@ -84,20 +84,20 @@ target_compile_options(_Cpp PRIVATE
     "${TORCH_CXX_FLAGS}"
     >)
 
-target_compile_definitions(_Cpp PRIVATE
-    TORCH_EXTENSION_NAME=_Cpp
+target_compile_definitions(_fvdb_cpp PRIVATE
+    TORCH_EXTENSION_NAME=_fvdb_cpp
     TORCH_API_INCLUDE_EXTENSION_H)
 
 # Configure the pybind11 module with PyTorch compatibility settings
-configure_torch_pybind11(_Cpp)
+configure_torch_pybind11(_fvdb_cpp)
 
 # Strip symbols in non-Debug builds to reduce wheel size
 if(NOT (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo") AND FVDB_STRIP_SYMBOLS)
-    target_link_options(_Cpp PRIVATE "-s")
+    target_link_options(_fvdb_cpp PRIVATE "-s")
 endif()
 
 # Only install the Python package artifacts; the core lib is installed as part of the Python module
-install(TARGETS _Cpp fvdb
+install(TARGETS _fvdb_cpp fvdb
     LIBRARY DESTINATION fvdb COMPONENT PythonModule
     RUNTIME DESTINATION fvdb COMPONENT PythonModule)
 

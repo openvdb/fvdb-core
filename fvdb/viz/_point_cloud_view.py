@@ -7,7 +7,7 @@ import torch
 
 from fvdb import GaussianSplat3d
 
-from .._Cpp import GaussianSplat3dView as GaussianSplat3dViewCpp
+from .._fvdb_cpp import GaussianSplat3dView as GaussianSplat3dViewCpp
 from ._viewer_server import _get_viewer_server_cpp
 
 

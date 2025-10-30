@@ -4,8 +4,8 @@
 from enum import Enum
 from typing import Any
 
-from .._Cpp import GaussianSplat3d as GaussianSplat3dCpp
-from .._Cpp import GaussianSplat3dView as GaussianSplat3dViewCpp
+from .._fvdb_cpp import GaussianSplat3d as GaussianSplat3dCpp
+from .._fvdb_cpp import GaussianSplat3dView as GaussianSplat3dViewCpp
 from ._viewer_server import _get_viewer_server_cpp
 
 

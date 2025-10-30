@@ -35,7 +35,7 @@ import numpy as np
 import torch
 
 from . import _parse_device_string
-from ._Cpp import GridBatch as GridBatchCpp
+from ._fvdb_cpp import GridBatch as GridBatchCpp
 from .jagged_tensor import JaggedTensor
 from .types import (
     DeviceIdentifier,
@@ -500,7 +500,7 @@ class GridBatch:
             data (JaggedTensor): A :class:`fvdb.JaggedTensor` containing the data of the grids.
             names (list[str]): A list of strings containing the name of each grid.
         """
-        from ._Cpp import load as _load
+        from ._fvdb_cpp import load as _load
 
         device = resolve_device(device)
 
@@ -2009,7 +2009,7 @@ class GridBatch:
             grid names. Use 'name' for a single name applied to all grids, or 'names'
             for individual names per grid.
         """
-        from ._Cpp import save as _save
+        from ._fvdb_cpp import save as _save
 
         # Handle the overloaded signature - if name is provided, use it
         data_impl = data._impl if data else None
