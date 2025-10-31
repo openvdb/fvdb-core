@@ -83,11 +83,11 @@ html_static_path = ["imgs"]
 
 def process_signature(app, what, name, obj, options, signature, return_annotation):
     if signature is not None:
-        signature = signature.replace("._Cpp", "")
+        signature = signature.replace("._fvdb_cpp", "")
         signature = signature.replace("fvdb::", "fvdb.")
 
     if return_annotation is not None:
-        return_annotation = return_annotation.replace("._Cpp", "")
+        return_annotation = return_annotation.replace("._fvdb_cpp", "")
         return_annotation = return_annotation.replace("fvdb::", "fvdb.")
 
     return signature, return_annotation

@@ -1,15 +1,16 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+
+#include <pybind11/pytypes.h>
+#include <pybind11/stl.h>
+
 #include "TypeCasters.h"
 
 #include <fvdb/GaussianSplat3d.h>
 #include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
 #include <fvdb/detail/viewer/Viewer.h>
-
-#include <pybind11/pytypes.h>
-#include <pybind11/stl.h>
 
 void
 bind_viewer(py::module &m) {

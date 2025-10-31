@@ -6,7 +6,7 @@ from typing import Any
 
 import torch
 
-from .._Cpp import CameraView as CameraViewCpp
+from .._fvdb_cpp import CameraView as CameraViewCpp
 from ..types import NumericMaxRank1, NumericScalarNative, to_Vec3f
 from ._viewer_server import _get_viewer_server_cpp
 

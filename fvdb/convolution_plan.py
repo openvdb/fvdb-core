@@ -16,9 +16,9 @@ from fvdb.types import NumericMaxRank1, ValueConstraint, to_Vec3i
 
 from fvdb import Grid, GridBatch, JaggedTensor
 
-from ._Cpp import ConvPackBackend
-from ._Cpp import JaggedTensor as JaggedTensorCpp
-from ._Cpp import SparseConvPackInfo as SparseConvPackInfoCpp
+from ._fvdb_cpp import ConvPackBackend
+from ._fvdb_cpp import JaggedTensor as JaggedTensorCpp
+from ._fvdb_cpp import SparseConvPackInfo as SparseConvPackInfoCpp
 
 _CUTLASS_SUPPORTED_CHANNELS: tuple[tuple[int, int], ...] = (
     (32, 64),

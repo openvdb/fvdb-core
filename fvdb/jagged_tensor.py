@@ -38,12 +38,12 @@ import numpy as np
 import torch
 
 from . import _parse_device_string
-from ._Cpp import JaggedTensor as JaggedTensorCpp
-from ._Cpp import jempty as jempty_cpp
-from ._Cpp import jones as jones_cpp
-from ._Cpp import jrand as jrand_cpp
-from ._Cpp import jrandn as jrandn_cpp
-from ._Cpp import jzeros as jzeros_cpp
+from ._fvdb_cpp import JaggedTensor as JaggedTensorCpp
+from ._fvdb_cpp import jempty as jempty_cpp
+from ._fvdb_cpp import jones as jones_cpp
+from ._fvdb_cpp import jrand as jrand_cpp
+from ._fvdb_cpp import jrandn as jrandn_cpp
+from ._fvdb_cpp import jzeros as jzeros_cpp
 from .types import (
     DeviceIdentifier,
     NumericMaxRank1,

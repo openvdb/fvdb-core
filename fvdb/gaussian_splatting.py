@@ -8,9 +8,9 @@ import torch
 from fvdb.enums import ProjectionType
 
 from . import JaggedTensor as JaggedTensorCpp
-from ._Cpp import GaussianSplat3d as GaussianSplat3dCpp
-from ._Cpp import JaggedTensor
-from ._Cpp import ProjectedGaussianSplats as ProjectedGaussianSplatsCpp
+from ._fvdb_cpp import GaussianSplat3d as GaussianSplat3dCpp
+from ._fvdb_cpp import JaggedTensor
+from ._fvdb_cpp import ProjectedGaussianSplats as ProjectedGaussianSplatsCpp
 from .grid import Grid
 from .grid_batch import GridBatch
 from .jagged_tensor import JaggedTensor

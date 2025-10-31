@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import torch
 
-from .._Cpp import JaggedTensor
+from .._fvdb_cpp import JaggedTensor
 from ..grid import Grid
 from ..grid_batch import GridBatch
 

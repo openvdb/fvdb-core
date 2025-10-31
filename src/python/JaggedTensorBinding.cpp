@@ -1,15 +1,16 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+
+#include <pybind11/numpy.h>
+#include <pybind11/pytypes.h>
+#include <pybind11/stl.h>
+
 #include "TypeCasters.h"
 
 #include <fvdb/FVDB.h>
 
 #include <torch/extension.h>
-
-#include <pybind11/numpy.h>
-#include <pybind11/pytypes.h>
-#include <pybind11/stl.h>
 
 #include <optional>
 
