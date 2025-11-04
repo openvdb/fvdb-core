@@ -4,7 +4,7 @@
 import warnings
 import webbrowser
 
-from .._Cpp import Viewer as ViewerCpp
+from .._fvdb_cpp import Viewer as ViewerCpp
 
 # Global viewer server. Create by calling init()
 _viewer_server_cpp: ViewerCpp | None = None
@@ -58,6 +58,19 @@ def init(ip_address: str = "127.0.0.1", port: int = 8080, vk_device_id: int = 0,
     """
     global _viewer_server_cpp
     if _viewer_server_cpp is None:
+        try:
+            import nanovdb_editor as editor
+
+            compiler = editor.Compiler()
+            compute = editor.Compute(compiler)
+            di = compute.device_interface()
+            di.create_device_manager(enable_validation=False)
+
+            di.create_device(device_index=vk_device_id, enable_external_usage=False)
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to create Vulkan device with ID {vk_device_id}. You may have an incompatible version of Vulkan installed."
+            ) from e
         _viewer_server_cpp = ViewerCpp(ip_address=ip_address, port=port, device_id=vk_device_id, verbose=verbose)
     else:
         warnings.warn(

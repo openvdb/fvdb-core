@@ -6,13 +6,14 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "fvdb-core"
-version = "0.3.0"
+version = "0.3.1"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 readme = "README.md"
 dependencies = [
     # Require torch; users will choose the correct CUDA build from PyTorch's index
     "torch>=2.8,<2.10",
+    "numpy",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",

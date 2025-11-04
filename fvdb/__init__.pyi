@@ -17,12 +17,12 @@ def _parse_device_string(device_string: str | torch.device) -> torch.device: ...
 # The following import needs to come after the GridBatch and JaggedTensor imports
 # immediately above in order to avoid a circular dependency error.
 from . import nn, utils, viz
-from ._Cpp import ConvPackBackend, config, volume_render
+from ._fvdb_cpp import ConvPackBackend, config, volume_render
 from .convolution_plan import ConvolutionPlan
 from .enums import ProjectionType, ShOrderingMode
 from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
-from .grid import Grid, load_grid, save_grid
-from .grid_batch import GridBatch, load_gridbatch, save_gridbatch
+from .grid import Grid
+from .grid_batch import GridBatch
 from .jagged_tensor import JaggedTensor, jempty, jones, jrand, jrandn, jzeros
 from .torch_jagged import (
     add,
@@ -103,13 +103,7 @@ __all__ = [
     "GaussianSplat3d",
     "ProjectedGaussianSplats",
     "ConvolutionPlan",
-    # GridBatch operations
-    "load_gridbatch",
-    "save_gridbatch",
-    # Grid operations
     "Grid",
-    "load_grid",
-    "save_grid",
     # JaggedTensor operations
     "jcat",
     "jrand",

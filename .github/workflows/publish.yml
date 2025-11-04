@@ -58,7 +58,7 @@ jobs:
       matrix:
         python-version: ['3.10', '3.11', '3.12', '3.13']
         torch-version: ['2.8']
-        cuda-version: ['12.9']
+        cuda-version: ['12.8']
     steps:
       - name: Stagger job starts to avoid API rate limits
         run: |
@@ -96,7 +96,7 @@ jobs:
     needs: [start-build-runner, pr-flags] # start when runner is ready and flags computed
     runs-on: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }} # run the job on the newly created runner
     container:
-      image: nvidia/cuda:12.9.0-cudnn-devel-ubuntu22.04
+      image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
@@ -154,7 +154,7 @@ jobs:
 
       - name: Install pip dependencies
         run: |
-          # Convert CUDA version from 12.9 to cu129 format for PyTorch index
+          # Convert CUDA version from 12.8 to cu128 format for PyTorch index
           CUDA_TAG="cu$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
           TORCH_VERSION="${{ matrix.torch-version }}"
           echo "Installing PyTorch ${TORCH_VERSION} for ${CUDA_TAG}"

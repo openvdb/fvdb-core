@@ -31,14 +31,19 @@
 #include <fvdb/detail/ops/RayImplicitIntersection.h>
 #include <fvdb/detail/ops/SampleRaysUniform.h>
 #include <fvdb/detail/ops/SegmentsAlongRays.h>
+#include <fvdb/detail/ops/SerializeEncode.h>
 #include <fvdb/detail/ops/VoxelNeighborhood.h>
 #include <fvdb/detail/ops/VoxelsAlongRays.h>
 #include <fvdb/detail/ops/convolution/pack_info/BrickHaloBuffer.h>
 #include <fvdb/detail/ops/convolution/pack_info/ConvolutionKernelMap.h>
 #include <fvdb/detail/ops/convolution/pack_info/IGEMMBitOperations.h>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
 
 #include <torch/types.h>
+
+#include <tuple>
+#include <vector>
 
 namespace fvdb {
 
@@ -1077,6 +1082,46 @@ GridBatch::ijk() const {
     c10::DeviceGuard guard(device());
     return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
         return fvdb::detail::ops::dispatchActiveGridCoords<DeviceTag>(*mImpl);
+    });
+}
+
+JaggedTensor
+GridBatch::morton(const torch::Tensor &offset) const {
+    c10::DeviceGuard guard(device());
+    const nanovdb::Coord offsetCoord = tensorToCoord(offset);
+    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
+        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
+            *mImpl, SpaceFillingCurveType::ZOrder, offsetCoord);
+    });
+}
+
+JaggedTensor
+GridBatch::morton_zyx(const torch::Tensor &offset) const {
+    c10::DeviceGuard guard(device());
+    const nanovdb::Coord offsetCoord = tensorToCoord(offset);
+    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
+        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
+            *mImpl, SpaceFillingCurveType::ZOrderTransposed, offsetCoord);
+    });
+}
+
+JaggedTensor
+GridBatch::hilbert(const torch::Tensor &offset) const {
+    c10::DeviceGuard guard(device());
+    const nanovdb::Coord offsetCoord = tensorToCoord(offset);
+    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
+        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
+            *mImpl, SpaceFillingCurveType::Hilbert, offsetCoord);
+    });
+}
+
+JaggedTensor
+GridBatch::hilbert_zyx(const torch::Tensor &offset) const {
+    c10::DeviceGuard guard(device());
+    const nanovdb::Coord offsetCoord = tensorToCoord(offset);
+    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
+        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
+            *mImpl, SpaceFillingCurveType::HilbertTransposed, offsetCoord);
     });
 }
 

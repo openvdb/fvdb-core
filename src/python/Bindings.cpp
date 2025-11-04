@@ -1,6 +1,10 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+
+#include <pybind11/numpy.h>
+#include <pybind11/stl.h>
+
 #include "TypeCasters.h"
 
 #include <fvdb/Config.h>
@@ -8,9 +12,6 @@
 
 #include <c10/cuda/CUDAFunctions.h>
 #include <torch/extension.h>
-
-#include <pybind11/numpy.h>
-#include <pybind11/stl.h>
 
 void bind_grid_batch(py::module &m);
 void bind_jagged_tensor(py::module &m);

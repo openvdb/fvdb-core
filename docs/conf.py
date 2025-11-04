@@ -25,7 +25,12 @@ author = "Contributors to the OpenVDB Project"
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ["sphinx.ext.autodoc", "sphinx.ext.viewcode", "sphinx.ext.napoleon", "myst_parser"]
+extensions = [
+    "sphinx.ext.autodoc",
+    "sphinx.ext.viewcode",
+    "sphinx.ext.napoleon",
+    "myst_parser",
+]
 
 myst_enable_extensions = [
     "amsmath",
@@ -55,7 +60,7 @@ source_suffix = [".rst", ".md"]
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "wip", "tutorials/wip/"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "wip", "tutorials"]
 
 autodoc_default_options = {"undoc-members": "forward, extra_repr"}
 
@@ -65,6 +70,7 @@ autodoc_default_options = {"undoc-members": "forward, extra_repr"}
 # a list of builtin themes.
 #
 html_theme = "sphinx_rtd_theme"
+html_theme_options = {"analytics_id": "G-60P7VJJ09C"}  # Google Analytics ID
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
@@ -77,11 +83,11 @@ html_static_path = ["imgs"]
 
 def process_signature(app, what, name, obj, options, signature, return_annotation):
     if signature is not None:
-        signature = signature.replace("._Cpp", "")
+        signature = signature.replace("._fvdb_cpp", "")
         signature = signature.replace("fvdb::", "fvdb.")
 
     if return_annotation is not None:
-        return_annotation = return_annotation.replace("._Cpp", "")
+        return_annotation = return_annotation.replace("._fvdb_cpp", "")
         return_annotation = return_annotation.replace("fvdb::", "fvdb.")
 
     return signature, return_annotation

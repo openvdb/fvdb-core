@@ -69,8 +69,11 @@ set(FVDB_CPP_FILES
 )
 
 set(FVDB_CU_FILES
+    #fvdb/detail/ops/convolution/backend/SparseConvolutionGroundTruth.cu
     fvdb/detail/GridBatchImpl.cu
     fvdb/detail/ops/ActiveGridGoords.cu
+    fvdb/detail/ops/ActiveGridGoords.cu
+    fvdb/detail/ops/ActiveVoxelsInBoundsMask.cu
     fvdb/detail/ops/ActiveVoxelsInBoundsMask.cu
     fvdb/detail/ops/BuildCoarseGridFromFine.cu
     fvdb/detail/ops/BuildDenseGrid.cu
@@ -87,7 +90,6 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/CoarseIjkForFineGrid.cu
     fvdb/detail/ops/convolution/backend/MESparseConvolution.cu
     fvdb/detail/ops/convolution/backend/SparseConvolutionCutlass.cu
-    #fvdb/detail/ops/convolution/backend/SparseConvolutionGroundTruth.cu
     fvdb/detail/ops/convolution/backend/SparseConvolutionHalo.cu
     fvdb/detail/ops/convolution/backend/SparseConvolutionHaloGrad.cu
     fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMM.cu
@@ -146,6 +148,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/SampleRaysUniform.cu
     fvdb/detail/ops/ScaledDotProductAttention.cu
     fvdb/detail/ops/SegmentsAlongRays.cu
+    fvdb/detail/ops/SerializeEncode.cu
     fvdb/detail/ops/SplatIntoGridBezier.cu
     fvdb/detail/ops/SplatIntoGridTrilinear.cu
     fvdb/detail/ops/TransformPointToGrid.cu

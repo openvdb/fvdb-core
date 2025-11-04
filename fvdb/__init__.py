@@ -56,11 +56,11 @@ if _spec is not None and _spec.origin is not None:
         pass
 
 # isort: off
-from ._Cpp import jcat as _jcat_cpp
-from ._Cpp import ConvPackBackend
-from ._Cpp import scaled_dot_product_attention as _scaled_dot_product_attention_cpp
-from ._Cpp import gaussian_render_jagged as _gaussian_render_jagged_cpp
-from ._Cpp import (
+from ._fvdb_cpp import jcat as _jcat_cpp
+from ._fvdb_cpp import ConvPackBackend
+from ._fvdb_cpp import scaled_dot_product_attention as _scaled_dot_product_attention_cpp
+from ._fvdb_cpp import gaussian_render_jagged as _gaussian_render_jagged_cpp
+from ._fvdb_cpp import (
     config,
     volume_render,
 )
@@ -219,12 +219,8 @@ __all__ = [
     "ShOrderingMode",
     "ConvolutionPlan",
     # GridBatch operations
-    "load_gridbatch",
-    "save_gridbatch",
     # Grid operations
     "Grid",
-    "load_grid",
-    "save_grid",
     # JaggedTensor operations
     "jcat",
     "jrand",

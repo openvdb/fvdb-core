@@ -782,24 +782,29 @@ radixSortAsync(KeyT *keysIn,
                 OffsetT outputOffset = offsets[leftDeviceId] + leftIntervals[leftDeviceId] +
                                        rightIntervals[leftDeviceId];
 
-                C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
-                    leftKeysIn, leftCount * sizeof(KeyT), leftDeviceId, leftStream));
-                C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
-                    leftValuesIn, leftCount * sizeof(ValueT), leftDeviceId, leftStream));
-                C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
-                    rightKeysIn, rightCount * sizeof(KeyT), leftDeviceId, leftStream));
-                C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
-                    rightValuesIn, rightCount * sizeof(ValueT), leftDeviceId, leftStream));
-                C10_CUDA_CHECK(
-                    nanovdb::util::cuda::memPrefetchAsync(keysOut + outputOffset,
-                                                          (leftCount + rightCount) * sizeof(KeyT),
-                                                          leftDeviceId,
-                                                          leftStream));
-                C10_CUDA_CHECK(
-                    nanovdb::util::cuda::memPrefetchAsync(valuesOut + outputOffset,
-                                                          (leftCount + rightCount) * sizeof(ValueT),
-                                                          leftDeviceId,
-                                                          leftStream));
+                if (leftCount) {
+                    C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+                        leftKeysIn, leftCount * sizeof(KeyT), leftDeviceId, leftStream));
+                    C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+                        leftValuesIn, leftCount * sizeof(ValueT), leftDeviceId, leftStream));
+                }
+                if (rightCount) {
+                    C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+                        rightKeysIn, rightCount * sizeof(KeyT), leftDeviceId, leftStream));
+                    C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+                        rightValuesIn, rightCount * sizeof(ValueT), leftDeviceId, leftStream));
+                }
+                if (auto outputCount = leftCount + rightCount) {
+                    C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(keysOut + outputOffset,
+                                                                         outputCount * sizeof(KeyT),
+                                                                         leftDeviceId,
+                                                                         leftStream));
+                    C10_CUDA_CHECK(
+                        nanovdb::util::cuda::memPrefetchAsync(valuesOut + outputOffset,
+                                                              outputCount * sizeof(ValueT),
+                                                              leftDeviceId,
+                                                              leftStream));
+                }
 
                 CUB_WRAPPER(cub::DeviceMerge::MergePairs,
                             leftKeysIn,
@@ -831,24 +836,29 @@ radixSortAsync(KeyT *keysIn,
                 OffsetT outputOffset = offsets[leftDeviceId] + leftIntervals[rightDeviceId] +
                                        rightIntervals[rightDeviceId];
 
-                C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
-                    leftKeysIn, leftCount * sizeof(KeyT), rightDeviceId, rightStream));
-                C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
-                    leftValuesIn, leftCount * sizeof(ValueT), rightDeviceId, rightStream));
-                C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
-                    rightKeysIn, rightCount * sizeof(KeyT), rightDeviceId, rightStream));
-                C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
-                    rightValuesIn, rightCount * sizeof(ValueT), rightDeviceId, rightStream));
-                C10_CUDA_CHECK(
-                    nanovdb::util::cuda::memPrefetchAsync(keysOut + outputOffset,
-                                                          (leftCount + rightCount) * sizeof(KeyT),
-                                                          rightDeviceId,
-                                                          rightStream));
-                C10_CUDA_CHECK(
-                    nanovdb::util::cuda::memPrefetchAsync(valuesOut + outputOffset,
-                                                          (leftCount + rightCount) * sizeof(ValueT),
-                                                          rightDeviceId,
-                                                          rightStream));
+                if (leftCount) {
+                    C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+                        leftKeysIn, leftCount * sizeof(KeyT), rightDeviceId, rightStream));
+                    C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+                        leftValuesIn, leftCount * sizeof(ValueT), rightDeviceId, rightStream));
+                }
+                if (rightCount) {
+                    C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+                        rightKeysIn, rightCount * sizeof(KeyT), rightDeviceId, rightStream));
+                    C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
+                        rightValuesIn, rightCount * sizeof(ValueT), rightDeviceId, rightStream));
+                }
+                if (auto outputCount = leftCount + rightCount) {
+                    C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(keysOut + outputOffset,
+                                                                         outputCount * sizeof(KeyT),
+                                                                         rightDeviceId,
+                                                                         rightStream));
+                    C10_CUDA_CHECK(
+                        nanovdb::util::cuda::memPrefetchAsync(valuesOut + outputOffset,
+                                                              outputCount * sizeof(ValueT),
+                                                              rightDeviceId,
+                                                              rightStream));
+                }
 
                 CUB_WRAPPER(cub::DeviceMerge::MergePairs,
                             leftKeysIn,
