@@ -4,7 +4,7 @@
 import warnings
 import webbrowser
 
-from .._Cpp import Viewer as ViewerCpp
+from .._fvdb_cpp import Viewer as ViewerCpp
 
 # Global viewer server. Create by calling init()
 _viewer_server_cpp: ViewerCpp | None = None
