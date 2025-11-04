@@ -55,15 +55,15 @@ template <> struct DeviceValidationHelper<torch::kPrivateUse1> {
 
 template <torch::DeviceType DeviceTag>
 void
-validate_device(torch::Device const &device) {
+validateDevice(torch::Device const &device) {
     DeviceValidationHelper<DeviceTag>::validate(device);
 }
 
 template <torch::DeviceType DeviceTag, typename T, size_t... TailDims>
 torch::Tensor
-make_out_tensor(GridBatchImpl const &grid_batch) {
+makeOutTensor(GridBatchImpl const &grid_batch) {
     grid_batch.checkNonEmptyGrid();
-    validate_device<DeviceTag>(grid_batch.device());
+    validateDevice<DeviceTag>(grid_batch.device());
 
     // Infer dtype from template type T
     auto const dtype = c10::CppTypeToScalarType<T>::value;
@@ -77,11 +77,57 @@ make_out_tensor(GridBatchImpl const &grid_batch) {
 
 template <torch::DeviceType DeviceTag, typename T, size_t... TailDims>
 auto
-make_out_accessor(torch::Tensor const &out_tensor) {
+makeOutAccessor(torch::Tensor const &out_tensor) {
     static constexpr size_t N = sizeof...(TailDims) + 1;
     return tensorAccessor<DeviceTag, T, N>(out_tensor);
 }
 
+/**
+ * @brief CRTP base class for simple elementwise operations over grid voxels.
+ *
+ * This helper simplifies operations that share the same input/output topology
+ * (i.e., same sparse voxel structure) but differ only in the rank and dtype
+ * of the output features. Each active voxel is visited elementwise.
+ *
+ * @tparam DeviceTag The device type (torch::kCPU, torch::kCUDA, or torch::kPrivateUse1)
+ * @tparam Derived The derived class (CRTP pattern)
+ * @tparam T The output tensor element type (e.g., int64_t, float)
+ * @tparam TailDims... Optional trailing dimensions for multi-dimensional output features
+ *                     (e.g., for a (N, 3) tensor, use TailDims = 3)
+ *
+ * Usage example (from SerializeEncode.cu):
+ * @code
+ * template <torch::DeviceType DeviceTag>
+ * struct Processor : public BaseProcessor<DeviceTag, Processor<DeviceTag>, int64_t> {
+ *     // Add any state needed for your operation
+ *     nanovdb::Coord offset = nanovdb::Coord{0, 0, 0};
+ *     SpaceFillingCurveType order_type = SpaceFillingCurveType::ZOrder;
+ *
+ *     // Implement this method to define per-voxel computation
+ *     __hostdev__ void
+ *     perActiveVoxel(nanovdb::Coord const &ijk, int64_t const feature_idx, auto out_accessor) const
+ * {
+ *         // Your voxel processing logic here
+ *         // ijk: global 3D coordinates of the voxel
+ *         // feature_idx: linear index into the output tensor for this voxel
+ *         // out_accessor: tensor accessor for writing output
+ *         out_accessor[feature_idx] = compute_value(ijk);
+ *     }
+ * };
+ *
+ * // Usage:
+ * JaggedTensor result = Processor<torch::kCUDA>{...}.execute(gridBatch);
+ * @endcode
+ *
+ * The base class handles:
+ * - Output tensor allocation with correct shape (totalVoxels, TailDims...)
+ * - Dispatching to CPU/CUDA/PrivateUse1 implementations
+ * - Iterating over all active voxels in the grid batch
+ * - Wrapping output tensor as a JaggedTensor
+ *
+ * The derived class must implement:
+ * - perActiveVoxel(): Computes output value(s) for each active voxel
+ */
 template <torch::DeviceType DeviceTag, typename Derived, typename T, size_t... TailDims>
 struct BaseProcessor {
     using Out_t = OutAccessor_t<DeviceTag, T, TailDims...>;
@@ -100,17 +146,14 @@ struct BaseProcessor {
         auto const ijk = leaf.offsetToGlobalCoord(voxelIdx);
         if (leaf.isActive(voxelIdx)) {
             auto const feature_idx = static_cast<int64_t>(baseOffset + leaf.getValue(voxelIdx) - 1);
-            static_cast<Derived const *>(this)->per_active_voxel(ijk, feature_idx, out_accessor);
+            static_cast<Derived const *>(this)->perActiveVoxel(ijk, feature_idx, out_accessor);
         }
     }
-};
 
-template <torch::DeviceType DeviceTag, typename Derived, typename T, size_t... TailDims>
-struct ExecutingBaseProcessor : public BaseProcessor<DeviceTag, Derived, T, TailDims...> {
     JaggedTensor
     execute(GridBatchImpl const &grid_batch, int const num_threads = 1024) const {
-        auto out_tensor   = make_out_tensor<DeviceTag, T, TailDims...>(grid_batch);
-        auto out_accessor = make_out_accessor<DeviceTag, T, TailDims...>(out_tensor);
+        auto out_tensor   = makeOutTensor<DeviceTag, T, TailDims...>(grid_batch);
+        auto out_accessor = makeOutAccessor<DeviceTag, T, TailDims...>(out_tensor);
         if constexpr (DeviceTag == torch::kCUDA) {
             forEachVoxelCUDA(num_threads, // num threads
                              1,

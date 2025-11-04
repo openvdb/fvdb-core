@@ -16,7 +16,7 @@ namespace ops {
 namespace {
 
 template <torch::DeviceType DeviceTag>
-struct Processor : public ExecutingBaseProcessor<DeviceTag, Processor<DeviceTag>, int64_t> {
+struct Processor : public BaseProcessor<DeviceTag, Processor<DeviceTag>, int64_t> {
     nanovdb::Coord offset            = nanovdb::Coord{0, 0, 0};
     SpaceFillingCurveType order_type = SpaceFillingCurveType::ZOrder;
 
@@ -24,9 +24,7 @@ struct Processor : public ExecutingBaseProcessor<DeviceTag, Processor<DeviceTag>
     // curve code (Morton or Hilbert) for
     // each active voxel in a batch of grids
     __hostdev__ void
-    per_active_voxel(nanovdb::Coord const &ijk,
-                     int64_t const feature_idx,
-                     auto out_accessor) const {
+    perActiveVoxel(nanovdb::Coord const &ijk, int64_t const feature_idx, auto out_accessor) const {
         // Apply offset to coordinates
         auto const i = static_cast<uint32_t>(ijk[0] + offset[0]);
         auto const j = static_cast<uint32_t>(ijk[1] + offset[1]);
