@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any, cast, overload
 import torch
 
 from . import _parse_device_string
-from ._Cpp import GridBatch as GridBatchCpp
+from ._fvdb_cpp import GridBatch as GridBatchCpp
 from .jagged_tensor import JaggedTensor
 from .types import (
     DeviceIdentifier,
@@ -373,7 +373,7 @@ class Grid:
             data (torch.Tensor): A :class:`torch.Tensor` containing the data associated with the grid, with shape ``(grid.num_voxels, channels*)``.
             name (str): The name of the loaded grid.
         """
-        from ._Cpp import load as _load
+        from ._fvdb_cpp import load as _load
 
         if isinstance(path, pathlib.Path):
             path = str(path)
@@ -1887,7 +1887,7 @@ class Grid:
             verbose (bool): Whether to print information about the saved grid.
                 Default is ``False``.
         """
-        from ._Cpp import save as _save
+        from ._fvdb_cpp import save as _save
 
         if isinstance(path, pathlib.Path):
             path = str(path)

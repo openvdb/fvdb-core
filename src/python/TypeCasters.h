@@ -4,12 +4,12 @@
 #ifndef PYTHON_TYPECASTERS_H
 #define PYTHON_TYPECASTERS_H
 
+#include <pybind11/numpy.h>
+#include <pybind11/stl.h>
+
 #include <fvdb/Types.h>
 
 #include <torch/extension.h>
-
-#include <pybind11/numpy.h>
-#include <pybind11/stl.h>
 
 namespace pybind11 {
 namespace detail {
