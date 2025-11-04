@@ -97,8 +97,13 @@ gray_stream_to_uint64(uint32_t g0, uint32_t g1, uint32_t g2) {
     return value;
 }
 
+/// @brief Compute Hilbert curve index for 3D coordinates
+/// @param i I coordinate (must be 0 <= i < 2^21)
+/// @param j J coordinate (must be 0 <= j < 2^21)
+/// @param k K coordinate (must be 0 <= k < 2^21)
+/// @return 63-bit Hilbert index
 __hostdev__ inline uint64_t
-hilbert_order21_index(uint32_t i, uint32_t j, uint32_t k) {
+hilbert(uint32_t i, uint32_t j, uint32_t k) {
     // encoder: (i, j, k) -> uint64_t code.
 
     i = i & _HILBERT_MASK;
@@ -115,29 +120,6 @@ hilbert_order21_index(uint32_t i, uint32_t j, uint32_t k) {
     // swapaxes+reshape to a 63-bit Gray stream, Gray to Binary (prefix XOR),
     // then pack to uint64 with a leading zero bit.
     return gray_stream_to_uint64(i, j, k);
-}
-
-/// @brief Compute Hilbert curve index for 3D coordinates with offset handling
-/// @param i I coordinate (can be negative)
-/// @param j J coordinate (can be negative)
-/// @param k K coordinate (can be negative)
-/// @param offset_i Offset to make i non-negative
-/// @param offset_j Offset to make j non-negative
-/// @param offset_k Offset to make k non-negative
-/// @return 63-bit Hilbert index
-__hostdev__ inline uint64_t
-hilbert_with_offset(int32_t const i,
-                    int32_t const j,
-                    int32_t const k,
-                    uint32_t const offset_i,
-                    uint32_t const offset_j,
-                    uint32_t const offset_k) {
-    // Add offsets to ensure non-negative coordinates
-    uint32_t x = static_cast<uint32_t>(i + static_cast<int32_t>(offset_i));
-    uint32_t y = static_cast<uint32_t>(j + static_cast<int32_t>(offset_j));
-    uint32_t z = static_cast<uint32_t>(k + static_cast<int32_t>(offset_k));
-
-    return hilbert_order21_index(x, y, z);
 }
 
 } // namespace utils

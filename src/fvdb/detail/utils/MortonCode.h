@@ -31,15 +31,42 @@ expand_lower_21_bits_by_3(uint32_t const x) {
 }
 
 /// @brief Compute Morton code for 3D coordinates
-/// @param x X coordinate (must be <= 2^21-1)
-/// @param y Y coordinate (must be <= 2^21-1)
-/// @param z Z coordinate (must be <= 2^21-1)
+/// @param i I coordinate (must be 0 <= i < 2^21)
+/// @param j J coordinate (must be 0 <= j < 2^21)
+/// @param k K coordinate (must be 0 <= k < 2^21)
 /// @return 64-bit Morton code
 __hostdev__ constexpr inline uint64_t
-morton(uint32_t const x, uint32_t const y, uint32_t const z) {
-    return expand_lower_21_bits_by_3(x) | (expand_lower_21_bits_by_3(y) << 1) |
-           (expand_lower_21_bits_by_3(z) << 2);
+morton(uint32_t const i, uint32_t const j, uint32_t const k) {
+    return (expand_lower_21_bits_by_3(i) << 0) | (expand_lower_21_bits_by_3(j) << 1) |
+           (expand_lower_21_bits_by_3(k) << 2);
 }
+
+static_assert(morton(0, 0, 0) == 0b000, "morton(0, 0, 0) should be 0b000");
+static_assert(morton(1, 0, 0) == 0b001, "morton(1, 0, 0) should be 0b001");
+static_assert(morton(0, 1, 0) == 0b010, "morton(0, 1, 0) should be 0b010");
+static_assert(morton(1, 1, 0) == 0b011, "morton(1, 1, 0) should be 0b011");
+static_assert(morton(0, 0, 1) == 0b100, "morton(0, 0, 1) should be 0b100");
+static_assert(morton(1, 0, 1) == 0b101, "morton(1, 0, 1) should be 0b101");
+static_assert(morton(0, 1, 1) == 0b110, "morton(0, 1, 1) should be 0b110");
+static_assert(morton(1, 1, 1) == 0b111, "morton(1, 1, 1) should be 0b111");
+
+static_assert(morton(0, 0, 0) == 0b000000, "morton(0, 0, 0) should be 0b000000");
+static_assert(morton(2, 0, 0) == 0b001000, "morton(2, 0, 0) should be 0b001000");
+static_assert(morton(0, 2, 0) == 0b010000, "morton(0, 2, 0) should be 0b010000");
+static_assert(morton(2, 2, 0) == 0b011000, "morton(2, 2, 0) should be 0b011000");
+static_assert(morton(0, 0, 2) == 0b100000, "morton(0, 0, 2) should be 0b100000");
+static_assert(morton(2, 0, 2) == 0b101000, "morton(2, 0, 2) should be 0b101000");
+static_assert(morton(0, 2, 2) == 0b110000, "morton(0, 2, 2) should be 0b110000");
+static_assert(morton(2, 2, 2) == 0b111000, "morton(2, 2, 2) should be 0b111000");
+
+static_assert(morton(0, 0, 0) == 0b000000, "morton(0, 0, 0) should be 0b000000");
+static_assert(morton(3, 0, 0) == 0b001001, "morton(3, 0, 0) should be 0b001001");
+static_assert(morton(0, 3, 0) == 0b010010, "morton(0, 3, 0) should be 0b010010");
+static_assert(morton(3, 3, 0) == 0b011011, "morton(3, 3, 0) should be 0b011011");
+static_assert(morton(0, 0, 3) == 0b100100, "morton(0, 0, 3) should be 0b100100");
+static_assert(morton(3, 0, 3) == 0b101101, "morton(3, 0, 3) should be 0b101101");
+static_assert(morton(0, 3, 3) == 0b110110, "morton(0, 3, 3) should be 0b110110");
+static_assert(morton(3, 3, 3) == 0b111111, "morton(3, 3, 3) should be 0b111111");
 
 // ---- Static self-check ----
 constexpr inline uint64_t
@@ -52,28 +79,6 @@ _expected_mask_21bits_spaced3() {
 
 static_assert(expand_lower_21_bits_by_3(0x1FFFFFu) == _expected_mask_21bits_spaced3(),
               "21-bit expand failed");
-
-/// @brief Compute Morton code for 3D coordinates with offset handling
-/// @param i I coordinate (can be negative)
-/// @param j J coordinate (can be negative)
-/// @param k K coordinate (can be negative)
-/// @param offset_i Offset to make i non-negative
-/// @param offset_j Offset to make j non-negative
-/// @param offset_k Offset to make k non-negative
-/// @return 64-bit Morton code
-__hostdev__ inline uint64_t
-morton_with_offset(int32_t const i,
-                   int32_t const j,
-                   int32_t const k,
-                   int32_t const offset_i,
-                   int32_t const offset_j,
-                   int32_t const offset_k) {
-    auto const x = static_cast<uint32_t>(i + offset_i);
-    auto const y = static_cast<uint32_t>(j + offset_j);
-    auto const z = static_cast<uint32_t>(k + offset_k);
-
-    return morton(x, y, z);
-}
 
 } // namespace utils
 } // namespace detail

@@ -2606,7 +2606,7 @@ class GridBatch:
         else:
             offset = to_Vec3i(offset)
 
-        return self._impl.morton(offset)
+        return JaggedTensor(impl=self._impl.morton(offset))
 
     def morton_zyx(self, offset: NumericMaxRank1 | None = None) -> JaggedTensor:
         """
@@ -2628,7 +2628,7 @@ class GridBatch:
         else:
             offset = to_Vec3i(offset)
 
-        return self._impl.morton_zyx(offset)
+        return JaggedTensor(impl=self._impl.morton_zyx(offset))
 
     def hilbert(self, offset: NumericMaxRank1 | None = None) -> JaggedTensor:
         """
@@ -2650,7 +2650,7 @@ class GridBatch:
         else:
             offset = to_Vec3i(offset)
 
-        return self._impl.hilbert(offset)
+        return JaggedTensor(impl=self._impl.hilbert(offset))
 
     def hilbert_zyx(self, offset: NumericMaxRank1 | None = None) -> JaggedTensor:
         """
@@ -2672,7 +2672,7 @@ class GridBatch:
         else:
             offset = to_Vec3i(offset)
 
-        return self._impl.hilbert_zyx(offset)
+        return JaggedTensor(impl=self._impl.hilbert_zyx(offset))
 
     @property
     def jidx(self) -> torch.Tensor:
