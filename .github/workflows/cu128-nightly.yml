@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   fvdb-build:
-    if: ${{ !startsWith(github.event.pull_request.title, 'Draft:') }}
+    if: ${{ github.repository == 'openvdb/fvdb-core' && !startsWith(github.event.pull_request.title, 'Draft:') }}
     name: fVDB Build
     runs-on:
       - self-hosted
@@ -160,6 +160,7 @@ jobs:
           echo "Cleanup completed"
 
   fvdb-benchmarks:
+    if: ${{ github.repository == 'openvdb/fvdb-core' }}
     needs: [fvdb-build]
     name: fVDB Continuous Benchmarking
     runs-on:
