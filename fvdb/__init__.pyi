@@ -17,7 +17,7 @@ def _parse_device_string(device_string: str | torch.device) -> torch.device: ...
 # The following import needs to come after the GridBatch and JaggedTensor imports
 # immediately above in order to avoid a circular dependency error.
 from . import nn, utils, viz
-from ._fvdb_cpp import ConvPackBackend, config, volume_render
+from ._fvdb_cpp import ConvPackBackend, config, hilbert, morton, volume_render
 from .convolution_plan import ConvolutionPlan
 from .enums import ProjectionType, ShOrderingMode
 from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
@@ -111,6 +111,9 @@ __all__ = [
     "jones",
     "jzeros",
     "jempty",
+    # Morton/Hilbert operations
+    "morton",
+    "hilbert",
     # Specialized operations
     "scaled_dot_product_attention",
     "volume_render",
