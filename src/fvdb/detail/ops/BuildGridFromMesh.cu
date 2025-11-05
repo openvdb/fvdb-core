@@ -42,7 +42,7 @@ buildGridFromMeshCPU(const JaggedTensor &vertices,
 
         // int64_t numSearched = 0;
         // int64_t numFound = 0;
-        // For eacjh face, compute thee min max voxels
+        // For each face, compute the min max voxels
         for (int faceId = 0; faceId < ti.size(0); faceId += 1) {
             const torch::Tensor face         = ti.index({faceId}); // 3
             const torch::Tensor faceVertices = vi.index({face});   // [3, 3]

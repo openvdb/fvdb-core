@@ -100,9 +100,9 @@ convIjkForGridCallback(int32_t bidx,
     for (int di = lower[0]; di <= upper[0]; di += 1) {
         for (int dj = lower[1]; dj <= upper[1]; dj += 1) {
             for (int dk = lower[2]; dk <= upper[2]; dk += 1, count += 1) {
-                const nanovdb::Coord dstIjk = srcIjk + nanovdb::Coord(dk, dj, di);
-                if (dstIjk[0] % stride[2] != 0 || dstIjk[1] % stride[1] != 0 ||
-                    dstIjk[2] % stride[0] != 0)
+                const nanovdb::Coord dstIjk = srcIjk + nanovdb::Coord(di, dj, dk);
+                if (dstIjk[0] % stride[0] != 0 || dstIjk[1] % stride[1] != 0 ||
+                    dstIjk[2] % stride[2] != 0)
                     continue;
                 //  The original torchsparse implementation has a weird bug that checks the
                 //  coordsMin. if (dstIjk[0] < coordsMin[0] || dstIjk[1] < coordsMin[1] || dstIjk[2]
@@ -113,9 +113,9 @@ convIjkForGridCallback(int32_t bidx,
                 //     continue;
 
                 const int64_t base  = (baseOffset + index) * kernelVolume + count;
-                outIJKData[base][0] = dstIjk[0] / stride[2];
+                outIJKData[base][0] = dstIjk[0] / stride[0];
                 outIJKData[base][1] = dstIjk[1] / stride[1];
-                outIJKData[base][2] = dstIjk[2] / stride[0];
+                outIJKData[base][2] = dstIjk[2] / stride[2];
                 outIJKBIdx[base]    = bidx;
                 outMask[base]       = true;
             }
@@ -228,13 +228,13 @@ dispatchBuildGridForConv<torch::kCPU>(const GridBatchImpl &baseBatchHdl,
             for (int di = lower[0]; di <= upper[0]; di += 1) {
                 for (int dj = lower[1]; dj <= upper[1]; dj += 1) {
                     for (int dk = lower[2]; dk <= upper[2]; dk += 1) {
-                        const nanovdb::Coord dstIjk = ijk0 + nanovdb::Coord(dk, dj, di);
-                        if (dstIjk[0] % stride[2] != 0 || dstIjk[1] % stride[1] != 0 ||
-                            dstIjk[2] % stride[0] != 0)
+                        const nanovdb::Coord dstIjk = ijk0 + nanovdb::Coord(di, dj, dk);
+                        if (dstIjk[0] % stride[0] != 0 || dstIjk[1] % stride[1] != 0 ||
+                            dstIjk[2] % stride[2] != 0)
                             continue;
-                        proxyGridAccessor.setValue(nanovdb::Coord(dstIjk[0] / stride[2],
+                        proxyGridAccessor.setValue(nanovdb::Coord(dstIjk[0] / stride[0],
                                                                   dstIjk[1] / stride[1],
-                                                                  dstIjk[2] / stride[0]),
+                                                                  dstIjk[2] / stride[2]),
                                                    1.0f);
                     }
                 }

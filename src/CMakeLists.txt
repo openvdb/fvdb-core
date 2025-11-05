@@ -38,17 +38,13 @@ execute_process(
 # Source files
 set(FVDB_CPP_FILES
     fvdb/Config.cpp
-    fvdb/FVDB.cpp
-    fvdb/GaussianSplat3d.cpp
-    fvdb/GridBatch.cpp
-    fvdb/JaggedTensor.cpp
-    fvdb/SparseConvPackInfo.cpp
     fvdb/detail/autograd/Attention.cpp
     fvdb/detail/autograd/AvgPoolGrid.cpp
+    fvdb/detail/autograd/EvaluateSphericalHarmonics.cpp
     fvdb/detail/autograd/GaussianRender.cpp
+    fvdb/detail/autograd/Inject.cpp
     fvdb/detail/autograd/JaggedReduce.cpp
     fvdb/detail/autograd/MaxPoolGrid.cpp
-    fvdb/detail/autograd/EvaluateSphericalHarmonics.cpp
     fvdb/detail/autograd/ReadFromDense.cpp
     fvdb/detail/autograd/ReadIntoDense.cpp
     fvdb/detail/autograd/SampleGrid.cpp
@@ -59,100 +55,108 @@ set(FVDB_CPP_FILES
     fvdb/detail/autograd/TransformPoints.cpp
     fvdb/detail/autograd/UpsampleGrid.cpp
     fvdb/detail/autograd/VolumeRender.cpp
-    fvdb/detail/autograd/Inject.cpp
+    fvdb/detail/io/GaussianPlyIO.cpp
     fvdb/detail/io/LoadNanovdb.cpp
     fvdb/detail/io/SaveNanoVDB.cpp
-    fvdb/detail/io/GaussianPlyIO.cpp
     fvdb/detail/TorchDeviceBuffer.cpp
+    fvdb/detail/viewer/GaussianSplat3dView.cpp
     fvdb/detail/viewer/Viewer.cpp
-    fvdb/detail/viewer/GaussianSplat3dView.cpp)
+    fvdb/FVDB.cpp
+    fvdb/GaussianSplat3d.cpp
+    fvdb/GridBatch.cpp
+    fvdb/JaggedTensor.cpp
+    fvdb/SparseConvPackInfo.cpp
+)
 
 set(FVDB_CU_FILES
-    fvdb/detail/ops/IntegrateTSDF.cu
-    fvdb/detail/ops/BuildPaddedGrid.cu
-    fvdb/detail/ops/BuildGridFromNearestVoxelsToPoints.cu
-    fvdb/detail/ops/BuildGridForConv.cu
-    fvdb/detail/ops/BuildGridFromPoints.cu
-    fvdb/detail/ops/BuildGridFromMesh.cu
-    fvdb/detail/ops/BuildFineGridFromCoarse.cu
-    fvdb/detail/ops/BuildDilatedGrid.cu
-    fvdb/detail/ops/BuildMergedGrids.cu
-    fvdb/detail/ops/BuildPrunedGrid.cu
-    fvdb/detail/ops/Inject.cu
-    fvdb/detail/ops/BuildDenseGrid.cu
+    fvdb/detail/GridBatchImpl.cu
+    fvdb/detail/ops/ActiveGridGoords.cu
+    fvdb/detail/ops/ActiveGridGoords.cu
+    fvdb/detail/ops/ActiveVoxelsInBoundsMask.cu
+    fvdb/detail/ops/ActiveVoxelsInBoundsMask.cu
     fvdb/detail/ops/BuildCoarseGridFromFine.cu
+    fvdb/detail/ops/BuildDenseGrid.cu
+    fvdb/detail/ops/BuildDilatedGrid.cu
+    fvdb/detail/ops/BuildFineGridFromCoarse.cu
+    fvdb/detail/ops/BuildGridForConv.cu
     fvdb/detail/ops/BuildGridFromIjk.cu
+    fvdb/detail/ops/BuildGridFromMesh.cu
+    fvdb/detail/ops/BuildGridFromNearestVoxelsToPoints.cu
+    fvdb/detail/ops/BuildGridFromPoints.cu
+    fvdb/detail/ops/BuildMergedGrids.cu
+    fvdb/detail/ops/BuildPaddedGrid.cu
+    fvdb/detail/ops/BuildPrunedGrid.cu
     fvdb/detail/ops/CoarseIjkForFineGrid.cu
-    fvdb/detail/ops/MarchingCubes.cu
-    fvdb/detail/ops/ReadIntoDense.cu
-    fvdb/detail/ops/JOffsetsFromJIdx.cu
-    fvdb/detail/ops/TransformPointToGrid.cu
-    fvdb/detail/ops/CubesInGrid.cu
-    fvdb/detail/ops/JCat0.cu
-    fvdb/detail/ops/GridEdgeNetwork.cu
-    fvdb/detail/ops/SampleGridTrilinearWithGradBackward.cu
-    fvdb/detail/ops/VolumeRender.cu
-    fvdb/detail/ops/RayImplicitIntersection.cu
-    fvdb/detail/ops/SegmentsAlongRays.cu
-    fvdb/detail/ops/PopulateGridMetadata.cu
-    fvdb/detail/ops/VoxelNeighborhood.cu
-    fvdb/detail/ops/SampleGridTrilinearWithGrad.cu
+    fvdb/detail/ops/convolution/backend/MESparseConvolution.cu
+    fvdb/detail/ops/convolution/backend/SparseConvolutionCutlass.cu
+    fvdb/detail/ops/convolution/backend/SparseConvolutionHalo.cu
+    fvdb/detail/ops/convolution/backend/SparseConvolutionHaloGrad.cu
+    fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMM.cu
+    fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMMGrad.cu
+    fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMMGradSorted.cu
+    fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMMSorted.cu
+    fvdb/detail/ops/convolution/backend/SparseConvolutionKernelMap.cu
+    fvdb/detail/ops/convolution/backend/SparseConvolutionLggs.cu
+    fvdb/detail/ops/convolution/pack_info/BrickHaloBuffer.cu
+    fvdb/detail/ops/convolution/pack_info/ConvolutionKernelMap.cu
+    fvdb/detail/ops/convolution/pack_info/IGEMMBitOperations.cu
     fvdb/detail/ops/CoordsInGrid.cu
+    fvdb/detail/ops/CubesInGrid.cu
+    fvdb/detail/ops/DownsampleGridAvgPool.cu
+    fvdb/detail/ops/DownsampleGridMaxPool.cu
+    fvdb/detail/ops/GridEdgeNetwork.cu
     fvdb/detail/ops/gsplat/FusedSSIM.cu
     fvdb/detail/ops/gsplat/GaussianComputeNanInfMask.cu
-    fvdb/detail/ops/gsplat/GaussianSplatSparse.cu
-    fvdb/detail/ops/gsplat/GaussianProjectionJaggedBackward.cu
-    fvdb/detail/ops/gsplat/GaussianProjectionForward.cu
-    fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsForward.cu
-    fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsBackward.cu
-    fvdb/detail/ops/gsplat/GaussianRasterizeBackward.cu
     fvdb/detail/ops/gsplat/GaussianProjectionBackward.cu
+    fvdb/detail/ops/gsplat/GaussianProjectionForward.cu
+    fvdb/detail/ops/gsplat/GaussianProjectionJaggedBackward.cu
+    fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.cu
+    fvdb/detail/ops/gsplat/GaussianRasterizeBackward.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeForward.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeNumContributingGaussians.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeTopContributingGaussianIds.cu
-    fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.cu
+    fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsBackward.cu
+    fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsForward.cu
+    fvdb/detail/ops/gsplat/GaussianSplatSparse.cu
     fvdb/detail/ops/gsplat/GaussianTileIntersection.cu
-    fvdb/detail/ops/UpsampleGridNearest.cu
-    fvdb/detail/ops/DownsampleGridAvgPool.cu
-    fvdb/detail/ops/JIdxForJOffsets.cu
-    fvdb/detail/ops/SampleGridBezierWithGrad.cu
-    fvdb/detail/ops/JaggedTensorIndex.cu
-    fvdb/detail/ops/SampleRaysUniform.cu
-    fvdb/detail/ops/SplatIntoGridTrilinear.cu
-    fvdb/detail/ops/DownsampleGridMaxPool.cu
-    fvdb/detail/ops/SampleGridBezier.cu
-    fvdb/detail/ops/PointsInGrid.cu
-    fvdb/detail/ops/IjkToIndex.cu
-    fvdb/detail/ops/ActiveGridGoords.cu
-    fvdb/detail/ops/SerializeEncode.cu
-    fvdb/detail/ops/IjkToInvIndex.cu
-    fvdb/detail/ops/ReadFromDense.cu
-    fvdb/detail/ops/NearestIjkForPoints.cu
-    fvdb/detail/ops/ActiveVoxelsInBoundsMask.cu
-    fvdb/detail/ops/JIdxForGrid.cu
-    fvdb/detail/ops/VoxelsAlongRays.cu
-    fvdb/detail/ops/SampleGridTrilinear.cu
-    fvdb/detail/ops/SplatIntoGridBezier.cu
-    fvdb/detail/ops/ScaledDotProductAttention.cu
     fvdb/detail/ops/IjkForMesh.cu
-    fvdb/detail/ops/SampleGridBezierWithGradBackward.cu
-    fvdb/detail/ops/convolution/pack_info/ConvolutionKernelMap.cu
-    fvdb/detail/ops/convolution/pack_info/BrickHaloBuffer.cu
-    fvdb/detail/ops/convolution/pack_info/IGEMMBitOperations.cu
-    fvdb/detail/ops/convolution/backend/MESparseConvolution.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionCutlass.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionLggs.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionHalo.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMMGradSorted.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMMSorted.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMMGrad.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionKernelMap.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMM.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionHaloGrad.cu
-    fvdb/detail/ops/jagged/JaggedSort.cu
+    fvdb/detail/ops/IjkToIndex.cu
+    fvdb/detail/ops/IjkToInvIndex.cu
+    fvdb/detail/ops/Inject.cu
+    fvdb/detail/ops/IntegrateTSDF.cu
     fvdb/detail/ops/jagged/JaggedReduce.cu
+    fvdb/detail/ops/jagged/JaggedSort.cu
+    fvdb/detail/ops/JaggedTensorIndex.cu
+    fvdb/detail/ops/JCat0.cu
+    fvdb/detail/ops/JIdxForGrid.cu
+    fvdb/detail/ops/JIdxForJOffsets.cu
+    fvdb/detail/ops/JOffsetsFromJIdx.cu
+    fvdb/detail/ops/MarchingCubes.cu
+    fvdb/detail/ops/NearestIjkForPoints.cu
+    fvdb/detail/ops/PointsInGrid.cu
+    fvdb/detail/ops/PopulateGridMetadata.cu
+    fvdb/detail/ops/RayImplicitIntersection.cu
+    fvdb/detail/ops/ReadFromDense.cu
+    fvdb/detail/ops/ReadIntoDense.cu
+    fvdb/detail/ops/SampleGridBezier.cu
+    fvdb/detail/ops/SampleGridBezierWithGrad.cu
+    fvdb/detail/ops/SampleGridBezierWithGradBackward.cu
+    fvdb/detail/ops/SampleGridTrilinear.cu
+    fvdb/detail/ops/SampleGridTrilinearWithGrad.cu
+    fvdb/detail/ops/SampleGridTrilinearWithGradBackward.cu
+    fvdb/detail/ops/SampleRaysUniform.cu
+    fvdb/detail/ops/ScaledDotProductAttention.cu
+    fvdb/detail/ops/SegmentsAlongRays.cu
+    fvdb/detail/ops/SerializeEncode.cu
+    fvdb/detail/ops/SplatIntoGridBezier.cu
+    fvdb/detail/ops/SplatIntoGridTrilinear.cu
+    fvdb/detail/ops/TransformPointToGrid.cu
+    fvdb/detail/ops/UpsampleGridNearest.cu
+    fvdb/detail/ops/VolumeRender.cu
+    fvdb/detail/ops/VoxelNeighborhood.cu
+    fvdb/detail/ops/VoxelsAlongRays.cu
     fvdb/detail/utils/cuda/ForEachCUDA.cu
-    fvdb/detail/GridBatchImpl.cu)
+)
 
 # Build library
 add_library(fvdb SHARED ${FVDB_CPP_FILES} ${FVDB_CU_FILES})
