@@ -12,7 +12,9 @@ namespace ops {
 namespace {
 
 template <torch::DeviceType DeviceTag>
-struct Processor : public BaseProcessor<DeviceTag, Processor<DeviceTag>, int32_t, 3> {
+struct Processor : public BasePerActiveVoxelProcessor<DeviceTag,
+                                                      Processor<DeviceTag>,
+                                                      FixedElementType<int32_t, 3>> {
     // active coords get saved directly to the output tensor
     __hostdev__ void
     perActiveVoxel(nanovdb::Coord const &ijk, int64_t const feature_idx, auto out_accessor) const {

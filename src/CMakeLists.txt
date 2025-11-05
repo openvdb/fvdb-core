@@ -84,6 +84,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/BuildGridFromIjk.cu
     fvdb/detail/ops/CoarseIjkForFineGrid.cu
     fvdb/detail/ops/MarchingCubes.cu
+    fvdb/detail/ops/MortonHilbertFromIjk.cu
     fvdb/detail/ops/ReadIntoDense.cu
     fvdb/detail/ops/JOffsetsFromJIdx.cu
     fvdb/detail/ops/TransformPointToGrid.cu

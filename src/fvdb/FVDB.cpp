@@ -7,6 +7,9 @@
 #include <fvdb/detail/autograd/Attention.h>
 #include <fvdb/detail/autograd/VolumeRender.h>
 
+// Morton/hilbert
+#include <fvdb/detail/ops/MortonHilbertFromIjk.h>
+
 // IO headers
 #include <fvdb/detail/io/LoadNanovdb.h>
 #include <fvdb/detail/io/SaveNanoVDB.h>
@@ -241,5 +244,15 @@ __FVDB__BUILDER(torch::ones, jones)
 __FVDB__BUILDER(torch::empty, jempty)
 
 #undef __FVDB__BUILDER
+
+torch::Tensor
+morton(torch::Tensor const &ijk) {
+    return detail::ops::mortonFromIjk(ijk);
+}
+
+torch::Tensor
+hilbert(torch::Tensor const &ijk) {
+    return detail::ops::hilbertFromIjk(ijk);
+}
 
 } // namespace fvdb

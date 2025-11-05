@@ -271,6 +271,16 @@ load(const std::string &path,
 std::tuple<GridBatch, JaggedTensor, std::vector<std::string>>
 load(const std::string &path, const torch::Device &device, bool verbose = false);
 
+/// @brief Convert a tensor of ijk coordinates to a tensor of morton codes
+/// @param ijk An int32 tensor of shape [N, 3] containing the ijk coordinates to convert
+/// @return An int64 tensor of shape [N] containing the morton codes
+torch::Tensor morton(torch::Tensor const &ijk);
+
+/// @brief Convert a tensor of ijk coordinates to a tensor of hilbert codes
+/// @param ijk An int32 tensor of shape [N, 3] containing the ijk coordinates to convert
+/// @return An int64 tensor of shape [N] containing the hilbert codes
+torch::Tensor hilbert(torch::Tensor const &ijk);
+
 } // namespace fvdb
 
 #endif // FVDB_FVDB_H

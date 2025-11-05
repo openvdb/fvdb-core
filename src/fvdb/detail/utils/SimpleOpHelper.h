@@ -19,15 +19,42 @@
 namespace fvdb {
 namespace detail {
 
-template <torch::DeviceType DeviceTag, typename T, size_t... TailDims>
-struct OutAccessorTypeHelper {
-    static constexpr size_t N = sizeof...(TailDims) + 1;
-    using type = decltype(tensorAccessor<DeviceTag, T, N>(std::declval<torch::Tensor &>()));
-    type accessor;
+template <typename T, size_t N> struct DynamicElementType {
+    using value_type              = T;
+    static constexpr size_t NDIMS = N;
+    std::array<size_t, N> dynamic_shape;
+
+    constexpr DynamicElementType(std::array<size_t, N> in_shape) : dynamic_shape(in_shape) {}
+
+    constexpr std::array<size_t, N>
+    shape() const {
+        return dynamic_shape;
+    }
 };
 
-template <torch::DeviceType DeviceTag, typename T, size_t... TailDims>
-using OutAccessor_t = typename OutAccessorTypeHelper<DeviceTag, T, TailDims...>::type;
+template <typename T, size_t... Dims> struct FixedElementType {
+    using value_type                                       = T;
+    static constexpr size_t NDIMS                          = sizeof...(Dims);
+    static constexpr std::array<size_t, NDIMS> fixed_shape = {Dims...};
+
+    constexpr std::array<size_t, NDIMS>
+    shape() const {
+        return fixed_shape;
+    }
+};
+
+template <typename T> using ScalarElementType = FixedElementType<T>;
+static_assert(ScalarElementType<int64_t>::NDIMS == 0);
+
+template <torch::DeviceType DeviceTag, typename ElementType> struct AccessorTypeHelper {
+    using value_type                      = typename ElementType::value_type;
+    static constexpr size_t ELEMENT_NDIMS = ElementType::NDIMS;
+    using type = decltype(tensorAccessor<DeviceTag, value_type, ELEMENT_NDIMS + 1>(
+        std::declval<torch::Tensor &>()));
+};
+
+template <torch::DeviceType DeviceTag, typename ElementType>
+using Accessor_t = typename AccessorTypeHelper<DeviceTag, ElementType>::type;
 
 template <torch::DeviceType DeviceTag> struct DeviceValidationHelper;
 
@@ -59,27 +86,58 @@ validateDevice(torch::Device const &device) {
     DeviceValidationHelper<DeviceTag>::validate(device);
 }
 
-template <torch::DeviceType DeviceTag, typename T, size_t... TailDims>
+template <torch::DeviceType DeviceTag, typename ElementType>
 torch::Tensor
-makeOutTensor(GridBatchImpl const &grid_batch) {
+makeOutTensorFromGridBatch(GridBatchImpl const &grid_batch, ElementType const &element_type) {
     grid_batch.checkNonEmptyGrid();
     validateDevice<DeviceTag>(grid_batch.device());
+
+    using T            = typename ElementType::value_type;
+    constexpr size_t N = 1 + ElementType::NDIMS;
 
     // Infer dtype from template type T
     auto const dtype = c10::CppTypeToScalarType<T>::value;
     auto const opts  = torch::TensorOptions().dtype(dtype).device(grid_batch.device());
 
     // Create shape array with variable length based on N
-    static constexpr size_t N = sizeof...(TailDims) + 1;
-    std::array<int64_t, N> const shape{grid_batch.totalVoxels(), TailDims...};
+    auto const outer_dim = static_cast<int64_t>(grid_batch.totalVoxels());
+    std::array<int64_t, N> shape;
+    auto const tail_shape = element_type.shape();
+    shape[0]              = outer_dim;
+    for (size_t i = 1; i < N; ++i) {
+        shape[i] = tail_shape[i - 1];
+    }
     return torch::empty(shape, opts);
 }
 
-template <torch::DeviceType DeviceTag, typename T, size_t... TailDims>
+template <torch::DeviceType DeviceTag, typename ElementType>
+torch::Tensor
+makeOutTensorFromTensor(torch::Tensor const &in_tensor, ElementType const &element_type) {
+    using T            = typename ElementType::value_type;
+    constexpr size_t N = 1 + ElementType::NDIMS;
+    validateDevice<DeviceTag>(in_tensor.device());
+
+    // Infer dtype from template type T
+    auto const dtype = c10::CppTypeToScalarType<T>::value;
+    auto const opts  = torch::TensorOptions().dtype(dtype).device(in_tensor.device());
+
+    // Create shape array with variable length based on N
+    auto const outer_dim = static_cast<int64_t>(in_tensor.size(0));
+    std::array<int64_t, N> shape;
+    auto const tail_shape = element_type.shape();
+    shape[0]              = outer_dim;
+    for (size_t i = 1; i < N; ++i) {
+        shape[i] = tail_shape[i - 1];
+    }
+    return torch::empty(shape, opts);
+}
+
+template <torch::DeviceType DeviceTag, typename ElementType>
 auto
-makeOutAccessor(torch::Tensor const &out_tensor) {
-    static constexpr size_t N = sizeof...(TailDims) + 1;
-    return tensorAccessor<DeviceTag, T, N>(out_tensor);
+makeAccessor(torch::Tensor &tensor) {
+    using T            = typename ElementType::value_type;
+    constexpr size_t N = 1 + ElementType::NDIMS;
+    return tensorAccessor<DeviceTag, T, N>(tensor);
 }
 
 /**
@@ -91,14 +149,17 @@ makeOutAccessor(torch::Tensor const &out_tensor) {
  *
  * @tparam DeviceTag The device type (torch::kCPU, torch::kCUDA, or torch::kPrivateUse1)
  * @tparam Derived The derived class (CRTP pattern)
- * @tparam T The output tensor element type (e.g., int64_t, float)
- * @tparam TailDims... Optional trailing dimensions for multi-dimensional output features
- *                     (e.g., for a (N, 3) tensor, use TailDims = 3)
+ * @tparam OutElementType Element type descriptor that encapsulates both value type and shape.
+ *                        Can be ScalarElementType<T> for scalar outputs,
+ *                        FixedElementType<T, Dims...> for fixed-shape outputs (e.g., (N, 3)),
+ *                        or DynamicElementType<T, N> for runtime-determined shapes.
  *
  * Usage example (from SerializeEncode.cu):
  * @code
  * template <torch::DeviceType DeviceTag>
- * struct Processor : public BaseProcessor<DeviceTag, Processor<DeviceTag>, int64_t> {
+ * struct Processor : public BasePerActiveVoxelProcessor<DeviceTag,
+ *                                                        Processor<DeviceTag>,
+ *                                                        ScalarElementType<int64_t>> {
  *     // Add any state needed for your operation
  *     nanovdb::Coord offset = nanovdb::Coord{0, 0, 0};
  *     SpaceFillingCurveType order_type = SpaceFillingCurveType::ZOrder;
@@ -120,7 +181,7 @@ makeOutAccessor(torch::Tensor const &out_tensor) {
  * @endcode
  *
  * The base class handles:
- * - Output tensor allocation with correct shape (totalVoxels, TailDims...)
+ * - Output tensor allocation with correct shape based on OutElementType
  * - Dispatching to CPU/CUDA/PrivateUse1 implementations
  * - Iterating over all active voxels in the grid batch
  * - Wrapping output tensor as a JaggedTensor
@@ -128,9 +189,9 @@ makeOutAccessor(torch::Tensor const &out_tensor) {
  * The derived class must implement:
  * - perActiveVoxel(): Computes output value(s) for each active voxel
  */
-template <torch::DeviceType DeviceTag, typename Derived, typename T, size_t... TailDims>
-struct BaseProcessor {
-    using Out_t = OutAccessor_t<DeviceTag, T, TailDims...>;
+template <torch::DeviceType DeviceTag, typename Derived, typename OutElementType>
+struct BasePerActiveVoxelProcessor {
+    using Out_t = Accessor_t<DeviceTag, OutElementType>;
 
     __hostdev__ void
     operator()(int64_t const batchIdx,
@@ -151,9 +212,12 @@ struct BaseProcessor {
     }
 
     JaggedTensor
-    execute(GridBatchImpl const &grid_batch, int const num_threads = 1024) const {
-        auto out_tensor   = makeOutTensor<DeviceTag, T, TailDims...>(grid_batch);
-        auto out_accessor = makeOutAccessor<DeviceTag, T, TailDims...>(out_tensor);
+    execute(GridBatchImpl const &grid_batch,
+            OutElementType const &out_element = OutElementType{},
+            int const num_threads             = 1024) const {
+        auto out_tensor =
+            makeOutTensorFromGridBatch<DeviceTag, OutElementType>(grid_batch, out_element);
+        auto out_accessor = makeAccessor<DeviceTag, OutElementType>(out_tensor);
         if constexpr (DeviceTag == torch::kCUDA) {
             forEachVoxelCUDA(num_threads, // num threads
                              1,
@@ -167,6 +231,98 @@ struct BaseProcessor {
             forEachVoxelCPU(1, grid_batch, *static_cast<Derived const *>(this), out_accessor);
         }
         return grid_batch.jaggedTensor(out_tensor);
+    }
+};
+
+/**
+ * @brief CRTP base class for simple elementwise operations over tensor elements.
+ *
+ * This helper simplifies operations that transform input tensor elements into output
+ * tensor elements, preserving the first dimension (number of elements) while potentially
+ * changing the element type, rank, or shape. Each element in the input tensor is processed
+ * independently.
+ *
+ * @tparam DeviceTag The device type (torch::kCPU, torch::kCUDA, or torch::kPrivateUse1)
+ * @tparam Derived The derived class (CRTP pattern)
+ * @tparam InElementType Element type descriptor for input tensor.
+ *                       Can be ScalarElementType<T>, FixedElementType<T, Dims...>,
+ *                       or DynamicElementType<T, N>.
+ * @tparam OutElementType Element type descriptor for output tensor.
+ *                        Can be ScalarElementType<T>, FixedElementType<T, Dims...>,
+ *                        or DynamicElementType<T, N>.
+ *
+ * Usage example:
+ * @code
+ * template <torch::DeviceType DeviceTag>
+ * struct MyTransform : public BasePerElementProcessor<DeviceTag,
+ *                                                      MyTransform<DeviceTag>,
+ *                                                      ScalarElementType<float>,
+ *                                                      FixedElementType<float, 3>> {
+ *     // Add any state needed for your operation
+ *     float scale = 1.0f;
+ *
+ *     // Implement this method to define per-element computation
+ *     __hostdev__ void
+ *     perElement(int64_t const element_idx, auto in_accessor, auto out_accessor) const {
+ *         // Your element processing logic here
+ *         // element_idx: index of the current element being processed
+ *         // in_accessor: tensor accessor for reading input
+ *         // out_accessor: tensor accessor for writing output
+ *         float value = in_accessor[element_idx];
+ *         out_accessor[element_idx][0] = value * scale;
+ *         out_accessor[element_idx][1] = value * scale * 2.0f;
+ *         out_accessor[element_idx][2] = value * scale * 3.0f;
+ *     }
+ * };
+ *
+ * // Usage:
+ * torch::Tensor result = MyTransform<torch::kCUDA>{.scale = 2.0f}.execute(input_tensor);
+ * @endcode
+ *
+ * The base class handles:
+ * - Output tensor allocation with correct shape based on OutElementType
+ * - Dispatching to CPU/CUDA/PrivateUse1 implementations
+ * - Iterating over all elements in the input tensor
+ *
+ * The derived class must implement:
+ * - perElement(): Computes output value(s) for each input element
+ */
+template <torch::DeviceType DeviceTag,
+          typename Derived,
+          typename InElementType,
+          typename OutElementType>
+struct BasePerElementProcessor {
+    using In_t  = Accessor_t<DeviceTag, InElementType>;
+    using Out_t = Accessor_t<DeviceTag, OutElementType>;
+
+    __hostdev__ void
+    operator()(int64_t const element_idx, int64_t, In_t in_accessor, Out_t out_accessor) const {
+        static_cast<Derived const *>(this)->perElement(element_idx, in_accessor, out_accessor);
+    }
+
+    torch::Tensor
+    execute(torch::Tensor const &in_tensor,
+            OutElementType const &out_element = OutElementType{},
+            int const num_threads             = 1024) const {
+        auto out_tensor =
+            makeOutTensorFromTensor<DeviceTag, OutElementType>(in_tensor, out_element);
+        auto out_accessor         = makeAccessor<DeviceTag, OutElementType>(out_tensor);
+        constexpr size_t IN_NDIMS = 1 + InElementType::NDIMS;
+        using IN_T                = typename InElementType::value_type;
+        if constexpr (DeviceTag == torch::kCUDA) {
+            forEachTensorElementChannelCUDA<IN_T, IN_NDIMS>(num_threads,
+                                                            1, // num channels, ignored
+                                                            in_tensor,
+                                                            *static_cast<Derived const *>(this),
+                                                            out_accessor);
+        } else if constexpr (DeviceTag == torch::kPrivateUse1) {
+            forEachTensorElementChannelPrivateUse1<IN_T, IN_NDIMS>(
+                1, in_tensor, *static_cast<Derived const *>(this), out_accessor);
+        } else if constexpr (DeviceTag == torch::kCPU) {
+            forEachTensorElementChannelCPU<IN_T, IN_NDIMS>(
+                1, in_tensor, *static_cast<Derived const *>(this), out_accessor);
+        }
+        return out_tensor;
     }
 };
 
