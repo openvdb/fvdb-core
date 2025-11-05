@@ -71,8 +71,6 @@ set(FVDB_CPP_FILES
 set(FVDB_CU_FILES
     fvdb/detail/GridBatchImpl.cu
     fvdb/detail/ops/ActiveGridGoords.cu
-    fvdb/detail/ops/ActiveGridGoords.cu
-    fvdb/detail/ops/ActiveVoxelsInBoundsMask.cu
     fvdb/detail/ops/ActiveVoxelsInBoundsMask.cu
     fvdb/detail/ops/BuildCoarseGridFromFine.cu
     fvdb/detail/ops/BuildDenseGrid.cu
@@ -102,10 +100,8 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/convolution/pack_info/IGEMMBitOperations.cu
     fvdb/detail/ops/CoordsInGrid.cu
     fvdb/detail/ops/CubesInGrid.cu
-    fvdb/detail/ops/CubesInGrid.cu
     fvdb/detail/ops/DownsampleGridAvgPool.cu
     fvdb/detail/ops/DownsampleGridMaxPool.cu
-    fvdb/detail/ops/GridEdgeNetwork.cu
     fvdb/detail/ops/GridEdgeNetwork.cu
     fvdb/detail/ops/gsplat/FusedSSIM.cu
     fvdb/detail/ops/gsplat/GaussianComputeNanInfMask.cu
@@ -130,44 +126,32 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/jagged/JaggedSort.cu
     fvdb/detail/ops/JaggedTensorIndex.cu
     fvdb/detail/ops/JCat0.cu
-    fvdb/detail/ops/JCat0.cu
     fvdb/detail/ops/JIdxForGrid.cu
     fvdb/detail/ops/JIdxForJOffsets.cu
     fvdb/detail/ops/JOffsetsFromJIdx.cu
-    fvdb/detail/ops/JOffsetsFromJIdx.cu
-    fvdb/detail/ops/MarchingCubes.cu
     fvdb/detail/ops/MarchingCubes.cu
     fvdb/detail/ops/MortonHilbertFromIjk.cu
     fvdb/detail/ops/NearestIjkForPoints.cu
     fvdb/detail/ops/PointsInGrid.cu
     fvdb/detail/ops/PopulateGridMetadata.cu
-    fvdb/detail/ops/PopulateGridMetadata.cu
-    fvdb/detail/ops/RayImplicitIntersection.cu
     fvdb/detail/ops/RayImplicitIntersection.cu
     fvdb/detail/ops/ReadFromDense.cu
-    fvdb/detail/ops/ReadIntoDense.cu
     fvdb/detail/ops/ReadIntoDense.cu
     fvdb/detail/ops/SampleGridBezier.cu
     fvdb/detail/ops/SampleGridBezierWithGrad.cu
     fvdb/detail/ops/SampleGridBezierWithGradBackward.cu
     fvdb/detail/ops/SampleGridTrilinear.cu
     fvdb/detail/ops/SampleGridTrilinearWithGrad.cu
-    fvdb/detail/ops/SampleGridTrilinearWithGrad.cu
-    fvdb/detail/ops/SampleGridTrilinearWithGradBackward.cu
     fvdb/detail/ops/SampleGridTrilinearWithGradBackward.cu
     fvdb/detail/ops/SampleRaysUniform.cu
     fvdb/detail/ops/ScaledDotProductAttention.cu
-    fvdb/detail/ops/SegmentsAlongRays.cu
     fvdb/detail/ops/SegmentsAlongRays.cu
     fvdb/detail/ops/SerializeEncode.cu
     fvdb/detail/ops/SplatIntoGridBezier.cu
     fvdb/detail/ops/SplatIntoGridTrilinear.cu
     fvdb/detail/ops/TransformPointToGrid.cu
-    fvdb/detail/ops/TransformPointToGrid.cu
     fvdb/detail/ops/UpsampleGridNearest.cu
     fvdb/detail/ops/VolumeRender.cu
-    fvdb/detail/ops/VolumeRender.cu
-    fvdb/detail/ops/VoxelNeighborhood.cu
     fvdb/detail/ops/VoxelNeighborhood.cu
     fvdb/detail/ops/VoxelsAlongRays.cu
     fvdb/detail/utils/cuda/ForEachCUDA.cu
