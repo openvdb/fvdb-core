@@ -348,6 +348,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("compressed") = false,
           py::arg("verbose")    = false);
 
+    m.def("morton", &fvdb::morton, py::arg("ijk"));
+    m.def("hilbert", &fvdb::hilbert, py::arg("ijk"));
+
     /*
               py::overload_cast<const std::vector<int64_t>&,
                                 std::optional<const std::vector<int64_t>>&,

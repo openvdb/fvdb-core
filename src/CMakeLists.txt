@@ -71,8 +71,6 @@ set(FVDB_CPP_FILES
 set(FVDB_CU_FILES
     fvdb/detail/GridBatchImpl.cu
     fvdb/detail/ops/ActiveGridGoords.cu
-    fvdb/detail/ops/ActiveGridGoords.cu
-    fvdb/detail/ops/ActiveVoxelsInBoundsMask.cu
     fvdb/detail/ops/ActiveVoxelsInBoundsMask.cu
     fvdb/detail/ops/BuildCoarseGridFromFine.cu
     fvdb/detail/ops/BuildDenseGrid.cu
@@ -132,6 +130,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/JIdxForJOffsets.cu
     fvdb/detail/ops/JOffsetsFromJIdx.cu
     fvdb/detail/ops/MarchingCubes.cu
+    fvdb/detail/ops/MortonHilbertFromIjk.cu
     fvdb/detail/ops/NearestIjkForPoints.cu
     fvdb/detail/ops/PointsInGrid.cu
     fvdb/detail/ops/PopulateGridMetadata.cu

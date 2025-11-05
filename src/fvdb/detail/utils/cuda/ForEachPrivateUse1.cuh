@@ -7,6 +7,7 @@
 #include <fvdb/Config.h>
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
@@ -85,6 +86,24 @@ forEachJaggedElementChannelPrivateUse1Kernel(int64_t numel,
         const int64_t channelIdx      = (idx + offset) % channelsPerElement;
 
         func(batchIdx, elementIdx, channelIdx, jaggedAcc, args...);
+    }
+}
+
+template <int32_t NDIMS, typename ScalarT, typename Func, typename... Args>
+__global__ void
+forEachTensorElementChannelPrivateUse1Kernel(int64_t numel,
+                                             int64_t offset,
+                                             TorchRAcc32<ScalarT, NDIMS> tensorAcc,
+                                             int64_t channelsPerElement,
+                                             Func func,
+                                             Args... args) {
+    for (int64_t idx = (static_cast<int64_t>(blockIdx.x) * blockDim.x) + threadIdx.x;
+         idx < numel * channelsPerElement;
+         idx += blockDim.x * gridDim.x) {
+        const int64_t elementIdx = (idx + offset) / channelsPerElement;
+        const int64_t channelIdx = (idx + offset) % channelsPerElement;
+
+        func(elementIdx, channelIdx, tensorAcc, args...);
     }
 }
 
@@ -207,6 +226,41 @@ forEachJaggedElementChannelPrivateUse1(int64_t numChannels,
                     deviceElementCount,
                     deviceElementOffset,
                     jaggedTensor.packed_accessor32<ScalarT, NDIMS, torch::RestrictPtrTraits>(),
+                    numChannels,
+                    func,
+                    args...);
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+        }
+    }
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
+    }
+}
+
+template <typename ScalarT, int32_t NDIMS, typename Func, typename... Args>
+void
+forEachTensorElementChannelPrivateUse1(int64_t numChannels,
+                                       const torch::Tensor &tensor,
+                                       Func func,
+                                       Args... args) {
+    TORCH_CHECK(tensor.device().is_privateuseone(), "Tensor must be on a PrivateUse1 device");
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
+
+        size_t deviceElementOffset, deviceElementCount;
+        std::tie(deviceElementOffset, deviceElementCount) =
+            fvdb::detail::deviceChunk(tensor.size(0), deviceId);
+
+        const int64_t deviceNumBlocks = GET_BLOCKS(deviceElementCount, DEFAULT_BLOCK_DIM);
+        if (deviceNumBlocks > 0) {
+            _private::forEachTensorElementChannelPrivateUse1Kernel<NDIMS, ScalarT, Func, Args...>
+                <<<deviceNumBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                    deviceElementCount,
+                    deviceElementOffset,
+                    tensor.packed_accessor32<ScalarT, NDIMS, torch::RestrictPtrTraits>(),
                     numChannels,
                     func,
                     args...);

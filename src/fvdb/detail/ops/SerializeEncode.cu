@@ -16,7 +16,9 @@ namespace ops {
 namespace {
 
 template <torch::DeviceType DeviceTag>
-struct Processor : public BaseProcessor<DeviceTag, Processor<DeviceTag>, int64_t> {
+struct Processor : public BasePerActiveVoxelProcessor<DeviceTag,
+                                                      Processor<DeviceTag>,
+                                                      ScalarElementType<int64_t>> {
     nanovdb::Coord offset            = nanovdb::Coord{0, 0, 0};
     SpaceFillingCurveType order_type = SpaceFillingCurveType::ZOrder;
 

@@ -8,7 +8,7 @@ import torch
 from fvdb.types import resolve_device
 from parameterized import parameterized
 
-from fvdb import GridBatch, JaggedTensor
+from fvdb import GridBatch, JaggedTensor, hilbert, morton
 
 all_device_combos = [
     ["cpu"],
@@ -174,7 +174,7 @@ class TestMortonHilbert(unittest.TestCase):
         self.assertTrue(torch.equal(code, ex))
 
     @parameterized.expand(all_device_combos)
-    def test_morton_codes(self, device):
+    def test_grid_batch_morton_codes(self, device):
         device = resolve_device(device)
         jagged_ijk, grid_batch = _create_test_grid_batch(7, device)
         ijks_flat = grid_batch.ijk.jdata
@@ -216,7 +216,7 @@ class TestMortonHilbert(unittest.TestCase):
         self.assertTrue(torch.equal(morton_zyx_codes_hard_with_offset, morton_zyx_codes_with_offset.jdata))
 
     @parameterized.expand(all_device_combos)
-    def test_hilbert_codes(self, device):
+    def test_grid_batch_hilbert_codes(self, device):
         device = resolve_device(device)
         jagged_ijk, grid_batch = _create_test_grid_batch(7, device)
 
@@ -234,7 +234,7 @@ class TestMortonHilbert(unittest.TestCase):
         self.assertEqual(len(hilbert_zyx_codes_with_offset), len(hilbert_zyx_codes))
 
     @parameterized.expand(all_device_combos)
-    def test_space_filling_curve_properties(self, device):
+    def test_grid_batch_space_filling_curve_properties(self, device):
         device = resolve_device(device)
         batch_size = 7
         jagged_ijk, grid_batch = _create_test_grid_batch(batch_size, device)
@@ -257,6 +257,47 @@ class TestMortonHilbert(unittest.TestCase):
         # Test that codes are within valid range for uint64
         self.assertTrue(torch.all(morton_codes.jdata >= 0))
         self.assertTrue(torch.all(hilbert_codes.jdata >= 0))
+
+    @parameterized.expand(all_device_combos)
+    def test_morton_codes_torch_tensor(self, device):
+        device = resolve_device(device)
+
+        # Generate random ijk coordinates as a flat tensor
+        num_voxels = 500
+        ijks_flat = torch.randint(0, 1000, (num_voxels, 3), device=device, dtype=torch.int32)
+
+        # Get Morton codes
+        morton_codes = morton(ijks_flat)
+
+        self.assertEqual(len(ijks_flat), len(morton_codes))
+
+        # Verify codes are int64
+        self.assertEqual(morton_codes.dtype, torch.int64)
+
+        # Test that codes are non-negative
+        self.assertTrue(torch.all(morton_codes >= 0))
+
+        # Codes should match the hard-way implementation
+        morton_codes_hard = _morton3D_encode_hard_torch(ijks_flat)
+        self.assertTrue(torch.equal(morton_codes_hard, morton_codes))
+
+    @parameterized.expand(all_device_combos)
+    def test_hilbert_codes_torch_tensor(self, device):
+        device = resolve_device(device)
+
+        # Generate random ijk coordinates as a flat tensor
+        num_voxels = 500
+        ijks_flat = torch.randint(0, 1000, (num_voxels, 3), device=device, dtype=torch.int32)
+
+        hilbert_codes = hilbert(ijks_flat)
+        # Test that codes are non-negative
+        self.assertTrue(torch.all(hilbert_codes >= 0))
+
+        # Verify codes are int64
+        self.assertEqual(hilbert_codes.dtype, torch.int64)
+
+        # Verify correct number of codes returned
+        self.assertEqual(len(ijks_flat), len(hilbert_codes))
 
 
 if __name__ == "__main__":

@@ -63,6 +63,8 @@ from ._fvdb_cpp import gaussian_render_jagged as _gaussian_render_jagged_cpp
 from ._fvdb_cpp import (
     config,
     volume_render,
+    morton,
+    hilbert,
 )
 
 # Import JaggedTensor from jagged_tensor.py
@@ -228,6 +230,9 @@ __all__ = [
     "jones",
     "jzeros",
     "jempty",
+    # Morton/Hilbert operations
+    "morton",
+    "hilbert",
     # Specialized operations
     "scaled_dot_product_attention",
     "volume_render",
