@@ -11,7 +11,11 @@ import unittest
 
 import torch
 from fvdb.types import DeviceIdentifier, resolve_device
-from fvdb.utils.tests import fourier_anti_symmetric_kernel, has_any_symmetry
+from fvdb.utils.tests import (
+    fourier_anti_symmetric_kernel,
+    generate_hermit_impulses_dense,
+    has_any_symmetry,
+)
 from fvdb.utils.tests.convolution_utils import conv_ground_truth_stride_1
 from parameterized import parameterized
 
@@ -316,3 +320,127 @@ class TestConvDefault(unittest.TestCase):
         torch.testing.assert_close(gt_dense_activation, dense_impulse_field, rtol=1e-5, atol=1e-6)
         torch.testing.assert_close(gt_dense_convolved, dense_convolved, rtol=1e-5, atol=1e-6)
         print("Confirmed that the utils ground truth dense convolved matches the dense convolved.")
+
+    @parameterized.expand(all_device_dtype_combos)
+    def test_multiple_impulses(self, device: DeviceIdentifier, dtype: torch.dtype):
+        device = resolve_device(device)
+
+        impulse_coords, impulse_field = generate_hermit_impulses_dense(
+            num_candidates=self.NUM_CANDIDATES,
+            volume_shape=self.VOLUME_SHAPE,
+            kernel_size=self.KERNEL_SIZE,
+            impulse_value=1,
+            dtype=dtype,
+            device=device,
+        )
+
+        num_impulses = len(impulse_coords)
+        print(f"impulse_coords.shape: {impulse_coords.shape}")
+        print(f"Number of generated impulses: {num_impulses}")
+
+        total_value = torch.sum(impulse_field).item()
+        print(f"Total sum of impulse_field: {total_value}")
+        self.assertAlmostEqual(total_value, num_impulses, places=5)
+        self.assertEqual(round(total_value), num_impulses)
+        print("Confirmed that the total sum of impulse_field matches the total number of impulses.")
+
+        # Test that the impulse field's shape matches the volume shape
+        self.assertEqual(impulse_field.shape, self.VOLUME_SHAPE)
+        print("Confirmed that the impulse field shape matches the volume shape.")
+
+        # Get a kernel and convolve the impulse field with it
+        kernel = fourier_anti_symmetric_kernel(self.KERNEL_SIZE, dtype=dtype, device=device)
+        self.assertFalse(has_any_symmetry(kernel))
+        print("Confirmed that the kernel is anti-symmetric.")
+
+        self.assertTrue(torch.all(kernel != 0), "Kernel has zero entries!")
+        print("Confirmed that the kernel has no zeros.")
+
+        impulse_field_with_channel_and_batch = impulse_field.reshape(1, 1, *self.VOLUME_SHAPE)
+        kernel_with_channels = kernel.reshape(1, 1, *self.KERNEL_SIZE)
+        kernel_volume = math.prod(self.KERNEL_SIZE)
+
+        _backend_setting = torch.backends.cudnn.allow_tf32
+        # Disable TF32 for consistent precision across CPU and CUDA
+        torch.backends.cudnn.allow_tf32 = False
+        dense_convolved = torch.nn.functional.conv3d(
+            input=impulse_field_with_channel_and_batch, weight=kernel_with_channels, padding="same"
+        )
+        torch.backends.cudnn.allow_tf32 = _backend_setting
+        self.assertEqual(impulse_field_with_channel_and_batch.shape, dense_convolved.shape)
+        print("Confirmed that the convolved shape matches the impulse field shape.")
+
+        # Let's build a grid batch from the impulse coords
+        jagged_impulse_coords = JaggedTensor(impulse_coords)
+        grid_batch = GridBatch.from_ijk(jagged_impulse_coords)
+        self.assertEqual(grid_batch.grid_count, 1)
+        print("Confirmed that the grid batch has a single grid.")
+
+        # Create a dst grid batch from the kernel size
+        dst_grid_batch = grid_batch.conv_grid(kernel_size=self.KERNEL_SIZE, stride=1)
+        dst_ijks = dst_grid_batch.ijk.jdata
+        print(f"dst_ijks.shape: {dst_ijks.shape}")
+        dst_ijks_count = len(dst_ijks)
+
+        # The ijks should be the same as the coords of the nonzero entries of the
+        # dense convolved field.
+        dense_convolved_rect_only = dense_convolved[0, 0, :, :, :]
+        self.assertEqual(dense_convolved_rect_only.shape, self.VOLUME_SHAPE)
+        print("Confirmed that the dense convolved rect only shape matches the volume shape.")
+
+        nonzero_coords = torch.nonzero(dense_convolved_rect_only).to(torch.int32)
+        print(f"nonzero_coords.shape: {nonzero_coords.shape}")
+        nonzero_coords_count = len(nonzero_coords)
+        self.assertEqual(nonzero_coords_count, dst_ijks_count)
+        print("Confirmed that the number of nonzero coords matches the number of dst ijks.")
+
+        # Because of the way sparse volumes work, the dst ijks will be in tile clumps, so won't
+        # necessarily match the nonzero coords in ordering. We'll reorder them both using a little
+        # encoding
+        def sort_coords(coords):
+            encoding = coords[:, 0] * 10000 + coords[:, 1] * 1000 + coords[:, 2]
+            perm = torch.argsort(encoding)
+            return coords[perm], perm
+
+        nonzero_coords_sorted, nonzero_coords_perm = sort_coords(nonzero_coords)
+        dst_ijks_sorted, dst_ijks_perm = sort_coords(dst_ijks)
+        self.assertTrue(torch.equal(nonzero_coords_sorted, dst_ijks_sorted))
+        print("Confirmed that the nonzero coords sorted matches the dst ijks sorted.")
+
+        # Create a convolution plan!
+        conv_plan = ConvolutionPlan.from_grid_batch(
+            kernel_size=self.KERNEL_SIZE, stride=1, source_grid=grid_batch, target_grid=dst_grid_batch
+        )
+        self.assertEqual(str(conv_plan._backend), "ConvPackBackend.GATHER_SCATTER")
+        print(f"Confirmed that the conv plan backend is GATHER_SCATTER.")
+
+        # Execute the convolution plan!
+        self.assertEqual(num_impulses, len(impulse_coords))
+        print(f"Confirmed that the number of impulses matches the number of impulse coords.")
+        features = JaggedTensor(torch.ones((num_impulses, 1), device=device, dtype=dtype))
+        sparse_convolved_jagged = conv_plan.execute(features, kernel_with_channels)
+        sparse_convolved_flat = sparse_convolved_jagged.jdata.flatten()
+
+        self.assertEqual(len(sparse_convolved_flat), dst_ijks_count)
+        print("Confirmed that the sparse convolution output has the same number of voxels as the dst ijks.")
+
+        # Get the dense convolved at the location of the nonzero coords
+        dense_convolved_at_nonzero_coords_sorted = dense_convolved[
+            0, 0, nonzero_coords_sorted[:, 0], nonzero_coords_sorted[:, 1], nonzero_coords_sorted[:, 2]
+        ]
+        dense_convolved_at_nonzero_coords_sorted_flat = dense_convolved_at_nonzero_coords_sorted.flatten()
+        self.assertEqual(len(dense_convolved_at_nonzero_coords_sorted_flat), dst_ijks_count)
+        print(
+            "Confirmed that the dense convolved at the nonzero coords has the same number of voxels as the dst ijks sorted."
+        )
+
+        # Reorder the sparse convolved to match the nonzero coords sorted
+        sparse_convolved_sorted = sparse_convolved_flat[dst_ijks_perm].flatten()
+        self.assertEqual(len(sparse_convolved_sorted), dst_ijks_count)
+        print("Confirmed that the sparse convolved sorted has the same number of voxels as the dst ijks sorted.")
+
+        # The dense convolved at the nonzero coords should match the sparse convolved
+        torch.testing.assert_close(
+            dense_convolved_at_nonzero_coords_sorted_flat, sparse_convolved_sorted, rtol=1e-5, atol=1e-6
+        )
+        print("Confirmed that the dense convolved at the nonzero coords matches the sparse convolved.")

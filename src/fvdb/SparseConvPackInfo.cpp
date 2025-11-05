@@ -250,9 +250,9 @@ SparseConvPackInfo::sparseConv3d(const JaggedTensor &input,
                                  const torch::Tensor &weights,
                                  ConvPackBackend backend) const {
     TORCH_CHECK_VALUE(input.num_outer_lists() == mSourceGrid.grid_count(),
-                      "Input batch size must match target grid batch size");
+                      "Input batch size must match source grid batch size");
     TORCH_CHECK_VALUE(input.element_count() == mSourceGrid.total_voxels(),
-                      "Input element count must match target grid total voxels");
+                      "Input element count must match source grid total voxels");
 
     if (backend == ConvPackBackend::GATHER_SCATTER) {
         auto ret = detail::autograd::SparseConvolutionKernelMap::apply(
