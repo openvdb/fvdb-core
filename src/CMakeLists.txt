@@ -69,7 +69,6 @@ set(FVDB_CPP_FILES
 )
 
 set(FVDB_CU_FILES
-    #fvdb/detail/ops/convolution/backend/SparseConvolutionGroundTruth.cu
     fvdb/detail/GridBatchImpl.cu
     fvdb/detail/ops/ActiveGridGoords.cu
     fvdb/detail/ops/ActiveGridGoords.cu
