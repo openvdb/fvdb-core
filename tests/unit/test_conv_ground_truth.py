@@ -158,6 +158,58 @@ class TestConvGroundTruth(unittest.TestCase):
         )
 
     @parameterized.expand(all_device_dtype_combos)
+    def test_single_impulse_activation_and_weights(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """
+        This test iterates over each single weight location in the kernel space,
+        creates a kernel that has just an impulse at that location, and convolves a single impulse
+        conv grid with it. For each location within the kernel, we should expect the output to have
+        a single impulse at the activation impulse coord minus the centered kernel impulse coord
+        """
+        device = resolve_device(device)
+
+        coord = torch.tensor(self.SINGLE_COORD, device=device, dtype=torch.int32)
+        impulse_field = torch.zeros((1,) + self.SINGLE_VOLUME_SHAPE, device=device, dtype=dtype)
+
+        impulse_field[0, coord[0], coord[1], coord[2]] = 1
+
+        self.assertEqual(impulse_field.sum().item(), 1)
+
+        kernel_half_width = tuple(k // 2 for k in self.KERNEL_SIZE)
+
+        for k0 in range(self.KERNEL_SIZE[0]):
+            for k1 in range(self.KERNEL_SIZE[1]):
+                for k2 in range(self.KERNEL_SIZE[2]):
+                    # Create a kernel that has just an impulse at the current location
+                    weights = torch.zeros((1, 1, *self.KERNEL_SIZE), device=device, dtype=dtype)
+                    weights[0, 0, k0, k1, k2] = 1
+                    self.assertEqual(weights.sum().item(), 1)
+
+                    convolved = torch.nn.functional.conv3d(
+                        input=impulse_field, weight=weights, stride=1, padding="same"
+                    )
+                    self.assertEqual(impulse_field.shape, convolved.shape)
+                    self.assertEqual(convolved.sum().item(), 1)
+
+                    # Expected output coordinate
+                    nonzero_coords = torch.nonzero(convolved[0])
+                    self.assertEqual(nonzero_coords.shape[0], 1)
+                    centered_kernel_coord = (
+                        k0 - kernel_half_width[0],
+                        k1 - kernel_half_width[1],
+                        k2 - kernel_half_width[2],
+                    )
+                    expected_output_coord = (
+                        self.SINGLE_COORD[0] - centered_kernel_coord[0],
+                        self.SINGLE_COORD[1] - centered_kernel_coord[1],
+                        self.SINGLE_COORD[2] - centered_kernel_coord[2],
+                    )
+                    got_output_coord = tuple(nonzero_coords[0].tolist())
+                    self.assertEqual(got_output_coord, expected_output_coord)
+                    # print(
+                    #     f"Kernel offset: {(k0, k1, k2)}, Nonzero coords: {nonzero_coords}, expected: {expected_output_coord}"
+                    # )
+
+    @parameterized.expand(all_device_dtype_combos)
     def test_multiple_impulses(self, device: DeviceIdentifier, dtype: torch.dtype):
         device = resolve_device(device)
 

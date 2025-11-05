@@ -39,6 +39,11 @@ class TestConvDefault(unittest.TestCase):
 
     @parameterized.expand(all_device_dtype_combos)
     def test_single_impulse_conv_grid(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """
+        This test validates that the topology of the output grid correctly
+        matches the shape of the kernel centered at the single impulse coordinate,
+        and is not transposed across spatial dimensions. This was broken before!
+        """
         device = resolve_device(device)
 
         coord = torch.tensor(self.SINGLE_COORD, device=device, dtype=torch.int32)
@@ -69,6 +74,12 @@ class TestConvDefault(unittest.TestCase):
 
     @parameterized.expand(all_device_dtype_combos)
     def test_single_impulse_activation_and_weights(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """
+        This test iterates over each single weight location in the kernel space,
+        creates a kernel that has just an impulse at that location, and convolves a single impulse
+        conv grid with it. For each location within the kernel, we should expect the output to have
+        a single impulse at the activation impulse coord minus the centered kernel impulse coord
+        """
         device = resolve_device(device)
 
         coord = torch.tensor(self.SINGLE_COORD, device=device, dtype=torch.int32)
@@ -90,106 +101,136 @@ class TestConvDefault(unittest.TestCase):
         for k0 in range(self.KERNEL_SIZE[0]):
             for k1 in range(self.KERNEL_SIZE[1]):
                 for k2 in range(self.KERNEL_SIZE[2]):
-                    c0 = self.SINGLE_COORD[0] + k0 - kernel_half_width[0]
-                    c1 = self.SINGLE_COORD[1] + k1 - kernel_half_width[1]
-                    c2 = self.SINGLE_COORD[2] + k2 - kernel_half_width[2]
-
+                    # Create a kernel that has just an impulse at the current location
                     weights = torch.zeros((1, 1, *self.KERNEL_SIZE), device=device, dtype=dtype)
                     weights[0, 0, k0, k1, k2] = 1
                     self.assertEqual(weights.sum().item(), 1)
 
-                    convolved = conv_plan.execute(features, weights)
-                    convolved_flat = convolved.jdata
-                    self.assertEqual(convolved_flat.sum().item(), 1)
+                    convolved_features_jagged = conv_plan.execute(features, weights)
+                    convolved_features_flat = convolved_features_jagged.jdata.flatten()
+                    self.assertEqual(convolved_features_flat.sum().item(), 1)
 
-                    print(f"Convolved shape: {convolved_flat.shape}")
-                    self.assertEqual(len(convolved_flat), len(dst_ijks))
+                    nonzero_mask = convolved_features_flat != 0
+                    ijks_of_nonzero = dst_ijks[nonzero_mask].contiguous()
+                    self.assertEqual(len(ijks_of_nonzero), 1)
+                    got_output_coord = tuple(ijks_of_nonzero.flatten().tolist())
+                    print(f"{k0, k1, k2} -> ijks_of_nonzero: {got_output_coord}")
+
+                    # Expected output coordinate
+                    centered_kernel_coord = (
+                        k0 - kernel_half_width[0],
+                        k1 - kernel_half_width[1],
+                        k2 - kernel_half_width[2],
+                    )
+                    expected_output_coord = (
+                        self.SINGLE_COORD[0] - centered_kernel_coord[0],
+                        self.SINGLE_COORD[1] - centered_kernel_coord[1],
+                        self.SINGLE_COORD[2] - centered_kernel_coord[2],
+                    )
+                    self.assertEqual(got_output_coord, expected_output_coord)
 
     @parameterized.expand(all_device_dtype_combos)
     def test_single_impulse(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """
+        This test creates a src grid with a single nonzero voxel as an impulse.
+        The weights kernel that is created is anti-symmetric. The dst grid topology
+        is already tested elsewhere. Here we validate that the resulting convolution
+        is correct.
+        """
         device = resolve_device(device)
 
         # For single impulse, we just need to make sure it's far enough away from
         # the boundary of the volume.
-
+        # This is just validating that our test parameters are set up correctly.
         expected_volume_shape = tuple(a + 2 for a in self.KERNEL_SIZE)
-        expected_impulse_coord = tuple(1 + a // 2 for a in self.KERNEL_SIZE)
-
+        half_kernel_size = tuple(a // 2 for a in self.KERNEL_SIZE)
+        expected_impulse_coord = tuple(1 + a for a in half_kernel_size)
         self.assertEqual(expected_volume_shape, self.SINGLE_VOLUME_SHAPE)
         self.assertEqual(expected_impulse_coord, self.SINGLE_COORD)
+        print("Confirmed that the expected volume/coord matches the config.")
 
+        # Create a src grid with batch size 1 and a single nonzero voxel as an impulse.
         coord = torch.tensor(self.SINGLE_COORD, device=device, dtype=torch.int32)
-
         ijks = JaggedTensor(coord.unsqueeze(0))
         features = JaggedTensor(torch.ones((1, 1), device=device, dtype=dtype))
-        grid_batch = GridBatch.from_ijk(ijks, device=device)
+        grid_batch = GridBatch.from_ijk(ijks)
         dense_field_from_grid_batch = grid_batch.inject_to_dense_cmajor(
             features, min_coord=(0, 0, 0), grid_size=self.SINGLE_VOLUME_SHAPE
         )
 
+        # Anti-symmetric kernel
         kernel = fourier_anti_symmetric_kernel(self.KERNEL_SIZE, dtype=dtype, device=device)
         self.assertFalse(has_any_symmetry(kernel))
+        print("Confirmed that the kernel is anti-symmetric.")
         kernel_with_channels = kernel.reshape(1, 1, *self.KERNEL_SIZE)
         kernel_sum = kernel_with_channels.sum().item()
 
-        impulse_field = torch.zeros((1, 1) + self.SINGLE_VOLUME_SHAPE, device=device, dtype=dtype)
-        impulse_field[0, 0, coord[0], coord[1], coord[2]] = 1
-        self.assertEqual(impulse_field.sum().item(), 1)
+        # Dense impulse field.
+        dense_impulse_field = torch.zeros((1, 1) + self.SINGLE_VOLUME_SHAPE, device=device, dtype=dtype)
+        dense_impulse_field[0, 0, coord[0], coord[1], coord[2]] = 1
+        self.assertEqual(dense_impulse_field.sum().item(), 1)
+        print("Confirmed that the dense impulse field has a single nonzero voxel.")
+
         # Test that our manually constructed impulse field matches what we get from the grid batch
-        torch.testing.assert_close(impulse_field, dense_field_from_grid_batch, atol=1e-5, rtol=1e-6)
+        torch.testing.assert_close(dense_impulse_field, dense_field_from_grid_batch, atol=1e-5, rtol=1e-6)
+        print("Confirmed that the dense impulse field matches the grid batch impulse field.")
 
-        gt_dense_activation, gt_convolved = conv_ground_truth_stride_1(
-            grid_batch, features, kernel_with_channels, dense_dims=self.SINGLE_VOLUME_SHAPE, ijk_min=(0, 0, 0)
-        )
-
-        # Test that the dense activation matches the ground truth
-        torch.testing.assert_close(dense_field_from_grid_batch, gt_dense_activation, atol=1e-5, rtol=1e-6)
-
-        # Do a single convolution
+        # Test the dense convolution ourselves.
         _backend_setting = torch.backends.cudnn.allow_tf32
         # Disable TF32 for consistent precision across CPU and CUDA
         torch.backends.cudnn.allow_tf32 = False
-        convolved = torch.nn.functional.conv3d(input=impulse_field, weight=kernel_with_channels, padding="same")
-        self.assertEqual(impulse_field.shape, convolved.shape)
+        dense_convolved = torch.nn.functional.conv3d(
+            input=dense_impulse_field, weight=kernel_with_channels, padding="same"
+        )
         torch.backends.cudnn.allow_tf32 = _backend_setting
+        self.assertEqual(dense_impulse_field.shape, dense_convolved.shape)
+        dense_convolved_flat = dense_convolved.flatten()
+        print("Confirmed that the dense convolved has the same shape as the dense impulse field.")
 
-        # Check the sums
-        conv_sum = convolved.sum().item()
-        gt_conv_sum = gt_convolved.sum().item()
-        self.assertAlmostEqual(conv_sum, gt_conv_sum, places=5)
-        self.assertAlmostEqual(conv_sum, kernel_sum, places=5)
-
-        # Test that the convolved field matches the ground truth
-        torch.testing.assert_close(convolved, gt_convolved, atol=1e-5, rtol=1e-6)
+        # This dense convolution is our ground truth. Since the input is just an impulse, the
+        # convolution should have the same sum as the kernel, and in fact should be the kernel
+        # flipped. We've tested this heavily elsewhere, so we'll just assert that the sums are
+        # the same.
+        self.assertAlmostEqual(dense_convolved.sum().item(), kernel_sum, places=5)
+        print("Confirmed that the dense convolved has the same sum as the kernel.")
 
         # Get a convolution plan
         dst_grid_batch = grid_batch.conv_grid(kernel_size=self.KERNEL_SIZE, stride=1)
-        # dst_grid_batch = grid_batch.conv_grid(kernel_size=(7, 5, 3), stride=1)
-
         dst_ijks = dst_grid_batch.ijk.jdata
-        # The dst_ijks should correspond to all voxel locations in the footprint of the kernel over the impulse.
-        # Since the kernel is centered at SINGLE_COORD in a volume of SINGLE_VOLUME_SHAPE, with stride=1,
-        # the output ijks should cover all coordinates reachable by the kernel centered at SINGLE_COORD, which is
-        # exactly all coordinates in a (3,5,7) block centered at (2,3,4), i.e. ijk in (2+a, 3+b, 4+c) for
-        # a in [-1,0,1], b in [-2,-1,0,1,2], c in [-3,-2,-1,0,1,2,3]
+
+        # The dst_ijks should correspond to all voxel locations in the footprint of the
+        # kernel over the impulse. Since the kernel is centered at SINGLE_COORD in a volume of
+        # SINGLE_VOLUME_SHAPE, with stride=1, the output ijks should cover all coordinates
+        # reachable by the kernel centered at SINGLE_COORD, which is exactly all coordinates
+        # in a (3,5,7) block centered at (2,3,4), i.e. ijk in (2+a, 3+b, 4+c)
+        # for a in [-1,0,1], b in [-2,-1,0,1,2], c in [-3,-2,-1,0,1,2,3]
         #
         # Let's build the set of expected ijks and compare to dst_ijks.
         expected_ijks = []
-        for di in range(-(self.KERNEL_SIZE[0] // 2), self.KERNEL_SIZE[0] // 2 + 1):
-            for dj in range(-(self.KERNEL_SIZE[1] // 2), self.KERNEL_SIZE[1] // 2 + 1):
-                for dk in range(-(self.KERNEL_SIZE[2] // 2), self.KERNEL_SIZE[2] // 2 + 1):
-                    i = self.SINGLE_COORD[0] + di
-                    j = self.SINGLE_COORD[1] + dj
-                    k = self.SINGLE_COORD[2] + dk
+        for di in range(self.KERNEL_SIZE[0]):
+            for dj in range(self.KERNEL_SIZE[1]):
+                for dk in range(self.KERNEL_SIZE[2]):
+                    i = self.SINGLE_COORD[0] + di - half_kernel_size[0]
+                    j = self.SINGLE_COORD[1] + dj - half_kernel_size[1]
+                    k = self.SINGLE_COORD[2] + dk - half_kernel_size[2]
                     expected_ijks.append([i, j, k])
         expected_ijks = torch.tensor(expected_ijks, device=device, dtype=torch.int32)
         # dst_ijks is shape (N, 3), expected_ijks is (N, 3)
         self.assertEqual(dst_ijks.shape, expected_ijks.shape)
+        self.assertEqual(3, dst_ijks.shape[1])
+        self.assertEqual(3, expected_ijks.shape[1])
+        print("Confirmed that the dst ijks matches the expected ijks.")
 
-        print(f"Kernel volume: {math.prod(self.KERNEL_SIZE)}")
-        print(f"Number of output ijks: {len(dst_ijks)}")
-        self.assertEqual(len(dst_ijks), math.prod(self.KERNEL_SIZE))
+        # Test the expected kernel volume against the dst ijks. This is technically
+        # just testing the dst grid, which we've done elsewhere.
+        expected_kernel_volume = math.prod(self.KERNEL_SIZE)
+        dst_ijks_volume = len(dst_ijks)
+        print(f"Expected kernel volume: {expected_kernel_volume}")
+        print(f"Number of output ijks: {dst_ijks_volume}")
+        self.assertEqual(dst_ijks_volume, expected_kernel_volume)
+        print("Confirmed that the dst ijks volume matches the expected kernel volume.")
 
+        # Test the expected bounds.
         expected_bounds_min = expected_ijks.min(dim=0)[0].tolist()
         expected_bounds_max = expected_ijks.max(dim=0)[0].tolist()
         dst_bounds_min = dst_ijks.min(dim=0)[0].tolist()
@@ -198,126 +239,80 @@ class TestConvDefault(unittest.TestCase):
         print(f"Output ijks bounds: {dst_bounds_min} to {dst_bounds_max}")
         self.assertEqual(dst_bounds_min, expected_bounds_min)
         self.assertEqual(dst_bounds_max, expected_bounds_max)
+        print("Confirmed that the dst ijks bounds matches the expected ijks bounds.")
 
-        expected_ijks_fake_morton = (
-            expected_ijks[:, 0] * 10000 + expected_ijks[:, 1] * 100 + expected_ijks[:, 2] * 1
-        ).to(torch.int64)
+        # The expected ijks should be the same as the dst ijks.
+        self.assertTrue(torch.equal(expected_ijks, dst_ijks))
+        print("Confirmed that the expected ijks matches the dst ijks.")
 
-        expected_ijks_perm = torch.argsort(expected_ijks_fake_morton)
-        expected_ijks_sorted = expected_ijks[expected_ijks_perm]
-
-        dst_ijks_fake_morton = (dst_ijks[:, 0] * 10000 + dst_ijks[:, 1] * 100 + dst_ijks[:, 2] * 1).to(torch.int64)
-        dst_ijks_perm = torch.argsort(dst_ijks_fake_morton)
-        dst_ijks_sorted = dst_ijks[dst_ijks_perm]
-        torch.testing.assert_close(dst_ijks_sorted, expected_ijks_sorted)
-
-        # conv_plan = ConvolutionPlan.from_grid_batch(
-        #     kernel_size=self.KERNEL_SIZE, stride=1, source_grid=grid_batch, target_grid=dst_grid_batch
-        # )
+        # Create a convolution plan!
         conv_plan = ConvolutionPlan.from_grid_batch(
-            kernel_size=(7, 5, 3), stride=1, source_grid=grid_batch, target_grid=dst_grid_batch
+            kernel_size=self.KERNEL_SIZE, stride=1, source_grid=grid_batch, target_grid=dst_grid_batch
         )
-        print(f"\n\nconv plan backend: {conv_plan._backend}\n\n")
+        self.assertEqual(str(conv_plan._backend), "ConvPackBackend.GATHER_SCATTER")
+        print(f"Confirmed that the conv plan backend is GATHER_SCATTER.")
 
-        convolved_sparse_plan = conv_plan.execute(features, kernel_with_channels)
-        conv_plan_sum = convolved_sparse_plan.jdata.sum().item()
-        self.assertAlmostEqual(conv_plan_sum, gt_conv_sum, places=5)
+        # Execute the convolution plan!
+        sparse_convolved_jagged = conv_plan.execute(features, kernel_with_channels)
+        sparse_convolved_flat = sparse_convolved_jagged.jdata.flatten()
+
+        # The sum of the convolved sparse plan should be the same as the kernel sum.
+        conv_plan_sum = sparse_convolved_flat.sum().item()
         self.assertAlmostEqual(conv_plan_sum, kernel_sum, places=5)
+        print("Confirmed that the sparse convolved has the same sum as the kernel.")
 
-        out_ijks_list = dst_grid_batch.ijk.jdata.tolist()
-        out_features_list = convolved_sparse_plan.jdata.tolist()
-        kernel_list = kernel.tolist()
-        kernel_flattened_list = kernel.contiguous().view(-1).tolist()
-        print(f"out_ijks_list: {out_ijks_list}")
-        print(f"out_features_list: {out_features_list}")
-        print(f"kernel_list: {kernel_list}")
-        print(f"kernel_flattened_list: {kernel_flattened_list}")
+        # Extract the convolved region around the impulse
+        print(f"expected_bounds_min: {expected_bounds_min}")
+        print(f"expected_bounds_max: {expected_bounds_max}")
+        expected_size = tuple(mx - mn + 1 for mn, mx in zip(expected_bounds_min, expected_bounds_max))
+        print(f"expected_size: {expected_size}")
+        dense_convolved_region = dense_convolved[
+            0,
+            0,
+            expected_bounds_min[0] : expected_bounds_max[0] + 1,
+            expected_bounds_min[1] : expected_bounds_max[1] + 1,
+            expected_bounds_min[2] : expected_bounds_max[2] + 1,
+        ]
+        dense_convolved_region_flat = dense_convolved_region.flatten()
+        print(f"dense_convolved_region.shape: {dense_convolved_region.shape}")
+        print(f"dense_convolved.shape: {dense_convolved.shape}")
 
-        assoc = {}
-        kmajor_stride = self.KERNEL_SIZE[0] * self.KERNEL_SIZE[1]
-        kinner_stride = self.KERNEL_SIZE[0]
-        kminor_stride = 1
-        for i in range(len(out_ijks_list)):
-            ijk_theory = out_ijks_list[i]
-            ijk_theory = tuple(k - 1 for k in ijk_theory)
-            feature = out_features_list[i][0]
-            for j in range(len(kernel_flattened_list)):
-                if abs(kernel_flattened_list[j] - feature) < 1e-5:
-                    kmajor = j // kmajor_stride
-                    kinner = (j - kmajor * kmajor_stride) // kinner_stride
-                    kminor = (j - (kmajor * kmajor_stride + kinner * kinner_stride)) // kminor_stride
+        self.assertEqual(dense_convolved_region.shape, kernel.shape)
+        print("Confirmed that the dense convolved region matches the kernel shape.")
 
-                    print(f"{i} theory, {j} actual \t\tk: {(kmajor, kinner, kminor)}")
+        # Since PyTorch conv3d performs cross-correlation, we need to flip to get the result to
+        # match the kernel.
+        kernel_flipped = torch.flip(kernel, dims=[0, 1, 2])
 
-                    assoc[i] = j
-            # for ii in range(self.KERNEL_SIZE[0]):
-            #     for jj in range(self.KERNEL_SIZE[1]):
-            #         for kk in range(self.KERNEL_SIZE[2]):
-            #             feature_kernel = kernel_list[ii][jj][kk]
-            #             if abs(feature_kernel - feature) < 1e-5:
-            #                 print(f"{ijk_theory} theory, {ii, jj, kk} actual")
-            #                 assoc[ijk_theory] = (ii, jj, kk)
+        # The flipped convolved region should match the kernel
+        torch.testing.assert_close(dense_convolved_region, kernel_flipped, rtol=1e-5, atol=1e-6)
+        print("Confirmed that the dense convolved region matches the flipped kernel.")
 
-        print(f"Length of assoc: {len(assoc)}")
-        assoc_keys_set = set(assoc.keys())
-        print(f"Length of assoc_keys_set: {len(assoc_keys_set)}")
+        # The sparse convolved values should match the dense values, because we've
+        # already tested that the ijks are the same.
+        torch.testing.assert_close(sparse_convolved_flat, dense_convolved_region_flat, rtol=1e-5, atol=1e-6)
+        print("Confirmed that the sparse convolved values match the dense convolved region.")
 
-        assoc_values_set = set(assoc.values())
-        print(f"Length of assoc_values_set: {len(assoc_values_set)}")
+        # Even though this is transitive, we'll assert it explicitly.
+        torch.testing.assert_close(sparse_convolved_flat, kernel_flipped.flatten(), rtol=1e-5, atol=1e-6)
+        print("Confirmed that the sparse convolved values match the flipped kernel.")
 
-        self.assertEqual(len(assoc_keys_set), len(assoc_values_set))
-
-        convolved_dense_plan = dst_grid_batch.inject_to_dense_cmajor(
-            convolved_sparse_plan, min_coord=(0, 0, 0), grid_size=self.SINGLE_VOLUME_SHAPE
+        # Lastly, we'll get dense convolved from the sparse convolved
+        dense_convolved_from_sparse = dst_grid_batch.inject_to_dense_cmajor(
+            sparse_convolved_jagged, min_coord=(0, 0, 0), grid_size=self.SINGLE_VOLUME_SHAPE
         )
-        print(f"convolved_dense_plan.shape: {convolved_dense_plan.shape}")
-        print(f"gt_convolved.shape: {gt_convolved.shape}")
+        torch.testing.assert_close(dense_convolved_from_sparse, dense_convolved, rtol=1e-5, atol=1e-6)
+        print("Confirmed that the dense convolved from the sparse convolved matches the dense convolved.")
 
-        # Try all possible axis permutations and flips of the spatial dims (1,2,3) to see what matches gt_convolved.
-        import itertools
-
-        def find_best_match(convolved, gt, spatial_dims=(1, 2, 3), rtol=1e-6, atol=1e-5):
-            """
-            Brute-force try permutations and flips along the spatial dims of convolved to match gt.
-            Returns (perm, flip_combo) if match is found, else None.
-            """
-            original_shape = convolved.shape
-            spatial_axes = list(spatial_dims)
-            perms = list(itertools.permutations(spatial_axes))
-            flip_combos = list(itertools.product([False, True], repeat=3))
-            for perm in perms:
-                # Map original (d1,d2,d3) axes to permuted axes
-                permute_map = [0] + list(perm) + [4] if convolved.ndim == 5 else [0] + list(perm)
-                permuted = convolved.permute(permute_map)
-                for flips in flip_combos:
-                    mod = permuted
-                    flip_dims = [ax for flip, ax in zip(flips, range(1, 4)) if flip]
-                    if flip_dims:
-                        mod = torch.flip(mod, dims=flip_dims)
-                    try:
-                        torch.testing.assert_close(mod, gt, atol=atol, rtol=rtol)
-                        print(f"Match found! Permutation {perm}, Flips {flips}")
-                        return perm, flips
-                    except AssertionError as e:
-                        # Print some measure of total error to help debugging
-                        abs_error = (mod - gt).abs().sum().item()
-                        max_error = (mod - gt).abs().max().item()
-                        print(
-                            f"Permutation {perm}, Flips {flips}: Abs error sum={abs_error:.7g}, Max error={max_error:.7g}"
-                        )
-                        continue
-            print("No permutation/flip combination matched.")
-            return None
-
-        # # Use this detective function to see if spatial dims are just shuffled/flipped.
-        # _match_result = find_best_match(convolved_dense_plan, gt_convolved)
-
-        # if _match_result is not None:
-        #     perm, flips = _match_result
-        #     convolved_dense_plan = convolved_dense_plan.permute(perm).flip(dims=flips)
-        # else:
-        #     print("No permutation/flip combination matched.")
-        #     self.fail("No permutation/flip combination matched.")
-        self.fail("Boo")
-
-        # torch.testing.assert_close(convolved_dense_plan, gt_convolved, atol=1e-5, rtol=1e-6)
+        # Let's also test the output of the convolution_utils ground truth.
+        gt_dense_activation, gt_dense_convolved = conv_ground_truth_stride_1(
+            grid_batch=grid_batch,
+            activation=features,
+            weights=kernel_with_channels,
+            dense_dims=self.SINGLE_VOLUME_SHAPE,
+            ijk_min=(0, 0, 0),
+            allow_tf32=False,
+        )
+        torch.testing.assert_close(gt_dense_activation, dense_impulse_field, rtol=1e-5, atol=1e-6)
+        torch.testing.assert_close(gt_dense_convolved, dense_convolved, rtol=1e-5, atol=1e-6)
+        print("Confirmed that the utils ground truth dense convolved matches the dense convolved.")

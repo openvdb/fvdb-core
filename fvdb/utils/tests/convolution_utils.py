@@ -96,7 +96,9 @@ def conv_ground_truth_stride_1(
     else:
         dense_dims = to_Vec3i(dense_dims, value_constraint=ValueConstraint.POSITIVE)
 
-    dense_activation = grid_batch.write_to_dense_cmajor(sparse_data=activation, min_coord=ijk_min, grid_size=dense_dims)
+    dense_activation = grid_batch.inject_to_dense_cmajor(
+        sparse_data=activation, min_coord=ijk_min, grid_size=dense_dims
+    )
 
     _backend_setting = torch.backends.cudnn.allow_tf32
     torch.backends.cudnn.allow_tf32 = allow_tf32
