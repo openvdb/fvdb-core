@@ -229,7 +229,7 @@ jobs:
     name: fVDB GTests
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04
+      image: nvidia/cuda:13.0.1-cudnn-runtime-ubuntu22.04
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
@@ -283,7 +283,7 @@ jobs:
           cmake --version
 
       - name: Install apt dependencies
-        run: apt install -y zlib1g-dev libpng-dev mesa-vulkan-drivers vulkan-tools
+        run: apt install -y zlib1g-dev libpng-dev mesa-vulkan-drivers vulkan-tools make
 
       - name: Install pip dependencies
         run: |
@@ -421,7 +421,7 @@ jobs:
     name: fVDB Documentation Tests
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04
+      image: nvidia/cuda:13.0.1-cudnn-runtime-ubuntu22.04
       env:
         PYTHONPATH: ""
       options: --rm
