@@ -18,7 +18,7 @@ usage() {
   echo "  -h, --help     Display this help message and exit."
   echo "  --cuda-arch-list <value>  Set TORCH_CUDA_ARCH_LIST (auto-detects if not specified; "
   echo "                            use 'default' to force auto-detect)."
-  echo "                            Example: --cuda-arch-list=8.0;8.6+PTX"
+  echo "                            Example: --cuda-arch-list=\"8.0;8.6+PTX\""
   echo ""
   echo "Build Modifiers (for 'install' and 'wheel' build types, typically passed after build_type):"
   echo "  gtests         Enable building tests (sets FVDB_BUILD_TESTS=ON)."
