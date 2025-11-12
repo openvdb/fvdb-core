@@ -27,31 +27,19 @@ jIdxForJOffsets(TorchRAcc32<fvdb::JOffsetsType, 1> offsets,
     while (left <= right) {
         fvdb::JIdxType mid = left + (right - left) / 2;
 
-        // Check if key is present at mid
-        // if (idx >= offsets[mid] && idx < offsets[mid + 1]) {
-        //     outJIdx[idx] = mid;
-        //     return;
-        // }
-        // the above check can not handle the following case:
-        // offsets = [0, 10, 10, 40], idx=10, mid=1.
-        ///////////////////////////////////////////////////////////////
-
         // the bin-search should consider when there are some value in offsets
-        if (offsets[mid] <= idx){
+        if (offsets[mid] <= idx) {
             // if offsets[mid] <= idx, just means possible.
             // the case [0, 10, 10, 40], when idx=10, mid=1,
             // what we need is 2, so we need to let left = mid+1
-            if ((mid < (offsets.size(0)-1)) &&
-                (idx < offsets[mid+1])){
+            if ((mid < (offsets.size(0) - 1)) && (idx < offsets[mid + 1])) {
                 outJIdx[idx] = mid;
                 return;
-            }
-            else
-            {
+            } else {
                 // if idx >= offsets[mid+1], means target may in the right.
                 left = mid + 1;
             }
-        } else{
+        } else {
             // if idx < offsets[mid], means target is in the left
             right = mid - 1;
         }
