@@ -18,7 +18,7 @@ usage() {
   echo "  -h, --help     Display this help message and exit."
   echo "  --cuda-arch-list <value>  Set TORCH_CUDA_ARCH_LIST (auto-detects if not specified; "
   echo "                            use 'default' to force auto-detect)."
-  echo "                            Example: --cuda-arch-list=8.0;8.6+PTX"
+  echo "                            Example: --cuda-arch-list=\"8.0;8.6+PTX\""
   echo ""
   echo "Build Modifiers (for 'install' and 'wheel' build types, typically passed after build_type):"
   echo "  gtests         Enable building tests (sets FVDB_BUILD_TESTS=ON)."
@@ -85,18 +85,17 @@ setup_parallel_build_jobs() {
 set_cuda_arch_list() {
   local list="$1"
   if [ -n "$list" ] && [ "$list" != "default" ]; then
-    echo "Using TORCH_CUDA_ARCH_LIST=$list"
+    echo "Using specified TORCH_CUDA_ARCH_LIST=$list"
     export TORCH_CUDA_ARCH_LIST="$list"
   else
-    if ([ "$list" == "default" ] || [ -z "$TORCH_CUDA_ARCH_LIST" ]) && command -v nvidia-smi >/dev/null 2>&1; then
+    if ([ "$list" == "default" ] && [ -z "$TORCH_CUDA_ARCH_LIST" ]) && command -v nvidia-smi >/dev/null 2>&1; then
       echo "Detecting CUDA architectures via nvidia-smi"
       # Try via nvidia-smi (compute_cap available on newer drivers)
       TORCH_CUDA_ARCH_LIST=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | awk 'NF' | awk '!seen[$0]++' | sed 's/$/+PTX/' | paste -sd';' -)
-    fi
-
-    if [ -n "$TORCH_CUDA_ARCH_LIST" ]; then
       export TORCH_CUDA_ARCH_LIST
       echo "Detected CUDA architectures: $TORCH_CUDA_ARCH_LIST"
+    elif ([ "$list" == "default" ] && [ -n "$TORCH_CUDA_ARCH_LIST" ]); then
+      echo "Using environment TORCH_CUDA_ARCH_LIST=$TORCH_CUDA_ARCH_LIST"
     else
       echo "Warning: Could not auto-detect CUDA architectures. Consider setting TORCH_CUDA_ARCH_LIST manually (e.g., 8.0;8.6+PTX)."
     fi
