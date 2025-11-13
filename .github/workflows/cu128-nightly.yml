@@ -1,9 +1,9 @@
 name: fVDB Nightly Build and Tests -- CUDA 12.8
 
-# on:
+on:
 #   schedule:
 #     - cron: "01 15 * * *"  # Runs every day at 4am pacific/11am UTC
-#   workflow_dispatch:
+  workflow_dispatch:
 
 
 permissions:
