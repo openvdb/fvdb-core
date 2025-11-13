@@ -101,6 +101,80 @@ TEST_F(JaggedTensorTest, LSizesConstructor) {
     EXPECT_EQ(computed_lsizes[2], 1);
 }
 
+// Test jidx_from_joffsets, JaggedTensor on CPU
+TEST_F(JaggedTensorTest, JIdxFromJOffsetsCPU) {
+    auto device = torch::kCPU;
+
+    { // case 1: all tensor are not empty
+        std::vector<int64_t> lsizes = {3, 2, 1};
+        auto data                   = torch::tensor({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f},
+                                  torch::TensorOptions().dtype(torch::kFloat32).device(device));
+
+        JaggedTensor jt(lsizes, data);
+        auto jidx     = jt.jidx_from_joffsets(jt.joffsets(), data.size(0));
+        auto jidx_cpu = jidx.cpu().to(torch::kInt64);
+
+        std::vector<int64_t> expected_vec = {0, 0, 0, 1, 1, 2};
+        auto expected                     = torch::tensor(
+            expected_vec, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU));
+
+        EXPECT_TRUE(torch::equal(jidx_cpu, expected));
+    }
+
+    { // case 2: lsizes with zeros
+        std::vector<int64_t> lsizes2 = {0, 3, 0, 0, 2, 1, 0};
+        auto data2                   = torch::tensor({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f},
+                                   torch::TensorOptions().dtype(torch::kFloat32).device(device));
+
+        JaggedTensor jt2(lsizes2, data2);
+        auto jidx2     = jt2.jidx_from_joffsets(jt2.joffsets(), data2.size(0));
+        auto jidx2_cpu = jidx2.cpu().to(torch::kInt64);
+
+        std::vector<int64_t> expected_vec2 = {1, 1, 1, 4, 4, 5};
+        auto expected2                     = torch::tensor(
+            expected_vec2, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU));
+
+        EXPECT_TRUE(torch::equal(jidx2_cpu, expected2));
+    }
+}
+
+// Test jidx_from_joffsets, JaggedTensor on CUDA
+TEST_F(JaggedTensorTest, JIdxFromJOffsetsCUDA) {
+    auto device = torch::kCUDA;
+
+    { // case 1: all tensor are not empty
+        std::vector<int64_t> lsizes = {3, 2, 1};
+        auto data                   = torch::tensor({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f},
+                                  torch::TensorOptions().dtype(torch::kFloat32).device(device));
+
+        JaggedTensor jt(lsizes, data);
+        auto jidx     = jt.jidx_from_joffsets(jt.joffsets(), data.size(0));
+        auto jidx_cpu = jidx.cpu().to(torch::kInt64);
+
+        std::vector<int64_t> expected_vec = {0, 0, 0, 1, 1, 2};
+        auto expected                     = torch::tensor(
+            expected_vec, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU));
+
+        EXPECT_TRUE(torch::equal(jidx_cpu, expected));
+    }
+
+    { // case 2: lsizes with zeros, means a batch has empty tensors
+        std::vector<int64_t> lsizes2 = {0, 3, 0, 0, 2, 1, 0};
+        auto data2                   = torch::tensor({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f},
+                                   torch::TensorOptions().dtype(torch::kFloat32).device(device));
+
+        JaggedTensor jt2(lsizes2, data2);
+        auto jidx2     = jt2.jidx_from_joffsets(jt2.joffsets(), data2.size(0));
+        auto jidx2_cpu = jidx2.cpu().to(torch::kInt64);
+
+        std::vector<int64_t> expected_vec2 = {1, 1, 1, 4, 4, 5};
+        auto expected2                     = torch::tensor(
+            expected_vec2, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU));
+
+        EXPECT_TRUE(torch::equal(jidx2_cpu, expected2));
+    }
+}
+
 // Test vector of vector of tensors constructor (nested lists)
 TEST_F(JaggedTensorTest, NestedListsConstructor) {
     auto tensor_small  = torch::tensor({1.0f});
