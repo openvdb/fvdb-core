@@ -240,5 +240,18 @@ bind_viewer(py::module &m) {
              &fvdb::detail::viewer::Viewer::getCameraView,
              py::arg("name"),
              py::return_value_policy::reference_internal,
-             "Get a camera view by name");
+             "Get a camera view by name")
+        .def("add_image",
+             &fvdb::detail::viewer::Viewer::addImage,
+             py::arg("scene_name"),
+             py::arg("name"),
+             py::arg("rgba_image"),
+             py::arg("width"),
+             py::arg("height"),
+             "Add an RGBA8 image as a 2D NanoVDB grid to the viewer. "
+             "The rgba_image should be a 1D uint8 tensor of size width * height * 4 "
+             "containing packed RGBA values.")
+        .def("wait_for_interrupt",
+             &fvdb::detail::viewer::Viewer::waitForInteerrupt,
+             "Block until the viewer is interrupted by the user (Ctrl-C or closing the window)");
 }
