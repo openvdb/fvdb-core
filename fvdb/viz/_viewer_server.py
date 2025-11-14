@@ -45,6 +45,9 @@ def init(ip_address: str = "127.0.0.1", port: int = 8080, vk_device_id: int = 0,
         # Show the viewer in the browser or inline in a Jupyter notebook
         fvdb.viz.show()
 
+        # Keep the script running until the user interrupts
+        fvdb.viz.wait_for_interrupt()
+
     .. note::
 
         If the viewer server is already initialized, this function will do nothing and
@@ -98,6 +101,9 @@ def show():
         # Show the viewer in the browser or inline in a Jupyter notebook
         fvdb.viz.show()
 
+        # Keep the script running until the user interrupts
+        fvdb.viz.wait_for_interrupt()
+
     .. note::
         You must call :func:`fvdb.viz.init()` before calling this function. If the viewer server
         is not initialized, this function will raise a RuntimeError.
@@ -149,3 +155,14 @@ def remove_view(scene_name: str, name: str):
     """
     viewer_server = _get_viewer_server_cpp()
     viewer_server.remove_view(scene_name, name)
+
+
+def wait_for_interrupt():
+    """
+    Block execution until the viewer is interrupted by the user.
+
+    This function blocks the current thread until the viewer receives an interrupt signal (via Ctrl-C).
+    Use this to keep a script running while interacting with the viewer.
+    """
+    viewer_server = _get_viewer_server_cpp()
+    viewer_server.wait_for_interrupt()

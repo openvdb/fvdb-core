@@ -274,6 +274,11 @@ Viewer::stopServer() {
     }
 }
 
+void
+Viewer::waitForInteerrupt() {
+    mEditor.editor.wait_for_interrupt(&mEditor.editor);
+}
+
 std::tuple<float, float, float>
 Viewer::cameraOrbitCenter(const std::string &scene_name) {
     (void)scene_name;
@@ -483,6 +488,37 @@ Viewer::addCameraView(const std::string &scene_name,
     mEditor.editor.add_camera_view_2(&mEditor.editor, sceneToken, &it->second.mView);
 
     return it->second;
+}
+
+void
+Viewer::addImage(const std::string &scene_name,
+                 const std::string &name,
+                 const torch::Tensor &rgba_image,
+                 int64_t width,
+                 int64_t height) {
+    TORCH_CHECK(rgba_image.dim() == 1, "rgba_image must be a 1D tensor of packed RGBA8 values");
+    TORCH_CHECK(rgba_image.scalar_type() == torch::kUInt8 ||
+                    rgba_image.scalar_type() == torch::kByte,
+                "rgba_image must have dtype uint8");
+    TORCH_CHECK(rgba_image.numel() == width * height * 4,
+                "rgba_image must have size width * height * 4");
+
+    torch::Tensor rgba_cpu = rgba_image.cpu().contiguous();
+
+    pnanovdb_compute_array_t *rgba_array =
+        mEditor.compute.create_array(1u, width * height * 4, rgba_cpu.data_ptr());
+
+    pnanovdb_compute_array_t *image_nanovdb =
+        mEditor.compute.nanovdb_from_image_rgba8(rgba_array, width, height);
+
+    mEditor.compute.destroy_array(rgba_array);
+
+    pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
+    pnanovdb_editor_token_t *nameToken  = mEditor.editor.get_token(name.c_str());
+
+    mEditor.editor.add_nanovdb_2(&mEditor.editor, sceneToken, nameToken, image_nanovdb);
+
+    mEditor.compute.destroy_array(image_nanovdb);
 }
 
 } // namespace fvdb::detail::viewer

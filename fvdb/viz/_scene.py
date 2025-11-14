@@ -81,7 +81,7 @@ class Scene:
             You can pass in a single radius as a float to use the same radius for all points.
 
         Args:
-            name (str): The name of the point cloud added to the viewer. If a point cloud with the same name
+            name (str): The name of the point cloud added to the viewer. This must be unique among all views added to the scene. If a point cloud with the same name
                 already exists in the viewer, it will be replaced.
             points (NumericMaxRank2): The 3D points of the point cloud as a tensor-like object of shape ``(N, 3)``
                 where ``N`` is the number of points.
@@ -130,8 +130,7 @@ class Scene:
         Add a :class:`fvdb.GaussianSplat3d` to the viewer and return a view for it.
 
         Args:
-            name (str): The name of the Gaussian splat 3D scene. This must be unique among all
-                scenes added to the viewer.
+            name (str): The name of the Gaussian splat 3D scene. This must be unique among all views added to the scene.
             gaussian_splat_3d (GaussianSplat3d): The Gaussian splat 3D scene to add.
             tile_size (int): The tile size to use for rendering. Default is 16.
             min_radius_2d (float): The minimum radius in pixels to use when rendering splats. Default is 0.0.
@@ -154,6 +153,38 @@ class Scene:
             sh_degree_to_use=sh_degree_to_use,
             _private=GaussianSplat3dView.__PRIVATE__,
         )
+
+    @torch.no_grad()
+    def add_image(
+        self,
+        name: str,
+        rgba_image: torch.Tensor,
+        width: int,
+        height: int,
+    ):
+        """
+        Add an RGBA8 image to the viewer.
+
+        Args:
+            name (str): The name of the image view. This must be unique among all views added to the scene.
+            rgba_image (torch.Tensor): A 1D uint8 tensor of size ``width * height * 4`` containing packed RGBA values.
+                Each pixel is represented by 4 consecutive bytes (R, G, B, A) with values in [0, 255].
+            width (int): The width of the image in pixels.
+            height (int): The height of the image in pixels.
+        """
+        if not isinstance(rgba_image, torch.Tensor):
+            raise TypeError(f"rgba_image must be a torch.Tensor, got {type(rgba_image)}")
+        if rgba_image.dtype != torch.uint8:
+            raise TypeError(f"rgba_image must have dtype torch.uint8, got {rgba_image.dtype}")
+        if rgba_image.dim() != 1:
+            raise ValueError(f"rgba_image must be a 1D tensor, got {rgba_image.dim()}D")
+        if rgba_image.numel() != width * height * 4:
+            raise ValueError(
+                f"rgba_image must have size width * height * 4 = {width * height * 4}, got {rgba_image.numel()}"
+            )
+
+        server = _get_viewer_server_cpp()
+        server.add_image(self._name, name, rgba_image, width, height)
 
     @torch.no_grad()
     def add_cameras(
