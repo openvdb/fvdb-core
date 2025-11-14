@@ -259,9 +259,9 @@ class GaussianSplat3d:
     - Rendering features at arbitrary sparse pixel locations (:meth:`sparse_render_features`).
     - Rendering depths at arbitrary sparse pixel locations (:meth:`sparse_render_depths`).
     - Computing which gaussians contribute to each pixel in an image plane
-      (:meth:`render_num_contributing_gaussians`, :meth:`render_top_contributing_gaussian_ids`).
+      (:meth:`render_num_contributing_gaussians`, :meth:`render_contributing_gaussian_ids`).
     - Computing the set of Gaussians which contribute to a set of sparse pixel locations
-      (:meth:`sparse_render_num_contributing_gaussians`, :meth:`sparse_render_top_contributing_gaussian_ids`).
+      (:meth:`sparse_render_num_contributing_gaussians`, :meth:`sparse_render_contributing_gaussian_ids`).
     - Saving and loading Gaussian splat data to/from PLY files (:meth:`save_to_ply`, :meth:`from_ply`).
     - Slicing, indexing, and masking Gaussians to create new :class:`GaussianSplat3d` instances.
     - Concatenating multiple :class:`GaussianSplat3d` instances into a single instance (:meth:`cat`).
@@ -2077,9 +2077,8 @@ class GaussianSplat3d:
             )
             return JaggedTensor(impl=result_num_contributing_gaussians_impl), JaggedTensor(impl=result_alphas_impl)
 
-    def render_top_contributing_gaussian_ids(
+    def render_contributing_gaussian_ids(
         self,
-        num_samples: int,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
         image_width: int,
@@ -2091,7 +2090,7 @@ class GaussianSplat3d:
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
         antialias: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[JaggedTensor, JaggedTensor]:
         """
         Renders the ids of the top ``num_samples`` contributing Gaussians in ``C`` camera views. **i.e.** the ids of the
         most opaque Gaussians contributing to each pixel in each image.
@@ -2127,8 +2126,7 @@ class GaussianSplat3d:
                 Gaussians to return for each pixel. Each element represents the transmittance-weighted opacity of the Gaussian
                 that contributes to the pixel (i.e. its proportion of the visible contribution to the pixel).
         """
-        return self._impl.render_top_contributing_gaussian_ids(
-            num_samples=num_samples,
+        return self._impl.render_contributing_gaussian_ids(
             world_to_camera_matrices=world_to_camera_matrices,
             projection_matrices=projection_matrices,
             image_width=image_width,
@@ -2143,9 +2141,8 @@ class GaussianSplat3d:
         )
 
     @overload
-    def sparse_render_top_contributing_gaussian_ids(
+    def sparse_render_contributing_gaussian_ids(
         self,
-        num_samples: int,
         pixels_to_render: torch.Tensor,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
@@ -2158,12 +2155,11 @@ class GaussianSplat3d:
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
         antialias: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor]: ...
+    ) -> tuple[JaggedTensor, JaggedTensor]: ...
 
     @overload
-    def sparse_render_top_contributing_gaussian_ids(
+    def sparse_render_contributing_gaussian_ids(
         self,
-        num_samples: int,
         pixels_to_render: JaggedTensor,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
@@ -2178,9 +2174,8 @@ class GaussianSplat3d:
         antialias: bool = False,
     ) -> tuple[JaggedTensor, JaggedTensor]: ...
 
-    def sparse_render_top_contributing_gaussian_ids(
+    def sparse_render_contributing_gaussian_ids(
         self,
-        num_samples: int,
         pixels_to_render: JaggedTensor | torch.Tensor,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
@@ -2193,7 +2188,7 @@ class GaussianSplat3d:
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
         antialias: bool = False,
-    ) -> tuple[JaggedTensor | torch.Tensor, JaggedTensor | torch.Tensor]:
+    ) -> tuple[JaggedTensor, JaggedTensor]:
         """
         Renders the ids of the top ``num_samples`` contributing Gaussians in the specified set of
         pixels across ``C`` camera views. **i.e.** the ids of the most opaque Gaussians contributing
@@ -2244,8 +2239,7 @@ class GaussianSplat3d:
             tensors = [pixels_to_render[i] for i in range(C)]
             pixels_to_render_jagged = JaggedTensor(tensors)
 
-            result_ids, result_weights = self._impl.sparse_render_top_contributing_gaussian_ids(
-                num_samples=num_samples,
+            result_ids, result_weights = self._impl.sparse_render_contributing_gaussian_ids(
                 pixels_to_render=pixels_to_render_jagged._impl,
                 world_to_camera_matrices=world_to_camera_matrices,
                 projection_matrices=projection_matrices,
@@ -2268,8 +2262,7 @@ class GaussianSplat3d:
             return dense_ids, dense_weights
         else:
             # Already a JaggedTensor, call C++ implementation directly
-            result_ids_impl, result_weights_impl = self._impl.sparse_render_top_contributing_gaussian_ids(
-                num_samples=num_samples,
+            result_ids_impl, result_weights_impl = self._impl.sparse_render_contributing_gaussian_ids(
                 pixels_to_render=pixels_to_render._impl,
                 world_to_camera_matrices=world_to_camera_matrices,
                 projection_matrices=projection_matrices,

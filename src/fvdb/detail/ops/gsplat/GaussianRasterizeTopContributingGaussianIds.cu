@@ -17,56 +17,45 @@
 namespace fvdb::detail::ops {
 namespace {
 
-/**
- * @brief Sorts three arrays in-place based on depth indices using bubble sort.
- *
- * This device function performs a bubble sort on three parallel arrays, using the depth indices
- * as the sorting key. The function maintains the correspondence between the three arrays
- * during sorting. This is optimized for small arrays (typically 4-24 elements) where the
- * simplicity and cache locality of bubble sort can be beneficial.
- *
- * @param depthIndices Array of depth indices to sort by
- * @param radianceWeights Array of radiance weights corresponding to each depth index
- * @param maxRadianceWeightIndices Array of indices for maximum radiance weights
- * @param numSamples Number of elements in each array to sort
- *
- * @note The function modifies all three arrays in-place. The sorting is stable and
- * maintains the relationship between corresponding elements in all three arrays.
- *
- * @example
- * uint32_t depths[] = {3, 1, 2};
- * float weights[] = {0.3, 0.1, 0.2};
- * int32_t indices[] = {0, 1, 2};
- * bubbleSortByDepth<float>(depths, weights, indices, 3);
- * // Result:
- * // depths:    {1, 2, 3}
- * // weights:   {0.1, 0.2, 0.3}
- * // indices:   {1, 2, 0}
- */
-template <typename ScalarType>
-__device__ void
-bubbleSortByDepth(uint32_t *depthIndices,
-                  ScalarType *radianceWeights,
-                  int32_t *maxRadianceWeightIndices,
-                  const uint32_t numSamples) {
-    for (uint32_t i = 0; i < numSamples - 1; ++i) {
-        for (uint32_t j = 0; j < numSamples - 1 - i; ++j) {
-            if (depthIndices[j] > depthIndices[j + 1]) {
-                // Swap all three arrays to maintain correspondence
-                uint32_t tempDepth  = depthIndices[j];
-                depthIndices[j]     = depthIndices[j + 1];
-                depthIndices[j + 1] = tempDepth;
+/// @brief Copy data from the padded 'Top Contributing Gaussian IDs' JaggedTensor to an unpadded
+/// 'Contributing Gaussian IDs' JaggedTensor
+///
+/// This function copies data from srcJagged (ldim=1 with fixed-size padding) to dstJagged (ldim=2
+/// with variable sizes). Each pixel in srcJagged has maxSamplesPerPixel elements, with unused
+/// slots padded with -1. We copy only the valid samples (count given by numValidSamples).
+///
+/// @param srcJagged Source JaggedTensor (ldim=1) with fixed-size padding per pixel
+/// @param dstJagged Destination JaggedTensor (ldim=2) with variable sizes per pixel
+/// @param numValidSamples JaggedTensor containing count of valid samples per pixel
+/// @param maxSamplesPerPixel Maximum samples per pixel in source (including padding)
+void
+copyPaddedJaggedToJagged(const fvdb::JaggedTensor &srcJagged,
+                         fvdb::JaggedTensor &dstJagged,
+                         const fvdb::JaggedTensor &numValidSamples,
+                         const int32_t maxSamplesPerPixel) {
+    const int64_t numPixels = srcJagged.jdata().size(0);
+    TORCH_CHECK_VALUE(numPixels == dstJagged.num_outer_lists(),
+                      "Source and destination must have the same number of pixels");
+    TORCH_CHECK_VALUE(numPixels == numValidSamples.numel(),
+                      "numValidSamples must have one entry per pixel");
 
-                ScalarType tempWeight  = radianceWeights[j];
-                radianceWeights[j]     = radianceWeights[j + 1];
-                radianceWeights[j + 1] = tempWeight;
-
-                int32_t tempId                  = maxRadianceWeightIndices[j];
-                maxRadianceWeightIndices[j]     = maxRadianceWeightIndices[j + 1];
-                maxRadianceWeightIndices[j + 1] = tempId;
-            }
-        }
+    if (numPixels == 0) {
+        return;
     }
+
+    // srcJagged.jdata() has shape [numPixels, maxSamplesPerPixel]
+    // We want to extract only the first numValidSamples[i] elements from each row i
+    // dstJagged.jdata() has shape [sum(numValidSamples)]
+
+    // Create a mask indicating which elements are valid (not padding)
+    // mask[i, j] = true if j < numValidSamples[i]
+    torch::Tensor sampleIndices =
+        torch::arange(maxSamplesPerPixel,
+                      torch::TensorOptions().dtype(torch::kInt32).device(numValidSamples.device()));
+    torch::Tensor mask = sampleIndices.unsqueeze(0) < numValidSamples.jdata().unsqueeze(1);
+
+    // Use the mask to extract valid samples and copy to destination
+    dstJagged.jdata().copy_(srcJagged.jdata().index({mask}));
 }
 
 // Structure to hold arguments and methods for the rasterize top contributing gaussian ids kernel
@@ -155,34 +144,16 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeTopContributingGa
         extern __shared__ int s[];
         auto *sharedGaussians = reinterpret_cast<Gaussian2D<ScalarType> *>(s); // [blockSize]
 
-        // Shared memory for the indices and max radiance weights for all pixels in this block
-        int32_t *batchMaxRadianceWeightIndices = reinterpret_cast<int32_t *>(
-            sharedGaussians + blockSize); // [blockSize * mNumDepthSamples]
-
-        ScalarType *batchRadianceWeights = reinterpret_cast<ScalarType *>(
-            batchMaxRadianceWeightIndices +
-            blockSize * mNumDepthSamples); // [blockSize *mNumDepthSamples]
-
-        // Shared memory for tracking depth order indices
-        uint32_t *batchDepthIndices = reinterpret_cast<uint32_t *>(
-            batchRadianceWeights + blockSize * mNumDepthSamples); // [blockSize * mNumDepthSamples]
-
         const auto tidx = threadIdx.y * blockDim.x + threadIdx.x;
 
-        // Shared memory for the indices and max radiance weights for this pixel in the block
-        int32_t *maxRadianceWeightIndices = batchMaxRadianceWeightIndices + tidx * mNumDepthSamples;
-        ScalarType *radianceWeights       = batchRadianceWeights + tidx * mNumDepthSamples;
-        uint32_t *depthIndices            = batchDepthIndices + tidx * mNumDepthSamples;
-
-        // Initialize the indices and max radiance weights for this pixel in the block
-        for (uint32_t w = 0; w < mNumDepthSamples; ++w) {
-            radianceWeights[w]          = 0.f;
-            maxRadianceWeightIndices[w] = -1;
-            depthIndices[w]             = UINT32_MAX; // Large value for uninitialized
-        }
+        // Thread-local buffers for accumulating writes
+        // Most pixels have < 64 contributing gaussians in typical scenes
+        constexpr uint32_t MAX_LOCAL_BUFFER_SIZE = 64;
+        int32_t localIds[MAX_LOCAL_BUFFER_SIZE];
+        ScalarType localWeights[MAX_LOCAL_BUFFER_SIZE];
 
         ScalarType accumTransmittance = 1.0f;
-        uint32_t depthCounter         = 0; // Counter to track processing order (depth order)
+        uint32_t writeIndex           = 0;
 
         // We don't return right away if the pixel is not in the image since we want to use
         // this thread to load gaussians into shared memory
@@ -202,6 +173,9 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeTopContributingGa
         // be a crop so we need to add the origin to get the absolute pixel coordinates
         const ScalarType px = col + commonArgs.mImageOriginW + ScalarType{0.5f};
         const ScalarType py = row + commonArgs.mImageOriginH + ScalarType{0.5f};
+
+        const auto pixIdx =
+            pixelIsActive ? commonArgs.pixelIndex(cameraId, row, col, activePixelIndex) : 0;
 
         // collect and process batches of gaussians
         // each thread loads one gaussian at a time before rasterizing its
@@ -247,38 +221,30 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeTopContributingGa
 
                     const ScalarType radianceWeight = alpha * accumTransmittance;
 
-                    // Find the index of the smallest radiance weight in our top K samples
-                    uint32_t min_idx = 0;
-                    for (uint32_t k = 1; k < mNumDepthSamples; ++k) {
-                        if (radianceWeights[k] < radianceWeights[min_idx]) {
-                            min_idx = k;
-                        }
+                    // Write to thread-local buffer instead of global memory
+                    if (writeIndex < MAX_LOCAL_BUFFER_SIZE) {
+                        localIds[writeIndex]     = gaussian.id;
+                        localWeights[writeIndex] = radianceWeight;
+                        writeIndex++;
+                    } else {
+                        // Overflow: buffer is full, fall back to direct write (rare case)
+                        writeId(pixIdx, writeIndex, gaussian.id);
+                        writeWeight(pixIdx, writeIndex, radianceWeight);
+                        writeIndex++;
                     }
-
-                    // If this gaussian is more significant than our weakest sample, replace it
-                    if (radianceWeight > radianceWeights[min_idx]) {
-                        radianceWeights[min_idx]          = radianceWeight;
-                        maxRadianceWeightIndices[min_idx] = gaussian.id;
-                        depthIndices[min_idx]             = depthCounter;
-                    }
-
-                    depthCounter++; // Increment depth order counter
 
                     accumTransmittance = nextTransmittance;
                 }
             }
         }
 
-        if (pixelIsActive) {
-            // Sort the samples by depth order before outputting
-            bubbleSortByDepth(
-                depthIndices, radianceWeights, maxRadianceWeightIndices, mNumDepthSamples);
-
-            const auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
-
-            for (uint32_t k = 0; k < mNumDepthSamples; ++k) {
-                writeWeight(pixIdx, k, radianceWeights[k]);
-                writeId(pixIdx, k, maxRadianceWeightIndices[k]);
+        // Flush thread-local buffers to global memory
+        if (pixelIsActive && writeIndex > 0) {
+            // Write buffered results from thread-local storage to global memory
+            const uint32_t numToWrite = min(writeIndex, MAX_LOCAL_BUFFER_SIZE);
+            for (uint32_t i = 0; i < numToWrite; ++i) {
+                writeId(pixIdx, i, localIds[i]);
+                writeWeight(pixIdx, i, localWeights[i]);
             }
         }
     }
@@ -317,7 +283,7 @@ rasterizeTopContributingGaussianIdsForward(
     if (commonArgs.mHasMasks && pixelInImage && !commonArgs.mMasks[cameraId][tileRow][tileCol]) {
         auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
 
-        for (int32_t d = 0; d < args.mNumDepthSamples; ++d) {
+        for (uint32_t d = 0; d < args.mNumDepthSamples; ++d) {
             args.writeId(
                 pixIdx, d, commonArgs.mHasBackgrounds ? commonArgs.mBackgrounds[cameraId][d] : 0);
         }
@@ -341,7 +307,7 @@ rasterizeTopContributingGaussianIdsForward(
 
 template <typename ScalarType, bool IS_PACKED>
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
-launchRasterizeTopContributingGaussianIdsForwardKernel(
+launchRasterizeContributingGaussianIdsForwardKernel(
     // Gaussian parameters
     const torch::Tensor &means2d,                   // [C, N, 2] or [nnz, 2]
     const torch::Tensor &conics,                    // [C, N, 3] or [nnz, 3]
@@ -351,7 +317,10 @@ launchRasterizeTopContributingGaussianIdsForwardKernel(
     // intersections
     const torch::Tensor &tileOffsets,     // [C, tile_height, tile_width]
     const torch::Tensor &tileGaussianIds, // [n_isects]
-    const RenderSettings &settings,       // render settings
+    // render settings
+    const fvdb::JaggedTensor &numContributingGaussians, // [C, NumPixels, 1]
+    const RenderSettings &settings,                     // render settings
+    // sparse rendering parameters
     const std::optional<fvdb::JaggedTensor> &pixelsToRender = std::nullopt, // [C, NumPixels, 2]
     const std::optional<torch::Tensor> &activeTiles         = std::nullopt,
     const std::optional<torch::Tensor> &tilePixelMask       = std::nullopt,
@@ -359,18 +328,40 @@ launchRasterizeTopContributingGaussianIdsForwardKernel(
     const std::optional<torch::Tensor> &pixelMap            = std::nullopt) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means2d));
 
-    TORCH_CHECK_VALUE(settings.numDepthSamples > 0, "numDepthSamples must be greater than 0");
+    const auto C                           = means2d.size(0); // number of cameras
+    const auto numContributingGaussiansSum = numContributingGaussians.jdata().sum().item<int64_t>();
 
-    TORCH_CHECK_VALUE(tileOffsets.size(2) ==
+    TORCH_CHECK_VALUE(numContributingGaussians.numel() > 0,
+                      "numContributingGaussians cannot be empty");
+    // Ensure that number of contributing gaussians won't overflow the number of tensors we can
+    // express in a JaggedTensor
+    TORCH_CHECK_VALUE(
+        numContributingGaussiansSum <= std::numeric_limits<fvdb::JIdxType>::max(),
+        "Number of contributing gaussians is too large to express in the number of tensors we can create in a JaggedTensor");
+    // Ensure numContributingGaussians is appropriately sized
+    if (pixelsToRender.has_value()) {
+        TORCH_CHECK_VALUE(
+            numContributingGaussians.lsizes1() == pixelsToRender.value().lsizes1(),
+            "numContributingGaussians must have the same number of elements as pixelsToRender");
+    } else {
+        TORCH_CHECK_VALUE(
+            torch::equal(torch::from_blob(numContributingGaussians.lsizes1().data(),
+                                          numContributingGaussians.lsizes1().size(),
+                                          torch::kInt64),
+                         torch::arange(1, C + 1, 1, torch::TensorOptions().dtype(torch::kInt64)) *
+                             settings.imageHeight * settings.imageWidth),
+            "numContributingGaussians must have the same number of elements as the number of pixels in the images");
+    }
+
+    const auto tileExtentH = tileOffsets.size(1);
+    const auto tileExtentW = tileOffsets.size(2);
+
+    TORCH_CHECK_VALUE(tileExtentW ==
                           (settings.imageWidth + settings.tileSize - 1) / settings.tileSize,
                       "tileOffsets width must match the number of tiles in image size");
-    TORCH_CHECK_VALUE(tileOffsets.size(1) ==
+    TORCH_CHECK_VALUE(tileExtentH ==
                           (settings.imageHeight + settings.tileSize - 1) / settings.tileSize,
                       "tileOffsets height must match the number of tiles in image size");
-
-    const uint32_t C           = means2d.size(0); // number of cameras
-    const uint32_t tileExtentH = tileOffsets.size(1);
-    const uint32_t tileExtentW = tileOffsets.size(2);
 
     TORCH_CHECK_VALUE(pixelMap.has_value() == pixelsToRender.has_value(),
                       "pixelMap and pixelsToRender must be provided together");
@@ -385,28 +376,29 @@ launchRasterizeTopContributingGaussianIdsForwardKernel(
     std::vector<torch::Tensor> idsToRenderVec;
     std::vector<torch::Tensor> weightsToRenderVec;
 
+    // maximum possible number of depth samples per pixel
+    const auto maxDepthSamplesPerPixel = numContributingGaussians.jdata().max().item<int32_t>();
+
     for (const auto &size: sizes) {
-        idsToRenderVec.push_back(
-            torch::empty({size, settings.numDepthSamples}, means2d.options().dtype(torch::kInt32)));
-        weightsToRenderVec.push_back(
-            torch::empty({size, settings.numDepthSamples},
+        idsToRenderVec.emplace_back(
+            torch::empty({size, maxDepthSamplesPerPixel}, means2d.options().dtype(torch::kInt32)));
+        weightsToRenderVec.emplace_back(
+            torch::empty({size, maxDepthSamplesPerPixel},
                          means2d.options().dtype(c10::CppTypeToScalarType<ScalarType>::value)));
     }
 
     auto outIds     = fvdb::JaggedTensor(idsToRenderVec);
     auto outWeights = fvdb::JaggedTensor(weightsToRenderVec);
 
-    const at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-
     // Each pixel in each tile will cache a gaussian consisting of:
     //   - int32_t  gaussian_id; -- 4 bytes
     //   - vec2t    xy;          -- 8 bytes for float32
     //   - scalar_t opacity;     -- 4 bytes for float32
     //   - vec3t    conic;       -- 12 bytes for float32
+    // Note: We use thread-local storage for buffering writes, so only need shared memory for
+    // Gaussians
     const uint32_t sharedMem =
-        settings.tileSize * settings.tileSize *
-        (sizeof(Gaussian2D<ScalarType>) +
-         (sizeof(int32_t) + sizeof(ScalarType) + sizeof(uint32_t)) * settings.numDepthSamples);
+        settings.tileSize * settings.tileSize * sizeof(Gaussian2D<ScalarType>);
 
     if (cudaFuncSetAttribute(rasterizeTopContributingGaussianIdsForward<ScalarType, IS_PACKED>,
                              cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -431,7 +423,7 @@ launchRasterizeTopContributingGaussianIdsForwardKernel(
                                                                        settings.imageOriginW,
                                                                        settings.imageOriginH,
                                                                        settings.tileSize,
-                                                                       settings.numDepthSamples,
+                                                                       maxDepthSamplesPerPixel,
                                                                        tileOffsets,
                                                                        tileGaussianIds,
                                                                        outIds,
@@ -441,25 +433,94 @@ launchRasterizeTopContributingGaussianIdsForwardKernel(
                                                                        tilePixelCumsum,
                                                                        pixelMap);
 
+    const at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
     rasterizeTopContributingGaussianIdsForward<<<gridDim, blockDim, sharedMem, stream>>>(args);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
-    C10_CUDA_CHECK(cudaStreamSynchronize(stream));
 
-    return std::make_tuple(outIds, outWeights);
+    // TODO: When refactoring GaussianRasterizeTopContributingGaussianIds to
+    //  GaussianRasterizeContributingGaussianIds, I realized there would need to be nontrivial
+    //  work to refactor the RasterizeCommonArgs (and additional work to the JaggedAccessor) to
+    //  support this list-of-lists style of rendering where we write different numbers of
+    //  samples per pixel and different numbers of pixels per camera. To save on the lower
+    //  level work, we have instead still called 'rasterizeTopContributingGaussianIdsForward'
+    //  and we will now copy the sparse results into an appropriate JaggedTensor. This at least
+    //  removes the guesswork from the user over what sample count to use and changes the
+    //  public interface, but we leave this inefficient copy step for future work to refactor
+    //  writing results directly to a JaggedTensor.
+
+    //  Allocate JaggedTensor output storage
+    const auto outputNumPixels  = numContributingGaussians.numel();
+    const auto outputNumCameras = numContributingGaussians.num_outer_lists();
+
+    // Populate the linear batch indices (jidx)
+    torch::Tensor outIndices =
+        torch::repeat_interleave(torch::arange(outputNumPixels,
+                                               torch::TensorOptions()
+                                                   .dtype(fvdb::JIdxScalarType)
+                                                   .device(numContributingGaussians.device())),
+                                 numContributingGaussians.jdata());
+
+    // Populate the LoL indices (ListIdx)
+    // Extract pixel counts per camera from joffsets
+    torch::Tensor pixelCountsPerCamera = numContributingGaussians.joffsets().diff();
+
+    // First column: camera indices (repeat each camera index by its pixel count)
+    torch::Tensor cameraIndices =
+        torch::repeat_interleave(torch::arange(outputNumCameras,
+                                               torch::TensorOptions()
+                                                   .dtype(fvdb::JLIdxScalarType)
+                                                   .device(numContributingGaussians.device())),
+                                 pixelCountsPerCamera);
+
+    // Second column: pixel indices within each camera [0...N0-1, 0...N1-1, ...]
+    // Create offsets for each camera and subtract from sequential indices
+    torch::Tensor cumsumOffsets = torch::cat({torch::zeros({1}, pixelCountsPerCamera.options()),
+                                              pixelCountsPerCamera.slice(0, 0, -1)})
+                                      .cumsum(0);
+
+    torch::Tensor repeatedOffsets = torch::repeat_interleave(cumsumOffsets, pixelCountsPerCamera);
+
+    torch::Tensor pixelIndices =
+        torch::arange(outputNumPixels, pixelCountsPerCamera.options()) - repeatedOffsets;
+
+    // Stack into [totalPixels, 2]
+    torch::Tensor outListIds =
+        torch::stack({cameraIndices, pixelIndices}, 1).to(fvdb::JLIdxScalarType);
+
+    // Allocate output data storage
+    torch::Tensor outIdsData =
+        torch::empty({numContributingGaussiansSum}, means2d.options().dtype(torch::kInt32));
+    torch::Tensor outWeightsData =
+        torch::empty({numContributingGaussiansSum},
+                     means2d.options().dtype(c10::CppTypeToScalarType<ScalarType>::value));
+
+    auto outIdsJaggedSamples = fvdb::JaggedTensor::from_data_indices_and_list_ids(
+        outIdsData, outIndices, outListIds, outputNumPixels);
+    auto outWeightsJaggedSamples = fvdb::JaggedTensor::from_data_indices_and_list_ids(
+        outWeightsData, outIndices, outListIds, outputNumPixels);
+
+    // Copy valid samples
+    copyPaddedJaggedToJagged(
+        outIds, outIdsJaggedSamples, numContributingGaussians, maxDepthSamplesPerPixel);
+    copyPaddedJaggedToJagged(
+        outWeights, outWeightsJaggedSamples, numContributingGaussians, maxDepthSamplesPerPixel);
+
+    return std::make_tuple(outIdsJaggedSamples, outWeightsJaggedSamples);
 }
 
 } // namespace
 
 template <>
-std::tuple<torch::Tensor, torch::Tensor>
-dispatchGaussianRasterizeTopContributingGaussianIds<torch::kCUDA>(
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
+dispatchGaussianRasterizeContributingGaussianIds<torch::kCUDA>(
     // Gaussian parameters
-    const torch::Tensor &means2d,         // [C, N, 2]
-    const torch::Tensor &conics,          // [C, N, 3]
-    const torch::Tensor &opacities,       // [N]
-    const torch::Tensor &tileOffsets,     // [C, tile_height, tile_width]
-    const torch::Tensor &tileGaussianIds, // [n_isects]
-    const RenderSettings &settings        // render settings
+    const torch::Tensor &means2d,                  // [C, N, 2]
+    const torch::Tensor &conics,                   // [C, N, 3]
+    const torch::Tensor &opacities,                // [N]
+    const torch::Tensor &tileOffsets,              // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds,          // [n_isects]
+    const torch::Tensor &numContributingGaussians, // [C, H, W]
+    const RenderSettings &settings                 // render settings
 
 ) {
     FVDB_FUNC_RANGE();
@@ -468,12 +529,32 @@ dispatchGaussianRasterizeTopContributingGaussianIds<torch::kCUDA>(
     const std::optional<torch::Tensor> backgrounds = std::nullopt;
     const std::optional<torch::Tensor> masks       = std::nullopt;
 
+    // NOTE: We are converting the format of numContributingGaussians to a JaggedTensor so that both
+    //       the dense and sparse dispatch functions can use the same launch*Kernel functions.
+    const auto C          = numContributingGaussians.size(0);
+    const auto H          = numContributingGaussians.size(1);
+    const auto W          = numContributingGaussians.size(2);
+    torch::Tensor offsets = torch::arange(0,
+                                          C + 1,
+                                          torch::TensorOptions()
+                                              .dtype(fvdb::JOffsetsScalarType)
+                                              .device(numContributingGaussians.device())) *
+                            (H * W);
+    // Simple list (ldim=1), list_ids is empty with shape [0, 1]
+    torch::Tensor listIds = torch::empty({0, 1},
+                                         torch::TensorOptions()
+                                             .dtype(fvdb::JLIdxScalarType)
+                                             .device(numContributingGaussians.device()));
+
+    JaggedTensor numContributingGaussiansJagged = JaggedTensor::from_data_offsets_and_list_ids(
+        numContributingGaussians.flatten(), offsets, listIds);
+
     return AT_DISPATCH_V2(
         opacities.scalar_type(),
-        "GaussianRasterizeTopContributingGaussianIds",
+        "GaussianRasterizeContributingGaussianIds",
         AT_WRAP([&]() {
             auto [ids, weights] =
-                isPacked ? launchRasterizeTopContributingGaussianIdsForwardKernel<float, true>(
+                isPacked ? launchRasterizeContributingGaussianIdsForwardKernel<float, true>(
                                means2d,
                                conics,
                                opacities,
@@ -481,8 +562,9 @@ dispatchGaussianRasterizeTopContributingGaussianIds<torch::kCUDA>(
                                masks,
                                tileOffsets,
                                tileGaussianIds,
+                               numContributingGaussiansJagged,
                                settings)
-                         : launchRasterizeTopContributingGaussianIdsForwardKernel<float, false>(
+                         : launchRasterizeContributingGaussianIdsForwardKernel<float, false>(
                                means2d,
                                conics,
                                opacities,
@@ -490,35 +572,32 @@ dispatchGaussianRasterizeTopContributingGaussianIds<torch::kCUDA>(
                                masks,
                                tileOffsets,
                                tileGaussianIds,
+                               numContributingGaussiansJagged,
                                settings);
-            const auto C = means2d.size(0);
-            return std::make_tuple(
-                ids.jdata().reshape(
-                    {C, settings.imageHeight, settings.imageWidth, settings.numDepthSamples}),
-                weights.jdata().reshape(
-                    {C, settings.imageHeight, settings.imageWidth, settings.numDepthSamples}));
+            return std::make_tuple(ids, weights);
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
         c10::kHalf);
 }
 
 template <>
-std::tuple<torch::Tensor, torch::Tensor>
-dispatchGaussianRasterizeTopContributingGaussianIds<torch::kCPU>(
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
+dispatchGaussianRasterizeContributingGaussianIds<torch::kCPU>(
     // Gaussian parameters
-    const torch::Tensor &means2d,         // [C, N, 2]
-    const torch::Tensor &conics,          // [C, N, 3]
-    const torch::Tensor &opacities,       // [N]
-    const torch::Tensor &tileOffsets,     // [C, tile_height, tile_width]
-    const torch::Tensor &tileGaussianIds, // [n_isects]
-    const RenderSettings &settings        // render settings
+    const torch::Tensor &means2d,                  // [C, N, 2]
+    const torch::Tensor &conics,                   // [C, N, 3]
+    const torch::Tensor &opacities,                // [N]
+    const torch::Tensor &tileOffsets,              // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds,          // [n_isects]
+    const torch::Tensor &numContributingGaussians, // [C, H, W]
+    const RenderSettings &settings                 // render settings
 ) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
 }
 
 template <>
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
-dispatchGaussianSparseRasterizeTopContributingGaussianIds<torch::kCUDA>(
+dispatchGaussianSparseRasterizeContributingGaussianIds<torch::kCUDA>(
     const torch::Tensor &means2d,         // [C, N, 2]
     const torch::Tensor &conics,          // [C, N, 3]
     const torch::Tensor &opacities,       // [N]
@@ -529,6 +608,7 @@ dispatchGaussianSparseRasterizeTopContributingGaussianIds<torch::kCUDA>(
     const torch::Tensor &tilePixelMask,
     const torch::Tensor &tilePixelCumsum,
     const torch::Tensor &pixelMap,
+    const fvdb::JaggedTensor &numContributingGaussians,
     const RenderSettings &settings // render settings
 ) {
     FVDB_FUNC_RANGE();
@@ -539,10 +619,10 @@ dispatchGaussianSparseRasterizeTopContributingGaussianIds<torch::kCUDA>(
 
     return AT_DISPATCH_V2(
         opacities.scalar_type(),
-        "GaussianRasterizeTopContributingGaussianIds",
+        "GaussianRasterizeContributingGaussianIds",
         AT_WRAP([&]() {
             if (isPacked) {
-                return launchRasterizeTopContributingGaussianIdsForwardKernel<float, true>(
+                return launchRasterizeContributingGaussianIdsForwardKernel<float, true>(
                     means2d,
                     conics,
                     opacities,
@@ -550,6 +630,7 @@ dispatchGaussianSparseRasterizeTopContributingGaussianIds<torch::kCUDA>(
                     masks,
                     tileOffsets,
                     tileGaussianIds,
+                    numContributingGaussians,
                     settings,
                     pixelsToRender,
                     activeTiles,
@@ -557,7 +638,7 @@ dispatchGaussianSparseRasterizeTopContributingGaussianIds<torch::kCUDA>(
                     tilePixelCumsum,
                     pixelMap);
             } else {
-                return launchRasterizeTopContributingGaussianIdsForwardKernel<float, false>(
+                return launchRasterizeContributingGaussianIdsForwardKernel<float, false>(
                     means2d,
                     conics,
                     opacities,
@@ -565,6 +646,7 @@ dispatchGaussianSparseRasterizeTopContributingGaussianIds<torch::kCUDA>(
                     masks,
                     tileOffsets,
                     tileGaussianIds,
+                    numContributingGaussians,
                     settings,
                     pixelsToRender,
                     activeTiles,
@@ -579,7 +661,7 @@ dispatchGaussianSparseRasterizeTopContributingGaussianIds<torch::kCUDA>(
 
 template <>
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
-dispatchGaussianSparseRasterizeTopContributingGaussianIds<torch::kCPU>(
+dispatchGaussianSparseRasterizeContributingGaussianIds<torch::kCPU>(
     const torch::Tensor &means2d,         // [C, N, 2]
     const torch::Tensor &conics,          // [C, N, 3]
     const torch::Tensor &opacities,       // [N]
@@ -590,6 +672,7 @@ dispatchGaussianSparseRasterizeTopContributingGaussianIds<torch::kCPU>(
     const torch::Tensor &tilePixelMask,
     const torch::Tensor &tilePixelCumsum,
     const torch::Tensor &pixelMap,
+    const fvdb::JaggedTensor &numContributingGaussians,
     const RenderSettings &settings // render settings
 ) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");

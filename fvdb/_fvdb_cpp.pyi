@@ -231,9 +231,8 @@ class GaussianSplat3d:
         eps_2d: float = ...,
         antialias: bool = ...,
     ) -> tuple[JaggedTensor, JaggedTensor]: ...
-    def render_top_contributing_gaussian_ids(
+    def render_contributing_gaussian_ids(
         self,
-        num_samples: int,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
         image_width: int,
@@ -245,11 +244,10 @@ class GaussianSplat3d:
         min_radius_2d: float = ...,
         eps_2d: float = ...,
         antialias: bool = ...,
-    ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def sparse_render_top_contributing_gaussian_ids(
+    ) -> tuple[JaggedTensor, JaggedTensor]: ...
+    def sparse_render_contributing_gaussian_ids(
         self,
         pixels_to_render: JaggedTensor,
-        num_samples: int,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
         image_width: int,
