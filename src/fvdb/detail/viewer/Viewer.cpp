@@ -525,7 +525,7 @@ Viewer::addImage(const std::string &scene_name,
             nameToken,
             PNANOVDB_REFLECT_DATA_TYPE(pnanovdb_editor_shader_name_t));
     if (mapped) {
-        mapped->shader_name = mEditor.editor.get_token("editor/image2d");
+        mapped->shader_name = mEditor.editor.get_token("editor/image2d.slang");
         mEditor.editor.unmap_params(&mEditor.editor, sceneToken, nameToken);
     }
 
