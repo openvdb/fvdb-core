@@ -518,6 +518,17 @@ Viewer::addImage(const std::string &scene_name,
 
     mEditor.editor.add_nanovdb_2(&mEditor.editor, sceneToken, nameToken, image_nanovdb);
 
+    pnanovdb_editor_shader_name_t *mapped =
+        (pnanovdb_editor_shader_name_t *)mEditor.editor.map_params(
+            &mEditor.editor,
+            sceneToken,
+            nameToken,
+            PNANOVDB_REFLECT_DATA_TYPE(pnanovdb_editor_shader_name_t));
+    if (mapped) {
+        mapped->shader_name = mEditor.editor.get_token("editor/image2d");
+        mEditor.editor.unmap_params(&mEditor.editor, sceneToken, nameToken);
+    }
+
     mEditor.compute.destroy_array(image_nanovdb);
 }
 
