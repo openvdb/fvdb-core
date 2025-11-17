@@ -48,9 +48,6 @@ SparseConvPackInfo::SparseConvPackInfo(Vec3iOrScalar kernelsize,
                 "Source and target grids must both be on the same device");
     TORCH_CHECK(srcGrid.device() == targetGrid.device(),
                 "Device should match between this grid and target grid.");
-    TORCH_CHECK(!(kernelsize.value() == Vec3iOrScalar(1).value() &&
-                  stride.value() == Vec3iOrScalar(1).value()),
-                "1x1 conv does not need kernel map to be built!");
 
     mStride     = stride;
     mKernelSize = kernelsize;
