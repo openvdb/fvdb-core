@@ -172,7 +172,7 @@ while (( "$#" )); do
       is_config_arg_handled=true
     elif [[ "$1" == "debug" ]]; then
       echo "Enabling debug build"
-      CONFIG_SETTINGS+=" --config-settings=cmake.build-type=debug"
+      CONFIG_SETTINGS+=" --config-settings=cmake.build-type=Debug  -C cmake.define.CMAKE_BUILD_TYPE=Debug"
       is_config_arg_handled=true
     elif [[ "$1" == "strip_symbols" ]]; then
       echo "Enabling strip symbols build"

@@ -76,8 +76,8 @@ function(ConfigureTest CMAKE_TEST_NAME)
   )
 
   target_compile_options(${CMAKE_TEST_NAME}_obj PRIVATE
-    $<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANGUAGE:CUDA>>:-G -Xcompiler=-O0>
-    $<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANGUAGE:CXX>>:-O0>
+    $<$<AND:$<CONFIG:Debug>,$<COMPILE_LANGUAGE:CUDA>>:-G -Xcompiler=-O0>
+    $<$<AND:$<CONFIG:Debug>,$<COMPILE_LANGUAGE:CXX>>:-O0>
     $<$<COMPILE_LANGUAGE:CXX>:
     "-Wall"
     "-Werror"
@@ -100,6 +100,11 @@ function(ConfigureTest CMAKE_TEST_NAME)
     ${CMAKE_TEST_NAME}
     PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${TEST_BINARY_DIRECTORY}
                INSTALL_RPATH "\$ORIGIN/../../../lib"
+  )
+
+  # Add linker flags for Debug builds to preserve symbols
+  target_link_options(${CMAKE_TEST_NAME} PRIVATE
+    $<$<CONFIG:Debug>:-rdynamic -g>
   )
 
   # Link the FINAL executable against necessary libraries
