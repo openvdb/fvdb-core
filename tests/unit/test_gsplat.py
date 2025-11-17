@@ -1514,7 +1514,7 @@ class TestGaussianRender(BaseGaussianTestCase):
         )
 
 
-class TestTopGaussianContributionsRender(BaseGaussianTestCase):
+class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
 
     def setUp(self):
         super().setUp()
