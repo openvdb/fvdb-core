@@ -145,6 +145,7 @@ ConfigureTest(GaussianSphericalHarmonicsForwardTest "GaussianSphericalHarmonicsF
 ConfigureTest(GaussianSphericalHarmonicsBackwardTest "GaussianSphericalHarmonicsBackwardTest.cpp")
 ConfigureTest(GaussianProjectionForwardTest "GaussianProjectionForwardTest.cpp")
 ConfigureTest(GaussianProjectionBackwardTest "GaussianProjectionBackwardTest.cpp")
+ConfigureTest(GaussianRasterizeTopContributorsTest "GaussianRasterizeTopContributorsTest.cpp")
 ConfigureTest(GaussianRasterizeContributingGaussianIdsTest "GaussianRasterizeContributingGaussianIdsTest.cpp")
 
 if(NOT NANOVDB_EDITOR_SKIP)
