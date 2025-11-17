@@ -48,6 +48,7 @@ jobs:
   start-build-runner:
     name: Start CPU-only EC2 runner for build
     runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false || github.event_name != 'pull_request_target'
     outputs:
       label: ${{ steps.start-build-runner.outputs.label }}
       ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
