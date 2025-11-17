@@ -22,13 +22,13 @@ namespace {
 
 #define NUM_THREADS 256
 
-#define CUB_WRAPPER(func, ...)                                                    \
-    do {                                                                          \
-        size_t temp_storage_bytes = 0;                                            \
-        func(nullptr, temp_storage_bytes, __VA_ARGS__);                           \
-        auto &caching_allocator = *::c10::cuda::CUDACachingAllocator::get();      \
-        auto temp_storage       = caching_allocator.allocate(temp_storage_bytes); \
-        func(temp_storage.get(), temp_storage_bytes, __VA_ARGS__);                \
+#define CUB_WRAPPER(func, ...)                                                \
+    do {                                                                      \
+        size_t tempStorageBytes = 0;                                          \
+        func(nullptr, tempStorageBytes, __VA_ARGS__);                         \
+        auto &cachingAllocator = *::c10::cuda::CUDACachingAllocator::get();   \
+        auto tempStorage       = cachingAllocator.allocate(tempStorageBytes); \
+        func(tempStorage.get(), tempStorageBytes, __VA_ARGS__);               \
     } while (false)
 
 // Compute the number of 2d image tiles intersected by a set of 2D projected Gaussians.
@@ -43,62 +43,62 @@ namespace {
 //
 template <typename T, typename CountT>
 __global__ __launch_bounds__(NUM_THREADS) void
-count_tiles_per_gaussian(const uint32_t gaussian_offset,
-                         const uint32_t gaussian_count,
-                         const uint32_t num_gaussians_per_camera,
-                         const uint32_t tile_size,
-                         const uint32_t num_tiles_w,
-                         const uint32_t num_tiles_h,
-                         const T *__restrict__ means2d,                     // [C, N, 2] or [M, 2]
-                         const int32_t *__restrict__ radii,                 // [C, N]    or [M]
-                         const bool *__restrict__ tile_mask,                // [C, H, W] or nullptr
-                         const int32_t *__restrict__ camera_jidx,           // NULL or [M]
-                         CountT *__restrict__ out_num_tiles_per_gaussian) { // [ C * N ] or [ M ]
-    // parallelize over gaussian_count
-    for (auto idx = blockIdx.x * blockDim.x + threadIdx.x; idx < gaussian_count;
+countTilesPerGaussian(const uint32_t gaussianOffset,
+                      const uint32_t gaussianCount,
+                      const uint32_t numGaussiansPerCamera,
+                      const uint32_t tileSize,
+                      const uint32_t numTilesW,
+                      const uint32_t numTilesH,
+                      const T *__restrict__ means2d,                 // [C, N, 2] or [M, 2]
+                      const int32_t *__restrict__ radii,             // [C, N]    or [M]
+                      const bool *__restrict__ tileMask,             // [C, H, W] or nullptr
+                      const int32_t *__restrict__ cameraJIdx,        // NULL or [M]
+                      CountT *__restrict__ outNumTilesPerGaussian) { // [ C * N ] or [ M ]
+    // parallelize over gaussianCount
+    for (auto idx = blockIdx.x * blockDim.x + threadIdx.x; idx < gaussianCount;
          idx += blockDim.x * gridDim.x) {
         // For now we'll upcast float16 and bfloat16 to float32
         using OpT = typename OpType<T>::type;
 
-        auto gidx        = idx + gaussian_offset;
+        auto gidx        = idx + gaussianOffset;
         const OpT radius = radii[gidx];
         if (radius <= 0) {
-            out_num_tiles_per_gaussian[gidx] = static_cast<CountT>(0);
+            outNumTilesPerGaussian[gidx] = static_cast<CountT>(0);
         } else {
             using vec2f = typename Vec2Type<OpT>::type;
 
-            const vec2f mean2d    = *reinterpret_cast<const vec2f *>(means2d + gidx * 2);
-            const OpT tile_radius = radius / static_cast<OpT>(tile_size);
-            const OpT tile_mean_u = mean2d.x / static_cast<OpT>(tile_size);
-            const OpT tile_mean_v = mean2d.y / static_cast<OpT>(tile_size);
+            const vec2f mean2d   = *reinterpret_cast<const vec2f *>(means2d + gidx * 2);
+            const OpT tileRadius = radius / static_cast<OpT>(tileSize);
+            const OpT tileMeanU  = mean2d.x / static_cast<OpT>(tileSize);
+            const OpT tileMeanV  = mean2d.y / static_cast<OpT>(tileSize);
 
             // tile_min is inclusive, tile_max is exclusive
-            uint2 tile_min, tile_max;
-            tile_min.x = min(max(0, (uint32_t)floor(tile_mean_u - tile_radius)), num_tiles_w);
-            tile_min.y = min(max(0, (uint32_t)floor(tile_mean_v - tile_radius)), num_tiles_h);
-            tile_max.x = min(max(0, (uint32_t)ceil(tile_mean_u + tile_radius)), num_tiles_w);
-            tile_max.y = min(max(0, (uint32_t)ceil(tile_mean_v + tile_radius)), num_tiles_h);
+            uint2 tileMin, tileMax;
+            tileMin.x = min(max(0, (uint32_t)floor(tileMeanU - tileRadius)), numTilesW);
+            tileMin.y = min(max(0, (uint32_t)floor(tileMeanV - tileRadius)), numTilesH);
+            tileMax.x = min(max(0, (uint32_t)ceil(tileMeanU + tileRadius)), numTilesW);
+            tileMax.y = min(max(0, (uint32_t)ceil(tileMeanV + tileRadius)), numTilesH);
 
-            out_num_tiles_per_gaussian[gidx] = [&]() {
-                if (tile_mask) {
-                    CountT num_tiles   = 0;
-                    const int32_t cidx = (camera_jidx == nullptr)
-                                             ? static_cast<int32_t>(gidx / num_gaussians_per_camera)
-                                             : camera_jidx[gidx];
+            outNumTilesPerGaussian[gidx] = [&]() {
+                if (tileMask) {
+                    CountT numTiles    = 0;
+                    const int32_t cidx = (cameraJIdx == nullptr)
+                                             ? static_cast<int32_t>(gidx / numGaussiansPerCamera)
+                                             : cameraJIdx[gidx];
                     // loop min / max range and count number of tiles
-                    for (uint32_t i = tile_min.y; i < tile_max.y; ++i) {
-                        for (uint32_t j = tile_min.x; j < tile_max.x; ++j) {
-                            if (tile_mask[cidx * num_tiles_h * num_tiles_w + i * num_tiles_w + j]) {
-                                num_tiles++;
+                    for (uint32_t i = tileMin.y; i < tileMax.y; ++i) {
+                        for (uint32_t j = tileMin.x; j < tileMax.x; ++j) {
+                            if (tileMask[cidx * numTilesH * numTilesW + i * numTilesW + j]) {
+                                numTiles++;
                             }
                         }
                     }
-                    return num_tiles;
+                    return numTiles;
                 } else {
                     // write out number of tiles per gaussian
-                    const CountT num_tiles =
-                        static_cast<CountT>((tile_max.y - tile_min.y) * (tile_max.x - tile_min.x));
-                    return num_tiles;
+                    const CountT numTiles =
+                        static_cast<CountT>((tileMax.y - tileMin.y) * (tileMax.x - tileMin.x));
+                    return numTiles;
                 }
             }();
         }
@@ -107,7 +107,7 @@ count_tiles_per_gaussian(const uint32_t gaussian_offset,
 
 // Encode a float depth into a int64_t
 __device__ inline int64_t
-encode_depth(float depth) {
+encodeDepth(float depth) {
     int32_t ret;
     std::memcpy(&ret, &depth, sizeof(depth));
     return static_cast<int64_t>(ret);
@@ -119,25 +119,22 @@ encode_depth(float depth) {
 // [tile_id_bits] tile_idx
 // [camera_id_bits] cidx
 __device__ inline int64_t
-encode_cam_tile_depth_key(int64_t cidx,
-                          int64_t tile_idx,
-                          int64_t encoded_depth,
-                          int32_t tile_id_bits) {
-    int64_t cidx_enc = cidx << tile_id_bits;
-    return ((cidx_enc | tile_idx) << 32) | encoded_depth;
+encodeCamTileDepthKey(int64_t cidx, int64_t tileIdx, int64_t encodedDepth, int32_t tileIdBits) {
+    int64_t cidxEnc = cidx << tileIdBits;
+    return ((cidxEnc | tileIdx) << 32) | encodedDepth;
 }
 
 // Decode a camera index and tile index from a int64_t
 // The layout is (from least to most significant bits):
 // [32 bits] depth (ignored and dropped)
-// [tile_id_bits] tile_idx
+// [tileIdBits] tileIdx
 // [camera_id_bits] cidx
 __device__ inline std::tuple<int32_t, int32_t>
-decode_cam_tile_key(int64_t packed_cam_tile_depth_key, int32_t tile_id_bits) {
-    int32_t tile_key = packed_cam_tile_depth_key >> 32;
-    int32_t cidx_enc = tile_key >> tile_id_bits;
-    int32_t tile_idx = tile_key & ((1 << tile_id_bits) - 1);
-    return {cidx_enc, tile_idx};
+decodeCamTileKey(int64_t packedCamTileDepthKey, int32_t tileIdBits) {
+    int32_t tileKey = packedCamTileDepthKey >> 32;
+    int32_t cidxEnc = tileKey >> tileIdBits;
+    int32_t tileIdx = tileKey & ((1 << tileIdBits) - 1);
+    return {cidxEnc, tileIdx};
 }
 
 // Compute a set of intersections between the 2D projected Gaussians and each tile to be
@@ -160,50 +157,50 @@ decode_cam_tile_key(int64_t packed_cam_tile_depth_key, int32_t tile_id_bits) {
 //
 template <typename T>
 __global__ __launch_bounds__(NUM_THREADS) void
-compute_gaussian_tile_intersections(
-    const uint32_t num_cameras,
-    const uint32_t num_gaussians_per_camera,
-    const uint32_t gaussian_offset,
-    const uint32_t gaussian_count,
-    const uint32_t tile_size,
-    const uint32_t num_tiles_w,
-    const uint32_t num_tiles_h,
-    const uint32_t tile_id_bits,
-    const T *__restrict__ means2d,                      // [C, N, 2] or [M, 2]
-    const int32_t *__restrict__ radii,                  // [C, N]    or [M]
-    const T *__restrict__ depths,                       // [C, N]    or [M]
-    const int32_t *__restrict__ cum_tiles_per_gaussian, // [ C * N ] or [ M ]
-    const bool *__restrict__ tile_mask,                 // [C, H, W] or nullptr
-    const int32_t *__restrict__ camera_jidx,            // NULL or [M]
-    int64_t *__restrict__ intersection_keys,     // [ C * N * num_tiles ] or [ M * num_tiles ]
-    int32_t *__restrict__ intersection_values) { // [ C * N * num_tiles ] or [ M * num_tiles ]
+computeGaussianTileIntersections(
+    const uint32_t numCameras,
+    const uint32_t numGaussiansPerCamera,
+    const uint32_t gaussianOffset,
+    const uint32_t gaussianCount,
+    const uint32_t tileSize,
+    const uint32_t numTilesW,
+    const uint32_t numTilesH,
+    const uint32_t tileIdBits,
+    const T *__restrict__ means2d,                   // [C, N, 2] or [M, 2]
+    const int32_t *__restrict__ radii,               // [C, N]    or [M]
+    const T *__restrict__ depths,                    // [C, N]    or [M]
+    const int32_t *__restrict__ cumTilesPerGaussian, // [ C * N ] or [ M ]
+    const bool *__restrict__ tileMask,               // [C, H, W] or nullptr
+    const int32_t *__restrict__ cameraJIdx,          // NULL or [M]
+    int64_t *__restrict__ intersectionKeys,          // [ C * N * numTiles ] or [ M * numTiles ]
+    int32_t *__restrict__ intersectionValues) {      // [ C * N * numTiles ] or [ M * numTiles ]
 
     // parallelize over total_gaussians
-    for (auto idx = blockIdx.x * blockDim.x + threadIdx.x; idx < gaussian_count;
+    for (auto idx = blockIdx.x * blockDim.x + threadIdx.x; idx < gaussianCount;
          idx += blockDim.x * gridDim.x) {
         // For now we'll upcast float16 and bfloat16 to float32
         using OpT = typename OpType<T>::type;
 
-        auto gidx = idx + gaussian_offset;
+        auto gidx = idx + gaussianOffset;
         // Get the camera id from the batch indices or use the camera index directly
         const int32_t cidx =
-            camera_jidx == nullptr ? gidx / num_gaussians_per_camera : camera_jidx[gidx];
+            cameraJIdx == nullptr ? gidx / numGaussiansPerCamera : cameraJIdx[gidx];
 
         const OpT radius = radii[gidx];
         if (radius > 0) {
             using vec2f = typename Vec2Type<OpT>::type;
 
-            const vec2f mean2d    = *reinterpret_cast<const vec2f *>(means2d + 2 * gidx);
-            const OpT tile_radius = radius / static_cast<OpT>(tile_size);
-            const OpT tile_mean_u = mean2d.x / static_cast<OpT>(tile_size);
-            const OpT tile_mean_v = mean2d.y / static_cast<OpT>(tile_size);
+            const vec2f mean2d   = *reinterpret_cast<const vec2f *>(means2d + 2 * gidx);
+            const OpT tileRadius = radius / static_cast<OpT>(tileSize);
+            const OpT tileMeanU  = mean2d.x / static_cast<OpT>(tileSize);
+            const OpT tileMeanV  = mean2d.y / static_cast<OpT>(tileSize);
 
             // tile_min is inclusive, tile_max is exclusive
-            uint2 tile_min, tile_max;
-            tile_min.x = min(max(0, (uint32_t)floor(tile_mean_u - tile_radius)), num_tiles_w);
-            tile_min.y = min(max(0, (uint32_t)floor(tile_mean_v - tile_radius)), num_tiles_h);
-            tile_max.x = min(max(0, (uint32_t)ceil(tile_mean_u + tile_radius)), num_tiles_w);
-            tile_max.y = min(max(0, (uint32_t)ceil(tile_mean_v + tile_radius)), num_tiles_h);
+            uint2 tileMin, tileMax;
+            tileMin.x = min(max(0, (uint32_t)floor(tileMeanU - tileRadius)), numTilesW);
+            tileMin.y = min(max(0, (uint32_t)floor(tileMeanV - tileRadius)), numTilesH);
+            tileMax.x = min(max(0, (uint32_t)ceil(tileMeanU + tileRadius)), numTilesW);
+            tileMax.y = min(max(0, (uint32_t)ceil(tileMeanV + tileRadius)), numTilesH);
 
             // If you use float64, we're casting you to float32 so we can
             // pack the depth into the key. In principle this loses precision,
@@ -213,25 +210,23 @@ compute_gaussian_tile_intersections(
             // Suppose you're using tile_id_bits = 22, then the output for this intersection is
             // camera id (10 bits) | tile id (22 bits) | depth (32 bits)
             // which we pack into an int64_t
-            const int64_t depth_enc = encode_depth(depth);
+            const int64_t depthEnc = encodeDepth(depth);
 
             // For each tile this Gaussian intersects, write out an intersection tuple
             // {(camera_id | tile_id | depth), gaussian_id} (int64_t, int32_t)
-            int64_t cur_isect = (gidx == 0) ? 0 : cum_tiles_per_gaussian[gidx - 1];
-            for (int32_t i = tile_min.y; i < tile_max.y; ++i) {
-                for (int32_t j = tile_min.x; j < tile_max.x; ++j) {
+            int64_t curIsect = (gidx == 0) ? 0 : cumTilesPerGaussian[gidx - 1];
+            for (int32_t i = tileMin.y; i < tileMax.y; ++i) {
+                for (int32_t j = tileMin.x; j < tileMax.x; ++j) {
                     // Skip if tile is masked out
-                    if (tile_mask &&
-                        !tile_mask[cidx * num_tiles_h * num_tiles_w + i * num_tiles_w + j]) {
+                    if (tileMask && !tileMask[cidx * numTilesH * numTilesW + i * numTilesW + j]) {
                         continue;
                     }
-                    const int64_t tile_idx =
-                        (i * num_tiles_w + j); // Needs to fit in tile_id_bits bits
-                    const int64_t packed_cam_idx_and_tile_idx =
-                        encode_cam_tile_depth_key(cidx, tile_idx, depth_enc, tile_id_bits);
-                    intersection_keys[cur_isect]   = packed_cam_idx_and_tile_idx;
-                    intersection_values[cur_isect] = gidx;
-                    cur_isect += 1;
+                    const int64_t tileIdx = (i * numTilesW + j); // Needs to fit in tileIdBits bits
+                    const int64_t packedCamIdxAndTileIdx =
+                        encodeCamTileDepthKey(cidx, tileIdx, depthEnc, tileIdBits);
+                    intersectionKeys[curIsect]   = packedCamIdxAndTileIdx;
+                    intersectionValues[curIsect] = gidx;
+                    curIsect += 1;
                 }
             }
         }
@@ -239,50 +234,48 @@ compute_gaussian_tile_intersections(
 }
 
 __global__ __launch_bounds__(NUM_THREADS) void
-compute_tile_offsets_sparse(
-    const uint32_t num_intersections,
-    const uint32_t num_tiles,
-    const uint32_t tile_id_bits,
-    const int64_t *__restrict__ sorted_intersection_keys,
-    const uint32_t *__restrict__ active_tiles,
-    const uint32_t num_active_tiles,
-    int32_t *__restrict__ out_offsets) { // [C, n_tiles] or [num_active_tiles]
+computeTileOffsetsSparse(const uint32_t numIntersections,
+                         const uint32_t numTiles,
+                         const uint32_t tileIdBits,
+                         const int64_t *__restrict__ sortedIntersectionKeys,
+                         const uint32_t *__restrict__ activeTiles,
+                         const uint32_t numActiveTiles,
+                         int32_t *__restrict__ outOffsets) { // [C, n_tiles] or [num_active_tiles]
 
     // parallelize over active tiles
-    for (auto idx = blockIdx.x * blockDim.x + threadIdx.x; idx <= num_active_tiles;
+    for (auto idx = blockIdx.x * blockDim.x + threadIdx.x; idx <= numActiveTiles;
          idx += blockDim.x * gridDim.x) {
-        if (idx == num_active_tiles) {
-            out_offsets[idx] = num_intersections;
+        if (idx == numActiveTiles) {
+            outOffsets[idx] = numIntersections;
         } else {
             // get the first intersection for this tile
-            const int64_t tile_start_idx_dense = active_tiles[idx];
-            const int64_t cam_idx              = tile_start_idx_dense / num_tiles;
-            const int64_t tile_idx             = tile_start_idx_dense % num_tiles;
+            const int64_t tileStartIdxDense = activeTiles[idx];
+            const int64_t camIdx            = tileStartIdxDense / numTiles;
+            const int64_t tileIdx           = tileStartIdxDense % numTiles;
 
-            auto depth_enc = encode_depth(0.0f); // Don't care what depth
+            auto depthEnc = encodeDepth(0.0f); // Don't care what depth
 
-            const int64_t packed_cam_idx_and_tile_idx =
-                encode_cam_tile_depth_key(cam_idx, tile_idx, depth_enc, tile_id_bits);
+            const int64_t packedCamIdxAndTileIdx =
+                encodeCamTileDepthKey(camIdx, tileIdx, depthEnc, tileIdBits);
 
-            // search in sorted_intersection_keys for the start of the range matching
-            // packed_cam_idx_and_tile_idx
+            // search in sortedIntersectionKeys for the start of the range matching
+            // packedCamIdxAndTileIdx
 
-            auto compare_keys_ignore_depth = [tile_id_bits](int64_t lhs, int64_t rhs) {
-                auto [lhs_cam_idx, lhs_tile_idx] = decode_cam_tile_key(lhs, tile_id_bits);
-                auto [rhs_cam_idx, rhs_tile_idx] = decode_cam_tile_key(rhs, tile_id_bits);
-                return (lhs_cam_idx < rhs_cam_idx) ||
-                       ((lhs_cam_idx == rhs_cam_idx) && (lhs_tile_idx < rhs_tile_idx));
+            auto compareKeysIgnoreDepth = [tileIdBits](int64_t lhs, int64_t rhs) {
+                auto [lhsCamIdx, lhsTileIdx] = decodeCamTileKey(lhs, tileIdBits);
+                auto [rhsCamIdx, rhsTileIdx] = decodeCamTileKey(rhs, tileIdBits);
+                return (lhsCamIdx < rhsCamIdx) ||
+                       ((lhsCamIdx == rhsCamIdx) && (lhsTileIdx < rhsTileIdx));
             };
 
-            auto const tile_start =
-                thrust::lower_bound(thrust::seq,
-                                    sorted_intersection_keys,
-                                    sorted_intersection_keys + num_intersections,
-                                    packed_cam_idx_and_tile_idx,
-                                    compare_keys_ignore_depth) -
-                sorted_intersection_keys;
+            auto const tileStart = thrust::lower_bound(thrust::seq,
+                                                       sortedIntersectionKeys,
+                                                       sortedIntersectionKeys + numIntersections,
+                                                       packedCamIdxAndTileIdx,
+                                                       compareKeysIgnoreDepth) -
+                                   sortedIntersectionKeys;
 
-            out_offsets[idx] = tile_start;
+            outOffsets[idx] = tileStart;
         }
     }
 }
@@ -293,15 +286,15 @@ compute_tile_offsets_sparse(
 // i.e. gaussians[out_offsets[c, i, j]:out_offsets[c, i, j+1]] are the Gaussians that
 // intersect tile (i, j) in camera c.
 __global__ __launch_bounds__(NUM_THREADS) void
-compute_tile_offsets(const uint32_t offset,
-                     const uint32_t count,
-                     const uint32_t num_intersections,
-                     const uint32_t num_cameras,
-                     const uint32_t num_tiles,
-                     const uint32_t tile_id_bits,
-                     const int64_t *__restrict__ sorted_intersection_keys,
-                     int32_t *__restrict__ out_offsets) { // [C, n_tiles]
-    // sorted_intersection_keys is [(cidx_0 | tidx_0 | depth_0), ..., (cidx_N | tidx_N |
+computeTileOffsets(const uint32_t offset,
+                   const uint32_t count,
+                   const uint32_t numIntersections,
+                   const uint32_t numCameras,
+                   const uint32_t numTiles,
+                   const uint32_t tileIdBits,
+                   const int64_t *__restrict__ sortedIntersectionKeys,
+                   int32_t *__restrict__ outOffsets) { // [C, numTiles]
+    // sortedIntersectionKeys is [(cidx_0 | tidx_0 | depth_0), ..., (cidx_N | tidx_N |
     // depth_N)] where cidx_i = camera index, tidx_i = tile index, depth_i = depth of the
     // gaussian at the intersection, lexographically sorted.
     //
@@ -313,43 +306,42 @@ compute_tile_offsets(const uint32_t offset,
     // Parallelize over intersections
     for (auto idx = blockIdx.x * blockDim.x + threadIdx.x; idx < count;
          idx += blockDim.x * gridDim.x) {
-        auto isect_idx = idx + offset;
+        auto isectIdx = idx + offset;
         // Bit-packed key for the camera/tile part of the this intersection
         // i.e. tile_id | camera_id << tile_id_bits
-        const int64_t tile_key = sorted_intersection_keys[isect_idx] >> 32;
-        auto [cam_idx, tile_idx] =
-            decode_cam_tile_key(sorted_intersection_keys[isect_idx], tile_id_bits);
+        const int64_t tileKey  = sortedIntersectionKeys[isectIdx] >> 32;
+        auto [camIdx, tileIdx] = decodeCamTileKey(sortedIntersectionKeys[isectIdx], tileIdBits);
 
         // The first intersection for this camera/tile pair
-        const int64_t tile_start_idx = cam_idx * num_tiles + tile_idx;
+        const int64_t tileStartIdx = camIdx * numTiles + tileIdx;
 
-        if (isect_idx == 0) {
+        if (isectIdx == 0) {
             // The first tile in the first camera writes out 0 as the offset
             // until the first valid tile (inclusive). i.e. tiles before this one
             // have no intersections, so their offset range is [0, 0]
-            for (uint32_t i = 0; i < tile_start_idx + 1; ++i) {
-                out_offsets[i] = 0;
+            for (uint32_t i = 0; i < tileStartIdx + 1; ++i) {
+                outOffsets[i] = 0;
             }
         }
-        if (isect_idx == num_intersections - 1) {
-            for (uint32_t i = tile_start_idx + 1; i < num_cameras * num_tiles; ++i) {
-                out_offsets[i] = static_cast<int32_t>(num_intersections);
+        if (isectIdx == numIntersections - 1) {
+            for (uint32_t i = tileStartIdx + 1; i < numCameras * numTiles; ++i) {
+                outOffsets[i] = static_cast<int32_t>(numIntersections);
             }
         }
 
-        if (isect_idx > 0) {
-            const int64_t prev_tile_key = sorted_intersection_keys[isect_idx - 1] >> 32;
+        if (isectIdx > 0) {
+            const int64_t prevTileKey = sortedIntersectionKeys[isectIdx - 1] >> 32;
 
-            if (prev_tile_key == tile_key) {
+            if (prevTileKey == tileKey) {
                 continue;
             }
 
-            auto [prev_cam_idx, prev_tile_idx] =
-                decode_cam_tile_key(sorted_intersection_keys[isect_idx - 1], tile_id_bits);
-            const int64_t prev_tile_start_idx = prev_cam_idx * num_tiles + prev_tile_idx;
+            auto [prevCamIdx, prevTileIdx] =
+                decodeCamTileKey(sortedIntersectionKeys[isectIdx - 1], tileIdBits);
+            const int64_t prevTileStartIdx = prevCamIdx * numTiles + prevTileIdx;
 
-            for (uint32_t i = prev_tile_start_idx + 1; i < tile_start_idx + 1; ++i) {
-                out_offsets[i] = static_cast<int32_t>(isect_idx);
+            for (uint32_t i = prevTileStartIdx + 1; i < tileStartIdx + 1; ++i) {
+                outOffsets[i] = static_cast<int32_t>(isectIdx);
             }
         }
     }
@@ -357,223 +349,222 @@ compute_tile_offsets(const uint32_t offset,
 
 std::tuple<torch::Tensor, torch::Tensor>
 gaussianTileIntersectionCUDAImpl(
-    const torch::Tensor &means2d,                    // [C, N, 2] or [M, 2]
-    const torch::Tensor &radii,                      // [C, N] or [M]
-    const torch::Tensor &depths,                     // [C, N] or [M]
-    const at::optional<torch::Tensor> &camera_jidx,  // NULL or [M]
-    const at::optional<torch::Tensor> &tile_mask,    // NULL or [C, H, W]
-    const at::optional<torch::Tensor> &active_tiles, // NULL or [num_active_tiles]
-    const uint32_t num_cameras,
-    const uint32_t tile_size,
-    const uint32_t num_tiles_h,
-    const uint32_t num_tiles_w) {
-    const bool is_packed = camera_jidx.has_value();
-    const bool is_sparse = active_tiles.has_value();
+    const torch::Tensor &means2d,                   // [C, N, 2] or [M, 2]
+    const torch::Tensor &radii,                     // [C, N] or [M]
+    const torch::Tensor &depths,                    // [C, N] or [M]
+    const at::optional<torch::Tensor> &cameraJIdx,  // NULL or [M]
+    const at::optional<torch::Tensor> &tileMask,    // NULL or [C, H, W]
+    const at::optional<torch::Tensor> &activeTiles, // NULL or [numActiveTiles]
+    const uint32_t numCameras,
+    const uint32_t tileSize,
+    const uint32_t numTilesH,
+    const uint32_t numTilesW) {
+    const bool isPacked = cameraJIdx.has_value();
+    const bool isSparse = activeTiles.has_value();
 
     TORCH_CHECK(means2d.is_cuda(), "means2d must be a CUDA tensor");
     TORCH_CHECK(radii.is_cuda(), "radii must be a CUDA tensor");
     TORCH_CHECK(depths.is_cuda(), "depths must be a CUDA tensor");
 
-    if (is_packed) {
-        TORCH_CHECK(camera_jidx.value().is_cuda(), "camera_jidx must be a CUDA tensor");
+    if (isPacked) {
+        TORCH_CHECK(cameraJIdx.value().is_cuda(), "cameraJIdx must be a CUDA tensor");
         TORCH_CHECK_VALUE(means2d.dim() == 2, "means2d must have 2 dimensions (M, 2)");
         TORCH_CHECK_VALUE(radii.dim() == 1, "radii must have 1 dimension (M)");
         TORCH_CHECK_VALUE(depths.dim() == 1, "depths must have 1 dimension (M)");
-        TORCH_CHECK_VALUE(camera_jidx.value().dim() == 1, "camera_jidx must have 1 dimension (M)");
+        TORCH_CHECK_VALUE(cameraJIdx.value().dim() == 1, "cameraJIdx must have 1 dimension (M)");
         TORCH_CHECK_VALUE(radii.size(0) == means2d.size(0),
                           "radii must have the same number of points as means2d");
         TORCH_CHECK_VALUE(depths.size(0) == means2d.size(0),
                           "depths must have the same number of points as means2d");
-        TORCH_CHECK_VALUE(camera_jidx.value().size(0) == means2d.size(0),
-                          "camera_jidx must have the same number of points as means2d");
+        TORCH_CHECK_VALUE(cameraJIdx.value().size(0) == means2d.size(0),
+                          "cameraJIdx must have the same number of points as means2d");
     } else {
         TORCH_CHECK_VALUE(means2d.dim() == 3, "means2d must have 3 dimensions (C, N, 2)");
-        TORCH_CHECK_VALUE(means2d.size(0) == num_cameras,
+        TORCH_CHECK_VALUE(means2d.size(0) == numCameras,
                           "means2d must have num_cameras in the first dimension");
         TORCH_CHECK_VALUE(means2d.size(2) == 2, "means2d must have 2 points in the last dimension");
         TORCH_CHECK_VALUE(radii.dim() == 2, "radii must have 2 dimensions (C, N)");
-        TORCH_CHECK_VALUE(radii.size(0) == num_cameras,
-                          "radii must have num_cameras in the first dimension");
+        TORCH_CHECK_VALUE(radii.size(0) == numCameras,
+                          "radii must have numCameras in the first dimension");
         TORCH_CHECK_VALUE(radii.size(1) == means2d.size(1),
                           "radii must have the same number of points as means2d");
         TORCH_CHECK_VALUE(depths.dim() == 2, "depths must have 2 dimensions (C, N)");
-        TORCH_CHECK_VALUE(depths.size(0) == num_cameras,
-                          "depths must have num_cameras in the first dimension");
+        TORCH_CHECK_VALUE(depths.size(0) == numCameras,
+                          "depths must have numCameras in the first dimension");
         TORCH_CHECK_VALUE(depths.size(1) == means2d.size(1),
                           "depths must have the same number of points as means2d");
     }
 
-    if (is_sparse) {
-        TORCH_CHECK(tile_mask.value().is_cuda(), "tile_mask must be a CUDA tensor");
-        TORCH_CHECK_VALUE(tile_mask.value().dim() == 3,
-                          "tile_mask must have 3 dimensions (C, H, W)");
-        TORCH_CHECK_VALUE(tile_mask.value().size(0) == num_cameras,
-                          "tile_mask must have num_cameras in the first dimension");
-        TORCH_CHECK_VALUE(tile_mask.value().size(1) == num_tiles_h,
-                          "tile_mask must have num_tiles_h in the second dimension");
-        TORCH_CHECK_VALUE(tile_mask.value().size(2) == num_tiles_w,
-                          "tile_mask must have num_tiles_w in the third dimension");
-        TORCH_CHECK(active_tiles.value().is_cuda(), "active_tiles must be a CUDA tensor");
-        TORCH_CHECK_VALUE(active_tiles.value().dim() == 1,
-                          "active_tiles must have 1 dimension (num_active_tiles)");
+    if (isSparse) {
+        TORCH_CHECK(tileMask.value().is_cuda(), "tileMask must be a CUDA tensor");
+        TORCH_CHECK_VALUE(tileMask.value().dim() == 3, "tileMask must have 3 dimensions (C, H, W)");
+        TORCH_CHECK_VALUE(tileMask.value().size(0) == numCameras,
+                          "tile_mask must have numCameras in the first dimension");
+        TORCH_CHECK_VALUE(tileMask.value().size(1) == numTilesH,
+                          "tileMask must have numTilesH in the second dimension");
+        TORCH_CHECK_VALUE(tileMask.value().size(2) == numTilesW,
+                          "tileMask must have numTilesW in the third dimension");
+        TORCH_CHECK(activeTiles.value().is_cuda(), "activeTiles must be a CUDA tensor");
+        TORCH_CHECK_VALUE(activeTiles.value().dim() == 1,
+                          "activeTiles must have 1 dimension (numActiveTiles)");
     }
 
-    const uint32_t num_gaussians   = is_packed ? means2d.size(0) : means2d.size(1);
-    const uint32_t total_gaussians = is_packed ? means2d.size(0) : num_cameras * num_gaussians;
+    const uint32_t numGaussians   = isPacked ? means2d.size(0) : means2d.size(1);
+    const uint32_t totalGaussians = isPacked ? means2d.size(0) : numCameras * numGaussians;
 
-    // const uint32_t num_cameras      = means2d.size(0);
-    const uint32_t total_tiles      = num_tiles_h * num_tiles_w;
-    const uint32_t num_tile_id_bits = (uint32_t)floor(log2(total_tiles)) + 1;
-    const uint32_t num_cam_id_bits  = (uint32_t)floor(log2(num_cameras)) + 1;
-    const auto camera_jidx_ptr =
-        camera_jidx.has_value() ? camera_jidx.value().data_ptr<int32_t>() : nullptr;
+    // const uint32_t numCameras      = means2d.size(0);
+    const uint32_t totalTiles    = numTilesH * numTilesW;
+    const uint32_t numTileIdBits = (uint32_t)floor(log2(totalTiles)) + 1;
+    const uint32_t numCamIdBits  = (uint32_t)floor(log2(numCameras)) + 1;
+    const auto cameraJIdxPtr =
+        cameraJIdx.has_value() ? cameraJIdx.value().data_ptr<int32_t>() : nullptr;
 
-    const auto device_guard = at::cuda::OptionalCUDAGuard(at::device_of(means2d));
-    const auto stream       = at::cuda::getCurrentCUDAStream(means2d.device().index());
+    const auto deviceGuard = at::cuda::OptionalCUDAGuard(at::device_of(means2d));
+    const auto stream      = at::cuda::getCurrentCUDAStream(means2d.device().index());
 
-    const uint32_t num_active_tiles =
-        is_sparse ? active_tiles.value().size(0) : num_cameras * total_tiles;
-    const uint32_t output_num_tiles = num_active_tiles + 1;
+    const uint32_t numActiveTiles =
+        isSparse ? activeTiles.value().size(0) : numCameras * totalTiles;
+    const uint32_t outputNumTiles = numActiveTiles + 1;
 
-    auto dims = is_sparse ? std::vector<int64_t>({output_num_tiles})
-                          : std::vector<int64_t>({num_cameras, num_tiles_h, num_tiles_w});
+    auto dims = isSparse ? std::vector<int64_t>({outputNumTiles})
+                         : std::vector<int64_t>({numCameras, numTilesH, numTilesW});
 
-    auto output_dims = at::IntArrayRef(dims);
+    auto outputDims = at::IntArrayRef(dims);
 
-    if (total_gaussians == 0) {
-        return std::make_tuple(torch::zeros(output_dims, means2d.options().dtype(torch::kInt32)),
+    if (totalGaussians == 0) {
+        return std::make_tuple(torch::zeros(outputDims, means2d.options().dtype(torch::kInt32)),
                                torch::empty({0}, means2d.options().dtype(torch::kInt32)));
     }
     using scalar_t = float;
 
     // Allocate tensor to store the number of tiles each gaussian intersects
-    torch::Tensor tiles_per_gaussian_cumsum =
-        torch::empty({total_gaussians}, means2d.options().dtype(torch::kInt32));
+    torch::Tensor tilesPerGaussianCumsum =
+        torch::empty({totalGaussians}, means2d.options().dtype(torch::kInt32));
 
-    const auto tile_mask_ptr = tile_mask.has_value() ? tile_mask.value().data_ptr<bool>() : nullptr;
+    const auto tileMaskPtr = tileMask.has_value() ? tileMask.value().data_ptr<bool>() : nullptr;
 
     // Count the number of tiles each Gaussian intersects, store in tiles_per_gaussian_cumsum
-    const int NUM_BLOCKS = (total_gaussians + NUM_THREADS - 1) / NUM_THREADS;
-    count_tiles_per_gaussian<scalar_t, int32_t>
+    const int NUM_BLOCKS = (totalGaussians + NUM_THREADS - 1) / NUM_THREADS;
+    countTilesPerGaussian<scalar_t, int32_t>
         <<<NUM_BLOCKS, NUM_THREADS, 0, stream>>>(0,
-                                                 total_gaussians,
-                                                 num_gaussians,
-                                                 tile_size,
-                                                 num_tiles_w,
-                                                 num_tiles_h,
+                                                 totalGaussians,
+                                                 numGaussians,
+                                                 tileSize,
+                                                 numTilesW,
+                                                 numTilesH,
                                                  means2d.data_ptr<scalar_t>(),
                                                  radii.data_ptr<int32_t>(),
-                                                 tile_mask_ptr,
-                                                 camera_jidx_ptr,
-                                                 tiles_per_gaussian_cumsum.data_ptr<int32_t>());
+                                                 tileMaskPtr,
+                                                 cameraJIdxPtr,
+                                                 tilesPerGaussianCumsum.data_ptr<int32_t>());
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
     // In place cumulative sum to get the total number of intersections
-    torch::cumsum_out(tiles_per_gaussian_cumsum, tiles_per_gaussian_cumsum, 0, torch::kInt32);
+    torch::cumsum_out(tilesPerGaussianCumsum, tilesPerGaussianCumsum, 0, torch::kInt32);
 
     // Allocate tensors to store the intersections
-    const int64_t total_intersections = tiles_per_gaussian_cumsum[-1].item<int64_t>();
-    if (total_intersections == 0) {
-        return std::make_tuple(torch::zeros(output_dims, means2d.options().dtype(torch::kInt32)),
+    const int64_t totalIntersections = tilesPerGaussianCumsum[-1].item<int64_t>();
+    if (totalIntersections == 0) {
+        return std::make_tuple(torch::zeros(outputDims, means2d.options().dtype(torch::kInt32)),
                                torch::empty({0}, means2d.options().dtype(torch::kInt32)));
     } else {
-        torch::Tensor intersection_keys =
-            torch::empty({total_intersections}, means2d.options().dtype(torch::kInt64));
-        torch::Tensor intersection_values =
-            torch::empty({total_intersections}, means2d.options().dtype(torch::kInt32));
+        torch::Tensor intersectionKeys =
+            torch::empty({totalIntersections}, means2d.options().dtype(torch::kInt64));
+        torch::Tensor intersectionValues =
+            torch::empty({totalIntersections}, means2d.options().dtype(torch::kInt32));
 
         // Compute the set of intersections between each projected Gaussian and each tile,
         // store them in intersection_keys and intersection_values
         // where intersection_keys encodes (camera_id, tile_id, depth) and intersection_values
         // encodes the index of the Gaussian in the input arrays.
-        compute_gaussian_tile_intersections<scalar_t>
-            <<<NUM_BLOCKS, NUM_THREADS, 0, stream>>>(num_cameras,
-                                                     num_gaussians,
+        computeGaussianTileIntersections<scalar_t>
+            <<<NUM_BLOCKS, NUM_THREADS, 0, stream>>>(numCameras,
+                                                     numGaussians,
                                                      0,
-                                                     total_gaussians,
-                                                     tile_size,
-                                                     num_tiles_w,
-                                                     num_tiles_h,
-                                                     num_tile_id_bits,
+                                                     totalGaussians,
+                                                     tileSize,
+                                                     numTilesW,
+                                                     numTilesH,
+                                                     numTileIdBits,
                                                      means2d.data_ptr<scalar_t>(),
                                                      radii.data_ptr<int32_t>(),
                                                      depths.data_ptr<scalar_t>(),
-                                                     tiles_per_gaussian_cumsum.data_ptr<int32_t>(),
-                                                     tile_mask_ptr,
-                                                     camera_jidx_ptr,
-                                                     intersection_keys.data_ptr<int64_t>(),
-                                                     intersection_values.data_ptr<int32_t>());
+                                                     tilesPerGaussianCumsum.data_ptr<int32_t>(),
+                                                     tileMaskPtr,
+                                                     cameraJIdxPtr,
+                                                     intersectionKeys.data_ptr<int64_t>(),
+                                                     intersectionValues.data_ptr<int32_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
 
         // Sort the intersections by their key so intersections within the same tile are grouped
         // together and sorted by their depth (near to far).
         {
             // Allocate tensors to store the sorted intersections
-            torch::Tensor keys_sorted = torch::empty_like(intersection_keys);
-            torch::Tensor vals_sorted = torch::empty_like(intersection_values);
+            torch::Tensor keysSorted = torch::empty_like(intersectionKeys);
+            torch::Tensor valsSorted = torch::empty_like(intersectionValues);
 
             // https://nvidia.github.io/cccl/cub/api/structcub_1_1DeviceRadixSort.html
             // DoubleBuffer reduce the auxiliary memory usage from O(N+P) to O(P)
             // Create a set of DoubleBuffers to wrap pairs of device pointers
-            cub::DoubleBuffer<int64_t> d_keys(intersection_keys.data_ptr<int64_t>(),
-                                              keys_sorted.data_ptr<int64_t>());
-            cub::DoubleBuffer<int32_t> d_vals(intersection_values.data_ptr<int32_t>(),
-                                              vals_sorted.data_ptr<int32_t>());
+            cub::DoubleBuffer<int64_t> d_keys(intersectionKeys.data_ptr<int64_t>(),
+                                              keysSorted.data_ptr<int64_t>());
+            cub::DoubleBuffer<int32_t> d_vals(intersectionValues.data_ptr<int32_t>(),
+                                              valsSorted.data_ptr<int32_t>());
 
-            const int32_t num_bits = 32 + num_cam_id_bits + num_tile_id_bits;
+            const int32_t numBits = 32 + numCamIdBits + numTileIdBits;
             CUB_WRAPPER(cub::DeviceRadixSort::SortPairs,
                         d_keys,
                         d_vals,
-                        total_intersections,
+                        totalIntersections,
                         0,
-                        num_bits,
+                        numBits,
                         stream);
             C10_CUDA_CHECK(cudaStreamSynchronize(stream));
             // DoubleBuffer swaps the pointers if the keys were sorted in the input buffer
             // so we need to grab the right buffer.
             if (d_keys.selector == 1) {
-                intersection_keys = keys_sorted;
+                intersectionKeys = keysSorted;
             }
             if (d_vals.selector == 1) {
-                intersection_values = vals_sorted;
+                intersectionValues = valsSorted;
             }
         }
 
-        if (is_sparse) {
+        if (isSparse) {
             // Compute a joffsets tensor that stores the offsets into the sorted Gaussian
             // intersections
-            torch::Tensor tile_joffsets =
-                torch::empty({output_num_tiles}, means2d.options().dtype(torch::kInt32));
-            const int NUM_BLOCKS_2 = (output_num_tiles + NUM_THREADS - 1) / NUM_THREADS;
-            compute_tile_offsets_sparse<<<NUM_BLOCKS_2, NUM_THREADS, 0, stream>>>(
-                total_intersections,
-                total_tiles,
-                num_tile_id_bits,
-                intersection_keys.data_ptr<int64_t>(),
-                active_tiles.value().data_ptr<uint32_t>(),
-                num_active_tiles,
-                tile_joffsets.data_ptr<int32_t>());
+            torch::Tensor tileJOffsets =
+                torch::empty({outputNumTiles}, means2d.options().dtype(torch::kInt32));
+            const int NUM_BLOCKS_2 = (outputNumTiles + NUM_THREADS - 1) / NUM_THREADS;
+            computeTileOffsetsSparse<<<NUM_BLOCKS_2, NUM_THREADS, 0, stream>>>(
+                totalIntersections,
+                totalTiles,
+                numTileIdBits,
+                intersectionKeys.data_ptr<int64_t>(),
+                activeTiles.value().data_ptr<uint32_t>(),
+                numActiveTiles,
+                tileJOffsets.data_ptr<int32_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
 
-            return std::make_tuple(tile_joffsets, intersection_values);
+            return std::make_tuple(tileJOffsets, intersectionValues);
         } else {
             // Compute a joffsets tensor that stores the offsets into the sorted Gaussian
             // intersections
-            torch::Tensor tile_joffsets = torch::empty({num_cameras, num_tiles_h, num_tiles_w},
-                                                       means2d.options().dtype(torch::kInt32));
-            const int NUM_BLOCKS_2      = (total_intersections + NUM_THREADS - 1) / NUM_THREADS;
-            compute_tile_offsets<<<NUM_BLOCKS_2, NUM_THREADS, 0, stream>>>(
+            torch::Tensor tileJOffsets = torch::empty({numCameras, numTilesH, numTilesW},
+                                                      means2d.options().dtype(torch::kInt32));
+            const int NUM_BLOCKS_2     = (totalIntersections + NUM_THREADS - 1) / NUM_THREADS;
+            computeTileOffsets<<<NUM_BLOCKS_2, NUM_THREADS, 0, stream>>>(
                 0,
-                total_intersections,
-                total_intersections,
-                num_cameras,
-                total_tiles,
-                num_tile_id_bits,
-                intersection_keys.data_ptr<int64_t>(),
-                tile_joffsets.data_ptr<int32_t>());
+                totalIntersections,
+                totalIntersections,
+                numCameras,
+                totalTiles,
+                numTileIdBits,
+                intersectionKeys.data_ptr<int64_t>(),
+                tileJOffsets.data_ptr<int32_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
 
-            return std::make_tuple(tile_joffsets, intersection_values);
+            return std::make_tuple(tileJOffsets, intersectionValues);
         }
     }
 }
@@ -589,15 +580,15 @@ mergePath(KeyIteratorIn keys1,
           ptrdiff_t *key1Intervals,
           ptrdiff_t *key2Intervals,
           int intervalIndex) {
-    using key_type = typename ::cuda::std::iterator_traits<KeyIteratorIn>::value_type;
+    using KeyType = typename ::cuda::std::iterator_traits<KeyIteratorIn>::value_type;
 
     const size_t combinedIndex = intervalIndex * (keys1Count + keys2Count) / 2;
     size_t leftTop             = combinedIndex > keys1Count ? keys1Count : combinedIndex;
     size_t rightTop            = combinedIndex > keys1Count ? combinedIndex - keys1Count : 0;
     size_t leftBottom          = rightTop;
 
-    key_type leftKey;
-    key_type rightKey;
+    KeyType leftKey;
+    KeyType rightKey;
     while (true) {
         ptrdiff_t offset   = (leftTop - leftBottom) / 2;
         ptrdiff_t leftMid  = leftTop - offset;
@@ -909,162 +900,160 @@ radixSortAsync(KeyT *keysIn,
 
 std::tuple<torch::Tensor, torch::Tensor>
 gaussianTileIntersectionPrivateUse1Impl(
-    const torch::Tensor &means2d,                    // [C, N, 2] or [M, 2]
-    const torch::Tensor &radii,                      // [C, N] or [M]
-    const torch::Tensor &depths,                     // [C, N] or [M]
-    const at::optional<torch::Tensor> &camera_jidx,  // NULL or [M]
-    const at::optional<torch::Tensor> &tile_mask,    // NULL or [C, H, W]
-    const at::optional<torch::Tensor> &active_tiles, // NULL or [num_active_tiles]
-    const uint32_t num_cameras,
-    const uint32_t tile_size,
-    const uint32_t num_tiles_h,
-    const uint32_t num_tiles_w) {
-    const bool is_packed = camera_jidx.has_value();
-    const bool is_sparse = active_tiles.has_value();
+    const torch::Tensor &means2d,                   // [C, N, 2] or [M, 2]
+    const torch::Tensor &radii,                     // [C, N] or [M]
+    const torch::Tensor &depths,                    // [C, N] or [M]
+    const at::optional<torch::Tensor> &cameraJIdx,  // NULL or [M]
+    const at::optional<torch::Tensor> &tileMask,    // NULL or [C, H, W]
+    const at::optional<torch::Tensor> &activeTiles, // NULL or [numActiveTiles]
+    const uint32_t numCameras,
+    const uint32_t tileSize,
+    const uint32_t numTilesH,
+    const uint32_t numTilesW) {
+    const bool isPacked = cameraJIdx.has_value();
+    const bool isSparse = activeTiles.has_value();
 
     TORCH_CHECK(means2d.is_privateuseone(), "means2d must be a PrivateUse1 tensor");
     TORCH_CHECK(radii.is_privateuseone(), "radii must be a PrivateUse1 tensor");
     TORCH_CHECK(depths.is_privateuseone(), "depths must be a PrivateUse1 tensor");
 
-    if (is_packed) {
-        TORCH_CHECK(camera_jidx.value().is_privateuseone(),
+    if (isPacked) {
+        TORCH_CHECK(cameraJIdx.value().is_privateuseone(),
                     "camera_jidx must be a PrivateUse1 tensor");
         TORCH_CHECK_VALUE(means2d.dim() == 2, "means2d must have 2 dimensions (M, 2)");
         TORCH_CHECK_VALUE(radii.dim() == 1, "radii must have 1 dimension (M)");
         TORCH_CHECK_VALUE(depths.dim() == 1, "depths must have 1 dimension (M)");
-        TORCH_CHECK_VALUE(camera_jidx.value().dim() == 1, "camera_jidx must have 1 dimension (M)");
+        TORCH_CHECK_VALUE(cameraJIdx.value().dim() == 1, "cameraJIdx must have 1 dimension (M)");
         TORCH_CHECK_VALUE(radii.size(0) == means2d.size(0),
                           "radii must have the same number of points as means2d");
         TORCH_CHECK_VALUE(depths.size(0) == means2d.size(0),
                           "depths must have the same number of points as means2d");
-        TORCH_CHECK_VALUE(camera_jidx.value().size(0) == means2d.size(0),
-                          "camera_jidx must have the same number of points as means2d");
+        TORCH_CHECK_VALUE(cameraJIdx.value().size(0) == means2d.size(0),
+                          "cameraJIdx must have the same number of points as means2d");
     } else {
         TORCH_CHECK_VALUE(means2d.dim() == 3, "means2d must have 3 dimensions (C, N, 2)");
-        TORCH_CHECK_VALUE(means2d.size(0) == num_cameras,
+        TORCH_CHECK_VALUE(means2d.size(0) == numCameras,
                           "means2d must have num_cameras in the first dimension");
         TORCH_CHECK_VALUE(means2d.size(2) == 2, "means2d must have 2 points in the last dimension");
         TORCH_CHECK_VALUE(radii.dim() == 2, "radii must have 2 dimensions (C, N)");
-        TORCH_CHECK_VALUE(radii.size(0) == num_cameras,
+        TORCH_CHECK_VALUE(radii.size(0) == numCameras,
                           "radii must have num_cameras in the first dimension");
         TORCH_CHECK_VALUE(radii.size(1) == means2d.size(1),
                           "radii must have the same number of points as means2d");
         TORCH_CHECK_VALUE(depths.dim() == 2, "depths must have 2 dimensions (C, N)");
-        TORCH_CHECK_VALUE(depths.size(0) == num_cameras,
+        TORCH_CHECK_VALUE(depths.size(0) == numCameras,
                           "depths must have num_cameras in the first dimension");
         TORCH_CHECK_VALUE(depths.size(1) == means2d.size(1),
                           "depths must have the same number of points as means2d");
     }
 
-    if (is_sparse) {
-        TORCH_CHECK(tile_mask.value().is_privateuseone(), "tile_mask must be a PrivateUse1 tensor");
-        TORCH_CHECK_VALUE(tile_mask.value().dim() == 3,
-                          "tile_mask must have 3 dimensions (C, H, W)");
-        TORCH_CHECK_VALUE(tile_mask.value().size(0) == num_cameras,
-                          "tile_mask must have num_cameras in the first dimension");
-        TORCH_CHECK_VALUE(tile_mask.value().size(1) == num_tiles_h,
-                          "tile_mask must have num_tiles_h in the second dimension");
-        TORCH_CHECK_VALUE(tile_mask.value().size(2) == num_tiles_w,
-                          "tile_mask must have num_tiles_w in the third dimension");
-        TORCH_CHECK(active_tiles.value().is_privateuseone(),
-                    "active_tiles must be a PrivateUse1 tensor");
-        TORCH_CHECK_VALUE(active_tiles.value().dim() == 1,
-                          "active_tiles must have 1 dimension (num_active_tiles)");
+    if (isSparse) {
+        TORCH_CHECK(tileMask.value().is_privateuseone(), "tileMask must be a PrivateUse1 tensor");
+        TORCH_CHECK_VALUE(tileMask.value().dim() == 3, "tileMask must have 3 dimensions (C, H, W)");
+        TORCH_CHECK_VALUE(tileMask.value().size(0) == numCameras,
+                          "tileMask must have num_cameras in the first dimension");
+        TORCH_CHECK_VALUE(tileMask.value().size(1) == numTilesH,
+                          "tileMask must have numTilesH in the second dimension");
+        TORCH_CHECK_VALUE(tileMask.value().size(2) == numTilesW,
+                          "tileMask must have numTilesW in the third dimension");
+        TORCH_CHECK(activeTiles.value().is_privateuseone(),
+                    "activeTiles must be a PrivateUse1 tensor");
+        TORCH_CHECK_VALUE(activeTiles.value().dim() == 1,
+                          "activeTiles must have 1 dimension (numActiveTiles)");
     }
 
-    const uint32_t num_gaussians   = is_packed ? means2d.size(0) : means2d.size(1);
-    const uint32_t total_gaussians = is_packed ? means2d.size(0) : num_cameras * num_gaussians;
+    const uint32_t numGaussians   = isPacked ? means2d.size(0) : means2d.size(1);
+    const uint32_t totalGaussians = isPacked ? means2d.size(0) : numCameras * numGaussians;
 
-    // const uint32_t num_cameras      = means2d.size(0);
-    const uint32_t total_tiles      = num_tiles_h * num_tiles_w;
-    const uint32_t num_tile_id_bits = (uint32_t)floor(log2(total_tiles)) + 1;
-    const uint32_t num_cam_id_bits  = (uint32_t)floor(log2(num_cameras)) + 1;
-    const auto camera_jidx_ptr =
-        camera_jidx.has_value() ? camera_jidx.value().data_ptr<int32_t>() : nullptr;
+    // const uint32_t numCameras      = means2d.size(0);
+    const uint32_t totalTiles    = numTilesH * numTilesW;
+    const uint32_t numTileIdBits = (uint32_t)floor(log2(totalTiles)) + 1;
+    const uint32_t numCamIdBits  = (uint32_t)floor(log2(numCameras)) + 1;
+    const auto cameraJIdxPtr =
+        cameraJIdx.has_value() ? cameraJIdx.value().data_ptr<int32_t>() : nullptr;
 
-    const uint32_t num_active_tiles =
-        is_sparse ? active_tiles.value().size(0) : num_cameras * total_tiles;
-    const uint32_t output_num_tiles = num_active_tiles + 1;
+    const uint32_t numActiveTiles =
+        isSparse ? activeTiles.value().size(0) : numCameras * totalTiles;
+    const uint32_t outputNumTiles = numActiveTiles + 1;
 
-    auto dims = is_sparse ? std::vector<int64_t>({output_num_tiles})
-                          : std::vector<int64_t>({num_cameras, num_tiles_h, num_tiles_w});
+    auto dims = isSparse ? std::vector<int64_t>({outputNumTiles})
+                         : std::vector<int64_t>({numCameras, numTilesH, numTilesW});
 
-    auto output_dims = at::IntArrayRef(dims);
+    auto outputDims = at::IntArrayRef(dims);
 
-    if (total_gaussians == 0) {
-        return std::make_tuple(torch::zeros(output_dims, means2d.options().dtype(torch::kInt32)),
+    if (totalGaussians == 0) {
+        return std::make_tuple(torch::zeros(outputDims, means2d.options().dtype(torch::kInt32)),
                                torch::empty({0}, means2d.options().dtype(torch::kInt32)));
     }
     using scalar_t = float;
 
     // Allocate tensor to store the number of tiles each gaussian intersects
-    torch::Tensor tiles_per_gaussian_cumsum =
-        torch::empty({total_gaussians}, means2d.options().dtype(torch::kInt32));
+    torch::Tensor tilesPerGaussianCumsum =
+        torch::empty({totalGaussians}, means2d.options().dtype(torch::kInt32));
 
-    const auto tile_mask_ptr = tile_mask.has_value() ? tile_mask.value().data_ptr<bool>() : nullptr;
+    const auto tileMaskPtr = tileMask.has_value() ? tileMask.value().data_ptr<bool>() : nullptr;
 
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
-        int64_t device_gaussian_offset, device_gaussian_count;
-        std::tie(device_gaussian_offset, device_gaussian_count) =
-            deviceChunk(total_gaussians, deviceId);
+        int64_t deviceGaussianOffset, deviceGaussianCount;
+        std::tie(deviceGaussianOffset, deviceGaussianCount) = deviceChunk(totalGaussians, deviceId);
 
-        // Count the number of tiles each Gaussian intersects, store in tiles_per_gaussian_cumsum
-        const int NUM_BLOCKS = (device_gaussian_count + NUM_THREADS - 1) / NUM_THREADS;
-        count_tiles_per_gaussian<scalar_t, int32_t>
-            <<<NUM_BLOCKS, NUM_THREADS, 0, stream>>>(device_gaussian_offset,
-                                                     device_gaussian_count,
-                                                     num_gaussians,
-                                                     tile_size,
-                                                     num_tiles_w,
-                                                     num_tiles_h,
+        // Count the number of tiles each Gaussian intersects, store in tilesPerGaussianCumsum
+        const int NUM_BLOCKS = (deviceGaussianCount + NUM_THREADS - 1) / NUM_THREADS;
+        countTilesPerGaussian<scalar_t, int32_t>
+            <<<NUM_BLOCKS, NUM_THREADS, 0, stream>>>(deviceGaussianOffset,
+                                                     deviceGaussianCount,
+                                                     numGaussians,
+                                                     tileSize,
+                                                     numTilesW,
+                                                     numTilesH,
                                                      means2d.data_ptr<scalar_t>(),
                                                      radii.data_ptr<int32_t>(),
-                                                     tile_mask_ptr,
-                                                     camera_jidx_ptr,
-                                                     tiles_per_gaussian_cumsum.data_ptr<int32_t>());
+                                                     tileMaskPtr,
+                                                     cameraJIdxPtr,
+                                                     tilesPerGaussianCumsum.data_ptr<int32_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 
     mergeStreams();
 
     // In place cumulative sum to get the total number of intersections
-    torch::cumsum_out(tiles_per_gaussian_cumsum, tiles_per_gaussian_cumsum, 0, torch::kInt32);
+    torch::cumsum_out(tilesPerGaussianCumsum, tilesPerGaussianCumsum, 0, torch::kInt32);
 
     // Allocate tensors to store the intersections
-    const int64_t total_intersections = tiles_per_gaussian_cumsum[-1].item<int64_t>();
-    if (total_intersections == 0) {
-        return std::make_tuple(torch::zeros(output_dims, means2d.options().dtype(torch::kInt32)),
+    const int64_t totalIntersections = tilesPerGaussianCumsum[-1].item<int64_t>();
+    if (totalIntersections == 0) {
+        return std::make_tuple(torch::zeros(outputDims, means2d.options().dtype(torch::kInt32)),
                                torch::empty({0}, means2d.options().dtype(torch::kInt32)));
     } else {
-        torch::Tensor intersection_keys =
-            torch::empty({total_intersections}, means2d.options().dtype(torch::kInt64));
-        torch::Tensor intersection_values =
-            torch::empty({total_intersections}, means2d.options().dtype(torch::kInt32));
+        torch::Tensor intersectionKeys =
+            torch::empty({totalIntersections}, means2d.options().dtype(torch::kInt64));
+        torch::Tensor intersectionValues =
+            torch::empty({totalIntersections}, means2d.options().dtype(torch::kInt32));
 
         // Allocate tensors to store the sorted intersections
-        torch::Tensor keys_sorted = torch::empty_like(intersection_keys);
-        torch::Tensor vals_sorted = torch::empty_like(intersection_values);
+        torch::Tensor keysSorted = torch::empty_like(intersectionKeys);
+        torch::Tensor valsSorted = torch::empty_like(intersectionValues);
 
-        torch::Tensor device_intersection_offsets =
+        torch::Tensor deviceIntersectionOffsets =
             torch::empty({c10::cuda::device_count()}, means2d.options().dtype(torch::kInt64));
-        torch::Tensor device_intersection_counts =
+        torch::Tensor deviceIntersectionCounts =
             torch::empty({c10::cuda::device_count()}, means2d.options().dtype(torch::kInt64));
-        torch::Tensor merge_intervals =
+        torch::Tensor mergeIntervals =
             torch::empty({2 * c10::cuda::device_count()}, means2d.options().dtype(torch::kInt64));
 
         std::vector<cudaEvent_t> events(c10::cuda::device_count());
 
         // Compute a joffsets tensor that stores the offsets into the sorted Gaussian
         // intersections
-        torch::Tensor tile_joffsets = torch::empty({num_cameras, num_tiles_h, num_tiles_w},
-                                                   means2d.options().dtype(torch::kInt32));
+        torch::Tensor tileJOffsets = torch::empty({numCameras, numTilesH, numTilesW},
+                                                  means2d.options().dtype(torch::kInt32));
 
         // Compute the set of intersections between each projected Gaussian and each tile,
-        // store them in intersection_keys and intersection_values
-        // where intersection_keys encodes (camera_id, tile_id, depth) and intersection_values
+        // store them in intersectionKeys and intersectionValues
+        // where intersectionKeys encodes (camera_id, tile_id, depth) and intersectionValues
         // encodes the index of the Gaussian in the input arrays.
 
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
@@ -1072,28 +1061,28 @@ gaussianTileIntersectionPrivateUse1Impl(
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
             cudaEventCreate(&events[deviceId], cudaEventDisableTiming);
 
-            int64_t device_gaussian_offset, device_gaussian_count;
-            std::tie(device_gaussian_offset, device_gaussian_count) =
-                deviceChunk(total_gaussians, deviceId);
+            int64_t deviceGaussianOffset, deviceGaussianCount;
+            std::tie(deviceGaussianOffset, deviceGaussianCount) =
+                deviceChunk(totalGaussians, deviceId);
 
-            const int NUM_BLOCKS = (device_gaussian_count + NUM_THREADS - 1) / NUM_THREADS;
-            compute_gaussian_tile_intersections<scalar_t><<<NUM_BLOCKS, NUM_THREADS, 0, stream>>>(
-                num_cameras,
-                num_gaussians,
-                device_gaussian_offset,
-                device_gaussian_count,
-                tile_size,
-                num_tiles_w,
-                num_tiles_h,
-                num_tile_id_bits,
-                means2d.data_ptr<scalar_t>(),
-                radii.data_ptr<int32_t>(),
-                depths.data_ptr<scalar_t>(),
-                tiles_per_gaussian_cumsum.data_ptr<int32_t>(),
-                tile_mask_ptr,
-                camera_jidx_ptr,
-                intersection_keys.data_ptr<int64_t>(),
-                intersection_values.data_ptr<int32_t>());
+            const int NUM_BLOCKS = (deviceGaussianCount + NUM_THREADS - 1) / NUM_THREADS;
+            computeGaussianTileIntersections<scalar_t>
+                <<<NUM_BLOCKS, NUM_THREADS, 0, stream>>>(numCameras,
+                                                         numGaussians,
+                                                         deviceGaussianOffset,
+                                                         deviceGaussianCount,
+                                                         tileSize,
+                                                         numTilesW,
+                                                         numTilesH,
+                                                         numTileIdBits,
+                                                         means2d.data_ptr<scalar_t>(),
+                                                         radii.data_ptr<int32_t>(),
+                                                         depths.data_ptr<scalar_t>(),
+                                                         tilesPerGaussianCumsum.data_ptr<int32_t>(),
+                                                         tileMaskPtr,
+                                                         cameraJIdxPtr,
+                                                         intersectionKeys.data_ptr<int64_t>(),
+                                                         intersectionValues.data_ptr<int32_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
             C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
         }
@@ -1111,22 +1100,22 @@ gaussianTileIntersectionPrivateUse1Impl(
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
             C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[0]));
-            std::tie(device_intersection_offsets.data_ptr<int64_t>()[deviceId],
-                     device_intersection_counts.data_ptr<int64_t>()[deviceId]) =
-                deviceChunk(total_intersections, deviceId);
+            std::tie(deviceIntersectionOffsets.data_ptr<int64_t>()[deviceId],
+                     deviceIntersectionCounts.data_ptr<int64_t>()[deviceId]) =
+                deviceChunk(totalIntersections, deviceId);
         }
 
-        const int32_t num_bits = 32 + num_cam_id_bits + num_tile_id_bits;
-        radixSortAsync(intersection_keys.data_ptr<int64_t>(),
-                       keys_sorted.data_ptr<int64_t>(),
-                       intersection_values.data_ptr<int32_t>(),
-                       vals_sorted.data_ptr<int32_t>(),
-                       total_intersections,
+        const int32_t numBits = 32 + numCamIdBits + numTileIdBits;
+        radixSortAsync(intersectionKeys.data_ptr<int64_t>(),
+                       keysSorted.data_ptr<int64_t>(),
+                       intersectionValues.data_ptr<int32_t>(),
+                       valsSorted.data_ptr<int32_t>(),
+                       totalIntersections,
                        0,
-                       num_bits,
-                       merge_intervals.data_ptr<int64_t>(),
-                       device_intersection_offsets.const_data_ptr<int64_t>(),
-                       device_intersection_counts.const_data_ptr<int64_t>(),
+                       numBits,
+                       mergeIntervals.data_ptr<int64_t>(),
+                       deviceIntersectionOffsets.const_data_ptr<int64_t>(),
+                       deviceIntersectionCounts.const_data_ptr<int64_t>(),
                        events.data());
 
         {
@@ -1138,7 +1127,7 @@ gaussianTileIntersectionPrivateUse1Impl(
             C10_CUDA_CHECK(cudaEventRecord(events[0], stream));
         }
 
-        TORCH_CHECK(!is_sparse, "Sparse tile offsets are not implemented for mGPU");
+        TORCH_CHECK(!isSparse, "Sparse tile offsets are not implemented for mGPU");
 
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
@@ -1146,17 +1135,17 @@ gaussianTileIntersectionPrivateUse1Impl(
             C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[0]));
 
             const int NUM_BLOCKS_2 =
-                (device_intersection_counts.const_data_ptr<int64_t>()[deviceId] + NUM_THREADS - 1) /
+                (deviceIntersectionCounts.const_data_ptr<int64_t>()[deviceId] + NUM_THREADS - 1) /
                 NUM_THREADS;
-            compute_tile_offsets<<<NUM_BLOCKS_2, NUM_THREADS, 0, stream>>>(
-                device_intersection_offsets.const_data_ptr<int64_t>()[deviceId],
-                device_intersection_counts.const_data_ptr<int64_t>()[deviceId],
-                total_intersections,
-                num_cameras,
-                total_tiles,
-                num_tile_id_bits,
-                keys_sorted.data_ptr<int64_t>(),
-                tile_joffsets.data_ptr<int32_t>());
+            computeTileOffsets<<<NUM_BLOCKS_2, NUM_THREADS, 0, stream>>>(
+                deviceIntersectionOffsets.const_data_ptr<int64_t>()[deviceId],
+                deviceIntersectionCounts.const_data_ptr<int64_t>()[deviceId],
+                totalIntersections,
+                numCameras,
+                totalTiles,
+                numTileIdBits,
+                keysSorted.data_ptr<int64_t>(),
+                tileJOffsets.data_ptr<int32_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
 
@@ -1166,7 +1155,7 @@ gaussianTileIntersectionPrivateUse1Impl(
 
         mergeStreams();
 
-        return std::make_tuple(tile_joffsets, vals_sorted);
+        return std::make_tuple(tileJOffsets, valsSorted);
     }
 }
 
@@ -1175,105 +1164,115 @@ gaussianTileIntersectionPrivateUse1Impl(
 template <>
 std::tuple<torch::Tensor, torch::Tensor>
 dispatchGaussianTileIntersection<torch::kCUDA>(
-    const torch::Tensor &means2d,                   // [C, N, 2] or [M, 2]
-    const torch::Tensor &radii,                     // [C, N] or [M]
-    const torch::Tensor &depths,                    // [C, N] or [M]
-    const at::optional<torch::Tensor> &camera_jidx, // NULL or [M]
-    const uint32_t num_cameras,
-    const uint32_t tile_size,
-    const uint32_t num_tiles_h,
-    const uint32_t num_tiles_w) {
+    const torch::Tensor &means2d,                  // [C, N, 2] or [M, 2]
+    const torch::Tensor &radii,                    // [C, N] or [M]
+    const torch::Tensor &depths,                   // [C, N] or [M]
+    const at::optional<torch::Tensor> &cameraJIdx, // NULL or [M]
+    const uint32_t numCameras,
+    const uint32_t tileSize,
+    const uint32_t numTilesH,
+    const uint32_t numTilesW) {
     FVDB_FUNC_RANGE();
     return gaussianTileIntersectionCUDAImpl(means2d,
                                             radii,
                                             depths,
-                                            camera_jidx,
+                                            cameraJIdx,
                                             at::nullopt,
                                             at::nullopt,
-                                            num_cameras,
-                                            tile_size,
-                                            num_tiles_h,
-                                            num_tiles_w);
+                                            numCameras,
+                                            tileSize,
+                                            numTilesH,
+                                            numTilesW);
 }
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor>
 dispatchGaussianTileIntersection<torch::kPrivateUse1>(
-    const torch::Tensor &means2d,                   // [C, N, 2] or [M, 2]
-    const torch::Tensor &radii,                     // [C, N] or [M]
-    const torch::Tensor &depths,                    // [C, N] or [M]
-    const at::optional<torch::Tensor> &camera_jidx, // NULL or [M]
-    const uint32_t num_cameras,
-    const uint32_t tile_size,
-    const uint32_t num_tiles_h,
-    const uint32_t num_tiles_w) {
+    const torch::Tensor &means2d,                  // [C, N, 2] or [M, 2]
+    const torch::Tensor &radii,                    // [C, N] or [M]
+    const torch::Tensor &depths,                   // [C, N] or [M]
+    const at::optional<torch::Tensor> &cameraJIdx, // NULL or [M]
+    const uint32_t numCameras,
+    const uint32_t tileSize,
+    const uint32_t numTilesH,
+    const uint32_t numTilesW) {
     FVDB_FUNC_RANGE();
     return gaussianTileIntersectionPrivateUse1Impl(means2d,
                                                    radii,
                                                    depths,
-                                                   camera_jidx,
+                                                   cameraJIdx,
                                                    at::nullopt,
                                                    at::nullopt,
-                                                   num_cameras,
-                                                   tile_size,
-                                                   num_tiles_h,
-                                                   num_tiles_w);
+                                                   numCameras,
+                                                   tileSize,
+                                                   numTilesH,
+                                                   numTilesW);
 }
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor>
 dispatchGaussianTileIntersection<torch::kCPU>(
-    const torch::Tensor &means2d,                  // [C, N, 2] or [nnz, 2]
-    const torch::Tensor &radii,                    // [C, N] or [nnz]
-    const torch::Tensor &depths,                   // [C, N] or [nnz]
-    const at::optional<torch::Tensor> &camera_ids, // NULL or [M]
-    const uint32_t num_cameras,
-    const uint32_t tile_size,
-    const uint32_t num_tiles_h,
-    const uint32_t num_tiles_w) {
+    const torch::Tensor &means2d,                 // [C, N, 2] or [nnz, 2]
+    const torch::Tensor &radii,                   // [C, N] or [nnz]
+    const torch::Tensor &depths,                  // [C, N] or [nnz]
+    const at::optional<torch::Tensor> &cameraIds, // NULL or [M]
+    const uint32_t numCameras,
+    const uint32_t tileSize,
+    const uint32_t numTilesH,
+    const uint32_t numTilesW) {
     TORCH_CHECK(false, "CPU implementation not available");
 }
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor>
 dispatchGaussianTileIntersectionSparse<torch::kCUDA>(
-    const torch::Tensor &means2d,                   // [C, N, 2] or [M, 2]
-    const torch::Tensor &radii,                     // [C, N] or [M]
-    const torch::Tensor &depths,                    // [C, N] or [M]
-    const torch::Tensor &tile_mask,                 // [C, H, W]
-    const torch::Tensor &active_tiles,              // [num_active_tiles]
-    const at::optional<torch::Tensor> &camera_jidx, // NULL or [M]
-    const uint32_t num_cameras,
-    const uint32_t tile_size,
-    const uint32_t num_tiles_h,
-    const uint32_t num_tiles_w) {
+    const torch::Tensor &means2d,                  // [C, N, 2] or [M, 2]
+    const torch::Tensor &radii,                    // [C, N] or [M]
+    const torch::Tensor &depths,                   // [C, N] or [M]
+    const torch::Tensor &tileMask,                 // [C, H, W]
+    const torch::Tensor &activeTiles,              // [num_active_tiles]
+    const at::optional<torch::Tensor> &cameraJIdx, // NULL or [M]
+    const uint32_t numCameras,
+    const uint32_t tileSize,
+    const uint32_t numTilesH,
+    const uint32_t numTilesW) {
     FVDB_FUNC_RANGE();
     return gaussianTileIntersectionCUDAImpl(means2d,
                                             radii,
                                             depths,
-                                            camera_jidx,
-                                            tile_mask,
-                                            active_tiles,
-                                            num_cameras,
-                                            tile_size,
-                                            num_tiles_h,
-                                            num_tiles_w);
+                                            cameraJIdx,
+                                            tileMask,
+                                            activeTiles,
+                                            numCameras,
+                                            tileSize,
+                                            numTilesH,
+                                            numTilesW);
 }
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor>
 dispatchGaussianTileIntersectionSparse<torch::kCPU>(
-    const torch::Tensor &means2d,                   // [C, N, 2] or [M, 2]
-    const torch::Tensor &radii,                     // [C, N] or [M]
-    const torch::Tensor &depths,                    // [C, N] or [M]
-    const torch::Tensor &tile_mask,                 // [C, H, W]
-    const torch::Tensor &active_tiles,              // [num_active_tiles]
-    const at::optional<torch::Tensor> &camera_jidx, // NULL or [M]
-    const uint32_t num_cameras,
-    const uint32_t tile_size,
-    const uint32_t num_tiles_h,
-    const uint32_t num_tiles_w) {
-    TORCH_CHECK(false, "CPU implementation not available");
+    const torch::Tensor &means2d,                  // [C, N, 2] or [M, 2]
+    const torch::Tensor &radii,                    // [C, N] or [M]
+    const torch::Tensor &depths,                   // [C, N] or [M]
+    const torch::Tensor &tileMask,                 // [C, H, W]
+    const torch::Tensor &activeTiles,              // [num_active_tiles]
+    const at::optional<torch::Tensor> &cameraJIdx, // NULL or [M]
+    const uint32_t numCameras,
+    const uint32_t tileSize,
+    const uint32_t numTilesH,
+    const uint32_t numTilesW) {
+    FVDB_FUNC_RANGE();
+    return gaussianTileIntersectionCUDAImpl(means2d,
+                                            radii,
+                                            depths,
+                                            cameraJIdx,
+                                            tileMask,
+                                            activeTiles,
+                                            numCameras,
+                                            tileSize,
+                                            numTilesH,
+                                            numTilesW);
 }
 
 } // namespace ops
