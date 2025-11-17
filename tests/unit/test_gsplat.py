@@ -1518,6 +1518,9 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
 
     def setUp(self):
         super().setUp()
+        # Reducing width/height to reduce file size of reference test data
+        self.width = int(self.width / 2)
+        self.height = int(self.height / 2)
 
     @staticmethod
     def calculate_expected_alpha(opacity: float, num_layers: int) -> float:
@@ -1931,12 +1934,14 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
         )
 
         if self.save_regression_data:
-            torch.save(ids, self.data_path / "regression_top_contributors_ids.pt")
-            torch.save(weights, self.data_path / "regression_top_contributors_weights.pt")
+            torch.save(ids, self.data_path / "regression_contributing_gaussian_ids.pt")
+            torch.save(weights, self.data_path / "regression_contributing_gaussian_weights.pt")
 
         # load the regression data
-        ids_regression = torch.load(self.data_path / "regression_top_contributors_ids.pt", weights_only=False)
-        weights_regression = torch.load(self.data_path / "regression_top_contributors_weights.pt", weights_only=False)
+        ids_regression = torch.load(self.data_path / "regression_contributing_gaussian_ids.pt", weights_only=False)
+        weights_regression = torch.load(
+            self.data_path / "regression_contributing_gaussian_weights.pt", weights_only=False
+        )
 
         self.assertTrue(ids == ids_regression)
         self.assertTrue(weights == weights_regression)
@@ -2026,8 +2031,10 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
         )
 
         # load the regression data
-        ids_regression = torch.load(self.data_path / "regression_top_contributors_ids.pt", weights_only=False)
-        weights_regression = torch.load(self.data_path / "regression_top_contributors_weights.pt", weights_only=False)
+        ids_regression = torch.load(self.data_path / "regression_contributing_gaussian_ids.pt", weights_only=False)
+        weights_regression = torch.load(
+            self.data_path / "regression_contributing_gaussian_weights.pt", weights_only=False
+        )
 
         for pixels, image_sparse_ids, image_reference_ids in zip(pixels_to_render.unbind(), sparse_ids, ids_regression):
             assert isinstance(pixels, torch.Tensor)
@@ -2131,8 +2138,10 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
         )
 
         # load the regression data
-        ids_regression = torch.load(self.data_path / "regression_top_contributors_ids.pt", weights_only=False)
-        weights_regression = torch.load(self.data_path / "regression_top_contributors_weights.pt", weights_only=False)
+        ids_regression = torch.load(self.data_path / "regression_contributing_gaussian_ids.pt", weights_only=False)
+        weights_regression = torch.load(
+            self.data_path / "regression_contributing_gaussian_weights.pt", weights_only=False
+        )
 
         for pixels, image_sparse_ids, image_reference_ids in zip(pixels_to_render, sparse_ids, ids_regression):
             assert isinstance(pixels, torch.Tensor)
