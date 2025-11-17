@@ -338,17 +338,18 @@ launchRasterizeContributingGaussianIdsForwardKernel(
     TORCH_CHECK_VALUE(
         numContributingGaussiansSum <= std::numeric_limits<fvdb::JIdxType>::max(),
         "Number of contributing gaussians is too large to express in the number of tensors we can create in a JaggedTensor");
+
     // Ensure numContributingGaussians is appropriately sized
+    TORCH_CHECK_VALUE(numContributingGaussians.ldim() == 1,
+                      "numContributingGaussians must be a single list dimension JaggedTensor");
     if (pixelsToRender.has_value()) {
         TORCH_CHECK_VALUE(
             numContributingGaussians.lsizes1() == pixelsToRender.value().lsizes1(),
             "numContributingGaussians must have the same number of elements as pixelsToRender");
     } else {
         TORCH_CHECK_VALUE(
-            torch::equal(torch::from_blob(numContributingGaussians.lsizes1().data(),
-                                          numContributingGaussians.lsizes1().size(),
-                                          torch::kInt64),
-                         torch::arange(1, C + 1, 1, torch::TensorOptions().dtype(torch::kInt64)) *
+            torch::equal(numContributingGaussians.joffsets(),
+                         torch::arange(0, C + 1, 1, numContributingGaussians.options()) *
                              settings.imageHeight * settings.imageWidth),
             "numContributingGaussians must have the same number of elements as the number of pixels in the images");
     }

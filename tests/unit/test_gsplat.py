@@ -45,7 +45,7 @@ class BaseGaussianTestCase(unittest.TestCase):
     data_path = get_fvdb_test_data_path() / "gsplat"
     save_image_data = False
     # NB: The files for regression data are saved at pwd to prevent accidental overwrites
-    save_regression_data = False
+    save_regression_data = True
 
     def setUp(self):
         torch.random.manual_seed(0)
@@ -1736,7 +1736,6 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
         self.assertTrue(torch.allclose(alphas_centers, expected_alphas_centers, atol=1e-5, rtol=1e-8))
 
         # Test render contributing gaussian ids
-        print("Rendering contributing gaussian ids")
         ids, weights = gs3d.render_contributing_gaussian_ids(
             world_to_cam_xform.unsqueeze(0).contiguous(),
             intrinsics.unsqueeze(0).contiguous(),
@@ -1745,7 +1744,6 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
             0.1,
             10000.0,
         )
-        print("Done rendering contributing gaussian ids")
 
         # Calculate expected weights for all layers
         expected_weights = torch.zeros(num_gaussian_layers, device=self.device, dtype=torch.float32)
@@ -1884,65 +1882,64 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
                 self.assertTrue(torch.equal(sparse_pixel_ids, reference_pixel_ids))
                 self.assertTrue(torch.equal(sparse_pixel_weights, reference_pixel_weights))
 
-    # def test_gaussian_contributors_scene_render(self):
-    #     # Test render num contributing gaussians
-    #     num_contributing_gaussians, alphas = self.gs3d.render_num_contributing_gaussians(
-    #         self.cam_to_world_mats,
-    #         self.projection_mats,
-    #         self.width,
-    #         self.height,
-    #         0.01,
-    #         10000.0,
-    #     )
-    #     prev_num_contributing_gaussians = num_contributing_gaussians
-    #     for _ in range(50):
-    #         num_contributing_gaussians, alphas = self.gs3d.render_num_contributing_gaussians(
-    #             self.cam_to_world_mats,
-    #             self.projection_mats,
-    #             self.width,
-    #             self.height,
-    #             0.01,
-    #             10000.0,
-    #         )
-    #         self.assertTrue(torch.equal(num_contributing_gaussians, prev_num_contributing_gaussians))
-    #         prev_num_contributing_gaussians = num_contributing_gaussians
+    def test_gaussian_contributors_scene_render(self):
+        # Test render num contributing gaussians
+        num_contributing_gaussians, alphas = self.gs3d.render_num_contributing_gaussians(
+            self.cam_to_world_mats,
+            self.projection_mats,
+            self.width,
+            self.height,
+            0.01,
+            10000.0,
+        )
+        prev_num_contributing_gaussians = num_contributing_gaussians
+        for _ in range(50):
+            num_contributing_gaussians, alphas = self.gs3d.render_num_contributing_gaussians(
+                self.cam_to_world_mats,
+                self.projection_mats,
+                self.width,
+                self.height,
+                0.01,
+                10000.0,
+            )
+            self.assertTrue(torch.equal(num_contributing_gaussians, prev_num_contributing_gaussians))
+            prev_num_contributing_gaussians = num_contributing_gaussians
 
-    #     if self.save_regression_data:
-    #         torch.save(num_contributing_gaussians, self.data_path / "regression_num_contributing_gaussians.pt")
-    #         torch.save(alphas, self.data_path / "regression_num_contributing_gaussians_alphas.pt")
+        if self.save_regression_data:
+            torch.save(num_contributing_gaussians, self.data_path / "regression_num_contributing_gaussians.pt")
+            torch.save(alphas, self.data_path / "regression_num_contributing_gaussians_alphas.pt")
 
-    #     # load the regression data
-    #     num_contributing_gaussians_regression = torch.load(
-    #         self.data_path / "regression_num_contributing_gaussians.pt", weights_only=True
-    #     )
-    #     alphas_regression = torch.load(
-    #         self.data_path / "regression_num_contributing_gaussians_alphas.pt", weights_only=True
-    #     )
+        # load the regression data
+        num_contributing_gaussians_regression = torch.load(
+            self.data_path / "regression_num_contributing_gaussians.pt", weights_only=True
+        )
+        alphas_regression = torch.load(
+            self.data_path / "regression_num_contributing_gaussians_alphas.pt", weights_only=True
+        )
 
-    #     self.assertTrue(torch.equal(num_contributing_gaussians, num_contributing_gaussians_regression))
-    #     self.assertTrue(torch.equal(alphas, alphas_regression))
+        self.assertTrue(torch.equal(num_contributing_gaussians, num_contributing_gaussians_regression))
+        self.assertTrue(torch.equal(alphas, alphas_regression))
 
-    #     # Test render top contributing gaussian ids
-    #     ids, weights = self.gs3d.render_top_contributing_gaussian_ids(
-    #         6,
-    #         self.cam_to_world_mats,
-    #         self.projection_mats,
-    #         self.width,
-    #         self.height,
-    #         0.01,
-    #         10000.0,
-    #     )
+        # Test render top contributing gaussian ids
+        ids, weights = self.gs3d.render_contributing_gaussian_ids(
+            self.cam_to_world_mats,
+            self.projection_mats,
+            self.width,
+            self.height,
+            0.01,
+            10000.0,
+        )
 
-    #     if self.save_regression_data:
-    #         torch.save(ids, "regression_top_contributors_ids.pt")
-    #         torch.save(weights, "regression_top_contributors_weights.pt")
+        if self.save_regression_data:
+            torch.save(ids, self.data_path / "regression_top_contributors_ids.pt")
+            torch.save(weights, self.data_path / "regression_top_contributors_weights.pt")
 
-    #     # load the regression data
-    #     ids_regression = torch.load(self.data_path / "regression_top_contributors_ids.pt", weights_only=True)
-    #     weights_regression = torch.load(self.data_path / "regression_top_contributors_weights.pt", weights_only=True)
+        # load the regression data
+        ids_regression = torch.load(self.data_path / "regression_top_contributors_ids.pt", weights_only=False)
+        weights_regression = torch.load(self.data_path / "regression_top_contributors_weights.pt", weights_only=False)
 
-    #     self.assertTrue(torch.equal(ids, ids_regression))
-    #     self.assertTrue(torch.equal(weights, weights_regression))
+        self.assertTrue(ids == ids_regression)
+        self.assertTrue(weights == weights_regression)
 
     # def test_gaussian_contributors_scene_sparse_render(self):
     #     # sparse rendering
