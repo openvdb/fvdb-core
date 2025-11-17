@@ -59,7 +59,7 @@ copyPaddedJaggedToJagged(const fvdb::JaggedTensor &srcJagged,
 }
 
 // Structure to hold arguments and methods for the rasterize top contributing gaussian ids kernel
-template <typename ScalarType, bool IS_PACKED> struct RasterizeTopContributingGaussianIdsArgs {
+template <typename ScalarType, bool IS_PACKED> struct RasterizeContributingGaussianIdsArgs {
     using CommonArgs = RasterizeCommonArgs<ScalarType, 1, IS_PACKED>;
     CommonArgs commonArgs;
 
@@ -70,7 +70,7 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeTopContributingGa
     JaggedRAcc64<int32_t, 2> mOutIds;                   // [X, numDepthSamples]
     JaggedRAcc64<ScalarType, 2> mOutWeights;            // [X, numDepthSamples]
 
-    RasterizeTopContributingGaussianIdsArgs(
+    RasterizeContributingGaussianIdsArgs(
         const torch::Tensor &means2d,                   // [C, N, 2] or [nnz, 2]
         const torch::Tensor &conics,                    // [C, N, 3] or [nnz, 3]
         const torch::Tensor &opacities,                 // [C, N] or [nnz]
@@ -256,8 +256,8 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeTopContributingGa
 
 template <typename ScalarType, bool IS_PACKED>
 __global__ void
-rasterizeTopContributingGaussianIdsForward(
-    RasterizeTopContributingGaussianIdsArgs<ScalarType, IS_PACKED> args) {
+rasterizeContributingGaussianIdsForward(
+    RasterizeContributingGaussianIdsArgs<ScalarType, IS_PACKED> args) {
     auto &commonArgs = args.commonArgs;
 
     // each thread draws one pixel, but also timeshares caching gaussians in a
@@ -401,7 +401,7 @@ launchRasterizeContributingGaussianIdsForwardKernel(
     const uint32_t sharedMem =
         settings.tileSize * settings.tileSize * sizeof(Gaussian2D<ScalarType>);
 
-    if (cudaFuncSetAttribute(rasterizeTopContributingGaussianIdsForward<ScalarType, IS_PACKED>,
+    if (cudaFuncSetAttribute(rasterizeContributingGaussianIdsForward<ScalarType, IS_PACKED>,
                              cudaFuncAttributeMaxDynamicSharedMemorySize,
                              sharedMem) != cudaSuccess) {
         AT_ERROR("Failed to set maximum shared memory size (requested ",
@@ -413,29 +413,28 @@ launchRasterizeContributingGaussianIdsForwardKernel(
     const dim3 gridDim  = activeTiles.has_value() // sparse mode
                               ? dim3(activeTiles.value().size(0), 1, 1)
                               : dim3(C * tileExtentH * tileExtentW, 1, 1);
-    auto args =
-        RasterizeTopContributingGaussianIdsArgs<ScalarType, IS_PACKED>(means2d,
-                                                                       conics,
-                                                                       opacities,
-                                                                       backgrounds,
-                                                                       masks,
-                                                                       settings.imageWidth,
-                                                                       settings.imageHeight,
-                                                                       settings.imageOriginW,
-                                                                       settings.imageOriginH,
-                                                                       settings.tileSize,
-                                                                       maxDepthSamplesPerPixel,
-                                                                       tileOffsets,
-                                                                       tileGaussianIds,
-                                                                       outIds,
-                                                                       outWeights,
-                                                                       activeTiles,
-                                                                       tilePixelMask,
-                                                                       tilePixelCumsum,
-                                                                       pixelMap);
+    auto args           = RasterizeContributingGaussianIdsArgs<ScalarType, IS_PACKED>(means2d,
+                                                                            conics,
+                                                                            opacities,
+                                                                            backgrounds,
+                                                                            masks,
+                                                                            settings.imageWidth,
+                                                                            settings.imageHeight,
+                                                                            settings.imageOriginW,
+                                                                            settings.imageOriginH,
+                                                                            settings.tileSize,
+                                                                            maxDepthSamplesPerPixel,
+                                                                            tileOffsets,
+                                                                            tileGaussianIds,
+                                                                            outIds,
+                                                                            outWeights,
+                                                                            activeTiles,
+                                                                            tilePixelMask,
+                                                                            tilePixelCumsum,
+                                                                            pixelMap);
 
     const at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-    rasterizeTopContributingGaussianIdsForward<<<gridDim, blockDim, sharedMem, stream>>>(args);
+    rasterizeContributingGaussianIdsForward<<<gridDim, blockDim, sharedMem, stream>>>(args);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
     // TODO: When refactoring GaussianRasterizeTopContributingGaussianIds to
@@ -443,8 +442,9 @@ launchRasterizeContributingGaussianIdsForwardKernel(
     //  work to refactor the RasterizeCommonArgs (and additional work to the JaggedAccessor) to
     //  support this list-of-lists style of rendering where we write different numbers of
     //  samples per pixel and different numbers of pixels per camera. To save on the lower
-    //  level work, we have instead still called 'rasterizeTopContributingGaussianIdsForward'
-    //  and we will now copy the sparse results into an appropriate JaggedTensor. This at least
+    //  level work, we have instead still kept 'rasterizeContributingGaussianIdsForward' with
+    //  similar logic rendering a dense, maximum number of maxDepthSamplesPerPixel per-pixel
+    //  and we will now copy the results into an appropriately sparse JaggedTensor. This at least
     //  removes the guesswork from the user over what sample count to use and changes the
     //  public interface, but we leave this inefficient copy step for future work to refactor
     //  writing results directly to a JaggedTensor.

@@ -20,7 +20,7 @@
 #error "FVDB_EXTERNAL_TEST_DATA_PATH must be defined"
 #endif
 
-struct GaussianRasterizeTopContributorsTestFixture : public ::testing::Test {
+struct GaussianRasterizeContributingGaussianIdsTestFixture : public ::testing::Test {
     void
     loadInputData(const std::string insPath) {
         const std::string dataPath =
@@ -139,7 +139,7 @@ struct GaussianRasterizeTopContributorsTestFixture : public ::testing::Test {
     uint32_t tileSize;
 };
 
-TEST_F(GaussianRasterizeTopContributorsTestFixture, TestBasicInputsAndOutputs) {
+TEST_F(GaussianRasterizeContributingGaussianIdsTestFixture, TestBasicInputsAndOutputs) {
     loadTestData("gaussian_top_contributors_1point_input.pt");
 
     fvdb::detail::ops::RenderSettings settings;
@@ -215,7 +215,7 @@ TEST_F(GaussianRasterizeTopContributorsTestFixture, TestBasicInputsAndOutputs) {
     EXPECT_TRUE(torch::allclose(centerPixelWeights, expectedWeights));
 }
 
-TEST_F(GaussianRasterizeTopContributorsTestFixture, TestBasicInputsAndOutputsSparse) {
+TEST_F(GaussianRasterizeContributingGaussianIdsTestFixture, TestBasicInputsAndOutputsSparse) {
     loadTestData("gaussian_top_contributors_1point_input.pt");
 
     fvdb::detail::ops::RenderSettings settings;
@@ -340,7 +340,7 @@ TEST_F(GaussianRasterizeTopContributorsTestFixture, TestBasicInputsAndOutputsSpa
     EXPECT_TRUE(torch::allclose(sparsePixelWeights, centerPixelWeights));
 }
 
-TEST_F(GaussianRasterizeTopContributorsTestFixture, CPUThrows) {
+TEST_F(GaussianRasterizeContributingGaussianIdsTestFixture, CPUThrows) {
     loadTestData("gaussian_top_contributors_1point_input.pt");
     moveToDevice(torch::kCPU);
 
