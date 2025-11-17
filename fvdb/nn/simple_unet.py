@@ -36,7 +36,7 @@ import torch
 import torch.nn as nn
 from fvdb.types import NumericMaxRank1
 
-from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
+from fvdb import ConvolutionPlan, GridBatch, JaggedTensor, relu_
 
 from .modules import fvnn_module
 
@@ -77,7 +77,6 @@ class SimpleUNetBasicBlock(nn.Module):
 
         self.conv = fvnn.SparseConv3d(in_channels, out_channels, kernel_size=kernel_size, stride=1, bias=False)
         self.batch_norm = fvnn.BatchNorm(out_channels, momentum=momentum)
-        self.relu = torch.nn.ReLU(inplace=True)
 
     def extra_repr(self) -> str:
         return (
@@ -97,7 +96,7 @@ class SimpleUNetBasicBlock(nn.Module):
         x = self.conv(data, plan)
         out_grid = plan.target_grid_batch
         x = self.batch_norm(x, out_grid)
-        x = self.relu(x)
+        x = relu_(x)
         return x
 
 
@@ -160,8 +159,6 @@ class SimpleUNetConvBlock(nn.Module):
 
         self.blocks = nn.ModuleList(layers)
 
-        self.final_relu = torch.nn.ReLU(inplace=True)
-
     def extra_repr(self) -> str:
         return (
             f"in_channels={self.in_channels}, mid_channels={self.mid_channels}, out_channels={self.out_channels}, "
@@ -189,7 +186,7 @@ class SimpleUNetConvBlock(nn.Module):
             data = block(data, plan)
 
         data = data + residual
-        data = self.final_relu(data)
+        data = relu_(data)
 
         return data
 
