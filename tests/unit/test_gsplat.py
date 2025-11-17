@@ -2032,6 +2032,7 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
         for pixels, image_sparse_ids, image_reference_ids in zip(pixels_to_render.unbind(), sparse_ids, ids_regression):
             assert isinstance(pixels, torch.Tensor)
             assert isinstance(image_sparse_ids, JaggedTensor)
+            assert isinstance(image_reference_ids, JaggedTensor)
             y_coords = pixels[:, 0]  # [num_pixels_to_render]
             x_coords = pixels[:, 1]  # [num_pixels_to_render]
             pixel_indices = (y_coords * self.width + x_coords).long()  # [num_pixels_to_render]
@@ -2049,6 +2050,7 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
         ):
             assert isinstance(pixels, torch.Tensor)
             assert isinstance(image_sparse_weights, JaggedTensor)
+            assert isinstance(image_reference_weights, JaggedTensor)
             y_coords = pixels[:, 0]  # [num_pixels_to_render]
             x_coords = pixels[:, 1]  # [num_pixels_to_render]
             pixel_indices = (y_coords * self.width + x_coords).long()  # [num_pixels_to_render]
@@ -2135,6 +2137,7 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
         for pixels, image_sparse_ids, image_reference_ids in zip(pixels_to_render, sparse_ids, ids_regression):
             assert isinstance(pixels, torch.Tensor)
             assert isinstance(image_sparse_ids, JaggedTensor)
+            assert isinstance(image_reference_ids, JaggedTensor)
             y_coords = pixels[:, 0]  # [num_pixels_to_render]
             x_coords = pixels[:, 1]  # [num_pixels_to_render]
             pixel_indices = (y_coords * self.width + x_coords).long()  # [num_pixels_to_render]
@@ -2152,6 +2155,7 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
         ):
             assert isinstance(pixels, torch.Tensor)
             assert isinstance(image_sparse_weights, JaggedTensor)
+            assert isinstance(image_reference_weights, JaggedTensor)
             y_coords = pixels[:, 0]  # [num_pixels_to_render]
             x_coords = pixels[:, 1]  # [num_pixels_to_render]
             pixel_indices = (y_coords * self.width + x_coords).long()  # [num_pixels_to_render]

@@ -2126,7 +2126,7 @@ class GaussianSplat3d:
                 Gaussians to return for each pixel. Each element represents the transmittance-weighted opacity of the Gaussian
                 that contributes to the pixel (i.e. its proportion of the visible contribution to the pixel).
         """
-        return self._impl.render_contributing_gaussian_ids(
+        ids, weights = self._impl.render_contributing_gaussian_ids(
             world_to_camera_matrices=world_to_camera_matrices,
             projection_matrices=projection_matrices,
             image_width=image_width,
@@ -2139,6 +2139,7 @@ class GaussianSplat3d:
             eps_2d=eps_2d,
             antialias=antialias,
         )
+        return JaggedTensor(impl=ids), JaggedTensor(impl=weights)
 
     @overload
     def sparse_render_contributing_gaussian_ids(
