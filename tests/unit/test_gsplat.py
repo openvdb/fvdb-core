@@ -2034,7 +2034,6 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
             assert isinstance(image_sparse_ids, JaggedTensor)
             y_coords = pixels[:, 0]  # [num_pixels_to_render]
             x_coords = pixels[:, 1]  # [num_pixels_to_render]
-            # Calculate pixel indices (row-major order: pixel_index = y * width + x)
             pixel_indices = (y_coords * self.width + x_coords).long()  # [num_pixels_to_render]
 
             # Select tensors from reference_ids at the specified pixel positions
@@ -2052,7 +2051,6 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
             assert isinstance(image_sparse_weights, JaggedTensor)
             y_coords = pixels[:, 0]  # [num_pixels_to_render]
             x_coords = pixels[:, 1]  # [num_pixels_to_render]
-            # Calculate pixel indices (row-major order: pixel_index = y * width + x)
             pixel_indices = (y_coords * self.width + x_coords).long()  # [num_pixels_to_render]
 
             # Select tensors from reference_weights at the specified pixel positions
@@ -2062,94 +2060,108 @@ class TestTopGaussianContributionsRender(BaseGaussianTestCase):
 
             self.assertTrue(image_sparse_weights == selected_reference_weights)
 
-    # def test_gaussian_contributors_scene_dense_pixels_sparse_render(self):
-    #     # Test that the sparse render works with dense pixel specification
-    #     # Taking a [C, R, 2] tensor as pixels_to_render and returning Tensors [C, R, num_samples]
+    def test_gaussian_contributors_scene_dense_pixels_sparse_render(self):
+        # Test that the sparse render works with dense pixel specification
+        # Taking a [C, R, 2] tensor as pixels_to_render and returning Tensors [C, R, num_samples]
 
-    #     # sparse rendering - use pixels that we know have gaussians (center pixels)
-    #     num_pixels_to_render = 100
+        # sparse rendering - use pixels that we know have gaussians (center pixels)
+        num_pixels_to_render = 100
 
-    #     # Generate random pixel coordinates within image bounds
-    #     xCoords = torch.randint(0, self.width, (num_pixels_to_render,))
-    #     yCoords = torch.randint(0, self.height, (num_pixels_to_render,))
+        # Generate random pixel coordinates within image bounds
+        xCoords = torch.randint(0, self.width, (num_pixels_to_render,))
+        yCoords = torch.randint(0, self.height, (num_pixels_to_render,))
 
-    #     # Stack x and y coordinates to form 2D pixel coordinates
-    #     pixels_to_render = torch.stack([yCoords, xCoords], 1).unsqueeze(0).to(self.device)
+        # Stack x and y coordinates to form 2D pixel coordinates
+        pixels_to_render = torch.stack([yCoords, xCoords], 1).unsqueeze(0).to(self.device)
 
-    #     # test sparse render num contributing gaussians
-    #     sparse_num_contributing_gaussians, sparse_alphas = self.gs3d.sparse_render_num_contributing_gaussians(
-    #         pixels_to_render,
-    #         self.cam_to_world_mats,
-    #         self.projection_mats,
-    #         self.width,
-    #         self.height,
-    #         0.01,
-    #         10000.0,
-    #     )
+        # test sparse render num contributing gaussians
+        sparse_num_contributing_gaussians, sparse_alphas = self.gs3d.sparse_render_num_contributing_gaussians(
+            pixels_to_render,
+            self.cam_to_world_mats,
+            self.projection_mats,
+            self.width,
+            self.height,
+            0.01,
+            10000.0,
+        )
 
-    #     # load the regression data
-    #     num_contributing_gaussians_regression = torch.load(
-    #         self.data_path / "regression_num_contributing_gaussians.pt", weights_only=True
-    #     )
-    #     alphas_regression = torch.load(
-    #         self.data_path / "regression_num_contributing_gaussians_alphas.pt", weights_only=True
-    #     )
+        # load the regression data
+        num_contributing_gaussians_regression = torch.load(
+            self.data_path / "regression_num_contributing_gaussians.pt", weights_only=True
+        )
+        alphas_regression = torch.load(
+            self.data_path / "regression_num_contributing_gaussians_alphas.pt", weights_only=True
+        )
 
-    #     for pixels, sparse_num_contributing_gaussians, reference_num_contributing_gaussians in zip(
-    #         pixels_to_render.unbind(), sparse_num_contributing_gaussians.unbind(), num_contributing_gaussians_regression
-    #     ):
-    #         assert isinstance(pixels, torch.Tensor)
-    #         assert isinstance(sparse_num_contributing_gaussians, torch.Tensor)
-    #         y_coords = pixels[:, 0]  # [num_pixels_to_render]
-    #         x_coords = pixels[:, 1]  # [num_pixels_to_render]
-    #         # Index reference_num_contributing_gaussians using the coordinates
-    #         selected_reference_num_contributing_gaussians = reference_num_contributing_gaussians[y_coords, x_coords]
-    #         self.assertTrue(
-    #             torch.equal(sparse_num_contributing_gaussians, selected_reference_num_contributing_gaussians)
-    #         )
+        for pixels, sparse_num_contributing_gaussians, reference_num_contributing_gaussians in zip(
+            pixels_to_render.unbind(), sparse_num_contributing_gaussians.unbind(), num_contributing_gaussians_regression
+        ):
+            assert isinstance(pixels, torch.Tensor)
+            assert isinstance(sparse_num_contributing_gaussians, torch.Tensor)
+            y_coords = pixels[:, 0]  # [num_pixels_to_render]
+            x_coords = pixels[:, 1]  # [num_pixels_to_render]
+            # Index reference_num_contributing_gaussians using the coordinates
+            selected_reference_num_contributing_gaussians = reference_num_contributing_gaussians[y_coords, x_coords]
+            self.assertTrue(
+                torch.equal(sparse_num_contributing_gaussians, selected_reference_num_contributing_gaussians)
+            )
 
-    #     for pixels, sparse_alphas, reference_alphas in zip(
-    #         pixels_to_render.unbind(), sparse_alphas.unbind(), alphas_regression
-    #     ):
-    #         assert isinstance(pixels, torch.Tensor)
-    #         assert isinstance(sparse_alphas, torch.Tensor)
-    #         y_coords = pixels[:, 0]  # [num_pixels_to_render]
-    #         x_coords = pixels[:, 1]  # [num_pixels_to_render]
-    #         # Index reference_alphas using the coordinates
-    #         selected_reference_alphas = reference_alphas[y_coords, x_coords]
-    #         self.assertTrue(torch.equal(sparse_alphas, selected_reference_alphas))
+        for pixels, sparse_alphas, reference_alphas in zip(
+            pixels_to_render.unbind(), sparse_alphas.unbind(), alphas_regression
+        ):
+            assert isinstance(pixels, torch.Tensor)
+            assert isinstance(sparse_alphas, torch.Tensor)
+            y_coords = pixels[:, 0]  # [num_pixels_to_render]
+            x_coords = pixels[:, 1]  # [num_pixels_to_render]
+            # Index reference_alphas using the coordinates
+            selected_reference_alphas = reference_alphas[y_coords, x_coords]
+            self.assertTrue(torch.equal(sparse_alphas, selected_reference_alphas))
 
-    #     # test sparse render top contributing gaussian ids
-    #     sparse_ids, sparse_weights = self.gs3d.sparse_render_top_contributing_gaussian_ids(
-    #         6,
-    #         pixels_to_render,
-    #         self.cam_to_world_mats,
-    #         self.projection_mats,
-    #         self.width,
-    #         self.height,
-    #         0.01,
-    #         10000.0,
-    #     )
+        # test sparse render top contributing gaussian ids
+        sparse_ids, sparse_weights = self.gs3d.sparse_render_contributing_gaussian_ids(
+            pixels_to_render,
+            self.cam_to_world_mats,
+            self.projection_mats,
+            self.width,
+            self.height,
+            0.01,
+            10000.0,
+        )
 
-    #     # load the regression data
-    #     ids_regression = torch.load(self.data_path / "regression_top_contributors_ids.pt", weights_only=True)
-    #     weights_regression = torch.load(self.data_path / "regression_top_contributors_weights.pt", weights_only=True)
+        # load the regression data
+        ids_regression = torch.load(self.data_path / "regression_top_contributors_ids.pt", weights_only=False)
+        weights_regression = torch.load(self.data_path / "regression_top_contributors_weights.pt", weights_only=False)
 
-    #     for pixels, sparse_ids, reference_ids in zip(pixels_to_render, sparse_ids, ids_regression):
-    #         y_coords = pixels[:, 0]  # [num_pixels_to_render]
-    #         x_coords = pixels[:, 1]  # [num_pixels_to_render]
-    #         # Index reference_ids using the coordinates
-    #         selected_reference_ids = reference_ids[y_coords, x_coords]  # [num_pixels_to_render, num_samples]
+        for pixels, image_sparse_ids, image_reference_ids in zip(pixels_to_render, sparse_ids, ids_regression):
+            assert isinstance(pixels, torch.Tensor)
+            assert isinstance(image_sparse_ids, JaggedTensor)
+            y_coords = pixels[:, 0]  # [num_pixels_to_render]
+            x_coords = pixels[:, 1]  # [num_pixels_to_render]
+            pixel_indices = (y_coords * self.width + x_coords).long()  # [num_pixels_to_render]
 
-    #         self.assertTrue(torch.equal(sparse_ids, selected_reference_ids))
+            # Select tensors from reference_ids at the specified pixel positions
+            reference_ids_list = image_reference_ids.unbind()
+            selected_tensors = [reference_ids_list[idx.item()] for idx in pixel_indices]
+            selected_reference_ids = JaggedTensor(selected_tensors)
 
-    #     # check weights
-    #     for pixels, sparse_weights, reference_weights in zip(pixels_to_render, sparse_weights, weights_regression):
-    #         y_coords = pixels[:, 0]  # [num_pixels_to_render]
-    #         x_coords = pixels[:, 1]  # [num_pixels_to_render]
-    #         # Index reference_weights using the coordinates
-    #         selected_reference_weights = reference_weights[y_coords, x_coords]  # [num_pixels_to_render, num_samples]
-    #         self.assertTrue(torch.equal(sparse_weights, selected_reference_weights))
+            self.assertTrue(image_sparse_ids == selected_reference_ids)
+
+        # check weights
+        for pixels, image_sparse_weights, image_reference_weights in zip(
+            pixels_to_render, sparse_weights, weights_regression
+        ):
+            assert isinstance(pixels, torch.Tensor)
+            assert isinstance(image_sparse_weights, JaggedTensor)
+            y_coords = pixels[:, 0]  # [num_pixels_to_render]
+            x_coords = pixels[:, 1]  # [num_pixels_to_render]
+            pixel_indices = (y_coords * self.width + x_coords).long()  # [num_pixels_to_render]
+
+            # Select tensors from reference_weights at the specified pixel positions
+            reference_weights_list = image_reference_weights.unbind()
+            selected_tensors = [reference_weights_list[idx.item()] for idx in pixel_indices]
+            selected_reference_weights = JaggedTensor(selected_tensors)
+
+            self.assertTrue(image_sparse_weights == selected_reference_weights)
 
 
 if __name__ == "__main__":

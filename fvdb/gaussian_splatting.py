@@ -2254,12 +2254,7 @@ class GaussianSplat3d:
                 antialias=antialias,
             )
 
-            ids_list = result_ids.unbind()
-            weights_list = result_weights.unbind()
-            dense_ids = torch.stack(ids_list, dim=0)  # type: ignore # Shape: (C, R, num_samples)
-            dense_weights = torch.stack(weights_list, dim=0)  # type: ignore # Shape: (C, R, num_samples)
-
-            return dense_ids, dense_weights
+            return JaggedTensor(impl=result_ids), JaggedTensor(impl=result_weights)
         else:
             # Already a JaggedTensor, call C++ implementation directly
             result_ids_impl, result_weights_impl = self._impl.sparse_render_contributing_gaussian_ids(
