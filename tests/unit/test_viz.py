@@ -110,7 +110,20 @@ class TestViewerScene(unittest.TestCase):
         # Flatten to 1D numpy array
         rgba_flat = rgba_data.reshape(-1)
 
-        scene.add_image("small_image", rgba_flat, width, height)
+        view = scene.add_image("small_image", rgba_flat, width, height)
+        assert view is not None
+        assert isinstance(view, fvdb.viz.ImageView)
+        assert view.name == "small_image"
+        assert view.scene_name == "test_image"
+        assert view.width == width
+        assert view.height == height
+
+        # Test update method
+        rgba_data2 = np.zeros((height, width, 4), dtype=np.uint8)
+        rgba_data2[:, :, 2] = 255
+        rgba_data2[:, :, 3] = 255
+        rgba_flat2 = rgba_data2.reshape(-1)
+        view.update(rgba_flat2)
 
 
 if __name__ == "__main__":

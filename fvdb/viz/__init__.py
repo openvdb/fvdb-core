@@ -3,6 +3,7 @@
 #
 from ._camera_view import CamerasView
 from ._gaussian_splat_3d_view import GaussianSplat3dView, ShOrderingMode
+from ._image_view import ImageView
 from ._point_cloud_view import PointCloudView
 from ._scene import Scene, get_scene
 from ._utils import grid_edge_network, gridbatch_edge_network
@@ -14,6 +15,7 @@ __all__ = [
     "wait_for_interrupt",
     "GaussianSplat3dView",
     "CamerasView",
+    "ImageView",
     "get_scene",
     "ShOrderingMode",
     "PointCloudView",

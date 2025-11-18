@@ -19,6 +19,7 @@ from ..types import (
 )
 from ._camera_view import CamerasView
 from ._gaussian_splat_3d_view import GaussianSplat3dView
+from ._image_view import ImageView
 from ._point_cloud_view import PointCloudView
 from ._viewer_server import _get_viewer_server_cpp
 
@@ -161,9 +162,9 @@ class Scene:
         rgba_image: NumericMaxRank1,
         width: int,
         height: int,
-    ):
+    ) -> ImageView:
         """
-        Add an RGBA8 image to the viewer.
+        Add an RGBA8 image to the viewer and return a view for it.
 
         Args:
             name (str): The name of the image view. This must be unique among all views added to the scene.
@@ -171,6 +172,9 @@ class Scene:
                 Each pixel is represented by 4 consecutive bytes (R, G, B, A) with values in [0, 255].
             width (int): The width of the image in pixels.
             height (int): The height of the image in pixels.
+
+        Returns:
+            image_view (ImageView): A view for the image added to the scene.
         """
         # Convert to torch tensor
         rgba_tensor = torch.as_tensor(rgba_image)
@@ -186,6 +190,14 @@ class Scene:
 
         server = _get_viewer_server_cpp()
         server.add_image(self._name, name, rgba_tensor, width, height)
+
+        return ImageView(
+            scene_name=self._name,
+            name=name,
+            width=width,
+            height=height,
+            _private=ImageView.__PRIVATE__,
+        )
 
     @torch.no_grad()
     def add_cameras(
