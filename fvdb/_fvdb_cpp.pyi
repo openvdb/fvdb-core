@@ -244,6 +244,7 @@ class GaussianSplat3d:
         min_radius_2d: float = ...,
         eps_2d: float = ...,
         antialias: bool = ...,
+        top_k_contributors: int = ...,
     ) -> tuple[JaggedTensor, JaggedTensor]: ...
     def sparse_render_contributing_gaussian_ids(
         self,
@@ -259,6 +260,7 @@ class GaussianSplat3d:
         min_radius_2d: float = ...,
         eps_2d: float = ...,
         antialias: bool = ...,
+        top_k_contributors: int = ...,
     ) -> tuple[JaggedTensor, JaggedTensor]: ...
     def reset_accumulated_gradient_state(self) -> None: ...
     def save_ply(self, filename: str, metadata: dict[str, str | int | float | torch.Tensor] | None) -> None: ...
