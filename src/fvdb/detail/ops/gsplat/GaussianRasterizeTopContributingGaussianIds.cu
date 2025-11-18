@@ -150,7 +150,7 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeTopContributingGa
                             const uint32_t blockSize,
                             const bool pixelIsActive,
                             const uint32_t activePixelIndex) {
-        extern __shared__ int s[];
+        alignas(Gaussian2D<ScalarType>) extern __shared__ char s[];
         auto *sharedGaussians = reinterpret_cast<Gaussian2D<ScalarType> *>(s); // [blockSize]
 
         // Shared memory for the indices and max radiance weights for all pixels in this block

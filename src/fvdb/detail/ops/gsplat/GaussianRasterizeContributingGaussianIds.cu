@@ -142,7 +142,7 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeContributingGauss
                             const uint32_t blockSize,
                             const bool pixelIsActive,
                             const uint32_t activePixelIndex) {
-        extern __shared__ int s[];
+        alignas(Gaussian2D<ScalarType>) extern __shared__ char s[];
         auto *sharedGaussians = reinterpret_cast<Gaussian2D<ScalarType> *>(s); // [blockSize]
 
         const auto tidx = threadIdx.y * blockDim.x + threadIdx.x;
@@ -526,7 +526,7 @@ launchRasterizeContributingGaussianIdsForwardKernel(
     //   - scalar_t opacity;     -- 4 bytes for float32
     //   - vec3t    conic;       -- 12 bytes for float32
     // Note: We use thread-local storage for buffering writes, so only need shared memory for
-    // Gaussians
+    // Gaussians. We add 32 bytes for alignment padding.
     const uint32_t sharedMem =
         settings.tileSize * settings.tileSize * sizeof(Gaussian2D<ScalarType>);
 
@@ -641,7 +641,7 @@ launchRasterizeContributingGaussianIdsForwardKernel(
 } // namespace
 
 template <>
-std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
+__host__ std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
 dispatchGaussianRasterizeContributingGaussianIds<torch::kCUDA>(
     // Gaussian parameters
     const torch::Tensor &means2d,         // [C, N, 2]
@@ -730,7 +730,7 @@ dispatchGaussianRasterizeContributingGaussianIds<torch::kCPU>(
 }
 
 template <>
-std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
+__host__ std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
 dispatchGaussianSparseRasterizeContributingGaussianIds<torch::kCUDA>(
     const torch::Tensor &means2d,         // [C, N, 2]
     const torch::Tensor &conics,          // [C, N, 3]
