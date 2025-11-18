@@ -119,4 +119,3 @@ class ImageView:
 
         server = _get_viewer_server_cpp()
         server.add_image(self._scene_name, self._name, rgba_tensor, self._width, self._height)
-
