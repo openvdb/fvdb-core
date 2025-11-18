@@ -543,7 +543,7 @@ class SimpleUNetUnpad(nn.Module):
 
     def forward(self, data: JaggedTensor, padded_grid: GridBatch, grid: GridBatch) -> JaggedTensor:
         plan = ConvolutionPlan.from_grid_batch_transposed(
-            kernel_size=self.kernel_size, stride=1, source_grid=padded_grid, target_grid=grid
+            kernel_size=self.kernel_size, stride=1, source_grid=grid, target_grid=padded_grid
         )
         return self.deconv(data, plan)
 
