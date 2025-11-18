@@ -221,7 +221,7 @@ target_link_libraries(fvdb PRIVATE
 
 # Add linker flags for Debug builds to preserve symbols
 if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
-    target_link_options(fvdb PRIVATE "-rdynamic" "-g")
+    target_link_options(fvdb PRIVATE "-rdynamic")
 endif()
 
 # Strip symbols in non-Debug builds to reduce wheel size

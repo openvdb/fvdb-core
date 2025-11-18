@@ -104,7 +104,7 @@ function(ConfigureTest CMAKE_TEST_NAME)
 
   # Add linker flags for Debug builds to preserve symbols
   target_link_options(${CMAKE_TEST_NAME} PRIVATE
-    $<$<CONFIG:Debug>:-rdynamic -g>
+    $<$<CONFIG:Debug>:-rdynamic>
   )
 
   # Link the FINAL executable against necessary libraries
