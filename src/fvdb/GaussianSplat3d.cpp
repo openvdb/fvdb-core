@@ -501,25 +501,22 @@ GaussianSplat3d::renderContributingGaussianIdsImpl(
     FVDB_FUNC_RANGE();
     const ProjectedGaussianSplats &state =
         projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settings);
-    // TODO: Currently projection only performs spherical harmonics evaluation on input
-    // SH/features,
+    // TODO: Currently projection only performs spherical harmonics evaluation on input SH/features,
     //       whereas we'd really like rendering to be more generic to be able to supply some
-    //       other render quantity directly, such as an integer ID as we need in this case.  So,
-    //       to just test the ID rendering we need, we'll pass the IDs we want to render here
-    //       rather than have a 'render deep samples of any quantity or evaluated shading'
-    //       function.
+    //       other render quantity directly, such as an integer ID as we need in this case.  So, to
+    //       just test the ID rendering we need, we'll pass the IDs we want to render here rather
+    //       than have a 'render deep samples of any quantity or evaluated shading' function.
     //
     //       It would be more reusable here to render any 'features' we want by being able to
     //       provide a tensor of any type/value without any shading evaluation (or maybe in the
-    //       future support other shading models/quantities). This would add complexity to
-    //       support more 'shading models' during projection, i.e. not evaluating SH and passing
-    //       through the 'raw' features.  Secondly, this would require carrying around a
-    //       separate 'feature' tensor from the sh0/shN ones to support a different 'shading
-    //       model' and there's currently quite a lot of logic that assumes the primacy of the
-    //       sh0/shN tensors, so we leave this all to a further refactor and just render 'deep
-    //       IDs' as a fixed function. Currently, this function uses the existing
-    //       'projectGuassiansImpl' which performs SH evaluation which creates some wasted
-    //       computation because we don't use the SH values.
+    //       future support other shading models/quantities). This would add complexity to support
+    //       more 'shading models' during projection, i.e. not evaluating SH and passing through the
+    //       'raw' features.  Secondly, this would require carrying around a separate 'feature'
+    //       tensor from the sh0/shN ones to support a different 'shading model' and there's
+    //       currently quite a lot of logic that assumes the primacy of the sh0/shN tensors, so we
+    //       leave this all to a further refactor and just render 'deep IDs' as a fixed function.
+    //       Currently, this function uses the existing 'projectGuassiansImpl' which performs SH
+    //       evaluation which creates some wasted computation because we don't use the SH values.
 
     return FVDB_DISPATCH_KERNEL_DEVICE(state.perGaussian2dMean.device(), [&]() {
         return fvdb::detail::ops::dispatchGaussianRasterizeContributingGaussianIds<DeviceTag>(
