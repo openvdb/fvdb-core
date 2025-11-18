@@ -194,8 +194,8 @@ set(TORCH_CUDA_COMMON_FLAGS
     "--expt-relaxed-constexpr")
 
 target_compile_options(fvdb PRIVATE
-    $<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANGUAGE:CUDA>>:-G -Xcompiler=-O0>
-    $<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANGUAGE:CXX>>:-O0>
+    $<$<AND:$<CONFIG:Debug>,$<COMPILE_LANGUAGE:CUDA>>:-G -Xcompiler=-O0>
+    $<$<AND:$<CONFIG:Debug>,$<COMPILE_LANGUAGE:CXX>>:-O0>
     $<$<COMPILE_LANGUAGE:CXX>:
     "-Wno-unknown-pragmas"
     "-Wno-class-memaccess"
@@ -218,6 +218,11 @@ target_compile_options(fvdb PRIVATE
 
 target_link_libraries(fvdb PRIVATE
     ${TORCH_LIBRARIES} tinyply cudnn_frontend cudnn cutlass blosc::blosc)
+
+# Add linker flags for Debug builds to preserve symbols
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    target_link_options(fvdb PRIVATE "-rdynamic")
+endif()
 
 # Strip symbols in non-Debug builds to reduce wheel size
 if(NOT (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo") AND FVDB_STRIP_SYMBOLS)

@@ -91,6 +91,11 @@ target_compile_definitions(_fvdb_cpp PRIVATE
 # Configure the pybind11 module with PyTorch compatibility settings
 configure_torch_pybind11(_fvdb_cpp)
 
+# Add linker flags for Debug builds to preserve symbols
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    target_link_options(_fvdb_cpp PRIVATE "-rdynamic")
+endif()
+
 # Strip symbols in non-Debug builds to reduce wheel size
 if(NOT (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo") AND FVDB_STRIP_SYMBOLS)
     target_link_options(_fvdb_cpp PRIVATE "-s")
