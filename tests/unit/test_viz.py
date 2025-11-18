@@ -60,8 +60,8 @@ class TestViewerScene(unittest.TestCase):
     def test_add_point_cloud(self):
         scene = fvdb.viz.Scene("test_point_cloud")
 
-        points = torch.randn(100, 3)
-        colors = torch.rand(100, 3)  # Colors in [0, 1]
+        points = np.random.randn(100, 3)
+        colors = np.random.rand(100, 3)  # Colors in [0, 1]
         point_size = 2.0
 
         view = scene.add_point_cloud("test_pc", points, colors, point_size)
@@ -107,10 +107,10 @@ class TestViewerScene(unittest.TestCase):
         rgba_data[:, :, 2] = 0
         rgba_data[:, :, 3] = 255
 
-        # Flatten to 1D and convert to torch tensor
-        rgba_tensor = torch.from_numpy(rgba_data.reshape(-1))
+        # Flatten to 1D numpy array
+        rgba_flat = rgba_data.reshape(-1)
 
-        scene.add_image("small_image", rgba_tensor, width, height)
+        scene.add_image("small_image", rgba_flat, width, height)
 
 
 if __name__ == "__main__":

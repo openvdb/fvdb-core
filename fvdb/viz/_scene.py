@@ -158,7 +158,7 @@ class Scene:
     def add_image(
         self,
         name: str,
-        rgba_image: torch.Tensor,
+        rgba_image: NumericMaxRank1,
         width: int,
         height: int,
     ):
@@ -167,24 +167,25 @@ class Scene:
 
         Args:
             name (str): The name of the image view. This must be unique among all views added to the scene.
-            rgba_image (torch.Tensor): A 1D uint8 tensor of size ``width * height * 4`` containing packed RGBA values.
+            rgba_image (NumericMaxRank1): A 1D uint8 tensor-like object of size ``width * height * 4`` containing packed RGBA values.
                 Each pixel is represented by 4 consecutive bytes (R, G, B, A) with values in [0, 255].
             width (int): The width of the image in pixels.
             height (int): The height of the image in pixels.
         """
-        if not isinstance(rgba_image, torch.Tensor):
-            raise TypeError(f"rgba_image must be a torch.Tensor, got {type(rgba_image)}")
-        if rgba_image.dtype != torch.uint8:
-            raise TypeError(f"rgba_image must have dtype torch.uint8, got {rgba_image.dtype}")
-        if rgba_image.dim() != 1:
-            raise ValueError(f"rgba_image must be a 1D tensor, got {rgba_image.dim()}D")
-        if rgba_image.numel() != width * height * 4:
+        # Convert to torch tensor
+        rgba_tensor = torch.as_tensor(rgba_image)
+
+        if rgba_tensor.dtype != torch.uint8:
+            raise TypeError(f"rgba_image must have dtype torch.uint8, got {rgba_tensor.dtype}")
+        if rgba_tensor.dim() != 1:
+            raise ValueError(f"rgba_image must be a 1D tensor, got {rgba_tensor.dim()}D")
+        if rgba_tensor.numel() != width * height * 4:
             raise ValueError(
-                f"rgba_image must have size width * height * 4 = {width * height * 4}, got {rgba_image.numel()}"
+                f"rgba_image must have size width * height * 4 = {width * height * 4}, got {rgba_tensor.numel()}"
             )
 
         server = _get_viewer_server_cpp()
-        server.add_image(self._name, name, rgba_image, width, height)
+        server.add_image(self._name, name, rgba_tensor, width, height)
 
     @torch.no_grad()
     def add_cameras(
