@@ -19,13 +19,13 @@ namespace ops {
 /// contributing Gaussians for each pixel
 template <torch::DeviceType>
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor> dispatchGaussianRasterizeContributingGaussianIds(
-    const torch::Tensor &means2d,                  // [C, N, 2]
-    const torch::Tensor &conics,                   // [C, N, 3]
-    const torch::Tensor &opacities,                // [N]
-    const torch::Tensor &tile_offsets,             // [C, tile_height, tile_width]
-    const torch::Tensor &tile_gaussian_ids,        // [n_isects]
-    const torch::Tensor &numContributingGaussians, // [C, H, W]
-    const RenderSettings &settings);
+    const torch::Tensor &means2d,           // [C, N, 2]
+    const torch::Tensor &conics,            // [C, N, 3]
+    const torch::Tensor &opacities,         // [N]
+    const torch::Tensor &tile_offsets,      // [C, tile_height, tile_width]
+    const torch::Tensor &tile_gaussian_ids, // [n_isects]
+    const RenderSettings &settings,
+    const std::optional<torch::Tensor> &maybeNumContributingGaussians = std::nullopt);
 
 /// @brief Performs sparse deep image rasterization to render the IDs and weighted alpha values of
 /// the top-K most visible Gaussians for each pixel. Renders only specified pixels.
@@ -42,8 +42,8 @@ dispatchGaussianSparseRasterizeContributingGaussianIds(
     const torch::Tensor &tilePixelMask,
     const torch::Tensor &tilePixelCumsum,
     const torch::Tensor &pixelMap,
-    const fvdb::JaggedTensor &numContributingGaussians,
-    const RenderSettings &settings);
+    const RenderSettings &settings,
+    const std::optional<fvdb::JaggedTensor> &maybeNumContributingGaussians = std::nullopt);
 
 } // namespace ops
 } // namespace detail

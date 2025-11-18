@@ -17,32 +17,30 @@
 namespace fvdb::detail::ops {
 namespace {
 
-/**
- * @brief Sorts three arrays in-place based on depth indices using bubble sort.
- *
- * This device function performs a bubble sort on three parallel arrays, using the depth indices
- * as the sorting key. The function maintains the correspondence between the three arrays
- * during sorting. This is optimized for small arrays (typically 4-24 elements) where the
- * simplicity and cache locality of bubble sort can be beneficial.
- *
- * @param depthIndices Array of depth indices to sort by
- * @param radianceWeights Array of radiance weights corresponding to each depth index
- * @param maxRadianceWeightIndices Array of indices for maximum radiance weights
- * @param numSamples Number of elements in each array to sort
- *
- * @note The function modifies all three arrays in-place. The sorting is stable and
- * maintains the relationship between corresponding elements in all three arrays.
- *
- * @example
- * uint32_t depths[] = {3, 1, 2};
- * float weights[] = {0.3, 0.1, 0.2};
- * int32_t indices[] = {0, 1, 2};
- * bubbleSortByDepth<float>(depths, weights, indices, 3);
- * // Result:
- * // depths:    {1, 2, 3}
- * // weights:   {0.1, 0.2, 0.3}
- * // indices:   {1, 2, 0}
- */
+/// @brief Sorts three arrays in-place based on depth indices using bubble sort
+///
+/// This device function performs a bubble sort on three parallel arrays, using the depth indices
+/// as the sorting key. The function maintains the correspondence between the three arrays during
+/// sorting. This is optimized for small arrays (typically 4-24 elements) where the simplicity and
+/// cache locality of bubble sort can be beneficial.
+///
+/// @param depthIndices Array of depth indices to sort by
+/// @param radianceWeights Array of radiance weights corresponding to each depth index
+/// @param maxRadianceWeightIndices Array of indices for maximum radiance weights
+/// @param numSamples Number of elements in each array to sort
+///
+/// @note The function modifies all three arrays in-place. The sorting is stable and maintains the
+/// relationship between corresponding elements in all three arrays.
+///
+/// @example
+/// uint32_t depths[] = {3, 1, 2};
+/// float weights[] = {0.3, 0.1, 0.2};
+/// int32_t indices[] = {0, 1, 2};
+/// bubbleSortByDepth<float>(depths, weights, indices, 3);
+/// // Result:
+/// // depths:    {1, 2, 3}
+/// // weights:   {0.1, 0.2, 0.3}
+/// // indices:   {1, 2, 0}
 template <typename ScalarType>
 __device__ void
 bubbleSortByDepth(uint32_t *depthIndices,

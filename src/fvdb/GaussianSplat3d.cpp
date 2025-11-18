@@ -11,8 +11,8 @@
 
 // Ops headers
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeContributingGaussianIds.h>
-#include <fvdb/detail/ops/gsplat/GaussianRasterizeTopContributingGaussianIds.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeNumContributingGaussians.h>
+#include <fvdb/detail/ops/gsplat/GaussianRasterizeTopContributingGaussianIds.h>
 #include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
 #include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
 #include <fvdb/detail/ops/gsplat/GaussianTileIntersection.h>
@@ -492,99 +492,34 @@ GaussianSplat3d::sparseRenderNumContributingGaussiansImpl(
     });
 }
 
-std::tuple<torch::Tensor, torch::Tensor>
-GaussianSplat3d::renderTopContributingGaussianIdsImpl(
-    const torch::Tensor &worldToCameraMatrices,
-    const torch::Tensor &projectionMatrices,
-    const fvdb::detail::ops::RenderSettings &settings) {
-    FVDB_FUNC_RANGE();
-    const ProjectedGaussianSplats &state =
-        projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settings);
-    // TODO: Currently projection only performs spherical harmonics evaluation on input SH/features,
-    //       whereas we'd really like rendering to be more generic to be able to supply some
-    //       other render quantity directly, such as an integer ID as we need in this case.  So, to
-    //       just test the ID rendering we need, we'll pass the IDs we want to render here rather
-    //       than have a 'render deep samples of any quantity or evaluated shading' function.
-    //
-    //       It would be more reusable here to render any 'features' we want by being able to
-    //       provide a tensor of any type/value without any shading evaluation (or maybe in the
-    //       future support other shading models/quantities). This would add complexity to support
-    //       more 'shading models' during projection, i.e. not evaluating SH and passing through the
-    //       'raw' features.  Secondly, this would require carrying around a separate 'feature'
-    //       tensor from the sh0/shN ones to support a different 'shading model' and there's
-    //       currently quite a lot of logic that assumes the primacy of the sh0/shN tensors, so we
-    //       leave this all to a further refactor and just render 'deep IDs' as a fixed function.
-    //       Currently, this function uses the existing 'projectGuassiansImpl' which performs SH
-    //       evaluation which creates some wasted computation because we don't use the SH values.
-
-    return FVDB_DISPATCH_KERNEL_DEVICE(state.perGaussian2dMean.device(), [&]() {
-        return fvdb::detail::ops::dispatchGaussianRasterizeTopContributingGaussianIds<DeviceTag>(
-            state.perGaussian2dMean,
-            state.perGaussianConic,
-            state.perGaussianOpacity,
-            state.tileOffsets,
-            state.tileGaussianIds,
-            settings);
-    });
-}
-
-std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
-GaussianSplat3d::sparseRenderTopContributingGaussianIdsImpl(
-    const fvdb::JaggedTensor &pixelsToRender,
-    const torch::Tensor &worldToCameraMatrices,
-    const torch::Tensor &projectionMatrices,
-    const fvdb::detail::ops::RenderSettings &settings) {
-    FVDB_FUNC_RANGE();
-    const ProjectedGaussianSplats &state =
-        projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settings);
-
-    const auto [activeTiles, activeTileMask, tilePixelMask, tilePixelCumsum, pixelMap] =
-        fvdb::detail::ops::computeSparseInfo(settings.tileSize,
-                                             state.tileOffsets.size(2),
-                                             state.tileOffsets.size(1),
-                                             pixelsToRender);
-
-    return FVDB_DISPATCH_KERNEL_DEVICE(state.perGaussian2dMean.device(), [&]() {
-        return fvdb::detail::ops::dispatchGaussianSparseRasterizeTopContributingGaussianIds<
-            DeviceTag>(state.perGaussian2dMean,
-                       state.perGaussianConic,
-                       state.perGaussianOpacity,
-                       state.tileOffsets,
-                       state.tileGaussianIds,
-                       pixelsToRender,
-                       activeTiles,
-                       tilePixelMask,
-                       tilePixelCumsum,
-                       pixelMap,
-                       settings);
-    });
-}
-
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
 GaussianSplat3d::renderContributingGaussianIdsImpl(
     const torch::Tensor &worldToCameraMatrices,
     const torch::Tensor &projectionMatrices,
-    const torch::Tensor &numContributingGaussians,
-    const fvdb::detail::ops::RenderSettings &settings) {
+    const fvdb::detail::ops::RenderSettings &settings,
+    const std::optional<torch::Tensor> &maybeNumContributingGaussians) {
     FVDB_FUNC_RANGE();
     const ProjectedGaussianSplats &state =
         projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settings);
-    // TODO: Currently projection only performs spherical harmonics evaluation on input SH/features,
+    // TODO: Currently projection only performs spherical harmonics evaluation on input
+    // SH/features,
     //       whereas we'd really like rendering to be more generic to be able to supply some
-    //       other render quantity directly, such as an integer ID as we need in this case.  So, to
-    //       just test the ID rendering we need, we'll pass the IDs we want to render here rather
-    //       than have a 'render deep samples of any quantity or evaluated shading' function.
+    //       other render quantity directly, such as an integer ID as we need in this case.  So,
+    //       to just test the ID rendering we need, we'll pass the IDs we want to render here
+    //       rather than have a 'render deep samples of any quantity or evaluated shading'
+    //       function.
     //
     //       It would be more reusable here to render any 'features' we want by being able to
     //       provide a tensor of any type/value without any shading evaluation (or maybe in the
-    //       future support other shading models/quantities). This would add complexity to support
-    //       more 'shading models' during projection, i.e. not evaluating SH and passing through the
-    //       'raw' features.  Secondly, this would require carrying around a separate 'feature'
-    //       tensor from the sh0/shN ones to support a different 'shading model' and there's
-    //       currently quite a lot of logic that assumes the primacy of the sh0/shN tensors, so we
-    //       leave this all to a further refactor and just render 'deep IDs' as a fixed function.
-    //       Currently, this function uses the existing 'projectGuassiansImpl' which performs SH
-    //       evaluation which creates some wasted computation because we don't use the SH values.
+    //       future support other shading models/quantities). This would add complexity to
+    //       support more 'shading models' during projection, i.e. not evaluating SH and passing
+    //       through the 'raw' features.  Secondly, this would require carrying around a
+    //       separate 'feature' tensor from the sh0/shN ones to support a different 'shading
+    //       model' and there's currently quite a lot of logic that assumes the primacy of the
+    //       sh0/shN tensors, so we leave this all to a further refactor and just render 'deep
+    //       IDs' as a fixed function. Currently, this function uses the existing
+    //       'projectGuassiansImpl' which performs SH evaluation which creates some wasted
+    //       computation because we don't use the SH values.
 
     return FVDB_DISPATCH_KERNEL_DEVICE(state.perGaussian2dMean.device(), [&]() {
         return fvdb::detail::ops::dispatchGaussianRasterizeContributingGaussianIds<DeviceTag>(
@@ -593,8 +528,8 @@ GaussianSplat3d::renderContributingGaussianIdsImpl(
             state.perGaussianOpacity,
             state.tileOffsets,
             state.tileGaussianIds,
-            numContributingGaussians,
-            settings);
+            settings,
+            maybeNumContributingGaussians);
     });
 }
 
@@ -603,8 +538,8 @@ GaussianSplat3d::sparseRenderContributingGaussianIdsImpl(
     const fvdb::JaggedTensor &pixelsToRender,
     const torch::Tensor &worldToCameraMatrices,
     const torch::Tensor &projectionMatrices,
-    const fvdb::JaggedTensor &numContributingGaussians,
-    const fvdb::detail::ops::RenderSettings &settings) {
+    const fvdb::detail::ops::RenderSettings &settings,
+    const std::optional<fvdb::JaggedTensor> &maybeNumContributingGaussians) {
     FVDB_FUNC_RANGE();
     const ProjectedGaussianSplats &state =
         projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settings);
@@ -627,8 +562,8 @@ GaussianSplat3d::sparseRenderContributingGaussianIdsImpl(
             tilePixelMask,
             tilePixelCumsum,
             pixelMap,
-            numContributingGaussians,
-            settings);
+            settings,
+            maybeNumContributingGaussians);
     });
 }
 
@@ -864,67 +799,6 @@ GaussianSplat3d::sparseRenderNumContributingGaussians(const fvdb::JaggedTensor &
         pixelsToRender, worldToCameraMatrices, projectionMatrices, settings);
 }
 
-std::tuple<torch::Tensor, torch::Tensor>
-GaussianSplat3d::renderTopContributingGaussianIds(const int numSamples,
-                                                  const torch::Tensor &worldToCameraMatrices,
-                                                  const torch::Tensor &projectionMatrices,
-                                                  const size_t imageWidth,
-                                                  const size_t imageHeight,
-                                                  const float near,
-                                                  const float far,
-                                                  const ProjectionType projectionType,
-                                                  const size_t tileSize,
-                                                  const float minRadius2d,
-                                                  const float eps2d,
-                                                  const bool antialias) {
-    RenderSettings settings;
-    settings.imageWidth      = imageWidth;
-    settings.imageHeight     = imageHeight;
-    settings.nearPlane       = near;
-    settings.farPlane        = far;
-    settings.projectionType  = projectionType;
-    settings.shDegreeToUse   = 0;
-    settings.tileSize        = tileSize;
-    settings.radiusClip      = minRadius2d;
-    settings.eps2d           = eps2d;
-    settings.renderMode      = RenderSettings::RenderMode::DEPTH;
-    settings.numDepthSamples = numSamples;
-
-    return renderTopContributingGaussianIdsImpl(
-        worldToCameraMatrices, projectionMatrices, settings);
-}
-
-std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
-GaussianSplat3d::sparseRenderTopContributingGaussianIds(const int numSamples,
-                                                        const fvdb::JaggedTensor &pixelsToRender,
-                                                        const torch::Tensor &worldToCameraMatrices,
-                                                        const torch::Tensor &projectionMatrices,
-                                                        const size_t imageWidth,
-                                                        const size_t imageHeight,
-                                                        const float near,
-                                                        const float far,
-                                                        const ProjectionType projectionType,
-                                                        const size_t tileSize,
-                                                        const float minRadius2d,
-                                                        const float eps2d,
-                                                        const bool antialias) {
-    RenderSettings settings;
-    settings.imageWidth      = imageWidth;
-    settings.imageHeight     = imageHeight;
-    settings.nearPlane       = near;
-    settings.farPlane        = far;
-    settings.projectionType  = projectionType;
-    settings.shDegreeToUse   = 0;
-    settings.tileSize        = tileSize;
-    settings.radiusClip      = minRadius2d;
-    settings.eps2d           = eps2d;
-    settings.renderMode      = RenderSettings::RenderMode::DEPTH;
-    settings.numDepthSamples = numSamples;
-
-    return sparseRenderTopContributingGaussianIdsImpl(
-        pixelsToRender, worldToCameraMatrices, projectionMatrices, settings);
-}
-
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
 GaussianSplat3d::renderContributingGaussianIds(const torch::Tensor &worldToCameraMatrices,
                                                const torch::Tensor &projectionMatrices,
@@ -936,24 +810,32 @@ GaussianSplat3d::renderContributingGaussianIds(const torch::Tensor &worldToCamer
                                                const size_t tileSize,
                                                const float minRadius2d,
                                                const float eps2d,
-                                               const bool antialias) {
+                                               const bool antialias,
+                                               const int topKContributors) {
     RenderSettings settings;
-    settings.imageWidth     = imageWidth;
-    settings.imageHeight    = imageHeight;
-    settings.nearPlane      = near;
-    settings.farPlane       = far;
-    settings.projectionType = projectionType;
-    settings.shDegreeToUse  = 0;
-    settings.tileSize       = tileSize;
-    settings.radiusClip     = minRadius2d;
-    settings.eps2d          = eps2d;
-    settings.renderMode     = RenderSettings::RenderMode::DEPTH;
+    settings.imageWidth      = imageWidth;
+    settings.imageHeight     = imageHeight;
+    settings.nearPlane       = near;
+    settings.farPlane        = far;
+    settings.projectionType  = projectionType;
+    settings.shDegreeToUse   = 0;
+    settings.tileSize        = tileSize;
+    settings.radiusClip      = minRadius2d;
+    settings.eps2d           = eps2d;
+    settings.renderMode      = RenderSettings::RenderMode::DEPTH;
+    settings.numDepthSamples = topKContributors;
 
-    const auto [numContributingGaussians, weights] =
-        renderNumContributingGaussiansImpl(worldToCameraMatrices, projectionMatrices, settings);
-
-    return renderContributingGaussianIdsImpl(
-        worldToCameraMatrices, projectionMatrices, numContributingGaussians, settings);
+    if (topKContributors > 0) {
+        return renderContributingGaussianIdsImpl(
+            worldToCameraMatrices, projectionMatrices, settings);
+    } else {
+        // Use the standard path - compute actual number of contributing gaussians
+        torch::Tensor numContributingGaussians, weights;
+        std::tie(numContributingGaussians, weights) =
+            renderNumContributingGaussiansImpl(worldToCameraMatrices, projectionMatrices, settings);
+        return renderContributingGaussianIdsImpl(
+            worldToCameraMatrices, projectionMatrices, settings, numContributingGaussians);
+    }
 }
 
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
@@ -968,27 +850,34 @@ GaussianSplat3d::sparseRenderContributingGaussianIds(const fvdb::JaggedTensor &p
                                                      const size_t tileSize,
                                                      const float minRadius2d,
                                                      const float eps2d,
-                                                     const bool antialias) {
+                                                     const bool antialias,
+                                                     const int topKContributors) {
     RenderSettings settings;
-    settings.imageWidth     = imageWidth;
-    settings.imageHeight    = imageHeight;
-    settings.nearPlane      = near;
-    settings.farPlane       = far;
-    settings.projectionType = projectionType;
-    settings.shDegreeToUse  = 0;
-    settings.tileSize       = tileSize;
-    settings.radiusClip     = minRadius2d;
-    settings.eps2d          = eps2d;
-    settings.renderMode     = RenderSettings::RenderMode::DEPTH;
+    settings.imageWidth      = imageWidth;
+    settings.imageHeight     = imageHeight;
+    settings.nearPlane       = near;
+    settings.farPlane        = far;
+    settings.projectionType  = projectionType;
+    settings.shDegreeToUse   = 0;
+    settings.tileSize        = tileSize;
+    settings.radiusClip      = minRadius2d;
+    settings.eps2d           = eps2d;
+    settings.renderMode      = RenderSettings::RenderMode::DEPTH;
+    settings.numDepthSamples = topKContributors;
 
-    const auto [numContributingGaussians, weights] = sparseRenderNumContributingGaussiansImpl(
-        pixelsToRender, worldToCameraMatrices, projectionMatrices, settings);
-
-    return sparseRenderContributingGaussianIdsImpl(pixelsToRender,
-                                                   worldToCameraMatrices,
-                                                   projectionMatrices,
-                                                   numContributingGaussians,
-                                                   settings);
+    if (topKContributors > 0) {
+        return sparseRenderContributingGaussianIdsImpl(
+            pixelsToRender, worldToCameraMatrices, projectionMatrices, settings);
+    } else {
+        fvdb::JaggedTensor numContributingGaussians, weights;
+        std::tie(numContributingGaussians, weights) = sparseRenderNumContributingGaussiansImpl(
+            pixelsToRender, worldToCameraMatrices, projectionMatrices, settings);
+        return sparseRenderContributingGaussianIdsImpl(pixelsToRender,
+                                                       worldToCameraMatrices,
+                                                       projectionMatrices,
+                                                       settings,
+                                                       numContributingGaussians);
+    }
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
