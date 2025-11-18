@@ -12,6 +12,9 @@ from .types import (
     ListOfListsOfTensors,
     ListOfTensors,
     LShapeSpec,
+    NumericMaxRank1,
+    NumericMaxRank2,
+    NumericMaxRank3,
     RShapeSpec,
     Vec3d,
     Vec3dBatch,
@@ -1005,9 +1008,9 @@ class Viewer:
         self,
         scene_name: str,
         name: str,
-        camera_to_world_matrices: torch.Tensor,
-        projection_matrices: torch.Tensor,
-        image_sizes: torch.Tensor,
+        camera_to_world_matrices: NumericMaxRank3,
+        projection_matrices: NumericMaxRank3,
+        image_sizes: NumericMaxRank2,
         frustum_near_plane: float,
         frustum_far_plane: float,
         axis_length: float,
@@ -1019,6 +1022,15 @@ class Viewer:
     ) -> CameraView: ...
     def has_camera_view(self, name: str) -> bool: ...
     def get_camera_view(self, name: str) -> CameraView: ...
+    def add_image(
+        self,
+        scene_name: str,
+        name: str,
+        rgba_image: NumericMaxRank1,
+        width: int,
+        height: int,
+    ) -> None: ...
+    def wait_for_interrupt(self) -> None: ...
 
 class config:
     enable_ultra_sparse_acceleration: ClassVar[bool] = ...

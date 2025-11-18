@@ -85,6 +85,12 @@ class Viewer {
                               const std::tuple<float, float, float> &frustumColor,
                               bool visible);
 
+    void addImage(const std::string &scene_name,
+                  const std::string &name,
+                  const torch::Tensor &rgba_image,
+                  int64_t width,
+                  int64_t height);
+
     bool
     hasGaussianSplat3dView(const std::string &name) const {
         return mSplat3dViews.find(name) != mSplat3dViews.end();
@@ -141,6 +147,8 @@ class Viewer {
     port() const {
         return mPort;
     };
+
+    void waitForInteerrupt();
 };
 
 } // namespace fvdb::detail::viewer
