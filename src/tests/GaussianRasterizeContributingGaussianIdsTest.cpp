@@ -160,8 +160,8 @@ TEST_F(GaussianRasterizeContributingGaussianIdsTestFixture, TestBasicInputsAndOu
             opacities,
             tileOffsets,
             tileGaussianIds,
-            numContributingGaussians,
-            settings);
+            settings,
+            numContributingGaussians);
 
     const int h                 = imageHeight;
     const int w                 = imageWidth;
@@ -236,8 +236,8 @@ TEST_F(GaussianRasterizeContributingGaussianIdsTestFixture, TestBasicInputsAndOu
             opacities,
             tileOffsets,
             tileGaussianIds,
-            numContributingGaussians,
-            settings);
+            settings,
+            numContributingGaussians);
 
     const int h = imageHeight;
     const int w = imageWidth;
@@ -278,8 +278,8 @@ TEST_F(GaussianRasterizeContributingGaussianIdsTestFixture, TestBasicInputsAndOu
             tilePixelMask,
             tilePixelCumsum,
             pixelMap,
-            numContributingGaussiansSparse,
-            settings);
+            settings,
+            numContributingGaussiansSparse);
 
     const int numGaussianLayers = 5;
 
