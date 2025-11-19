@@ -411,11 +411,6 @@ GaussianSplat3d::renderCropFromProjectedGaussiansImpl(
     // Rasterize projected Gaussians to pixels (differentiable)
     // NOTE:  projectGaussians* performs input checking, we need to apply some further
     // checking before GaussianRasterizeToPixels
-    std::optional<torch::Tensor> backgroundsOpt = std::nullopt;
-    if (backgrounds.has_value()) {
-        backgroundsOpt = backgrounds.value();
-    }
-
     auto outputs = detail::autograd::RasterizeGaussiansToPixels::apply(
         projectedGaussians.perGaussian2dMean,
         projectedGaussians.perGaussianConic,
@@ -429,7 +424,7 @@ GaussianSplat3d::renderCropFromProjectedGaussiansImpl(
         projectedGaussians.tileOffsets,
         projectedGaussians.tileGaussianIds,
         false,
-        backgroundsOpt);
+        backgrounds);
     torch::Tensor renderedImage  = outputs[0];
     torch::Tensor renderedAlphas = outputs[1];
 
@@ -1285,11 +1280,6 @@ gaussianRenderJagged(const JaggedTensor &means,     // [N1 + N2 + ..., 3]
     }
 
     // Rasterize projected Gaussians to pixels [differentiable]
-    std::optional<torch::Tensor> backgroundsOpt = std::nullopt;
-    if (backgrounds.has_value()) {
-        backgroundsOpt = backgrounds.value();
-    }
-
     auto outputs =
         detail::autograd::RasterizeGaussiansToPixels::apply(means2d,
                                                             conics,
@@ -1303,7 +1293,7 @@ gaussianRenderJagged(const JaggedTensor &means,     // [N1 + N2 + ..., 3]
                                                             tile_offsets,
                                                             tile_gaussian_ids,
                                                             false,
-                                                            backgroundsOpt);
+                                                            backgrounds);
     torch::Tensor renderedImages      = outputs[0];
     torch::Tensor renderedAlphaImages = outputs[1];
 

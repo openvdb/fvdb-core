@@ -225,11 +225,6 @@ RasterizeGaussiansToPixels::forward(
     // const int C = means2d.size(0);
     // const int N = means2d.size(1);
 
-    std::optional<torch::Tensor> backgroundsTensor = std::nullopt;
-    if (backgrounds.has_value()) {
-        backgroundsTensor = backgrounds.value();
-    }
-
     auto variables          = FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
         return ops::dispatchGaussianRasterizeForward<DeviceTag>(means2d,
                                                                 conics,
@@ -242,7 +237,7 @@ RasterizeGaussiansToPixels::forward(
                                                                 tileSize,
                                                                 tileOffsets,
                                                                 tileGaussianIds,
-                                                                backgroundsTensor);
+                                                                backgrounds);
     });
     Variable renderedColors = std::get<0>(variables);
     Variable renderedAlphas = std::get<1>(variables);
