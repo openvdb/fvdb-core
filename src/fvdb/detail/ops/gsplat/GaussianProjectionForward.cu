@@ -198,21 +198,23 @@ template <typename T, bool Ortho> struct ProjectionForward {
     inline __device__ void
     loadCamerasIntoSharedMemory() {
         // Load projection matrices and world-to-camera matrices into shared memory
-        extern __shared__ T sharedMemory[];
-        projectionMatsShared    = reinterpret_cast<Mat3 *>(sharedMemory);
-        worldToCamRotMatsShared = reinterpret_cast<Mat3 *>(sharedMemory + C * 9);
-        worldToCamTranslation   = reinterpret_cast<Vec3 *>(sharedMemory + 2 * C * 9);
+        alignas(Mat3) extern __shared__ char sharedMemory[];
 
-        if (threadIdx.x < C * (9 + 9 + 3)) {
-            if (threadIdx.x < C * 9) {
-                const auto camId   = threadIdx.x / 9;
-                const auto entryId = threadIdx.x % 9;
+        projectionMatsShared    = reinterpret_cast<Mat3 *>(sharedMemory);
+        worldToCamRotMatsShared = reinterpret_cast<Mat3 *>(sharedMemory + C * sizeof(Mat3));
+        worldToCamTranslation   = reinterpret_cast<Vec3 *>(sharedMemory + C * 2 * sizeof(Mat3));
+
+        const int64_t totalElements = C * (9 + 9 + 3);
+        for (int64_t i = threadIdx.x; i < totalElements; i += blockDim.x) {
+            if (i < C * 9) {
+                const auto camId   = i / 9;
+                const auto entryId = i % 9;
                 const auto rowId   = entryId / 3;
                 const auto colId   = entryId % 3;
                 projectionMatsShared[camId][rowId][colId] =
                     mProjectionMatricesAcc[camId][rowId][colId];
-            } else if (threadIdx.x < 2 * C * 9) {
-                const auto baseIdx = threadIdx.x - C * 9;
+            } else if (i < 2 * C * 9) {
+                const auto baseIdx = i - C * 9;
                 const auto camId   = baseIdx / 9;
                 const auto entryId = baseIdx % 9;
                 const auto rowId   = entryId / 3;
@@ -220,7 +222,7 @@ template <typename T, bool Ortho> struct ProjectionForward {
                 worldToCamRotMatsShared[camId][rowId][colId] =
                     mWorldToCamMatricesAcc[camId][rowId][colId];
             } else {
-                const auto baseIdx                    = threadIdx.x - 2 * C * 9;
+                const auto baseIdx                    = i - 2 * C * 9;
                 const auto camId                      = baseIdx / 3;
                 const auto entryId                    = baseIdx % 3;
                 worldToCamTranslation[camId][entryId] = mWorldToCamMatricesAcc[camId][entryId][3];
@@ -293,8 +295,9 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
 
     using scalar_t = float;
 
-    const size_t NUM_BLOCKS     = GET_BLOCKS(C * N, DEFAULT_BLOCK_DIM);
-    const size_t SHARD_MEM_SIZE = C * (9 + 9 + 3) * sizeof(scalar_t);
+    const size_t NUM_BLOCKS = GET_BLOCKS(C * N, DEFAULT_BLOCK_DIM);
+    const size_t SHARD_MEM_SIZE =
+        C * (2 * sizeof(nanovdb::math::Mat3<scalar_t>) + sizeof(nanovdb::math::Vec3<scalar_t>));
 
     if (ortho) {
         ProjectionForward<scalar_t, true> projectionForward(imageWidth,
@@ -395,8 +398,9 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
         int64_t deviceProblemOffset, deviceProblemSize;
         std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(C * N, deviceId);
 
-        const size_t NUM_BLOCKS     = GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM);
-        const size_t SHARD_MEM_SIZE = C * (9 + 9 + 3) * sizeof(scalar_t);
+        const size_t NUM_BLOCKS = GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM);
+        const size_t SHARD_MEM_SIZE =
+            C * (2 * sizeof(nanovdb::math::Mat3<scalar_t>) + sizeof(nanovdb::math::Vec3<scalar_t>));
 
         if (ortho) {
             ProjectionForward<scalar_t, true> projectionForward(imageWidth,
