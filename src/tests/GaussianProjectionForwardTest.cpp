@@ -182,7 +182,7 @@ TEST_F(GaussianProjectionForwardTestFixture, TestPerspectiveProjection) {
                                                                            false);
 
     // Use relaxed tolerances to account for minor numerical differences between debug and release
-    // builds The default rtol=1e-5, atol=1e-8 are too strict for operations involving exp, sqrt,
+    // builds. The default rtol=1e-5, atol=1e-8 are too strict for operations involving exp, sqrt,
     // and inverse
 #ifdef NDEBUG
     // Release build: stricter tolerances
