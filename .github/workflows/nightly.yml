@@ -1,8 +1,8 @@
 name: fVDB Nightly Build and Tests
 
 on:
-  schedule:
-    - cron: "01 15 * * *"  # Runs every day at 4am pacific/11am UTC
+  # schedule:
+  #   - cron: "01 15 * * *"  # Runs every day at 4am pacific/11am UTC
   workflow_dispatch:
 
 
