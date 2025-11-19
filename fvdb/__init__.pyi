@@ -90,7 +90,8 @@ def gaussian_render_jagged(
     return_debug_info: bool = False,
     render_depth_only: bool = False,
     ortho: bool = False,
-) -> JaggedTensor: ...
+    backgrounds: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]: ...
 @overload
 def jcat(grid_batches: Sequence[GridBatch]) -> GridBatch: ...
 @overload
