@@ -362,6 +362,75 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestBasicInputsAndOutputs) {
     EXPECT_TRUE(torch::equal(outLastIds, expectedLastIds));
 }
 
+TEST_F(GaussianRasterizeForwardTestFixture, TestBasicBackgrounds) {
+    loadTestData("rasterize_forward_inputs.pt", "rasterize_forward_outputs.pt");
+
+    const int numCameras  = means2d.size(0);
+    const int numChannels = colors.size(-1);
+
+    // Create different background colors for each camera
+    // Camera 0: red background [1, 0, 0]
+    // Camera 1+: black background [0, 0, 0] (if there are multiple cameras)
+    torch::Tensor backgrounds = torch::zeros({numCameras, numChannels}, colors.options());
+    backgrounds[0][0]         = 1.0f; // Red for first camera
+
+    // Render without background (should match expected outputs)
+    const auto [outColorsNoBackground, outAlphasNoBackground, outLastIdsNoBackground] =
+        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(means2d,
+                                                                          conics,
+                                                                          colors,
+                                                                          opacities,
+                                                                          imageWidth,
+                                                                          imageHeight,
+                                                                          imageOriginW,
+                                                                          imageOriginH,
+                                                                          tileSize,
+                                                                          tileOffsets,
+                                                                          tileGaussianIds);
+
+    // Render with background
+    const auto [outColorsWithBackground, outAlphasWithBackground, outLastIdsWithBackground] =
+        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(means2d,
+                                                                          conics,
+                                                                          colors,
+                                                                          opacities,
+                                                                          imageWidth,
+                                                                          imageHeight,
+                                                                          imageOriginW,
+                                                                          imageOriginH,
+                                                                          tileSize,
+                                                                          tileOffsets,
+                                                                          tileGaussianIds,
+                                                                          backgrounds);
+
+    // Alphas and last IDs should be identical regardless of background
+    EXPECT_TRUE(torch::allclose(outAlphasNoBackground, outAlphasWithBackground));
+    EXPECT_TRUE(torch::equal(outLastIdsNoBackground, outLastIdsWithBackground));
+
+    // For pixels with full opacity (alpha ~= 1), colors should match regardless of background
+    // For pixels with partial transparency, colors should be blended with background
+
+    // Verify that we have at least some non-opaque pixels to actually test background blending
+    // Count pixels with alpha < 0.99 (i.e., not fully opaque)
+    auto nonOpaquePixels = (outAlphasNoBackground < 0.99f).sum();
+    EXPECT_GT(nonOpaquePixels.item<int64_t>(), 0)
+        << "Test requires some non-opaque pixels to validate background blending";
+
+    // Compute expected colors with background blending: color = renderedColor + (1 - alpha) *
+    // background
+    torch::Tensor expectedColorsWithBackground = torch::zeros_like(outColorsNoBackground);
+    for (int c = 0; c < numCameras; c++) {
+        auto alpha     = outAlphasNoBackground[c];                 // [H, W, 1]
+        auto baseColor = outColorsNoBackground[c];                 // [H, W, D]
+        auto bg        = backgrounds[c].view({1, 1, numChannels}); // [1, 1, D]
+
+        // Expected: renderedColor + (1 - alpha) * background
+        expectedColorsWithBackground[c] = baseColor + (1.0f - alpha) * bg;
+    }
+
+    EXPECT_TRUE(torch::allclose(outColorsWithBackground, expectedColorsWithBackground, 1e-5, 1e-5));
+}
+
 TEST_F(GaussianRasterizeForwardTestFixture, TestConcatenatedChannels) {
     loadTestData("rasterize_forward_inputs.pt", "rasterize_forward_outputs_64.pt");
 
@@ -386,7 +455,7 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestConcatenatedChannels) {
     EXPECT_TRUE(torch::equal(outLastIds, expectedLastIds));
 }
 
-// Compares the output of multi-camera rasterization with the output of sequentialsingle-camera
+// Compares the output of multi-camera rasterization with the output of sequential single-camera
 // rasterization.
 TEST_F(GaussianRasterizeForwardTestFixture, TestMultipleCameras) {
     // the output here is not used in this test.
