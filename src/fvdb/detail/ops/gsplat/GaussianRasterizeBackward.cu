@@ -619,7 +619,7 @@ struct RasterizeBackwardArgs {
         const uint32_t blockSize,
         const bool pixelIsActive,
         const uint32_t activePixelIndex) {
-        extern __shared__ int s[];
+        alignas(Gaussian2D<ScalarType>) extern __shared__ char s[];
 
         Gaussian2D<ScalarType> *sharedGaussians =
             reinterpret_cast<Gaussian2D<ScalarType> *>(s);               // [blockSize]
