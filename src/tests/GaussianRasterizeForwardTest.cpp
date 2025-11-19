@@ -362,75 +362,6 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestBasicInputsAndOutputs) {
     EXPECT_TRUE(torch::equal(outLastIds, expectedLastIds));
 }
 
-TEST_F(GaussianRasterizeForwardTestFixture, TestBasicBackgrounds) {
-    loadTestData("rasterize_forward_inputs.pt", "rasterize_forward_outputs.pt");
-
-    const int numCameras  = means2d.size(0);
-    const int numChannels = colors.size(-1);
-
-    // Create different background colors for each camera
-    // Camera 0: red background [1, 0, 0]
-    // Camera 1+: black background [0, 0, 0] (if there are multiple cameras)
-    torch::Tensor backgrounds = torch::zeros({numCameras, numChannels}, colors.options());
-    backgrounds[0][0]         = 1.0f; // Red for first camera
-
-    // Render without background (should match expected outputs)
-    const auto [outColorsNoBackground, outAlphasNoBackground, outLastIdsNoBackground] =
-        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(means2d,
-                                                                          conics,
-                                                                          colors,
-                                                                          opacities,
-                                                                          imageWidth,
-                                                                          imageHeight,
-                                                                          imageOriginW,
-                                                                          imageOriginH,
-                                                                          tileSize,
-                                                                          tileOffsets,
-                                                                          tileGaussianIds);
-
-    // Render with background
-    const auto [outColorsWithBackground, outAlphasWithBackground, outLastIdsWithBackground] =
-        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(means2d,
-                                                                          conics,
-                                                                          colors,
-                                                                          opacities,
-                                                                          imageWidth,
-                                                                          imageHeight,
-                                                                          imageOriginW,
-                                                                          imageOriginH,
-                                                                          tileSize,
-                                                                          tileOffsets,
-                                                                          tileGaussianIds,
-                                                                          backgrounds);
-
-    // Alphas and last IDs should be identical regardless of background
-    EXPECT_TRUE(torch::allclose(outAlphasNoBackground, outAlphasWithBackground));
-    EXPECT_TRUE(torch::equal(outLastIdsNoBackground, outLastIdsWithBackground));
-
-    // For pixels with full opacity (alpha ~= 1), colors should match regardless of background
-    // For pixels with partial transparency, colors should be blended with background
-
-    // Verify that we have at least some non-opaque pixels to actually test background blending
-    // Count pixels with alpha < 0.99 (i.e., not fully opaque)
-    auto nonOpaquePixels = (outAlphasNoBackground < 0.99f).sum();
-    EXPECT_GT(nonOpaquePixels.item<int64_t>(), 0)
-        << "Test requires some non-opaque pixels to validate background blending";
-
-    // Compute expected colors with background blending: color = renderedColor + (1 - alpha) *
-    // background
-    torch::Tensor expectedColorsWithBackground = torch::zeros_like(outColorsNoBackground);
-    for (int c = 0; c < numCameras; c++) {
-        auto alpha     = outAlphasNoBackground[c];                 // [H, W, 1]
-        auto baseColor = outColorsNoBackground[c];                 // [H, W, D]
-        auto bg        = backgrounds[c].view({1, 1, numChannels}); // [1, 1, D]
-
-        // Expected: renderedColor + (1 - alpha) * background
-        expectedColorsWithBackground[c] = baseColor + (1.0f - alpha) * bg;
-    }
-
-    EXPECT_TRUE(torch::allclose(outColorsWithBackground, expectedColorsWithBackground, 1e-5, 1e-5));
-}
-
 TEST_F(GaussianRasterizeForwardTestFixture, TestConcatenatedChannels) {
     loadTestData("rasterize_forward_inputs.pt", "rasterize_forward_outputs_64.pt");
 
@@ -576,6 +507,75 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestMultipleCameras) {
     EXPECT_TRUE(torch::equal(combinedLastIds, outLastIdsAll));
 }
 
+TEST_F(GaussianRasterizeForwardTestFixture, TestMultipleCamerasWithBackgrounds) {
+    loadTestData("rasterize_forward_inputs_3cams.pt", "rasterize_forward_outputs.pt");
+
+    const int numCameras  = means2d.size(0);
+    const int numChannels = colors.size(-1);
+
+    // Create different background colors for each camera
+    // Camera 0: Red [1, 0, 0]
+    // Camera 1: Green [0, 1, 0]
+    // Camera 2: Blue [0, 0, 1]
+    torch::Tensor backgrounds = torch::zeros({numCameras, numChannels}, colors.options());
+    backgrounds[0][0]         = 1.0f; // Red
+    if (numCameras > 1)
+        backgrounds[1][1] = 1.0f;     // Green
+    if (numCameras > 2)
+        backgrounds[2][2] = 1.0f;     // Blue
+
+    // Render without background
+    const auto [outColorsNoBackground, outAlphasNoBackground, outLastIdsNoBackground] =
+        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(means2d,
+                                                                          conics,
+                                                                          colors,
+                                                                          opacities,
+                                                                          imageWidth,
+                                                                          imageHeight,
+                                                                          imageOriginW,
+                                                                          imageOriginH,
+                                                                          tileSize,
+                                                                          tileOffsets,
+                                                                          tileGaussianIds);
+
+    // Render with different background per camera
+    const auto [outColorsWithBackground, outAlphasWithBackground, outLastIdsWithBackground] =
+        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(means2d,
+                                                                          conics,
+                                                                          colors,
+                                                                          opacities,
+                                                                          imageWidth,
+                                                                          imageHeight,
+                                                                          imageOriginW,
+                                                                          imageOriginH,
+                                                                          tileSize,
+                                                                          tileOffsets,
+                                                                          tileGaussianIds,
+                                                                          backgrounds);
+
+    // Alphas and last IDs should be identical regardless of background
+    EXPECT_TRUE(torch::allclose(outAlphasNoBackground, outAlphasWithBackground));
+    EXPECT_TRUE(torch::equal(outLastIdsNoBackground, outLastIdsWithBackground));
+
+    // Verify that we have at least some non-opaque pixels to actually test background blending
+    auto nonOpaquePixels = (outAlphasNoBackground < 0.99f).sum();
+    EXPECT_GT(nonOpaquePixels.item<int64_t>(), 0)
+        << "Test requires some non-opaque pixels to validate background blending";
+
+    // Compute expected colors with background blending and compare per camera
+    torch::Tensor expectedColorsWithBackground = torch::zeros_like(outColorsNoBackground);
+    for (int c = 0; c < numCameras; c++) {
+        auto alpha     = outAlphasNoBackground[c];                 // [H, W, 1]
+        auto baseColor = outColorsNoBackground[c];                 // [H, W, D]
+        auto bg        = backgrounds[c].view({1, 1, numChannels}); // [1, 1, D]
+
+        // Expected: renderedColor + (1 - alpha) * background
+        expectedColorsWithBackground[c] = baseColor + (1.0f - alpha) * bg;
+    }
+
+    EXPECT_TRUE(torch::allclose(outColorsWithBackground, expectedColorsWithBackground, 1e-5, 1e-5));
+}
+
 TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterization) {
     loadTestData("rasterize_forward_inputs.pt", "rasterize_forward_outputs.pt");
 
@@ -612,101 +612,6 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterization) {
                                              expectedRenderedColors,
                                              expectedRenderedAlphas,
                                              expectedLastIds));
-}
-
-TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationWithBackgrounds) {
-    loadTestData("rasterize_forward_inputs.pt", "rasterize_forward_outputs.pt");
-
-    const int numCameras  = means2d.size(0);
-    const int numChannels = colors.size(-1);
-
-    // Create different background colors for each camera
-    torch::Tensor backgrounds = torch::zeros({numCameras, numChannels}, colors.options());
-    backgrounds[0][0]         = 1.0f; // Red for first camera
-
-    auto const pixelsToRender = generateSparsePixelCoords(numCameras, 100).cuda();
-
-    auto [activeTiles, activeTileMask, tilePixelMask, tilePixelCumsum, pixelMap] =
-        fvdb::detail::ops::computeSparseInfo(
-            tileSize, tileOffsets.size(2), tileOffsets.size(1), pixelsToRender);
-
-    // Render sparse without background
-    const auto [outColorsSparseNoBackground,
-                outAlphasSparseNoBackground,
-                outLastIdsSparseNoBackground] =
-        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(pixelsToRender,
-                                                                                means2d,
-                                                                                conics,
-                                                                                colors,
-                                                                                opacities,
-                                                                                imageWidth,
-                                                                                imageHeight,
-                                                                                imageOriginW,
-                                                                                imageOriginH,
-                                                                                tileSize,
-                                                                                tileOffsets,
-                                                                                tileGaussianIds,
-                                                                                activeTiles,
-                                                                                tilePixelMask,
-                                                                                tilePixelCumsum,
-                                                                                pixelMap);
-
-    // Render sparse with background
-    const auto [outColorsSparseWithBackground,
-                outAlphasSparseWithBackground,
-                outLastIdsSparseWithBackground] =
-        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(pixelsToRender,
-                                                                                means2d,
-                                                                                conics,
-                                                                                colors,
-                                                                                opacities,
-                                                                                imageWidth,
-                                                                                imageHeight,
-                                                                                imageOriginW,
-                                                                                imageOriginH,
-                                                                                tileSize,
-                                                                                tileOffsets,
-                                                                                tileGaussianIds,
-                                                                                activeTiles,
-                                                                                tilePixelMask,
-                                                                                tilePixelCumsum,
-                                                                                pixelMap,
-                                                                                backgrounds);
-
-    // Alphas and last IDs should be identical regardless of background
-    for (int c = 0; c < numCameras; c++) {
-        EXPECT_TRUE(torch::allclose(outAlphasSparseNoBackground.index(c).jdata(),
-                                    outAlphasSparseWithBackground.index(c).jdata()));
-        EXPECT_TRUE(torch::equal(outLastIdsSparseNoBackground.index(c).jdata(),
-                                 outLastIdsSparseWithBackground.index(c).jdata()));
-    }
-
-    // Verify that we have at least some non-opaque pixels
-    bool hasTransparentPixels = false;
-    for (int c = 0; c < numCameras; c++) {
-        auto alphas          = outAlphasSparseNoBackground.index(c).jdata();
-        auto nonOpaquePixels = (alphas < 0.99f).sum();
-        if (nonOpaquePixels.item<int64_t>() > 0) {
-            hasTransparentPixels = true;
-            break;
-        }
-    }
-    EXPECT_TRUE(hasTransparentPixels)
-        << "Test requires some non-opaque pixels to validate background blending";
-
-    // Compute expected colors with background blending and compare
-    for (int c = 0; c < numCameras; c++) {
-        auto alpha     = outAlphasSparseNoBackground.index(c).jdata(); // [N, 1]
-        auto baseColor = outColorsSparseNoBackground.index(c).jdata(); // [N, D]
-        auto bg        = backgrounds[c].view({1, numChannels});        // [1, D]
-
-        // Expected: renderedColor + (1 - alpha) * background
-        auto expectedColors = baseColor + (1.0f - alpha) * bg;
-        auto actualColors   = outColorsSparseWithBackground.index(c).jdata();
-
-        EXPECT_TRUE(torch::allclose(actualColors, expectedColors, 1e-5, 1e-5))
-            << "Background blending mismatch for camera " << c;
-    }
 }
 
 TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationConcatenatedChannels) {
@@ -801,6 +706,108 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationMultipleCamer
                                              outColorsAll,
                                              outAlphasAll,
                                              outLastIdsAll));
+}
+
+TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationMultipleCamerasWithBackgrounds) {
+    loadTestData("rasterize_forward_inputs_3cams.pt", "rasterize_forward_outputs.pt");
+
+    const int numCameras  = means2d.size(0);
+    const int numChannels = colors.size(-1);
+
+    // Create different background colors for each camera
+    // Camera 0: Red [1, 0, 0]
+    // Camera 1: Green [0, 1, 0]
+    // Camera 2: Blue [0, 0, 1]
+    torch::Tensor backgrounds = torch::zeros({numCameras, numChannels}, colors.options());
+    backgrounds[0][0]         = 1.0f; // Red
+    if (numCameras > 1)
+        backgrounds[1][1] = 1.0f;     // Green
+    if (numCameras > 2)
+        backgrounds[2][2] = 1.0f;     // Blue
+
+    auto const pixelsToRender = generateSparsePixelCoords(numCameras, 100).cuda();
+
+    auto [activeTiles, activeTileMask, tilePixelMask, tilePixelCumsum, pixelMap] =
+        fvdb::detail::ops::computeSparseInfo(
+            tileSize, tileOffsets.size(2), tileOffsets.size(1), pixelsToRender);
+
+    // Render sparse without background
+    const auto [outColorsSparseNoBackground,
+                outAlphasSparseNoBackground,
+                outLastIdsSparseNoBackground] =
+        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(pixelsToRender,
+                                                                                means2d,
+                                                                                conics,
+                                                                                colors,
+                                                                                opacities,
+                                                                                imageWidth,
+                                                                                imageHeight,
+                                                                                imageOriginW,
+                                                                                imageOriginH,
+                                                                                tileSize,
+                                                                                tileOffsets,
+                                                                                tileGaussianIds,
+                                                                                activeTiles,
+                                                                                tilePixelMask,
+                                                                                tilePixelCumsum,
+                                                                                pixelMap);
+
+    // Render sparse with different background per camera
+    const auto [outColorsSparseWithBackground,
+                outAlphasSparseWithBackground,
+                outLastIdsSparseWithBackground] =
+        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(pixelsToRender,
+                                                                                means2d,
+                                                                                conics,
+                                                                                colors,
+                                                                                opacities,
+                                                                                imageWidth,
+                                                                                imageHeight,
+                                                                                imageOriginW,
+                                                                                imageOriginH,
+                                                                                tileSize,
+                                                                                tileOffsets,
+                                                                                tileGaussianIds,
+                                                                                activeTiles,
+                                                                                tilePixelMask,
+                                                                                tilePixelCumsum,
+                                                                                pixelMap,
+                                                                                backgrounds);
+
+    // Alphas and last IDs should be identical regardless of background
+    for (int c = 0; c < numCameras; c++) {
+        EXPECT_TRUE(torch::allclose(outAlphasSparseNoBackground.index(c).jdata(),
+                                    outAlphasSparseWithBackground.index(c).jdata()));
+        EXPECT_TRUE(torch::equal(outLastIdsSparseNoBackground.index(c).jdata(),
+                                 outLastIdsSparseWithBackground.index(c).jdata()));
+    }
+
+    // Verify that we have at least some non-opaque pixels
+    bool hasTransparentPixels = false;
+    for (int c = 0; c < numCameras; c++) {
+        auto alphas          = outAlphasSparseNoBackground.index(c).jdata();
+        auto nonOpaquePixels = (alphas < 0.99f).sum();
+        if (nonOpaquePixels.item<int64_t>() > 0) {
+            hasTransparentPixels = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(hasTransparentPixels)
+        << "Test requires some non-opaque pixels to validate background blending";
+
+    // Compute expected colors with background blending and compare per camera
+    for (int c = 0; c < numCameras; c++) {
+        auto alpha     = outAlphasSparseNoBackground.index(c).jdata(); // [N, 1]
+        auto baseColor = outColorsSparseNoBackground.index(c).jdata(); // [N, D]
+        auto bg        = backgrounds[c].view({1, numChannels});        // [1, D]
+
+        // Expected: renderedColor + (1 - alpha) * background
+        auto expectedColors = baseColor + (1.0f - alpha) * bg;
+        auto actualColors   = outColorsSparseWithBackground.index(c).jdata();
+
+        EXPECT_TRUE(torch::allclose(actualColors, expectedColors, 1e-5, 1e-5))
+            << "Background blending mismatch for camera " << c;
+    }
 }
 
 TEST_F(GaussianRasterizeForwardTestFixture, CPUThrows) {
