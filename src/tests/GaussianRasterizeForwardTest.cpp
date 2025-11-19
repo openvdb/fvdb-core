@@ -614,6 +614,101 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterization) {
                                              expectedLastIds));
 }
 
+TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationWithBackgrounds) {
+    loadTestData("rasterize_forward_inputs.pt", "rasterize_forward_outputs.pt");
+
+    const int numCameras  = means2d.size(0);
+    const int numChannels = colors.size(-1);
+
+    // Create different background colors for each camera
+    torch::Tensor backgrounds = torch::zeros({numCameras, numChannels}, colors.options());
+    backgrounds[0][0]         = 1.0f; // Red for first camera
+
+    auto const pixelsToRender = generateSparsePixelCoords(numCameras, 100).cuda();
+
+    auto [activeTiles, activeTileMask, tilePixelMask, tilePixelCumsum, pixelMap] =
+        fvdb::detail::ops::computeSparseInfo(
+            tileSize, tileOffsets.size(2), tileOffsets.size(1), pixelsToRender);
+
+    // Render sparse without background
+    const auto [outColorsSparseNoBackground,
+                outAlphasSparseNoBackground,
+                outLastIdsSparseNoBackground] =
+        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(pixelsToRender,
+                                                                                means2d,
+                                                                                conics,
+                                                                                colors,
+                                                                                opacities,
+                                                                                imageWidth,
+                                                                                imageHeight,
+                                                                                imageOriginW,
+                                                                                imageOriginH,
+                                                                                tileSize,
+                                                                                tileOffsets,
+                                                                                tileGaussianIds,
+                                                                                activeTiles,
+                                                                                tilePixelMask,
+                                                                                tilePixelCumsum,
+                                                                                pixelMap);
+
+    // Render sparse with background
+    const auto [outColorsSparseWithBackground,
+                outAlphasSparseWithBackground,
+                outLastIdsSparseWithBackground] =
+        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(pixelsToRender,
+                                                                                means2d,
+                                                                                conics,
+                                                                                colors,
+                                                                                opacities,
+                                                                                imageWidth,
+                                                                                imageHeight,
+                                                                                imageOriginW,
+                                                                                imageOriginH,
+                                                                                tileSize,
+                                                                                tileOffsets,
+                                                                                tileGaussianIds,
+                                                                                activeTiles,
+                                                                                tilePixelMask,
+                                                                                tilePixelCumsum,
+                                                                                pixelMap,
+                                                                                backgrounds);
+
+    // Alphas and last IDs should be identical regardless of background
+    for (int c = 0; c < numCameras; c++) {
+        EXPECT_TRUE(torch::allclose(outAlphasSparseNoBackground.index(c).jdata(),
+                                    outAlphasSparseWithBackground.index(c).jdata()));
+        EXPECT_TRUE(torch::equal(outLastIdsSparseNoBackground.index(c).jdata(),
+                                 outLastIdsSparseWithBackground.index(c).jdata()));
+    }
+
+    // Verify that we have at least some non-opaque pixels
+    bool hasTransparentPixels = false;
+    for (int c = 0; c < numCameras; c++) {
+        auto alphas          = outAlphasSparseNoBackground.index(c).jdata();
+        auto nonOpaquePixels = (alphas < 0.99f).sum();
+        if (nonOpaquePixels.item<int64_t>() > 0) {
+            hasTransparentPixels = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(hasTransparentPixels)
+        << "Test requires some non-opaque pixels to validate background blending";
+
+    // Compute expected colors with background blending and compare
+    for (int c = 0; c < numCameras; c++) {
+        auto alpha     = outAlphasSparseNoBackground.index(c).jdata(); // [N, 1]
+        auto baseColor = outColorsSparseNoBackground.index(c).jdata(); // [N, D]
+        auto bg        = backgrounds[c].view({1, numChannels});        // [1, D]
+
+        // Expected: renderedColor + (1 - alpha) * background
+        auto expectedColors = baseColor + (1.0f - alpha) * bg;
+        auto actualColors   = outColorsSparseWithBackground.index(c).jdata();
+
+        EXPECT_TRUE(torch::allclose(actualColors, expectedColors, 1e-5, 1e-5))
+            << "Background blending mismatch for camera " << c;
+    }
+}
+
 TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationConcatenatedChannels) {
     loadTestData("rasterize_forward_inputs.pt", "rasterize_forward_outputs_64.pt");
 

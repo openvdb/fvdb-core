@@ -796,13 +796,13 @@ dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
     const torch::Tensor &activeTiles,
     const torch::Tensor &tilePixelMask,
     const torch::Tensor &tilePixelCumsum,
-    const torch::Tensor &pixelMap) {
+    const torch::Tensor &pixelMap,
+    const at::optional<torch::Tensor> &backgrounds) {
     FVDB_FUNC_RANGE();
     const uint32_t channels = features.size(-1);
     const bool isPacked     = means2d.dim() == 2;
 
-    const std::optional<torch::Tensor> backgrounds = std::nullopt;
-    const std::optional<torch::Tensor> masks       = std::nullopt;
+    const std::optional<torch::Tensor> masks = std::nullopt;
 
 #define CALL_FWD_SPARSE_CUDA(N)                                                   \
     case N: {                                                                     \
@@ -897,7 +897,8 @@ dispatchGaussianSparseRasterizeForward<torch::kCPU>(
     const torch::Tensor &activeTiles,
     const torch::Tensor &tilePixelMask,
     const torch::Tensor &tilePixelCumsum,
-    const torch::Tensor &pixelMap) {
+    const torch::Tensor &pixelMap,
+    const at::optional<torch::Tensor> &backgrounds) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
 }
 
