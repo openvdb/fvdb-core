@@ -198,7 +198,7 @@ template <typename T, bool Ortho> struct ProjectionForward {
     inline __device__ void
     loadCamerasIntoSharedMemory() {
         // Load projection matrices and world-to-camera matrices into shared memory
-        extern __shared__ char sharedMemory[];
+        alignas(Mat3) extern __shared__ char sharedMemory[];
 
         projectionMatsShared    = reinterpret_cast<Mat3 *>(sharedMemory);
         worldToCamRotMatsShared = reinterpret_cast<Mat3 *>(sharedMemory + C * sizeof(Mat3));
