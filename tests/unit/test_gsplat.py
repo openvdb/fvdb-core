@@ -2402,9 +2402,6 @@ class TestGaussianRenderBackgrounds(BaseGaussianTestCase):
         backgrounds[0] = torch.tensor([1.0, 0.0, 0.0], device=self.device)  # Red
         backgrounds[1] = torch.tensor([0.0, 1.0, 0.0], device=self.device)  # Green
 
-        print(f"backgrounds shape: {backgrounds.shape}")
-        print(f"backgrounds:\n{backgrounds}")
-
         # Render without backgrounds
         colors_no_bg, alphas_no_bg, _ = gaussian_render_jagged(
             jt_means,
@@ -2438,18 +2435,8 @@ class TestGaussianRenderBackgrounds(BaseGaussianTestCase):
             backgrounds=backgrounds,
         )
 
-        print(f"colors_no_bg shape: {colors_no_bg.shape}")
-        print(f"colors_with_bg shape: {colors_with_bg.shape}")
-        print(f"alphas_no_bg shape: {alphas_no_bg.shape}")
-
         # Alphas should be identical
         self.assertTrue(torch.allclose(alphas_no_bg, alphas_with_bg))
-
-        # Sample a few pixels to see what's happening
-        print(f"\nSample pixels (camera 0, first row):")
-        print(f"colors_no_bg[0, 0, :5]: {colors_no_bg[0, 0, :5]}")
-        print(f"colors_with_bg[0, 0, :5]: {colors_with_bg[0, 0, :5]}")
-        print(f"alphas_no_bg[0, 0, :5]: {alphas_no_bg[0, 0, :5]}")
 
         # Verify blending for each camera
         # Colors and alphas are returned as [C, H, W, D] tensors (NOT [C*H, W, D])
@@ -2463,15 +2450,7 @@ class TestGaussianRenderBackgrounds(BaseGaussianTestCase):
             bg = backgrounds[cam_idx].view(1, 1, 3)
             expected = cam_colors_no_bg + (1.0 - cam_alphas_no_bg) * bg
 
-            # Check if blending is close - use a more lenient tolerance for jagged rendering
-            # as the implementation may have minor numerical differences
             max_diff = torch.abs(cam_colors_with_bg - expected).max().item()
-            mean_diff = torch.abs(cam_colors_with_bg - expected).mean().item()
-            print(f"Camera {cam_idx}: max diff = {max_diff}, mean diff = {mean_diff}")
-
-            # For debugging: check if backgrounds were applied at all
-            diff_from_no_bg = torch.abs(cam_colors_with_bg - cam_colors_no_bg).max().item()
-            print(f"Camera {cam_idx}: diff from no_bg = {diff_from_no_bg}")
 
             self.assertTrue(
                 torch.allclose(cam_colors_with_bg, expected, atol=1e-4, rtol=1e-4),
