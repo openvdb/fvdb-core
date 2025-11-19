@@ -95,7 +95,7 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeNumContributingGa
                             const uint32_t blockSize,
                             const bool pixelIsActive,
                             const uint32_t activePixelIndex) {
-        extern __shared__ int s[];
+        alignas(Gaussian2D<ScalarType>) extern __shared__ char s[];
         auto *sharedGaussians = reinterpret_cast<Gaussian2D<ScalarType> *>(s); // [blockSize]
 
         const auto tidx = threadIdx.y * blockDim.x + threadIdx.x;

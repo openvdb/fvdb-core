@@ -254,24 +254,23 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("eps_2d")          = 0.3,
              py::arg("antialias")       = false)
 
-        .def("render_top_contributing_gaussian_ids",
-             &fvdb::GaussianSplat3d::renderTopContributingGaussianIds,
-             py::arg("num_samples"),
+        .def("render_contributing_gaussian_ids",
+             &fvdb::GaussianSplat3d::renderContributingGaussianIds,
              py::arg("world_to_camera_matrices"),
              py::arg("projection_matrices"),
              py::arg("image_width"),
              py::arg("image_height"),
              py::arg("near"),
              py::arg("far"),
-             py::arg("projection_type") = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
-             py::arg("tile_size")       = 16,
-             py::arg("min_radius_2d")   = 0.0,
-             py::arg("eps_2d")          = 0.3,
-             py::arg("antialias")       = false)
+             py::arg("projection_type")    = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
+             py::arg("tile_size")          = 16,
+             py::arg("min_radius_2d")      = 0.0,
+             py::arg("eps_2d")             = 0.3,
+             py::arg("antialias")          = false,
+             py::arg("top_k_contributors") = 0)
 
-        .def("sparse_render_top_contributing_gaussian_ids",
-             &fvdb::GaussianSplat3d::sparseRenderTopContributingGaussianIds,
-             py::arg("num_samples"),
+        .def("sparse_render_contributing_gaussian_ids",
+             &fvdb::GaussianSplat3d::sparseRenderContributingGaussianIds,
              py::arg("pixels_to_render"),
              py::arg("world_to_camera_matrices"),
              py::arg("projection_matrices"),
@@ -279,27 +278,12 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("image_height"),
              py::arg("near"),
              py::arg("far"),
-             py::arg("projection_type") = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
-             py::arg("tile_size")       = 16,
-             py::arg("min_radius_2d")   = 0.0,
-             py::arg("eps_2d")          = 0.3,
-             py::arg("antialias")       = false)
-
-        .def("sparse_render_top_contributing_gaussian_ids",
-             &fvdb::GaussianSplat3d::sparseRenderTopContributingGaussianIds,
-             py::arg("num_samples"),
-             py::arg("pixels_to_render"),
-             py::arg("world_to_camera_matrices"),
-             py::arg("projection_matrices"),
-             py::arg("image_width"),
-             py::arg("image_height"),
-             py::arg("near"),
-             py::arg("far"),
-             py::arg("projection_type") = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
-             py::arg("tile_size")       = 16,
-             py::arg("min_radius_2d")   = 0.0,
-             py::arg("eps_2d")          = 0.3,
-             py::arg("antialias")       = false)
+             py::arg("projection_type")    = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
+             py::arg("tile_size")          = 16,
+             py::arg("min_radius_2d")      = 0.0,
+             py::arg("eps_2d")             = 0.3,
+             py::arg("antialias")          = false,
+             py::arg("top_k_contributors") = 0)
 
         .def("index_select", &fvdb::GaussianSplat3d::indexSelect, py::arg("indices"))
         .def("mask_select", &fvdb::GaussianSplat3d::maskSelect, py::arg("mask"))
