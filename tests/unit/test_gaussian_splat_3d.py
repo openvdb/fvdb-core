@@ -98,7 +98,6 @@ class BaseGaussianTestCase(unittest.TestCase):
         self.far_plane = 1e10
 
 
-@unittest.skip("skip")
 @parameterized_class(("run_backward"), [(True,), (False,)])
 class TestGaussianSplatCat(BaseGaussianTestCase):
     def setUp(self):
@@ -330,7 +329,6 @@ class TestGaussianSplatCat(BaseGaussianTestCase):
         self.assertTrue(torch.equal(gs3d_cat.accumulated_max_2d_radii, max_radii))
 
 
-@unittest.skip("skip")
 @parameterized_class(("run_backward"), [(True,), (False,)])
 class TestGaussianSplatTo(BaseGaussianTestCase):
     def setUp(self):
@@ -483,7 +481,6 @@ class TestGaussianSplatTo(BaseGaussianTestCase):
         self.check_device_and_dtype(gs3d, jagged_cpu_f32.device, torch.float32)
 
 
-@unittest.skip("skip")
 class TestGaussianSplatIndexSet(BaseGaussianTestCase):
     def setUp(self):
         super().setUp()
@@ -788,7 +785,6 @@ class TestGaussianSplatIndexSet(BaseGaussianTestCase):
         )
 
 
-@unittest.skip("skip")
 class TestGaussianSplatIndex(BaseGaussianTestCase):
     def setUp(self):
         super().setUp()
@@ -1129,7 +1125,6 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
         check_is_view(gs_sel, gt_idx)
 
 
-@unittest.skip("skip")
 class TestLoadAndSavePly(BaseGaussianTestCase):
     def setUp(self):
         super().setUp()
@@ -1371,7 +1366,6 @@ class TestLoadAndSavePly(BaseGaussianTestCase):
         self.assertEqual(training_info["num_cams"], 88)
 
 
-@unittest.skip("skip")
 class TestGaussianRender(BaseGaussianTestCase):
 
     def setUp(self):
@@ -1520,7 +1514,6 @@ class TestGaussianRender(BaseGaussianTestCase):
         )
 
 
-@unittest.skip("skip")
 class TestTopGaussianContributionsRender(BaseGaussianTestCase):
 
     def setUp(self):
