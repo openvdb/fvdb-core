@@ -1737,7 +1737,7 @@ class GaussianSplat3d:
 
         Args:
             pixels_to_render (torch.Tensor | JaggedTensor): A tensor of shape ``(C, P, 2)`` or a JaggedTensor where ``C`` is the number of camera views,
-                and ``P`` is the number of pixel coordinates to render per camera. Each pixel coordinate is represented as (x, y).
+                and ``P`` is the number of pixel coordinates to render per camera. Each pixel coordinate is represented as (y, x) (row, col).
             world_to_camera_matrices (torch.Tensor): Tensor of shape ``(C, 4, 4)`` representing the
                 world-to-camera transformation matrices for C cameras. Each matrix transforms points
                 from world coordinates to camera coordinates.
