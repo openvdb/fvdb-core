@@ -257,12 +257,12 @@ class GaussianSplat3d:
     - Rendering images with arbitrary channels using spherical harmonics for view-dependent color
       representation (:meth:`render_images`, :meth:`render_images_and_depths`).
     - Rendering depth maps (:meth:`render_depths`, :meth:`render_images_and_depths`).
-    - Rendering features at arbitrary sparse pixel locations (:meth:`sparse_render_features`).
-    - Rendering depths at arbitrary sparse pixel locations (:meth:`sparse_render_depths`).
+    - Rendering features at arbitrary sparse pixel locations (:meth:`render_features_sparse`).
+    - Rendering depths at arbitrary sparse pixel locations (:meth:`render_depths_sparse`).
     - Computing which gaussians contribute to each pixel in an image plane
       (:meth:`render_num_contributing_gaussians`, :meth:`render_contributing_gaussian_ids`).
     - Computing the set of Gaussians which contribute to a set of sparse pixel locations
-      (:meth:`sparse_render_num_contributing_gaussians`, :meth:`sparse_render_contributing_gaussian_ids`).
+      (:meth:`render_num_contributing_gaussians_sparse`, :meth:`render_contributing_gaussian_ids_sparse`).
     - Saving and loading Gaussian splat data to/from PLY files (:meth:`save_to_ply`, :meth:`from_ply`).
     - Slicing, indexing, and masking Gaussians to create new :class:`GaussianSplat3d` instances.
     - Concatenating multiple :class:`GaussianSplat3d` instances into a single instance (:meth:`cat`).
@@ -2232,7 +2232,7 @@ class GaussianSplat3d:
         )
 
     @overload
-    def sparse_render_num_contributing_gaussians(
+    def render_num_contributing_gaussians_sparse(
         self,
         pixels_to_render: torch.Tensor,
         world_to_camera_matrices: torch.Tensor,
@@ -2249,7 +2249,7 @@ class GaussianSplat3d:
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
 
     @overload
-    def sparse_render_num_contributing_gaussians(
+    def render_num_contributing_gaussians_sparse(
         self,
         pixels_to_render: JaggedTensor,
         world_to_camera_matrices: torch.Tensor,
@@ -2265,7 +2265,7 @@ class GaussianSplat3d:
         antialias: bool = False,
     ) -> tuple[JaggedTensor, JaggedTensor]: ...
 
-    def sparse_render_num_contributing_gaussians(
+    def render_num_contributing_gaussians_sparse(
         self,
         pixels_to_render: JaggedTensor | torch.Tensor,
         world_to_camera_matrices: torch.Tensor,
@@ -2426,7 +2426,7 @@ class GaussianSplat3d:
         return JaggedTensor(impl=ids), JaggedTensor(impl=weights)
 
     @overload
-    def sparse_render_contributing_gaussian_ids(
+    def render_contributing_gaussian_ids_sparse(
         self,
         pixels_to_render: torch.Tensor,
         world_to_camera_matrices: torch.Tensor,
@@ -2444,7 +2444,7 @@ class GaussianSplat3d:
     ) -> tuple[JaggedTensor, JaggedTensor]: ...
 
     @overload
-    def sparse_render_contributing_gaussian_ids(
+    def render_contributing_gaussian_ids_sparse(
         self,
         pixels_to_render: JaggedTensor,
         world_to_camera_matrices: torch.Tensor,
@@ -2461,7 +2461,7 @@ class GaussianSplat3d:
         top_k_contributors: int = 0,
     ) -> tuple[JaggedTensor, JaggedTensor]: ...
 
-    def sparse_render_contributing_gaussian_ids(
+    def render_contributing_gaussian_ids_sparse(
         self,
         pixels_to_render: JaggedTensor | torch.Tensor,
         world_to_camera_matrices: torch.Tensor,
