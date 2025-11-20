@@ -1,7 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include "fvdb/detail/autograd/GaussianRasterizeSparse.h"
+#include <fvdb/detail/autograd/GaussianRasterizeSparse.h>
 
 #include <fvdb/GaussianSplat3d.h>
 #include <fvdb/detail/io/GaussianPlyIO.h>
