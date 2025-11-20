@@ -166,7 +166,6 @@ RasterizeGaussiansToPixelsSparse::backward(
     Variable dLossDMean2dAbs;
     if (absgrad) {
         dLossDMean2dAbs = std::get<0>(variables);
-        // means2d.absgrad = dLossDMean2dAbs;
     } else {
         dLossDMean2dAbs = Variable();
     }
