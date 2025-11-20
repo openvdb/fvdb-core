@@ -179,7 +179,8 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("crop_height")   = -1,
              py::arg("crop_origin_w") = -1,
              py::arg("crop_origin_h") = -1,
-             py::arg("tile_size")     = 16)
+             py::arg("tile_size")     = 16,
+             py::arg("backgrounds")   = std::nullopt)
 
         .def("render_images",
              &fvdb::GaussianSplat3d::renderImages,
@@ -194,7 +195,8 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("tile_size")        = 16,
              py::arg("min_radius_2d")    = 0.0,
              py::arg("eps_2d")           = 0.3,
-             py::arg("antialias")        = false)
+             py::arg("antialias")        = false,
+             py::arg("backgrounds")      = std::nullopt)
 
         .def("render_depths",
              &fvdb::GaussianSplat3d::renderDepths,
@@ -208,7 +210,8 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("tile_size")       = 16,
              py::arg("min_radius_2d")   = 0.0,
              py::arg("eps_2d")          = 0.3,
-             py::arg("antialias")       = false)
+             py::arg("antialias")       = false,
+             py::arg("backgrounds")     = std::nullopt)
 
         .def("render_images_and_depths",
              &fvdb::GaussianSplat3d::renderImagesAndDepths,
@@ -223,7 +226,8 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("tile_size")        = 16,
              py::arg("min_radius_2d")    = 0.0,
              py::arg("eps_2d")           = 0.3,
-             py::arg("antialias")        = false)
+             py::arg("antialias")        = false,
+             py::arg("backgrounds")      = std::nullopt)
 
         .def("render_num_contributing_gaussians",
              &fvdb::GaussianSplat3d::renderNumContributingGaussians,
@@ -321,6 +325,7 @@ bind_gaussian_splat3d(py::module &m) {
           py::arg("antialias")            = false,
           py::arg("render_depth_channel") = false,
           py::arg("return_debug_info")    = false,
-          py::arg("return_debug_info")    = false,
-          py::arg("ortho")                = false);
+          py::arg("render_depth_only")    = false,
+          py::arg("ortho")                = false,
+          py::arg("backgrounds")          = std::nullopt);
 }

@@ -585,15 +585,15 @@ dispatchGaussianRasterizeForward<torch::kCUDA>(
     const uint32_t imageOriginW,
     const uint32_t imageOriginH,
     const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,    // [C, tile_height, tile_width]
-    const torch::Tensor &tileGaussianIds // [n_isects]
+    const torch::Tensor &tileOffsets,              // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds,          // [n_isects]
+    const at::optional<torch::Tensor> &backgrounds // [C, D]
 ) {
     FVDB_FUNC_RANGE();
     const uint32_t channels = features.size(-1);
     const bool isPacked     = means2d.dim() == 2;
 
-    const std::optional<torch::Tensor> backgrounds = std::nullopt;
-    const std::optional<torch::Tensor> masks       = std::nullopt;
+    const std::optional<torch::Tensor> masks = std::nullopt;
 
 #define CALL_FWD_CUDA(N)                                                                        \
     case N: {                                                                                   \
@@ -677,15 +677,15 @@ dispatchGaussianRasterizeForward<torch::kPrivateUse1>(
     const uint32_t imageOriginH,
     const uint32_t tileSize,
     // intersections
-    const torch::Tensor &tileOffsets,    // [C, tile_height, tile_width]
-    const torch::Tensor &tileGaussianIds // [n_isects]
+    const torch::Tensor &tileOffsets,              // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds,          // [n_isects]
+    const at::optional<torch::Tensor> &backgrounds // [C, D]
 ) {
     FVDB_FUNC_RANGE();
     const uint32_t channels = features.size(-1);
     const bool isPacked     = means2d.dim() == 2;
 
-    const std::optional<torch::Tensor> backgrounds = std::nullopt;
-    const std::optional<torch::Tensor> masks       = std::nullopt;
+    const std::optional<torch::Tensor> masks = std::nullopt;
 
 #define CALL_FWD_PRIVATEUSE1(N)                                                                 \
     case N: {                                                                                   \
@@ -769,8 +769,9 @@ dispatchGaussianRasterizeForward<torch::kCPU>(
     const uint32_t imageOriginH,
     const uint32_t tileSize,
     // intersections
-    const torch::Tensor &tileOffsets,    // [C, tile_height, tile_width]
-    const torch::Tensor &tileGaussianIds // [n_isects]
+    const torch::Tensor &tileOffsets,              // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds,          // [n_isects]
+    const at::optional<torch::Tensor> &backgrounds // [C, D]
 ) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
 }
@@ -795,13 +796,13 @@ dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
     const torch::Tensor &activeTiles,
     const torch::Tensor &tilePixelMask,
     const torch::Tensor &tilePixelCumsum,
-    const torch::Tensor &pixelMap) {
+    const torch::Tensor &pixelMap,
+    const at::optional<torch::Tensor> &backgrounds) {
     FVDB_FUNC_RANGE();
     const uint32_t channels = features.size(-1);
     const bool isPacked     = means2d.dim() == 2;
 
-    const std::optional<torch::Tensor> backgrounds = std::nullopt;
-    const std::optional<torch::Tensor> masks       = std::nullopt;
+    const std::optional<torch::Tensor> masks = std::nullopt;
 
 #define CALL_FWD_SPARSE_CUDA(N)                                                   \
     case N: {                                                                     \
@@ -896,7 +897,8 @@ dispatchGaussianSparseRasterizeForward<torch::kCPU>(
     const torch::Tensor &activeTiles,
     const torch::Tensor &tilePixelMask,
     const torch::Tensor &tilePixelCumsum,
-    const torch::Tensor &pixelMap) {
+    const torch::Tensor &pixelMap,
+    const at::optional<torch::Tensor> &backgrounds) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
 }
 

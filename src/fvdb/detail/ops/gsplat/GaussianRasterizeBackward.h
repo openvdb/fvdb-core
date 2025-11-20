@@ -43,6 +43,9 @@ namespace ops {
 /// @param[in] absGrad Whether to use absolute gradients
 /// @param[in] numSharedChannelsOverride Override for number of shared memory channels (-1 means
 /// auto-select)
+/// @param[in] backgrounds Optional background color per camera [C, D]. If provided, background
+/// colors affect gradient computation for transparent pixels. If not provided, background is
+/// assumed to be black.
 ///
 /// @return std::tuple containing gradients of the loss function with respect to the input
 /// parameters:
@@ -65,14 +68,16 @@ dispatchGaussianRasterizeBackward(
     const uint32_t imageOriginW,
     const uint32_t imageOriginH,
     const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,            // [C, tile_height, tile_width]
-    const torch::Tensor &tileGaussianIds,        // [n_isects]
-    const torch::Tensor &renderedAlphas,         // [C, imageHeight, imageWidth, 1]
-    const torch::Tensor &lastIds,                // [C, imageHeight, imageWidth]
-    const torch::Tensor &dLossDRenderedFeatures, // [C, imageHeight, imageWidth, D]
-    const torch::Tensor &dLossDRenderedAlphas,   // [C, imageHeight, imageWidth, 1]
+    const torch::Tensor &tileOffsets,                            // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds,                        // [n_isects]
+    const torch::Tensor &renderedAlphas,                         // [C, imageHeight, imageWidth, 1]
+    const torch::Tensor &lastIds,                                // [C, imageHeight, imageWidth]
+    const torch::Tensor &dLossDRenderedFeatures,                 // [C, imageHeight, imageWidth, D]
+    const torch::Tensor &dLossDRenderedAlphas,                   // [C, imageHeight, imageWidth, 1]
     const bool absGrad,
-    const int64_t numSharedChannelsOverride = -1);
+    const int64_t numSharedChannelsOverride        = -1,
+    const at::optional<torch::Tensor> &backgrounds = at::nullopt // [C, D]
+);
 
 /// @brief Calculate gradients for the sparse Gaussian rasterization process (backward pass)
 ///
@@ -110,6 +115,9 @@ dispatchGaussianRasterizeBackward(
 /// @param[in] absGrad Whether to use absolute gradients
 /// @param[in] numSharedChannelsOverride Override for number of shared memory channels (-1 means
 /// auto-select)
+/// @param[in] backgrounds Optional background color per camera [C, D]. If provided, background
+/// colors affect gradient computation for transparent pixels. If not provided, background is
+/// assumed to be black.
 ///
 /// @return std::tuple containing gradients of the loss function with respect to the input
 /// parameters:
@@ -150,7 +158,9 @@ dispatchGaussianSparseRasterizeBackward(
     const torch::Tensor &pixelMap,        // [AP]
     // Options
     const bool absGrad,
-    const int64_t numSharedChannelsOverride = -1);
+    const int64_t numSharedChannelsOverride        = -1,
+    const at::optional<torch::Tensor> &backgrounds = at::nullopt // [C, D]
+);
 
 } // namespace ops
 } // namespace detail

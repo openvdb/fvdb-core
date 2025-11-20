@@ -2253,5 +2253,330 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
             self.assertTrue(image_sparse_weights == selected_reference_weights)
 
 
+class TestGaussianRenderBackgrounds(BaseGaussianTestCase):
+    """Test background color support in Gaussian rendering"""
+
+    def setUp(self):
+        super().setUp()
+
+    def test_render_with_uniform_background(self):
+        """Test that uniform background colors blend correctly with rendered images"""
+        num_cameras = self.cam_to_world_mats.shape[0]
+        num_channels = 3
+
+        # Create a uniform background color (gray)
+        backgrounds = torch.full((num_cameras, num_channels), 0.5, device=self.device, dtype=torch.float32)
+
+        # Render without background
+        colors_no_bg, alphas_no_bg = self.gs3d.render_images(
+            self.cam_to_world_mats,
+            self.projection_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+        )
+
+        # Render with background
+        colors_with_bg, alphas_with_bg = self.gs3d.render_images(
+            self.cam_to_world_mats,
+            self.projection_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            backgrounds=backgrounds,
+        )
+
+        # Alphas should be identical regardless of background
+        self.assertTrue(torch.allclose(alphas_no_bg, alphas_with_bg))
+
+        # Verify we have some non-opaque pixels (otherwise test is meaningless)
+        non_opaque_pixels = (alphas_no_bg < 0.99).sum()
+        self.assertGreater(non_opaque_pixels.item(), 0, "Test requires some non-opaque pixels")
+
+        # Compute expected blended colors manually
+        # Expected: renderedColor + (1 - alpha) * background
+        backgrounds_expanded = backgrounds.view(num_cameras, 1, 1, num_channels)
+        expected_colors = colors_no_bg + (1.0 - alphas_no_bg) * backgrounds_expanded
+
+        # Colors should match the manual blending
+        self.assertTrue(torch.allclose(colors_with_bg, expected_colors, atol=1e-5, rtol=1e-5))
+
+    def test_render_with_different_backgrounds_per_camera(self):
+        """Test multi-camera rendering with different background colors"""
+        num_cameras = min(3, self.cam_to_world_mats.shape[0])
+        cam_mats = self.cam_to_world_mats[:num_cameras]
+        proj_mats = self.projection_mats[:num_cameras]
+        num_channels = 3
+
+        # Create different background colors for each camera
+        backgrounds = torch.zeros((num_cameras, num_channels), device=self.device, dtype=torch.float32)
+        backgrounds[0] = torch.tensor([1.0, 0.0, 0.0], device=self.device)  # Red
+        if num_cameras > 1:
+            backgrounds[1] = torch.tensor([0.0, 1.0, 0.0], device=self.device)  # Green
+        if num_cameras > 2:
+            backgrounds[2] = torch.tensor([0.0, 0.0, 1.0], device=self.device)  # Blue
+
+        # Render without background
+        colors_no_bg, alphas_no_bg = self.gs3d.render_images(
+            cam_mats, proj_mats, self.width, self.height, self.near_plane, self.far_plane
+        )
+
+        # Render with different backgrounds
+        colors_with_bg, alphas_with_bg = self.gs3d.render_images(
+            cam_mats, proj_mats, self.width, self.height, self.near_plane, self.far_plane, backgrounds=backgrounds
+        )
+
+        # Alphas should be identical
+        self.assertTrue(torch.allclose(alphas_no_bg, alphas_with_bg))
+
+        # Verify each camera has the correct background blending
+        for cam_idx in range(num_cameras):
+            bg = backgrounds[cam_idx].view(1, 1, num_channels)
+            expected = colors_no_bg[cam_idx] + (1.0 - alphas_no_bg[cam_idx]) * bg
+            self.assertTrue(torch.allclose(colors_with_bg[cam_idx], expected, atol=1e-5, rtol=1e-5))
+
+    def test_render_depths_with_background(self):
+        """Test depth rendering with background values"""
+        num_cameras = self.cam_to_world_mats.shape[0]
+
+        # Create background depth values
+        backgrounds = torch.full((num_cameras, 1), 100.0, device=self.device, dtype=torch.float32)
+
+        # Render without background
+        depths_no_bg, alphas_no_bg = self.gs3d.render_depths(
+            self.cam_to_world_mats,
+            self.projection_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+        )
+
+        # Render with background
+        depths_with_bg, alphas_with_bg = self.gs3d.render_depths(
+            self.cam_to_world_mats,
+            self.projection_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            backgrounds=backgrounds,
+        )
+
+        # Alphas should be identical
+        self.assertTrue(torch.allclose(alphas_no_bg, alphas_with_bg))
+
+        # Expected: renderedDepth + (1 - alpha) * backgroundDepth
+        backgrounds_expanded = backgrounds.view(num_cameras, 1, 1, 1)
+        expected_depths = depths_no_bg + (1.0 - alphas_no_bg) * backgrounds_expanded
+
+        self.assertTrue(torch.allclose(depths_with_bg, expected_depths, atol=1e-5, rtol=1e-5))
+
+    def test_render_images_and_depths_with_background(self):
+        """Test combined image+depth rendering with backgrounds"""
+        num_cameras = self.cam_to_world_mats.shape[0]
+
+        # Create background with RGB + depth
+        backgrounds = torch.zeros((num_cameras, 4), device=self.device, dtype=torch.float32)
+        backgrounds[:, :3] = 0.3  # Gray RGB
+        backgrounds[:, 3] = 50.0  # Depth value
+
+        # Render with background
+        outputs_with_bg, alphas_with_bg = self.gs3d.render_images_and_depths(
+            self.cam_to_world_mats,
+            self.projection_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            backgrounds=backgrounds,
+        )
+
+        # Render without background
+        outputs_no_bg, alphas_no_bg = self.gs3d.render_images_and_depths(
+            self.cam_to_world_mats,
+            self.projection_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+        )
+
+        # Alphas should be identical
+        self.assertTrue(torch.allclose(alphas_no_bg, alphas_with_bg))
+
+        # Check RGB+D channels blend correctly
+        backgrounds_expanded = backgrounds.view(num_cameras, 1, 1, 4)
+        expected_outputs = outputs_no_bg + (1.0 - alphas_no_bg) * backgrounds_expanded
+
+        self.assertTrue(torch.allclose(outputs_with_bg, expected_outputs, atol=1e-5, rtol=1e-5))
+
+    def test_gradients_flow_with_backgrounds(self):
+        """Test that gradients flow correctly through rendering with backgrounds"""
+        num_cameras = min(2, self.cam_to_world_mats.shape[0])
+        cam_mats = self.cam_to_world_mats[:num_cameras]
+        proj_mats = self.projection_mats[:num_cameras]
+        num_channels = 3
+
+        # Create backgrounds
+        backgrounds = torch.full((num_cameras, num_channels), 0.5, device=self.device, dtype=torch.float32)
+
+        # Render with background and compute loss
+        colors, alphas = self.gs3d.render_images(
+            cam_mats, proj_mats, self.width, self.height, self.near_plane, self.far_plane, backgrounds=backgrounds
+        )
+
+        loss = colors.sum()
+        loss.backward()
+
+        # Check that gradients were computed
+        self.assertIsNotNone(self.gs3d.means.grad)
+        self.assertIsNotNone(self.gs3d.quats.grad)
+        self.assertIsNotNone(self.gs3d.log_scales.grad)
+        self.assertIsNotNone(self.gs3d.logit_opacities.grad)
+        self.assertIsNotNone(self.gs3d.sh0.grad)
+
+        # Gradients should be non-zero (at least somewhere)
+        assert self.gs3d.means.grad is not None
+        assert self.gs3d.logit_opacities.grad is not None
+        self.assertGreater(torch.abs(self.gs3d.means.grad).sum().item(), 0)
+        self.assertGreater(torch.abs(self.gs3d.logit_opacities.grad).sum().item(), 0)
+
+    def test_default_behavior_unchanged(self):
+        """Test that omitting backgrounds gives same results as before"""
+        # Render without explicitly passing backgrounds
+        colors_default, alphas_default = self.gs3d.render_images(
+            self.cam_to_world_mats,
+            self.projection_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+        )
+
+        # Render with backgrounds=None (should be same)
+        colors_none, alphas_none = self.gs3d.render_images(
+            self.cam_to_world_mats,
+            self.projection_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            backgrounds=None,
+        )
+
+        # Should be identical
+        self.assertTrue(torch.equal(colors_default, colors_none))
+        self.assertTrue(torch.equal(alphas_default, alphas_none))
+
+    def test_render_from_projected_gaussians_with_backgrounds(self):
+        """Test rendering from pre-projected gaussians with backgrounds"""
+        num_cameras = min(2, self.cam_to_world_mats.shape[0])
+        cam_mats = self.cam_to_world_mats[:num_cameras]
+        proj_mats = self.projection_mats[:num_cameras]
+        num_channels = 3
+
+        # Project gaussians
+        projected = self.gs3d.project_gaussians_for_images(
+            cam_mats, proj_mats, self.width, self.height, self.near_plane, self.far_plane
+        )
+
+        # Create backgrounds
+        backgrounds = torch.full((num_cameras, num_channels), 0.7, device=self.device, dtype=torch.float32)
+
+        # Render without background
+        colors_no_bg, alphas_no_bg = self.gs3d.render_from_projected_gaussians(projected)
+
+        # Render with background
+        colors_with_bg, alphas_with_bg = self.gs3d.render_from_projected_gaussians(projected, backgrounds=backgrounds)
+
+        # Alphas should be identical
+        self.assertTrue(torch.allclose(alphas_no_bg, alphas_with_bg))
+
+        # Verify blending
+        backgrounds_expanded = backgrounds.view(num_cameras, 1, 1, num_channels)
+        expected_colors = colors_no_bg + (1.0 - alphas_no_bg) * backgrounds_expanded
+
+        self.assertTrue(torch.allclose(colors_with_bg, expected_colors, atol=1e-5, rtol=1e-5))
+
+    def test_jagged_render_with_backgrounds(self):
+        """Test jagged tensor rendering with backgrounds"""
+        # Use the existing test gaussians, create two scenes from the same data
+        jt_means = JaggedTensor([self.gs3d.means, self.gs3d.means]).to(self.device)
+        jt_quats = JaggedTensor([self.gs3d.quats, self.gs3d.quats]).to(self.device)
+        jt_scales = JaggedTensor([self.gs3d.scales, self.gs3d.scales]).to(self.device)
+        jt_opacities = JaggedTensor([self.gs3d.opacities, self.gs3d.opacities]).to(self.device)
+
+        sh_coeffs = torch.cat([self.gs3d.sh0, self.gs3d.shN], dim=1)  # [N, K, 3]
+        jt_sh_coeffs = JaggedTensor([sh_coeffs, sh_coeffs]).to(self.device)
+
+        # Two scenes, one camera each
+        jt_viewmats = JaggedTensor([self.cam_to_world_mats[0:1], self.cam_to_world_mats[0:1]]).to(self.device)
+        jt_Ks = JaggedTensor([self.projection_mats[0:1], self.projection_mats[0:1]]).to(self.device)
+
+        # Create backgrounds (2 cameras total: 1 per scene)
+        num_cameras = 2
+        backgrounds = torch.zeros((num_cameras, 3), device=self.device, dtype=torch.float32)
+        backgrounds[0] = torch.tensor([1.0, 0.0, 0.0], device=self.device)  # Red
+        backgrounds[1] = torch.tensor([0.0, 1.0, 0.0], device=self.device)  # Green
+
+        # Render without backgrounds
+        colors_no_bg, alphas_no_bg, _ = gaussian_render_jagged(
+            jt_means,
+            jt_quats,
+            jt_scales,
+            jt_opacities,
+            jt_sh_coeffs,
+            jt_viewmats,
+            jt_Ks,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            self.sh_degree,
+        )
+
+        # Render with backgrounds
+        colors_with_bg, alphas_with_bg, _ = gaussian_render_jagged(
+            jt_means,
+            jt_quats,
+            jt_scales,
+            jt_opacities,
+            jt_sh_coeffs,
+            jt_viewmats,
+            jt_Ks,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            self.sh_degree,
+            backgrounds=backgrounds,
+        )
+
+        # Alphas should be identical
+        self.assertTrue(torch.allclose(alphas_no_bg, alphas_with_bg))
+
+        # Verify blending for each camera
+        # Colors and alphas are returned as [C, H, W, D] tensors (NOT [C*H, W, D])
+        for cam_idx in range(num_cameras):
+            # Extract this camera's data
+            cam_colors_no_bg = colors_no_bg[cam_idx]  # [H, W, 3]
+            cam_colors_with_bg = colors_with_bg[cam_idx]  # [H, W, 3]
+            cam_alphas_no_bg = alphas_no_bg[cam_idx]  # [H, W, 1]
+
+            # Compute expected colors with background blending
+            bg = backgrounds[cam_idx].view(1, 1, 3)
+            expected = cam_colors_no_bg + (1.0 - cam_alphas_no_bg) * bg
+
+            max_diff = torch.abs(cam_colors_with_bg - expected).max().item()
+
+            self.assertTrue(
+                torch.allclose(cam_colors_with_bg, expected, atol=1e-4, rtol=1e-4),
+                f"Camera {cam_idx}: max diff {max_diff} exceeds tolerance",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

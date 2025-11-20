@@ -37,24 +37,28 @@ namespace ops {
 /// where its Gaussians start
 /// @param[in] tileGaussianIds Flattened Gaussian IDs for tile intersection [n_isects] indicating
 /// which Gaussians affect each tile
+/// @param[in] backgrounds Optional background color per camera [C, D]. If provided, background
+/// colors will be blended with transparent pixels. If not provided, background is assumed to be
+/// black.
 ///
 /// @return std::tuple containing:
 ///         - Rendered image features/colors [C, image_height, image_width, D]
 ///         - Alpha values [C, image_height, image_width, 1]
 ///         - Last Gaussian ID rendered at each pixel [C, image_height, image_width]
 template <torch::DeviceType>
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-dispatchGaussianRasterizeForward(const torch::Tensor &means2d,   // [C, N, 2]
-                                 const torch::Tensor &conics,    // [C, N, 3]
-                                 const torch::Tensor &features,  // [C, N, D]
-                                 const torch::Tensor &opacities, // [N]
-                                 const uint32_t imageWidth,
-                                 const uint32_t imageHeight,
-                                 const uint32_t imageOriginW,
-                                 const uint32_t imageOriginH,
-                                 const uint32_t tileSize,
-                                 const torch::Tensor &tileOffsets, // [C, tile_height, tile_width]
-                                 const torch::Tensor &tileGaussianIds // [n_isects]
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> dispatchGaussianRasterizeForward(
+    const torch::Tensor &means2d,   // [C, N, 2]
+    const torch::Tensor &conics,    // [C, N, 3]
+    const torch::Tensor &features,  // [C, N, D]
+    const torch::Tensor &opacities, // [N]
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const uint32_t imageOriginW,
+    const uint32_t imageOriginH,
+    const uint32_t tileSize,
+    const torch::Tensor &tileOffsets,                            // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds,                        // [n_isects]
+    const at::optional<torch::Tensor> &backgrounds = at::nullopt // [C, D]
 );
 
 /// @brief Dispatches the sparse Gaussian rasterization forward pass to the specified device.
@@ -76,28 +80,33 @@ dispatchGaussianRasterizeForward(const torch::Tensor &means2d,   // [C, N, 2]
 /// @param tilePixelMask Tensor containing the mask for each tile pixel.
 /// @param tilePixelCumsum Tensor containing the cumulative sum of tile pixels.
 /// @param pixelMap Tensor containing the mapping of pixels to output indices.
+/// @param backgrounds Optional background color per camera [C, D]. If provided, background
+/// colors will be blended with transparent pixels. If not provided, background is assumed to be
+/// black.
 /// @return A tuple containing:
 ///         - Output colors JaggedTensor for the specified pixels.
 ///         - Output alphas JaggedTensor for the specified pixels.
 ///         - Output last Gaussian IDs JaggedTensor for the specified pixels.
 template <torch::DeviceType Device>
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor, fvdb::JaggedTensor>
-dispatchGaussianSparseRasterizeForward(const fvdb::JaggedTensor &pixelsToRender,
-                                       const torch::Tensor &means2d,
-                                       const torch::Tensor &conics,
-                                       const torch::Tensor &features,
-                                       const torch::Tensor &opacities,
-                                       const uint32_t imageWidth,
-                                       const uint32_t imageHeight,
-                                       const uint32_t imageOriginW,
-                                       const uint32_t imageOriginH,
-                                       const uint32_t tileSize,
-                                       const torch::Tensor &tileOffsets,
-                                       const torch::Tensor &tileGaussianIds,
-                                       const torch::Tensor &activeTiles,
-                                       const torch::Tensor &tilePixelMask,
-                                       const torch::Tensor &tilePixelCumsum,
-                                       const torch::Tensor &pixelMap);
+dispatchGaussianSparseRasterizeForward(
+    const fvdb::JaggedTensor &pixelsToRender,
+    const torch::Tensor &means2d,
+    const torch::Tensor &conics,
+    const torch::Tensor &features,
+    const torch::Tensor &opacities,
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const uint32_t imageOriginW,
+    const uint32_t imageOriginH,
+    const uint32_t tileSize,
+    const torch::Tensor &tileOffsets,
+    const torch::Tensor &tileGaussianIds,
+    const torch::Tensor &activeTiles,
+    const torch::Tensor &tilePixelMask,
+    const torch::Tensor &tilePixelCumsum,
+    const torch::Tensor &pixelMap,
+    const at::optional<torch::Tensor> &backgrounds = at::nullopt);
 
 } // namespace ops
 } // namespace detail
