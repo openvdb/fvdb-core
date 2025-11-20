@@ -15,7 +15,7 @@ from .grid_batch import GridBatch
 from .jagged_tensor import JaggedTensor
 from .types import DeviceIdentifier, cast_check, resolve_device
 
-JaggedTensorOrTensor = TypeVar("JaggedTensorOrTensor", JaggedTensor, torch.Tensor)
+JaggedTensorOrTensorT = TypeVar("JaggedTensorOrTensorT", JaggedTensor, torch.Tensor)
 
 
 class ProjectedGaussianSplats:
@@ -1698,7 +1698,7 @@ class GaussianSplat3d:
 
     def render_depths_sparse(
         self,
-        pixels_to_render: JaggedTensorOrTensor,
+        pixels_to_render: JaggedTensorOrTensorT,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
         image_width: int,
@@ -1710,7 +1710,7 @@ class GaussianSplat3d:
         min_radius_2d: float = 0.3,
         eps_2d: float = 0.3,
         antialias: bool = False,
-    ) -> tuple[JaggedTensorOrTensor, JaggedTensorOrTensor]:
+    ) -> tuple[JaggedTensorOrTensorT, JaggedTensorOrTensorT]:
         """
         Render ``C`` collections of sparse depth values from this :class:`GaussianSplat3d` from ``C`` camera views
         at the specified pixel locations.
@@ -1873,7 +1873,7 @@ class GaussianSplat3d:
 
     def render_features_sparse(
         self,
-        pixels_to_render: JaggedTensorOrTensor,
+        pixels_to_render: JaggedTensorOrTensorT,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
         image_width: int,
@@ -1886,7 +1886,7 @@ class GaussianSplat3d:
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
         antialias: bool = False,
-    ) -> tuple[JaggedTensorOrTensor, JaggedTensorOrTensor]:
+    ) -> tuple[JaggedTensorOrTensorT, JaggedTensorOrTensorT]:
         """
         Render ``C`` collections of multi-channel features (see :attr:`num_channels`) from this :class:`GaussianSplat3d` from ``C`` camera views
         at the specified pixel locations.
@@ -1970,7 +1970,7 @@ class GaussianSplat3d:
 
     def render_features_and_depths_sparse(
         self,
-        pixels_to_render: JaggedTensorOrTensor,
+        pixels_to_render: JaggedTensorOrTensorT,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
         image_width: int,
@@ -1983,7 +1983,7 @@ class GaussianSplat3d:
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
         antialias: bool = False,
-    ) -> tuple[JaggedTensorOrTensor, JaggedTensorOrTensor]:
+    ) -> tuple[JaggedTensorOrTensorT, JaggedTensorOrTensorT]:
         """
         Render ``C`` collections of sparse multi-channel features (see :attr:`num_channels`) with depth as
         the last channel from this :class:`GaussianSplat3d` from ``C`` camera views at the specified pixel locations.
