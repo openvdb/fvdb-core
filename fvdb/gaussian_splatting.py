@@ -1900,7 +1900,7 @@ class GaussianSplat3d:
             # Render sparse images from C camera views at specified pixel locations
             # features is a tensor of shape [C, P, D] where D is the number of channels
             # alphas is a tensor of shape [C, P, 1]
-            features, alphas = gaussian_splat_3d.render_images_sparse(
+            features, alphas = gaussian_splat_3d.render_features_sparse(
                 pixels_to_render, # tensor of shape [C, P, 2]
                 world_to_camera_matrices, # tensor of shape [C, 4, 4]
                 projection_matrices, # tensor of shape [C, 3, 3]
