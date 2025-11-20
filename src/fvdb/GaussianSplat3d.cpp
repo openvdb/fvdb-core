@@ -728,18 +728,18 @@ GaussianSplat3d::renderFromProjectedGaussians(
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
-GaussianSplat3d::renderImages(const torch::Tensor &worldToCameraMatrices,
-                              const torch::Tensor &projectionMatrices,
-                              const size_t imageWidth,
-                              const size_t imageHeight,
-                              const float near,
-                              const float far,
-                              const ProjectionType projectionType,
-                              const int64_t shDegreeToUse,
-                              const size_t tileSize,
-                              const float minRadius2d,
-                              const float eps2d,
-                              const bool antialias) {
+GaussianSplat3d::renderFeatures(const torch::Tensor &worldToCameraMatrices,
+                                const torch::Tensor &projectionMatrices,
+                                const size_t imageWidth,
+                                const size_t imageHeight,
+                                const float near,
+                                const float far,
+                                const ProjectionType projectionType,
+                                const int64_t shDegreeToUse,
+                                const size_t tileSize,
+                                const float minRadius2d,
+                                const float eps2d,
+                                const bool antialias) {
     RenderSettings settings;
     settings.imageWidth     = imageWidth;
     settings.imageHeight    = imageHeight;
@@ -839,19 +839,19 @@ GaussianSplat3d::renderDepthsSparse(const fvdb::JaggedTensor &pixelsToRender,
 }
 
 std::tuple<JaggedTensor, JaggedTensor>
-GaussianSplat3d::renderImagesSparse(const fvdb::JaggedTensor &pixelsToRender,
-                                    const torch::Tensor &worldToCameraMatrices,
-                                    const torch::Tensor &projectionMatrices,
-                                    const size_t imageWidth,
-                                    const size_t imageHeight,
-                                    const float near,
-                                    const float far,
-                                    const ProjectionType projectionType,
-                                    const int64_t shDegreeToUse,
-                                    const size_t tileSize,
-                                    const float minRadius2d,
-                                    const float eps2d,
-                                    const bool antialias) {
+GaussianSplat3d::renderFeaturesSparse(const fvdb::JaggedTensor &pixelsToRender,
+                                      const torch::Tensor &worldToCameraMatrices,
+                                      const torch::Tensor &projectionMatrices,
+                                      const size_t imageWidth,
+                                      const size_t imageHeight,
+                                      const float near,
+                                      const float far,
+                                      const ProjectionType projectionType,
+                                      const int64_t shDegreeToUse,
+                                      const size_t tileSize,
+                                      const float minRadius2d,
+                                      const float eps2d,
+                                      const bool antialias) {
     RenderSettings settings;
     settings.imageWidth     = imageWidth;
     settings.imageHeight    = imageHeight;
@@ -868,19 +868,19 @@ GaussianSplat3d::renderImagesSparse(const fvdb::JaggedTensor &pixelsToRender,
 }
 
 std::tuple<JaggedTensor, JaggedTensor>
-GaussianSplat3d::renderImagesAndDepthsSparse(const fvdb::JaggedTensor &pixelsToRender,
-                                             const torch::Tensor &worldToCameraMatrices,
-                                             const torch::Tensor &projectionMatrices,
-                                             const size_t imageWidth,
-                                             const size_t imageHeight,
-                                             const float near,
-                                             const float far,
-                                             const ProjectionType projectionType,
-                                             const int64_t shDegreeToUse,
-                                             const size_t tileSize,
-                                             const float minRadius2d,
-                                             const float eps2d,
-                                             const bool antialias) {
+GaussianSplat3d::renderFeaturesAndDepthsSparse(const fvdb::JaggedTensor &pixelsToRender,
+                                               const torch::Tensor &worldToCameraMatrices,
+                                               const torch::Tensor &projectionMatrices,
+                                               const size_t imageWidth,
+                                               const size_t imageHeight,
+                                               const float near,
+                                               const float far,
+                                               const ProjectionType projectionType,
+                                               const int64_t shDegreeToUse,
+                                               const size_t tileSize,
+                                               const float minRadius2d,
+                                               const float eps2d,
+                                               const bool antialias) {
     RenderSettings settings;
     settings.imageWidth     = imageWidth;
     settings.imageHeight    = imageHeight;
@@ -1007,18 +1007,18 @@ GaussianSplat3d::renderContributingGaussianIdsSparse(const fvdb::JaggedTensor &p
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
-GaussianSplat3d::renderImagesAndDepths(const torch::Tensor &worldToCameraMatrices,
-                                       const torch::Tensor &projectionMatrices,
-                                       const size_t imageWidth,
-                                       const size_t imageHeight,
-                                       const float near,
-                                       const float far,
-                                       const ProjectionType projectionType,
-                                       const int64_t shDegreeToUse,
-                                       const size_t tileSize,
-                                       const float minRadius2d,
-                                       const float eps2d,
-                                       const bool antialias) {
+GaussianSplat3d::renderFeaturesAndDepths(const torch::Tensor &worldToCameraMatrices,
+                                         const torch::Tensor &projectionMatrices,
+                                         const size_t imageWidth,
+                                         const size_t imageHeight,
+                                         const float near,
+                                         const float far,
+                                         const ProjectionType projectionType,
+                                         const int64_t shDegreeToUse,
+                                         const size_t tileSize,
+                                         const float minRadius2d,
+                                         const float eps2d,
+                                         const bool antialias) {
     RenderSettings settings;
     settings.imageWidth     = imageWidth;
     settings.imageHeight    = imageHeight;

@@ -255,9 +255,9 @@ class GaussianSplat3d:
     These include:
 
     - Rendering images with arbitrary channels using spherical harmonics for view-dependent color
-      representation (:meth:`render_images`, :meth:`render_images_and_depths`).
-    - Rendering depth maps (:meth:`render_depths`, :meth:`render_images_and_depths`).
-    - Rendering features at arbitrary sparse pixel locations (:meth:`render_features_sparse`).
+      representation (:meth:`render_features`, :meth:`render_features_and_depths`).
+    - Rendering depth maps (:meth:`render_depths`, :meth:`render_features_and_depths`).
+    - Rendering features at arbitrary sparse pixel locations (:meth:`render_features_sparse`, :meth:`render_features_and_depths_sparse`).
     - Rendering depths at arbitrary sparse pixel locations (:meth:`render_depths_sparse`).
     - Computing which gaussians contribute to each pixel in an image plane
       (:meth:`render_num_contributing_gaussians`, :meth:`render_contributing_gaussian_ids`).
@@ -1789,7 +1789,7 @@ class GaussianSplat3d:
         else:
             return JaggedTensor(impl=ret_depths), JaggedTensor(impl=ret_alphas)
 
-    def render_images(
+    def render_features(
         self,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
@@ -1820,7 +1820,7 @@ class GaussianSplat3d:
             # Render images from C camera views.
             # images is a tensor of shape [C, H, W, D] where D is the number of channels
             # alpha_images is a tensor of shape [C, H, W, 1]
-            images, alpha_images = gaussian_splat_3d.render_images(
+            images, alpha_images = gaussian_splat_3d.render_features(
                 world_to_camera_matrices, # tensor of shape [C, 4, 4]
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the images
@@ -1856,7 +1856,7 @@ class GaussianSplat3d:
                 Each element represents the alpha value (opacity) at a pixel such that ``0 <= alpha < 1``,
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
-        return self._impl.render_images(
+        return self._impl.render_features(
             world_to_camera_matrices=world_to_camera_matrices,
             projection_matrices=projection_matrices,
             image_width=image_width,
@@ -1947,7 +1947,7 @@ class GaussianSplat3d:
         else:
             raise TypeError("pixels_to_render must be either a torch.Tensor or a fvdb.JaggedTensor")
 
-        ret_features, ret_alphas = self._impl.render_images_sparse(
+        ret_features, ret_alphas = self._impl.render_features_sparse(
             pixels_to_render=pixels_to_render_impl,
             world_to_camera_matrices=world_to_camera_matrices,
             projection_matrices=projection_matrices,
@@ -1968,7 +1968,7 @@ class GaussianSplat3d:
         else:
             return JaggedTensor(impl=ret_features), JaggedTensor(impl=ret_alphas)
 
-    def render_images_and_depths_sparse(
+    def render_features_and_depths_sparse(
         self,
         pixels_to_render: JaggedTensorOrTensor,
         world_to_camera_matrices: torch.Tensor,
@@ -1996,7 +1996,7 @@ class GaussianSplat3d:
             # Render sparse images with depth from C camera views at specified pixel locations
             # features is a tensor of shape [C, P, D + 1] where D is the number of channels
             # alphas is a tensor of shape [C, P, 1]
-            features, alphas = gaussian_splat_3d.render_images_and_depths_sparse(
+            features, alphas = gaussian_splat_3d.render_features_and_depths_sparse(
                 pixels_to_render, # tensor of shape [C, P, 2]
                 world_to_camera_matrices, # tensor of shape [C, 4, 4]
                 projection_matrices, # tensor of shape [C, 3, 3]
@@ -2044,7 +2044,7 @@ class GaussianSplat3d:
         else:
             raise TypeError("pixels_to_render must be either a torch.Tensor or a fvdb.JaggedTensor")
 
-        ret_features, ret_alphas = self._impl.render_images_and_depths_sparse(
+        ret_features, ret_alphas = self._impl.render_features_and_depths_sparse(
             pixels_to_render=pixels_to_render_impl,
             world_to_camera_matrices=world_to_camera_matrices,
             projection_matrices=projection_matrices,
@@ -2065,7 +2065,7 @@ class GaussianSplat3d:
         else:
             return JaggedTensor(impl=ret_features), JaggedTensor(impl=ret_alphas)
 
-    def render_images_and_depths(
+    def render_features_and_depths(
         self,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
@@ -2096,7 +2096,7 @@ class GaussianSplat3d:
             # Render images with depth maps from C camera views.
             # images is a tensor of shape [C, H, W, D + 1] where D is the number of channels
             # alpha_images is a tensor of shape [C, H, W, 1]
-            images, alpha_images = gaussian_splat_3d.render_images(
+            images, alpha_images = gaussian_splat_3d.render_features_and_depths(
                 world_to_camera_matrices, # tensor of shape [C, 4, 4]
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the images
@@ -2136,7 +2136,7 @@ class GaussianSplat3d:
                 Each element represents the alpha value (opacity) at a pixel such that ``0 <= alpha < 1``,
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
-        return self._impl.render_images_and_depths(
+        return self._impl.render_features_and_depths(
             world_to_camera_matrices=world_to_camera_matrices,
             projection_matrices=projection_matrices,
             image_width=image_width,
@@ -2181,7 +2181,7 @@ class GaussianSplat3d:
             # Render images from C camera views.
             # images is a tensor of shape [C, H, W, D] where D is the number of channels
             # alpha_images is a tensor of shape [C, H, W, 1]
-            num_gaussians, alpha_images = gaussian_splat_3d.render_images(
+            num_gaussians, alpha_images = gaussian_splat_3d.render_num_contributing_gaussians(
                 world_to_camera_matrices, # tensor of shape [C, 4, 4]
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the images

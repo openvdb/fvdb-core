@@ -190,7 +190,7 @@ class GaussianSplat3d:
         crop_origin_h: int = ...,
         tile_size: int = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def render_images(
+    def render_features(
         self,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
@@ -205,7 +205,7 @@ class GaussianSplat3d:
         eps_2d: float = ...,
         antialias: bool = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def render_images_sparse(
+    def render_features_sparse(
         self,
         pixels_to_render: JaggedTensor,
         world_to_camera_matrices: torch.Tensor,
@@ -221,7 +221,7 @@ class GaussianSplat3d:
         eps_2d: float = ...,
         antialias: bool = ...,
     ) -> tuple[JaggedTensor, JaggedTensor]: ...
-    def render_images_and_depths(
+    def render_features_and_depths(
         self,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
@@ -236,7 +236,7 @@ class GaussianSplat3d:
         eps_2d: float = ...,
         antialias: bool = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def render_images_and_depths_sparse(
+    def render_features_and_depths_sparse(
         self,
         pixels_to_render: JaggedTensor,
         world_to_camera_matrices: torch.Tensor,

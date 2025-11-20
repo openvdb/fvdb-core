@@ -145,7 +145,7 @@ class TestGaussianSplatCat(BaseGaussianTestCase):
         gs3d.requires_grad = True
         gs3d.accumulate_max_2d_radii = True
         gs3d.accumulate_mean_2d_gradients = True
-        rgb, alpha = gs3d.render_images(
+        rgb, alpha = gs3d.render_features(
             self.cam_to_world_mats,
             self.projection_mats,
             self.width,
@@ -339,7 +339,7 @@ class TestGaussianSplatTo(BaseGaussianTestCase):
         if self.run_backward:
             self.gs3d.accumulate_max_2d_radii = True
             self.gs3d.accumulate_mean_2d_gradients = True
-            rgb1, alpha1 = self.gs3d.render_images(
+            rgb1, alpha1 = self.gs3d.render_features(
                 self.cam_to_world_mats,
                 self.projection_mats,
                 self.width,
@@ -517,7 +517,7 @@ class TestGaussianSplatIndexSet(BaseGaussianTestCase):
         # Render and compute losses on the source and destination Gaussian Splats
         # to make sure they have gradients but have a seperate autograd graph
         if dst_acc_grad_mean_2d or acc_max_2d_radii:
-            rgb1, alpha1 = dst.render_images(
+            rgb1, alpha1 = dst.render_features(
                 self.cam_to_world_mats,
                 self.projection_mats,
                 self.width,
@@ -528,7 +528,7 @@ class TestGaussianSplatIndexSet(BaseGaussianTestCase):
             loss1 = rgb1.sum()
             loss1.backward()
         if src_acc_grad_mean_2d or acc_max_2d_radii:
-            rgb2, alpha2 = src.render_images(
+            rgb2, alpha2 = src.render_features(
                 self.cam_to_world_mats,
                 self.projection_mats,
                 self.width,
@@ -858,7 +858,7 @@ class TestGaussianSplatIndex(BaseGaussianTestCase):
         if accumulate_mean_2d_gradients or accumulate_max_2d_radii:
             gs3d.requires_grad = True
             # Render images and compute a loss so we get gradients
-            rgb, alpha = gs3d.render_images(
+            rgb, alpha = gs3d.render_features(
                 self.cam_to_world_mats,
                 self.projection_mats,
                 self.width,
@@ -1418,7 +1418,7 @@ class TestGaussianRender(BaseGaussianTestCase):
         return (canvas * 255).astype(np.uint8)
 
     def test_gaussian_render(self):
-        render_colors, render_alphas = self.gs3d.render_images(
+        render_colors, render_alphas = self.gs3d.render_features(
             self.cam_to_world_mats,
             self.projection_mats,
             self.width,
@@ -2394,7 +2394,7 @@ class TestGaussianRenderSparse(BaseGaussianTestCase):
 
         torch.cuda.synchronize()
 
-        dense_features, dense_alphas = self.gs3d.render_images(
+        dense_features, dense_alphas = self.gs3d.render_features(
             self.cam_to_world_mats[0:1],
             self.projection_mats[0:1],
             self.width,
@@ -2453,7 +2453,7 @@ class TestGaussianRenderSparse(BaseGaussianTestCase):
         self.gs3d.log_scales.grad.zero_()
         self.gs3d.logit_opacities.grad.zero_()
 
-        dense_features, dense_alphas = self.gs3d.render_images(
+        dense_features, dense_alphas = self.gs3d.render_features(
             self.cam_to_world_mats[0:1],
             self.projection_mats[0:1],
             self.width,
@@ -2499,7 +2499,7 @@ class TestGaussianRenderSparse(BaseGaussianTestCase):
         y_coords = idx // self.width
         pixels_to_render = JaggedTensor([torch.stack([y_coords, x_coords], 1)]).to(self.device)
 
-        sparse_features, sparse_alphas = self.gs3d.render_images_and_depths_sparse(
+        sparse_features, sparse_alphas = self.gs3d.render_features_and_depths_sparse(
             pixels_to_render,
             self.cam_to_world_mats[0:1],
             self.projection_mats[0:1],
@@ -2511,7 +2511,7 @@ class TestGaussianRenderSparse(BaseGaussianTestCase):
 
         torch.cuda.synchronize()
 
-        dense_features, dense_alphas = self.gs3d.render_images_and_depths(
+        dense_features, dense_alphas = self.gs3d.render_features_and_depths(
             self.cam_to_world_mats[0:1],
             self.projection_mats[0:1],
             self.width,
@@ -2541,7 +2541,7 @@ class TestGaussianRenderSparse(BaseGaussianTestCase):
         y_coords = idx // self.width
         pixels_to_render = JaggedTensor([torch.stack([y_coords, x_coords], 1)]).to(self.device)
 
-        sparse_features, sparse_alphas = self.gs3d.render_images_and_depths_sparse(
+        sparse_features, sparse_alphas = self.gs3d.render_features_and_depths_sparse(
             pixels_to_render,
             self.cam_to_world_mats[0:1],
             self.projection_mats[0:1],
@@ -2570,7 +2570,7 @@ class TestGaussianRenderSparse(BaseGaussianTestCase):
         self.gs3d.log_scales.grad.zero_()
         self.gs3d.logit_opacities.grad.zero_()
 
-        dense_features, dense_alphas = self.gs3d.render_images_and_depths(
+        dense_features, dense_alphas = self.gs3d.render_features_and_depths(
             self.cam_to_world_mats[0:1],
             self.projection_mats[0:1],
             self.width,
