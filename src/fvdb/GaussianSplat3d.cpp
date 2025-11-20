@@ -1,13 +1,16 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include "fvdb/detail/autograd/GaussianRasterizeSparse.h"
+
 #include <fvdb/GaussianSplat3d.h>
 #include <fvdb/detail/io/GaussianPlyIO.h>
 #include <fvdb/detail/utils/Nvtx.h>
 
 // Autograd headers
 #include <fvdb/detail/autograd/EvaluateSphericalHarmonics.h>
-#include <fvdb/detail/autograd/GaussianRender.h>
+#include <fvdb/detail/autograd/GaussianProjection.h>
+#include <fvdb/detail/autograd/GaussianRasterize.h>
 
 // Ops headers
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeNumContributingGaussians.h>
@@ -440,6 +443,47 @@ GaussianSplat3d::renderImpl(const torch::Tensor &worldToCameraMatrices,
         state, settings.tileSize, settings.imageWidth, settings.imageHeight, 0, 0);
 }
 
+std::tuple<JaggedTensor, JaggedTensor>
+GaussianSplat3d::sparseRenderImpl(const JaggedTensor &pixelsToRender,
+                                  const torch::Tensor &worldToCameraMatrices,
+                                  const torch::Tensor &projectionMatrices,
+                                  const fvdb::detail::ops::RenderSettings &settings) {
+    FVDB_FUNC_RANGE();
+
+    const ProjectedGaussianSplats &state =
+        projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settings);
+
+    const auto [activeTiles, activeTileMask, tilePixelMask, tilePixelCumsum, pixelMap] =
+        fvdb::detail::ops::computeSparseInfo(settings.tileSize,
+                                             state.tileOffsets.size(2),
+                                             state.tileOffsets.size(1),
+                                             pixelsToRender);
+
+    auto rasterizeResult =
+        detail::autograd::RasterizeGaussiansToPixelsSparse::apply(pixelsToRender,
+                                                                  state.perGaussian2dMean,
+                                                                  state.perGaussianConic,
+                                                                  state.perGaussianRenderQuantity,
+                                                                  state.perGaussianOpacity,
+                                                                  settings.imageWidth,
+                                                                  settings.imageHeight,
+                                                                  0,
+                                                                  0,
+                                                                  settings.tileSize,
+                                                                  state.tileOffsets,
+                                                                  state.tileGaussianIds,
+                                                                  activeTiles,
+                                                                  tilePixelMask,
+                                                                  tilePixelCumsum,
+                                                                  pixelMap,
+                                                                  false);
+    auto renderedPixelsJData = rasterizeResult[0];
+
+    auto renderedAlphasJData = rasterizeResult[1];
+    return {pixelsToRender.jagged_like(renderedPixelsJData),
+            pixelsToRender.jagged_like(renderedAlphasJData)};
+}
+
 std::tuple<torch::Tensor, torch::Tensor>
 GaussianSplat3d::renderNumContributingGaussiansImpl(
     const torch::Tensor &worldToCameraMatrices,
@@ -760,6 +804,92 @@ GaussianSplat3d::renderNumContributingGaussians(const torch::Tensor &worldToCame
     settings.renderMode     = RenderSettings::RenderMode::DEPTH;
 
     return renderNumContributingGaussiansImpl(worldToCameraMatrices, projectionMatrices, settings);
+}
+
+std::tuple<JaggedTensor, JaggedTensor>
+GaussianSplat3d::sparseRenderDepths(const fvdb::JaggedTensor &pixelsToRender,
+                                    const torch::Tensor &worldToCameraMatrices,
+                                    const torch::Tensor &projectionMatrices,
+                                    const size_t imageWidth,
+                                    const size_t imageHeight,
+                                    const float near,
+                                    const float far,
+                                    const ProjectionType projectionType,
+                                    const size_t tileSize,
+                                    const float minRadius2d,
+                                    const float eps2d,
+                                    const bool antialias) {
+    RenderSettings settings;
+    settings.imageWidth     = imageWidth;
+    settings.imageHeight    = imageHeight;
+    settings.nearPlane      = near;
+    settings.farPlane       = far;
+    settings.projectionType = projectionType;
+    settings.shDegreeToUse  = 0;
+    settings.tileSize       = tileSize;
+    settings.radiusClip     = minRadius2d;
+    settings.eps2d          = eps2d;
+    settings.renderMode     = RenderSettings::RenderMode::DEPTH;
+
+    return sparseRenderImpl(pixelsToRender, worldToCameraMatrices, projectionMatrices, settings);
+}
+
+std::tuple<JaggedTensor, JaggedTensor>
+GaussianSplat3d::sparseRenderImages(const fvdb::JaggedTensor &pixelsToRender,
+                                    const torch::Tensor &worldToCameraMatrices,
+                                    const torch::Tensor &projectionMatrices,
+                                    const size_t imageWidth,
+                                    const size_t imageHeight,
+                                    const float near,
+                                    const float far,
+                                    const ProjectionType projectionType,
+                                    const int64_t shDegreeToUse,
+                                    const size_t tileSize,
+                                    const float minRadius2d,
+                                    const float eps2d,
+                                    const bool antialias) {
+    RenderSettings settings;
+    settings.imageWidth     = imageWidth;
+    settings.imageHeight    = imageHeight;
+    settings.nearPlane      = near;
+    settings.farPlane       = far;
+    settings.projectionType = projectionType;
+    settings.shDegreeToUse  = shDegreeToUse;
+    settings.tileSize       = tileSize;
+    settings.radiusClip     = minRadius2d;
+    settings.eps2d          = eps2d;
+    settings.renderMode     = RenderSettings::RenderMode::RGB;
+
+    return sparseRenderImpl(pixelsToRender, worldToCameraMatrices, projectionMatrices, settings);
+}
+
+std::tuple<JaggedTensor, JaggedTensor>
+GaussianSplat3d::sparseRenderImagesAndDepths(const fvdb::JaggedTensor &pixelsToRender,
+                                             const torch::Tensor &worldToCameraMatrices,
+                                             const torch::Tensor &projectionMatrices,
+                                             const size_t imageWidth,
+                                             const size_t imageHeight,
+                                             const float near,
+                                             const float far,
+                                             const ProjectionType projectionType,
+                                             const int64_t shDegreeToUse,
+                                             const size_t tileSize,
+                                             const float minRadius2d,
+                                             const float eps2d,
+                                             const bool antialias) {
+    RenderSettings settings;
+    settings.imageWidth     = imageWidth;
+    settings.imageHeight    = imageHeight;
+    settings.nearPlane      = near;
+    settings.farPlane       = far;
+    settings.projectionType = projectionType;
+    settings.shDegreeToUse  = shDegreeToUse;
+    settings.tileSize       = tileSize;
+    settings.radiusClip     = minRadius2d;
+    settings.eps2d          = eps2d;
+    settings.renderMode     = RenderSettings::RenderMode::RGBD;
+
+    return sparseRenderImpl(pixelsToRender, worldToCameraMatrices, projectionMatrices, settings);
 }
 
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>

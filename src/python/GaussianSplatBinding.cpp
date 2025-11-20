@@ -1,6 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <pybind11/cast.h>
+
 #include "TypeCasters.h"
 
 #include <fvdb/FVDB.h>
@@ -225,6 +227,53 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("eps_2d")           = 0.3,
              py::arg("antialias")        = false)
 
+        .def("render_images_sparse",
+             &fvdb::GaussianSplat3d::sparseRenderImages,
+             py::arg("pixels_to_render"),
+             py::arg("world_to_camera_matrices"),
+             py::arg("projection_matrices"),
+             py::arg("image_width"),
+             py::arg("image_height"),
+             py::arg("near"),
+             py::arg("far"),
+             py::arg("projection_type")  = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
+             py::arg("sh_degree_to_use") = -1,
+             py::arg("tile_size")        = 16,
+             py::arg("min_radius_2d")    = 0.0,
+             py::arg("eps_2d")           = 0.3,
+             py::arg("antialias")        = false)
+
+        .def("render_depths_sparse",
+             &fvdb::GaussianSplat3d::sparseRenderDepths,
+             py::arg("pixels_to_render"),
+             py::arg("world_to_camera_matrices"),
+             py::arg("projection_matrices"),
+             py::arg("image_width"),
+             py::arg("image_height"),
+             py::arg("near"),
+             py::arg("far"),
+             py::arg("projection_type") = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
+             py::arg("tile_size")       = 16,
+             py::arg("min_radius_2d")   = 0.0,
+             py::arg("eps_2d")          = 0.3,
+             py::arg("antialias")       = false)
+
+        .def("render_images_and_depths_sparse",
+             &fvdb::GaussianSplat3d::sparseRenderImagesAndDepths,
+             py::arg("pixels_to_render"),
+             py::arg("world_to_camera_matrices"),
+             py::arg("projection_matrices"),
+             py::arg("image_width"),
+             py::arg("image_height"),
+             py::arg("near"),
+             py::arg("far"),
+             py::arg("projection_type")  = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
+             py::arg("sh_degree_to_use") = -1,
+             py::arg("tile_size")        = 16,
+             py::arg("min_radius_2d")    = 0.0,
+             py::arg("eps_2d")           = 0.3,
+             py::arg("antialias")        = false)
+
         .def("render_num_contributing_gaussians",
              &fvdb::GaussianSplat3d::renderNumContributingGaussians,
              py::arg("world_to_camera_matrices"),
@@ -239,7 +288,7 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("eps_2d")          = 0.3,
              py::arg("antialias")       = false)
 
-        .def("sparse_render_num_contributing_gaussians",
+        .def("render_num_contributing_gaussians_sparse",
              &fvdb::GaussianSplat3d::sparseRenderNumContributingGaussians,
              py::arg("pixels_to_render"),
              py::arg("world_to_camera_matrices"),
@@ -269,7 +318,7 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("eps_2d")          = 0.3,
              py::arg("antialias")       = false)
 
-        .def("sparse_render_top_contributing_gaussian_ids",
+        .def("render_top_contributing_gaussian_ids_sparse",
              &fvdb::GaussianSplat3d::sparseRenderTopContributingGaussianIds,
              py::arg("num_samples"),
              py::arg("pixels_to_render"),
@@ -285,7 +334,7 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("eps_2d")          = 0.3,
              py::arg("antialias")       = false)
 
-        .def("sparse_render_top_contributing_gaussian_ids",
+        .def("render_top_contributing_gaussian_ids_sparse",
              &fvdb::GaussianSplat3d::sparseRenderTopContributingGaussianIds,
              py::arg("num_samples"),
              py::arg("pixels_to_render"),

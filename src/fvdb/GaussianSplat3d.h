@@ -927,6 +927,50 @@ class GaussianSplat3d {
                           const float eps2d                   = 0.3,
                           const bool antialias                = false);
 
+    std::tuple<JaggedTensor, JaggedTensor>
+    sparseRenderImages(const fvdb::JaggedTensor &pixelsToRender,
+                       const torch::Tensor &worldToCameraMatrices,
+                       const torch::Tensor &projectionMatrices,
+                       const size_t imageWidth,
+                       const size_t imageHeight,
+                       const float near,
+                       const float far,
+                       const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
+                       const int64_t shDegreeToUse         = -1,
+                       const size_t tileSize               = 16,
+                       const float minRadius2d             = 0.0,
+                       const float eps2d                   = 0.3,
+                       const bool antialias                = false);
+
+    std::tuple<JaggedTensor, JaggedTensor>
+    sparseRenderDepths(const fvdb::JaggedTensor &pixelsToRender,
+                       const torch::Tensor &worldToCameraMatrices,
+                       const torch::Tensor &projectionMatrices,
+                       const size_t imageWidth,
+                       const size_t imageHeight,
+                       const float near,
+                       const float far,
+                       const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
+                       const size_t tileSize               = 16,
+                       const float minRadius2d             = 0.0,
+                       const float eps2d                   = 0.3,
+                       const bool antialias                = false);
+
+    std::tuple<JaggedTensor, JaggedTensor>
+    sparseRenderImagesAndDepths(const fvdb::JaggedTensor &pixelsToRender,
+                                const torch::Tensor &worldToCameraMatrices,
+                                const torch::Tensor &projectionMatrices,
+                                const size_t imageWidth,
+                                const size_t imageHeight,
+                                const float near,
+                                const float far,
+                                const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
+                                const int64_t shDegreeToUse         = -1,
+                                const size_t tileSize               = 16,
+                                const float minRadius2d             = 0.0,
+                                const float eps2d                   = 0.3,
+                                const bool antialias                = false);
+
     /// @brief Render the number of contributing Gaussians for each pixel in the image.
     /// @param worldToCameraMatrices [C, 4, 4] Camera-to-world matrices
     /// @param projectionMatrices [C, 4, 4] Projection matrices
@@ -1154,9 +1198,9 @@ class GaussianSplat3d {
     ///         The mask must have the same length as the number of Gaussians in this scene.
     GaussianSplat3d tensorIndexGetImpl(const torch::Tensor &indexOrMask) const;
 
-    /// @brief Render the gaussian splatting scene
-    ///         This function returns a single render quantity (RGB, depth, RGB+D) and
-    ///         single alpha value per pixel.
+    /// @brief Render the scene described by the Gaussian splats from the specified views.
+    ///        This function returns a single render quantity (RGB, depth, RGB+D) and
+    ///        single alpha value per pixel.
     /// @param worldToCameraMatrices [C, 4, 4]
     /// @param projectionMatrices [C, 3, 3]
     /// @param settings
@@ -1165,6 +1209,20 @@ class GaussianSplat3d {
     renderImpl(const torch::Tensor &worldToCameraMatrices,
                const torch::Tensor &projectionMatrices,
                const fvdb::detail::ops::RenderSettings &settings);
+
+    /// @brief Render the scene described by the Gaussian splats at the specified pixels in the
+    ///        specified views. This function returns a single render quantity (RGB, depth, RGB+D)
+    ///        and single alpha value per pixel.
+    /// @param pixelsToRender [P1 + P2 + ..., 2] JaggedTensor of pixels per camera to render.
+    /// @param worldToCameraMatrices [C, 4, 4]
+    /// @param projectionMatrices [C, 3, 3]
+    /// @param settings
+    /// @return Tuple of (render quantity, alpha value)
+    std::tuple<JaggedTensor, JaggedTensor>
+    sparseRenderImpl(const JaggedTensor &pixelsToRender,
+                     const torch::Tensor &worldToCameraMatrices,
+                     const torch::Tensor &projectionMatrices,
+                     const fvdb::detail::ops::RenderSettings &settings);
 
     /// @brief Render the number of contributing Gaussians for each pixel in the image.
     /// @param worldToCameraMatrices [C, 4, 4]

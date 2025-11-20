@@ -1,14 +1,12 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef FVDB_DETAIL_AUTOGRAD_GAUSSIANRENDER_H
-#define FVDB_DETAIL_AUTOGRAD_GAUSSIANRENDER_H
+#ifndef FVDB_DETAIL_AUTOGRAD_GAUSSIANPROJECTION_H
+#define FVDB_DETAIL_AUTOGRAD_GAUSSIANPROJECTION_H
 
 #include <torch/autograd.h>
 
-namespace fvdb {
-namespace detail {
-namespace autograd {
+namespace fvdb::detail::autograd {
 
 struct ProjectGaussians : public torch::autograd::Function<ProjectGaussians> {
     using VariableList    = torch::autograd::variable_list;
@@ -37,28 +35,6 @@ struct ProjectGaussians : public torch::autograd::Function<ProjectGaussians> {
     static VariableList backward(AutogradContext *ctx, VariableList gradOutput);
 };
 
-struct RasterizeGaussiansToPixels : public torch::autograd::Function<RasterizeGaussiansToPixels> {
-    using VariableList    = torch::autograd::variable_list;
-    using AutogradContext = torch::autograd::AutogradContext;
-    using Variable        = torch::autograd::Variable;
-
-    static VariableList forward(AutogradContext *ctx,
-                                const Variable &means2d,   // [C, N, 2]
-                                const Variable &conics,    // [C, N, 3]
-                                const Variable &colors,    // [C, N, 3]
-                                const Variable &opacities, // [N]
-                                const uint32_t imageWidth,
-                                const uint32_t imageHeight,
-                                const uint32_t imageOriginW,
-                                const uint32_t imageOriginH,
-                                const uint32_t tileSize,
-                                const Variable &tileOffsets,     // [C, tile_height, tile_width]
-                                const Variable &tileGaussianIds, // [n_isects]
-                                const bool absgrad);
-
-    static VariableList backward(AutogradContext *ctx, VariableList gradOutput);
-};
-
 struct ProjectGaussiansJagged : public torch::autograd::Function<ProjectGaussiansJagged> {
     using VariableList    = torch::autograd::variable_list;
     using AutogradContext = torch::autograd::AutogradContext;
@@ -83,8 +59,6 @@ struct ProjectGaussiansJagged : public torch::autograd::Function<ProjectGaussian
     static VariableList backward(AutogradContext *ctx, VariableList gradOutput);
 };
 
-} // namespace autograd
-} // namespace detail
-} // namespace fvdb
+} // namespace fvdb::detail::autograd
 
-#endif // FVDB_DETAIL_AUTOGRAD_GAUSSIANRENDER_H
+#endif // FVDB_DETAIL_AUTOGRAD_GAUSSIANPROJECTION_H

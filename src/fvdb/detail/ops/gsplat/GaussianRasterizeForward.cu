@@ -13,6 +13,7 @@
 
 #include <nanovdb/math/Math.h>
 
+#include <c10/core/DeviceType.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/util/Exception.h>
 
@@ -874,6 +875,30 @@ dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
         CALL_FWD_SPARSE_CUDA(513)
     default: AT_ERROR("Unsupported number of channels: ", channels);
     }
+}
+
+template <>
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor, fvdb::JaggedTensor>
+dispatchGaussianSparseRasterizeForward<torch::kPrivateUse1>(
+    // sparse pixel coordinates
+    const fvdb::JaggedTensor &pixelsToRender, // [C, maxPixelsPerCamera, 2]
+    // Gaussian parameters
+    const torch::Tensor &means2d,   // [C, N, 2]
+    const torch::Tensor &conics,    // [C, N, 3]
+    const torch::Tensor &features,  // [C, N, D]
+    const torch::Tensor &opacities, // [N]
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const uint32_t imageOriginW,
+    const uint32_t imageOriginH,
+    const uint32_t tileSize,
+    const torch::Tensor &tileOffsets,     // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds, // [n_isects]
+    const torch::Tensor &activeTiles,
+    const torch::Tensor &tilePixelMask,
+    const torch::Tensor &tilePixelCumsum,
+    const torch::Tensor &pixelMap) {
+    TORCH_CHECK_NOT_IMPLEMENTED(false, "PrivateUse1 implementation not available");
 }
 
 template <>

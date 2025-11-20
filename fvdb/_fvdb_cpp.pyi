@@ -166,6 +166,21 @@ class GaussianSplat3d:
         eps_2d: float = ...,
         antialias: bool = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
+    def render_depths_sparse(
+        self,
+        pixels_to_render: JaggedTensor,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        image_width: int,
+        image_height: int,
+        near: float,
+        far: float,
+        projection_type: ProjectionType = ...,
+        tile_size: int = ...,
+        min_radius_2d: float = ...,
+        eps_2d: float = ...,
+        antialias: bool = ...,
+    ) -> tuple[JaggedTensor, JaggedTensor]: ...
     def render_from_projected_gaussians(
         self,
         projected_gaussians: ProjectedGaussianSplats,
@@ -190,6 +205,22 @@ class GaussianSplat3d:
         eps_2d: float = ...,
         antialias: bool = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
+    def render_images_sparse(
+        self,
+        pixels_to_render: JaggedTensor,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        image_width: int,
+        image_height: int,
+        near: float,
+        far: float,
+        projection_type: ProjectionType = ...,
+        sh_degree_to_use: int = ...,
+        tile_size: int = ...,
+        min_radius_2d: float = ...,
+        eps_2d: float = ...,
+        antialias: bool = ...,
+    ) -> tuple[JaggedTensor, JaggedTensor]: ...
     def render_images_and_depths(
         self,
         world_to_camera_matrices: torch.Tensor,
@@ -205,6 +236,22 @@ class GaussianSplat3d:
         eps_2d: float = ...,
         antialias: bool = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
+    def render_images_and_depths_sparse(
+        self,
+        pixels_to_render: JaggedTensor,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        image_width: int,
+        image_height: int,
+        near: float,
+        far: float,
+        projection_type: ProjectionType = ...,
+        sh_degree_to_use: int = ...,
+        tile_size: int = ...,
+        min_radius_2d: float = ...,
+        eps_2d: float = ...,
+        antialias: bool = ...,
+    ) -> tuple[JaggedTensor, JaggedTensor]: ...
     def render_num_contributing_gaussians(
         self,
         world_to_camera_matrices: torch.Tensor,
@@ -219,7 +266,7 @@ class GaussianSplat3d:
         eps_2d: float = ...,
         antialias: bool = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def sparse_render_num_contributing_gaussians(
+    def render_num_contributing_gaussians_sparse(
         self,
         pixels_to_render: JaggedTensor,
         world_to_camera_matrices: torch.Tensor,
@@ -249,7 +296,7 @@ class GaussianSplat3d:
         eps_2d: float = ...,
         antialias: bool = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def sparse_render_top_contributing_gaussian_ids(
+    def render_top_contributing_gaussian_ids_sparse(
         self,
         pixels_to_render: JaggedTensor,
         num_samples: int,

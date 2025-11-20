@@ -11,6 +11,7 @@
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <ATen/cuda/Atomic.cuh>
+#include <c10/core/DeviceType.h>
 #include <c10/cuda/CUDAGuard.h>
 
 #include <cooperative_groups.h>
@@ -1701,6 +1702,34 @@ dispatchGaussianSparseRasterizeBackward<torch::kCUDA>(
         CALL_BWD_SPARSE_CUDA(513)
     default: AT_ERROR("Unsupported number of channels: ", colorDim);
     }
+}
+
+template <>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchGaussianSparseRasterizeBackward<torch::kPrivateUse1>(
+    const fvdb::JaggedTensor &pixelsToRender, // [C, NumPixels, 2]
+    const torch::Tensor &means2d,             // [C, N, 2]
+    const torch::Tensor &conics,              // [C, N, 3]
+    const torch::Tensor &features,            // [C, N, D]
+    const torch::Tensor &opacities,           // [N]
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const uint32_t imageOriginW,
+    const uint32_t imageOriginH,
+    const uint32_t tileSize,
+    const torch::Tensor &tileOffsets,                 // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds,             // [n_isects]
+    const fvdb::JaggedTensor &renderedAlphas,         // [C lists: varying sizes, each element [1]]
+    const fvdb::JaggedTensor &lastIds,                // [C lists: varying sizes]
+    const fvdb::JaggedTensor &dLossDRenderedFeatures, // [C lists: varying sizes, each element [D]]
+    const fvdb::JaggedTensor &dLossDRenderedAlphas,   // [C lists: varying sizes, each element [1]]
+    const torch::Tensor &activeTiles,                 // [AT]
+    const torch::Tensor &tilePixelMask,               // [AT, wordsPerTile]
+    const torch::Tensor &tilePixelCumsum,             // [AT]
+    const torch::Tensor &pixelMap,                    // [AP]
+    const bool absGrad,
+    const int64_t numSharedChannelsOverride) {
+    TORCH_CHECK_NOT_IMPLEMENTED(false, "PrivateUse1 implementation not available");
 }
 
 template <>
