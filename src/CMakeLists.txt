@@ -115,6 +115,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/gsplat/GaussianRasterizeForward.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeNumContributingGaussians.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeTopContributingGaussianIds.cu
+    fvdb/detail/ops/gsplat/GaussianRasterizeContributingGaussianIds.cu
     fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsBackward.cu
     fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsForward.cu
     fvdb/detail/ops/gsplat/GaussianSplatSparse.cu

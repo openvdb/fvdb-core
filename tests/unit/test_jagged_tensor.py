@@ -2574,6 +2574,22 @@ class TestJaggedTensor(unittest.TestCase):
         jt1.round_()
         self.assertTrue(torch.allclose(jt2.jdata, jt1.jdata))
 
+    @parameterized.expand(all_device_dtype_combos)
+    def test_jidxforjoffsets(self, device, dtype):
+        jt1 = fvdb.jrandn([[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        joffsets = jt1.joffsets
+        jidx = jt1.jidx
+        torch_jidx = torch.arange(joffsets.size(0) - 1, device=jidx.device, dtype=jidx.dtype)
+        torch_jidx = torch_jidx.repeat_interleave(joffsets[1:] - joffsets[:-1])
+        self.assertTrue(torch.allclose(jidx, torch_jidx))
+
+        jt1 = fvdb.jrandn([[0, 0, 30], [40, 0, 0, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        joffsets = jt1.joffsets
+        jidx = jt1.jidx
+        torch_jidx = torch.arange(joffsets.size(0) - 1, device=jidx.device, dtype=jidx.dtype)
+        torch_jidx = torch_jidx.repeat_interleave(joffsets[1:] - joffsets[:-1])
+        self.assertTrue(torch.allclose(jidx, torch_jidx))
+
     # def test_argsort(self):
     #     data = [torch.randn(np.random.randint(1024, 2048),) for _ in range(7)]
     #     jt = fvdb.JaggedTensor(data)
