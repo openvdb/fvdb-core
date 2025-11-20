@@ -928,7 +928,7 @@ class GaussianSplat3d {
                           const bool antialias                = false);
 
     std::tuple<JaggedTensor, JaggedTensor>
-    sparseRenderImages(const fvdb::JaggedTensor &pixelsToRender,
+    renderImagesSparse(const fvdb::JaggedTensor &pixelsToRender,
                        const torch::Tensor &worldToCameraMatrices,
                        const torch::Tensor &projectionMatrices,
                        const size_t imageWidth,
@@ -943,7 +943,7 @@ class GaussianSplat3d {
                        const bool antialias                = false);
 
     std::tuple<JaggedTensor, JaggedTensor>
-    sparseRenderDepths(const fvdb::JaggedTensor &pixelsToRender,
+    renderDepthsSparse(const fvdb::JaggedTensor &pixelsToRender,
                        const torch::Tensor &worldToCameraMatrices,
                        const torch::Tensor &projectionMatrices,
                        const size_t imageWidth,
@@ -957,7 +957,7 @@ class GaussianSplat3d {
                        const bool antialias                = false);
 
     std::tuple<JaggedTensor, JaggedTensor>
-    sparseRenderImagesAndDepths(const fvdb::JaggedTensor &pixelsToRender,
+    renderImagesAndDepthsSparse(const fvdb::JaggedTensor &pixelsToRender,
                                 const torch::Tensor &worldToCameraMatrices,
                                 const torch::Tensor &projectionMatrices,
                                 const size_t imageWidth,
@@ -1012,7 +1012,7 @@ class GaussianSplat3d {
     ///     alphas: A [P1 + P2 + ..., 1] jagged tensor containing the composited alpha value of the
     ///     pixels
     std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
-    sparseRenderNumContributingGaussians(const fvdb::JaggedTensor &pixelsToRender,
+    renderNumContributingGaussiansSparse(const fvdb::JaggedTensor &pixelsToRender,
                                          const torch::Tensor &worldToCameraMatrices,
                                          const torch::Tensor &projectionMatrices,
                                          const size_t imageWidth,
@@ -1167,7 +1167,7 @@ class GaussianSplat3d {
     ///              tensor containing the weights of the contributing Gaussians of each rendered
     ///              pixel for each camera. The weights are in row-major order and sum to 1 for each
     ///              pixel if that pixel is opaque (alpha=1).
-    std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor> sparseRenderContributingGaussianIds(
+    std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor> renderContributingGaussianIdsSparse(
         const fvdb::JaggedTensor &pixelsToRender,
         const torch::Tensor &worldToCameraMatrices,
         const torch::Tensor &projectionMatrices,

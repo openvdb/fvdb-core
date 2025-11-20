@@ -2517,7 +2517,7 @@ class GaussianSplat3d:
             tensors = [pixels_to_render[i] for i in range(C)]
             pixels_to_render_jagged = JaggedTensor(tensors)
 
-            result_ids, result_weights = self._impl.render_top_contributing_gaussian_ids_sparse(
+            result_ids, result_weights = self._impl.render_contributing_gaussian_ids_sparse(
                 pixels_to_render=pixels_to_render_jagged._impl,
                 world_to_camera_matrices=world_to_camera_matrices,
                 projection_matrices=projection_matrices,
@@ -2536,7 +2536,7 @@ class GaussianSplat3d:
             return JaggedTensor(impl=result_ids), JaggedTensor(impl=result_weights)
         else:
             # Already a JaggedTensor, call C++ implementation directly
-            result_ids_impl, result_weights_impl = self._impl.render_top_contributing_gaussian_ids_sparse(
+            result_ids_impl, result_weights_impl = self._impl.render_contributing_gaussian_ids_sparse(
                 pixels_to_render=pixels_to_render._impl,
                 world_to_camera_matrices=world_to_camera_matrices,
                 projection_matrices=projection_matrices,

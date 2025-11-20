@@ -296,7 +296,7 @@ class GaussianSplat3d:
         antialias: bool = ...,
         top_k_contributors: int = ...,
     ) -> tuple[JaggedTensor, JaggedTensor]: ...
-    def render_top_contributing_gaussian_ids_sparse(
+    def render_contributing_gaussian_ids_sparse(
         self,
         pixels_to_render: JaggedTensor,
         world_to_camera_matrices: torch.Tensor,

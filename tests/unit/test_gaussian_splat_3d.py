@@ -2122,7 +2122,7 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
 
             # Select tensors from reference_ids at the specified pixel positions
             reference_ids_list = image_reference_ids.unbind()
-            selected_tensors = [reference_ids_list[idx.item()] for idx in pixel_indices]
+            selected_tensors = [reference_ids_list[idx.item()] for idx in pixel_indices]  # type: ignore
             selected_reference_ids = JaggedTensor(selected_tensors)
 
             self.assertTrue(image_sparse_ids == selected_reference_ids)
@@ -2140,7 +2140,7 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
 
             # Select tensors from reference_weights at the specified pixel positions
             reference_weights_list = image_reference_weights.unbind()
-            selected_tensors = [reference_weights_list[idx.item()] for idx in pixel_indices]
+            selected_tensors = [reference_weights_list[idx.item()] for idx in pixel_indices]  # type: ignore
             selected_reference_weights = JaggedTensor(selected_tensors)
 
             self.assertTrue(image_sparse_weights == selected_reference_weights)
@@ -2229,7 +2229,7 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
 
             # Select tensors from reference_ids at the specified pixel positions
             reference_ids_list = image_reference_ids.unbind()
-            selected_tensors = [reference_ids_list[idx.item()] for idx in pixel_indices]
+            selected_tensors = [reference_ids_list[idx.item()] for idx in pixel_indices]  # type: ignore
             selected_reference_ids = JaggedTensor(selected_tensors)
 
             self.assertTrue(image_sparse_ids == selected_reference_ids)
@@ -2247,7 +2247,7 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
 
             # Select tensors from reference_weights at the specified pixel positions
             reference_weights_list = image_reference_weights.unbind()
-            selected_tensors = [reference_weights_list[idx.item()] for idx in pixel_indices]
+            selected_tensors = [reference_weights_list[idx.item()] for idx in pixel_indices]  # type: ignore
             selected_reference_weights = JaggedTensor(selected_tensors)
 
             self.assertTrue(image_sparse_weights == selected_reference_weights)

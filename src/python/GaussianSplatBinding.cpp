@@ -228,7 +228,7 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("antialias")        = false)
 
         .def("render_images_sparse",
-             &fvdb::GaussianSplat3d::sparseRenderImages,
+             &fvdb::GaussianSplat3d::renderImagesSparse,
              py::arg("pixels_to_render"),
              py::arg("world_to_camera_matrices"),
              py::arg("projection_matrices"),
@@ -244,7 +244,7 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("antialias")        = false)
 
         .def("render_depths_sparse",
-             &fvdb::GaussianSplat3d::sparseRenderDepths,
+             &fvdb::GaussianSplat3d::renderDepthsSparse,
              py::arg("pixels_to_render"),
              py::arg("world_to_camera_matrices"),
              py::arg("projection_matrices"),
@@ -259,7 +259,7 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("antialias")       = false)
 
         .def("render_images_and_depths_sparse",
-             &fvdb::GaussianSplat3d::sparseRenderImagesAndDepths,
+             &fvdb::GaussianSplat3d::renderImagesAndDepthsSparse,
              py::arg("pixels_to_render"),
              py::arg("world_to_camera_matrices"),
              py::arg("projection_matrices"),
@@ -289,7 +289,7 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("antialias")       = false)
 
         .def("render_num_contributing_gaussians_sparse",
-             &fvdb::GaussianSplat3d::sparseRenderNumContributingGaussians,
+             &fvdb::GaussianSplat3d::renderNumContributingGaussiansSparse,
              py::arg("pixels_to_render"),
              py::arg("world_to_camera_matrices"),
              py::arg("projection_matrices"),
@@ -318,8 +318,8 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("antialias")          = false,
              py::arg("top_k_contributors") = 0)
 
-        .def("render_top_contributing_gaussian_ids_sparse",
-             &fvdb::GaussianSplat3d::sparseRenderTopContributingGaussianIds,
+        .def("render_contributing_gaussian_ids_sparse",
+             &fvdb::GaussianSplat3d::renderContributingGaussianIdsSparse,
              py::arg("pixels_to_render"),
              py::arg("world_to_camera_matrices"),
              py::arg("projection_matrices"),

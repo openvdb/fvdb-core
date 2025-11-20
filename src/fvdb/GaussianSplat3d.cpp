@@ -1,9 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/autograd/GaussianRasterizeSparse.h>
-
 #include <fvdb/GaussianSplat3d.h>
+#include <fvdb/detail/autograd/GaussianRasterizeSparse.h>
 #include <fvdb/detail/io/GaussianPlyIO.h>
 #include <fvdb/detail/utils/Nvtx.h>
 
@@ -812,7 +811,7 @@ GaussianSplat3d::renderNumContributingGaussians(const torch::Tensor &worldToCame
 }
 
 std::tuple<JaggedTensor, JaggedTensor>
-GaussianSplat3d::sparseRenderDepths(const fvdb::JaggedTensor &pixelsToRender,
+GaussianSplat3d::renderDepthsSparse(const fvdb::JaggedTensor &pixelsToRender,
                                     const torch::Tensor &worldToCameraMatrices,
                                     const torch::Tensor &projectionMatrices,
                                     const size_t imageWidth,
@@ -840,7 +839,7 @@ GaussianSplat3d::sparseRenderDepths(const fvdb::JaggedTensor &pixelsToRender,
 }
 
 std::tuple<JaggedTensor, JaggedTensor>
-GaussianSplat3d::sparseRenderImages(const fvdb::JaggedTensor &pixelsToRender,
+GaussianSplat3d::renderImagesSparse(const fvdb::JaggedTensor &pixelsToRender,
                                     const torch::Tensor &worldToCameraMatrices,
                                     const torch::Tensor &projectionMatrices,
                                     const size_t imageWidth,
@@ -869,7 +868,7 @@ GaussianSplat3d::sparseRenderImages(const fvdb::JaggedTensor &pixelsToRender,
 }
 
 std::tuple<JaggedTensor, JaggedTensor>
-GaussianSplat3d::sparseRenderImagesAndDepths(const fvdb::JaggedTensor &pixelsToRender,
+GaussianSplat3d::renderImagesAndDepthsSparse(const fvdb::JaggedTensor &pixelsToRender,
                                              const torch::Tensor &worldToCameraMatrices,
                                              const torch::Tensor &projectionMatrices,
                                              const size_t imageWidth,
@@ -898,7 +897,7 @@ GaussianSplat3d::sparseRenderImagesAndDepths(const fvdb::JaggedTensor &pixelsToR
 }
 
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
-GaussianSplat3d::sparseRenderNumContributingGaussians(const fvdb::JaggedTensor &pixelsToRender,
+GaussianSplat3d::renderNumContributingGaussiansSparse(const fvdb::JaggedTensor &pixelsToRender,
                                                       const torch::Tensor &worldToCameraMatrices,
                                                       const torch::Tensor &projectionMatrices,
                                                       const size_t imageWidth,
@@ -966,7 +965,7 @@ GaussianSplat3d::renderContributingGaussianIds(const torch::Tensor &worldToCamer
 }
 
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
-GaussianSplat3d::sparseRenderContributingGaussianIds(const fvdb::JaggedTensor &pixelsToRender,
+GaussianSplat3d::renderContributingGaussianIdsSparse(const fvdb::JaggedTensor &pixelsToRender,
                                                      const torch::Tensor &worldToCameraMatrices,
                                                      const torch::Tensor &projectionMatrices,
                                                      const size_t imageWidth,
