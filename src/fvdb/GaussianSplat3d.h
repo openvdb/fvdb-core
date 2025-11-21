@@ -871,18 +871,18 @@ class GaussianSplat3d {
     ///     images: A [C, H, W, D] tensor containing the the rendered image for each camera
     ///     alphas: A [C, H, W, 1] tensor containing the alpha values of the rendered images
     std::tuple<torch::Tensor, torch::Tensor>
-    renderFeatures(const torch::Tensor &worldToCameraMatrices,
-                   const torch::Tensor &projectionMatrices,
-                   const size_t imageWidth,
-                   const size_t imageHeight,
-                   const float near,
-                   const float far,
-                   const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
-                   const int64_t shDegreeToUse         = -1,
-                   const size_t tileSize               = 16,
-                   const float minRadius2d             = 0.0,
-                   const float eps2d                   = 0.3,
-                   const bool antialias                = false);
+    renderImages(const torch::Tensor &worldToCameraMatrices,
+                 const torch::Tensor &projectionMatrices,
+                 const size_t imageWidth,
+                 const size_t imageHeight,
+                 const float near,
+                 const float far,
+                 const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
+                 const int64_t shDegreeToUse         = -1,
+                 const size_t tileSize               = 16,
+                 const float minRadius2d             = 0.0,
+                 const float eps2d                   = 0.3,
+                 const bool antialias                = false);
 
     /// @brief Render depths of this Gaussian splat scene from the given camera matrices and
     /// projection matrices.
@@ -914,18 +914,18 @@ class GaussianSplat3d {
                  const bool antialias                = false);
 
     std::tuple<torch::Tensor, torch::Tensor>
-    renderFeaturesAndDepths(const torch::Tensor &worldToCameraMatrices,
-                            const torch::Tensor &projectionMatrices,
-                            const size_t imageWidth,
-                            const size_t imageHeight,
-                            const float near,
-                            const float far,
-                            const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
-                            const int64_t shDegreeToUse         = -1,
-                            const size_t tileSize               = 16,
-                            const float minRadius2d             = 0.0,
-                            const float eps2d                   = 0.3,
-                            const bool antialias                = false);
+    renderImagesAndDepths(const torch::Tensor &worldToCameraMatrices,
+                          const torch::Tensor &projectionMatrices,
+                          const size_t imageWidth,
+                          const size_t imageHeight,
+                          const float near,
+                          const float far,
+                          const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
+                          const int64_t shDegreeToUse         = -1,
+                          const size_t tileSize               = 16,
+                          const float minRadius2d             = 0.0,
+                          const float eps2d                   = 0.3,
+                          const bool antialias                = false);
 
     std::tuple<JaggedTensor, JaggedTensor>
     sparseRenderImages(const fvdb::JaggedTensor &pixelsToRender,
