@@ -928,22 +928,22 @@ class GaussianSplat3d {
                             const bool antialias                = false);
 
     std::tuple<JaggedTensor, JaggedTensor>
-    renderFeaturesSparse(const fvdb::JaggedTensor &pixelsToRender,
-                         const torch::Tensor &worldToCameraMatrices,
-                         const torch::Tensor &projectionMatrices,
-                         const size_t imageWidth,
-                         const size_t imageHeight,
-                         const float near,
-                         const float far,
-                         const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
-                         const int64_t shDegreeToUse         = -1,
-                         const size_t tileSize               = 16,
-                         const float minRadius2d             = 0.0,
-                         const float eps2d                   = 0.3,
-                         const bool antialias                = false);
+    sparseRenderImages(const fvdb::JaggedTensor &pixelsToRender,
+                       const torch::Tensor &worldToCameraMatrices,
+                       const torch::Tensor &projectionMatrices,
+                       const size_t imageWidth,
+                       const size_t imageHeight,
+                       const float near,
+                       const float far,
+                       const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
+                       const int64_t shDegreeToUse         = -1,
+                       const size_t tileSize               = 16,
+                       const float minRadius2d             = 0.0,
+                       const float eps2d                   = 0.3,
+                       const bool antialias                = false);
 
     std::tuple<JaggedTensor, JaggedTensor>
-    renderDepthsSparse(const fvdb::JaggedTensor &pixelsToRender,
+    sparseRenderDepths(const fvdb::JaggedTensor &pixelsToRender,
                        const torch::Tensor &worldToCameraMatrices,
                        const torch::Tensor &projectionMatrices,
                        const size_t imageWidth,
@@ -957,19 +957,19 @@ class GaussianSplat3d {
                        const bool antialias                = false);
 
     std::tuple<JaggedTensor, JaggedTensor>
-    renderFeaturesAndDepthsSparse(const fvdb::JaggedTensor &pixelsToRender,
-                                  const torch::Tensor &worldToCameraMatrices,
-                                  const torch::Tensor &projectionMatrices,
-                                  const size_t imageWidth,
-                                  const size_t imageHeight,
-                                  const float near,
-                                  const float far,
-                                  const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
-                                  const int64_t shDegreeToUse         = -1,
-                                  const size_t tileSize               = 16,
-                                  const float minRadius2d             = 0.0,
-                                  const float eps2d                   = 0.3,
-                                  const bool antialias                = false);
+    sparseRenderImagesAndDepths(const fvdb::JaggedTensor &pixelsToRender,
+                                const torch::Tensor &worldToCameraMatrices,
+                                const torch::Tensor &projectionMatrices,
+                                const size_t imageWidth,
+                                const size_t imageHeight,
+                                const float near,
+                                const float far,
+                                const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
+                                const int64_t shDegreeToUse         = -1,
+                                const size_t tileSize               = 16,
+                                const float minRadius2d             = 0.0,
+                                const float eps2d                   = 0.3,
+                                const bool antialias                = false);
 
     /// @brief Render the number of contributing Gaussians for each pixel in the image.
     /// @param worldToCameraMatrices [C, 4, 4] Camera-to-world matrices
@@ -1012,7 +1012,7 @@ class GaussianSplat3d {
     ///     alphas: A [P1 + P2 + ..., 1] jagged tensor containing the composited alpha value of the
     ///     pixels
     std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
-    renderNumContributingGaussiansSparse(const fvdb::JaggedTensor &pixelsToRender,
+    sparseRenderNumContributingGaussians(const fvdb::JaggedTensor &pixelsToRender,
                                          const torch::Tensor &worldToCameraMatrices,
                                          const torch::Tensor &projectionMatrices,
                                          const size_t imageWidth,
@@ -1167,7 +1167,7 @@ class GaussianSplat3d {
     ///              tensor containing the weights of the contributing Gaussians of each rendered
     ///              pixel for each camera. The weights are in row-major order and sum to 1 for each
     ///              pixel if that pixel is opaque (alpha=1).
-    std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor> renderContributingGaussianIdsSparse(
+    std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor> sparseRenderContributingGaussianIds(
         const fvdb::JaggedTensor &pixelsToRender,
         const torch::Tensor &worldToCameraMatrices,
         const torch::Tensor &projectionMatrices,

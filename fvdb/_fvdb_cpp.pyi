@@ -166,7 +166,7 @@ class GaussianSplat3d:
         eps_2d: float = ...,
         antialias: bool = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def render_depths_sparse(
+    def sparse_render_depths(
         self,
         pixels_to_render: JaggedTensor,
         world_to_camera_matrices: torch.Tensor,
@@ -190,7 +190,7 @@ class GaussianSplat3d:
         crop_origin_h: int = ...,
         tile_size: int = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def render_features(
+    def render_images(
         self,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
@@ -205,7 +205,7 @@ class GaussianSplat3d:
         eps_2d: float = ...,
         antialias: bool = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def render_features_sparse(
+    def sparse_render_images(
         self,
         pixels_to_render: JaggedTensor,
         world_to_camera_matrices: torch.Tensor,
@@ -221,7 +221,7 @@ class GaussianSplat3d:
         eps_2d: float = ...,
         antialias: bool = ...,
     ) -> tuple[JaggedTensor, JaggedTensor]: ...
-    def render_features_and_depths(
+    def render_images_and_depths(
         self,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
@@ -236,7 +236,7 @@ class GaussianSplat3d:
         eps_2d: float = ...,
         antialias: bool = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def render_features_and_depths_sparse(
+    def sparse_render_images_and_depths(
         self,
         pixels_to_render: JaggedTensor,
         world_to_camera_matrices: torch.Tensor,
@@ -266,7 +266,7 @@ class GaussianSplat3d:
         eps_2d: float = ...,
         antialias: bool = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def render_num_contributing_gaussians_sparse(
+    def sparse_render_num_contributing_gaussians(
         self,
         pixels_to_render: JaggedTensor,
         world_to_camera_matrices: torch.Tensor,
@@ -296,7 +296,7 @@ class GaussianSplat3d:
         antialias: bool = ...,
         top_k_contributors: int = ...,
     ) -> tuple[JaggedTensor, JaggedTensor]: ...
-    def render_contributing_gaussian_ids_sparse(
+    def sparse_render_contributing_gaussian_ids(
         self,
         pixels_to_render: JaggedTensor,
         world_to_camera_matrices: torch.Tensor,

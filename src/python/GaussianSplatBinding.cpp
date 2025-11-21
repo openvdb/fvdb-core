@@ -183,7 +183,7 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("crop_origin_h") = -1,
              py::arg("tile_size")     = 16)
 
-        .def("render_features",
+        .def("render_images",
              &fvdb::GaussianSplat3d::renderFeatures,
              py::arg("world_to_camera_matrices"),
              py::arg("projection_matrices"),
@@ -212,7 +212,7 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("eps_2d")          = 0.3,
              py::arg("antialias")       = false)
 
-        .def("render_features_and_depths",
+        .def("render_images_and_depths",
              &fvdb::GaussianSplat3d::renderFeaturesAndDepths,
              py::arg("world_to_camera_matrices"),
              py::arg("projection_matrices"),
@@ -227,8 +227,8 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("eps_2d")           = 0.3,
              py::arg("antialias")        = false)
 
-        .def("render_features_sparse",
-             &fvdb::GaussianSplat3d::renderFeaturesSparse,
+        .def("sparse_render_images",
+             &fvdb::GaussianSplat3d::sparseRenderImages,
              py::arg("pixels_to_render"),
              py::arg("world_to_camera_matrices"),
              py::arg("projection_matrices"),
@@ -243,8 +243,8 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("eps_2d")           = 0.3,
              py::arg("antialias")        = false)
 
-        .def("render_depths_sparse",
-             &fvdb::GaussianSplat3d::renderDepthsSparse,
+        .def("sparse_render_depths",
+             &fvdb::GaussianSplat3d::sparseRenderDepths,
              py::arg("pixels_to_render"),
              py::arg("world_to_camera_matrices"),
              py::arg("projection_matrices"),
@@ -258,8 +258,8 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("eps_2d")          = 0.3,
              py::arg("antialias")       = false)
 
-        .def("render_features_and_depths_sparse",
-             &fvdb::GaussianSplat3d::renderFeaturesAndDepthsSparse,
+        .def("sparse_render_images_and_depths",
+             &fvdb::GaussianSplat3d::sparseRenderImagesAndDepths,
              py::arg("pixels_to_render"),
              py::arg("world_to_camera_matrices"),
              py::arg("projection_matrices"),
@@ -288,8 +288,8 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("eps_2d")          = 0.3,
              py::arg("antialias")       = false)
 
-        .def("render_num_contributing_gaussians_sparse",
-             &fvdb::GaussianSplat3d::renderNumContributingGaussiansSparse,
+        .def("sparse_render_num_contributing_gaussians",
+             &fvdb::GaussianSplat3d::sparseRenderNumContributingGaussians,
              py::arg("pixels_to_render"),
              py::arg("world_to_camera_matrices"),
              py::arg("projection_matrices"),
@@ -318,8 +318,8 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("antialias")          = false,
              py::arg("top_k_contributors") = 0)
 
-        .def("render_contributing_gaussian_ids_sparse",
-             &fvdb::GaussianSplat3d::renderContributingGaussianIdsSparse,
+        .def("sparse_render_contributing_gaussian_ids",
+             &fvdb::GaussianSplat3d::sparseRenderContributingGaussianIds,
              py::arg("pixels_to_render"),
              py::arg("world_to_camera_matrices"),
              py::arg("projection_matrices"),
