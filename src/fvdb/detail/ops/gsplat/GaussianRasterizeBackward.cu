@@ -1393,11 +1393,14 @@ dispatchGaussianRasterizeBackward<torch::kCUDA>(
     const torch::Tensor &dLossDRenderedFeatures, // [C, imageHeight, imageWidth, 3]
     const torch::Tensor &dLossDRenderedAlphas,   // [C, imageHeight, imageWidth, 1]
     const bool absGrad,
-    const int64_t numSharedChannelsOverride) {
+    const int64_t numSharedChannelsOverride,
+    const at::optional<torch::Tensor> &backgrounds) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means2d));
 
     uint32_t colorDim   = features.size(-1);
     const bool isPacked = means2d.dim() == 2;
+
+    const std::optional<torch::Tensor> masks = std::nullopt;
 
 #define CALL_BWD_CUDA(N)                                                            \
     case N: {                                                                       \
@@ -1407,8 +1410,8 @@ dispatchGaussianRasterizeBackward<torch::kCUDA>(
                 conics,                                                             \
                 features,                                                           \
                 opacities,                                                          \
-                at::nullopt /*backgrounds*/,                                        \
-                at::nullopt /*masks*/,                                              \
+                backgrounds,                                                        \
+                masks,                                                              \
                 imageWidth,                                                         \
                 imageHeight,                                                        \
                 imageOriginW,                                                       \
@@ -1428,8 +1431,8 @@ dispatchGaussianRasterizeBackward<torch::kCUDA>(
                 conics,                                                             \
                 features,                                                           \
                 opacities,                                                          \
-                at::nullopt /*backgrounds*/,                                        \
-                at::nullopt /*masks*/,                                              \
+                backgrounds,                                                        \
+                masks,                                                              \
                 imageWidth,                                                         \
                 imageHeight,                                                        \
                 imageOriginW,                                                       \
@@ -1492,56 +1495,57 @@ dispatchGaussianRasterizeBackward<torch::kPrivateUse1>(
     const torch::Tensor &dLossDRenderedFeatures, // [C, imageHeight, imageWidth, 3]
     const torch::Tensor &dLossDRenderedAlphas,   // [C, imageHeight, imageWidth, 1]
     const bool absGrad,
-    const int64_t numSharedChannelsOverride) {
+    const int64_t numSharedChannelsOverride,
+    const at::optional<torch::Tensor> &backgrounds) {
     TORCH_CHECK(numSharedChannelsOverride == -1,
                 "PrivateUse1 implementation does not support shared channels override");
 
     uint32_t colorDim   = features.size(-1);
     const bool isPacked = means2d.dim() == 2;
 
-#define CALL_BWD_PRIVATEUSE1(N)                                          \
-    case N: {                                                            \
-        if (isPacked) {                                                  \
-            return callRasterizeBackwardPrivateUse1<float, N, N, true>(  \
-                means2d,                                                 \
-                conics,                                                  \
-                features,                                                \
-                opacities,                                               \
-                at::nullopt /*backgrounds*/,                             \
-                at::nullopt /*masks*/,                                   \
-                imageWidth,                                              \
-                imageHeight,                                             \
-                imageOriginW,                                            \
-                imageOriginH,                                            \
-                tileSize,                                                \
-                tileOffsets,                                             \
-                tileGaussianIds,                                         \
-                renderedAlphas,                                          \
-                lastGaussianIds,                                         \
-                dLossDRenderedFeatures,                                  \
-                dLossDRenderedAlphas,                                    \
-                absGrad);                                                \
-        } else {                                                         \
-            return callRasterizeBackwardPrivateUse1<float, N, N, false>( \
-                means2d,                                                 \
-                conics,                                                  \
-                features,                                                \
-                opacities,                                               \
-                at::nullopt /*backgrounds*/,                             \
-                at::nullopt /*masks*/,                                   \
-                imageWidth,                                              \
-                imageHeight,                                             \
-                imageOriginW,                                            \
-                imageOriginH,                                            \
-                tileSize,                                                \
-                tileOffsets,                                             \
-                tileGaussianIds,                                         \
-                renderedAlphas,                                          \
-                lastGaussianIds,                                         \
-                dLossDRenderedFeatures,                                  \
-                dLossDRenderedAlphas,                                    \
-                absGrad);                                                \
-        }                                                                \
+    const std::optional<torch::Tensor> masks = std::nullopt;
+
+#define CALL_BWD_PRIVATEUSE1(N)                                                                 \
+    case N: {                                                                                   \
+        if (isPacked) {                                                                         \
+            return callRasterizeBackwardPrivateUse1<float, N, N, true>(means2d,                 \
+                                                                       conics,                  \
+                                                                       features,                \
+                                                                       opacities,               \
+                                                                       backgrounds,             \
+                                                                       masks,                   \
+                                                                       imageWidth,              \
+                                                                       imageHeight,             \
+                                                                       imageOriginW,            \
+                                                                       imageOriginH,            \
+                                                                       tileSize,                \
+                                                                       tileOffsets,             \
+                                                                       tileGaussianIds,         \
+                                                                       renderedAlphas,          \
+                                                                       lastGaussianIds,         \
+                                                                       dLossDRenderedFeatures,  \
+                                                                       dLossDRenderedAlphas,    \
+                                                                       absGrad);                \
+        } else {                                                                                \
+            return callRasterizeBackwardPrivateUse1<float, N, N, false>(means2d,                \
+                                                                        conics,                 \
+                                                                        features,               \
+                                                                        opacities,              \
+                                                                        backgrounds,            \
+                                                                        masks,                  \
+                                                                        imageWidth,             \
+                                                                        imageHeight,            \
+                                                                        imageOriginW,           \
+                                                                        imageOriginH,           \
+                                                                        tileSize,               \
+                                                                        tileOffsets,            \
+                                                                        tileGaussianIds,        \
+                                                                        renderedAlphas,         \
+                                                                        lastGaussianIds,        \
+                                                                        dLossDRenderedFeatures, \
+                                                                        dLossDRenderedAlphas,   \
+                                                                        absGrad);               \
+        }                                                                                       \
     }
 
     switch (colorDim) {
@@ -1590,7 +1594,8 @@ dispatchGaussianRasterizeBackward<torch::kCPU>(
     const torch::Tensor &dLossDRenderedFeatures, // [C, imageHeight, imageWidth, 3]
     const torch::Tensor &dLossDRenderedAlphas,   // [C, imageHeight, imageWidth, 1]
     const bool absGrad,
-    const int64_t numSharedChannelsOverride) {
+    const int64_t numSharedChannelsOverride,
+    const at::optional<torch::Tensor> &backgrounds) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
 }
 
@@ -1618,9 +1623,12 @@ dispatchGaussianSparseRasterizeBackward<torch::kCUDA>(
     const torch::Tensor &tilePixelCumsum,             // [AT]
     const torch::Tensor &pixelMap,                    // [AP]
     const bool absGrad,
-    const int64_t numSharedChannelsOverride) {
+    const int64_t numSharedChannelsOverride,
+    const at::optional<torch::Tensor> &backgrounds) {
     uint32_t colorDim   = features.size(-1);
     const bool isPacked = means2d.dim() == 2;
+
+    const std::optional<torch::Tensor> masks = std::nullopt;
 
 #define CALL_BWD_SPARSE_CUDA(N)                                                     \
     case N: {                                                                       \
@@ -1630,8 +1638,8 @@ dispatchGaussianSparseRasterizeBackward<torch::kCUDA>(
                 conics,                                                             \
                 features,                                                           \
                 opacities,                                                          \
-                at::nullopt /*backgrounds*/,                                        \
-                at::nullopt /*masks*/,                                              \
+                backgrounds,                                                        \
+                masks,                                                              \
                 imageWidth,                                                         \
                 imageHeight,                                                        \
                 imageOriginW,                                                       \
@@ -1655,8 +1663,8 @@ dispatchGaussianSparseRasterizeBackward<torch::kCUDA>(
                 conics,                                                             \
                 features,                                                           \
                 opacities,                                                          \
-                at::nullopt /*backgrounds*/,                                        \
-                at::nullopt /*masks*/,                                              \
+                backgrounds,                                                        \
+                masks,                                                              \
                 imageWidth,                                                         \
                 imageHeight,                                                        \
                 imageOriginW,                                                       \
@@ -1756,7 +1764,8 @@ dispatchGaussianSparseRasterizeBackward<torch::kCPU>(
     const torch::Tensor &tilePixelCumsum,             // [AT]
     const torch::Tensor &pixelMap,                    // [AP]
     const bool absGrad,
-    const int64_t numSharedChannelsOverride) {
+    const int64_t numSharedChannelsOverride,
+    const at::optional<torch::Tensor> &backgrounds) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
 }
 

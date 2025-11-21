@@ -1530,6 +1530,7 @@ class GaussianSplat3d:
         crop_origin_w: int = -1,
         crop_origin_h: int = -1,
         tile_size: int = 16,
+        backgrounds: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Render a set of images from Gaussian splats that have already been projected onto image planes
@@ -1614,6 +1615,7 @@ class GaussianSplat3d:
             crop_origin_w=crop_origin_w,
             crop_origin_h=crop_origin_h,
             tile_size=tile_size,
+            backgrounds=backgrounds,
         )
 
     def render_depths(
@@ -1629,6 +1631,7 @@ class GaussianSplat3d:
         min_radius_2d: float = 0.3,
         eps_2d: float = 0.3,
         antialias: bool = False,
+        backgrounds: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Render ``C`` depth maps from this :class:`GaussianSplat3d` from ``C`` camera views.
@@ -1694,6 +1697,7 @@ class GaussianSplat3d:
             min_radius_2d=min_radius_2d,
             eps_2d=eps_2d,
             antialias=antialias,
+            backgrounds=backgrounds,
         )
 
     def sparse_render_depths(
@@ -1803,6 +1807,7 @@ class GaussianSplat3d:
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
         antialias: bool = False,
+        backgrounds: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Render ``C`` multi-channel images (see :attr:`num_channels`) from this :class:`GaussianSplat3d` from ``C`` camera views.
@@ -1869,6 +1874,7 @@ class GaussianSplat3d:
             min_radius_2d=min_radius_2d,
             eps_2d=eps_2d,
             antialias=antialias,
+            backgrounds=backgrounds,
         )
 
     def sparse_render_images(
@@ -2079,6 +2085,7 @@ class GaussianSplat3d:
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
         antialias: bool = False,
+        backgrounds: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Render ``C`` multi-channel images (see :attr:`num_channels`) with depth as the last channel from this :class:`GaussianSplat3d` from ``C`` camera views.
@@ -2149,6 +2156,7 @@ class GaussianSplat3d:
             min_radius_2d=min_radius_2d,
             eps_2d=eps_2d,
             antialias=antialias,
+            backgrounds=backgrounds,
         )
 
     def render_num_contributing_gaussians(

@@ -841,17 +841,19 @@ class GaussianSplat3d {
     /// @param cropOriginH Origin of the cropped image in the height dimension (use -1 for no
     /// cropping)
     /// @param tileSize Size of the tiles used for rendering
+    /// @param backgrounds Optional [C, D] tensor of background colors for each camera
     /// @return Tuple of two tensors:
     ///     images: A [C, H, W, D|1|D+1] tensor containing the the rendered image
     ///             (or depth or image and depth) for each camera
     ///     alphas: A [C, H, W, 1] tensor containing the alpha values of the rendered images
     std::tuple<torch::Tensor, torch::Tensor>
     renderFromProjectedGaussians(const GaussianSplat3d::ProjectedGaussianSplats &projectedGaussians,
-                                 const ssize_t cropWidth   = -1,
-                                 const ssize_t cropHeight  = -1,
-                                 const ssize_t cropOriginW = -1,
-                                 const ssize_t cropOriginH = -1,
-                                 const size_t tileSize     = 16);
+                                 const ssize_t cropWidth                         = -1,
+                                 const ssize_t cropHeight                        = -1,
+                                 const ssize_t cropOriginW                       = -1,
+                                 const ssize_t cropOriginH                       = -1,
+                                 const size_t tileSize                           = 16,
+                                 const std::optional<torch::Tensor> &backgrounds = std::nullopt);
 
     /// @brief Render images of this Gaussian splat scene from the given camera matrices and
     /// projection matrices.
@@ -867,6 +869,7 @@ class GaussianSplat3d {
     /// @param minRadius2d Minimum radius in pixels below which projected Gaussians are ignored
     /// @param eps2d Blur factor for antialiasing (only used if antialias is true)
     /// @param antialias Whether to antialias the image
+    /// @param backgrounds Optional [C, D] tensor of background colors for each camera
     /// @return Tuple of two tensors:
     ///     images: A [C, H, W, D] tensor containing the the rendered image for each camera
     ///     alphas: A [C, H, W, 1] tensor containing the alpha values of the rendered images
@@ -877,12 +880,13 @@ class GaussianSplat3d {
                  const size_t imageHeight,
                  const float near,
                  const float far,
-                 const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
-                 const int64_t shDegreeToUse         = -1,
-                 const size_t tileSize               = 16,
-                 const float minRadius2d             = 0.0,
-                 const float eps2d                   = 0.3,
-                 const bool antialias                = false);
+                 const ProjectionType projectionType             = ProjectionType::PERSPECTIVE,
+                 const int64_t shDegreeToUse                     = -1,
+                 const size_t tileSize                           = 16,
+                 const float minRadius2d                         = 0.0,
+                 const float eps2d                               = 0.3,
+                 const bool antialias                            = false,
+                 const std::optional<torch::Tensor> &backgrounds = std::nullopt);
 
     /// @brief Render depths of this Gaussian splat scene from the given camera matrices and
     /// projection matrices.
@@ -897,6 +901,7 @@ class GaussianSplat3d {
     /// @param minRadius2d Minimum radius in pixels below which projected Gaussians are ignored
     /// @param eps2d Blur factor for antialiasing (only used if antialias is true)
     /// @param antialias Whether to antialias the image
+    /// @param backgrounds Optional [C, 1] tensor of background depths for each camera
     /// @return Tuple of two tensors:
     ///     images: A [C, H, W, 1] tensor containing the the rendered depths for each camera
     ///     alphas: A [C, H, W, 1] tensor containing the alpha values of the rendered depths
@@ -907,11 +912,12 @@ class GaussianSplat3d {
                  const size_t imageHeight,
                  const float near,
                  const float far,
-                 const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
-                 const size_t tileSize               = 16,
-                 const float minRadius2d             = 0.0,
-                 const float eps2d                   = 0.3,
-                 const bool antialias                = false);
+                 const ProjectionType projectionType             = ProjectionType::PERSPECTIVE,
+                 const size_t tileSize                           = 16,
+                 const float minRadius2d                         = 0.0,
+                 const float eps2d                               = 0.3,
+                 const bool antialias                            = false,
+                 const std::optional<torch::Tensor> &backgrounds = std::nullopt);
 
     std::tuple<torch::Tensor, torch::Tensor>
     renderImagesAndDepths(const torch::Tensor &worldToCameraMatrices,
@@ -925,7 +931,8 @@ class GaussianSplat3d {
                           const size_t tileSize               = 16,
                           const float minRadius2d             = 0.0,
                           const float eps2d                   = 0.3,
-                          const bool antialias                = false);
+                          const bool antialias                = false,
+                          const std::optional<torch::Tensor> &backgrounds = std::nullopt);
 
     std::tuple<JaggedTensor, JaggedTensor>
     sparseRenderImages(const fvdb::JaggedTensor &pixelsToRender,
@@ -1255,13 +1262,14 @@ class GaussianSplat3d {
                                                  const torch::Tensor &projectionMatrices,
                                                  const fvdb::detail::ops::RenderSettings &settings);
 
-    std::tuple<torch::Tensor, torch::Tensor>
-    renderCropFromProjectedGaussiansImpl(const ProjectedGaussianSplats &state,
-                                         const size_t tileSize,
-                                         const ssize_t cropWidth,
-                                         const ssize_t cropHeight,
-                                         const ssize_t cropOriginW,
-                                         const ssize_t cropOriginH);
+    std::tuple<torch::Tensor, torch::Tensor> renderCropFromProjectedGaussiansImpl(
+        const ProjectedGaussianSplats &state,
+        const size_t tileSize,
+        const ssize_t cropWidth,
+        const ssize_t cropHeight,
+        const ssize_t cropOriginW,
+        const ssize_t cropOriginH,
+        const std::optional<torch::Tensor> &backgrounds = std::nullopt);
 
     /// @brief Implements index set with a tensor of booleans or integer indices
     /// @param indexOrMask A 1D tensor of indices in the range [0, numGaussians-1] or a boolean mask
@@ -1456,17 +1464,18 @@ gaussianRenderJagged(const JaggedTensor &means,     // [N1 + N2 + ..., 3]
                      const JaggedTensor &Ks,        // [C1 + C2 + ..., 3, 3]
                      const uint32_t image_width,
                      const uint32_t image_height,
-                     const float near_plane          = 0.01,
-                     const float far_plane           = 1e10,
-                     const int sh_degree_to_use      = -1,
-                     const int tile_size             = 16,
-                     const float radius_clip         = 0.0,
-                     const float eps2d               = 0.3,
-                     const bool antialias            = false,
-                     const bool render_depth_channel = false,
-                     const bool return_debug_info    = false,
-                     const bool render_depth_only    = false,
-                     const bool ortho                = false);
+                     const float near_plane                          = 0.01,
+                     const float far_plane                           = 1e10,
+                     const int sh_degree_to_use                      = -1,
+                     const int tile_size                             = 16,
+                     const float radius_clip                         = 0.0,
+                     const float eps2d                               = 0.3,
+                     const bool antialias                            = false,
+                     const bool render_depth_channel                 = false,
+                     const bool return_debug_info                    = false,
+                     const bool render_depth_only                    = false,
+                     const bool ortho                                = false,
+                     const std::optional<torch::Tensor> &backgrounds = std::nullopt);
 
 } // namespace fvdb
 

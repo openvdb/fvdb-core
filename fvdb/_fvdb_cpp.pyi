@@ -3,7 +3,7 @@
 #
 import typing
 from enum import Enum
-from typing import ClassVar, overload
+from typing import ClassVar, Optional, overload
 
 import torch
 
@@ -165,6 +165,7 @@ class GaussianSplat3d:
         min_radius_2d: float = ...,
         eps_2d: float = ...,
         antialias: bool = ...,
+        backgrounds: Optional[torch.Tensor] = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
     def sparse_render_depths(
         self,
@@ -189,6 +190,7 @@ class GaussianSplat3d:
         crop_origin_w: int = ...,
         crop_origin_h: int = ...,
         tile_size: int = ...,
+        backgrounds: Optional[torch.Tensor] = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
     def render_images(
         self,
@@ -204,6 +206,7 @@ class GaussianSplat3d:
         min_radius_2d: float = ...,
         eps_2d: float = ...,
         antialias: bool = ...,
+        backgrounds: Optional[torch.Tensor] = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
     def sparse_render_images(
         self,
@@ -235,6 +238,7 @@ class GaussianSplat3d:
         min_radius_2d: float = ...,
         eps_2d: float = ...,
         antialias: bool = ...,
+        backgrounds: Optional[torch.Tensor] = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
     def sparse_render_images_and_depths(
         self,
@@ -1084,7 +1088,29 @@ class config:
     pedantic_error_checking: ClassVar[bool] = ...
     def __init__(self, *args, **kwargs) -> None: ...
 
-def gaussian_render_jagged(*args, **kwargs): ...
+def gaussian_render_jagged(
+    means: JaggedTensor,
+    quats: JaggedTensor,
+    scales: JaggedTensor,
+    opacities: JaggedTensor,
+    sh_coeffs: JaggedTensor,
+    viewmats: JaggedTensor,
+    Ks: JaggedTensor,
+    image_width: int,
+    image_height: int,
+    near_plane: float = ...,
+    far_plane: float = ...,
+    sh_degree_to_use: int = ...,
+    tile_size: int = ...,
+    radius_clip: float = ...,
+    eps2d: float = ...,
+    antialias: bool = ...,
+    render_depth_channel: bool = ...,
+    return_debug_info: bool = ...,
+    render_depth_only: bool = ...,
+    ortho: bool = ...,
+    backgrounds: Optional[torch.Tensor] = ...,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]: ...
 @overload
 def gridbatch_from_dense(
     num_grids: int,
