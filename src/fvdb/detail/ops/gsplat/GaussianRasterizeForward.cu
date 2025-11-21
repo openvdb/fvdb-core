@@ -898,7 +898,8 @@ dispatchGaussianSparseRasterizeForward<torch::kPrivateUse1>(
     const torch::Tensor &activeTiles,
     const torch::Tensor &tilePixelMask,
     const torch::Tensor &tilePixelCumsum,
-    const torch::Tensor &pixelMap) {
+    const torch::Tensor &pixelMap,
+    const at::optional<torch::Tensor> &backgrounds) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "PrivateUse1 implementation not available");
 }
 

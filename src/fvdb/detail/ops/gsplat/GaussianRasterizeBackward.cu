@@ -1736,7 +1736,8 @@ dispatchGaussianSparseRasterizeBackward<torch::kPrivateUse1>(
     const torch::Tensor &tilePixelCumsum,             // [AT]
     const torch::Tensor &pixelMap,                    // [AP]
     const bool absGrad,
-    const int64_t numSharedChannelsOverride) {
+    const int64_t numSharedChannelsOverride,
+    const at::optional<torch::Tensor> &backgrounds) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "PrivateUse1 implementation not available");
 }
 
