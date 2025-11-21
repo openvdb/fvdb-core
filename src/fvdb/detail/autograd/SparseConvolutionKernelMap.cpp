@@ -56,41 +56,23 @@ SparseConvolutionKernelMap::forward(AutogradContext *ctx,
             3,
         },
         opt);
-    if (!transposed) {
-        TORCH_CHECK_VALUE(inFeatures.size(0) == sizes[0],
-                          "The number of input features must match the number of voxels");
-        TORCH_CHECK_VALUE(
-            kernels.dim() == 5,
-            std::string(
-                "Expected kernels to have 5 dimensions (shape (out_ch, in_ch, d, h, w)) but got ") +
-                std::to_string(kernels.dim()) + " dimensions");
-        TORCH_CHECK_VALUE(
-            kernels.size(1) == inFeatures.size(1),
-            "Expected input channels of kernels (" + std::to_string(kernels.size(1)) +
-                ") to equal input channels of features: " + std::to_string(inFeatures.size(1)));
-        const int outC = kernels.size(0), inC = kernels.size(1);
-        kWidth[0] = kernels.size(2);
-        kWidth[1] = kernels.size(3);
-        kWidth[2] = kernels.size(4);
-        kernels   = kernels.permute({2, 3, 4, 1, 0}).reshape({-1, inC, outC}).contiguous();
-    } else {
-        TORCH_CHECK_VALUE(inFeatures.size(0) == sizes[1],
-                          "The number of input features must match the number of voxels");
-        TORCH_CHECK_VALUE(
-            kernels.dim() == 5,
-            std::string(
-                "Expected kernels to have 5 dimensions (shape (in_ch, out_ch, d, h, w)) but got ") +
-                std::to_string(kernels.dim()) + " dimensions");
-        TORCH_CHECK_VALUE(
-            kernels.size(0) == inFeatures.size(1),
-            "Expected input channels of kernels (" + std::to_string(kernels.size(0)) +
-                ") to equal input channels of features: " + std::to_string(inFeatures.size(1)));
-        const int inC = kernels.size(0), outC = kernels.size(1);
-        kWidth[0] = kernels.size(2);
-        kWidth[1] = kernels.size(3);
-        kWidth[2] = kernels.size(4);
-        kernels   = kernels.permute({2, 3, 4, 0, 1}).reshape({-1, inC, outC}).contiguous();
-    }
+
+    TORCH_CHECK_VALUE(!transposed ? inFeatures.size(0) == sizes[0] : inFeatures.size(0) == sizes[1],
+                      "The number of input features must match the number of voxels");
+    TORCH_CHECK_VALUE(
+        kernels.dim() == 5,
+        std::string(
+            "Expected kernels to have 5 dimensions (shape (out_ch, in_ch, d, h, w)) but got ") +
+            std::to_string(kernels.dim()) + " dimensions");
+    TORCH_CHECK_VALUE(
+        kernels.size(1) == inFeatures.size(1),
+        "Expected input channels of kernels (" + std::to_string(kernels.size(1)) +
+            ") to equal input channels of features: " + std::to_string(inFeatures.size(1)));
+    const int outC = kernels.size(0), inC = kernels.size(1);
+    kWidth[0] = kernels.size(2);
+    kWidth[1] = kernels.size(3);
+    kWidth[2] = kernels.size(4);
+    kernels   = kernels.permute({2, 3, 4, 1, 0}).reshape({-1, inC, outC}).contiguous();
 
     // Save for backward
     ctx->save_for_backward({inFeatures, kernels, nbmaps, nbsizes});
@@ -169,23 +151,13 @@ SparseConvolutionKernelMap::backward(AutogradContext *ctx, variable_list grad_ou
     }
 
     const int outC = gradWeight.size(-1), inC = gradWeight.size(-2);
-    if (!transposed) {
-        gradWeight = gradWeight
-                         .reshape({kWidth[2].item<int32_t>(),
-                                   kWidth[1].item<int32_t>(),
-                                   kWidth[0].item<int32_t>(),
-                                   inC,
-                                   outC})
-                         .permute({4, 3, 2, 1, 0});
-    } else {
-        gradWeight = gradWeight
-                         .reshape({kWidth[2].item<int32_t>(),
-                                   kWidth[1].item<int32_t>(),
-                                   kWidth[0].item<int32_t>(),
-                                   inC,
-                                   outC})
-                         .permute({3, 4, 2, 1, 0});
-    }
+    gradWeight = gradWeight
+                     .reshape({kWidth[2].item<int32_t>(),
+                               kWidth[1].item<int32_t>(),
+                               kWidth[0].item<int32_t>(),
+                               inC,
+                               outC})
+                     .permute({4, 3, 2, 1, 0});
     return {
         gradInput, gradWeight, torch::Tensor(), torch::Tensor(), torch::Tensor(), torch::Tensor()};
 }
