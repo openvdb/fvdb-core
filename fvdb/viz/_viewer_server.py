@@ -1,6 +1,7 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
+import uuid
 import warnings
 import webbrowser
 
@@ -20,11 +21,18 @@ def _get_viewer_server_cpp() -> ViewerCpp:
     """
     global _viewer_server_cpp
     if _viewer_server_cpp is None:
-        raise RuntimeError("Viewer server is not initialized. Call fvdb.viz.init() first.")
+        raise RuntimeError(
+            "Viewer server is not initialized. Call fvdb.viz.init() first."
+        )
     return _viewer_server_cpp
 
 
-def init(ip_address: str = "127.0.0.1", port: int = 8080, vk_device_id: int = 0, verbose: bool = False):
+def init(
+    ip_address: str = "127.0.0.1",
+    port: int = 8080,
+    vk_device_id: int = 0,
+    verbose: bool = False,
+):
     """
     Initialize the viewer web-server on the given IP address and port. You must call this function
     first before visualizing any scenes.
@@ -74,7 +82,9 @@ def init(ip_address: str = "127.0.0.1", port: int = 8080, vk_device_id: int = 0,
             raise RuntimeError(
                 f"Failed to create Vulkan device with ID {vk_device_id}. You may have an incompatible version of Vulkan installed."
             ) from e
-        _viewer_server_cpp = ViewerCpp(ip_address=ip_address, port=port, device_id=vk_device_id, verbose=verbose)
+        _viewer_server_cpp = ViewerCpp(
+            ip_address=ip_address, port=port, device_id=vk_device_id, verbose=verbose
+        )
     else:
         warnings.warn(
             f"Viewer server is already initialized with IP = {_viewer_server_cpp.ip_address()} and port = {_viewer_server_cpp.port()}."
@@ -115,10 +125,45 @@ def show():
 
     try:
         from IPython import get_ipython
-        from IPython.display import IFrame, display
+        from IPython.display import HTML, display
 
         if get_ipython() is not None:
-            display(IFrame(src=url, width="100%", height="600px"))
+            # Generate a unique ID for this viewer instance
+            viewer_id = f"viewer-container-{uuid.uuid4().hex[:8]}"
+
+            html_content = f"""
+            <div id="{viewer_id}"></div>
+            <script>
+                (function() {{
+                    // Get the current page's protocol and hostname (without port)
+                    // This ensures we construct the URL correctly even when Jupyter
+                    // is running on a non-default port
+                    var protocol = window.location.protocol; // e.g., "http:" or "https:"
+                    var hostname = window.location.hostname; // e.g., "localhost" or "example.com"
+                    var viewerPort = "{viewer_server_port}";
+                    
+                    // Explicitly construct the viewer URL
+                    var viewerUrl = protocol + "//" + hostname + ":" + viewerPort;
+                    
+                    console.log("Viewer URL: " + viewerUrl);
+                    
+                    // Create and insert the iframe
+                    var iframe = document.createElement('iframe');
+                    iframe.src = viewerUrl;
+                    iframe.width = '100%';
+                    iframe.height = '600px';
+                    iframe.style.border = 'none';
+                    
+                    var container = document.getElementById('{viewer_id}');
+                    if (container) {{
+                        container.appendChild(iframe);
+                    }} else {{
+                        console.error('Could not find container element with id: {viewer_id}');
+                    }}
+                }})();
+            </script>
+            """
+            display(HTML(html_content))
             return
     except ImportError:
         pass
