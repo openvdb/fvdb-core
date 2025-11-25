@@ -11,16 +11,6 @@ on:
         - 'examples/**'
         - 'notebooks/**'
         - 'scripts/**'
-  push:
-    branches:
-      - main
-    paths-ignore:
-        - 'CODEOWNERS'
-        - '**.md'
-        - 'debug/**'
-        - 'examples/**'
-        - 'notebooks/**'
-        - 'scripts/**'
   workflow_dispatch:
     inputs:
       branch:
