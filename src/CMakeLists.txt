@@ -41,8 +41,10 @@ set(FVDB_CPP_FILES
     fvdb/detail/autograd/Attention.cpp
     fvdb/detail/autograd/AvgPoolGrid.cpp
     fvdb/detail/autograd/EvaluateSphericalHarmonics.cpp
-    fvdb/detail/autograd/GaussianRender.cpp
     fvdb/detail/autograd/Inject.cpp
+    fvdb/detail/autograd/GaussianProjection.cpp
+    fvdb/detail/autograd/GaussianRasterize.cpp
+    fvdb/detail/autograd/GaussianRasterizeSparse.cpp
     fvdb/detail/autograd/JaggedReduce.cpp
     fvdb/detail/autograd/MaxPoolGrid.cpp
     fvdb/detail/autograd/ReadFromDense.cpp
