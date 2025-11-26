@@ -34,6 +34,7 @@ import math
 from typing import Any, Sequence
 
 import fvdb.nn as fvnn
+import fvdb.torch_jagged as fvdb_jagged
 import torch
 import torch.nn as nn
 from fvdb.types import (
@@ -87,7 +88,6 @@ class SimpleUNetBasicBlock(nn.Module):
 
         self.conv = fvnn.SparseConv3d(in_channels, out_channels, kernel_size=kernel_size, stride=1, bias=False)
         self.batch_norm = fvnn.BatchNorm(out_channels, momentum=momentum)
-        self.relu = fvnn.ReLU(inplace=True)
 
     def extra_repr(self) -> str:
         return (
@@ -107,7 +107,7 @@ class SimpleUNetBasicBlock(nn.Module):
         x = self.conv(data, plan)
         out_grid = plan.target_grid_batch
         x = self.batch_norm(x, out_grid)
-        x = self.relu(x, out_grid)
+        x = fvdb_jagged.relu(x)
         return x
 
 
@@ -170,8 +170,6 @@ class SimpleUNetConvBlock(nn.Module):
 
         self.blocks = nn.ModuleList(layers)
 
-        self.final_relu = fvnn.ReLU(inplace=True)
-
     def extra_repr(self) -> str:
         return (
             f"in_channels={self.in_channels}, mid_channels={self.mid_channels}, out_channels={self.out_channels}, "
@@ -199,7 +197,7 @@ class SimpleUNetConvBlock(nn.Module):
             data = block(data, plan)
 
         data = data + residual
-        data = self.final_relu(data, plan.target_grid_batch)
+        data = fvdb_jagged.relu(data)
 
         return data
 

@@ -367,7 +367,7 @@ class TestBatching(unittest.TestCase):
         gridbatch_2 = fvdb.GridBatch.from_points(randpts_2, voxel_sizes=0.01)
         self.assertTrue(gridbatch_2.is_contiguous())
 
-        gridbatch_cat = fvdb.jcat([gridbatch_1, gridbatch_2])
+        gridbatch_cat = fvdb.GridBatch.from_cat([gridbatch_1, gridbatch_2])
         self.assertTrue(gridbatch_cat.is_contiguous())
 
         self.assertEqual(gridbatch_cat.grid_count, gridbatch.grid_count)
@@ -375,7 +375,9 @@ class TestBatching(unittest.TestCase):
         self.assertTrue(torch.equal(gridbatch_cat.num_voxels, gridbatch.num_voxels))
         self.assertTrue(torch.equal(gridbatch_cat.ijk.jdata, gridbatch.ijk.jdata))
 
-        gridbatch_cat_2 = fvdb.jcat([gridbatch_1, fvdb.GridBatch.from_zero_grids(device=device), gridbatch_2])
+        gridbatch_cat_2 = fvdb.GridBatch.from_cat(
+            [gridbatch_1, fvdb.GridBatch.from_zero_grids(device=device), gridbatch_2]
+        )
 
         self.assertEqual(gridbatch_cat_2.grid_count, gridbatch.grid_count)
         self.assertEqual(len(gridbatch), len(gridbatch_cat_2))
@@ -391,7 +393,7 @@ class TestBatching(unittest.TestCase):
         pts_list_2 = [pts_list[i] for i in [7, 11, 13, 15, 17, 19, 19, 21, 33, 44, 55]]
         gridbatch_target = fvdb.GridBatch.from_points(fvdb.JaggedTensor(pts_list_2), voxel_sizes=0.01)
 
-        gridbatch_cat_3 = fvdb.jcat([gridbatch_3, gridbatch_4])
+        gridbatch_cat_3 = fvdb.GridBatch.from_cat([gridbatch_3, gridbatch_4])
         self.assertEqual(gridbatch_cat_3.grid_count, gridbatch_target.grid_count)
         self.assertEqual(len(gridbatch_cat_3), len(gridbatch_target))
         self.assertTrue(torch.equal(gridbatch_cat_3.num_voxels, gridbatch_target.num_voxels))
@@ -424,7 +426,7 @@ class TestBatching(unittest.TestCase):
         grid_pts = fvdb.JaggedTensor(pts_to_cat)
         target_grid = fvdb.GridBatch.from_points(grid_pts, voxel_sizes=0.01)
 
-        gridbatch_cat_4 = fvdb.jcat(grids_to_cat)
+        gridbatch_cat_4 = fvdb.GridBatch.from_cat(grids_to_cat)
 
         self.assertEqual(gridbatch_cat_4.grid_count, target_grid.grid_count)
         self.assertEqual(len(gridbatch_cat_4), len(target_grid))
@@ -642,7 +644,7 @@ class TestBatching(unittest.TestCase):
             self.assertEqual(gridbatch.num_voxels_at(-n), gridbatch.num_voxels_at(num_grids - n))
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_jcat_edge_cases(self, device, dtype):
+    def test_from_cat_edge_cases(self, device, dtype):
         """Test edge cases and error handling in jcat function"""
         num_grids = np.random.randint(8, 16)
         nvox_per_grid = NVOX if device == "cuda" else 100
@@ -670,31 +672,28 @@ class TestBatching(unittest.TestCase):
             ]
         )
 
-        # Test 1: Empty list should raise ValueError
+        # Empty list should raise ValueError
         with self.assertRaises(ValueError) as context:
-            fvdb.jcat([])
-        self.assertIn("Cannot concatenate empty list", str(context.exception))
-
-        # Test 2: GridBatch with dim argument should raise ValueError
+            fvdb.GridBatch.from_cat([])
         with self.assertRaises(ValueError) as context:
-            fvdb.jcat([gridbatch, gridbatch], dim=0)
-        self.assertIn("GridBatch concatenation does not support dim argument", str(context.exception))
+            fvdb.JaggedTensor.from_cat([])
 
-        with self.assertRaises(ValueError) as context:
-            fvdb.jcat([gridbatch, gridbatch], dim=1)
-        self.assertIn("GridBatch concatenation does not support dim argument", str(context.exception))
-
-        # Test 3: Invalid type (not GridBatch or JaggedTensor) should raise TypeError
+        # Invalid type (not GridBatch or JaggedTensor) should raise TypeError
         with self.assertRaises(TypeError) as context:
-            fvdb.jcat([torch.rand(10, 3, device=device, dtype=dtype)])
-        self.assertIn("jcat() can only cat GridBatch or JaggedTensor", str(context.exception))
+            fvdb.jcat([torch.rand(10, 3, device=device, dtype=dtype)])  # type: ignore
 
         with self.assertRaises(TypeError) as context:
-            fvdb.jcat([[1, 2, 3], [4, 5, 6]])
-        self.assertIn("jcat() can only cat GridBatch or JaggedTensor", str(context.exception))
+            fvdb.jcat([[1, 2, 3], [4, 5, 6]])  # type: ignore
+
+        # Invalid type (not GridBatch or JaggedTensor) should raise TypeError
+        with self.assertRaises(TypeError) as context:
+            fvdb.gcat([torch.rand(10, 3, device=device, dtype=dtype)])  # type: ignore
+
+        with self.assertRaises(TypeError) as context:
+            fvdb.gcat([[1, 2, 3], [4, 5, 6]])  # type: ignore
 
         # Test 4: Valid GridBatch concatenation (without dim) should work and return GridBatch
-        gridbatch_cat = fvdb.jcat([gridbatch, gridbatch])
+        gridbatch_cat = fvdb.gcat([gridbatch, gridbatch])
         self.assertIsInstance(gridbatch_cat, fvdb.GridBatch)
         self.assertEqual(gridbatch_cat.grid_count, 2 * gridbatch.grid_count)
         self.assertTrue(gridbatch_cat.is_contiguous())

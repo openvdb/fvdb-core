@@ -81,7 +81,7 @@ bind_jt_build_functions(py::module &m){
     __FVDB__BUILDER(jrandn, "jrandn")
     __FVDB__BUILDER(jzeros, "jzeros")
     __FVDB__BUILDER(jones, "jones")
-    __FVDB__BUILDER(jones, "jempty")
+    __FVDB__BUILDER(jempty, "jempty")
     // clang-format on
 }
 #undef __FVDB__BUILDER_INNER
