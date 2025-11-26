@@ -12,9 +12,9 @@ from dataclasses import dataclass
 from typing import Any, overload
 
 import torch
-from fvdb.types import NumericMaxRank1, ValueConstraint, to_Vec3i
 
 from fvdb import Grid, GridBatch, JaggedTensor
+from fvdb.types import NumericMaxRank1, ValueConstraint, to_Vec3i
 
 from ._fvdb_cpp import ConvPackBackend
 from ._fvdb_cpp import JaggedTensor as JaggedTensorCpp
@@ -59,7 +59,9 @@ def _vec_is_all(v: torch.Tensor, i: int | float) -> bool:
     return bool(torch.all(torch.eq(v, i)).item())
 
 
-def _channel_pair_supported(in_channels: int, out_channels: int, channel_pairs: tuple[tuple[int, int], ...]) -> bool:
+def _channel_pair_supported(
+    in_channels: int, out_channels: int, channel_pairs: tuple[tuple[int, int], ...]
+) -> bool:
     if len(channel_pairs) == 0:
         return True
     return (in_channels, out_channels) in channel_pairs
@@ -190,26 +192,36 @@ class ConvolutionPlan:
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
         if not _vec_is_all(stride, 1):
-            raise NotImplementedError("Strides not equal to 1 are not currently supported")
+            raise NotImplementedError(
+                "Strides not equal to 1 are not currently supported"
+            )
 
         if not _vec_is_all(stride, stride[0].item()):
             raise NotImplementedError("Non-uniform strides are not currently supported")
 
         backend = expert_config.get("backend", "default")
         if backend != "default":
-            raise NotImplementedError("Non-default backends are not currently supported")
+            raise NotImplementedError(
+                "Non-default backends are not currently supported"
+            )
 
         if backend in ["dense", "halo", "lggs"]:
             if target_grid is not None:
-                raise ValueError("Target grid must be None for dense, halo, and lggs backends.")
+                raise ValueError(
+                    "Target grid must be None for dense, halo, and lggs backends."
+                )
             target_grid = source_grid
         elif target_grid is None:
             target_grid = source_grid.conv_grid(kernel_size, stride)
 
-        pack_info = SparseConvPackInfoCpp(kernel_size, stride, source_grid._impl, target_grid._impl)
+        pack_info = SparseConvPackInfoCpp(
+            kernel_size, stride, source_grid._impl, target_grid._impl
+        )
 
         transposed = False
-        backend = cls._configure_backend(pack_info, channel_pairs, transposed, expert_config)
+        backend = cls._configure_backend(
+            pack_info, channel_pairs, transposed, expert_config
+        )
         return cls(pack_info, channel_pairs, transposed, expert_config, backend)
 
     @classmethod
@@ -272,26 +284,38 @@ class ConvolutionPlan:
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
         if not _vec_is_all(stride, 1):
-            raise NotImplementedError("Strides not equal to 1 are not currently supported")
+            raise NotImplementedError(
+                "Strides not equal to 1 are not currently supported"
+            )
 
         if not _vec_is_all(stride, stride[0].item()):
             raise NotImplementedError("Non-uniform strides are not currently supported")
 
         backend = expert_config.get("backend", "default")
         if backend != "default":
-            raise NotImplementedError("Non-default backends are not currently supported")
+            raise NotImplementedError(
+                "Non-default backends are not currently supported"
+            )
 
         if backend == "dense":
             if target_grid is not None:
-                raise ValueError("Target grid must be None for dense backend, transposed.")
+                raise ValueError(
+                    "Target grid must be None for dense backend, transposed."
+                )
             target_grid = source_grid
         elif target_grid is None:
-            raise ValueError("Target grid must be provided for transposed convolution, except for dense backend.")
+            raise ValueError(
+                "Target grid must be provided for transposed convolution, except for dense backend."
+            )
 
-        pack_info = SparseConvPackInfoCpp(kernel_size, stride, source_grid._impl, target_grid._impl)
+        pack_info = SparseConvPackInfoCpp(
+            kernel_size, stride, source_grid._impl, target_grid._impl
+        )
 
         transposed = True
-        backend = cls._configure_backend(pack_info, channel_pairs, transposed, expert_config)
+        backend = cls._configure_backend(
+            pack_info, channel_pairs, transposed, expert_config
+        )
         return cls(pack_info, channel_pairs, transposed, expert_config, backend)
 
     @classmethod
@@ -357,26 +381,36 @@ class ConvolutionPlan:
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
         if not _vec_is_all(stride, 1):
-            raise NotImplementedError("Strides not equal to 1 are not currently supported")
+            raise NotImplementedError(
+                "Strides not equal to 1 are not currently supported"
+            )
 
         if not _vec_is_all(stride, stride[0].item()):
             raise NotImplementedError("Non-uniform strides are not currently supported")
 
         backend = expert_config.get("backend", "default")
         if backend != "default":
-            raise NotImplementedError("Non-default backends are not currently supported")
+            raise NotImplementedError(
+                "Non-default backends are not currently supported"
+            )
 
         if backend in ["dense", "halo", "lggs"]:
             if target_grid is not None:
-                raise ValueError("Target grid must be None for dense, halo, and lggs backends.")
+                raise ValueError(
+                    "Target grid must be None for dense, halo, and lggs backends."
+                )
             target_grid = source_grid
         elif target_grid is None:
             target_grid = source_grid.conv_grid(kernel_size, stride)
 
-        pack_info = SparseConvPackInfoCpp(kernel_size, stride, source_grid._impl, target_grid._impl)
+        pack_info = SparseConvPackInfoCpp(
+            kernel_size, stride, source_grid._impl, target_grid._impl
+        )
 
         transposed = False
-        backend = cls._configure_backend(pack_info, channel_pairs, transposed, expert_config)
+        backend = cls._configure_backend(
+            pack_info, channel_pairs, transposed, expert_config
+        )
         return cls(pack_info, channel_pairs, transposed, expert_config, backend)
 
     @classmethod
@@ -437,26 +471,38 @@ class ConvolutionPlan:
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
         if not _vec_is_all(stride, 1):
-            raise NotImplementedError("Strides not equal to 1 are not currently supported")
+            raise NotImplementedError(
+                "Strides not equal to 1 are not currently supported"
+            )
 
         if not _vec_is_all(stride, stride[0].item()):
             raise NotImplementedError("Non-uniform strides are not currently supported")
 
         backend = expert_config.get("backend", "default")
         if backend != "default":
-            raise NotImplementedError("Non-default backends are not currently supported")
+            raise NotImplementedError(
+                "Non-default backends are not currently supported"
+            )
 
         if backend == "dense":
             if target_grid is not None:
-                raise ValueError("Target grid must be None for dense backend, transposed.")
+                raise ValueError(
+                    "Target grid must be None for dense backend, transposed."
+                )
             target_grid = source_grid
         elif target_grid is None:
-            raise ValueError("Target grid must be provided for transposed convolution, except for dense backend.")
+            raise ValueError(
+                "Target grid must be provided for transposed convolution, except for dense backend."
+            )
 
-        pack_info = SparseConvPackInfoCpp(kernel_size, stride, source_grid._impl, target_grid._impl)
+        pack_info = SparseConvPackInfoCpp(
+            kernel_size, stride, source_grid._impl, target_grid._impl
+        )
 
         transposed = True
-        backend = cls._configure_backend(pack_info, channel_pairs, transposed, expert_config)
+        backend = cls._configure_backend(
+            pack_info, channel_pairs, transposed, expert_config
+        )
         return cls(pack_info, channel_pairs, transposed, expert_config, backend)
 
     @classmethod
@@ -493,8 +539,12 @@ class ConvolutionPlan:
             # Create the corresponding backward/transpose plan
             transposed_plan = ConvolutionPlan.from_plan_transposed(forward_plan)
         """
-        kernel_size = to_Vec3i(plan._pack_info.kernel_size, value_constraint=ValueConstraint.POSITIVE)
-        stride = to_Vec3i(plan._pack_info.stride, value_constraint=ValueConstraint.POSITIVE)
+        kernel_size = to_Vec3i(
+            plan._pack_info.kernel_size, value_constraint=ValueConstraint.POSITIVE
+        )
+        stride = to_Vec3i(
+            plan._pack_info.stride, value_constraint=ValueConstraint.POSITIVE
+        )
 
         # Transposing!
         source_grid = plan._pack_info.target_grid
@@ -503,8 +553,12 @@ class ConvolutionPlan:
         channel_pairs = tuple((dst, src) for src, dst in plan._channel_pairs)
         expert_config = plan._expert_config
 
-        t_pack_info = SparseConvPackInfoCpp(kernel_size, stride, source_grid, target_grid)
-        t_backend = cls._configure_backend(t_pack_info, channel_pairs, transposed, expert_config)
+        t_pack_info = SparseConvPackInfoCpp(
+            kernel_size, stride, source_grid, target_grid
+        )
+        t_backend = cls._configure_backend(
+            t_pack_info, channel_pairs, transposed, expert_config
+        )
         return cls(t_pack_info, channel_pairs, transposed, expert_config, t_backend)
 
     def valid_usage(
@@ -533,8 +587,12 @@ class ConvolutionPlan:
         kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
-        self_kernel_size = to_Vec3i(self._pack_info.kernel_size, value_constraint=ValueConstraint.POSITIVE)
-        self_stride = to_Vec3i(self._pack_info.stride, value_constraint=ValueConstraint.POSITIVE)
+        self_kernel_size = to_Vec3i(
+            self._pack_info.kernel_size, value_constraint=ValueConstraint.POSITIVE
+        )
+        self_stride = to_Vec3i(
+            self._pack_info.stride, value_constraint=ValueConstraint.POSITIVE
+        )
 
         return (
             _channel_pair_supported(in_channels, out_channels, self._channel_pairs)
@@ -549,7 +607,9 @@ class ConvolutionPlan:
     @overload
     def execute(self, data: JaggedTensor, weights: torch.Tensor) -> JaggedTensor: ...
 
-    def execute(self, data: JaggedTensor | torch.Tensor, weights: torch.Tensor) -> JaggedTensor | torch.Tensor:
+    def execute(
+        self, data: JaggedTensor | torch.Tensor, weights: torch.Tensor
+    ) -> JaggedTensor | torch.Tensor:
         """
         Execute this :class:`ConvolutionPlan` with the input data and weights.
 
@@ -606,6 +666,11 @@ class ConvolutionPlan:
         if not _channel_pair_supported(in_c, out_c, self._channel_pairs):
             raise ValueError(f"Channel pair {in_c, out_c} is not supported")
 
+        assert isinstance(
+            data, (torch.Tensor, JaggedTensor)
+        ), "data must be a torch.Tensor or JaggedTensor"
+        assert isinstance(weights, torch.Tensor), "weights must be a torch.Tensor"
+
         is_flat: bool = isinstance(data, torch.Tensor)
         if is_flat:
             if self._pack_info.source_grid.grid_count != 1:
@@ -628,9 +693,17 @@ class ConvolutionPlan:
             result = self._execute_dense(data, weights)
         else:
             if self._transposed:
-                result = JaggedTensor(impl=self._pack_info.sparse_transpose_conv_3d(data._impl, weights, self._backend))
+                result = JaggedTensor(
+                    impl=self._pack_info.sparse_transpose_conv_3d(
+                        data._impl, weights, self._backend
+                    )
+                )
             else:
-                result = JaggedTensor(impl=self._pack_info.sparse_conv_3d(data._impl, weights, self._backend))
+                result = JaggedTensor(
+                    impl=self._pack_info.sparse_conv_3d(
+                        data._impl, weights, self._backend
+                    )
+                )
 
         if is_flat:
             return result.jdata
@@ -726,7 +799,9 @@ class ConvolutionPlan:
 
         for channel_pair in channel_pairs:
             if len(channel_pair) != 2 or channel_pair[0] <= 0 or channel_pair[1] <= 0:
-                raise ValueError("channel_pair must be a tuple of two positive integers")
+                raise ValueError(
+                    "channel_pair must be a tuple of two positive integers"
+                )
 
         backend = expert_config.get("backend", "default")
         allow_tf32 = expert_config.get("allow_tf32", True)
@@ -734,13 +809,18 @@ class ConvolutionPlan:
         feature_dtypes = expert_config.get("feature_dtypes", _DEFAULT_DTYPES)
         is_cuda = pack_info.source_grid.device.type == "cuda"
 
-        kernel_size = to_Vec3i(pack_info.kernel_size, value_constraint=ValueConstraint.POSITIVE)
+        kernel_size = to_Vec3i(
+            pack_info.kernel_size, value_constraint=ValueConstraint.POSITIVE
+        )
         stride = to_Vec3i(pack_info.stride, value_constraint=ValueConstraint.POSITIVE)
 
         all_dtypes = set(weight_dtypes + feature_dtypes)
 
         sm_arch = (
-            0.0 if not is_cuda else torch.cuda.get_device_capability()[0] + torch.cuda.get_device_capability()[1] / 10
+            0.0
+            if not is_cuda
+            else torch.cuda.get_device_capability()[0]
+            + torch.cuda.get_device_capability()[1] / 10
         )
 
         # tf32 requires compute capability >= 8.0 (Ampere)
@@ -775,16 +855,22 @@ class ConvolutionPlan:
                 raise ValueError("Halo backend requires GPU")
 
             if sm_arch < 8:
-                raise ValueError("Halo backend requires GPU with compute capability >= 8.0")
+                raise ValueError(
+                    "Halo backend requires GPU with compute capability >= 8.0"
+                )
 
             if not _vec_is_all(stride, 1) or not _vec_is_all(kernel_size, 3):
                 raise ValueError("Halo backend requires stride 1 and kernel_size 3.")
 
             if not pack_info.source_grid.is_same(pack_info.target_grid):
-                raise ValueError("Halo backend requires source_grid and target_grid to be the same.")
+                raise ValueError(
+                    "Halo backend requires source_grid and target_grid to be the same."
+                )
 
             if transposed:
-                raise ValueError("Halo backend does not support transposed convolution.")
+                raise ValueError(
+                    "Halo backend does not support transposed convolution."
+                )
 
             return ConvPackBackend.HALO
 
@@ -793,7 +879,9 @@ class ConvolutionPlan:
                 raise ValueError("Dense backend requires stride 1.")
 
             if not pack_info.source_grid.is_same(pack_info.target_grid):
-                raise ValueError("Dense backend requires source_grid and target_grid to be the same.")
+                raise ValueError(
+                    "Dense backend requires source_grid and target_grid to be the same."
+                )
 
             return ConvPackBackend.DENSE
 
@@ -802,17 +890,25 @@ class ConvolutionPlan:
                 raise ValueError("Cutlass backend requires GPU")
 
             if sm_arch < 8:
-                raise ValueError("Cutlass backend requires GPU with compute capability >= 8.0")
+                raise ValueError(
+                    "Cutlass backend requires GPU with compute capability >= 8.0"
+                )
 
             if transposed:
-                raise ValueError("Cutlass backend does not support transposed convolution.")
+                raise ValueError(
+                    "Cutlass backend does not support transposed convolution."
+                )
 
             if len(channel_pairs) == 0:
-                raise ValueError("Cutlass backend requires channel_pairs to be non-empty")
+                raise ValueError(
+                    "Cutlass backend requires channel_pairs to be non-empty"
+                )
 
             for channel_pair in channel_pairs:
                 if channel_pair not in _CUTLASS_SUPPORTED_CHANNELS:
-                    raise ValueError(f"Cutlass backend does not support {channel_pair} convolution.")
+                    raise ValueError(
+                        f"Cutlass backend does not support {channel_pair} convolution."
+                    )
 
             pack_info.build_cutlass(benchmark=False)
             return ConvPackBackend.CUTLASS
@@ -822,13 +918,17 @@ class ConvolutionPlan:
                 raise ValueError("LGGS backend requires GPU")
 
             if sm_arch < 8:
-                raise ValueError("LGGS backend requires GPU with compute capability >= 8.0")
+                raise ValueError(
+                    "LGGS backend requires GPU with compute capability >= 8.0"
+                )
 
             if channel_pairs != [(128, 128)]:
                 raise ValueError("LGGS backend only supports 128 to 128 convolution.")
 
             if transposed:
-                raise ValueError("LGGS backend does not support transposed convolution.")
+                raise ValueError(
+                    "LGGS backend does not support transposed convolution."
+                )
 
             if not _vec_is_all(kernel_size, 3):
                 raise ValueError("LGGS backend requires kernel_size 3.")
@@ -889,15 +989,23 @@ class ConvolutionPlan:
         else:
             raise NotImplementedError(f"Backend {backend} is not supported")
 
-    def _execute_halo(self, data: JaggedTensor | torch.Tensor, weights: torch.Tensor) -> JaggedTensor:
-        assert not self._transposed, "Halo backend does not support transposed convolution."
+    def _execute_halo(
+        self, data: JaggedTensor | torch.Tensor, weights: torch.Tensor
+    ) -> JaggedTensor:
+        assert (
+            not self._transposed
+        ), "Halo backend does not support transposed convolution."
 
         if isinstance(data, torch.Tensor):
             data = JaggedTensor(data)
 
-        return JaggedTensor(impl=self._pack_info.source_grid.sparse_conv_halo(data._impl, weights, 8))
+        return JaggedTensor(
+            impl=self._pack_info.source_grid.sparse_conv_halo(data._impl, weights, 8)
+        )
 
-    def _execute_dense(self, data: JaggedTensor | torch.Tensor, weights: torch.Tensor) -> JaggedTensor:
+    def _execute_dense(
+        self, data: JaggedTensor | torch.Tensor, weights: torch.Tensor
+    ) -> JaggedTensor:
         source_grid = self._pack_info.source_grid
         target_grid = self._pack_info.target_grid
         assert source_grid.is_same(target_grid)
@@ -907,14 +1015,24 @@ class ConvolutionPlan:
 
         min_coord = source_grid.ijk.jdata.min(dim=0).values
         # BXYZC -> BCXYZ
-        dense_feature = source_grid.write_to_dense_cmajor(data._impl, min_coord=min_coord)
+        dense_feature = source_grid.write_to_dense_cmajor(
+            data._impl, min_coord=min_coord
+        )
         if self._transposed:
-            dense_feature = torch.nn.functional.conv_transpose3d(dense_feature, weights, padding=1, stride=1)
+            dense_feature = torch.nn.functional.conv_transpose3d(
+                dense_feature, weights, padding=1, stride=1
+            )
         else:
-            dense_feature = torch.nn.functional.conv3d(dense_feature, weights, padding=1, stride=1)
+            dense_feature = torch.nn.functional.conv3d(
+                dense_feature, weights, padding=1, stride=1
+            )
         # BCXYZ -> BXYZC
         dense_feature = dense_feature.contiguous()
-        return JaggedTensor(impl=source_grid.read_from_dense_cmajor(dense_feature, dense_origins=min_coord))
+        return JaggedTensor(
+            impl=source_grid.read_from_dense_cmajor(
+                dense_feature, dense_origins=min_coord
+            )
+        )
 
 
 # These tests are to validate that the type-checking is happy. They won't actually run because
@@ -949,9 +1067,13 @@ def _grid_batch_test_for_typing():
     voxel_sizes = [0.1] * batch_size
     origins = [0] * batch_size
 
-    grid_batch = GridBatch.from_zero_voxels(device="cuda", voxel_sizes=voxel_sizes, origins=origins)
+    grid_batch = GridBatch.from_zero_voxels(
+        device="cuda", voxel_sizes=voxel_sizes, origins=origins
+    )
 
-    plan = ConvolutionPlan.from_grid_batch(kernel_size=3, stride=1, source_grid=grid_batch)
+    plan = ConvolutionPlan.from_grid_batch(
+        kernel_size=3, stride=1, source_grid=grid_batch
+    )
     plan_t = ConvolutionPlan.from_plan_transposed(plan)
 
     weights_1 = torch.randn(16, 8, 3, 3, 3, device="cuda")

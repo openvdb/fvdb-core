@@ -32,7 +32,9 @@ def _parse_device_string(device_or_device_string: str | torch.device) -> torch.d
     if isinstance(device_or_device_string, torch.device):
         return device_or_device_string
     if not isinstance(device_or_device_string, str):
-        raise TypeError(f"Expected a string or torch.device, but got {type(device_or_device_string)}")
+        raise TypeError(
+            f"Expected a string or torch.device, but got {type(device_or_device_string)}"
+        )
     device = torch.device(device_or_device_string)
     if device.type == "cuda" and device.index is None:
         device = torch.device("cuda", torch.cuda.current_device())
@@ -85,7 +87,11 @@ from .grid import Grid
 def scaled_dot_product_attention(
     query: JaggedTensor, key: JaggedTensor, value: JaggedTensor, scale: float
 ) -> JaggedTensor:
-    return JaggedTensor(impl=_scaled_dot_product_attention_cpp(query._impl, key._impl, value._impl, scale))
+    return JaggedTensor(
+        impl=_scaled_dot_product_attention_cpp(
+            query._impl, key._impl, value._impl, scale
+        )
+    )
 
 
 def gaussian_render_jagged(
@@ -108,7 +114,6 @@ def gaussian_render_jagged(
     render_depth_channel: bool = False,
     return_debug_info: bool = False,
     ortho: bool = False,
-    backgrounds: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
     return _gaussian_render_jagged_cpp(
         means=means._impl,
@@ -130,7 +135,6 @@ def gaussian_render_jagged(
         render_depth_channel=render_depth_channel,
         return_debug_info=return_debug_info,
         ortho=ortho,
-        backgrounds=backgrounds,
     )
 
 
@@ -200,7 +204,9 @@ def jcat(things_to_cat, dim=None):
         # Wrap the result back in a GridBatch
         return GridBatch(impl=cpp_result)
     elif isinstance(things_to_cat[0], JaggedTensor):
-        return _jcat_cpp([thing._impl for thing in things_to_cat], dim)
+        cpp_jags = [thing._impl for thing in things_to_cat]
+        cpp_result = _jcat_cpp(cpp_jags, dim)
+        return JaggedTensor(impl=cpp_result)
     else:
         raise TypeError("jcat() can only cat GridBatch or JaggedTensor")
 

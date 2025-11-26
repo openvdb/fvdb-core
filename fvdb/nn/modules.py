@@ -4,8 +4,10 @@
 import math
 from typing import Any, Sequence
 
+import fvdb
 import torch
 import torch.nn as nn
+from fvdb import ConvolutionPlan, Grid, GridBatch, JaggedTensor
 from fvdb.types import (
     NumericMaxRank1,
     NumericMaxRank2,
@@ -14,9 +16,6 @@ from fvdb.types import (
     to_Vec3iBroadcastable,
 )
 from torch.profiler import record_function
-
-import fvdb
-from fvdb import ConvolutionPlan, Grid, GridBatch, JaggedTensor
 
 
 def fvnn_module(module):
@@ -59,11 +58,17 @@ class AvgPool(nn.Module):
         stride (NumericMaxRank1, optional): the stride of the window. Default value is :attr:`kernel_size`
     """
 
-    def __init__(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 | None = None):
+    def __init__(
+        self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 | None = None
+    ):
         super().__init__()
-        self._kernel_size = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
+        self._kernel_size = to_Vec3iBroadcastable(
+            kernel_size, value_constraint=ValueConstraint.POSITIVE
+        )
         self._stride = (
-            to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE) if stride else self.kernel_size
+            to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE)
+            if stride
+            else self.kernel_size
         )
 
     @property
@@ -90,7 +95,10 @@ class AvgPool(nn.Module):
         return f"kernel_size={self.kernel_size}, stride={self.stride}"
 
     def forward(
-        self, fine_data: JaggedTensor, fine_grid: GridBatch, coarse_grid: GridBatch | None = None
+        self,
+        fine_data: JaggedTensor,
+        fine_grid: GridBatch,
+        coarse_grid: GridBatch | None = None,
     ) -> tuple[JaggedTensor, GridBatch]:
         """
         Apply 3D average pooling to the input :class:`JaggedTensor` of ``fine_data`` associated with
@@ -106,7 +114,9 @@ class AvgPool(nn.Module):
             pooled_data (JaggedTensor): The pooled features associated with the coarse grid.
             coarse_grid (GridBatch): The coarse :class:`fvdb.GridBatch` after pooling.
         """
-        return fine_grid.avg_pool(self.kernel_size, fine_data, stride=self.stride, coarse_grid=coarse_grid)
+        return fine_grid.avg_pool(
+            self.kernel_size, fine_data, stride=self.stride, coarse_grid=coarse_grid
+        )
 
 
 @fvnn_module
@@ -138,11 +148,17 @@ class MaxPool(nn.Module):
 
     """
 
-    def __init__(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 | None = None):
+    def __init__(
+        self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 | None = None
+    ):
         super().__init__()
-        self._kernel_size = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
+        self._kernel_size = to_Vec3iBroadcastable(
+            kernel_size, value_constraint=ValueConstraint.POSITIVE
+        )
         self._stride = (
-            to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE) if stride else self.kernel_size
+            to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE)
+            if stride
+            else self.kernel_size
         )
 
     @property
@@ -169,7 +185,10 @@ class MaxPool(nn.Module):
         return f"kernel_size={self.kernel_size}, stride={self.stride}"
 
     def forward(
-        self, fine_data: JaggedTensor, fine_grid: GridBatch, coarse_grid: GridBatch | None = None
+        self,
+        fine_data: JaggedTensor,
+        fine_grid: GridBatch,
+        coarse_grid: GridBatch | None = None,
     ) -> tuple[JaggedTensor, GridBatch]:
         """
         Apply 3D max pooling to the input :class:`JaggedTensor` of ``fine_data`` associated with
@@ -216,7 +235,9 @@ class UpsamplingNearest(nn.Module):
 
     def __init__(self, scale_factor: NumericMaxRank1):
         super().__init__()
-        self._scale_factor = to_Vec3iBroadcastable(scale_factor, value_constraint=ValueConstraint.POSITIVE)
+        self._scale_factor = to_Vec3iBroadcastable(
+            scale_factor, value_constraint=ValueConstraint.POSITIVE
+        )
 
     @property
     def scale_factor(self) -> torch.Tensor:
@@ -253,7 +274,9 @@ class UpsamplingNearest(nn.Module):
             refined_data (JaggedTensor): The refined features associated with the fine grid.
             fine_grid (GridBatch): The fine :class:`fvdb.GridBatch` after upsampling.
         """
-        return coarse_grid.refine(self.scale_factor, coarse_data, mask, fine_grid=fine_grid)
+        return coarse_grid.refine(
+            self.scale_factor, coarse_data, mask, fine_grid=fine_grid
+        )
 
 
 class _SparseConv3dBase(nn.Module):
@@ -270,7 +293,9 @@ class _SparseConv3dBase(nn.Module):
         self.in_channels = in_channels
         self.out_channels = out_channels
 
-        self.kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
+        self.kernel_size = to_Vec3i(
+            kernel_size, value_constraint=ValueConstraint.POSITIVE
+        )
         self.stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
         self.kernel_volume: int = int(torch.prod(self.kernel_size).item())
@@ -345,11 +370,19 @@ class SparseConv3d(_SparseConv3dBase):
         Returns:
             result (JaggedTensor): The result of the sparse convolution.
         """
-        if not plan.valid_usage(self.in_channels, self.out_channels, self.kernel_size, self.stride, transposed=False):
+        if not plan.valid_usage(
+            self.in_channels,
+            self.out_channels,
+            self.kernel_size,
+            self.stride,
+            transposed=False,
+        ):
             raise ValueError(
                 "Convolution plan used with a SparseConv3d module that had "
                 "mismatched input/output channels, kernel size, or stride, or transposition"
             )
+
+        assert isinstance(data, JaggedTensor), "Input data must be a JaggedTensor"
 
         out_data = plan.execute(data, self.weight)
 
@@ -401,7 +434,13 @@ class SparseConvTranspose3d(_SparseConv3dBase):
         Returns:
             result (JaggedTensor): The result of the sparse transposed convolution.
         """
-        if not plan.valid_usage(self.in_channels, self.out_channels, self.kernel_size, self.stride, transposed=True):
+        if not plan.valid_usage(
+            self.in_channels,
+            self.out_channels,
+            self.kernel_size,
+            self.stride,
+            transposed=True,
+        ):
             raise ValueError(
                 "Convolution plan used with a SparseConvTranspose3d module that had "
                 "mismatched input/output channels, kernel size, or stride, or transposition"
@@ -442,7 +481,9 @@ class GroupNorm(nn.GroupNorm):
             result (JaggedTensor): The result of the group normalization.
         """
         num_channels = data.jdata.size(1)
-        assert num_channels == self.num_channels, "Input feature should have the same number of channels as GroupNorm"
+        assert (
+            num_channels == self.num_channels
+        ), "Input feature should have the same number of channels as GroupNorm"
         num_batches = grid.grid_count
 
         flat_data, flat_offsets = data.jdata, data.joffsets
@@ -496,7 +537,9 @@ class BatchNorm(nn.BatchNorm1d):
             result (JaggedTensor): The result of the batch normalization.
         """
         num_channels = data.jdata.size(1)
-        assert num_channels == self.num_features, "Input feature should have the same number of channels as BatchNorm"
+        assert (
+            num_channels == self.num_features
+        ), "Input feature should have the same number of channels as BatchNorm"
         result_data = super().forward(data.jdata)
         return grid.jagged_like(result_data)
 
@@ -543,12 +586,16 @@ class SyncBatchNorm(nn.SyncBatchNorm):
             result (JaggedTensor): The result of the synchronized batch normalization.
         """
         num_channels = data.jdata.size(1)
-        assert num_channels == self.num_features, "Input feature should have the same number of channels as BatchNorm"
+        assert (
+            num_channels == self.num_features
+        ), "Input feature should have the same number of channels as BatchNorm"
         result_data = super().forward(data.jdata)
         return grid.jagged_like(result_data)
 
     @classmethod
-    def convert_sync_batchnorm(cls, module: nn.Module, process_group: Any = None) -> nn.Module:
+    def convert_sync_batchnorm(
+        cls, module: nn.Module, process_group: Any = None
+    ) -> nn.Module:
         """
         Helper function to convert :attr:`fvdb.nn.BatchNorm` layer in the model to :attr:`fvdb.nn.SyncBatchNorm` layer.
 
@@ -594,6 +641,8 @@ class SyncBatchNorm(nn.SyncBatchNorm):
             if hasattr(module, "qconfig"):
                 module_output.qconfig = module.qconfig
         for name, child in module.named_children():
-            module_output.add_module(name, cls.convert_sync_batchnorm(child, process_group))
+            module_output.add_module(
+                name, cls.convert_sync_batchnorm(child, process_group)
+            )
         del module
         return module_output
