@@ -1065,41 +1065,6 @@ def gaussian_render_jagged(
     backgrounds: Optional[torch.Tensor] = ...,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]: ...
 @overload
-def gridbatch_from_dense(
-    num_grids: int,
-    dense_dims: Vec3i,
-    ijk_min: Vec3i = ...,
-    voxel_sizes: Vec3dBatchOrScalar = ...,
-    origins: Vec3dBatch = ...,
-    mask: torch.Tensor | None = ...,
-    device: torch.device = ...,
-) -> GridBatch: ...
-@overload
-def gridbatch_from_dense(
-    num_grids: int,
-    dense_dims: Vec3i,
-    ijk_min: Vec3i = ...,
-    voxel_sizes: Vec3dBatchOrScalar = ...,
-    origins: Vec3dBatch = ...,
-    mask: torch.Tensor | None = ...,
-    device: str = ...,
-) -> GridBatch: ...
-def gridbatch_from_ijk(
-    ijk: JaggedTensor | torch.Tensor, voxel_sizes: Vec3dBatchOrScalar = ..., origins: Vec3dBatch = ...
-) -> GridBatch: ...
-def gridbatch_from_mesh(
-    vertices: JaggedTensor | torch.Tensor,
-    faces: JaggedTensor | torch.Tensor,
-    voxel_sizes: Vec3dBatchOrScalar = ...,
-    origins: Vec3dBatch = ...,
-) -> GridBatch: ...
-def gridbatch_from_nearest_voxels_to_points(
-    points: JaggedTensor | torch.Tensor, voxel_sizes: Vec3dBatchOrScalar = ..., origins: Vec3dBatch = ...
-) -> GridBatch: ...
-def gridbatch_from_points(
-    points: JaggedTensor | torch.Tensor, voxel_sizes: Vec3dBatchOrScalar = ..., origins: Vec3dBatch = ...
-) -> GridBatch: ...
-@overload
 def jcat(grid_batches: list[GridBatch]) -> GridBatch: ...
 @overload
 def jcat(jagged_tensors: list[JaggedTensor | torch.Tensor], dim: int | None = ...) -> JaggedTensor: ...

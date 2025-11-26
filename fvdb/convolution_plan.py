@@ -606,6 +606,9 @@ class ConvolutionPlan:
         if not _channel_pair_supported(in_c, out_c, self._channel_pairs):
             raise ValueError(f"Channel pair {in_c, out_c} is not supported")
 
+        assert isinstance(data, (torch.Tensor, JaggedTensor)), "data must be a torch.Tensor or JaggedTensor"
+        assert isinstance(weights, torch.Tensor), "weights must be a torch.Tensor"
+
         is_flat: bool = isinstance(data, torch.Tensor)
         if is_flat:
             if self._pack_info.source_grid.grid_count != 1:

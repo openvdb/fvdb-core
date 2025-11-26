@@ -570,7 +570,7 @@ class TestBasicOps(unittest.TestCase):
         grid_p1, grid_d1, _ = make_dense_grid_batch_and_jagged_point_data(gsize, device, dtype)
         grid_p2, grid_d2, _ = make_dense_grid_batch_and_jagged_point_data(gsize - 2, device, dtype)
 
-        grid_p, grid_d = fvdb.jcat([grid_p1, grid_p2]), fvdb.jcat([grid_d1, grid_d2])
+        grid_p, grid_d = fvdb.GridBatch.from_cat([grid_p1, grid_p2]), fvdb.GridBatch.from_cat([grid_d1, grid_d2])
 
         pijk = grid_p.ijk
         dijk = grid_d.ijk

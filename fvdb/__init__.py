@@ -56,7 +56,6 @@ if _spec is not None and _spec.origin is not None:
         pass
 
 # isort: off
-from ._fvdb_cpp import jcat as _jcat_cpp
 from ._fvdb_cpp import ConvPackBackend
 from ._fvdb_cpp import scaled_dot_product_attention as _scaled_dot_product_attention_cpp
 from ._fvdb_cpp import gaussian_render_jagged as _gaussian_render_jagged_cpp
@@ -68,17 +67,8 @@ from ._fvdb_cpp import (
 )
 
 # Import JaggedTensor from jagged_tensor.py
-from .jagged_tensor import (
-    JaggedTensor,
-    jrand,
-    jrandn,
-    jones,
-    jzeros,
-    jempty,
-)
-
-# Import GridBatch and Grid
-from .grid_batch import GridBatch
+from .jagged_tensor import JaggedTensor, jcat
+from .grid_batch import GridBatch, gcat
 from .grid import Grid
 
 
@@ -185,26 +175,6 @@ from .torch_jagged import (
     std,
 )
 
-# isort: on
-
-
-def jcat(things_to_cat, dim=None):
-    if len(things_to_cat) == 0:
-        raise ValueError("Cannot concatenate empty list")
-    if isinstance(things_to_cat[0], GridBatch):
-        if dim is not None:
-            raise ValueError("GridBatch concatenation does not support dim argument")
-        # Extract the C++ implementations from the GridBatch wrappers
-        cpp_grids = [g._gridbatch for g in things_to_cat]
-        cpp_result = _jcat_cpp(cpp_grids)
-        # Wrap the result back in a GridBatch
-        return GridBatch(impl=cpp_result)
-    elif isinstance(things_to_cat[0], JaggedTensor):
-        return _jcat_cpp([thing._impl for thing in things_to_cat], dim)
-    else:
-        raise TypeError("jcat() can only cat GridBatch or JaggedTensor")
-
-
 # The following import needs to come after all classes and functions are defined
 # in order to avoid a circular dependency error.
 # Make these available without an explicit submodule import
@@ -216,22 +186,16 @@ __version_info__ = tuple(map(int, __version__.split(".")))
 __all__ = [
     # Core classes
     "GridBatch",
+    "Grid",
     "JaggedTensor",
     "GaussianSplat3d",
     "ProjectedGaussianSplats",
     "ProjectionType",
     "ShOrderingMode",
     "ConvolutionPlan",
-    # GridBatch operations
-    # Grid operations
-    "Grid",
-    # JaggedTensor operations
+    # Concatenation of jagged tensors or grid/grid batches
     "jcat",
-    "jrand",
-    "jrandn",
-    "jones",
-    "jzeros",
-    "jempty",
+    "gcat",
     # Morton/Hilbert operations
     "morton",
     "hilbert",
