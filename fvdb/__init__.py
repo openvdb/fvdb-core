@@ -32,9 +32,7 @@ def _parse_device_string(device_or_device_string: str | torch.device) -> torch.d
     if isinstance(device_or_device_string, torch.device):
         return device_or_device_string
     if not isinstance(device_or_device_string, str):
-        raise TypeError(
-            f"Expected a string or torch.device, but got {type(device_or_device_string)}"
-        )
+        raise TypeError(f"Expected a string or torch.device, but got {type(device_or_device_string)}")
     device = torch.device(device_or_device_string)
     if device.type == "cuda" and device.index is None:
         device = torch.device("cuda", torch.cuda.current_device())
@@ -87,11 +85,7 @@ from .grid import Grid
 def scaled_dot_product_attention(
     query: JaggedTensor, key: JaggedTensor, value: JaggedTensor, scale: float
 ) -> JaggedTensor:
-    return JaggedTensor(
-        impl=_scaled_dot_product_attention_cpp(
-            query._impl, key._impl, value._impl, scale
-        )
-    )
+    return JaggedTensor(impl=_scaled_dot_product_attention_cpp(query._impl, key._impl, value._impl, scale))
 
 
 def gaussian_render_jagged(
