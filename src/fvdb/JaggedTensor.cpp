@@ -498,7 +498,8 @@ JaggedTensor::from_data_indices_and_list_ids(torch::Tensor data,
     ret.mListIdx       = list_ids;
     ret.mOffsets       = joffsets_from_jidx_and_jdata(indices, data, num_tensors);
     ret.mNumOuterLists = ret.joffsets().size(0) - 1;
-    if (ret.mListIdx.size(1) == 2 && ret.mListIdx.size(0) > 0) {
+    // In the ldim == 2 case, we need to compute the number of outer lists from the list indices.
+    if (ret.mListIdx.numel() > 0 && ret.mListIdx.size(1) == 2) {
         ret.mNumOuterLists =
             ret.mListIdx.index({torch::indexing::Slice(), 0}).max().item<int64_t>() + 1;
     }
@@ -525,7 +526,8 @@ JaggedTensor::from_data_offsets_and_list_ids(torch::Tensor data,
     ret.mOffsets       = offsets;
     ret.mListIdx       = list_ids;
     ret.mNumOuterLists = offsets.size(0) - 1;
-    if (ret.mListIdx.size(1) == 2 && ret.mListIdx.size(0) > 0) {
+    // In the ldim == 2 case, we need to compute the number of outer lists from the list indices.
+    if (ret.mListIdx.numel() > 0 && ret.mListIdx.size(1) == 2) {
         ret.mNumOuterLists =
             ret.mListIdx.index({torch::indexing::Slice(), 0}).max().item<int64_t>() + 1;
     }
