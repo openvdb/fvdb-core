@@ -698,7 +698,7 @@ class JaggedTensor:
             offsets (torch.Tensor): Offset tensor marking tensor boundaries.
                 Shape: ``(num_tensors + 1,)``.
             list_ids (torch.Tensor): List ID tensor for nested structure (potentially an empty tensor for
-                class :class:`JaggedTensor` with ldim == 1).
+                :class:`JaggedTensor` with ldim == 1).
                 Shape: ``(num_tensors, ldim)`` or empty.
 
         Returns:
