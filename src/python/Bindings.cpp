@@ -370,9 +370,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
             })
         .def_property_static(
             "pedantic_error_checking",
-            [](py::object) { return fvdb::Config::global().pendanticErrorCheckingEnabled(); },
+            [](py::object) { return fvdb::Config::global().pedanticErrorCheckingEnabled(); },
             [](py::object, bool enabled) {
-                fvdb::Config::global().setPendanticErrorChecking(enabled);
+                fvdb::Config::global().setPedanticErrorChecking(enabled);
             });
 
     py::enum_<fvdb::ConvPackBackend>(m, "ConvPackBackend")

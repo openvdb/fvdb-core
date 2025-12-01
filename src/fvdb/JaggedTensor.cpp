@@ -27,14 +27,14 @@ JaggedTensor::binary_op_check(const JaggedTensor &other) const {
                 "batch indices' shape should match between this tensor and other tensor");
     TORCH_CHECK(mOffsets.sizes().equals(other.joffsets().sizes()),
                 "offsets shape should match between this tensor and other tensor");
-    if (Config::global().pendanticErrorCheckingEnabled()) {
+    if (Config::global().pedanticErrorCheckingEnabled()) {
         // This is a slow check that we cap optionally do for correctness.
         TORCH_CHECK_VALUE(torch::equal(mOffsets, other.joffsets()),
                           "offsets shape should match between this tensor and other tensor");
         TORCH_CHECK_VALUE(
             torch::equal(other.mListIdx, mListIdx),
             "JaggedTensors must have the same lshape. ",
-            "This error was raised because config.pendatic_error_checking was enabled");
+            "This error was raised because config.pedantic_error_checking was enabled");
     }
 }
 
