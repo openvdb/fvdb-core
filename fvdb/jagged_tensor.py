@@ -649,22 +649,23 @@ class JaggedTensor:
         cls, data: torch.Tensor, indices: torch.Tensor, list_ids: torch.Tensor, num_tensors: int
     ) -> "JaggedTensor":
         """
-        Create a nested JaggedTensor from data, indices, and list IDs.
+        Create a nested :class:`JaggedTensor` from data, indices, and list IDs.
 
-        Creates a multi-level jagged structure where list_ids provide an additional
+        Creates a potentially multi-level jagged structure where list_ids provide an additional
         level of grouping beyond the basic indices.
 
         Args:
             data (torch.Tensor): Flattened data tensor containing all elements.
-                Shape: (total_elements, ...).
+                Shape: ``(total_elements, ...)``
             indices (torch.Tensor): Index tensor mapping each element to its tensor.
-                Shape: (total_elements,).
-            list_ids (torch.Tensor): List ID tensor for nested structure.
-                Shape: (total_elements,).
+                Shape: ``(total_elements,)``
+            list_ids (torch.Tensor): List ID tensor for nested structure (potentially an empty tensor for
+                JaggedTensor with ldim == 1).
+                Shape: ``(num_tensors, ldim)`` or empty.
             num_tensors (int): Total number of tensors.
 
         Returns:
-            jagged_tensor (JaggedTensor): A new JaggedTensor with nested jagged structure.
+            jagged_tensor (JaggedTensor): A new :class:`JaggedTensor`.
         """
         return cls(impl=JaggedTensorCpp.from_data_indices_and_list_ids(data, indices, list_ids, num_tensors))
 
@@ -696,11 +697,12 @@ class JaggedTensor:
                 Shape: ``(total_elements, ...)``.
             offsets (torch.Tensor): Offset tensor marking tensor boundaries.
                 Shape: ``(num_tensors + 1,)``.
-            list_ids (torch.Tensor): List ID tensor for nested structure.
-                Shape: ``(num_tensors, 2)``.
+            list_ids (torch.Tensor): List ID tensor for nested structure (potentially an empty tensor for
+                class :class:`JaggedTensor` with ldim == 1).
+                Shape: ``(num_tensors, ldim)`` or empty.
 
         Returns:
-            jagged_tensor (JaggedTensor): A new :class:`JaggedTensor` with nested jagged structure.
+            jagged_tensor (JaggedTensor): A new :class:`JaggedTensor`.
         """
         return cls(impl=JaggedTensorCpp.from_data_offsets_and_list_ids(data, offsets, list_ids))
 

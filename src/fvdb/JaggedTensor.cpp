@@ -480,13 +480,16 @@ JaggedTensor::from_data_indices_and_list_ids(torch::Tensor data,
                                              torch::Tensor list_ids,
                                              int64_t num_tensors) {
     TORCH_CHECK_VALUE(
-        list_ids.dim() == 2,
+        list_ids.numel() == 0 || list_ids.dim() == 2,
         "Invalid list indices when constructing JaggedTensor from data, indices, and list indices");
     TORCH_CHECK_VALUE(
         list_ids.numel() == 0 || list_ids.size(0) == num_tensors,
         "Invalid list indices when constructing JaggedTensor from data, indices, and list indices");
     TORCH_CHECK_VALUE(
         indices.dim() == 1,
+        "Invalid indices when constructing JaggedTensor from data, indices, and list indices");
+    TORCH_CHECK_VALUE(
+        indices.numel() == 0 || indices.size(0) == data.size(0),
         "Invalid indices when constructing JaggedTensor from data, indices, and list indices");
 
     JaggedTensor ret;
@@ -508,7 +511,7 @@ JaggedTensor::from_data_offsets_and_list_ids(torch::Tensor data,
                                              torch::Tensor offsets,
                                              torch::Tensor list_ids) {
     TORCH_CHECK_VALUE(
-        list_ids.dim() == 2,
+        list_ids.numel() == 0 || list_ids.dim() == 2,
         "Invalid list indices when constructing JaggedTensor from data, offsets, and list indices");
     TORCH_CHECK_VALUE(
         list_ids.numel() == 0 || list_ids.size(0) == (offsets.size(0) - 1),

@@ -217,13 +217,50 @@ class JaggedTensor : public torch::CustomClassHolder {
                                                                  torch::Tensor jlidx,
                                                                  int64_t numOuterLists);
 
-    /// @brief Create a JaggedTensor from the given data, indices, and list ids
+    /// @brief Create a JaggedTensor from the given data, indices, and list ids.
+    ///
+    /// Creates a potentially multi-level jagged structure where list_ids provide an additional
+    /// level of grouping beyond the basic indices.
+    ///
+    /// @param data Flattened data tensor containing all elements.
+    ///             Shape: (total_elements, ...).
+    /// @param indices Index tensor mapping each element to its tensor.
+    ///                Shape: (total_elements,).
+    /// @param list_ids List ID tensor for nested structure (potentially an empty tensor for
+    /// JaggedTensor with ldim == 1).
+    ///                 Shape: (num_tensors, ldim) or empty.
+    /// @param num_tensors Total number of tensors.
+    /// @return A new JaggedTensor
     static JaggedTensor from_data_indices_and_list_ids(torch::Tensor data,
                                                        torch::Tensor indices,
                                                        torch::Tensor list_ids,
                                                        int64_t num_tensors);
 
-    /// @brief Create a JaggedTensor from the given data, offsets, and list ids
+    /// @brief Create a JaggedTensor from the given data, offsets, and list IDs.
+    ///
+    /// The offsets are used to define boundaries between tensors in the flattened array,
+    /// and the list ids provide an additional level of grouping.
+    ///
+    /// Example:
+    ///
+    ///     data = torch.tensor([1, 2, 3, 4, 5, 6])
+    ///     offsets = torch.tensor([0, 2, 5, 6])  # 3 tensors: [0:2], [2:5], [5:6]
+    ///     list_ids = torch.tensor([[0, 0], [0, 1], [1, 0]]) # First two tensors in list 0, last in
+    ///     list 1
+    ///
+    ///     jt = JaggedTensor::from_data_offsets_and_list_ids(data, offsets, list_ids)
+    ///
+    ///     // jt represents the structure [[t_00, t_01], [t_10]]
+    ///     // where t_00 = [1, 2], t_01 = [3, 4, 5], t_10 = [6]
+    ///
+    /// @param data Flattened data tensor containing all elements.
+    ///             Shape: (total_elements, ...).
+    /// @param offsets Offset tensor marking tensor boundaries.
+    ///                Shape: (num_tensors + 1,).
+    /// @param list_ids List ID tensor for nested structure (potentially an empty tensor for
+    /// JaggedTensor with ldim == 1).
+    ///                 Shape: (num_tensors, ldim) or empty.
+    /// @return A new JaggedTensor
     static JaggedTensor from_data_offsets_and_list_ids(torch::Tensor data,
                                                        torch::Tensor offsets,
                                                        torch::Tensor list_ids);

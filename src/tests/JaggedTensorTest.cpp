@@ -479,7 +479,7 @@ TEST_F(JaggedTensorTest, StaticFactoryMethods) {
     // Test from_data_indices_and_list_ids
     auto data     = torch::tensor({1.0f, 2.0f, 3.0f, 4.0f, 5.0f});
     auto indices  = torch::tensor({0, 0, 1, 1, 2}, torch::kInt32);
-    auto list_ids = torch::tensor({0, 1, 2}, torch::kInt32);
+    auto list_ids = torch::tensor({{0}, {1}, {2}}, torch::kInt32);
 
     auto jt = JaggedTensor::from_data_indices_and_list_ids(data, indices, list_ids, 3);
 
