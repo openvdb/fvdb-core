@@ -479,12 +479,26 @@ JaggedTensor::from_data_indices_and_list_ids(torch::Tensor data,
                                              torch::Tensor indices,
                                              torch::Tensor list_ids,
                                              int64_t num_tensors) {
+    TORCH_CHECK_VALUE(
+        list_ids.dim() == 2,
+        "Invalid list indices when constructing JaggedTensor from data, indices, and list indices");
+    TORCH_CHECK_VALUE(
+        list_ids.numel() == 0 || list_ids.size(0) == num_tensors,
+        "Invalid list indices when constructing JaggedTensor from data, indices, and list indices");
+    TORCH_CHECK_VALUE(
+        indices.dim() == 1,
+        "Invalid indices when constructing JaggedTensor from data, indices, and list indices");
+
     JaggedTensor ret;
     ret.mData          = data;
     ret.mBatchIdx      = indices;
     ret.mListIdx       = list_ids;
     ret.mOffsets       = joffsets_from_jidx_and_jdata(indices, data, num_tensors);
     ret.mNumOuterLists = ret.joffsets().size(0) - 1;
+    if (ret.mListIdx.size(1) == 2 && ret.mListIdx.size(0) > 0) {
+        ret.mNumOuterLists =
+            ret.mListIdx.index({torch::indexing::Slice(), 0}).max().item<int64_t>() + 1;
+    }
     ret.mLShapeCache.markDirty();
     return ret;
 }
@@ -508,7 +522,11 @@ JaggedTensor::from_data_offsets_and_list_ids(torch::Tensor data,
     ret.mOffsets       = offsets;
     ret.mListIdx       = list_ids;
     ret.mNumOuterLists = offsets.size(0) - 1;
-    ret.mBatchIdx      = jidx_from_joffsets(offsets, data.size(0));
+    if (ret.mListIdx.size(1) == 2 && ret.mListIdx.size(0) > 0) {
+        ret.mNumOuterLists =
+            ret.mListIdx.index({torch::indexing::Slice(), 0}).max().item<int64_t>() + 1;
+    }
+    ret.mBatchIdx = jidx_from_joffsets(offsets, data.size(0));
     ret.mLShapeCache.markDirty();
     return ret;
 }
