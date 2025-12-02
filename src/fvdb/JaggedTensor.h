@@ -251,7 +251,7 @@ class JaggedTensor : public torch::CustomClassHolder {
     ///                 For ldim == 2: shape (num_tensors, 2) where each row is (outer_idx,
     ///                 inner_idx).
     /// @param num_tensors Total number of tensors.
-    /// @return A JaggedTensor representing defined by the data, indices, and list ids.
+    /// @return A JaggedTensor defined by the data, indices, and list ids.
     static JaggedTensor from_data_indices_and_list_ids(torch::Tensor data,
                                                        torch::Tensor indices,
                                                        torch::Tensor list_ids,
@@ -289,7 +289,7 @@ class JaggedTensor : public torch::CustomClassHolder {
     ///                 Empty tensor assumes a single, naturally ordered list of tensors.
     ///                 For ldim == 2: shape (num_tensors, 2) where each row is (outer_idx,
     ///                 inner_idx).
-    /// @return A JaggedTensor representing defined by the data, offsets, and list ids.
+    /// @return A JaggedTensor defined by the data, offsets, and list ids.
     static JaggedTensor from_data_offsets_and_list_ids(torch::Tensor data,
                                                        torch::Tensor offsets,
                                                        torch::Tensor list_ids);
