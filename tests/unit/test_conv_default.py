@@ -444,3 +444,157 @@ class TestConvDefault(unittest.TestCase):
             dense_convolved_at_nonzero_coords_sorted_flat, sparse_convolved_sorted, rtol=1e-5, atol=1e-6
         )
         print("Confirmed that the dense convolved at the nonzero coords matches the sparse convolved.")
+
+    # ==================================================================================
+    # Backward convolution tests
+    # ==================================================================================
+
+    @parameterized.expand(all_device_dtype_combos)
+    def test_single_impulse_backward(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """
+        Test backward pass of sparse convolution against dense ground truth.
+
+        This test creates the same single impulse setup as test_single_impulse,
+        but with requires_grad=True on both features and weights. We then:
+        1. Run forward pass on both sparse (ConvolutionPlan) and dense (conv3d)
+        2. Create an impulse output gradient at the center of the dst grid
+        3. Run backward pass on both
+        4. Compare the resulting gradients
+
+        The sparse convolution backward should produce identical gradients to
+        the dense convolution backward for the same mathematical operation.
+        """
+        device = resolve_device(device)
+
+        # Validate test parameters (same as forward test)
+        expected_volume_shape = tuple(a + 2 for a in self.KERNEL_SIZE)
+        half_kernel_size = tuple(a // 2 for a in self.KERNEL_SIZE)
+        expected_impulse_coord = tuple(1 + a for a in half_kernel_size)
+        self.assertEqual(expected_volume_shape, self.SINGLE_VOLUME_SHAPE)
+        self.assertEqual(expected_impulse_coord, self.SINGLE_COORD)
+        print("Confirmed that the expected volume/coord matches the config.")
+
+        # Create src grid with single impulse
+        coord = torch.tensor(self.SINGLE_COORD, device=device, dtype=torch.int32)
+        ijks = JaggedTensor(coord.unsqueeze(0))
+        grid_batch = GridBatch.from_ijk(ijks)
+
+        # Create features with requires_grad
+        features_data = torch.ones((1, 1), device=device, dtype=dtype, requires_grad=True)
+        features = JaggedTensor(features_data)
+
+        # Create dst grid (the convolution output topology)
+        dst_grid_batch = grid_batch.conv_grid(kernel_size=self.KERNEL_SIZE, stride=1)
+        dst_ijks = dst_grid_batch.ijk.jdata
+        kernel_volume = math.prod(self.KERNEL_SIZE)
+        self.assertEqual(len(dst_ijks), kernel_volume)
+        print(f"Confirmed dst grid has {kernel_volume} voxels.")
+
+        # Anti-symmetric kernel with requires_grad
+        kernel = fourier_anti_symmetric_kernel(self.KERNEL_SIZE, dtype=dtype, device=device)
+        self.assertFalse(has_any_symmetry(kernel))
+        kernel_with_channels = kernel.reshape(1, 1, *self.KERNEL_SIZE).clone()
+        kernel_with_channels.requires_grad_(True)
+        print("Created anti-symmetric kernel with requires_grad=True.")
+
+        # Create convolution plan
+        conv_plan = ConvolutionPlan.from_grid_batch(
+            kernel_size=self.KERNEL_SIZE, stride=1, source_grid=grid_batch, target_grid=dst_grid_batch
+        )
+        self.assertEqual(str(conv_plan._backend), "ConvPackBackend.GATHER_SCATTER")
+        print("Created convolution plan.")
+
+        # =====================================================================
+        # DENSE GROUND TRUTH PATH (with gradients)
+        # =====================================================================
+        # Create dense impulse field with requires_grad
+        dense_impulse_field = torch.zeros((1, 1) + self.SINGLE_VOLUME_SHAPE, device=device, dtype=dtype)
+        dense_impulse_field[0, 0, coord[0], coord[1], coord[2]] = 1
+        dense_impulse_field = dense_impulse_field.clone().requires_grad_(True)
+
+        # Dense kernel (separate copy for dense path to isolate gradients)
+        dense_kernel = kernel_with_channels.detach().clone().requires_grad_(True)
+
+        # Dense forward
+        _backend_setting = torch.backends.cudnn.allow_tf32
+        torch.backends.cudnn.allow_tf32 = False
+        dense_output = torch.nn.functional.conv3d(input=dense_impulse_field, weight=dense_kernel, padding="same")
+        torch.backends.cudnn.allow_tf32 = _backend_setting
+        print("Dense forward pass complete.")
+
+        # =====================================================================
+        # SPARSE PATH (with gradients)
+        # =====================================================================
+        sparse_output_jagged = conv_plan.execute(features, kernel_with_channels)
+        sparse_output_flat = sparse_output_jagged.jdata.flatten()
+        print("Sparse forward pass complete.")
+
+        # Verify forward passes match (sanity check before testing backward)
+        # Extract dense output at dst_ijks locations
+        dense_output_at_dst = dense_output[0, 0, dst_ijks[:, 0], dst_ijks[:, 1], dst_ijks[:, 2]]
+        torch.testing.assert_close(sparse_output_flat, dense_output_at_dst, rtol=1e-5, atol=1e-6)
+        print("Forward pass sanity check: sparse output matches dense output at dst locations.")
+
+        # =====================================================================
+        # BACKWARD PASS
+        # =====================================================================
+        # Create output gradient with impulse at center of dst grid (which is SINGLE_COORD)
+        # This is the simplest case: gradient flows back through the single center voxel
+        output_grad_coord = self.SINGLE_COORD
+
+        # Dense output gradient
+        dense_output_grad = torch.zeros_like(dense_output)
+        dense_output_grad[0, 0, output_grad_coord[0], output_grad_coord[1], output_grad_coord[2]] = 1
+
+        # Sparse output gradient - need to find the index in dst_ijks that matches output_grad_coord
+        output_grad_coord_tensor = torch.tensor(output_grad_coord, device=device, dtype=torch.int32)
+        matches = (dst_ijks == output_grad_coord_tensor).all(dim=1)
+        output_grad_idx = int(torch.nonzero(matches).squeeze().item())
+        print(f"Output gradient at coord {output_grad_coord}, sparse index {output_grad_idx}")
+
+        sparse_output_grad_data = torch.zeros_like(sparse_output_jagged.jdata)
+        sparse_output_grad_data[output_grad_idx, 0] = 1
+        sparse_output_grad = JaggedTensor(sparse_output_grad_data)
+
+        # Run backward on dense
+        dense_output.backward(dense_output_grad)
+        dense_input_grad = dense_impulse_field.grad
+        dense_kernel_grad = dense_kernel.grad
+        assert dense_input_grad is not None
+        assert dense_kernel_grad is not None
+        print("Dense backward pass complete.")
+
+        # Run backward on sparse
+        # The sparse backward is done by calling backward on the jagged tensor's jdata
+        sparse_output_jagged.jdata.backward(sparse_output_grad_data)
+        sparse_input_grad = features_data.grad
+        sparse_kernel_grad = kernel_with_channels.grad
+        assert sparse_input_grad is not None
+        assert sparse_kernel_grad is not None
+        print("Sparse backward pass complete.")
+
+        # =====================================================================
+        # COMPARE GRADIENTS
+        # =====================================================================
+
+        # Compare input gradients
+        # The sparse input gradient is for the single voxel at SINGLE_COORD
+        # The dense input gradient at that location should match
+        dense_input_grad_at_coord = dense_input_grad[0, 0, coord[0], coord[1], coord[2]]
+        print(f"Dense input grad at impulse coord: {dense_input_grad_at_coord.item()}")
+        print(f"Sparse input grad: {sparse_input_grad.flatten().item()}")
+        torch.testing.assert_close(
+            sparse_input_grad.flatten(),
+            dense_input_grad_at_coord.unsqueeze(0),
+            rtol=1e-5,
+            atol=1e-6,
+        )
+        print("INPUT GRADIENT TEST PASSED: Sparse input grad matches dense input grad at impulse coord.")
+
+        # Compare kernel gradients
+        print(f"Dense kernel grad shape: {dense_kernel_grad.shape}")
+        print(f"Sparse kernel grad shape: {sparse_kernel_grad.shape}")
+        print(f"Dense kernel grad sum: {dense_kernel_grad.sum().item()}")
+        print(f"Sparse kernel grad sum: {sparse_kernel_grad.sum().item()}")
+        torch.testing.assert_close(sparse_kernel_grad, dense_kernel_grad, rtol=1e-5, atol=1e-6)
+        print("KERNEL GRADIENT TEST PASSED: Sparse kernel grad matches dense kernel grad.")
