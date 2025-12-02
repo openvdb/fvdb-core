@@ -649,23 +649,45 @@ class JaggedTensor:
         cls, data: torch.Tensor, indices: torch.Tensor, list_ids: torch.Tensor, num_tensors: int
     ) -> "JaggedTensor":
         """
-        Create a nested :class:`JaggedTensor` from data, indices, and list IDs.
+        Create a :class:`JaggedTensor` from data, per-element indices, and list IDs.
 
-        Creates a potentially multi-level jagged structure where list_ids provide an additional
-        level of grouping beyond the basic indices.
+        This function validates that data, indices, list_ids, and num_tensors are compatible.
+        The offsets are computed internally from the indices.
+
+        Example (ldim == 1, list of tensors):
+
+        .. code-block:: python
+
+            data = torch.tensor([1, 2, 3, 4, 5])
+            indices = torch.tensor([0, 0, 1, 1, 1])  # Elements 0-1 in tensor 0,
+                                                     # elements 2-4 in tensor 1
+            list_ids = torch.empty((0, 1), dtype=torch.int)  # Empty for ldim == 1
+            jt = JaggedTensor.from_data_indices_and_list_ids(data, indices, list_ids, 2)
+            # Result: [[1, 2], [3, 4, 5]]
+
+        Example (ldim == 2, list of lists of tensors):
+
+        .. code-block:: python
+
+            data = torch.tensor([1, 2, 3, 4, 5, 6])
+            indices = torch.tensor([0, 0, 1, 1, 1, 2])  # 3 tensors
+            list_ids = torch.tensor([[0, 0], [0, 1], [1, 0]])  # Outer/inner indices
+            jt = JaggedTensor.from_data_indices_and_list_ids(data, indices, list_ids, 3)
+            # Result: [[[1, 2], [3, 4, 5]], [[6]]]
 
         Args:
             data (torch.Tensor): Flattened data tensor containing all elements.
-                Shape: ``(total_elements, ...)``
-            indices (torch.Tensor): Index tensor mapping each element to its tensor.
-                Shape: ``(total_elements,)``
-            list_ids (torch.Tensor): List ID tensor for nested structure (potentially an empty tensor for
-                JaggedTensor with ldim == 1).
-                Shape: ``(num_tensors, ldim)`` or empty.
+                Shape: ``(total_elements, ...)``.
+            indices (torch.Tensor): Index tensor mapping each element to its tensor index
+                (0 to num_tensors-1). Shape: ``(total_elements,)``, or empty if num_tensors == 1.
+            list_ids (torch.Tensor): Tensor defining the hierarchical position of each tensor.
+                For ldim == 1: shape ``(num_tensors, 1)`` or empty tensor with shape ``(0, 1)``.
+                Empty tensor assumes a single, naturally ordered list of tensors.
+                For ldim == 2: shape ``(num_tensors, 2)`` where each row is ``(outer_idx, inner_idx)``.
             num_tensors (int): Total number of tensors.
 
         Returns:
-            jagged_tensor (JaggedTensor): A new :class:`JaggedTensor`.
+            jagged_tensor (JaggedTensor): A :class:`JaggedTensor` defined by the data, indices, and list ids.
         """
         return cls(impl=JaggedTensorCpp.from_data_indices_and_list_ids(data, indices, list_ids, num_tensors))
 
@@ -674,35 +696,45 @@ class JaggedTensor:
         cls, data: torch.Tensor, offsets: torch.Tensor, list_ids: torch.Tensor
     ) -> "JaggedTensor":
         """
-        Create a nested :class:`JaggedTensor` from data, offsets, and list IDs.
+        Create a :class:`JaggedTensor` from data, offsets, and list IDs.
 
-        The offsets are used to define boundaries between tensors in the flattened array,
-        and the list ids provide an additional level of grouping.
+        This function validates that data, offsets, and list_ids are compatible.
+        The per-element indices are computed internally from the offsets.
 
-        Example:
+        Example (ldim == 1, list of tensors):
+
+        .. code-block:: python
+
+            data = torch.tensor([1, 2, 3, 4, 5])
+            offsets = torch.tensor([0, 2, 5])  # 2 tensors: data[0:2], data[2:5]
+            list_ids = torch.empty((0, 1), dtype=torch.int)  # Empty for ldim == 1
+            jt = JaggedTensor.from_data_offsets_and_list_ids(data, offsets, list_ids)
+            # Result: [[1, 2], [3, 4, 5]]
+
+        Example (ldim == 2, list of lists of tensors):
 
         .. code-block:: python
 
             data = torch.tensor([1, 2, 3, 4, 5, 6])
             offsets = torch.tensor([0, 2, 5, 6])  # 3 tensors: [0:2], [2:5], [5:6]
-            list_ids = torch.tensor([[0, 0], [0, 1], [1, 0]]) # First two tensors in list 0, last in list 1
-
+            list_ids = torch.tensor([[0, 0], [0, 1], [1, 0]])
+            # list_ids maps: tensor 0 -> list[0][0], tensor 1 -> list[0][1], tensor 2 -> list[1][0]
             jt = JaggedTensor.from_data_offsets_and_list_ids(data, offsets, list_ids)
-
-            # jt represents the structure [[t_00, t_01], [t_10]]
-            # where t_00 = [1, 2], t_01 = [3, 4, 5], t_10 = [6]
+            # Result: [[[1, 2], [3, 4, 5]], [[6]]]
 
         Args:
             data (torch.Tensor): Flattened data tensor containing all elements.
                 Shape: ``(total_elements, ...)``.
-            offsets (torch.Tensor): Offset tensor marking tensor boundaries.
+            offsets (torch.Tensor): Offset tensor marking tensor boundaries. ``offsets[i]`` is the
+                start index of tensor i, and ``offsets[i+1] - offsets[i]`` is its length.
                 Shape: ``(num_tensors + 1,)``.
-            list_ids (torch.Tensor): List ID tensor for nested structure (potentially an empty tensor for
-                :class:`JaggedTensor` with ldim == 1).
-                Shape: ``(num_tensors, ldim)`` or empty.
+            list_ids (torch.Tensor): Tensor defining the hierarchical position of each tensor.
+                For ldim == 1: shape ``(num_tensors, 1)`` or empty tensor with shape ``(0, 1)``.
+                Empty tensor assumes a single, naturally ordered list of tensors.
+                For ldim == 2: shape ``(num_tensors, 2)`` where each row is ``(outer_idx, inner_idx)``.
 
         Returns:
-            jagged_tensor (JaggedTensor): A new :class:`JaggedTensor`.
+            jagged_tensor (JaggedTensor): A :class:`JaggedTensor` defined by the data, offsets, and list ids.
         """
         return cls(impl=JaggedTensorCpp.from_data_offsets_and_list_ids(data, offsets, list_ids))
 
