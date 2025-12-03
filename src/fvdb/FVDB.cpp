@@ -93,18 +93,18 @@ scaledDotProductAttention(const JaggedTensor &query,
     // Required for math backend which needs contiguous tensors
     auto make_nested_tensor = [](const JaggedTensor &jt) -> torch::Tensor {
         const auto &data          = jt.jdata();
-        auto offsets_tensor       = jt.joffsets();
         const int64_t num_tensors = jt.num_tensors();
 
+        // Use cached lsizes
+        const auto &lsizes = jt.lsizes1();
         std::vector<torch::Tensor> tensor_list;
         tensor_list.reserve(num_tensors);
 
-        auto offsets_cpu = offsets_tensor.cpu();
-        auto offsets_acc = offsets_cpu.accessor<int64_t, 1>();
+        int64_t start = 0;
         for (int64_t i = 0; i < num_tensors; ++i) {
-            int64_t start = offsets_acc[i];
-            int64_t end   = offsets_acc[i + 1];
+            int64_t end = start + lsizes[i];
             tensor_list.push_back(data.slice(0, start, end).contiguous());
+            start = end;
         }
 
         return at::_nested_tensor_from_tensor_list(tensor_list, {}, {}, {}, {});
