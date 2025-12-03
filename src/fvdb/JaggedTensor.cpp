@@ -365,56 +365,42 @@ JaggedTensor::recompute_lsizes_if_dirty() {
 
 std::vector<torch::Tensor>
 JaggedTensor::unbind1() const {
-    std::vector<torch::Tensor> ret(num_tensors());
-
     int64_t ldim = mListIdx.size(1);
     if (ldim != 1) {
         TORCH_WARN(
             "Calling unbind on a multidimensional list of jagged tensors will return a flattened list");
     }
+    // Get sizes from cache (uses cached values if available, otherwise syncs once)
+    auto sizes = lsizes1();
 
-    torch::Tensor offsetsCpu = mOffsets.cpu();
-    auto acc                 = offsetsCpu.accessor<JOffsetsType, 1>();
-    for (int i = 0; i < num_tensors(); ++i) {
-        const JOffsetsType startIdx = acc[i];
-        const JOffsetsType endIdx   = acc[i + 1];
-
-        ret[i] = mData.index({torch::indexing::Slice(startIdx, endIdx)});
-    }
-
-    return ret;
+    return mData.split_with_sizes(sizes, 0);
 }
 
 std::vector<std::vector<torch::Tensor>>
 JaggedTensor::unbind2() const {
-    std::vector<std::vector<torch::Tensor>> ret;
-
     int64_t ldim = mListIdx.size(1);
 
     if (ldim != 2) {
         TORCH_CHECK_VALUE(false, "Called unbind2() on a list with list dimension != 2");
     }
 
-    torch::Tensor listIdxCpu = mListIdx.cpu();
-    torch::Tensor offsetsCpu = mOffsets.cpu();
-    ssize_t currentList      = -1;
+    // Get nested sizes from cache
+    auto nested_sizes = lsizes2();
 
-    auto offAcc = offsetsCpu.accessor<JOffsetsType, 1>();
-    auto lixAcc = listIdxCpu.accessor<JLIdxType, 2>();
+    std::vector<std::vector<torch::Tensor>> ret;
+    ret.reserve(nested_sizes.size());
 
-    for (int i = 0; i < num_tensors(); ++i) {
-        const JLIdxType outerIdx = lixAcc[i][0];
+    JOffsetsType offset = 0;
+    for (const auto &inner_sizes: nested_sizes) {
+        std::vector<torch::Tensor> inner_tensors;
+        inner_tensors.reserve(inner_sizes.size());
 
-        if (outerIdx != currentList) {
-            currentList += 1;
-            ret.push_back(std::vector<torch::Tensor>());
+        for (JOffsetsType size: inner_sizes) {
+            inner_tensors.push_back(mData.narrow(0, offset, size));
+            offset += size;
         }
-        const JOffsetsType startIdx = offAcc[i];
-        const JOffsetsType endIdx   = offAcc[i + 1];
-
-        ret.back().push_back(mData.index({torch::indexing::Slice(startIdx, endIdx)}));
+        ret.push_back(std::move(inner_tensors));
     }
-
     return ret;
 }
 
@@ -560,7 +546,6 @@ JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(torch::Tensor jdata,
     ret.mNumOuterLists = numOuterLists;
     ret.mBatchIdx      = jidx;
     ret.mLShapeCache.markDirty();
-    ret.recompute_lsizes_if_dirty();
     return ret;
 }
 
