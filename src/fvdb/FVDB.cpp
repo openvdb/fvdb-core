@@ -48,7 +48,7 @@ scaledDotProductAttention(const JaggedTensor &query,
     // - value: (N, ..., S, V)
 
     // Helper to create a zero-copy nested tensor view from a JaggedTensor
-    // This is more efficient but only works with fused backends (flash/efficient attention)
+    // Only works with efficient attention
     auto make_nested_view = [](const JaggedTensor &jt) -> torch::Tensor {
         const auto &data = jt.jdata(); // (Total, H, D)
         const int64_t H  = data.size(1);
@@ -57,7 +57,7 @@ scaledDotProductAttention(const JaggedTensor &query,
         const int64_t stride_L    = H * D;
         const int64_t num_tensors = jt.num_tensors();
 
-        // Use cached lsizes - avoids GPU->CPU copy if already computed
+        // Use cached lsizes
         const auto &lsizes = jt.lsizes1(); // std::vector<int64_t>
 
         // Create lengths tensor
@@ -89,7 +89,7 @@ scaledDotProductAttention(const JaggedTensor &query,
             data.view({-1}), nested_size, nested_strides, offsets_arg);
     };
 
-    // Helper to create a proper nested tensor (with copy) from a JaggedTensor
+    // Helper to create a nested tensor (with copy) from a JaggedTensor
     // Required for math backend which needs contiguous tensors
     auto make_nested_tensor = [](const JaggedTensor &jt) -> torch::Tensor {
         const auto &data          = jt.jdata();
