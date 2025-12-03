@@ -182,8 +182,7 @@ target_include_directories(fvdb PUBLIC
     ${NANOVDB_EDITOR_INCLUDE_DIR})
 target_include_directories(fvdb PRIVATE
     ${TORCH_SOURCE_INCLUDE_DIRS}
-    ${tinyply_SOURCE_DIR}/source
-    ${CMAKE_CURRENT_SOURCE_DIR}/temp/wspro_reduce)
+    ${tinyply_SOURCE_DIR}/source)
 
 # Needed by Torch for CUDA extensions
 set(TORCH_CUDA_COMMON_FLAGS
