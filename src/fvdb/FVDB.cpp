@@ -47,7 +47,8 @@ scaledDotProductAttention(const JaggedTensor &query,
     // - key: (N, ..., S, E)
     // - value: (N, ..., S, V)
 
-    // Helper to create a nested tensor view from a JaggedTensor
+    // Helper to create a zero-copy nested tensor view from a JaggedTensor
+    // This is more efficient but only works with fused backends (flash/efficient attention)
     auto make_nested_view = [](const JaggedTensor &jt) -> torch::Tensor {
         const auto &data = jt.jdata(); // (Total, H, D)
         const int64_t H  = data.size(1);
@@ -55,7 +56,7 @@ scaledDotProductAttention(const JaggedTensor &query,
 
         const int64_t stride_L = H * D;
 
-        auto offsets_tensor       = jt.joffsets().cpu(); // (N+1)
+        auto offsets_tensor       = jt.joffsets().cpu();
         const int64_t num_tensors = jt.num_tensors();
 
         // Compute lengths: offsets[1:] - offsets[:-1]
@@ -74,7 +75,7 @@ scaledDotProductAttention(const JaggedTensor &query,
         nested_strides.select(1, 1).fill_(D);
         nested_strides.select(1, 2).fill_(1);
 
-        // Prepare offsets in bytes/elements for the buffer
+        // Prepare offsets in elements for the buffer
         std::vector<int64_t> storage_offsets(num_tensors);
         auto offsets_acc = offsets_tensor.accessor<int64_t, 1>();
         for (int64_t i = 0; i < num_tensors; ++i) {
@@ -84,20 +85,82 @@ scaledDotProductAttention(const JaggedTensor &query,
         auto offsets_arg = torch::tensor(storage_offsets, lengths.options().dtype(torch::kLong));
 
         return at::_nested_view_from_buffer(
-            data.view(-1), nested_size, nested_strides, offsets_arg);
+            data.view({-1}), nested_size, nested_strides, offsets_arg);
     };
 
-    torch::Tensor q_nested = make_nested_view(query); // (N, L, H, D)
-    torch::Tensor k_nested = make_nested_view(key);   // (N, S, H, D)
-    torch::Tensor v_nested = make_nested_view(value); // (N, S, H, D)
+    // Helper to create a proper nested tensor (with copy) from a JaggedTensor
+    // Required for math backend which needs contiguous tensors
+    auto make_nested_tensor = [](const JaggedTensor &jt) -> torch::Tensor {
+        const auto &data          = jt.jdata();
+        auto offsets_tensor       = jt.joffsets();
+        const int64_t num_tensors = jt.num_tensors();
 
-    // We need (N, H, L, D).
-    // Transpose and make contiguous.
-    // NOTE: Our previous ScaledDotProductAttention implementation also required contiguous inputs
-    // of this channel ordering.
-    q_nested = q_nested.transpose(1, 2).contiguous();
-    k_nested = k_nested.transpose(1, 2).contiguous();
-    v_nested = v_nested.transpose(1, 2).contiguous();
+        std::vector<torch::Tensor> tensor_list;
+        tensor_list.reserve(num_tensors);
+
+        auto offsets_cpu = offsets_tensor.cpu();
+        auto offsets_acc = offsets_cpu.accessor<int64_t, 1>();
+        for (int64_t i = 0; i < num_tensors; ++i) {
+            int64_t start = offsets_acc[i];
+            int64_t end   = offsets_acc[i + 1];
+            tensor_list.push_back(data.slice(0, start, end).contiguous());
+        }
+
+        return at::_nested_tensor_from_tensor_list(tensor_list, {}, {}, {}, {});
+    };
+
+    torch::Tensor q_nested, k_nested, v_nested;
+
+    // Check runtime context set by Python's sdpa_kernel() context manager
+    // These reflect what backends are enabled/disabled at runtime
+    auto &ctx                  = at::globalContext();
+    bool flash_enabled         = ctx.userEnabledFlashSDP();
+    bool mem_efficient_enabled = ctx.userEnabledMemEfficientSDP();
+    bool math_enabled          = ctx.userEnabledMathSDP();
+    bool cudnn_enabled         = ctx.userEnabledCuDNNSDP();
+
+    // Different backends have different nested tensor requirements:
+    // - Flash Attention: needs _nested_tensor_from_tensor_list (NOT contiguous after transpose)
+    // - Efficient Attention: works with _nested_view_from_buffer (zero-copy)
+    // - Math: needs _nested_tensor_from_tensor_list WITH contiguous after transpose
+
+    bool math_only = math_enabled && !flash_enabled && !mem_efficient_enabled && !cudnn_enabled;
+
+    if (math_only) {
+        // Math backend requires contiguous nested tensors
+        q_nested = make_nested_tensor(query).transpose(1, 2).contiguous();
+        k_nested = make_nested_tensor(key).transpose(1, 2).contiguous();
+        v_nested = make_nested_tensor(value).transpose(1, 2).contiguous();
+    } else if (flash_enabled && !mem_efficient_enabled) {
+        // Flash Attention needs proper nested tensors but NOT contiguous
+        q_nested = make_nested_tensor(query).transpose(1, 2);
+        k_nested = make_nested_tensor(key).transpose(1, 2);
+        v_nested = make_nested_tensor(value).transpose(1, 2);
+    } else {
+        // Efficient attention can use zero-copy view
+        q_nested = make_nested_view(query).transpose(1, 2);
+        k_nested = make_nested_view(key).transpose(1, 2);
+        v_nested = make_nested_view(value).transpose(1, 2);
+
+        // Query which backend will actually be used based on tensor properties
+        // SDPBackend: 0=error, 1=math, 2=flash_attention, 3=efficient_attention, 4=cudnn_attention
+        int64_t backend =
+            at::_fused_sdp_choice(q_nested, k_nested, v_nested, {}, 0.0, false, scale, false);
+
+        // Handle fallback cases
+        if (backend == 1) {
+            // Math backend selected - need contiguous tensors
+            q_nested = make_nested_tensor(query).transpose(1, 2).contiguous();
+            k_nested = make_nested_tensor(key).transpose(1, 2).contiguous();
+            v_nested = make_nested_tensor(value).transpose(1, 2).contiguous();
+        } else if (backend == 2) {
+            // Flash attention selected - need proper nested tensors (not view)
+            q_nested = make_nested_tensor(query).transpose(1, 2);
+            k_nested = make_nested_tensor(key).transpose(1, 2);
+            v_nested = make_nested_tensor(value).transpose(1, 2);
+        }
+        // For efficient_attention (3) or cudnn (4), keep the zero-copy view
+    }
 
     torch::Tensor out_nested = at::native::scaled_dot_product_attention(
         q_nested, k_nested, v_nested, {}, 0.0, false, scale);
