@@ -2,19 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import pathlib
-from typing import Any, Mapping, Sequence, overload
+from typing import Any, Mapping, Sequence, TypeVar, overload
 
 import torch
 from fvdb.enums import ProjectionType
 
-from . import JaggedTensor as JaggedTensorCpp
 from ._fvdb_cpp import GaussianSplat3d as GaussianSplat3dCpp
-from ._fvdb_cpp import JaggedTensor
+from ._fvdb_cpp import JaggedTensor as JaggedTensorCpp
 from ._fvdb_cpp import ProjectedGaussianSplats as ProjectedGaussianSplatsCpp
 from .grid import Grid
 from .grid_batch import GridBatch
 from .jagged_tensor import JaggedTensor
 from .types import DeviceIdentifier, cast_check, resolve_device
+
+JaggedTensorOrTensorT = TypeVar("JaggedTensorOrTensorT", JaggedTensor, torch.Tensor)
 
 
 class ProjectedGaussianSplats:
@@ -256,7 +257,7 @@ class GaussianSplat3d:
     - Rendering images with arbitrary channels using spherical harmonics for view-dependent color
       representation (:meth:`render_images`, :meth:`render_images_and_depths`).
     - Rendering depth maps (:meth:`render_depths`, :meth:`render_images_and_depths`).
-    - Rendering features at arbitrary sparse pixel locations (:meth:`sparse_render_features`).
+    - Rendering features at arbitrary sparse pixel locations (:meth:`sparse_render_images`, :meth:`sparse_render_images_and_depths`).
     - Rendering depths at arbitrary sparse pixel locations (:meth:`sparse_render_depths`).
     - Computing which gaussians contribute to each pixel in an image plane
       (:meth:`render_num_contributing_gaussians`, :meth:`render_contributing_gaussian_ids`).
@@ -1699,6 +1700,99 @@ class GaussianSplat3d:
             backgrounds=backgrounds,
         )
 
+    def sparse_render_depths(
+        self,
+        pixels_to_render: JaggedTensorOrTensorT,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        image_width: int,
+        image_height: int,
+        near: float,
+        far: float,
+        projection_type=ProjectionType.PERSPECTIVE,
+        tile_size: int = 16,
+        min_radius_2d: float = 0.3,
+        eps_2d: float = 0.3,
+        antialias: bool = False,
+    ) -> tuple[JaggedTensorOrTensorT, JaggedTensorOrTensorT]:
+        """
+        Render ``C`` collections of sparse depth values from this :class:`GaussianSplat3d` from ``C`` camera views
+        at the specified pixel locations.
+
+        Example:
+
+        .. code-block:: python
+
+            # Assume gaussian_splat_3d is an instance of GaussianSplat3d
+            # pixels_to_render is a tensor of shape [C, P, 2] containing pixel coordinates to render
+            # Render sparse depth values from C camera views at specified pixel locations
+            # depth_values is a tensor of shape [C, P, 1]
+            # alpha_values is a tensor of shape [C, P, 1]
+            depth_values, alpha_values = gaussian_splat_3d.sparse_render_depths(
+                pixels_to_render, # tensor of shape [C, P, 2]
+                world_to_camera_matrices, # tensor of shape [C, 4, 4]
+                projection_matrices, # tensor of shape [C, 3, 3]
+                image_width, # width of the images
+                image_height, # height of the images
+                near, # near clipping plane
+                far) # far clipping plane
+
+            true_depths = depth_values / alpha_values  # Get true depth values by dividing by alpha
+
+        Args:
+            pixels_to_render (torch.Tensor | JaggedTensor): A tensor of shape ``(C, P, 2)`` or a JaggedTensor where ``C`` is the number of camera views,
+                and ``P`` is the number of pixel coordinates to render per camera. Each pixel coordinate is represented as (y, x) (row, col).
+            world_to_camera_matrices (torch.Tensor): Tensor of shape ``(C, 4, 4)`` representing the
+                world-to-camera transformation matrices for C cameras. Each matrix transforms points
+                from world coordinates to camera coordinates.
+            projection_matrices (torch.Tensor): Tensor of shape ``(C, 3, 3)`` representing the projection matrices for ``C`` cameras.
+                Each matrix projects points in camera space into homogeneous pixel coordinates.
+            image_width (int): The width of the images to be rendered. Note these are the same for all images being rendered.
+            image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
+            near (float): The near clipping plane distance for the projection.
+            far (float): The far clipping plane distance for the projection.
+            projection_type (ProjectionType): The type of projection to use. Default is :attr:`fvdb.ProjectionType.PERSPECTIVE`.
+            tile_size (int): The size of the tiles to use for rendering. Default is 16. You shouldn't set this parameter unless you really know what you are doing.
+            min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
+            eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
+                numerical issues.
+            antialias (bool): If ``True``, applies opacity correction to the projected Gaussians when using ``eps_2d > 0.0``.
+
+
+        Returns:
+            depth_values (torch.Tensor | JaggedTensor): A tensor of shape ``(C, P, 1)`` or a JaggedTensor where ``C`` is the number of camera views,
+                and ``P`` is the number of pixel coordinates rendered per camera. Each element represents the depth value at that pixel.
+            alpha_values (torch.Tensor | JaggedTensor): A tensor of shape ``(C, P, 1)`` or a JaggedTensor where ``C`` is the number of camera views,
+                and ``P`` is the number of pixel coordinates rendered per camera. Each element represents the alpha value (opacity) at that pixel such that ``0 <= alpha < 1``,
+                and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
+        """
+        if isinstance(pixels_to_render, torch.Tensor):
+            pixels_to_render_impl = JaggedTensorCpp(pixels_to_render)
+        elif isinstance(pixels_to_render, JaggedTensor):
+            pixels_to_render_impl: JaggedTensorCpp = pixels_to_render._impl
+        else:
+            raise TypeError("pixels_to_render must be either a torch.Tensor or a fvdb.JaggedTensor")
+
+        ret_depths, ret_alphas = self._impl.sparse_render_depths(
+            pixels_to_render=pixels_to_render_impl,
+            world_to_camera_matrices=world_to_camera_matrices,
+            projection_matrices=projection_matrices,
+            image_width=image_width,
+            image_height=image_height,
+            near=near,
+            far=far,
+            projection_type=self._proj_type_to_cpp(projection_type),
+            tile_size=tile_size,
+            min_radius_2d=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+        )
+
+        if isinstance(pixels_to_render, torch.Tensor):
+            return ret_depths.jdata, ret_alphas.jdata
+        else:
+            return JaggedTensor(impl=ret_depths), JaggedTensor(impl=ret_alphas)
+
     def render_images(
         self,
         world_to_camera_matrices: torch.Tensor,
@@ -1783,6 +1877,200 @@ class GaussianSplat3d:
             backgrounds=backgrounds,
         )
 
+    def sparse_render_images(
+        self,
+        pixels_to_render: JaggedTensorOrTensorT,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        image_width: int,
+        image_height: int,
+        near: float,
+        far: float,
+        projection_type=ProjectionType.PERSPECTIVE,
+        sh_degree_to_use: int = -1,
+        tile_size: int = 16,
+        min_radius_2d: float = 0.0,
+        eps_2d: float = 0.3,
+        antialias: bool = False,
+    ) -> tuple[JaggedTensorOrTensorT, JaggedTensorOrTensorT]:
+        """
+        Render ``C`` collections of multi-channel features (see :attr:`num_channels`) from this :class:`GaussianSplat3d` from ``C`` camera views
+        at the specified pixel locations.
+
+        Example:
+
+        .. code-block:: python
+
+            # Assume gaussian_splat_3d is an instance of GaussianSplat3d
+            # pixels_to_render is a tensor of shape [C, P, 2] containing pixel coordinates to render
+            # Render sparse images from C camera views at specified pixel locations
+            # features is a tensor of shape [C, P, D] where D is the number of channels
+            # alphas is a tensor of shape [C, P, 1]
+            features, alphas = gaussian_splat_3d.sparse_render_images(
+                pixels_to_render, # tensor of shape [C, P, 2]
+                world_to_camera_matrices, # tensor of shape [C, 4, 4]
+                projection_matrices, # tensor of shape [C, 3, 3]
+                image_width, # width of the images
+                image_height, # height of the images
+                near, # near clipping plane
+                far) # far clipping plane
+
+        Args:
+            pixels_to_render (torch.Tensor | JaggedTensor): A tensor of shape ``(C, P, 2)`` or a :class:`~fvdb.JaggedTensor` where ``C`` is the number of camera views,
+                and ``P`` is the number of pixel coordinates to render per camera. Each pixel coordinate is represented as (y, x) (row, col).
+            world_to_camera_matrices (torch.Tensor): Tensor of shape ``(C, 4, 4)`` representing the
+                world-to-camera transformation matrices for C cameras. Each matrix transforms points
+                from world coordinates to camera coordinates.
+            projection_matrices (torch.Tensor): Tensor of shape ``(C, 3, 3)`` representing the projection matrices for ``C`` cameras.
+                Each matrix projects points in camera space into homogeneous pixel coordinates.
+            image_width (int): The width of the images to be rendered. Note these are the same for all images being rendered.
+            image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
+            near (float): The near clipping plane distance for the projection.
+            far (float): The far clipping plane distance for the projection.
+            projection_type (ProjectionType): The type of projection to use. Default is :attr:`fvdb.ProjectionType.PERSPECTIVE`.
+            sh_degree_to_use (int): The degree of spherical harmonics to use for rendering. -1 means use all available SH bases.
+                0 means use only the first SH base (constant color). Note that you can't use more SH bases than available in the GaussianSplat3d instance.
+                Default is -1.
+            tile_size (int): The size of the tiles to use for rendering. Default is 16. You shouldn't set this parameter unless you really know what you are doing.
+            min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
+            eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
+                numerical issues.
+            antialias (bool): If ``True``, applies opacity correction to the projected Gaussians when using ``eps_2d > 0.0``.
+
+        Returns:
+            features (torch.Tensor | JaggedTensor): A tensor of shape ``(C, P, D)`` or a
+                :class:`~fvdb.JaggedTensor` where ``C`` is the number of camera views,
+                ``P`` is the number of pixel coordinates rendered per camera, and ``D`` is the number of channels.
+            alpha_images (torch.Tensor | JaggedTensor): A tensor of shape ``(C, P, 1)`` or a :class:`~fvdb.JaggedTensor`
+                where ``C`` is the number of camera views, and ``P`` is the number of pixel coordinates rendered per camera.
+                Each element represents the alpha value (opacity) at that pixel such that ``0 <= alpha < 1``,
+                and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
+        """
+        if isinstance(pixels_to_render, torch.Tensor):
+            pixels_to_render_impl = JaggedTensorCpp(pixels_to_render)
+        elif isinstance(pixels_to_render, JaggedTensor):
+            pixels_to_render_impl: JaggedTensorCpp = pixels_to_render._impl
+        else:
+            raise TypeError("pixels_to_render must be either a torch.Tensor or a fvdb.JaggedTensor")
+
+        ret_features, ret_alphas = self._impl.sparse_render_images(
+            pixels_to_render=pixels_to_render_impl,
+            world_to_camera_matrices=world_to_camera_matrices,
+            projection_matrices=projection_matrices,
+            image_width=image_width,
+            image_height=image_height,
+            near=near,
+            far=far,
+            projection_type=self._proj_type_to_cpp(projection_type),
+            sh_degree_to_use=sh_degree_to_use,
+            tile_size=tile_size,
+            min_radius_2d=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+        )
+
+        if isinstance(pixels_to_render, torch.Tensor):
+            return ret_features.jdata, ret_alphas.jdata
+        else:
+            return JaggedTensor(impl=ret_features), JaggedTensor(impl=ret_alphas)
+
+    def sparse_render_images_and_depths(
+        self,
+        pixels_to_render: JaggedTensorOrTensorT,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        image_width: int,
+        image_height: int,
+        near: float,
+        far: float,
+        projection_type=ProjectionType.PERSPECTIVE,
+        sh_degree_to_use: int = -1,
+        tile_size: int = 16,
+        min_radius_2d: float = 0.0,
+        eps_2d: float = 0.3,
+        antialias: bool = False,
+    ) -> tuple[JaggedTensorOrTensorT, JaggedTensorOrTensorT]:
+        """
+        Render ``C`` collections of sparse multi-channel features (see :attr:`num_channels`) with depth as
+        the last channel from this :class:`GaussianSplat3d` from ``C`` camera views at the specified pixel locations.
+
+        Example:
+        .. code-block:: python
+
+            # Assume gaussian_splat_3d is an instance of GaussianSplat3d
+            # pixels_to_render is a tensor of shape [C, P, 2] containing pixel coordinates to render
+            # Render sparse images with depth from C camera views at specified pixel locations
+            # features is a tensor of shape [C, P, D + 1] where D is the number of channels
+            # alphas is a tensor of shape [C, P, 1]
+            features, alphas = gaussian_splat_3d.sparse_render_images_and_depths(
+                pixels_to_render, # tensor of shape [C, P, 2]
+                world_to_camera_matrices, # tensor of shape [C, 4, 4]
+                projection_matrices, # tensor of shape [C, 3, 3]
+                image_width, # width of the images
+                image_height, # height of the images
+                near, # near clipping plane
+                far) # far clipping plane
+
+        Args:
+            pixels_to_render (torch.Tensor | JaggedTensor): A tensor of shape ``(C, P, 2)`` or a :class:`~fvdb.JaggedTensor` where ``C`` is the number of camera views,
+                and ``P`` is the number of pixel coordinates to render per camera. Each pixel coordinate is represented as (y, x) (row, col).
+            world_to_camera_matrices (torch.Tensor): Tensor of shape ``(C, 4, 4)`` representing the
+                world-to-camera transformation matrices for C cameras. Each matrix transforms points
+                from world coordinates to camera coordinates.
+            projection_matrices (torch.Tensor): Tensor of shape ``(C, 3, 3)`` representing the projection matrices for ``C`` cameras.
+                Each matrix projects points in camera space into homogeneous pixel coordinates.
+            image_width (int): The width of the images to be rendered. Note these are the same for all images being rendered.
+            image_height (int): The height of the images to be rendered. Note these are the same for all images being rendered.
+            near (float): The near clipping plane distance for the projection.
+            far (float): The far clipping plane distance for the projection.
+            projection_type (ProjectionType): The type of projection to use. Default is :attr:`fvdb.ProjectionType.PERSPECTIVE`.
+            sh_degree_to_use (int): The degree of spherical harmonics to use for rendering. -1 means use all available SH bases.
+                0 means use only the first SH base (constant color). Note that you can't use more SH bases than available in the GaussianSplat3d instance.
+                Default is -1.
+            tile_size (int): The size of the tiles to use for rendering. Default is 16. You shouldn't set this parameter unless you really know what you are doing.
+            min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
+            eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
+                numerical issues.
+            antialias (bool): If ``True``, applies opacity correction to the projected Gaussians when using ``eps_2d > 0.0``.
+
+        Returns:
+            features_with_depths (torch.Tensor | JaggedTensor): A tensor of shape ``(C, P, D + 1)`` or a
+                :class:`~fvdb.JaggedTensor` where ``C`` is the number of camera views,
+                ``P`` is the number of pixel coordinates rendered per camera, and ``D`` is the number of channels. The last channel
+                represents the depth value at that pixel.
+            alpha_images (torch.Tensor | JaggedTensor): A tensor of shape ``(C, P, 1)`` or a :class:`~fvdb.JaggedTensor`
+                where ``C`` is the number of camera views, and ``P`` is the number of pixel coordinates rendered per camera.
+                Each element represents the alpha value (opacity) at that pixel such that ``0 <= alpha < 1``,
+                and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
+        """
+        if isinstance(pixels_to_render, torch.Tensor):
+            pixels_to_render_impl = JaggedTensorCpp(pixels_to_render)
+        elif isinstance(pixels_to_render, JaggedTensor):
+            pixels_to_render_impl: JaggedTensorCpp = pixels_to_render._impl
+        else:
+            raise TypeError("pixels_to_render must be either a torch.Tensor or a fvdb.JaggedTensor")
+
+        ret_features, ret_alphas = self._impl.sparse_render_images_and_depths(
+            pixels_to_render=pixels_to_render_impl,
+            world_to_camera_matrices=world_to_camera_matrices,
+            projection_matrices=projection_matrices,
+            image_width=image_width,
+            image_height=image_height,
+            near=near,
+            far=far,
+            projection_type=self._proj_type_to_cpp(projection_type),
+            sh_degree_to_use=sh_degree_to_use,
+            tile_size=tile_size,
+            min_radius_2d=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+        )
+
+        if isinstance(pixels_to_render, torch.Tensor):
+            return ret_features.jdata, ret_alphas.jdata
+        else:
+            return JaggedTensor(impl=ret_features), JaggedTensor(impl=ret_alphas)
+
     def render_images_and_depths(
         self,
         world_to_camera_matrices: torch.Tensor,
@@ -1815,7 +2103,7 @@ class GaussianSplat3d:
             # Render images with depth maps from C camera views.
             # images is a tensor of shape [C, H, W, D + 1] where D is the number of channels
             # alpha_images is a tensor of shape [C, H, W, 1]
-            images, alpha_images = gaussian_splat_3d.render_images(
+            images, alpha_images = gaussian_splat_3d.render_images_and_depths(
                 world_to_camera_matrices, # tensor of shape [C, 4, 4]
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the images
@@ -1901,7 +2189,7 @@ class GaussianSplat3d:
             # Render images from C camera views.
             # images is a tensor of shape [C, H, W, D] where D is the number of channels
             # alpha_images is a tensor of shape [C, H, W, 1]
-            num_gaussians, alpha_images = gaussian_splat_3d.render_images(
+            num_gaussians, alpha_images = gaussian_splat_3d.render_num_contributing_gaussians(
                 world_to_camera_matrices, # tensor of shape [C, 4, 4]
                 projection_matrices, # tensor of shape [C, 3, 3]
                 image_width, # width of the images

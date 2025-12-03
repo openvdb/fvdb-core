@@ -101,6 +101,10 @@ __all__ = [
     "GaussianSplat3d",
     "ProjectedGaussianSplats",
     "ConvolutionPlan",
+    "ProjectionType",
+    "ShOrderingMode",
+    "Grid",
+    # JaggedTensor operations
     # Concatenation of jagged tensors or grid/grid batches
     "jcat",
     "gcat",
