@@ -54,14 +54,14 @@ scaledDotProductAttention(const JaggedTensor &query,
         const int64_t H  = data.size(1);
         const int64_t D  = data.size(2);
 
-        const int64_t stride_L = H * D;
-
-        auto offsets_tensor       = jt.joffsets().cpu();
+        const int64_t stride_L    = H * D;
         const int64_t num_tensors = jt.num_tensors();
 
-        // Compute lengths: offsets[1:] - offsets[:-1]
-        auto lengths =
-            offsets_tensor.slice(0, 1, num_tensors + 1) - offsets_tensor.slice(0, 0, num_tensors);
+        // Use cached lsizes - avoids GPU->CPU copy if already computed
+        const auto &lsizes = jt.lsizes1(); // std::vector<int64_t>
+
+        // Create lengths tensor
+        auto lengths = torch::tensor(lsizes, torch::TensorOptions().dtype(torch::kLong));
 
         // Construct nested_size: (N, 3) -> [L_i, H, D]
         auto nested_size = torch::empty({num_tensors, 3}, lengths.options());
@@ -75,14 +75,15 @@ scaledDotProductAttention(const JaggedTensor &query,
         nested_strides.select(1, 1).fill_(D);
         nested_strides.select(1, 2).fill_(1);
 
-        // Prepare offsets in elements for the buffer
+        // Compute storage_offsets from cumulative sum of lsizes
         std::vector<int64_t> storage_offsets(num_tensors);
-        auto offsets_acc = offsets_tensor.accessor<int64_t, 1>();
+        int64_t cumulative = 0;
         for (int64_t i = 0; i < num_tensors; ++i) {
-            storage_offsets[i] = offsets_acc[i] * stride_L;
+            storage_offsets[i] = cumulative * stride_L;
+            cumulative += lsizes[i];
         }
 
-        auto offsets_arg = torch::tensor(storage_offsets, lengths.options().dtype(torch::kLong));
+        auto offsets_arg = torch::tensor(storage_offsets, lengths.options());
 
         return at::_nested_view_from_buffer(
             data.view({-1}), nested_size, nested_strides, offsets_arg);
@@ -165,8 +166,8 @@ scaledDotProductAttention(const JaggedTensor &query,
     torch::Tensor out_nested = at::native::scaled_dot_product_attention(
         q_nested, k_nested, v_nested, {}, 0.0, false, scale);
 
-    // out_nested is (N, H, L, D) nested tensor.
-    // We need to convert back to JaggedTensor with shape (Total, H, D)
+    // out_nested is a nested tensor with components of shape (H, L_i, D), where L_i is the sequence
+    // length for batch element i. We need to convert back to JaggedTensor with shape (L_i, H, D)
     std::vector<torch::Tensor> outList = out_nested.unbind();
     for (auto &t: outList) {
         t = t.permute({1, 0, 2}).contiguous();
