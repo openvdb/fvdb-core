@@ -11,7 +11,6 @@
                 "${workspaceFolder}/src",
                 "${workspaceFolder}/../nanovdb",
                 "${workspaceFolder}/external/glm",
-                "${workspaceFolder}/external/cudnn_fe/include",
                 "${workspaceFolder}/external/cutlass/include",
                 "${workspaceFolder}/external/tinyply/source",
                 "${env:CONDA_PREFIX}/envs/fvdb/include/python3.11",
