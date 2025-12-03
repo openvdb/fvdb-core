@@ -1745,7 +1745,13 @@ class TestJaggedTensor(unittest.TestCase):
         with torch.nn.attention.sdpa_kernel([torch.nn.attention.SDPBackend.MATH]):
             out_jagged_fvdb = fvdb.scaled_dot_product_attention(q_jagged, k_jagged, v_jagged, scale=scale)
             self.check_lshape(out_jagged_fvdb, out_jagged_torch_forloop_list)
-        self.assertTrue(torch.allclose(out_jagged_torch_forloop.jdata, out_jagged_fvdb.jdata))
+
+        atol = 1e-8
+        rtol = 1e-5
+        if dtype == torch.float16:
+            atol = 1e-3
+            rtol = 1e-3
+        self.assertTrue(torch.allclose(out_jagged_torch_forloop.jdata, out_jagged_fvdb.jdata, atol=atol, rtol=rtol))
         self.assertTrue(torch.all(out_jagged_torch_forloop.joffsets == out_jagged_fvdb.joffsets))
 
     def test_datatype_caster(self):

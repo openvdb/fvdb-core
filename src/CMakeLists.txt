@@ -12,7 +12,6 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_torch.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_tinyply.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_cutlass.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_nanovdb.cmake)
-include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_cudnn_frontend.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_blosc.cmake)
 
 # Build options
@@ -38,7 +37,6 @@ execute_process(
 # Source files
 set(FVDB_CPP_FILES
     fvdb/Config.cpp
-    fvdb/detail/autograd/Attention.cpp
     fvdb/detail/autograd/AvgPoolGrid.cpp
     fvdb/detail/autograd/EvaluateSphericalHarmonics.cpp
     fvdb/detail/autograd/GaussianRender.cpp
@@ -145,7 +143,6 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/SampleGridTrilinearWithGrad.cu
     fvdb/detail/ops/SampleGridTrilinearWithGradBackward.cu
     fvdb/detail/ops/SampleRaysUniform.cu
-    fvdb/detail/ops/ScaledDotProductAttention.cu
     fvdb/detail/ops/SegmentsAlongRays.cu
     fvdb/detail/ops/SerializeEncode.cu
     fvdb/detail/ops/SplatIntoGridBezier.cu
@@ -218,7 +215,7 @@ target_compile_options(fvdb PRIVATE
     >)
 
 target_link_libraries(fvdb PRIVATE
-    ${TORCH_LIBRARIES} tinyply cudnn_frontend cudnn cutlass blosc::blosc)
+    ${TORCH_LIBRARIES} tinyply cutlass blosc::blosc)
 
 # Add linker flags for Debug builds to preserve symbols
 if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
