@@ -38,7 +38,6 @@ execute_process(
 # Source files
 set(FVDB_CPP_FILES
     fvdb/Config.cpp
-    fvdb/detail/autograd/Attention.cpp
     fvdb/detail/autograd/AvgPoolGrid.cpp
     fvdb/detail/autograd/EvaluateSphericalHarmonics.cpp
     fvdb/detail/autograd/GaussianRender.cpp
@@ -145,7 +144,6 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/SampleGridTrilinearWithGrad.cu
     fvdb/detail/ops/SampleGridTrilinearWithGradBackward.cu
     fvdb/detail/ops/SampleRaysUniform.cu
-    fvdb/detail/ops/ScaledDotProductAttention.cu
     fvdb/detail/ops/SegmentsAlongRays.cu
     fvdb/detail/ops/SerializeEncode.cu
     fvdb/detail/ops/SplatIntoGridBezier.cu
