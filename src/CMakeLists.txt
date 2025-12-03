@@ -18,6 +18,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_blosc.cmake)
 option(FVDB_BUILD_TESTS "Configure CMake to build tests" ON)
 option(FVDB_BUILD_BENCHMARKS "Configure CMake to build (google & nvbench) benchmarks" OFF)
 option(FVDB_STRIP_SYMBOLS "Strip symbols from the build" OFF)
+option(FVDB_LINEINFO "Enable lineinfo in the build" OFF)
 
 message(STATUS "FVDB: Configure CMake to build tests: ${FVDB_BUILD_TESTS}")
 message(STATUS "FVDB: Configure CMake to build (google & nvbench) benchmarks: ${FVDB_BUILD_BENCHMARKS}")
@@ -181,7 +182,8 @@ target_include_directories(fvdb PUBLIC
     ${NANOVDB_EDITOR_INCLUDE_DIR})
 target_include_directories(fvdb PRIVATE
     ${TORCH_SOURCE_INCLUDE_DIRS}
-    ${tinyply_SOURCE_DIR}/source)
+    ${tinyply_SOURCE_DIR}/source
+    ${CMAKE_CURRENT_SOURCE_DIR}/temp/wspro_reduce)
 
 # Needed by Torch for CUDA extensions
 set(TORCH_CUDA_COMMON_FLAGS
@@ -212,7 +214,8 @@ target_compile_options(fvdb PRIVATE
     "--threads=$ENV{NVCC_THREADS}"
     "-Xcompiler=-Wall,-Werror"
     ${TORCH_CUDA_COMMON_FLAGS}
-    >)
+    >
+    $<$<AND:$<BOOL:${FVDB_LINEINFO}>,$<COMPILE_LANGUAGE:CUDA>>:-lineinfo>)
 
 target_link_libraries(fvdb PRIVATE
     ${TORCH_LIBRARIES} tinyply cutlass blosc::blosc)
