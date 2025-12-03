@@ -1704,11 +1704,14 @@ class TestJaggedTensor(unittest.TestCase):
         [
             # Flash Attention - only supports float16/bfloat16
             (torch.float16, torch.nn.attention.SDPBackend.FLASH_ATTENTION),
+            (torch.bfloat16, torch.nn.attention.SDPBackend.FLASH_ATTENTION),
             # Efficient Attention - only supports float16/bfloat16/float32
             (torch.float16, torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION),
+            (torch.bfloat16, torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION),
             (torch.float32, torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION),
             # Math - supports all dtypes
             (torch.float16, torch.nn.attention.SDPBackend.MATH),
+            (torch.bfloat16, torch.nn.attention.SDPBackend.MATH),
             (torch.float32, torch.nn.attention.SDPBackend.MATH),
             (torch.float64, torch.nn.attention.SDPBackend.MATH),
         ]
@@ -1764,6 +1767,9 @@ class TestJaggedTensor(unittest.TestCase):
         if dtype == torch.float16:
             atol = 1e-3
             rtol = 1e-3
+        elif dtype == torch.bfloat16:
+            atol = 1e-2
+            rtol = 1e-2
         self.assertTrue(torch.allclose(out_jagged_torch_forloop.jdata, out_jagged_fvdb.jdata, atol=atol, rtol=rtol))
         self.assertTrue(torch.all(out_jagged_torch_forloop.joffsets == out_jagged_fvdb.joffsets))
 
