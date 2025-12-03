@@ -1647,7 +1647,7 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
         pixels_to_render = JaggedTensor([torch.tensor([[h // 2 - 1, w // 2 - 1]])]).to(self.device)
 
         # test sparse render num contributing gaussians
-        sparse_num_contributing_gaussians, sparse_alphas = gs3d.render_num_contributing_gaussians_sparse(
+        sparse_num_contributing_gaussians, sparse_alphas = gs3d.sparse_render_num_contributing_gaussians(
             pixels_to_render,
             world_to_cam_xform.unsqueeze(0).contiguous(),
             intrinsics.unsqueeze(0).contiguous(),
@@ -1668,7 +1668,7 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
         self.assertTrue(torch.equal(sparse_alphas.unbind()[0][0], alphas[0][h // 2 - 1][w // 2 - 1]))
 
         # test sparse render top contributing gaussian ids
-        sparse_ids, sparse_weights = gs3d.render_contributing_gaussian_ids_sparse(
+        sparse_ids, sparse_weights = gs3d.sparse_render_contributing_gaussian_ids(
             pixels_to_render,
             world_to_cam_xform.unsqueeze(0).contiguous(),
             intrinsics.unsqueeze(0).contiguous(),
@@ -1685,7 +1685,7 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
         # Test that sparse_render_contributing_gaussian_ids with top_k_contributors
         # set to max(num_contributing_gaussians) produces identical results
         max_contributors = int(sparse_num_contributing_gaussians.jdata.max().item())
-        sparse_ids_topk, sparse_weights_topk = gs3d.render_contributing_gaussian_ids_sparse(
+        sparse_ids_topk, sparse_weights_topk = gs3d.sparse_render_contributing_gaussian_ids(
             pixels_to_render,
             world_to_cam_xform.unsqueeze(0).contiguous(),
             intrinsics.unsqueeze(0).contiguous(),
@@ -1877,7 +1877,7 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
         pixels_to_render = JaggedTensor([test_pixels]).to(self.device)
 
         # test sparse render num contributing gaussians
-        sparse_num_contributing_gaussians, sparse_alphas = gs3d.render_num_contributing_gaussians_sparse(
+        sparse_num_contributing_gaussians, sparse_alphas = gs3d.sparse_render_num_contributing_gaussians(
             pixels_to_render,
             world_to_cam_xform.unsqueeze(0).contiguous(),
             intrinsics.unsqueeze(0).contiguous(),
@@ -1908,7 +1908,7 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
             self.assertTrue(torch.equal(sparse_alphas, selected_reference_alphas))
 
         # test sparse render contributing gaussian ids
-        sparse_ids, sparse_weights = gs3d.render_contributing_gaussian_ids_sparse(
+        sparse_ids, sparse_weights = gs3d.sparse_render_contributing_gaussian_ids(
             pixels_to_render,
             world_to_cam_xform.unsqueeze(0).contiguous(),
             intrinsics.unsqueeze(0).contiguous(),
@@ -1943,7 +1943,7 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
         # Test that sparse_render_contributing_gaussian_ids with top_k_contributors
         # set to max(num_contributing_gaussians) produces identical results
         max_contributors = int(sparse_num_contributing_gaussians.jdata.max().item())
-        sparse_ids_topk, sparse_weights_topk = gs3d.render_contributing_gaussian_ids_sparse(
+        sparse_ids_topk, sparse_weights_topk = gs3d.sparse_render_contributing_gaussian_ids(
             pixels_to_render,
             world_to_cam_xform.unsqueeze(0).contiguous(),
             intrinsics.unsqueeze(0).contiguous(),
@@ -2036,7 +2036,7 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
 
         # Test render num contributing gaussians
         num_contributing_gaussians, num_contributing_gaussians_alphas = (
-            self.gs3d.render_num_contributing_gaussians_sparse(
+            self.gs3d.sparse_render_num_contributing_gaussians(
                 pixels_to_render,
                 self.cam_to_world_mats,
                 self.projection_mats,
@@ -2049,7 +2049,7 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
         prev_num_contributing_gaussians = num_contributing_gaussians
         for _ in range(50):
             num_contributing_gaussians, num_contributing_gaussians_alphas = (
-                self.gs3d.render_num_contributing_gaussians_sparse(
+                self.gs3d.sparse_render_num_contributing_gaussians(
                     pixels_to_render,
                     self.cam_to_world_mats,
                     self.projection_mats,
@@ -2095,7 +2095,7 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
             self.assertTrue(torch.equal(sparse_alphas, selected_reference_alphas))
 
         # Test render top contributing gaussian ids
-        sparse_ids, sparse_weights = self.gs3d.render_contributing_gaussian_ids_sparse(
+        sparse_ids, sparse_weights = self.gs3d.sparse_render_contributing_gaussian_ids(
             pixels_to_render,
             self.cam_to_world_mats,
             self.projection_mats,
@@ -2159,7 +2159,7 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
         pixels_to_render = torch.stack([yCoords, xCoords], 1).unsqueeze(0).to(self.device)
 
         # test sparse render num contributing gaussians
-        sparse_num_contributing_gaussians, sparse_alphas = self.gs3d.render_num_contributing_gaussians_sparse(
+        sparse_num_contributing_gaussians, sparse_alphas = self.gs3d.sparse_render_num_contributing_gaussians(
             pixels_to_render,
             self.cam_to_world_mats,
             self.projection_mats,
@@ -2202,7 +2202,7 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
             self.assertTrue(torch.equal(sparse_alphas, selected_reference_alphas))
 
         # test sparse render top contributing gaussian ids
-        sparse_ids, sparse_weights = self.gs3d.render_contributing_gaussian_ids_sparse(
+        sparse_ids, sparse_weights = self.gs3d.sparse_render_contributing_gaussian_ids(
             pixels_to_render,
             self.cam_to_world_mats,
             self.projection_mats,
