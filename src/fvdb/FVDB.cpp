@@ -102,7 +102,7 @@ scaledDotProductAttention(const JaggedTensor &query,
     torch::Tensor out_nested = at::native::scaled_dot_product_attention(
         q_nested, k_nested, v_nested, {}, 0.0, false, scale);
 
-    // out_nested is (N, H, L, D) nested tensor.
+    // out_nested is a nested tensor with components of shape (H, L_i, D), where L_i is the sequence length for batch element i.
     // We need to convert back to JaggedTensor with shape (Total, H, D)
     std::vector<torch::Tensor> outList = out_nested.unbind();
     for (auto &t: outList) {
