@@ -13,6 +13,7 @@
 #include <fvdb/detail/io/LoadNanovdb.h>
 #include <fvdb/detail/io/SaveNanoVDB.h>
 
+#include <ATen/SDPBackend.h>
 #include <ATen/cuda/CUDAContext.h>
 
 namespace fvdb {
@@ -132,35 +133,41 @@ scaledDotProductAttention(const JaggedTensor &query,
         q_nested = make_nested_tensor(query).transpose(1, 2).contiguous();
         k_nested = make_nested_tensor(key).transpose(1, 2).contiguous();
         v_nested = make_nested_tensor(value).transpose(1, 2).contiguous();
-    } else if (flash_enabled && !mem_efficient_enabled) {
-        // Flash Attention needs proper nested tensors but NOT contiguous
+    } else if (flash_enabled) {
+        // Flash Attention enabled - use nested tensors (also compatible with efficient attention)
+        // This avoids double tensor creation when both backends are enabled and PyTorch selects
+        // flash
         q_nested = make_nested_tensor(query).transpose(1, 2);
         k_nested = make_nested_tensor(key).transpose(1, 2);
         v_nested = make_nested_tensor(value).transpose(1, 2);
+
+        // Check for math fallback if math is also enabled
+        if (math_enabled) {
+            auto backend = static_cast<at::SDPBackend>(
+                at::_fused_sdp_choice(q_nested, k_nested, v_nested, {}, 0.0, false, scale, false));
+            if (backend == at::SDPBackend::math) {
+                q_nested = q_nested.contiguous();
+                k_nested = k_nested.contiguous();
+                v_nested = v_nested.contiguous();
+            }
+        }
     } else {
-        // Efficient attention can use zero-copy view
+        // Flash disabled - efficient/math only, can use zero-copy view
         q_nested = make_nested_view(query).transpose(1, 2);
         k_nested = make_nested_view(key).transpose(1, 2);
         v_nested = make_nested_view(value).transpose(1, 2);
 
         // Query which backend will actually be used based on tensor properties
-        // SDPBackend: 0=error, 1=math, 2=flash_attention, 3=efficient_attention, 4=cudnn_attention
-        int64_t backend =
-            at::_fused_sdp_choice(q_nested, k_nested, v_nested, {}, 0.0, false, scale, false);
+        auto backend = static_cast<at::SDPBackend>(
+            at::_fused_sdp_choice(q_nested, k_nested, v_nested, {}, 0.0, false, scale, false));
 
-        // Handle fallback cases
-        if (backend == 1) {
+        if (backend == at::SDPBackend::math) {
             // Math backend selected - need contiguous tensors
             q_nested = make_nested_tensor(query).transpose(1, 2).contiguous();
             k_nested = make_nested_tensor(key).transpose(1, 2).contiguous();
             v_nested = make_nested_tensor(value).transpose(1, 2).contiguous();
-        } else if (backend == 2) {
-            // Flash attention selected - need proper nested tensors (not view)
-            q_nested = make_nested_tensor(query).transpose(1, 2);
-            k_nested = make_nested_tensor(key).transpose(1, 2);
-            v_nested = make_nested_tensor(value).transpose(1, 2);
         }
-        // For efficient_attention (3) or cudnn (4), keep the zero-copy view
+        // For efficient_attention or cudnn, keep the zero-copy view
     }
 
     torch::Tensor out_nested = at::native::scaled_dot_product_attention(
