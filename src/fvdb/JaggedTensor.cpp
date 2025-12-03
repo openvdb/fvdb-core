@@ -395,7 +395,7 @@ JaggedTensor::unbind2() const {
         std::vector<torch::Tensor> inner_tensors;
         inner_tensors.reserve(inner_sizes.size());
 
-        for (int64_t size: inner_sizes) {
+        for (JOffsetsType size: inner_sizes) {
             inner_tensors.push_back(mData.narrow(0, offset, size));
             offset += size;
         }
