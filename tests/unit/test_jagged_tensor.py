@@ -405,7 +405,7 @@ class TestJaggedTensor(unittest.TestCase):
 
     @parameterized.expand(all_device_dtype_combos)
     def test_jflatten_list(self, device, dtype):
-        jt1 = fvdb.jrand([100, 200, 300, 400, 500, 600, 700, 800], [2, 3, 4])
+        jt1 = fvdb.JaggedTensor.from_rand([100, 200, 300, 400, 500, 600, 700, 800], [2, 3, 4])
 
         jt3 = jt1.jflatten(dim=0)
         self.assertEqual(len(jt3.lshape), 1)
@@ -1745,7 +1745,13 @@ class TestJaggedTensor(unittest.TestCase):
         with torch.nn.attention.sdpa_kernel([torch.nn.attention.SDPBackend.MATH]):
             out_jagged_fvdb = fvdb.scaled_dot_product_attention(q_jagged, k_jagged, v_jagged, scale=scale)
             self.check_lshape(out_jagged_fvdb, out_jagged_torch_forloop_list)
-        self.assertTrue(torch.allclose(out_jagged_torch_forloop.jdata, out_jagged_fvdb.jdata))
+
+        atol = 1e-8
+        rtol = 1e-5
+        if dtype == torch.float16:
+            atol = 1e-3
+            rtol = 1e-3
+        self.assertTrue(torch.allclose(out_jagged_torch_forloop.jdata, out_jagged_fvdb.jdata, atol=atol, rtol=rtol))
         self.assertTrue(torch.all(out_jagged_torch_forloop.joffsets == out_jagged_fvdb.joffsets))
 
     def test_datatype_caster(self):
@@ -2325,7 +2331,13 @@ class TestJaggedTensor(unittest.TestCase):
 
         lsizes = [10, 20, 30, 40, 50]
         esizes = [(), (3,), (3, 4), (3, 4, 5)]
-        funcs = [fvdb.jrand, fvdb.jrandn, fvdb.jzeros, fvdb.jones, fvdb.jempty]
+        funcs = [
+            fvdb.JaggedTensor.from_rand,
+            fvdb.JaggedTensor.from_randn,
+            fvdb.JaggedTensor.from_zeros,
+            fvdb.JaggedTensor.from_ones,
+            fvdb.JaggedTensor.from_empty,
+        ]
         for func in funcs:
             for eshape in esizes:
                 for rgrad in [True, False]:
@@ -2341,7 +2353,6 @@ class TestJaggedTensor(unittest.TestCase):
 
         lsizes = [[10, 20, 30, 40, 50], [100, 200], [1], [0, 0, 4]]
         esizes = [(), (3,), (3, 4), (3, 4, 5)]
-        funcs = [fvdb.jrand, fvdb.jrandn, fvdb.jzeros, fvdb.jones, fvdb.jempty]
         for func in funcs:
             for eshape in esizes:
                 for rgrad in [True, False]:
@@ -2359,19 +2370,21 @@ class TestJaggedTensor(unittest.TestCase):
             lsizes = []
             eshape = (3, 4)
             with self.assertRaises(Exception):
-                jt = fvdb.jrand(lsizes, eshape, device=device, dtype=dtype)
+                jt = fvdb.JaggedTensor.from_rand(lsizes, eshape, device=device, dtype=dtype)
 
             lsizes = [[]]
             with self.assertRaises(Exception):
-                jt = fvdb.jrand(lsizes, eshape, device=device, dtype=dtype)  # type: ignore
+                jt = fvdb.JaggedTensor.from_rand(lsizes, eshape, device=device, dtype=dtype)
 
             lsizes = [[], []]
             with self.assertRaises(Exception):
-                jt = fvdb.jrand(lsizes, eshape, device=device, dtype=dtype)  # type: ignore
+                jt = fvdb.JaggedTensor.from_rand(lsizes, eshape, device=device, dtype=dtype)
 
     @parameterized.expand(all_device_dtype_combos)
     def test_assignment(self, device, dtype):
-        jt1 = fvdb.jrandn([[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        jt1 = fvdb.JaggedTensor.from_randn(
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
+        )
         jt2 = jt1
         jt3 = jt1.clone()
         self.assertTrue(torch.all(jt1.jdata == jt2.jdata).item())
@@ -2391,7 +2404,9 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.all(jt1.jdata == jt2.jdata).item())
         self.assertTrue(not torch.all(jt1.jdata == jt3.jdata).item())
 
-        jt1 = fvdb.jrandn([[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        jt1 = fvdb.JaggedTensor.from_randn(
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
+        )
         jt2 = jt1
         jt3 = jt1.clone()
         self.assertTrue(torch.all(jt1.jdata == jt2.jdata).item())
@@ -2408,7 +2423,9 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.all(jt1.jdata == jt2.jdata).item())
         self.assertTrue(not torch.all(jt1.jdata == jt3.jdata).item())
 
-        jt1 = fvdb.jrandn([[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        jt1 = fvdb.JaggedTensor.from_randn(
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
+        )
         jt2 = jt1
         jt3 = jt1.clone()
         self.assertTrue(torch.all(jt1.jdata == jt2.jdata).item())
@@ -2425,7 +2442,9 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.all(jt1.jdata == jt2.jdata).item())
         self.assertTrue(not torch.all(jt1.jdata == jt3.jdata).item())
 
-        jt1 = fvdb.jrandn([[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        jt1 = fvdb.JaggedTensor.from_randn(
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
+        )
         jt2 = jt1
         jt3 = jt1.clone()
         self.assertTrue(torch.all(jt1.jdata == jt2.jdata).item())
@@ -2442,7 +2461,9 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.all(jt1.jdata == jt2.jdata).item())
         self.assertTrue(not torch.all(jt1.jdata == jt3.jdata).item())
 
-        jt1 = fvdb.jrandn([[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        jt1 = fvdb.JaggedTensor.from_randn(
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
+        )
         jt2 = jt1
         jt3 = jt1.clone()
         self.assertTrue(torch.all(jt1.jdata == jt2.jdata).item())
@@ -2459,7 +2480,9 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.all(jt1.jdata == jt2.jdata).item())
         self.assertTrue(not torch.all(jt1.jdata == jt3.jdata).item())
 
-        jt1 = fvdb.jrandn([[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        jt1 = fvdb.JaggedTensor.from_randn(
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
+        )
         jt2 = jt1
         jt3 = jt1.clone()
         self.assertTrue(torch.all(jt1.jdata == jt2.jdata).item())
@@ -2476,7 +2499,9 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.all(jt1.jdata == jt2.jdata).item())
         self.assertTrue(not torch.all(jt1.jdata == jt3.jdata).item())
 
-        jt1 = fvdb.jrandn([[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        jt1 = fvdb.JaggedTensor.from_randn(
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
+        )
         jt2 = jt1
         jt3 = jt1.clone()
         self.assertTrue(torch.all(jt1.jdata == jt2.jdata).item())
@@ -2493,7 +2518,9 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.all(jt1.jdata == jt2.jdata).item())
         self.assertTrue(not torch.all(jt1.jdata == jt3.jdata).item())
 
-        jt1 = fvdb.jrandn([[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        jt1 = fvdb.JaggedTensor.from_randn(
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
+        )
         jt2 = jt1
         jt3 = jt1.clone()
         self.assertTrue(torch.all(jt1.jdata == jt2.jdata).item())
@@ -2517,12 +2544,16 @@ class TestJaggedTensor(unittest.TestCase):
 
     @parameterized.expand(all_device_dtype_combos)
     def test_sqrt(self, device, dtype):
-        jt1 = fvdb.jrandn([[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        jt1 = fvdb.JaggedTensor.from_randn(
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
+        )
         jt1 = jt1.abs()
         jt2 = jt1.sqrt()
         self.assertTrue(torch.allclose(jt2.jdata, jt1.jdata.sqrt()))
 
-        jt1 = fvdb.jrandn([[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        jt1 = fvdb.JaggedTensor.from_randn(
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
+        )
         jt1.abs_()
         jt2 = jt1.sqrt()
         jt1.sqrt_()
@@ -2530,11 +2561,15 @@ class TestJaggedTensor(unittest.TestCase):
 
     @parameterized.expand(all_device_dtype_combos)
     def test_floor(self, device, dtype):
-        jt1 = fvdb.jrandn([[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        jt1 = fvdb.JaggedTensor.from_randn(
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
+        )
         jt2 = jt1.floor()
         self.assertTrue(torch.allclose(jt2.jdata, jt1.jdata.floor()))
 
-        jt1 = fvdb.jrandn([[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        jt1 = fvdb.JaggedTensor.from_randn(
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
+        )
         jt1.abs_()
         jt2 = jt1.floor()
         jt1.floor_()
@@ -2542,11 +2577,15 @@ class TestJaggedTensor(unittest.TestCase):
 
     @parameterized.expand(all_device_dtype_combos)
     def test_ceil(self, device, dtype):
-        jt1 = fvdb.jrandn([[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        jt1 = fvdb.JaggedTensor.from_randn(
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
+        )
         jt2 = jt1.ceil()
         self.assertTrue(torch.allclose(jt2.jdata, jt1.jdata.ceil()))
 
-        jt1 = fvdb.jrandn([[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        jt1 = fvdb.JaggedTensor.from_randn(
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
+        )
         jt1.abs_()
         jt2 = jt1.ceil()
         jt1.ceil_()
@@ -2554,41 +2593,138 @@ class TestJaggedTensor(unittest.TestCase):
 
     @parameterized.expand(all_device_dtype_combos)
     def test_abs(self, device, dtype):
-        jt1 = fvdb.jrandn([[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        jt1 = fvdb.JaggedTensor.from_randn(
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
+        )
         jt2 = jt1.abs()
         self.assertTrue(torch.all(jt2.jdata == jt1.jdata.abs()).item())
 
-        jt1 = fvdb.jrandn([[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        jt1 = fvdb.JaggedTensor.from_randn(
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
+        )
         jt2 = jt1.abs()
         jt1.abs_()
         self.assertTrue(torch.allclose(jt2.jdata, jt1.jdata))
 
     @parameterized.expand(all_device_dtype_combos)
     def test_round(self, device, dtype):
-        jt1 = fvdb.jrandn([[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        jt1 = fvdb.JaggedTensor.from_randn(
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
+        )
         jt2 = jt1.round()
         self.assertTrue(torch.all(jt2.jdata == jt1.jdata.round()).item())
 
-        jt1 = fvdb.jrandn([[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        jt1 = fvdb.JaggedTensor.from_randn(
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
+        )
         jt2 = jt1.round()
         jt1.round_()
         self.assertTrue(torch.allclose(jt2.jdata, jt1.jdata))
 
     @parameterized.expand(all_device_dtype_combos)
     def test_jidxforjoffsets(self, device, dtype):
-        jt1 = fvdb.jrandn([[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        jt1 = fvdb.JaggedTensor.from_randn(
+            [[10, 20, 30], [40, 50, 60, 70], [80, 90]], (3, 4), device=device, dtype=dtype
+        )
         joffsets = jt1.joffsets
         jidx = jt1.jidx
         torch_jidx = torch.arange(joffsets.size(0) - 1, device=jidx.device, dtype=jidx.dtype)
         torch_jidx = torch_jidx.repeat_interleave(joffsets[1:] - joffsets[:-1])
         self.assertTrue(torch.allclose(jidx, torch_jidx))
 
-        jt1 = fvdb.jrandn([[0, 0, 30], [40, 0, 0, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
+        jt1 = fvdb.JaggedTensor.from_randn([[0, 0, 30], [40, 0, 0, 70], [80, 90]], (3, 4), device=device, dtype=dtype)
         joffsets = jt1.joffsets
         jidx = jt1.jidx
         torch_jidx = torch.arange(joffsets.size(0) - 1, device=jidx.device, dtype=jidx.dtype)
         torch_jidx = torch_jidx.repeat_interleave(joffsets[1:] - joffsets[:-1])
         self.assertTrue(torch.allclose(jidx, torch_jidx))
+
+    @parameterized.expand(all_device_dtype_combos)
+    def test_from_data_offsets_and_list_ids(self, device, dtype):
+        # Regression test for https://github.com/openvdb/fvdb-core/issues/356
+        for ldim in [1, 2]:
+            # Generate random JaggedTensor
+            data = []
+            if ldim == 1:
+                num_tensors = np.random.randint(1, 10)
+                for _ in range(num_tensors):
+                    size = np.random.randint(0, 20)
+                    data.append(torch.rand(size, 1, device=device, dtype=dtype))
+                num_outer = num_tensors
+            else:
+                num_outer = np.random.randint(2, 10)
+                # Ensure at least one tensor overall
+                has_tensor = False
+                for _ in range(num_outer):
+                    inner = []
+                    num_inner = np.random.randint(0, 10)  # Allow 0 inner tensors
+                    for _ in range(num_inner):
+                        # Random size for each tensor
+                        size = np.random.randint(0, 20)
+                        inner.append(torch.rand(size, 1, device=device, dtype=dtype))
+                        has_tensor = True
+                    data.append(inner)
+
+                if not has_tensor:
+                    data = [[torch.rand(5, 1, device=device, dtype=dtype)]]
+                    num_outer = 1
+
+            jt = fvdb.JaggedTensor(data)
+
+            self.assertEqual(len(jt), num_outer)
+            self.assertEqual(jt.ldim, ldim)
+
+            # Test from_data_offsets_and_list_ids
+            jt_offsets = fvdb.JaggedTensor.from_data_offsets_and_list_ids(jt.jdata, jt.joffsets, jt.jlidx)
+            self.assertEqual(len(jt_offsets), num_outer)
+            self.assertEqual(jt_offsets.ldim, ldim)
+            # Check that structure is preserved
+            self.assertTrue(torch.equal(jt_offsets.joffsets, jt.joffsets))
+            self.assertTrue(torch.equal(jt_offsets.jlidx, jt.jlidx))
+
+    @parameterized.expand(all_device_dtype_combos)
+    def test_from_data_indices_and_list_ids(self, device, dtype):
+        # Regression test for https://github.com/openvdb/fvdb-core/issues/356
+        for ldim in [1, 2]:
+            # Generate random JaggedTensor
+            data = []
+            if ldim == 1:
+                num_tensors = np.random.randint(1, 10)
+                for _ in range(num_tensors):
+                    size = np.random.randint(0, 20)
+                    data.append(torch.rand(size, 1, device=device, dtype=dtype))
+                num_outer = num_tensors
+            else:
+                num_outer = np.random.randint(2, 10)
+                # Ensure at least one tensor overall
+                has_tensor = False
+                for _ in range(num_outer):
+                    inner = []
+                    num_inner = np.random.randint(0, 10)  # Allow 0 inner tensors
+                    for _ in range(num_inner):
+                        # Random size for each tensor
+                        size = np.random.randint(0, 20)
+                        inner.append(torch.rand(size, 1, device=device, dtype=dtype))
+                        has_tensor = True
+                    data.append(inner)
+
+                if not has_tensor:
+                    data = [[torch.rand(5, 1, device=device, dtype=dtype)]]
+                    num_outer = 1
+
+            jt = fvdb.JaggedTensor(data)
+
+            self.assertEqual(len(jt), num_outer)
+            self.assertEqual(jt.ldim, ldim)
+
+            # Test from_data_indices_and_list_ids
+            num_tensors = jt.joffsets.size(0) - 1
+            jt_indices = fvdb.JaggedTensor.from_data_indices_and_list_ids(jt.jdata, jt.jidx, jt.jlidx, num_tensors)
+            self.assertEqual(len(jt_indices), num_outer)
+            self.assertEqual(jt_indices.ldim, ldim)
+            # Check that structure is preserved
+            self.assertTrue(torch.equal(jt_indices.joffsets, jt.joffsets))
+            self.assertTrue(torch.equal(jt_indices.jlidx, jt.jlidx))
 
     # def test_argsort(self):
     #     data = [torch.randn(np.random.randint(1024, 2048),) for _ in range(7)]

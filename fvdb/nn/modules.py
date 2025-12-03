@@ -90,7 +90,10 @@ class AvgPool(nn.Module):
         return f"kernel_size={self.kernel_size}, stride={self.stride}"
 
     def forward(
-        self, fine_data: JaggedTensor, fine_grid: GridBatch, coarse_grid: GridBatch | None = None
+        self,
+        fine_data: JaggedTensor,
+        fine_grid: GridBatch,
+        coarse_grid: GridBatch | None = None,
     ) -> tuple[JaggedTensor, GridBatch]:
         """
         Apply 3D average pooling to the input :class:`JaggedTensor` of ``fine_data`` associated with
@@ -169,7 +172,10 @@ class MaxPool(nn.Module):
         return f"kernel_size={self.kernel_size}, stride={self.stride}"
 
     def forward(
-        self, fine_data: JaggedTensor, fine_grid: GridBatch, coarse_grid: GridBatch | None = None
+        self,
+        fine_data: JaggedTensor,
+        fine_grid: GridBatch,
+        coarse_grid: GridBatch | None = None,
     ) -> tuple[JaggedTensor, GridBatch]:
         """
         Apply 3D max pooling to the input :class:`JaggedTensor` of ``fine_data`` associated with
@@ -345,11 +351,19 @@ class SparseConv3d(_SparseConv3dBase):
         Returns:
             result (JaggedTensor): The result of the sparse convolution.
         """
-        if not plan.valid_usage(self.in_channels, self.out_channels, self.kernel_size, self.stride, transposed=False):
+        if not plan.valid_usage(
+            self.in_channels,
+            self.out_channels,
+            self.kernel_size,
+            self.stride,
+            transposed=False,
+        ):
             raise ValueError(
                 "Convolution plan used with a SparseConv3d module that had "
                 "mismatched input/output channels, kernel size, or stride, or transposition"
             )
+
+        assert isinstance(data, JaggedTensor), "Input data must be a JaggedTensor"
 
         out_data = plan.execute(data, self.weight)
 
@@ -401,7 +415,13 @@ class SparseConvTranspose3d(_SparseConv3dBase):
         Returns:
             result (JaggedTensor): The result of the sparse transposed convolution.
         """
-        if not plan.valid_usage(self.in_channels, self.out_channels, self.kernel_size, self.stride, transposed=True):
+        if not plan.valid_usage(
+            self.in_channels,
+            self.out_channels,
+            self.kernel_size,
+            self.stride,
+            transposed=True,
+        ):
             raise ValueError(
                 "Convolution plan used with a SparseConvTranspose3d module that had "
                 "mismatched input/output channels, kernel size, or stride, or transposition"

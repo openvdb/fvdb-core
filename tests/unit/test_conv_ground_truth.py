@@ -260,3 +260,258 @@ class TestConvGroundTruth(unittest.TestCase):
                 test_case=self,
                 check_bounds=False,
             )
+
+    # ==================================================================================
+    # Backward convolution tests
+    # ==================================================================================
+    #
+    # These tests verify that PyTorch's conv3d backward pass produces expected gradients.
+    # The backward pass computes:
+    #   - Gradient w.r.t. input: dy convolved with flipped weights (or conv_transpose(dy, w))
+    #   - Gradient w.r.t. weights: correlation of input with output gradient
+    #
+    # For cross-correlation (which PyTorch conv3d implements), if an impulse in the output
+    # gradient at coord C produces input gradients, those gradients should form the original
+    # kernel centered at C (since backward effectively convolves dy with flip(flip(w)) = w).
+
+    @parameterized.expand(all_device_dtype_combos)
+    def test_single_impulse_backward_input_grad(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """
+        Test that backward pass w.r.t. input produces expected gradients.
+
+        If we place an impulse in the output gradient at a specific coordinate,
+        the input gradient should contain the kernel (not flipped) centered at
+        that coordinate. This is because the backward of cross-correlation
+        involves convolving with the flipped kernel, which reverses the flip
+        that happened in forward.
+        """
+        device = resolve_device(device)
+
+        coord = torch.tensor(self.SINGLE_COORD, device=device, dtype=torch.int32)
+        impulse_field = torch.zeros((1,) + self.SINGLE_VOLUME_SHAPE, device=device, dtype=dtype)
+        impulse_field[0, coord[0], coord[1], coord[2]] = 1
+        impulse_field.requires_grad_(True)
+
+        kernel = fourier_anti_symmetric_kernel(self.KERNEL_SIZE, dtype=dtype, device=device)
+        self.assertFalse(has_any_symmetry(kernel))
+        kernel_with_channels = kernel.reshape(1, 1, *self.KERNEL_SIZE)
+
+        _backend_setting = torch.backends.cudnn.allow_tf32
+        torch.backends.cudnn.allow_tf32 = False
+
+        # Forward pass
+        output = torch.nn.functional.conv3d(input=impulse_field, weight=kernel_with_channels, padding="same")
+
+        # Create output gradient with impulse at the same coord
+        output_grad = torch.zeros_like(output)
+        output_grad[0, coord[0], coord[1], coord[2]] = 1
+
+        # Backward pass
+        output.backward(output_grad)
+        torch.backends.cudnn.allow_tf32 = _backend_setting
+
+        input_grad = impulse_field.grad
+        assert input_grad is not None
+
+        # Extract the region around the impulse coordinate
+        kernel_half = tuple(k // 2 for k in self.KERNEL_SIZE)
+        start_coords = tuple(int(coord[i].item()) - kernel_half[i] for i in range(3))
+        end_coords = tuple(int(coord[i].item()) + kernel_half[i] + 1 for i in range(3))
+
+        input_grad_region = input_grad[
+            0, start_coords[0] : end_coords[0], start_coords[1] : end_coords[1], start_coords[2] : end_coords[2]
+        ]
+
+        self.assertEqual(input_grad_region.shape, kernel.shape)
+
+        # For backward of cross-correlation, the input gradient should be the
+        # original kernel (not flipped). This is because backward involves
+        # conv_transpose which flips the kernel, canceling the forward flip.
+        torch.testing.assert_close(input_grad_region, kernel, rtol=1e-5, atol=1e-6)
+
+    @parameterized.expand(all_device_dtype_combos)
+    def test_single_impulse_backward_weight_grad(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """
+        Test that backward pass w.r.t. weights produces expected gradients.
+
+        For an impulse input at coord C and an impulse output gradient at coord G,
+        the weight gradient at kernel position (i,j,k) equals:
+            input[G + centered_offset(i,j,k)] * output_grad[G]
+
+        With both impulses at the same coord and value 1, only the center weight
+        (where centered_offset = 0) should have gradient = 1.
+        """
+        device = resolve_device(device)
+
+        coord = torch.tensor(self.SINGLE_COORD, device=device, dtype=torch.int32)
+        impulse_field = torch.zeros((1,) + self.SINGLE_VOLUME_SHAPE, device=device, dtype=dtype)
+        impulse_field[0, coord[0], coord[1], coord[2]] = 1
+
+        kernel = fourier_anti_symmetric_kernel(self.KERNEL_SIZE, dtype=dtype, device=device)
+        kernel_with_channels = kernel.reshape(1, 1, *self.KERNEL_SIZE).clone()
+        kernel_with_channels.requires_grad_(True)
+
+        _backend_setting = torch.backends.cudnn.allow_tf32
+        torch.backends.cudnn.allow_tf32 = False
+
+        # Forward pass
+        output = torch.nn.functional.conv3d(input=impulse_field, weight=kernel_with_channels, padding="same")
+
+        # Create output gradient with impulse at the same coord
+        output_grad = torch.zeros_like(output)
+        output_grad[0, coord[0], coord[1], coord[2]] = 1
+
+        # Backward pass
+        output.backward(output_grad)
+        torch.backends.cudnn.allow_tf32 = _backend_setting
+
+        weight_grad = kernel_with_channels.grad
+        assert weight_grad is not None
+
+        # For cross-correlation backward w.r.t. weights:
+        # dw[i,j,k] = sum over spatial of x[s + i - k//2] * dy[s]
+        # With impulse input at coord and impulse output grad at coord:
+        # Only the center weight (i,j,k) = (k0//2, k1//2, k2//2) should have grad = 1
+        kernel_center = tuple(k // 2 for k in self.KERNEL_SIZE)
+        expected_grad = torch.zeros_like(weight_grad)
+        expected_grad[0, 0, kernel_center[0], kernel_center[1], kernel_center[2]] = 1
+
+        torch.testing.assert_close(weight_grad, expected_grad, rtol=1e-5, atol=1e-6)
+
+    @parameterized.expand(all_device_dtype_combos)
+    def test_single_impulse_backward_weight_grad_offset(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """
+        Test weight gradient when input and output gradient impulses are at different coords.
+
+        When input impulse is at coord_in and output gradient impulse is at coord_out,
+        the weight gradient should have a single non-zero entry at the kernel position
+        corresponding to the offset between them.
+        """
+        device = resolve_device(device)
+
+        # Input impulse at center
+        coord_in = torch.tensor(self.SINGLE_COORD, device=device, dtype=torch.int32)
+        impulse_field = torch.zeros((1,) + self.SINGLE_VOLUME_SHAPE, device=device, dtype=dtype)
+        impulse_field[0, coord_in[0], coord_in[1], coord_in[2]] = 1
+
+        kernel = fourier_anti_symmetric_kernel(self.KERNEL_SIZE, dtype=dtype, device=device)
+        kernel_with_channels = kernel.reshape(1, 1, *self.KERNEL_SIZE).clone()
+        kernel_with_channels.requires_grad_(True)
+
+        kernel_half = tuple(k // 2 for k in self.KERNEL_SIZE)
+
+        # Test a few different offset positions within the kernel
+        test_offsets = [
+            (0, 0, 0),  # Center
+            (1, 0, 0),  # Offset in first axis
+            (0, -1, 1),  # Mixed offset
+        ]
+
+        for offset in test_offsets:
+            # Reset gradient
+            if kernel_with_channels.grad is not None:
+                kernel_with_channels.grad.zero_()
+
+            # Output gradient impulse at offset from input
+            coord_out = (
+                int(coord_in[0].item()) + offset[0],
+                int(coord_in[1].item()) + offset[1],
+                int(coord_in[2].item()) + offset[2],
+            )
+
+            _backend_setting = torch.backends.cudnn.allow_tf32
+            torch.backends.cudnn.allow_tf32 = False
+
+            output = torch.nn.functional.conv3d(input=impulse_field, weight=kernel_with_channels, padding="same")
+
+            output_grad = torch.zeros_like(output)
+            output_grad[0, coord_out[0], coord_out[1], coord_out[2]] = 1
+
+            output.backward(output_grad)
+            torch.backends.cudnn.allow_tf32 = _backend_setting
+
+            weight_grad = kernel_with_channels.grad
+            assert weight_grad is not None
+
+            # The non-zero weight gradient should be at kernel position:
+            # (k//2 - offset[0], k//2 - offset[1], k//2 - offset[2])
+            expected_kernel_pos = tuple(kernel_half[i] - offset[i] for i in range(3))
+
+            # Check that exactly one position has non-zero gradient
+            nonzero_mask = weight_grad[0, 0] != 0
+            nonzero_coords = torch.nonzero(nonzero_mask)
+            self.assertEqual(nonzero_coords.shape[0], 1, f"Expected 1 non-zero grad for offset {offset}")
+
+            actual_pos = tuple(nonzero_coords[0].tolist())
+            self.assertEqual(actual_pos, expected_kernel_pos, f"Wrong grad position for offset {offset}")
+
+    @parameterized.expand(all_device_dtype_combos)
+    def test_multiple_impulses_backward(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """
+        Test backward pass with multiple non-overlapping impulses.
+
+        Similar to test_multiple_impulses but for the backward pass. Each impulse
+        in the output gradient should independently produce a kernel in the input
+        gradient without interference.
+        """
+        device = resolve_device(device)
+
+        impulse_coords, impulse_field = generate_hermit_impulses_dense(
+            num_candidates=self.NUM_CANDIDATES,
+            volume_shape=self.VOLUME_SHAPE,
+            kernel_size=self.KERNEL_SIZE,
+            impulse_value=1,
+            dtype=dtype,
+            device=device,
+        )
+
+        num_impulses = len(impulse_coords)
+        print(f"Number of generated impulses for backward test: {num_impulses}")
+
+        impulse_field_with_channel = impulse_field.reshape(1, *self.VOLUME_SHAPE)
+        impulse_field_with_channel = impulse_field_with_channel.clone().requires_grad_(True)
+
+        kernel = fourier_anti_symmetric_kernel(self.KERNEL_SIZE, dtype=dtype, device=device)
+        self.assertFalse(has_any_symmetry(kernel))
+        kernel_with_channels = kernel.reshape(1, 1, *self.KERNEL_SIZE)
+
+        _backend_setting = torch.backends.cudnn.allow_tf32
+        torch.backends.cudnn.allow_tf32 = False
+
+        # Forward pass
+        output = torch.nn.functional.conv3d(
+            input=impulse_field_with_channel, weight=kernel_with_channels, padding="same"
+        )
+
+        # Create output gradient with impulses at the same coords as input
+        output_grad = torch.zeros_like(output)
+        for i in range(num_impulses):
+            c = impulse_coords[i]
+            output_grad[0, c[0], c[1], c[2]] = 1
+
+        # Backward pass
+        output.backward(output_grad)
+        torch.backends.cudnn.allow_tf32 = _backend_setting
+
+        input_grad = impulse_field_with_channel.grad
+        assert input_grad is not None
+
+        # Verify each impulse produces the expected kernel in input gradient
+        kernel_half = tuple(k // 2 for k in self.KERNEL_SIZE)
+
+        for i in range(num_impulses):
+            coord = impulse_coords[i]
+            start_coords = tuple(max(0, int(coord[j].item()) - kernel_half[j]) for j in range(3))
+            end_coords = tuple(
+                min(input_grad.shape[j + 1], int(coord[j].item()) + kernel_half[j] + 1) for j in range(3)
+            )
+
+            # Extract region
+            grad_region = input_grad[
+                0, start_coords[0] : end_coords[0], start_coords[1] : end_coords[1], start_coords[2] : end_coords[2]
+            ]
+
+            # Only check if the region is fully within bounds (no clipping)
+            expected_shape = tuple(end_coords[j] - start_coords[j] for j in range(3))
+            if expected_shape == self.KERNEL_SIZE:
+                torch.testing.assert_close(grad_region, kernel, rtol=1e-5, atol=1e-6)

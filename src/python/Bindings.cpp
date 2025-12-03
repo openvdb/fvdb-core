@@ -81,7 +81,7 @@ bind_jt_build_functions(py::module &m){
     __FVDB__BUILDER(jrandn, "jrandn")
     __FVDB__BUILDER(jzeros, "jzeros")
     __FVDB__BUILDER(jones, "jones")
-    __FVDB__BUILDER(jones, "jempty")
+    __FVDB__BUILDER(jempty, "jempty")
     // clang-format on
 }
 #undef __FVDB__BUILDER_INNER
@@ -370,9 +370,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
             })
         .def_property_static(
             "pedantic_error_checking",
-            [](py::object) { return fvdb::Config::global().pendanticErrorCheckingEnabled(); },
+            [](py::object) { return fvdb::Config::global().pedanticErrorCheckingEnabled(); },
             [](py::object, bool enabled) {
-                fvdb::Config::global().setPendanticErrorChecking(enabled);
+                fvdb::Config::global().setPedanticErrorChecking(enabled);
             });
 
     py::enum_<fvdb::ConvPackBackend>(m, "ConvPackBackend")

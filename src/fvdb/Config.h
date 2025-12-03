@@ -13,14 +13,14 @@ class Config {
     void setUltraSparseAcceleration(bool enabled);
     bool ultraSparseAccelerationEnabled() const;
 
-    void setPendanticErrorChecking(bool enabled);
-    bool pendanticErrorCheckingEnabled() const;
+    void setPedanticErrorChecking(bool enabled);
+    bool pedanticErrorCheckingEnabled() const;
 
     static Config &global();
 
   private:
     bool mUltraSparseAcceleration = false;
-    bool mPendanticErrorChecking  = false;
+    bool mPedanticErrorChecking   = false;
 };
 
 } // namespace fvdb

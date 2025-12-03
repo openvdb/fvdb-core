@@ -505,7 +505,7 @@ struct RasterizeBackwardArgs {
         outMean2dGradientContribution = {
             sigmaGradientContribution * (conic[0] * delta[0] + conic[1] * delta[1]),
             sigmaGradientContribution * (conic[1] * delta[0] + conic[2] * delta[1])};
-        if (!mAbsGrad) {
+        if (mAbsGrad) {
             outMean2dAbsGradientContribution = {abs(outMean2dGradientContribution[0]),
                                                 abs(outMean2dGradientContribution[1])};
         }

@@ -39,26 +39,13 @@ import torch
 
 from . import _parse_device_string
 from ._fvdb_cpp import JaggedTensor as JaggedTensorCpp
+from ._fvdb_cpp import jcat as jcat_cpp
 from ._fvdb_cpp import jempty as jempty_cpp
 from ._fvdb_cpp import jones as jones_cpp
 from ._fvdb_cpp import jrand as jrand_cpp
 from ._fvdb_cpp import jrandn as jrandn_cpp
 from ._fvdb_cpp import jzeros as jzeros_cpp
-from .types import (
-    DeviceIdentifier,
-    NumericMaxRank1,
-    NumericMaxRank2,
-    ValueConstraint,
-    resolve_device,
-    to_Vec3f,
-    to_Vec3fBatch,
-    to_Vec3fBatchBroadcastable,
-    to_Vec3fBroadcastable,
-    to_Vec3i,
-    to_Vec3iBatch,
-    to_Vec3iBatchBroadcastable,
-    to_Vec3iBroadcastable,
-)
+from .types import DeviceIdentifier, LShapeSpec, RShapeSpec
 
 if TYPE_CHECKING:
     from .grid import Grid
@@ -128,6 +115,28 @@ _JT_TORCH_WHITELIST: set[str] = {
 }
 
 
+@overload
+def _convert_to_list(seq: Sequence[int]) -> list[int]: ...
+@overload
+def _convert_to_list(seq: Sequence[Sequence[int]]) -> list[list[int]]: ...
+
+
+def _convert_to_list(seq: Sequence[int] | Sequence[Sequence[int]]) -> list[int] | list[list[int]]:
+    """Helper to convert Sequence types to list types for C++ binding compatibility."""
+    if isinstance(seq, (list, tuple)):
+        if seq and isinstance(seq[0], (list, tuple)):
+            # Nested sequence - convert inner sequences to lists
+            converted: list[list[int]] = [
+                list(inner) if isinstance(inner, tuple) else cast(list[int], inner) for inner in seq
+            ]
+            return list(converted) if isinstance(seq, tuple) else converted
+        else:
+            # Simple sequence of ints
+            return list(seq) if isinstance(seq, tuple) else cast(list[int], seq)  # type: ignore
+    else:
+        return cast(list[int], seq)
+
+
 class JaggedTensor:
     """
     A jagged (ragged) tensor data structure with support for efficient operations.
@@ -189,6 +198,12 @@ class JaggedTensor:
         - :meth:`from_list_of_lists_of_tensors()` for nested lists of tensors
         - :meth:`from_data_and_indices()` for pre-computed flat format
         - :meth:`from_data_and_offsets()` for pre-computed flat format with offsets
+        - :meth:`from_empty()` for uninitialized data
+        - :meth:`from_ones()` for data filled with ones
+        - :meth:`from_rand()` for data filled with random values from uniform distribution [0, 1)
+        - :meth:`from_randn()` for data filled with random values from normal distribution (mean 0, variance 1)
+        - :meth:`from_zeros()` for data filled with zeros
+        - :meth:`from_cat()` for concatenation of jagged tensors
 
     """
 
@@ -253,6 +268,273 @@ class JaggedTensor:
     # ============================================================
     #                  JaggedTensor from_* constructors
     # ============================================================
+
+    @classmethod
+    def from_empty(
+        cls,
+        lsizes: Sequence[int] | Sequence[Sequence[int]],
+        rsizes: Sequence[int] | None = None,
+        *,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | None = None,
+        requires_grad: bool = False,
+        pin_memory: bool = False,
+    ) -> "JaggedTensor":
+        """
+        Create a :class:`JaggedTensor` with uninitialized data.
+
+        Similar to :func:`torch.empty()`, creates a :class:`JaggedTensor` with allocated but uninitialized
+        memory, which is faster than initializing values when they will be immediately
+        overwritten.
+
+        Example:
+
+        ... code-block:: python
+
+            jt = jempty([2, 3, 4], rsizes=[5])
+            print(jt)  # Output: A JaggedTensor containing tensors [of shapes (2, 5), (3, 5), (4, 5)] with uninitialized values.
+
+            jt = jempty([[2, 3], [4]], rsizes=[5, 6])
+            print(jt)  # Output: A JaggedTensor containing tensors [of shapes (2, 5, 6), (3, 5, 6), (4, 5, 6)] with uninitialized values.
+
+        Args:
+            lsizes (Sequence[int] | Sequence[Sequence[int]]): Sizes for the jagged dimensions.
+                Can be a sequence of integers for simple jagged structure, or nested sequences
+                for multi-level jagged structure.
+            rsizes (Sequence[int] | None): Sizes for the regular (trailing) dimensions.
+                Defaults to ``None`` *i.e.* scalar elements.
+            device (torch.device | str | None): Device to create the tensor on.
+                Defaults to ``None`` *i.e.* ``"cpu"``.
+            dtype (torch.dtype | None): Data type for the tensor elements.
+                Defaults to ``None`` *i.e.* ``torch.float32``.
+            requires_grad (bool): Whether to track gradients. Defaults to ``False``.
+            pin_memory (bool): Whether to use pinned memory. Defaults to ``False``.
+
+        Returns:
+            JaggedTensor: A new :class:`JaggedTensor` with uninitialized data.
+        """
+        lsizes_cpp: list[int] | list[list[int]] = _convert_to_list(lsizes)
+        rsizes_cpp: list[int] | None = _convert_to_list(rsizes) if rsizes is not None else None
+        return cls(impl=jempty_cpp(lsizes_cpp, rsizes_cpp, dtype, device, requires_grad, pin_memory))
+
+    @classmethod
+    def from_ones(
+        cls,
+        lsizes: Sequence[int] | Sequence[Sequence[int]],
+        rsizes: Sequence[int] | None = None,
+        *,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | None = None,
+        requires_grad: bool = False,
+        pin_memory: bool = False,
+    ) -> "JaggedTensor":
+        """
+        Create a :class:`JaggedTensor` filled with ones.
+
+        Similar to :func:`torch.ones()`, creates a :class:`JaggedTensor` where all elements are initialized
+        to the value 1.
+
+
+        Example:
+
+        ... code-block:: python
+
+            jt = jones([2, 3, 4], rsizes=[5])
+            print(jt)  # Output: A JaggedTensor containing tensors
+                [of shapes (2, 5), (3, 5), (4, 5)] filled with ones.
+
+            jt = jones([[2, 3], [4]], rsizes=[5, 6])
+            print(jt)  # Output: A JaggedTensor containing tensors
+                [of shapes (2, 5, 6), (3, 5, 6), (4, 5, 6)] filled with ones.
+
+
+        Args:
+            lsizes (Sequence[int] | Sequence[Sequence[int]]): Sizes for the jagged dimensions.
+                Can be a sequence of integers for simple jagged structure, or nested sequences
+                for multi-level jagged structure.
+            rsizes (Sequence[int] | None): Sizes for the regular (trailing) dimensions.
+                Defaults to ``None`` *i.e.* (scalar elements).
+            device (torch.device | str | None): Device to create the tensor on.
+                Defaults to ``None`` *i.e.* (CPU).
+            dtype (torch.dtype | None): Data type for the tensor elements.
+                Defaults to ``None`` *i.e.* (torch.float32).
+            requires_grad (bool): Whether to track gradients. Defaults to ``False``.
+            pin_memory (bool): Whether to use pinned memory. Defaults to ``False``.
+
+        Returns:
+            JaggedTensor: A new :class:`JaggedTensor` filled with ones.
+        """
+        lsizes_cpp: list[int] | list[list[int]] = _convert_to_list(lsizes)
+        rsizes_cpp: list[int] | None = _convert_to_list(rsizes) if rsizes is not None else None
+        return cls(impl=jones_cpp(lsizes_cpp, rsizes_cpp, dtype, device, requires_grad, pin_memory))
+
+    @classmethod
+    def from_rand(
+        cls,
+        lsizes: Sequence[int] | Sequence[Sequence[int]],
+        rsizes: Sequence[int] | None = None,
+        *,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | None = None,
+        requires_grad: bool = False,
+        pin_memory: bool = False,
+    ) -> "JaggedTensor":
+        """
+        Create a :class:`JaggedTensor` with random values from uniform distribution [0, 1).
+
+        Similar to :func:`torch.rand()`, creates a :class:`JaggedTensor` filled with random values sampled
+        from a uniform distribution on the interval [0, 1).
+
+        Example:
+
+        ... code-block:: python
+
+            jt = jrand([2, 3, 4], rsizes=[5])
+            print(jt)  # Output: A JaggedTensor containing tensors
+                [of shapes (2, 5), (3, 5), (4, 5)] with random values.
+
+            jt = jrand([[2, 3], [4]], rsizes=[5, 6])
+            print(jt)  # Output: A JaggedTensor containing tensors
+                [of shapes (2, 5, 6), (3, 5, 6), (4, 5, 6)] with random values.
+
+        Args:
+            lsizes (Sequence[int] | Sequence[Sequence[int]]): Sizes for the jagged dimensions.
+                Can be a sequence of integers for simple jagged structure, or nested sequences
+                for multi-level jagged structure.
+            rsizes (Sequence[int] | None): Sizes for the regular (trailing) dimensions.
+                Defaults to ``None`` *i.e.* (scalar elements).
+            device (torch.device | str | None): Device to create the tensor on.
+                Defaults to ``None`` *i.e.* ``"cpu"``.
+            dtype (torch.dtype | None): Data type for the tensor elements.
+                Defaults to ``None`` *i.e.* ``torch.float32``.
+            requires_grad (bool): Whether to track gradients. Defaults to ``False``.
+            pin_memory (bool): Whether to use pinned memory. Defaults to ``False``.
+
+        Returns:
+            JaggedTensor: A new :class:`JaggedTensor` with random values in [0, 1).
+        """
+        lsizes_cpp: list[int] | list[list[int]] = _convert_to_list(lsizes)
+        rsizes_cpp: list[int] | None = _convert_to_list(rsizes) if rsizes is not None else None
+        return cls(impl=jrand_cpp(lsizes_cpp, rsizes_cpp, dtype, device, requires_grad, pin_memory))
+
+    @classmethod
+    def from_randn(
+        cls,
+        lsizes: Sequence[int] | Sequence[Sequence[int]],
+        rsizes: Sequence[int] | None = None,
+        *,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | None = None,
+        requires_grad: bool = False,
+        pin_memory: bool = False,
+    ) -> "JaggedTensor":
+        """
+        Create a :class:`JaggedTensor` with random values from standard normal distribution.
+
+        Similar to :func:`torch.randn()`, creates a :class:`JaggedTensor` filled with random values sampled
+        from a standard normal distribution (mean=0, std=1).
+
+        Example:
+
+        ... code-block:: python
+
+            jt = jrandn([2, 3, 4], rsizes=[5])
+            print(jt)  # Output: A JaggedTensor containing tensors
+                [of shapes (2, 5), (3, 5), (4, 5)] with normal random values.
+
+            jt = jrandn([[2, 3], [4]], rsizes=[5, 6])
+            print(jt)  # Output: A JaggedTensor containing tensors
+                [of shapes (2, 5, 6), (3, 5, 6), (4, 5, 6)] with normal random values.
+
+        Args:
+            lsizes (Sequence[int] | Sequence[Sequence[int]]): Sizes for the jagged dimensions.
+                Can be a sequence of integers for simple jagged structure, or nested sequences
+                for multi-level jagged structure.
+            rsizes (Sequence[int] | None): Sizes for the regular (trailing) dimensions.
+                Defaults to ``None`` *i.e.* (scalar elements).
+            device (torch.device | str | None): Device to create the tensor on.
+                Defaults to ``None`` *i.e.* ``"cpu"``.
+            dtype (torch.dtype | None): Data type for the tensor elements.
+                Defaults to ``None`` *i.e.* ``torch.float32``.
+            requires_grad (bool): Whether to track gradients. Defaults to ``False``.
+            pin_memory (bool): Whether to use pinned memory. Defaults to ``False``.
+
+        Returns:
+            JaggedTensor: A new :class:`JaggedTensor` with normal random values.
+        """
+        lsizes_cpp: list[int] | list[list[int]] = _convert_to_list(lsizes)
+        rsizes_cpp: list[int] | None = _convert_to_list(rsizes) if rsizes is not None else None
+        return cls(impl=jrandn_cpp(lsizes_cpp, rsizes_cpp, dtype, device, requires_grad, pin_memory))
+
+    @classmethod
+    def from_zeros(
+        cls,
+        lsizes: Sequence[int] | Sequence[Sequence[int]],
+        rsizes: Sequence[int] | None = None,
+        *,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | None = None,
+        requires_grad: bool = False,
+        pin_memory: bool = False,
+    ) -> "JaggedTensor":
+        """
+        Create a :class:`JaggedTensor` filled with zeros.
+
+        Similar to :func:`torch.zeros()`, creates a :class:`JaggedTensor` where all elements are initialized
+        to the value 0.
+
+        Example:
+
+            jt = jzeros([2, 3, 4], rsizes=[5])
+            print(jt)  # Output: A JaggedTensor containing tensors
+                [of shapes (2, 5), (3, 5), (4, 5)] filled with zeros
+
+            jt = jzeros([[2, 3], [4]], rsizes=[5, 6])
+            print(jt)  # Output: A JaggedTensor containing tensors
+                [of shapes (2, 5, 6), (3, 5, 6), (4, 5, 6)] filled with zeros
+
+
+        Args:
+            lsizes (Sequence[int] | Sequence[Sequence[int]]): Sizes for the jagged dimensions.
+                Can be a sequence of integers for simple jagged structure, or nested sequences
+                for multi-level jagged structure.
+            rsizes (Sequence[int] | None): Sizes for the regular (trailing) dimensions.
+                Defaults to ``None`` *i.e.* scalar elements.
+            device (torch.device | str | None): Device to create the tensor on.
+                Defaults to ``None`` *i.e.* ``"cpu"``.
+            dtype (torch.dtype | None): Data type for the tensor elements.
+                Defaults to ``None`` *i.e.* ``torch.float32``.
+            requires_grad (bool): Whether to track gradients. Defaults to ``False``.
+            pin_memory (bool): Whether to use pinned memory. Defaults to ``False``.
+
+        Returns:
+            JaggedTensor: A new :class:`JaggedTensor` filled with zeros.
+        """
+        lsizes_cpp: list[int] | list[list[int]] = _convert_to_list(lsizes)
+        rsizes_cpp: list[int] | None = _convert_to_list(rsizes) if rsizes is not None else None
+        return cls(impl=jzeros_cpp(lsizes_cpp, rsizes_cpp, dtype, device, requires_grad, pin_memory))
+
+    @classmethod
+    def from_cat(
+        cls,
+        things_to_cat: "Sequence[JaggedTensor]",
+        dim: int | None = None,
+    ) -> "JaggedTensor":
+        """
+        Create a JaggedTensor by concatenating a sequence of JaggedTensors.
+
+        Args:
+            things_to_cat: The sequence of JaggedTensors to concatenate.
+            dim: The dimension to concatenate along, optional.
+        """
+        if len(things_to_cat) == 0:
+            raise ValueError("Cannot concatenate empty list")
+        elif isinstance(things_to_cat[0], JaggedTensor):
+            cpp_jags: list[JaggedTensorCpp] = [thing._impl for thing in things_to_cat]
+            cpp_result = jcat_cpp(cpp_jags, dim)  # type: ignore
+            return cls(impl=cpp_result)
+        else:
+            raise TypeError("JaggedTensor.from_cat() can only cat JaggedTensors")
 
     @classmethod
     def from_tensor(cls, data: torch.Tensor) -> "JaggedTensor":
@@ -367,22 +649,45 @@ class JaggedTensor:
         cls, data: torch.Tensor, indices: torch.Tensor, list_ids: torch.Tensor, num_tensors: int
     ) -> "JaggedTensor":
         """
-        Create a nested JaggedTensor from data, indices, and list IDs.
+        Create a :class:`JaggedTensor` from data, per-element indices, and list IDs.
 
-        Creates a multi-level jagged structure where list_ids provide an additional
-        level of grouping beyond the basic indices.
+        This function validates that data, indices, list_ids, and num_tensors are compatible.
+        The offsets are computed internally from the indices.
+
+        Example (ldim == 1, list of tensors):
+
+        .. code-block:: python
+
+            data = torch.tensor([1, 2, 3, 4, 5])
+            indices = torch.tensor([0, 0, 1, 1, 1])  # Elements 0-1 in tensor 0,
+                                                     # elements 2-4 in tensor 1
+            list_ids = torch.empty((0, 1), dtype=torch.int)  # Empty for ldim == 1
+            jt = JaggedTensor.from_data_indices_and_list_ids(data, indices, list_ids, 2)
+            # Result: [[1, 2], [3, 4, 5]]
+
+        Example (ldim == 2, list of lists of tensors):
+
+        .. code-block:: python
+
+            data = torch.tensor([1, 2, 3, 4, 5, 6])
+            indices = torch.tensor([0, 0, 1, 1, 1, 2])  # 3 tensors
+            list_ids = torch.tensor([[0, 0], [0, 1], [1, 0]])  # Outer/inner indices
+            jt = JaggedTensor.from_data_indices_and_list_ids(data, indices, list_ids, 3)
+            # Result: [[[1, 2], [3, 4, 5]], [[6]]]
 
         Args:
             data (torch.Tensor): Flattened data tensor containing all elements.
-                Shape: (total_elements, ...).
-            indices (torch.Tensor): Index tensor mapping each element to its tensor.
-                Shape: (total_elements,).
-            list_ids (torch.Tensor): List ID tensor for nested structure.
-                Shape: (total_elements,).
+                Shape: ``(total_elements, ...)``.
+            indices (torch.Tensor): Index tensor mapping each element to its tensor index
+                (0 to num_tensors-1). Shape: ``(total_elements,)``, or empty if num_tensors == 1.
+            list_ids (torch.Tensor): Tensor defining the hierarchical position of each tensor.
+                For ldim == 1: shape ``(num_tensors, 1)`` or empty tensor with shape ``(0, 1)``.
+                Empty tensor assumes a single, naturally ordered list of tensors.
+                For ldim == 2: shape ``(num_tensors, 2)`` where each row is ``(outer_idx, inner_idx)``.
             num_tensors (int): Total number of tensors.
 
         Returns:
-            jagged_tensor (JaggedTensor): A new JaggedTensor with nested jagged structure.
+            jagged_tensor (JaggedTensor): A :class:`JaggedTensor` defined by the data, indices, and list ids.
         """
         return cls(impl=JaggedTensorCpp.from_data_indices_and_list_ids(data, indices, list_ids, num_tensors))
 
@@ -391,34 +696,45 @@ class JaggedTensor:
         cls, data: torch.Tensor, offsets: torch.Tensor, list_ids: torch.Tensor
     ) -> "JaggedTensor":
         """
-        Create a nested :class:`JaggedTensor` from data, offsets, and list IDs.
+        Create a :class:`JaggedTensor` from data, offsets, and list IDs.
 
-        The offsets are used to define boundaries between tensors in the flattened array,
-        and the list ids provide an additional level of grouping.
+        This function validates that data, offsets, and list_ids are compatible.
+        The per-element indices are computed internally from the offsets.
 
-        Example:
+        Example (ldim == 1, list of tensors):
+
+        .. code-block:: python
+
+            data = torch.tensor([1, 2, 3, 4, 5])
+            offsets = torch.tensor([0, 2, 5])  # 2 tensors: data[0:2], data[2:5]
+            list_ids = torch.empty((0, 1), dtype=torch.int)  # Empty for ldim == 1
+            jt = JaggedTensor.from_data_offsets_and_list_ids(data, offsets, list_ids)
+            # Result: [[1, 2], [3, 4, 5]]
+
+        Example (ldim == 2, list of lists of tensors):
 
         .. code-block:: python
 
             data = torch.tensor([1, 2, 3, 4, 5, 6])
             offsets = torch.tensor([0, 2, 5, 6])  # 3 tensors: [0:2], [2:5], [5:6]
-            list_ids = torch.tensor([[0, 0], [0, 1], [1, 0]]) # First two tensors in list 0, last in list 1
-
+            list_ids = torch.tensor([[0, 0], [0, 1], [1, 0]])
+            # list_ids maps: tensor 0 -> list[0][0], tensor 1 -> list[0][1], tensor 2 -> list[1][0]
             jt = JaggedTensor.from_data_offsets_and_list_ids(data, offsets, list_ids)
-
-            # jt represents the structure [[t_00, t_01], [t_10]]
-            # where t_00 = [1, 2], t_01 = [3, 4, 5], t_10 = [6]
+            # Result: [[[1, 2], [3, 4, 5]], [[6]]]
 
         Args:
             data (torch.Tensor): Flattened data tensor containing all elements.
                 Shape: ``(total_elements, ...)``.
-            offsets (torch.Tensor): Offset tensor marking tensor boundaries.
+            offsets (torch.Tensor): Offset tensor marking tensor boundaries. ``offsets[i]`` is the
+                start index of tensor i, and ``offsets[i+1] - offsets[i]`` is its length.
                 Shape: ``(num_tensors + 1,)``.
-            list_ids (torch.Tensor): List ID tensor for nested structure.
-                Shape: ``(num_tensors, 2)``.
+            list_ids (torch.Tensor): Tensor defining the hierarchical position of each tensor.
+                For ldim == 1: shape ``(num_tensors, 1)`` or empty tensor with shape ``(0, 1)``.
+                Empty tensor assumes a single, naturally ordered list of tensors.
+                For ldim == 2: shape ``(num_tensors, 2)`` where each row is ``(outer_idx, inner_idx)``.
 
         Returns:
-            jagged_tensor (JaggedTensor): A new :class:`JaggedTensor` with nested jagged structure.
+            jagged_tensor (JaggedTensor): A :class:`JaggedTensor` defined by the data, offsets, and list ids.
         """
         return cls(impl=JaggedTensorCpp.from_data_offsets_and_list_ids(data, offsets, list_ids))
 
@@ -1637,256 +1953,12 @@ class JaggedTensor:
         return JaggedTensor(impl=self._impl.int())
 
 
-@overload
-def _convert_to_list(seq: Sequence[int]) -> list[int]: ...
-@overload
-def _convert_to_list(seq: Sequence[Sequence[int]]) -> list[list[int]]: ...
-
-
-def _convert_to_list(seq: Sequence[int] | Sequence[Sequence[int]]) -> list[int] | list[list[int]]:
-    """Helper to convert Sequence types to list types for C++ binding compatibility."""
-    if isinstance(seq, (list, tuple)):
-        if seq and isinstance(seq[0], (list, tuple)):
-            # Nested sequence - convert inner sequences to lists
-            converted: list[list[int]] = [
-                list(inner) if isinstance(inner, tuple) else cast(list[int], inner) for inner in seq
-            ]
-            return list(converted) if isinstance(seq, tuple) else converted
-        else:
-            # Simple sequence of ints
-            return list(seq) if isinstance(seq, tuple) else cast(list[int], seq)  # type: ignore
-    else:
-        return cast(list[int], seq)
-
-
-def jempty(
-    lsizes: Sequence[int] | Sequence[Sequence[int]],
-    rsizes: Sequence[int] | None = None,
-    *,
-    device: torch.device | str | None = None,
-    dtype: torch.dtype | None = None,
-    requires_grad: bool = False,
-    pin_memory: bool = False,
-) -> JaggedTensor:
+def jcat(jagged_tensors: Sequence[JaggedTensor], dim: int | None = None) -> JaggedTensor:
     """
-    Create a :class:`JaggedTensor` with uninitialized data.
-
-    Similar to :func:`torch.empty()`, creates a :class:`JaggedTensor` with allocated but uninitialized
-    memory, which is faster than initializing values when they will be immediately
-    overwritten.
-
-    Example:
-
-    ... code-block:: python
-
-        jt = jempty([2, 3, 4], rsizes=[5])
-        print(jt)  # Output: A JaggedTensor containing tensors [of shapes (2, 5), (3, 5), (4, 5)] with uninitialized values.
-
-        jt = jempty([[2, 3], [4]], rsizes=[5, 6])
-        print(jt)  # Output: A JaggedTensor containing tensors [of shapes (2, 5, 6), (3, 5, 6), (4, 5, 6)] with uninitialized values.
+    Concatenate a sequence of JaggedTensors along a given dimension.
 
     Args:
-        lsizes (Sequence[int] | Sequence[Sequence[int]]): Sizes for the jagged dimensions.
-            Can be a sequence of integers for simple jagged structure, or nested sequences
-            for multi-level jagged structure.
-        rsizes (Sequence[int] | None): Sizes for the regular (trailing) dimensions.
-            Defaults to ``None`` *i.e.* scalar elements.
-        device (torch.device | str | None): Device to create the tensor on.
-            Defaults to ``None`` *i.e.* ``"cpu"``.
-        dtype (torch.dtype | None): Data type for the tensor elements.
-            Defaults to ``None`` *i.e.* ``torch.float32``.
-        requires_grad (bool): Whether to track gradients. Defaults to ``False``.
-        pin_memory (bool): Whether to use pinned memory. Defaults to ``False``.
-
-    Returns:
-        JaggedTensor: A new :class:`JaggedTensor` with uninitialized data.
+        jagged_tensors: The sequence of JaggedTensors to concatenate.
+        dim: The dimension to concatenate along, optional.
     """
-    lsizes_cpp: list[int] | list[list[int]] = _convert_to_list(lsizes)
-    rsizes_cpp: list[int] | None = _convert_to_list(rsizes) if rsizes is not None else None
-    return JaggedTensor(impl=jempty_cpp(lsizes_cpp, rsizes_cpp, dtype, device, requires_grad, pin_memory))
-
-
-def jrand(
-    lsizes: Sequence[int] | Sequence[Sequence[int]],
-    rsizes: Sequence[int] | None = None,
-    *,
-    device: torch.device | str | None = None,
-    dtype: torch.dtype | None = None,
-    requires_grad: bool = False,
-    pin_memory: bool = False,
-) -> JaggedTensor:
-    """
-    Create a :class:`JaggedTensor` with random values from uniform distribution [0, 1).
-
-    Similar to :func:`torch.rand()`, creates a :class:`JaggedTensor` filled with random values sampled
-    from a uniform distribution on the interval [0, 1).
-
-    Example:
-
-    ... code-block:: python
-
-        jt = jrand([2, 3, 4], rsizes=[5])
-        print(jt)  # Output: A JaggedTensor containing tensors [of shapes (2, 5), (3, 5), (4, 5)] with random values.
-
-        jt = jrand([[2, 3], [4]], rsizes=[5, 6])
-        print(jt)  # Output: A JaggedTensor containing tensors [of shapes (2, 5, 6), (3, 5, 6), (4, 5, 6)] with random values.
-
-    Args:
-        lsizes (Sequence[int] | Sequence[Sequence[int]]): Sizes for the jagged dimensions.
-            Can be a sequence of integers for simple jagged structure, or nested sequences
-            for multi-level jagged structure.
-        rsizes (Sequence[int] | None): Sizes for the regular (trailing) dimensions.
-            Defaults to ``None`` *i.e.* (scalar elements).
-        device (torch.device | str | None): Device to create the tensor on.
-            Defaults to ``None`` *i.e.* ``"cpu"``.
-        dtype (torch.dtype | None): Data type for the tensor elements.
-            Defaults to ``None`` *i.e.* ``torch.float32``.
-        requires_grad (bool): Whether to track gradients. Defaults to ``False``.
-        pin_memory (bool): Whether to use pinned memory. Defaults to ``False``.
-
-    Returns:
-        JaggedTensor: A new :class:`JaggedTensor` with random values in [0, 1).
-    """
-    lsizes_cpp: list[int] | list[list[int]] = _convert_to_list(lsizes)
-    rsizes_cpp: list[int] | None = _convert_to_list(rsizes) if rsizes is not None else None
-    return JaggedTensor(impl=jrand_cpp(lsizes_cpp, rsizes_cpp, dtype, device, requires_grad, pin_memory))
-
-
-def jrandn(
-    lsizes: Sequence[int] | Sequence[Sequence[int]],
-    rsizes: Sequence[int] | None = None,
-    *,
-    device: torch.device | str | None = None,
-    dtype: torch.dtype | None = None,
-    requires_grad: bool = False,
-    pin_memory: bool = False,
-) -> JaggedTensor:
-    """
-    Create a :class:`JaggedTensor` with random values from standard normal distribution.
-
-    Similar to :func:`torch.randn()`, creates a :class:`JaggedTensor` filled with random values sampled
-    from a standard normal distribution (mean=0, std=1).
-
-    Example:
-
-    ... code-block:: python
-
-        jt = jrandn([2, 3, 4], rsizes=[5])
-        print(jt)  # Output: A JaggedTensor containing tensors [of shapes (2, 5), (3, 5), (4, 5)] with normal random values.
-
-        jt = jrandn([[2, 3], [4]], rsizes=[5, 6])
-        print(jt)  # Output: A JaggedTensor containing tensors [of shapes (2, 5, 6), (3, 5, 6), (4, 5, 6)] with normal random values.
-
-    Args:
-        lsizes (Sequence[int] | Sequence[Sequence[int]]): Sizes for the jagged dimensions.
-            Can be a sequence of integers for simple jagged structure, or nested sequences
-            for multi-level jagged structure.
-        rsizes (Sequence[int] | None): Sizes for the regular (trailing) dimensions.
-            Defaults to ``None`` *i.e.* (scalar elements).
-        device (torch.device | str | None): Device to create the tensor on.
-            Defaults to ``None`` *i.e.* ``"cpu"``.
-        dtype (torch.dtype | None): Data type for the tensor elements.
-            Defaults to ``None`` *i.e.* ``torch.float32``.
-        requires_grad (bool): Whether to track gradients. Defaults to ``False``.
-        pin_memory (bool): Whether to use pinned memory. Defaults to ``False``.
-
-    Returns:
-        JaggedTensor: A new :class:`JaggedTensor` with normal random values.
-    """
-    lsizes_cpp: list[int] | list[list[int]] = _convert_to_list(lsizes)
-    rsizes_cpp: list[int] | None = _convert_to_list(rsizes) if rsizes is not None else None
-    return JaggedTensor(impl=jrandn_cpp(lsizes_cpp, rsizes_cpp, dtype, device, requires_grad, pin_memory))
-
-
-def jones(
-    lsizes: Sequence[int] | Sequence[Sequence[int]],
-    rsizes: Sequence[int] | None = None,
-    *,
-    device: torch.device | str | None = None,
-    dtype: torch.dtype | None = None,
-    requires_grad: bool = False,
-    pin_memory: bool = False,
-) -> JaggedTensor:
-    """
-    Create a :class:`JaggedTensor` filled with ones.
-
-    Similar to :func:`torch.ones()`, creates a :class:`JaggedTensor` where all elements are initialized
-    to the value 1.
-
-
-    Example:
-
-    ... code-block:: python
-
-        jt = jones([2, 3, 4], rsizes=[5])
-        print(jt)  # Output: A JaggedTensor containing tensors [of shapes (2, 5), (3, 5), (4, 5)] filled with ones.
-
-        jt = jones([[2, 3], [4]], rsizes=[5, 6])
-        print(jt)  # Output: A JaggedTensor containing tensors [of shapes (2, 5, 6), (3, 5, 6), (4, 5, 6)] filled with ones.
-
-
-    Args:
-        lsizes (Sequence[int] | Sequence[Sequence[int]]): Sizes for the jagged dimensions.
-            Can be a sequence of integers for simple jagged structure, or nested sequences
-            for multi-level jagged structure.
-        rsizes (Sequence[int] | None): Sizes for the regular (trailing) dimensions.
-            Defaults to ``None`` *i.e.* (scalar elements).
-        device (torch.device | str | None): Device to create the tensor on.
-            Defaults to ``None`` *i.e.* (CPU).
-        dtype (torch.dtype | None): Data type for the tensor elements.
-            Defaults to ``None`` *i.e.* (torch.float32).
-        requires_grad (bool): Whether to track gradients. Defaults to ``False``.
-        pin_memory (bool): Whether to use pinned memory. Defaults to ``False``.
-
-    Returns:
-        JaggedTensor: A new :class:`JaggedTensor` filled with ones.
-    """
-    lsizes_cpp: list[int] | list[list[int]] = _convert_to_list(lsizes)
-    rsizes_cpp: list[int] | None = _convert_to_list(rsizes) if rsizes is not None else None
-    return JaggedTensor(impl=jones_cpp(lsizes_cpp, rsizes_cpp, dtype, device, requires_grad, pin_memory))
-
-
-def jzeros(
-    lsizes: Sequence[int] | Sequence[Sequence[int]],
-    rsizes: Sequence[int] | None = None,
-    *,
-    device: torch.device | str | None = None,
-    dtype: torch.dtype | None = None,
-    requires_grad: bool = False,
-    pin_memory: bool = False,
-) -> JaggedTensor:
-    """
-    Create a :class:`JaggedTensor` filled with zeros.
-
-    Similar to :func:`torch.zeros()`, creates a :class:`JaggedTensor` where all elements are initialized
-    to the value 0.
-
-
-    Example:
-
-        jt = jzeros([2, 3, 4], rsizes=[5])
-        print(jt)  # Output: A JaggedTensor containing tensors [of shapes (2, 5), (3, 5), (4, 5)] filled with zeros
-
-        jt = jzeros([[2, 3], [4]], rsizes=[5, 6])
-        print(jt)  # Output: A JaggedTensor containing tensors [of shapes (2, 5, 6), (3, 5, 6), (4, 5, 6)] filled with zeros
-
-
-    Args:
-        lsizes (Sequence[int] | Sequence[Sequence[int]]): Sizes for the jagged dimensions.
-            Can be a sequence of integers for simple jagged structure, or nested sequences
-            for multi-level jagged structure.
-        rsizes (Sequence[int] | None): Sizes for the regular (trailing) dimensions.
-            Defaults to ``None`` *i.e.* scalar elements.
-        device (torch.device | str | None): Device to create the tensor on.
-            Defaults to ``None`` *i.e.* ``"cpu"``.
-        dtype (torch.dtype | None): Data type for the tensor elements.
-            Defaults to ``None`` *i.e.* ``torch.float32``.
-        requires_grad (bool): Whether to track gradients. Defaults to ``False``.
-        pin_memory (bool): Whether to use pinned memory. Defaults to ``False``.
-
-    Returns:
-        JaggedTensor: A new :class:`JaggedTensor` filled with zeros.
-    """
-    lsizes_cpp: list[int] | list[list[int]] = _convert_to_list(lsizes)
-    rsizes_cpp: list[int] | None = _convert_to_list(rsizes) if rsizes is not None else None
-    return JaggedTensor(impl=jzeros_cpp(lsizes_cpp, rsizes_cpp, dtype, device, requires_grad, pin_memory))
+    return JaggedTensor.from_cat(jagged_tensors, dim)

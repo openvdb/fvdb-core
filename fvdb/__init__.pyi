@@ -22,8 +22,8 @@ from .convolution_plan import ConvolutionPlan
 from .enums import ProjectionType, ShOrderingMode
 from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
 from .grid import Grid
-from .grid_batch import GridBatch
-from .jagged_tensor import JaggedTensor, jempty, jones, jrand, jrandn, jzeros
+from .grid_batch import GridBatch, gcat
+from .jagged_tensor import JaggedTensor, jcat
 from .torch_jagged import (
     add,
     all,
@@ -92,14 +92,11 @@ def gaussian_render_jagged(
     ortho: bool = False,
     backgrounds: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]: ...
-@overload
-def jcat(grid_batches: Sequence[GridBatch]) -> GridBatch: ...
-@overload
-def jcat(jagged_tensors: Sequence[JaggedTensor], dim: int | None = None) -> JaggedTensor: ...
 
 __all__ = [
     # Core classes
     "GridBatch",
+    "Grid",
     "JaggedTensor",
     "GaussianSplat3d",
     "ProjectedGaussianSplats",
@@ -108,12 +105,9 @@ __all__ = [
     "ShOrderingMode",
     "Grid",
     # JaggedTensor operations
+    # Concatenation of jagged tensors or grid/grid batches
     "jcat",
-    "jrand",
-    "jrandn",
-    "jones",
-    "jzeros",
-    "jempty",
+    "gcat",
     # Morton/Hilbert operations
     "morton",
     "hilbert",

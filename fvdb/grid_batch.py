@@ -29,13 +29,14 @@ mesh extraction, and coordinate transformations on sparse voxel data.
 """
 
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any, cast, overload
+from typing import TYPE_CHECKING, Any, Sequence, cast, overload
 
 import numpy as np
 import torch
 
 from . import _parse_device_string
 from ._fvdb_cpp import GridBatch as GridBatchCpp
+from ._fvdb_cpp import jcat as jcat_cpp
 from .jagged_tensor import JaggedTensor
 from .types import (
     DeviceIdentifier,
@@ -132,6 +133,7 @@ class GridBatch:
             - :meth:`from_mesh()`: for a grid batch from triangle meshes
             - :meth:`from_points()`: for a grid batch from point clouds
             - :meth:`from_nearest_voxels_to_points()`: for a grid batch from nearest voxels to points
+            - :meth:`from_cat()`: for a grid batch from concatenating other grids and grid batches
 
     Attributes:
         max_grids_per_batch (int): Maximum number of grids that can be stored in a single :class:`fvdb.GridBatch`.
@@ -591,7 +593,8 @@ class GridBatch:
         Create a batch of grids from a batch of point clouds.
 
         Args:
-            points (JaggedTensor): Per-grid point positions to populate the grid from. A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3)``.
+            points (JaggedTensor): Per-grid point positions to populate the grid from.
+                A :class:`fvdb.JaggedTensor` with shape ``(batch_size, num_points_for_grid_b, 3)``.
             voxel_sizes (NumericMaxRank2): Size of each voxel, per-grid; broadcastable to shape ``(batch_size, 3)``,
                 floating dtype
             origins (NumericMaxRank2): World-space coordinate of the center of the ``[0,0,0]`` voxel, per-grid;
@@ -686,6 +689,26 @@ class GridBatch:
         origins = to_Vec3fBatch(origins)
         grid_batch_impl = GridBatchCpp(voxel_sizes=voxel_sizes, grid_origins=origins, device=resolved_device)
         return cls(impl=grid_batch_impl)
+
+    @classmethod
+    def from_cat(cls, grids: "Sequence[GridBatch | Grid]") -> "GridBatch":
+        """
+        Create a grid batch from concatenating a sequence of grids and grid batches.
+
+        Args:
+            grids: The sequence of grids and grid batches to concatenate.
+
+        Returns:
+            grid_batch (GridBatch): A new :class:`fvdb.GridBatch` object.
+        """
+        grid_impls: list[GridBatchCpp] = []
+        from .grid import Grid
+
+        for grid in grids:
+            if not isinstance(grid, (GridBatch, Grid)):
+                raise TypeError(f"Expected GridBatch or Grid, got {type(grid)}")
+            grid_impls.append(grid._impl)
+        return cls(impl=jcat_cpp(grid_impls))
 
     # ============================================================
     #                Regular Instance Methods Begin
@@ -2859,3 +2882,18 @@ class GridBatch:
     def _gridbatch(self):
         # Access underlying GridBatchCpp - use sparingly during migration
         return self._impl
+
+
+def gcat(grids: "Sequence[GridBatch|Grid]") -> GridBatch:
+    """
+    Concatenate a sequence of GridBatches or Grids into a single GridBatch.
+
+    Concatenation is concatenation along the batch dimension, and increases the batch count.
+
+    Args:
+        grids: The sequence of GridBatches or Grids to concatenate.
+
+    Returns:
+        grid_batch (GridBatch): A new :class:`fvdb.GridBatch` object.
+    """
+    return GridBatch.from_cat(grids)

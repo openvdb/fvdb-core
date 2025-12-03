@@ -35,7 +35,7 @@ copyPaddedJaggedToJagged(const fvdb::JaggedTensor &srcJagged,
                          const fvdb::JaggedTensor &numValidSamples,
                          const int32_t maxSamplesPerPixel) {
     const int64_t numPixels = srcJagged.jdata().size(0);
-    TORCH_CHECK_VALUE(numPixels == dstJagged.num_outer_lists(),
+    TORCH_CHECK_VALUE(numPixels == (dstJagged.joffsets().size(0) - 1),
                       "Source and destination must have the same number of pixels");
     TORCH_CHECK_VALUE(numPixels == numValidSamples.numel(),
                       "numValidSamples must have one entry per pixel");
