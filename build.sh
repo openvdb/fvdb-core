@@ -26,6 +26,7 @@ usage() {
   echo "  editor_skip    Skip building and installing the nanovdb_editor dependency (sets NANOVDB_EDITOR_SKIP=ON)."
   echo "  editor_force   Force rebuild of the nanovdb_editor dependency (sets NANOVDB_EDITOR_FORCE=ON)."
   echo "  debug          Build in debug mode with full debug symbols and no optimizations."
+  echo "  lineinfo       Enable CUDA lineinfo (sets FVDB_LINEINFO=ON)."
   echo "  strip_symbols  Strip symbols from the build (will be ignored if debug is enabled)."
   echo "  verbose        Enable verbose build output for pip and CMake."
   echo ""
@@ -190,6 +191,10 @@ while (( "$#" )); do
     elif [[ "$1" == "debug" ]]; then
       echo "Enabling debug build"
       CONFIG_SETTINGS+=" --config-settings=cmake.build-type=Debug  -C cmake.define.CMAKE_BUILD_TYPE=Debug"
+      is_config_arg_handled=true
+    elif [[ "$1" == "lineinfo" ]]; then
+      echo "Enabling CUDA lineinfo"
+      CONFIG_SETTINGS+=" --config-settings=cmake.define.FVDB_LINEINFO=ON"
       is_config_arg_handled=true
     elif [[ "$1" == "strip_symbols" ]]; then
       echo "Enabling strip symbols build"
