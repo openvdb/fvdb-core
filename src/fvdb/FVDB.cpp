@@ -4,7 +4,6 @@
 #include <fvdb/FVDB.h>
 
 // Autograd headers
-#include <fvdb/detail/autograd/Attention.h>
 #include <fvdb/detail/autograd/VolumeRender.h>
 
 // Morton/hilbert
@@ -47,26 +46,67 @@ scaledDotProductAttention(const JaggedTensor &query,
     // - query: (N, ..., L, E)
     // - key: (N, ..., S, E)
     // - value: (N, ..., S, V)
-    std::vector<torch::Tensor> outList;
-    torch::Tensor qOffsets  = query.joffsets().cpu();
-    torch::Tensor kvOffsets = key.joffsets().cpu();
 
-    for (int64_t b = 0; b < query.num_tensors(); ++b) {
-        int64_t qStart  = qOffsets[b].item<int64_t>();
-        int64_t qEnd    = qOffsets[b + 1].item<int64_t>();
-        int64_t kvStart = kvOffsets[b].item<int64_t>();
-        int64_t kvEnd   = kvOffsets[b + 1].item<int64_t>();
+    // Helper to create a nested tensor view from a JaggedTensor
+    auto make_nested_view = [](const JaggedTensor &jt) -> torch::Tensor {
+        const auto &data = jt.jdata(); // (Total, H, D)
+        const int64_t H  = data.size(1);
+        const int64_t D  = data.size(2);
 
-        torch::Tensor q =
-            query.jdata().index({torch::indexing::Slice(qStart, qEnd)}).permute({1, 0, 2});
-        torch::Tensor k =
-            key.jdata().index({torch::indexing::Slice(kvStart, kvEnd)}).permute({1, 0, 2});
-        torch::Tensor v =
-            value.jdata().index({torch::indexing::Slice(kvStart, kvEnd)}).permute({1, 0, 2});
+        const int64_t stride_L = H * D;
 
-        torch::Tensor out =
-            at::native::scaled_dot_product_attention(q, k, v, {}, 0.0, false, scale);
-        outList.push_back(out.permute({1, 0, 2}));
+        auto offsets_tensor       = jt.joffsets().cpu(); // (N+1)
+        const int64_t num_tensors = jt.num_tensors();
+
+        // Compute lengths: offsets[1:] - offsets[:-1]
+        auto lengths =
+            offsets_tensor.slice(0, 1, num_tensors + 1) - offsets_tensor.slice(0, 0, num_tensors);
+
+        // Construct nested_size: (N, 3) -> [L_i, H, D]
+        auto nested_size = torch::empty({num_tensors, 3}, lengths.options());
+        nested_size.select(1, 0).copy_(lengths);
+        nested_size.select(1, 1).fill_(H);
+        nested_size.select(1, 2).fill_(D);
+
+        // Construct nested_strides: (N, 3) -> [H*D, D, 1]
+        auto nested_strides = torch::empty({num_tensors, 3}, lengths.options());
+        nested_strides.select(1, 0).fill_(stride_L);
+        nested_strides.select(1, 1).fill_(D);
+        nested_strides.select(1, 2).fill_(1);
+
+        // Prepare offsets in bytes/elements for the buffer
+        std::vector<int64_t> storage_offsets(num_tensors);
+        auto offsets_acc = offsets_tensor.accessor<int64_t, 1>();
+        for (int64_t i = 0; i < num_tensors; ++i) {
+            storage_offsets[i] = offsets_acc[i] * stride_L;
+        }
+
+        auto offsets_arg = torch::tensor(storage_offsets, lengths.options().dtype(torch::kLong));
+
+        return at::_nested_view_from_buffer(
+            data.view(-1), nested_size, nested_strides, offsets_arg);
+    };
+
+    torch::Tensor q_nested = make_nested_view(query); // (N, L, H, D)
+    torch::Tensor k_nested = make_nested_view(key);   // (N, S, H, D)
+    torch::Tensor v_nested = make_nested_view(value); // (N, S, H, D)
+
+    // We need (N, H, L, D).
+    // Transpose and make contiguous.
+    // NOTE: Our previous ScaledDotProductAttention implementation also required contiguous inputs
+    // of this channel ordering.
+    q_nested = q_nested.transpose(1, 2).contiguous();
+    k_nested = k_nested.transpose(1, 2).contiguous();
+    v_nested = v_nested.transpose(1, 2).contiguous();
+
+    torch::Tensor out_nested = at::native::scaled_dot_product_attention(
+        q_nested, k_nested, v_nested, {}, 0.0, false, scale);
+
+    // out_nested is (N, H, L, D) nested tensor.
+    // We need to convert back to JaggedTensor with shape (Total, H, D)
+    std::vector<torch::Tensor> outList = out_nested.unbind();
+    for (auto &t: outList) {
+        t = t.permute({1, 0, 2}).contiguous();
     }
 
     return JaggedTensor(outList);
