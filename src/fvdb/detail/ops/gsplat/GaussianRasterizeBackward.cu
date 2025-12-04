@@ -1149,11 +1149,7 @@ callRasterizeBackwardWithCorrectSharedChannels(
     if (numSharedSharedChannelsOverride > 0) {
         return callWithSharedChannels(numSharedSharedChannelsOverride);
     } else {
-        cudaDeviceProp deviceProperties;
-        if (cudaGetDeviceProperties(&deviceProperties, stream.device_index()) != cudaSuccess) {
-            AT_ERROR("Failed to query device properties");
-        }
-        const size_t maxSharedMemory = deviceProperties.sharedMemPerBlockOptin;
+        const int maxSharedMemory = fvdb::detail::getMaxSharedMemory(stream.device_index());
 
         const size_t sharedMemChannelOptions[4] = {NUM_CHANNELS, 64, 32, 16};
         for (size_t i = 0; i < 4; ++i) {
