@@ -1149,7 +1149,7 @@ callRasterizeBackwardWithCorrectSharedChannels(
     if (numSharedSharedChannelsOverride > 0) {
         return callWithSharedChannels(numSharedSharedChannelsOverride);
     } else {
-        const int maxSharedMemory = fvdb::detail::getMaxSharedMemory(stream.device_index());
+        const size_t maxSharedMemory = fvdb::detail::getMaxSharedMemory(stream.device_index());
 
         const size_t sharedMemChannelOptions[4] = {NUM_CHANNELS, 64, 32, 16};
         for (size_t i = 0; i < 4; ++i) {
