@@ -91,7 +91,8 @@ getMaxSharedMemory(int device) {
     static std::vector<std::atomic<int>> cache(deviceCount);
     static std::vector<std::once_flag> initFlags(deviceCount);
 
-    if (int cached = cache[device].load(std::memory_order_relaxed); cached > 0) {
+    int cached = cache[device].load(std::memory_order_relaxed);
+    if (cached > 0) {
         return cached;
     }
 
@@ -100,11 +101,11 @@ getMaxSharedMemory(int device) {
         TORCH_CHECK(cudaDeviceGetAttribute(&maxSharedMemory,
                                            cudaDevAttrMaxSharedMemoryPerBlockOptin,
                                            device) == cudaSuccess,
-                    "Failed to get max shared memory per block optin");
+                    "Failed to get max shared memory per block");
         cache[device].store(maxSharedMemory, std::memory_order_relaxed);
     });
 
-    int cached = cache[device].load(std::memory_order_relaxed);
+    cached = cache[device].load(std::memory_order_relaxed);
     TORCH_CHECK(cached > 0, "Failed to initialize max shared memory for device ", device);
     return cached;
 };
