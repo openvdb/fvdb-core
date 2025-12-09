@@ -1493,7 +1493,6 @@ class TestGaussianRender(BaseGaussianTestCase):
             False,  # return debug info
             False,  # ortho
         )
-        torch.cuda.synchronize()
 
         pixels = self._tensors_to_pixel(render_colors, render_alphas)
         differ, cmp = compare_images(pixels, str(self.data_path / "regression_gaussian_render_jagged_result.png"))
@@ -2122,7 +2121,7 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
 
             # Select tensors from reference_ids at the specified pixel positions
             reference_ids_list = image_reference_ids.unbind()
-            selected_tensors = [reference_ids_list[idx.item()] for idx in pixel_indices]
+            selected_tensors = [reference_ids_list[idx.item()] for idx in pixel_indices]  # type: ignore
             selected_reference_ids = JaggedTensor(selected_tensors)
 
             self.assertTrue(image_sparse_ids == selected_reference_ids)
@@ -2140,7 +2139,7 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
 
             # Select tensors from reference_weights at the specified pixel positions
             reference_weights_list = image_reference_weights.unbind()
-            selected_tensors = [reference_weights_list[idx.item()] for idx in pixel_indices]
+            selected_tensors = [reference_weights_list[idx.item()] for idx in pixel_indices]  # type: ignore
             selected_reference_weights = JaggedTensor(selected_tensors)
 
             self.assertTrue(image_sparse_weights == selected_reference_weights)
@@ -2229,7 +2228,7 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
 
             # Select tensors from reference_ids at the specified pixel positions
             reference_ids_list = image_reference_ids.unbind()
-            selected_tensors = [reference_ids_list[idx.item()] for idx in pixel_indices]
+            selected_tensors = [reference_ids_list[idx.item()] for idx in pixel_indices]  # type: ignore
             selected_reference_ids = JaggedTensor(selected_tensors)
 
             self.assertTrue(image_sparse_ids == selected_reference_ids)
@@ -2247,10 +2246,383 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
 
             # Select tensors from reference_weights at the specified pixel positions
             reference_weights_list = image_reference_weights.unbind()
-            selected_tensors = [reference_weights_list[idx.item()] for idx in pixel_indices]
+            selected_tensors = [reference_weights_list[idx.item()] for idx in pixel_indices]  # type: ignore
             selected_reference_weights = JaggedTensor(selected_tensors)
 
             self.assertTrue(image_sparse_weights == selected_reference_weights)
+
+
+class TestGaussianRenderSparse(BaseGaussianTestCase):
+    def setUp(self):
+        super().setUp()
+
+    def test_gaussian_render_sparse_depth(self):
+        # Generate random pixel coordinates within image bounds
+
+        idx = torch.randperm(self.width * self.height)[:5000]
+        x_coords = idx % self.width
+        y_coords = idx // self.width
+        pixels_to_render = JaggedTensor([torch.stack([y_coords, x_coords], 1)]).to(self.device)
+
+        sparse_depth, sparse_alphas = self.gs3d.sparse_render_depths(
+            pixels_to_render,
+            self.cam_to_world_mats[0:1],
+            self.projection_mats[0:1],
+            self.width,
+            self.height,
+            self.near_plane,  # near_plane
+            self.far_plane,  # far_plane
+        )
+
+        dense_depth, dense_alphas = self.gs3d.render_depths(
+            self.cam_to_world_mats[0:1],
+            self.projection_mats[0:1],
+            self.width,
+            self.height,
+            self.near_plane,  # near_plane
+            self.far_plane,  # far_plane
+        )
+
+        dense_depth_pixels = dense_depth[0, y_coords, x_coords]
+        dense_alphas_pixels = dense_alphas[0, y_coords, x_coords]
+
+        self.assertTrue(
+            torch.allclose(sparse_depth.jdata, dense_depth_pixels, atol=1e-5, rtol=1e-8),
+            "Sparse depth render does not match dense depth render at specified pixels",
+        )
+        self.assertTrue(
+            torch.allclose(sparse_alphas.jdata, dense_alphas_pixels, atol=1e-5, rtol=1e-8),
+            "Sparse alpha render does not match dense alpha render at specified pixels",
+        )
+
+    def test_gaussian_render_sparse_depth_backward(self):
+        # Generate random pixel coordinates within image bounds
+
+        idx = torch.randperm(self.width * self.height)[:5000]
+        x_coords = idx % self.width
+        y_coords = idx // self.width
+        pixels_to_render = JaggedTensor([torch.stack([y_coords, x_coords], 1)]).to(self.device)
+
+        sparse_depth, sparse_alphas = self.gs3d.sparse_render_depths(
+            pixels_to_render,
+            self.cam_to_world_mats[0:1],
+            self.projection_mats[0:1],
+            self.width,
+            self.height,
+            self.near_plane,  # near_plane
+            self.far_plane,  # far_plane
+        )
+
+        l1 = torch.mean(sparse_depth.jdata) + sparse_alphas.jdata.sum()
+        l1.backward()
+
+        assert self.gs3d.means.grad is not None, "Gradients not computed for means in sparse depth render"
+        assert self.gs3d.quats.grad is not None, "Gradients not computed for quats in sparse depth render"
+        assert self.gs3d.log_scales.grad is not None, "Gradients not computed for log_scales in sparse depth render"
+        assert (
+            self.gs3d.logit_opacities.grad is not None
+        ), "Gradients not computed for logit_opacities in sparse depth render"
+        sparse_means_grad = self.gs3d.means.grad.clone()
+        sparse_quats_grad = self.gs3d.quats.grad.clone()
+        sparse_log_scales_grad = self.gs3d.log_scales.grad.clone()
+        sparse_logit_opacities_grad = self.gs3d.logit_opacities.grad
+        self.gs3d.means.grad.zero_()
+        self.gs3d.quats.grad.zero_()
+        self.gs3d.log_scales.grad.zero_()
+        self.gs3d.logit_opacities.grad.zero_()
+
+        dense_depth, dense_alphas = self.gs3d.render_depths(
+            self.cam_to_world_mats[0:1],
+            self.projection_mats[0:1],
+            self.width,
+            self.height,
+            self.near_plane,  # near_plane
+            self.far_plane,  # far_plane
+        )
+
+        dense_depth_pixels = dense_depth[0, y_coords, x_coords]
+        dense_alphas_pixels = dense_alphas[0, y_coords, x_coords]
+
+        l2 = torch.mean(dense_depth_pixels) + dense_alphas_pixels.sum()
+        l2.backward()
+
+        dense_means_grad = self.gs3d.means.grad.clone()
+        dense_quats_grad = self.gs3d.quats.grad.clone()
+        dense_log_scales_grad = self.gs3d.log_scales.grad.clone()
+        dense_logit_opacities_grad = self.gs3d.logit_opacities.grad.clone()
+
+        self.assertTrue(
+            torch.allclose(sparse_means_grad, dense_means_grad, atol=1e-4, rtol=1e-8),
+            "Sparse means grad does not match dense means grad at specified pixels",
+        )
+        self.assertTrue(
+            torch.allclose(sparse_quats_grad, dense_quats_grad, atol=1e-4, rtol=1e-8),
+            "Sparse quats grad does not match dense quats grad at specified pixels",
+        )
+        self.assertTrue(
+            torch.allclose(sparse_log_scales_grad, dense_log_scales_grad, atol=1e-4, rtol=1e-8),
+            "Sparse log scales grad does not match dense log scales grad at specified pixels",
+        )
+        self.assertTrue(
+            torch.allclose(sparse_logit_opacities_grad, dense_logit_opacities_grad, atol=1e-4, rtol=1e-8),
+            "Sparse logit opacities grad does not match dense logit opacities grad at specified pixels",
+        )
+
+    def test_gaussian_render_sparse_features(self):
+        # Generate random pixel coordinates within image bounds
+
+        idx = torch.randperm(self.width * self.height)[:5000]
+        x_coords = idx % self.width
+        y_coords = idx // self.width
+        pixels_to_render = JaggedTensor([torch.stack([y_coords, x_coords], 1)]).to(self.device)
+
+        sparse_features, sparse_alphas = self.gs3d.sparse_render_images(
+            pixels_to_render,
+            self.cam_to_world_mats[0:1],
+            self.projection_mats[0:1],
+            self.width,
+            self.height,
+            self.near_plane,  # near_plane
+            self.far_plane,  # far_plane
+        )
+
+        dense_features, dense_alphas = self.gs3d.render_images(
+            self.cam_to_world_mats[0:1],
+            self.projection_mats[0:1],
+            self.width,
+            self.height,
+            self.near_plane,  # near_plane
+            self.far_plane,  # far_plane
+        )
+
+        dense_depth_pixels = dense_features[0, y_coords, x_coords]
+        dense_alphas_pixels = dense_alphas[0, y_coords, x_coords]
+
+        self.assertTrue(
+            torch.allclose(sparse_features.jdata, dense_depth_pixels, atol=1e-5, rtol=1e-8),
+            "Sparse depth render does not match dense depth render at specified pixels",
+        )
+        self.assertTrue(
+            torch.allclose(sparse_alphas.jdata, dense_alphas_pixels, atol=1e-5, rtol=1e-8),
+            "Sparse alpha render does not match dense alpha render at specified pixels",
+        )
+
+    def test_gaussian_render_sparse_features_backward(self):
+        # Generate random pixel coordinates within image bounds
+
+        idx = torch.randperm(self.width * self.height)[:5000]
+        x_coords = idx % self.width
+        y_coords = idx // self.width
+        pixels_to_render = JaggedTensor([torch.stack([y_coords, x_coords], 1)]).to(self.device)
+
+        sparse_features, sparse_alphas = self.gs3d.sparse_render_images(
+            pixels_to_render,
+            self.cam_to_world_mats[0:1],
+            self.projection_mats[0:1],
+            self.width,
+            self.height,
+            self.near_plane,  # near_plane
+            self.far_plane,  # far_plane
+        )
+
+        l1 = torch.mean(sparse_features.jdata) + sparse_alphas.jdata.sum()
+        l1.backward()
+
+        assert self.gs3d.means.grad is not None, "Gradients not computed for means in sparse features render"
+        assert self.gs3d.quats.grad is not None, "Gradients not computed for quats in sparse features render"
+        assert self.gs3d.log_scales.grad is not None, "Gradients not computed for log_scales in sparse features render"
+        assert (
+            self.gs3d.logit_opacities.grad is not None
+        ), "Gradients not computed for logit_opacities in sparse features render"
+        assert self.gs3d.sh0.grad is not None, "Gradients not computed for sh0 in sparse features render"
+        assert self.gs3d.shN.grad is not None, "Gradients not computed for shN in sparse features render"
+        sparse_means_grad = self.gs3d.means.grad.clone()
+        sparse_quats_grad = self.gs3d.quats.grad.clone()
+        sparse_log_scales_grad = self.gs3d.log_scales.grad.clone()
+        sparse_logit_opacities_grad = self.gs3d.logit_opacities.grad.clone()
+        sparse_sh0_grad = self.gs3d.sh0.grad.clone()
+        sparse_shN_grad = self.gs3d.shN.grad.clone()
+        self.gs3d.means.grad.zero_()
+        self.gs3d.quats.grad.zero_()
+        self.gs3d.log_scales.grad.zero_()
+        self.gs3d.logit_opacities.grad.zero_()
+        self.gs3d.sh0.grad.zero_()
+        self.gs3d.shN.grad.zero_()
+
+        dense_features, dense_alphas = self.gs3d.render_images(
+            self.cam_to_world_mats[0:1],
+            self.projection_mats[0:1],
+            self.width,
+            self.height,
+            self.near_plane,  # near_plane
+            self.far_plane,  # far_plane
+        )
+
+        dense_features_pixels = dense_features[0, y_coords, x_coords]
+        dense_alphas_pixels = dense_alphas[0, y_coords, x_coords]
+
+        l2 = torch.mean(dense_features_pixels) + dense_alphas_pixels.sum()
+        l2.backward()
+
+        dense_means_grad = self.gs3d.means.grad.clone()
+        dense_quats_grad = self.gs3d.quats.grad.clone()
+        dense_log_scales_grad = self.gs3d.log_scales.grad.clone()
+        dense_logit_opacities_grad = self.gs3d.logit_opacities.grad.clone()
+        dense_sh0_grad = self.gs3d.sh0.grad.clone()
+        dense_shN_grad = self.gs3d.shN.grad.clone()
+
+        self.assertTrue(
+            torch.allclose(sparse_means_grad, dense_means_grad, atol=1e-4, rtol=1e-8),
+            "Sparse means grad does not match dense means grad at specified pixels",
+        )
+        self.assertTrue(
+            torch.allclose(sparse_quats_grad, dense_quats_grad, atol=1e-4, rtol=1e-8),
+            "Sparse quats grad does not match dense quats grad at specified pixels",
+        )
+        self.assertTrue(
+            torch.allclose(sparse_log_scales_grad, dense_log_scales_grad, atol=1e-4, rtol=1e-8),
+            "Sparse log scales grad does not match dense log scales grad at specified pixels",
+        )
+        self.assertTrue(
+            torch.allclose(sparse_logit_opacities_grad, dense_logit_opacities_grad, atol=1e-4, rtol=1e-8),
+            "Sparse logit opacities grad does not match dense logit opacities grad at specified pixels",
+        )
+        self.assertTrue(
+            torch.allclose(sparse_sh0_grad, dense_sh0_grad, atol=1e-4, rtol=1e-8),
+            "Sparse sh0 grad does not match dense sh0 grad at specified pixels",
+        )
+        self.assertTrue(
+            torch.allclose(sparse_shN_grad, dense_shN_grad, atol=1e-4, rtol=1e-8),
+            "Sparse shN grad does not match dense shN grad at specified pixels",
+        )
+
+    def test_gaussian_render_sparse_features_and_depths(self):
+        # Generate random pixel coordinates within image bounds
+
+        idx = torch.randperm(self.width * self.height)[:5000]
+        x_coords = idx % self.width
+        y_coords = idx // self.width
+        pixels_to_render = JaggedTensor([torch.stack([y_coords, x_coords], 1)]).to(self.device)
+
+        sparse_features, sparse_alphas = self.gs3d.sparse_render_images_and_depths(
+            pixels_to_render,
+            self.cam_to_world_mats[0:1],
+            self.projection_mats[0:1],
+            self.width,
+            self.height,
+            self.near_plane,  # near_plane
+            self.far_plane,  # far_plane
+        )
+
+        dense_features, dense_alphas = self.gs3d.render_images_and_depths(
+            self.cam_to_world_mats[0:1],
+            self.projection_mats[0:1],
+            self.width,
+            self.height,
+            self.near_plane,  # near_plane
+            self.far_plane,  # far_plane
+        )
+
+        dense_depth_pixels = dense_features[0, y_coords, x_coords]
+        dense_alphas_pixels = dense_alphas[0, y_coords, x_coords]
+
+        self.assertTrue(
+            torch.allclose(sparse_features.jdata, dense_depth_pixels, atol=1e-5, rtol=1e-8),
+            "Sparse depth render does not match dense depth render at specified pixels",
+        )
+        self.assertTrue(
+            torch.allclose(sparse_alphas.jdata, dense_alphas_pixels, atol=1e-5, rtol=1e-8),
+            "Sparse alpha render does not match dense alpha render at specified pixels",
+        )
+
+    def test_gaussian_render_sparse_features_and_depths_backward(self):
+        # Generate random pixel coordinates within image bounds
+
+        idx = torch.randperm(self.width * self.height)[:5000]
+        x_coords = idx % self.width
+        y_coords = idx // self.width
+        pixels_to_render = JaggedTensor([torch.stack([y_coords, x_coords], 1)]).to(self.device)
+
+        sparse_features, sparse_alphas = self.gs3d.sparse_render_images_and_depths(
+            pixels_to_render,
+            self.cam_to_world_mats[0:1],
+            self.projection_mats[0:1],
+            self.width,
+            self.height,
+            self.near_plane,  # near_plane
+            self.far_plane,  # far_plane
+        )
+
+        l1 = torch.mean(sparse_features.jdata) + sparse_alphas.jdata.sum()
+        l1.backward()
+
+        assert self.gs3d.means.grad is not None, "Gradients not computed for means in sparse features render"
+        assert self.gs3d.quats.grad is not None, "Gradients not computed for quats in sparse features render"
+        assert self.gs3d.log_scales.grad is not None, "Gradients not computed for log_scales in sparse features render"
+        assert (
+            self.gs3d.logit_opacities.grad is not None
+        ), "Gradients not computed for logit_opacities in sparse features render"
+        assert self.gs3d.sh0.grad is not None, "Gradients not computed for sh0 in sparse features render"
+        assert self.gs3d.shN.grad is not None, "Gradients not computed for shN in sparse features render"
+        sparse_means_grad = self.gs3d.means.grad.clone()
+        sparse_quats_grad = self.gs3d.quats.grad.clone()
+        sparse_log_scales_grad = self.gs3d.log_scales.grad.clone()
+        sparse_logit_opacities_grad = self.gs3d.logit_opacities.grad
+        sparse_sh0_grad = self.gs3d.sh0.grad.clone()
+        sparse_shN_grad = self.gs3d.shN.grad.clone()
+        self.gs3d.means.grad.zero_()
+        self.gs3d.quats.grad.zero_()
+        self.gs3d.log_scales.grad.zero_()
+        self.gs3d.logit_opacities.grad.zero_()
+        self.gs3d.sh0.grad.zero_()
+        self.gs3d.shN.grad.zero_()
+
+        dense_features, dense_alphas = self.gs3d.render_images_and_depths(
+            self.cam_to_world_mats[0:1],
+            self.projection_mats[0:1],
+            self.width,
+            self.height,
+            self.near_plane,  # near_plane
+            self.far_plane,  # far_plane
+        )
+
+        dense_features_pixels = dense_features[0, y_coords, x_coords]
+        dense_alphas_pixels = dense_alphas[0, y_coords, x_coords]
+
+        l2 = torch.mean(dense_features_pixels) + dense_alphas_pixels.sum()
+        l2.backward()
+
+        dense_means_grad = self.gs3d.means.grad.clone()
+        dense_quats_grad = self.gs3d.quats.grad.clone()
+        dense_log_scales_grad = self.gs3d.log_scales.grad.clone()
+        dense_logit_opacities_grad = self.gs3d.logit_opacities.grad.clone()
+        dense_sh0_grad = self.gs3d.sh0.grad.clone()
+        dense_shN_grad = self.gs3d.shN.grad.clone()
+
+        self.assertTrue(
+            torch.allclose(sparse_means_grad, dense_means_grad, atol=1e-4, rtol=1e-8),
+            "Sparse means grad does not match dense means grad at specified pixels",
+        )
+        self.assertTrue(
+            torch.allclose(sparse_quats_grad, dense_quats_grad, atol=1e-4, rtol=1e-8),
+            "Sparse quats grad does not match dense quats grad at specified pixels",
+        )
+        self.assertTrue(
+            torch.allclose(sparse_log_scales_grad, dense_log_scales_grad, atol=1e-4, rtol=1e-8),
+            "Sparse log scales grad does not match dense log scales grad at specified pixels",
+        )
+        self.assertTrue(
+            torch.allclose(sparse_logit_opacities_grad, dense_logit_opacities_grad, atol=1e-4, rtol=1e-8),
+            "Sparse logit opacities grad does not match dense logit opacities grad at specified pixels",
+        )
+        self.assertTrue(
+            torch.allclose(sparse_sh0_grad, dense_sh0_grad, atol=1e-4, rtol=1e-8),
+            "Sparse sh0 grad does not match dense sh0 grad at specified pixels",
+        )
+        self.assertTrue(
+            torch.allclose(sparse_shN_grad, dense_shN_grad, atol=1e-4, rtol=1e-8),
+            "Sparse shN grad does not match dense shN grad at specified pixels",
+        )
 
 
 class TestGaussianRenderBackgrounds(BaseGaussianTestCase):
