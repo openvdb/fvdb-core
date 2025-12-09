@@ -519,7 +519,7 @@ gaussianTileIntersectionCUDAImpl(
                         0,
                         numBits,
                         stream);
-            C10_CUDA_CHECK(cudaStreamSynchronize(stream));
+
             // DoubleBuffer swaps the pointers if the keys were sorted in the input buffer
             // so we need to grab the right buffer.
             if (d_keys.selector == 1) {
