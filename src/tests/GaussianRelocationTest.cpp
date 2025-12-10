@@ -81,54 +81,50 @@ class GaussianRelocationTest : public ::testing::Test {
         }
         torch::manual_seed(0);
     }
+
+    void
+    TestRelocation(const torch::Tensor &opacities,
+                   const torch::Tensor &scales,
+                   const torch::Tensor &ratios) {
+        const int nMax               = opacities.size(0);
+        auto const binomialCoeffsCPU = buildBinomialCoeffsCPU(nMax);
+        auto const binomialCoeffs    = binomialCoeffsCPU.to(opacities.device());
+
+        const auto [gpuOpacitiesNew, gpuScalesNew] =
+            fvdb::detail::ops::dispatchGaussianRelocation<torch::kCUDA>(
+                opacities, scales, ratios, binomialCoeffs, nMax);
+
+        const auto [refOpacitiesNew, refScalesNew] =
+            referenceRelocation(opacities.cpu(), scales.cpu(), ratios.cpu(), binomialCoeffsCPU);
+
+        EXPECT_TRUE(torch::allclose(gpuOpacitiesNew.cpu(), refOpacitiesNew, 1e-6, 1e-6));
+        EXPECT_TRUE(torch::allclose(gpuScalesNew.cpu(), refScalesNew, 1e-6, 1e-6));
+    }
 };
 
 TEST_F(GaussianRelocationTest, ComputesExpectedValues) {
-    const int nMax = 3;
+    // Focus on low/dead opacities; include one mildly higher entry to ensure mixed behavior.
+    auto opacities =
+        torch::tensor({1e-6f, 5e-4f, 1e-2f, 0.2f}, fvdb::test::tensorOpts<float>(torch::kCUDA));
+    auto scales = torch::tensor(
+        {{1.0f, 0.8f, 1.2f}, {0.5f, 0.25f, 0.125f}, {1.5f, 0.6f, 0.9f}, {0.8f, 1.1f, 0.7f}},
+        fvdb::test::tensorOpts<float>(torch::kCUDA));
+    auto ratios = torch::tensor({1, 2, 3, 4},
+                                torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt32));
 
-    auto binomialCoeffsCPU = buildBinomialCoeffsCPU(nMax);
-
-    auto opacities = torch::tensor({0.2f, 0.5f, 0.8f}, fvdb::test::tensorOpts<float>(torch::kCUDA));
-    auto scales    = torch::tensor({{1.0f, 2.0f, 3.0f}, {0.25f, 0.5f, 1.0f}, {2.0f, 0.5f, 1.5f}},
-                                fvdb::test::tensorOpts<float>(torch::kCUDA));
-    auto ratios =
-        torch::tensor({1, 2, 3}, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt32));
-    auto binomialCoeffs = binomialCoeffsCPU.to(torch::kCUDA);
-
-    const auto [gpuOpacitiesNew, gpuScalesNew] =
-        fvdb::detail::ops::dispatchGaussianRelocation<torch::kCUDA>(
-            opacities, scales, ratios, binomialCoeffs, nMax);
-
-    const auto [refOpacitiesNew, refScalesNew] =
-        referenceRelocation(opacities.cpu(), scales.cpu(), ratios.cpu(), binomialCoeffsCPU);
-
-    EXPECT_TRUE(torch::allclose(gpuOpacitiesNew.cpu(), refOpacitiesNew, 1e-6, 1e-6));
-    EXPECT_TRUE(torch::allclose(gpuScalesNew.cpu(), refScalesNew, 1e-6, 1e-6));
+    TestRelocation(opacities, scales, ratios);
 }
 
 TEST_F(GaussianRelocationTest, HandlesEdgeOpacitiesAndRatios) {
-    const int nMax         = 4;
-    auto binomialCoeffsCPU = buildBinomialCoeffsCPU(nMax);
-
     auto opacities =
-        torch::tensor({1e-6f, 0.25f, 0.99999f, 0.6f}, fvdb::test::tensorOpts<float>(torch::kCUDA));
+        torch::tensor({1e-7f, 1e-5f, 5e-4f, 1e-2f}, fvdb::test::tensorOpts<float>(torch::kCUDA));
     auto scales = torch::tensor(
-        {{1.0f, 1.0f, 1.0f}, {0.5f, 0.25f, 0.125f}, {2.0f, 3.0f, 4.0f}, {1.25f, 0.75f, 0.5f}},
+        {{1.0f, 1.0f, 1.0f}, {0.4f, 0.3f, 0.2f}, {1.8f, 0.6f, 0.9f}, {0.9f, 1.1f, 0.7f}},
         fvdb::test::tensorOpts<float>(torch::kCUDA));
     auto ratios = torch::tensor({1, 4, 2, 3},
                                 torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt32));
 
-    auto binomialCoeffs = binomialCoeffsCPU.to(torch::kCUDA);
-
-    const auto [gpuOpacitiesNew, gpuScalesNew] =
-        fvdb::detail::ops::dispatchGaussianRelocation<torch::kCUDA>(
-            opacities, scales, ratios, binomialCoeffs, nMax);
-
-    const auto [refOpacitiesNew, refScalesNew] =
-        referenceRelocation(opacities.cpu(), scales.cpu(), ratios.cpu(), binomialCoeffsCPU);
-
-    EXPECT_TRUE(torch::allclose(gpuOpacitiesNew.cpu(), refOpacitiesNew, 1e-5, 1e-6));
-    EXPECT_TRUE(torch::allclose(gpuScalesNew.cpu(), refScalesNew, 1e-5, 1e-5));
+    TestRelocation(opacities, scales, ratios);
 }
 
 TEST_F(GaussianRelocationTest, ValidatesInputs) {
