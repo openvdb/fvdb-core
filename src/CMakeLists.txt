@@ -106,6 +106,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/GridEdgeNetwork.cu
     fvdb/detail/ops/gsplat/FusedSSIM.cu
     fvdb/detail/ops/gsplat/GaussianComputeNanInfMask.cu
+    fvdb/detail/ops/gsplat/GaussianMCMCAddNoise.cu
     fvdb/detail/ops/gsplat/GaussianProjectionBackward.cu
     fvdb/detail/ops/gsplat/GaussianProjectionForward.cu
     fvdb/detail/ops/gsplat/GaussianProjectionJaggedBackward.cu
