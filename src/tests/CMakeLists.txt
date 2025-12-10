@@ -153,7 +153,7 @@ ConfigureTest(GaussianProjectionBackwardTest "GaussianProjectionBackwardTest.cpp
 ConfigureTest(GaussianRasterizeTopContributorsTest "GaussianRasterizeTopContributorsTest.cpp")
 ConfigureTest(GaussianRasterizeContributingGaussianIdsTest "GaussianRasterizeContributingGaussianIdsTest.cpp")
 ConfigureTest(GaussianMCMCAddNoiseTest "GaussianMCMCAddNoiseTest.cpp")
-ConfigureTest(GaussianRelocationTest "GaussianRelocationTest.cpp")
+ConfigureTest(GaussianMCMCRelocationTest "GaussianMCMCRelocationTest.cpp")
 
 if(NOT NANOVDB_EDITOR_SKIP)
   #ConfigureTest(ViewerTest "ViewerTest.cpp")

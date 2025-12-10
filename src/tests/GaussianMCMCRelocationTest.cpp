@@ -3,7 +3,7 @@
 
 #include "utils/Tensor.h"
 
-#include <fvdb/detail/ops/gsplat/GaussianRelocation.h>
+#include <fvdb/detail/ops/gsplat/GaussianMCMCRelocation.h>
 
 #include <torch/torch.h>
 
