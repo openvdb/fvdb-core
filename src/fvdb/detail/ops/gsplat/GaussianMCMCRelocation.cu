@@ -30,7 +30,8 @@ gaussianRelocationKernel(fvdb::TorchRAcc64<ScalarType, 2> logScales,
     const auto N = logScales.size(0);
     for (uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < N;
          idx += blockDim.x * gridDim.x) {
-        const int32_t nIdx = ratios[idx];
+        // Clamp nIdx to prevent out-of-bounds access to binomialCoeffs
+        const int32_t nIdx = min(ratios[idx], static_cast<int32_t>(nMax));
 
         // convert logit opacity to opacity
         auto opacity    = ScalarType(1.0) / (1 + exp(-logitOpacities[idx]));
