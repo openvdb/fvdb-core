@@ -1057,10 +1057,11 @@ GaussianSplat3d::relocateGaussians(const torch::Tensor &logScales,
                                    const torch::Tensor &logitOpacities,
                                    const torch::Tensor &ratios,
                                    const torch::Tensor &binomialCoeffs,
-                                   const int nMax) {
+                                   const int nMax,
+                                   const float minOpacity) {
     return FVDB_DISPATCH_KERNEL_DEVICE(logScales.device(), [&]() {
         return detail::ops::dispatchGaussianRelocation<DeviceTag>(
-            logScales, logitOpacities, ratios, binomialCoeffs, nMax);
+            logScales, logitOpacities, ratios, binomialCoeffs, nMax, minOpacity);
     });
 }
 

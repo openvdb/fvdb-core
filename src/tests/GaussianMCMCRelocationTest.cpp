@@ -43,7 +43,8 @@ std::tuple<torch::Tensor, torch::Tensor>
 referenceRelocation(const torch::Tensor &logScales,
                     const torch::Tensor &logitOpacities,
                     const torch::Tensor &ratios,
-                    const torch::Tensor &binomialCoeffsCPU) {
+                    const torch::Tensor &binomialCoeffsCPU,
+                    float minOpacity) {
     // Convert to probability/linear space to mirror the kernel's internal math.
     auto opacities    = torch::sigmoid(logitOpacities);
     auto scales       = torch::exp(logScales);
@@ -55,8 +56,11 @@ referenceRelocation(const torch::Tensor &logScales,
         const int32_t nIdx = ratios[idx].item<int32_t>();
         const float opacity =
             opacities[idx].item<float>(); // CPU tensor so item<float> is fine for test sizes
-        const float opacityNew = 1.0f - std::pow(1.0f - opacity, 1.0f / static_cast<float>(nIdx));
-        opacitiesNew[idx]      = opacityNew;
+        const float opacityNew =
+            std::clamp<float>(1.0f - std::pow(1.0f - opacity, 1.0f / static_cast<float>(nIdx)),
+                              minOpacity,
+                              1.0f - std::numeric_limits<float>::epsilon());
+        opacitiesNew[idx] = opacityNew;
 
         float denomSum = 0.0f;
         for (int32_t i = 1; i <= nIdx; ++i) {
@@ -98,14 +102,16 @@ class GaussianRelocationTest : public ::testing::Test {
 
         const auto [gpuLogitOpacitiesNew, gpuLogScalesNew] =
             fvdb::detail::ops::dispatchGaussianRelocation<torch::kCUDA>(
-                logScales, logitOpacities, ratios, binomialCoeffs, nMax);
+                logScales, logitOpacities, ratios, binomialCoeffs, nMax, mMinOpacity);
 
         const auto [refLogitNew, refLogScalesNew] = referenceRelocation(
-            logScales.cpu(), logitOpacities.cpu(), ratios.cpu(), binomialCoeffsCPU);
+            logScales.cpu(), logitOpacities.cpu(), ratios.cpu(), binomialCoeffsCPU, mMinOpacity);
 
         EXPECT_TRUE(torch::allclose(gpuLogitOpacitiesNew.cpu(), refLogitNew, 1e-6, 1e-6));
         EXPECT_TRUE(torch::allclose(gpuLogScalesNew.cpu(), refLogScalesNew, 1e-6, 1e-6));
     }
+
+    float mMinOpacity{0.005f};
 };
 
 TEST_F(GaussianRelocationTest, ComputesExpectedValues) {
@@ -155,30 +161,31 @@ TEST_F(GaussianRelocationTest, ValidatesInputs) {
 
     // binomialCoeffs on CPU
     EXPECT_THROW(fvdb::detail::ops::dispatchGaussianRelocation<torch::kCUDA>(
-                     logScales, logitOpacities, ratios, binomialCoeffsCPU, nMax),
+                     logScales, logitOpacities, ratios, binomialCoeffsCPU, nMax, mMinOpacity),
                  c10::Error);
 
     // binomialCoeffs wrong shape
     auto badBinomShape = binomialCoeffs.slice(/*dim=*/0, 0, nMax - 1);
     EXPECT_THROW(fvdb::detail::ops::dispatchGaussianRelocation<torch::kCUDA>(
-                     logScales, logitOpacities, ratios, badBinomShape, nMax),
+                     logScales, logitOpacities, ratios, badBinomShape, nMax, mMinOpacity),
                  c10::Error);
 
     // ratios wrong dtype
     auto ratiosLong = ratios.to(torch::kInt64);
     EXPECT_THROW(fvdb::detail::ops::dispatchGaussianRelocation<torch::kCUDA>(
-                     logScales, logitOpacities, ratiosLong, binomialCoeffs, nMax),
+                     logScales, logitOpacities, ratiosLong, binomialCoeffs, nMax, mMinOpacity),
                  c10::Error);
 
     // opacities on CPU
-    EXPECT_THROW(fvdb::detail::ops::dispatchGaussianRelocation<torch::kCUDA>(
-                     logScales.cpu(), logitOpacities.cpu(), ratios, binomialCoeffs, nMax),
-                 c10::Error);
+    EXPECT_THROW(
+        fvdb::detail::ops::dispatchGaussianRelocation<torch::kCUDA>(
+            logScales.cpu(), logitOpacities.cpu(), ratios, binomialCoeffs, nMax, mMinOpacity),
+        c10::Error);
 
     // scales wrong shape
     auto logScalesBad = logScales.view({2, 3, 1});
     EXPECT_THROW(fvdb::detail::ops::dispatchGaussianRelocation<torch::kCUDA>(
-                     logScalesBad, logitOpacities, ratios, binomialCoeffs, nMax),
+                     logScalesBad, logitOpacities, ratios, binomialCoeffs, nMax, mMinOpacity),
                  c10::Error);
 }
 
@@ -195,7 +202,7 @@ TEST_F(GaussianRelocationTest, CpuNotImplemented) {
         torch::tensor({1, 2}, torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt32));
 
     EXPECT_THROW(fvdb::detail::ops::dispatchGaussianRelocation<torch::kCPU>(
-                     logScales, logitOpacities, ratios, binomialCoeffsCPU, nMax),
+                     logScales, logitOpacities, ratios, binomialCoeffsCPU, nMax, mMinOpacity),
                  c10::Error);
 }
 

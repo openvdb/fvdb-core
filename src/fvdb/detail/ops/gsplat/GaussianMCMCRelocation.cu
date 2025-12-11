@@ -12,6 +12,8 @@
 
 #include <complex.h>
 
+#include <algorithm>
+
 namespace fvdb::detail::ops {
 namespace {
 
@@ -23,7 +25,8 @@ gaussianRelocationKernel(fvdb::TorchRAcc64<ScalarType, 2> logScales,
                          fvdb::TorchRAcc64<ScalarType, 2> binomialCoeffs,
                          fvdb::TorchRAcc64<ScalarType, 2> logScalesNew,
                          fvdb::TorchRAcc64<ScalarType, 1> logitOpacitiesNew,
-                         std::size_t nMax) {
+                         std::size_t nMax,
+                         float minOpacity) {
     const auto N = logScales.size(0);
     for (uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < N;
          idx += blockDim.x * gridDim.x) {
@@ -32,6 +35,8 @@ gaussianRelocationKernel(fvdb::TorchRAcc64<ScalarType, 2> logScales,
         // convert logit opacity to opacity
         auto opacity    = ScalarType(1.0) / (1 + exp(-logitOpacities[idx]));
         auto opacityNew = ScalarType(1.0) - powf(1 - opacity, ScalarType(1.0) / nIdx);
+        opacityNew      = std::clamp<ScalarType>(
+            opacityNew, minOpacity, 1.0 - std::numeric_limits<ScalarType>::epsilon());
         // logit(x) = log(x / (1-x))
         logitOpacitiesNew[idx] = log(opacityNew / (ScalarType(1.0) - opacityNew));
 
@@ -59,7 +64,8 @@ launchGaussianRelocation(const torch::Tensor &logScales,      // [N, 3]
                          const torch::Tensor &logitOpacities, // [N]
                          const torch::Tensor &ratios,         // [N]
                          const torch::Tensor &binomialCoeffs, // [nMax, nMax]
-                         const int nMax) {
+                         const int nMax,
+                         ScalarType minOpacity) {
     const auto N = logitOpacities.size(0);
 
     auto logitOpacitiesNew = torch::empty_like(logitOpacities);
@@ -76,7 +82,8 @@ launchGaussianRelocation(const torch::Tensor &logScales,      // [N, 3]
         binomialCoeffs.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>(),
         logScalesNew.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>(),
         logitOpacitiesNew.packed_accessor64<ScalarType, 1, torch::RestrictPtrTraits>(),
-        nMax);
+        nMax,
+        minOpacity);
 
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return std::make_tuple(logitOpacitiesNew, logScalesNew);
@@ -90,7 +97,8 @@ dispatchGaussianRelocation<torch::kCUDA>(const torch::Tensor &logScales,      //
                                          const torch::Tensor &logitOpacities, // [N]
                                          const torch::Tensor &ratios,         // [N]
                                          const torch::Tensor &binomialCoeffs, // [nMax, nMax]
-                                         const int nMax) {
+                                         const int nMax,
+                                         float minOpacity) {
     FVDB_FUNC_RANGE();
     const at::cuda::OptionalCUDAGuard device_guard(device_of(logScales));
 
@@ -119,7 +127,8 @@ dispatchGaussianRelocation<torch::kCUDA>(const torch::Tensor &logScales,      //
                                            logitOpacities.contiguous(),
                                            ratios.contiguous(),
                                            binomialCoeffs,
-                                           nMax);
+                                           nMax,
+                                           minOpacity);
 }
 
 template <>
@@ -128,7 +137,8 @@ dispatchGaussianRelocation<torch::kPrivateUse1>(const torch::Tensor &logScales, 
                                                 const torch::Tensor &logitOpacities, // [N]
                                                 const torch::Tensor &ratios,         // [N]
                                                 const torch::Tensor &binomialCoeffs, // [nMax, nMax]
-                                                const int nMax) {
+                                                const int nMax,
+                                                float minOpacity) {
     // TODO: Implement PrivateUse1
     TORCH_CHECK_NOT_IMPLEMENTED(false, "PrivateUse1 implementation not available");
 }
@@ -139,7 +149,8 @@ dispatchGaussianRelocation<torch::kCPU>(const torch::Tensor &logScales,      // 
                                         const torch::Tensor &logitOpacities, // [N]
                                         const torch::Tensor &ratios,         // [N]
                                         const torch::Tensor &binomialCoeffs, // [nMax, nMax]
-                                        const int nMax) {
+                                        const int nMax,
+                                        float minOpacity) {
     // CPU path intentionally unsupported; keep signature for clearer error messaging in tests.
     TORCH_CHECK_NOT_IMPLEMENTED(false, "GaussianRelocation is not implemented for CPU");
 }

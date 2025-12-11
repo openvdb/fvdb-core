@@ -344,7 +344,8 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("logit_opacities"),
              py::arg("ratios"),
              py::arg("binomial_coeffs"),
-             py::arg("n_max"))
+             py::arg("n_max"),
+             py::arg("min_opacity") = 0.005)
 
         .def("add_noise_to_means", &fvdb::GaussianSplat3d::addNoiseToMeans, py::arg("noise_scale"))
 

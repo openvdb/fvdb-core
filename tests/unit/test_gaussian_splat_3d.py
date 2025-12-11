@@ -3027,6 +3027,7 @@ class TestGaussianSplatMCMC(BaseGaussianTestCase):
 
         opacity = torch.sigmoid(logit_cpu)  # [N]
         opacity_new = 1.0 - torch.pow(1.0 - opacity, 1.0 / ratios_cpu.float())
+        opacity_new = torch.clamp(opacity_new, min=0.005, max=1.0 - torch.finfo(opacity_new.dtype).eps)
         logit_ref = torch.log(opacity_new) - torch.log1p(-opacity_new)
 
         log_scales_ref = torch.empty_like(log_cpu)

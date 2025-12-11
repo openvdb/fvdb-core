@@ -20,7 +20,7 @@ namespace ops {
 /// @param ratios Replication ratios per Gaussian [N] (int32)
 /// @param binomialCoeffs Binomial coefficients table [nMax, nMax]
 /// @param nMax Maximum replication ratio (size of binomial table)
-///
+/// @param minOpacity Minimum opacity
 /// @return tuple of (opacitiesNew [N], scalesNew [N, 3])
 template <torch::DeviceType DeviceType>
 std::tuple<torch::Tensor, torch::Tensor>
@@ -28,7 +28,8 @@ dispatchGaussianRelocation(const torch::Tensor &logScales,      // [N, 3]
                            const torch::Tensor &logitOpacities, // [N]
                            const torch::Tensor &ratios,         // [N]
                            const torch::Tensor &binomialCoeffs, // [nMax, nMax]
-                           const int nMax);
+                           const int nMax,
+                           float minOpacity);
 
 } // namespace ops
 } // namespace detail
