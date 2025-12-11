@@ -4,6 +4,8 @@
 #include <fvdb/GaussianSplat3d.h>
 #include <fvdb/detail/autograd/GaussianRasterizeSparse.h>
 #include <fvdb/detail/io/GaussianPlyIO.h>
+#include <fvdb/detail/ops/gsplat/GaussianMCMCAddNoise.h>
+#include <fvdb/detail/ops/gsplat/GaussianMCMCRelocation.h>
 #include <fvdb/detail/utils/Nvtx.h>
 
 // Autograd headers
@@ -1048,6 +1050,26 @@ GaussianSplat3d::renderImagesAndDepths(const torch::Tensor &worldToCameraMatrice
         projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settings);
     return renderCropFromProjectedGaussiansImpl(
         state, settings.tileSize, settings.imageWidth, settings.imageHeight, 0, 0, backgrounds);
+}
+
+std::tuple<torch::Tensor, torch::Tensor>
+GaussianSplat3d::relocateGaussians(const torch::Tensor &logitOpacities,
+                                   const torch::Tensor &logScales,
+                                   const torch::Tensor &ratios,
+                                   const torch::Tensor &binomialCoeffs,
+                                   const int nMax) {
+    return FVDB_DISPATCH_KERNEL_DEVICE(logitOpacities.device(), [&]() {
+        return detail::ops::dispatchGaussianRelocation<DeviceTag>(
+            logitOpacities, logScales, ratios, binomialCoeffs, nMax);
+    });
+}
+
+void
+GaussianSplat3d::addNoiseToMeans(const float noiseScale) {
+    FVDB_DISPATCH_KERNEL_DEVICE(mMeans.device(), [&]() {
+        return detail::ops::dispatchGaussianMCMCAddNoise<DeviceTag>(
+            mMeans, mLogScales, mLogitOpacities, mQuats, noiseScale);
+    });
 }
 
 GaussianSplat3d

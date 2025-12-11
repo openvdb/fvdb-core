@@ -338,6 +338,16 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("antialias")          = false,
              py::arg("top_k_contributors") = 0)
 
+        .def("relocate_gaussians",
+             &fvdb::GaussianSplat3d::relocateGaussians,
+             py::arg("logit_opacities"),
+             py::arg("log_scales"),
+             py::arg("ratios"),
+             py::arg("binomial_coeffs"),
+             py::arg("n_max"))
+
+        .def("add_noise_to_means", &fvdb::GaussianSplat3d::addNoiseToMeans, py::arg("noise_scale"))
+
         .def("index_select", &fvdb::GaussianSplat3d::indexSelect, py::arg("indices"))
         .def("mask_select", &fvdb::GaussianSplat3d::maskSelect, py::arg("mask"))
         .def("slice_select",
