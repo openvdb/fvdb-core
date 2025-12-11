@@ -1190,8 +1190,8 @@ class GaussianSplat3d {
         const int topKContributors          = 0);
 
     /// @brief Relocate Gaussians by adjusting opacity and scale based on replication ratio.
-    /// @param logScales logScales of the Gaussians to relocate [N, 3].
-    /// @param logitOpacities logitOpacities of the Gaussians to relocate [N].
+    /// @param logScales Log scales of the Gaussians to relocate [N, 3].
+    /// @param logitOpacities Logit opacities of the Gaussians to relocate [N].
     /// @param ratios Replication ratios per Gaussian [N].
     /// @param binomialCoeffs Binomial coefficients table [nMax, nMax].
     /// @param nMax Maximum replication ratio (size of binomial table).

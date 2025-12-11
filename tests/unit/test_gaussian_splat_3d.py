@@ -2999,8 +2999,7 @@ class TestGaussianSplatMCMC(BaseGaussianTestCase):
 
         device = torch.device(self.device)
         thr = 0.1
-        # Match runtime behavior in gsplat: convert logits/log-scales to probability/linear space
-        # before calling relocate_gaussians.
+        # Convert logit opacities to opacities for filtering.
         all_opacities = torch.sigmoid(self.gs3d.logit_opacities)
         mask = all_opacities < thr
         if not bool(mask.any()):
