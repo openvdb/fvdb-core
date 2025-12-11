@@ -340,8 +340,8 @@ bind_gaussian_splat3d(py::module &m) {
 
         .def("relocate_gaussians",
              &fvdb::GaussianSplat3d::relocateGaussians,
-             py::arg("logit_opacities"),
              py::arg("log_scales"),
+             py::arg("logit_opacities"),
              py::arg("ratios"),
              py::arg("binomial_coeffs"),
              py::arg("n_max"))

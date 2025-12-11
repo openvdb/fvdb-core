@@ -1053,14 +1053,14 @@ GaussianSplat3d::renderImagesAndDepths(const torch::Tensor &worldToCameraMatrice
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
-GaussianSplat3d::relocateGaussians(const torch::Tensor &logitOpacities,
-                                   const torch::Tensor &logScales,
+GaussianSplat3d::relocateGaussians(const torch::Tensor &logScales,
+                                   const torch::Tensor &logitOpacities,
                                    const torch::Tensor &ratios,
                                    const torch::Tensor &binomialCoeffs,
                                    const int nMax) {
-    return FVDB_DISPATCH_KERNEL_DEVICE(logitOpacities.device(), [&]() {
+    return FVDB_DISPATCH_KERNEL_DEVICE(logScales.device(), [&]() {
         return detail::ops::dispatchGaussianRelocation<DeviceTag>(
-            logitOpacities, logScales, ratios, binomialCoeffs, nMax);
+            logScales, logitOpacities, ratios, binomialCoeffs, nMax);
     });
 }
 

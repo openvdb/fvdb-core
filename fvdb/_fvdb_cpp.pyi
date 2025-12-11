@@ -318,8 +318,8 @@ class GaussianSplat3d:
     ) -> tuple[JaggedTensor, JaggedTensor]: ...
     def relocate_gaussians(
         self,
-        logit_opacities: torch.Tensor,
         log_scales: torch.Tensor,
+        logit_opacities: torch.Tensor,
         ratios: torch.Tensor,
         binomial_coeffs: torch.Tensor,
         n_max: int,
