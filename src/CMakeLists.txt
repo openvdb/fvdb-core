@@ -107,6 +107,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/gsplat/FusedSSIM.cu
     fvdb/detail/ops/gsplat/GaussianComputeNanInfMask.cu
     fvdb/detail/ops/gsplat/GaussianMCMCAddNoise.cu
+    fvdb/detail/ops/gsplat/GaussianMCMCRelocation.cu
     fvdb/detail/ops/gsplat/GaussianProjectionBackward.cu
     fvdb/detail/ops/gsplat/GaussianProjectionForward.cu
     fvdb/detail/ops/gsplat/GaussianProjectionJaggedBackward.cu
@@ -116,7 +117,6 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/gsplat/GaussianRasterizeNumContributingGaussians.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeTopContributingGaussianIds.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeContributingGaussianIds.cu
-    fvdb/detail/ops/gsplat/GaussianRelocation.cu
     fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsBackward.cu
     fvdb/detail/ops/gsplat/GaussianSphericalHarmonicsForward.cu
     fvdb/detail/ops/gsplat/GaussianSplatSparse.cu

@@ -2561,6 +2561,38 @@ class GaussianSplat3d:
             )
             return JaggedTensor(impl=result_ids_impl), JaggedTensor(impl=result_weights_impl)
 
+    def relocate_gaussians(
+        self,
+        log_scales: torch.Tensor,
+        logit_opacities: torch.Tensor,
+        ratios: torch.Tensor,
+        binomial_coeffs: torch.Tensor,
+        n_max: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Relocate Gaussians by adjusting opacity and scale based on replication ratio.
+
+        Args:
+            log_scales (torch.Tensor): Log scales of the Gaussians to relocate [N, 3].
+            logit_opacities (torch.Tensor): Logit opacities of the Gaussians to relocate [N].
+            ratios (torch.Tensor): Replication ratios per Gaussian [N].
+            binomial_coeffs (torch.Tensor): Binomial coefficients table [nMax, nMax].
+            n_max (int): Maximum replication ratio (size of binomial table).
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: Tuple of (logit_opacities_new [N], log_scales_new [N, 3]).
+        """
+        return self._impl.relocate_gaussians(log_scales, logit_opacities, ratios, binomial_coeffs, n_max)
+
+    def add_noise_to_means(self, noise_scale: float) -> None:
+        """
+        Add noise to the Gaussian positions (means), scaled by ``noise_scale``.
+
+        Args:
+            noise_scale (float): Noise scale factor applied to scale-dependent noise.
+        """
+        self._impl.add_noise_to_means(noise_scale)
+
     def reset_accumulated_gradient_state(self) -> None:
         """
         Reset the accumulated projected gradients of the mans if :attr:`accumulate_mean_2d_gradients` is ``True``,
