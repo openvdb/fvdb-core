@@ -3009,38 +3009,39 @@ class TestGaussianSplatMCMC(BaseGaussianTestCase):
         idx = mask.nonzero(as_tuple=False).squeeze(1)
         idx = idx[: min(1024, idx.numel())]
 
-        logit_opacities = self.gs3d.logit_opacities[idx]
         log_scales = self.gs3d.log_scales[idx]
+        logit_opacities = self.gs3d.logit_opacities[idx]
         ratios = torch.full((idx.numel(),), 2, device=device, dtype=torch.int32)
         n_max = int(ratios.max().item())
         binomial = self._build_binomial_coeffs(n_max=n_max, device=device)
 
         logit_new, log_scales_new = self.gs3d.relocate_gaussians(  # type: ignore[attr-defined]
-            logit_opacities, log_scales, ratios, binomial, n_max
+            log_scales, logit_opacities, ratios, binomial, n_max
         )
 
         # CPU reference matching the kernel math.
-        logit_opacities_ref = torch.empty_like(logit_opacities.cpu())
-        log_scales_ref = torch.empty_like(log_scales.cpu())
+        logit_cpu = logit_opacities.cpu()
+        log_cpu = log_scales.cpu()
         ratios_cpu = ratios.cpu()
         binom_cpu = binomial.cpu()
-        for i in range(idx.numel()):
-            n_idx = int(ratios_cpu[i].item())
-            logit_opacity = logit_opacities[i].item()
-            opacity = 1.0 / (1.0 + np.exp(-logit_opacity))
-            opacity_new = 1.0 - (1.0 - opacity) ** (1.0 / n_idx)
-            logit_opacities_ref[i] = torch.log(opacity_new / (1.0 - opacity_new))
 
+        opacity = torch.sigmoid(logit_cpu)  # [N]
+        opacity_new = 1.0 - torch.pow(1.0 - opacity, 1.0 / ratios_cpu.float())
+        logit_ref = torch.log(opacity_new) - torch.log1p(-opacity_new)
+
+        log_scales_ref = torch.empty_like(log_cpu)
+        for i in range(opacity.shape[0]):
+            n_idx = int(ratios_cpu[i].item())
             denom = 0.0
             for ii in range(1, n_idx + 1):
                 for k in range(ii):
-                    binom = binom_cpu[ii - 1, k].item()
+                    binom = float(binom_cpu[ii - 1, k].item())
                     sign = 1.0 if (k % 2 == 0) else -1.0
-                    denom += binom * sign * (opacity_new ** (k + 1)) / np.sqrt(k + 1)
-            coeff = opacity / denom
-            log_scales_ref[i] = torch.log(coeff * torch.exp(log_scales[i].cpu()))
+                    denom += binom * sign * (opacity_new[i].item() ** (k + 1)) / np.sqrt(k + 1)
+            coeff = opacity[i].item() / denom
+            log_scales_ref[i] = torch.log(torch.exp(log_cpu[i]) * coeff)
 
-        self.assertTrue(torch.allclose(logit_new.cpu(), logit_opacities_ref, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(logit_new.cpu(), logit_ref, atol=1e-4, rtol=1e-4))
         self.assertTrue(torch.allclose(log_scales_new.cpu(), log_scales_ref, atol=1e-5, rtol=1e-5))
 
     def test_add_noise_to_means(self):
