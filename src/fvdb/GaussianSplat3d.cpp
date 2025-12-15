@@ -1059,7 +1059,7 @@ GaussianSplat3d::relocateGaussians(const torch::Tensor &logScales,
                                    const torch::Tensor &binomialCoeffs,
                                    const int nMax,
                                    const float minOpacity) {
-    return FVDB_DISPATCH_KERNEL_DEVICE(logScales.device(), [&]() {
+    return FVDB_DISPATCH_KERNEL(logScales.device(), [&]() {
         return detail::ops::dispatchGaussianRelocation<DeviceTag>(
             logScales, logitOpacities, ratios, binomialCoeffs, nMax, minOpacity);
     });
@@ -1067,7 +1067,7 @@ GaussianSplat3d::relocateGaussians(const torch::Tensor &logScales,
 
 void
 GaussianSplat3d::addNoiseToMeans(const float noiseScale) {
-    FVDB_DISPATCH_KERNEL_DEVICE(mMeans.device(), [&]() {
+    FVDB_DISPATCH_KERNEL(mMeans.device(), [&]() {
         return detail::ops::dispatchGaussianMCMCAddNoise<DeviceTag>(
             mMeans, mLogScales, mLogitOpacities, mQuats, noiseScale);
     });
