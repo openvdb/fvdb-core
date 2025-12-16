@@ -3013,9 +3013,10 @@ class TestGaussianSplatMCMC(BaseGaussianTestCase):
         ratios = torch.full((idx.numel(),), 2, device=device, dtype=torch.int32)
         n_max = int(ratios.max().item())
         binomial = self._build_binomial_coeffs(n_max=n_max, device=device)
+        min_opacity = 0.005
 
         logit_new, log_scales_new = self.gs3d.relocate_gaussians(  # type: ignore[attr-defined]
-            log_scales, logit_opacities, ratios, binomial, n_max
+            log_scales, logit_opacities, ratios, binomial, n_max, min_opacity
         )
 
         # CPU reference matching the kernel math.
