@@ -1203,7 +1203,7 @@ class GaussianSplat3d {
                       const torch::Tensor &ratios,         // [N]
                       const torch::Tensor &binomialCoeffs, // [nMax, nMax]
                       const int nMax,
-                      const float minOpacity = 0.005);
+                      const float minOpacity);
 
     /// @brief Add noise to the Gaussian positions (means), scaled by noiseScale.
     /// @param noiseScale Noise scale

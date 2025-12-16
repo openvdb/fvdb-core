@@ -2568,6 +2568,7 @@ class GaussianSplat3d:
         ratios: torch.Tensor,
         binomial_coeffs: torch.Tensor,
         n_max: int,
+        min_opacity: float,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Relocate Gaussians by adjusting opacity and scale based on replication ratio.
@@ -2582,7 +2583,14 @@ class GaussianSplat3d:
         Returns:
             tuple[torch.Tensor, torch.Tensor]: Tuple of (logit_opacities_new [N], log_scales_new [N, 3]).
         """
-        return self._impl.relocate_gaussians(log_scales, logit_opacities, ratios, binomial_coeffs, n_max)
+        return self._impl.relocate_gaussians(
+            log_scales,
+            logit_opacities,
+            ratios,
+            binomial_coeffs,
+            n_max,
+            min_opacity,
+        )
 
     def add_noise_to_means(self, noise_scale: float) -> None:
         """
