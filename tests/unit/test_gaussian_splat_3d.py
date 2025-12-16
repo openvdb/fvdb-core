@@ -2950,5 +2950,153 @@ class TestGaussianRenderBackgrounds(BaseGaussianTestCase):
             )
 
 
+class TestGaussianSplatMCMC(BaseGaussianTestCase):
+    def setUp(self):
+        super().setUp()
+
+    def _build_binomial_coeffs(self, n_max: int, device: torch.device) -> torch.Tensor:
+        coeffs = torch.zeros((n_max, n_max), device=device, dtype=torch.float32)
+        for row in range(n_max):
+            coeffs[row, 0] = 1.0
+            coeffs[row, row] = 1.0
+            for k in range(1, row):
+                coeffs[row, k] = coeffs[row - 1, k - 1] + coeffs[row - 1, k]
+        return coeffs
+
+    def _quat_to_rotation(self, quat: torch.Tensor) -> torch.Tensor:
+        """quat: [..., 4] in [w,x,y,z] order"""
+        w, x, y, z = quat.unbind(-1)
+        norm = torch.sqrt(w * w + x * x + y * y + z * z)
+        w, x, y, z = w / norm, x / norm, y / norm, z / norm
+        xx, yy, zz = x * x, y * y, z * z
+        xy, xz, yz = x * y, x * z, y * z
+        wx, wy, wz = w * x, w * y, w * z
+        r00 = 1 - 2 * (yy + zz)
+        r01 = 2 * (xy - wz)
+        r02 = 2 * (xz + wy)
+        r10 = 2 * (xy + wz)
+        r11 = 1 - 2 * (xx + zz)
+        r12 = 2 * (yz - wx)
+        r20 = 2 * (xz - wy)
+        r21 = 2 * (yz + wx)
+        r22 = 1 - 2 * (xx + yy)
+        return torch.stack(
+            [
+                torch.stack([r00, r01, r02], dim=-1),
+                torch.stack([r10, r11, r12], dim=-1),
+                torch.stack([r20, r21, r22], dim=-1),
+            ],
+            dim=-2,
+        )
+
+    def _logistic_gate(self, x: torch.Tensor) -> torch.Tensor:
+        # Matches logistic() in GaussianMCMCAddNoise.cu with k=100, x0=0.995.
+        return 1.0 / (1.0 + torch.exp(-100.0 * (x - 0.995)))
+
+    def test_relocate_gaussians(self):
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA required for relocate_gaussians")
+
+        device = torch.device(self.device)
+        thr = 0.1
+        # Convert logit opacities to opacities for filtering.
+        all_opacities = torch.sigmoid(self.gs3d.logit_opacities)
+        mask = all_opacities < thr
+        if not bool(mask.any()):
+            self.skipTest("No gaussians below relocation threshold")
+
+        idx = mask.nonzero(as_tuple=False).squeeze(1)
+        idx = idx[: min(1024, idx.numel())]
+
+        log_scales = self.gs3d.log_scales[idx]
+        logit_opacities = self.gs3d.logit_opacities[idx]
+        ratios = torch.full((idx.numel(),), 2, device=device, dtype=torch.int32)
+        n_max = int(ratios.max().item())
+        binomial = self._build_binomial_coeffs(n_max=n_max, device=device)
+
+        logit_new, log_scales_new = self.gs3d.relocate_gaussians(  # type: ignore[attr-defined]
+            log_scales, logit_opacities, ratios, binomial, n_max
+        )
+
+        # CPU reference matching the kernel math.
+        logit_cpu = logit_opacities.cpu()
+        log_cpu = log_scales.cpu()
+        ratios_cpu = ratios.cpu()
+        binom_cpu = binomial.cpu()
+
+        opacity = torch.sigmoid(logit_cpu)  # [N]
+        opacity_new = 1.0 - torch.pow(1.0 - opacity, 1.0 / ratios_cpu.float())
+        opacity_new = torch.clamp(opacity_new, min=0.005, max=1.0 - torch.finfo(opacity_new.dtype).eps)
+        logit_ref = torch.log(opacity_new) - torch.log1p(-opacity_new)
+
+        log_scales_ref = torch.empty_like(log_cpu)
+        for i in range(opacity.shape[0]):
+            n_idx = int(ratios_cpu[i].item())
+            denom = 0.0
+            for ii in range(1, n_idx + 1):
+                for k in range(ii):
+                    binom = float(binom_cpu[ii - 1, k].item())
+                    sign = 1.0 if (k % 2 == 0) else -1.0
+                    denom += binom * sign * (opacity_new[i].item() ** (k + 1)) / np.sqrt(k + 1)
+            coeff = opacity[i].item() / denom
+            log_scales_ref[i] = torch.log(torch.exp(log_cpu[i]) * coeff)
+
+        self.assertTrue(torch.allclose(logit_new.cpu(), logit_ref, atol=1e-4, rtol=1e-4))
+        self.assertTrue(torch.allclose(log_scales_new.cpu(), log_scales_ref, atol=1e-5, rtol=1e-5))
+
+    def test_add_noise_to_means(self):
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA required for add_noise_to_means")
+
+        device = torch.device(self.device)
+        torch.manual_seed(0)
+        torch.cuda.manual_seed(0)
+
+        n = min(128, self.gs3d.means.shape[0])
+        idx = torch.arange(n, device=device)
+
+        means = self.gs3d.means[idx].clone()
+        quats = self.gs3d.quats[idx].clone()
+        log_scales = self.gs3d.log_scales[idx].clone()
+        logit_opacities = self.gs3d.logit_opacities[idx].clone()
+        sh0 = self.gs3d.sh0[idx].clone()
+        shN = self.gs3d.shN[idx].clone()
+
+        gs = GaussianSplat3d.from_tensors(
+            means=means.clone(),
+            quats=quats.clone(),
+            log_scales=log_scales.clone(),
+            logit_opacities=logit_opacities.clone(),
+            sh0=sh0,
+            shN=shN,
+        )
+
+        noise_scale = 0.3
+        rng_state = torch.cuda.get_rng_state(device)
+        gs.add_noise_to_means(noise_scale)  # type: ignore[attr-defined]
+
+        # Reconstruct the base noise drawn inside the kernel.
+        torch.cuda.set_rng_state(rng_state, device=device)
+        base_noise = torch.randn_like(means)
+
+        opacity = torch.sigmoid(logit_opacities.cpu())
+        gate = self._logistic_gate(1.0 - opacity)
+
+        scales = torch.exp(log_scales.cpu())  # [n,3]
+        R = self._quat_to_rotation(quats.cpu())  # [n,3,3]
+        S = torch.zeros_like(R)
+        S[:, 0, 0] = scales[:, 0]
+        S[:, 1, 1] = scales[:, 1]
+        S[:, 2, 2] = scales[:, 2]
+        M = torch.matmul(R, S)
+        covar = torch.matmul(M, M.transpose(-1, -2))  # [n,3,3]
+
+        noise = base_noise.cpu() * gate.unsqueeze(1) * noise_scale
+        delta = torch.matmul(covar, noise.unsqueeze(-1)).squeeze(-1)
+        expected_means = means.cpu() + delta
+
+        self.assertTrue(torch.allclose(gs.means.cpu(), expected_means, atol=1e-5, rtol=1e-6))
+
+
 if __name__ == "__main__":
     unittest.main()

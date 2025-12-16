@@ -1189,6 +1189,26 @@ class GaussianSplat3d {
         const bool antialias                = false,
         const int topKContributors          = 0);
 
+    /// @brief Relocate Gaussians by adjusting opacity and scale based on replication ratio.
+    /// @param logScales Log scales of the Gaussians to relocate [N, 3].
+    /// @param logitOpacities Logit opacities of the Gaussians to relocate [N].
+    /// @param ratios Replication ratios per Gaussian [N].
+    /// @param binomialCoeffs Binomial coefficients table [nMax, nMax].
+    /// @param nMax Maximum replication ratio (size of binomial table).
+    /// @param minOpacity Minimum opacity
+    /// @return Tuple of (logitOpacitiesNew [N], logScalesNew [N, 3])
+    std::tuple<torch::Tensor, torch::Tensor>
+    relocateGaussians(const torch::Tensor &logScales,      // [N, 3]
+                      const torch::Tensor &logitOpacities, // [N]
+                      const torch::Tensor &ratios,         // [N]
+                      const torch::Tensor &binomialCoeffs, // [nMax, nMax]
+                      const int nMax,
+                      const float minOpacity = 0.005);
+
+    /// @brief Add noise to the Gaussian positions (means), scaled by noiseScale.
+    /// @param noiseScale Noise scale
+    void addNoiseToMeans(const float noiseScale);
+
     /// @brief Select a subset of the Gaussians in this scene based on the given slice.
     /// @param begin The start index of the slice (inclusive)
     /// @param end The end index of the slice (exclusive)

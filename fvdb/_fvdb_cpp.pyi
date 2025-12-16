@@ -316,6 +316,16 @@ class GaussianSplat3d:
         antialias: bool = ...,
         top_k_contributors: int = ...,
     ) -> tuple[JaggedTensor, JaggedTensor]: ...
+    def relocate_gaussians(
+        self,
+        log_scales: torch.Tensor,
+        logit_opacities: torch.Tensor,
+        ratios: torch.Tensor,
+        binomial_coeffs: torch.Tensor,
+        n_max: int,
+        min_opacity: float,
+    ) -> tuple[torch.Tensor, torch.Tensor]: ...
+    def add_noise_to_means(self, noise_scale: float) -> None: ...
     def reset_accumulated_gradient_state(self) -> None: ...
     def save_ply(self, filename: str, metadata: dict[str, str | int | float | torch.Tensor] | None) -> None: ...
     @staticmethod

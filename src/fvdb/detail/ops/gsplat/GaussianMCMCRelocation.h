@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-#ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRELOCATION_H
-#define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRELOCATION_H
+#ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANMCMCRELOCATION_H
+#define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANMCMCRELOCATION_H
 
 #include <torch/types.h>
 
@@ -15,20 +15,21 @@ namespace ops {
 
 /// @brief Relocate Gaussians by adjusting opacity and scale based on replication ratio.
 ///
-/// @param opacities Input opacities [N]
-/// @param scales Input scales [N, 3]
+/// @param logScales Input log scales [N, 3]
+/// @param logitOpacities Input logit opacities [N]
 /// @param ratios Replication ratios per Gaussian [N] (int32)
 /// @param binomialCoeffs Binomial coefficients table [nMax, nMax]
 /// @param nMax Maximum replication ratio (size of binomial table)
-///
+/// @param minOpacity Minimum opacity
 /// @return tuple of (opacitiesNew [N], scalesNew [N, 3])
 template <torch::DeviceType DeviceType>
 std::tuple<torch::Tensor, torch::Tensor>
-dispatchGaussianRelocation(const torch::Tensor &opacities,      // [N]
-                           const torch::Tensor &scales,         // [N, 3]
+dispatchGaussianRelocation(const torch::Tensor &logScales,      // [N, 3]
+                           const torch::Tensor &logitOpacities, // [N]
                            const torch::Tensor &ratios,         // [N]
                            const torch::Tensor &binomialCoeffs, // [nMax, nMax]
-                           const int nMax);
+                           const int nMax,
+                           float minOpacity);
 
 } // namespace ops
 } // namespace detail
