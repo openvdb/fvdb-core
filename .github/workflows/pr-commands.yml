@@ -37,128 +37,12 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           comment_id: ${{ github.event.comment.id }}
 
-  run-all-workflows:
-    name: Run All Workflows
-    if: >
-      github.event.issue.pull_request &&
-      contains(github.event.comment.body, '/run-all') &&
-      (
-        github.event.comment.author_association == 'OWNER' ||
-        github.event.comment.author_association == 'MEMBER' ||
-        github.event.comment.author_association == 'COLLABORATOR'
-      )
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      pull-requests: write
-    steps:
-      - name: Add reaction to comment
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.reactions.createForIssueComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: context.payload.comment.id,
-              content: 'rocket'
-            });
-
-      - name: Get PR info
-        id: pr-info
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const pr = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number
-            });
-            core.setOutput('ref', pr.data.head.ref);
-            console.log(`PR branch: ${pr.data.head.ref}`);
-
-      - name: Trigger all workflows
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const ref = '${{ steps.pr-info.outputs.ref }}';
-            const workflows = [
-              'tests.yml',
-              'codestyle.yml',
-              'cu128.yml',
-              'cu130.yml'
-            ];
-
-            // Helper to find the triggered run with retries
-            async function findWorkflowRun(workflowId, beforeTime) {
-              const maxRetries = 5;
-              const delayMs = 3000;
-
-              for (let attempt = 1; attempt <= maxRetries; attempt++) {
-                await new Promise(resolve => setTimeout(resolve, delayMs));
-                console.log(`Looking for ${workflowId} run (attempt ${attempt}/${maxRetries})...`);
-
-                const runs = await github.rest.actions.listWorkflowRuns({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  workflow_id: workflowId,
-                  branch: ref,
-                  per_page: 10,
-                  event: 'workflow_dispatch'
-                });
-
-                // Find a run created after we triggered it
-                const run = runs.data.workflow_runs.find(r =>
-                  new Date(r.created_at) >= beforeTime
-                );
-
-                if (run) {
-                  console.log(`Found run: ${run.html_url}`);
-                  return run;
-                }
-              }
-              return null;
-            }
-
-            const results = [];
-            for (const workflow of workflows) {
-              const beforeTime = new Date();
-              try {
-                console.log(`Triggering ${workflow} on ref ${ref}`);
-                await github.rest.actions.createWorkflowDispatch({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  workflow_id: workflow,
-                  ref: ref
-                });
-                console.log(`Successfully triggered ${workflow}`);
-
-                // Try to find the run and get its URL
-                const run = await findWorkflowRun(workflow, beforeTime);
-                if (run) {
-                  results.push(`* [\`${workflow}\`](${run.html_url})`);
-                } else {
-                  results.push(`* \`${workflow}\` (run pending)`);
-                }
-              } catch (error) {
-                console.log(`Failed to trigger ${workflow}: ${error.message}`);
-                results.push(`* \`${workflow}\`: ${error.message}`);
-              }
-            }
-
-            // Post summary comment
-            const body = `### Triggered workflows on branch \`${ref}\`\n\n${results.join('\n')}`;
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: body
-            });
-
-  run-single-workflow:
-    name: Run Single Workflow
+  run-workflows:
+    name: Run Workflows
     if: >
       github.event.issue.pull_request &&
       (
+        contains(github.event.comment.body, '/run-all') ||
         contains(github.event.comment.body, '/run-tests') ||
         contains(github.event.comment.body, '/run-codestyle') ||
         contains(github.event.comment.body, '/run-cu128') ||
@@ -198,7 +82,7 @@ jobs:
             core.setOutput('ref', pr.data.head.ref);
             console.log(`PR branch: ${pr.data.head.ref}`);
 
-      - name: Trigger requested workflow
+      - name: Trigger workflows
         uses: actions/github-script@v7
         with:
           script: |
@@ -211,6 +95,18 @@ jobs:
               '/run-cu128': 'cu128.yml',
               '/run-cu130': 'cu130.yml'
             };
+
+            // Determine which workflows to run
+            let workflowsToRun = [];
+            if (comment.includes('/run-all')) {
+              workflowsToRun = Object.values(workflowMap);
+            } else {
+              for (const [command, workflow] of Object.entries(workflowMap)) {
+                if (comment.includes(command)) {
+                  workflowsToRun.push(workflow);
+                }
+              }
+            }
 
             // Helper to find the triggered run with retries
             async function findWorkflowRun(workflowId, beforeTime) {
@@ -242,34 +138,36 @@ jobs:
               return null;
             }
 
-            for (const [command, workflow] of Object.entries(workflowMap)) {
-              if (comment.includes(command)) {
-                const beforeTime = new Date();
-                try {
-                  console.log(`Triggering ${workflow} on ref ${ref}`);
-                  await github.rest.actions.createWorkflowDispatch({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    workflow_id: workflow,
-                    ref: ref
-                  });
+            const results = [];
+            for (const workflow of workflowsToRun) {
+              const beforeTime = new Date();
+              try {
+                console.log(`Triggering ${workflow} on ref ${ref}`);
+                await github.rest.actions.createWorkflowDispatch({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  workflow_id: workflow,
+                  ref: ref
+                });
+                console.log(`Successfully triggered ${workflow}`);
 
-                  const run = await findWorkflowRun(workflow, beforeTime);
-                  const link = run ? `[\`${workflow}\`](${run.html_url})` : `\`${workflow}\``;
-
-                  await github.rest.issues.createComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: context.issue.number,
-                    body: `* Triggered ${link} on branch \`${ref}\``
-                  });
-                } catch (error) {
-                  await github.rest.issues.createComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: context.issue.number,
-                    body: `* Failed to trigger \`${workflow}\`: ${error.message}`
-                  });
+                const run = await findWorkflowRun(workflow, beforeTime);
+                if (run) {
+                  results.push(`* [\`${workflow}\`](${run.html_url})`);
+                } else {
+                  results.push(`* \`${workflow}\` (run pending)`);
                 }
+              } catch (error) {
+                console.log(`Failed to trigger ${workflow}: ${error.message}`);
+                results.push(`* \`${workflow}\`: ${error.message}`);
               }
             }
+
+            // Post summary comment
+            const body = `### Triggered workflows on branch \`${ref}\`\n\n${results.join('\n')}`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });
