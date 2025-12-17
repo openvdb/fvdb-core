@@ -3,6 +3,7 @@ on:
     pull_request:
       branches:
         - '**'
+    workflow_dispatch:
 
 # Allow subsequent pushes to the same PR or REF to cancel any previous jobs.
 concurrency:
