@@ -69,24 +69,19 @@ jobs:
               content: 'rocket'
             });
 
-      - name: Get PR info
-        id: pr-info
+      - name: Trigger workflows
         uses: actions/github-script@v7
         with:
           script: |
+            // Get PR branch
             const pr = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: context.issue.number
             });
-            core.setOutput('ref', pr.data.head.ref);
-            console.log(`PR branch: ${pr.data.head.ref}`);
+            const ref = pr.data.head.ref;
+            console.log(`PR branch: ${ref}`);
 
-      - name: Trigger workflows
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const ref = '${{ steps.pr-info.outputs.ref }}';
             const comment = context.payload.comment.body;
 
             const workflowMap = {
@@ -96,13 +91,16 @@ jobs:
               '/run-cu130': 'cu130.yml'
             };
 
+            // Helper to check if command is present (with word boundary)
+            const hasCommand = (cmd) => new RegExp(`${cmd}(?:\\s|$)`).test(comment);
+
             // Determine which workflows to run
             let workflowsToRun = [];
-            if (comment.includes('/run-all')) {
+            if (hasCommand('/run-all')) {
               workflowsToRun = Object.values(workflowMap);
             } else {
               for (const [command, workflow] of Object.entries(workflowMap)) {
-                if (comment.includes(command)) {
+                if (hasCommand(command)) {
                   workflowsToRun.push(workflow);
                 }
               }
