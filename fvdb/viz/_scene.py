@@ -342,17 +342,17 @@ class Scene:
     @property
     def camera_orbit_direction(self) -> torch.Tensor:
         """
-        Return the direction pointing from the orbit center to the camera position.
+        Return the direction pointing from the camera position toward the orbit center.
 
         .. seealso:: :attr:`camera_orbit_radius`
         .. seealso:: :attr:`camera_orbit_center`
 
         .. note::
-            The camera itself is positioned at: ``camera_position = orbit_center + orbit_radius * orbit_direction``
+            The camera itself is positioned at: ``camera_position = orbit_center - orbit_radius * orbit_direction``
 
         Returns:
             direction (torch.Tensor): A tensor of shape ``(3,)`` representing the direction pointing from the orbit
-                center to the camera position.
+                camera position toward the orbit center.
         """
         server = _get_viewer_server_cpp()
         dx, dy, dz = server.camera_view_direction(self._name)
@@ -361,17 +361,17 @@ class Scene:
     @camera_orbit_direction.setter
     def camera_orbit_direction(self, direction: NumericMaxRank1):
         """
-        Set the direction pointing from the orbit center to the camera position.
+        Set the direction pointing from the camera position toward the orbit center.
 
         .. seealso:: :attr:`camera_orbit_radius`
         .. seealso:: :attr:`camera_orbit_center`
 
         .. note::
-            The camera itself is positioned at: ``camera_position = orbit_center + orbit_radius * orbit_direction``
+            The camera itself is positioned at: ``camera_position = orbit_center - orbit_radius * orbit_direction``
 
         Args:
             direction (NumericMaxRank1): A tensor-like object of shape ``(3,)`` representing the direction pointing from the orbit
-                center to the camera position.
+                camera position toward the orbit center.
         """
         server = _get_viewer_server_cpp()
         dir_vec3f = to_Vec3f(direction).cpu().numpy()
