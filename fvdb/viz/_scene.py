@@ -351,7 +351,7 @@ class Scene:
             The camera itself is positioned at: ``camera_position = orbit_center - orbit_radius * orbit_direction``
 
         Returns:
-            direction (torch.Tensor): A tensor of shape ``(3,)`` representing the direction pointing from the orbit
+            direction (torch.Tensor): A tensor of shape ``(3,)`` representing the direction pointing from the
                 camera position toward the orbit center.
         """
         server = _get_viewer_server_cpp()
@@ -370,7 +370,7 @@ class Scene:
             The camera itself is positioned at: ``camera_position = orbit_center - orbit_radius * orbit_direction``
 
         Args:
-            direction (NumericMaxRank1): A tensor-like object of shape ``(3,)`` representing the direction pointing from the orbit
+            direction (NumericMaxRank1): A tensor-like object of shape ``(3,)`` representing the direction pointing from the
                 camera position toward the orbit center.
         """
         server = _get_viewer_server_cpp()
