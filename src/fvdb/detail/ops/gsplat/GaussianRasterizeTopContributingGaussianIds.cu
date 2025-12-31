@@ -387,7 +387,7 @@ launchRasterizeTopContributingGaussianIdsForwardKernel(
         idsToRenderVec.push_back(
             torch::empty({size, settings.numDepthSamples}, means2d.options().dtype(torch::kInt32)));
         weightsToRenderVec.push_back(
-            torch::empty({size, settings.numDepthSamples},
+            torch::zeros({size, settings.numDepthSamples},
                          means2d.options().dtype(c10::CppTypeToScalarType<ScalarType>::value)));
     }
 
