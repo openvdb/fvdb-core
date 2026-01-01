@@ -158,6 +158,7 @@ class GaussianSplat3d {
         torch::Tensor tilePixelMask;   // [num_active_tiles, words_per_tile] - bitmask of pixels
         torch::Tensor tilePixelCumsum; // [num_active_tiles] - cumulative sum of active pixels
         torch::Tensor pixelMap;        // [num_active_pixels] - mapping for pixel write order
+        // Note: tileOffsets (inherited) is 1D [num_active_tiles + 1] in sparse mode
     };
 
   public:
@@ -1381,56 +1382,6 @@ class GaussianSplat3d {
                                              const torch::Tensor &worldToCameraMatrices,
                                              const torch::Tensor &projectionMatrices,
                                              const fvdb::detail::ops::RenderSettings &settings);
-
-    /// @brief Render the gaussian splatting scene
-    ///         For every pixel being rendered, this function returns multiple samples in depth of
-    ///         the gaussian IDs and multiple samples of the weighted alpha values. The number of
-    ///         samples per pixel is determined by the sampling parameters in the settings. If
-    ///         the size of the requested number of samples is greater than the number of
-    ///         contributing samples for a pixel, the remaining samples' weights are filled with
-    ///         zeros and the IDs are filled with -1.  The samples are ordered front to back in
-    ///         their depth ordering from camera.
-    /// @param worldToCameraMatrices [C, 4, 4]
-    /// @param projectionMatrices [C, 3, 3]
-    /// @param settings
-    /// @return Tuple of two tensors:
-    ///     ids: A [B, H, W, K] tensor containing the the IDs of the top K contributors to the
-    ///          rendered pixel for each camera
-    ///     weights: A [B, H, W, K] tensor containing the weights of the top K contributors to the
-    ///              rendered pixel for each camera. The weights are normalized to sum to the alpha
-    ///              value of the final rendered pixel if the list is exahustive of all contributing
-    ///              samples.
-    std::tuple<torch::Tensor, torch::Tensor>
-    renderTopContributingGaussianIdsImpl(const torch::Tensor &worldToCameraMatrices,
-                                         const torch::Tensor &projectionMatrices,
-                                         const fvdb::detail::ops::RenderSettings &settings);
-
-    /// @brief Sparse render the gaussian splatting scene
-    ///         For every pixel being rendered, this function returns multiple samples in depth of
-    ///         the gaussian IDs and multiple samples of the weighted alpha values. The number of
-    ///         samples per pixel is determined by the sampling parameters in the settings. If
-    ///         the size of the requested number of samples is greater than the number of
-    ///         contributing samples for a pixel, the remaining samples' weights are filled with
-    ///         zeros and the IDs are filled with -1.  The samples are ordered front to back in
-    ///         their depth ordering from camera.
-    /// @param pixelsToRender [P1 + P2 + ..., 2] JaggedTensor of pixels per camera to render.
-    /// @param worldToCameraMatrices [C, 4, 4]
-    /// @param projectionMatrices [C, 3, 3]
-    /// @param settings
-    /// @return Tuple of two tensors:
-    ///     ids: A [P1 + P2 + ..., K] jagged tensor containing the the IDs of the top K contributors
-    ///     to the
-    ///          rendered pixel for each camera
-    ///     weights: A [P1 + P2 + ..., K] jagged tensor containing the weights of the top K
-    ///     contributors to the
-    ///              rendered pixel for each camera. The weights are normalized to sum to the alpha
-    ///              value of the final rendered pixel if the list is exahustive of all contributing
-    ///              samples.
-    std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
-    sparseRenderTopContributingGaussianIdsImpl(const fvdb::JaggedTensor &pixelsToRender,
-                                               const torch::Tensor &worldToCameraMatrices,
-                                               const torch::Tensor &projectionMatrices,
-                                               const fvdb::detail::ops::RenderSettings &settings);
 
     /// @brief Render the gaussian splatting scene
     ///         For every pixel being rendered, this function returns multiple samples in depth of
