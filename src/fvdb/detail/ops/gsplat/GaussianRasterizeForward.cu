@@ -329,7 +329,7 @@ launchRasterizeForwardKernel(
     const bool packed = means2d.dim() == 2;
 
     // Get C from tileOffsets for dense mode (means2d.size(0) is nnz in packed mode)
-    // For sparse mode, C is only used for output sizing which comes from pixelsToRender
+    // For sparse mode, C is unused, only used for output sizing for dense mode
     const uint32_t C        = tileOffsetsAreSparse ? 0 : tileOffsets.size(0); // number of cameras
     const uint32_t N        = packed ? 0 : means2d.size(1);                   // number of gaussians
     const uint32_t channels = features.size(-1);

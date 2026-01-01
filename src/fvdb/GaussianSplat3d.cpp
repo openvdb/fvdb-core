@@ -390,7 +390,7 @@ GaussianSplat3d::projectGaussiansImpl(const torch::Tensor &worldToCameraMatrices
 }
 
 GaussianSplat3d::SparseProjectedGaussianSplats
-GaussianSplat3d::projectGaussiansImplSparse(const JaggedTensor &pixelsToRender,
+GaussianSplat3d::sparseProjectGaussiansImpl(const JaggedTensor &pixelsToRender,
                                             const torch::Tensor &worldToCameraMatrices,
                                             const torch::Tensor &projectionMatrices,
                                             const RenderSettings &settings) {
@@ -424,8 +424,6 @@ GaussianSplat3d::projectGaussiansImplSparse(const JaggedTensor &pixelsToRender,
         fvdb::detail::ops::computeSparseInfo(
             settings.tileSize, numTilesW, numTilesH, pixelsToRender);
 
-    // Keep activeTiles as Int32 for rasterization compatibility
-    // (RasterizeCommonArgs expects int32_t)
     ret.activeTiles     = activeTiles;
     ret.activeTileMask  = activeTileMask;
     ret.tilePixelMask   = tilePixelMask;
@@ -591,9 +589,7 @@ GaussianSplat3d::sparseRenderImpl(const JaggedTensor &pixelsToRender,
                                   const fvdb::detail::ops::RenderSettings &settings) {
     FVDB_FUNC_RANGE();
 
-    // Use sparse projection which computes sparse tile info first and then only
-    // intersects with active tiles, avoiding wasted computation on inactive tiles
-    const SparseProjectedGaussianSplats &state = projectGaussiansImplSparse(
+    const SparseProjectedGaussianSplats &state = sparseProjectGaussiansImpl(
         pixelsToRender, worldToCameraMatrices, projectionMatrices, settings);
 
     auto rasterizeResult =
@@ -647,9 +643,8 @@ GaussianSplat3d::sparseRenderNumContributingGaussiansImpl(
     const torch::Tensor &projectionMatrices,
     const fvdb::detail::ops::RenderSettings &settings) {
     FVDB_FUNC_RANGE();
-    // Use sparse projection which computes sparse tile info first and then only
-    // intersects with active tiles, avoiding wasted computation on inactive tiles
-    const SparseProjectedGaussianSplats &state = projectGaussiansImplSparse(
+
+    const SparseProjectedGaussianSplats &state = sparseProjectGaussiansImpl(
         pixelsToRender, worldToCameraMatrices, projectionMatrices, settings);
 
     return FVDB_DISPATCH_KERNEL_DEVICE(state.perGaussian2dMean.device(), [&]() {
@@ -714,9 +709,8 @@ GaussianSplat3d::sparseRenderContributingGaussianIdsImpl(
     const fvdb::detail::ops::RenderSettings &settings,
     const std::optional<fvdb::JaggedTensor> &maybeNumContributingGaussians) {
     FVDB_FUNC_RANGE();
-    // Use sparse projection which computes sparse tile info first and then only
-    // intersects with active tiles, avoiding wasted computation on inactive tiles
-    const SparseProjectedGaussianSplats &state = projectGaussiansImplSparse(
+
+    const SparseProjectedGaussianSplats &state = sparseProjectGaussiansImpl(
         pixelsToRender, worldToCameraMatrices, projectionMatrices, settings);
 
     return FVDB_DISPATCH_KERNEL_DEVICE(state.perGaussian2dMean.device(), [&]() {

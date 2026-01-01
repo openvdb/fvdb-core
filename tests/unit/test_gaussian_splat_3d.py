@@ -2032,7 +2032,10 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
         # Stack x and y coordinates to form 2D pixel coordinates
         test_pixels = torch.stack([yCoords, xCoords], 1)
 
-        pixels_to_render = JaggedTensor([test_pixels]).to(self.device)
+        # Create JaggedTensor with one list per camera (each camera gets the same pixels)
+        # This is required because sparse rendering expects num_outer_lists to match num_cameras
+        pixels_per_camera = [test_pixels.clone() for _ in range(self.num_cameras)]
+        pixels_to_render = JaggedTensor(pixels_per_camera).to(self.device)
 
         # Test render num contributing gaussians
         num_contributing_gaussians, num_contributing_gaussians_alphas = (
@@ -2155,8 +2158,10 @@ class TestGaussianContributingGaussianIdsRender(BaseGaussianTestCase):
         xCoords = torch.randint(0, self.width, (num_pixels_to_render,))
         yCoords = torch.randint(0, self.height, (num_pixels_to_render,))
 
-        # Stack x and y coordinates to form 2D pixel coordinates
-        pixels_to_render = torch.stack([yCoords, xCoords], 1).unsqueeze(0).to(self.device)
+        # Stack x and y coordinates to form 2D pixel coordinates [num_pixels, 2]
+        # Expand to [C, num_pixels, 2] so it matches the number of cameras
+        test_pixels = torch.stack([yCoords, xCoords], 1)
+        pixels_to_render = test_pixels.unsqueeze(0).expand(self.num_cameras, -1, -1).to(self.device)
 
         # test sparse render num contributing gaussians
         sparse_num_contributing_gaussians, sparse_alphas = self.gs3d.sparse_render_num_contributing_gaussians(

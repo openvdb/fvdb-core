@@ -1300,7 +1300,7 @@ class GaussianSplat3d {
     /// @param settings Render settings
     /// @return SparseProjectedGaussianSplats containing projected Gaussians and sparse tile data
     SparseProjectedGaussianSplats
-    projectGaussiansImplSparse(const JaggedTensor &pixelsToRender,
+    sparseProjectGaussiansImpl(const JaggedTensor &pixelsToRender,
                                const torch::Tensor &worldToCameraMatrices,
                                const torch::Tensor &projectionMatrices,
                                const fvdb::detail::ops::RenderSettings &settings);

@@ -162,14 +162,11 @@ struct RasterizeTopContributingGaussianIdsArgs {
                             const uint32_t blockSize,
                             const bool pixelIsActive,
                             const uint32_t activePixelIndex) {
-        // Only Gaussians need shared memory now - per-thread arrays go in registers
         alignas(Gaussian2D<ScalarType>) extern __shared__ char s[];
         auto *sharedGaussians = reinterpret_cast<Gaussian2D<ScalarType> *>(s); // [blockSize]
 
         const auto tidx = threadIdx.y * blockDim.x + threadIdx.x;
 
-        // Per-thread arrays in REGISTERS instead of shared memory
-        // This dramatically reduces shared memory usage and improves occupancy
         constexpr uint32_t MAX_STATIC_SAMPLES = (NUM_DEPTH_SAMPLES > 0) ? NUM_DEPTH_SAMPLES : 32;
         int32_t maxRadianceWeightIndices[MAX_STATIC_SAMPLES];
         ScalarType radianceWeights[MAX_STATIC_SAMPLES];
@@ -298,10 +295,9 @@ struct RasterizeTopContributingGaussianIdsArgs {
  ****************************************************************************/
 
 template <typename ScalarType, bool IS_PACKED, uint32_t NUM_DEPTH_SAMPLES = 0>
-__global__ void
-    __launch_bounds__(256, 5) // 256 threads/block, target 5+ blocks/SM for better latency hiding
-    rasterizeTopContributingGaussianIdsForward(
-        RasterizeTopContributingGaussianIdsArgs<ScalarType, IS_PACKED, NUM_DEPTH_SAMPLES> args) {
+__global__ void __launch_bounds__(256) // 256 threads/block
+rasterizeTopContributingGaussianIdsForward(
+    RasterizeTopContributingGaussianIdsArgs<ScalarType, IS_PACKED, NUM_DEPTH_SAMPLES> args) {
     auto &commonArgs = args.commonArgs;
 
     // each thread draws one pixel, but also timeshares caching gaussians in a
@@ -352,24 +348,24 @@ __global__ void
 // Helper to launch the kernel with a specific NUM_DEPTH_SAMPLES template parameter
 template <typename ScalarType, bool IS_PACKED, uint32_t NUM_DEPTH_SAMPLES>
 void
-launchKernelWithDepthSamples(const dim3 &gridDim,
-                             const dim3 &blockDim,
-                             const uint32_t sharedMem,
-                             const at::cuda::CUDAStream &stream,
-                             const torch::Tensor &means2d,
-                             const torch::Tensor &conics,
-                             const torch::Tensor &opacities,
-                             const at::optional<torch::Tensor> &backgrounds,
-                             const at::optional<torch::Tensor> &masks,
-                             const RenderSettings &settings,
-                             const torch::Tensor &tileOffsets,
-                             const torch::Tensor &tileGaussianIds,
-                             const fvdb::JaggedTensor &outIds,
-                             const fvdb::JaggedTensor &outWeights,
-                             const std::optional<torch::Tensor> &activeTiles,
-                             const std::optional<torch::Tensor> &tilePixelMask,
-                             const std::optional<torch::Tensor> &tilePixelCumsum,
-                             const std::optional<torch::Tensor> &pixelMap) {
+launchKernelWithNumSamples(const dim3 &gridDim,
+                           const dim3 &blockDim,
+                           const uint32_t sharedMem,
+                           const at::cuda::CUDAStream &stream,
+                           const torch::Tensor &means2d,
+                           const torch::Tensor &conics,
+                           const torch::Tensor &opacities,
+                           const at::optional<torch::Tensor> &backgrounds,
+                           const at::optional<torch::Tensor> &masks,
+                           const RenderSettings &settings,
+                           const torch::Tensor &tileOffsets,
+                           const torch::Tensor &tileGaussianIds,
+                           const fvdb::JaggedTensor &outIds,
+                           const fvdb::JaggedTensor &outWeights,
+                           const std::optional<torch::Tensor> &activeTiles,
+                           const std::optional<torch::Tensor> &tilePixelMask,
+                           const std::optional<torch::Tensor> &tilePixelCumsum,
+                           const std::optional<torch::Tensor> &pixelMap) {
     if (cudaFuncSetAttribute(
             rasterizeTopContributingGaussianIdsForward<ScalarType, IS_PACKED, NUM_DEPTH_SAMPLES>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -425,8 +421,7 @@ launchRasterizeTopContributingGaussianIdsForwardKernel(
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means2d));
 
     TORCH_CHECK_VALUE(settings.numDepthSamples > 0, "numDepthSamples must be greater than 0");
-    TORCH_CHECK_VALUE(settings.numDepthSamples <= 32,
-                      "numDepthSamples must be <= 32 for register-based kernel");
+    TORCH_CHECK_VALUE(settings.numDepthSamples <= 32, "numDepthSamples must be <= 32");
 
     // tileOffsets can be 3D (dense) or 1D (sparse)
     if (tileOffsets.dim() == 3) {
@@ -468,7 +463,6 @@ launchRasterizeTopContributingGaussianIdsForwardKernel(
 
     const at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
-    // Shared memory now only holds the Gaussian cache (per-thread arrays are in registers)
     // Each pixel in each tile will cache a gaussian consisting of:
     //   - int32_t  gaussian_id; -- 4 bytes
     //   - vec2t    xy;          -- 8 bytes for float32
@@ -483,188 +477,187 @@ launchRasterizeTopContributingGaussianIdsForwardKernel(
                               : dim3(C * tileExtentH * tileExtentW, 1, 1);
 
     // Dispatch to compile-time specialized kernels for common numDepthSamples values
-    // This allows the compiler to optimize register allocation and unroll loops
     switch (settings.numDepthSamples) {
     case 1:
-        launchKernelWithDepthSamples<ScalarType, IS_PACKED, 1>(gridDim,
-                                                               blockDim,
-                                                               sharedMem,
-                                                               stream,
-                                                               means2d,
-                                                               conics,
-                                                               opacities,
-                                                               backgrounds,
-                                                               masks,
-                                                               settings,
-                                                               tileOffsets,
-                                                               tileGaussianIds,
-                                                               outIds,
-                                                               outWeights,
-                                                               activeTiles,
-                                                               tilePixelMask,
-                                                               tilePixelCumsum,
-                                                               pixelMap);
+        launchKernelWithNumSamples<ScalarType, IS_PACKED, 1>(gridDim,
+                                                             blockDim,
+                                                             sharedMem,
+                                                             stream,
+                                                             means2d,
+                                                             conics,
+                                                             opacities,
+                                                             backgrounds,
+                                                             masks,
+                                                             settings,
+                                                             tileOffsets,
+                                                             tileGaussianIds,
+                                                             outIds,
+                                                             outWeights,
+                                                             activeTiles,
+                                                             tilePixelMask,
+                                                             tilePixelCumsum,
+                                                             pixelMap);
         break;
     case 2:
-        launchKernelWithDepthSamples<ScalarType, IS_PACKED, 2>(gridDim,
-                                                               blockDim,
-                                                               sharedMem,
-                                                               stream,
-                                                               means2d,
-                                                               conics,
-                                                               opacities,
-                                                               backgrounds,
-                                                               masks,
-                                                               settings,
-                                                               tileOffsets,
-                                                               tileGaussianIds,
-                                                               outIds,
-                                                               outWeights,
-                                                               activeTiles,
-                                                               tilePixelMask,
-                                                               tilePixelCumsum,
-                                                               pixelMap);
+        launchKernelWithNumSamples<ScalarType, IS_PACKED, 2>(gridDim,
+                                                             blockDim,
+                                                             sharedMem,
+                                                             stream,
+                                                             means2d,
+                                                             conics,
+                                                             opacities,
+                                                             backgrounds,
+                                                             masks,
+                                                             settings,
+                                                             tileOffsets,
+                                                             tileGaussianIds,
+                                                             outIds,
+                                                             outWeights,
+                                                             activeTiles,
+                                                             tilePixelMask,
+                                                             tilePixelCumsum,
+                                                             pixelMap);
         break;
     case 4:
-        launchKernelWithDepthSamples<ScalarType, IS_PACKED, 4>(gridDim,
-                                                               blockDim,
-                                                               sharedMem,
-                                                               stream,
-                                                               means2d,
-                                                               conics,
-                                                               opacities,
-                                                               backgrounds,
-                                                               masks,
-                                                               settings,
-                                                               tileOffsets,
-                                                               tileGaussianIds,
-                                                               outIds,
-                                                               outWeights,
-                                                               activeTiles,
-                                                               tilePixelMask,
-                                                               tilePixelCumsum,
-                                                               pixelMap);
+        launchKernelWithNumSamples<ScalarType, IS_PACKED, 4>(gridDim,
+                                                             blockDim,
+                                                             sharedMem,
+                                                             stream,
+                                                             means2d,
+                                                             conics,
+                                                             opacities,
+                                                             backgrounds,
+                                                             masks,
+                                                             settings,
+                                                             tileOffsets,
+                                                             tileGaussianIds,
+                                                             outIds,
+                                                             outWeights,
+                                                             activeTiles,
+                                                             tilePixelMask,
+                                                             tilePixelCumsum,
+                                                             pixelMap);
         break;
     case 8:
-        launchKernelWithDepthSamples<ScalarType, IS_PACKED, 8>(gridDim,
-                                                               blockDim,
-                                                               sharedMem,
-                                                               stream,
-                                                               means2d,
-                                                               conics,
-                                                               opacities,
-                                                               backgrounds,
-                                                               masks,
-                                                               settings,
-                                                               tileOffsets,
-                                                               tileGaussianIds,
-                                                               outIds,
-                                                               outWeights,
-                                                               activeTiles,
-                                                               tilePixelMask,
-                                                               tilePixelCumsum,
-                                                               pixelMap);
+        launchKernelWithNumSamples<ScalarType, IS_PACKED, 8>(gridDim,
+                                                             blockDim,
+                                                             sharedMem,
+                                                             stream,
+                                                             means2d,
+                                                             conics,
+                                                             opacities,
+                                                             backgrounds,
+                                                             masks,
+                                                             settings,
+                                                             tileOffsets,
+                                                             tileGaussianIds,
+                                                             outIds,
+                                                             outWeights,
+                                                             activeTiles,
+                                                             tilePixelMask,
+                                                             tilePixelCumsum,
+                                                             pixelMap);
         break;
     case 12:
-        launchKernelWithDepthSamples<ScalarType, IS_PACKED, 12>(gridDim,
-                                                                blockDim,
-                                                                sharedMem,
-                                                                stream,
-                                                                means2d,
-                                                                conics,
-                                                                opacities,
-                                                                backgrounds,
-                                                                masks,
-                                                                settings,
-                                                                tileOffsets,
-                                                                tileGaussianIds,
-                                                                outIds,
-                                                                outWeights,
-                                                                activeTiles,
-                                                                tilePixelMask,
-                                                                tilePixelCumsum,
-                                                                pixelMap);
+        launchKernelWithNumSamples<ScalarType, IS_PACKED, 12>(gridDim,
+                                                              blockDim,
+                                                              sharedMem,
+                                                              stream,
+                                                              means2d,
+                                                              conics,
+                                                              opacities,
+                                                              backgrounds,
+                                                              masks,
+                                                              settings,
+                                                              tileOffsets,
+                                                              tileGaussianIds,
+                                                              outIds,
+                                                              outWeights,
+                                                              activeTiles,
+                                                              tilePixelMask,
+                                                              tilePixelCumsum,
+                                                              pixelMap);
         break;
     case 16:
-        launchKernelWithDepthSamples<ScalarType, IS_PACKED, 16>(gridDim,
-                                                                blockDim,
-                                                                sharedMem,
-                                                                stream,
-                                                                means2d,
-                                                                conics,
-                                                                opacities,
-                                                                backgrounds,
-                                                                masks,
-                                                                settings,
-                                                                tileOffsets,
-                                                                tileGaussianIds,
-                                                                outIds,
-                                                                outWeights,
-                                                                activeTiles,
-                                                                tilePixelMask,
-                                                                tilePixelCumsum,
-                                                                pixelMap);
+        launchKernelWithNumSamples<ScalarType, IS_PACKED, 16>(gridDim,
+                                                              blockDim,
+                                                              sharedMem,
+                                                              stream,
+                                                              means2d,
+                                                              conics,
+                                                              opacities,
+                                                              backgrounds,
+                                                              masks,
+                                                              settings,
+                                                              tileOffsets,
+                                                              tileGaussianIds,
+                                                              outIds,
+                                                              outWeights,
+                                                              activeTiles,
+                                                              tilePixelMask,
+                                                              tilePixelCumsum,
+                                                              pixelMap);
         break;
     case 24:
-        launchKernelWithDepthSamples<ScalarType, IS_PACKED, 24>(gridDim,
-                                                                blockDim,
-                                                                sharedMem,
-                                                                stream,
-                                                                means2d,
-                                                                conics,
-                                                                opacities,
-                                                                backgrounds,
-                                                                masks,
-                                                                settings,
-                                                                tileOffsets,
-                                                                tileGaussianIds,
-                                                                outIds,
-                                                                outWeights,
-                                                                activeTiles,
-                                                                tilePixelMask,
-                                                                tilePixelCumsum,
-                                                                pixelMap);
+        launchKernelWithNumSamples<ScalarType, IS_PACKED, 24>(gridDim,
+                                                              blockDim,
+                                                              sharedMem,
+                                                              stream,
+                                                              means2d,
+                                                              conics,
+                                                              opacities,
+                                                              backgrounds,
+                                                              masks,
+                                                              settings,
+                                                              tileOffsets,
+                                                              tileGaussianIds,
+                                                              outIds,
+                                                              outWeights,
+                                                              activeTiles,
+                                                              tilePixelMask,
+                                                              tilePixelCumsum,
+                                                              pixelMap);
         break;
     case 32:
-        launchKernelWithDepthSamples<ScalarType, IS_PACKED, 32>(gridDim,
-                                                                blockDim,
-                                                                sharedMem,
-                                                                stream,
-                                                                means2d,
-                                                                conics,
-                                                                opacities,
-                                                                backgrounds,
-                                                                masks,
-                                                                settings,
-                                                                tileOffsets,
-                                                                tileGaussianIds,
-                                                                outIds,
-                                                                outWeights,
-                                                                activeTiles,
-                                                                tilePixelMask,
-                                                                tilePixelCumsum,
-                                                                pixelMap);
+        launchKernelWithNumSamples<ScalarType, IS_PACKED, 32>(gridDim,
+                                                              blockDim,
+                                                              sharedMem,
+                                                              stream,
+                                                              means2d,
+                                                              conics,
+                                                              opacities,
+                                                              backgrounds,
+                                                              masks,
+                                                              settings,
+                                                              tileOffsets,
+                                                              tileGaussianIds,
+                                                              outIds,
+                                                              outWeights,
+                                                              activeTiles,
+                                                              tilePixelMask,
+                                                              tilePixelCumsum,
+                                                              pixelMap);
         break;
     default:
         // Fallback to dynamic kernel for non-standard sizes
-        launchKernelWithDepthSamples<ScalarType, IS_PACKED, 0>(gridDim,
-                                                               blockDim,
-                                                               sharedMem,
-                                                               stream,
-                                                               means2d,
-                                                               conics,
-                                                               opacities,
-                                                               backgrounds,
-                                                               masks,
-                                                               settings,
-                                                               tileOffsets,
-                                                               tileGaussianIds,
-                                                               outIds,
-                                                               outWeights,
-                                                               activeTiles,
-                                                               tilePixelMask,
-                                                               tilePixelCumsum,
-                                                               pixelMap);
+        launchKernelWithNumSamples<ScalarType, IS_PACKED, 0>(gridDim,
+                                                             blockDim,
+                                                             sharedMem,
+                                                             stream,
+                                                             means2d,
+                                                             conics,
+                                                             opacities,
+                                                             backgrounds,
+                                                             masks,
+                                                             settings,
+                                                             tileOffsets,
+                                                             tileGaussianIds,
+                                                             outIds,
+                                                             outWeights,
+                                                             activeTiles,
+                                                             tilePixelMask,
+                                                             tilePixelCumsum,
+                                                             pixelMap);
         break;
     }
 
