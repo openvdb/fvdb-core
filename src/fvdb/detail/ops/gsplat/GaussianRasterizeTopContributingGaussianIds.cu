@@ -68,7 +68,9 @@ bubbleSortByDepth(uint32_t *depthIndices,
 }
 
 // Structure to hold arguments and methods for the rasterize top contributing gaussian ids kernel
-template <typename ScalarType, bool IS_PACKED> struct RasterizeTopContributingGaussianIdsArgs {
+// NUM_DEPTH_SAMPLES: 0 means dynamic (use mNumDepthSamples), >0 means compile-time constant
+template <typename ScalarType, bool IS_PACKED, uint32_t NUM_DEPTH_SAMPLES = 0>
+struct RasterizeTopContributingGaussianIdsArgs {
     using CommonArgs = RasterizeCommonArgs<ScalarType, 1, IS_PACKED>;
     CommonArgs commonArgs;
 
@@ -141,6 +143,16 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeTopContributingGa
         mOutIds.data()[pixelIndex][depthIndex] = id;
     }
 
+    // Helper to get the actual number of depth samples (compile-time or runtime)
+    __device__ __forceinline__ uint32_t
+    getNumDepthSamples() const {
+        if constexpr (NUM_DEPTH_SAMPLES > 0) {
+            return NUM_DEPTH_SAMPLES;
+        } else {
+            return mNumDepthSamples;
+        }
+    }
+
     __device__ void
     volumeRenderTileForward(const uint32_t cameraId,
                             const uint32_t row,
@@ -150,33 +162,29 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeTopContributingGa
                             const uint32_t blockSize,
                             const bool pixelIsActive,
                             const uint32_t activePixelIndex) {
+        // Only Gaussians need shared memory now - per-thread arrays go in registers
         alignas(Gaussian2D<ScalarType>) extern __shared__ char s[];
         auto *sharedGaussians = reinterpret_cast<Gaussian2D<ScalarType> *>(s); // [blockSize]
 
-        // Shared memory for the indices and max radiance weights for all pixels in this block
-        int32_t *batchMaxRadianceWeightIndices = reinterpret_cast<int32_t *>(
-            sharedGaussians + blockSize); // [blockSize * mNumDepthSamples]
-
-        ScalarType *batchRadianceWeights = reinterpret_cast<ScalarType *>(
-            batchMaxRadianceWeightIndices +
-            blockSize * mNumDepthSamples); // [blockSize *mNumDepthSamples]
-
-        // Shared memory for tracking depth order indices
-        uint32_t *batchDepthIndices = reinterpret_cast<uint32_t *>(
-            batchRadianceWeights + blockSize * mNumDepthSamples); // [blockSize * mNumDepthSamples]
-
         const auto tidx = threadIdx.y * blockDim.x + threadIdx.x;
 
-        // Shared memory for the indices and max radiance weights for this pixel in the block
-        int32_t *maxRadianceWeightIndices = batchMaxRadianceWeightIndices + tidx * mNumDepthSamples;
-        ScalarType *radianceWeights       = batchRadianceWeights + tidx * mNumDepthSamples;
-        uint32_t *depthIndices            = batchDepthIndices + tidx * mNumDepthSamples;
+        // Per-thread arrays in REGISTERS instead of shared memory
+        // This dramatically reduces shared memory usage and improves occupancy
+        constexpr uint32_t MAX_STATIC_SAMPLES = (NUM_DEPTH_SAMPLES > 0) ? NUM_DEPTH_SAMPLES : 32;
+        int32_t maxRadianceWeightIndices[MAX_STATIC_SAMPLES];
+        ScalarType radianceWeights[MAX_STATIC_SAMPLES];
+        uint32_t depthIndices[MAX_STATIC_SAMPLES];
 
-        // Initialize the indices and max radiance weights for this pixel in the block
-        for (uint32_t w = 0; w < mNumDepthSamples; ++w) {
-            radianceWeights[w]          = 0.f;
-            maxRadianceWeightIndices[w] = -1;
-            depthIndices[w]             = UINT32_MAX; // Large value for uninitialized
+        const uint32_t numSamples = getNumDepthSamples();
+
+// Initialize the indices and max radiance weights for this pixel
+#pragma unroll
+        for (uint32_t w = 0; w < MAX_STATIC_SAMPLES; ++w) {
+            if (w < numSamples) {
+                radianceWeights[w]          = 0.f;
+                maxRadianceWeightIndices[w] = -1;
+                depthIndices[w]             = UINT32_MAX; // Large value for uninitialized
+            }
         }
 
         ScalarType accumTransmittance = 1.0f;
@@ -247,8 +255,9 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeTopContributingGa
 
                     // Find the index of the smallest radiance weight in our top K samples
                     uint32_t min_idx = 0;
-                    for (uint32_t k = 1; k < mNumDepthSamples; ++k) {
-                        if (radianceWeights[k] < radianceWeights[min_idx]) {
+#pragma unroll
+                    for (uint32_t k = 1; k < MAX_STATIC_SAMPLES; ++k) {
+                        if (k < numSamples && radianceWeights[k] < radianceWeights[min_idx]) {
                             min_idx = k;
                         }
                     }
@@ -269,14 +278,16 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeTopContributingGa
 
         if (pixelIsActive) {
             // Sort the samples by depth order before outputting
-            bubbleSortByDepth(
-                depthIndices, radianceWeights, maxRadianceWeightIndices, mNumDepthSamples);
+            bubbleSortByDepth(depthIndices, radianceWeights, maxRadianceWeightIndices, numSamples);
 
             const auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
 
-            for (uint32_t k = 0; k < mNumDepthSamples; ++k) {
-                writeWeight(pixIdx, k, radianceWeights[k]);
-                writeId(pixIdx, k, maxRadianceWeightIndices[k]);
+#pragma unroll
+            for (uint32_t k = 0; k < MAX_STATIC_SAMPLES; ++k) {
+                if (k < numSamples) {
+                    writeWeight(pixIdx, k, radianceWeights[k]);
+                    writeId(pixIdx, k, maxRadianceWeightIndices[k]);
+                }
             }
         }
     }
@@ -286,10 +297,11 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeTopContributingGa
  * Rasterization to Pixels Forward Pass
  ****************************************************************************/
 
-template <typename ScalarType, bool IS_PACKED>
+template <typename ScalarType, bool IS_PACKED, uint32_t NUM_DEPTH_SAMPLES = 0>
 __global__ void
-rasterizeTopContributingGaussianIdsForward(
-    RasterizeTopContributingGaussianIdsArgs<ScalarType, IS_PACKED> args) {
+    __launch_bounds__(256, 5) // 256 threads/block, target 5+ blocks/SM for better latency hiding
+    rasterizeTopContributingGaussianIdsForward(
+        RasterizeTopContributingGaussianIdsArgs<ScalarType, IS_PACKED, NUM_DEPTH_SAMPLES> args) {
     auto &commonArgs = args.commonArgs;
 
     // each thread draws one pixel, but also timeshares caching gaussians in a
@@ -337,6 +349,61 @@ rasterizeTopContributingGaussianIdsForward(
                                  activePixelIndex);
 }
 
+// Helper to launch the kernel with a specific NUM_DEPTH_SAMPLES template parameter
+template <typename ScalarType, bool IS_PACKED, uint32_t NUM_DEPTH_SAMPLES>
+void
+launchKernelWithDepthSamples(const dim3 &gridDim,
+                             const dim3 &blockDim,
+                             const uint32_t sharedMem,
+                             const at::cuda::CUDAStream &stream,
+                             const torch::Tensor &means2d,
+                             const torch::Tensor &conics,
+                             const torch::Tensor &opacities,
+                             const at::optional<torch::Tensor> &backgrounds,
+                             const at::optional<torch::Tensor> &masks,
+                             const RenderSettings &settings,
+                             const torch::Tensor &tileOffsets,
+                             const torch::Tensor &tileGaussianIds,
+                             const fvdb::JaggedTensor &outIds,
+                             const fvdb::JaggedTensor &outWeights,
+                             const std::optional<torch::Tensor> &activeTiles,
+                             const std::optional<torch::Tensor> &tilePixelMask,
+                             const std::optional<torch::Tensor> &tilePixelCumsum,
+                             const std::optional<torch::Tensor> &pixelMap) {
+    if (cudaFuncSetAttribute(
+            rasterizeTopContributingGaussianIdsForward<ScalarType, IS_PACKED, NUM_DEPTH_SAMPLES>,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            sharedMem) != cudaSuccess) {
+        AT_ERROR("Failed to set maximum shared memory size (requested ",
+                 sharedMem,
+                 " bytes), try lowering tile_size.");
+    }
+
+    auto args = RasterizeTopContributingGaussianIdsArgs<ScalarType, IS_PACKED, NUM_DEPTH_SAMPLES>(
+        means2d,
+        conics,
+        opacities,
+        backgrounds,
+        masks,
+        settings.imageWidth,
+        settings.imageHeight,
+        settings.imageOriginW,
+        settings.imageOriginH,
+        settings.tileSize,
+        settings.numDepthSamples,
+        tileOffsets,
+        tileGaussianIds,
+        outIds,
+        outWeights,
+        activeTiles,
+        tilePixelMask,
+        tilePixelCumsum,
+        pixelMap);
+
+    rasterizeTopContributingGaussianIdsForward<ScalarType, IS_PACKED, NUM_DEPTH_SAMPLES>
+        <<<gridDim, blockDim, sharedMem, stream>>>(args);
+}
+
 template <typename ScalarType, bool IS_PACKED>
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
 launchRasterizeTopContributingGaussianIdsForwardKernel(
@@ -358,6 +425,8 @@ launchRasterizeTopContributingGaussianIdsForwardKernel(
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means2d));
 
     TORCH_CHECK_VALUE(settings.numDepthSamples > 0, "numDepthSamples must be greater than 0");
+    TORCH_CHECK_VALUE(settings.numDepthSamples <= 32,
+                      "numDepthSamples must be <= 32 for register-based kernel");
 
     TORCH_CHECK_VALUE(tileOffsets.size(2) ==
                           (settings.imageWidth + settings.tileSize - 1) / settings.tileSize,
@@ -396,50 +465,206 @@ launchRasterizeTopContributingGaussianIdsForwardKernel(
 
     const at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
+    // Shared memory now only holds the Gaussian cache (per-thread arrays are in registers)
     // Each pixel in each tile will cache a gaussian consisting of:
     //   - int32_t  gaussian_id; -- 4 bytes
     //   - vec2t    xy;          -- 8 bytes for float32
     //   - scalar_t opacity;     -- 4 bytes for float32
     //   - vec3t    conic;       -- 12 bytes for float32
     const uint32_t sharedMem =
-        settings.tileSize * settings.tileSize *
-        (sizeof(Gaussian2D<ScalarType>) +
-         (sizeof(int32_t) + sizeof(ScalarType) + sizeof(uint32_t)) * settings.numDepthSamples);
-
-    if (cudaFuncSetAttribute(rasterizeTopContributingGaussianIdsForward<ScalarType, IS_PACKED>,
-                             cudaFuncAttributeMaxDynamicSharedMemorySize,
-                             sharedMem) != cudaSuccess) {
-        AT_ERROR("Failed to set maximum shared memory size (requested ",
-                 sharedMem,
-                 " bytes), try lowering tile_size.");
-    }
+        settings.tileSize * settings.tileSize * sizeof(Gaussian2D<ScalarType>);
 
     const dim3 blockDim = {settings.tileSize, settings.tileSize, 1};
     const dim3 gridDim  = activeTiles.has_value() // sparse mode
                               ? dim3(activeTiles.value().size(0), 1, 1)
                               : dim3(C * tileExtentH * tileExtentW, 1, 1);
-    auto args =
-        RasterizeTopContributingGaussianIdsArgs<ScalarType, IS_PACKED>(means2d,
-                                                                       conics,
-                                                                       opacities,
-                                                                       backgrounds,
-                                                                       masks,
-                                                                       settings.imageWidth,
-                                                                       settings.imageHeight,
-                                                                       settings.imageOriginW,
-                                                                       settings.imageOriginH,
-                                                                       settings.tileSize,
-                                                                       settings.numDepthSamples,
-                                                                       tileOffsets,
-                                                                       tileGaussianIds,
-                                                                       outIds,
-                                                                       outWeights,
-                                                                       activeTiles,
-                                                                       tilePixelMask,
-                                                                       tilePixelCumsum,
-                                                                       pixelMap);
 
-    rasterizeTopContributingGaussianIdsForward<<<gridDim, blockDim, sharedMem, stream>>>(args);
+    // Dispatch to compile-time specialized kernels for common numDepthSamples values
+    // This allows the compiler to optimize register allocation and unroll loops
+    switch (settings.numDepthSamples) {
+    case 1:
+        launchKernelWithDepthSamples<ScalarType, IS_PACKED, 1>(gridDim,
+                                                               blockDim,
+                                                               sharedMem,
+                                                               stream,
+                                                               means2d,
+                                                               conics,
+                                                               opacities,
+                                                               backgrounds,
+                                                               masks,
+                                                               settings,
+                                                               tileOffsets,
+                                                               tileGaussianIds,
+                                                               outIds,
+                                                               outWeights,
+                                                               activeTiles,
+                                                               tilePixelMask,
+                                                               tilePixelCumsum,
+                                                               pixelMap);
+        break;
+    case 2:
+        launchKernelWithDepthSamples<ScalarType, IS_PACKED, 2>(gridDim,
+                                                               blockDim,
+                                                               sharedMem,
+                                                               stream,
+                                                               means2d,
+                                                               conics,
+                                                               opacities,
+                                                               backgrounds,
+                                                               masks,
+                                                               settings,
+                                                               tileOffsets,
+                                                               tileGaussianIds,
+                                                               outIds,
+                                                               outWeights,
+                                                               activeTiles,
+                                                               tilePixelMask,
+                                                               tilePixelCumsum,
+                                                               pixelMap);
+        break;
+    case 4:
+        launchKernelWithDepthSamples<ScalarType, IS_PACKED, 4>(gridDim,
+                                                               blockDim,
+                                                               sharedMem,
+                                                               stream,
+                                                               means2d,
+                                                               conics,
+                                                               opacities,
+                                                               backgrounds,
+                                                               masks,
+                                                               settings,
+                                                               tileOffsets,
+                                                               tileGaussianIds,
+                                                               outIds,
+                                                               outWeights,
+                                                               activeTiles,
+                                                               tilePixelMask,
+                                                               tilePixelCumsum,
+                                                               pixelMap);
+        break;
+    case 8:
+        launchKernelWithDepthSamples<ScalarType, IS_PACKED, 8>(gridDim,
+                                                               blockDim,
+                                                               sharedMem,
+                                                               stream,
+                                                               means2d,
+                                                               conics,
+                                                               opacities,
+                                                               backgrounds,
+                                                               masks,
+                                                               settings,
+                                                               tileOffsets,
+                                                               tileGaussianIds,
+                                                               outIds,
+                                                               outWeights,
+                                                               activeTiles,
+                                                               tilePixelMask,
+                                                               tilePixelCumsum,
+                                                               pixelMap);
+        break;
+    case 12:
+        launchKernelWithDepthSamples<ScalarType, IS_PACKED, 12>(gridDim,
+                                                                blockDim,
+                                                                sharedMem,
+                                                                stream,
+                                                                means2d,
+                                                                conics,
+                                                                opacities,
+                                                                backgrounds,
+                                                                masks,
+                                                                settings,
+                                                                tileOffsets,
+                                                                tileGaussianIds,
+                                                                outIds,
+                                                                outWeights,
+                                                                activeTiles,
+                                                                tilePixelMask,
+                                                                tilePixelCumsum,
+                                                                pixelMap);
+        break;
+    case 16:
+        launchKernelWithDepthSamples<ScalarType, IS_PACKED, 16>(gridDim,
+                                                                blockDim,
+                                                                sharedMem,
+                                                                stream,
+                                                                means2d,
+                                                                conics,
+                                                                opacities,
+                                                                backgrounds,
+                                                                masks,
+                                                                settings,
+                                                                tileOffsets,
+                                                                tileGaussianIds,
+                                                                outIds,
+                                                                outWeights,
+                                                                activeTiles,
+                                                                tilePixelMask,
+                                                                tilePixelCumsum,
+                                                                pixelMap);
+        break;
+    case 24:
+        launchKernelWithDepthSamples<ScalarType, IS_PACKED, 24>(gridDim,
+                                                                blockDim,
+                                                                sharedMem,
+                                                                stream,
+                                                                means2d,
+                                                                conics,
+                                                                opacities,
+                                                                backgrounds,
+                                                                masks,
+                                                                settings,
+                                                                tileOffsets,
+                                                                tileGaussianIds,
+                                                                outIds,
+                                                                outWeights,
+                                                                activeTiles,
+                                                                tilePixelMask,
+                                                                tilePixelCumsum,
+                                                                pixelMap);
+        break;
+    case 32:
+        launchKernelWithDepthSamples<ScalarType, IS_PACKED, 32>(gridDim,
+                                                                blockDim,
+                                                                sharedMem,
+                                                                stream,
+                                                                means2d,
+                                                                conics,
+                                                                opacities,
+                                                                backgrounds,
+                                                                masks,
+                                                                settings,
+                                                                tileOffsets,
+                                                                tileGaussianIds,
+                                                                outIds,
+                                                                outWeights,
+                                                                activeTiles,
+                                                                tilePixelMask,
+                                                                tilePixelCumsum,
+                                                                pixelMap);
+        break;
+    default:
+        // Fallback to dynamic kernel for non-standard sizes
+        launchKernelWithDepthSamples<ScalarType, IS_PACKED, 0>(gridDim,
+                                                               blockDim,
+                                                               sharedMem,
+                                                               stream,
+                                                               means2d,
+                                                               conics,
+                                                               opacities,
+                                                               backgrounds,
+                                                               masks,
+                                                               settings,
+                                                               tileOffsets,
+                                                               tileGaussianIds,
+                                                               outIds,
+                                                               outWeights,
+                                                               activeTiles,
+                                                               tilePixelMask,
+                                                               tilePixelCumsum,
+                                                               pixelMap);
+        break;
+    }
+
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     C10_CUDA_CHECK(cudaStreamSynchronize(stream));
 

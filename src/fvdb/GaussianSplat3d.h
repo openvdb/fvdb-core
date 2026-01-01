@@ -150,6 +150,16 @@ class GaussianSplat3d {
         }
     };
 
+    /// @brief A set of projected Gaussians with sparse tile intersection data for sparse rendering.
+    /// This struct extends ProjectedGaussianSplats with additional sparse-specific tensors.
+    struct SparseProjectedGaussianSplats : public ProjectedGaussianSplats {
+        torch::Tensor activeTiles;     // [num_active_tiles] - tile IDs of active tiles
+        torch::Tensor activeTileMask;  // [C, TH, TW] - boolean mask of active tiles
+        torch::Tensor tilePixelMask;   // [num_active_tiles, words_per_tile] - bitmask of pixels
+        torch::Tensor tilePixelCumsum; // [num_active_tiles] - cumulative sum of active pixels
+        torch::Tensor pixelMap;        // [num_active_pixels] - mapping for pixel write order
+    };
+
   public:
     /// @brief Concatenate a vector of GaussianSplat3d objects into a single GaussianSplat3d object.
     /// @param splats A vector of GaussianSplat3d objects to concatenate.
@@ -1281,6 +1291,18 @@ class GaussianSplat3d {
     ProjectedGaussianSplats projectGaussiansImpl(const torch::Tensor &worldToCameraMatrices,
                                                  const torch::Tensor &projectionMatrices,
                                                  const fvdb::detail::ops::RenderSettings &settings);
+
+    /// @brief Project Gaussians with sparse tile intersection for efficient sparse rendering.
+    /// @param pixelsToRender JaggedTensor of pixel coordinates to render [P1 + P2 + ..., 2]
+    /// @param worldToCameraMatrices [C, 4, 4] Camera-to-world matrices
+    /// @param projectionMatrices [C, 3, 3] Projection matrices
+    /// @param settings Render settings
+    /// @return SparseProjectedGaussianSplats containing projected Gaussians and sparse tile data
+    SparseProjectedGaussianSplats
+    projectGaussiansImplSparse(const JaggedTensor &pixelsToRender,
+                               const torch::Tensor &worldToCameraMatrices,
+                               const torch::Tensor &projectionMatrices,
+                               const fvdb::detail::ops::RenderSettings &settings);
 
     std::tuple<torch::Tensor, torch::Tensor> renderCropFromProjectedGaussiansImpl(
         const ProjectedGaussianSplats &state,
