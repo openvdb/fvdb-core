@@ -49,7 +49,7 @@ RasterizeGaussiansToPixelsSparse::forward(
                                                                       activeTiles,
                                                                       tilePixelMask,
                                                                       tilePixelCumsum,
-                                                                      pixelMap;
+                                                                      pixelMap);
     });
     JaggedTensor renderedColors = std::get<0>(variables);
     JaggedTensor renderedAlphas = std::get<1>(variables);
