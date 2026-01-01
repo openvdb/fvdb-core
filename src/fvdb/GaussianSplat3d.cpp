@@ -405,6 +405,13 @@ GaussianSplat3d::projectGaussiansImplSparse(const JaggedTensor &pixelsToRender,
                 "projectionMatrices must have shape (C, 3, 3)");
     TORCH_CHECK(worldToCameraMatrices.is_contiguous(), "worldToCameraMatrices must be contiguous");
     TORCH_CHECK(projectionMatrices.is_contiguous(), "projectionMatrices must be contiguous");
+    TORCH_CHECK(static_cast<int64_t>(pixelsToRender.num_outer_lists()) == C,
+                "pixelsToRender must have the same number of outer lists as the number of cameras. "
+                "Got ",
+                pixelsToRender.num_outer_lists(),
+                " outer lists but ",
+                C,
+                " cameras. ");
 
     SparseProjectedGaussianSplats ret;
     ret.mRenderSettings = settings;
@@ -499,23 +506,22 @@ GaussianSplat3d::projectGaussiansImplSparse(const JaggedTensor &pixelsToRender,
     }();
 
     // Intersect projected Gaussians with image tiles [non-differentiable]
-    // NOTE: We use the DENSE tile intersection here because the rasterization kernels
-    // expect tileOffsets with shape [C, TH, TW]. The sparse tile intersection returns
-    // a 1D tensor [num_active_tiles + 1] which is not compatible with current rasterization.
-    // The sparse info (activeTiles, tilePixelMask, etc.) is used by the rasterization
-    // to only process active tiles/pixels.
-    const auto [tileOffsets, tileGaussianIds] = FVDB_DISPATCH_KERNEL(mMeans.device(), [&]() {
-        return detail::ops::dispatchGaussianTileIntersection<DeviceTag>(ret.perGaussian2dMean,
-                                                                        ret.perGaussianRadius,
-                                                                        ret.perGaussianDepth,
-                                                                        at::nullopt,
-                                                                        C,
-                                                                        settings.tileSize,
-                                                                        numTilesH,
-                                                                        numTilesW);
+    // Use sparse tile intersection which only computes intersections for active tiles
+    const auto [sparseTileOffsets, tileGaussianIds] = FVDB_DISPATCH_KERNEL(mMeans.device(), [&]() {
+        return detail::ops::dispatchGaussianTileIntersectionSparse<DeviceTag>(ret.perGaussian2dMean,
+                                                                              ret.perGaussianRadius,
+                                                                              ret.perGaussianDepth,
+                                                                              ret.activeTileMask,
+                                                                              ret.activeTiles,
+                                                                              at::nullopt,
+                                                                              C,
+                                                                              settings.tileSize,
+                                                                              numTilesH,
+                                                                              numTilesW);
     });
-    ret.tileOffsets                           = tileOffsets;     // [C, TH, TW]
-    ret.tileGaussianIds                       = tileGaussianIds; // [TOT_INTERSECTIONS]
+    // Use sparse 1D tile offsets - RasterizeCommonArgs detects the format from dimensions
+    ret.tileOffsets     = sparseTileOffsets; // [num_active_tiles + 1]
+    ret.tileGaussianIds = tileGaussianIds;   // [TOT_INTERSECTIONS]
 
     return ret;
 }

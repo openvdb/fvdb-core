@@ -413,7 +413,7 @@ TEST_F(GaussianTileIntersectionTest, PackedFormatTest) {
 
 torch::Tensor
 tile_mask_to_active_tiles(const torch::Tensor &tile_mask) {
-    return torch::nonzero(tile_mask.flatten()).flatten().to(torch::kUInt32);
+    return torch::nonzero(tile_mask.flatten()).flatten().to(torch::kInt32);
 }
 
 TEST_F(GaussianTileIntersectionTest, DenseViaSparseTest) {

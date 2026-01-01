@@ -238,7 +238,7 @@ computeTileOffsetsSparse(const uint32_t numIntersections,
                          const uint32_t numTiles,
                          const uint32_t tileIdBits,
                          const int64_t *__restrict__ sortedIntersectionKeys,
-                         const uint32_t *__restrict__ activeTiles,
+                         const int32_t *__restrict__ activeTiles,
                          const uint32_t numActiveTiles,
                          int32_t *__restrict__ outOffsets) { // [C, n_tiles] or [num_active_tiles]
 
@@ -541,7 +541,7 @@ gaussianTileIntersectionCUDAImpl(
                 totalTiles,
                 numTileIdBits,
                 intersectionKeys.data_ptr<int64_t>(),
-                activeTiles.value().data_ptr<uint32_t>(),
+                activeTiles.value().data_ptr<int32_t>(),
                 numActiveTiles,
                 tileJOffsets.data_ptr<int32_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
