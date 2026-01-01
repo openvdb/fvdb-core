@@ -506,7 +506,7 @@ GaussianSplat3d::sparseProjectGaussiansImpl(const JaggedTensor &pixelsToRender,
     // Intersect projected Gaussians with image tiles [non-differentiable]
     // Use sparse tile intersection which only computes intersections for active tiles
     const auto [sparseTileOffsets, tileGaussianIds] = FVDB_DISPATCH_KERNEL(mMeans.device(), [&]() {
-        return detail::ops::dispatchGaussianTileIntersectionSparse<DeviceTag>(ret.perGaussian2dMean,
+        return detail::ops::dispatchGaussianSparseTileIntersection<DeviceTag>(ret.perGaussian2dMean,
                                                                               ret.perGaussianRadius,
                                                                               ret.perGaussianDepth,
                                                                               ret.activeTileMask,

@@ -1225,7 +1225,7 @@ dispatchGaussianTileIntersection<torch::kCPU>(
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor>
-dispatchGaussianTileIntersectionSparse<torch::kCUDA>(
+dispatchGaussianSparseTileIntersection<torch::kCUDA>(
     const torch::Tensor &means2d,                  // [C, N, 2] or [M, 2]
     const torch::Tensor &radii,                    // [C, N] or [M]
     const torch::Tensor &depths,                   // [C, N] or [M]
@@ -1251,7 +1251,7 @@ dispatchGaussianTileIntersectionSparse<torch::kCUDA>(
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor>
-dispatchGaussianTileIntersectionSparse<torch::kPrivateUse1>(
+dispatchGaussianSparseTileIntersection<torch::kPrivateUse1>(
     const torch::Tensor &means2d,                  // [C, N, 2] or [M, 2]
     const torch::Tensor &radii,                    // [C, N] or [M]
     const torch::Tensor &depths,                   // [C, N] or [M]
@@ -1279,7 +1279,7 @@ dispatchGaussianTileIntersectionSparse<torch::kPrivateUse1>(
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor>
-dispatchGaussianTileIntersectionSparse<torch::kCPU>(
+dispatchGaussianSparseTileIntersection<torch::kCPU>(
     const torch::Tensor &means2d,                  // [C, N, 2] or [M, 2]
     const torch::Tensor &radii,                    // [C, N] or [M]
     const torch::Tensor &depths,                   // [C, N] or [M]
