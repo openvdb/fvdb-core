@@ -2592,14 +2592,16 @@ class GaussianSplat3d:
             min_opacity,
         )
 
-    def add_noise_to_means(self, noise_scale: float) -> None:
+    def add_noise_to_means(self, noise_scale: float, t: float = 0.005, k: float = 100.0) -> None:
         """
         Add noise to the Gaussian positions (means), scaled by ``noise_scale``.
 
         Args:
             noise_scale (float): Noise scale factor applied to scale-dependent noise.
+            t (float): Parameter t for noise scaling. Defaults to 0.005.
+            k (float): Parameter k for noise scaling. Defaults to 100.0.
         """
-        self._impl.add_noise_to_means(noise_scale)
+        self._impl.add_noise_to_means(noise_scale, t, k)
 
     def reset_accumulated_gradient_state(self) -> None:
         """

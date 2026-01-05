@@ -1066,10 +1066,10 @@ GaussianSplat3d::relocateGaussians(const torch::Tensor &logScales,
 }
 
 void
-GaussianSplat3d::addNoiseToMeans(const float noiseScale) {
+GaussianSplat3d::addNoiseToMeans(const float noiseScale, const float t, const float k) {
     FVDB_DISPATCH_KERNEL(mMeans.device(), [&]() {
         return detail::ops::dispatchGaussianMCMCAddNoise<DeviceTag>(
-            mMeans, mLogScales, mLogitOpacities, mQuats, noiseScale);
+            mMeans, mLogScales, mLogitOpacities, mQuats, noiseScale, t, k);
     });
 }
 
