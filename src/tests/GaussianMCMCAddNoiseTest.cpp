@@ -64,7 +64,7 @@ TEST_F(GaussianMCMCAddNoiseTest, AppliesNoiseWithDeterministicBaseNoise) {
     auto meansBaseline  = means.clone();
 
     fvdb::detail::ops::dispatchGaussianMCMCAddNoise<torch::kCUDA>(
-        means, logScales, logitOpacities, quats, noiseScale, 0.005, 100);
+        means, logScales, logitOpacities, quats, noiseScale, 0.005, 100.0);
 
     restoreCudaGeneratorState(rngState);
     const auto baseNoise = torch::randn_like(meansBaseline);
@@ -115,7 +115,7 @@ TEST_F(GaussianMCMCAddNoiseTest, HighOpacitySuppressesNoise) {
     constexpr float noiseScale = 1.0f;
 
     fvdb::detail::ops::dispatchGaussianMCMCAddNoise<torch::kCUDA>(
-        means, logScales, logitOpacities, quats, noiseScale, 0.005, 100);
+        means, logScales, logitOpacities, quats, noiseScale, 0.005, 100.0);
 
     // Gate approaches zero when opacity ~1; expect negligible movement.
     const auto maxAbs = torch::abs(means).max().item<float>();
