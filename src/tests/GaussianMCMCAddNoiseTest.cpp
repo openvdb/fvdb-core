@@ -133,7 +133,7 @@ TEST_F(GaussianMCMCAddNoiseTest, ZeroNoiseScaleNoOp) {
         floatOpts());
 
     fvdb::detail::ops::dispatchGaussianMCMCAddNoise<torch::kCUDA>(
-        means, logScales, logitOpacities, quats, /*noiseScale=*/0.0f, 0.005, 100);
+        means, logScales, logitOpacities, quats, /*noiseScale=*/0.0f, 0.005, 100.0);
 
     EXPECT_TRUE(torch::allclose(means, origMeans));
 }
@@ -154,7 +154,7 @@ TEST_F(GaussianMCMCAddNoiseTest, CpuAndPrivateUseNotImplemented) {
     auto logitOpacitiesCuda = logitOpacities.cuda();
     auto quatsCuda          = quats.cuda();
     EXPECT_THROW((fvdb::detail::ops::dispatchGaussianMCMCAddNoise<torch::kPrivateUse1>(
-                     meansCuda, logScalesCuda, logitOpacitiesCuda, quatsCuda, 1.0f, 0.005, 100)),
+                     meansCuda, logScalesCuda, logitOpacitiesCuda, quatsCuda, 1.0f, 0.005, 100.0)),
                  c10::Error);
 }
 
