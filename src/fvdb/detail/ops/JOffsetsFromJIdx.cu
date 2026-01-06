@@ -23,10 +23,11 @@ joffsetsFromJIdx(torch::Tensor jidx, torch::Tensor jdata, int64_t numTensors) {
     TORCH_CHECK_VALUE(jidx.dim() == 1, "jidx must be a 1D tensor");
 
     if (jidx.size(0) == 0 && numTensors == 1) {
-        torch::Tensor ret = torch::empty({2}, JOffsetsScalarType);
-        auto acc          = ret.accessor<JOffsetsType, 1>();
-        acc[0]            = 0;
-        acc[1]            = jdata.size(0);
+        torch::Tensor ret =
+            torch::empty({2}, torch::TensorOptions().dtype(JOffsetsScalarType).pinned_memory(true));
+        auto acc = ret.accessor<JOffsetsType, 1>();
+        acc[0]   = 0;
+        acc[1]   = jdata.size(0);
         return ret.to(jdata.device());
     }
 
