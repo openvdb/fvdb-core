@@ -1207,7 +1207,9 @@ class GaussianSplat3d {
 
     /// @brief Add noise to the Gaussian positions (means), scaled by noiseScale.
     /// @param noiseScale Noise scale
-    void addNoiseToMeans(const float noiseScale);
+    /// @param t Cutoff for opacity scaling
+    /// @param k Exponent for opacity scaling
+    void addNoiseToMeans(const float noiseScale, const float t = 0.005, const float k = 100.0);
 
     /// @brief Select a subset of the Gaussians in this scene based on the given slice.
     /// @param begin The start index of the slice (inclusive)

@@ -16,7 +16,9 @@ void dispatchGaussianMCMCAddNoise(torch::Tensor &means,                // [N, 3]
                                   const torch::Tensor &logScales,      // [N]
                                   const torch::Tensor &logitOpacities, // [N]
                                   const torch::Tensor &quats,          // [N, 4]
-                                  float noiseScale);                   // [N]
+                                  const float noiseScale,
+                                  const float t,
+                                  const float k);
 
 } // namespace ops
 } // namespace detail

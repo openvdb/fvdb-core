@@ -347,7 +347,11 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("n_max"),
              py::arg("min_opacity"))
 
-        .def("add_noise_to_means", &fvdb::GaussianSplat3d::addNoiseToMeans, py::arg("noise_scale"))
+        .def("add_noise_to_means",
+             &fvdb::GaussianSplat3d::addNoiseToMeans,
+             py::arg("noise_scale"),
+             py::arg("t") = 0.005,
+             py::arg("k") = 100.0)
 
         .def("index_select", &fvdb::GaussianSplat3d::indexSelect, py::arg("indices"))
         .def("mask_select", &fvdb::GaussianSplat3d::maskSelect, py::arg("mask"))
