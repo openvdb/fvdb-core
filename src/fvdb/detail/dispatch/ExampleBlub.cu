@@ -1,9 +1,10 @@
-#if 1
-
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include "fvdb/detail/utils/DispatchSparse.cuh"
+#include "fvdb/detail/dispatch/ExampleBlub.h"
+
+#include "fvdb/detail/dispatch/ConcreteTensorAccessorDevice.cuh"
+#include "fvdb/detail/dispatch/ConcreteTensorAccessorHost.h"
 
 namespace fvdb {
 namespace dispatch {
@@ -14,10 +15,13 @@ namespace example {
 // -------------------------------------------------------------------------
 
 void
-blub_impl(TorchDeviceCudaTag,
-          ConcreteTensor<TorchDeviceCudaTag, float, 1> in,
-          ConcreteTensor<TorchDeviceCudaTag, int, 1> out) {
+blub_impl(TorchDeviceCudaTag, CudaTensor<float, 1> in, CudaTensor<int, 1> out) {
     printf("blub_impl(Cuda, float, int)\n");
+    auto in_accessor  = accessor(in);
+    auto out_accessor = accessor(out);
+    printf("  in.size(0)=%ld, out.size(0)=%ld\n",
+           (long)in_accessor.size(0),
+           (long)out_accessor.size(0));
 }
 
 // -------------------------------------------------------------------------
@@ -33,6 +37,11 @@ blub_impl(DeviceTag,
           ConcreteTensor<DeviceTag, double, 1> in,
           ConcreteTensor<DeviceTag, int, 1> out) {
     printf("any-device double-int-type blub_impl(%s, double, int)\n", typeid(DeviceTag).name());
+    auto in_accessor  = accessor(in);
+    auto out_accessor = accessor(out);
+    printf("  in.size(0)=%ld, out.size(0)=%ld\n",
+           (long)in_accessor.size(0),
+           (long)out_accessor.size(0));
 }
 
 template void blub_impl<TorchDeviceCpuTag>(TorchDeviceCpuTag,
@@ -45,5 +54,3 @@ template void blub_impl<TorchDeviceCudaTag>(TorchDeviceCudaTag,
 } // namespace example
 } // namespace dispatch
 } // namespace fvdb
-
-#endif // 0

@@ -1,20 +1,21 @@
-#if 1
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef FVDB_DETAIL_UTILS_DISPATCHSPARSE_H
-#define FVDB_DETAIL_UTILS_DISPATCHSPARSE_H
+#ifndef FVDB_DETAIL_DISPATCH_SPARSEDISPATCHTABLE_H
+#define FVDB_DETAIL_DISPATCH_SPARSEDISPATCHTABLE_H
 
-#include <ATen/core/TensorAccessor.h>
-#include <torch/types.h>
+#ifdef __CUDACC__
+#error "This header must not be included during nvcc compilation"
+#endif
 
-#include <cstdint>
+#include "fvdb/detail/dispatch/Tag.h"
+
+#include <array>
 #include <functional>
 #include <stdexcept>
 #include <tuple>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 namespace fvdb {
 namespace dispatch {
@@ -48,9 +49,9 @@ namespace dispatch {
 
 enum class DummyEnum { Mup = 18, Spod = 2, Bom = 44 };
 
-struct DummyMupT {};
-struct DummySpodT {};
-struct DummyBomT {};
+using DummyMupTag  = Tag<DummyEnum::Mup>;
+using DummySpodTag = Tag<DummyEnum::Spod>;
+using DummyBomTag  = Tag<DummyEnum::Bom>;
 
 // -----------------------------------------------------------------------------
 // DispatchAxis: Generic Traits for Value-Type Associations
@@ -184,60 +185,15 @@ template <typename... Pairs> struct DispatchAxis {
 // -----------------------------------------------------------------------------
 // Example: DummyAxis using DummyEnum and Dummy types
 // -----------------------------------------------------------------------------
-using DummyAxis = DispatchAxis<ValueTypePair<DummyEnum::Mup, DummyMupT>,
-                               ValueTypePair<DummyEnum::Spod, DummySpodT>,
-                               ValueTypePair<DummyEnum::Bom, DummyBomT>>;
-
-// -----------------------------------------------------------------------------
-// TorchDtypeAxis: DispatchAxis from a pack of C++ types
-// -----------------------------------------------------------------------------
-// Demonstrates defining a DispatchAxis from just raw C++ element types,
-// automatically associating each with the corresponding torch ScalarType enum.
-// Uses c10::CppTypeToScalarType<T> for the mapping (not available in torch:: namespace).
-
-template <typename... Ts>
-using TorchDtypeAxis = DispatchAxis<ValueTypePair<c10::CppTypeToScalarType<Ts>::value, Ts>...>;
-
-// Example: A dtype axis for common floating-point types
-using FloatDtypeAxis = TorchDtypeAxis<float, double>;
-
-// Example: A dtype axis matching the existing DtypeList
-using StandardDtypeAxis = TorchDtypeAxis<float, double, int32_t, int64_t, bool>;
-
-// -----------------------------------------------------------------------------
-// TorchDeviceAxis: DispatchAxis for torch device types
-// -----------------------------------------------------------------------------
-// For devices, we don't have distinct C++ types - we need to create tag types
-// that wrap the device enum values. The Tag template creates a unique type for
-// each enum value.
-
-template <auto V> struct Tag {
-    static constexpr auto value = V;
-};
-
-// Device tag types - each is a distinct type that carries its device enum value
-using TorchDeviceCpuTag         = Tag<torch::kCPU>;
-using TorchDeviceCudaTag        = Tag<torch::kCUDA>;
-using TorchDevicePrivateUse1Tag = Tag<torch::kPrivateUse1>;
-
-// Create a DispatchAxis directly from enum values
-// Automatically generates Tag<V> types for each value
-// Usage: DispatchAxisFromValues<torch::kCPU, torch::kCUDA, torch::kPrivateUse1>
-template <auto... Vs> using TorchDeviceDispatchAxis = DispatchAxis<ValueTypePair<Vs, Tag<Vs>>...>;
-
-// Now TorchDeviceAxis can be defined much more simply:
-using ExampleTorchDeviceAxis =
-    TorchDeviceDispatchAxis<torch::kCPU, torch::kCUDA, torch::kPrivateUse1>;
+using DummyAxis = DispatchAxis<ValueTypePair<DummyEnum::Mup, DummyMupTag>,
+                               ValueTypePair<DummyEnum::Spod, DummySpodTag>,
+                               ValueTypePair<DummyEnum::Bom, DummyBomTag>>;
 
 // -----------------------------------------------------------------------------
 // IntDispatchAxis: DispatchAxis from a list of integer values
 // -----------------------------------------------------------------------------
 // For dispatch over compile-time integer values (e.g., supported channel counts,
 // kernel sizes, etc.). Each integer becomes a distinct type via IntegralTag.
-
-// A tag type that wraps an integral value, inheriting from std::integral_constant
-// for standard library compatibility (implicit conversion, ::value, etc.)
-template <auto V> struct IntegralTag : std::integral_constant<decltype(V), V> {};
 
 // Create a DispatchAxis directly from integer values
 // Automatically generates IntegralTag<V> types for each value
@@ -323,42 +279,22 @@ template <typename... Axes> struct AxisProduct {
 
 // Example: Product of device, dtype, and channel axes
 // Total combinations = 3 devices * 5 dtypes * 6 channels = 90
-using ExampleProductAxis =
-    AxisProduct<TorchDeviceDispatchAxis<torch::kCPU, torch::kCUDA, torch::kPrivateUse1>,
-                TorchDtypeAxis<float, double, int32_t, int64_t, bool>,
-                IntDispatchAxis<1, 3, 4, 8, 16, 32>>;
+// using ExampleProductAxis =
+//     AxisProduct<TorchDeviceDispatchAxis<torch::kCPU, torch::kCUDA, torch::kPrivateUse1>,
+//                 TorchDtypeAxis<float, double, int32_t, int64_t, bool>,
+//                 IntDispatchAxis<1, 3, 4, 8, 16, 32>>;
 
 // Usage: (compile time or runtime)
 // ExampleProductAxis::index_of_types<TorchDeviceCudaTag, float, IntegralTag<4>>
 // ExampleProductAxis::index_of_values(torch::kCUDA, torch::ScalarType::Float, 4)
 
-//-----------------------------------------------------------------------------------
-// TENSOR ACCESSOR WRAPPERS
-//-----------------------------------------------------------------------------------
-// Wrapper structs that encapsulate tensor accessor creation. The primary template
-// handles CPU accessors. CUDA/PrivateUse1 specializations are forward-declared here
-// and defined in DispatchSparse.cuh (requires nvcc).
-//
-// Usage: ConcreteTensor<DeviceTag, T, N>(tensor) constructs the appropriate accessor.
-// The wrapper forwards operator[] so kernel code can use acc[i] directly.
-
-template <typename DeviceTag, typename ScalarT, size_t Rank> struct ConcreteTensor {
-    torch::Tensor tensor;
-};
-
-template <typename ScalarT, size_t Rank, typename IndexT = int64_t>
-auto
-accessor(ConcreteTensor<TorchDeviceCpuTag, ScalarT, Rank> ct) {
-    return ct.tensor.template accessor<ScalarT, Rank, IndexT>();
-}
-
 // -----------------------------------------------------------------------------
-// The Base DispatchTable class
+// SparseDispatchTable class
 // -----------------------------------------------------------------------------
-template <typename FunctionSignature, typename AxesT> struct BaseDispatchTable;
+template <typename FunctionSignature, typename AxesT> struct SparseDispatchTable;
 
 template <typename ReturnType, typename... Args, typename AxesT>
-struct BaseDispatchTable<ReturnType(Args...), AxesT> {
+struct SparseDispatchTable<ReturnType(Args...), AxesT> {
     using Axes        = AxesT;
     using FunctionPtr = ReturnType (*)(Args...);
     std::array<FunctionPtr, Axes::size> table_{};
@@ -389,28 +325,13 @@ struct BaseDispatchTable<ReturnType(Args...), AxesT> {
 };
 
 // -----------------------------------------------------------------------------
-// BindAt: A declarative binding specification (type-level, no runtime data)
-// -----------------------------------------------------------------------------
-// Specifies that Factory<Types...>{}() should be bound at the slot for Types...
-// Factory is a class template with operator() that returns a function pointer.
-
-template <template <typename...> class Factory, typename... Types> struct BindAt {
-    template <typename Table>
-    static void
-    apply(Table &table) {
-        constexpr size_t idx = Table::Axes::template index_of_types<Types...>;
-        table.table_[idx]    = Factory<Types...>{}();
-    }
-};
-
-// -----------------------------------------------------------------------------
 // BindFn: Bind a constexpr lambda factory (C++20)
 // -----------------------------------------------------------------------------
 // Allows factories to be written as constexpr lambdas with template parameters:
 //   constexpr auto my_factory = []<typename A, typename B>() { return [...]; };
-// Usage: BindFn<my_factory, TypeA, TypeB>
+// Usage: BindTypesFn<my_factory, TypeA, TypeB>
 
-template <auto Factory, typename... Types> struct BindFn {
+template <auto Factory, typename... Types> struct BindTypesFn {
     template <typename Table>
     static void
     apply(Table &table) {
@@ -419,10 +340,19 @@ template <auto Factory, typename... Types> struct BindFn {
     }
 };
 
+template <auto Factory, auto... Values> struct BindValuesFn {
+    template <typename Table>
+    static void
+    apply(Table &table) {
+        constexpr size_t idx = Table::Axes::template index_of_values<Values...>;
+        table.table_[idx]    = Factory.template operator()<Values...>();
+    }
+};
+
 // -----------------------------------------------------------------------------
 // Bindings: A composable list of binding specifications
 // -----------------------------------------------------------------------------
-// Aggregates multiple BindAt specs. Applied via fold expression.
+// Aggregates multiple Bind specs. Applied via fold expression.
 
 template <typename... Specs> struct Bindings {
     template <typename Table>
@@ -440,87 +370,12 @@ template <typename... Specs> struct Bindings {
 template <typename Signature, typename Axes, typename BindingSpec>
 auto
 make_table() {
-    BaseDispatchTable<Signature, Axes> table{};
+    SparseDispatchTable<Signature, Axes> table{};
     BindingSpec::apply(table);
     return table;
 }
 
-namespace example {
-
-// -----------------------------------------------------------------------------
-// Example: "blub" operation with sparse coverage
-// -----------------------------------------------------------------------------
-
-// -------------------------------------------------------------------------
-// The blub_impl variations below represent "real" authoring content. Nothing in them
-// is boilerplate beyond what we'd expect to have to write, nothing feels overly repetitive
-// or onerous. We are able to separate out variations where it makes sense to do so for
-// whatever our kernel/op requires. The examples here are contrived and an unlikely
-// set of specializations, done really just to demonstrate and flex the dispatch system.
-// Pretty much everything beyond these blub_impl implementations is boilerplate,
-// so we want it to be as minimal as possible, and we want to offload as much as possible
-// to the dispatch utility headers.
-// -------------------------------------------------------------------------
-
-void blub_impl(TorchDeviceCpuTag,
-               ConcreteTensor<TorchDeviceCpuTag, float, 1> in,
-               ConcreteTensor<TorchDeviceCpuTag, int, 1> out);
-
-void blub_impl(TorchDeviceCudaTag,
-    ConcreteTensor<TorchDeviceCudaTag, float, 1> in,
-    ConcreteTensor<TorchDeviceCudaTag, int, 1> out);
-
-template <typename T>
-void blub_impl(TorchDeviceCpuTag,
-               ConcreteTensor<TorchDeviceCpuTag, T, 1> in,
-               ConcreteTensor<TorchDeviceCpuTag, T, 1> out);
-
-extern template void blub_impl<int32_t>(TorchDeviceCpuTag,
-                                        ConcreteTensor<TorchDeviceCpuTag, int32_t, 1>,
-                                        ConcreteTensor<TorchDeviceCpuTag, int32_t, 1>);
-extern template void blub_impl<int64_t>(TorchDeviceCpuTag,
-                                        ConcreteTensor<TorchDeviceCpuTag, int64_t, 1>,
-                                        ConcreteTensor<TorchDeviceCpuTag, int64_t, 1>);
-extern template void blub_impl<torch::Half>(TorchDeviceCpuTag,
-                                            ConcreteTensor<TorchDeviceCpuTag, torch::Half, 1>,
-                                            ConcreteTensor<TorchDeviceCpuTag, torch::Half, 1>);
-extern template void blub_impl<float>(TorchDeviceCpuTag,
-                                      ConcreteTensor<TorchDeviceCpuTag, float, 1>,
-                                      ConcreteTensor<TorchDeviceCpuTag, float, 1>);
-extern template void blub_impl<double>(TorchDeviceCpuTag,
-                                       ConcreteTensor<TorchDeviceCpuTag, double, 1>,
-                                       ConcreteTensor<TorchDeviceCpuTag, double, 1>);
-
-template <typename DeviceTag>
-void blub_impl(DeviceTag,
-               ConcreteTensor<DeviceTag, double, 1> in,
-               ConcreteTensor<DeviceTag, int, 1> out);
-
-extern template void blub_impl<TorchDeviceCpuTag>(TorchDeviceCpuTag,
-                                                  ConcreteTensor<TorchDeviceCpuTag, double, 1>,
-                                                  ConcreteTensor<TorchDeviceCpuTag, int, 1>);
-
-                                                  extern template void blub_impl<TorchDeviceCudaTag>(TorchDeviceCudaTag,
-                                                    ConcreteTensor<TorchDeviceCudaTag, double, 1>,
-                                                    ConcreteTensor<TorchDeviceCudaTag, int, 1>);
-
-// -----------------------------------------------------------------------------
-// The general use "blub" function, which will handle all of the dispatch to the
-// blub implementations above. This is the whole reason we're here.
-// -----------------------------------------------------------------------------
-// Overload: output dtype defaults to input dtype
-torch::Tensor blub(torch::Tensor in, torch::ScalarType out_dtype);
-
-// Overload: output dtype defaults to input dtype
-inline torch::Tensor
-blub(torch::Tensor in) {
-    return blub(in, in.scalar_type());
-}
-
-} // namespace example
 } // namespace dispatch
 } // namespace fvdb
 
-#endif // FVDB_DETAIL_UTILS_DISPATCHSPARSE_H
-
-#endif // 0
+#endif // FVDB_DETAIL_DISPATCH_SPARSEDISPATCHTABLE_H

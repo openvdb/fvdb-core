@@ -1,15 +1,20 @@
-#if 1
-
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
-
-// CUDA specializations for TorchAccessor wrappers.
-// This file should only be included by .cu files compiled with nvcc.
 //
-#ifndef FVDB_DETAIL_UTILS_DISPATCHSPARSE_CUH
-#define FVDB_DETAIL_UTILS_DISPATCHSPARSE_CUH
 
-#include "DispatchSparse.h"
+#ifndef __CUDACC__
+#error "This header must only be included during nvcc compilation"
+#endif
+
+#ifndef FVDB_DETAIL_DISPATCH_CONCRETETENSORACCESSORDEVICE_CUH
+#define FVDB_DETAIL_DISPATCH_CONCRETETENSORACCESSORDEVICE_CUH
+
+#include "fvdb/detail/dispatch/ConcreteTensor.h"
+
+#include <ATen/core/TensorAccessor.h>
+
+#include <cstdint>
+#include <type_traits>
 
 namespace fvdb {
 namespace dispatch {
@@ -20,7 +25,7 @@ namespace dispatch {
 
 template <typename ScalarT, size_t Rank, typename IndexT = int64_t>
 auto
-accessor(ConcreteTensor<TorchDeviceCudaTag, ScalarT, Rank> ct) {
+accessor(CudaTensor<ScalarT, Rank> ct) {
     if constexpr (std::is_same_v<IndexT, int64_t>) {
         return ct.tensor.template packed_accessor64<ScalarT, Rank, at::RestrictPtrTraits>();
     } else {
@@ -30,7 +35,7 @@ accessor(ConcreteTensor<TorchDeviceCudaTag, ScalarT, Rank> ct) {
 
 template <typename ScalarT, size_t Rank, typename IndexT = int64_t>
 auto
-accessor(ConcreteTensor<TorchDevicePrivateUse1Tag, ScalarT, Rank> ct) {
+accessor(PrivateUse1Tensor<ScalarT, Rank> ct) {
     if constexpr (std::is_same_v<IndexT, int64_t>) {
         return ct.tensor.template packed_accessor64<ScalarT, Rank, at::RestrictPtrTraits>();
     } else {
@@ -38,10 +43,7 @@ accessor(ConcreteTensor<TorchDevicePrivateUse1Tag, ScalarT, Rank> ct) {
     }
 }
 
-
 } // namespace dispatch
 } // namespace fvdb
 
-#endif // FVDB_DETAIL_UTILS_DISPATCHSPARSE_CUH
-
-#endif // 0
+#endif // FVDB_DETAIL_DISPATCH_CONCRETETENSORACCESSORDEVICE_CUH

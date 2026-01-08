@@ -1,9 +1,11 @@
-#if 1
-
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include "fvdb/detail/utils/DispatchSparse.h"
+#include "fvdb/detail/dispatch/ExampleBlub.h"
+
+#include "fvdb/detail/dispatch/ConcreteTensorAccessorHost.h"
+#include "fvdb/detail/dispatch/SparseDispatchTable.h"
+#include "fvdb/detail/dispatch/TorchDispatchHost.h"
 
 namespace fvdb {
 namespace dispatch {
@@ -14,68 +16,59 @@ namespace example {
 // -------------------------------------------------------------------------
 
 void
-blub_impl(TorchDeviceCpuTag,
-          ConcreteTensor<TorchDeviceCpuTag, float, 1> in,
-          ConcreteTensor<TorchDeviceCpuTag, int, 1> out) {
+blub_impl(TorchDeviceCpuTag, CpuTensor<float, 1> in, CpuTensor<int, 1> out) {
     printf("blub_impl(Cpu, float, int)\n");
+    auto in_accessor  = accessor(in);
+    auto out_accessor = accessor(out);
+    // Verify accessors work by accessing size
+    printf("  in.size(0)=%ld, out.size(0)=%ld\n", in_accessor.size(0), out_accessor.size(0));
 }
 
 template <typename T>
 void
-blub_impl(TorchDeviceCpuTag,
-          ConcreteTensor<TorchDeviceCpuTag, T, 1> in,
-          ConcreteTensor<TorchDeviceCpuTag, T, 1> out) {
+blub_impl(TorchDeviceCpuTag, CpuTensor<T, 1> in, CpuTensor<T, 1> out) {
     printf("generic same-type blub_impl(Cpu, %s, %s)\n", typeid(T).name(), typeid(T).name());
+    auto in_accessor  = accessor(in);
+    auto out_accessor = accessor(out);
+    // Verify accessors work by accessing size
+    printf("  in.size(0)=%ld, out.size(0)=%ld\n", in_accessor.size(0), out_accessor.size(0));
 }
 
-template void blub_impl<int32_t>(TorchDeviceCpuTag,
-                                 ConcreteTensor<TorchDeviceCpuTag, int32_t, 1>,
-                                 ConcreteTensor<TorchDeviceCpuTag, int32_t, 1>);
-template void blub_impl<int64_t>(TorchDeviceCpuTag,
-                                 ConcreteTensor<TorchDeviceCpuTag, int64_t, 1>,
-                                 ConcreteTensor<TorchDeviceCpuTag, int64_t, 1>);
-template void blub_impl<torch::Half>(TorchDeviceCpuTag,
-                                     ConcreteTensor<TorchDeviceCpuTag, torch::Half, 1>,
-                                     ConcreteTensor<TorchDeviceCpuTag, torch::Half, 1>);
-template void blub_impl<float>(TorchDeviceCpuTag,
-                               ConcreteTensor<TorchDeviceCpuTag, float, 1>,
-                               ConcreteTensor<TorchDeviceCpuTag, float, 1>);
-template void blub_impl<double>(TorchDeviceCpuTag,
-                                ConcreteTensor<TorchDeviceCpuTag, double, 1>,
-                                ConcreteTensor<TorchDeviceCpuTag, double, 1>);
-
+template void blub_impl<int32_t>(TorchDeviceCpuTag, CpuTensor<int32_t, 1>, CpuTensor<int32_t, 1>);
+template void blub_impl<int64_t>(TorchDeviceCpuTag, CpuTensor<int64_t, 1>, CpuTensor<int64_t, 1>);
+template void
+    blub_impl<torch::Half>(TorchDeviceCpuTag, CpuTensor<torch::Half, 1>, CpuTensor<torch::Half, 1>);
+template void blub_impl<float>(TorchDeviceCpuTag, CpuTensor<float, 1>, CpuTensor<float, 1>);
+template void blub_impl<double>(TorchDeviceCpuTag, CpuTensor<double, 1>, CpuTensor<double, 1>);
 
 // -------------------------------------------------------------------------
 // Axis definitions: declare the extent of the dispatch space
+// Often, these can just use defaults like "all torch devices", and
+// "all torch numeric types".
 // -------------------------------------------------------------------------
-using BlubDeviceAxis = TorchDeviceDispatchAxis<torch::kCPU, torch::kCUDA>;
-using BlubDtypeAxis  = TorchDtypeAxis<int32_t, int64_t, torch::Half, float, double>;
-using BlubAxes       = AxisProduct<BlubDeviceAxis, BlubDtypeAxis, BlubDtypeAxis>;
-using BlubSignature  = torch::Tensor(torch::Tensor, torch::ScalarType);
+using BlubDeviceAxis  = TorchDeviceDispatchAxis<torch::kCPU, torch::kCUDA>;
+using BlubDtypeAxis   = TorchDtypeAxis<int32_t, int64_t, torch::Half, float, double>;
+using BlubAxes        = AxisProduct<BlubDeviceAxis, BlubDtypeAxis, BlubDtypeAxis>;
+using BlubSignature   = torch::Tensor(torch::Tensor, torch::ScalarType);
+using BlubFunctionPtr = BlubSignature *;
 
 // -------------------------------------------------------------------------
-// Factory: a template struct that maps axis types to a function pointer.
-// Must be in .cu because it instantiates ConcreteTensor for CUDA device tags,
-// whose specializations require nvcc (defined in DispatchSparse.cuh).
-// Note: We use a template struct instead of a template lambda because NVCC
-// doesn't support template lambdas being converted to function pointers when
-// the template parameters aren't used in the parameter types.
+// Factory: a template lambda that maps axis types to a function pointer.
+// This uses C++20 template lambdas, which is safe here since this file is
+// compiled only by the host compiler (not nvcc). NVCC doesn't support
+// template lambdas being converted to function pointers when the template
+// parameters aren't used in the parameter types.
 // -------------------------------------------------------------------------
-template <typename DeviceTag, typename InDtype, typename OutDtype>
-struct BlubFactory {
-    static torch::Tensor
-    impl(torch::Tensor in, torch::ScalarType out_dtype) {
+
+constexpr auto blub_impl_factory =
+    []<typename DeviceTag, typename InDtype, typename OutDtype>() -> BlubFunctionPtr {
+    return [](torch::Tensor in, torch::ScalarType out_dtype) -> torch::Tensor {
         torch::Tensor out = torch::empty_like(in, in.options().dtype(out_dtype));
         auto concrete_in  = ::fvdb::dispatch::ConcreteTensor<DeviceTag, InDtype, 1>{in};
         auto concrete_out = ::fvdb::dispatch::ConcreteTensor<DeviceTag, OutDtype, 1>{out};
         blub_impl(DeviceTag{}, concrete_in, concrete_out);
         return out;
-    }
-
-    auto
-    operator()() const {
-        return &impl;
-    }
+    };
 };
 
 // -----------------------------------------------------------------------------
@@ -101,16 +94,16 @@ blub_unsupported(torch::DeviceType device,
 // -------------------------------------------------------------------------
 using BlubBindings = Bindings<
     // Same-type CPU bindings
-    BindAt<BlubFactory, TorchDeviceCpuTag, int32_t, int32_t>,
-    BindAt<BlubFactory, TorchDeviceCpuTag, int64_t, int64_t>,
-    BindAt<BlubFactory, TorchDeviceCpuTag, torch::Half, torch::Half>,
-    BindAt<BlubFactory, TorchDeviceCpuTag, float, float>,
-    BindAt<BlubFactory, TorchDeviceCpuTag, double, double>,
+    BindTypesFn<blub_impl_factory, TorchDeviceCpuTag, int32_t, int32_t>,
+    BindTypesFn<blub_impl_factory, TorchDeviceCpuTag, int64_t, int64_t>,
+    BindTypesFn<blub_impl_factory, TorchDeviceCpuTag, torch::Half, torch::Half>,
+    BindTypesFn<blub_impl_factory, TorchDeviceCpuTag, float, float>,
+    BindTypesFn<blub_impl_factory, TorchDeviceCpuTag, double, double>,
     // Cross-type conversions (float/double -> int)
-    BindAt<BlubFactory, TorchDeviceCpuTag, float, int32_t>,
-    BindAt<BlubFactory, TorchDeviceCudaTag, float, int32_t>,
-    BindAt<BlubFactory, TorchDeviceCpuTag, double, int32_t>,
-    BindAt<BlubFactory, TorchDeviceCudaTag, double, int32_t>>;
+    BindTypesFn<blub_impl_factory, TorchDeviceCpuTag, float, int32_t>,
+    BindTypesFn<blub_impl_factory, TorchDeviceCudaTag, float, int32_t>,
+    BindTypesFn<blub_impl_factory, TorchDeviceCpuTag, double, int32_t>,
+    BindTypesFn<blub_impl_factory, TorchDeviceCudaTag, double, int32_t>>;
 
 // -----------------------------------------------------------------------------
 // The general use "blub" function, which will handle all of the dispatch to the
@@ -126,9 +119,6 @@ blub(torch::Tensor in, torch::ScalarType out_dtype) {
     return fn_ptr(in, out_dtype);
 }
 
-
 } // namespace example
 } // namespace dispatch
 } // namespace fvdb
-
-#endif // 0
