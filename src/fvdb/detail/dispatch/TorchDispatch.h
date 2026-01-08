@@ -18,33 +18,12 @@ namespace dispatch {
 // -----------------------------------------------------------------------------
 // TorchDtypeAxis: DispatchAxis from ScalarType enum values
 // -----------------------------------------------------------------------------
-// Creates a DispatchAxis from torch ScalarType enum values, automatically
-// generating the correct C++ scalar type for eacah value.
-template <auto... Vs> using TorchDtypeAxis = DispatchAxis<ValueTypePair<Vs, ScalarCppTypeT<Vs>>...>;
-
-// Example: A dtype axis for common floating-point types
-using FloatDtypeAxis = TorchDtypeAxis<torch::kFloat32, torch::kFloat64>;
-
-// Example: A dtype axis matching the existing DtypeList
-using StandardDtypeAxis =
-    TorchDtypeAxis<torch::kFloat32, torch::kFloat64, torch::kInt32, torch::kInt64, torch::kBool>;
+template <torch::ScalarType... Values> using TorchScalarTypeAxis = ValueOrdering<Values...>;
 
 // -----------------------------------------------------------------------------
 // TorchDeviceAxis: DispatchAxis for torch device types
 // -----------------------------------------------------------------------------
-// Note: ScalarCppTypeT is defined in ConcreteTensor.h for use by accessor functions
-// For devices, we don't have distinct C++ types - we need to create tag types
-// that wrap the device enum values. The Tag template creates a unique type for
-// each enum value.
-
-// Create a DispatchAxis directly from enum values
-// Automatically generates Tag<V> types for each value
-// Usage: DispatchAxisFromValues<torch::kCPU, torch::kCUDA, torch::kPrivateUse1>
-template <auto... Vs> using TorchDeviceDispatchAxis = DispatchAxis<ValueTypePair<Vs, Tag<Vs>>...>;
-
-// Now TorchDeviceAxis can be defined much more simply:
-using ExampleTorchDeviceAxis =
-    TorchDeviceDispatchAxis<torch::kCPU, torch::kCUDA, torch::kPrivateUse1>;
+template <torch::DeviceType... Values> using TorchDeviceDispatchAxis = ValueOrdering<Values...>;
 
 } // namespace dispatch
 } // namespace fvdb
