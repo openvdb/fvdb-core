@@ -60,7 +60,7 @@ set(FVDB_CPP_FILES
     fvdb/detail/io/LoadNanovdb.cpp
     fvdb/detail/io/SaveNanoVDB.cpp
     fvdb/detail/TorchDeviceBuffer.cpp
-    fvdb/detail/utils/DispatchSparse.cpp
+    fvdb/detail/dispatch/ExampleBlub.cpp
     fvdb/detail/viewer/GaussianSplat3dView.cpp
     fvdb/detail/viewer/Viewer.cpp
     fvdb/FVDB.cpp
@@ -159,7 +159,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/VoxelNeighborhood.cu
     fvdb/detail/ops/VoxelsAlongRays.cu
     fvdb/detail/utils/cuda/ForEachCUDA.cu
-    fvdb/detail/utils/DispatchSparse.cu
+    fvdb/detail/dispatch/ExampleBlub.cu
 )
 
 # Build library

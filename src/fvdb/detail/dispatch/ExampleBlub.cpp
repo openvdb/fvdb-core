@@ -73,19 +73,24 @@ constexpr auto blub_impl_factory =
 
 // -----------------------------------------------------------------------------
 // Operation-specific error handler for unsupported combinations.
-// Receives axis values (device, in_dtype, out_dtype) followed by function args.
+// Returns a function pointer that, when called, throws an error.
 // -----------------------------------------------------------------------------
-torch::Tensor
+BlubFunctionPtr
 blub_unsupported(torch::DeviceType device,
                  torch::ScalarType in_dtype,
                  torch::ScalarType out_dtype) {
-    TORCH_CHECK(false,
-                "blub: unsupported combination - device=",
-                device,
-                ", in_dtype=",
-                in_dtype,
-                ", out_dtype=",
-                out_dtype);
+    // Capture error info and return a lambda that throws when invoked
+    // Note: We use a static to avoid dangling captures; the error message
+    // is generated at call time from the actual tensor properties anyway.
+    return [](torch::Tensor in, torch::ScalarType out_dtype) -> torch::Tensor {
+        TORCH_CHECK(false,
+                    "blub: unsupported combination - device=",
+                    in.device().type(),
+                    ", in_dtype=",
+                    in.scalar_type(),
+                    ", out_dtype=",
+                    out_dtype);
+    };
 }
 
 // -------------------------------------------------------------------------

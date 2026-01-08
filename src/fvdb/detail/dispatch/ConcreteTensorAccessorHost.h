@@ -7,8 +7,6 @@
 
 #include "fvdb/detail/dispatch/ConcreteTensor.h"
 
-#include <cstdint>
-
 namespace fvdb {
 namespace dispatch {
 
@@ -16,10 +14,12 @@ namespace dispatch {
 // ConcreteTensor CPU overload
 //-----------------------------------------------------------------------------------
 
-template <typename ScalarT, size_t Rank, typename IndexT = int64_t>
+template <typename ScalarT, size_t Rank>
 auto
 accessor(CpuTensor<ScalarT, Rank> ct) {
-    return ct.tensor.template accessor<ScalarT, Rank, IndexT>();
+    // Note: Host TensorAccessor only takes <T, N>, no index type parameter
+    // (unlike packed_accessor64/32 for CUDA)
+    return ct.tensor.template accessor<ScalarT, Rank>();
 }
 
 } // namespace dispatch
