@@ -60,7 +60,6 @@ set(FVDB_CPP_FILES
     fvdb/detail/io/LoadNanovdb.cpp
     fvdb/detail/io/SaveNanoVDB.cpp
     fvdb/detail/TorchDeviceBuffer.cpp
-    fvdb/detail/dispatch/ExampleBlub.cpp
     fvdb/detail/viewer/GaussianSplat3dView.cpp
     fvdb/detail/viewer/Viewer.cpp
     fvdb/FVDB.cpp

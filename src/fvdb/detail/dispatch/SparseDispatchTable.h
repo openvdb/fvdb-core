@@ -4,10 +4,6 @@
 #ifndef FVDB_DETAIL_DISPATCH_SPARSEDISPATCHTABLE_H
 #define FVDB_DETAIL_DISPATCH_SPARSEDISPATCHTABLE_H
 
-#ifdef __CUDACC__
-#error "This header must not be included during nvcc compilation"
-#endif
-
 #include "fvdb/detail/dispatch/Tag.h"
 
 #include <array>
@@ -325,6 +321,13 @@ struct SparseDispatchTable<ReturnType(Args...), AxesT> {
 };
 
 // -----------------------------------------------------------------------------
+// The following section requires C++20 template lambdas which nvcc doesn't
+// fully support (template lambdas converted to function pointers). This
+// section is compiled only by the host compiler.
+// -----------------------------------------------------------------------------
+#ifndef __CUDACC__
+
+// -----------------------------------------------------------------------------
 // Helpers for BindValuesFn: Convert compile-time values to types via axes
 // -----------------------------------------------------------------------------
 
@@ -408,6 +411,8 @@ make_table() {
     BindingSpec::apply(table);
     return table;
 }
+
+#endif // !__CUDACC__
 
 } // namespace dispatch
 } // namespace fvdb

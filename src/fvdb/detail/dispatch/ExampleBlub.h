@@ -6,6 +6,7 @@
 #define FVDB_DETAIL_DISPATCH_EXAMPLEBLUB_H
 
 #include "fvdb/detail/dispatch/ConcreteTensor.h"
+#include "fvdb/detail/dispatch/TorchTags.h"
 
 #include <cstdint>
 
@@ -54,20 +55,18 @@ extern template void blub_impl<torch::kFloat64>(TorchDeviceCpuTag,
                                                 CpuTensor<torch::kFloat64, 1>,
                                                 CpuTensor<torch::kFloat64, 1>);
 
-template <typename DeviceTag>
-void blub_impl(DeviceTag,
-               ConcreteTensor<DeviceTag, Tag<torch::kFloat64>, 1> in,
-               ConcreteTensor<DeviceTag, Tag<torch::kInt32>, 1> out);
+template <torch::DeviceType DeviceValue>
+void blub_impl(Tag<DeviceValue>,
+               ConcreteTensor<DeviceValue, torch::kFloat64, 1> in,
+               ConcreteTensor<DeviceValue, torch::kInt32, 1> out);
 
-extern template void
-    blub_impl<TorchDeviceCpuTag>(TorchDeviceCpuTag,
-                                 ConcreteTensor<TorchDeviceCpuTag, Tag<torch::kFloat64>, 1>,
-                                 ConcreteTensor<TorchDeviceCpuTag, Tag<torch::kInt32>, 1>);
+extern template void blub_impl<torch::kCPU>(Tag<torch::kCPU>,
+                                            ConcreteTensor<torch::kCPU, torch::kFloat64, 1>,
+                                            ConcreteTensor<torch::kCPU, torch::kInt32, 1>);
 
-extern template void
-    blub_impl<TorchDeviceCudaTag>(TorchDeviceCudaTag,
-                                  ConcreteTensor<TorchDeviceCudaTag, Tag<torch::kFloat64>, 1>,
-                                  ConcreteTensor<TorchDeviceCudaTag, Tag<torch::kInt32>, 1>);
+extern template void blub_impl<torch::kCUDA>(Tag<torch::kCUDA>,
+                                             ConcreteTensor<torch::kCUDA, torch::kFloat64, 1>,
+                                             ConcreteTensor<torch::kCUDA, torch::kInt32, 1>);
 
 // -----------------------------------------------------------------------------
 // The general use "blub" function, which will handle all of the dispatch to the

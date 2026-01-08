@@ -5,26 +5,13 @@
 #ifndef FVDB_DETAIL_DISPATCH_CONCRETETENSOR_H
 #define FVDB_DETAIL_DISPATCH_CONCRETETENSOR_H
 
-#include "fvdb/detail/dispatch/TorchTags.h"
-
-#include <c10/core/ScalarType.h>
+#include <torch/types.h>
 
 namespace fvdb {
 namespace dispatch {
 
-//-----------------------------------------------------------------------------------
-// ScalarCppTypeT: Extract C++ type from a dtype Tag
-//-----------------------------------------------------------------------------------
-// Given Tag<torch::kFloat32>, yields float.
-// This is used by accessor functions to get the actual C++ type for tensor access.
-
-template <typename T> struct ScalarCppType;
-
-template <torch::ScalarType S> struct ScalarCppType<Tag<S>> {
-    using type = typename c10::impl::ScalarTypeToCPPType<S>::type;
-};
-
-template <typename T> using ScalarCppTypeT = typename ScalarCppType<T>::type;
+template <torch::ScalarType S>
+using ScalarCppTypeT = typename c10::impl::ScalarTypeToCPPType<S>::type;
 
 //-----------------------------------------------------------------------------------
 // TENSOR ACCESSOR WRAPPERS
@@ -33,19 +20,29 @@ template <typename T> using ScalarCppTypeT = typename ScalarCppType<T>::type;
 // not by C++ scalar types. This keeps the interface consistent with the dispatch system.
 // Example: ConcreteTensor<Tag<torch::kCPU>, Tag<torch::kFloat32>, 2>
 
-template <typename DeviceTag, typename DtypeTag, size_t Rank> struct ConcreteTensor {
+// The typename of the value torch::kCPU is torch::DeviceType
+
+template <torch::DeviceType Device, torch::ScalarType Stype, size_t Rank> struct ConcreteTensor {
+    static constexpr torch::DeviceType DeviceValue     = Device;
+    static constexpr torch::ScalarType ScalarTypeValue = Stype;
+
     torch::Tensor tensor;
+    ConcreteTensor() = default;
+    explicit ConcreteTensor(torch::Tensor t) : tensor(t) {
+        TORCH_CHECK_VALUE(t.device().type() == DeviceValue, "Device mismatch");
+        TORCH_CHECK_VALUE(t.scalar_type() == ScalarTypeValue, "Scalar type mismatch");
+    }
 };
 
 // Convenience aliases using device tags and dtype enum values
-template <torch::ScalarType Dtype, size_t Rank>
-using CpuTensor = ConcreteTensor<TorchDeviceCpuTag, Tag<Dtype>, Rank>;
+template <torch::ScalarType Stype, size_t Rank>
+using CpuTensor = ConcreteTensor<torch::kCPU, Stype, Rank>;
 
-template <torch::ScalarType Dtype, size_t Rank>
-using CudaTensor = ConcreteTensor<TorchDeviceCudaTag, Tag<Dtype>, Rank>;
+template <torch::ScalarType Stype, size_t Rank>
+using CudaTensor = ConcreteTensor<torch::kCUDA, Stype, Rank>;
 
-template <torch::ScalarType Dtype, size_t Rank>
-using PrivateUse1Tensor = ConcreteTensor<TorchDevicePrivateUse1Tag, Tag<Dtype>, Rank>;
+template <torch::ScalarType Stype, size_t Rank>
+using PrivateUse1Tensor = ConcreteTensor<torch::kPrivateUse1, Stype, Rank>;
 
 } // namespace dispatch
 } // namespace fvdb

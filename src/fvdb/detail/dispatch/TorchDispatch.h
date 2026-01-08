@@ -2,13 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-#ifdef __CUDACC__
-#error "This header must not be included during nvcc compilation"
-#endif
+#ifndef FVDB_DETAIL_DISPATCH_TORCHDISPATCH_H
+#define FVDB_DETAIL_DISPATCH_TORCHDISPATCH_H
 
-#ifndef FVDB_DETAIL_DISPATCH_TORCHDISPATCHHOST_H
-#define FVDB_DETAIL_DISPATCH_TORCHDISPATCHHOST_H
-
+#include "fvdb/detail/dispatch/ConcreteTensor.h"
 #include "fvdb/detail/dispatch/SparseDispatchTable.h"
 
 #include <torch/types.h>
@@ -22,10 +19,8 @@ namespace dispatch {
 // TorchDtypeAxis: DispatchAxis from ScalarType enum values
 // -----------------------------------------------------------------------------
 // Creates a DispatchAxis from torch ScalarType enum values, automatically
-// generating Tag<V> types for each value.
-// Usage: TorchDtypeAxis<torch::kFloat32, torch::kFloat64, torch::kInt32>
-
-template <auto... Vs> using TorchDtypeAxis = DispatchAxis<ValueTypePair<Vs, Tag<Vs>>...>;
+// generating the correct C++ scalar type for eacah value.
+template <auto... Vs> using TorchDtypeAxis = DispatchAxis<ValueTypePair<Vs, ScalarCppTypeT<Vs>>...>;
 
 // Example: A dtype axis for common floating-point types
 using FloatDtypeAxis = TorchDtypeAxis<torch::kFloat32, torch::kFloat64>;
@@ -54,4 +49,4 @@ using ExampleTorchDeviceAxis =
 } // namespace dispatch
 } // namespace fvdb
 
-#endif // FVDB_DETAIL_DISPATCH_TORCHDISPATCHHOST_H
+#endif // FVDB_DETAIL_DISPATCH_TORCHDISPATCH_H
