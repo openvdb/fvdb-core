@@ -77,6 +77,7 @@ algorithms for 3D reconstruction from sensor data.
 
    self
    installation
+   GitHub Repository <https://github.com/openvdb/fvdb-core>
 
 .. toctree::
    :caption: Applications
