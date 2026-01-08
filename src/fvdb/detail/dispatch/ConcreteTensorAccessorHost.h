@@ -14,7 +14,7 @@ namespace dispatch {
 // ConcreteTensor CPU overload
 //-----------------------------------------------------------------------------------
 
-template <typename ScalarT, size_t Rank>
+template <typename ScalarT, size_t Rank, typename UnusedIndexT = int64_t>
 auto
 accessor(CpuTensor<ScalarT, Rank> ct) {
     // Note: Host TensorAccessor only takes <T, N>, no index type parameter
