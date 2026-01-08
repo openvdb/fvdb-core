@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.abspath(".."))
 
 # -- Project information -----------------------------------------------------
 
-project = "fVDB"
+project = "ƒVDB"
 copyright = "Contributors to the OpenVDB Project"
 author = "Contributors to the OpenVDB Project"
 
@@ -76,6 +76,9 @@ html_theme_options = {"analytics_id": "G-60P7VJJ09C"}  # Google Analytics ID
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ["imgs"]
+html_css_files = [
+    "css/custom.css",
+]
 
 
 # -- Custom hooks ------------------------------------------------------------
