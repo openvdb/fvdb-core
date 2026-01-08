@@ -7,25 +7,45 @@
 
 #include "fvdb/detail/dispatch/TorchTags.h"
 
+#include <c10/core/ScalarType.h>
+
 namespace fvdb {
 namespace dispatch {
 
 //-----------------------------------------------------------------------------------
+// ScalarCppTypeT: Extract C++ type from a dtype Tag
+//-----------------------------------------------------------------------------------
+// Given Tag<torch::kFloat32>, yields float.
+// This is used by accessor functions to get the actual C++ type for tensor access.
+
+template <typename T> struct ScalarCppType;
+
+template <torch::ScalarType S> struct ScalarCppType<Tag<S>> {
+    using type = typename c10::impl::ScalarTypeToCPPType<S>::type;
+};
+
+template <typename T> using ScalarCppTypeT = typename ScalarCppType<T>::type;
+
+//-----------------------------------------------------------------------------------
 // TENSOR ACCESSOR WRAPPERS
 //-----------------------------------------------------------------------------------
+// ConcreteTensor is parameterized by device and dtype tags (enum values wrapped in Tag<>),
+// not by C++ scalar types. This keeps the interface consistent with the dispatch system.
+// Example: ConcreteTensor<Tag<torch::kCPU>, Tag<torch::kFloat32>, 2>
 
-template <typename DeviceTag, typename ScalarT, size_t Rank> struct ConcreteTensor {
+template <typename DeviceTag, typename DtypeTag, size_t Rank> struct ConcreteTensor {
     torch::Tensor tensor;
 };
 
-template <typename ScalarT, size_t Rank>
-using CpuTensor = ConcreteTensor<TorchDeviceCpuTag, ScalarT, Rank>;
+// Convenience aliases using device tags and dtype enum values
+template <torch::ScalarType Dtype, size_t Rank>
+using CpuTensor = ConcreteTensor<TorchDeviceCpuTag, Tag<Dtype>, Rank>;
 
-template <typename ScalarT, size_t Rank>
-using CudaTensor = ConcreteTensor<TorchDeviceCudaTag, ScalarT, Rank>;
+template <torch::ScalarType Dtype, size_t Rank>
+using CudaTensor = ConcreteTensor<TorchDeviceCudaTag, Tag<Dtype>, Rank>;
 
-template <typename ScalarT, size_t Rank>
-using PrivateUse1Tensor = ConcreteTensor<TorchDevicePrivateUse1Tag, ScalarT, Rank>;
+template <torch::ScalarType Dtype, size_t Rank>
+using PrivateUse1Tensor = ConcreteTensor<TorchDevicePrivateUse1Tag, Tag<Dtype>, Rank>;
 
 } // namespace dispatch
 } // namespace fvdb

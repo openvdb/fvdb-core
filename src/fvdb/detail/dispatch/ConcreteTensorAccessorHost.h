@@ -11,12 +11,15 @@ namespace fvdb {
 namespace dispatch {
 
 //-----------------------------------------------------------------------------------
-// ConcreteTensor CPU overload
+// ConcreteTensor CPU accessor
 //-----------------------------------------------------------------------------------
+// Extracts the C++ scalar type from the DtypeTag to call torch's accessor.
+// Matches any ConcreteTensor with CPU device tag.
 
-template <typename ScalarT, size_t Rank, typename UnusedIndexT = int64_t>
+template <typename DtypeTag, size_t Rank>
 auto
-accessor(CpuTensor<ScalarT, Rank> ct) {
+accessor(ConcreteTensor<TorchDeviceCpuTag, DtypeTag, Rank> ct) {
+    using ScalarT = ScalarCppTypeT<DtypeTag>;
     // Note: Host TensorAccessor only takes <T, N>, no index type parameter
     // (unlike packed_accessor64/32 for CUDA)
     return ct.tensor.template accessor<ScalarT, Rank>();

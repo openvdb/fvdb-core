@@ -19,24 +19,25 @@ namespace fvdb {
 namespace dispatch {
 
 // -----------------------------------------------------------------------------
-// TorchDtypeAxis: DispatchAxis from a pack of C++ types
+// TorchDtypeAxis: DispatchAxis from ScalarType enum values
 // -----------------------------------------------------------------------------
-// Demonstrates defining a DispatchAxis from just raw C++ element types,
-// automatically associating each with the corresponding torch ScalarType enum.
-// Uses c10::CppTypeToScalarType<T> for the mapping (not available in torch:: namespace).
+// Creates a DispatchAxis from torch ScalarType enum values, automatically
+// generating Tag<V> types for each value.
+// Usage: TorchDtypeAxis<torch::kFloat32, torch::kFloat64, torch::kInt32>
 
-template <typename... Ts>
-using TorchDtypeAxis = DispatchAxis<ValueTypePair<c10::CppTypeToScalarType<Ts>::value, Ts>...>;
+template <auto... Vs> using TorchDtypeAxis = DispatchAxis<ValueTypePair<Vs, Tag<Vs>>...>;
 
 // Example: A dtype axis for common floating-point types
-using FloatDtypeAxis = TorchDtypeAxis<float, double>;
+using FloatDtypeAxis = TorchDtypeAxis<torch::kFloat32, torch::kFloat64>;
 
 // Example: A dtype axis matching the existing DtypeList
-using StandardDtypeAxis = TorchDtypeAxis<float, double, int32_t, int64_t, bool>;
+using StandardDtypeAxis =
+    TorchDtypeAxis<torch::kFloat32, torch::kFloat64, torch::kInt32, torch::kInt64, torch::kBool>;
 
 // -----------------------------------------------------------------------------
 // TorchDeviceAxis: DispatchAxis for torch device types
 // -----------------------------------------------------------------------------
+// Note: ScalarCppTypeT is defined in ConcreteTensor.h for use by accessor functions
 // For devices, we don't have distinct C++ types - we need to create tag types
 // that wrap the device enum values. The Tag template creates a unique type for
 // each enum value.

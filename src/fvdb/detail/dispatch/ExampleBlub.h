@@ -28,34 +28,46 @@ namespace example {
 // to the dispatch utility headers.
 // -------------------------------------------------------------------------
 
-void blub_impl(TorchDeviceCpuTag, CpuTensor<float, 1> in, CpuTensor<int, 1> out);
+// All tensor parameters use enum values for dtype (e.g., torch::kFloat32, not float)
+void
+blub_impl(TorchDeviceCpuTag, CpuTensor<torch::kFloat32, 1> in, CpuTensor<torch::kInt32, 1> out);
 
-void blub_impl(TorchDeviceCudaTag, CudaTensor<float, 1> in, CudaTensor<int, 1> out);
+void
+blub_impl(TorchDeviceCudaTag, CudaTensor<torch::kFloat32, 1> in, CudaTensor<torch::kInt32, 1> out);
 
-template <typename T> void blub_impl(TorchDeviceCpuTag, CpuTensor<T, 1> in, CpuTensor<T, 1> out);
+template <torch::ScalarType Dtype>
+void blub_impl(TorchDeviceCpuTag, CpuTensor<Dtype, 1> in, CpuTensor<Dtype, 1> out);
 
-extern template void
-    blub_impl<int32_t>(TorchDeviceCpuTag, CpuTensor<int32_t, 1>, CpuTensor<int32_t, 1>);
-extern template void
-    blub_impl<int64_t>(TorchDeviceCpuTag, CpuTensor<int64_t, 1>, CpuTensor<int64_t, 1>);
-extern template void
-    blub_impl<torch::Half>(TorchDeviceCpuTag, CpuTensor<torch::Half, 1>, CpuTensor<torch::Half, 1>);
-extern template void blub_impl<float>(TorchDeviceCpuTag, CpuTensor<float, 1>, CpuTensor<float, 1>);
-extern template void
-    blub_impl<double>(TorchDeviceCpuTag, CpuTensor<double, 1>, CpuTensor<double, 1>);
+extern template void blub_impl<torch::kInt32>(TorchDeviceCpuTag,
+                                              CpuTensor<torch::kInt32, 1>,
+                                              CpuTensor<torch::kInt32, 1>);
+extern template void blub_impl<torch::kInt64>(TorchDeviceCpuTag,
+                                              CpuTensor<torch::kInt64, 1>,
+                                              CpuTensor<torch::kInt64, 1>);
+extern template void blub_impl<torch::kFloat16>(TorchDeviceCpuTag,
+                                                CpuTensor<torch::kFloat16, 1>,
+                                                CpuTensor<torch::kFloat16, 1>);
+extern template void blub_impl<torch::kFloat32>(TorchDeviceCpuTag,
+                                                CpuTensor<torch::kFloat32, 1>,
+                                                CpuTensor<torch::kFloat32, 1>);
+extern template void blub_impl<torch::kFloat64>(TorchDeviceCpuTag,
+                                                CpuTensor<torch::kFloat64, 1>,
+                                                CpuTensor<torch::kFloat64, 1>);
 
 template <typename DeviceTag>
 void blub_impl(DeviceTag,
-               ConcreteTensor<DeviceTag, double, 1> in,
-               ConcreteTensor<DeviceTag, int, 1> out);
+               ConcreteTensor<DeviceTag, Tag<torch::kFloat64>, 1> in,
+               ConcreteTensor<DeviceTag, Tag<torch::kInt32>, 1> out);
 
-extern template void blub_impl<TorchDeviceCpuTag>(TorchDeviceCpuTag,
-                                                  ConcreteTensor<TorchDeviceCpuTag, double, 1>,
-                                                  ConcreteTensor<TorchDeviceCpuTag, int, 1>);
+extern template void
+    blub_impl<TorchDeviceCpuTag>(TorchDeviceCpuTag,
+                                 ConcreteTensor<TorchDeviceCpuTag, Tag<torch::kFloat64>, 1>,
+                                 ConcreteTensor<TorchDeviceCpuTag, Tag<torch::kInt32>, 1>);
 
-extern template void blub_impl<TorchDeviceCudaTag>(TorchDeviceCudaTag,
-                                                   ConcreteTensor<TorchDeviceCudaTag, double, 1>,
-                                                   ConcreteTensor<TorchDeviceCudaTag, int, 1>);
+extern template void
+    blub_impl<TorchDeviceCudaTag>(TorchDeviceCudaTag,
+                                  ConcreteTensor<TorchDeviceCudaTag, Tag<torch::kFloat64>, 1>,
+                                  ConcreteTensor<TorchDeviceCudaTag, Tag<torch::kInt32>, 1>);
 
 // -----------------------------------------------------------------------------
 // The general use "blub" function, which will handle all of the dispatch to the

@@ -325,6 +325,27 @@ struct SparseDispatchTable<ReturnType(Args...), AxesT> {
 };
 
 // -----------------------------------------------------------------------------
+// Helpers for BindValuesFn: Convert compile-time values to types via axes
+// -----------------------------------------------------------------------------
+
+// Get the Nth value from a parameter pack of values
+template <size_t I, auto... Vs> struct NthValue;
+
+template <auto First, auto... Rest> struct NthValue<0, First, Rest...> {
+    static constexpr auto value = First;
+};
+
+template <size_t I, auto First, auto... Rest> struct NthValue<I, First, Rest...> {
+    static constexpr auto value = NthValue<I - 1, Rest...>::value;
+};
+
+// Get the type corresponding to a value in an axis
+template <typename Axis, auto V> struct ValueToType {
+    static constexpr size_t idx = Axis::index_of_value(V);
+    using type                  = typename Axis::template type_at_index<idx>;
+};
+
+// -----------------------------------------------------------------------------
 // BindFn: Bind a constexpr lambda factory (C++20)
 // -----------------------------------------------------------------------------
 // Allows factories to be written as constexpr lambdas with template parameters:
@@ -340,12 +361,25 @@ template <auto Factory, typename... Types> struct BindTypesFn {
     }
 };
 
+// Bind using enum/integral values instead of types
+// The values are converted to their corresponding types via the axes
 template <auto Factory, auto... Values> struct BindValuesFn {
+    template <typename Table, size_t... Is>
+    static void
+    apply_impl(Table &table, std::index_sequence<Is...>) {
+        using Axes           = typename Table::Axes;
+        constexpr size_t idx = Axes::index_of_values(Values...);
+        // Convert each value to its corresponding type from the appropriate axis
+        table.table_[idx] =
+            Factory.template
+            operator()<typename ValueToType<typename Axes::template axis_at<Is>,
+                                            NthValue<Is, Values...>::value>::type...>();
+    }
+
     template <typename Table>
     static void
     apply(Table &table) {
-        constexpr size_t idx = Table::Axes::template index_of_values<Values...>;
-        table.table_[idx]    = Factory.template operator()<Values...>();
+        apply_impl(table, std::make_index_sequence<sizeof...(Values)>{});
     }
 };
 

@@ -20,12 +20,15 @@ namespace fvdb {
 namespace dispatch {
 
 //-----------------------------------------------------------------------------------
-// ConcreteTensor CUDA/PrivateUse1 specializations
+// ConcreteTensor CUDA/PrivateUse1 accessors
 //-----------------------------------------------------------------------------------
+// Extracts the C++ scalar type from the DtypeTag to call torch's packed_accessor.
+// Matches any ConcreteTensor with CUDA or PrivateUse1 device tags.
 
-template <typename ScalarT, size_t Rank, typename IndexT = int64_t>
+template <typename DtypeTag, size_t Rank, typename IndexT = int64_t>
 auto
-accessor(CudaTensor<ScalarT, Rank> ct) {
+accessor(ConcreteTensor<TorchDeviceCudaTag, DtypeTag, Rank> ct) {
+    using ScalarT = ScalarCppTypeT<DtypeTag>;
     if constexpr (std::is_same_v<IndexT, int64_t>) {
         return ct.tensor.template packed_accessor64<ScalarT, Rank, at::RestrictPtrTraits>();
     } else {
@@ -33,9 +36,10 @@ accessor(CudaTensor<ScalarT, Rank> ct) {
     }
 }
 
-template <typename ScalarT, size_t Rank, typename IndexT = int64_t>
+template <typename DtypeTag, size_t Rank, typename IndexT = int64_t>
 auto
-accessor(PrivateUse1Tensor<ScalarT, Rank> ct) {
+accessor(ConcreteTensor<TorchDevicePrivateUse1Tag, DtypeTag, Rank> ct) {
+    using ScalarT = ScalarCppTypeT<DtypeTag>;
     if constexpr (std::is_same_v<IndexT, int64_t>) {
         return ct.tensor.template packed_accessor64<ScalarT, Rank, at::RestrictPtrTraits>();
     } else {
