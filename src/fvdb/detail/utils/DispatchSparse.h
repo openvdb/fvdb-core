@@ -1,9 +1,11 @@
+#if 1
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
 #ifndef FVDB_DETAIL_UTILS_DISPATCHSPARSE_H
 #define FVDB_DETAIL_UTILS_DISPATCHSPARSE_H
 
+#include <ATen/core/TensorAccessor.h>
 #include <torch/types.h>
 
 #include <cstdint>
@@ -84,11 +86,24 @@ struct ContainsTypeImpl<T, First, Rest...>
                          ContainsTypeImpl<T, Rest...>::value> {};
 
 // Helper: Get the index of type T in the pack of Pairs
+// Uses partial specialization to properly short-circuit template instantiation
 template <typename T, typename... Pairs> struct IndexOfTypeImpl;
 
+// Base case: T not found in list - provide a clear compile-time error
+template <typename T> struct IndexOfTypeImpl<T> {
+    static_assert(sizeof(T) == 0, "Type not found in DispatchAxis");
+    static constexpr size_t value = size_t(-1); // Unreachable
+};
+
+// Match case: T matches the first pair's type
+template <typename T, auto V, typename... Rest>
+struct IndexOfTypeImpl<T, ValueTypePair<V, T>, Rest...> {
+    static constexpr size_t value = 0;
+};
+
+// Recursive case: T doesn't match, continue searching
 template <typename T, typename First, typename... Rest> struct IndexOfTypeImpl<T, First, Rest...> {
-    static constexpr size_t value =
-        std::is_same_v<T, typename First::type> ? 0 : 1 + IndexOfTypeImpl<T, Rest...>::value;
+    static constexpr size_t value = 1 + IndexOfTypeImpl<T, Rest...>::value;
 };
 
 } // namespace detail
@@ -178,7 +193,7 @@ using DummyAxis = DispatchAxis<ValueTypePair<DummyEnum::Mup, DummyMupT>,
 // -----------------------------------------------------------------------------
 // Demonstrates defining a DispatchAxis from just raw C++ element types,
 // automatically associating each with the corresponding torch ScalarType enum.
-// Uses torch's built-in c10::CppTypeToScalarType<T> for the mapping.
+// Uses c10::CppTypeToScalarType<T> for the mapping (not available in torch:: namespace).
 
 template <typename... Ts>
 using TorchDtypeAxis = DispatchAxis<ValueTypePair<c10::CppTypeToScalarType<Ts>::value, Ts>...>;
@@ -201,17 +216,18 @@ template <auto V> struct Tag {
 };
 
 // Device tag types - each is a distinct type that carries its device enum value
-using TorchDeviceCpuTag         = Tag<c10::kCPU>;
-using TorchDeviceCudaTag        = Tag<c10::kCUDA>;
-using TorchDevicePrivateUse1Tag = Tag<c10::kPrivateUse1>;
+using TorchDeviceCpuTag         = Tag<torch::kCPU>;
+using TorchDeviceCudaTag        = Tag<torch::kCUDA>;
+using TorchDevicePrivateUse1Tag = Tag<torch::kPrivateUse1>;
 
 // Create a DispatchAxis directly from enum values
 // Automatically generates Tag<V> types for each value
-// Usage: DispatchAxisFromValues<c10::kCPU, c10::kCUDA, c10::kPrivateUse1>
+// Usage: DispatchAxisFromValues<torch::kCPU, torch::kCUDA, torch::kPrivateUse1>
 template <auto... Vs> using TorchDeviceDispatchAxis = DispatchAxis<ValueTypePair<Vs, Tag<Vs>>...>;
 
 // Now TorchDeviceAxis can be defined much more simply:
-using ExampleTorchDeviceAxis = TorchDeviceDispatchAxis<c10::kCPU, c10::kCUDA, c10::kPrivateUse1>;
+using ExampleTorchDeviceAxis =
+    TorchDeviceDispatchAxis<torch::kCPU, torch::kCUDA, torch::kPrivateUse1>;
 
 // -----------------------------------------------------------------------------
 // IntDispatchAxis: DispatchAxis from a list of integer values
@@ -308,48 +324,32 @@ template <typename... Axes> struct AxisProduct {
 // Example: Product of device, dtype, and channel axes
 // Total combinations = 3 devices * 5 dtypes * 6 channels = 90
 using ExampleProductAxis =
-    AxisProduct<TorchDeviceDispatchAxis<c10::kCPU, c10::kCUDA, c10::kPrivateUse1>,
+    AxisProduct<TorchDeviceDispatchAxis<torch::kCPU, torch::kCUDA, torch::kPrivateUse1>,
                 TorchDtypeAxis<float, double, int32_t, int64_t, bool>,
                 IntDispatchAxis<1, 3, 4, 8, 16, 32>>;
 
 // Usage: (compile time or runtime)
 // ExampleProductAxis::index_of_types<TorchDeviceCudaTag, float, IntegralTag<4>>
-// ExampleProductAxis::index_of_values(c10::kCUDA, c10::ScalarType::Float, 4)
+// ExampleProductAxis::index_of_values(torch::kCUDA, torch::ScalarType::Float, 4)
 
 //-----------------------------------------------------------------------------------
-// TENSOR ACCESSOR HELPERS
+// TENSOR ACCESSOR WRAPPERS
 //-----------------------------------------------------------------------------------
+// Wrapper structs that encapsulate tensor accessor creation. The primary template
+// handles CPU accessors. CUDA/PrivateUse1 specializations are forward-declared here
+// and defined in DispatchSparse.cuh (requires nvcc).
+//
+// Usage: ConcreteTensor<DeviceTag, T, N>(tensor) constructs the appropriate accessor.
+// The wrapper forwards operator[] so kernel code can use acc[i] directly.
 
-template <typename DeviceTag, typename T, size_t N>
-using TorchAccessor64 =
-    typename std::conditional<DeviceTag == torch::kCUDA || DeviceTag == torch::kPrivateUse1,
-                              torch::PackedTensorAccessor64<T, N, torch::RestrictPtrTraits>,
-                              torch::TensorAccessor<T, N, int64_t>>::type;
+template <typename DeviceTag, typename ScalarT, size_t Rank> struct ConcreteTensor {
+    torch::Tensor tensor;
+};
 
-template <typename DeviceTag, typename T, size_t N>
-using TorchAccessor32 =
-    typename std::conditional<DeviceTag == torch::kCUDA || DeviceTag == torch::kPrivateUse1,
-                              torch::PackedTensorAccessor32<T, N, torch::RestrictPtrTraits>,
-                              torch::TensorAccessor<T, N, int32_t>>::type;
-
-template <typename DeviceTag, typename T, size_t N>
-TorchAccessor64<DeviceTag, T, N>
-makeAccessor64(torch::Tensor &tensor) {
-    if constexpr (DeviceTag == torch::kCUDA || DeviceTag == torch::kPrivateUse1) {
-        return tensor.generic_packed_accessor<T, N, torch::RestrictPtrTraits, int64_t>();
-    } else {
-        return tensor.accessor<T, N, int64_t>();
-    }
-}
-
-template <typename DeviceTag, typename T, size_t N>
-TorchAccessor32<DeviceTag, T, N>
-makeAccessor32(torch::Tensor &tensor) {
-    if constexpr (DeviceTag == torch::kCUDA || DeviceTag == torch::kPrivateUse1) {
-        return tensor.generic_packed_accessor<T, N, torch::RestrictPtrTraits, int32_t>();
-    } else {
-        return tensor.accessor<T, N, int32_t>();
-    }
+template <typename ScalarT, size_t Rank, typename IndexT = int64_t>
+auto
+accessor(ConcreteTensor<TorchDeviceCpuTag, ScalarT, Rank> ct) {
+    return ct.tensor.template accessor<ScalarT, Rank, IndexT>();
 }
 
 // -----------------------------------------------------------------------------
@@ -363,33 +363,28 @@ struct BaseDispatchTable<ReturnType(Args...), AxesT> {
     using FunctionPtr = ReturnType (*)(Args...);
     std::array<FunctionPtr, Axes::size> table_{};
 
-    // Dispatch with generic error on unbound combination
-    template <auto... Values>
-    ReturnType
-    dispatch(Values... values, Args... args) const {
+    template <typename... Values>
+    FunctionPtr
+    find_required(Values... values) const {
         static_assert(sizeof...(Values) == Axes::num_axes, "Must provide one value per axis");
         auto const idx = Axes::index_of_values(values...);
-
-        if (table_[idx] == nullptr) {
+        auto ret       = table_[idx];
+        if (ret == nullptr) {
             throw std::runtime_error("No implementation bound for this combination of axis values");
         }
-        return table_[idx](std::forward<Args>(args)...);
+        return ret;
     }
 
-    // Dispatch with custom fallback handler for unbound combinations.
-    // Fallback receives axis values followed by function args, enabling
-    // operation-specific error messages with full runtime context.
-    template <typename Fallback, auto... Values>
-    ReturnType
-    dispatch_or(Fallback &&fallback, Values... values, Args... args) const {
+    template <typename Fallback, typename... Values>
+    FunctionPtr
+    find_or(Fallback &&fallback, Values... values) const {
         static_assert(sizeof...(Values) == Axes::num_axes, "Must provide one value per axis");
         auto const idx = Axes::index_of_values(values...);
-
-        if (table_[idx] == nullptr) {
-            return std::invoke(
-                std::forward<Fallback>(fallback), values..., std::forward<Args>(args)...);
+        auto ret       = table_[idx];
+        if (ret == nullptr) {
+            return std::invoke(std::forward<Fallback>(fallback), values...);
         }
-        return table_[idx](std::forward<Args>(args)...);
+        return ret;
     }
 };
 
@@ -468,54 +463,64 @@ namespace example {
 // -------------------------------------------------------------------------
 
 void blub_impl(TorchDeviceCpuTag,
-               TorchAccessor64<TorchDeviceCpuTag, float, 1> in,
-               TorchAccessor64<TorchDeviceCpuTag, int, 1> out);
+               ConcreteTensor<TorchDeviceCpuTag, float, 1> in,
+               ConcreteTensor<TorchDeviceCpuTag, int, 1> out);
 
 void blub_impl(TorchDeviceCudaTag,
-               TorchAccessor64<TorchDeviceCudaTag, float, 1> in,
-               TorchAccessor64<TorchDeviceCudaTag, int, 1> out);
+    ConcreteTensor<TorchDeviceCudaTag, float, 1> in,
+    ConcreteTensor<TorchDeviceCudaTag, int, 1> out);
 
 template <typename T>
 void blub_impl(TorchDeviceCpuTag,
-               TorchAccessor64<TorchDeviceCpuTag, T, 1> in,
-               TorchAccessor64<TorchDeviceCpuTag, T, 1> out);
+               ConcreteTensor<TorchDeviceCpuTag, T, 1> in,
+               ConcreteTensor<TorchDeviceCpuTag, T, 1> out);
 
 extern template void blub_impl<int32_t>(TorchDeviceCpuTag,
-                                        TorchAccessor64<TorchDeviceCpuTag, int32_t, 1>,
-                                        TorchAccessor64<TorchDeviceCpuTag, int32_t, 1>);
+                                        ConcreteTensor<TorchDeviceCpuTag, int32_t, 1>,
+                                        ConcreteTensor<TorchDeviceCpuTag, int32_t, 1>);
 extern template void blub_impl<int64_t>(TorchDeviceCpuTag,
-                                        TorchAccessor64<TorchDeviceCpuTag, int64_t, 1>,
-                                        TorchAccessor64<TorchDeviceCpuTag, int64_t, 1>);
+                                        ConcreteTensor<TorchDeviceCpuTag, int64_t, 1>,
+                                        ConcreteTensor<TorchDeviceCpuTag, int64_t, 1>);
 extern template void blub_impl<torch::Half>(TorchDeviceCpuTag,
-                                            TorchAccessor64<TorchDeviceCpuTag, torch::Half, 1>,
-                                            TorchAccessor64<TorchDeviceCpuTag, torch::Half, 1>);
+                                            ConcreteTensor<TorchDeviceCpuTag, torch::Half, 1>,
+                                            ConcreteTensor<TorchDeviceCpuTag, torch::Half, 1>);
 extern template void blub_impl<float>(TorchDeviceCpuTag,
-                                      TorchAccessor64<TorchDeviceCpuTag, float, 1>,
-                                      TorchAccessor64<TorchDeviceCpuTag, float, 1>);
+                                      ConcreteTensor<TorchDeviceCpuTag, float, 1>,
+                                      ConcreteTensor<TorchDeviceCpuTag, float, 1>);
 extern template void blub_impl<double>(TorchDeviceCpuTag,
-                                       TorchAccessor64<TorchDeviceCpuTag, double, 1>,
-                                       TorchAccessor64<TorchDeviceCpuTag, double, 1>);
+                                       ConcreteTensor<TorchDeviceCpuTag, double, 1>,
+                                       ConcreteTensor<TorchDeviceCpuTag, double, 1>);
 
 template <typename DeviceTag>
 void blub_impl(DeviceTag,
-               TorchAccessor64<DeviceTag, double, 1> in,
-               TorchAccessor64<DeviceTag, int, 1> out);
+               ConcreteTensor<DeviceTag, double, 1> in,
+               ConcreteTensor<DeviceTag, int, 1> out);
 
 extern template void blub_impl<TorchDeviceCpuTag>(TorchDeviceCpuTag,
-                                                  TorchAccessor64<TorchDeviceCpuTag, double, 1>,
-                                                  TorchAccessor64<TorchDeviceCpuTag, int, 1>);
-extern template void blub_impl<TorchDeviceCudaTag>(TorchDeviceCudaTag,
-                                                   TorchAccessor64<TorchDeviceCudaTag, double, 1>,
-                                                   TorchAccessor64<TorchDeviceCudaTag, int, 1>);
+                                                  ConcreteTensor<TorchDeviceCpuTag, double, 1>,
+                                                  ConcreteTensor<TorchDeviceCpuTag, int, 1>);
+
+                                                  extern template void blub_impl<TorchDeviceCudaTag>(TorchDeviceCudaTag,
+                                                    ConcreteTensor<TorchDeviceCudaTag, double, 1>,
+                                                    ConcreteTensor<TorchDeviceCudaTag, int, 1>);
 
 // -----------------------------------------------------------------------------
 // The general use "blub" function, which will handle all of the dispatch to the
 // blub implementations above. This is the whole reason we're here.
 // -----------------------------------------------------------------------------
-torch::Tensor blub(torch::Tensor in, torch::ScalarType out_dtype = in.scalar_type());
+// Overload: output dtype defaults to input dtype
+torch::Tensor blub(torch::Tensor in, torch::ScalarType out_dtype);
+
+// Overload: output dtype defaults to input dtype
+inline torch::Tensor
+blub(torch::Tensor in) {
+    return blub(in, in.scalar_type());
+}
 
 } // namespace example
 } // namespace dispatch
 } // namespace fvdb
 
 #endif // FVDB_DETAIL_UTILS_DISPATCHSPARSE_H
+
+#endif // 0

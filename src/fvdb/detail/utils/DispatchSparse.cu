@@ -3,47 +3,44 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include "fvdb/detail/utils/DispatchSparse.h"
+#include "fvdb/detail/utils/DispatchSparse.cuh"
 
 namespace fvdb {
 namespace dispatch {
 namespace example {
 
 // -------------------------------------------------------------------------
-// CPU-only implementations (no CUDA accessor types needed)
+// CUDA implementation (requires nvcc for PackedTensorAccessor types)
 // -------------------------------------------------------------------------
 
 void
-blub_impl(TorchDeviceCpuTag,
-          ConcreteTensor<TorchDeviceCpuTag, float, 1> in,
-          ConcreteTensor<TorchDeviceCpuTag, int, 1> out) {
-    printf("blub_impl(Cpu, float, int)\n");
+blub_impl(TorchDeviceCudaTag,
+          ConcreteTensor<TorchDeviceCudaTag, float, 1> in,
+          ConcreteTensor<TorchDeviceCudaTag, int, 1> out) {
+    printf("blub_impl(Cuda, float, int)\n");
 }
 
-template <typename T>
+// -------------------------------------------------------------------------
+// Device-generic template for double->int conversion
+// Template definition here since it uses ConcreteTensor<DeviceTag, ...>
+// which resolves to PackedTensorAccessor for CUDA/PrivateUse1 device tags.
+// Both CPU and CUDA instantiations provided here to satisfy ODR.
+// -------------------------------------------------------------------------
+
+template <typename DeviceTag>
 void
-blub_impl(TorchDeviceCpuTag,
-          ConcreteTensor<TorchDeviceCpuTag, T, 1> in,
-          ConcreteTensor<TorchDeviceCpuTag, T, 1> out) {
-    printf("generic same-type blub_impl(Cpu, %s, %s)\n", typeid(T).name(), typeid(T).name());
+blub_impl(DeviceTag,
+          ConcreteTensor<DeviceTag, double, 1> in,
+          ConcreteTensor<DeviceTag, int, 1> out) {
+    printf("any-device double-int-type blub_impl(%s, double, int)\n", typeid(DeviceTag).name());
 }
 
-template void blub_impl<int32_t>(TorchDeviceCpuTag,
-                                 ConcreteTensor<TorchDeviceCpuTag, int32_t, 1>,
-                                 ConcreteTensor<TorchDeviceCpuTag, int32_t, 1>);
-template void blub_impl<int64_t>(TorchDeviceCpuTag,
-                                 ConcreteTensor<TorchDeviceCpuTag, int64_t, 1>,
-                                 ConcreteTensor<TorchDeviceCpuTag, int64_t, 1>);
-template void blub_impl<torch::Half>(TorchDeviceCpuTag,
-                                     ConcreteTensor<TorchDeviceCpuTag, torch::Half, 1>,
-                                     ConcreteTensor<TorchDeviceCpuTag, torch::Half, 1>);
-template void blub_impl<float>(TorchDeviceCpuTag,
-                               ConcreteTensor<TorchDeviceCpuTag, float, 1>,
-                               ConcreteTensor<TorchDeviceCpuTag, float, 1>);
-template void blub_impl<double>(TorchDeviceCpuTag,
-                                ConcreteTensor<TorchDeviceCpuTag, double, 1>,
-                                ConcreteTensor<TorchDeviceCpuTag, double, 1>);
-
+template void blub_impl<TorchDeviceCpuTag>(TorchDeviceCpuTag,
+                                           ConcreteTensor<TorchDeviceCpuTag, double, 1>,
+                                           ConcreteTensor<TorchDeviceCpuTag, int, 1>);
+template void blub_impl<TorchDeviceCudaTag>(TorchDeviceCudaTag,
+                                            ConcreteTensor<TorchDeviceCudaTag, double, 1>,
+                                            ConcreteTensor<TorchDeviceCudaTag, int, 1>);
 
 // -------------------------------------------------------------------------
 // Axis definitions: declare the extent of the dispatch space
@@ -125,7 +122,6 @@ blub(torch::Tensor in, torch::ScalarType out_dtype) {
     auto fn_ptr = table.find_or(blub_unsupported, device, in_dtype, out_dtype);
     return fn_ptr(in, out_dtype);
 }
-
 
 } // namespace example
 } // namespace dispatch
