@@ -7,12 +7,12 @@
 #include "fvdb/detail/dispatch/Tag.h"
 
 #include <array>
+#include <concepts>
 #include <functional>
 #include <stdexcept>
 #include <tuple>
 #include <type_traits>
 #include <utility>
-#include <concepts>
 
 namespace fvdb {
 namespace dispatch {
@@ -183,10 +183,10 @@ struct SparseDispatchTable<ReturnType(Args...), AxesT> {
 
 // Concept for the dispatch table
 template <typename T>
-concept DispatchTable = requires(T& t, std::size_t idx) {
-    typename T::FunctionPtr;  // Must have FunctionPtr type alias
-    typename T::Axes;         // Must have Axes type alias
-    t.table_[idx];            // Must have indexable table_ member
+concept DispatchTable = requires(T &t, std::size_t idx) {
+    typename T::FunctionPtr; // Must have FunctionPtr type alias
+    typename T::Axes;        // Must have Axes type alias
+    t.table_[idx];           // Must have indexable table_ member
 };
 
 // -----------------------------------------------------------------------------
