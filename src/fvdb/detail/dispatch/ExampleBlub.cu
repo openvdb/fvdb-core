@@ -7,6 +7,8 @@
 #include "fvdb/detail/dispatch/SparseDispatchTable.h"
 #include "fvdb/detail/dispatch/TorchDispatch.h"
 
+#include <concepts>
+
 namespace fvdb {
 namespace dispatch {
 namespace example {

@@ -12,67 +12,14 @@
 #include <tuple>
 #include <type_traits>
 #include <utility>
+#include <concepts>
 
 namespace fvdb {
 namespace dispatch {
 
 // -----------------------------------------------------------------------------
-// DispatchAxis
+// ValueOrdering
 // -----------------------------------------------------------------------------
-
-#if 0
-
-// A single value-type pair: directly encodes the association
-template <auto V, typename T> struct ValueTypePair {
-    static constexpr auto value = V;
-    using type                  = T;
-};
-
-namespace detail {
-
-// Helper: Get the type at index I from a pack of Pairs
-template <size_t I, typename... Pairs> struct TypeAtIndexImpl;
-
-template <typename First, typename... Rest> struct TypeAtIndexImpl<0, First, Rest...> {
-    using type = typename First::type;
-};
-
-template <size_t I, typename First, typename... Rest> struct TypeAtIndexImpl<I, First, Rest...> {
-    using type = typename TypeAtIndexImpl<I - 1, Rest...>::type;
-};
-
-// Helper: Check if type T exists in the pack of Pairs
-template <typename T, typename... Pairs> struct ContainsTypeImpl : std::false_type {};
-
-template <typename T, typename First, typename... Rest>
-struct ContainsTypeImpl<T, First, Rest...>
-    : std::bool_constant<std::is_same_v<T, typename First::type> ||
-                         ContainsTypeImpl<T, Rest...>::value> {};
-
-// Helper: Get the index of type T in the pack of Pairs
-// Uses partial specialization to properly short-circuit template instantiation
-template <typename T, typename... Pairs> struct IndexOfTypeImpl;
-
-// Base case: T not found in list - provide a clear compile-time error
-template <typename T> struct IndexOfTypeImpl<T> {
-    static_assert(sizeof(T) == 0, "Type not found in DispatchAxis");
-    static constexpr size_t value = size_t(-1); // Unreachable
-};
-
-// Match case: T matches the first pair's type
-template <typename T, auto V, typename... Rest>
-struct IndexOfTypeImpl<T, ValueTypePair<V, T>, Rest...> {
-    static constexpr size_t value = 0;
-};
-
-// Recursive case: T doesn't match, continue searching
-template <typename T, typename First, typename... Rest> struct IndexOfTypeImpl<T, First, Rest...> {
-    static constexpr size_t value = 1 + IndexOfTypeImpl<T, Rest...>::value;
-};
-
-} // namespace detail
-
-#endif
 
 template <auto... Values> struct ValueOrdering {
     using value_type                     = std::common_type_t<decltype(Values)...>;
@@ -232,6 +179,14 @@ struct SparseDispatchTable<ReturnType(Args...), AxesT> {
         }
         return ret;
     }
+};
+
+// Concept for the dispatch table
+template <typename T>
+concept DispatchTable = requires(T& t, std::size_t idx) {
+    typename T::FunctionPtr;  // Must have FunctionPtr type alias
+    typename T::Axes;         // Must have Axes type alias
+    t.table_[idx];            // Must have indexable table_ member
 };
 
 // -----------------------------------------------------------------------------
