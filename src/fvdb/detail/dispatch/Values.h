@@ -18,14 +18,14 @@ namespace {
 // types match AND the values are equal.
 template <typename T, typename U> struct type_and_value_equal_impl {
     static constexpr bool
-    compare(T const&, U const&) {
+    compare(T const &, U const &) {
         return false;
     }
 };
 
 template <typename T> struct type_and_value_equal_impl<T, T> {
     static constexpr bool
-    compare(T const&a, T const&b) {
+    compare(T const &a, T const &b) {
         return a == b;
     }
 };
@@ -36,7 +36,7 @@ struct type_and_value_equal : type_and_value_equal_impl<std::decay_t<T>, std::de
 
 } // namespace
 
-template <auto... values> struct ValueAnyTypePack {
+template <auto... values> struct AnyTypeValuePack {
     static constexpr auto value_tuple = std::make_tuple(values...);
     static constexpr auto size        = sizeof...(values);
 
@@ -54,9 +54,9 @@ template <auto... values> struct ValueAnyTypePack {
     static constexpr std::optional<size_t>
     first_index_of_value(auto v) {
         std::optional<size_t> result = std::nullopt;
-        auto check_at_index = [&]<size_t I>() {
+        auto check_at_index          = [&]<size_t I>() {
             if (!result) {
-                auto const& elem = std::get<I>(value_tuple);
+                auto const &elem = std::get<I>(value_tuple);
                 if (type_and_value_equal<decltype(elem), decltype(v)>::compare(elem, v)) {
                     result = I;
                 }
@@ -75,33 +75,42 @@ template <auto... values> struct ValueAnyTypePack {
     }
 };
 
-// ValueSameTypePack: like ValueAnyTypePack, but enforces that all values share
+// SameTypeValuePack: like AnyTypeValuePack, but enforces that all values share
 // the same type. Values do NOT need to be unique.
-template <auto... values>
-struct ValueSameTypePack : ValueAnyTypePack<values...> {
-    using base = ValueAnyTypePack<values...>;
+template <auto... values> struct SameTypeValuePack;
 
-    // Enforce uniform typing via static_assert
-    static_assert(sizeof...(values) == 0 ||
-                      (std::is_same_v<std::decay_t<decltype(values)>,
-                                      std::common_type_t<std::decay_t<decltype(values)>...>> &&
-                       ...),
-                  "All values in ValueSameTypePack must have the same type");
+template <> struct SameTypeValuePack<> : AnyTypeValuePack<> {
+    using value_type = void;
 };
 
-// Partial specialization for non-empty pack to expose value_type
-template <auto first, auto... rest>
-    requires(std::is_same_v<std::decay_t<decltype(first)>, std::decay_t<decltype(rest)>> && ...)
-struct ValueSameTypePack<first, rest...> : ValueAnyTypePack<first, rest...> {
-    using base       = ValueAnyTypePack<first, rest...>;
-    using value_type = std::decay_t<decltype(first)>;
+template <auto... values> struct SameTypeValuePack<values...> : AnyTypeValuePack<values...> {
+    using base       = AnyTypeValuePack<values...>;
+    using value_type = std::common_type_t<std::decay_t<decltype(values)>...>;
+
+    // Enforce uniform typing via static_assert
+    static_assert(sizeof...(values) > 0 &&
+                      (std::is_same_v<value_type, std::decay_t<decltype(values)>> && ...),
+                  "All values in SameTypeValuePack must have the same type");
+
+    // Returns the index of the first value matching v (considering only values
+    // of the same decayed type). Returns std::nullopt if not found.
+    static constexpr std::optional<size_t>
+    first_index_of_value(value_type v) {
+        return base::first_index_of_value(v);
+    }
+
+    static value_type
+    value_at_index(size_t idx) {
+        return base::value_at_index(idx);
+    }
 };
 
 // Helper to check uniqueness at compile time
 namespace {
 
 template <auto... values>
-constexpr bool all_values_unique() {
+constexpr bool
+all_values_unique() {
     if constexpr (sizeof...(values) <= 1) {
         return true;
     } else {
@@ -119,21 +128,24 @@ constexpr bool all_values_unique() {
 
 } // namespace
 
-// UniqueValueSameTypePack: like ValueSameTypePack, but also enforces that all
+// SameTypeUniqueValuePack: like SameTypeValuePack, but also enforces that all
 // values are unique. Provides index_of_value instead of first_index_of_value.
-template <auto... values>
-struct UniqueValueSameTypePack : ValueSameTypePack<values...> {
-    using base = ValueSameTypePack<values...>;
+template <auto... values> struct SameTypeUniqueValuePack : SameTypeValuePack<values...> {
+    using base       = SameTypeValuePack<values...>;
+    using value_type = typename base::value_type;
 
     static_assert(all_values_unique<values...>(),
-                  "All values in UniqueValueSameTypePack must be unique");
+                  "All values in SameTypeUniqueValuePack must be unique");
 
     // Since values are unique, there's exactly one index per value.
     static constexpr std::optional<size_t>
-    index_of_value(auto v) {
+    index_of_value(value_type v) {
         return base::first_index_of_value(v);
     }
 };
+
+// UniqueIntegerPack: like SameTypeUniqueValuePack, but for integer values.
+template <int... Values> using UniqueIntegerPack = SameTypeUniqueValuePack<Values...>;
 
 } // namespace dispatch
 } // namespace fvdb
