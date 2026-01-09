@@ -346,10 +346,8 @@ launchRasterizeForwardKernel(
     std::vector<torch::Tensor> lastIdsToRenderVec;
 
     for (const auto &size: sizes) {
-        featuresToRenderVec.push_back(
-            torch::empty({size, channels}, features.options().dtype(torch::kFloat32)));
-        alphasToRenderVec.push_back(
-            torch::empty({size, 1}, features.options().dtype(torch::kFloat32)));
+        featuresToRenderVec.push_back(torch::empty({size, channels}, features.options()));
+        alphasToRenderVec.push_back(torch::empty({size, 1}, features.options()));
         lastIdsToRenderVec.push_back(torch::empty({size}, features.options().dtype(torch::kInt32)));
     }
 
@@ -468,10 +466,8 @@ launchRasterizeForwardKernels(
     std::vector<torch::Tensor> lastIdsToRenderVec;
 
     for (const auto &size: sizes) {
-        featuresToRenderVec.push_back(
-            torch::empty({size, channels}, features.options().dtype(torch::kFloat32)));
-        alphasToRenderVec.push_back(
-            torch::empty({size, 1}, features.options().dtype(torch::kFloat32)));
+        featuresToRenderVec.push_back(torch::empty({size, channels}, features.options()));
+        alphasToRenderVec.push_back(torch::empty({size, 1}, features.options()));
         lastIdsToRenderVec.push_back(torch::empty({size}, features.options().dtype(torch::kInt32)));
     }
 
