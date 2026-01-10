@@ -147,6 +147,111 @@ template <auto... values> struct SameTypeUniqueValuePack : SameTypeValuePack<val
 // UniqueIntegerPack: like SameTypeUniqueValuePack, but for integer values.
 template <int... Values> using UniqueIntegerPack = SameTypeUniqueValuePack<Values...>;
 
+// -----------------------------------------------------------------------------
+// is_value_pack - concept to check if a type is a value pack, true for
+// all the pack types herein
+template <typename T> struct is_value_pack : std::false_type {};
+
+template <typename T> inline constexpr bool is_value_pack_v = is_value_pack<T>::value;
+
+template <auto... Values> struct is_value_pack<AnyTypeValuePack<Values...>> : std::true_type {};
+
+template <auto... Values> struct is_value_pack<SameTypeValuePack<Values...>> : std::true_type {};
+
+template <auto... Values>
+struct is_value_pack<SameTypeUniqueValuePack<Values...>> : std::true_type {};
+
+template <typename T>
+concept ValuePack = is_value_pack_v<T>;
+
+// ---
+// TAIL TRAITS - gives the pack minus its first element.
+template <typename Pack> struct tail;
+
+template <template <auto...> typename PackType>
+    requires ValuePack<PackType<>>
+struct tail<PackType<>> {
+    using type = PackType<>;
+};
+
+template <template <auto...> typename PackType, auto First, auto... Rest>
+    requires ValuePack<PackType<First, Rest...>>
+struct tail<PackType<First, Rest...>> {
+    using type = PackType<Rest...>;
+};
+
+template <typename Pack> using tail_t = typename tail<Pack>::type;
+
+// -----------------------------------------------------------------------------
+// SUBSET TRAITS
+// -----------------------------------------------------------------------------
+
+template <typename SubsetValuePack, typename ValuePack> struct is_subset_of : std::false_type {};
+
+template <typename SubsetValuePack, typename ValuePack>
+inline constexpr bool is_subset_of_v = is_subset_of<SubsetValuePack, ValuePack>::value;
+
+template <typename SubsetValuePack, typename ValuePack>
+concept SubsetOf = is_subset_of_v<SubsetValuePack, ValuePack>;
+
+// Empty subset packs are a subset of an empty value pack.
+template <>
+struct is_subset_of<SameTypeUniqueValuePack<>, SameTypeUniqueValuePack<>> : std::true_type {};
+
+// If the subset pack is empty, it is a subset of any value pack.
+template <auto... Values>
+struct is_subset_of<SameTypeUniqueValuePack<>, SameTypeUniqueValuePack<Values...>>
+    : std::true_type {};
+
+// If the value pack is empty, no subset can be a subset of it, except in the empty case which
+// is specialized above.
+template <auto... Values>
+struct is_subset_of<SameTypeUniqueValuePack<Values...>, SameTypeUniqueValuePack<>>
+    : std::false_type {};
+
+// Pack is a subset of itself.
+template <auto... Values>
+struct is_subset_of<SameTypeUniqueValuePack<Values...>, SameTypeUniqueValuePack<Values...>>
+    : std::true_type {};
+
+// Subset unique values don't need to be in the same order.
+template <auto... SubsetValues, auto... Values>
+struct is_subset_of<SameTypeUniqueValuePack<SubsetValues...>, SameTypeUniqueValuePack<Values...>>
+    : std::bool_constant<(SameTypeUniqueValuePack<Values...>::contains_value(SubsetValues) &&
+                          ...)> {
+}
+
+// Create the indices of the subset same type unique value pack relative the the value pack,
+// requiring the concept SubsetOf.
+template <typename SubsetValuePack, typename ValuePack>
+struct subset_indices;
+
+template <auto... Values>
+struct subset_indices<SameTypeUniqueValuePack<>, SameTypeUniqueValuePack<Values...>> {
+    using subset_pack_type = SameTypeUniqueValuePack<>;
+    using value_pack_type  = SameTypeUniqueValuePack<Values...>;
+
+    // Empty index sequence is valid for an empty subset pack.
+    using type = std::index_sequence<>;
+};
+
+template <auto... SubsetValues, auto... Values>
+struct subset_indices<SameTypeUniqueValuePack<SubsetValues...>,
+                      SameTypeUniqueValuePack<Values...>> {
+    using subset_pack_type = SameTypeUniqueValuePack<SubsetValues...>;
+    using value_pack_type  = SameTypeUniqueValuePack<Values...>;
+
+    static_assert(is_subset_of_v<subset_pack_type, value_pack_type>,
+                  "SubsetValuePack must be a subset of ValuePack");
+
+    // Since is_subset_of guarantees all SubsetValues exist in Values,
+    // index_of_value will never return nullopt here.
+    using type = std::index_sequence<value_pack_type::index_of_value(SubsetValues).value()...>;
+};
+
+template <typename SubsetValuePack, typename ValuePack>
+using subset_indices_t = typename subset_indices<SubsetValuePack, ValuePack>::type;
+
 } // namespace dispatch
 } // namespace fvdb
 
