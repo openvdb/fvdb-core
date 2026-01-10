@@ -16,14 +16,15 @@ namespace fvdb {
 namespace dispatch {
 
 // -----------------------------------------------------------------------------
-// TorchDtypeAxis: DispatchAxis from ScalarType enum values
+// TorchScalarTypeAxis: DispatchAxis from ScalarType enum values
 // -----------------------------------------------------------------------------
-template <torch::ScalarType... Values> using TorchScalarTypeAxis = ValueOrdering<Values...>;
+template <torch::ScalarType... Vals> using TorchScalarTypeAxis = SameTypeUniqueValuePack<Vals...>;
 
 // -----------------------------------------------------------------------------
-// TorchDeviceAxis: DispatchAxis for torch device types
+// TorchDeviceDispatchAxis: DispatchAxis for torch device types
 // -----------------------------------------------------------------------------
-template <torch::DeviceType... Values> using TorchDeviceDispatchAxis = ValueOrdering<Values...>;
+template <torch::DeviceType... Vals>
+using TorchDeviceDispatchAxis = SameTypeUniqueValuePack<Vals...>;
 
 } // namespace dispatch
 } // namespace fvdb

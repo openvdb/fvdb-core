@@ -16,7 +16,7 @@ namespace fvdb {
 namespace dispatch {
 
 // -----------------------------------------------------------------------------
-// DimensionalAxis concept
+// is_dimensional_axis trait
 // -----------------------------------------------------------------------------
 // A DimensionalAxis is a SameTypeUniqueValuePack - a set of unique values of
 // the same type that can be indexed bidirectionally.
@@ -27,9 +27,6 @@ template <typename T> inline constexpr bool is_dimensional_axis_v = is_dimension
 
 template <auto... values>
 struct is_dimensional_axis<SameTypeUniqueValuePack<values...>> : std::true_type {};
-
-template <typename T>
-concept DimensionalAxis = is_dimensional_axis_v<T>;
 
 // -----------------------------------------------------------------------------
 // AxisOuterProduct
@@ -43,7 +40,10 @@ concept DimensionalAxis = is_dimensional_axis_v<T>;
 //
 // Returns std::nullopt if any value is not found in its corresponding axis.
 
-template <DimensionalAxis... Axes> struct AxisOuterProduct {
+template <typename... Axes> struct AxisOuterProduct {
+    static_assert((is_dimensional_axis_v<Axes> && ...),
+                  "AxisOuterProduct requires all Axes to be DimensionalAxis types "
+                  "(i.e., SameTypeUniqueValuePack instantiations)");
     // -------------------------------------------------------------------------
     // Type aliases
     // -------------------------------------------------------------------------
@@ -152,7 +152,7 @@ template <typename T>
 inline constexpr bool is_axis_outer_product_v = is_axis_outer_product<T>::value;
 
 template <typename T>
-concept IsAxisOuterProduct = is_axis_outer_product_v<T>;
+concept AxisOuterProductConcept = is_axis_outer_product_v<T>;
 
 // -----------------------------------------------------------------------------
 // is_subspace_of trait
@@ -170,9 +170,6 @@ struct is_subspace_of<AxisOuterProduct<SubAxes...>, AxisOuterProduct<FullAxes...
 
 template <typename Sub, typename Full>
 inline constexpr bool is_subspace_of_v = is_subspace_of<Sub, Full>::value;
-
-template <typename SubSpace, typename FullSpace>
-concept SubspaceOf = is_subspace_of_v<SubSpace, FullSpace>;
 
 // -----------------------------------------------------------------------------
 // for_each_values

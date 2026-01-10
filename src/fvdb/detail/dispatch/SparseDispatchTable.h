@@ -17,40 +17,47 @@ namespace fvdb {
 namespace dispatch {
 
 // =============================================================================
+// Traits
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// is_instantiator_for trait
+// -----------------------------------------------------------------------------
+// Checks if an Instantiator template, when instantiated with Values..., has a
+// static get() method that returns FunctionPtrT.
+//
+// Usage: is_instantiator_for_v<MyInstantiator, FunctionPtr, val1, val2, ...>
+
+template <template <auto...> typename Instantiator, typename FunctionPtrT, auto... Values>
+    struct is_instantiator_for : std::bool_constant < requires {
+    { Instantiator<Values...>::get() } -> std::same_as<FunctionPtrT>;
+} > {};
+
+template <template <auto...> typename Instantiator, typename FunctionPtrT, auto... Values>
+inline constexpr bool is_instantiator_for_v =
+    is_instantiator_for<Instantiator, FunctionPtrT, Values...>::value;
+
+// =============================================================================
 // Concepts
 // =============================================================================
 
 // -----------------------------------------------------------------------------
-// IsDispatchTable: Checks if a type is a valid dispatch table
+// DispatchTableConcept: Checks if a type is a valid dispatch table
 // -----------------------------------------------------------------------------
 
 template <typename T>
-concept IsDispatchTable = requires(T &t, std::size_t idx) {
+concept DispatchTableConcept = requires(T &t, std::size_t idx) {
     typename T::FunctionPtr;
     typename T::Axes;
     { t.table_[idx] } -> std::convertible_to<typename T::FunctionPtr &>;
-} && IsAxisOuterProduct<typename T::Axes>;
+} && AxisOuterProductConcept<typename T::Axes>;
 
 // -----------------------------------------------------------------------------
-// InstantiatorFor: Checks if a template is a valid instantiator for a table
-// -----------------------------------------------------------------------------
-// An Instantiator must have a static get() method returning FunctionPtr when
-// instantiated with values from the table's axes.
-//
-// Usage: InstantiatorFor<MyInst, MyTable, val1, val2, val3>
-// This checks that MyInst<val1, val2, val3>::get() returns MyTable::FunctionPtr.
-
-template <template <auto...> typename Inst, typename Table, auto... Values>
-concept InstantiatorFor = IsDispatchTable<Table> && requires {
-    { Inst<Values...>::get() } -> std::same_as<typename Table::FunctionPtr>;
-};
-
-// -----------------------------------------------------------------------------
-// BindingSpecFor: Checks if a type is a valid binding specification for a table
+// BindingSpecForConcept: Checks if a type is a valid binding specification for a table
 // -----------------------------------------------------------------------------
 
 template <typename Spec, typename Table>
-concept BindingSpecFor = IsDispatchTable<Table> && requires(Table &t) {
+concept BindingSpecForConcept = DispatchTableConcept<Table> && requires(Table &t) {
     { Spec::apply(t) } -> std::same_as<void>;
 };
 
@@ -64,7 +71,7 @@ template <typename FunctionSignature, typename AxesT> struct DispatchTable;
 
 template <typename ReturnType, typename... Args, typename AxesT>
 struct DispatchTable<ReturnType(Args...), AxesT> {
-    static_assert(IsAxisOuterProduct<AxesT>, "DispatchTable Axes must be an AxisOuterProduct");
+    static_assert(is_axis_outer_product_v<AxesT>, "DispatchTable Axes must be an AxisOuterProduct");
 
     using Axes        = AxesT;
     using FunctionPtr = ReturnType (*)(Args...);
@@ -95,11 +102,10 @@ struct DispatchTable<ReturnType(Args...), AxesT> {
         static_assert(sizeof...(Values) == Axes::num_axes,
                       "Must provide exactly one value per axis");
         auto const idx = Axes::index_of_values(values...);
-        static_assert(idx.has_value(), "Values must be valid members of their corresponding axes");
-        auto ret = table_[*idx];
-        if (ret == nullptr) {
+        if (!idx.has_value() || table_[*idx] == nullptr) {
             return std::invoke(std::forward<Fallback>(fallback), values...);
         }
+        auto ret = table_[*idx];
         return ret;
     }
 };
@@ -122,13 +128,12 @@ struct DispatchTable<ReturnType(Args...), AxesT> {
 
 template <template <auto...> typename Instantiator, auto... Values> struct Binding {
     template <typename Table>
-        requires IsDispatchTable<Table>
+        requires DispatchTableConcept<Table>
     static void
     apply(Table &table) {
         // Check that the instantiator returns the correct type
-        static_assert(
-            std::is_same_v<decltype(Instantiator<Values...>::get()), typename Table::FunctionPtr>,
-            "Instantiator::get() must return Table::FunctionPtr");
+        static_assert(is_instantiator_for_v<Instantiator, typename Table::FunctionPtr, Values...>,
+                      "Instantiator::get() must return Table::FunctionPtr");
 
         // Check that all values are valid for the table's axes
         static_assert(Table::Axes::index_of_values(Values...).has_value(),
@@ -146,7 +151,7 @@ template <template <auto...> typename Instantiator, auto... Values> struct Bindi
 // This is checked at apply() time to prevent accidental full-space instantiation.
 
 template <template <auto...> typename Instantiator, typename Subspace> struct SubspaceBinding {
-    static_assert(IsAxisOuterProduct<Subspace>,
+    static_assert(is_axis_outer_product_v<Subspace>,
                   "SubspaceBinding requires Subspace to be an AxisOuterProduct");
 
   private:
@@ -167,7 +172,7 @@ template <template <auto...> typename Instantiator, typename Subspace> struct Su
 
   public:
     template <typename Table>
-        requires IsDispatchTable<Table>
+        requires DispatchTableConcept<Table>
     static void
     apply(Table &table) {
         // CRITICAL: Verify the subspace is actually a subspace of the table's axes.
@@ -190,7 +195,7 @@ template <template <auto...> typename Instantiator, typename Subspace> struct Su
 // Useful for filling unsupported combinations with an error handler.
 
 template <typename Subspace, auto FnPtr> struct FillBinding {
-    static_assert(IsAxisOuterProduct<Subspace>,
+    static_assert(is_axis_outer_product_v<Subspace>,
                   "FillBinding requires Subspace to be an AxisOuterProduct");
 
   private:
@@ -208,7 +213,7 @@ template <typename Subspace, auto FnPtr> struct FillBinding {
 
   public:
     template <typename Table>
-        requires IsDispatchTable<Table>
+        requires DispatchTableConcept<Table>
     static void
     apply(Table &table) {
         // Verify the subspace is valid for this table
@@ -227,12 +232,12 @@ template <typename Subspace, auto FnPtr> struct FillBinding {
 // BindingList: Aggregates multiple bindings
 // -----------------------------------------------------------------------------
 
-template <typename... Bindings> struct BindingList {
+template <typename... BindingTs> struct BindingList {
     template <typename Table>
-        requires IsDispatchTable<Table>
+        requires DispatchTableConcept<Table>
     static void
     apply(Table &table) {
-        (Bindings::apply(table), ...);
+        (BindingTs::apply(table), ...);
     }
 };
 
@@ -245,7 +250,7 @@ template <typename... Bindings> struct BindingList {
 // -----------------------------------------------------------------------------
 
 template <typename Table, typename BindingSpec>
-    requires IsDispatchTable<Table> && BindingSpecFor<BindingSpec, Table>
+    requires DispatchTableConcept<Table> && BindingSpecForConcept<BindingSpec, Table>
 Table
 build_table() {
     Table table{};
@@ -258,7 +263,7 @@ build_table() {
 // -----------------------------------------------------------------------------
 
 template <typename BindingSpec, typename Table>
-    requires IsDispatchTable<Table> && BindingSpecFor<BindingSpec, Table>
+    requires DispatchTableConcept<Table> && BindingSpecForConcept<BindingSpec, Table>
 Table
 with_bindings(Table const &original) {
     Table result = original;
