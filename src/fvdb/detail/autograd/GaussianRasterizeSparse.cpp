@@ -22,7 +22,8 @@ RasterizeGaussiansToPixelsSparse::forward(
     const uint32_t imageOriginW,
     const uint32_t imageOriginH,
     const uint32_t tileSize,
-    const RasterizeGaussiansToPixelsSparse::Variable &tileOffsets, // [C, tile_height, tile_width]
+    const RasterizeGaussiansToPixelsSparse::Variable
+        &tileOffsets, // [C, tile_height, tile_width] (dense) or [num_active_tiles + 1] (sparse)
     const RasterizeGaussiansToPixelsSparse::Variable &tileGaussianIds, // [n_isects]
     const RasterizeGaussiansToPixelsSparse::Variable &activeTiles,     // [num_active_tiles]
     const RasterizeGaussiansToPixelsSparse::Variable
@@ -31,8 +32,6 @@ RasterizeGaussiansToPixelsSparse::forward(
     const RasterizeGaussiansToPixelsSparse::Variable &pixelMap,        // [num_pixels]
     const bool absgrad) {
     FVDB_FUNC_RANGE_WITH_NAME("RasterizeGaussiansToPixelsSparse::forward");
-    // const int C = means2d.size(0);
-    // const int N = means2d.size(1);
 
     auto variables              = FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
         return ops::dispatchGaussianSparseRasterizeForward<DeviceTag>(pixelsToRender,
@@ -175,23 +174,23 @@ RasterizeGaussiansToPixelsSparse::backward(
     Variable dLossDOpacities = std::get<4>(variables);
 
     return {
-        Variable(),
-        dLossDMeans2d,
-        dLossDConics,
-        dLossDColors,
-        dLossDOpacities,
-        Variable(),
-        Variable(),
-        Variable(),
-        Variable(),
-        Variable(),
-        Variable(),
-        Variable(),
-        Variable(),
-        Variable(),
-        Variable(),
-        Variable(),
-        Variable(),
+        Variable(),      // pixelsToRender
+        dLossDMeans2d,   // means2d
+        dLossDConics,    // conics
+        dLossDColors,    // features
+        dLossDOpacities, // opacities
+        Variable(),      // imageWidth
+        Variable(),      // imageHeight
+        Variable(),      // imageOriginW
+        Variable(),      // imageOriginH
+        Variable(),      // tileSize
+        Variable(),      // tileOffsets
+        Variable(),      // tileGaussianIds
+        Variable(),      // activeTiles
+        Variable(),      // tilePixelMask
+        Variable(),      // tilePixelCumsum
+        Variable(),      // pixelMap
+        Variable(),      // absgrad
     };
 }
 

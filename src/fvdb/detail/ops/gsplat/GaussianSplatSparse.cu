@@ -239,7 +239,7 @@ computeSparseInfo(const int32_t tileSideLength,
 
     if (numImages == 0 || numPixels == 0) {
         return {empty({0}, torch::kInt, device),
-                zeros({numImages, numTilesW, numTilesH}, torch::kBool, device),
+                zeros({numImages, numTilesH, numTilesW}, torch::kBool, device),
                 empty({0, numWordsPerTileBitmask(tileSideLength)}, torch::kLong, device),
                 zeros({1}, torch::kLong, device),
                 empty({0}, torch::kLong, device)};
@@ -307,8 +307,11 @@ computeSparseInfo(const int32_t tileSideLength,
     numPixelsPerTile          = numPixelsPerTile.index({at::indexing::Slice(0, numUniqueTiles)});
 
     // Cumsum so we know where each tile starts in the sorted array
-    // TODO: should we use CUB?
-    torch::cumsum_out(numPixelsPerTile, numPixelsPerTile, 0);
+    CUB_WRAPPER(cub::DeviceScan::InclusiveSum,
+                numPixelsPerTile.data_ptr<int64_t>(),
+                numPixelsPerTile.data_ptr<int64_t>(),
+                numUniqueTiles,
+                stream);
 
     // Compute a bitmask for each tile indicating which pixels are active in that tile
     torch::Tensor tileBitMask =

@@ -238,7 +238,7 @@ computeTileOffsetsSparse(const uint32_t numIntersections,
                          const uint32_t numTiles,
                          const uint32_t tileIdBits,
                          const int64_t *__restrict__ sortedIntersectionKeys,
-                         const uint32_t *__restrict__ activeTiles,
+                         const int32_t *__restrict__ activeTiles,
                          const uint32_t numActiveTiles,
                          int32_t *__restrict__ outOffsets) { // [C, n_tiles] or [num_active_tiles]
 
@@ -541,7 +541,7 @@ gaussianTileIntersectionCUDAImpl(
                 totalTiles,
                 numTileIdBits,
                 intersectionKeys.data_ptr<int64_t>(),
-                activeTiles.value().data_ptr<uint32_t>(),
+                activeTiles.value().data_ptr<int32_t>(),
                 numActiveTiles,
                 tileJOffsets.data_ptr<int32_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
@@ -1225,7 +1225,7 @@ dispatchGaussianTileIntersection<torch::kCPU>(
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor>
-dispatchGaussianTileIntersectionSparse<torch::kCUDA>(
+dispatchGaussianSparseTileIntersection<torch::kCUDA>(
     const torch::Tensor &means2d,                  // [C, N, 2] or [M, 2]
     const torch::Tensor &radii,                    // [C, N] or [M]
     const torch::Tensor &depths,                   // [C, N] or [M]
@@ -1251,7 +1251,7 @@ dispatchGaussianTileIntersectionSparse<torch::kCUDA>(
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor>
-dispatchGaussianTileIntersectionSparse<torch::kCPU>(
+dispatchGaussianSparseTileIntersection<torch::kPrivateUse1>(
     const torch::Tensor &means2d,                  // [C, N, 2] or [M, 2]
     const torch::Tensor &radii,                    // [C, N] or [M]
     const torch::Tensor &depths,                   // [C, N] or [M]
@@ -1263,16 +1263,35 @@ dispatchGaussianTileIntersectionSparse<torch::kCPU>(
     const uint32_t numTilesH,
     const uint32_t numTilesW) {
     FVDB_FUNC_RANGE();
-    return gaussianTileIntersectionCUDAImpl(means2d,
-                                            radii,
-                                            depths,
-                                            cameraJIdx,
-                                            tileMask,
-                                            activeTiles,
-                                            numCameras,
-                                            tileSize,
-                                            numTilesH,
-                                            numTilesW);
+    // Sparse tile intersection is not implemented for multi-GPU (PrivateUse1)
+    // The PrivateUse1 impl already checks for this and throws an appropriate error
+    return gaussianTileIntersectionPrivateUse1Impl(means2d,
+                                                   radii,
+                                                   depths,
+                                                   cameraJIdx,
+                                                   tileMask,
+                                                   activeTiles,
+                                                   numCameras,
+                                                   tileSize,
+                                                   numTilesH,
+                                                   numTilesW);
+}
+
+template <>
+std::tuple<torch::Tensor, torch::Tensor>
+dispatchGaussianSparseTileIntersection<torch::kCPU>(
+    const torch::Tensor &means2d,                  // [C, N, 2] or [M, 2]
+    const torch::Tensor &radii,                    // [C, N] or [M]
+    const torch::Tensor &depths,                   // [C, N] or [M]
+    const torch::Tensor &tileMask,                 // [C, H, W]
+    const torch::Tensor &activeTiles,              // [num_active_tiles]
+    const at::optional<torch::Tensor> &cameraJIdx, // NULL or [M]
+    const uint32_t numCameras,
+    const uint32_t tileSize,
+    const uint32_t numTilesH,
+    const uint32_t numTilesW) {
+    FVDB_FUNC_RANGE();
+    TORCH_CHECK(false, "CPU implementation not available for sparse tile intersection");
 }
 
 } // namespace ops

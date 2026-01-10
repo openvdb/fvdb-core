@@ -413,7 +413,7 @@ TEST_F(GaussianTileIntersectionTest, PackedFormatTest) {
 
 torch::Tensor
 tile_mask_to_active_tiles(const torch::Tensor &tile_mask) {
-    return torch::nonzero(tile_mask.flatten()).flatten().to(torch::kUInt32);
+    return torch::nonzero(tile_mask.flatten()).flatten().to(torch::kInt32);
 }
 
 TEST_F(GaussianTileIntersectionTest, DenseViaSparseTest) {
@@ -425,7 +425,7 @@ TEST_F(GaussianTileIntersectionTest, DenseViaSparseTest) {
     auto active_tiles        = tile_mask_to_active_tiles(tile_mask);
 
     auto [tile_offsets, intersection_values] =
-        fvdb::detail::ops::dispatchGaussianTileIntersectionSparse<torch::kCUDA>(
+        fvdb::detail::ops::dispatchGaussianSparseTileIntersection<torch::kCUDA>(
             means2d.cuda(),
             radii.cuda(),
             depths.cuda(),
@@ -470,7 +470,7 @@ TEST_F(GaussianTileIntersectionTest, SparseIntersectionTest) {
     int32_t num_active_tiles = active_tiles.size(0);
 
     auto [tile_offsets, intersection_values] =
-        fvdb::detail::ops::dispatchGaussianTileIntersectionSparse<torch::kCUDA>(
+        fvdb::detail::ops::dispatchGaussianSparseTileIntersection<torch::kCUDA>(
             means2d.cuda(),
             radii.cuda(),
             depths.cuda(),
@@ -508,7 +508,7 @@ TEST_F(GaussianTileIntersectionTest, SparseCPUNotImplementedTest) {
     auto tile_mask                      = torch::ones({1, num_tiles_h, num_tiles_w}, torch::kBool);
     auto active_tiles                   = tile_mask_to_active_tiles(tile_mask);
 
-    EXPECT_THROW(fvdb::detail::ops::dispatchGaussianTileIntersectionSparse<torch::kCPU>(
+    EXPECT_THROW(fvdb::detail::ops::dispatchGaussianSparseTileIntersection<torch::kCPU>(
                      means2d,
                      radii,
                      depths,
@@ -535,7 +535,7 @@ TEST_F(GaussianTileIntersectionTest, SparseZeroLengthGaussianTest) {
     auto active_tiles        = tile_mask_to_active_tiles(tile_mask);
 
     auto [tile_offsets, intersection_values] =
-        fvdb::detail::ops::dispatchGaussianTileIntersectionSparse<torch::kCUDA>(
+        fvdb::detail::ops::dispatchGaussianSparseTileIntersection<torch::kCUDA>(
             means2d.cuda(),
             radii.cuda(),
             depths.cuda(),
@@ -574,7 +574,7 @@ TEST_F(GaussianTileIntersectionTest, SparsePackedFormatTest) {
     auto active_tiles        = tile_mask_to_active_tiles(tile_mask);
 
     auto [tile_offsets, intersection_values] =
-        fvdb::detail::ops::dispatchGaussianTileIntersectionSparse<torch::kCUDA>(
+        fvdb::detail::ops::dispatchGaussianSparseTileIntersection<torch::kCUDA>(
             means2d_packed.cuda(),
             radii_packed.cuda(),
             depths_packed.cuda(),
@@ -621,7 +621,7 @@ TEST_F(GaussianTileIntersectionTest, RandomSparsePatternTest) {
     }
 #endif
     auto [tile_offsets, intersection_values] =
-        fvdb::detail::ops::dispatchGaussianTileIntersectionSparse<torch::kCUDA>(
+        fvdb::detail::ops::dispatchGaussianSparseTileIntersection<torch::kCUDA>(
             means2d.cuda(),
             radii.cuda(),
             depths.cuda(),

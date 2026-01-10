@@ -143,7 +143,7 @@ dispatchGaussianSparseRasterizeBackward(
     const uint32_t imageOriginW,
     const uint32_t imageOriginH,
     const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,     // [C, tile_height, tile_width]
+    const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
     const torch::Tensor &tileGaussianIds, // [n_isects]
     // Forward pass outputs (sparse)
     const fvdb::JaggedTensor &renderedAlphas, // [C lists: varying sizes, each element [1]]
