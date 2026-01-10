@@ -241,6 +241,28 @@ template <typename... BindingTs> struct BindingList {
     }
 };
 
+// -----------------------------------------------------------------------------
+// WithGet: Wraps an Invoker (with static invoke()) to add the get() method
+// -----------------------------------------------------------------------------
+// Use this to avoid writing boilerplate get() methods on instantiators.
+// The Invoker must have: static FunctionPtrT invoke(Args...);
+//
+// Usage:
+//   template <auto... Values> struct MyInvoker {
+//       static RetT invoke(Args...) { ... }
+//   };
+//   using MyInstantiator = WithGet<MyInvoker, FunctionPtrT>;
+//   // Then use MyInstantiator::Bind in Binding/SubspaceBinding
+
+template <template <auto...> typename Invoker, typename FunctionPtrT> struct WithGet {
+    template <auto... Values> struct Bind {
+        static FunctionPtrT
+        get() {
+            return &Invoker<Values...>::invoke;
+        }
+    };
+};
+
 // =============================================================================
 // Free Functions for Table Construction
 // =============================================================================
