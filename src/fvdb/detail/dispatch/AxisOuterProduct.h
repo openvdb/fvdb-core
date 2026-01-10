@@ -138,6 +138,21 @@ template <DimensionalAxis... Axes> struct AxisOuterProduct {
     }
 };
 
+// -----------------------------------------------------------------------------
+// is_axis_outer_product trait
+// -----------------------------------------------------------------------------
+// Checks if a type is an AxisOuterProduct instantiation.
+
+template <typename T> struct is_axis_outer_product : std::false_type {};
+
+template <typename... Axes>
+struct is_axis_outer_product<AxisOuterProduct<Axes...>> : std::true_type {};
+
+template <typename T>
+inline constexpr bool is_axis_outer_product_v = is_axis_outer_product<T>::value;
+
+template <typename T>
+concept IsAxisOuterProduct = is_axis_outer_product_v<T>;
 
 // -----------------------------------------------------------------------------
 // is_subspace_of trait
@@ -146,15 +161,12 @@ template <DimensionalAxis... Axes> struct AxisOuterProduct {
 // same number of axes, and each axis is a subset of the corresponding axis in
 // the full space.
 
-template <typename SubSpace, typename FullSpace>
-struct is_subspace_of : std::false_type {};
+template <typename SubSpace, typename FullSpace> struct is_subspace_of : std::false_type {};
 
 template <typename... SubAxes, typename... FullAxes>
 struct is_subspace_of<AxisOuterProduct<SubAxes...>, AxisOuterProduct<FullAxes...>>
-    : std::bool_constant<
-        sizeof...(SubAxes) == sizeof...(FullAxes) &&
-        (is_subset_of_v<SubAxes, FullAxes> && ...)
-    > {};
+    : std::bool_constant<sizeof...(SubAxes) == sizeof...(FullAxes) &&
+                         (is_subset_of_v<SubAxes, FullAxes> && ...)> {};
 
 template <typename Sub, typename Full>
 inline constexpr bool is_subspace_of_v = is_subspace_of<Sub, Full>::value;
@@ -174,14 +186,13 @@ concept SubspaceOf = is_subspace_of_v<SubSpace, FullSpace>;
 
 namespace detail {
 
-template <template <auto...> typename Action, typename... Axes>
-struct ForEachValuesImpl;
+template <template <auto...> typename Action, typename... Axes> struct ForEachValuesImpl;
 
 // Base case: invoke Action with accumulated values
-template <template <auto...> typename Action>
-struct ForEachValuesImpl<Action> {
+template <template <auto...> typename Action> struct ForEachValuesImpl<Action> {
     template <auto... Values, typename... Args>
-    static void apply(Args&&... args) {
+    static void
+    apply(Args &&...args) {
         Action<Values...>::apply(std::forward<Args>(args)...);
     }
 };
@@ -190,24 +201,24 @@ struct ForEachValuesImpl<Action> {
 template <template <auto...> typename Action, auto... AxisVals, typename... Rest>
 struct ForEachValuesImpl<Action, SameTypeUniqueValuePack<AxisVals...>, Rest...> {
     template <auto... Accumulated, typename... Args>
-    static void apply(Args&&... args) {
-        (ForEachValuesImpl<Action, Rest...>
-            ::template apply<Accumulated..., AxisVals>(
-                std::forward<Args>(args)...), ...);
+    static void
+    apply(Args &&...args) {
+        (ForEachValuesImpl<Action, Rest...>::template apply<Accumulated..., AxisVals>(
+             std::forward<Args>(args)...),
+         ...);
     }
 };
 
 } // namespace detail
 
-template <typename Space, template <auto...> typename Action>
-struct for_each_values;
+template <typename Space, template <auto...> typename Action> struct for_each_values;
 
 template <typename... Axes, template <auto...> typename Action>
 struct for_each_values<AxisOuterProduct<Axes...>, Action> {
     template <typename... Args>
-    static void apply(Args&&... args) {
-        detail::ForEachValuesImpl<Action, Axes...>
-            ::template apply<>(std::forward<Args>(args)...);
+    static void
+    apply(Args &&...args) {
+        detail::ForEachValuesImpl<Action, Axes...>::template apply<>(std::forward<Args>(args)...);
     }
 };
 
@@ -229,50 +240,58 @@ struct for_each_values<AxisOuterProduct<Axes...>, Action> {
 namespace detail {
 
 template <template <auto...> typename Instantiator,
-          template <typename, auto...> typename Action,
+          template <typename, auto...>
+          typename Action,
           typename... Axes>
 struct ForEachPermutationImpl;
 
 // Base case: instantiate and invoke Action
-template <template <auto...> typename Instantiator,
-          template <typename, auto...> typename Action>
+template <template <auto...> typename Instantiator, template <typename, auto...> typename Action>
 struct ForEachPermutationImpl<Instantiator, Action> {
     template <auto... Values, typename... Args>
-    static void apply(Args&&... args) {
-        Action<Instantiator<Values...>, Values...>
-            ::apply(std::forward<Args>(args)...);
+    static void
+    apply(Args &&...args) {
+        Action<Instantiator<Values...>, Values...>::apply(std::forward<Args>(args)...);
     }
 };
 
 // Recursive case: expand axis, recurse
 template <template <auto...> typename Instantiator,
-          template <typename, auto...> typename Action,
-          auto... AxisVals, typename... Rest>
-struct ForEachPermutationImpl<Instantiator, Action,
-                              SameTypeUniqueValuePack<AxisVals...>, Rest...> {
+          template <typename, auto...>
+          typename Action,
+          auto... AxisVals,
+          typename... Rest>
+struct ForEachPermutationImpl<Instantiator, Action, SameTypeUniqueValuePack<AxisVals...>, Rest...> {
     template <auto... Accumulated, typename... Args>
-    static void apply(Args&&... args) {
-        (ForEachPermutationImpl<Instantiator, Action, Rest...>
-            ::template apply<Accumulated..., AxisVals>(
-                std::forward<Args>(args)...), ...);
+    static void
+    apply(Args &&...args) {
+        (ForEachPermutationImpl<Instantiator, Action, Rest...>::template apply<Accumulated...,
+                                                                               AxisVals>(
+             std::forward<Args>(args)...),
+         ...);
     }
 };
 
 } // namespace detail
 
 template <typename Space,
-          template <auto...> typename Instantiator,
-          template <typename, auto...> typename Action>
+          template <auto...>
+          typename Instantiator,
+          template <typename, auto...>
+          typename Action>
 struct for_each_permutation;
 
 template <typename... Axes,
-          template <auto...> typename Instantiator,
-          template <typename, auto...> typename Action>
+          template <auto...>
+          typename Instantiator,
+          template <typename, auto...>
+          typename Action>
 struct for_each_permutation<AxisOuterProduct<Axes...>, Instantiator, Action> {
     template <typename... Args>
-    static void apply(Args&&... args) {
-        detail::ForEachPermutationImpl<Instantiator, Action, Axes...>
-            ::template apply<>(std::forward<Args>(args)...);
+    static void
+    apply(Args &&...args) {
+        detail::ForEachPermutationImpl<Instantiator, Action, Axes...>::template apply<>(
+            std::forward<Args>(args)...);
     }
 };
 
