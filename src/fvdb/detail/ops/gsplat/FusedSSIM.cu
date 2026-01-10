@@ -638,6 +638,29 @@ fusedSSIMPrivateUse1(
                                                   deviceId,
                                                   stream);
 
+            nanovdb::util::cuda::memPrefetchAsync(ssim_map.const_data_ptr<float>() +
+                                                      localElementOffset,
+                                                  localElementCount * sizeof(float),
+                                                  deviceId,
+                                                  stream);
+            if (train) {
+                nanovdb::util::cuda::memPrefetchAsync(dm_dmu1.const_data_ptr<float>() +
+                                                          localElementOffset,
+                                                      localElementCount * sizeof(float),
+                                                      deviceId,
+                                                      stream);
+                nanovdb::util::cuda::memPrefetchAsync(dm_dsigma1_sq.const_data_ptr<float>() +
+                                                          localElementOffset,
+                                                      localElementCount * sizeof(float),
+                                                      deviceId,
+                                                      stream);
+                nanovdb::util::cuda::memPrefetchAsync(dm_dsigma12.const_data_ptr<float>() +
+                                                          localElementOffset,
+                                                      localElementCount * sizeof(float),
+                                                      deviceId,
+                                                      stream);
+            }
+
             // Launch config
             dim3 grid(localBlockCount);
             dim3 block(BLOCK_X, BLOCK_Y);
@@ -729,6 +752,11 @@ fusedSSIMBackwardPrivateUse1(double C1,
                                                   deviceId,
                                                   stream);
             nanovdb::util::cuda::memPrefetchAsync(dL_dmap_.const_data_ptr<float>() +
+                                                      localElementOffset,
+                                                  localElementCount * sizeof(float),
+                                                  deviceId,
+                                                  stream);
+            nanovdb::util::cuda::memPrefetchAsync(dL_dimg1.const_data_ptr<float>() +
                                                       localElementOffset,
                                                   localElementCount * sizeof(float),
                                                   deviceId,
