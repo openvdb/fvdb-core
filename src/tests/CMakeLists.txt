@@ -160,7 +160,7 @@ ConfigureTest(DispatchValuesTest "dispatch/ValuesTest.cpp")
 ConfigureTest(DispatchAxisOuterProductTest "dispatch/AxisOuterProductTest.cpp")
 ConfigureTest(DispatchPermutationMapTest "dispatch/PermutationMapTest.cpp")
 ConfigureTest(DispatchDispatchTableTest "dispatch/DispatchTableTest.cpp")
-# ConfigureTest(DispatchDispatchTableCudaTest "dispatch/DispatchTableCudaTest.cu")
+ConfigureTest(DispatchDispatchTableCudaTest "dispatch/DispatchTableCudaTest.cu")
 ConfigureTest(DispatchDispatchTableTinyCudaTest "dispatch/DispatchTableTinyCudaTest.cu")
 
 if(NOT NANOVDB_EDITOR_SKIP)

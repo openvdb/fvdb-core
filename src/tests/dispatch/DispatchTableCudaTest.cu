@@ -193,6 +193,8 @@ template <torch::ScalarType Dtype> struct CudaFloat32Invoker {
 
 template <auto... Vs> using CudaSaxpyInst = InvokeToGet<CudaFloat32Invoker, Vs...>;
 
+#if 1 // COMMENTED OUT FOR DEBUGGING CORE DUMP
+
 // =============================================================================
 // Three-Axis SAXPY Infrastructure
 // =============================================================================
@@ -206,7 +208,7 @@ template <torch::ScalarType Dtype> struct ThreeAxisSaxpyInvoker<torch::kCPU, Dty
     using scalar_t = ScalarCppType<Dtype>;
 
     static torch::Tensor
-    invoke(const torch::Tensor &x, torch::Tensor y, double alpha) {
+    invoke(const torch::Tensor &x, torch::Tensor y, double alpha, bool /*inplace*/) {
         auto x_acc = x.accessor<scalar_t, 1>();
         auto y_acc = y.accessor<scalar_t, 1>();
         scalar_t a = static_cast<scalar_t>(alpha);
@@ -222,7 +224,7 @@ template <torch::ScalarType Dtype> struct ThreeAxisSaxpyInvoker<torch::kCPU, Dty
     using scalar_t = ScalarCppType<Dtype>;
 
     static torch::Tensor
-    invoke(const torch::Tensor &x, torch::Tensor y, double alpha) {
+    invoke(const torch::Tensor &x, torch::Tensor y, double alpha, bool /*inplace*/) {
         auto result = y.clone();
         auto x_acc  = x.accessor<scalar_t, 1>();
         auto r_acc  = result.accessor<scalar_t, 1>();
@@ -239,7 +241,7 @@ template <torch::ScalarType Dtype> struct ThreeAxisSaxpyInvoker<torch::kCUDA, Dt
     using scalar_t = ScalarCppType<Dtype>;
 
     static torch::Tensor
-    invoke(const torch::Tensor &x, torch::Tensor y, double alpha) {
+    invoke(const torch::Tensor &x, torch::Tensor y, double alpha, bool /*inplace*/) {
         c10::cuda::CUDAGuard guard(x.device());
         auto stream         = c10::cuda::getCurrentCUDAStream();
         int64_t n           = x.size(0);
@@ -258,7 +260,7 @@ template <torch::ScalarType Dtype> struct ThreeAxisSaxpyInvoker<torch::kCUDA, Dt
     using scalar_t = ScalarCppType<Dtype>;
 
     static torch::Tensor
-    invoke(const torch::Tensor &x, torch::Tensor y, double alpha) {
+    invoke(const torch::Tensor &x, torch::Tensor y, double alpha, bool /*inplace*/) {
         auto result = y.clone();
         c10::cuda::CUDAGuard guard(x.device());
         auto stream         = c10::cuda::getCurrentCUDAStream();
@@ -365,6 +367,8 @@ template <torch::DeviceType Device, torch::ScalarType Dtype> struct CudaOnlySaxp
 
 template <auto... Vs> using CudaOnlyInst = InvokeToGet<CudaOnlySaxpyInvoker, Vs...>;
 
+#endif // COMMENTED OUT FOR DEBUGGING CORE DUMP
+
 // =============================================================================
 // Test Fixture
 // =============================================================================
@@ -434,6 +438,11 @@ TEST_F(DispatchTableCudaTest, SingleDtypeDispatchFloat32Cuda) {
 
     verifySaxpy(y, y_orig, x, 2.0);
 }
+
+// ============================================================================
+// DISSECTION BLOCK A: DeviceDtypeSpace tests (8 combos: 2 devices × 4 dtypes)
+// ============================================================================
+#if 1 // DISSECT BLOCK A
 
 TEST_F(DispatchTableCudaTest, DeviceDtypeDispatchFloat32) {
     // Test full device × dtype dispatch for float32
@@ -587,9 +596,12 @@ TEST_F(DispatchTableCudaTest, AllHalfPrecisionTypesInOneDispatcher) {
     }
 }
 
-// =============================================================================
-// Three-Axis Dispatch Tests
-// =============================================================================
+#endif // DISSECT BLOCK A
+
+// ============================================================================
+// DISSECTION BLOCK B: ThreeAxisDispatch test (16 combos: 2 devices × 4 dtypes × 2 bools)
+// ============================================================================
+#if 1 // DISSECT BLOCK B
 
 TEST_F(DispatchTableCudaTest, ThreeAxisDispatch) {
     using Generators = SubspaceGenerator<ThreeAxisSaxpyInst, ThreeAxisSpace>;
@@ -640,6 +652,13 @@ TEST_F(DispatchTableCudaTest, ThreeAxisDispatch) {
         verifySaxpy(result, y_orig, x, 1.5, 5e-2, 5e-2);
     }
 }
+
+#endif // DISSECT BLOCK B
+
+// ============================================================================
+// DISSECTION BLOCK C: Remaining tests (various dispatch space sizes)
+// ============================================================================
+#if 0 // DISSECT BLOCK C
 
 // =============================================================================
 // Static Dispatch Table Tests
@@ -881,6 +900,13 @@ TEST_F(DispatchTableCudaTest, LargeTensorDispatch) {
     verifySaxpy(y, y_orig, x, 0.5);
 }
 
+#endif // DISSECT BLOCK C
+
+// ============================================================================
+// DISSECTION BLOCK D: PointGenerator and type deduction tests
+// ============================================================================
+#if 0 // DISSECT BLOCK D
+
 // =============================================================================
 // PointGenerator with CUDA Test
 // =============================================================================
@@ -944,6 +970,8 @@ TEST_F(DispatchTableCudaTest, TypeDeductionForCudaInvoker) {
     static_assert(std::is_same_v<decltype(SaxpyInstantiator<torch::kCUDA, torch::kBFloat16>::get()),
                                  ExpectedFPtr>);
 }
+
+#endif // DISSECT BLOCK D
 
 } // namespace dispatch
 } // namespace fvdb
