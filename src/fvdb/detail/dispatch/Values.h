@@ -80,7 +80,8 @@ template <auto... values> struct AnyTypeValuePack {
 template <auto... values> struct SameTypeValuePack;
 
 template <> struct SameTypeValuePack<> : AnyTypeValuePack<> {
-    using value_type = void;
+    // No value_type defined for empty pack - there's no meaningful type.
+    // Attempting to access ::value_type will produce a clear compile error.
 };
 
 template <auto... values> struct SameTypeValuePack : AnyTypeValuePack<values...> {

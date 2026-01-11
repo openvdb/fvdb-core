@@ -44,6 +44,8 @@ template <typename... Axes> struct AxisOuterProduct {
     static_assert((is_dimensional_axis_v<Axes> && ...),
                   "AxisOuterProduct requires all Axes to be DimensionalAxis types "
                   "(i.e., SameTypeUniqueValuePack instantiations)");
+    static_assert(((Axes::size > 0) && ... && true),
+                  "AxisOuterProduct does not support empty axes (size must be > 0)");
     // -------------------------------------------------------------------------
     // Type aliases
     // -------------------------------------------------------------------------
@@ -163,10 +165,12 @@ concept AxisOuterProductConcept = is_axis_outer_product_v<T>;
 
 template <typename SubSpace, typename FullSpace> struct is_subspace_of : std::false_type {};
 
+// Specialization for same-length axis packs only (uses requires to prevent
+// instantiation of fold expression when pack lengths differ)
 template <typename... SubAxes, typename... FullAxes>
+    requires(sizeof...(SubAxes) == sizeof...(FullAxes))
 struct is_subspace_of<AxisOuterProduct<SubAxes...>, AxisOuterProduct<FullAxes...>>
-    : std::bool_constant<sizeof...(SubAxes) == sizeof...(FullAxes) &&
-                         (is_subset_of_v<SubAxes, FullAxes> && ...)> {};
+    : std::bool_constant<(is_subset_of_v<SubAxes, FullAxes> && ...)> {};
 
 template <typename Sub, typename Full>
 inline constexpr bool is_subspace_of_v = is_subspace_of<Sub, Full>::value;

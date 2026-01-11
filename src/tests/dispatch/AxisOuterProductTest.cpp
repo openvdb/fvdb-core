@@ -77,14 +77,9 @@ TEST(AxisOuterProduct, EmptySpaceHasSizeOne) {
     EXPECT_EQ(Space::size, 1u);
 }
 
-TEST(AxisOuterProduct, EmptyAxisMakesSpaceSizeZero) {
-    using Empty    = SameTypeUniqueValuePack<>;
-    using NonEmpty = SameTypeUniqueValuePack<1, 2, 3>;
-    using Space    = AxisOuterProduct<NonEmpty, Empty>;
-
-    static_assert(Space::size == 0); // 3 * 0
-    EXPECT_EQ(Space::size, 0u);
-}
+// Note: AxisOuterProduct with empty axes (e.g., SameTypeUniqueValuePack<>) is
+// rejected at compile time via static_assert. This is intentional - empty axes
+// have no valid values to dispatch on. The rejection cannot be tested at runtime.
 
 // =============================================================================
 // AxisOuterProduct Type Aliases Tests
@@ -248,9 +243,11 @@ TEST(IsSubspaceOf, DifferentAxisCountIsNotSubspace) {
     using OneAxis = AxisOuterProduct<SameTypeUniqueValuePack<1, 2>>;
     using TwoAxes = AxisOuterProduct<SameTypeUniqueValuePack<1, 2>, SameTypeUniqueValuePack<3, 4>>;
 
+    // Different axis counts cannot be subspaces of each other
     static_assert(!is_subspace_of_v<OneAxis, TwoAxes>);
     static_assert(!is_subspace_of_v<TwoAxes, OneAxis>);
     EXPECT_FALSE((is_subspace_of_v<OneAxis, TwoAxes>));
+    EXPECT_FALSE((is_subspace_of_v<TwoAxes, OneAxis>));
 }
 
 TEST(IsSubspaceOf, DisjointValuesIsNotSubspace) {
@@ -261,12 +258,13 @@ TEST(IsSubspaceOf, DisjointValuesIsNotSubspace) {
     EXPECT_FALSE((is_subspace_of_v<Sub, Full>));
 }
 
-TEST(IsSubspaceOf, EmptySubspaceIsSubspaceOfAny) {
-    using Empty = AxisOuterProduct<SameTypeUniqueValuePack<>>;
-    using Full  = AxisOuterProduct<SameTypeUniqueValuePack<1, 2, 3>>;
+TEST(IsSubspaceOf, PartialOverlapIsNotSubspace) {
+    // Only some values overlap - not a proper subspace
+    using Sub  = AxisOuterProduct<SameTypeUniqueValuePack<1, 2, 99>>;
+    using Full = AxisOuterProduct<SameTypeUniqueValuePack<1, 2, 3>>;
 
-    static_assert(is_subspace_of_v<Empty, Full>);
-    EXPECT_TRUE((is_subspace_of_v<Empty, Full>));
+    static_assert(!is_subspace_of_v<Sub, Full>);
+    EXPECT_FALSE((is_subspace_of_v<Sub, Full>));
 }
 
 // =============================================================================

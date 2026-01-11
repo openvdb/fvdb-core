@@ -136,9 +136,11 @@ TEST(AnyTypeValuePack, ValueTupleContainsAllValues) {
 // SameTypeValuePack Tests
 // =============================================================================
 
-TEST(SameTypeValuePack, EmptyPackHasVoidValueType) {
+TEST(SameTypeValuePack, EmptyPackHasSizeZero) {
     using EmptyPack = SameTypeValuePack<>;
-    static_assert(std::is_same_v<EmptyPack::value_type, void>);
+    // Note: Empty packs intentionally do not define value_type - there's no
+    // meaningful type when there are no values. Accessing ::value_type would
+    // produce a compile error.
     EXPECT_EQ(EmptyPack::size, std::size_t{0});
 }
 
