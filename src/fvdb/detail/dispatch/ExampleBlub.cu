@@ -139,15 +139,18 @@ using BlubScalarTypeAxis = TorchScalarTypeAxis<torch::kInt32,
 using BlubAxes           = AxisOuterProduct<BlubDeviceAxis, BlubScalarTypeAxis, BlubScalarTypeAxis>;
 
 // -----------------------------------------------------------------------------
-// Invoker - the bridge between runtime dispatch and static implementation
+// Instantiator - the bridge between runtime dispatch and static implementation
 // -----------------------------------------------------------------------------
+// This is the "get-based" approach: the Instantiator has a static `get()`
+// method that returns the function pointer to dispatch to.
 
 template <torch::DeviceType DeviceValue,
           torch::ScalarType InScalarType,
           torch::ScalarType OutScalarType>
-struct BlubInvoker {
+struct BlubInstantiator {
+    // The actual dispatch function
     static torch::Tensor
-    invoke(torch::Tensor in, torch::ScalarType outScalarType) {
+    dispatch(torch::Tensor in, torch::ScalarType outScalarType) {
         // Create output tensor with the specified dtype on the same device
         auto out =
             torch::empty_like(in, torch::TensorOptions().dtype(OutScalarType).device(in.device()));
@@ -161,6 +164,12 @@ struct BlubInvoker {
 
         return out;
     }
+
+    // Required by PointGenerator/SubspaceGenerator: return the function pointer
+    static constexpr auto
+    get() {
+        return &dispatch;
+    }
 };
 
 // -----------------------------------------------------------------------------
@@ -168,12 +177,13 @@ struct BlubInvoker {
 // -----------------------------------------------------------------------------
 // Each generator corresponds to one or more blub_impl overloads above.
 // The structure mirrors the implementation coverage.
-template <auto... Values> using BlubBind = PointGenerator<GetFromInvoke<BlubInvoker>, Values...>;
+template <auto... Values> using BlubBind = PointGenerator<BlubInstantiator, Values...>;
 
-template <typename DeviceAxis, typename InScalarTypeAxis, typename OutScalarTypeAxis>
-using BlubSubspaceBind =
-    SubspaceGenerator<GetFromInvoke<BlubInvoker>,
-                      AxisOuterProduct<DeviceAxis, InScalarTypeAxis, OutScalarTypeAxis>>;
+// TEMPORARILY DISABLED: SubspaceGenerator causes nvcc to crash
+// template <typename DeviceAxis, typename InScalarTypeAxis, typename OutScalarTypeAxis>
+// using BlubSubspaceBind =
+//     SubspaceGenerator<BlubInstantiator,
+//                       AxisOuterProduct<DeviceAxis, InScalarTypeAxis, OutScalarTypeAxis>>;
 
 using BlubBindings = GeneratorList<
     // CPU Float32 -> Int32: specific overload blub_impl(Cpu, Float32, Int32)
@@ -189,10 +199,10 @@ using BlubBindings = GeneratorList<
     BlubBind<torch::kCPU, torch::kFloat32, torch::kFloat32>,
     BlubBind<torch::kCPU, torch::kFloat64, torch::kFloat64>,
 
-    // Any-device Float64 -> Int32: device-generic template blub_impl<Device>(...)
-    BlubSubspaceBind<BlubDeviceAxis,
-                     TorchScalarTypeAxis<torch::kFloat64>,
-                     TorchScalarTypeAxis<torch::kInt32>>>;
+    // Any-device Float64 -> Int32: expanded manually instead of SubspaceGenerator
+    // (SubspaceGenerator causes nvcc to crash - for_each_permutation is too complex)
+    BlubBind<torch::kCPU, torch::kFloat64, torch::kInt32>,
+    BlubBind<torch::kCUDA, torch::kFloat64, torch::kInt32>>;
 
 // -----------------------------------------------------------------------------
 // Public API

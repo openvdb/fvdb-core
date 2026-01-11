@@ -83,7 +83,7 @@ template <> struct SameTypeValuePack<> : AnyTypeValuePack<> {
     using value_type = void;
 };
 
-template <auto... values> struct SameTypeValuePack<values...> : AnyTypeValuePack<values...> {
+template <auto... values> struct SameTypeValuePack : AnyTypeValuePack<values...> {
     using base       = AnyTypeValuePack<values...>;
     using value_type = std::common_type_t<std::decay_t<decltype(values)>...>;
 

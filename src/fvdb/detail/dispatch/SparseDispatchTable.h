@@ -36,6 +36,26 @@ namespace dispatch {
 template <typename ReturnType, typename... Args> using FunctionPtr = ReturnType (*)(Args...);
 
 // -----------------------------------------------------------------------------
+// Concepts for Dispatcher components
+// -----------------------------------------------------------------------------
+
+// Encoder must have a static encode() method that returns a tuple of axis values
+template <typename Encoder, typename AxesT, typename... Args>
+concept EncoderConcept = requires(Args... args) {
+    {
+        Encoder::encode(args...)
+    } -> std::convertible_to<typename AxesT::value_types_tuple_type>;
+};
+
+// UnboundHandler must have a static unbound() method (typically [[noreturn]])
+template <typename Handler, typename AxesT>
+concept UnboundHandlerConcept = requires {
+    // We can't easily check the exact signature without unpacking the tuple,
+    // so we just check the type exists and has a static unbound member
+    &Handler::unbound;
+};
+
+// -----------------------------------------------------------------------------
 // Dispatcher: A dispatch table with baked-in encoder and error handler
 // -----------------------------------------------------------------------------
 // The encoder maps runtime arguments to the axis value tuple for lookup.
@@ -53,7 +73,13 @@ template <typename AxesT,
           typename UnboundHandler,
           typename ReturnType,
           typename... Args>
+    requires AxisOuterProductConcept<AxesT> &&
+             EncoderConcept<Encoder, AxesT, Args...> &&
+             UnboundHandlerConcept<UnboundHandler, AxesT>
 struct Dispatcher {
+    static_assert(AxisOuterProductConcept<AxesT>,
+                  "Dispatcher: AxesT must be an AxisOuterProduct");
+
     using axes_type         = AxesT;
     using return_type       = ReturnType;
     using function_ptr_type = FunctionPtr<ReturnType, Args...>;
@@ -102,6 +128,9 @@ template <typename AxesT,
           typename UnboundHandler,
           typename ReturnType,
           typename... Args>
+    requires AxisOuterProductConcept<AxesT> &&
+             EncoderConcept<Encoder, AxesT, Args...> &&
+             UnboundHandlerConcept<UnboundHandler, AxesT>
 Dispatcher<AxesT, Encoder, UnboundHandler, ReturnType, Args...>
 build_dispatcher() {
     using dispatcher_type = Dispatcher<AxesT, Encoder, UnboundHandler, ReturnType, Args...>;
@@ -115,8 +144,10 @@ build_dispatcher() {
     return dispatcher;
 }
 
-// GetFromInvoke: Adaptor that wraps an Invoker template into an Instantiator
-// -----------------------------------------------------------------------------
+// =============================================================================
+// GetFromInvoke: EXPERIMENTAL - Currently crashes nvcc, commented out
+// =============================================================================
+// Adaptor that wraps an Invoker template into an Instantiator.
 // Transforms a template with a static `invoke` function into an instantiator
 // with a static `get` function returning the function pointer to `invoke`.
 //
@@ -131,53 +162,21 @@ build_dispatcher() {
 //   };
 //
 // Usage with generators:
-//   using MyGen = SubspaceGenerator<GetFromInvoke<MyInvoker>::template Instantiator, MySubspace>;
-
-namespace {
-
-template <template <auto...> typename InvokerTemplate> struct _GetFromInvokeHelper {
-    template <auto... Values> struct fromInvoke {
-        // Return the function pointer to the invoke function.
-        // The return type is automatically inferred from the invoke signature.
-        static constexpr auto
-        get() {
-            return &InvokerTemplate<Values...>::invoke;
-        }
-    };
-};
-
-} // namespace
-
-template <template <auto...> typename InvokerTemplate>
-using GetFromInvoke = typename _GetFromInvokeHelper<InvokerTemplate>::template fromInvoke;
-
-// -----------------------------------------------------------------------------
-// Imagine that I have an invoker which is templated on the specific values of
-// the axes, and has a static function which returns the ReturnType and takes
-// the Args...
-namespace {
-
-using ExampleValueType1 = int32_t;
-using ExampleValueType2 = int8_t;
-using ExampleValueType3 = int16_t;
-
-template <ExampleValueType1 Value1, ExampleValueType2 Value2, ExampleValueType3 Value3>
-struct ExampleSpecificInvoker {
-    static int
-    invoke(size_t first_argument, void const *second_argument, float third_argument) {
-        // Some sort of implementation logic here which is specific to the values of the axes,
-        // but this invoke function is now the actual function pointer.
-        return 0;
-    }
-};
-
-// Example usage with ExampleSpecificInvoker:
-// using ExampleInstantiator = GetFromInvoke<ExampleSpecificInvoker>;
-// Now ExampleInstantiator<1, 2, 3>::get() returns &ExampleSpecificInvoker<1, 2, 3>::invoke
-// which is a FunctionPtr<int, size_t, void const*, float>
-using ExampleInstantiator = GetFromInvoke<ExampleSpecificInvoker>;
-
-} // namespace
+//   using MyGen = SubspaceGenerator<GetFromInvoke<MyInvoker>::template fromInvoke, MySubspace>;
+//
+// NOTE: This causes nvcc to crash (segfault) during compilation. The deeply
+// nested template metaprogramming seems to trigger a compiler bug. Until this
+// is resolved, use the direct get()-based approach instead.
+//
+// template <template <auto...> typename InvokerTemplate>
+// struct GetFromInvoke {
+//     template <auto... Values> struct fromInvoke {
+//         static constexpr auto
+//         get() {
+//             return &InvokerTemplate<Values...>::invoke;
+//         }
+//     };
+// };
 
 } // namespace dispatch
 } // namespace fvdb
