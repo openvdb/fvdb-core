@@ -169,8 +169,7 @@ build_dispatcher() {
 // This avoids the awkward nested template access pattern that was previously
 // required (GetFromInvoke<MyInvoker>::template fromInvoke).
 
-template <template <auto...> typename InvokerTemplate, auto... Values>
-struct InvokeToGet {
+template <template <auto...> typename InvokerTemplate, auto... Values> struct InvokeToGet {
     static constexpr auto
     get() {
         return &InvokerTemplate<Values...>::invoke;

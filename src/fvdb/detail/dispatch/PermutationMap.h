@@ -61,8 +61,8 @@ template <typename AxesT, typename T, T emptyValue = T(0)> struct PermutationArr
 
     constexpr T
     get(index_tuple_type index) const {
-        auto idx = std::apply(
-            [](auto... values) { return axes_type::index_of_values(values...); }, index);
+        auto idx =
+            std::apply([](auto... values) { return axes_type::index_of_values(values...); }, index);
         if (!idx.has_value()) {
             return empty_value;
         }
@@ -71,8 +71,8 @@ template <typename AxesT, typename T, T emptyValue = T(0)> struct PermutationArr
 
     constexpr void
     set(index_tuple_type index, value_type val) {
-        auto idx = std::apply(
-            [](auto... values) { return axes_type::index_of_values(values...); }, index);
+        auto idx =
+            std::apply([](auto... values) { return axes_type::index_of_values(values...); }, index);
         if (idx.has_value()) {
             storage_[*idx] = val;
         }
@@ -126,8 +126,8 @@ template <typename AxesT, typename T, T emptyValue = T(0)> struct PermutationUno
 
     T
     get(index_tuple_type index) const {
-        auto idx = std::apply(
-            [](auto... values) { return axes_type::index_of_values(values...); }, index);
+        auto idx =
+            std::apply([](auto... values) { return axes_type::index_of_values(values...); }, index);
         if (!idx.has_value()) {
             return empty_value;
         }
@@ -137,8 +137,8 @@ template <typename AxesT, typename T, T emptyValue = T(0)> struct PermutationUno
 
     void
     set(index_tuple_type index, value_type val) {
-        auto idx = std::apply(
-            [](auto... values) { return axes_type::index_of_values(values...); }, index);
+        auto idx =
+            std::apply([](auto... values) { return axes_type::index_of_values(values...); }, index);
         if (idx.has_value()) {
             storage_[*idx] = val;
         }

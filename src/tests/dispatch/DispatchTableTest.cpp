@@ -18,10 +18,10 @@ namespace dispatch {
 // Test Axes Definitions
 // =============================================================================
 
-using SingleAxis    = SameTypeUniqueValuePack<10, 20, 30>;
-using CharAxis      = SameTypeUniqueValuePack<'a', 'b'>;
-using IntAxis       = SameTypeUniqueValuePack<1, 2, 3>;
-using BoolAxis      = SameTypeUniqueValuePack<true, false>;
+using SingleAxis = SameTypeUniqueValuePack<10, 20, 30>;
+using CharAxis   = SameTypeUniqueValuePack<'a', 'b'>;
+using IntAxis    = SameTypeUniqueValuePack<1, 2, 3>;
+using BoolAxis   = SameTypeUniqueValuePack<true, false>;
 
 using SingleAxisSpace = AxisOuterProduct<SingleAxis>;
 using TwoAxisSpace    = AxisOuterProduct<IntAxis, CharAxis>;
@@ -32,13 +32,25 @@ using ThreeAxisSpace  = AxisOuterProduct<IntAxis, CharAxis, BoolAxis>;
 // =============================================================================
 
 // Simple functions with different signatures for testing
-int simpleNoArgs() { return 42; }
+int
+simpleNoArgs() {
+    return 42;
+}
 
-int simpleOneArg(int x) { return x * 2; }
+int
+simpleOneArg(int x) {
+    return x * 2;
+}
 
-int simpleTwoArgs(int x, int y) { return x + y; }
+int
+simpleTwoArgs(int x, int y) {
+    return x + y;
+}
 
-std::string stringReturn(int x) { return std::to_string(x); }
+std::string
+stringReturn(int x) {
+    return std::to_string(x);
+}
 
 // =============================================================================
 // FunctionPtr Type Alias Tests
@@ -46,7 +58,7 @@ std::string stringReturn(int x) { return std::to_string(x); }
 
 TEST(FunctionPtr, TypeAliasIsCorrectForNoArgs) {
     using FPtr = FunctionPtr<int>;
-    static_assert(std::is_same_v<FPtr, int(*)()>);
+    static_assert(std::is_same_v<FPtr, int (*)()>);
 
     FPtr ptr = &simpleNoArgs;
     EXPECT_EQ(ptr(), 42);
@@ -54,7 +66,7 @@ TEST(FunctionPtr, TypeAliasIsCorrectForNoArgs) {
 
 TEST(FunctionPtr, TypeAliasIsCorrectForOneArg) {
     using FPtr = FunctionPtr<int, int>;
-    static_assert(std::is_same_v<FPtr, int(*)(int)>);
+    static_assert(std::is_same_v<FPtr, int (*)(int)>);
 
     FPtr ptr = &simpleOneArg;
     EXPECT_EQ(ptr(5), 10);
@@ -62,7 +74,7 @@ TEST(FunctionPtr, TypeAliasIsCorrectForOneArg) {
 
 TEST(FunctionPtr, TypeAliasIsCorrectForMultipleArgs) {
     using FPtr = FunctionPtr<int, int, int>;
-    static_assert(std::is_same_v<FPtr, int(*)(int, int)>);
+    static_assert(std::is_same_v<FPtr, int (*)(int, int)>);
 
     FPtr ptr = &simpleTwoArgs;
     EXPECT_EQ(ptr(3, 4), 7);
@@ -70,7 +82,7 @@ TEST(FunctionPtr, TypeAliasIsCorrectForMultipleArgs) {
 
 TEST(FunctionPtr, TypeAliasWorksWithDifferentReturnTypes) {
     using FPtr = FunctionPtr<std::string, int>;
-    static_assert(std::is_same_v<FPtr, std::string(*)(int)>);
+    static_assert(std::is_same_v<FPtr, std::string (*)(int)>);
 
     FPtr ptr = &stringReturn;
     EXPECT_EQ(ptr(123), "123");
@@ -82,9 +94,15 @@ TEST(FunctionPtr, TypeAliasWorksWithDifferentReturnTypes) {
 
 namespace {
 // Test functions that return their "identity" based on compile-time values
-template <int V> int returnValue(int) { return V; }
+template <int V>
+int
+returnValue(int) {
+    return V;
+}
 
-template <int V1, char V2> int returnCombined(int x, char c) {
+template <int V1, char V2>
+int
+returnCombined(int x, char c) {
     return V1 * 1000 + static_cast<int>(V2) + x;
 }
 } // namespace
@@ -149,20 +167,25 @@ TEST(FunctionPtrStorage, MultiAxisFunctionPointers) {
 namespace {
 // A simple encoder that extracts values from function arguments
 struct SingleAxisEncoder {
-    static std::tuple<int> encode(int axisValue) {
+    static std::tuple<int>
+    encode(int axisValue) {
         return std::make_tuple(axisValue);
     }
 };
 
 struct TwoAxisEncoder {
-    static std::tuple<int, char> encode(int first, char second, int /*extra*/) {
+    static std::tuple<int, char>
+    encode(int first, char second, int /*extra*/) {
         return std::make_tuple(first, second);
     }
 };
 
 // Invalid encoder - wrong return type
 struct InvalidEncoder {
-    static int encode(int x) { return x; } // Returns int, not tuple
+    static int
+    encode(int x) {
+        return x;
+    } // Returns int, not tuple
 };
 } // namespace
 
@@ -207,13 +230,15 @@ TEST(EncoderConcept, EncoderEncodesCorrectly) {
 
 namespace {
 struct ThrowingUnboundHandler {
-    [[noreturn]] static void unbound(int value) {
+    [[noreturn]] static void
+    unbound(int value) {
         throw std::runtime_error("Unbound for value: " + std::to_string(value));
     }
 };
 
 struct TwoAxisThrowingHandler {
-    [[noreturn]] static void unbound(int v1, char v2) {
+    [[noreturn]] static void
+    unbound(int v1, char v2) {
         throw std::runtime_error("Unbound for: " + std::to_string(v1) + ", " + v2);
     }
 };
@@ -221,17 +246,19 @@ struct TwoAxisThrowingHandler {
 // For tracking calls without throwing
 struct TrackingUnboundHandler {
     static inline int lastValue = 0;
-    static inline bool called = false;
+    static inline bool called   = false;
 
-    [[noreturn]] static void unbound(int value) {
+    [[noreturn]] static void
+    unbound(int value) {
         lastValue = value;
-        called = true;
+        called    = true;
         throw std::runtime_error("Tracked unbound");
     }
 
-    static void reset() {
+    static void
+    reset() {
         lastValue = 0;
-        called = false;
+        called    = false;
     }
 };
 } // namespace
@@ -247,7 +274,7 @@ TEST(UnboundHandlerConcept, HandlerThrowsCorrectly) {
     try {
         ThrowingUnboundHandler::unbound(42);
         FAIL() << "Should have thrown";
-    } catch (const std::runtime_error& e) {
+    } catch (const std::runtime_error &e) {
         EXPECT_NE(std::string(e.what()).find("42"), std::string::npos);
     }
 }
@@ -259,46 +286,55 @@ TEST(UnboundHandlerConcept, HandlerThrowsCorrectly) {
 namespace {
 // Simple invoker templates for testing
 template <int V> struct SimpleInvoker {
-    static int invoke(int x) { return V * 10 + x; }
+    static int
+    invoke(int x) {
+        return V * 10 + x;
+    }
 };
 
 template <int V1, char V2> struct TwoAxisInvoker {
-    static int invoke(int x, char c) {
+    static int
+    invoke(int x, char c) {
         return V1 * 1000 + static_cast<int>(V2) + x + static_cast<int>(c);
     }
 };
 
 // Instantiators that return function pointers (the get() pattern)
 template <int V> struct SimpleInstantiator {
-    static FunctionPtr<int, int> get() {
+    static FunctionPtr<int, int>
+    get() {
         return &SimpleInvoker<V>::invoke;
     }
 };
 
 template <int V1, char V2> struct TwoAxisInstantiator {
-    static FunctionPtr<int, int, char> get() {
+    static FunctionPtr<int, int, char>
+    get() {
         return &TwoAxisInvoker<V1, V2>::invoke;
     }
 };
 } // namespace
 
 TEST(Dispatcher, TypeAliasesAreCorrect) {
-    using DispatcherType = Dispatcher<SingleAxisSpace, SingleAxisEncoder, ThrowingUnboundHandler, int, int>;
+    using DispatcherType =
+        Dispatcher<SingleAxisSpace, SingleAxisEncoder, ThrowingUnboundHandler, int, int>;
 
     static_assert(std::is_same_v<DispatcherType::axes_type, SingleAxisSpace>);
     static_assert(std::is_same_v<DispatcherType::return_type, int>);
-    static_assert(std::is_same_v<DispatcherType::function_ptr_type, int(*)(int)>);
+    static_assert(std::is_same_v<DispatcherType::function_ptr_type, int (*)(int)>);
 }
 
 TEST(Dispatcher, MapTypeUsesNullptrAsEmptyValue) {
-    using DispatcherType = Dispatcher<SingleAxisSpace, SingleAxisEncoder, ThrowingUnboundHandler, int, int>;
+    using DispatcherType =
+        Dispatcher<SingleAxisSpace, SingleAxisEncoder, ThrowingUnboundHandler, int, int>;
     using MapType = typename DispatcherType::map_type;
 
     static_assert(MapType::empty_value == nullptr);
 }
 
 TEST(Dispatcher, CanBeDefaultConstructed) {
-    using DispatcherType = Dispatcher<SingleAxisSpace, SingleAxisEncoder, ThrowingUnboundHandler, int, int>;
+    using DispatcherType =
+        Dispatcher<SingleAxisSpace, SingleAxisEncoder, ThrowingUnboundHandler, int, int>;
 
     DispatcherType dispatcher;
     // All entries should be nullptr
@@ -308,7 +344,8 @@ TEST(Dispatcher, CanBeDefaultConstructed) {
 }
 
 TEST(Dispatcher, ManuallyPopulatedDispatcherWorks) {
-    using DispatcherType = Dispatcher<SingleAxisSpace, SingleAxisEncoder, ThrowingUnboundHandler, int, int>;
+    using DispatcherType =
+        Dispatcher<SingleAxisSpace, SingleAxisEncoder, ThrowingUnboundHandler, int, int>;
 
     DispatcherType dispatcher;
     dispatcher.permutation_map.set(std::make_tuple(10), &SimpleInvoker<10>::invoke);
@@ -322,7 +359,8 @@ TEST(Dispatcher, ManuallyPopulatedDispatcherWorks) {
 }
 
 TEST(Dispatcher, ThrowsForUnboundEntry) {
-    using DispatcherType = Dispatcher<SingleAxisSpace, SingleAxisEncoder, ThrowingUnboundHandler, int, int>;
+    using DispatcherType =
+        Dispatcher<SingleAxisSpace, SingleAxisEncoder, ThrowingUnboundHandler, int, int>;
 
     DispatcherType dispatcher;
     dispatcher.permutation_map.set(std::make_tuple(10), &SimpleInvoker<10>::invoke);
@@ -334,7 +372,8 @@ TEST(Dispatcher, ThrowsForUnboundEntry) {
 }
 
 TEST(Dispatcher, UnboundHandlerReceivesEncodedValues) {
-    using DispatcherType = Dispatcher<SingleAxisSpace, SingleAxisEncoder, TrackingUnboundHandler, int, int>;
+    using DispatcherType =
+        Dispatcher<SingleAxisSpace, SingleAxisEncoder, TrackingUnboundHandler, int, int>;
 
     DispatcherType dispatcher;
     // Nothing bound
@@ -357,20 +396,16 @@ TEST(Dispatcher, UnboundHandlerReceivesEncodedValues) {
 // =============================================================================
 
 TEST(BuildDispatcher, CreatesDispatcherFromPointGenerators) {
-    using Generators = GeneratorList<
-        PointGenerator<SimpleInstantiator, 10>,
-        PointGenerator<SimpleInstantiator, 20>,
-        PointGenerator<SimpleInstantiator, 30>
-    >;
+    using Generators = GeneratorList<PointGenerator<SimpleInstantiator, 10>,
+                                     PointGenerator<SimpleInstantiator, 20>,
+                                     PointGenerator<SimpleInstantiator, 30>>;
 
-    auto dispatcher = build_dispatcher<
-        SingleAxisSpace,
-        Generators,
-        SingleAxisEncoder,
-        ThrowingUnboundHandler,
-        int,
-        int
-    >();
+    auto dispatcher = build_dispatcher<SingleAxisSpace,
+                                       Generators,
+                                       SingleAxisEncoder,
+                                       ThrowingUnboundHandler,
+                                       int,
+                                       int>();
 
     EXPECT_EQ(dispatcher(10), 110);
     EXPECT_EQ(dispatcher(20), 220);
@@ -380,14 +415,12 @@ TEST(BuildDispatcher, CreatesDispatcherFromPointGenerators) {
 TEST(BuildDispatcher, CreatesDispatcherFromSubspaceGenerator) {
     using Generators = SubspaceGenerator<SimpleInstantiator, SingleAxisSpace>;
 
-    auto dispatcher = build_dispatcher<
-        SingleAxisSpace,
-        Generators,
-        SingleAxisEncoder,
-        ThrowingUnboundHandler,
-        int,
-        int
-    >();
+    auto dispatcher = build_dispatcher<SingleAxisSpace,
+                                       Generators,
+                                       SingleAxisEncoder,
+                                       ThrowingUnboundHandler,
+                                       int,
+                                       int>();
 
     EXPECT_EQ(dispatcher(10), 110);
     EXPECT_EQ(dispatcher(20), 220);
@@ -396,24 +429,22 @@ TEST(BuildDispatcher, CreatesDispatcherFromSubspaceGenerator) {
 
 TEST(BuildDispatcher, WorksWithTwoAxisSpace) {
     struct TwoAxisEncoderDirect {
-        static std::tuple<int, char> encode(int first, char second) {
+        static std::tuple<int, char>
+        encode(int first, char second) {
             return std::make_tuple(first, second);
         }
     };
 
-    using Generators = GeneratorList<
-        PointGenerator<TwoAxisInstantiator, 1, 'a'>,
-        PointGenerator<TwoAxisInstantiator, 2, 'b'>
-    >;
+    using Generators = GeneratorList<PointGenerator<TwoAxisInstantiator, 1, 'a'>,
+                                     PointGenerator<TwoAxisInstantiator, 2, 'b'>>;
 
-    auto dispatcher = build_dispatcher<
-        TwoAxisSpace,
-        Generators,
-        TwoAxisEncoderDirect,
-        TwoAxisThrowingHandler,
-        int,
-        int, char
-    >();
+    auto dispatcher = build_dispatcher<TwoAxisSpace,
+                                       Generators,
+                                       TwoAxisEncoderDirect,
+                                       TwoAxisThrowingHandler,
+                                       int,
+                                       int,
+                                       char>();
 
     // TwoAxisInvoker<1, 'a'>::invoke(5, 'x') = 1*1000 + 97 + 5 + 120 = 1222
     EXPECT_EQ(dispatcher(1, 'a'), 1000 + 97 + 1 + 97); // invoker adds x and c to result
@@ -434,14 +465,17 @@ TEST(BuildDispatcher, WorksWithTwoAxisSpace) {
 namespace {
 // An invoker template (what we have)
 template <int V> struct MyInvoker {
-    static int invoke(int x) { return V * 100 + x; }
+    static int
+    invoke(int x) {
+        return V * 100 + x;
+    }
 };
 
 // Manual implementation of GetFromInvoke for testing
-template <template <auto...> typename InvokerTemplate>
-struct TestGetFromInvoke {
+template <template <auto...> typename InvokerTemplate> struct TestGetFromInvoke {
     template <auto... Values> struct fromInvoke {
-        static constexpr auto get() {
+        static constexpr auto
+        get() {
             return &InvokerTemplate<Values...>::invoke;
         }
     };
@@ -454,7 +488,7 @@ using WrappedInvoker10 = TestGetFromInvoke<MyInvoker>::template fromInvoke<10>;
 TEST(GetFromInvoke, WrappedInvokerReturnsCorrectFunctionPointer) {
     auto ptr = WrappedInvoker10::get();
 
-    static_assert(std::is_same_v<decltype(ptr), int(*)(int)>);
+    static_assert(std::is_same_v<decltype(ptr), int (*)(int)>);
     ASSERT_NE(ptr, nullptr);
     EXPECT_EQ(ptr(5), 1005); // 10*100 + 5
 }
@@ -487,7 +521,7 @@ TEST(GetFromInvoke, CanBeUsedWithSubspaceGenerator) {
     Map map;
     SubspaceGenerator<TestGetFromInvoke<MyInvoker>::fromInvoke, SingleAxisSpace>::apply(map);
 
-    for (int v : {10, 20, 30}) {
+    for (int v: {10, 20, 30}) {
         auto ptr = map.get(std::make_tuple(v));
         ASSERT_NE(ptr, nullptr) << "Pointer for value " << v << " is null";
         EXPECT_EQ(ptr(7), v * 100 + 7);
@@ -497,14 +531,12 @@ TEST(GetFromInvoke, CanBeUsedWithSubspaceGenerator) {
 TEST(GetFromInvoke, FullDispatcherIntegration) {
     using Generators = SubspaceGenerator<TestGetFromInvoke<MyInvoker>::fromInvoke, SingleAxisSpace>;
 
-    auto dispatcher = build_dispatcher<
-        SingleAxisSpace,
-        Generators,
-        SingleAxisEncoder,
-        ThrowingUnboundHandler,
-        int,
-        int
-    >();
+    auto dispatcher = build_dispatcher<SingleAxisSpace,
+                                       Generators,
+                                       SingleAxisEncoder,
+                                       ThrowingUnboundHandler,
+                                       int,
+                                       int>();
 
     EXPECT_EQ(dispatcher(10), 1010); // 10*100 + 10
     EXPECT_EQ(dispatcher(20), 2020); // 20*100 + 20
@@ -522,29 +554,31 @@ TEST(GetFromInvoke, FullDispatcherIntegration) {
 namespace {
 // Invoker for InvokeToGet tests
 template <int V> struct ITGInvoker {
-    static int invoke(int x) { return V * 100 + x; }
+    static int
+    invoke(int x) {
+        return V * 100 + x;
+    }
 };
 
 // The key improvement: users can create clean template aliases
-template <auto... Vs>
-using ITGInstantiator = InvokeToGet<ITGInvoker, Vs...>;
+template <auto... Vs> using ITGInstantiator = InvokeToGet<ITGInvoker, Vs...>;
 
 // Multi-axis version
 template <int V1, char V2> struct ITGMultiAxisInvoker {
-    static std::string invoke(int x) {
+    static std::string
+    invoke(int x) {
         return std::to_string(V1) + V2 + std::to_string(x);
     }
 };
 
-template <auto... Vs>
-using ITGMultiAxisInstantiator = InvokeToGet<ITGMultiAxisInvoker, Vs...>;
+template <auto... Vs> using ITGMultiAxisInstantiator = InvokeToGet<ITGMultiAxisInvoker, Vs...>;
 } // namespace
 
 TEST(InvokeToGet, DirectInstantiationWorks) {
     // Can instantiate directly with explicit values
     auto ptr = InvokeToGet<ITGInvoker, 10>::get();
 
-    static_assert(std::is_same_v<decltype(ptr), int(*)(int)>);
+    static_assert(std::is_same_v<decltype(ptr), int (*)(int)>);
     ASSERT_NE(ptr, nullptr);
     EXPECT_EQ(ptr(5), 1005); // 10*100 + 5
 }
@@ -586,7 +620,7 @@ TEST(InvokeToGet, CanBeUsedWithSubspaceGenerator) {
     Map map;
     SubspaceGenerator<ITGInstantiator, SingleAxisSpace>::apply(map);
 
-    for (int v : {10, 20, 30}) {
+    for (int v: {10, 20, 30}) {
         auto ptr = map.get(std::make_tuple(v));
         ASSERT_NE(ptr, nullptr) << "Pointer for value " << v << " is null";
         EXPECT_EQ(ptr(7), v * 100 + 7);
@@ -596,14 +630,12 @@ TEST(InvokeToGet, CanBeUsedWithSubspaceGenerator) {
 TEST(InvokeToGet, FullDispatcherIntegration) {
     using Generators = SubspaceGenerator<ITGInstantiator, SingleAxisSpace>;
 
-    auto dispatcher = build_dispatcher<
-        SingleAxisSpace,
-        Generators,
-        SingleAxisEncoder,
-        ThrowingUnboundHandler,
-        int,
-        int
-    >();
+    auto dispatcher = build_dispatcher<SingleAxisSpace,
+                                       Generators,
+                                       SingleAxisEncoder,
+                                       ThrowingUnboundHandler,
+                                       int,
+                                       int>();
 
     EXPECT_EQ(dispatcher(10), 1010); // 10*100 + 10
     EXPECT_EQ(dispatcher(20), 2020);
@@ -613,7 +645,7 @@ TEST(InvokeToGet, FullDispatcherIntegration) {
 TEST(InvokeToGet, PreservesFunctionPointerAddress) {
     // Verify the address is exactly the invoke function
     auto fromInvokeToGet = InvokeToGet<ITGInvoker, 10>::get();
-    auto direct = &ITGInvoker<10>::invoke;
+    auto direct          = &ITGInvoker<10>::invoke;
 
     EXPECT_EQ(fromInvokeToGet, direct);
 }
@@ -633,8 +665,8 @@ TEST(InvokeToGet, MultiAxisWithSubspaceGenerator) {
     SubspaceGenerator<ITGMultiAxisInstantiator, TwoAxisSpace>::apply(map);
 
     // Verify all 6 combinations are populated
-    for (int i : {1, 2, 3}) {
-        for (char c : {'a', 'b'}) {
+    for (int i: {1, 2, 3}) {
+        for (char c: {'a', 'b'}) {
             auto ptr = map.get(std::make_tuple(i, c));
             ASSERT_NE(ptr, nullptr) << "Null for (" << i << ", " << c << ")";
             EXPECT_EQ(ptr(0), std::to_string(i) + c + "0");
@@ -650,7 +682,8 @@ TEST(InvokeToGet, MultiAxisFullDispatcher) {
 
     struct MultiAxisEncoder {
         // This encoder uses the int arg to select axis1, fixed 'a'/'b' based on value
-        static std::tuple<int, char> encode(int x) {
+        static std::tuple<int, char>
+        encode(int x) {
             // Map: 1->'a', 2->'b', 3->'a' for testing
             char c = (x == 2) ? 'b' : 'a';
             return std::make_tuple(x, c);
@@ -658,21 +691,22 @@ TEST(InvokeToGet, MultiAxisFullDispatcher) {
     };
 
     struct MultiAxisUnbound {
-        [[noreturn]] static void unbound(int, char) {
+        [[noreturn]] static void
+        unbound(int, char) {
             throw std::runtime_error("unbound");
         }
     };
 
     using Generators = SubspaceGenerator<ITGMultiAxisInstantiator, TwoAxisSpace>;
 
-    auto dispatcher = build_dispatcher<
-        TwoAxisSpace,
-        Generators,
-        MultiAxisEncoder,
-        MultiAxisUnbound,
-        std::string,
-        int  // Only int arg at runtime, encoder derives both axes from it
-    >();
+    auto dispatcher =
+        build_dispatcher<TwoAxisSpace,
+                         Generators,
+                         MultiAxisEncoder,
+                         MultiAxisUnbound,
+                         std::string,
+                         int // Only int arg at runtime, encoder derives both axes from it
+                         >();
 
     // ITGMultiAxisInvoker<1, 'a'>::invoke(1) = "1a1"
     EXPECT_EQ(dispatcher(1), "1a1");
@@ -692,21 +726,29 @@ TEST(InvokeToGet, MultiAxisFullDispatcher) {
 namespace {
 // Invokers with different signatures
 template <int V> struct VoidReturnInvoker {
-    static void invoke(int& out) { out = V; }
+    static void
+    invoke(int &out) {
+        out = V;
+    }
 };
 
 template <int V> struct VoidReturnInstantiator {
-    static FunctionPtr<void, int&> get() {
+    static FunctionPtr<void, int &>
+    get() {
         return &VoidReturnInvoker<V>::invoke;
     }
 };
 
 template <int V> struct ConstRefInvoker {
-    static int invoke(const std::string& s) { return V + static_cast<int>(s.length()); }
+    static int
+    invoke(const std::string &s) {
+        return V + static_cast<int>(s.length());
+    }
 };
 
 template <int V> struct ConstRefInstantiator {
-    static FunctionPtr<int, const std::string&> get() {
+    static FunctionPtr<int, const std::string &>
+    get() {
         return &ConstRefInvoker<V>::invoke;
     }
 };
@@ -714,27 +756,34 @@ template <int V> struct ConstRefInstantiator {
 
 TEST(FunctionPtrTypeMatching, VoidReturnTypesWork) {
     struct VoidEncoder {
-        static std::tuple<int> encode(int& /*out*/) { return std::make_tuple(10); }
+        static std::tuple<int>
+        encode(int & /*out*/) {
+            return std::make_tuple(10);
+        }
     };
 
     struct VoidUnbound {
-        [[noreturn]] static void unbound(int) { throw std::runtime_error("unbound"); }
+        [[noreturn]] static void
+        unbound(int) {
+            throw std::runtime_error("unbound");
+        }
     };
 
-    using Map = PermutationArrayMap<SingleAxisSpace, FunctionPtr<void, int&>, nullptr>;
+    using Map = PermutationArrayMap<SingleAxisSpace, FunctionPtr<void, int &>, nullptr>;
 
     Map map;
     PointGenerator<VoidReturnInstantiator, 10>::apply(map);
 
     int result = 0;
-    auto ptr = map.get(std::make_tuple(10));
+    auto ptr   = map.get(std::make_tuple(10));
     ASSERT_NE(ptr, nullptr);
     ptr(result);
     EXPECT_EQ(result, 10);
 }
 
 TEST(FunctionPtrTypeMatching, ConstRefArgumentsWork) {
-    using Map = PermutationArrayMap<SingleAxisSpace, FunctionPtr<int, const std::string&>, nullptr>;
+    using Map =
+        PermutationArrayMap<SingleAxisSpace, FunctionPtr<int, const std::string &>, nullptr>;
 
     Map map;
     PointGenerator<ConstRefInstantiator, 10>::apply(map);
@@ -757,13 +806,15 @@ TEST(FunctionPtrTypeMatching, ConstRefArgumentsWork) {
 TEST(DispatcherEdgeCases, InvalidEncodedValueReturnsNullptr) {
     // If the encoder returns a value not in the axis, the lookup should fail
     struct BadEncoder {
-        static std::tuple<int> encode(int x) {
+        static std::tuple<int>
+        encode(int x) {
             // This encoder might return a value not in SingleAxis (10, 20, 30)
             return std::make_tuple(x);
         }
     };
 
-    using DispatcherType = Dispatcher<SingleAxisSpace, BadEncoder, ThrowingUnboundHandler, int, int>;
+    using DispatcherType =
+        Dispatcher<SingleAxisSpace, BadEncoder, ThrowingUnboundHandler, int, int>;
 
     DispatcherType dispatcher;
     dispatcher.permutation_map.set(std::make_tuple(10), &SimpleInvoker<10>::invoke);
@@ -776,7 +827,8 @@ TEST(DispatcherEdgeCases, InvalidEncodedValueReturnsNullptr) {
 }
 
 TEST(DispatcherEdgeCases, EmptyDispatcherThrowsForAllCalls) {
-    using DispatcherType = Dispatcher<SingleAxisSpace, SingleAxisEncoder, ThrowingUnboundHandler, int, int>;
+    using DispatcherType =
+        Dispatcher<SingleAxisSpace, SingleAxisEncoder, ThrowingUnboundHandler, int, int>;
 
     DispatcherType dispatcher;
     // Nothing bound
@@ -787,19 +839,16 @@ TEST(DispatcherEdgeCases, EmptyDispatcherThrowsForAllCalls) {
 }
 
 TEST(DispatcherEdgeCases, PartiallyBoundDispatcher) {
-    using Generators = GeneratorList<
-        PointGenerator<SimpleInstantiator, 10>
-        // 20 and 30 not bound
-    >;
+    using Generators = GeneratorList<PointGenerator<SimpleInstantiator, 10>
+                                     // 20 and 30 not bound
+                                     >;
 
-    auto dispatcher = build_dispatcher<
-        SingleAxisSpace,
-        Generators,
-        SingleAxisEncoder,
-        ThrowingUnboundHandler,
-        int,
-        int
-    >();
+    auto dispatcher = build_dispatcher<SingleAxisSpace,
+                                       Generators,
+                                       SingleAxisEncoder,
+                                       ThrowingUnboundHandler,
+                                       int,
+                                       int>();
 
     EXPECT_EQ(dispatcher(10), 110);
     EXPECT_THROW(dispatcher(20), std::runtime_error);
@@ -815,7 +864,7 @@ TEST(DispatcherEdgeCases, PartiallyBoundDispatcher) {
 
 TEST(FunctionPtrAddress, StoredAddressMatchesOriginal) {
     using FPtr = FunctionPtr<int, int>;
-    using Map = PermutationArrayMap<SingleAxisSpace, FPtr, nullptr>;
+    using Map  = PermutationArrayMap<SingleAxisSpace, FPtr, nullptr>;
 
     Map map;
 
@@ -849,15 +898,16 @@ TEST(FunctionPtrAddress, GetFromInvokePreservesAddress) {
 
 namespace {
 template <int V1, char V2> struct MultiAxisInvoker {
-    static std::string invoke(int x) {
+    static std::string
+    invoke(int x) {
         return std::to_string(V1) + V2 + std::to_string(x);
     }
 };
 
-template <template <auto...> typename InvokerTemplate>
-struct MultiAxisGetFromInvoke {
+template <template <auto...> typename InvokerTemplate> struct MultiAxisGetFromInvoke {
     template <auto V1, auto V2> struct fromInvoke {
-        static constexpr auto get() {
+        static constexpr auto
+        get() {
             return &InvokerTemplate<V1, V2>::invoke;
         }
     };
@@ -893,11 +943,12 @@ TEST(GetFromInvokeMultiAxis, CanBeUsedWithSubspaceGenerator) {
     using Map = PermutationArrayMap<TwoAxisSpace, FunctionPtr<std::string, int>, nullptr>;
 
     Map map;
-    SubspaceGenerator<MultiAxisGetFromInvoke<MultiAxisInvoker>::fromInvoke, TwoAxisSpace>::apply(map);
+    SubspaceGenerator<MultiAxisGetFromInvoke<MultiAxisInvoker>::fromInvoke, TwoAxisSpace>::apply(
+        map);
 
     // Verify all 6 combinations are populated
-    for (int i : {1, 2, 3}) {
-        for (char c : {'a', 'b'}) {
+    for (int i: {1, 2, 3}) {
+        for (char c: {'a', 'b'}) {
             auto ptr = map.get(std::make_tuple(i, c));
             ASSERT_NE(ptr, nullptr) << "Null for (" << i << ", " << c << ")";
             EXPECT_EQ(ptr(0), std::to_string(i) + c + "0");
@@ -912,14 +963,12 @@ TEST(GetFromInvokeMultiAxis, CanBeUsedWithSubspaceGenerator) {
 TEST(StaticDispatchTable, CanBeStoredAsStaticConst) {
     using Generators = SubspaceGenerator<SimpleInstantiator, SingleAxisSpace>;
 
-    static const auto dispatcher = build_dispatcher<
-        SingleAxisSpace,
-        Generators,
-        SingleAxisEncoder,
-        ThrowingUnboundHandler,
-        int,
-        int
-    >();
+    static const auto dispatcher = build_dispatcher<SingleAxisSpace,
+                                                    Generators,
+                                                    SingleAxisEncoder,
+                                                    ThrowingUnboundHandler,
+                                                    int,
+                                                    int>();
 
     // Should work the same as a non-static dispatcher
     EXPECT_EQ(dispatcher(10), 110);
@@ -938,7 +987,8 @@ TEST(TypeDeduction, InstantiatorTypeMatchesMapValueType) {
     static_assert(std::is_same_v<decltype(SimpleInstantiator<10>::get()), ExpectedFPtr>);
 
     // Verify the wrapped GetFromInvoke also returns the expected type
-    static_assert(std::is_same_v<decltype(TestGetFromInvoke<MyInvoker>::fromInvoke<10>::get()), ExpectedFPtr>);
+    static_assert(std::is_same_v<decltype(TestGetFromInvoke<MyInvoker>::fromInvoke<10>::get()),
+                                 ExpectedFPtr>);
 
     // Verify the new InvokeToGet returns the expected type
     static_assert(std::is_same_v<decltype(InvokeToGet<ITGInvoker, 10>::get()), ExpectedFPtr>);
@@ -948,10 +998,11 @@ TEST(TypeDeduction, InstantiatorTypeMatchesMapValueType) {
 }
 
 TEST(TypeDeduction, DispatcherFunctionPtrTypeMatchesCallSignature) {
-    using DispatcherType = Dispatcher<SingleAxisSpace, SingleAxisEncoder, ThrowingUnboundHandler, int, int>;
+    using DispatcherType =
+        Dispatcher<SingleAxisSpace, SingleAxisEncoder, ThrowingUnboundHandler, int, int>;
 
     // The dispatcher's function_ptr_type should match what we're storing
-    static_assert(std::is_same_v<DispatcherType::function_ptr_type, int(*)(int)>);
+    static_assert(std::is_same_v<DispatcherType::function_ptr_type, int (*)(int)>);
 
     // And the stored functions should be callable with the same signature
     using StoredFPtr = decltype(std::declval<DispatcherType>().permutation_map.get(0));
@@ -965,21 +1016,23 @@ TEST(TypeDeduction, DispatcherFunctionPtrTypeMatchesCallSignature) {
 namespace {
 // Test with a more complex function signature
 template <int V> struct ComplexInvoker {
-    static std::tuple<int, std::string> invoke(int x, double d, const std::string& s) {
+    static std::tuple<int, std::string>
+    invoke(int x, double d, const std::string &s) {
         return {V + x + static_cast<int>(d), s + std::to_string(V)};
     }
 };
 
 template <int V> struct ComplexInstantiator {
-    static auto get() {
+    static auto
+    get() {
         return &ComplexInvoker<V>::invoke;
     }
 };
 } // namespace
 
 TEST(ComplexSignature, WorksWithTupleReturnType) {
-    using FPtr = FunctionPtr<std::tuple<int, std::string>, int, double, const std::string&>;
-    using Map = PermutationArrayMap<SingleAxisSpace, FPtr, nullptr>;
+    using FPtr = FunctionPtr<std::tuple<int, std::string>, int, double, const std::string &>;
+    using Map  = PermutationArrayMap<SingleAxisSpace, FPtr, nullptr>;
 
     Map map;
     PointGenerator<ComplexInstantiator, 10>::apply(map);

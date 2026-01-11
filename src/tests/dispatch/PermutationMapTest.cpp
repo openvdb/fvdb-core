@@ -475,8 +475,8 @@ TEST(FillGenerator, FillsTwoAxisSubspace) {
     FillGenerator<TwoAxisSpace, 123>::apply(map);
 
     // All positions should have the same value
-    for (int i : {1, 2, 3}) {
-        for (char c : {'a', 'b'}) {
+    for (int i: {1, 2, 3}) {
+        for (char c: {'a', 'b'}) {
             EXPECT_EQ(map.get(std::make_tuple(i, c)), 123);
         }
     }
@@ -498,8 +498,8 @@ TEST(FillGenerator, WorksWithUnorderedMap) {
 TEST(GeneratorList, AppliesMultipleGeneratorsInOrder) {
     PermutationArrayMap<SingleAxisSpace, int> map;
 
-    using Generators = GeneratorList<FillGenerator<SingleAxisSpace, 10>,
-                                     PointGenerator<PointInstantiator, 20>>;
+    using Generators =
+        GeneratorList<FillGenerator<SingleAxisSpace, 10>, PointGenerator<PointInstantiator, 20>>;
 
     Generators::apply(map);
 
@@ -512,8 +512,8 @@ TEST(GeneratorList, AppliesMultipleGeneratorsInOrder) {
 TEST(GeneratorList, LaterGeneratorsOverwriteEarlierOnes) {
     PermutationArrayMap<SingleAxisSpace, int> map;
 
-    using Generators = GeneratorList<FillGenerator<SingleAxisSpace, 100>,
-                                     FillGenerator<SingleAxisSpace, 200>>;
+    using Generators =
+        GeneratorList<FillGenerator<SingleAxisSpace, 100>, FillGenerator<SingleAxisSpace, 200>>;
 
     Generators::apply(map);
 
@@ -536,16 +536,15 @@ TEST(GeneratorList, EmptyGeneratorListDoesNothing) {
 }
 
 TEST(GeneratorList, MultipleSubspaceGenerators) {
-    using Axis1    = SameTypeUniqueValuePack<1, 2>;
-    using Axis2    = SameTypeUniqueValuePack<10, 20>;
-    using Space    = AxisOuterProduct<Axis1, Axis2>;
-    using SubA     = AxisOuterProduct<SameTypeUniqueValuePack<1>, SameTypeUniqueValuePack<10, 20>>;
-    using SubB     = AxisOuterProduct<SameTypeUniqueValuePack<2>, SameTypeUniqueValuePack<10, 20>>;
+    using Axis1 = SameTypeUniqueValuePack<1, 2>;
+    using Axis2 = SameTypeUniqueValuePack<10, 20>;
+    using Space = AxisOuterProduct<Axis1, Axis2>;
+    using SubA  = AxisOuterProduct<SameTypeUniqueValuePack<1>, SameTypeUniqueValuePack<10, 20>>;
+    using SubB  = AxisOuterProduct<SameTypeUniqueValuePack<2>, SameTypeUniqueValuePack<10, 20>>;
 
     PermutationArrayMap<Space, int> map;
 
-    using Generators = GeneratorList<FillGenerator<SubA, 100>,
-                                     FillGenerator<SubB, 200>>;
+    using Generators = GeneratorList<FillGenerator<SubA, 100>, FillGenerator<SubB, 200>>;
 
     Generators::apply(map);
 
@@ -564,7 +563,8 @@ TEST(GeneratorForConcept, ValidGeneratorsSatisfyConcept) {
 
     static_assert(GeneratorForConcept<FillGenerator<SingleAxisSpace, 42>, Map>);
     static_assert(GeneratorForConcept<PointGenerator<PointInstantiator, 10>, Map>);
-    static_assert(GeneratorForConcept<SubspaceGenerator<SubspaceInstantiator, SingleAxisSpace>, Map>);
+    static_assert(
+        GeneratorForConcept<SubspaceGenerator<SubspaceInstantiator, SingleAxisSpace>, Map>);
     static_assert(GeneratorForConcept<GeneratorList<>, Map>);
 }
 
@@ -584,9 +584,9 @@ TEST(BuildPermutationMap, CreatesMapFromGenerators) {
 }
 
 TEST(BuildPermutationMap, CreatesMapFromGeneratorList) {
-    using Map        = PermutationArrayMap<SingleAxisSpace, int>;
-    using Generators = GeneratorList<FillGenerator<SingleAxisSpace, 10>,
-                                     PointGenerator<PointInstantiator, 20>>;
+    using Map = PermutationArrayMap<SingleAxisSpace, int>;
+    using Generators =
+        GeneratorList<FillGenerator<SingleAxisSpace, 10>, PointGenerator<PointInstantiator, 20>>;
 
     auto map = build_permutation_map<Map, Generators>();
 
@@ -619,9 +619,9 @@ TEST(BuildPermutationMap, CanBeStoredAsConst) {
 // =============================================================================
 
 TEST(OverlayPermutationMap, OverlaysNewValuesOnExistingMap) {
-    using Map         = PermutationArrayMap<SingleAxisSpace, int>;
-    using BaseGen     = FillGenerator<SingleAxisSpace, 10>;
-    using OverlayGen  = PointGenerator<PointInstantiator, 20>;
+    using Map        = PermutationArrayMap<SingleAxisSpace, int>;
+    using BaseGen    = FillGenerator<SingleAxisSpace, 10>;
+    using OverlayGen = PointGenerator<PointInstantiator, 20>;
 
     auto base    = build_permutation_map<Map, BaseGen>();
     auto overlay = overlay_permutation_map<OverlayGen>(base);
@@ -638,9 +638,9 @@ TEST(OverlayPermutationMap, OverlaysNewValuesOnExistingMap) {
 }
 
 TEST(OverlayPermutationMap, PreservesNonOverlaidValues) {
-    using Map        = PermutationArrayMap<SingleAxisSpace, int>;
-    using BaseGen    = GeneratorList<PointGenerator<PointInstantiator, 10>,
-                                     PointGenerator<PointInstantiator, 30>>;
+    using Map = PermutationArrayMap<SingleAxisSpace, int>;
+    using BaseGen =
+        GeneratorList<PointGenerator<PointInstantiator, 10>, PointGenerator<PointInstantiator, 30>>;
     using OverlayGen = PointGenerator<PointInstantiator, 20>;
 
     auto base    = build_permutation_map<Map, BaseGen>();
