@@ -155,6 +155,10 @@ ConfigureTest(GaussianRasterizeContributingGaussianIdsTest "GaussianRasterizeCon
 ConfigureTest(GaussianMCMCAddNoiseTest "GaussianMCMCAddNoiseTest.cpp")
 ConfigureTest(GaussianMCMCRelocationTest "GaussianMCMCRelocationTest.cpp")
 
+# Configure dispatch unit tests
+ConfigureTest(DispatchValuesTest "dispatch/ValuesTest.cpp")
+ConfigureTest(DispatchAxisOuterProductTest "dispatch/AxisOuterProductTest.cpp")
+
 if(NOT NANOVDB_EDITOR_SKIP)
   #ConfigureTest(ViewerTest "ViewerTest.cpp")
 endif()

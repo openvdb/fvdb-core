@@ -42,9 +42,7 @@ template <typename ReturnType, typename... Args> using FunctionPtr = ReturnType 
 // Encoder must have a static encode() method that returns a tuple of axis values
 template <typename Encoder, typename AxesT, typename... Args>
 concept EncoderConcept = requires(Args... args) {
-    {
-        Encoder::encode(args...)
-    } -> std::convertible_to<typename AxesT::value_types_tuple_type>;
+    { Encoder::encode(args...) } -> std::convertible_to<typename AxesT::value_types_tuple_type>;
 };
 
 // UnboundHandler must have a static unbound() method (typically [[noreturn]])
@@ -73,12 +71,10 @@ template <typename AxesT,
           typename UnboundHandler,
           typename ReturnType,
           typename... Args>
-    requires AxisOuterProductConcept<AxesT> &&
-             EncoderConcept<Encoder, AxesT, Args...> &&
+    requires AxisOuterProductConcept<AxesT> && EncoderConcept<Encoder, AxesT, Args...> &&
              UnboundHandlerConcept<UnboundHandler, AxesT>
 struct Dispatcher {
-    static_assert(AxisOuterProductConcept<AxesT>,
-                  "Dispatcher: AxesT must be an AxisOuterProduct");
+    static_assert(AxisOuterProductConcept<AxesT>, "Dispatcher: AxesT must be an AxisOuterProduct");
 
     using axes_type         = AxesT;
     using return_type       = ReturnType;
@@ -128,8 +124,7 @@ template <typename AxesT,
           typename UnboundHandler,
           typename ReturnType,
           typename... Args>
-    requires AxisOuterProductConcept<AxesT> &&
-             EncoderConcept<Encoder, AxesT, Args...> &&
+    requires AxisOuterProductConcept<AxesT> && EncoderConcept<Encoder, AxesT, Args...> &&
              UnboundHandlerConcept<UnboundHandler, AxesT>
 Dispatcher<AxesT, Encoder, UnboundHandler, ReturnType, Args...>
 build_dispatcher() {

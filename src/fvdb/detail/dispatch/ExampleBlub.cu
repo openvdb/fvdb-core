@@ -185,40 +185,53 @@ template <auto... Values> using BlubBind = PointGenerator<BlubInstantiator, Valu
 //     SubspaceGenerator<BlubInstantiator,
 //                       AxisOuterProduct<DeviceAxis, InScalarTypeAxis, OutScalarTypeAxis>>;
 
-using BlubBindings = GeneratorList<
-    // CPU Float32 -> Int32: specific overload blub_impl(Cpu, Float32, Int32)
-    BlubBind<torch::kCPU, torch::kFloat32, torch::kInt32>,
+// using BlubBindings = GeneratorList<
+//     // CPU Float32 -> Int32: specific overload blub_impl(Cpu, Float32, Int32)
+//     BlubBind<torch::kCPU, torch::kFloat32, torch::kInt32>,
 
-    // CUDA Float32 -> Int32: specific overload blub_impl(Cuda, Float32, Int32)
-    BlubBind<torch::kCUDA, torch::kFloat32, torch::kInt32>,
+//     // // CUDA Float32 -> Int32: specific overload blub_impl(Cuda, Float32, Int32)
+//     // BlubBind<torch::kCUDA, torch::kFloat32, torch::kInt32>,
 
-    // CPU same-type: generic template blub_impl<Dtype>(Cpu, in, out)
-    BlubBind<torch::kCPU, torch::kInt32, torch::kInt32>,
-    BlubBind<torch::kCPU, torch::kInt64, torch::kInt64>,
-    BlubBind<torch::kCPU, torch::kFloat16, torch::kFloat16>,
-    BlubBind<torch::kCPU, torch::kFloat32, torch::kFloat32>,
-    BlubBind<torch::kCPU, torch::kFloat64, torch::kFloat64>,
+//     // // CPU same-type: generic template blub_impl<Dtype>(Cpu, in, out)
+//     // BlubBind<torch::kCPU, torch::kInt32, torch::kInt32>,
+//     // BlubBind<torch::kCPU, torch::kInt64, torch::kInt64>,
+//     // BlubBind<torch::kCPU, torch::kFloat16, torch::kFloat16>,
+//     // BlubBind<torch::kCPU, torch::kFloat32, torch::kFloat32>,
+//     // BlubBind<torch::kCPU, torch::kFloat64, torch::kFloat64>,
 
-    // Any-device Float64 -> Int32: expanded manually instead of SubspaceGenerator
-    // (SubspaceGenerator causes nvcc to crash - for_each_permutation is too complex)
-    BlubBind<torch::kCPU, torch::kFloat64, torch::kInt32>,
-    BlubBind<torch::kCUDA, torch::kFloat64, torch::kInt32>>;
+//     // // Any-device Float64 -> Int32: expanded manually instead of SubspaceGenerator
+//     // // (SubspaceGenerator causes nvcc to crash - for_each_permutation is too complex)
+//     // BlubBind<torch::kCPU, torch::kFloat64, torch::kInt32>,
+//     // BlubBind<torch::kCUDA, torch::kFloat64, torch::kInt32>
+
+//     >;
 
 // -----------------------------------------------------------------------------
 // Public API
 // -----------------------------------------------------------------------------
 
-torch::Tensor
-blub(torch::Tensor in, torch::ScalarType outScalarType) {
-    static const auto dispatchTable = build_dispatcher<BlubAxes,
-                                                       BlubBindings,
-                                                       BlubEncoder,
-                                                       BlubUnboundHandler,
-                                                       torch::Tensor,
-                                                       torch::Tensor,
-                                                       torch::ScalarType>();
+// torch::Tensor
+// blub(torch::Tensor in, torch::ScalarType outScalarType) {
+//     static const auto dispatchTable = build_dispatcher<BlubAxes,
+//                                                        BlubBindings,
+//                                                        BlubEncoder,
+//                                                        BlubUnboundHandler,
+//                                                        torch::Tensor,
+//                                                        torch::Tensor,
+//                                                        torch::ScalarType>();
 
-    return dispatchTable(in, outScalarType);
+//     return dispatchTable(in, outScalarType);
+// }
+
+void
+test() {
+    // static const auto dispatchTable = build_dispatcher<BlubAxes,
+    //                                                    BlubBindings,
+    //                                                    BlubEncoder,
+    //                                                    BlubUnboundHandler,
+    //                                                    torch::Tensor,
+    //                                                    torch::Tensor,
+    //                                                    torch::ScalarType>();
 }
 
 } // namespace example
