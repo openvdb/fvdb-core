@@ -39,7 +39,7 @@ template <typename AxesT, typename T, T emptyValue = T(0)> struct PermutationArr
 
     std::array<value_type, axes_type::size> storage_;
 
-    PermutationArrayMap() { storage_.fill(empty_value); }
+    constexpr PermutationArrayMap() { storage_.fill(empty_value); }
 
     // -------------------------------------------------------------------------
     // Linear index accessors (used by generators)
@@ -61,7 +61,8 @@ template <typename AxesT, typename T, T emptyValue = T(0)> struct PermutationArr
 
     constexpr T
     get(index_tuple_type index) const {
-        auto idx = axes_type::index_of_values(index);
+        auto idx = std::apply(
+            [](auto... values) { return axes_type::index_of_values(values...); }, index);
         if (!idx.has_value()) {
             return empty_value;
         }
@@ -70,7 +71,8 @@ template <typename AxesT, typename T, T emptyValue = T(0)> struct PermutationArr
 
     constexpr void
     set(index_tuple_type index, value_type val) {
-        auto idx = axes_type::index_of_values(index);
+        auto idx = std::apply(
+            [](auto... values) { return axes_type::index_of_values(values...); }, index);
         if (idx.has_value()) {
             storage_[*idx] = val;
         }
@@ -124,7 +126,8 @@ template <typename AxesT, typename T, T emptyValue = T(0)> struct PermutationUno
 
     T
     get(index_tuple_type index) const {
-        auto idx = axes_type::index_of_values(index);
+        auto idx = std::apply(
+            [](auto... values) { return axes_type::index_of_values(values...); }, index);
         if (!idx.has_value()) {
             return empty_value;
         }
@@ -134,7 +137,8 @@ template <typename AxesT, typename T, T emptyValue = T(0)> struct PermutationUno
 
     void
     set(index_tuple_type index, value_type val) {
-        auto idx = axes_type::index_of_values(index);
+        auto idx = std::apply(
+            [](auto... values) { return axes_type::index_of_values(values...); }, index);
         if (idx.has_value()) {
             storage_[*idx] = val;
         }
