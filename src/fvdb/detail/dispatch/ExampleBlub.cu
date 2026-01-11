@@ -94,136 +94,110 @@ template void blub_impl<torch::kCUDA>(Tag<torch::kCUDA>,
                                       ConcreteTensor<torch::kCUDA, torch::kInt32, 1>);
 
 // =============================================================================
-// DISPATCH INFRASTRUCTURE
+// DISPATCH TABLE CONFIGURATION
 // =============================================================================
-// Everything below is dispatch machinery. The goal: minimal boilerplate that
-// clearly expresses authoring intent.
-//
-// =============================================================================
+// This section defines the dispatch space, invoker, and bindings for blub.
+// The goal is to be declarative: specify WHAT combinations are supported,
+// and let the infrastructure handle HOW to dispatch.
 
 // -----------------------------------------------------------------------------
-// AXIS DEFINITIONS: The extent of the dispatch space
-// -----------------------------------------------------------------------------
-// These define WHAT we might dispatch over. The actual sparse coverage
-// (which combinations are supported) is declared separately in bindings.
-
-using BlubDeviceAxis = TorchDeviceDispatchAxis<torch::kCPU, torch::kCUDA>;
-using BlubDtypeAxis  = TorchScalarTypeAxis<torch::kInt32,
-                                           torch::kInt64,
-                                           torch::kFloat16,
-                                           torch::kFloat32,
-                                           torch::kFloat64>;
-
-// Full dispatch space: Device × InputDtype × OutputDtype
-using BlubAxes = AxisOuterProduct<BlubDeviceAxis, BlubDtypeAxis, BlubDtypeAxis>;
-
-// -----------------------------------------------------------------------------
-// TABLE TYPE: Function signature and dispatch table
+// Encoder and error handler
 // -----------------------------------------------------------------------------
 
-using BlubFunctionPtr = torch::Tensor (*)(torch::Tensor, torch::ScalarType);
-using BlubTable       = DispatchTable<torch::Tensor(torch::Tensor, torch::ScalarType), BlubAxes>;
+auto
+blub_encode(torch::Tensor in, torch::ScalarType outScalarType) {
+    return std::make_tuple(in.device().type(), in.scalar_type(), outScalarType);
+}
+
+[[noreturn]] void
+blub_unbound_error(torch::DeviceType deviceType,
+                   torch::ScalarType inScalarType,
+                   torch::ScalarType outScalarType) {
+    TORCH_CHECK(false,
+                "Blub: Unsupported combination - device: ",
+                deviceType,
+                ", input dtype: ",
+                inScalarType,
+                ", output dtype: ",
+                outScalarType);
+}
 
 // -----------------------------------------------------------------------------
-// INVOKER: The actual implementation for each axis value combination
+// Axis definitions - the full space of possible dispatch combinations
 // -----------------------------------------------------------------------------
-// This is the bridge between dispatch values and actual implementations.
-// One invoker can serve many bindings if they share the same pattern.
-// Note: Only invoke() is needed; WithGet adds the get() method automatically.
 
-template <torch::DeviceType Device, torch::ScalarType InDtype, torch::ScalarType OutDtype>
+using BlubDeviceAxis     = TorchDeviceDispatchAxis<torch::kCPU, torch::kCUDA>;
+using BlubScalarTypeAxis = TorchScalarTypeAxis<torch::kInt32,
+                                               torch::kInt64,
+                                               torch::kFloat16,
+                                               torch::kFloat32,
+                                               torch::kFloat64>;
+using BlubAxes           = AxisOuterProduct<BlubDeviceAxis, BlubScalarTypeAxis, BlubScalarTypeAxis>;
+
+// -----------------------------------------------------------------------------
+// Invoker - the bridge between runtime dispatch and static implementation
+// -----------------------------------------------------------------------------
+
+template <torch::DeviceType DeviceValue,
+          torch::ScalarType InScalarType,
+          torch::ScalarType OutScalarType>
 struct BlubInvoker {
     static torch::Tensor
-    invoke(torch::Tensor in, torch::ScalarType out_dtype) {
-        auto out          = torch::empty_like(in, in.options().dtype(out_dtype));
-        auto concrete_in  = ConcreteTensor<Device, InDtype, 1>{in};
-        auto concrete_out = ConcreteTensor<Device, OutDtype, 1>{out};
-        blub_impl(Tag<Device>{}, concrete_in, concrete_out);
+    invoke(torch::Tensor in, torch::ScalarType outScalarType) {
+        // Create output tensor with the specified dtype on the same device
+        auto out =
+            torch::empty_like(in, torch::TensorOptions().dtype(OutScalarType).device(in.device()));
+
+        // Concretize tensors with compile-time type information
+        auto concreteIn  = ConcreteTensor<DeviceValue, InScalarType, 1>(in);
+        auto concreteOut = ConcreteTensor<DeviceValue, OutScalarType, 1>(out);
+
+        // Dispatch to the implementation - overload resolution picks the right one
+        blub_impl(Tag<DeviceValue>(), concreteIn, concreteOut);
+
         return out;
     }
 };
 
-// Wrap the invoker to add get() - this is what Binding/SubspaceBinding use
-using BlubInstantiator = WithGet<BlubInvoker, BlubFunctionPtr>;
-
 // -----------------------------------------------------------------------------
-// BINDING ALIASES: Reduce repetition in binding declarations
+// Bindings - declare which combinations are actually implemented
 // -----------------------------------------------------------------------------
-
-template <auto... Values> using BlubBind = Binding<BlubInstantiator::Bind, Values...>;
+// Each generator corresponds to one or more blub_impl overloads above.
+// The structure mirrors the implementation coverage.
+template <auto... Values> using BlubBind = PointGenerator<GetFromInvoke<BlubInvoker>, Values...>;
 
 template <typename Subspace>
-using BlubSubspaceBind = SubspaceBinding<BlubInstantiator::Bind, Subspace>;
+using BlubSubspaceBind = SubspaceGenerator<GetFromInvoke<BlubInvoker>, Subspace>;
 
-// -----------------------------------------------------------------------------
-// SUBSPACE DEFINITIONS: Rectangular regions of supported combinations
-// -----------------------------------------------------------------------------
+using BlubBindings = GeneratorList<
+    // CPU Float32 -> Int32: specific overload blub_impl(Cpu, Float32, Int32)
+    BlubBind<torch::kCPU, torch::kFloat32, torch::kInt32>,
 
-// Float32 → Int32 on all devices
-using Float32ToInt32Subspace = AxisOuterProduct<BlubDeviceAxis,
-                                                TorchScalarTypeAxis<torch::kFloat32>,
-                                                TorchScalarTypeAxis<torch::kInt32>>;
+    // CUDA Float32 -> Int32: specific overload blub_impl(Cuda, Float32, Int32)
+    BlubBind<torch::kCUDA, torch::kFloat32, torch::kInt32>,
 
-// Float64 → Int32 on all devices
-using Float64ToInt32Subspace = AxisOuterProduct<BlubDeviceAxis,
-                                                TorchScalarTypeAxis<torch::kFloat64>,
-                                                TorchScalarTypeAxis<torch::kInt32>>;
-
-// -----------------------------------------------------------------------------
-// BINDING SPECIFICATION: Declares which combinations are supported
-// -----------------------------------------------------------------------------
-// This is THE declaration of intent - clean, minimal, and expressive.
-
-// clang-format off
-using BlubBindings = BindingList<
-    // Same-type CPU bindings (diagonal entries - must be individual)
+    // CPU same-type: generic template blub_impl<Dtype>(Cpu, in, out)
     BlubBind<torch::kCPU, torch::kInt32, torch::kInt32>,
     BlubBind<torch::kCPU, torch::kInt64, torch::kInt64>,
     BlubBind<torch::kCPU, torch::kFloat16, torch::kFloat16>,
     BlubBind<torch::kCPU, torch::kFloat32, torch::kFloat32>,
     BlubBind<torch::kCPU, torch::kFloat64, torch::kFloat64>,
 
-    // Cross-type conversions (rectangular subspaces - both CPU and CUDA)
-    BlubSubspaceBind<Float32ToInt32Subspace>,
-    BlubSubspaceBind<Float64ToInt32Subspace>
->;
-// clang-format on
+    // Any-device Float64 -> Int32: device-generic template blub_impl<Device>(...)
+    BlubSubspaceBind<AxisOuterProduct<BlubDeviceAxis,
+                                      TorchScalarTypeAxis<torch::kFloat64>,
+                                      TorchScalarTypeAxis<torch::kInt32>>>>;
 
 // -----------------------------------------------------------------------------
-// ERROR HANDLER: Called for unsupported combinations
-// -----------------------------------------------------------------------------
-
-BlubFunctionPtr
-blub_unsupported(torch::DeviceType /*device*/,
-                 torch::ScalarType /*in_dtype*/,
-                 torch::ScalarType /*out_dtype*/) {
-    return [](torch::Tensor in, torch::ScalarType out_dtype) -> torch::Tensor {
-        TORCH_CHECK(false,
-                    "blub: unsupported combination - device=",
-                    in.device().type(),
-                    ", in_dtype=",
-                    in.scalar_type(),
-                    ", out_dtype=",
-                    out_dtype);
-    };
-}
-
-// -----------------------------------------------------------------------------
-// PUBLIC API: The minimal wrapper
+// Public API
 // -----------------------------------------------------------------------------
 
 torch::Tensor
-blub(torch::Tensor in, torch::ScalarType out_dtype) {
-    // Build table once, statically
-    static auto const table = build_table<BlubTable, BlubBindings>();
+blub(torch::Tensor in, torch::ScalarType outScalarType) {
+    static const auto dispatchTable =
+        build_dispatcher<BlubAxes, BlubBindings, torch::Tensor, torch::Tensor, torch::ScalarType>();
 
-    // Extract runtime values
-    auto const device   = in.device().type();
-    auto const in_dtype = in.scalar_type();
-
-    // Dispatch with fallback for unsupported combinations
-    auto fn_ptr = table.find_or(blub_unsupported, device, in_dtype, out_dtype);
-    return fn_ptr(in, out_dtype);
+    return dispatchTable(blub_encode, blub_unbound_error, in, outScalarType);
 }
 
 } // namespace example

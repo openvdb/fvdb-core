@@ -68,19 +68,6 @@ extern template void blub_impl<torch::kCUDA>(Tag<torch::kCUDA>,
                                              ConcreteTensor<torch::kCUDA, torch::kFloat64, 1>,
                                              ConcreteTensor<torch::kCUDA, torch::kInt32, 1>);
 
-// -----------------------------------------------------------------------------
-// The general use "blub" function, which will handle all of the dispatch to the
-// blub implementations above. This is the whole reason we're here.
-// -----------------------------------------------------------------------------
-// Overload: output dtype defaults to input dtype
-torch::Tensor blub(torch::Tensor in, torch::ScalarType out_dtype);
-
-// Overload: output dtype defaults to input dtype
-inline torch::Tensor
-blub(torch::Tensor in) {
-    return blub(in, in.scalar_type());
-}
-
 } // namespace example
 } // namespace dispatch
 } // namespace fvdb

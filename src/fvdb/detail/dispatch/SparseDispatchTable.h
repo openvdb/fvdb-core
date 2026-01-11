@@ -4,10 +4,8 @@
 #ifndef FVDB_DETAIL_DISPATCH_SPARSEDISPATCHTABLE_H
 #define FVDB_DETAIL_DISPATCH_SPARSEDISPATCHTABLE_H
 
-#include "fvdb/detail/dispatch/AxisOuterProduct.h"
+#include "fvdb/detail/dispatch/PermutationMap.h"
 
-#include <array>
-#include <concepts>
 #include <functional>
 #include <stdexcept>
 #include <type_traits>
@@ -16,282 +14,143 @@
 namespace fvdb {
 namespace dispatch {
 
-// =============================================================================
-// Traits
-// =============================================================================
-
-// -----------------------------------------------------------------------------
-// is_instantiator_for trait
-// -----------------------------------------------------------------------------
-// Checks if an Instantiator template, when instantiated with Values..., has a
-// static get() method that returns FunctionPtrT.
+// What are the key ideas behind the dispatch table? What does it add on top
+// of the plain permutation map?
 //
-// Usage: is_instantiator_for_v<MyInstantiator, FunctionPtr, val1, val2, ...>
-
-template <template <auto...> typename Instantiator, typename FunctionPtrT, auto... Values>
-    struct is_instantiator_for : std::bool_constant < requires {
-    { Instantiator<Values...>::get() } -> std::same_as<FunctionPtrT>;
-} > {};
-
-template <template <auto...> typename Instantiator, typename FunctionPtrT, auto... Values>
-inline constexpr bool is_instantiator_for_v =
-    is_instantiator_for<Instantiator, FunctionPtrT, Values...>::value;
-
-// =============================================================================
-// Concepts
-// =============================================================================
-
-// -----------------------------------------------------------------------------
-// DispatchTableConcept: Checks if a type is a valid dispatch table
-// -----------------------------------------------------------------------------
-
-template <typename T>
-concept DispatchTableConcept = requires(T &t, std::size_t idx) {
-    typename T::FunctionPtr;
-    typename T::Axes;
-    { t.table_[idx] } -> std::convertible_to<typename T::FunctionPtr &>;
-} && AxisOuterProductConcept<typename T::Axes>;
-
-// -----------------------------------------------------------------------------
-// BindingSpecForConcept: Checks if a type is a valid binding specification for a table
-// -----------------------------------------------------------------------------
-
-template <typename Spec, typename Table>
-concept BindingSpecForConcept = DispatchTableConcept<Table> && requires(Table &t) {
-    { Spec::apply(t) } -> std::same_as<void>;
-};
-
-// =============================================================================
-// DispatchTable
-// =============================================================================
-// A simple dispatch table that maps axis value combinations to function pointers.
-// This is just data + lookup; construction is handled by free functions.
-
-template <typename FunctionSignature, typename AxesT> struct DispatchTable;
-
-template <typename ReturnType, typename... Args, typename AxesT>
-struct DispatchTable<ReturnType(Args...), AxesT> {
-    static_assert(is_axis_outer_product_v<AxesT>, "DispatchTable Axes must be an AxisOuterProduct");
-
-    using Axes        = AxesT;
-    using FunctionPtr = ReturnType (*)(Args...);
-
-    std::array<FunctionPtr, Axes::size> table_{};
-
-    // -------------------------------------------------------------------------
-    // Lookup
-    // -------------------------------------------------------------------------
-
-    template <typename... Values>
-    FunctionPtr
-    find_required(Values... values) const {
-        static_assert(sizeof...(Values) == Axes::num_axes,
-                      "Must provide exactly one value per axis");
-        auto const idx = Axes::index_of_values(values...);
-        static_assert(idx.has_value(), "Values must be valid members of their corresponding axes");
-        auto ret = table_[*idx];
-        if (ret == nullptr) {
-            throw std::runtime_error("No implementation bound for this combination of axis values");
-        }
-        return ret;
-    }
-
-    template <typename Fallback, typename... Values>
-    FunctionPtr
-    find_or(Fallback &&fallback, Values... values) const {
-        static_assert(sizeof...(Values) == Axes::num_axes,
-                      "Must provide exactly one value per axis");
-        auto const idx = Axes::index_of_values(values...);
-        if (!idx.has_value() || table_[*idx] == nullptr) {
-            return std::invoke(std::forward<Fallback>(fallback), values...);
-        }
-        auto ret = table_[*idx];
-        return ret;
-    }
-};
-
-// =============================================================================
-// Binding Types
-// =============================================================================
-// These types describe bindings declaratively. They have a static apply()
-// method that performs the actual binding when called.
+// it's a permutation map with a function pointer as the value type.
 //
-// IMPORTANT: Bindings are checked at apply() time to ensure:
-//   1. The subspace is valid for the table's axes (prevents accidental full-space binding)
-//   2. The instantiator returns the correct function pointer type
+// it will usually be used in situations where the values of the arguments of
+// the function are used to produce a the value tuple which is the index type
+// of the permutation map.
+//
+// It is not an invalid usage to call with values that are not in the space
+// of the axes, so long as they're the correct types as the axes value types.
+//
+// The generators, which permutation map wants to have with a static "get"
+// function that returns a value, are often more easily expressed as a struct
+// with a static "invoke" function which *is* the function pointer, so we want
+// an adapter that turns the invoke struct type into the generator. We don't
+// need to rebuild the permutation map machinery to support this variation,
+// the wrapper invoke_to_get struct is fine.
 
-// -----------------------------------------------------------------------------
-// Binding: Binds a single value combination
-// -----------------------------------------------------------------------------
-// Instantiator must be a template with signature:
-//   template <auto... Values> struct Inst { static FunctionPtr get(); };
+template <typename ReturnType, typename... Args> using FunctionPtr = ReturnType (*)(Args...);
 
-template <template <auto...> typename Instantiator, auto... Values> struct Binding {
-    template <typename Table>
-        requires DispatchTableConcept<Table>
-    static void
-    apply(Table &table) {
-        // Check that the instantiator returns the correct type
-        static_assert(is_instantiator_for_v<Instantiator, typename Table::FunctionPtr, Values...>,
-                      "Instantiator::get() must return Table::FunctionPtr");
+template <typename AxesT, typename ReturnType, typename... Args> struct Dispatcher {
+    using axes_type         = AxesT;
+    using return_type       = ReturnType;
+    using function_ptr_type = FunctionPtr<ReturnType, Args...>;
+    using map_type          = PermutationMap<AxesT, function_ptr_type, nullptr>;
 
-        // Check that all values are valid for the table's axes
-        static_assert(Table::Axes::index_of_values(Values...).has_value(),
-                      "Binding values must be valid members of the table's axes");
+    map_type permutation_map;
 
-        constexpr auto idx = Table::Axes::index_of_values(Values...).value();
-        table.table_[idx]  = Instantiator<Values...>::get();
-    }
-};
-
-// -----------------------------------------------------------------------------
-// SubspaceBinding: Binds all combinations in a subspace
-// -----------------------------------------------------------------------------
-// Subspace must be an AxisOuterProduct whose axes are subsets of the table's axes.
-// This is checked at apply() time to prevent accidental full-space instantiation.
-
-template <template <auto...> typename Instantiator, typename Subspace> struct SubspaceBinding {
-    static_assert(is_axis_outer_product_v<Subspace>,
-                  "SubspaceBinding requires Subspace to be an AxisOuterProduct");
-
-  private:
-    // Action for for_each_permutation: binds each instantiated value combination
-    template <typename InstType, auto... Vals> struct BindAction {
-        template <typename Table>
-        static void
-        apply(Table &table) {
-            // These are already validated by the outer apply(), but we include
-            // them here for defense-in-depth and clearer error messages.
-            static_assert(Table::Axes::index_of_values(Vals...).has_value(),
-                          "Subspace values must be valid members of the table's axes");
-
-            constexpr auto idx = Table::Axes::index_of_values(Vals...).value();
-            table.table_[idx]  = InstType::get();
+    template <typename Encoder, typename UnboundHandler>
+    ReturnType
+    operator()(Encoder &&encoder, UnboundHandler &&unbound_handler, Args... args) const {
+        auto const index_as_value_tuple = std::invoke(std::forward<Encoder>(encoder), args...);
+        auto const function_ptr         = permutation_map.get(index_as_value_tuple);
+        if (function_ptr == nullptr) {
+            std::apply(std::forward<UnboundHandler>(unbound_handler), index_as_value_tuple);
+            throw std::runtime_error(
+                "Unbound dispatch handler did not throw. Dispatcher: unexpected code path reached.");
         }
-    };
-
-  public:
-    template <typename Table>
-        requires DispatchTableConcept<Table>
-    static void
-    apply(Table &table) {
-        // CRITICAL: Verify the subspace is actually a subspace of the table's axes.
-        // This prevents accidentally binding the full permutation space when you
-        // meant to bind a subset.
-        static_assert(is_subspace_of_v<Subspace, typename Table::Axes>,
-                      "SubspaceBinding: Subspace must be a subspace of the table's axes. "
-                      "Each axis of the Subspace must be a subset of the corresponding "
-                      "axis in the table. This check prevents accidental full-space "
-                      "instantiation.");
-
-        for_each_permutation<Subspace, Instantiator, BindAction>::apply(table);
+        return std::invoke(function_ptr, std::forward<Args>(args)...);
     }
 };
 
 // -----------------------------------------------------------------------------
-// FillBinding: Fills all combinations in a subspace with a constant value
+// build_dispatcher: Construct a Dispatcher from generator specifications
 // -----------------------------------------------------------------------------
-// No instantiation per permutation - just stores the same pointer everywhere.
-// Useful for filling unsupported combinations with an error handler.
-
-template <typename Subspace, auto FnPtr> struct FillBinding {
-    static_assert(is_axis_outer_product_v<Subspace>,
-                  "FillBinding requires Subspace to be an AxisOuterProduct");
-
-  private:
-    template <auto... Vals> struct FillAction {
-        template <typename Table>
-        static void
-        apply(Table &table) {
-            static_assert(Table::Axes::index_of_values(Vals...).has_value(),
-                          "Subspace values must be valid members of the table's axes");
-
-            constexpr auto idx = Table::Axes::index_of_values(Vals...).value();
-            table.table_[idx]  = FnPtr;
-        }
-    };
-
-  public:
-    template <typename Table>
-        requires DispatchTableConcept<Table>
-    static void
-    apply(Table &table) {
-        // Verify the subspace is valid for this table
-        static_assert(is_subspace_of_v<Subspace, typename Table::Axes>,
-                      "FillBinding: Subspace must be a subspace of the table's axes");
-
-        // Verify the function pointer type matches
-        static_assert(std::is_same_v<decltype(FnPtr), typename Table::FunctionPtr>,
-                      "FillBinding: FnPtr must be of type Table::FunctionPtr");
-
-        for_each_values<Subspace, FillAction>::apply(table);
-    }
-};
-
-// -----------------------------------------------------------------------------
-// BindingList: Aggregates multiple bindings
-// -----------------------------------------------------------------------------
-
-template <typename... BindingTs> struct BindingList {
-    template <typename Table>
-        requires DispatchTableConcept<Table>
-    static void
-    apply(Table &table) {
-        (BindingTs::apply(table), ...);
-    }
-};
-
-// -----------------------------------------------------------------------------
-// WithGet: Wraps an Invoker (with static invoke()) to add the get() method
-// -----------------------------------------------------------------------------
-// Use this to avoid writing boilerplate get() methods on instantiators.
-// The Invoker must have: static FunctionPtrT invoke(Args...);
+// Creates a dispatch table by populating a Dispatcher's permutation map using
+// the provided generators. The generators determine which combinations of axis
+// values are bound to function pointers.
+//
+// Template parameters:
+//   AxesT      - The AxisOuterProduct defining the dispatch space
+//   Generators - A generator or GeneratorList that populates the map
+//   ReturnType - Return type of the dispatched functions
+//   Args...    - Argument types of the dispatched functions
 //
 // Usage:
-//   template <auto... Values> struct MyInvoker {
-//       static RetT invoke(Args...) { ... }
-//   };
-//   using MyInstantiator = WithGet<MyInvoker, FunctionPtrT>;
-//   // Then use MyInstantiator::Bind in Binding/SubspaceBinding
+//   using MyBindings = GeneratorList<...>;
+//   static const auto table = build_dispatcher<MyAxes, MyBindings, ReturnT, Arg1, Arg2>();
 
-template <template <auto...> typename Invoker, typename FunctionPtrT> struct WithGet {
-    template <auto... Values> struct Bind {
-        static FunctionPtrT
+template <typename AxesT, typename Generators, typename ReturnType, typename... Args>
+Dispatcher<AxesT, ReturnType, Args...>
+build_dispatcher() {
+    using dispatcher_type = Dispatcher<AxesT, ReturnType, Args...>;
+    using map_type        = typename dispatcher_type::map_type;
+
+    static_assert(GeneratorForConcept<Generators, map_type>,
+                  "Generators must be valid for the dispatcher's map type");
+
+    dispatcher_type dispatcher{};
+    Generators::apply(dispatcher.permutation_map);
+    return dispatcher;
+}
+
+// GetFromInvoke: Adaptor that wraps an Invoker template into an Instantiator
+// -----------------------------------------------------------------------------
+// Transforms a template with a static `invoke` function into an instantiator
+// with a static `get` function returning the function pointer to `invoke`.
+//
+// The Invoker template must have:
+//   template <auto... Values> struct Invoker {
+//       static ReturnType invoke(Args...);  // The actual function to dispatch to
+//   };
+//
+// This produces an Instantiator template usable with PermutationMap generators:
+//   template <auto... Values> struct Instantiator {
+//       static FunctionPtr<ReturnType, Args...> get();  // Returns &Invoker<Values...>::invoke
+//   };
+//
+// Usage with generators:
+//   using MyGen = SubspaceGenerator<GetFromInvoke<MyInvoker>::template Instantiator, MySubspace>;
+
+namespace {
+
+template <template <auto...> typename InvokerTemplate> struct _GetFromInvokeHelper {
+    template <auto... Values> struct fromInvoke {
+        // Return the function pointer to the invoke function.
+        // The return type is automatically inferred from the invoke signature.
+        static constexpr auto
         get() {
-            return &Invoker<Values...>::invoke;
+            return &InvokerTemplate<Values...>::invoke;
         }
     };
 };
 
-// =============================================================================
-// Free Functions for Table Construction
-// =============================================================================
+} // namespace
+
+template <template <auto...> typename InvokerTemplate>
+using GetFromInvoke = typename _GetFromInvokeHelper<InvokerTemplate>::template fromInvoke;
 
 // -----------------------------------------------------------------------------
-// build_table: Construct a dispatch table from a binding specification
-// -----------------------------------------------------------------------------
+// Imagine that I have an invoker which is templated on the specific values of
+// the axes, and has a static function which returns the ReturnType and takes
+// the Args...
+namespace {
 
-template <typename Table, typename BindingSpec>
-    requires DispatchTableConcept<Table> && BindingSpecForConcept<BindingSpec, Table>
-Table
-build_table() {
-    Table table{};
-    BindingSpec::apply(table);
-    return table;
-}
+using ExampleValueType1 = int32_t;
+using ExampleValueType2 = int8_t;
+using ExampleValueType3 = int16_t;
 
-// -----------------------------------------------------------------------------
-// with_bindings: Derive a new table by adding bindings to an existing one
-// -----------------------------------------------------------------------------
+template <ExampleValueType1 Value1, ExampleValueType2 Value2, ExampleValueType3 Value3>
+struct ExampleSpecificInvoker {
+    static int
+    invoke(size_t first_argument, void const *second_argument, float third_argument) {
+        // Some sort of implementation logic here which is specific to the values of the axes,
+        // but this invoke function is now the actual function pointer.
+        return 0;
+    }
+};
 
-template <typename BindingSpec, typename Table>
-    requires DispatchTableConcept<Table> && BindingSpecForConcept<BindingSpec, Table>
-Table
-with_bindings(Table const &original) {
-    Table result = original;
-    BindingSpec::apply(result);
-    return result;
-}
+// Example usage with ExampleSpecificInvoker:
+// using ExampleInstantiator = GetFromInvoke<ExampleSpecificInvoker>;
+// Now ExampleInstantiator<1, 2, 3>::get() returns &ExampleSpecificInvoker<1, 2, 3>::invoke
+// which is a FunctionPtr<int, size_t, void const*, float>
+using ExampleInstantiator = GetFromInvoke<ExampleSpecificInvoker>;
+
+} // namespace
 
 } // namespace dispatch
 } // namespace fvdb
