@@ -35,7 +35,25 @@ namespace dispatch {
 
 template <typename ReturnType, typename... Args> using FunctionPtr = ReturnType (*)(Args...);
 
-template <typename AxesT, typename ReturnType, typename... Args> struct Dispatcher {
+// -----------------------------------------------------------------------------
+// Dispatcher: A dispatch table with baked-in encoder and error handler
+// -----------------------------------------------------------------------------
+// The encoder maps runtime arguments to the axis value tuple for lookup.
+// The error handler is invoked (with the encoded tuple) when no binding exists.
+//
+// Template parameters:
+//   AxesT          - The AxisOuterProduct defining the dispatch space
+//   Encoder        - Type with static encode(Args...) -> value_types_tuple_type
+//   UnboundHandler - Type with static [[noreturn]] unbound(axis values...)
+//   ReturnType     - Return type of the dispatched functions
+//   Args...        - Argument types of the dispatched functions
+
+template <typename AxesT,
+          typename Encoder,
+          typename UnboundHandler,
+          typename ReturnType,
+          typename... Args>
+struct Dispatcher {
     using axes_type         = AxesT;
     using return_type       = ReturnType;
     using function_ptr_type = FunctionPtr<ReturnType, Args...>;
@@ -43,17 +61,17 @@ template <typename AxesT, typename ReturnType, typename... Args> struct Dispatch
 
     map_type permutation_map;
 
-    template <typename Encoder, typename UnboundHandler>
     ReturnType
-    operator()(Encoder &&encoder, UnboundHandler &&unbound_handler, Args... args) const {
-        auto const index_as_value_tuple = std::invoke(std::forward<Encoder>(encoder), args...);
+    operator()(Args... args) const {
+        auto const index_as_value_tuple = Encoder::encode(args...);
         auto const function_ptr         = permutation_map.get(index_as_value_tuple);
         if (function_ptr == nullptr) {
-            std::apply(std::forward<UnboundHandler>(unbound_handler), index_as_value_tuple);
+            std::apply([](auto... values) { UnboundHandler::unbound(values...); },
+                       index_as_value_tuple);
             throw std::runtime_error(
                 "Unbound dispatch handler did not throw. Dispatcher: unexpected code path reached.");
         }
-        return std::invoke(function_ptr, std::forward<Args>(args)...);
+        return function_ptr(args...);
     }
 };
 
@@ -65,19 +83,28 @@ template <typename AxesT, typename ReturnType, typename... Args> struct Dispatch
 // values are bound to function pointers.
 //
 // Template parameters:
-//   AxesT      - The AxisOuterProduct defining the dispatch space
-//   Generators - A generator or GeneratorList that populates the map
-//   ReturnType - Return type of the dispatched functions
-//   Args...    - Argument types of the dispatched functions
+//   AxesT          - The AxisOuterProduct defining the dispatch space
+//   Generators     - A generator or GeneratorList that populates the map
+//   Encoder        - Type with static encode(Args...) -> axes value tuple
+//   UnboundHandler - Type with static [[noreturn]] unbound(axis values...)
+//   ReturnType     - Return type of the dispatched functions
+//   Args...        - Argument types of the dispatched functions
 //
 // Usage:
 //   using MyBindings = GeneratorList<...>;
-//   static const auto table = build_dispatcher<MyAxes, MyBindings, ReturnT, Arg1, Arg2>();
+//   static const auto table = build_dispatcher<MyAxes, MyBindings,
+//                                              MyEncoder, MyErrorHandler,
+//                                              ReturnT, Arg1, Arg2>();
 
-template <typename AxesT, typename Generators, typename ReturnType, typename... Args>
-Dispatcher<AxesT, ReturnType, Args...>
+template <typename AxesT,
+          typename Generators,
+          typename Encoder,
+          typename UnboundHandler,
+          typename ReturnType,
+          typename... Args>
+Dispatcher<AxesT, Encoder, UnboundHandler, ReturnType, Args...>
 build_dispatcher() {
-    using dispatcher_type = Dispatcher<AxesT, ReturnType, Args...>;
+    using dispatcher_type = Dispatcher<AxesT, Encoder, UnboundHandler, ReturnType, Args...>;
     using map_type        = typename dispatcher_type::map_type;
 
     static_assert(GeneratorForConcept<Generators, map_type>,

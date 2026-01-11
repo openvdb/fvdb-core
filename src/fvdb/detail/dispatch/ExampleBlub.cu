@@ -104,23 +104,27 @@ template void blub_impl<torch::kCUDA>(Tag<torch::kCUDA>,
 // Encoder and error handler
 // -----------------------------------------------------------------------------
 
-auto
-blub_encode(torch::Tensor in, torch::ScalarType outScalarType) {
-    return std::make_tuple(in.device().type(), in.scalar_type(), outScalarType);
-}
+struct BlubEncoder {
+    static auto
+    encode(torch::Tensor in, torch::ScalarType outScalarType) {
+        return std::make_tuple(in.device().type(), in.scalar_type(), outScalarType);
+    }
+};
 
-[[noreturn]] void
-blub_unbound_error(torch::DeviceType deviceType,
-                   torch::ScalarType inScalarType,
-                   torch::ScalarType outScalarType) {
-    TORCH_CHECK(false,
-                "Blub: Unsupported combination - device: ",
-                deviceType,
-                ", input dtype: ",
-                inScalarType,
-                ", output dtype: ",
-                outScalarType);
-}
+struct BlubUnboundHandler {
+    [[noreturn]] static void
+    unbound(torch::DeviceType deviceType,
+            torch::ScalarType inScalarType,
+            torch::ScalarType outScalarType) {
+        TORCH_CHECK(false,
+                    "Blub: Unsupported combination - device: ",
+                    deviceType,
+                    ", input dtype: ",
+                    inScalarType,
+                    ", output dtype: ",
+                    outScalarType);
+    }
+};
 
 // -----------------------------------------------------------------------------
 // Axis definitions - the full space of possible dispatch combinations
@@ -166,8 +170,10 @@ struct BlubInvoker {
 // The structure mirrors the implementation coverage.
 template <auto... Values> using BlubBind = PointGenerator<GetFromInvoke<BlubInvoker>, Values...>;
 
-template <typename Subspace>
-using BlubSubspaceBind = SubspaceGenerator<GetFromInvoke<BlubInvoker>, Subspace>;
+template <typename DeviceAxis, typename InScalarTypeAxis, typename OutScalarTypeAxis>
+using BlubSubspaceBind =
+    SubspaceGenerator<GetFromInvoke<BlubInvoker>,
+                      AxisOuterProduct<DeviceAxis, InScalarTypeAxis, OutScalarTypeAxis>>;
 
 using BlubBindings = GeneratorList<
     // CPU Float32 -> Int32: specific overload blub_impl(Cpu, Float32, Int32)
@@ -184,9 +190,9 @@ using BlubBindings = GeneratorList<
     BlubBind<torch::kCPU, torch::kFloat64, torch::kFloat64>,
 
     // Any-device Float64 -> Int32: device-generic template blub_impl<Device>(...)
-    BlubSubspaceBind<AxisOuterProduct<BlubDeviceAxis,
-                                      TorchScalarTypeAxis<torch::kFloat64>,
-                                      TorchScalarTypeAxis<torch::kInt32>>>>;
+    BlubSubspaceBind<BlubDeviceAxis,
+                     TorchScalarTypeAxis<torch::kFloat64>,
+                     TorchScalarTypeAxis<torch::kInt32>>>;
 
 // -----------------------------------------------------------------------------
 // Public API
@@ -194,10 +200,15 @@ using BlubBindings = GeneratorList<
 
 torch::Tensor
 blub(torch::Tensor in, torch::ScalarType outScalarType) {
-    static const auto dispatchTable =
-        build_dispatcher<BlubAxes, BlubBindings, torch::Tensor, torch::Tensor, torch::ScalarType>();
+    static const auto dispatchTable = build_dispatcher<BlubAxes,
+                                                       BlubBindings,
+                                                       BlubEncoder,
+                                                       BlubUnboundHandler,
+                                                       torch::Tensor,
+                                                       torch::Tensor,
+                                                       torch::ScalarType>();
 
-    return dispatchTable(blub_encode, blub_unbound_error, in, outScalarType);
+    return dispatchTable(in, outScalarType);
 }
 
 } // namespace example
