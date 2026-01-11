@@ -100,8 +100,6 @@ TEST(TinyCudaDispatch, SingleAxisSingleValue) {
     EXPECT_EQ(t[0].item<float>(), 42.0f);
 }
 
-#if 0
-
 // =============================================================================
 // TEST 3: Two-axis, single value each (1 combination, but 2D lookup)
 // =============================================================================
@@ -358,8 +356,6 @@ TEST(TinyCudaDispatch, TwoDevicesTwoDtypes) {
         EXPECT_EQ(t[0].item<double>(), 4.0);
     }
 }
-
-#endif
 
 } // namespace dispatch
 } // namespace fvdb
