@@ -53,8 +53,6 @@ TEST(TinyCudaDispatch, TrivialKernelWorks) {
     EXPECT_TRUE(torch::allclose(t, expected));
 }
 
-#if 0
-
 // =============================================================================
 // TEST 2: Single-axis, single-value space (1 combination)
 // =============================================================================
@@ -101,6 +99,8 @@ TEST(TinyCudaDispatch, SingleAxisSingleValue) {
     dispatcher(t);
     EXPECT_EQ(t[0].item<float>(), 42.0f);
 }
+
+#if 0
 
 // =============================================================================
 // TEST 3: Two-axis, single value each (1 combination, but 2D lookup)

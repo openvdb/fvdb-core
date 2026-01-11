@@ -296,7 +296,9 @@ template <template <auto...> typename Instantiator, typename Subspace> struct Su
                       "Each axis of the Subspace must be a subset of (or equal to) the "
                       "corresponding axis in the map.");
 
-        for_each_permutation<Subspace, Instantiator, StoreAction>::apply(map);
+        // Use flat iteration to avoid deep template recursion that causes
+        // compile-time explosion with nvcc.
+        for_each_permutation_flat<Subspace, Instantiator, StoreAction>::apply(map);
     }
 };
 
@@ -339,7 +341,9 @@ template <typename Subspace, auto Value> struct FillGenerator {
         static_assert(std::is_convertible_v<decltype(Value), typename Map::value_type>,
                       "FillGenerator: Value must be convertible to Map::value_type");
 
-        for_each_values<Subspace, FillAction>::apply(map);
+        // Use flat iteration to avoid deep template recursion that causes
+        // compile-time explosion with nvcc.
+        for_each_values_flat<Subspace, FillAction>::apply(map);
     }
 };
 

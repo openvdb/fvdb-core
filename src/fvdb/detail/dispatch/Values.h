@@ -143,6 +143,15 @@ template <auto... values> struct SameTypeUniqueValuePack : SameTypeValuePack<val
     index_of_value(value_type v) {
         return base::first_index_of_value(v);
     }
+
+    // -------------------------------------------------------------------------
+    // COMPILE-TIME VALUE ACCESS
+    // -------------------------------------------------------------------------
+    // Access the value at compile-time index I. This enables flat iteration
+    // over value packs by decoding linear indices back to values.
+    template <size_t I>
+        requires(I < sizeof...(values))
+    static constexpr value_type value_at = std::get<I>(base::value_tuple);
 };
 
 // UniqueIntegerPack: like SameTypeUniqueValuePack, but for integer values.

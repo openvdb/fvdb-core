@@ -138,6 +138,45 @@ template <typename... Axes> struct AxisOuterProduct {
         return index_of_values_impl(std::make_index_sequence<num_axes>{},
                                     value_types_tuple_type{values...});
     }
+
+    // -------------------------------------------------------------------------
+    // LINEAR INDEX DECODING
+    // -------------------------------------------------------------------------
+    // These functions provide the reverse of index_of_values: given a linear
+    // index, decode it back to axis indices and values. This enables flat
+    // iteration over the space using index_sequence<0..Size-1> instead of
+    // recursive template expansion.
+
+    // Given a linear index, compute the index within axis I.
+    // For row-major order: axis_index = (linear_idx / stride[I]) % axis_size[I]
+    template <size_t I>
+        requires(I < num_axes)
+    static constexpr size_t
+    axis_index_at(size_t linear_idx) {
+        return (linear_idx / strides[I]) % axis_at_type<I>::size;
+    }
+
+    // Compile-time version: compute axis index for a compile-time linear index.
+    template <size_t I, size_t LinearIdx>
+        requires(I < num_axes && LinearIdx < size)
+    static constexpr size_t axis_index_at_v = (LinearIdx / strides[I]) % axis_at_type<I>::size;
+
+  private:
+    // Helper to decode linear index to value tuple at compile time
+    template <size_t LinearIdx, size_t... Is>
+    static constexpr value_types_tuple_type
+    values_at_index_impl(std::index_sequence<Is...>) {
+        return value_types_tuple_type{
+            axis_at_type<Is>::template value_at<axis_index_at_v<Is, LinearIdx>>...};
+    }
+
+  public:
+    // Decode a compile-time linear index to a tuple of axis values.
+    // This is the inverse of index_of_values for valid indices.
+    template <size_t LinearIdx>
+        requires(LinearIdx < size)
+    static constexpr value_types_tuple_type values_at_index =
+        values_at_index_impl<LinearIdx>(std::make_index_sequence<num_axes>{});
 };
 
 // -----------------------------------------------------------------------------
@@ -224,6 +263,81 @@ struct for_each_values<AxisOuterProduct<Axes...>, Action> {
 };
 
 // -----------------------------------------------------------------------------
+// for_each_values_flat
+// -----------------------------------------------------------------------------
+// Flattened version of for_each_values that uses linear index iteration
+// instead of recursive template expansion. This produces O(Space::size)
+// template instantiations with constant depth, rather than the O(product of
+// axis sizes × recursion depth) instantiations of the recursive version.
+//
+// The implementation decodes each linear index back to axis values at compile
+// time, then invokes Action<values...>::apply(args...).
+
+namespace detail {
+
+// Helper to invoke Action with values decoded from a linear index.
+// Uses the axis_index_at_v and value_at machinery to extract compile-time values.
+template <typename Space,
+          size_t LinearIdx,
+          template <auto...>
+          typename Action,
+          typename AxisIndexSeq>
+struct InvokeActionAtIndex;
+
+template <typename Space,
+          size_t LinearIdx,
+          template <auto...>
+          typename Action,
+          size_t... AxisIndices>
+struct InvokeActionAtIndex<Space, LinearIdx, Action, std::index_sequence<AxisIndices...>> {
+    template <typename... Args>
+    static void
+    apply(Args &&...args) {
+        // Decode linear index to per-axis indices, then to values
+        // axis_index_at_v<AxisIdx, LinearIdx> gives the index within that axis
+        // axis_at_type<AxisIdx>::value_at<idx> gives the value at that index
+        Action<Space::template axis_at_type<AxisIndices>::template value_at<
+            Space::template axis_index_at_v<AxisIndices, LinearIdx>>...>::
+            apply(std::forward<Args>(args)...);
+    }
+};
+
+// Helper to iterate over all linear indices using a fold expression
+template <typename Space, template <auto...> typename Action, typename LinearIndexSeq>
+struct ForEachValuesFlatImpl;
+
+template <typename Space, template <auto...> typename Action, size_t... LinearIndices>
+struct ForEachValuesFlatImpl<Space, Action, std::index_sequence<LinearIndices...>> {
+    template <typename... Args>
+    static void
+    apply(Args &&...args) {
+        // Invoke action for each linear index
+        (InvokeActionAtIndex<
+             Space,
+             LinearIndices,
+             Action,
+             std::make_index_sequence<Space::num_axes>>::apply(std::forward<Args>(args)...),
+         ...);
+    }
+};
+
+} // namespace detail
+
+template <typename Space, template <auto...> typename Action> struct for_each_values_flat;
+
+template <typename... Axes, template <auto...> typename Action>
+struct for_each_values_flat<AxisOuterProduct<Axes...>, Action> {
+    using Space = AxisOuterProduct<Axes...>;
+
+    template <typename... Args>
+    static void
+    apply(Args &&...args) {
+        detail::ForEachValuesFlatImpl<Space, Action, std::make_index_sequence<Space::size>>::apply(
+            std::forward<Args>(args)...);
+    }
+};
+
+// -----------------------------------------------------------------------------
 // for_each_permutation
 // -----------------------------------------------------------------------------
 // Compile-time iteration over all value combinations in an AxisOuterProduct.
@@ -293,6 +407,118 @@ struct for_each_permutation<AxisOuterProduct<Axes...>, Instantiator, Action> {
     apply(Args &&...args) {
         detail::ForEachPermutationImpl<Instantiator, Action, Axes...>::template apply<>(
             std::forward<Args>(args)...);
+    }
+};
+
+// -----------------------------------------------------------------------------
+// for_each_permutation_flat
+// -----------------------------------------------------------------------------
+// Flattened version of for_each_permutation that uses linear index iteration
+// instead of recursive template expansion. Like for_each_values_flat, this
+// produces O(Space::size) template instantiations with constant depth.
+//
+// For each linear index:
+//   1. Decodes to axis values at compile time
+//   2. Instantiates Instantiator<values...>
+//   3. Invokes Action<InstType, values...>::apply(args...)
+
+namespace detail {
+
+// Helper to invoke Action with Instantiator at a specific linear index.
+template <typename Space,
+          size_t LinearIdx,
+          template <auto...>
+          typename Instantiator,
+          template <typename, auto...>
+          typename Action,
+          typename AxisIndexSeq>
+struct InvokePermutationAtIndex;
+
+template <typename Space,
+          size_t LinearIdx,
+          template <auto...>
+          typename Instantiator,
+          template <typename, auto...>
+          typename Action,
+          size_t... AxisIndices>
+struct InvokePermutationAtIndex<Space,
+                                LinearIdx,
+                                Instantiator,
+                                Action,
+                                std::index_sequence<AxisIndices...>> {
+    // Extract the value for each axis at this linear index
+    template <size_t AxisIdx>
+    static constexpr auto value_for_axis = Space::template axis_at_type<AxisIdx>::template value_at<
+        Space::template axis_index_at_v<AxisIdx, LinearIdx>>;
+
+    // The instantiated type for these values
+    using instantiated_type = Instantiator<value_for_axis<AxisIndices>...>;
+
+    template <typename... Args>
+    static void
+    apply(Args &&...args) {
+        Action<instantiated_type, value_for_axis<AxisIndices>...>::apply(
+            std::forward<Args>(args)...);
+    }
+};
+
+// Helper to iterate over all linear indices
+template <typename Space,
+          template <auto...>
+          typename Instantiator,
+          template <typename, auto...>
+          typename Action,
+          typename LinearIndexSeq>
+struct ForEachPermutationFlatImpl;
+
+template <typename Space,
+          template <auto...>
+          typename Instantiator,
+          template <typename, auto...>
+          typename Action,
+          size_t... LinearIndices>
+struct ForEachPermutationFlatImpl<Space,
+                                  Instantiator,
+                                  Action,
+                                  std::index_sequence<LinearIndices...>> {
+    template <typename... Args>
+    static void
+    apply(Args &&...args) {
+        (InvokePermutationAtIndex<
+             Space,
+             LinearIndices,
+             Instantiator,
+             Action,
+             std::make_index_sequence<Space::num_axes>>::apply(std::forward<Args>(args)...),
+         ...);
+    }
+};
+
+} // namespace detail
+
+template <typename Space,
+          template <auto...>
+          typename Instantiator,
+          template <typename, auto...>
+          typename Action>
+struct for_each_permutation_flat;
+
+template <typename... Axes,
+          template <auto...>
+          typename Instantiator,
+          template <typename, auto...>
+          typename Action>
+struct for_each_permutation_flat<AxisOuterProduct<Axes...>, Instantiator, Action> {
+    using Space = AxisOuterProduct<Axes...>;
+
+    template <typename... Args>
+    static void
+    apply(Args &&...args) {
+        detail::ForEachPermutationFlatImpl<
+            Space,
+            Instantiator,
+            Action,
+            std::make_index_sequence<Space::size>>::apply(std::forward<Args>(args)...);
     }
 };
 
