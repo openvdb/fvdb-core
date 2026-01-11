@@ -159,6 +159,7 @@ ConfigureTest(GaussianMCMCRelocationTest "GaussianMCMCRelocationTest.cpp")
 ConfigureTest(DispatchValuesTest "dispatch/ValuesTest.cpp")
 ConfigureTest(DispatchAxisOuterProductTest "dispatch/AxisOuterProductTest.cpp")
 ConfigureTest(DispatchPermutationMapTest "dispatch/PermutationMapTest.cpp")
+ConfigureTest(DispatchDispatchTableTest "dispatch/DispatchTableTest.cpp")
 
 if(NOT NANOVDB_EDITOR_SKIP)
   #ConfigureTest(ViewerTest "ViewerTest.cpp")

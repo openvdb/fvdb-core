@@ -39,7 +39,10 @@ template <typename ReturnType, typename... Args> using FunctionPtr = ReturnType 
 // Concepts for Dispatcher components
 // -----------------------------------------------------------------------------
 
-// Encoder must have a static encode() method that returns a tuple of axis values
+// Encoder must have a static encode() method that returns a tuple of axis values.
+// Note: Implicit conversions in the arguments are allowed (standard C++ behavior).
+// The encoder extracts axis values from runtime args; if those args undergo
+// implicit conversion, that's fine and expected.
 template <typename Encoder, typename AxesT, typename... Args>
 concept EncoderConcept = requires(Args... args) {
     { Encoder::encode(args...) } -> std::convertible_to<typename AxesT::value_types_tuple_type>;
@@ -140,9 +143,8 @@ build_dispatcher() {
 }
 
 // =============================================================================
-// GetFromInvoke: EXPERIMENTAL - Currently crashes nvcc, commented out
+// InvokeToGet: Adaptor from invoke()-style to get()-style instantiators
 // =============================================================================
-// Adaptor that wraps an Invoker template into an Instantiator.
 // Transforms a template with a static `invoke` function into an instantiator
 // with a static `get` function returning the function pointer to `invoke`.
 //
@@ -156,22 +158,24 @@ build_dispatcher() {
 //       static FunctionPtr<ReturnType, Args...> get();  // Returns &Invoker<Values...>::invoke
 //   };
 //
-// Usage with generators:
-//   using MyGen = SubspaceGenerator<GetFromInvoke<MyInvoker>::template fromInvoke, MySubspace>;
+// Design: This is a single-level template taking both the invoker template AND
+// the values. This allows users to create clean template aliases:
 //
-// NOTE: This causes nvcc to crash (segfault) during compilation. The deeply
-// nested template metaprogramming seems to trigger a compiler bug. Until this
-// is resolved, use the direct get()-based approach instead.
+//   template <auto... Vs>
+//   using MyInstantiator = InvokeToGet<MyInvoker, Vs...>;
 //
-// template <template <auto...> typename InvokerTemplate>
-// struct GetFromInvoke {
-//     template <auto... Values> struct fromInvoke {
-//         static constexpr auto
-//         get() {
-//             return &InvokerTemplate<Values...>::invoke;
-//         }
-//     };
-// };
+//   using MyGen = SubspaceGenerator<MyInstantiator, MySubspace>;
+//
+// This avoids the awkward nested template access pattern that was previously
+// required (GetFromInvoke<MyInvoker>::template fromInvoke).
+
+template <template <auto...> typename InvokerTemplate, auto... Values>
+struct InvokeToGet {
+    static constexpr auto
+    get() {
+        return &InvokerTemplate<Values...>::invoke;
+    }
+};
 
 } // namespace dispatch
 } // namespace fvdb
