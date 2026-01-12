@@ -134,7 +134,6 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
           mConics(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(conics, "conics")),
           mOpacities(initAccessor<ScalarType, NUM_OUTER_DIMS>(opacities, "opacities")),
           mTileGaussianIds(initAccessor<int32_t, 1>(tileGaussianIds, "tileGaussianIds")),
-          // Detect sparse tile offsets from tensor dimensions (1D = sparse, 3D = dense)
           mTileOffsetsAreSparse(tileOffsets.dim() == 1),
           // Initialize 3D accessor for dense mode, or placeholder for sparse mode
           mTileOffsets(mTileOffsetsAreSparse
@@ -164,14 +163,12 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
               pixelMap, tileOffsets.options().dtype(torch::kInt64), "pixelMap")) {
         static_assert(NUM_OUTER_DIMS == 1 || NUM_OUTER_DIMS == 2, "NUM_OUTER_DIMS must be 1 or 2");
 
-        // Compute tile counts from image dimensions (valid for both sparse and dense modes)
         mNumTilesW = (imageWidth + tileSize - 1) / tileSize;
         mNumTilesH = (imageHeight + tileSize - 1) / tileSize;
-        // Get camera count: for dense mode (3D tileOffsets), use tileOffsets.size(0)
-        // For sparse mode (1D tileOffsets), use means2d.size(0) for non-packed mode
-        // (For packed sparse mode, mNumCameras isn't used)
+
         if (mTileOffsetsAreSparse) {
             // Sparse mode: means2d is [C, N, 2] for non-packed, [nnz, 2] for packed
+            // (For packed sparse mode, mNumCameras isn't used)
             mNumCameras = IS_PACKED ? 0 : means2d.size(0);
         } else {
             // Dense mode: tileOffsets is [C, TH, TW]
@@ -226,10 +223,9 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
             TORCH_CHECK_VALUE(mNumTilesW == mMasks.size(2), "Bad size for masks");
         }
 
-        // Validate tileOffsets shape based on mode
+        // Validate tileOffsets shape
         if (mTileOffsetsAreSparse) {
             // Sparse mode: tileOffsets is 1D [AT + 1]
-            // The size should be activeTiles.size(0) + 1
             if (mIsSparse) {
                 TORCH_CHECK_VALUE(mSparseTileOffsets.size(0) == mActiveTiles.size(0) + 1,
                                   "Sparse tileOffsets size must be activeTiles.size(0) + 1");

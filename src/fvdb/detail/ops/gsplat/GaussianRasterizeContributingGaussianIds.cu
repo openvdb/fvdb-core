@@ -483,11 +483,9 @@ launchRasterizeContributingGaussianIdsForwardKernel(
             "numContributingGaussians must have the same number of elements as the number of pixels in the images");
     }
 
-    // tileOffsets can be 3D (dense) or 1D (sparse) - compute tile extents from image dimensions
     const auto tileExtentH = (settings.imageHeight + settings.tileSize - 1) / settings.tileSize;
     const auto tileExtentW = (settings.imageWidth + settings.tileSize - 1) / settings.tileSize;
 
-    // Only validate tileOffsets dimensions for dense mode (3D tensor)
     if (tileOffsets.dim() == 3) {
         TORCH_CHECK_VALUE(tileOffsets.size(2) == tileExtentW,
                           "tileOffsets width must match the number of tiles in image size");
