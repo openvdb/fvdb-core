@@ -34,17 +34,19 @@ TEST(IndexSpace, ConstantsAndTypes) {
     EXPECT_EQ(Space::rank, size_t{3});
     EXPECT_EQ(Space::numel, size_t{24}); // 2*3*4
 
-    // Shape array
-    EXPECT_EQ(Space::shape.size(), size_t{3});
-    EXPECT_EQ(Space::shape[0], size_t{2});
-    EXPECT_EQ(Space::shape[1], size_t{3});
-    EXPECT_EQ(Space::shape[2], size_t{4});
+    // Shape via get_shape()
+    constexpr auto shape = Space::get_shape();
+    EXPECT_EQ(shape.size(), size_t{3});
+    EXPECT_EQ(shape[0], size_t{2});
+    EXPECT_EQ(shape[1], size_t{3});
+    EXPECT_EQ(shape[2], size_t{4});
 
-    // Strides array (row-major: 3*4=12, 4, 1)
-    EXPECT_EQ(Space::strides.size(), size_t{3});
-    EXPECT_EQ(Space::strides[0], size_t{12});
-    EXPECT_EQ(Space::strides[1], size_t{4});
-    EXPECT_EQ(Space::strides[2], size_t{1});
+    // Strides via get_strides() (row-major: 3*4=12, 4, 1)
+    constexpr auto strides = Space::get_strides();
+    EXPECT_EQ(strides.size(), size_t{3});
+    EXPECT_EQ(strides[0], size_t{12});
+    EXPECT_EQ(strides[1], size_t{4});
+    EXPECT_EQ(strides[2], size_t{1});
 
     // Type aliases
     static_assert(std::is_same_v<Space::shape_seq, std::index_sequence<2, 3, 4>>);

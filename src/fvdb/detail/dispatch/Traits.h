@@ -18,12 +18,12 @@ template <size_t... Dims> struct strides_helper<std::index_sequence<Dims...>> {
     static_assert(((Dims > 0) && ... && true), "dimensions must be greater than 0");
 
   private:
-    static constexpr size_t N                   = sizeof...(Dims);
-    static constexpr std::array<size_t, N> dims = {Dims...};
+    static constexpr size_t N = sizeof...(Dims);
 
     static constexpr size_t
     suffix_product(size_t start) {
-        size_t result = 1;
+        constexpr size_t dims[] = {Dims...};
+        size_t result           = 1;
         for (size_t i = start; i < N; ++i) {
             result *= dims[i];
         }

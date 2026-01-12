@@ -6,6 +6,8 @@
 
 #include "fvdb/detail/dispatch/Traits.h"
 
+#include <nanovdb/util/Util.h>
+
 #include <array>
 #include <cstddef>
 #include <functional>
@@ -24,15 +26,36 @@ template <size_t... Is> struct IndexSpace {
     using shape_seq   = std::index_sequence<Is...>;
     using strides_seq = strides_helper_t<shape_seq>;
 
-    static constexpr auto shape   = array_from_indices<shape_seq>::value;
-    static constexpr auto strides = array_from_indices<strides_seq>::value;
-
     using Coord = std::array<size_t, rank>;
 
+    // Returns the shape as an array, computed from function-local storage.
+    // This avoids static data member linkage issues in device code.
+    __hostdev__ static constexpr Coord
+    get_shape() {
+        return Coord{Is...};
+    }
+
+    // Returns the strides as an array, computed on-demand.
+    // Row-major strides: stride[i] = product of shape[i+1..rank-1]
+    __hostdev__ static constexpr Coord
+    get_strides() {
+        constexpr size_t dims[] = {Is...};
+        Coord result{};
+        for (size_t i = 0; i < rank; ++i) {
+            size_t stride = 1;
+            for (size_t j = i + 1; j < rank; ++j) {
+                stride *= dims[j];
+            }
+            result[i] = stride;
+        }
+        return result;
+    }
+
     // This will happily compute something for a coord that is out of bounds.
-    static constexpr size_t
+    __hostdev__ static constexpr size_t
     linear_index(Coord const &coord) {
-        size_t result = 0;
+        constexpr auto strides = get_strides();
+        size_t result          = 0;
         for (size_t i = 0; i < rank; ++i) {
             result += coord[i] * strides[i];
         }
@@ -40,11 +63,13 @@ template <size_t... Is> struct IndexSpace {
     }
 
     // This will happily compute something for a linear index that is out of bounds.
-    static constexpr Coord
-    coord(size_t linear_index) {
+    __hostdev__ static constexpr Coord
+    coord(size_t linear_idx) {
+        constexpr auto shape   = get_shape();
+        constexpr auto strides = get_strides();
         Coord result{};
         for (size_t i = 0; i < rank; ++i) {
-            result[i] = (linear_index / strides[i]) % shape[i];
+            result[i] = (linear_idx / strides[i]) % shape[i];
         }
         return result;
     }
