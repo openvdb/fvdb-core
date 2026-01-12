@@ -156,13 +156,14 @@ ConfigureTest(GaussianMCMCAddNoiseTest "GaussianMCMCAddNoiseTest.cpp")
 ConfigureTest(GaussianMCMCRelocationTest "GaussianMCMCRelocationTest.cpp")
 
 # Configure dispatch unit tests
-# ConfigureTest(DispatchValuesTest "dispatch/ValuesTest.cpp")
+ConfigureTest(DispatchValuesTest "dispatch/ValuesTest.cpp")
 # ConfigureTest(DispatchAxisOuterProductTest "dispatch/AxisOuterProductTest.cpp")
 # ConfigureTest(DispatchPermutationMapTest "dispatch/PermutationMapTest.cpp")
 # ConfigureTest(DispatchDispatchTableTest "dispatch/DispatchTableTest.cpp")
 # ConfigureTest(DispatchDispatchTableCudaTest "dispatch/DispatchTableCudaTest.cu")
 # ConfigureTest(DispatchDispatchTableTinyCudaTest "dispatch/DispatchTableTinyCudaTest.cu")
 ConfigureTest(DispatchTraitsTest "dispatch/TraitsTest.cpp")
+ConfigureTest(DispatchIndexSpaceTest "dispatch/IndexSpaceTest.cpp")
 
 if(NOT NANOVDB_EDITOR_SKIP)
   #ConfigureTest(ViewerTest "ViewerTest.cpp")
