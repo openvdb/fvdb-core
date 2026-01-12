@@ -169,9 +169,8 @@ template <torch::ScalarType Dtype> struct CpuCudaInvoker<torch::kCUDA, Dtype> {
 
 template <auto... Vs> using CpuCudaInst = InvokeToGet<CpuCudaInvoker, Vs...>;
 
-using TwoDeviceSpace =
-    AxisOuterProduct<TorchDeviceDispatchAxis<torch::kCPU, torch::kCUDA>,
-                     TorchScalarTypeAxis<torch::kFloat32>>;
+using TwoDeviceSpace = AxisOuterProduct<TorchDeviceDispatchAxis<torch::kCPU, torch::kCUDA>,
+                                        TorchScalarTypeAxis<torch::kFloat32>>;
 
 TEST(TinyCudaDispatch, TwoDevicesOneType) {
     if (!torch::cuda::is_available()) {
@@ -190,7 +189,8 @@ TEST(TinyCudaDispatch, TwoDevicesOneType) {
 
     // Test CPU path
     {
-        auto t = torch::zeros({4}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
+        auto t =
+            torch::zeros({4}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
         dispatcher(t);
         EXPECT_EQ(t[0].item<float>(), 1.0f);
     }
@@ -254,7 +254,8 @@ TEST(TinyCudaDispatch, RealKernelDispatch) {
 
     // Test CPU
     {
-        auto t = torch::zeros({4}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
+        auto t =
+            torch::zeros({4}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
         dispatcher(t);
         EXPECT_EQ(t[0].item<float>(), 100.0f);
     }
@@ -305,9 +306,8 @@ template <> struct FourComboInvoker<torch::kCUDA, torch::kFloat64> {
 
 template <auto... Vs> using FourComboInst = InvokeToGet<FourComboInvoker, Vs...>;
 
-using FourComboSpace =
-    AxisOuterProduct<TorchDeviceDispatchAxis<torch::kCPU, torch::kCUDA>,
-                     TorchScalarTypeAxis<torch::kFloat32, torch::kFloat64>>;
+using FourComboSpace = AxisOuterProduct<TorchDeviceDispatchAxis<torch::kCPU, torch::kCUDA>,
+                                        TorchScalarTypeAxis<torch::kFloat32, torch::kFloat64>>;
 
 TEST(TinyCudaDispatch, TwoDevicesTwoDtypes) {
     if (!torch::cuda::is_available()) {
@@ -326,14 +326,16 @@ TEST(TinyCudaDispatch, TwoDevicesTwoDtypes) {
 
     // CPU float32
     {
-        auto t = torch::zeros({4}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
+        auto t =
+            torch::zeros({4}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
         dispatcher(t);
         EXPECT_EQ(t[0].item<float>(), 1.0f);
     }
 
     // CPU float64
     {
-        auto t = torch::zeros({4}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+        auto t =
+            torch::zeros({4}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
         dispatcher(t);
         EXPECT_EQ(t[0].item<double>(), 2.0);
     }

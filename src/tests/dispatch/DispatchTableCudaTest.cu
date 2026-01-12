@@ -656,13 +656,9 @@ TEST_F(DispatchTableCudaTest, ThreeAxisDispatch) {
 #endif // DISSECT BLOCK B
 
 // ============================================================================
-// DISSECTION BLOCK C: Remaining tests (various dispatch space sizes)
+// DISSECTION BLOCK C1: StaticDispatcherWorks (uses DeviceDtypeSpace - should be safe)
 // ============================================================================
-#if 0 // DISSECT BLOCK C
-
-// =============================================================================
-// Static Dispatch Table Tests
-// =============================================================================
+#if 1 // DISSECT BLOCK C1
 
 TEST_F(DispatchTableCudaTest, StaticDispatcherWorks) {
     // Test that dispatchers can be stored as static const (common pattern)
@@ -686,9 +682,12 @@ TEST_F(DispatchTableCudaTest, StaticDispatcherWorks) {
     verifySaxpy(y, y_orig, x, 4.0);
 }
 
-// =============================================================================
-// Integer Type Dispatch Tests
-// =============================================================================
+#endif // DISSECT BLOCK C1
+
+// ============================================================================
+// DISSECTION BLOCK C2: IntegerTypeDispatch (uses IntSaxpyInst, DeviceIntDtypeSpace)
+// ============================================================================
+#if 1 // DISSECT BLOCK C2
 
 TEST_F(DispatchTableCudaTest, IntegerTypeDispatch) {
     using Generators = SubspaceGenerator<IntSaxpyInst, DeviceIntDtypeSpace>;
@@ -730,16 +729,61 @@ TEST_F(DispatchTableCudaTest, IntegerTypeDispatch) {
     }
 }
 
-// =============================================================================
-// Partial Binding Tests (Some combinations not bound)
-// =============================================================================
+#endif // DISSECT BLOCK C2
 
+// ============================================================================
+// DISSECTION BLOCK C3: PartialBindingThrowsForUnbound (uses CudaOnlyInst, CudaOnlySpace)
+// This test builds a dispatcher for DeviceDtypeSpace (8 combos) but only binds
+// 1 combo via CudaOnlySpace - a SPARSE BINDING scenario.
+// ============================================================================
+
+// C3a: Just instantiate CudaOnlySaxpyInvoker directly (no dispatcher)
+#if 1 // DISSECT BLOCK C3a
+TEST_F(DispatchTableCudaTest, C3a_CudaOnlyInvokerInstantiation) {
+    // Just verify CudaOnlySaxpyInvoker can be instantiated
+    auto ptr = &CudaOnlySaxpyInvoker<torch::kCUDA, torch::kFloat32>::invoke;
+    EXPECT_NE(ptr, nullptr);
+}
+#endif // DISSECT BLOCK C3a
+
+// C3b: Just instantiate CudaOnlyInst (InvokeToGet wrapper)
+#if 1 // DISSECT BLOCK C3b
+TEST_F(DispatchTableCudaTest, C3b_CudaOnlyInstInstantiation) {
+    // Just verify CudaOnlyInst::get() works
+    auto ptr = CudaOnlyInst<torch::kCUDA, torch::kFloat32>::get();
+    EXPECT_NE(ptr, nullptr);
+}
+#endif // DISSECT BLOCK C3b
+
+// C3c: Build dispatcher with CudaOnlySpace as BOTH space and generator space (dense, not sparse)
+#if 1 // DISSECT BLOCK C3c
+TEST_F(DispatchTableCudaTest, C3c_CudaOnlyDenseDispatcher) {
+    // Build dispatcher where space == generator space (no sparse binding)
+    using Generators = SubspaceGenerator<CudaOnlyInst, CudaOnlySpace>;
+
+    auto dispatcher = build_dispatcher<CudaOnlySpace, // Same as generator space!
+                                       Generators,
+                                       DeviceDtypeEncoder,
+                                       SaxpyUnboundHandler,
+                                       void,
+                                       torch::Tensor &,
+                                       const torch::Tensor &,
+                                       double>();
+
+    auto [x, y] = createTestTensors<torch::kFloat32>(torch::kCUDA);
+    EXPECT_NO_THROW(dispatcher(y, x, 2.0));
+    torch::cuda::synchronize();
+}
+#endif // DISSECT BLOCK C3c
+
+// C3d: The original sparse binding test - builds DeviceDtypeSpace but binds only CudaOnlySpace
+#if 1 // DISSECT BLOCK C3d
 TEST_F(DispatchTableCudaTest, PartialBindingThrowsForUnbound) {
     // Only bind CUDA float32, but use full space
     using Generators = SubspaceGenerator<CudaOnlyInst, CudaOnlySpace>;
 
-    auto dispatcher = build_dispatcher<DeviceDtypeSpace, // Full space
-                                       Generators,       // But only CUDA×float32 bound
+    auto dispatcher = build_dispatcher<DeviceDtypeSpace, // Full space (8 combos)
+                                       Generators,       // But only CUDA×float32 bound (1 combo)
                                        DeviceDtypeEncoder,
                                        SaxpyUnboundHandler,
                                        void,
@@ -766,10 +810,12 @@ TEST_F(DispatchTableCudaTest, PartialBindingThrowsForUnbound) {
         EXPECT_THROW(dispatcher(y, x, 2.0), std::runtime_error);
     }
 }
+#endif // DISSECT BLOCK C3d
 
-// =============================================================================
-// Function Pointer Address Verification
-// =============================================================================
+// ============================================================================
+// DISSECTION BLOCK C4: Simple tests (no dispatcher, just pointer/static_assert)
+// ============================================================================
+#if 1 // DISSECT BLOCK C4
 
 TEST_F(DispatchTableCudaTest, InvokeToGetPreservesAddressInCuda) {
     // Verify InvokeToGet returns the exact address of the invoke function
@@ -778,10 +824,6 @@ TEST_F(DispatchTableCudaTest, InvokeToGetPreservesAddressInCuda) {
 
     EXPECT_EQ(fromInvokeToGet, direct);
 }
-
-// =============================================================================
-// Large Dispatch Space Test
-// =============================================================================
 
 TEST_F(DispatchTableCudaTest, LargeDispatchSpaceCompiles) {
     // Test with a larger dispatch space to ensure no compile-time issues
@@ -806,9 +848,12 @@ TEST_F(DispatchTableCudaTest, LargeDispatchSpaceCompiles) {
     EXPECT_TRUE(idx.has_value());
 }
 
-// =============================================================================
-// Multiple Dispatchers Test
-// =============================================================================
+#endif // DISSECT BLOCK C4
+
+// ============================================================================
+// DISSECTION BLOCK C5: MultipleDifferentDispatchers (2 dispatchers)
+// ============================================================================
+#if 1 // DISSECT BLOCK C5
 
 TEST_F(DispatchTableCudaTest, MultipleDifferentDispatchers) {
     // Create two different dispatchers to ensure no static state collision
@@ -848,9 +893,12 @@ TEST_F(DispatchTableCudaTest, MultipleDifferentDispatchers) {
     verifySaxpy(y2, y2_orig, x2, 3.0);
 }
 
-// =============================================================================
-// Edge Cases
-// =============================================================================
+#endif // DISSECT BLOCK C5
+
+// ============================================================================
+// DISSECTION BLOCK C6: Edge cases (Small/Large tensor)
+// ============================================================================
+#if 1 // DISSECT BLOCK C6
 
 TEST_F(DispatchTableCudaTest, SmallTensorDispatch) {
     using Generators = SubspaceGenerator<SaxpyInstantiator, DeviceDtypeSpace>;
@@ -900,12 +948,12 @@ TEST_F(DispatchTableCudaTest, LargeTensorDispatch) {
     verifySaxpy(y, y_orig, x, 0.5);
 }
 
-#endif // DISSECT BLOCK C
+#endif // DISSECT BLOCK C6
 
 // ============================================================================
 // DISSECTION BLOCK D: PointGenerator and type deduction tests
 // ============================================================================
-#if 0 // DISSECT BLOCK D
+#if 1 // DISSECT BLOCK D
 
 // =============================================================================
 // PointGenerator with CUDA Test

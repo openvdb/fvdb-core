@@ -4,6 +4,7 @@
 #ifndef FVDB_DETAIL_DISPATCH_AXISOUTERPRODUCT_H
 #define FVDB_DETAIL_DISPATCH_AXISOUTERPRODUCT_H
 
+#include "fvdb/detail/dispatch/Traits.h"
 #include "fvdb/detail/dispatch/Values.h"
 
 #include <array>
@@ -46,15 +47,15 @@ template <typename... Axes> struct AxisOuterProduct {
                   "(i.e., SameTypeUniqueValuePack instantiations)");
     static_assert(((Axes::size > 0) && ... && true),
                   "AxisOuterProduct does not support empty axes (size must be > 0)");
-    // -------------------------------------------------------------------------
-    // Type aliases
-    // -------------------------------------------------------------------------
-    using axes_tuple_type        = std::tuple<Axes...>;
-    using value_types_tuple_type = std::tuple<typename Axes::value_type...>;
 
-    template <size_t I> using axis_at_type = std::tuple_element_t<I, axes_tuple_type>;
+    static constexpr size_t rank  = sizeof...(Axes);
+    static constexpr size_t numel = (Axes::size * ... * 1);
 
-    template <size_t I> using value_at_type = std::tuple_element_t<I, value_types_tuple_type>;
+    using shape_seq   = std::index_sequence<Axes::size...>;
+    using strides_seq = strides_helper_t<shape_seq>;
+
+    static constexpr auto shape   = array_from_indices<shape_seq>::value;
+    static constexpr auto strides = array_from_indices<strides_seq>::value;
 
     // -------------------------------------------------------------------------
     // Constants
@@ -62,7 +63,6 @@ template <typename... Axes> struct AxisOuterProduct {
     static constexpr size_t num_axes = sizeof...(Axes);
     static constexpr size_t size     = (Axes::size * ... * 1);
 
-  private:
     // -------------------------------------------------------------------------
     // Stride computation (row-major: last axis has stride 1)
     // -------------------------------------------------------------------------
@@ -120,7 +120,6 @@ template <typename... Axes> struct AxisOuterProduct {
                 ...);
     }
 
-  public:
     // -------------------------------------------------------------------------
     // index_of_values
     // -------------------------------------------------------------------------
@@ -161,7 +160,6 @@ template <typename... Axes> struct AxisOuterProduct {
         requires(I < num_axes && LinearIdx < size)
     static constexpr size_t axis_index_at_v = (LinearIdx / strides[I]) % axis_at_type<I>::size;
 
-  private:
     // Helper to decode linear index to value tuple at compile time
     template <size_t LinearIdx, size_t... Is>
     static constexpr value_types_tuple_type
@@ -170,13 +168,14 @@ template <typename... Axes> struct AxisOuterProduct {
             axis_at_type<Is>::template value_at<axis_index_at_v<Is, LinearIdx>>...};
     }
 
-  public:
     // Decode a compile-time linear index to a tuple of axis values.
     // This is the inverse of index_of_values for valid indices.
     template <size_t LinearIdx>
         requires(LinearIdx < size)
     static constexpr value_types_tuple_type values_at_index =
         values_at_index_impl<LinearIdx>(std::make_index_sequence<num_axes>{});
+
+    // R
 };
 
 // -----------------------------------------------------------------------------
@@ -215,52 +214,15 @@ template <typename Sub, typename Full>
 inline constexpr bool is_subspace_of_v = is_subspace_of<Sub, Full>::value;
 
 // -----------------------------------------------------------------------------
-// for_each_values
-// -----------------------------------------------------------------------------
-// Compile-time iteration over all value combinations in an AxisOuterProduct.
-// For each permutation (v0, v1, ..., vN), invokes Action<v0, v1, ..., vN>::apply(args...).
-//
-// Action signature: template <auto... Values> struct Action {
-//     static void apply(Args...);
-// };
+// given a space, (which could be a subspace), and a visitor,
+// call the visitor for each point in the space, using an AnyTypeValuePack
+// to represent the point.
 
-namespace detail {
+template <typename Visitor, typename Space>
+auto
+valueVisit(Visitor &&visitor, Space const &space) {}
 
-template <template <auto...> typename Action, typename... Axes> struct ForEachValuesImpl;
-
-// Base case: invoke Action with accumulated values
-template <template <auto...> typename Action> struct ForEachValuesImpl<Action> {
-    template <auto... Values, typename... Args>
-    static void
-    apply(Args &&...args) {
-        Action<Values...>::apply(std::forward<Args>(args)...);
-    }
-};
-
-// Recursive case: expand current axis, recurse
-template <template <auto...> typename Action, auto... AxisVals, typename... Rest>
-struct ForEachValuesImpl<Action, SameTypeUniqueValuePack<AxisVals...>, Rest...> {
-    template <auto... Accumulated, typename... Args>
-    static void
-    apply(Args &&...args) {
-        (ForEachValuesImpl<Action, Rest...>::template apply<Accumulated..., AxisVals>(
-             std::forward<Args>(args)...),
-         ...);
-    }
-};
-
-} // namespace detail
-
-template <typename Space, template <auto...> typename Action> struct for_each_values;
-
-template <typename... Axes, template <auto...> typename Action>
-struct for_each_values<AxisOuterProduct<Axes...>, Action> {
-    template <typename... Args>
-    static void
-    apply(Args &&...args) {
-        detail::ForEachValuesImpl<Action, Axes...>::template apply<>(std::forward<Args>(args)...);
-    }
-};
+#if 0
 
 // -----------------------------------------------------------------------------
 // for_each_values_flat
@@ -337,78 +299,6 @@ struct for_each_values_flat<AxisOuterProduct<Axes...>, Action> {
     }
 };
 
-// -----------------------------------------------------------------------------
-// for_each_permutation
-// -----------------------------------------------------------------------------
-// Compile-time iteration over all value combinations in an AxisOuterProduct.
-// For each permutation (v0, v1, ..., vN):
-//   1. Instantiates Instantiator<v0, v1, ..., vN>
-//   2. Invokes Action<Instantiator<v0, v1, ..., vN>, v0, v1, ..., vN>::apply(args...)
-//
-// This gives Action access to both the instantiated type AND the compile-time values.
-//
-// Instantiator signature: template <auto... Values> struct Inst { ... };
-// Action signature: template <typename InstType, auto... Values> struct Action {
-//     static void apply(Args...);
-// };
-
-namespace detail {
-
-template <template <auto...> typename Instantiator,
-          template <typename, auto...>
-          typename Action,
-          typename... Axes>
-struct ForEachPermutationImpl;
-
-// Base case: instantiate and invoke Action
-template <template <auto...> typename Instantiator, template <typename, auto...> typename Action>
-struct ForEachPermutationImpl<Instantiator, Action> {
-    template <auto... Values, typename... Args>
-    static void
-    apply(Args &&...args) {
-        Action<Instantiator<Values...>, Values...>::apply(std::forward<Args>(args)...);
-    }
-};
-
-// Recursive case: expand axis, recurse
-template <template <auto...> typename Instantiator,
-          template <typename, auto...>
-          typename Action,
-          auto... AxisVals,
-          typename... Rest>
-struct ForEachPermutationImpl<Instantiator, Action, SameTypeUniqueValuePack<AxisVals...>, Rest...> {
-    template <auto... Accumulated, typename... Args>
-    static void
-    apply(Args &&...args) {
-        (ForEachPermutationImpl<Instantiator, Action, Rest...>::template apply<Accumulated...,
-                                                                               AxisVals>(
-             std::forward<Args>(args)...),
-         ...);
-    }
-};
-
-} // namespace detail
-
-template <typename Space,
-          template <auto...>
-          typename Instantiator,
-          template <typename, auto...>
-          typename Action>
-struct for_each_permutation;
-
-template <typename... Axes,
-          template <auto...>
-          typename Instantiator,
-          template <typename, auto...>
-          typename Action>
-struct for_each_permutation<AxisOuterProduct<Axes...>, Instantiator, Action> {
-    template <typename... Args>
-    static void
-    apply(Args &&...args) {
-        detail::ForEachPermutationImpl<Instantiator, Action, Axes...>::template apply<>(
-            std::forward<Args>(args)...);
-    }
-};
 
 // -----------------------------------------------------------------------------
 // for_each_permutation_flat
@@ -521,6 +411,8 @@ struct for_each_permutation_flat<AxisOuterProduct<Axes...>, Instantiator, Action
             std::make_index_sequence<Space::size>>::apply(std::forward<Args>(args)...);
     }
 };
+
+#endif
 
 } // namespace dispatch
 } // namespace fvdb

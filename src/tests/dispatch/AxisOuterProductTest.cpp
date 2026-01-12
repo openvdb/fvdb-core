@@ -427,7 +427,7 @@ TEST(IsSubspaceOf, PartialOverlapIsNotSubspace) {
 }
 
 // =============================================================================
-// for_each_values Tests
+// for_each_values_flat Tests
 // =============================================================================
 
 namespace {
@@ -438,92 +438,6 @@ template <auto... Vs> struct CollectValues {
     }
 };
 } // namespace
-
-TEST(ForEachValues, SingleAxisIteratesAllValues) {
-    using Axis  = SameTypeUniqueValuePack<10, 20, 30>;
-    using Space = AxisOuterProduct<Axis>;
-
-    std::vector<std::tuple<int>> result;
-    for_each_values<Space, CollectValues>::apply(result);
-
-    ASSERT_EQ(result.size(), 3u);
-    EXPECT_EQ(std::get<0>(result[0]), 10);
-    EXPECT_EQ(std::get<0>(result[1]), 20);
-    EXPECT_EQ(std::get<0>(result[2]), 30);
-}
-
-TEST(ForEachValues, TwoAxesIteratesCartesianProduct) {
-    using Axis1 = SameTypeUniqueValuePack<1, 2>;
-    using Axis2 = SameTypeUniqueValuePack<'a', 'b'>;
-    using Space = AxisOuterProduct<Axis1, Axis2>;
-
-    std::vector<std::tuple<int, char>> result;
-    for_each_values<Space, CollectValues>::apply(result);
-
-    ASSERT_EQ(result.size(), 4u);
-    EXPECT_EQ(result[0], std::make_tuple(1, 'a'));
-    EXPECT_EQ(result[1], std::make_tuple(1, 'b'));
-    EXPECT_EQ(result[2], std::make_tuple(2, 'a'));
-    EXPECT_EQ(result[3], std::make_tuple(2, 'b'));
-}
-
-TEST(ForEachValues, ThreeAxesIteratesAllCombinations) {
-    using Axis1 = SameTypeUniqueValuePack<0, 1>;
-    using Axis2 = SameTypeUniqueValuePack<0, 1>;
-    using Axis3 = SameTypeUniqueValuePack<0, 1>;
-    using Space = AxisOuterProduct<Axis1, Axis2, Axis3>;
-
-    std::vector<std::tuple<int, int, int>> result;
-    for_each_values<Space, CollectValues>::apply(result);
-
-    ASSERT_EQ(result.size(), 8u);
-    // Verify linear index corresponds to iteration order
-    for (size_t i = 0; i < result.size(); ++i) {
-        auto [v0, v1, v2] = result[i];
-        auto idx          = Space::index_of_values(v0, v1, v2);
-        EXPECT_EQ(idx, i);
-    }
-}
-
-// =============================================================================
-// for_each_permutation Tests
-// =============================================================================
-
-namespace {
-template <auto V1, auto V2> struct InstantiatedType {
-    static constexpr auto first  = V1;
-    static constexpr auto second = V2;
-};
-
-template <typename InstType, auto V1, auto V2> struct CollectInstantiated {
-    static void
-    apply(std::vector<std::pair<int, int>> &out) {
-        // Verify the instantiated type has correct values
-        static_assert(InstType::first == V1);
-        static_assert(InstType::second == V2);
-        out.emplace_back(V1, V2);
-    }
-};
-} // namespace
-
-TEST(ForEachPermutation, InstantiatesAndIterates) {
-    using Axis1 = SameTypeUniqueValuePack<1, 2>;
-    using Axis2 = SameTypeUniqueValuePack<10, 20>;
-    using Space = AxisOuterProduct<Axis1, Axis2>;
-
-    std::vector<std::pair<int, int>> result;
-    for_each_permutation<Space, InstantiatedType, CollectInstantiated>::apply(result);
-
-    ASSERT_EQ(result.size(), 4u);
-    EXPECT_EQ(result[0], std::make_pair(1, 10));
-    EXPECT_EQ(result[1], std::make_pair(1, 20));
-    EXPECT_EQ(result[2], std::make_pair(2, 10));
-    EXPECT_EQ(result[3], std::make_pair(2, 20));
-}
-
-// =============================================================================
-// for_each_values_flat Tests
-// =============================================================================
 
 TEST(ForEachValuesFlat, SingleAxisMatchesRecursive) {
     using Axis  = SameTypeUniqueValuePack<10, 20, 30>;
@@ -598,6 +512,23 @@ TEST(ForEachValuesFlat, LargerSpaceMatchesRecursive) {
 // =============================================================================
 // for_each_permutation_flat Tests
 // =============================================================================
+
+namespace {
+template <auto V1, auto V2> struct InstantiatedType {
+    static constexpr auto first  = V1;
+    static constexpr auto second = V2;
+};
+
+template <typename InstType, auto V1, auto V2> struct CollectInstantiated {
+    static void
+    apply(std::vector<std::pair<int, int>> &out) {
+        // Verify the instantiated type has correct values
+        static_assert(InstType::first == V1);
+        static_assert(InstType::second == V2);
+        out.emplace_back(V1, V2);
+    }
+};
+} // namespace
 
 TEST(ForEachPermutationFlat, MatchesRecursive) {
     using Axis1 = SameTypeUniqueValuePack<1, 2>;

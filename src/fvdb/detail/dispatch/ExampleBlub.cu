@@ -137,6 +137,7 @@ using BlubScalarTypeAxis = TorchScalarTypeAxis<torch::kInt32,
                                                torch::kFloat32,
                                                torch::kFloat64>;
 using BlubAxes           = AxisOuterProduct<BlubDeviceAxis, BlubScalarTypeAxis, BlubScalarTypeAxis>;
+using BlubFunctionPtr    = torch::Tensor (*)(torch::Tensor, torch::ScalarType);
 
 // -----------------------------------------------------------------------------
 // Instantiator - the bridge between runtime dispatch and static implementation
@@ -149,35 +150,74 @@ template <torch::DeviceType DeviceValue,
           torch::ScalarType OutScalarType>
 struct BlubInstantiator {
     // The actual dispatch function
-    static torch::Tensor
-    dispatch(torch::Tensor in, torch::ScalarType outScalarType) {
-        // Create output tensor with the specified dtype on the same device
-        auto out =
-            torch::empty_like(in, torch::TensorOptions().dtype(OutScalarType).device(in.device()));
+    // static torch::Tensor
+    // dispatch(torch::Tensor in, torch::ScalarType outScalarType) {
+    //     // Create output tensor with the specified dtype on the same device
+    //     auto out =
+    //         torch::empty_like(in,
+    //         torch::TensorOptions().dtype(OutScalarType).device(in.device()));
 
-        // Concretize tensors with compile-time type information
-        auto concreteIn  = ConcreteTensor<DeviceValue, InScalarType, 1>(in);
-        auto concreteOut = ConcreteTensor<DeviceValue, OutScalarType, 1>(out);
+    //     // Concretize tensors with compile-time type information
+    //     auto concreteIn  = ConcreteTensor<DeviceValue, InScalarType, 1>(in);
+    //     auto concreteOut = ConcreteTensor<DeviceValue, OutScalarType, 1>(out);
 
-        // Dispatch to the implementation - overload resolution picks the right one
-        blub_impl(Tag<DeviceValue>(), concreteIn, concreteOut);
+    //     // Dispatch to the implementation - overload resolution picks the right one
+    //     blub_impl(Tag<DeviceValue>(), concreteIn, concreteOut);
 
-        return out;
+    //     return out;
+    // }
+
+    static BlubFunctionPtr
+    get() {
+        return [](torch::Tensor in, torch::ScalarType outScalarType) -> torch::Tensor {
+            // Create output tensor with the specified dtype on the same device
+            auto out = torch::empty_like(
+                in, torch::TensorOptions().dtype(OutScalarType).device(in.device()));
+
+            // Concretize tensors with compile-time type information
+            auto concreteIn  = ConcreteTensor<DeviceValue, InScalarType, 1>(in);
+            auto concreteOut = ConcreteTensor<DeviceValue, OutScalarType, 1>(out);
+
+            // Dispatch to the implementation - overload resolution picks the right one
+            blub_impl(Tag<DeviceValue>(), concreteIn, concreteOut);
+
+            return out;
+        };
     }
 
-    // Required by PointGenerator/SubspaceGenerator: return the function pointer
-    static constexpr auto
-    get() {
-        return &dispatch;
+    // // Required by PointGenerator/SubspaceGenerator: return the function pointer
+    // static constexpr auto
+    // get() {
+    //     return &dispatch;
+    // }
+};
+
+template <typename Instantiator, auto... Values> struct Generator {
+    template <typename Map>
+        requires PermutationMapConcept<Map>
+    static void
+    apply(Map &map) {
+        // Check that the instantiator returns the correct type
+        static_assert(std::is_same_v<decltype(Instantiator::get()), typename Map::value_type>,
+                      "Instantiator::get() must return Map::value_type");
+
+        // Check that all values are valid for the map's axes
+        static_assert(Map::axes_type::index_of_values(Values...).has_value(),
+                      "Generator values must be valid members of the map's axes");
+
+        constexpr auto idx = Map::axes_type::index_of_values(Values...).value();
+        map.set(idx, Instantiator::get());
     }
 };
+
+template <auto... Values> using BlubBind = Generator<BlubInstantiator<Values...>, Values...>;
 
 // -----------------------------------------------------------------------------
 // Bindings - declare which combinations are actually implemented
 // -----------------------------------------------------------------------------
 // Each generator corresponds to one or more blub_impl overloads above.
 // The structure mirrors the implementation coverage.
-template <auto... Values> using BlubBind = PointGenerator<BlubInstantiator, Values...>;
+// template <auto... Values> using BlubBind = BlubGenerator<Values...>;
 
 // TEMPORARILY DISABLED: SubspaceGenerator causes nvcc to crash
 // template <typename DeviceAxis, typename InScalarTypeAxis, typename OutScalarTypeAxis>
@@ -185,53 +225,46 @@ template <auto... Values> using BlubBind = PointGenerator<BlubInstantiator, Valu
 //     SubspaceGenerator<BlubInstantiator,
 //                       AxisOuterProduct<DeviceAxis, InScalarTypeAxis, OutScalarTypeAxis>>;
 
-// using BlubBindings = GeneratorList<
-//     // CPU Float32 -> Int32: specific overload blub_impl(Cpu, Float32, Int32)
-//     BlubBind<torch::kCPU, torch::kFloat32, torch::kInt32>,
+using BlubBindings = GeneratorList<
+    // CPU Float32 -> Int32: specific overload blub_impl(Cpu, Float32, Int32)
+    // BlubBind<torch::kCPU, torch::kFloat32, torch::kInt32>,
+    BlubBind<torch::kCPU, torch::kFloat32, torch::kInt32>
 
-//     // // CUDA Float32 -> Int32: specific overload blub_impl(Cuda, Float32, Int32)
-//     // BlubBind<torch::kCUDA, torch::kFloat32, torch::kInt32>,
+    // // CUDA Float32 -> Int32: specific overload blub_impl(Cuda, Float32, Int32)
+    // BlubBind<torch::kCUDA, torch::kFloat32, torch::kInt32>,
 
-//     // // CPU same-type: generic template blub_impl<Dtype>(Cpu, in, out)
-//     // BlubBind<torch::kCPU, torch::kInt32, torch::kInt32>,
-//     // BlubBind<torch::kCPU, torch::kInt64, torch::kInt64>,
-//     // BlubBind<torch::kCPU, torch::kFloat16, torch::kFloat16>,
-//     // BlubBind<torch::kCPU, torch::kFloat32, torch::kFloat32>,
-//     // BlubBind<torch::kCPU, torch::kFloat64, torch::kFloat64>,
+    // // CPU same-type: generic template blub_impl<Dtype>(Cpu, in, out)
+    // BlubBind<torch::kCPU, torch::kInt32, torch::kInt32>,
+    // BlubBind<torch::kCPU, torch::kInt64, torch::kInt64>,
+    // BlubBind<torch::kCPU, torch::kFloat16, torch::kFloat16>,
+    // BlubBind<torch::kCPU, torch::kFloat32, torch::kFloat32>,
+    // BlubBind<torch::kCPU, torch::kFloat64, torch::kFloat64>,
 
-//     // // Any-device Float64 -> Int32: expanded manually instead of SubspaceGenerator
-//     // // (SubspaceGenerator causes nvcc to crash - for_each_permutation is too complex)
-//     // BlubBind<torch::kCPU, torch::kFloat64, torch::kInt32>,
-//     // BlubBind<torch::kCUDA, torch::kFloat64, torch::kInt32>
+    // // Subspace Generator for Any-device Float64 -> Int32
+    // BlubSubspaceBind<BlubDeviceAxis,
+    //                  TorchScalarTypeAxis<torch::kFloat64>,
+    //                  TorchScalarTypeAxis<torch::kInt32>>
 
-//     >;
+    >;
 
 // -----------------------------------------------------------------------------
 // Public API
 // -----------------------------------------------------------------------------
 
-// torch::Tensor
-// blub(torch::Tensor in, torch::ScalarType outScalarType) {
-//     static const auto dispatchTable = build_dispatcher<BlubAxes,
-//                                                        BlubBindings,
-//                                                        BlubEncoder,
-//                                                        BlubUnboundHandler,
-//                                                        torch::Tensor,
-//                                                        torch::Tensor,
-//                                                        torch::ScalarType>();
+torch::Tensor
+blub(torch::Tensor in, torch::ScalarType outScalarType) {
+    static const auto dispatchTable = build_dispatcher<BlubAxes,
+                                                       BlubBindings,
+                                                       BlubEncoder,
+                                                       BlubUnboundHandler,
+                                                       torch::Tensor,
+                                                       torch::Tensor,
+                                                       torch::ScalarType>();
+    // Dispatcher<BlubAxes, BlubEncoder, BlubUnboundHandler, torch::Tensor, torch::Tensor,
+    // torch::ScalarType> dispatchTable; BlubGenerator<torch::kCPU, torch::kFloat32,
+    // torch::kInt32>::apply(dispatchTable.permutation_map);
 
-//     return dispatchTable(in, outScalarType);
-// }
-
-void
-test() {
-    // static const auto dispatchTable = build_dispatcher<BlubAxes,
-    //                                                    BlubBindings,
-    //                                                    BlubEncoder,
-    //                                                    BlubUnboundHandler,
-    //                                                    torch::Tensor,
-    //                                                    torch::Tensor,
-    //                                                    torch::ScalarType>();
+    return dispatchTable(in, outScalarType);
 }
 
 } // namespace example

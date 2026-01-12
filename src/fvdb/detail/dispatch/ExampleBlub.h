@@ -68,6 +68,8 @@ extern template void blub_impl<torch::kCUDA>(Tag<torch::kCUDA>,
                                              ConcreteTensor<torch::kCUDA, torch::kFloat64, 1>,
                                              ConcreteTensor<torch::kCUDA, torch::kInt32, 1>);
 
+torch::Tensor blub(torch::Tensor in, torch::ScalarType outScalarType);
+
 } // namespace example
 } // namespace dispatch
 } // namespace fvdb
