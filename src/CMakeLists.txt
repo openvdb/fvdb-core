@@ -158,7 +158,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/VoxelNeighborhood.cu
     fvdb/detail/ops/VoxelsAlongRays.cu
     fvdb/detail/utils/cuda/ForEachCUDA.cu
-    fvdb/detail/dispatch/ExampleBlub.cu
+    # fvdb/detail/dispatch/ExampleBlub.cu
 )
 
 # Build library

@@ -43,7 +43,7 @@ template <typename T> using strides_helper_t = typename strides_helper<T>::type;
 template <typename T> struct array_from_indices;
 
 template <size_t... Is> struct array_from_indices<std::index_sequence<Is...>> {
-    static constexpr auto value = std::array{Is...};
+    static constexpr std::array<size_t, sizeof...(Is)> value = {Is...};
 };
 
 } // namespace dispatch
