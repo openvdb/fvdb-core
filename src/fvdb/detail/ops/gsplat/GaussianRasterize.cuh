@@ -85,8 +85,13 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
     VectorAccessor mMeans2d;                  // [C, N, 2] or [nnz, 2]
     VectorAccessor mConics;                   // [C, N, 3] or [nnz, 3]
     ScalarAccessor mOpacities;                // [C, N] or [nnz]
-    TorchRAcc64<int32_t, 3> mTileOffsets;     // [C, nTilesH, nTilesW]
     TorchRAcc64<int32_t, 1> mTileGaussianIds; // [totalIntersections]
+    // Tile offsets: can be 3D [C, nTilesH, nTilesW] (dense) or 1D [AT + 1] (sparse)
+    // We store both accessor types but only one is valid based on mTileOffsetsAreSparse
+    bool mTileOffsetsAreSparse;
+    TorchRAcc64<int32_t, 3>
+        mTileOffsets; // [C, nTilesH, nTilesW] - used when !mTileOffsetsAreSparse
+    TorchRAcc64<int32_t, 1> mSparseTileOffsets; // [AT + 1] - used when mTileOffsetsAreSparse
     // Common optional input tensors
     bool mHasFeatures;
     VectorAccessor mFeatures;                // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
@@ -115,7 +120,7 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
         const uint32_t imageOriginH,
         const uint32_t tileSize,
         const uint32_t blockOffset,
-        const torch::Tensor &tileOffsets,                               // [C, numTilesH, numTilesW]
+        const torch::Tensor &tileOffsets, // [C, numTilesH, numTilesW] (dense) or [AT + 1] (sparse)
         const torch::Tensor &tileGaussianIds,                           // [totalIntersections]
         const std::optional<torch::Tensor> &activeTiles = std::nullopt, // [AT]
         const std::optional<torch::Tensor> &tilePixelMask =
@@ -128,6 +133,19 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
           mMeans2d(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(means2d, "means2d")),
           mConics(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(conics, "conics")),
           mOpacities(initAccessor<ScalarType, NUM_OUTER_DIMS>(opacities, "opacities")),
+          mTileGaussianIds(initAccessor<int32_t, 1>(tileGaussianIds, "tileGaussianIds")),
+          mTileOffsetsAreSparse(tileOffsets.dim() == 1),
+          // Initialize 3D accessor for dense mode, or placeholder for sparse mode
+          mTileOffsets(mTileOffsetsAreSparse
+                           ? initAccessor<int32_t, 3>(
+                                 torch::empty({0, 0, 0}, tileOffsets.options()), "tileOffsets")
+                           : initAccessor<int32_t, 3>(tileOffsets, "tileOffsets")),
+          // Initialize 1D accessor for sparse mode, or placeholder for dense mode
+          mSparseTileOffsets(
+              mTileOffsetsAreSparse
+                  ? initAccessor<int32_t, 1>(tileOffsets, "sparseTileOffsets")
+                  : initAccessor<int32_t, 1>(torch::empty({0}, tileOffsets.options()),
+                                             "sparseTileOffsets")),
           mHasFeatures(features.has_value()),
           mFeatures(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(
               features, opacities.options(), "features")),
@@ -135,8 +153,6 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
           mHasBackgrounds(backgrounds.has_value()),
           mMasks(initAccessor<bool, 3>(masks, means2d.options().dtype(torch::kBool), "masks")),
           mHasMasks(masks.has_value()), mBlockOffset(blockOffset),
-          mTileOffsets(initAccessor<int32_t, 3>(tileOffsets, "tileOffsets")),
-          mTileGaussianIds(initAccessor<int32_t, 1>(tileGaussianIds, "tileGaussianIds")),
           mIsSparse(activeTiles.has_value()),
           mActiveTiles(initAccessor<int32_t, 1>(activeTiles, tileOffsets.options(), "activeTiles")),
           mTilePixelMask(initAccessor<uint64_t, 2>(
@@ -146,11 +162,20 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
           mPixelMap(initAccessor<int64_t, 1>(
               pixelMap, tileOffsets.options().dtype(torch::kInt64), "pixelMap")) {
         static_assert(NUM_OUTER_DIMS == 1 || NUM_OUTER_DIMS == 2, "NUM_OUTER_DIMS must be 1 or 2");
-        mNumCameras            = mTileOffsets.size(0);
+
+        mNumTilesW = (imageWidth + tileSize - 1) / tileSize;
+        mNumTilesH = (imageHeight + tileSize - 1) / tileSize;
+
+        if (mTileOffsetsAreSparse) {
+            // Sparse mode: means2d is [C, N, 2] for non-packed, [nnz, 2] for packed
+            // (For packed sparse mode, mNumCameras isn't used)
+            mNumCameras = IS_PACKED ? 0 : means2d.size(0);
+        } else {
+            // Dense mode: tileOffsets is [C, TH, TW]
+            mNumCameras = tileOffsets.size(0);
+        }
         mNumGaussiansPerCamera = IS_PACKED ? 0 : mMeans2d.size(1);
         mTotalIntersections    = mTileGaussianIds.size(0);
-        mNumTilesW             = mTileOffsets.size(2);
-        mNumTilesH             = mTileOffsets.size(1);
 
         checkInputShapes();
     }
@@ -198,9 +223,19 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
             TORCH_CHECK_VALUE(mNumTilesW == mMasks.size(2), "Bad size for masks");
         }
 
-        TORCH_CHECK_VALUE(mNumCameras == mTileOffsets.size(0), "Bad size for tileOffsets");
-        TORCH_CHECK_VALUE(mNumTilesH == mTileOffsets.size(1), "Bad size for tileOffsets");
-        TORCH_CHECK_VALUE(mNumTilesW == mTileOffsets.size(2), "Bad size for tileOffsets");
+        // Validate tileOffsets shape
+        if (mTileOffsetsAreSparse) {
+            // Sparse mode: tileOffsets is 1D [AT + 1]
+            if (mIsSparse) {
+                TORCH_CHECK_VALUE(mSparseTileOffsets.size(0) == mActiveTiles.size(0) + 1,
+                                  "Sparse tileOffsets size must be activeTiles.size(0) + 1");
+            }
+        } else {
+            // Dense mode: tileOffsets is 3D [C, numTilesH, numTilesW]
+            TORCH_CHECK_VALUE(mNumCameras == mTileOffsets.size(0), "Bad size for tileOffsets");
+            TORCH_CHECK_VALUE(mNumTilesH == mTileOffsets.size(1), "Bad size for tileOffsets");
+            TORCH_CHECK_VALUE(mNumTilesW == mTileOffsets.size(2), "Bad size for tileOffsets");
+        }
 
         if (mIsSparse) {
             TORCH_CHECK_VALUE(mTilePixelMask.size(0) == mActiveTiles.size(0),
@@ -350,7 +385,14 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
     // Get the first and last Gaussian ID in the current tile
     inline __device__ cuda::std::tuple<int32_t, int32_t>
     tileGaussianRange(uint32_t cameraId, uint32_t tileRow, uint32_t tileCol) {
-        // Figure out the first and (one past the) last Gaussian ID in this block/tile
+        // In sparse mode with 1D tile offsets, use the sparse offsets directly
+        // indexed by the tile ordinal (blockIdx.x + mBlockOffset)
+        if (mTileOffsetsAreSparse) {
+            const int32_t tileOrdinal = blockIdx.x + mBlockOffset;
+            return {mSparseTileOffsets[tileOrdinal], mSparseTileOffsets[tileOrdinal + 1]};
+        }
+
+        // Dense mode: look up by (cameraId, tileRow, tileCol)
         const int32_t firstGaussianIdInBlock = mTileOffsets[cameraId][tileRow][tileCol];
         auto [nextTileRow, nextTileCol]      = (tileCol < mNumTilesW - 1)
                                                    ? std::make_tuple(tileRow, tileCol + 1)

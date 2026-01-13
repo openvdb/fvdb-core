@@ -32,10 +32,10 @@ std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor> dispatchGaussianRasterizeCont
 template <torch::DeviceType>
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
 dispatchGaussianSparseRasterizeContributingGaussianIds(
-    const torch::Tensor &means2d,           // [C, N, 2]
-    const torch::Tensor &conics,            // [C, N, 3]
-    const torch::Tensor &opacities,         // [N]
-    const torch::Tensor &tile_offsets,      // [C, tile_height, tile_width]
+    const torch::Tensor &means2d,      // [C, N, 2]
+    const torch::Tensor &conics,       // [C, N, 3]
+    const torch::Tensor &opacities,    // [N]
+    const torch::Tensor &tile_offsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
     const torch::Tensor &tile_gaussian_ids, // [n_isects]
     const fvdb::JaggedTensor &pixelsToRender,
     const torch::Tensor &activeTiles,

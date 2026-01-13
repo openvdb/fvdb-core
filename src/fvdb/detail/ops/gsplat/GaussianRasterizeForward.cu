@@ -317,19 +317,22 @@ launchRasterizeForwardKernel(
     const std::optional<torch::Tensor> &pixelMap            = std::nullopt) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means2d));
 
-    TORCH_CHECK_VALUE(tileOffsets.size(2) == (imageWidth + tileSize - 1) / tileSize,
-                      "tileOffsets width must match the number of tiles in image size");
-    TORCH_CHECK_VALUE(tileOffsets.size(1) == (imageHeight + tileSize - 1) / tileSize,
-                      "tileOffsets height must match the number of tiles in image size");
+    // tileOffsets can be 3D (dense) or 1D (sparse)
+    const bool tileOffsetsAreSparse = tileOffsets.dim() == 1;
+    if (!tileOffsetsAreSparse) {
+        TORCH_CHECK_VALUE(tileOffsets.size(2) == (imageWidth + tileSize - 1) / tileSize,
+                          "tileOffsets width must match the number of tiles in image size");
+        TORCH_CHECK_VALUE(tileOffsets.size(1) == (imageHeight + tileSize - 1) / tileSize,
+                          "tileOffsets height must match the number of tiles in image size");
+    }
 
     const bool packed = means2d.dim() == 2;
 
-    const uint32_t C        = tileOffsets.size(0);          // number of cameras
-    const uint32_t N        = packed ? 0 : means2d.size(1); // number of gaussians
+    // Get C from tileOffsets for dense mode (means2d.size(0) is nnz in packed mode)
+    // For sparse mode, C is unused, only used for output sizing for dense mode
+    const uint32_t C        = tileOffsetsAreSparse ? 0 : tileOffsets.size(0); // number of cameras
+    const uint32_t N        = packed ? 0 : means2d.size(1);                   // number of gaussians
     const uint32_t channels = features.size(-1);
-
-    const uint32_t tileExtentH = tileOffsets.size(1);
-    const uint32_t tileExtentW = tileOffsets.size(2);
 
     TORCH_CHECK_VALUE(pixelMap.has_value() == pixelsToRender.has_value(),
                       "pixelMap and pixelsToRender must be provided together");
@@ -437,6 +440,7 @@ launchRasterizeForwardKernels(
     const std::optional<torch::Tensor> &tilePixelMask       = std::nullopt,
     const std::optional<torch::Tensor> &tilePixelCumsum     = std::nullopt,
     const std::optional<torch::Tensor> &pixelMap            = std::nullopt) {
+    TORCH_CHECK_VALUE(tileOffsets.dim() == 3, "tileOffsets must be 3D [C, TH, TW]");
     TORCH_CHECK_VALUE(tileOffsets.size(2) == (imageWidth + tileSize - 1) / tileSize,
                       "tileOffsets width must match the number of tiles in image size");
     TORCH_CHECK_VALUE(tileOffsets.size(1) == (imageHeight + tileSize - 1) / tileSize,
@@ -448,8 +452,8 @@ launchRasterizeForwardKernels(
     const uint32_t N        = packed ? 0 : means2d.size(1); // number of gaussians
     const uint32_t channels = features.size(-1);
 
-    const uint32_t tileExtentH = tileOffsets.size(1);
-    const uint32_t tileExtentW = tileOffsets.size(2);
+    const uint32_t tileExtentH = (imageHeight + tileSize - 1) / tileSize;
+    const uint32_t tileExtentW = (imageWidth + tileSize - 1) / tileSize;
 
     TORCH_CHECK_VALUE(pixelMap.has_value() == pixelsToRender.has_value(),
                       "pixelMap and pixelsToRender must be provided together");
@@ -788,7 +792,7 @@ dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
     const uint32_t imageOriginW,
     const uint32_t imageOriginH,
     const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,     // [C, tile_height, tile_width]
+    const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
     const torch::Tensor &tileGaussianIds, // [n_isects]
     const torch::Tensor &activeTiles,
     const torch::Tensor &tilePixelMask,
@@ -889,7 +893,7 @@ dispatchGaussianSparseRasterizeForward<torch::kPrivateUse1>(
     const uint32_t imageOriginW,
     const uint32_t imageOriginH,
     const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,     // [C, tile_height, tile_width]
+    const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
     const torch::Tensor &tileGaussianIds, // [n_isects]
     const torch::Tensor &activeTiles,
     const torch::Tensor &tilePixelMask,
@@ -914,7 +918,7 @@ dispatchGaussianSparseRasterizeForward<torch::kCPU>(
     const uint32_t imageOriginW,
     const uint32_t imageOriginH,
     const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,     // [C, tile_height, tile_width]
+    const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
     const torch::Tensor &tileGaussianIds, // [n_isects]
     const torch::Tensor &activeTiles,
     const torch::Tensor &tilePixelMask,
