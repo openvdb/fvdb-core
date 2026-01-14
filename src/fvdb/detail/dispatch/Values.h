@@ -4,76 +4,151 @@
 #ifndef FVDB_DETAIL_DISPATCH_VALUES_H
 #define FVDB_DETAIL_DISPATCH_VALUES_H
 
-#include <array>
+#include <cassert>
+#include <cstdint>
 #include <optional>
-#include <tuple>
+#include <stdexcept>
 #include <type_traits>
 
 namespace fvdb {
 namespace dispatch {
 
-namespace {
+// -----------------------------------------------------------------------------
+// ValuesElement
+// -----------------------------------------------------------------------------
 
-// Helper trait: compares two values, returning true only if their decayed
-// types match AND the values are equal.
-template <typename T, typename U> struct type_and_value_equal_impl {
-    static constexpr bool
-    compare(T const &, U const &) {
+template <size_t I, auto... Values> struct ValuesElement;
+
+template <size_t I> struct ValuesElement<I> {
+    static_assert(I != I, "Can't get an element from an empty value pack");
+};
+
+template <auto HeadValue, auto... TailValues> struct ValuesElement<0, HeadValue, TailValues...> {
+    using type = decltype(HeadValue);
+    static consteval type
+    value() {
+        return HeadValue;
+    }
+};
+
+template <size_t I, auto HeadValue, auto... TailValues>
+struct ValuesElement<I, HeadValue, TailValues...> {
+    static_assert(I > 0, "Specialization for 0 failed to occur");
+    static_assert(I <= sizeof...(TailValues), "Index out of bounds");
+    using type = typename ValuesElement<I - 1, TailValues...>::type;
+    static consteval type
+    value() {
+        return ValuesElement<I - 1, TailValues...>::value();
+    }
+};
+
+template <size_t I, auto... values>
+using ValuesElement_t = typename ValuesElement<I, values...>::type;
+
+// -----------------------------------------------------------------------------
+// ValuesContain
+// -----------------------------------------------------------------------------
+template <auto testValue, auto... values> struct ValuesContain {
+    static consteval bool
+    value() {
         return false;
     }
 };
 
-template <typename T> struct type_and_value_equal_impl<T, T> {
-    static constexpr bool
-    compare(T const &a, T const &b) {
-        return a == b;
-    }
-};
-
-// Wrapper that decays types before comparing
-template <typename T, typename U>
-struct type_and_value_equal : type_and_value_equal_impl<std::decay_t<T>, std::decay_t<U>> {};
-
-} // namespace
-
-template <auto... values> struct AnyTypeValuePack {
-    static constexpr auto value_tuple = std::make_tuple(values...);
-    static constexpr auto size        = sizeof...(values);
-
-    // -------------------------------------------------------------------------
-    // MEMBERSHIP
-    // -------------------------------------------------------------------------
-    // Check if value v is in the set of values spanned by this axis (constexpr)
-    static constexpr bool
-    contains_value(auto v) {
-        return (type_and_value_equal<decltype(values), decltype(v)>::compare(values, v) || ...);
-    }
-
-    // Returns the index of the first value matching v (considering only values
-    // of the same decayed type). Returns std::nullopt if not found.
-    static constexpr std::optional<size_t>
-    first_index_of_value(auto v) {
-        std::optional<size_t> result = std::nullopt;
-        auto check_at_index          = [&]<size_t I>() {
-            if (!result) {
-                auto const &elem = std::get<I>(value_tuple);
-                if (type_and_value_equal<decltype(elem), decltype(v)>::compare(elem, v)) {
-                    result = I;
-                }
+template <auto testValue, auto headValue, auto... tailValues>
+struct ValuesContain<testValue, headValue, tailValues...> {
+    static consteval bool
+    value() {
+        if constexpr (std::is_same_v<decltype(testValue), decltype(headValue)>) {
+            if constexpr (testValue == headValue) {
+                return true;
             }
-        };
-        [&]<size_t... Is>(std::index_sequence<Is...>) {
-            (check_at_index.template operator()<Is>(), ...);
-        }(std::make_index_sequence<size>{});
-        return result;
-    }
-
-    // Return the value at index, keeping in mind they may be separate types.
-    static constexpr auto
-    value_at_index(size_t idx) {
-        return std::get<idx>(value_tuple);
+        }
+        return ValuesContain<testValue, tailValues...>::value();
     }
 };
+
+// -----------------------------------------------------------------------------
+// ValuesDefiniteFirstIndex - for when we know that testValue is in the pack,
+// always returns the first index that matches both type and value.
+// -----------------------------------------------------------------------------
+template <auto> inline constexpr bool always_false_v = false;
+
+template <auto testValue, auto... values> struct ValuesDefiniteFirstIndex {
+    // This is a dummy test to force the static assert, it always fails.
+    static_assert(always_false_v<testValue>, "Value not found in pack");
+    static consteval size_t
+    value() {
+        return 0;
+    }
+};
+
+template <auto testValue, auto headValue, auto... tailValues>
+struct ValuesDefiniteFirstIndex<testValue, headValue, tailValues...> {
+    static consteval size_t
+    value() {
+        if constexpr (std::is_same_v<decltype(testValue), decltype(headValue)>) {
+            if constexpr (testValue == headValue) {
+                return 0;
+            }
+        }
+        return 1 + ValuesDefiniteFirstIndex<testValue, tailValues...>::value();
+    }
+};
+
+// -----------------------------------------------------------------------------
+// Values Head
+// -----------------------------------------------------------------------------
+template <auto... values> struct ValuesHead;
+
+template <auto headValue, auto... tailValues> struct ValuesHead<headValue, tailValues...> {
+    using type = decltype(headValue);
+    static consteval type
+    value() {
+        return headValue;
+    }
+};
+
+// -----------------------------------------------------------------------------
+// Values Unique
+// -----------------------------------------------------------------------------
+template <auto... Values> struct ValuesUnique;
+
+template <> struct ValuesUnique<> {
+    static consteval bool
+    value() {
+        return true;
+    }
+};
+
+template <auto headValue> struct ValuesUnique<headValue> {
+    static consteval bool
+    value() {
+        return true;
+    }
+};
+
+template <auto headValue, auto... tailValues> struct ValuesUnique<headValue, tailValues...> {
+    static consteval bool
+    value() {
+        return ((headValue != tailValues) && ... && true) && ValuesUnique<tailValues...>::value();
+    }
+};
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// PACKS - have an inheritance chain that allows for increased constraints
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
+// AnyTypeValuePack
+// -----------------------------------------------------------------------------
+template <auto... values> struct AnyTypeValuePack {};
+
+// -----------------------------------------------------------------------------
+// SameTypeValuePack
+// -----------------------------------------------------------------------------
 
 // SameTypeValuePack: like AnyTypeValuePack, but enforces that all values share
 // the same type. Values do NOT need to be unique.
@@ -84,113 +159,340 @@ template <> struct SameTypeValuePack<> : AnyTypeValuePack<> {
     // Attempting to access ::value_type will produce a clear compile error.
 };
 
-template <auto... values> struct SameTypeValuePack : AnyTypeValuePack<values...> {
-    using base       = AnyTypeValuePack<values...>;
-    using value_type = std::common_type_t<std::decay_t<decltype(values)>...>;
-
-    // Enforce uniform typing via static_assert
-    static_assert(sizeof...(values) > 0 &&
-                      (std::is_same_v<value_type, std::decay_t<decltype(values)>> && ...),
-                  "All values in SameTypeValuePack must have the same type");
-
-    // Returns the index of the first value matching v (considering only values
-    // of the same decayed type). Returns std::nullopt if not found.
-    static constexpr std::optional<size_t>
-    first_index_of_value(value_type v) {
-        return base::first_index_of_value(v);
-    }
-
-    static value_type
-    value_at_index(size_t idx) {
-        return base::value_at_index(idx);
-    }
+template <auto value> struct SameTypeValuePack<value> : AnyTypeValuePack<value> {
+    using value_type = decltype(value);
 };
 
-// Helper to check uniqueness at compile time
-namespace {
+template <auto headValue, auto... tailValues>
+struct SameTypeValuePack<headValue, tailValues...> : AnyTypeValuePack<headValue, tailValues...> {
+    using value_type = decltype(headValue);
+    static_assert((std::is_same_v<value_type, decltype(tailValues)> && ...),
+                  "All values must have the same type");
+};
+
+// -----------------------------------------------------------------------------
+// SameTypeUniqueValuePack
+// -----------------------------------------------------------------------------
+
+// SameTypeUniqueValuePack: like SameTypeValuePack, all values must have the
+// same type and be unique.
+template <auto... values> struct SameTypeUniqueValuePack;
+
+template <> struct SameTypeUniqueValuePack<> : SameTypeValuePack<> {
+    // No value_type defined for empty pack - there's no meaningful type.
+    // Attempting to access ::value_type will produce a clear compile error.
+};
+
+template <auto value> struct SameTypeUniqueValuePack<value> : SameTypeValuePack<value> {
+    using value_type = decltype(value);
+};
+
+template <auto headValue, auto... tailValues>
+struct SameTypeUniqueValuePack<headValue, tailValues...>
+    : SameTypeValuePack<headValue, tailValues...> {
+    using value_type = decltype(headValue);
+    static_assert(ValuesUnique<headValue, tailValues...>::value(), "All values must be unique");
+};
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// PACK DEDUCTIONS
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
+// PackSize
+// -----------------------------------------------------------------------------
+
+template <typename Pack> struct PackSize;
+template <auto... values> struct PackSize<AnyTypeValuePack<values...>> {
+    static consteval size_t
+    value() {
+        return sizeof...(values);
+    }
+};
 
 template <auto... values>
-constexpr bool
-all_values_unique() {
-    if constexpr (sizeof...(values) <= 1) {
-        return true;
-    } else {
-        constexpr auto arr = std::array{values...};
-        for (size_t i = 0; i < arr.size(); ++i) {
-            for (size_t j = i + 1; j < arr.size(); ++j) {
-                if (arr[i] == arr[j]) {
-                    return false;
-                }
-            }
-        }
-        return true;
-    }
+constexpr size_t
+packSize(AnyTypeValuePack<values...>) {
+    return sizeof...(values);
 }
 
-} // namespace
+// -----------------------------------------------------------------------------
+// PackElement
+// -----------------------------------------------------------------------------
 
-// SameTypeUniqueValuePack: like SameTypeValuePack, but also enforces that all
-// values are unique. Provides index_of_value instead of first_index_of_value.
-template <auto... values> struct SameTypeUniqueValuePack : SameTypeValuePack<values...> {
-    using base       = SameTypeValuePack<values...>;
-    using value_type = typename base::value_type;
-
-    static_assert(all_values_unique<values...>(),
-                  "All values in SameTypeUniqueValuePack must be unique");
-
-    // Since values are unique, there's exactly one index per value.
-    static constexpr std::optional<size_t>
-    index_of_value(value_type v) {
-        return base::first_index_of_value(v);
+template <typename Pack, size_t I> struct PackElement;
+template <auto... values, size_t I> struct PackElement<AnyTypeValuePack<values...>, I> {
+    using type = ValuesElement_t<I, values...>;
+    static consteval auto
+    value() {
+        return ValuesElement<I, values...>::value();
     }
-
-    // -------------------------------------------------------------------------
-    // COMPILE-TIME VALUE ACCESS
-    // -------------------------------------------------------------------------
-    // Access the value at compile-time index I. This enables flat iteration
-    // over value packs by decoding linear indices back to values.
-    template <size_t I>
-        requires(I < sizeof...(values))
-    static constexpr value_type value_at = std::get<I>(base::value_tuple);
 };
 
-// UniqueIntegerPack: like SameTypeUniqueValuePack, but for integer values.
-template <int... Values> using UniqueIntegerPack = SameTypeUniqueValuePack<Values...>;
+template <typename Pack, size_t I> using PackElement_t = typename PackElement<Pack, I>::type;
+
+// for same type packs, we can have a runtime version. This would never be
+// a compile-time version, we have other tools for that.
+inline [[noreturn]] void
+packElement(AnyTypeValuePack<>, size_t index) {
+    throw std::logic_error("Cannot get element from an empty pack");
+}
+
+template <auto headValue, auto... tailValues>
+constexpr auto
+packElement(SameTypeValuePack<headValue, tailValues...>, size_t index) -> decltype(headValue) {
+    if (index == 0) {
+        return headValue;
+    }
+    if constexpr (sizeof...(tailValues) > 0) {
+        assert(index > 0);
+        return packElement(SameTypeValuePack<tailValues...>{}, index - 1);
+    }
+    throw std::logic_error("Index out of bounds");
+}
+
+// -----------------------------------------------------------------------------
+// PackContains
+// -----------------------------------------------------------------------------
+
+template <typename Pack, auto testValue> struct PackContains;
+
+template <auto testValue> struct PackContains<AnyTypeValuePack<>, testValue> {
+    static consteval bool
+    value() {
+        return false;
+    }
+};
+
+template <auto... values, auto testValue>
+struct PackContains<AnyTypeValuePack<values...>, testValue> {
+    static consteval bool
+    value() {
+        return ValuesContain<testValue, values...>::value();
+    }
+};
+
+inline constexpr bool
+packContains(AnyTypeValuePack<>, auto testValue) {
+    return false;
+}
+
+template <auto headValue, auto... tailValues>
+constexpr bool
+packContains(AnyTypeValuePack<headValue, tailValues...>, auto testValue) {
+    using testType = std::decay_t<decltype(testValue)>;
+    using headType = decltype(headValue);
+    if constexpr (std::is_same_v<testType, headType>) {
+        if (testValue == headValue) {
+            return true;
+        }
+    }
+    return packContains(AnyTypeValuePack<tailValues...>{}, testValue);
+}
+
+// -----------------------------------------------------------------------------
+// PackDefiniteFirstIndex
+// -----------------------------------------------------------------------------
+
+template <typename Pack, auto testValue> struct PackDefiniteFirstIndex;
+template <auto... values, auto testValue>
+struct PackDefiniteFirstIndex<AnyTypeValuePack<values...>, testValue> {
+    static consteval size_t
+    value() {
+        return ValuesDefiniteFirstIndex<testValue, values...>::value();
+    }
+};
+
+// Runtime version.
+inline [[noreturn]] void
+packDefiniteFirstIndex(AnyTypeValuePack<>, auto value) {
+    throw std::logic_error("Cannot get definite first index from an empty pack");
+}
+
+template <auto headValue, auto... tailValues>
+constexpr size_t
+packDefiniteFirstIndex(AnyTypeValuePack<headValue, tailValues...>, auto testValue) {
+    using testType = std::decay_t<decltype(testValue)>;
+    using headType = decltype(headValue);
+    if constexpr (std::is_same_v<testType, headType>) {
+        if (testValue == headValue) {
+            return 0;
+        }
+    }
+    if constexpr (sizeof...(tailValues) > 0) {
+        assert(index > 0);
+        return packDefiniteFirstIndex(AnyTypeValuePack<tailValues...>{}, testValue);
+    }
+    throw std::logic_error("Index out of bounds");
+}
+
+// -----------------------------------------------------------------------------
+// PackDefiniteIndex
+// Definite index only defined for the SameTypeUniqueValuePack.
+// -----------------------------------------------------------------------------
+
+template <typename Pack, auto testValue> struct PackDefiniteIndex;
+template <auto... values, auto testValue>
+struct PackDefiniteIndex<SameTypeUniqueValuePack<values...>, testValue> {
+    static consteval size_t
+    value() {
+        return ValuesDefiniteFirstIndex<testValue, values...>::value();
+    }
+};
+
+inline [[noreturn]] void
+packDefiniteIndex(SameTypeUniqueValuePack<>, auto testValue) {
+    throw std::logic_error("Cannot get definite index from an empty pack");
+}
+
+template <auto headValue, auto... tailValues>
+constexpr size_t
+packDefiniteIndex(SameTypeUniqueValuePack<headValue, tailValues...>, auto testValue) {
+    using testType = std::decay_t<decltype(testValue)>;
+    using headType = decltype(headValue);
+    static_assert(std::is_same_v<testType, headType>, "Value type must match pack type");
+    if (testValue == headValue) {
+        return 0;
+    }
+    if constexpr (sizeof...(tailValues) > 0) {
+        return 1 + packDefiniteIndex(SameTypeUniqueValuePack<tailValues...>{}, testValue);
+    }
+    throw std::logic_error("Value not found in pack");
+}
+
+// -----------------------------------------------------------------------------
+// Pack First Index, Index (optional)
+// -----------------------------------------------------------------------------
+
+// Runtime version.
+inline constexpr std::optional<size_t>
+packFirstIndex(AnyTypeValuePack<>, auto value) {
+    return std::nullopt;
+}
+
+template <auto headValue, auto... tailValues>
+constexpr std::optional<size_t>
+packFirstIndex(AnyTypeValuePack<headValue, tailValues...>, auto testValue) {
+    using testType = std::decay_t<decltype(testValue)>;
+    using headType = decltype(headValue);
+    if constexpr (std::is_same_v<testType, headType>) {
+        if (testValue == headValue) {
+            return 0;
+        }
+    }
+    if constexpr (sizeof...(tailValues) > 0) {
+        auto result = packFirstIndex(AnyTypeValuePack<tailValues...>{}, testValue);
+        if (result.has_value()) {
+            return result.value() + 1;
+        }
+    }
+    return std::nullopt;
+}
+
+inline constexpr std::optional<size_t>
+packIndex(SameTypeUniqueValuePack<>, auto testValue) {
+    return std::nullopt;
+}
+
+template <auto headValue, auto... tailValues>
+constexpr std::optional<size_t>
+packIndex(SameTypeUniqueValuePack<headValue, tailValues...>, auto testValue) {
+    using testType = std::decay_t<decltype(value)>;
+    using headType = decltype(headValue);
+    static_assert(std::is_same_v<testType, headType>, "Value type must match pack type");
+    if (value == headValue) {
+        return 0;
+    }
+    if constexpr (sizeof...(tailValues) > 0) {
+        auto result = packIndex(SameTypeUniqueValuePack<tailValues...>{}, testValue);
+        if (result.has_value()) {
+            return result.value() + 1;
+        }
+    }
+    return std::nullopt;
+}
 
 // -----------------------------------------------------------------------------
 // SUBSET TRAITS
 // -----------------------------------------------------------------------------
 
-template <typename SubsetT, typename SupersetT> struct is_subset_of : std::false_type {};
-
-template <typename SubsetT, typename SupersetT>
-inline constexpr bool is_subset_of_v = is_subset_of<SubsetT, SupersetT>::value;
+template <typename Pack, typename SubsetPack> struct PackIsSubset;
 
 // Empty subset packs are a subset of an empty value pack.
-template <>
-struct is_subset_of<SameTypeUniqueValuePack<>, SameTypeUniqueValuePack<>> : std::true_type {};
+template <> struct PackIsSubset<AnyTypeValuePack<>, AnyTypeValuePack<>> {
+    static consteval bool
+    value() {
+        return true;
+    }
+};
 
-// If the subset pack is empty, it is a subset of any value pack.
-template <auto... Values>
-struct is_subset_of<SameTypeUniqueValuePack<>, SameTypeUniqueValuePack<Values...>>
-    : std::true_type {};
+// If the pack is empty, a non-empty pack is not a subset of it. The empty/empty case is handled
+// above.
+template <auto... SubsetValues>
+struct PackIsSubset<AnyTypeValuePack<>, AnyTypeValuePack<SubsetValues...>> {
+    static consteval bool
+    value() {
+        return false;
+    }
+};
 
-// If the value pack is empty, no subset can be a subset of it, except in the empty case which
-// is specialized above.
-template <auto... Values>
-struct is_subset_of<SameTypeUniqueValuePack<Values...>, SameTypeUniqueValuePack<>>
-    : std::false_type {};
+// If the subset pack is empty, it is a subset of any pack.
+template <auto... Values> struct PackIsSubset<AnyTypeValuePack<Values...>, AnyTypeValuePack<>> {
+    static consteval bool
+    value() {
+        return true;
+    }
+};
 
 // Pack is a subset of itself.
 template <auto... Values>
-struct is_subset_of<SameTypeUniqueValuePack<Values...>, SameTypeUniqueValuePack<Values...>>
-    : std::true_type {};
+struct PackIsSubset<AnyTypeValuePack<Values...>, AnyTypeValuePack<Values...>> {
+    static consteval bool
+    value() {
+        return true;
+    }
+};
 
-// Subset unique values don't need to be in the same order.
-template <auto... SubsetValues, auto... Values>
-struct is_subset_of<SameTypeUniqueValuePack<SubsetValues...>, SameTypeUniqueValuePack<Values...>>
-    : std::bool_constant<(SameTypeUniqueValuePack<Values...>::contains_value(SubsetValues) &&
-                          ...)> {};
+// Subset values don't need to be in the same order.
+template <auto... Values, auto... SubsetValues>
+struct PackIsSubset<AnyTypeValuePack<Values...>, AnyTypeValuePack<SubsetValues...>> {
+    static consteval bool
+    value() {
+        using PrimaryPack = AnyTypeValuePack<Values...>;
+        return (PackContains<PrimaryPack, SubsetValues>::value() && ... && true);
+    }
+};
+
+inline constexpr bool
+packIsSubset(AnyTypeValuePack<>, AnyTypeValuePack<>) {
+    return true;
+}
+
+template <auto... Values>
+constexpr bool
+packIsSubset(AnyTypeValuePack<Values...>, AnyTypeValuePack<>) {
+    return true;
+}
+
+template <auto... SubsetValues>
+constexpr bool
+packIsSubset(AnyTypeValuePack<>, AnyTypeValuePack<SubsetValues...>) {
+    return false;
+}
+
+template <auto... Values>
+constexpr bool
+packIsSubset(AnyTypeValuePack<Values...>, AnyTypeValuePack<Values...>) {
+    return true;
+}
+
+template <auto... Values, auto... SubsetValues>
+constexpr bool
+packIsSubset(AnyTypeValuePack<Values...> pack, AnyTypeValuePack<SubsetValues...>) {
+    return (packContains(pack, SubsetValues) && ... && true);
+}
 
 } // namespace dispatch
 } // namespace fvdb

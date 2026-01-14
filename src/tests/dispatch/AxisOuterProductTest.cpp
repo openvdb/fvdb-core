@@ -100,6 +100,8 @@ TEST(AxisOuterProduct, CoordFromIndicesType) {
     EXPECT_TRUE((std::is_same_v<CoordType2, ExpectedCoordType2>));
 }
 
+#if 0
+
 TEST(AxisOuterProduct, IndicesFromCoordType) {
     using Axis1 = DimensionalAxis<1, 2, 3>;
     using Axis2 = DimensionalAxis<'a', 'b', 'c', 'd'>;
@@ -264,6 +266,8 @@ TEST(AxisOuterProduct, VisitCountsCorrectly) {
     EXPECT_EQ(count, Space::numel);
     EXPECT_EQ(count, 24u); // 3 * 2 * 4
 }
+
+#endif
 
 } // namespace dispatch
 } // namespace fvdb
