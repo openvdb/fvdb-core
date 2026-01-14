@@ -6,6 +6,7 @@
 
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
+#include <fvdb/detail/ops/gsplat/GaussianTileIntersection.h>
 
 #include <torch/script.h>
 #include <torch/types.h>
@@ -807,6 +808,163 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationMultipleCamer
 
         EXPECT_TRUE(torch::allclose(actualColors, expectedColors, 1e-5, 1e-5))
             << "Background blending mismatch for camera " << c;
+    }
+}
+
+// Test packed mode rasterization with multiple cameras.
+// This verifies that when means2d has shape [nnz, 2] (packed) instead of [C, N, 2] (non-packed),
+// the rasterization produces the same results as non-packed mode.
+// This specifically tests the fix for deriving numCameras from tileOffsets instead of means2d.
+TEST_F(GaussianRasterizeForwardTestFixture, TestPackedModeMultipleCameras) {
+    loadTestData("rasterize_forward_inputs_3cams.pt", "rasterize_forward_outputs.pt");
+
+    const int numCameras         = means2d.size(0);
+    const int numGaussiansPerCam = means2d.size(1);
+    const int totalGaussians     = numCameras * numGaussiansPerCam;
+
+    ASSERT_GT(numCameras, 1) << "This test requires multiple cameras";
+
+    // Step 1: Run non-packed rasterization to get expected results
+    const auto [expectedColors, expectedAlphas, expectedLastIds] =
+        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(means2d,
+                                                                          conics,
+                                                                          colors,
+                                                                          opacities,
+                                                                          imageWidth,
+                                                                          imageHeight,
+                                                                          imageOriginW,
+                                                                          imageOriginH,
+                                                                          tileSize,
+                                                                          tileOffsets,
+                                                                          tileGaussianIds);
+
+    // Step 2: Reshape tensors to packed format [nnz, D]
+    // The test data's tileGaussianIds already contains global indices (0 to C*N-1).
+    // In non-packed mode, the kernel converts these to [cid][gid] internally.
+    // In packed mode, the kernel uses them directly as indices into the packed tensor.
+    auto means2dPacked   = means2d.reshape({totalGaussians, 2});
+    auto conicsPacked    = conics.reshape({totalGaussians, 3});
+    auto colorsPacked    = colors.reshape({totalGaussians, colors.size(-1)});
+    auto opacitiesPacked = opacities.reshape({totalGaussians});
+
+    // Step 3: Run packed rasterization with same tileOffsets and tileGaussianIds
+    const auto [outColorsPacked, outAlphasPacked, outLastIdsPacked] =
+        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(means2dPacked,
+                                                                          conicsPacked,
+                                                                          colorsPacked,
+                                                                          opacitiesPacked,
+                                                                          imageWidth,
+                                                                          imageHeight,
+                                                                          imageOriginW,
+                                                                          imageOriginH,
+                                                                          tileSize,
+                                                                          tileOffsets,
+                                                                          tileGaussianIds);
+
+    // Step 4: Compare results
+    // The output shapes should match: [C, H, W, D] for colors, [C, H, W, 1] for alphas
+    EXPECT_EQ(outColorsPacked.sizes(), expectedColors.sizes())
+        << "Packed output colors shape mismatch";
+    EXPECT_EQ(outAlphasPacked.sizes(), expectedAlphas.sizes())
+        << "Packed output alphas shape mismatch";
+    EXPECT_EQ(outLastIdsPacked.sizes(), expectedLastIds.sizes())
+        << "Packed output lastIds shape mismatch";
+
+    // The rendered colors and alphas should match (allowing for small numerical differences)
+    EXPECT_TRUE(torch::allclose(outColorsPacked, expectedColors, 1e-4, 1e-4))
+        << "Packed mode colors don't match non-packed mode";
+    EXPECT_TRUE(torch::allclose(outAlphasPacked, expectedAlphas, 1e-4, 1e-4))
+        << "Packed mode alphas don't match non-packed mode";
+
+    // lastIds should be identical since both modes use the same global indices
+    EXPECT_TRUE(torch::equal(outLastIdsPacked, expectedLastIds))
+        << "Packed mode lastIds don't match non-packed mode";
+}
+
+// Test packed mode with sparse rasterization and multiple cameras
+TEST_F(GaussianRasterizeForwardTestFixture, TestPackedModeSparseMultipleCameras) {
+    loadTestData("rasterize_forward_inputs_3cams.pt", "rasterize_forward_outputs.pt");
+
+    const int numCameras         = means2d.size(0);
+    const int numGaussiansPerCam = means2d.size(1);
+    const int totalGaussians     = numCameras * numGaussiansPerCam;
+
+    ASSERT_GT(numCameras, 1) << "This test requires multiple cameras";
+
+    // Generate sparse pixel coordinates to render
+    auto const pixelsToRender = generateSparsePixelCoords(numCameras, 100).cuda();
+
+    // Compute sparse info from pixels
+    auto [activeTiles, activeTileMask, tilePixelMask, tilePixelCumsum, pixelMap] =
+        fvdb::detail::ops::computeSparseInfo(
+            tileSize, tileOffsets.size(2), tileOffsets.size(1), pixelsToRender);
+
+    // Step 1: Run non-packed sparse rasterization to get expected results
+    const auto [expectedColorsSparse, expectedAlphasSparse, expectedLastIdsSparse] =
+        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(pixelsToRender,
+                                                                                means2d,
+                                                                                conics,
+                                                                                colors,
+                                                                                opacities,
+                                                                                imageWidth,
+                                                                                imageHeight,
+                                                                                imageOriginW,
+                                                                                imageOriginH,
+                                                                                tileSize,
+                                                                                tileOffsets,
+                                                                                tileGaussianIds,
+                                                                                activeTiles,
+                                                                                tilePixelMask,
+                                                                                tilePixelCumsum,
+                                                                                pixelMap);
+
+    // Step 2: Reshape tensors to packed format [nnz, D]
+    // The test data's tileGaussianIds already contains global indices (0 to C*N-1).
+    // In non-packed mode, the kernel converts these to [cid][gid] internally.
+    // In packed mode, the kernel uses them directly as indices into the packed tensor.
+    auto means2dPacked   = means2d.reshape({totalGaussians, 2});
+    auto conicsPacked    = conics.reshape({totalGaussians, 3});
+    auto colorsPacked    = colors.reshape({totalGaussians, colors.size(-1)});
+    auto opacitiesPacked = opacities.reshape({totalGaussians});
+
+    // Step 3: Run packed sparse rasterization with same sparse info and same gaussian IDs
+    const auto [outColorsPacked, outAlphasPacked, outLastIdsPacked] =
+        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(pixelsToRender,
+                                                                                means2dPacked,
+                                                                                conicsPacked,
+                                                                                colorsPacked,
+                                                                                opacitiesPacked,
+                                                                                imageWidth,
+                                                                                imageHeight,
+                                                                                imageOriginW,
+                                                                                imageOriginH,
+                                                                                tileSize,
+                                                                                tileOffsets,
+                                                                                tileGaussianIds,
+                                                                                activeTiles,
+                                                                                tilePixelMask,
+                                                                                tilePixelCumsum,
+                                                                                pixelMap);
+
+    // Step 4: Compare results
+    EXPECT_EQ(outColorsPacked.num_outer_lists(), expectedColorsSparse.num_outer_lists())
+        << "Packed sparse output has wrong number of cameras";
+
+    for (int c = 0; c < numCameras; ++c) {
+        auto expectedColors = expectedColorsSparse.index(c).jdata();
+        auto actualColors   = outColorsPacked.index(c).jdata();
+        auto expectedAlphas = expectedAlphasSparse.index(c).jdata();
+        auto actualAlphas   = outAlphasPacked.index(c).jdata();
+
+        EXPECT_EQ(actualColors.sizes(), expectedColors.sizes())
+            << "Packed sparse colors shape mismatch for camera " << c;
+        EXPECT_EQ(actualAlphas.sizes(), expectedAlphas.sizes())
+            << "Packed sparse alphas shape mismatch for camera " << c;
+
+        EXPECT_TRUE(torch::allclose(actualColors, expectedColors, 1e-4, 1e-4))
+            << "Packed sparse mode colors don't match for camera " << c;
+        EXPECT_TRUE(torch::allclose(actualAlphas, expectedAlphas, 1e-4, 1e-4))
+            << "Packed sparse mode alphas don't match for camera " << c;
     }
 }
 
