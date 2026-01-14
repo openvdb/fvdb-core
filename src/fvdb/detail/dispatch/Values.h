@@ -90,9 +90,12 @@ struct ValuesDefiniteFirstIndex<testValue, headValue, tailValues...> {
         if constexpr (std::is_same_v<decltype(testValue), decltype(headValue)>) {
             if constexpr (testValue == headValue) {
                 return 0;
+            } else {
+                return 1 + ValuesDefiniteFirstIndex<testValue, tailValues...>::value();
             }
+        } else {
+            return 1 + ValuesDefiniteFirstIndex<testValue, tailValues...>::value();
         }
-        return 1 + ValuesDefiniteFirstIndex<testValue, tailValues...>::value();
     }
 };
 
@@ -131,7 +134,12 @@ template <auto headValue> struct ValuesUnique<headValue> {
 template <auto headValue, auto... tailValues> struct ValuesUnique<headValue, tailValues...> {
     static consteval bool
     value() {
-        return ((headValue != tailValues) && ... && true) && ValuesUnique<tailValues...>::value();
+        // Unique if types differ OR values differ (must check type first to avoid implicit
+        // conversion)
+        return ((!std::is_same_v<decltype(headValue), decltype(tailValues)> ||
+                 headValue != tailValues) &&
+                ...) &&
+               ValuesUnique<tailValues...>::value();
     }
 };
 
@@ -235,7 +243,7 @@ template <typename Pack, size_t I> using PackElement_t = typename PackElement<Pa
 
 // for same type packs, we can have a runtime version. This would never be
 // a compile-time version, we have other tools for that.
-inline [[noreturn]] void
+[[noreturn]] inline void
 packElement(AnyTypeValuePack<>, size_t index) {
     throw std::logic_error("Cannot get element from an empty pack");
 }
@@ -306,7 +314,7 @@ struct PackDefiniteFirstIndex<AnyTypeValuePack<values...>, testValue> {
 };
 
 // Runtime version.
-inline [[noreturn]] void
+[[noreturn]] inline void
 packDefiniteFirstIndex(AnyTypeValuePack<>, auto value) {
     throw std::logic_error("Cannot get definite first index from an empty pack");
 }
@@ -342,7 +350,7 @@ struct PackDefiniteIndex<SameTypeUniqueValuePack<values...>, testValue> {
     }
 };
 
-inline [[noreturn]] void
+[[noreturn]] inline void
 packDefiniteIndex(SameTypeUniqueValuePack<>, auto testValue) {
     throw std::logic_error("Cannot get definite index from an empty pack");
 }
@@ -399,10 +407,10 @@ packIndex(SameTypeUniqueValuePack<>, auto testValue) {
 template <auto headValue, auto... tailValues>
 constexpr std::optional<size_t>
 packIndex(SameTypeUniqueValuePack<headValue, tailValues...>, auto testValue) {
-    using testType = std::decay_t<decltype(value)>;
+    using testType = std::decay_t<decltype(testValue)>;
     using headType = decltype(headValue);
     static_assert(std::is_same_v<testType, headType>, "Value type must match pack type");
-    if (value == headValue) {
+    if (testValue == headValue) {
         return 0;
     }
     if constexpr (sizeof...(tailValues) > 0) {
