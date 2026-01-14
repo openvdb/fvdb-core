@@ -924,7 +924,11 @@ callRasterizeBackwardWithTemplatedSharedChannels(
                                outDLossDOpacities);
     }
 
-    const uint32_t C = means2d.size(0);
+    // tileOffsets can be 3D (dense) or 1D (sparse)
+    const bool tileOffsetsAreSparse = tileOffsets.dim() == 1;
+    // Get C from tileOffsets for dense mode
+    // For sparse mode, C is unused, only used for output sizing for dense mode
+    const uint32_t C = tileOffsetsAreSparse ? 0 : tileOffsets.size(0);
     const uint32_t H = imageHeight;
     const uint32_t W = imageWidth;
 
@@ -1210,7 +1214,11 @@ callRasterizeBackwardPrivateUse1(
                                outDLossDOpacities);
     }
 
-    const uint32_t C = means2d.size(0);
+    // tileOffsets can be 3D (dense) or 1D (sparse)
+    const bool tileOffsetsAreSparse = tileOffsets.dim() == 1;
+    // Get C from tileOffsets for dense mode
+    // For sparse mode, C is unused, only used for output sizing for dense mode
+    const uint32_t C = tileOffsetsAreSparse ? 0 : tileOffsets.size(0);
     const uint32_t H = imageHeight;
     const uint32_t W = imageWidth;
 

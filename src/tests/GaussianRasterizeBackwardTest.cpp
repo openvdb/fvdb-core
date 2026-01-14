@@ -6,6 +6,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeBackward.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
+#include <fvdb/detail/ops/gsplat/GaussianTileIntersection.h>
 
 #include <torch/types.h>
 
@@ -102,8 +103,9 @@ class GaussianTestHelper {
                         int tileSize,
                         const std::vector<std::pair<float, float>> &gaussianPositions,
                         int numCameras = 1) {
-        const int32_t numTilesW = (imageWidth + tileSize - 1) / tileSize;
-        const int32_t numTilesH = (imageHeight + tileSize - 1) / tileSize;
+        const int32_t numTilesW    = (imageWidth + tileSize - 1) / tileSize;
+        const int32_t numTilesH    = (imageHeight + tileSize - 1) / tileSize;
+        const int32_t numGaussians = (int32_t)gaussianPositions.size();
 
         auto tileOffsets = torch::zeros({numCameras, numTilesH, numTilesW},
                                         torch::dtype(torch::kInt32).device(torch::kCUDA));
@@ -118,14 +120,16 @@ class GaussianTestHelper {
                     tileOffsets[cameraIdx][h][w] = currentOffset;
 
                     // Add gaussians that intersect this tile
-                    for (int g = 0; g < (int)gaussianPositions.size(); g++) {
+                    for (int g = 0; g < numGaussians; g++) {
                         int32_t gaussianTileRow = (int)gaussianPositions[g].second / tileSize;
                         int32_t gaussianTileCol = (int)gaussianPositions[g].first / tileSize;
 
                         if (h == gaussianTileRow && w == gaussianTileCol) {
-                            // Each camera references the same gaussian indices (0 to
-                            // numGaussians-1)
-                            tileGaussianIds.push_back(g);
+                            // Use global indices: camera c's gaussian g is at index c*N + g
+                            // The kernel uses cid = globalIdx / N, gid = globalIdx % N
+                            // to access means2d[cid][gid] in non-packed mode.
+                            int32_t globalIdx = cameraIdx * numGaussians + g;
+                            tileGaussianIds.push_back(globalIdx);
                             currentOffset++;
                         }
                     }
@@ -1350,4 +1354,122 @@ TEST_F(GaussianRasterizeTestFixture, TestSparseBackwardWithBackgrounds) {
     }
     EXPECT_TRUE(hasTransparentPixels)
         << "Test requires some non-opaque pixels to validate background effects";
+}
+
+// Test packed mode backward rasterization with multiple cameras.
+// This verifies that when means2d has shape [nnz, 2] (packed) instead of [C, N, 2] (non-packed),
+// the backward pass produces the same gradients as non-packed mode.
+// This specifically tests the fix for deriving numCameras from tileOffsets instead of means2d.
+TEST_F(GaussianRasterizeTestFixture, TestPackedModeBackwardMultipleCameras) {
+    const int numCameras          = 3;
+    const int numGaussians        = 4;
+    const int channels            = 3;
+    const int32_t testImageWidth  = 64;
+    const int32_t testImageHeight = 64;
+    const int32_t testTileSize    = 16;
+
+    // Define pixel/gaussian positions
+    std::vector<std::pair<int, int>> pixelPositions = {{8, 8}, {24, 24}, {40, 40}, {56, 56}};
+    auto gaussianPositions = GaussianTestHelper::getGaussianPositionsFromPixels(pixelPositions);
+
+    // Create test gaussians using helper (non-packed format: [C, N, D])
+    auto gaussians = GaussianTestHelper::createTestGaussians(
+        numCameras, numGaussians, channels, gaussianPositions);
+
+    // Create tile structure using helper
+    auto tiles = GaussianTestHelper::createTileStructure(
+        testImageWidth, testImageHeight, testTileSize, gaussianPositions, numCameras);
+
+    // Step 1: Run non-packed forward pass
+    auto denseResults = GaussianTestHelper::runForwardDense(
+        gaussians, tiles, testImageWidth, testImageHeight, testTileSize);
+
+    // Create gradient inputs
+    auto dLossDColors = torch::ones_like(denseResults.colors) * 0.1f;
+    auto dLossDAlphas = torch::ones_like(denseResults.alphas) * 0.1f;
+
+    // Step 2: Run non-packed backward to get expected gradients
+    const auto [expectedDMeans2dAbs,
+                expectedDMeans2d,
+                expectedDConics,
+                expectedDColors,
+                expectedDOpacities] =
+        fvdb::detail::ops::dispatchGaussianRasterizeBackward<torch::kCUDA>(
+            gaussians.means2d,
+            gaussians.conics,
+            gaussians.colors,
+            gaussians.opacities,
+            testImageWidth,
+            testImageHeight,
+            0, // imageOriginW
+            0, // imageOriginH
+            testTileSize,
+            tiles.tileOffsets,
+            tiles.tileGaussianIds,
+            denseResults.alphas,
+            denseResults.lastIds,
+            dLossDColors,
+            dLossDAlphas,
+            false, // absGrad
+            -1);   // numSharedChannelsOverride
+
+    // Step 3: Reshape to packed format [nnz, D]
+    // Non-packed mode: kernel converts index to [cid][gid] using division/modulo
+    // Packed mode: kernel uses index directly into the packed tensor
+    const int totalGaussians = numCameras * numGaussians;
+    auto means2dPacked       = gaussians.means2d.reshape({totalGaussians, 2});
+    auto conicsPacked        = gaussians.conics.reshape({totalGaussians, 3});
+    auto colorsPacked        = gaussians.colors.reshape({totalGaussians, channels});
+    auto opacitiesPacked     = gaussians.opacities.reshape({totalGaussians});
+
+    // Step 4: Run packed backward with same tileGaussianIds (global indices)
+    const auto [outDMeans2dAbsPacked,
+                outDMeans2dPacked,
+                outDConicsPacked,
+                outDColorsPacked,
+                outDOpacitiesPacked] =
+        fvdb::detail::ops::dispatchGaussianRasterizeBackward<torch::kCUDA>(
+            means2dPacked,
+            conicsPacked,
+            colorsPacked,
+            opacitiesPacked,
+            testImageWidth,
+            testImageHeight,
+            0,
+            0,
+            testTileSize,
+            tiles.tileOffsets, // Still use [C, H, W] tile offsets
+            tiles.tileGaussianIds,
+            denseResults.alphas,
+            denseResults.lastIds,
+            dLossDColors,
+            dLossDAlphas,
+            false,
+            -1);
+
+    // Step 5: Reshape expected gradients to packed format for comparison
+    auto expectedDMeans2dPacked   = expectedDMeans2d.reshape({totalGaussians, 2});
+    auto expectedDConicsPacked    = expectedDConics.reshape({totalGaussians, 3});
+    auto expectedDColorsPacked    = expectedDColors.reshape({totalGaussians, channels});
+    auto expectedDOpacitiesPacked = expectedDOpacities.reshape({totalGaussians});
+
+    // Step 6: Compare results
+    EXPECT_EQ(outDMeans2dPacked.sizes(), expectedDMeans2dPacked.sizes())
+        << "Packed gradient means2d shape mismatch";
+    EXPECT_EQ(outDConicsPacked.sizes(), expectedDConicsPacked.sizes())
+        << "Packed gradient conics shape mismatch";
+    EXPECT_EQ(outDColorsPacked.sizes(), expectedDColorsPacked.sizes())
+        << "Packed gradient colors shape mismatch";
+    EXPECT_EQ(outDOpacitiesPacked.sizes(), expectedDOpacitiesPacked.sizes())
+        << "Packed gradient opacities shape mismatch";
+
+    // gradients should match
+    EXPECT_TRUE(torch::allclose(outDMeans2dPacked, expectedDMeans2dPacked, 1e-4, 1e-4))
+        << "Packed mode means2d gradients don't match non-packed mode";
+    EXPECT_TRUE(torch::allclose(outDConicsPacked, expectedDConicsPacked, 1e-4, 1e-4))
+        << "Packed mode conics gradients don't match non-packed mode";
+    EXPECT_TRUE(torch::allclose(outDColorsPacked, expectedDColorsPacked, 1e-4, 1e-4))
+        << "Packed mode colors gradients don't match non-packed mode";
+    EXPECT_TRUE(torch::allclose(outDOpacitiesPacked, expectedDOpacitiesPacked, 1e-4, 1e-4))
+        << "Packed mode opacities gradients don't match non-packed mode";
 }
