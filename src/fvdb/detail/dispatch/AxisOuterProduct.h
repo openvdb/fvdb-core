@@ -43,181 +43,75 @@ struct is_subset_of<DimensionalAxis<SubsetValues...>, DimensionalAxis<Values...>
 // AxisOuterProduct
 // -----------------------------------------------------------------------------
 
-template <typename... Axes> struct AxisOuterProductHelper;
-
-template <> struct AxisOuterProductHelper<> {
-    static constexpr size_t rank  = 0;
-    static constexpr size_t numel = 0;
-
-    template <typename T> struct CoordFromIndicesTypeHelper {
-        using type = std::index_sequence<>;
-    };
-};
-
-template <typename Axis> struct AxisOuterProductHelper<Axis> {
-    static_assert(is_dimensional_axis_v<Axis>,
-                  "AxisOuterProduct requires the Axis to be a DimensionalAxis type ");
-    static_assert(Axis::size > 0,
-                  "AxisOuterProduct does not support empty axis (size must be > 0)");
-
-    static constexpr size_t rank  = 1;
-    static constexpr size_t numel = Axis::size;
-
-    template <typename T> struct CoordFromIndicesTypeHelper;
-
-    template <size_t ValueIndex>
-    struct CoordFromIndicesTypeHelper<std::index_sequence<ValueIndex>> {
-        using type = AnyTypeValuePack<Axis::template value_at<ValueIndex>>;
-    };
-};
-
-template <typename Axis0, typename... TailAxes> struct AxisOuterProductHelper<Axis0, TailAxes...> {
-    static_assert(is_dimensional_axis_v<Axis0>,
-                  "AxisOuterProduct requires the Axis0 to be a DimensionalAxis type ");
-    static_assert(Axis0::size > 0,
-                  "AxisOuterProduct does not support empty axis (size must be > 0)");
-
-    using _tail_helper_type = AxisOuterProductHelper<TailAxes...>;
-
-    static constexpr size_t rank  = 1 + _tail_helper_type::rank;
-    static constexpr size_t numel = Axis0::size * _tail_helper_type::numel;
-
-    template <typename T> struct CoordFromIndicesTypeHelper;
-
-    template <size_t ValueIndex0, size_t... TailValueIndices>
-    struct CoordFromIndicesTypeHelper<std::index_sequence<ValueIndex0, TailValueIndices...>> {
-        using _tail_indices_type = std::index_sequence<TailValueIndices...>;
-        using _tail_coord_type   = typename _tail_helper_type::template CoordFromIndicesTypeHelper<
-              _tail_indices_type>::type;
-        using type = typename PrependAnyTypeValue<Axis0::template value_at<ValueIndex0>,
-                                                  _tail_coord_type>::type;
-    };
-};
-
 template <typename... Axes> struct AxisOuterProduct {
-    static_assert((is_dimensional_axis_v<Axes> && ...),
-                  "AxisOuterProduct requires all Axes to be DimensionalAxis types "
-                  "(i.e., SameTypeUniqueValuePack instantiations)");
-    static_assert(((Axes::size > 0) && ... && true),
-                  "AxisOuterProduct does not support empty axes (size must be > 0)");
+    static_assert(sizeof...(Axes) > 0, "AxisOuterProduct must have at least one axis");
+    static_assert((is_dimensional_axis_v<Axes> && ... && true),
+                  "All axes must be dimensional axes");
 
-    using index_space_type = IndexSpace<Axes::size...>;
+    using index_space_type = IndexSpace<PackSize<Axes>::value()...>;
 
-    static constexpr size_t rank  = index_space_type::rank;
-    static constexpr size_t numel = index_space_type::numel;
-
-    template <typename T>
-    using coord_from_indices_type =
-        typename AxisOuterProductHelper<Axes...>::template CoordFromIndicesTypeHelper<T>::type;
-
-    // -------------------------------------------------------------------------
-    // Visitor pattern
-    // -------------------------------------------------------------------------
-    // Visits every point in the value space, calling the visitor with an
-    // AnyTypeValuePack tag type for each coordinate. This is analogous to
-    // IndexSpace::visit but operates in value space instead of index space.
-
-    template <typename ValueVisitor>
-    static void
-    visit(ValueVisitor &&visitor) {
-        index_space_type::visit([&visitor](auto index_coord) {
-            using index_coord_t = decltype(index_coord);
-            using value_coord_t = coord_from_indices_type<index_coord_t>;
-            std::invoke(std::forward<ValueVisitor>(visitor), value_coord_t{});
-        });
+    static consteval size_t
+    rank() {
+        return sizeof...(Axes);
     }
+    static consteval size_t
+    numel() {
+        return (PackSize<Axes>::value() * ... * 1);
+    }
+    using shape = std::index_sequence<PackSize<Axes>::value()...>;
 };
 
-template <typename T> struct CoordFromIndices;
+template <typename ValueSpace, typename Index> struct CoordFromIndices;
 
-template <typename Axis> struct CoordFromIndices<AxisOuterProduct<Axis>> {
-    template <typename... Axes> struct AxisOuterProductHelper;
+template <typename ValueSpace, typename Index>
+using CoordFromIndices_t = typename CoordFromIndices<ValueSpace, Index>::type;
 
-    template <> struct AxisOuterProductHelper<> {
-        static constexpr size_t rank  = 0;
-        static constexpr size_t numel = 0;
+template <> struct CoordFromIndices<AxisOuterProduct<>, std::index_sequence<>> {
+    using type = AnyTypeValuePack<>;
+};
 
-        template <typename T> struct CoordFromIndicesTypeHelper {
-            using type = std::index_sequence<>;
-        };
-    };
+template <typename Axis, size_t valueIndex>
+struct CoordFromIndices<AxisOuterProduct<Axis>, std::index_sequence<valueIndex>> {
+    static_assert(valueIndex < PackSize<Axis>::value(), "Index out of bounds");
+    using type = AnyTypeValuePack<PackElement_t<Axis, valueIndex>>;
+};
 
-    template <typename Axis> struct AxisOuterProductHelper<Axis> {
-        static_assert(is_dimensional_axis_v<Axis>,
-                      "AxisOuterProduct requires the Axis to be a DimensionalAxis type ");
-        static_assert(Axis::size > 0,
-                      "AxisOuterProduct does not support empty axis (size must be > 0)");
+template <typename Axis0, typename... TailAxes, size_t valueIndex0, size_t... tailValueIndices>
+struct CoordFromIndices<AxisOuterProduct<Axis0, TailAxes...>,
+                        std::index_sequence<valueIndex0, tailValueIndices...>> {
+    static_assert(sizeof...(tailValueIndices) == sizeof...(TailAxes),
+                  "Number of value indices must match number of axes");
+    static_assert(valueIndex0 < PackSize<Axis0>::value(), "Index out of bounds");
+    using type = PackPrepend_t<
+        CoordFromIndices_t<AxisOuterProduct<TailAxes...>, std::index_sequence<tailValueIndices...>>,
+        PackElement_t<Axis0, valueIndex0>>;
+};
 
-        static constexpr size_t rank  = 1;
-        static constexpr size_t numel = Axis::size;
+template <typename ValueSpace, typename Coord> struct IndicesFromCoord;
 
-        template <typename T> struct CoordFromIndicesTypeHelper;
+template <typename ValueSpace, typename Coord>
+using IndicesFromCoord_t = typename IndicesFromCoord<ValueSpace, Coord>::type;
 
-        template <size_t ValueIndex>
-        struct CoordFromIndicesTypeHelper<std::index_sequence<ValueIndex>> {
-            using type = AnyTypeValuePack<Axis::template value_at<ValueIndex>>;
-        };
-    };
+template <> struct IndicesFromCoord<AxisOuterProduct<>, AnyTypeValuePack<>> {
+    using type = std::index_sequence<>;
+};
 
-    template <typename Axis0, typename... TailAxes>
-    struct AxisOuterProductHelper<Axis0, TailAxes...> {
-        static_assert(is_dimensional_axis_v<Axis0>,
-                      "AxisOuterProduct requires the Axis0 to be a DimensionalAxis type ");
-        static_assert(Axis0::size > 0,
-                      "AxisOuterProduct does not support empty axis (size must be > 0)");
+template <typename Axis, auto coordValue>
+struct IndicesFromCoord<AxisOuterProduct<Axis>, AnyTypeValuePack<coordValue>> {
+    static_assert(PackContains<Axis, coordValue>::value(), "Coordinate value not found in axis");
+    using type = std::index_sequence<PackDefiniteFirstIndex<Axis, coordValue>::value()>;
+};
 
-        using _tail_helper_type = AxisOuterProductHelper<TailAxes...>;
-
-        static constexpr size_t rank  = 1 + _tail_helper_type::rank;
-        static constexpr size_t numel = Axis0::size * _tail_helper_type::numel;
-
-        template <typename T> struct CoordFromIndicesTypeHelper;
-
-        template <size_t ValueIndex0, size_t... TailValueIndices>
-        struct CoordFromIndicesTypeHelper<std::index_sequence<ValueIndex0, TailValueIndices...>> {
-            using _tail_indices_type = std::index_sequence<TailValueIndices...>;
-            using _tail_coord_type =
-                typename _tail_helper_type::template CoordFromIndicesTypeHelper<
-                    _tail_indices_type>::type;
-            using type = typename PrependAnyTypeValue<Axis0::template value_at<ValueIndex0>,
-                                                      _tail_coord_type>::type;
-        };
-    };
-
-    // -----------------------------------------------------------------------------
-    // is_axis_outer_product trait
-    // -----------------------------------------------------------------------------
-    // Checks if a type is an AxisOuterProduct instantiation.
-
-    template <typename T> struct is_axis_outer_product : std::false_type {};
-
-    template <typename... Axes>
-    struct is_axis_outer_product<AxisOuterProduct<Axes...>> : std::true_type {};
-
-    template <typename T>
-    inline constexpr bool is_axis_outer_product_v = is_axis_outer_product<T>::value;
-
-    template <typename T>
-    concept AxisOuterProductConcept = is_axis_outer_product_v<T>;
-
-    // -----------------------------------------------------------------------------
-    // is_subspace_of trait
-    // -----------------------------------------------------------------------------
-    // Checks if one AxisOuterProduct is a subspace of another. A subspace has the
-    // same number of axes, and each axis is a subset of the corresponding axis in
-    // the full space.
-
-    template <typename SubSpace, typename FullSpace> struct is_subspace_of : std::false_type {};
-
-    // Specialization for same-length axis packs only (uses requires to prevent
-    // instantiation of fold expression when pack lengths differ)
-    template <typename... SubAxes, typename... FullAxes>
-        requires(sizeof...(SubAxes) == sizeof...(FullAxes))
-    struct is_subspace_of<AxisOuterProduct<SubAxes...>, AxisOuterProduct<FullAxes...>>
-        : std::bool_constant<(is_subset_of_v<SubAxes, FullAxes> && ...)> {};
-
-    template <typename Sub, typename Full>
-    inline constexpr bool is_subspace_of_v = is_subspace_of<Sub, Full>::value;
+template <typename Axis0, typename... TailAxes, auto coordValue0, auto... tailCoordValues>
+struct IndicesFromCoord<AxisOuterProduct<Axis0, TailAxes...>,
+                        AnyTypeValuePack<coordValue0, tailCoordValues...>> {
+    static_assert(sizeof...(tailCoordValues) == sizeof...(TailAxes),
+                  "Number of coordinate values must match number of axes");
+    static_assert(PackContains<Axis0, coordValue0>::value(), "Coordinate value not found in axis");
+    using type = IndexSequencePrepend_t<
+        IndicesFromCoord_t<AxisOuterProduct<TailAxes...>, AnyTypeValuePack<tailCoordValues...>>,
+        PackDefiniteFirstIndex<Axis0, coordValue0>::value()>;
+};
 
 } // namespace dispatch
 } // namespace fvdb

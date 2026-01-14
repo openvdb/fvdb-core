@@ -13,11 +13,18 @@
 namespace fvdb {
 namespace dispatch {
 
+template <auto... values> struct ValuesSize {
+    static consteval size_t
+    value() {
+        return sizeof...(values);
+    }
+};
+
 // -----------------------------------------------------------------------------
 // ValuesElement
 // -----------------------------------------------------------------------------
 
-template <size_t I, auto... Values> struct ValuesElement;
+template <auto... Values> struct ValuesElement;
 
 template <size_t I> struct ValuesElement<I> {
     static_assert(I != I, "Can't get an element from an empty value pack");
@@ -113,6 +120,31 @@ template <auto headValue, auto... tailValues> struct ValuesHead<headValue, tailV
 };
 
 // -----------------------------------------------------------------------------
+// Values Same Type
+// -----------------------------------------------------------------------------
+template <auto... values> struct ValuesSameType;
+template <> struct ValuesSameType<> {
+    static consteval bool
+    value() {
+        return true;
+    }
+};
+
+template <auto value> struct ValuesSameType<value> {
+    static consteval bool
+    value() {
+        return true;
+    }
+};
+
+template <auto headValue, auto... tailValues> struct ValuesSameType<headValue, tailValues...> {
+    static consteval bool
+    value() {
+        return (std::is_same_v<decltype(headValue), decltype(tailValues)> && ...);
+    }
+};
+
+// -----------------------------------------------------------------------------
 // Values Unique
 // -----------------------------------------------------------------------------
 template <auto... Values> struct ValuesUnique;
@@ -149,60 +181,55 @@ template <auto headValue, auto... tailValues> struct ValuesUnique<headValue, tai
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-// -----------------------------------------------------------------------------
-// AnyTypeValuePack
-// -----------------------------------------------------------------------------
-template <auto... values> struct AnyTypeValuePack {
-    using base_pack = AnyTypeValuePack<values...>;
+// Value Pack Concept (The Category)
+template <typename T>
+concept ValuePack = requires { typename T::value_pack_tag; };
+
+// Value Pack Struct (The Concrete Type)
+template <auto... Vs> struct Values {
+    using value_pack_tag = void;
+
+    template <template <auto...> typename InspectionType>
+    using inspection_type = InspectionType<Vs...>;
+
+    template <auto selection, template <auto...> typename SelectionType>
+    using selection_type = SelectionType<selection, Vs...>;
 };
 
-// -----------------------------------------------------------------------------
-// SameTypeValuePack
-// -----------------------------------------------------------------------------
-
-// SameTypeValuePack: like AnyTypeValuePack, but enforces that all values share
-// the same type. Values do NOT need to be unique.
-template <auto... values> struct SameTypeValuePack;
-
-template <> struct SameTypeValuePack<> : AnyTypeValuePack<> {
-    // No value_type defined for empty pack - there's no meaningful type.
-    // Attempting to access ::value_type will produce a clear compile error.
+template <ValuePack Pack, template <auto...> typename InspectionType> struct PackInspection {
+    using type = typename Pack::template inspection_type<InspectionType>;
+    static consteval auto
+    value() {
+        return Pack::template inspection_type<InspectionType>::value();
+    }
 };
 
-template <auto value> struct SameTypeValuePack<value> : AnyTypeValuePack<value> {
-    using value_type = decltype(value);
-};
+template <ValuePack Pack> using PackSize = PackInspection<Pack, ValuesSize>;
 
-template <auto headValue, auto... tailValues>
-struct SameTypeValuePack<headValue, tailValues...> : AnyTypeValuePack<headValue, tailValues...> {
-    using value_type = decltype(headValue);
-    static_assert((std::is_same_v<value_type, decltype(tailValues)> && ...),
-                  "All values must have the same type");
-};
+template <ValuePack Pack>
+constexpr size_t
+packSize(Pack) {
+    return PackSize<Pack>::value();
+}
 
-// -----------------------------------------------------------------------------
-// SameTypeUniqueValuePack
-// -----------------------------------------------------------------------------
+template <ValuePack Pack> using PackSameType = PackInspection<Pack, ValuesSameType>;
 
-// SameTypeUniqueValuePack: like SameTypeValuePack, all values must have the
-// same type and be unique.
-template <auto... values> struct SameTypeUniqueValuePack;
+template <ValuePack Pack> using PackUnique = PackInspection<Pack, ValuesUnique>;
 
-template <> struct SameTypeUniqueValuePack<> : SameTypeValuePack<> {
-    // No value_type defined for empty pack - there's no meaningful type.
-    // Attempting to access ::value_type will produce a clear compile error.
-};
+template <typename T>
+concept NonEmptyValuePack = ValuePack<T> && PackSize<T>::value() > 0;
+template <typename T>
+concept EmptyValuePack = ValuePack<T> && PackSize<T>::value() == 0;
 
-template <auto value> struct SameTypeUniqueValuePack<value> : SameTypeValuePack<value> {
-    using value_type = decltype(value);
-};
+template <typename T>
+concept SameTypeValuePack = ValuePack<T> && PackSameType<T>::value();
+template <typename T>
+concept UniqueValuePack = ValuePack<T> && PackUnique<T>::value();
 
-template <auto headValue, auto... tailValues>
-struct SameTypeUniqueValuePack<headValue, tailValues...>
-    : SameTypeValuePack<headValue, tailValues...> {
-    using value_type = decltype(headValue);
-    static_assert(ValuesUnique<headValue, tailValues...>::value(), "All values must be unique");
-};
+template <typename T>
+concept SameTypeNonEmptyValuePack = SameTypeValuePack<T> && NonEmptyValuePack<T>;
+template <typename T>
+concept UniqueNonEmptyValuePack = UniqueValuePack<T> && NonEmptyValuePack<T>;
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
@@ -210,61 +237,70 @@ struct SameTypeUniqueValuePack<headValue, tailValues...>
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-// -----------------------------------------------------------------------------
-// PackSize
-// -----------------------------------------------------------------------------
+template <typename T> struct PackHeadValue;
 
-// Primary template delegates to the base_pack for derived pack types
-template <typename Pack> struct PackSize : PackSize<typename Pack::base_pack> {};
-
-// Specialization for AnyTypeValuePack (the actual base)
-template <auto... values> struct PackSize<AnyTypeValuePack<values...>> {
-    static consteval size_t
+template <auto... values>
+    requires NonEmptyValuePack<Values<values...>>
+struct PackHeadValue<Values<values...>> {
+    using type = typename ValuesHead<values...>::type;
+    static consteval auto
     value() {
-        return sizeof...(values);
+        return ValuesHead<values...>::value();
     }
 };
 
-template <auto... values>
-constexpr size_t
-packSize(AnyTypeValuePack<values...>) {
-    return sizeof...(values);
+template <NonEmptyValuePack Pack>
+constexpr auto
+packHeadValue(Pack) {
+    return PackHeadValue<Pack>::value();
+}
+
+template <typename T> struct PackTail;
+
+template <auto headValue, auto... tailValues>
+    requires NonEmptyValuePack<Values<headValue, tailValues...>>
+struct PackTail<Values<headValue, tailValues...>> {
+    using type = Values<tailValues...>;
+    static consteval auto
+    value() {
+        return Values<tailValues...>{};
+    }
+};
+
+template <NonEmptyValuePack Pack>
+constexpr auto
+packTail(Pack) {
+    return PackTail<Pack>::value();
 }
 
 // -----------------------------------------------------------------------------
 // PackElement
 // -----------------------------------------------------------------------------
 
-// Primary template delegates to the base_pack for derived pack types
-template <typename Pack, size_t I> struct PackElement : PackElement<typename Pack::base_pack, I> {};
+template <typename T, size_t I> struct PackElement;
 
-// Specialization for AnyTypeValuePack (the actual base)
-template <auto... values, size_t I> struct PackElement<AnyTypeValuePack<values...>, I> {
-    using type = ValuesElement_t<I, values...>;
+template <auto... values, size_t I>
+    requires NonEmptyValuePack<Values<values...>>
+struct PackElement<Values<values...>, I> {
+    using type = typename ValuesElement<I, values...>::type;
     static consteval auto
     value() {
         return ValuesElement<I, values...>::value();
     }
 };
 
-template <typename Pack, size_t I> using PackElement_t = typename PackElement<Pack, I>::type;
-
-// for same type packs, we can have a runtime version. This would never be
-// a compile-time version, we have other tools for that.
-[[noreturn]] inline void
-packElement(AnyTypeValuePack<>, size_t index) {
-    throw std::logic_error("Cannot get element from an empty pack");
-}
-
-template <auto headValue, auto... tailValues>
+// For the function to work, it needs to be same type.
+template <SameTypeValuePack Pack>
 constexpr auto
-packElement(SameTypeValuePack<headValue, tailValues...>, size_t index) -> decltype(headValue) {
-    if (index == 0) {
-        return headValue;
-    }
-    if constexpr (sizeof...(tailValues) > 0) {
-        assert(index > 0);
-        return packElement(SameTypeValuePack<tailValues...>{}, index - 1);
+packElement(Pack pack, size_t index) {
+    if constexpr (NonEmptyValuePack<Pack>) {
+        if (index == 0) {
+            return packHeadValue(pack);
+        }
+        if constexpr (NonEmptyValuePack<typename PackTail<Pack>::type>) {
+            assert(index > 0);
+            return packElement(packTail(pack), index - 1);
+        }
     }
     throw std::logic_error("Index out of bounds");
 }
@@ -273,11 +309,7 @@ packElement(SameTypeValuePack<headValue, tailValues...>, size_t index) -> declty
 // PackContains
 // -----------------------------------------------------------------------------
 
-// Primary template delegates to the base_pack for derived pack types
-template <typename Pack, auto testValue>
-struct PackContains : PackContains<typename Pack::base_pack, testValue> {};
-
-template <auto testValue> struct PackContains<AnyTypeValuePack<>, testValue> {
+template <ValuePack Pack, auto testValue> struct PackContains {
     static consteval bool
     value() {
         return false;
@@ -285,21 +317,23 @@ template <auto testValue> struct PackContains<AnyTypeValuePack<>, testValue> {
 };
 
 template <auto... values, auto testValue>
-struct PackContains<AnyTypeValuePack<values...>, testValue> {
+    requires NonEmptyValuePack<Values<values...>>
+struct PackContains<Values<values...>, testValue> {
     static consteval bool
     value() {
         return ValuesContain<testValue, values...>::value();
     }
 };
 
-inline constexpr bool
-packContains(AnyTypeValuePack<>, auto testValue) {
+template <EmptyValuePack Pack>
+constexpr auto
+packContains(Pack pack, auto testValue) {
     return false;
 }
 
 template <auto headValue, auto... tailValues>
 constexpr bool
-packContains(AnyTypeValuePack<headValue, tailValues...>, auto testValue) {
+packContains(Values<headValue, tailValues...>, auto testValue) {
     using testType = std::decay_t<decltype(testValue)>;
     using headType = decltype(headValue);
     if constexpr (std::is_same_v<testType, headType>) {
@@ -307,34 +341,31 @@ packContains(AnyTypeValuePack<headValue, tailValues...>, auto testValue) {
             return true;
         }
     }
-    return packContains(AnyTypeValuePack<tailValues...>{}, testValue);
+    return packContains(Values<tailValues...>{}, testValue);
 }
+
+template <typename Pack, auto testValue>
+concept ValuePackContains = ValuePack<Pack> && PackContains<Pack, testValue>::value();
 
 // -----------------------------------------------------------------------------
 // PackDefiniteFirstIndex
 // -----------------------------------------------------------------------------
 
-// Primary template delegates to the base_pack for derived pack types
-template <typename Pack, auto testValue>
-struct PackDefiniteFirstIndex : PackDefiniteFirstIndex<typename Pack::base_pack, testValue> {};
+template <typename Pack, auto testValue> struct PackDefiniteFirstIndex;
 
 template <auto... values, auto testValue>
-struct PackDefiniteFirstIndex<AnyTypeValuePack<values...>, testValue> {
+    requires ValuePackContains<Values<values...>, testValue>
+struct PackDefiniteFirstIndex<Values<values...>, testValue> {
     static consteval size_t
     value() {
         return ValuesDefiniteFirstIndex<testValue, values...>::value();
     }
 };
 
-// Runtime version.
-[[noreturn]] inline void
-packDefiniteFirstIndex(AnyTypeValuePack<>, auto value) {
-    throw std::logic_error("Cannot get definite first index from an empty pack");
-}
-
 template <auto headValue, auto... tailValues>
+    requires NonEmptyValuePack<Values<headValue, tailValues...>>
 constexpr size_t
-packDefiniteFirstIndex(AnyTypeValuePack<headValue, tailValues...>, auto testValue) {
+packDefiniteFirstIndex(Values<headValue, tailValues...>, auto testValue) {
     using testType = std::decay_t<decltype(testValue)>;
     using headType = decltype(headValue);
     if constexpr (std::is_same_v<testType, headType>) {
@@ -343,44 +374,31 @@ packDefiniteFirstIndex(AnyTypeValuePack<headValue, tailValues...>, auto testValu
         }
     }
     if constexpr (sizeof...(tailValues) > 0) {
-        assert(index > 0);
-        return packDefiniteFirstIndex(AnyTypeValuePack<tailValues...>{}, testValue);
+        return 1 + packDefiniteFirstIndex(Values<tailValues...>{}, testValue);
     }
-    throw std::logic_error("Index out of bounds");
+    throw std::logic_error("Value not found in pack");
 }
 
 // -----------------------------------------------------------------------------
 // PackDefiniteIndex
-// Definite index only defined for the SameTypeUniqueValuePack.
 // -----------------------------------------------------------------------------
 
 template <typename Pack, auto testValue> struct PackDefiniteIndex;
 template <auto... values, auto testValue>
-struct PackDefiniteIndex<SameTypeUniqueValuePack<values...>, testValue> {
+    requires UniqueNonEmptyValuePack<Values<values...>> &&
+             ValuePackContains<Values<values...>, testValue>
+struct PackDefiniteIndex<Values<values...>, testValue> {
     static consteval size_t
     value() {
         return ValuesDefiniteFirstIndex<testValue, values...>::value();
     }
 };
 
-[[noreturn]] inline void
-packDefiniteIndex(SameTypeUniqueValuePack<>, auto testValue) {
-    throw std::logic_error("Cannot get definite index from an empty pack");
-}
-
 template <auto headValue, auto... tailValues>
+    requires UniqueNonEmptyValuePack<Values<headValue, tailValues...>>
 constexpr size_t
-packDefiniteIndex(SameTypeUniqueValuePack<headValue, tailValues...>, auto testValue) {
-    using testType = std::decay_t<decltype(testValue)>;
-    using headType = decltype(headValue);
-    static_assert(std::is_same_v<testType, headType>, "Value type must match pack type");
-    if (testValue == headValue) {
-        return 0;
-    }
-    if constexpr (sizeof...(tailValues) > 0) {
-        return 1 + packDefiniteIndex(SameTypeUniqueValuePack<tailValues...>{}, testValue);
-    }
-    throw std::logic_error("Value not found in pack");
+packDefiniteIndex(Values<headValue, tailValues...> pack, auto testValue) {
+    return packDefiniteFirstIndex(pack, testValue);
 }
 
 // -----------------------------------------------------------------------------
@@ -389,13 +407,13 @@ packDefiniteIndex(SameTypeUniqueValuePack<headValue, tailValues...>, auto testVa
 
 // Runtime version.
 inline constexpr std::optional<size_t>
-packFirstIndex(AnyTypeValuePack<>, auto value) {
+packFirstIndex(Values<>, auto value) {
     return std::nullopt;
 }
 
 template <auto headValue, auto... tailValues>
 constexpr std::optional<size_t>
-packFirstIndex(AnyTypeValuePack<headValue, tailValues...>, auto testValue) {
+packFirstIndex(Values<headValue, tailValues...> pack, auto testValue) {
     using testType = std::decay_t<decltype(testValue)>;
     using headType = decltype(headValue);
     if constexpr (std::is_same_v<testType, headType>) {
@@ -403,58 +421,39 @@ packFirstIndex(AnyTypeValuePack<headValue, tailValues...>, auto testValue) {
             return 0;
         }
     }
-    if constexpr (sizeof...(tailValues) > 0) {
-        auto result = packFirstIndex(AnyTypeValuePack<tailValues...>{}, testValue);
-        if (result.has_value()) {
-            return result.value() + 1;
-        }
-    }
-    return std::nullopt;
+    return 1 + packFirstIndex(Values<tailValues...>{}, testValue);
 }
 
 inline constexpr std::optional<size_t>
-packIndex(SameTypeUniqueValuePack<>, auto testValue) {
+packIndex(Values<>, auto testValue) {
     return std::nullopt;
 }
 
 template <auto headValue, auto... tailValues>
+    requires UniqueNonEmptyValuePack<Values<headValue, tailValues...>>
 constexpr std::optional<size_t>
-packIndex(SameTypeUniqueValuePack<headValue, tailValues...>, auto testValue) {
-    using testType = std::decay_t<decltype(testValue)>;
-    using headType = decltype(headValue);
-    static_assert(std::is_same_v<testType, headType>, "Value type must match pack type");
-    if (testValue == headValue) {
-        return 0;
-    }
-    if constexpr (sizeof...(tailValues) > 0) {
-        auto result = packIndex(SameTypeUniqueValuePack<tailValues...>{}, testValue);
-        if (result.has_value()) {
-            return result.value() + 1;
-        }
-    }
-    return std::nullopt;
+packIndex(Values<headValue, tailValues...> pack, auto testValue) {
+    return packFirstIndex(pack, testValue);
 }
 
 // -----------------------------------------------------------------------------
 // SUBSET TRAITS
 // -----------------------------------------------------------------------------
 
-// Primary template delegates both to base_pack for derived pack types
-template <typename Pack, typename SubsetPack>
-struct PackIsSubset : PackIsSubset<typename Pack::base_pack, typename SubsetPack::base_pack> {};
+template <typename Pack, typename SubsetPack> struct PackIsSubset;
 
 // Empty subset packs are a subset of an empty value pack.
-template <> struct PackIsSubset<AnyTypeValuePack<>, AnyTypeValuePack<>> {
+template <> struct PackIsSubset<Values<>, Values<>> {
     static consteval bool
     value() {
         return true;
     }
 };
 
-// If the pack is empty, a non-empty pack is not a subset of it. The empty/empty case is handled
-// above.
+// If the pack is empty, a non-empty pack is not a subset of it.
 template <auto... SubsetValues>
-struct PackIsSubset<AnyTypeValuePack<>, AnyTypeValuePack<SubsetValues...>> {
+    requires NonEmptyValuePack<Values<SubsetValues...>>
+struct PackIsSubset<Values<>, Values<SubsetValues...>> {
     static consteval bool
     value() {
         return false;
@@ -462,16 +461,9 @@ struct PackIsSubset<AnyTypeValuePack<>, AnyTypeValuePack<SubsetValues...>> {
 };
 
 // If the subset pack is empty, it is a subset of any pack.
-template <auto... Values> struct PackIsSubset<AnyTypeValuePack<Values...>, AnyTypeValuePack<>> {
-    static consteval bool
-    value() {
-        return true;
-    }
-};
-
-// Pack is a subset of itself.
-template <auto... Values>
-struct PackIsSubset<AnyTypeValuePack<Values...>, AnyTypeValuePack<Values...>> {
+template <auto... Vs>
+    requires NonEmptyValuePack<Values<Vs...>>
+struct PackIsSubset<Values<Vs...>, Values<>> {
     static consteval bool
     value() {
         return true;
@@ -479,42 +471,89 @@ struct PackIsSubset<AnyTypeValuePack<Values...>, AnyTypeValuePack<Values...>> {
 };
 
 // Subset values don't need to be in the same order.
-template <auto... Values, auto... SubsetValues>
-struct PackIsSubset<AnyTypeValuePack<Values...>, AnyTypeValuePack<SubsetValues...>> {
+template <auto... Vs, auto... SubsetValues>
+    requires NonEmptyValuePack<Values<Vs...>> && NonEmptyValuePack<Values<SubsetValues...>>
+struct PackIsSubset<Values<Vs...>, Values<SubsetValues...>> {
     static consteval bool
     value() {
-        using PrimaryPack = AnyTypeValuePack<Values...>;
+        using PrimaryPack = Values<Vs...>;
         return (PackContains<PrimaryPack, SubsetValues>::value() && ... && true);
     }
 };
 
 inline constexpr bool
-packIsSubset(AnyTypeValuePack<>, AnyTypeValuePack<>) {
+packIsSubset(Values<>, Values<>) {
     return true;
 }
 
-template <auto... Values>
+template <auto... Vs>
+    requires NonEmptyValuePack<Values<Vs...>>
 constexpr bool
-packIsSubset(AnyTypeValuePack<Values...>, AnyTypeValuePack<>) {
+packIsSubset(Values<Vs...>, Values<>) {
     return true;
 }
 
 template <auto... SubsetValues>
+    requires NonEmptyValuePack<Values<SubsetValues...>>
 constexpr bool
-packIsSubset(AnyTypeValuePack<>, AnyTypeValuePack<SubsetValues...>) {
+packIsSubset(Values<>, Values<SubsetValues...>) {
     return false;
 }
 
-template <auto... Values>
+template <auto... Vs, auto... SubsetValues>
+    requires NonEmptyValuePack<Values<Vs...>> && NonEmptyValuePack<Values<SubsetValues...>>
 constexpr bool
-packIsSubset(AnyTypeValuePack<Values...>, AnyTypeValuePack<Values...>) {
-    return true;
+packIsSubset(Values<Vs...> pack, Values<SubsetValues...>) {
+    return (packContains(pack, SubsetValues) && ... && true);
 }
 
-template <auto... Values, auto... SubsetValues>
-constexpr bool
-packIsSubset(AnyTypeValuePack<Values...> pack, AnyTypeValuePack<SubsetValues...>) {
-    return (packContains(pack, SubsetValues) && ... && true);
+// -----------------------------------------------------------------------------
+// Pack Prepend
+// -----------------------------------------------------------------------------
+
+template <typename Pack, auto headValue> struct PackPrepend;
+
+template <auto headValue> struct PackPrepend<Values<>, headValue> {
+    using type = Values<headValue>;
+};
+
+template <auto... Vs, auto headValue>
+    requires NonEmptyValuePack<Values<Vs...>>
+struct PackPrepend<Values<Vs...>, headValue> {
+    using type = Values<headValue, Vs...>;
+};
+
+template <typename Pack, auto headValue>
+using PackPrepend_t = typename PackPrepend<Pack, headValue>::type;
+
+template <auto headValue, auto... Vs>
+constexpr auto
+packPrepend(Values<Vs...>) {
+    return Values<headValue, Vs...>{};
+}
+
+// -----------------------------------------------------------------------------
+// Index Sequence Prepend
+// -----------------------------------------------------------------------------
+
+template <typename Seq, size_t headIndex> struct IndexSequencePrepend;
+
+template <size_t headIndex> struct IndexSequencePrepend<std::index_sequence<>, headIndex> {
+    using type = std::index_sequence<headIndex>;
+};
+
+template <size_t... Indices, size_t headIndex>
+struct IndexSequencePrepend<std::index_sequence<Indices...>, headIndex> {
+    using type = std::index_sequence<headIndex, Indices...>;
+};
+
+template <typename Seq, size_t headIndex>
+using IndexSequencePrepend_t = typename IndexSequencePrepend<Seq, headIndex>::type;
+
+template <size_t headIndex, size_t... Indices>
+constexpr auto
+indexSequencePrepend(std::index_sequence<Indices...>) {
+    return std::index_sequence<headIndex, Indices...>{};
 }
 
 } // namespace dispatch

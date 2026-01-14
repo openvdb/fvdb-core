@@ -352,5 +352,87 @@ TEST(PackIsSubset, RuntimeFunction) {
     EXPECT_FALSE(packIsSubset(Full{}, NotSubset{}));
 }
 
+// =============================================================================
+// PackPrepend Tests
+// =============================================================================
+
+TEST(PackPrepend, PrependsToAnyTypeValuePack) {
+    using Original  = AnyTypeValuePack<20, 30>;
+    using Prepended = PackPrepend_t<Original, 10>;
+
+    static_assert(std::is_same_v<Prepended, AnyTypeValuePack<10, 20, 30>>);
+    EXPECT_EQ(PackSize<Prepended>::value(), 3u);
+    EXPECT_EQ((PackElement<Prepended, 0>::value()), 10);
+}
+
+TEST(PackPrepend, PrependsToSameTypeValuePack) {
+    using Original  = SameTypeValuePack<20, 30>;
+    using Prepended = PackPrepend_t<Original, 10>;
+
+    static_assert(std::is_same_v<Prepended, SameTypeValuePack<10, 20, 30>>);
+    static_assert(std::is_same_v<Prepended::value_type, int>);
+}
+
+TEST(PackPrepend, PrependsToSameTypeUniqueValuePack) {
+    using Original  = SameTypeUniqueValuePack<20, 30>;
+    using Prepended = PackPrepend_t<Original, 10>;
+
+    static_assert(std::is_same_v<Prepended, SameTypeUniqueValuePack<10, 20, 30>>);
+    static_assert(std::is_same_v<Prepended::value_type, int>);
+}
+
+TEST(PackPrepend, WorksWithMixedTypes) {
+    using Original  = AnyTypeValuePack<'x', true>;
+    using Prepended = PackPrepend_t<Original, 42>;
+
+    static_assert(std::is_same_v<Prepended, AnyTypeValuePack<42, 'x', true>>);
+}
+
+TEST(PackPrepend, PrependsToEmptyPacks) {
+    static_assert(std::is_same_v<PackPrepend_t<AnyTypeValuePack<>, 10>, AnyTypeValuePack<10>>);
+    static_assert(std::is_same_v<PackPrepend_t<SameTypeValuePack<>, 10>, SameTypeValuePack<10>>);
+    static_assert(
+        std::is_same_v<PackPrepend_t<SameTypeUniqueValuePack<>, 10>, SameTypeUniqueValuePack<10>>);
+}
+
+TEST(PackPrepend, RuntimePackPrependFunction) {
+    auto result1 = packPrepend<10>(SameTypeValuePack<20, 30>{});
+    static_assert(std::is_same_v<decltype(result1), SameTypeValuePack<10, 20, 30>>);
+
+    auto result2 = packPrepend<10>(SameTypeUniqueValuePack<20, 30>{});
+    static_assert(std::is_same_v<decltype(result2), SameTypeUniqueValuePack<10, 20, 30>>);
+
+    auto result3 = packPrepend<42>(AnyTypeValuePack<'x', true>{});
+    static_assert(std::is_same_v<decltype(result3), AnyTypeValuePack<42, 'x', true>>);
+
+    // Prepend to empty
+    auto result4 = packPrepend<10>(SameTypeValuePack<>{});
+    static_assert(std::is_same_v<decltype(result4), SameTypeValuePack<10>>);
+}
+
+// =============================================================================
+// IndexSequencePrepend Tests
+// =============================================================================
+
+TEST(IndexSequencePrepend, PrependsToIndexSequence) {
+    using Original  = std::index_sequence<1, 2, 3>;
+    using Prepended = IndexSequencePrepend_t<Original, 0>;
+
+    static_assert(std::is_same_v<Prepended, std::index_sequence<0, 1, 2, 3>>);
+}
+
+TEST(IndexSequencePrepend, PrependsToEmptySequence) {
+    static_assert(
+        std::is_same_v<IndexSequencePrepend_t<std::index_sequence<>, 42>, std::index_sequence<42>>);
+}
+
+TEST(IndexSequencePrepend, RuntimeFunction) {
+    auto result1 = indexSequencePrepend<0>(std::index_sequence<1, 2, 3>{});
+    static_assert(std::is_same_v<decltype(result1), std::index_sequence<0, 1, 2, 3>>);
+
+    auto result2 = indexSequencePrepend<42>(std::index_sequence<>{});
+    static_assert(std::is_same_v<decltype(result2), std::index_sequence<42>>);
+}
+
 } // namespace dispatch
 } // namespace fvdb
