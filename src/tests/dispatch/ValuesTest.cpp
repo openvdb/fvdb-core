@@ -131,5 +131,226 @@ TEST(AnyTypeValuePack, EmptyPackHasSizeZero) {
     EXPECT_EQ(packSize(EmptyPack{}), 0u);
 }
 
+// =============================================================================
+// SameTypeValuePack Tests
+// =============================================================================
+
+TEST(SameTypeValuePack, EnforcesUniformTypeAndProvidesValueType) {
+    using IntPack  = SameTypeValuePack<10, 20, 30>;
+    using CharPack = SameTypeValuePack<'a', 'b', 'c'>;
+
+    static_assert(std::is_same_v<IntPack::value_type, int>);
+    static_assert(std::is_same_v<CharPack::value_type, char>);
+
+    EXPECT_EQ(PackSize<IntPack>::value(), 3u);
+}
+
+TEST(SameTypeValuePack, AllowsDuplicateValues) {
+    using Pack = SameTypeValuePack<10, 10, 20, 10>;
+    EXPECT_EQ(PackSize<Pack>::value(), 4u);
+}
+
+TEST(SameTypeValuePack, InheritsFromAnyTypeValuePack) {
+    static_assert(std::is_base_of_v<AnyTypeValuePack<1, 2, 3>, SameTypeValuePack<1, 2, 3>>);
+}
+
+// =============================================================================
+// SameTypeUniqueValuePack Tests
+// =============================================================================
+
+TEST(SameTypeUniqueValuePack, EnforcesUniformTypeAndUniqueness) {
+    using Pack = SameTypeUniqueValuePack<10, 20, 30>;
+
+    static_assert(std::is_same_v<Pack::value_type, int>);
+    EXPECT_EQ(PackSize<Pack>::value(), 3u);
+}
+
+TEST(SameTypeUniqueValuePack, InheritsFromSameTypeValuePack) {
+    static_assert(std::is_base_of_v<SameTypeValuePack<1, 2, 3>, SameTypeUniqueValuePack<1, 2, 3>>);
+    static_assert(std::is_base_of_v<AnyTypeValuePack<1, 2, 3>, SameTypeUniqueValuePack<1, 2, 3>>);
+}
+
+// =============================================================================
+// PackElement Tests
+// =============================================================================
+
+TEST(PackElement, ReturnsValueAndTypeAtIndex) {
+    using Pack = AnyTypeValuePack<10, 'x', true>;
+
+    EXPECT_EQ((PackElement<Pack, 0>::value()), 10);
+    EXPECT_EQ((PackElement<Pack, 1>::value()), 'x');
+    EXPECT_EQ((PackElement<Pack, 2>::value()), true);
+
+    static_assert(std::is_same_v<PackElement_t<Pack, 0>, int>);
+    static_assert(std::is_same_v<PackElement_t<Pack, 1>, char>);
+    static_assert(std::is_same_v<PackElement_t<Pack, 2>, bool>);
+}
+
+TEST(PackElement, WorksWithDerivedPackTypes) {
+    using Pack = SameTypeValuePack<10, 20, 30>;
+
+    EXPECT_EQ((PackElement<Pack, 0>::value()), 10);
+    EXPECT_EQ((PackElement<Pack, 2>::value()), 30);
+}
+
+TEST(PackElement, RuntimePackElementFunction) {
+    using Pack = SameTypeValuePack<10, 20, 30>;
+
+    EXPECT_EQ(packElement(Pack{}, 0), 10);
+    EXPECT_EQ(packElement(Pack{}, 1), 20);
+    EXPECT_EQ(packElement(Pack{}, 2), 30);
+}
+
+// =============================================================================
+// PackContains Tests
+// =============================================================================
+
+TEST(PackContains, CompileTimeContainsCheck) {
+    using Pack = AnyTypeValuePack<10, 20, 30>;
+
+    EXPECT_TRUE((PackContains<Pack, 10>::value()));
+    EXPECT_TRUE((PackContains<Pack, 20>::value()));
+    EXPECT_TRUE((PackContains<Pack, 30>::value()));
+    EXPECT_FALSE((PackContains<Pack, 99>::value()));
+}
+
+TEST(PackContains, WorksWithDerivedPackTypes) {
+    using Pack = SameTypeUniqueValuePack<10, 20, 30>;
+
+    EXPECT_TRUE((PackContains<Pack, 20>::value()));
+    EXPECT_FALSE((PackContains<Pack, 99>::value()));
+}
+
+TEST(PackContains, RuntimePackContainsFunction) {
+    using Pack = AnyTypeValuePack<10, 20, 30>;
+
+    EXPECT_TRUE(packContains(Pack{}, 10));
+    EXPECT_TRUE(packContains(Pack{}, 30));
+    EXPECT_FALSE(packContains(Pack{}, 99));
+}
+
+TEST(PackContains, DistinguishesByType) {
+    using Pack = AnyTypeValuePack<'A', 'B', 'C'>;
+
+    EXPECT_TRUE((PackContains<Pack, 'A'>::value()));
+    EXPECT_FALSE((PackContains<Pack, 65>::value())); // 65 == 'A' but different type
+}
+
+// =============================================================================
+// PackDefiniteFirstIndex Tests
+// =============================================================================
+
+TEST(PackDefiniteFirstIndex, CompileTimeIndexLookup) {
+    using Pack = AnyTypeValuePack<10, 20, 30>;
+
+    EXPECT_EQ((PackDefiniteFirstIndex<Pack, 10>::value()), 0u);
+    EXPECT_EQ((PackDefiniteFirstIndex<Pack, 20>::value()), 1u);
+    EXPECT_EQ((PackDefiniteFirstIndex<Pack, 30>::value()), 2u);
+}
+
+TEST(PackDefiniteFirstIndex, ReturnsFirstIndexForDuplicates) {
+    using Pack = AnyTypeValuePack<10, 20, 10, 30>;
+
+    EXPECT_EQ((PackDefiniteFirstIndex<Pack, 10>::value()), 0u);
+}
+
+TEST(PackDefiniteFirstIndex, WorksWithDerivedPackTypes) {
+    using Pack = SameTypeValuePack<10, 20, 30>;
+
+    EXPECT_EQ((PackDefiniteFirstIndex<Pack, 20>::value()), 1u);
+}
+
+// =============================================================================
+// PackDefiniteIndex Tests (SameTypeUniqueValuePack only)
+// =============================================================================
+
+TEST(PackDefiniteIndex, CompileTimeIndexLookup) {
+    using Pack = SameTypeUniqueValuePack<10, 20, 30>;
+
+    EXPECT_EQ((PackDefiniteIndex<Pack, 10>::value()), 0u);
+    EXPECT_EQ((PackDefiniteIndex<Pack, 20>::value()), 1u);
+    EXPECT_EQ((PackDefiniteIndex<Pack, 30>::value()), 2u);
+}
+
+TEST(PackDefiniteIndex, RuntimeIndexLookup) {
+    using Pack = SameTypeUniqueValuePack<10, 20, 30>;
+
+    EXPECT_EQ(packDefiniteIndex(Pack{}, 10), 0u);
+    EXPECT_EQ(packDefiniteIndex(Pack{}, 20), 1u);
+    EXPECT_EQ(packDefiniteIndex(Pack{}, 30), 2u);
+}
+
+// =============================================================================
+// packFirstIndex / packIndex Tests (optional return)
+// =============================================================================
+
+TEST(PackFirstIndex, ReturnsOptionalIndex) {
+    using Pack = AnyTypeValuePack<10, 20, 30>;
+
+    EXPECT_EQ(packFirstIndex(Pack{}, 10), std::optional<size_t>{0});
+    EXPECT_EQ(packFirstIndex(Pack{}, 20), std::optional<size_t>{1});
+    EXPECT_EQ(packFirstIndex(Pack{}, 99), std::nullopt);
+}
+
+TEST(PackFirstIndex, ReturnsFirstForDuplicates) {
+    using Pack = AnyTypeValuePack<10, 20, 10, 30>;
+
+    EXPECT_EQ(packFirstIndex(Pack{}, 10), std::optional<size_t>{0});
+}
+
+TEST(PackIndex, ReturnsOptionalIndexForUniquePack) {
+    using Pack = SameTypeUniqueValuePack<10, 20, 30>;
+
+    EXPECT_EQ(packIndex(Pack{}, 10), std::optional<size_t>{0});
+    EXPECT_EQ(packIndex(Pack{}, 20), std::optional<size_t>{1});
+    EXPECT_EQ(packIndex(Pack{}, 99), std::nullopt);
+}
+
+// =============================================================================
+// PackIsSubset Tests
+// =============================================================================
+
+TEST(PackIsSubset, EmptyPackCases) {
+    using Empty    = AnyTypeValuePack<>;
+    using NonEmpty = AnyTypeValuePack<1, 2, 3>;
+
+    EXPECT_TRUE((PackIsSubset<Empty, Empty>::value()));
+    EXPECT_TRUE((PackIsSubset<NonEmpty, Empty>::value()));  // Empty is subset of anything
+    EXPECT_FALSE((PackIsSubset<Empty, NonEmpty>::value())); // Non-empty not subset of empty
+}
+
+TEST(PackIsSubset, SubsetChecks) {
+    using Full      = AnyTypeValuePack<1, 2, 3, 4, 5>;
+    using Subset    = AnyTypeValuePack<2, 4>;
+    using NotSubset = AnyTypeValuePack<2, 99>;
+
+    EXPECT_TRUE((PackIsSubset<Full, Full>::value()));       // Pack is subset of itself
+    EXPECT_TRUE((PackIsSubset<Full, Subset>::value()));     // Proper subset
+    EXPECT_FALSE((PackIsSubset<Full, NotSubset>::value())); // 99 not in Full
+}
+
+TEST(PackIsSubset, OrderDoesNotMatter) {
+    using Pack     = AnyTypeValuePack<1, 2, 3>;
+    using Reversed = AnyTypeValuePack<3, 2, 1>;
+
+    EXPECT_TRUE((PackIsSubset<Pack, Reversed>::value()));
+}
+
+TEST(PackIsSubset, WorksWithDerivedPackTypes) {
+    using Full   = SameTypeValuePack<1, 2, 3, 4, 5>;
+    using Subset = SameTypeUniqueValuePack<2, 4>;
+
+    EXPECT_TRUE((PackIsSubset<Full, Subset>::value()));
+}
+
+TEST(PackIsSubset, RuntimeFunction) {
+    using Full      = AnyTypeValuePack<1, 2, 3, 4, 5>;
+    using Subset    = AnyTypeValuePack<2, 4>;
+    using NotSubset = AnyTypeValuePack<2, 99>;
+
+    EXPECT_TRUE(packIsSubset(Full{}, Subset{}));
+    EXPECT_FALSE(packIsSubset(Full{}, NotSubset{}));
+}
+
 } // namespace dispatch
 } // namespace fvdb

@@ -152,7 +152,9 @@ template <auto headValue, auto... tailValues> struct ValuesUnique<headValue, tai
 // -----------------------------------------------------------------------------
 // AnyTypeValuePack
 // -----------------------------------------------------------------------------
-template <auto... values> struct AnyTypeValuePack {};
+template <auto... values> struct AnyTypeValuePack {
+    using base_pack = AnyTypeValuePack<values...>;
+};
 
 // -----------------------------------------------------------------------------
 // SameTypeValuePack
@@ -212,7 +214,10 @@ struct SameTypeUniqueValuePack<headValue, tailValues...>
 // PackSize
 // -----------------------------------------------------------------------------
 
-template <typename Pack> struct PackSize;
+// Primary template delegates to the base_pack for derived pack types
+template <typename Pack> struct PackSize : PackSize<typename Pack::base_pack> {};
+
+// Specialization for AnyTypeValuePack (the actual base)
 template <auto... values> struct PackSize<AnyTypeValuePack<values...>> {
     static consteval size_t
     value() {
@@ -230,7 +235,10 @@ packSize(AnyTypeValuePack<values...>) {
 // PackElement
 // -----------------------------------------------------------------------------
 
-template <typename Pack, size_t I> struct PackElement;
+// Primary template delegates to the base_pack for derived pack types
+template <typename Pack, size_t I> struct PackElement : PackElement<typename Pack::base_pack, I> {};
+
+// Specialization for AnyTypeValuePack (the actual base)
 template <auto... values, size_t I> struct PackElement<AnyTypeValuePack<values...>, I> {
     using type = ValuesElement_t<I, values...>;
     static consteval auto
@@ -265,7 +273,9 @@ packElement(SameTypeValuePack<headValue, tailValues...>, size_t index) -> declty
 // PackContains
 // -----------------------------------------------------------------------------
 
-template <typename Pack, auto testValue> struct PackContains;
+// Primary template delegates to the base_pack for derived pack types
+template <typename Pack, auto testValue>
+struct PackContains : PackContains<typename Pack::base_pack, testValue> {};
 
 template <auto testValue> struct PackContains<AnyTypeValuePack<>, testValue> {
     static consteval bool
@@ -304,7 +314,10 @@ packContains(AnyTypeValuePack<headValue, tailValues...>, auto testValue) {
 // PackDefiniteFirstIndex
 // -----------------------------------------------------------------------------
 
-template <typename Pack, auto testValue> struct PackDefiniteFirstIndex;
+// Primary template delegates to the base_pack for derived pack types
+template <typename Pack, auto testValue>
+struct PackDefiniteFirstIndex : PackDefiniteFirstIndex<typename Pack::base_pack, testValue> {};
+
 template <auto... values, auto testValue>
 struct PackDefiniteFirstIndex<AnyTypeValuePack<values...>, testValue> {
     static consteval size_t
@@ -426,7 +439,9 @@ packIndex(SameTypeUniqueValuePack<headValue, tailValues...>, auto testValue) {
 // SUBSET TRAITS
 // -----------------------------------------------------------------------------
 
-template <typename Pack, typename SubsetPack> struct PackIsSubset;
+// Primary template delegates both to base_pack for derived pack types
+template <typename Pack, typename SubsetPack>
+struct PackIsSubset : PackIsSubset<typename Pack::base_pack, typename SubsetPack::base_pack> {};
 
 // Empty subset packs are a subset of an empty value pack.
 template <> struct PackIsSubset<AnyTypeValuePack<>, AnyTypeValuePack<>> {
