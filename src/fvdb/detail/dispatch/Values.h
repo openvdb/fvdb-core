@@ -22,6 +22,12 @@ template <auto... values> struct ValuesSize {
     }
 };
 
+template <auto... values>
+consteval size_t
+ValuesSize_v() {
+    return ValuesSize<values...>::value();
+}
+
 // -----------------------------------------------------------------------------
 // ValuesElement
 // -----------------------------------------------------------------------------
@@ -54,6 +60,12 @@ struct ValuesElement<I, HeadValue, TailValues...> {
 template <size_t I, auto... values>
 using ValuesElement_t = typename ValuesElement<I, values...>::type;
 
+template <size_t I, auto... values>
+consteval auto
+ValuesElement_v() {
+    return ValuesElement<I, values...>::value();
+}
+
 // -----------------------------------------------------------------------------
 // ValuesContain
 // -----------------------------------------------------------------------------
@@ -76,6 +88,12 @@ struct ValuesContain<testValue, headValue, tailValues...> {
         return ValuesContain<testValue, tailValues...>::value();
     }
 };
+
+template <auto testValue, auto... values>
+consteval bool
+ValuesContain_v() {
+    return ValuesContain<testValue, values...>::value();
+}
 
 // -----------------------------------------------------------------------------
 // ValuesDefiniteFirstIndex - for when we know that testValue is in the pack,
@@ -108,6 +126,12 @@ struct ValuesDefiniteFirstIndex<testValue, headValue, tailValues...> {
     }
 };
 
+template <auto testValue, auto... values>
+consteval size_t
+ValuesDefiniteFirstIndex_v() {
+    return ValuesDefiniteFirstIndex<testValue, values...>::value();
+}
+
 // -----------------------------------------------------------------------------
 // Values Head
 // -----------------------------------------------------------------------------
@@ -120,6 +144,14 @@ template <auto headValue, auto... tailValues> struct ValuesHead<headValue, tailV
         return headValue;
     }
 };
+
+template <auto... values> using ValuesHead_t = typename ValuesHead<values...>::type;
+
+template <auto... values>
+consteval auto
+ValuesHead_v() {
+    return ValuesHead<values...>::value();
+}
 
 // -----------------------------------------------------------------------------
 // Values Same Type
@@ -146,6 +178,12 @@ template <auto headValue, auto... tailValues> struct ValuesSameType<headValue, t
     }
 };
 
+template <auto... values>
+consteval bool
+ValuesSameType_v() {
+    return ValuesSameType<values...>::value();
+}
+
 // -----------------------------------------------------------------------------
 // Values Unique
 // -----------------------------------------------------------------------------
@@ -162,6 +200,12 @@ template <auto A, auto B> struct ValuesDiffer {
         }
     }
 };
+
+template <auto A, auto B>
+consteval bool
+ValuesDiffer_v() {
+    return ValuesDiffer<A, B>::value();
+}
 
 template <auto... Values> struct ValuesUnique;
 
@@ -183,10 +227,16 @@ template <auto headValue, auto... tailValues> struct ValuesUnique<headValue, tai
     static consteval bool
     value() {
         // Unique if head differs from all tail values, and tail is itself unique
-        return (ValuesDiffer<headValue, tailValues>::value() && ...) &&
+        return (ValuesDiffer_v<headValue, tailValues>() && ...) &&
                ValuesUnique<tailValues...>::value();
     }
 };
+
+template <auto... values>
+consteval bool
+ValuesUnique_v() {
+    return ValuesUnique<values...>::value();
+}
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
@@ -220,24 +270,42 @@ template <ValuePack Pack, template <auto...> typename InspectionType> struct Pac
 template <ValuePack Pack> using PackSize = PackInspection<Pack, ValuesSize>;
 
 template <ValuePack Pack>
+consteval size_t
+PackSize_v() {
+    return PackSize<Pack>::value();
+}
+
+template <ValuePack Pack>
 constexpr size_t
 packSize(Pack) {
-    return PackSize<Pack>::value();
+    return PackSize_v<Pack>();
 }
 
 template <ValuePack Pack> using PackSameType = PackInspection<Pack, ValuesSameType>;
 
+template <ValuePack Pack>
+consteval bool
+PackSameType_v() {
+    return PackSameType<Pack>::value();
+}
+
 template <ValuePack Pack> using PackUnique = PackInspection<Pack, ValuesUnique>;
 
-template <typename T>
-concept NonEmptyValuePack = ValuePack<T> && PackSize<T>::value() > 0;
-template <typename T>
-concept EmptyValuePack = ValuePack<T> && PackSize<T>::value() == 0;
+template <ValuePack Pack>
+consteval bool
+PackUnique_v() {
+    return PackUnique<Pack>::value();
+}
 
 template <typename T>
-concept SameTypeValuePack = ValuePack<T> && PackSameType<T>::value();
+concept NonEmptyValuePack = ValuePack<T> && PackSize_v<T>() > 0;
 template <typename T>
-concept UniqueValuePack = ValuePack<T> && PackUnique<T>::value();
+concept EmptyValuePack = ValuePack<T> && PackSize_v<T>() == 0;
+
+template <typename T>
+concept SameTypeValuePack = ValuePack<T> && PackSameType_v<T>();
+template <typename T>
+concept UniqueValuePack = ValuePack<T> && PackUnique_v<T>();
 
 template <typename T>
 concept SameTypeNonEmptyValuePack = SameTypeValuePack<T> && NonEmptyValuePack<T>;
@@ -245,25 +313,50 @@ template <typename T>
 concept UniqueNonEmptyValuePack = UniqueValuePack<T> && NonEmptyValuePack<T>;
 
 // =============================================================================
-// Concept Test Helpers
+// Concept Test Helpers (consteval functions to avoid nvcc instantiation issues)
 // =============================================================================
 
-// Helper to test if a type satisfies a concept at compile time
-template <typename T> inline constexpr bool is_value_pack = ValuePack<T>;
-
-template <typename T> inline constexpr bool is_non_empty_value_pack = NonEmptyValuePack<T>;
-
-template <typename T> inline constexpr bool is_empty_value_pack = EmptyValuePack<T>;
-
-template <typename T> inline constexpr bool is_same_type_value_pack = SameTypeValuePack<T>;
-
-template <typename T> inline constexpr bool is_unique_value_pack = UniqueValuePack<T>;
+template <typename T>
+consteval bool
+is_value_pack() {
+    return ValuePack<T>;
+}
 
 template <typename T>
-inline constexpr bool is_same_type_non_empty_value_pack = SameTypeNonEmptyValuePack<T>;
+consteval bool
+is_non_empty_value_pack() {
+    return NonEmptyValuePack<T>;
+}
 
 template <typename T>
-inline constexpr bool is_unique_non_empty_value_pack = UniqueNonEmptyValuePack<T>;
+consteval bool
+is_empty_value_pack() {
+    return EmptyValuePack<T>;
+}
+
+template <typename T>
+consteval bool
+is_same_type_value_pack() {
+    return SameTypeValuePack<T>;
+}
+
+template <typename T>
+consteval bool
+is_unique_value_pack() {
+    return UniqueValuePack<T>;
+}
+
+template <typename T>
+consteval bool
+is_same_type_non_empty_value_pack() {
+    return SameTypeNonEmptyValuePack<T>;
+}
+
+template <typename T>
+consteval bool
+is_unique_non_empty_value_pack() {
+    return UniqueNonEmptyValuePack<T>;
+}
 
 // Note: value_pack_contains is defined after ValuePackContains concept below
 
@@ -285,10 +378,18 @@ struct PackHeadValue<Values<values...>> {
     }
 };
 
+template <NonEmptyValuePack Pack> using PackHeadValue_t = typename PackHeadValue<Pack>::type;
+
+template <NonEmptyValuePack Pack>
+consteval auto
+PackHeadValue_v() {
+    return PackHeadValue<Pack>::value();
+}
+
 template <NonEmptyValuePack Pack>
 constexpr auto
 packHeadValue(Pack) {
-    return PackHeadValue<Pack>::value();
+    return PackHeadValue_v<Pack>();
 }
 
 template <typename T> struct PackTail;
@@ -309,12 +410,17 @@ packTail(Pack) {
     return PackTail<Pack>::value();
 }
 
+template <NonEmptyValuePack Pack> using PackTail_t = typename PackTail<Pack>::type;
+
 // -----------------------------------------------------------------------------
 // For value packs which have the same type, return the type.
 // -----------------------------------------------------------------------------
 template <SameTypeNonEmptyValuePack Pack> struct PackValueType {
     using type = typename PackHeadValue<Pack>::type;
 };
+
+template <SameTypeNonEmptyValuePack Pack>
+using PackValueType_t = typename PackValueType<Pack>::type;
 
 // -----------------------------------------------------------------------------
 // index_sequence overload
@@ -338,6 +444,15 @@ struct PackElement<Values<values...>, I> {
         return ValuesElement<I, values...>::value();
     }
 };
+
+template <NonEmptyValuePack Pack, size_t I>
+using PackElement_t = typename PackElement<Pack, I>::type;
+
+template <NonEmptyValuePack Pack, size_t I>
+consteval auto
+PackElement_v() {
+    return PackElement<Pack, I>::value();
+}
 
 // For the function to work, it needs to be same type.
 template <SameTypeValuePack Pack>
@@ -371,9 +486,15 @@ template <auto... values, auto testValue>
 struct PackContains<Values<values...>, testValue> {
     static consteval bool
     value() {
-        return ValuesContain<testValue, values...>::value();
+        return ValuesContain_v<testValue, values...>();
     }
 };
+
+template <ValuePack Pack, auto testValue>
+consteval bool
+PackContains_v() {
+    return PackContains<Pack, testValue>::value();
+}
 
 inline constexpr auto
 packContains(Values<>, auto testValue) {
@@ -394,10 +515,13 @@ packContains(Values<headValue, tailValues...>, auto testValue) {
 }
 
 template <typename Pack, auto testValue>
-concept ValuePackContains = ValuePack<Pack> && PackContains<Pack, testValue>::value();
+concept ValuePackContains = ValuePack<Pack> && PackContains_v<Pack, testValue>();
 
 template <typename Pack, auto testValue>
-inline constexpr bool value_pack_contains = ValuePackContains<Pack, testValue>;
+consteval bool
+value_pack_contains() {
+    return ValuePackContains<Pack, testValue>;
+}
 
 // -----------------------------------------------------------------------------
 // PackDefiniteFirstIndex
@@ -410,9 +534,16 @@ template <auto... values, auto testValue>
 struct PackDefiniteFirstIndex<Values<values...>, testValue> {
     static consteval size_t
     value() {
-        return ValuesDefiniteFirstIndex<testValue, values...>::value();
+        return ValuesDefiniteFirstIndex_v<testValue, values...>();
     }
 };
+
+template <typename Pack, auto testValue>
+    requires ValuePackContains<Pack, testValue>
+consteval size_t
+PackDefiniteFirstIndex_v() {
+    return PackDefiniteFirstIndex<Pack, testValue>::value();
+}
 
 template <auto headValue, auto... tailValues>
     requires NonEmptyValuePack<Values<headValue, tailValues...>>
@@ -442,9 +573,16 @@ template <auto... values, auto testValue>
 struct PackDefiniteIndex<Values<values...>, testValue> {
     static consteval size_t
     value() {
-        return ValuesDefiniteFirstIndex<testValue, values...>::value();
+        return ValuesDefiniteFirstIndex_v<testValue, values...>();
     }
 };
+
+template <typename Pack, auto testValue>
+    requires UniqueNonEmptyValuePack<Pack> && ValuePackContains<Pack, testValue>
+consteval size_t
+PackDefiniteIndex_v() {
+    return PackDefiniteIndex<Pack, testValue>::value();
+}
 
 template <auto headValue, auto... tailValues>
     requires UniqueNonEmptyValuePack<Values<headValue, tailValues...>>
@@ -533,9 +671,15 @@ struct PackIsSubset<Values<Vs...>, Values<SubsetValues...>> {
     static consteval bool
     value() {
         using PrimaryPack = Values<Vs...>;
-        return (PackContains<PrimaryPack, SubsetValues>::value() && ... && true);
+        return (PackContains_v<PrimaryPack, SubsetValues>() && ... && true);
     }
 };
+
+template <typename Pack, typename SubsetPack>
+consteval bool
+PackIsSubset_v() {
+    return PackIsSubset<Pack, SubsetPack>::value();
+}
 
 inline constexpr bool
 packIsSubset(Values<>, Values<>) {
