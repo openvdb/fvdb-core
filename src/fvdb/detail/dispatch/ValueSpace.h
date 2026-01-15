@@ -162,19 +162,22 @@ template <typename Space, typename Coord> struct coord_types_match {
     }
 };
 
-template <> struct coord_types_match<ValueAxes<>, Values<>> {
+// Base case: single axis, single value
+template <ValueAxis Axis0, auto V0>
+struct coord_types_match<ValueAxes<Axis0>, Values<V0>> {
     static consteval bool
     value() {
-        return true;
+        return std::is_same_v<AxisValueType_t<Axis0>, decltype(V0)>;
     }
 };
 
-template <ValueAxis Axis0, ValueAxis... TailAxes, auto V0, auto... TailVs>
-struct coord_types_match<ValueAxes<Axis0, TailAxes...>, Values<V0, TailVs...>> {
+// Recursive case: multiple axes
+template <ValueAxis Axis0, ValueAxis Axis1, ValueAxis... TailAxes, auto V0, auto V1, auto... TailVs>
+struct coord_types_match<ValueAxes<Axis0, Axis1, TailAxes...>, Values<V0, V1, TailVs...>> {
     static consteval bool
     value() {
         return std::is_same_v<AxisValueType_t<Axis0>, decltype(V0)> &&
-               coord_types_match<ValueAxes<TailAxes...>, Values<TailVs...>>::value();
+               coord_types_match<ValueAxes<Axis1, TailAxes...>, Values<V1, TailVs...>>::value();
     }
 };
 
@@ -200,19 +203,22 @@ template <typename Space, typename Coord> struct space_contains {
     }
 };
 
-template <> struct space_contains<ValueAxes<>, Values<>> {
+// Base case: single axis, single value
+template <ValueAxis Axis0, auto V0>
+struct space_contains<ValueAxes<Axis0>, Values<V0>> {
     static consteval bool
     value() {
-        return true;
+        return AxisContains_v<Axis0, V0>();
     }
 };
 
-template <ValueAxis Axis0, ValueAxis... TailAxes, auto V0, auto... TailVs>
-struct space_contains<ValueAxes<Axis0, TailAxes...>, Values<V0, TailVs...>> {
+// Recursive case: multiple axes
+template <ValueAxis Axis0, ValueAxis Axis1, ValueAxis... TailAxes, auto V0, auto V1, auto... TailVs>
+struct space_contains<ValueAxes<Axis0, Axis1, TailAxes...>, Values<V0, V1, TailVs...>> {
     static consteval bool
     value() {
         return AxisContains_v<Axis0, V0>() &&
-               space_contains<ValueAxes<TailAxes...>, Values<TailVs...>>::value();
+               space_contains<ValueAxes<Axis1, TailAxes...>, Values<V1, TailVs...>>::value();
     }
 };
 
