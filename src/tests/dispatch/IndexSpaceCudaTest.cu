@@ -19,14 +19,14 @@ namespace dispatch {
 // =============================================================================
 
 // A kernel that is instantiated per coordinate.
-// The coordinate is encoded as compile-time template parameters via Indices<I, J>.
+// The coordinate is encoded as compile-time template parameters via Point<I, J>.
 // Each instantiation writes: [linear_index, I, J] to the output at linear_index * 3.
 template <size_t I, size_t J>
 __global__ void
 per_coord_kernel(size_t *output) {
     // Compute linear index from compile-time coordinates using row-major order
     using Space              = Sizes<2, 8>;
-    constexpr size_t lin_idx = LinearIndexFromIndices_v<Space, Indices<I, J>>();
+    constexpr size_t lin_idx = LinearIndexFromPoint_v<Space, Point<I, J>>();
 
     // Write identifying data: the linear index and the coordinate components
     output[lin_idx * 3 + 0] = lin_idx;
@@ -35,13 +35,13 @@ per_coord_kernel(size_t *output) {
 }
 
 // Visitor that launches a kernel for each coordinate in the space.
-// The coordinate comes in as Indices<I, J>.
+// The coordinate comes in as Point<I, J>.
 struct KernelLauncher {
     size_t *d_output;
 
     template <size_t I, size_t J>
     void
-    operator()(Indices<I, J>) const {
+    operator()(Point<I, J>) const {
         per_coord_kernel<I, J><<<1, 1>>>(d_output);
     }
 };
@@ -125,13 +125,13 @@ TEST(IndexSpaceCuda, RankNumelOnDevice) {
 // Test 3: Compile-time coordinate conversion in device code
 // =============================================================================
 
-// IndicesFromLinearIndex and LinearIndexFromIndices are compile-time only,
+// PointFromLinearIndex and LinearIndexFromPoint are compile-time only,
 // so we test them via template instantiation in device code.
 template <typename Space, size_t LinearIndex>
 __global__ void
 test_coord_round_trip_kernel(size_t *result) {
-    using Coord           = IndicesFromLinearIndex_t<Space, LinearIndex>;
-    constexpr size_t back = LinearIndexFromIndices_v<Space, Coord>();
+    using Coord           = PointFromLinearIndex_t<Space, LinearIndex>;
+    constexpr size_t back = LinearIndexFromPoint_v<Space, Coord>();
     *result               = back;
 }
 
@@ -186,7 +186,7 @@ struct Multi1DKernelLauncher {
 
     template <size_t I>
     void
-    operator()(Indices<I>) const {
+    operator()(Point<I>) const {
         per_1d_coord_kernel<I><<<1, 1>>>(d_output, base_offset);
     }
 };

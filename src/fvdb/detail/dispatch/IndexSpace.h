@@ -17,20 +17,19 @@ namespace fvdb {
 namespace dispatch {
 
 // -----------------------------------------------------------------------------
-// Sizes and Indices
+// Sizes and Point
 // -----------------------------------------------------------------------------
 
 template <size_t... Is> using Sizes = std::index_sequence<Is...>;
 
-template <size_t... Is> using Indices = std::index_sequence<Is...>;
+template <size_t... Is> using Point = std::index_sequence<Is...>;
 
 // -----------------------------------------------------------------------------
 // IndexSpace Concept
 // -----------------------------------------------------------------------------
 //
-// IndexSpace: a type representing an n-dimensional index space (e.g., Sizes<...>)
-// or an n-dimensional index point (e.g., Indices<...>).
-// Both correspond to std::index_sequence specializations.
+// IndexSpace: a type representing an n-dimensional index space (e.g., Sizes<...>).
+// Corresponds to std::index_sequence specializations.
 //
 // This concept enables generic code working with multidimensional index spaces.
 //
@@ -42,6 +41,24 @@ template <typename T>
 consteval bool
 is_index_space() {
     return IndexSpace<T>;
+}
+
+// -----------------------------------------------------------------------------
+// IndexPoint Concept
+// -----------------------------------------------------------------------------
+//
+// IndexPoint: a type representing a coordinate/point within an index space
+// (e.g., Point<0, 1, 2>). Structurally identical to IndexSpace but semantically
+// distinct - an IndexPoint is a single coordinate, not an iterable space.
+//
+
+template <typename T>
+concept IndexPoint = is_index_sequence<T>::value;
+
+template <typename T>
+consteval bool
+is_index_point() {
+    return IndexPoint<T>;
 }
 
 // -----------------------------------------------------------------------------
@@ -141,7 +158,49 @@ is_same_rank() {
 }
 
 // -----------------------------------------------------------------------------
-// Shape: type trait to extract the shape/indices type (e.g., Indices...) from a space
+// PointInBounds - checks if an IndexPoint lies within an IndexSpace
+// -----------------------------------------------------------------------------
+
+template <typename Space, typename Pt> struct point_in_bounds {
+    static consteval bool
+    value() {
+        return false;
+    }
+};
+
+template <> struct point_in_bounds<Sizes<>, Point<>> {
+    static consteval bool
+    value() {
+        return true;
+    }
+};
+
+template <size_t S0, size_t... TailSs, size_t I0, size_t... TailIs>
+struct point_in_bounds<Sizes<S0, TailSs...>, Point<I0, TailIs...>> {
+    static consteval bool
+    value() {
+        return (I0 < S0) && point_in_bounds<Sizes<TailSs...>, Point<TailIs...>>::value();
+    }
+};
+
+template <typename Space, typename Pt>
+consteval bool
+point_in_bounds_v() {
+    return point_in_bounds<Space, Pt>::value();
+}
+
+template <typename Space, typename Pt>
+concept PointInBounds = IndexSpace<Space> && IndexPoint<Pt> && Rank_v<Space>() == Rank_v<Pt>() &&
+                        point_in_bounds_v<Space, Pt>();
+
+template <typename Space, typename Pt>
+consteval bool
+is_point_in_bounds() {
+    return PointInBounds<Space, Pt>;
+}
+
+// -----------------------------------------------------------------------------
+// Shape: type trait to extract the shape type from a space
 // -----------------------------------------------------------------------------
 
 template <typename T> struct Shape;
@@ -165,43 +224,43 @@ template <size_t... Is, size_t V> struct Prepend<Sizes<Is...>, V> {
 template <typename T, size_t V> using Prepend_t = typename Prepend<T, V>::type;
 
 // -----------------------------------------------------------------------------
-// IndicesFromLinearIndex: Compute a coordinate (Indices...) from a linear index
+// PointFromLinearIndex: Compute a coordinate (Point<...>) from a linear index
 // -----------------------------------------------------------------------------
 
-template <NonEmptyIndexSpace Space, size_t linearIndex> struct IndicesFromLinearIndex;
+template <NonEmptyIndexSpace Space, size_t linearIndex> struct PointFromLinearIndex;
 
 template <size_t I, size_t linearIndex>
     requires NonEmptyIndexSpace<Sizes<I>>
-struct IndicesFromLinearIndex<Sizes<I>, linearIndex> {
+struct PointFromLinearIndex<Sizes<I>, linearIndex> {
     // happily will use indices out of bounds.
-    using type = Indices<linearIndex>;
+    using type = Point<linearIndex>;
 };
 
 template <size_t I0, size_t... TailIs, size_t linearIndex>
     requires NonEmptyIndexSpace<Sizes<I0, TailIs...>> && NonEmptyIndexSpace<Sizes<TailIs...>>
-struct IndicesFromLinearIndex<Sizes<I0, TailIs...>, linearIndex> {
+struct PointFromLinearIndex<Sizes<I0, TailIs...>, linearIndex> {
     static consteval size_t
     tailNumel() {
         return Numel_v<Sizes<TailIs...>>();
     }
 
-    using type = Prepend_t<
-        typename IndicesFromLinearIndex<Sizes<TailIs...>, linearIndex % tailNumel()>::type,
-        linearIndex / tailNumel()>;
+    using type =
+        Prepend_t<typename PointFromLinearIndex<Sizes<TailIs...>, linearIndex % tailNumel()>::type,
+                  linearIndex / tailNumel()>;
 };
 
 template <NonEmptyIndexSpace Space, size_t linearIndex>
-using IndicesFromLinearIndex_t = typename IndicesFromLinearIndex<Space, linearIndex>::type;
+using PointFromLinearIndex_t = typename PointFromLinearIndex<Space, linearIndex>::type;
 
 // -----------------------------------------------------------------------------
-// LinearIndexFromIndices: Compute a linear index from a coordinate (Indices...)
+// LinearIndexFromPoint: Compute a linear index from a coordinate (Point<...>)
 // -----------------------------------------------------------------------------
 
-template <NonEmptyIndexSpace Space, IndexSpace Index> struct LinearIndexFromIndices;
+template <NonEmptyIndexSpace Space, IndexPoint Pt> struct LinearIndexFromPoint;
 
 template <size_t S, size_t I>
     requires NonEmptyIndexSpace<Sizes<S>>
-struct LinearIndexFromIndices<Sizes<S>, Indices<I>> {
+struct LinearIndexFromPoint<Sizes<S>, Point<I>> {
     static consteval size_t
     value() {
         return I;
@@ -210,7 +269,7 @@ struct LinearIndexFromIndices<Sizes<S>, Indices<I>> {
 
 template <size_t S0, size_t... TailSs, size_t I0, size_t... TailIs>
     requires NonEmptyIndexSpace<Sizes<S0, TailSs...>> && NonEmptyIndexSpace<Sizes<TailSs...>>
-struct LinearIndexFromIndices<Sizes<S0, TailSs...>, Indices<I0, TailIs...>> {
+struct LinearIndexFromPoint<Sizes<S0, TailSs...>, Point<I0, TailIs...>> {
     static consteval size_t
     tailNumel() {
         return Numel_v<Sizes<TailSs...>>();
@@ -218,15 +277,14 @@ struct LinearIndexFromIndices<Sizes<S0, TailSs...>, Indices<I0, TailIs...>> {
 
     static consteval size_t
     value() {
-        return I0 * tailNumel() +
-               LinearIndexFromIndices<Sizes<TailSs...>, Indices<TailIs...>>::value();
+        return I0 * tailNumel() + LinearIndexFromPoint<Sizes<TailSs...>, Point<TailIs...>>::value();
     }
 };
 
-template <NonEmptyIndexSpace Space, IndexSpace Index>
+template <NonEmptyIndexSpace Space, IndexPoint Pt>
 consteval size_t
-LinearIndexFromIndices_v() {
-    return LinearIndexFromIndices<Space, Index>::value();
+LinearIndexFromPoint_v() {
+    return LinearIndexFromPoint<Space, Pt>::value();
 }
 
 // -----------------------------------------------------------------------------
@@ -240,7 +298,7 @@ LinearIndexFromIndices_v() {
 // Example:
 //     using MySpace = Sizes<2, 3>; // 2x3 space
 //     visit_index_space([](auto coord) {
-//         // coord is a Indices<I0, I1> for each valid coordinate pair
+//         // coord is a Point<I0, I1> for each valid coordinate pair
 //     }, MySpace{});
 //
 // You can also visit multiple spaces in sequence using visit_index_spaces.
@@ -251,10 +309,10 @@ LinearIndexFromIndices_v() {
 //     visit_index_spaces(visitor, MySpace1{}, MySpace2{});
 //
 // Note: For each coordinate, the visitor is invoked with a default-constructed
-// Indices<...> object with constexpr values for that coordinate.
+// Point<...> object with constexpr values for that coordinate.
 // -----------------------------------------------------------------------------
 
-template <NonEmptyIndexSpace Space, typename LinearIndicesSeq> struct IndexSpaceVisitHelper;
+template <NonEmptyIndexSpace Space, typename LinearPointSeq> struct IndexSpaceVisitHelper;
 
 template <NonEmptyIndexSpace Space, size_t... linearIndices>
 struct IndexSpaceVisitHelper<Space, std::index_sequence<linearIndices...>> {
@@ -262,7 +320,7 @@ struct IndexSpaceVisitHelper<Space, std::index_sequence<linearIndices...>> {
     static void
     visit(Visitor &&visitor) {
         // Note: don't forward visitor in fold - it's invoked multiple times
-        (std::invoke(visitor, IndicesFromLinearIndex_t<Space, linearIndices>{}), ...);
+        (std::invoke(visitor, PointFromLinearIndex_t<Space, linearIndices>{}), ...);
     }
 };
 
