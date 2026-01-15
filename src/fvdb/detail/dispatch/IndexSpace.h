@@ -25,21 +25,24 @@ template <size_t... Is> using Sizes = std::index_sequence<Is...>;
 template <size_t... Is> using Indices = std::index_sequence<Is...>;
 
 // -----------------------------------------------------------------------------
-// IndexSpace and IndexPoint Concepts
+// IndexSpace Concept
 // -----------------------------------------------------------------------------
 //
 // IndexSpace: a type representing an n-dimensional index space (e.g., Sizes<...>)
-// IndexPoint: a type representing an n-dimensional index point (e.g., Indices<...>)
+// or an n-dimensional index point (e.g., Indices<...>).
 // Both correspond to std::index_sequence specializations.
 //
-// These concepts enable generic code working with multidimensional index spaces.
+// This concept enables generic code working with multidimensional index spaces.
 //
 
 template <typename T>
 concept IndexSpace = is_index_sequence<T>::value;
 
 template <typename T>
-concept IndexPoint = is_index_sequence<T>::value;
+consteval bool
+is_index_space() {
+    return IndexSpace<T>;
+}
 
 // -----------------------------------------------------------------------------
 // Rank, Numel, and Shape
@@ -59,6 +62,12 @@ template <size_t... Is> struct Rank<Sizes<Is...>> {
     }
 };
 
+template <typename T>
+consteval size_t
+Rank_v() {
+    return Rank<T>::value();
+}
+
 template <typename T> struct Numel;
 
 template <size_t... Is> struct Numel<Sizes<Is...>> {
@@ -68,29 +77,68 @@ template <size_t... Is> struct Numel<Sizes<Is...>> {
     }
 };
 
+// Explicit specialization: empty Sizes has 0 elements
+template <> struct Numel<Sizes<>> {
+    static consteval size_t
+    value() {
+        return 0;
+    }
+};
+
+template <typename T>
+consteval size_t
+Numel_v() {
+    return Numel<T>::value();
+}
+
 // -----------------------------------------------------------------------------
 // IndexSpace Concept Refinements
 // -----------------------------------------------------------------------------
 //
-// TensorIndexSpace: a type representing an n-dimensional index space with more than 0 dimensions
-// ScalarIndexSpace: a type representing an n-dimensional index space with 0 dimensions
+// TensorIndexSpace: an index space with more than 0 dimensions
+// ScalarIndexSpace: an index space with 0 dimensions
+// NonEmptyIndexSpace: an index space with at least 1 element
 //
 
 template <typename T>
-concept TensorIndexSpace = IndexSpace<T> && Rank<T>::value() > 0;
-template <typename T>
-concept ScalarIndexSpace = IndexSpace<T> && Rank<T>::value() == 0;
+concept TensorIndexSpace = IndexSpace<T> && Rank_v<T>() > 0;
 
 template <typename T>
-concept NonEmptyIndexSpace = IndexSpace<T> && Numel<T>::value() > 0;
+concept ScalarIndexSpace = IndexSpace<T> && Rank_v<T>() == 0;
 
 template <typename T>
-concept TensorIndexPoint = IndexPoint<T> && Rank<T>::value() > 0;
-template <typename T>
-concept ScalarIndexPoint = IndexPoint<T> && Rank<T>::value() == 0;
+concept NonEmptyIndexSpace = IndexSpace<T> && Rank_v<T>() > 0 && Numel_v<T>() > 0;
 
 template <typename S, typename T>
-concept SameRank = Rank<S>::value() == Rank<T>::value();
+concept SameRank = Rank_v<S>() == Rank_v<T>();
+
+// =============================================================================
+// Concept Test Helpers (consteval functions to avoid nvcc instantiation issues)
+// =============================================================================
+
+template <typename T>
+consteval bool
+is_tensor_index_space() {
+    return TensorIndexSpace<T>;
+}
+
+template <typename T>
+consteval bool
+is_scalar_index_space() {
+    return ScalarIndexSpace<T>;
+}
+
+template <typename T>
+consteval bool
+is_non_empty_index_space() {
+    return NonEmptyIndexSpace<T>;
+}
+
+template <typename S, typename T>
+consteval bool
+is_same_rank() {
+    return SameRank<S, T>;
+}
 
 // -----------------------------------------------------------------------------
 // Shape: type trait to extract the shape/indices type (e.g., Indices...) from a space
@@ -102,6 +150,8 @@ template <IndexSpace Space> struct Shape<Space> {
     using type = Space;
 };
 
+template <typename T> using Shape_t = typename Shape<T>::type;
+
 // -----------------------------------------------------------------------------
 // Prepend type trait for adding a new size as the first dimension of a space
 // -----------------------------------------------------------------------------
@@ -111,6 +161,8 @@ template <typename T, size_t V> struct Prepend;
 template <size_t... Is, size_t V> struct Prepend<Sizes<Is...>, V> {
     using type = Sizes<V, Is...>;
 };
+
+template <typename T, size_t V> using Prepend_t = typename Prepend<T, V>::type;
 
 // -----------------------------------------------------------------------------
 // IndicesFromLinearIndex: Compute a coordinate (Indices...) from a linear index
@@ -130,19 +182,22 @@ template <size_t I0, size_t... TailIs, size_t linearIndex>
 struct IndicesFromLinearIndex<Sizes<I0, TailIs...>, linearIndex> {
     static consteval size_t
     tailNumel() {
-        return (TailIs * ... * 1);
+        return Numel_v<Sizes<TailIs...>>();
     }
 
-    using type = typename Prepend<
+    using type = Prepend_t<
         typename IndicesFromLinearIndex<Sizes<TailIs...>, linearIndex % tailNumel()>::type,
-        linearIndex / tailNumel()>::type;
+        linearIndex / tailNumel()>;
 };
+
+template <NonEmptyIndexSpace Space, size_t linearIndex>
+using IndicesFromLinearIndex_t = typename IndicesFromLinearIndex<Space, linearIndex>::type;
 
 // -----------------------------------------------------------------------------
 // LinearIndexFromIndices: Compute a linear index from a coordinate (Indices...)
 // -----------------------------------------------------------------------------
 
-template <NonEmptyIndexSpace Space, IndexPoint Index> struct LinearIndexFromIndices;
+template <NonEmptyIndexSpace Space, IndexSpace Index> struct LinearIndexFromIndices;
 
 template <size_t S, size_t I>
     requires NonEmptyIndexSpace<Sizes<S>>
@@ -158,7 +213,7 @@ template <size_t S0, size_t... TailSs, size_t I0, size_t... TailIs>
 struct LinearIndexFromIndices<Sizes<S0, TailSs...>, Indices<I0, TailIs...>> {
     static consteval size_t
     tailNumel() {
-        return (TailSs * ... * 1);
+        return Numel_v<Sizes<TailSs...>>();
     }
 
     static consteval size_t
@@ -167,6 +222,12 @@ struct LinearIndexFromIndices<Sizes<S0, TailSs...>, Indices<I0, TailIs...>> {
                LinearIndexFromIndices<Sizes<TailSs...>, Indices<TailIs...>>::value();
     }
 };
+
+template <NonEmptyIndexSpace Space, IndexSpace Index>
+consteval size_t
+LinearIndexFromIndices_v() {
+    return LinearIndexFromIndices<Space, Index>::value();
+}
 
 // -----------------------------------------------------------------------------
 // Visitation Utilities for Index Spaces
@@ -201,14 +262,14 @@ struct IndexSpaceVisitHelper<Space, std::index_sequence<linearIndices...>> {
     static void
     visit(Visitor &&visitor) {
         // Note: don't forward visitor in fold - it's invoked multiple times
-        (std::invoke(visitor, typename IndicesFromLinearIndex<Space, linearIndices>::type{}), ...);
+        (std::invoke(visitor, IndicesFromLinearIndex_t<Space, linearIndices>{}), ...);
     }
 };
 
 template <typename Visitor, NonEmptyIndexSpace Space>
 void
 visit_index_space(Visitor &&visitor, Space) {
-    IndexSpaceVisitHelper<Space, std::make_index_sequence<Numel<Space>::value()>>::visit(
+    IndexSpaceVisitHelper<Space, std::make_index_sequence<Numel_v<Space>()>>::visit(
         std::forward<Visitor>(visitor));
 }
 
