@@ -144,17 +144,24 @@ if (NOT NANOVDB_EDITOR_FORCE)
         if(NUM_LATEST_WHEELS GREATER 0)
             list(GET LATEST_WHEELS 0 LATEST_WHEEL)
             message(STATUS "Found wheel in dist for the latest version ${NANOVDB_EDITOR_LATEST_VERSION}: ${LATEST_WHEEL}")
+            message(STATUS "Installing nanovdb_editor wheel with: ${Python3_EXECUTABLE} -m pip install --force-reinstall -v ${LATEST_WHEEL}")
+            # CPM's nanovdb_editor_BINARY_DIR may not exist yet on this fast-path (installing a prebuilt wheel),
+            # but execute_process requires WORKING_DIRECTORY to exist.
+            file(MAKE_DIRECTORY ${nanovdb_editor_BINARY_DIR})
             execute_process(
-                COMMAND bash -lc "
-                ${Python3_EXECUTABLE} -m pip install --force-reinstall ${LATEST_WHEEL}
-                "
+                COMMAND ${Python3_EXECUTABLE} -m pip install --force-reinstall -v ${LATEST_WHEEL}
                 WORKING_DIRECTORY ${nanovdb_editor_BINARY_DIR}
                 RESULT_VARIABLE install_result
                 OUTPUT_VARIABLE install_output
                 ERROR_VARIABLE install_error
             )
             if(NOT install_result EQUAL 0)
-                message(FATAL_ERROR "nanovdb_editor wheel install failed.\nSTDOUT:\n${install_output}\n\nSTDERR:\n${install_error}")
+                message(FATAL_ERROR
+                    "nanovdb_editor wheel install failed (exit=${install_result}).\n"
+                    "Python3_EXECUTABLE: ${Python3_EXECUTABLE}\n"
+                    "Wheel: ${LATEST_WHEEL}\n"
+                    "WORKING_DIRECTORY: ${nanovdb_editor_BINARY_DIR}\n"
+                    "STDOUT:\n${install_output}\n\nSTDERR:\n${install_error}")
             else()
                 message(STATUS "Successfully installed: ${install_output}")
 
