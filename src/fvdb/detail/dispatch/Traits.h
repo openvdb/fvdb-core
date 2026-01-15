@@ -46,6 +46,10 @@ template <size_t... Is> struct array_from_indices<std::index_sequence<Is...>> {
     static constexpr std::array<size_t, sizeof...(Is)> value = {Is...};
 };
 
+template <typename T> struct is_index_sequence : std::false_type {};
+
+template <size_t... Is> struct is_index_sequence<std::index_sequence<Is...>> : std::true_type {};
+
 } // namespace dispatch
 } // namespace fvdb
 

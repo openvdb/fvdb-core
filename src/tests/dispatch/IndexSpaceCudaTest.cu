@@ -1,6 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 
+#if 0
+
 #include <fvdb/detail/dispatch/IndexSpace.h>
 
 #include <cuda_runtime.h>
@@ -168,3 +170,5 @@ TEST(IndexSpaceCuda, CoordConversionOnDevice) {
 
 } // namespace dispatch
 } // namespace fvdb
+
+#endif

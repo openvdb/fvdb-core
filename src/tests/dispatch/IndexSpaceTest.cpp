@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fvdb/detail/dispatch/IndexSpace.h>
+#include <fvdb/detail/dispatch/Traits.h>
 
 #include <gtest/gtest.h>
 
@@ -28,78 +29,72 @@ struct CoordToString {
 };
 
 TEST(IndexSpace, ConstantsAndTypes) {
-    using Space = IndexSpace<2, 3, 4>;
+    using Space = Sizes<2, 3, 4>;
 
     // Constants
-    EXPECT_EQ(Space::rank, size_t{3});
-    EXPECT_EQ(Space::numel, size_t{24}); // 2*3*4
+    EXPECT_EQ(Rank<Space>::value(), size_t{3});
+    EXPECT_EQ(Numel<Space>::value(), size_t{24}); // 2*3*4
 
     // Shape via get_shape()
-    constexpr auto shape = Space::get_shape();
+    constexpr auto shape = array_from_indices<Shape<Space>::type>::value;
     EXPECT_EQ(shape.size(), size_t{3});
     EXPECT_EQ(shape[0], size_t{2});
     EXPECT_EQ(shape[1], size_t{3});
     EXPECT_EQ(shape[2], size_t{4});
 
-    // Strides via get_strides() (row-major: 3*4=12, 4, 1)
-    constexpr auto strides = Space::get_strides();
-    EXPECT_EQ(strides.size(), size_t{3});
-    EXPECT_EQ(strides[0], size_t{12});
-    EXPECT_EQ(strides[1], size_t{4});
-    EXPECT_EQ(strides[2], size_t{1});
-
     // Type aliases
-    static_assert(std::is_same_v<Space::shape_seq, std::index_sequence<2, 3, 4>>);
-    static_assert(std::is_same_v<Space::strides_seq, std::index_sequence<12, 4, 1>>);
-    static_assert(std::is_same_v<Space::Coord, std::array<size_t, 3>>);
+    static_assert(std::is_same_v<Shape<Space>::type, std::index_sequence<2, 3, 4>>);
 }
 
-TEST(IndexSpace, LinearIndexAndCoord) {
-    using Space = IndexSpace<2, 3, 4>;
+TEST(IndexSpace, LinearIndexFromIndices) {
+    using Space = Sizes<2, 3, 4>;
 
     // coord → linear_index
-    EXPECT_EQ(Space::linear_index({0, 0, 0}), size_t{0});
-    EXPECT_EQ(Space::linear_index({0, 0, 1}), size_t{1});
-    EXPECT_EQ(Space::linear_index({0, 1, 0}), size_t{4});
-    EXPECT_EQ(Space::linear_index({1, 0, 0}), size_t{12});
-    EXPECT_EQ(Space::linear_index({1, 2, 3}), size_t{23}); // last valid element
-
-    // linear_index → coord (round-trip)
-    for (size_t i = 0; i < Space::numel; ++i) {
-        EXPECT_EQ(Space::linear_index(Space::coord(i)), i);
-    }
+    EXPECT_EQ((LinearIndexFromIndices<Space, Indices<0, 0, 0>>::value()), size_t{0});
+    EXPECT_EQ((LinearIndexFromIndices<Space, Indices<0, 0, 1>>::value()), size_t{1});
+    EXPECT_EQ((LinearIndexFromIndices<Space, Indices<0, 1, 0>>::value()), size_t{4});
+    EXPECT_EQ((LinearIndexFromIndices<Space, Indices<1, 0, 0>>::value()), size_t{12});
+    EXPECT_EQ((LinearIndexFromIndices<Space, Indices<1, 2, 3>>::value()),
+              size_t{23}); // last valid element
 }
 
-TEST(IndexSpace, LinearIndexCoordType) {
-    using Space = IndexSpace<2, 3>;
+TEST(IndexSpace, IndicesFromLinearIndex) {
+    using Space = Sizes<2, 3>;
 
     // Verify compile-time coordinate types
-    static_assert(std::is_same_v<Space::LinearIndexCoord<0>::type, std::index_sequence<0, 0>>);
-    static_assert(std::is_same_v<Space::LinearIndexCoord<1>::type, std::index_sequence<0, 1>>);
-    static_assert(std::is_same_v<Space::LinearIndexCoord<2>::type, std::index_sequence<0, 2>>);
-    static_assert(std::is_same_v<Space::LinearIndexCoord<3>::type, std::index_sequence<1, 0>>);
-    static_assert(std::is_same_v<Space::LinearIndexCoord<5>::type, std::index_sequence<1, 2>>);
+    static_assert(
+        std::is_same_v<IndicesFromLinearIndex<Space, 0>::type, std::index_sequence<0, 0>>);
+    static_assert(
+        std::is_same_v<IndicesFromLinearIndex<Space, 1>::type, std::index_sequence<0, 1>>);
+    static_assert(
+        std::is_same_v<IndicesFromLinearIndex<Space, 2>::type, std::index_sequence<0, 2>>);
+    static_assert(
+        std::is_same_v<IndicesFromLinearIndex<Space, 3>::type, std::index_sequence<1, 0>>);
+    static_assert(
+        std::is_same_v<IndicesFromLinearIndex<Space, 5>::type, std::index_sequence<1, 2>>);
 }
 
-TEST(IndexSpace, VisitMethod) {
-    using Space = IndexSpace<2, 3>;
+TEST(IndexSpace, VisitSpace) {
+    using Space = Sizes<2, 3>;
     std::string output;
-    Space::visit([&output](auto &&coord) {
-        if (!output.empty()) {
-            output += ", ";
-        }
+    visit_index_space(
+        [&output](auto &&coord) {
+            if (!output.empty()) {
+                output += ", ";
+            }
 
-        output += CoordToString::toString(coord);
-    });
+            output += CoordToString::toString(coord);
+        },
+        Space{});
 
     EXPECT_EQ(output, "<0, 0>, <0, 1>, <0, 2>, <1, 0>, <1, 1>, <1, 2>");
 }
 
-TEST(IndexSpace, VisitSpacesFunction) {
-    using Space1 = IndexSpace<2, 3>;
-    using Space2 = IndexSpace<3, 2>;
+TEST(IndexSpace, VisitIndexSpaces) {
+    using Space1 = Sizes<2, 3>;
+    using Space2 = Sizes<3, 2>;
     std::string output;
-    visit_spaces(
+    visit_index_spaces(
         [&output](auto &&coord) {
             if (!output.empty()) {
                 output += ", ";

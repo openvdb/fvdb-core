@@ -16,19 +16,39 @@
 namespace fvdb {
 namespace dispatch {
 
+// -----------------------------------------------------------------------------
+// Sizes and Indices
+// -----------------------------------------------------------------------------
+
 template <size_t... Is> using Sizes = std::index_sequence<Is...>;
 
 template <size_t... Is> using Indices = std::index_sequence<Is...>;
 
-template <typename T> struct is_index_sequence : std::false_type {};
-
-template <size_t... Is> struct is_index_sequence<std::index_sequence<Is...>> : std::true_type {};
+// -----------------------------------------------------------------------------
+// IndexSpace and IndexPoint Concepts
+// -----------------------------------------------------------------------------
+//
+// IndexSpace: a type representing an n-dimensional index space (e.g., Sizes<...>)
+// IndexPoint: a type representing an n-dimensional index point (e.g., Indices<...>)
+// Both correspond to std::index_sequence specializations.
+//
+// These concepts enable generic code working with multidimensional index spaces.
+//
 
 template <typename T>
 concept IndexSpace = is_index_sequence<T>::value;
 
 template <typename T>
 concept IndexPoint = is_index_sequence<T>::value;
+
+// -----------------------------------------------------------------------------
+// Rank, Numel, and Shape
+// -----------------------------------------------------------------------------
+//
+// Rank: the number of dimensions in the index space
+// Numel: the total number of elements in the index space
+// Shape: the shape of the index space
+//
 
 template <typename T> struct Rank;
 
@@ -48,6 +68,14 @@ template <size_t... Is> struct Numel<Sizes<Is...>> {
     }
 };
 
+// -----------------------------------------------------------------------------
+// IndexSpace Concept Refinements
+// -----------------------------------------------------------------------------
+//
+// TensorIndexSpace: a type representing an n-dimensional index space with more than 0 dimensions
+// ScalarIndexSpace: a type representing an n-dimensional index space with 0 dimensions
+//
+
 template <typename T>
 concept TensorIndexSpace = IndexSpace<T> && Rank<T>::value() > 0;
 template <typename T>
@@ -64,17 +92,29 @@ concept ScalarIndexPoint = IndexPoint<T> && Rank<T>::value() == 0;
 template <typename S, typename T>
 concept SameRank = Rank<S>::value() == Rank<T>::value();
 
+// -----------------------------------------------------------------------------
+// Shape: type trait to extract the shape/indices type (e.g., Indices...) from a space
+// -----------------------------------------------------------------------------
+
 template <typename T> struct Shape;
 
 template <IndexSpace Space> struct Shape<Space> {
     using type = Space;
 };
 
+// -----------------------------------------------------------------------------
+// Prepend type trait for adding a new size as the first dimension of a space
+// -----------------------------------------------------------------------------
+
 template <typename T, size_t V> struct Prepend;
 
 template <size_t... Is, size_t V> struct Prepend<Sizes<Is...>, V> {
     using type = Sizes<V, Is...>;
 };
+
+// -----------------------------------------------------------------------------
+// IndicesFromLinearIndex: Compute a coordinate (Indices...) from a linear index
+// -----------------------------------------------------------------------------
 
 template <NonEmptyIndexSpace Space, size_t linearIndex> struct IndicesFromLinearIndex;
 
@@ -97,6 +137,10 @@ struct IndicesFromLinearIndex<Sizes<I0, TailIs...>, linearIndex> {
         typename IndicesFromLinearIndex<Sizes<TailIs...>, linearIndex % tailNumel()>::type,
         linearIndex / tailNumel()>::type;
 };
+
+// -----------------------------------------------------------------------------
+// LinearIndexFromIndices: Compute a linear index from a coordinate (Indices...)
+// -----------------------------------------------------------------------------
 
 template <NonEmptyIndexSpace Space, IndexPoint Index> struct LinearIndexFromIndices;
 
@@ -123,6 +167,31 @@ struct LinearIndexFromIndices<Sizes<S0, TailSs...>, Indices<I0, TailIs...>> {
                LinearIndexFromIndices<Sizes<TailSs...>, Indices<TailIs...>>::value();
     }
 };
+
+// -----------------------------------------------------------------------------
+// Visitation Utilities for Index Spaces
+// -----------------------------------------------------------------------------
+//
+// Index spaces are traversed in row-major order: the last dimension is
+// the fastest-changing. You can visit all coordinates in an index space
+// by providing a visitor (callable) to visit_index_space.
+//
+// Example:
+//     using MySpace = Sizes<2, 3>; // 2x3 space
+//     visit_index_space([](auto coord) {
+//         // coord is a Indices<I0, I1> for each valid coordinate pair
+//     }, MySpace{});
+//
+// You can also visit multiple spaces in sequence using visit_index_spaces.
+// Each space is visited in order, calling the visitor for every coordinate
+// in that space.
+//
+// Example:
+//     visit_index_spaces(visitor, MySpace1{}, MySpace2{});
+//
+// Note: For each coordinate, the visitor is invoked with a default-constructed
+// Indices<...> object with constexpr values for that coordinate.
+// -----------------------------------------------------------------------------
 
 template <NonEmptyIndexSpace Space, typename LinearIndicesSeq> struct IndexSpaceVisitHelper;
 

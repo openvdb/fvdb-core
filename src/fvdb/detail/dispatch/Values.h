@@ -4,6 +4,8 @@
 #ifndef FVDB_DETAIL_DISPATCH_VALUES_H
 #define FVDB_DETAIL_DISPATCH_VALUES_H
 
+#include "fvdb/detail/dispatch/Traits.h"
+
 #include <cassert>
 #include <cstdint>
 #include <optional>
@@ -24,7 +26,7 @@ template <auto... values> struct ValuesSize {
 // ValuesElement
 // -----------------------------------------------------------------------------
 
-template <auto... Values> struct ValuesElement;
+template <size_t I, auto... Values> struct ValuesElement;
 
 template <size_t I> struct ValuesElement<I> {
     static_assert(I != I, "Can't get an element from an empty value pack");
@@ -130,7 +132,7 @@ template <> struct ValuesSameType<> {
     }
 };
 
-template <auto value> struct ValuesSameType<value> {
+template <auto headValue> struct ValuesSameType<headValue> {
     static consteval bool
     value() {
         return true;
@@ -147,6 +149,20 @@ template <auto headValue, auto... tailValues> struct ValuesSameType<headValue, t
 // -----------------------------------------------------------------------------
 // Values Unique
 // -----------------------------------------------------------------------------
+
+// Helper to check if two values are different (type-safe, avoids bool-compare warning)
+template <auto A, auto B> struct ValuesDiffer {
+    static consteval bool
+    value() {
+        if constexpr (!std::is_same_v<decltype(A), decltype(B)>) {
+            // Different types are always considered different
+            return true;
+        } else {
+            return A != B;
+        }
+    }
+};
+
 template <auto... Values> struct ValuesUnique;
 
 template <> struct ValuesUnique<> {
@@ -166,11 +182,8 @@ template <auto headValue> struct ValuesUnique<headValue> {
 template <auto headValue, auto... tailValues> struct ValuesUnique<headValue, tailValues...> {
     static consteval bool
     value() {
-        // Unique if types differ OR values differ (must check type first to avoid implicit
-        // conversion)
-        return ((!std::is_same_v<decltype(headValue), decltype(tailValues)> ||
-                 headValue != tailValues) &&
-                ...) &&
+        // Unique if head differs from all tail values, and tail is itself unique
+        return (ValuesDiffer<headValue, tailValues>::value() && ...) &&
                ValuesUnique<tailValues...>::value();
     }
 };
@@ -231,6 +244,29 @@ concept SameTypeNonEmptyValuePack = SameTypeValuePack<T> && NonEmptyValuePack<T>
 template <typename T>
 concept UniqueNonEmptyValuePack = UniqueValuePack<T> && NonEmptyValuePack<T>;
 
+// =============================================================================
+// Concept Test Helpers
+// =============================================================================
+
+// Helper to test if a type satisfies a concept at compile time
+template <typename T> inline constexpr bool is_value_pack = ValuePack<T>;
+
+template <typename T> inline constexpr bool is_non_empty_value_pack = NonEmptyValuePack<T>;
+
+template <typename T> inline constexpr bool is_empty_value_pack = EmptyValuePack<T>;
+
+template <typename T> inline constexpr bool is_same_type_value_pack = SameTypeValuePack<T>;
+
+template <typename T> inline constexpr bool is_unique_value_pack = UniqueValuePack<T>;
+
+template <typename T>
+inline constexpr bool is_same_type_non_empty_value_pack = SameTypeNonEmptyValuePack<T>;
+
+template <typename T>
+inline constexpr bool is_unique_non_empty_value_pack = UniqueNonEmptyValuePack<T>;
+
+// Note: value_pack_contains is defined after ValuePackContains concept below
+
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 // PACK DEDUCTIONS
@@ -272,6 +308,20 @@ constexpr auto
 packTail(Pack) {
     return PackTail<Pack>::value();
 }
+
+// -----------------------------------------------------------------------------
+// For value packs which have the same type, return the type.
+// -----------------------------------------------------------------------------
+template <SameTypeNonEmptyValuePack Pack> struct PackValueType {
+    using type = typename PackHeadValue<Pack>::type;
+};
+
+// -----------------------------------------------------------------------------
+// index_sequence overload
+// -----------------------------------------------------------------------------
+template <SameTypeNonEmptyValuePack Pack>
+    requires(std::is_same_v<typename PackValueType<Pack>::type, size_t>)
+struct is_index_sequence<Pack> : std::true_type {};
 
 // -----------------------------------------------------------------------------
 // PackElement
@@ -325,9 +375,8 @@ struct PackContains<Values<values...>, testValue> {
     }
 };
 
-template <EmptyValuePack Pack>
-constexpr auto
-packContains(Pack pack, auto testValue) {
+inline constexpr auto
+packContains(Values<>, auto testValue) {
     return false;
 }
 
@@ -346,6 +395,9 @@ packContains(Values<headValue, tailValues...>, auto testValue) {
 
 template <typename Pack, auto testValue>
 concept ValuePackContains = ValuePack<Pack> && PackContains<Pack, testValue>::value();
+
+template <typename Pack, auto testValue>
+inline constexpr bool value_pack_contains = ValuePackContains<Pack, testValue>;
 
 // -----------------------------------------------------------------------------
 // PackDefiniteFirstIndex
@@ -413,7 +465,7 @@ packFirstIndex(Values<>, auto value) {
 
 template <auto headValue, auto... tailValues>
 constexpr std::optional<size_t>
-packFirstIndex(Values<headValue, tailValues...> pack, auto testValue) {
+packFirstIndex(Values<headValue, tailValues...>, auto testValue) {
     using testType = std::decay_t<decltype(testValue)>;
     using headType = decltype(headValue);
     if constexpr (std::is_same_v<testType, headType>) {
@@ -421,7 +473,11 @@ packFirstIndex(Values<headValue, tailValues...> pack, auto testValue) {
             return 0;
         }
     }
-    return 1 + packFirstIndex(Values<tailValues...>{}, testValue);
+    auto tailResult = packFirstIndex(Values<tailValues...>{}, testValue);
+    if (tailResult) {
+        return 1 + *tailResult;
+    }
+    return std::nullopt;
 }
 
 inline constexpr std::optional<size_t>
