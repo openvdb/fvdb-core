@@ -470,6 +470,14 @@ packElement(Pack pack, size_t index) {
     throw std::logic_error("Index out of bounds");
 }
 
+// get<I>: compile-time indexed access to pack values (tuple-like interface)
+template <size_t I, NonEmptyValuePack Pack>
+    requires(I < PackSize_v<Pack>())
+constexpr auto
+get(Pack) {
+    return PackElement_v<Pack, I>();
+}
+
 // -----------------------------------------------------------------------------
 // PackContains
 // -----------------------------------------------------------------------------

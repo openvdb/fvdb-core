@@ -7,6 +7,8 @@
 
 #include <cstddef>
 #include <optional>
+#include <utility>
+#include <vector>
 
 namespace fvdb {
 namespace dispatch {
@@ -293,6 +295,45 @@ TEST(CoordFromPoint, ThreeAxisConversion) {
 }
 
 // =============================================================================
+// PointFromCoord Tests
+// =============================================================================
+
+TEST(PointFromCoord, ConvertsValueToIndex) {
+    using Space = ValueAxes<DeviceAxis, DTypeAxis>;
+    // DeviceAxis = {CPU, CUDA, Metal}, DTypeAxis = {Float32, Float64, Int32}
+
+    // Values<CPU, Float32> -> Point<0, 0>
+    static_assert(
+        std::is_same_v<PointFromCoord_t<Space, Values<Device::CPU, DType::Float32>>, Point<0, 0>>);
+
+    // Values<CUDA, Int32> -> Point<1, 2>
+    static_assert(
+        std::is_same_v<PointFromCoord_t<Space, Values<Device::CUDA, DType::Int32>>, Point<1, 2>>);
+
+    // Values<Metal, Float64> -> Point<2, 1>
+    static_assert(std::is_same_v<PointFromCoord_t<Space, Values<Device::Metal, DType::Float64>>,
+                                 Point<2, 1>>);
+}
+
+TEST(PointFromCoord, SingleAxisConversion) {
+    using Space = ValueAxes<IntAxis>; // {1, 2, 4, 8}
+
+    static_assert(std::is_same_v<PointFromCoord_t<Space, Values<1>>, Point<0>>);
+    static_assert(std::is_same_v<PointFromCoord_t<Space, Values<2>>, Point<1>>);
+    static_assert(std::is_same_v<PointFromCoord_t<Space, Values<4>>, Point<2>>);
+    static_assert(std::is_same_v<PointFromCoord_t<Space, Values<8>>, Point<3>>);
+}
+
+TEST(PointFromCoord, ThreeAxisConversion) {
+    using Space = ValueAxes<Values<'x', 'y'>, Values<10, 20>, Values<true, false>>;
+
+    // Verify a few coords
+    static_assert(std::is_same_v<PointFromCoord_t<Space, Values<'x', 10, true>>, Point<0, 0, 0>>);
+    static_assert(std::is_same_v<PointFromCoord_t<Space, Values<'y', 20, false>>, Point<1, 1, 1>>);
+    static_assert(std::is_same_v<PointFromCoord_t<Space, Values<'x', 20, true>>, Point<0, 1, 0>>);
+}
+
+// =============================================================================
 // Integration Tests
 // =============================================================================
 
@@ -324,6 +365,123 @@ TEST(ValueSpaceIntegration, SpaceContainsImpliesCoordTypesMatch) {
 
     // CoordTypesMatch can be true without SpaceContains (hypothetically invalid values)
     // This is tested implicitly - any valid coord that passes SpaceContains also passes types
+}
+
+TEST(ValueSpaceIntegration, CoordPointRoundTrip) {
+    using Space = ValueAxes<DeviceAxis, IntAxis>;
+    // DeviceAxis = {CPU, CUDA, Metal} (3), IntAxis = {1, 2, 4, 8} (4)
+
+    // Point -> Coord -> Point round trip
+    using Pt1    = Point<1, 2>;
+    using Coord1 = CoordFromPoint_t<Space, Pt1>;
+    static_assert(std::is_same_v<Coord1, Values<Device::CUDA, 4>>);
+    static_assert(std::is_same_v<PointFromCoord_t<Space, Coord1>, Pt1>);
+
+    // Coord -> Point -> Coord round trip
+    using Coord2 = Values<Device::Metal, 8>;
+    using Pt2    = PointFromCoord_t<Space, Coord2>;
+    static_assert(std::is_same_v<Pt2, Point<2, 3>>);
+    static_assert(std::is_same_v<CoordFromPoint_t<Space, Pt2>, Coord2>);
+
+    // Test all corners
+    static_assert(
+        std::is_same_v<PointFromCoord_t<Space, CoordFromPoint_t<Space, Point<0, 0>>>, Point<0, 0>>);
+    static_assert(
+        std::is_same_v<PointFromCoord_t<Space, CoordFromPoint_t<Space, Point<2, 3>>>, Point<2, 3>>);
+}
+
+// =============================================================================
+// visit_value_space Tests
+// =============================================================================
+
+TEST(VisitValueSpace, SingleAxisVisitsAllCoords) {
+    using Space = ValueAxes<IntAxis>; // {1, 2, 4, 8}
+
+    size_t           count = 0;
+    std::vector<int> visited;
+    visit_value_space(
+        [&](auto coord) {
+            ++count;
+            visited.push_back(get<0>(coord));
+        },
+        Space{});
+
+    EXPECT_EQ(count, 4u);
+    EXPECT_EQ(visited, (std::vector<int>{1, 2, 4, 8}));
+}
+
+TEST(VisitValueSpace, TwoAxisVisitsAllCombinations) {
+    using Space = ValueAxes<DeviceAxis, DTypeAxis>;
+    // 3 devices x 3 dtypes = 9 combinations
+
+    size_t                                count = 0;
+    std::vector<std::pair<Device, DType>> visited;
+    visit_value_space(
+        [&](auto coord) {
+            ++count;
+            visited.emplace_back(get<0>(coord), get<1>(coord));
+        },
+        Space{});
+
+    EXPECT_EQ(count, 9u);
+    // Row-major order: last axis varies fastest
+    ASSERT_EQ(visited.size(), 9u);
+    EXPECT_EQ(visited[0], std::make_pair(Device::CPU, DType::Float32));
+    EXPECT_EQ(visited[1], std::make_pair(Device::CPU, DType::Float64));
+    EXPECT_EQ(visited[2], std::make_pair(Device::CPU, DType::Int32));
+    EXPECT_EQ(visited[3], std::make_pair(Device::CUDA, DType::Float32));
+    EXPECT_EQ(visited[8], std::make_pair(Device::Metal, DType::Int32));
+}
+
+TEST(VisitValueSpace, ThreeAxisVisitsAll) {
+    using Space = ValueAxes<Values<'a', 'b'>, Values<1, 2>, Values<true, false>>;
+    // 2 x 2 x 2 = 8 combinations
+
+    size_t count = 0;
+    visit_value_space([&](auto) { ++count; }, Space{});
+
+    EXPECT_EQ(count, 8u);
+}
+
+TEST(VisitValueSpace, OrderMatchesIndexSpace) {
+    using Space    = ValueAxes<DeviceAxis, IntAxis>;
+    using IdxSpace = IndexSpaceOf_t<Space>;
+
+    // Collect coords via value space visitation
+    std::vector<std::pair<Device, int>> valueOrder;
+    visit_value_space(
+        [&](auto coord) { valueOrder.emplace_back(get<0>(coord), get<1>(coord)); }, Space{});
+
+    // Collect coords via index space visitation with manual conversion
+    std::vector<std::pair<Device, int>> indexOrder;
+    visit_index_space(
+        [&](auto pt) {
+            using Coord = CoordFromPoint_t<Space, decltype(pt)>;
+            indexOrder.emplace_back(get<0>(Coord{}), get<1>(Coord{}));
+        },
+        IdxSpace{});
+
+    EXPECT_EQ(valueOrder, indexOrder);
+}
+
+TEST(VisitValueSpaces, VisitsMultipleSpaces) {
+    using Space1 = ValueAxes<Values<1, 2>>;
+    using Space2 = ValueAxes<Values<'x', 'y', 'z'>>;
+
+    size_t count = 0;
+    visit_value_spaces([&](auto) { ++count; }, Space1{}, Space2{});
+
+    EXPECT_EQ(count, 5u); // 2 + 3
+}
+
+TEST(VisitValueSpaces, MaintainsOrderAcrossSpaces) {
+    using Space1 = ValueAxes<Values<1, 2>>;
+    using Space2 = ValueAxes<Values<10, 20>>;
+
+    std::vector<int> visited;
+    visit_value_spaces([&](auto coord) { visited.push_back(get<0>(coord)); }, Space1{}, Space2{});
+
+    EXPECT_EQ(visited, (std::vector<int>{1, 2, 10, 20}));
 }
 
 } // namespace dispatch

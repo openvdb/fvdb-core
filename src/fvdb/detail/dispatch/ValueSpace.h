@@ -163,8 +163,7 @@ template <typename Space, typename Coord> struct coord_types_match {
 };
 
 // Base case: single axis, single value
-template <ValueAxis Axis0, auto V0>
-struct coord_types_match<ValueAxes<Axis0>, Values<V0>> {
+template <ValueAxis Axis0, auto V0> struct coord_types_match<ValueAxes<Axis0>, Values<V0>> {
     static consteval bool
     value() {
         return std::is_same_v<AxisValueType_t<Axis0>, decltype(V0)>;
@@ -204,8 +203,7 @@ template <typename Space, typename Coord> struct space_contains {
 };
 
 // Base case: single axis, single value
-template <ValueAxis Axis0, auto V0>
-struct space_contains<ValueAxes<Axis0>, Values<V0>> {
+template <ValueAxis Axis0, auto V0> struct space_contains<ValueAxes<Axis0>, Values<V0>> {
     static consteval bool
     value() {
         return AxisContains_v<Axis0, V0>();
@@ -266,6 +264,75 @@ struct CoordFromPoint<ValueAxes<Axis0, TailAxes...>, Point<I0, TailIs...>> {
 template <ValueSpace Space, IndexPoint Pt>
     requires PointInBounds<IndexSpaceOf_t<Space>, Pt>
 using CoordFromPoint_t = typename CoordFromPoint<Space, Pt>::type;
+
+// -----------------------------------------------------------------------------
+// PointFromCoord - convert a ValueCoord to an IndexPoint within a ValueSpace
+// -----------------------------------------------------------------------------
+
+template <ValueSpace Space, typename Coord> struct PointFromCoord;
+
+// Base case: single axis, single value
+template <ValueAxis Axis, auto V>
+    requires SpaceContains<ValueAxes<Axis>, Values<V>>
+struct PointFromCoord<ValueAxes<Axis>, Values<V>> {
+    using type = Point<AxisIndex_v<Axis, V>()>;
+};
+
+// Recursive case: multiple axes
+template <ValueAxis Axis0, ValueAxis... TailAxes, auto V0, auto... TailVs>
+    requires SpaceContains<ValueAxes<Axis0, TailAxes...>, Values<V0, TailVs...>>
+struct PointFromCoord<ValueAxes<Axis0, TailAxes...>, Values<V0, TailVs...>> {
+    using type = Prepend_t<typename PointFromCoord<ValueAxes<TailAxes...>, Values<TailVs...>>::type,
+                           AxisIndex_v<Axis0, V0>()>;
+};
+
+template <ValueSpace Space, typename Coord>
+    requires SpaceContains<Space, Coord>
+using PointFromCoord_t = typename PointFromCoord<Space, Coord>::type;
+
+// -----------------------------------------------------------------------------
+// Visitation Utilities for Value Spaces
+// -----------------------------------------------------------------------------
+//
+// Value spaces are traversed in row-major order (matching the underlying index
+// space). The visitor receives a default-constructed Values<...> coord object
+// for each coordinate in the space.
+//
+// Example:
+//     using MySpace = ValueAxes<DeviceAxis, DTypeAxis>;
+//     visit_value_space([](auto coord) {
+//         // coord is a Values<Device, DType> for each valid combination
+//     }, MySpace{});
+//
+// -----------------------------------------------------------------------------
+
+// PointToCoordVisitor: Adapts a coord visitor to work with index points.
+// Named struct for cleaner stack traces and explicit instantiation.
+template <ValueSpace Space, typename CoordVisitor> struct PointToCoordVisitor {
+    CoordVisitor &visitor;
+
+    template <IndexPoint Pt>
+    void
+    operator()(Pt) const {
+        using Coord = CoordFromPoint_t<Space, Pt>;
+        std::invoke(visitor, Coord{});
+    }
+};
+
+template <typename Visitor, ValueSpace Space>
+void
+visit_value_space(Visitor &&visitor, Space) {
+    using IdxSpace = IndexSpaceOf_t<Space>;
+    PointToCoordVisitor<Space, std::remove_reference_t<Visitor>> wrapper{visitor};
+    visit_index_space(wrapper, IdxSpace{});
+}
+
+template <typename Visitor, ValueSpace... Spaces>
+void
+visit_value_spaces(Visitor &&visitor, Spaces... spaces) {
+    // Note: don't forward visitor in fold - it's used for each space
+    (visit_value_space(visitor, spaces), ...);
+}
 
 } // namespace dispatch
 } // namespace fvdb
