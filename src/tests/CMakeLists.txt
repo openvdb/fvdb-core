@@ -158,7 +158,7 @@ ConfigureTest(GaussianMCMCRelocationTest "GaussianMCMCRelocationTest.cpp")
 # Configure dispatch unit tests
 ConfigureTest(DispatchTraitsTest "dispatch/TraitsTest.cpp")
 ConfigureTest(DispatchIndexSpaceTest "dispatch/IndexSpaceTest.cpp")
-# ConfigureTest(DispatchIndexSpaceCudaTest "dispatch/IndexSpaceCudaTest.cu")
+ConfigureTest(DispatchIndexSpaceCudaTest "dispatch/IndexSpaceCudaTest.cu")
 ConfigureTest(DispatchValuesTest "dispatch/ValuesTest.cpp")
 ConfigureTest(DispatchValuesCudaTest "dispatch/ValuesCudaTest.cu")
 #ConfigureTest(DispatchAxisOuterProductTest "dispatch/AxisOuterProductTest.cpp")
