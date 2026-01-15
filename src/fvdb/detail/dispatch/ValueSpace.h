@@ -266,6 +266,16 @@ template <ValueSpace Space, IndexPoint Pt>
 using CoordFromPoint_t = typename CoordFromPoint<Space, Pt>::type;
 
 // -----------------------------------------------------------------------------
+// CoordFromLinearIndex - convert a linear index to a ValueCoord within a ValueSpace
+// -----------------------------------------------------------------------------
+// This chains CoordFromPoint <- PointFromLinearIndex around the same space.
+
+template <ValueSpace Space, size_t linearIndex>
+    requires(linearIndex < Numel_v<Space>())
+using CoordFromLinearIndex_t =
+    CoordFromPoint_t<Space, PointFromLinearIndex_t<IndexSpaceOf_t<Space>, linearIndex>>;
+
+// -----------------------------------------------------------------------------
 // PointFromCoord - convert a ValueCoord to an IndexPoint within a ValueSpace
 // -----------------------------------------------------------------------------
 
@@ -289,6 +299,148 @@ struct PointFromCoord<ValueAxes<Axis0, TailAxes...>, Values<V0, TailVs...>> {
 template <ValueSpace Space, typename Coord>
     requires SpaceContains<Space, Coord>
 using PointFromCoord_t = typename PointFromCoord<Space, Coord>::type;
+
+// -----------------------------------------------------------------------------
+// LinearIndexFromCoord - convert a ValueCoord to a linear index within a ValueSpace
+// -----------------------------------------------------------------------------
+// This chains LinearIndexFromPoint <- PointFromCoord around the same space.
+
+template <ValueSpace Space, typename Coord>
+    requires SpaceContains<Space, Coord>
+consteval size_t
+LinearIndexFromCoord_v() {
+    return LinearIndexFromPoint_v<IndexSpaceOf_t<Space>, PointFromCoord_t<Space, Coord>>();
+}
+
+// =============================================================================
+// ValueCoord <-> Tuple Conversion Utilities
+// =============================================================================
+//
+// These utilities provide type-safe conversions between Values<...> coords
+// and std::tuple<...> for runtime operations on value spaces.
+//
+// Key types:
+//   - SpaceTupleType_t<Space>: the std::tuple type for coords in a space
+//   - TupleTypesMatchSpace<Tuple, Space>: concept checking tuple/space compatibility
+//
+// Key functions:
+//   - coordToTuple(coord): convert Values<...> to std::tuple (constexpr)
+//   - spaceLinearIndex(space, tuple): runtime lookup returning std::optional<size_t>
+//
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// SpaceTupleType - the std::tuple type for coordinates in a ValueSpace
+// -----------------------------------------------------------------------------
+
+template <typename Space> struct SpaceTupleType;
+
+template <ValueAxis... Axes> struct SpaceTupleType<ValueAxes<Axes...>> {
+    using type = std::tuple<AxisValueType_t<Axes>...>;
+};
+
+template <ValueSpace Space> using SpaceTupleType_t = typename SpaceTupleType<Space>::type;
+
+// -----------------------------------------------------------------------------
+// TupleTypesMatchSpace - check if a tuple type matches a space's coordinate type
+// -----------------------------------------------------------------------------
+
+template <typename Tuple, typename Space> struct tuple_types_match_space {
+    static consteval bool
+    value() {
+        return false;
+    }
+};
+
+template <ValueAxis... Axes>
+struct tuple_types_match_space<std::tuple<AxisValueType_t<Axes>...>, ValueAxes<Axes...>> {
+    static consteval bool
+    value() {
+        return true;
+    }
+};
+
+template <typename Tuple, typename Space>
+consteval bool
+tuple_types_match_space_v() {
+    return tuple_types_match_space<std::decay_t<Tuple>, Space>::value();
+}
+
+template <typename Tuple, typename Space>
+concept TupleTypesMatchSpace = ValueSpace<Space> && tuple_types_match_space_v<Tuple, Space>();
+
+template <typename Tuple, typename Space>
+consteval bool
+is_tuple_types_match_space() {
+    return TupleTypesMatchSpace<Tuple, Space>;
+}
+
+// -----------------------------------------------------------------------------
+// coordToTuple - convert a Values coord to a std::tuple
+// -----------------------------------------------------------------------------
+// This is constexpr since the coord values are known at compile time.
+
+template <auto... Vs>
+constexpr auto
+coordToTuple(Values<Vs...>) {
+    return std::make_tuple(Vs...);
+}
+
+// Overload with explicit Space for type clarity
+template <ValueSpace Space, typename Coord>
+    requires CoordTypesMatch<Space, Coord>
+constexpr SpaceTupleType_t<Space>
+coordToTuple(Space, Coord) {
+    return coordToTuple(Coord{});
+}
+
+// -----------------------------------------------------------------------------
+// spaceLinearIndex - runtime linear index lookup from tuple coordinate
+// -----------------------------------------------------------------------------
+// Returns std::optional<size_t>: the linear index if coord is in space, nullopt otherwise.
+// This is the runtime analog of LinearIndexFromCoord_v for queries where
+// the coordinate values aren't known at compile time.
+//
+// The tuple must have the correct types (TupleTypesMatchSpace), but the values
+// may or may not be in the space's axes.
+
+// Base case: single axis
+template <ValueAxis Axis, typename T>
+    requires std::is_same_v<std::decay_t<T>, AxisValueType_t<Axis>>
+constexpr std::optional<size_t>
+spaceLinearIndex(ValueAxes<Axis>, const std::tuple<T> &coord) {
+    return axisIndex(Axis{}, std::get<0>(coord));
+}
+
+// Recursive case: multiple axes
+template <ValueAxis Axis0,
+          ValueAxis Axis1,
+          ValueAxis... TailAxes,
+          typename T0,
+          typename T1,
+          typename... TailTs>
+    requires TupleTypesMatchSpace<std::tuple<T0, T1, TailTs...>,
+                                  ValueAxes<Axis0, Axis1, TailAxes...>>
+constexpr std::optional<size_t>
+spaceLinearIndex(ValueAxes<Axis0, Axis1, TailAxes...>, const std::tuple<T0, T1, TailTs...> &coord) {
+    // Look up index in first axis
+    auto idx0 = axisIndex(Axis0{}, std::get<0>(coord));
+    if (!idx0) {
+        return std::nullopt;
+    }
+
+    // Extract tail tuple and recurse
+    auto tailCoord = std::apply([](auto, auto... tail) { return std::make_tuple(tail...); }, coord);
+
+    auto tailLinear = spaceLinearIndex(ValueAxes<Axis1, TailAxes...>{}, tailCoord);
+    if (!tailLinear) {
+        return std::nullopt;
+    }
+
+    // Combine: linear = idx0 * tailNumel + tailLinear (row-major order)
+    constexpr size_t tailNumel = Numel_v<ValueAxes<Axis1, TailAxes...>>();
+    return *idx0 * tailNumel + *tailLinear;
+}
 
 // -----------------------------------------------------------------------------
 // Visitation Utilities for Value Spaces

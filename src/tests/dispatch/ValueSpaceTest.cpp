@@ -295,6 +295,75 @@ TEST(CoordFromPoint, ThreeAxisConversion) {
 }
 
 // =============================================================================
+// CoordFromLinearIndex Tests
+// =============================================================================
+
+TEST(CoordFromLinearIndex, ConvertsLinearIndexToValue) {
+    using Space = ValueAxes<DeviceAxis, DTypeAxis>;
+    // DeviceAxis = {CPU, CUDA, Metal}, DTypeAxis = {Float32, Float64, Int32}
+    // Row-major order: DType varies fastest
+    // Linear 0 -> (0,0) -> Values<CPU, Float32>
+    // Linear 1 -> (0,1) -> Values<CPU, Float64>
+    // Linear 2 -> (0,2) -> Values<CPU, Int32>
+    // Linear 3 -> (1,0) -> Values<CUDA, Float32>
+    // Linear 8 -> (2,2) -> Values<Metal, Int32>
+
+    static_assert(
+        std::is_same_v<CoordFromLinearIndex_t<Space, 0>, Values<Device::CPU, DType::Float32>>);
+    static_assert(
+        std::is_same_v<CoordFromLinearIndex_t<Space, 1>, Values<Device::CPU, DType::Float64>>);
+    static_assert(
+        std::is_same_v<CoordFromLinearIndex_t<Space, 2>, Values<Device::CPU, DType::Int32>>);
+    static_assert(
+        std::is_same_v<CoordFromLinearIndex_t<Space, 3>, Values<Device::CUDA, DType::Float32>>);
+    static_assert(
+        std::is_same_v<CoordFromLinearIndex_t<Space, 5>, Values<Device::CUDA, DType::Int32>>);
+    static_assert(
+        std::is_same_v<CoordFromLinearIndex_t<Space, 8>, Values<Device::Metal, DType::Int32>>);
+}
+
+TEST(CoordFromLinearIndex, SingleAxisConversion) {
+    using Space = ValueAxes<IntAxis>; // {1, 2, 4, 8}
+
+    static_assert(std::is_same_v<CoordFromLinearIndex_t<Space, 0>, Values<1>>);
+    static_assert(std::is_same_v<CoordFromLinearIndex_t<Space, 1>, Values<2>>);
+    static_assert(std::is_same_v<CoordFromLinearIndex_t<Space, 2>, Values<4>>);
+    static_assert(std::is_same_v<CoordFromLinearIndex_t<Space, 3>, Values<8>>);
+}
+
+TEST(CoordFromLinearIndex, ThreeAxisConversion) {
+    using Space = ValueAxes<Values<'x', 'y'>, Values<10, 20>, Values<true, false>>;
+    // 2 x 2 x 2 = 8 combinations in row-major order:
+    // 0 -> (0,0,0) -> <'x', 10, true>
+    // 1 -> (0,0,1) -> <'x', 10, false>
+    // 2 -> (0,1,0) -> <'x', 20, true>
+    // 3 -> (0,1,1) -> <'x', 20, false>
+    // 4 -> (1,0,0) -> <'y', 10, true>
+    // 5 -> (1,0,1) -> <'y', 10, false>
+    // 6 -> (1,1,0) -> <'y', 20, true>
+    // 7 -> (1,1,1) -> <'y', 20, false>
+
+    static_assert(std::is_same_v<CoordFromLinearIndex_t<Space, 0>, Values<'x', 10, true>>);
+    static_assert(std::is_same_v<CoordFromLinearIndex_t<Space, 1>, Values<'x', 10, false>>);
+    static_assert(std::is_same_v<CoordFromLinearIndex_t<Space, 3>, Values<'x', 20, false>>);
+    static_assert(std::is_same_v<CoordFromLinearIndex_t<Space, 4>, Values<'y', 10, true>>);
+    static_assert(std::is_same_v<CoordFromLinearIndex_t<Space, 7>, Values<'y', 20, false>>);
+}
+
+TEST(CoordFromLinearIndex, MatchesCoordFromPoint) {
+    using Space    = ValueAxes<DeviceAxis, IntAxis>;
+    using IdxSpace = IndexSpaceOf_t<Space>;
+
+    // Verify CoordFromLinearIndex == CoordFromPoint(PointFromLinearIndex)
+    static_assert(std::is_same_v<CoordFromLinearIndex_t<Space, 0>,
+                                 CoordFromPoint_t<Space, PointFromLinearIndex_t<IdxSpace, 0>>>);
+    static_assert(std::is_same_v<CoordFromLinearIndex_t<Space, 5>,
+                                 CoordFromPoint_t<Space, PointFromLinearIndex_t<IdxSpace, 5>>>);
+    static_assert(std::is_same_v<CoordFromLinearIndex_t<Space, 11>,
+                                 CoordFromPoint_t<Space, PointFromLinearIndex_t<IdxSpace, 11>>>);
+}
+
+// =============================================================================
 // PointFromCoord Tests
 // =============================================================================
 
@@ -331,6 +400,92 @@ TEST(PointFromCoord, ThreeAxisConversion) {
     static_assert(std::is_same_v<PointFromCoord_t<Space, Values<'x', 10, true>>, Point<0, 0, 0>>);
     static_assert(std::is_same_v<PointFromCoord_t<Space, Values<'y', 20, false>>, Point<1, 1, 1>>);
     static_assert(std::is_same_v<PointFromCoord_t<Space, Values<'x', 20, true>>, Point<0, 1, 0>>);
+}
+
+// =============================================================================
+// LinearIndexFromCoord Tests
+// =============================================================================
+
+TEST(LinearIndexFromCoord, ConvertsValueToLinearIndex) {
+    using Space = ValueAxes<DeviceAxis, DTypeAxis>;
+    // DeviceAxis = {CPU, CUDA, Metal}, DTypeAxis = {Float32, Float64, Int32}
+    // Row-major order: DType varies fastest
+    // Values<CPU, Float32> -> (0,0) -> Linear 0
+    // Values<CPU, Float64> -> (0,1) -> Linear 1
+    // Values<CPU, Int32> -> (0,2) -> Linear 2
+    // Values<CUDA, Float32> -> (1,0) -> Linear 3
+    // Values<Metal, Int32> -> (2,2) -> Linear 8
+
+    static_assert(LinearIndexFromCoord_v<Space, Values<Device::CPU, DType::Float32>>() == 0);
+    static_assert(LinearIndexFromCoord_v<Space, Values<Device::CPU, DType::Float64>>() == 1);
+    static_assert(LinearIndexFromCoord_v<Space, Values<Device::CPU, DType::Int32>>() == 2);
+    static_assert(LinearIndexFromCoord_v<Space, Values<Device::CUDA, DType::Float32>>() == 3);
+    static_assert(LinearIndexFromCoord_v<Space, Values<Device::CUDA, DType::Int32>>() == 5);
+    static_assert(LinearIndexFromCoord_v<Space, Values<Device::Metal, DType::Int32>>() == 8);
+}
+
+TEST(LinearIndexFromCoord, SingleAxisConversion) {
+    using Space = ValueAxes<IntAxis>; // {1, 2, 4, 8}
+
+    static_assert(LinearIndexFromCoord_v<Space, Values<1>>() == 0);
+    static_assert(LinearIndexFromCoord_v<Space, Values<2>>() == 1);
+    static_assert(LinearIndexFromCoord_v<Space, Values<4>>() == 2);
+    static_assert(LinearIndexFromCoord_v<Space, Values<8>>() == 3);
+}
+
+TEST(LinearIndexFromCoord, ThreeAxisConversion) {
+    using Space = ValueAxes<Values<'x', 'y'>, Values<10, 20>, Values<true, false>>;
+    // 2 x 2 x 2 = 8 combinations in row-major order:
+    // <'x', 10, true> -> (0,0,0) -> 0
+    // <'x', 10, false> -> (0,0,1) -> 1
+    // <'x', 20, false> -> (0,1,1) -> 3
+    // <'y', 10, true> -> (1,0,0) -> 4
+    // <'y', 20, false> -> (1,1,1) -> 7
+
+    static_assert(LinearIndexFromCoord_v<Space, Values<'x', 10, true>>() == 0);
+    static_assert(LinearIndexFromCoord_v<Space, Values<'x', 10, false>>() == 1);
+    static_assert(LinearIndexFromCoord_v<Space, Values<'x', 20, false>>() == 3);
+    static_assert(LinearIndexFromCoord_v<Space, Values<'y', 10, true>>() == 4);
+    static_assert(LinearIndexFromCoord_v<Space, Values<'y', 20, false>>() == 7);
+}
+
+TEST(LinearIndexFromCoord, MatchesLinearIndexFromPoint) {
+    using Space    = ValueAxes<DeviceAxis, IntAxis>;
+    using IdxSpace = IndexSpaceOf_t<Space>;
+
+    // Verify LinearIndexFromCoord == LinearIndexFromPoint(PointFromCoord)
+    static_assert(
+        LinearIndexFromCoord_v<Space, Values<Device::CPU, 1>>() ==
+        LinearIndexFromPoint_v<IdxSpace, PointFromCoord_t<Space, Values<Device::CPU, 1>>>());
+    static_assert(
+        LinearIndexFromCoord_v<Space, Values<Device::CUDA, 4>>() ==
+        LinearIndexFromPoint_v<IdxSpace, PointFromCoord_t<Space, Values<Device::CUDA, 4>>>());
+    static_assert(
+        LinearIndexFromCoord_v<Space, Values<Device::Metal, 8>>() ==
+        LinearIndexFromPoint_v<IdxSpace, PointFromCoord_t<Space, Values<Device::Metal, 8>>>());
+}
+
+TEST(LinearIndexFromCoord, RoundTripWithCoordFromLinearIndex) {
+    using Space = ValueAxes<DeviceAxis, DTypeAxis>;
+
+    // Verify LinearIndexFromCoord(CoordFromLinearIndex(i)) == i
+    static_assert(LinearIndexFromCoord_v<Space, CoordFromLinearIndex_t<Space, 0>>() == 0);
+    static_assert(LinearIndexFromCoord_v<Space, CoordFromLinearIndex_t<Space, 4>>() == 4);
+    static_assert(LinearIndexFromCoord_v<Space, CoordFromLinearIndex_t<Space, 8>>() == 8);
+
+    // Verify CoordFromLinearIndex(LinearIndexFromCoord(c)) == c
+    using Coord1 = Values<Device::CPU, DType::Float32>;
+    using Coord2 = Values<Device::CUDA, DType::Int32>;
+    using Coord3 = Values<Device::Metal, DType::Float64>;
+    static_assert(
+        std::is_same_v<CoordFromLinearIndex_t<Space, LinearIndexFromCoord_v<Space, Coord1>()>,
+                       Coord1>);
+    static_assert(
+        std::is_same_v<CoordFromLinearIndex_t<Space, LinearIndexFromCoord_v<Space, Coord2>()>,
+                       Coord2>);
+    static_assert(
+        std::is_same_v<CoordFromLinearIndex_t<Space, LinearIndexFromCoord_v<Space, Coord3>()>,
+                       Coord3>);
 }
 
 // =============================================================================
@@ -482,6 +637,279 @@ TEST(VisitValueSpaces, MaintainsOrderAcrossSpaces) {
     visit_value_spaces([&](auto coord) { visited.push_back(get<0>(coord)); }, Space1{}, Space2{});
 
     EXPECT_EQ(visited, (std::vector<int>{1, 2, 10, 20}));
+}
+
+// =============================================================================
+// SpaceTupleType Tests
+// =============================================================================
+
+TEST(SpaceTupleType, MapsSpaceToCorrectTupleType) {
+    using Space1D = ValueAxes<DeviceAxis>;
+    using Space2D = ValueAxes<DeviceAxis, DTypeAxis>;
+    using Space3D = ValueAxes<DeviceAxis, DTypeAxis, IntAxis>;
+
+    static_assert(std::is_same_v<SpaceTupleType_t<Space1D>, std::tuple<Device>>);
+    static_assert(std::is_same_v<SpaceTupleType_t<Space2D>, std::tuple<Device, DType>>);
+    static_assert(std::is_same_v<SpaceTupleType_t<Space3D>, std::tuple<Device, DType, int>>);
+}
+
+TEST(SpaceTupleType, MixedAxisTypes) {
+    using Space = ValueAxes<IntAxis, CharAxis>;
+
+    static_assert(std::is_same_v<SpaceTupleType_t<Space>, std::tuple<int, char>>);
+}
+
+TEST(SpaceTupleType, SingleElementAxes) {
+    using Space = ValueAxes<Values<42>, Values<true>>;
+
+    static_assert(std::is_same_v<SpaceTupleType_t<Space>, std::tuple<int, bool>>);
+}
+
+// =============================================================================
+// TupleTypesMatchSpace Tests
+// =============================================================================
+
+TEST(TupleTypesMatchSpace, MatchingTupleTypesSatisfy) {
+    using Space = ValueAxes<DeviceAxis, DTypeAxis>;
+
+    // Correct tuple types match
+    static_assert(tuple_types_match_space_v<std::tuple<Device, DType>, Space>());
+    static_assert(TupleTypesMatchSpace<std::tuple<Device, DType>, Space>);
+    static_assert(is_tuple_types_match_space<std::tuple<Device, DType>, Space>());
+}
+
+TEST(TupleTypesMatchSpace, ConstRefTupleTypesMatch) {
+    using Space = ValueAxes<IntAxis, CharAxis>;
+
+    // decay_t handles const/ref qualifiers
+    static_assert(tuple_types_match_space_v<const std::tuple<int, char> &, Space>());
+    static_assert(TupleTypesMatchSpace<const std::tuple<int, char>, Space>);
+}
+
+TEST(TupleTypesMatchSpace, WrongTypesFail) {
+    using Space = ValueAxes<DeviceAxis, DTypeAxis>;
+
+    // Wrong element types
+    static_assert(!tuple_types_match_space_v<std::tuple<int, int>, Space>());
+    static_assert(!tuple_types_match_space_v<std::tuple<Device, int>, Space>());
+    static_assert(!tuple_types_match_space_v<std::tuple<int, DType>, Space>());
+    static_assert(!is_tuple_types_match_space<std::tuple<int, int>, Space>());
+}
+
+TEST(TupleTypesMatchSpace, WrongRankFails) {
+    using Space = ValueAxes<DeviceAxis, DTypeAxis>;
+
+    // Wrong arity
+    static_assert(!tuple_types_match_space_v<std::tuple<Device>, Space>());
+    static_assert(!tuple_types_match_space_v<std::tuple<Device, DType, int>, Space>());
+}
+
+TEST(TupleTypesMatchSpace, SingleAxisSpace) {
+    using Space = ValueAxes<IntAxis>;
+
+    static_assert(tuple_types_match_space_v<std::tuple<int>, Space>());
+    static_assert(!tuple_types_match_space_v<std::tuple<char>, Space>());
+    static_assert(!tuple_types_match_space_v<std::tuple<int, int>, Space>());
+}
+
+// =============================================================================
+// coordToTuple Tests
+// =============================================================================
+
+TEST(CoordToTuple, ConvertsValuesToTuple) {
+    // Single value
+    constexpr auto t1 = coordToTuple(Values<42>{});
+    static_assert(std::is_same_v<decltype(t1), const std::tuple<int>>);
+    static_assert(std::get<0>(t1) == 42);
+
+    // Multiple values
+    constexpr auto t2 = coordToTuple(Values<Device::CUDA, DType::Float64>{});
+    static_assert(std::is_same_v<decltype(t2), const std::tuple<Device, DType>>);
+    static_assert(std::get<0>(t2) == Device::CUDA);
+    static_assert(std::get<1>(t2) == DType::Float64);
+
+    // Three values
+    constexpr auto t3 = coordToTuple(Values<'x', 10, true>{});
+    static_assert(std::is_same_v<decltype(t3), const std::tuple<char, int, bool>>);
+    static_assert(std::get<0>(t3) == 'x');
+    static_assert(std::get<1>(t3) == 10);
+    static_assert(std::get<2>(t3) == true);
+}
+
+TEST(CoordToTuple, SpaceOverloadReturnsCorrectType) {
+    using Space = ValueAxes<DeviceAxis, DTypeAxis>;
+    using Coord = Values<Device::Metal, DType::Int32>;
+
+    constexpr auto t = coordToTuple(Space{}, Coord{});
+    static_assert(std::is_same_v<decltype(t), const SpaceTupleType_t<Space>>);
+    static_assert(std::get<0>(t) == Device::Metal);
+    static_assert(std::get<1>(t) == DType::Int32);
+}
+
+TEST(CoordToTuple, RuntimeUsage) {
+    auto t = coordToTuple(Values<1, 2, 4>{});
+    EXPECT_EQ(std::get<0>(t), 1);
+    EXPECT_EQ(std::get<1>(t), 2);
+    EXPECT_EQ(std::get<2>(t), 4);
+}
+
+// =============================================================================
+// spaceLinearIndex Tests
+// =============================================================================
+
+TEST(SpaceLinearIndex, SingleAxisReturnsAxisIndex) {
+    using Space = ValueAxes<IntAxis>; // {1, 2, 4, 8}
+
+    // Values in axis
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple(1)), std::optional<size_t>{0});
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple(2)), std::optional<size_t>{1});
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple(4)), std::optional<size_t>{2});
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple(8)), std::optional<size_t>{3});
+
+    // Values not in axis
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple(3)), std::nullopt);
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple(16)), std::nullopt);
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple(0)), std::nullopt);
+}
+
+TEST(SpaceLinearIndex, TwoAxisReturnsLinearIndex) {
+    using Space = ValueAxes<DeviceAxis, DTypeAxis>;
+    // DeviceAxis = {CPU, CUDA, Metal}, DTypeAxis = {Float32, Float64, Int32}
+    // Row-major order: DType varies fastest
+    // (CPU, Float32) -> 0, (CPU, Float64) -> 1, (CPU, Int32) -> 2
+    // (CUDA, Float32) -> 3, (CUDA, Float64) -> 4, (CUDA, Int32) -> 5
+    // (Metal, Float32) -> 6, (Metal, Float64) -> 7, (Metal, Int32) -> 8
+
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple(Device::CPU, DType::Float32)),
+              std::optional<size_t>{0});
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple(Device::CPU, DType::Float64)),
+              std::optional<size_t>{1});
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple(Device::CPU, DType::Int32)),
+              std::optional<size_t>{2});
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple(Device::CUDA, DType::Float32)),
+              std::optional<size_t>{3});
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple(Device::CUDA, DType::Int32)),
+              std::optional<size_t>{5});
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple(Device::Metal, DType::Int32)),
+              std::optional<size_t>{8});
+}
+
+TEST(SpaceLinearIndex, ThreeAxisReturnsLinearIndex) {
+    using Space = ValueAxes<Values<'x', 'y'>, Values<10, 20>, Values<true, false>>;
+    // 2 x 2 x 2 = 8 combinations in row-major order
+
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple('x', 10, true)), std::optional<size_t>{0});
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple('x', 10, false)), std::optional<size_t>{1});
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple('x', 20, true)), std::optional<size_t>{2});
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple('x', 20, false)), std::optional<size_t>{3});
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple('y', 10, true)), std::optional<size_t>{4});
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple('y', 10, false)), std::optional<size_t>{5});
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple('y', 20, true)), std::optional<size_t>{6});
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple('y', 20, false)), std::optional<size_t>{7});
+}
+
+TEST(SpaceLinearIndex, ReturnsNulloptForMissingValues) {
+    using Space = ValueAxes<DeviceAxis, IntAxis>; // {CPU,CUDA,Metal} x {1,2,4,8}
+
+    // First element missing from axis
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple(Device::CPU, 3)), std::nullopt);
+    EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple(Device::CUDA, 16)), std::nullopt);
+
+    // Both elements would need to be valid Device for type checking
+    // (type mismatch would be caught at compile time via concept)
+}
+
+TEST(SpaceLinearIndex, MatchesLinearIndexFromCoord) {
+    using Space  = ValueAxes<DeviceAxis, DTypeAxis>;
+    using Coord1 = Values<Device::CPU, DType::Float32>;
+    using Coord2 = Values<Device::CUDA, DType::Float64>;
+    using Coord3 = Values<Device::Metal, DType::Int32>;
+
+    // Verify runtime spaceLinearIndex matches compile-time LinearIndexFromCoord_v
+    // for all valid coordinates
+    auto coord1 = std::make_tuple(Device::CPU, DType::Float32);
+    auto coord2 = std::make_tuple(Device::CUDA, DType::Float64);
+    auto coord3 = std::make_tuple(Device::Metal, DType::Int32);
+
+    // Store expected values to avoid macro comma issues with template arguments
+    constexpr size_t expected1 = LinearIndexFromCoord_v<Space, Coord1>();
+    constexpr size_t expected2 = LinearIndexFromCoord_v<Space, Coord2>();
+    constexpr size_t expected3 = LinearIndexFromCoord_v<Space, Coord3>();
+
+    EXPECT_EQ(spaceLinearIndex(Space{}, coord1), expected1);
+    EXPECT_EQ(spaceLinearIndex(Space{}, coord2), expected2);
+    EXPECT_EQ(spaceLinearIndex(Space{}, coord3), expected3);
+}
+
+TEST(SpaceLinearIndex, ConstexprUsage) {
+    using Space = ValueAxes<IntAxis>;
+
+    // Verify constexpr evaluation works
+    constexpr auto idx1 = spaceLinearIndex(Space{}, std::make_tuple(4));
+    static_assert(idx1.has_value());
+    static_assert(*idx1 == 2);
+
+    constexpr auto idx2 = spaceLinearIndex(Space{}, std::make_tuple(99));
+    static_assert(!idx2.has_value());
+}
+
+TEST(SpaceLinearIndex, RuntimeVariableCoord) {
+    using Space = ValueAxes<IntAxis>; // {1, 2, 4, 8}
+
+    // Test with runtime-determined values
+    for (int val: {1, 2, 4, 8}) {
+        auto result = spaceLinearIndex(Space{}, std::make_tuple(val));
+        EXPECT_TRUE(result.has_value()) << "Value " << val << " should be in space";
+    }
+
+    for (int val: {0, 3, 5, 6, 7, 9, 16}) {
+        auto result = spaceLinearIndex(Space{}, std::make_tuple(val));
+        EXPECT_FALSE(result.has_value()) << "Value " << val << " should not be in space";
+    }
+}
+
+TEST(SpaceLinearIndex, TwoAxisRuntimeLookup) {
+    using Space = ValueAxes<DeviceAxis, IntAxis>;
+    // DeviceAxis = {CPU, CUDA, Metal} (3), IntAxis = {1, 2, 4, 8} (4)
+    // Total: 12 combinations
+
+    // Verify all valid combinations return correct linear indices
+    size_t expectedIdx = 0;
+    for (Device d: {Device::CPU, Device::CUDA, Device::Metal}) {
+        for (int i: {1, 2, 4, 8}) {
+            auto result = spaceLinearIndex(Space{}, std::make_tuple(d, i));
+            EXPECT_EQ(result, std::optional<size_t>{expectedIdx})
+                << "Failed for device=" << static_cast<int>(d) << ", int=" << i;
+            ++expectedIdx;
+        }
+    }
+
+    // Verify invalid int values return nullopt
+    for (Device d: {Device::CPU, Device::CUDA, Device::Metal}) {
+        EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple(d, 3)), std::nullopt);
+        EXPECT_EQ(spaceLinearIndex(Space{}, std::make_tuple(d, 16)), std::nullopt);
+    }
+}
+
+TEST(SpaceLinearIndex, RoundTripWithCoordFromLinearIndex) {
+    using Space = ValueAxes<DeviceAxis, DTypeAxis>;
+
+    // For each linear index, convert to coord tuple and back
+    for (size_t i = 0; i < Numel_v<Space>(); ++i) {
+        // We need to use visit to get runtime access to compile-time coords
+        size_t visitedIdx = 0;
+        visit_value_space(
+            [&](auto coord) {
+                if (visitedIdx == i) {
+                    auto tuple  = coordToTuple(coord);
+                    auto result = spaceLinearIndex(Space{}, tuple);
+                    EXPECT_EQ(result, std::optional<size_t>{i})
+                        << "Round trip failed for linear index " << i;
+                }
+                ++visitedIdx;
+            },
+            Space{});
+    }
 }
 
 } // namespace dispatch

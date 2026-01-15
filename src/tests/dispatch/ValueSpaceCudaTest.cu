@@ -422,7 +422,237 @@ TEST(ValueSpaceCuda, DeviceDispatchPattern) {
 }
 
 // =============================================================================
-// Test 9: IndexSpaceOf mapping in device code
+// Test 9: CoordFromLinearIndex in device code
+// =============================================================================
+
+template <typename Space, size_t linearIndex>
+__global__ void
+test_coord_from_linear_index_kernel(size_t *result) {
+    using Coord    = CoordFromLinearIndex_t<Space, linearIndex>;
+    using IdxSpace = IndexSpaceOf_t<Space>;
+    using Pt       = PointFromCoord_t<Space, Coord>;
+    // Return the linear index from the resulting coord to verify round-trip
+    *result = LinearIndexFromPoint_v<IdxSpace, Pt>();
+}
+
+TEST(ValueSpaceCuda, CoordFromLinearIndexOnDevice) {
+    using Space = ValueAxes<DeviceAxis, DTypeAxis>;
+
+    size_t *d_result = nullptr;
+    ASSERT_EQ(cudaMalloc(&d_result, sizeof(size_t)), cudaSuccess);
+
+    size_t h_result{};
+
+    // Test linear index 0 -> coord -> back to linear index 0
+    test_coord_from_linear_index_kernel<Space, 0><<<1, 1>>>(d_result);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(&h_result, d_result, sizeof(size_t), cudaMemcpyDeviceToHost), cudaSuccess);
+    EXPECT_EQ(h_result, size_t{0});
+
+    // Test linear index 3 (second device, first dtype)
+    test_coord_from_linear_index_kernel<Space, 3><<<1, 1>>>(d_result);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(&h_result, d_result, sizeof(size_t), cudaMemcpyDeviceToHost), cudaSuccess);
+    EXPECT_EQ(h_result, size_t{3});
+
+    // Test linear index 5 (last valid index in 2x3 space)
+    test_coord_from_linear_index_kernel<Space, 5><<<1, 1>>>(d_result);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(&h_result, d_result, sizeof(size_t), cudaMemcpyDeviceToHost), cudaSuccess);
+    EXPECT_EQ(h_result, size_t{5});
+
+    ASSERT_EQ(cudaFree(d_result), cudaSuccess);
+}
+
+__global__ void
+test_coord_from_linear_index_traits_kernel(bool *results) {
+    using Space = ValueAxes<DeviceAxis, DTypeAxis>;
+    // DeviceAxis = {CPU, CUDA}, DTypeAxis = {Float32, Float64, Int32}
+    // Linear 0 -> (0,0) -> Values<CPU, Float32>
+    // Linear 1 -> (0,1) -> Values<CPU, Float64>
+    // Linear 3 -> (1,0) -> Values<CUDA, Float32>
+    // Linear 5 -> (1,2) -> Values<CUDA, Int32>
+
+    results[0] =
+        std::is_same_v<CoordFromLinearIndex_t<Space, 0>, Values<Device::CPU, DType::Float32>>;
+    results[1] =
+        std::is_same_v<CoordFromLinearIndex_t<Space, 1>, Values<Device::CPU, DType::Float64>>;
+    results[2] =
+        std::is_same_v<CoordFromLinearIndex_t<Space, 3>, Values<Device::CUDA, DType::Float32>>;
+    results[3] =
+        std::is_same_v<CoordFromLinearIndex_t<Space, 5>, Values<Device::CUDA, DType::Int32>>;
+
+    // Verify CoordFromLinearIndex matches CoordFromPoint(PointFromLinearIndex)
+    using IdxSpace = IndexSpaceOf_t<Space>;
+    results[4]     = std::is_same_v<CoordFromLinearIndex_t<Space, 2>,
+                                    CoordFromPoint_t<Space, PointFromLinearIndex_t<IdxSpace, 2>>>;
+    results[5]     = std::is_same_v<CoordFromLinearIndex_t<Space, 4>,
+                                    CoordFromPoint_t<Space, PointFromLinearIndex_t<IdxSpace, 4>>>;
+}
+
+TEST(ValueSpaceCuda, CoordFromLinearIndexTraitsOnDevice) {
+    constexpr size_t num_tests = 6;
+
+    bool *d_results = nullptr;
+    ASSERT_EQ(cudaMalloc(&d_results, num_tests * sizeof(bool)), cudaSuccess);
+
+    test_coord_from_linear_index_traits_kernel<<<1, 1>>>(d_results);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    std::array<bool, num_tests> h_results{};
+    ASSERT_EQ(
+        cudaMemcpy(h_results.data(), d_results, num_tests * sizeof(bool), cudaMemcpyDeviceToHost),
+        cudaSuccess);
+
+    EXPECT_TRUE(h_results[0]) << "CoordFromLinearIndex<0> == Values<CPU, Float32>";
+    EXPECT_TRUE(h_results[1]) << "CoordFromLinearIndex<1> == Values<CPU, Float64>";
+    EXPECT_TRUE(h_results[2]) << "CoordFromLinearIndex<3> == Values<CUDA, Float32>";
+    EXPECT_TRUE(h_results[3]) << "CoordFromLinearIndex<5> == Values<CUDA, Int32>";
+    EXPECT_TRUE(h_results[4]) << "CoordFromLinearIndex matches CoordFromPoint chain (idx 2)";
+    EXPECT_TRUE(h_results[5]) << "CoordFromLinearIndex matches CoordFromPoint chain (idx 4)";
+
+    ASSERT_EQ(cudaFree(d_results), cudaSuccess);
+}
+
+// =============================================================================
+// Test 10: LinearIndexFromCoord in device code
+// =============================================================================
+
+template <typename Space, typename Coord>
+__global__ void
+test_linear_index_from_coord_kernel(size_t *result) {
+    *result = LinearIndexFromCoord_v<Space, Coord>();
+}
+
+TEST(ValueSpaceCuda, LinearIndexFromCoordOnDevice) {
+    using Space = ValueAxes<DeviceAxis, DTypeAxis>;
+
+    size_t *d_result = nullptr;
+    ASSERT_EQ(cudaMalloc(&d_result, sizeof(size_t)), cudaSuccess);
+
+    size_t h_result{};
+
+    // Test Values<CPU, Float32> -> linear index 0
+    test_linear_index_from_coord_kernel<Space, Values<Device::CPU, DType::Float32>>
+        <<<1, 1>>>(d_result);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(&h_result, d_result, sizeof(size_t), cudaMemcpyDeviceToHost), cudaSuccess);
+    EXPECT_EQ(h_result, size_t{0});
+
+    // Test Values<CUDA, Float32> -> linear index 3
+    test_linear_index_from_coord_kernel<Space, Values<Device::CUDA, DType::Float32>>
+        <<<1, 1>>>(d_result);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(&h_result, d_result, sizeof(size_t), cudaMemcpyDeviceToHost), cudaSuccess);
+    EXPECT_EQ(h_result, size_t{3});
+
+    // Test Values<CUDA, Int32> -> linear index 5
+    test_linear_index_from_coord_kernel<Space, Values<Device::CUDA, DType::Int32>>
+        <<<1, 1>>>(d_result);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(&h_result, d_result, sizeof(size_t), cudaMemcpyDeviceToHost), cudaSuccess);
+    EXPECT_EQ(h_result, size_t{5});
+
+    ASSERT_EQ(cudaFree(d_result), cudaSuccess);
+}
+
+__global__ void
+test_linear_index_from_coord_traits_kernel(size_t *results) {
+    using Space = ValueAxes<DeviceAxis, DTypeAxis>;
+    // DeviceAxis = {CPU, CUDA}, DTypeAxis = {Float32, Float64, Int32}
+    // Values<CPU, Float32> -> 0
+    // Values<CPU, Float64> -> 1
+    // Values<CUDA, Float32> -> 3
+    // Values<CUDA, Int32> -> 5
+
+    results[0] = LinearIndexFromCoord_v<Space, Values<Device::CPU, DType::Float32>>();
+    results[1] = LinearIndexFromCoord_v<Space, Values<Device::CPU, DType::Float64>>();
+    results[2] = LinearIndexFromCoord_v<Space, Values<Device::CUDA, DType::Float32>>();
+    results[3] = LinearIndexFromCoord_v<Space, Values<Device::CUDA, DType::Int32>>();
+
+    // Verify LinearIndexFromCoord matches LinearIndexFromPoint(PointFromCoord)
+    using IdxSpace = IndexSpaceOf_t<Space>;
+    results[4] =
+        LinearIndexFromPoint_v<IdxSpace,
+                               PointFromCoord_t<Space, Values<Device::CPU, DType::Int32>>>();
+    results[5] =
+        LinearIndexFromPoint_v<IdxSpace,
+                               PointFromCoord_t<Space, Values<Device::CUDA, DType::Float64>>>();
+}
+
+TEST(ValueSpaceCuda, LinearIndexFromCoordTraitsOnDevice) {
+    constexpr size_t num_tests = 6;
+    size_t *d_results          = nullptr;
+    ASSERT_EQ(cudaMalloc(&d_results, num_tests * sizeof(size_t)), cudaSuccess);
+
+    test_linear_index_from_coord_traits_kernel<<<1, 1>>>(d_results);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    // std::array<size_t, num_tests> h_results{};
+    std::vector<size_t> h_results;
+    h_results.resize(num_tests, 0);
+    ASSERT_EQ(
+        cudaMemcpy(h_results.data(), d_results, num_tests * sizeof(size_t), cudaMemcpyDeviceToHost),
+        cudaSuccess);
+
+    EXPECT_EQ(h_results[0], size_t{0}) << "LinearIndexFromCoord<CPU, Float32>";
+    EXPECT_EQ(h_results[1], size_t{1}) << "LinearIndexFromCoord<CPU, Float64>";
+    EXPECT_EQ(h_results[2], size_t{3}) << "LinearIndexFromCoord<CUDA, Float32>";
+    EXPECT_EQ(h_results[3], size_t{5}) << "LinearIndexFromCoord<CUDA, Int32>";
+    // Verify chain matches: LinearIndexFromCoord == LinearIndexFromPoint(PointFromCoord)
+    EXPECT_EQ(h_results[4], size_t{2}) << "LinearIndexFromPoint chain (CPU, Int32)";
+    EXPECT_EQ(h_results[5], size_t{4}) << "LinearIndexFromPoint chain (CUDA, Float64)";
+
+    ASSERT_EQ(cudaFree(d_results), cudaSuccess);
+}
+
+__global__ void
+test_linear_index_round_trip_kernel(bool *results) {
+    using Space = ValueAxes<DeviceAxis, DTypeAxis>;
+
+    // Verify LinearIndexFromCoord(CoordFromLinearIndex(i)) == i
+    results[0] = LinearIndexFromCoord_v<Space, CoordFromLinearIndex_t<Space, 0>>() == 0;
+    results[1] = LinearIndexFromCoord_v<Space, CoordFromLinearIndex_t<Space, 3>>() == 3;
+    results[2] = LinearIndexFromCoord_v<Space, CoordFromLinearIndex_t<Space, 5>>() == 5;
+
+    // Verify CoordFromLinearIndex(LinearIndexFromCoord(c)) == c
+    using Coord1 = Values<Device::CPU, DType::Float32>;
+    using Coord2 = Values<Device::CUDA, DType::Int32>;
+    results[3] =
+        std::is_same_v<CoordFromLinearIndex_t<Space, LinearIndexFromCoord_v<Space, Coord1>()>,
+                       Coord1>;
+    results[4] =
+        std::is_same_v<CoordFromLinearIndex_t<Space, LinearIndexFromCoord_v<Space, Coord2>()>,
+                       Coord2>;
+}
+
+TEST(ValueSpaceCuda, LinearIndexRoundTripOnDevice) {
+    constexpr size_t num_tests = 5;
+    bool *d_results            = nullptr;
+    ASSERT_EQ(cudaMalloc(&d_results, num_tests * sizeof(bool)), cudaSuccess);
+
+    test_linear_index_round_trip_kernel<<<1, 1>>>(d_results);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    // std::array<bool, num_tests> h_results{};
+    //  std::vector<bool> h_results;
+    //  h_results.resize(num_tests, false);
+    bool h_results[num_tests] = {false, false, false, false, false};
+    ASSERT_EQ(
+        cudaMemcpy((void *)h_results, d_results, num_tests * sizeof(bool), cudaMemcpyDeviceToHost),
+        cudaSuccess);
+
+    EXPECT_TRUE(h_results[0]) << "LinearIndexFromCoord(CoordFromLinearIndex(0)) == 0";
+    EXPECT_TRUE(h_results[1]) << "LinearIndexFromCoord(CoordFromLinearIndex(3)) == 3";
+    EXPECT_TRUE(h_results[2]) << "LinearIndexFromCoord(CoordFromLinearIndex(5)) == 5";
+    EXPECT_TRUE(h_results[3]) << "CoordFromLinearIndex(LinearIndexFromCoord(Coord1)) == Coord1";
+    EXPECT_TRUE(h_results[4]) << "CoordFromLinearIndex(LinearIndexFromCoord(Coord2)) == Coord2";
+
+    ASSERT_EQ(cudaFree(d_results), cudaSuccess);
+}
+
+// =============================================================================
+// Test 11: IndexSpaceOf mapping in device code
 // =============================================================================
 
 __global__ void
