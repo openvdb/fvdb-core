@@ -49,3 +49,87 @@ Finally, Downstream from PermutationMap is the DispatchTable, which combines the
 I'm clear on what the job of Traits, Values, IndexSpace is, and PermutationMap and DispatchTable afterwards. I no longer thing AxisOuterProduct is the most descriptive name for this middle thing - and I'm also not sure that DimensionalAxis is the right name for a specific set of values of permutation on a single axis.
 
 Given the style of the code in this dispatch directory and the overall design sensibility, and the explanataion above, help me brainstorm better names.
+
+================================================================================
+Op Implementation Patterns
+================================================================================
+
+The dispatch machinery handles the runtime lookup: a type-erased input (torch::Tensor, DLPack) 
+produces a ValueTuple at runtime, which becomes a key into the dispatch table. The function 
+pointer stored there was created during instantiation.
+
+The design question: **what does the op implementer's code look like?**
+
+Key insight: Device determines the *algorithm shape* (loops vs kernels), while dtype determines 
+the *working type* within that algorithm. Value specialization (explicit specialization for 
+every Device×DType combination) leads to combinatorial explosion and code duplication. Better 
+to separate concerns.
+
+The recommended pattern uses Tag<V> for device dispatch via overloading, with the scalar type 
+as a template parameter. This works identically for free functions and functors.
+
+### Free Function Style
+
+```cpp
+// Device-specific implementations, templated on scalar type
+template <typename T>
+void saxpy_impl(Tag<torch::kCPU>, T* y, T a, const T* x, size_t n) {
+    for (size_t i = 0; i < n; ++i) y[i] = a * x[i] + y[i];
+}
+
+template <typename T>
+void saxpy_impl(Tag<torch::kCUDA>, T* y, T a, const T* x, size_t n) {
+    saxpy_kernel<<<...>>>(y, a, x, n);
+}
+
+// Entry point from dispatch table - type erased
+template <typename Coord>
+void saxpy_dispatch(Coord, void* y, double a, const void* x, size_t n) {
+    constexpr auto device = get<0>(Coord{});
+    constexpr auto dtype  = get<1>(Coord{});
+    using T = ScalarCppTypeT<dtype>;
+    
+    saxpy_impl(Tag<device>{},
+               static_cast<T*>(y), T(a), static_cast<const T*>(x), n);
+}
+```
+
+### Functor Style
+
+```cpp
+struct SaxpyOp {
+    // Entry point from dispatch table
+    template <typename Coord>
+    static void call(Coord, void* y, double a, const void* x, size_t n) {
+        constexpr auto device = get<0>(Coord{});
+        constexpr auto dtype  = get<1>(Coord{});
+        using T = ScalarCppTypeT<dtype>;
+        
+        run(Tag<device>{},
+            static_cast<T*>(y), T(a), static_cast<const T*>(x), n);
+    }
+    
+private:
+    template <typename T>
+    static void run(Tag<torch::kCPU>, T* y, T a, const T* x, size_t n) {
+        for (size_t i = 0; i < n; ++i) y[i] = a * x[i] + y[i];
+    }
+    
+    template <typename T>
+    static void run(Tag<torch::kCUDA>, T* y, T a, const T* x, size_t n) {
+        saxpy_kernel<<<...>>>(y, a, x, n);
+    }
+};
+```
+
+### Summary
+
+The `call(Coord, ...)` signature is the type-erasure boundary. Everything below that is fully 
+typed (`T*` not `void*`). Device selection is via tag dispatch (overload resolution), not 
+if-constexpr chains. The actual algorithm is just normal C++ code.
+
+The Coord's job is to inform type mapping and device selection, then it disappears. The inner 
+code doesn't care about `Values<...>` or enums—it just works with real types.
+
+The `Values<...>` / `ValueSpace` machinery defines the dispatch space, and `Tag<V>` is the 
+overload selection mechanism at the implementation level. They compose nicely.

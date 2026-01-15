@@ -397,7 +397,7 @@ TEST(ValueSpaceIntegration, CoordPointRoundTrip) {
 TEST(VisitValueSpace, SingleAxisVisitsAllCoords) {
     using Space = ValueAxes<IntAxis>; // {1, 2, 4, 8}
 
-    size_t           count = 0;
+    size_t count = 0;
     std::vector<int> visited;
     visit_value_space(
         [&](auto coord) {
@@ -414,7 +414,7 @@ TEST(VisitValueSpace, TwoAxisVisitsAllCombinations) {
     using Space = ValueAxes<DeviceAxis, DTypeAxis>;
     // 3 devices x 3 dtypes = 9 combinations
 
-    size_t                                count = 0;
+    size_t count = 0;
     std::vector<std::pair<Device, DType>> visited;
     visit_value_space(
         [&](auto coord) {
@@ -449,8 +449,8 @@ TEST(VisitValueSpace, OrderMatchesIndexSpace) {
 
     // Collect coords via value space visitation
     std::vector<std::pair<Device, int>> valueOrder;
-    visit_value_space(
-        [&](auto coord) { valueOrder.emplace_back(get<0>(coord), get<1>(coord)); }, Space{});
+    visit_value_space([&](auto coord) { valueOrder.emplace_back(get<0>(coord), get<1>(coord)); },
+                      Space{});
 
     // Collect coords via index space visitation with manual conversion
     std::vector<std::pair<Device, int>> indexOrder;
