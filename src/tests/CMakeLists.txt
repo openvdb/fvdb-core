@@ -168,6 +168,9 @@ ConfigureTest(DispatchValueSpaceMapCudaTest "dispatch/ValueSpaceMapCudaTest.cu")
 ConfigureTest(DispatchTableBasicImplCudaTest "dispatch/DispatchTableBasicImplCudaTest.cu")
 ConfigureTest(DispatchTableBasicOpCudaTest "dispatch/DispatchTableBasicOpCudaTest.cu")
 
+ConfigureTest(DispatchScanLibHostTest "dispatch/ScanLibHostTest.cpp")
+ConfigureTest(DispatchScanLibCudaTest "dispatch/ScanLibCudaTest.cu")
+
 if(NOT NANOVDB_EDITOR_SKIP)
   #ConfigureTest(ViewerTest "ViewerTest.cpp")
 endif()
