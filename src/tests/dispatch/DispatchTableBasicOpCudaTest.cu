@@ -82,25 +82,15 @@ struct BasicOp {
     using GPUInt32Subspace = Values<Device::GPU, DType::Int32, ChannelPlacement::Minor>;
     using CPUSubspace      = ValueAxes<Values<Device::CPU>, DtypeAxis, PlacementAxis>;
     using Dispatcher       = DispatchTable<Space, BasicArray(size_t, size_t)>;
-
-    Dispatcher table;
-
-    BasicOp()
-        : table(Dispatcher::from_op<BasicOp>(),
-                GPUFloatSubspace{},
-                GPUInt32Subspace{},
-                CPUSubspace{}) {}
-
-    BasicArray
-    operator()(Device dev, DType dtype, ChannelPlacement pl, size_t C, size_t E) const {
-        return table(std::make_tuple(dev, dtype, pl), C, E);
-    }
 };
 
 BasicArray
 basic(Device dev, DType dtype, ChannelPlacement pl, size_t C, size_t E) {
-    static BasicOp const op{};
-    return op(dev, dtype, pl, C, E);
+    static BasicOp::Dispatcher const table{BasicOp::Dispatcher::from_op<BasicOp>(),
+                                           BasicOp::GPUFloatSubspace{},
+                                           BasicOp::GPUInt32Subspace{},
+                                           BasicOp::CPUSubspace{}};
+    return table(std::make_tuple(dev, dtype, pl), C, E);
 }
 
 // -----------------------------------------------------------------------------
