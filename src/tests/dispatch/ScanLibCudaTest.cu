@@ -5,8 +5,10 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstdint>
 #include <numeric>
+#include <type_traits>
 #include <vector>
 
 namespace scanlib {
@@ -111,6 +113,26 @@ make_input(int64_t n) {
     return v;
 }
 
+/// Compare scan results with appropriate tolerance for floating-point types.
+/// Parallel scans are not deterministic for floats due to non-associativity,
+/// so we use relative tolerance. Integers are compared exactly.
+template <typename T>
+void
+expect_scan_equal(std::vector<T> const &actual, std::vector<T> const &expected) {
+    ASSERT_EQ(actual.size(), expected.size());
+    for (size_t i = 0; i < actual.size(); ++i) {
+        if constexpr (std::is_floating_point_v<T>) {
+            // Relative tolerance + small absolute tolerance for values near zero
+            T const rel_tol = T{1e-4};
+            T const abs_tol = T{1e-6};
+            T const tol     = std::abs(expected[i]) * rel_tol + abs_tol;
+            EXPECT_NEAR(actual[i], expected[i], tol) << "at index " << i;
+        } else {
+            EXPECT_EQ(actual[i], expected[i]) << "at index " << i;
+        }
+    }
+}
+
 // =============================================================================
 // Typed test fixture for all scalar types
 // =============================================================================
@@ -143,7 +165,7 @@ TYPED_TEST(ScanLibCudaTest, Basic) {
 
     d_out.copyToHost(output.data());
 
-    EXPECT_EQ(output, expected_scan(input));
+    expect_scan_equal(output, expected_scan(input));
 }
 
 TYPED_TEST(ScanLibCudaTest, Large) {
@@ -165,7 +187,7 @@ TYPED_TEST(ScanLibCudaTest, Large) {
 
     d_out.copyToHost(output.data());
 
-    EXPECT_EQ(output, expected_scan(input));
+    expect_scan_equal(output, expected_scan(input));
 }
 
 TYPED_TEST(ScanLibCudaTest, SingleElement) {
@@ -222,7 +244,7 @@ TYPED_TEST(ScanLibCudaTest, WithStream) {
     d_out.copyToHost(output.data());
     cudaStreamDestroy(stream);
 
-    EXPECT_EQ(output, expected_scan(input));
+    expect_scan_equal(output, expected_scan(input));
 }
 
 // =============================================================================
