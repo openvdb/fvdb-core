@@ -550,7 +550,7 @@ TEST(ValueSpaceMap, CreateAndStoreWithStatefulFactory) {
     ValueSpaceMap_t<Space, int> map;
 
     // Factory lambda that accumulates state via captured reference
-    int  sum     = 0;
+    int sum      = 0;
     auto factory = [&sum](auto coord) {
         int val = std::get<0>(coordToTuple(coord));
         sum += val;
