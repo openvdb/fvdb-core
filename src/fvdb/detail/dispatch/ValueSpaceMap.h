@@ -63,24 +63,25 @@ template <ValueSpace Space> struct ValueSpaceMapKey {
     using space_type = Space;
     using coord_type = SpaceTupleType_t<Space>;
 
-    coord_type coord;
     size_t linear_index;
 
-    // The implicit conversion from Tuple to Key.
-    // This is called when you do: map.emplace(my_tuple, val);
-    explicit ValueSpaceMapKey(coord_type const &in_coord) {
+    constexpr explicit ValueSpaceMapKey(coord_type const &in_coord) {
         auto const opt_linear_index = spaceLinearIndex(space_type{}, in_coord);
         if (!opt_linear_index) {
             throw std::runtime_error("Insert Error: Coordinate is not in space!");
         }
-        coord        = in_coord;
         linear_index = *opt_linear_index;
     }
 
-    // Standard equality for Key vs Key
-    bool
+    template <ValuePack Coord>
+        requires SpaceContains<space_type, Coord>
+    constexpr explicit ValueSpaceMapKey(Coord in_coord) {
+        linear_index = LinearIndexFromCoord_v<space_type, Coord>();
+    }
+
+    constexpr bool
     operator==(ValueSpaceMapKey const &other) const {
-        return coord == other.coord && linear_index == other.linear_index;
+        return linear_index == other.linear_index;
     }
 };
 
@@ -89,7 +90,6 @@ template <ValueSpace Space> struct ValueSpaceMapKey {
 // ----------------------------------------------------------------------
 // By marking the hash as transparent, we can use tuples as lookup keys
 // without instantiating the Key type.
-
 template <ValueSpace Space> struct ValueSpaceMapHash {
     using space_type = Space;
     using coord_type = SpaceTupleType_t<Space>;
@@ -99,13 +99,13 @@ template <ValueSpace Space> struct ValueSpaceMapHash {
     using is_transparent = void;
 
     // Hash for stored Keys
-    std::size_t
+    constexpr std::size_t
     operator()(key_type const &k) const {
         return k.linear_index;
     }
 
     // Hash for Tuples (The "Get" path)
-    std::size_t
+    constexpr std::size_t
     operator()(coord_type const &t) const {
         auto const opt_linear_index = spaceLinearIndex(space_type{}, t);
         if (!opt_linear_index) {
@@ -115,6 +115,13 @@ template <ValueSpace Space> struct ValueSpaceMapHash {
             return 0;
         }
         return *opt_linear_index;
+    }
+
+    template <ValuePack Coord>
+        requires SpaceContains<space_type, Coord>
+    constexpr std::size_t
+    operator()(Coord in_coord) const {
+        return LinearIndexFromCoord_v<space_type, Coord>();
     }
 };
 
@@ -133,13 +140,13 @@ template <ValueSpace Space> struct ValueSpaceMapEqual {
     using is_transparent = void;
 
     // Key vs Key
-    bool
+    constexpr bool
     operator()(key_type const &lhs, key_type const &rhs) const {
         return lhs == rhs;
     }
 
     // Key vs Tuple (The "Get" path)
-    bool
+    constexpr bool
     operator()(key_type const &k, coord_type const &t) const {
         auto const opt_linear_index = spaceLinearIndex(space_type{}, t);
         if (!opt_linear_index) {
@@ -152,9 +159,23 @@ template <ValueSpace Space> struct ValueSpaceMapEqual {
 
     // Tuple vs Key (The "Get" path - reverse argument order)
     // Required for transparent lookup: the library may call with either order.
-    bool
+    constexpr bool
     operator()(coord_type const &t, key_type const &k) const {
         return (*this)(k, t); // Delegate to the Key vs Tuple overload
+    }
+
+    template <ValuePack Coord>
+        requires SpaceContains<space_type, Coord>
+    constexpr bool
+    operator()(Coord in_coord, key_type const &k) const {
+        return ValueSpaceMapKey<space_type>(in_coord) == k;
+    }
+
+    template <ValuePack Coord>
+        requires SpaceContains<space_type, Coord>
+    constexpr bool
+    operator()(key_type const &k, Coord in_coord) const {
+        return k == ValueSpaceMapKey<space_type>(in_coord);
     }
 };
 

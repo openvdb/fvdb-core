@@ -117,7 +117,7 @@ axisDefiniteIndex(Axis axis, auto value) {
 // A Value Space is an ordered set of ValueAxes. It must have at least one
 // axis.
 
-// Value Pack Concept (The Category)
+// ValueSpace Concept (The Category)
 template <typename T>
 concept ValueSpace = requires { typename T::value_space_tag; };
 
@@ -180,7 +180,7 @@ struct coord_types_match<ValueAxes<Axis0, Axis1, TailAxes...>, Values<V0, V1, Ta
     }
 };
 
-template <typename Space, typename Coord>
+template <ValueSpace Space, ValuePack Coord>
 consteval bool
 coord_types_match_v() {
     return coord_types_match<Space, Coord>::value();
@@ -220,7 +220,7 @@ struct space_contains<ValueAxes<Axis0, Axis1, TailAxes...>, Values<V0, V1, TailV
     }
 };
 
-template <typename Space, typename Coord>
+template <ValueSpace Space, ValuePack Coord>
 consteval bool
 space_contains_v() {
     return space_contains<Space, Coord>::value();
@@ -279,7 +279,7 @@ using CoordFromLinearIndex_t =
 // PointFromCoord - convert a ValueCoord to an IndexPoint within a ValueSpace
 // -----------------------------------------------------------------------------
 
-template <ValueSpace Space, typename Coord> struct PointFromCoord;
+template <ValueSpace Space, ValuePack Coord> struct PointFromCoord;
 
 // Base case: single axis, single value
 template <ValueAxis Axis, auto V>
@@ -296,7 +296,7 @@ struct PointFromCoord<ValueAxes<Axis0, TailAxes...>, Values<V0, TailVs...>> {
                            AxisIndex_v<Axis0, V0>()>;
 };
 
-template <ValueSpace Space, typename Coord>
+template <ValueSpace Space, ValuePack Coord>
     requires SpaceContains<Space, Coord>
 using PointFromCoord_t = typename PointFromCoord<Space, Coord>::type;
 
@@ -305,7 +305,7 @@ using PointFromCoord_t = typename PointFromCoord<Space, Coord>::type;
 // -----------------------------------------------------------------------------
 // This chains LinearIndexFromPoint <- PointFromCoord around the same space.
 
-template <ValueSpace Space, typename Coord>
+template <ValueSpace Space, ValuePack Coord>
     requires SpaceContains<Space, Coord>
 consteval size_t
 LinearIndexFromCoord_v() {
@@ -408,7 +408,7 @@ coordToTuple(Space, Coord) {
 template <ValueAxis Axis, typename T>
     requires std::is_same_v<std::decay_t<T>, AxisValueType_t<Axis>>
 constexpr std::optional<size_t>
-spaceLinearIndex(ValueAxes<Axis>, const std::tuple<T> &coord) {
+spaceLinearIndex(ValueAxes<Axis>, std::tuple<T> const &coord) {
     return axisIndex(Axis{}, std::get<0>(coord));
 }
 
@@ -422,7 +422,7 @@ template <ValueAxis Axis0,
     requires TupleTypesMatchSpace<std::tuple<T0, T1, TailTs...>,
                                   ValueAxes<Axis0, Axis1, TailAxes...>>
 constexpr std::optional<size_t>
-spaceLinearIndex(ValueAxes<Axis0, Axis1, TailAxes...>, const std::tuple<T0, T1, TailTs...> &coord) {
+spaceLinearIndex(ValueAxes<Axis0, Axis1, TailAxes...>, std::tuple<T0, T1, TailTs...> const &coord) {
     // Look up index in first axis
     auto idx0 = axisIndex(Axis0{}, std::get<0>(coord));
     if (!idx0) {
@@ -430,7 +430,7 @@ spaceLinearIndex(ValueAxes<Axis0, Axis1, TailAxes...>, const std::tuple<T0, T1, 
     }
 
     // Extract tail tuple and recurse
-    auto tailCoord = std::apply([](auto, auto... tail) { return std::make_tuple(tail...); }, coord);
+    auto tailCoord = tuple_tail(coord);
 
     auto tailLinear = spaceLinearIndex(ValueAxes<Axis1, TailAxes...>{}, tailCoord);
     if (!tailLinear) {

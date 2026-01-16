@@ -14,6 +14,10 @@
 namespace fvdb {
 namespace dispatch {
 
+// The dispatch table needs:
+// a function pointer value type, which is the user's choice
+// a
+
 // What are the key ideas behind the dispatch table? What does it add on top
 // of the plain permutation map?
 //

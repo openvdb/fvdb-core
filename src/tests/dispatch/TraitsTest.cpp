@@ -6,82 +6,28 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <string>
+#include <tuple>
 #include <type_traits>
+#include <vector>
 
 namespace fvdb {
 namespace dispatch {
 
 // =============================================================================
-// strides_helper_t Tests
+// is_index_sequence Tests
 // =============================================================================
 
-// For a shape <D0, D1, D2, ...>, strides are <D1*D2*..., D2*D3*..., ..., 1>
-// i.e., row-major (C-order) strides where stride[i] = product of dims[i+1:]
-
-TEST(strides_helper_t, SingleDimension) {
-    // Shape <10> → Strides <1>
-    using Shape    = std::index_sequence<10>;
-    using Strides  = strides_helper_t<Shape>;
-    using Expected = std::index_sequence<1>;
-    EXPECT_TRUE((std::is_same_v<Strides, Expected>));
+TEST(is_index_sequence, DetectsIndexSequence) {
+    EXPECT_TRUE((is_index_sequence<std::index_sequence<>>::value));
+    EXPECT_TRUE((is_index_sequence<std::index_sequence<1>>::value));
+    EXPECT_TRUE((is_index_sequence<std::index_sequence<1, 2, 3>>::value));
 }
 
-TEST(strides_helper_t, TwoDimensions) {
-    // Shape <3, 4> → Strides <4, 1>
-    using Shape    = std::index_sequence<3, 4>;
-    using Strides  = strides_helper_t<Shape>;
-    using Expected = std::index_sequence<4, 1>;
-    EXPECT_TRUE((std::is_same_v<Strides, Expected>));
-}
-
-TEST(strides_helper_t, ThreeDimensions) {
-    // Shape <2, 3, 4> → Strides <12, 4, 1>
-    // stride[0] = 3*4 = 12
-    // stride[1] = 4
-    // stride[2] = 1
-    using Shape    = std::index_sequence<2, 3, 4>;
-    using Strides  = strides_helper_t<Shape>;
-    using Expected = std::index_sequence<12, 4, 1>;
-    EXPECT_TRUE((std::is_same_v<Strides, Expected>));
-}
-
-TEST(strides_helper_t, FourDimensions) {
-    // Shape <2, 3, 4, 5> → Strides <60, 20, 5, 1>
-    // stride[0] = 3*4*5 = 60
-    // stride[1] = 4*5 = 20
-    // stride[2] = 5
-    // stride[3] = 1
-    using Shape    = std::index_sequence<2, 3, 4, 5>;
-    using Strides  = strides_helper_t<Shape>;
-    using Expected = std::index_sequence<60, 20, 5, 1>;
-    EXPECT_TRUE((std::is_same_v<Strides, Expected>));
-}
-
-TEST(strides_helper_t, AllOnes) {
-    // Shape <1, 1, 1> → Strides <1, 1, 1>
-    using Shape    = std::index_sequence<1, 1, 1>;
-    using Strides  = strides_helper_t<Shape>;
-    using Expected = std::index_sequence<1, 1, 1>;
-    EXPECT_TRUE((std::is_same_v<Strides, Expected>));
-}
-
-TEST(strides_helper_t, LargeDimensions) {
-    // Shape <100, 200> → Strides <200, 1>
-    using Shape    = std::index_sequence<100, 200>;
-    using Strides  = strides_helper_t<Shape>;
-    using Expected = std::index_sequence<200, 1>;
-    EXPECT_TRUE((std::is_same_v<Strides, Expected>));
-}
-
-TEST(strides_helper_t, NonUniformDimensions) {
-    // Shape <5, 1, 7> → Strides <7, 7, 1>
-    // stride[0] = 1*7 = 7
-    // stride[1] = 7
-    // stride[2] = 1
-    using Shape    = std::index_sequence<5, 1, 7>;
-    using Strides  = strides_helper_t<Shape>;
-    using Expected = std::index_sequence<7, 7, 1>;
-    EXPECT_TRUE((std::is_same_v<Strides, Expected>));
+TEST(is_index_sequence, RejectsNonIndexSequence) {
+    EXPECT_FALSE((is_index_sequence<int>::value));
+    EXPECT_FALSE((is_index_sequence<std::tuple<int>>::value));
+    EXPECT_FALSE((is_index_sequence<void>::value));
 }
 
 // =============================================================================
@@ -141,45 +87,156 @@ TEST(array_from_indices, IsConstexpr) {
 }
 
 // =============================================================================
-// Integration: strides_helper_t with array_from_indices
+// tuple_head Tests
 // =============================================================================
 
-TEST(TraitsIntegration, StridesToArray) {
-    // Convert strides to an array for runtime use
-    using Shape                = std::index_sequence<2, 3, 4>;
-    using Strides              = strides_helper_t<Shape>;
-    constexpr auto strides_arr = array_from_indices<Strides>::value;
-
-    EXPECT_EQ(strides_arr.size(), size_t{3});
-    EXPECT_EQ(strides_arr[0], size_t{12}); // 3*4
-    EXPECT_EQ(strides_arr[1], size_t{4});  // 4
-    EXPECT_EQ(strides_arr[2], size_t{1});  // 1
+TEST(tuple_head, SingleElement) {
+    auto t      = std::make_tuple(42);
+    auto result = tuple_head(t);
+    EXPECT_EQ(result, 42);
 }
 
-TEST(TraitsIntegration, LinearIndexComputation) {
-    // Verify strides can be used for linear index computation
-    // For shape <2, 3, 4>, element at [i, j, k] has linear index: i*12 + j*4 + k
-    using Shape            = std::index_sequence<2, 3, 4>;
-    using Strides          = strides_helper_t<Shape>;
-    constexpr auto strides = array_from_indices<Strides>::value;
+TEST(tuple_head, MultipleElements) {
+    auto t      = std::make_tuple(1, 2.0, "three");
+    auto result = tuple_head(t);
+    EXPECT_EQ(result, 1);
+}
 
-    // Element [0, 0, 0] → linear index 0
-    EXPECT_EQ(0 * strides[0] + 0 * strides[1] + 0 * strides[2], size_t{0});
+TEST(tuple_head, DifferentTypes) {
+    auto t      = std::make_tuple(std::string("hello"), 42, 3.14);
+    auto result = tuple_head(t);
+    EXPECT_EQ(result, "hello");
+}
 
-    // Element [1, 0, 0] → linear index 12
-    EXPECT_EQ(1 * strides[0] + 0 * strides[1] + 0 * strides[2], size_t{12});
+TEST(tuple_head, IsConstexpr) {
+    constexpr auto t      = std::make_tuple(10, 20, 30);
+    constexpr auto result = tuple_head(t);
+    static_assert(result == 10, "Head should be 10");
+    SUCCEED();
+}
 
-    // Element [0, 1, 0] → linear index 4
-    EXPECT_EQ(0 * strides[0] + 1 * strides[1] + 0 * strides[2], size_t{4});
+// =============================================================================
+// tuple_tail Tests
+// =============================================================================
 
-    // Element [0, 0, 1] → linear index 1
-    EXPECT_EQ(0 * strides[0] + 0 * strides[1] + 1 * strides[2], size_t{1});
+TEST(tuple_tail, TwoElements) {
+    auto t        = std::make_tuple(1, 2);
+    auto result   = tuple_tail(t);
+    auto expected = std::make_tuple(2);
+    EXPECT_EQ(result, expected);
+}
 
-    // Element [1, 2, 3] → linear index 1*12 + 2*4 + 3 = 23
-    EXPECT_EQ(1 * strides[0] + 2 * strides[1] + 3 * strides[2], size_t{23});
+TEST(tuple_tail, ThreeElements) {
+    auto t        = std::make_tuple(1, 2, 3);
+    auto result   = tuple_tail(t);
+    auto expected = std::make_tuple(2, 3);
+    EXPECT_EQ(result, expected);
+}
 
-    // Last element [1, 2, 3] should be total_size - 1 = 2*3*4 - 1 = 23
-    EXPECT_EQ(1 * strides[0] + 2 * strides[1] + 3 * strides[2], size_t{2 * 3 * 4 - 1});
+TEST(tuple_tail, SingleElementReturnsEmpty) {
+    auto t      = std::make_tuple(42);
+    auto result = tuple_tail(t);
+    EXPECT_EQ(std::tuple_size_v<decltype(result)>, size_t{0});
+}
+
+TEST(tuple_tail, MixedTypes) {
+    auto t        = std::make_tuple(1, 2.5, std::string("three"));
+    auto result   = tuple_tail(t);
+    auto expected = std::make_tuple(2.5, std::string("three"));
+    EXPECT_EQ(result, expected);
+}
+
+TEST(tuple_tail, IsConstexpr) {
+    constexpr auto t        = std::make_tuple(10, 20, 30);
+    constexpr auto result   = tuple_tail(t);
+    constexpr auto expected = std::make_tuple(20, 30);
+    static_assert(result == expected, "Tail should be (20, 30)");
+    SUCCEED();
+}
+
+// =============================================================================
+// TupleHead_t Tests
+// =============================================================================
+
+TEST(TupleHead_t, SingleElement) {
+    using Tuple    = std::tuple<int>;
+    using Expected = int;
+    EXPECT_TRUE((std::is_same_v<TupleHead_t<Tuple>, Expected>));
+}
+
+TEST(TupleHead_t, MultipleElements) {
+    using Tuple    = std::tuple<double, int, char>;
+    using Expected = double;
+    EXPECT_TRUE((std::is_same_v<TupleHead_t<Tuple>, Expected>));
+}
+
+TEST(TupleHead_t, ComplexTypes) {
+    using Tuple    = std::tuple<std::string, int, double>;
+    using Expected = std::string;
+    EXPECT_TRUE((std::is_same_v<TupleHead_t<Tuple>, Expected>));
+}
+
+// =============================================================================
+// TupleTail_t Tests
+// =============================================================================
+
+TEST(TupleTail_t, TwoElements) {
+    using Tuple    = std::tuple<int, double>;
+    using Expected = std::tuple<double>;
+    EXPECT_TRUE((std::is_same_v<TupleTail_t<Tuple>, Expected>));
+}
+
+TEST(TupleTail_t, ThreeElements) {
+    using Tuple    = std::tuple<int, double, char>;
+    using Expected = std::tuple<double, char>;
+    EXPECT_TRUE((std::is_same_v<TupleTail_t<Tuple>, Expected>));
+}
+
+TEST(TupleTail_t, SingleElementReturnsEmpty) {
+    using Tuple    = std::tuple<int>;
+    using Expected = std::tuple<>;
+    EXPECT_TRUE((std::is_same_v<TupleTail_t<Tuple>, Expected>));
+}
+
+TEST(TupleTail_t, ComplexTypes) {
+    using Tuple    = std::tuple<std::string, int, std::vector<double>>;
+    using Expected = std::tuple<int, std::vector<double>>;
+    EXPECT_TRUE((std::is_same_v<TupleTail_t<Tuple>, Expected>));
+}
+
+// =============================================================================
+// Integration: tuple_head and tuple_tail together
+// =============================================================================
+
+TEST(TupleIntegration, HeadAndTailCoverAll) {
+    auto t    = std::make_tuple(1, 2, 3);
+    auto head = tuple_head(t);
+    auto tail = tuple_tail(t);
+
+    EXPECT_EQ(head, 1);
+    EXPECT_EQ(tail, std::make_tuple(2, 3));
+}
+
+TEST(TupleIntegration, RecursiveDecomposition) {
+    // Decompose tuple step by step
+    auto t = std::make_tuple(1, 2, 3, 4);
+
+    auto h1 = tuple_head(t);
+    auto t1 = tuple_tail(t);
+    EXPECT_EQ(h1, 1);
+
+    auto h2 = tuple_head(t1);
+    auto t2 = tuple_tail(t1);
+    EXPECT_EQ(h2, 2);
+
+    auto h3 = tuple_head(t2);
+    auto t3 = tuple_tail(t2);
+    EXPECT_EQ(h3, 3);
+
+    auto h4 = tuple_head(t3);
+    auto t4 = tuple_tail(t3);
+    EXPECT_EQ(h4, 4);
+    EXPECT_EQ(std::tuple_size_v<decltype(t4)>, size_t{0});
 }
 
 } // namespace dispatch

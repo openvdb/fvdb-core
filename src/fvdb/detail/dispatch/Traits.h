@@ -6,39 +6,31 @@
 
 #include <array>
 #include <cstddef>
+#include <tuple>
 #include <utility>
 
 namespace fvdb {
 namespace dispatch {
 
-template <typename T> struct strides_helper;
+// =============================================================================
+// Index Sequence Utilities
+// =============================================================================
+//
+// Compile-time utilities for working with std::index_sequence.
+//
+// =============================================================================
 
-template <size_t... Dims> struct strides_helper<std::index_sequence<Dims...>> {
-    static_assert(sizeof...(Dims) > 0, "strides only defined for rank > 0");
-    static_assert(((Dims > 0) && ... && true), "dimensions must be greater than 0");
+// -----------------------------------------------------------------------------
+// is_index_sequence - type trait to detect std::index_sequence
+// -----------------------------------------------------------------------------
 
-  private:
-    static constexpr size_t N = sizeof...(Dims);
+template <typename T> struct is_index_sequence : std::false_type {};
 
-    static constexpr size_t
-    suffix_product(size_t start) {
-        constexpr size_t dims[] = {Dims...};
-        size_t result           = 1;
-        for (size_t i = start; i < N; ++i) {
-            result *= dims[i];
-        }
-        return result;
-    }
+template <size_t... Is> struct is_index_sequence<std::index_sequence<Is...>> : std::true_type {};
 
-    template <size_t... Is>
-    static auto
-        make_type(std::index_sequence<Is...>) -> std::index_sequence<suffix_product(Is + 1)...>;
-
-  public:
-    using type = decltype(make_type(std::make_index_sequence<N>{}));
-};
-
-template <typename T> using strides_helper_t = typename strides_helper<T>::type;
+// -----------------------------------------------------------------------------
+// array_from_indices - convert index_sequence to std::array at compile time
+// -----------------------------------------------------------------------------
 
 template <typename T> struct array_from_indices;
 
@@ -46,9 +38,59 @@ template <size_t... Is> struct array_from_indices<std::index_sequence<Is...>> {
     static constexpr std::array<size_t, sizeof...(Is)> value = {Is...};
 };
 
-template <typename T> struct is_index_sequence : std::false_type {};
+// =============================================================================
+// Tuple Utilities
+// =============================================================================
+//
+// Compile-time and constexpr utilities for tuple manipulation.
+//
+// =============================================================================
 
-template <size_t... Is> struct is_index_sequence<std::index_sequence<Is...>> : std::true_type {};
+// -----------------------------------------------------------------------------
+// tuple_head - extract the first element of a tuple
+// -----------------------------------------------------------------------------
+
+template <typename Tuple>
+constexpr auto
+tuple_head(Tuple const &t) {
+    return std::get<0>(t);
+}
+
+// -----------------------------------------------------------------------------
+// tuple_tail - extract all elements except the first
+// -----------------------------------------------------------------------------
+// Returns a new tuple containing elements [1, N) from the input tuple.
+// For a tuple of size 1, returns an empty tuple.
+
+template <typename Tuple>
+constexpr auto
+tuple_tail(Tuple const &t) {
+    return std::apply([](auto, auto... tail) { return std::make_tuple(tail...); }, t);
+}
+
+// -----------------------------------------------------------------------------
+// TupleTail_t - compile-time type of tuple_tail result
+// -----------------------------------------------------------------------------
+
+template <typename Tuple> struct TupleTail;
+
+template <typename Head, typename... Tail> struct TupleTail<std::tuple<Head, Tail...>> {
+    using type = std::tuple<Tail...>;
+};
+
+template <typename Tuple> using TupleTail_t = typename TupleTail<Tuple>::type;
+
+// -----------------------------------------------------------------------------
+// TupleHead_t - compile-time type of the first element
+// -----------------------------------------------------------------------------
+
+template <typename Tuple> struct TupleHead;
+
+template <typename Head, typename... Tail> struct TupleHead<std::tuple<Head, Tail...>> {
+    using type = Head;
+};
+
+template <typename Tuple> using TupleHead_t = typename TupleHead<Tuple>::type;
 
 } // namespace dispatch
 } // namespace fvdb
