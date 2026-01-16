@@ -170,6 +170,7 @@ ConfigureTest(DispatchTableBasicOpCudaTest "dispatch/DispatchTableBasicOpCudaTes
 
 ConfigureTest(DispatchScanLibHostTest "dispatch/ScanLibHostTest.cpp")
 ConfigureTest(DispatchScanLibCudaTest "dispatch/ScanLibCudaTest.cu")
+ConfigureTest(DispatchExampleFunctionalTest "dispatch/ExampleFunctionalTest.cpp")
 
 if(NOT NANOVDB_EDITOR_SKIP)
   #ConfigureTest(ViewerTest "ViewerTest.cpp")
