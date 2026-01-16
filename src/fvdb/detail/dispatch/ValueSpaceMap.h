@@ -187,7 +187,60 @@ template <ValueSpace Space, typename T>
 using ValueSpaceMap_t = std::
     unordered_map<ValueSpaceMapKey<Space>, T, ValueSpaceMapHash<Space>, ValueSpaceMapEqual<Space>>;
 
+// ----------------------------------------------------------------------
+// create_and_store utilities
+// ----------------------------------------------------------------------
+// These utilities populate a ValueSpaceMap with entries created by a factory.
+// The factory is called with each coordinate and should return the value to store.
+
+// Visitor that creates and stores entries for each coordinate in a space
+template <ValueSpace Space, typename T, typename Factory> struct CreateAndStoreVisitor {
+    std::reference_wrapper<ValueSpaceMap_t<Space, T>> map;
+    std::reference_wrapper<Factory> factory;
+
+    template <ValuePack Coord>
+        requires SpaceContains<Space, Coord>
+    void
+    operator()(Coord coord) const {
+        map.get().emplace(coord, factory.get()(coord));
+    }
+};
+
+// Create and store a single coordinate
+template <ValueSpace Space, typename T, typename Factory, ValuePack Coord>
+    requires SpaceContains<Space, Coord>
+void
+create_and_store_coord(ValueSpaceMap_t<Space, T> &map, Factory &&factory, Coord coord) {
+    map.emplace(coord, std::forward<Factory>(factory)(coord));
+}
+
+namespace detail {
+
+// Implementation helper: handle a single sub (either a coord or a subspace)
+template <ValueSpace Space, typename T, typename Factory, typename Sub>
+    requires SpaceCovers<Space, Sub>
+void
+create_and_store_one(ValueSpaceMap_t<Space, T> &map, Factory &factory, Sub sub) {
+    if constexpr (ValueSpace<Sub>) {
+        CreateAndStoreVisitor<Space, T, Factory> visitor{map, factory};
+        visit_value_space(visitor, sub);
+    } else {
+        static_assert(SpaceContains<Space, Sub>, "Coord must be in Space");
+        map.emplace(sub, factory(sub));
+    }
+}
+
+} // namespace detail
+
+// Populate map entries for multiple subs (coords or subspaces)
+template <ValueSpace Space, typename T, typename Factory, typename... Subs>
+    requires(SpaceCovers<Space, Subs> && ...)
+void
+create_and_store(ValueSpaceMap_t<Space, T> &map, Factory &factory, Subs... subs) {
+    (detail::create_and_store_one(map, factory, subs), ...);
+}
+
 } // namespace dispatch
 } // namespace fvdb
 
-#endif // FVDB_DETAIL_DISPATCH_ValueSpaceMAP_H
+#endif // FVDB_DETAIL_DISPATCH_VALUESPACEMAP_H

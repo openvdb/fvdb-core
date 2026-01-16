@@ -239,6 +239,156 @@ TEST(SpaceContains, MultiAxisValidation) {
 }
 
 // =============================================================================
+// SpaceHasSubspace Tests
+// =============================================================================
+
+TEST(SpaceHasSubspace, IdenticalSpaceIsSubspace) {
+    using Space = ValueAxes<DeviceAxis, DTypeAxis>;
+
+    // A space is a subspace of itself
+    static_assert(space_has_subspace_v<Space, Space>());
+    static_assert(SpaceHasSubspace<Space, Space>);
+}
+
+TEST(SpaceHasSubspace, SingleAxisSubspace) {
+    using FullAxis = Values<1, 2, 3, 4, 5>;
+    using SubAxis  = Values<2, 4>;
+    using Space    = ValueAxes<FullAxis>;
+    using Subspace = ValueAxes<SubAxis>;
+
+    static_assert(space_has_subspace_v<Space, Subspace>());
+    static_assert(SpaceHasSubspace<Space, Subspace>);
+
+    // Reverse is not true
+    static_assert(!space_has_subspace_v<Subspace, Space>());
+    static_assert(!SpaceHasSubspace<Subspace, Space>);
+}
+
+TEST(SpaceHasSubspace, TwoAxisSubspace) {
+    using Space    = ValueAxes<DeviceAxis, DTypeAxis>;
+    using Subspace = ValueAxes<Values<Device::CPU, Device::CUDA>, Values<DType::Float32>>;
+
+    // Subspace has subset of each axis
+    static_assert(space_has_subspace_v<Space, Subspace>());
+    static_assert(SpaceHasSubspace<Space, Subspace>);
+
+    // Single device, all dtypes
+    using Subspace2 = ValueAxes<Values<Device::CPU>, DTypeAxis>;
+    static_assert(space_has_subspace_v<Space, Subspace2>());
+    static_assert(SpaceHasSubspace<Space, Subspace2>);
+}
+
+TEST(SpaceHasSubspace, ThreeAxisSubspace) {
+    using Space = ValueAxes<DeviceAxis, DTypeAxis, IntAxis>;
+    using Subspace =
+        ValueAxes<Values<Device::CPU>, Values<DType::Float32, DType::Float64>, Values<1, 2>>;
+
+    static_assert(space_has_subspace_v<Space, Subspace>());
+    static_assert(SpaceHasSubspace<Space, Subspace>);
+}
+
+TEST(SpaceHasSubspace, FailsWhenAxisNotSubset) {
+    using Space  = ValueAxes<DeviceAxis, IntAxis>;
+    using NotSub = ValueAxes<DeviceAxis, Values<1, 2, 3>>; // 3 not in IntAxis
+
+    static_assert(!space_has_subspace_v<Space, NotSub>());
+    static_assert(!SpaceHasSubspace<Space, NotSub>);
+}
+
+TEST(SpaceHasSubspace, FailsWhenRankMismatch) {
+    using Space1D = ValueAxes<DeviceAxis>;
+    using Space2D = ValueAxes<DeviceAxis, DTypeAxis>;
+
+    // Different ranks can't be subspaces
+    static_assert(!space_has_subspace_v<Space1D, Space2D>());
+    static_assert(!space_has_subspace_v<Space2D, Space1D>());
+}
+
+TEST(SpaceHasSubspace, SingleElementSubspace) {
+    using Space    = ValueAxes<DeviceAxis, DTypeAxis>;
+    using Subspace = ValueAxes<Values<Device::CUDA>, Values<DType::Float64>>;
+
+    // Single element in each axis is valid subspace
+    static_assert(space_has_subspace_v<Space, Subspace>());
+    static_assert(SpaceHasSubspace<Space, Subspace>);
+}
+
+// =============================================================================
+// SpaceCovers Tests
+// =============================================================================
+
+TEST(SpaceCovers, CoversContainedCoord) {
+    using Space = ValueAxes<DeviceAxis, DTypeAxis>;
+    using Coord = Values<Device::CPU, DType::Float32>;
+
+    static_assert(space_covers_v<Space, Coord>());
+    static_assert(SpaceCovers<Space, Coord>);
+}
+
+TEST(SpaceCovers, CoversSubspace) {
+    using Space    = ValueAxes<DeviceAxis, DTypeAxis>;
+    using Subspace = ValueAxes<Values<Device::CPU>, DTypeAxis>;
+
+    static_assert(space_covers_v<Space, Subspace>());
+    static_assert(SpaceCovers<Space, Subspace>);
+}
+
+TEST(SpaceCovers, CoversIdenticalSpace) {
+    using Space = ValueAxes<IntAxis>;
+
+    static_assert(space_covers_v<Space, Space>());
+    static_assert(SpaceCovers<Space, Space>);
+}
+
+TEST(SpaceCovers, DoesNotCoverNonContainedCoord) {
+    using Space = ValueAxes<IntAxis>; // {1, 2, 4, 8}
+    using Coord = Values<3>;          // 3 not in axis
+
+    static_assert(!space_covers_v<Space, Coord>());
+    static_assert(!SpaceCovers<Space, Coord>);
+}
+
+TEST(SpaceCovers, DoesNotCoverNonSubspace) {
+    using Space  = ValueAxes<IntAxis>;         // {1, 2, 4, 8}
+    using NotSub = ValueAxes<Values<1, 2, 3>>; // 3 not in axis
+
+    static_assert(!space_covers_v<Space, NotSub>());
+    static_assert(!SpaceCovers<Space, NotSub>);
+}
+
+TEST(SpaceCovers, DoesNotCoverWrongRankSpace) {
+    using Space1D = ValueAxes<DeviceAxis>;
+    using Space2D = ValueAxes<DeviceAxis, DTypeAxis>;
+
+    static_assert(!space_covers_v<Space1D, Space2D>());
+    static_assert(!SpaceCovers<Space1D, Space2D>);
+}
+
+TEST(SpaceCovers, DoesNotCoverNonSpaceNonPack) {
+    using Space = ValueAxes<IntAxis>;
+
+    // Neither ValuePack nor ValueSpace
+    static_assert(!space_covers_v<Space, int>());
+    static_assert(!SpaceCovers<Space, int>);
+}
+
+TEST(SpaceCovers, MultiAxisCoord) {
+    using Space = ValueAxes<DeviceAxis, IntAxis>;
+    using Coord = Values<Device::CUDA, 4>;
+
+    static_assert(space_covers_v<Space, Coord>());
+    static_assert(SpaceCovers<Space, Coord>);
+}
+
+TEST(SpaceCovers, MultiAxisSubspace) {
+    using Space    = ValueAxes<DeviceAxis, IntAxis>;
+    using Subspace = ValueAxes<Values<Device::CPU, Device::CUDA>, Values<1, 4>>;
+
+    static_assert(space_covers_v<Space, Subspace>());
+    static_assert(SpaceCovers<Space, Subspace>);
+}
+
+// =============================================================================
 // IndexSpaceOf Tests
 // =============================================================================
 

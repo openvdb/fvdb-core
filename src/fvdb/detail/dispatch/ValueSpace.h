@@ -10,6 +10,7 @@
 
 #include <array>
 #include <concepts>
+#include <functional>
 #include <optional>
 #include <tuple>
 #include <type_traits>
@@ -228,6 +229,78 @@ space_contains_v() {
 
 template <typename Space, typename Coord>
 concept SpaceContains = CoordTypesMatch<Space, Coord> && space_contains_v<Space, Coord>();
+
+// -----------------------------------------------------------------------------
+// SpaceHasSubspace - checks if a ValueSpace is a subspace of another
+// -----------------------------------------------------------------------------
+// A subspace must have the same number of axes, and each axis of the subspace
+// must be a subset of the corresponding axis in the parent space.
+
+template <typename Space, typename Subspace> struct space_has_subspace {
+    static consteval bool
+    value() {
+        return false;
+    }
+};
+
+// Base case: single axis
+template <ValueAxis SpaceAxis, ValueAxis SubAxis>
+struct space_has_subspace<ValueAxes<SpaceAxis>, ValueAxes<SubAxis>> {
+    static consteval bool
+    value() {
+        return AxisSubsetOf<SubAxis, SpaceAxis>;
+    }
+};
+
+// Recursive case: multiple axes
+template <ValueAxis SpaceAxis0,
+          ValueAxis SpaceAxis1,
+          ValueAxis... SpaceTailAxes,
+          ValueAxis SubAxis0,
+          ValueAxis SubAxis1,
+          ValueAxis... SubTailAxes>
+struct space_has_subspace<ValueAxes<SpaceAxis0, SpaceAxis1, SpaceTailAxes...>,
+                          ValueAxes<SubAxis0, SubAxis1, SubTailAxes...>> {
+    static consteval bool
+    value() {
+        return AxisSubsetOf<SubAxis0, SpaceAxis0> &&
+               space_has_subspace<ValueAxes<SpaceAxis1, SpaceTailAxes...>,
+                                  ValueAxes<SubAxis1, SubTailAxes...>>::value();
+    }
+};
+
+template <typename Space, typename Subspace>
+consteval bool
+space_has_subspace_v() {
+    return space_has_subspace<Space, Subspace>::value();
+}
+
+template <typename Space, typename Subspace>
+concept SpaceHasSubspace =
+    ValueSpace<Space> && ValueSpace<Subspace> && space_has_subspace_v<Space, Subspace>();
+
+// -----------------------------------------------------------------------------
+// SpaceCovers - checks if T represents coordinates covered by Space
+// -----------------------------------------------------------------------------
+// T is "covered" by Space if:
+//   - T is a ValuePack coordinate contained in Space, OR
+//   - T is a ValueSpace that is a subspace of Space
+
+template <typename Space, typename T>
+consteval bool
+space_covers_v() {
+    if constexpr (ValueSpace<Space> && ValuePack<T>) {
+        return space_contains_v<Space, T>();
+    } else if constexpr (ValueSpace<Space> && ValueSpace<T>) {
+        return space_has_subspace_v<Space, T>();
+    } else {
+        return false;
+    }
+}
+
+template <typename Space, typename T>
+concept SpaceCovers = (ValueSpace<Space> && ValuePack<T> && SpaceContains<Space, T>) ||
+                      (ValueSpace<Space> && ValueSpace<T> && SpaceHasSubspace<Space, T>);
 
 // -----------------------------------------------------------------------------
 // IndexSpaceOf - the IndexSpace associated with a ValueSpace
@@ -460,22 +533,29 @@ spaceLinearIndex(ValueAxes<Axis0, Axis1, TailAxes...>, std::tuple<T0, T1, TailTs
 
 // PointToCoordVisitor: Adapts a coord visitor to work with index points.
 // Named struct for cleaner stack traces and explicit instantiation.
+// Stores visitor by reference - must not outlive the referenced visitor.
 template <ValueSpace Space, typename CoordVisitor> struct PointToCoordVisitor {
-    CoordVisitor &visitor;
+    std::reference_wrapper<CoordVisitor> visitor;
 
     template <IndexPoint Pt>
     void
     operator()(Pt) const {
         using Coord = CoordFromPoint_t<Space, Pt>;
-        std::invoke(visitor, Coord{});
+        std::invoke(visitor.get(), Coord{});
     }
 };
 
+template <ValueSpace Space, typename CoordVisitor>
+PointToCoordVisitor<Space, CoordVisitor>
+makePointToCoordVisitor(Space, CoordVisitor &visitor) {
+    return PointToCoordVisitor<Space, CoordVisitor>{visitor};
+}
+
 template <typename Visitor, ValueSpace Space>
 void
-visit_value_space(Visitor &&visitor, Space) {
+visit_value_space(Visitor &&visitor, Space space) {
     using IdxSpace = IndexSpaceOf_t<Space>;
-    PointToCoordVisitor<Space, std::remove_reference_t<Visitor>> wrapper{visitor};
+    auto wrapper   = makePointToCoordVisitor(space, visitor);
     visit_index_space(wrapper, IdxSpace{});
 }
 
