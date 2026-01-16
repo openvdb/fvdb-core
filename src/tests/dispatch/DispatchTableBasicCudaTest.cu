@@ -164,20 +164,20 @@ using BasicDeviceAxis    = Values<Device::CPU, Device::GPU>;
 using BasicDtypeAxis     = Values<DType::Float32, DType::Float64, DType::Int32>;
 using BasicPlacementAxis = Values<ChannelPlacement::Major, ChannelPlacement::Minor>;
 using BasicSpace         = ValueAxes<BasicDeviceAxis, BasicDtypeAxis, BasicPlacementAxis>;
-
-using BasicFnPtr = BasicArray (*)(size_t, size_t);
+using BasicGPUFloatSubspace =
+    ValueAxes<Values<Device::GPU>, BasicDtypeAxis, Values<ChannelPlacement::Major>>;
+using BasicGPUInt32Subspace = Values<Device::GPU, DType::Int32, ChannelPlacement::Minor>;
+using BasicCPUSubspace      = ValueAxes<Values<Device::CPU>, BasicDtypeAxis, BasicPlacementAxis>;
+using BasicDispatcher       = DispatchTable<BasicSpace, BasicArray(size_t, size_t)>;
 
 BasicArray
 basic(Device dev, DType dtype, ChannelPlacement pl, size_t C, size_t E) {
-    static DispatchTable<BasicSpace, BasicArray(size_t, size_t)> const table{
-        [](auto coord) {
-            return [](size_t c, size_t e) { return basic_impl(decltype(coord){}, c, e); };
-        },
-        // GPU: all dtypes major, plus int32 minor
-        ValueAxes<Values<Device::GPU>, BasicDtypeAxis, Values<ChannelPlacement::Major>>{},
-        Values<Device::GPU, DType::Int32, ChannelPlacement::Minor>{},
-        // CPU: full space
-        ValueAxes<Values<Device::CPU>, BasicDtypeAxis, BasicPlacementAxis>{}};
+    static BasicDispatcher const table{
+        BasicDispatcher::from_visitor(
+            [](auto coord, size_t c, size_t e) { return basic_impl(coord, c, e); }),
+        BasicGPUFloatSubspace{},
+        BasicGPUInt32Subspace{},
+        BasicCPUSubspace{}};
     return table(std::make_tuple(dev, dtype, pl), C, E);
 }
 

@@ -77,6 +77,59 @@ class DispatchTable<Space, ReturnType(Args...)> {
         function_pointer_type const fptr = it->second;
         return fptr(args...);
     }
+
+    // // For struct with static op() overloads
+    // template <typename Op>
+    // static auto
+    // from_op() {
+    //     return [](auto coord) {
+    //         using C = decltype(coord);
+    //         return [](Args... args) -> ReturnType { return Op::op(C{}, args...); };
+    //     };
+    // }
+
+    // // For overloaded/visitor pattern (default-constructible functor)
+    // template <typename Visitor>
+    // static auto
+    // from_visitor(Visitor) {
+    //     return [](auto coord) {
+    //         using C = decltype(coord);
+    //         return [](Args... args) -> ReturnType { return Visitor{}(C{}, args...); };
+    //     };
+    // }
+  private:
+    template <typename Op, typename Coord>
+    static ReturnType
+    op_call(Args... args) {
+        return Op::op(Coord{}, args...);
+    }
+
+    template <typename Visitor, typename Coord>
+    static ReturnType
+    visitor_call(Args... args) {
+        return Visitor{}(Coord{}, args...);
+    }
+
+  public:
+    // For struct with static op() overloads
+    template <typename Op>
+    static auto
+    from_op() {
+        return [](auto coord) -> function_pointer_type {
+            using C = decltype(coord);
+            return &op_call<Op, C>;
+        };
+    }
+
+    // For overloaded/visitor pattern (default-constructible functor)
+    template <typename Visitor>
+    static auto
+    from_visitor(Visitor) {
+        return [](auto coord) -> function_pointer_type {
+            using C = decltype(coord);
+            return &visitor_call<Visitor, C>;
+        };
+    }
 };
 
 } // namespace dispatch
