@@ -4,6 +4,7 @@
 #include "DispatchTableBasicUtils.cuh"
 
 #include <fvdb/detail/dispatch/SparseDispatchTable.h>
+#include <fvdb/detail/dispatch/Tag.h>
 #include <fvdb/detail/dispatch/ValueSpace.h>
 #include <fvdb/detail/dispatch/Values.h>
 
@@ -18,14 +19,10 @@
 namespace fvdb {
 namespace dispatch {
 
-// -----------------------------------------------------------------------------
-// OPERATOR IMPLEMENTATIONS (signatures preserved)
-// -----------------------------------------------------------------------------
-
 template <DType dtype>
     requires is_float_dtype<dtype>
 BasicArray
-basic_impl(Values<Device::GPU, dtype, ChannelPlacement::Major> /* coord */,
+basic_impl(Tag<Device::GPU, dtype, ChannelPlacement::Major>,
            size_t channel_count,
            size_t element_count) {
     using T    = DTypeToCpp_t<dtype>;
@@ -37,7 +34,7 @@ basic_impl(Values<Device::GPU, dtype, ChannelPlacement::Major> /* coord */,
 }
 
 BasicArray
-basic_impl(Values<Device::GPU, DType::Int32, ChannelPlacement::Major> /* coord */,
+basic_impl(Tag<Device::GPU, DType::Int32, ChannelPlacement::Major>,
            size_t channel_count,
            size_t element_count) {
     size_t n   = channel_count * element_count;
@@ -48,7 +45,7 @@ basic_impl(Values<Device::GPU, DType::Int32, ChannelPlacement::Major> /* coord *
 }
 
 BasicArray
-basic_impl(Values<Device::GPU, DType::Int32, ChannelPlacement::Minor> /* coord */,
+basic_impl(Tag<Device::GPU, DType::Int32, ChannelPlacement::Minor>,
            size_t channel_count,
            size_t element_count) {
     size_t n   = channel_count * element_count;
@@ -60,9 +57,7 @@ basic_impl(Values<Device::GPU, DType::Int32, ChannelPlacement::Minor> /* coord *
 
 template <DType dtype, ChannelPlacement placement>
 BasicArray
-basic_impl(Values<Device::CPU, dtype, placement> /* coord */,
-           size_t channel_count,
-           size_t element_count) {
+basic_impl(Tag<Device::CPU, dtype, placement>, size_t channel_count, size_t element_count) {
     using T  = DTypeToCpp_t<dtype>;
     size_t n = channel_count * element_count;
     T *data  = static_cast<T *>(allocMem(Device::CPU, n * sizeof(T)));
@@ -74,10 +69,6 @@ basic_impl(Values<Device::CPU, dtype, placement> /* coord */,
         }
     return {Device::CPU, dtype, placement, channel_count, element_count, data};
 }
-
-// -----------------------------------------------------------------------------
-// DISPATCH TABLE
-// -----------------------------------------------------------------------------
 
 using BasicDeviceAxis    = Values<Device::CPU, Device::GPU>;
 using BasicDtypeAxis     = Values<DType::Float32, DType::Float64, DType::Int32>;

@@ -4,6 +4,7 @@
 #include "DispatchTableBasicUtils.cuh"
 
 #include <fvdb/detail/dispatch/SparseDispatchTable.h>
+#include <fvdb/detail/dispatch/Tag.h>
 #include <fvdb/detail/dispatch/ValueSpace.h>
 #include <fvdb/detail/dispatch/Values.h>
 
@@ -18,30 +19,11 @@
 namespace fvdb {
 namespace dispatch {
 
-// -----------------------------------------------------------------------------
-// OPERATOR IMPLEMENTATIONS (signatures preserved)
-// -----------------------------------------------------------------------------
-
-// -----------------------------------------------------------------------------
-// DISPATCH TABLE
-// -----------------------------------------------------------------------------
 struct BasicOp {
-    using DeviceAxis    = Values<Device::CPU, Device::GPU>;
-    using DtypeAxis     = Values<DType::Float32, DType::Float64, DType::Int32>;
-    using PlacementAxis = Values<ChannelPlacement::Major, ChannelPlacement::Minor>;
-    using Space         = ValueAxes<DeviceAxis, DtypeAxis, PlacementAxis>;
-    using GPUFloatSubspace =
-        ValueAxes<Values<Device::GPU>, DtypeAxis, Values<ChannelPlacement::Major>>;
-    using GPUInt32Subspace = Values<Device::GPU, DType::Int32, ChannelPlacement::Minor>;
-    using CPUSubspace      = ValueAxes<Values<Device::CPU>, DtypeAxis, PlacementAxis>;
-    using Dispatcher       = DispatchTable<Space, BasicArray(size_t, size_t)>;
-
-    Dispatcher table;
-
     template <DType dtype>
         requires is_float_dtype<dtype>
     static BasicArray
-    op(Values<Device::GPU, dtype, ChannelPlacement::Major> /* coord */,
+    op(Tag<Device::GPU, dtype, ChannelPlacement::Major>,
        size_t channel_count,
        size_t element_count) {
         using T    = DTypeToCpp_t<dtype>;
@@ -53,7 +35,7 @@ struct BasicOp {
     }
 
     static BasicArray
-    op(Values<Device::GPU, DType::Int32, ChannelPlacement::Major> /* coord */,
+    op(Tag<Device::GPU, DType::Int32, ChannelPlacement::Major>,
        size_t channel_count,
        size_t element_count) {
         size_t n   = channel_count * element_count;
@@ -65,7 +47,7 @@ struct BasicOp {
     }
 
     static BasicArray
-    op(Values<Device::GPU, DType::Int32, ChannelPlacement::Minor> /* coord */,
+    op(Tag<Device::GPU, DType::Int32, ChannelPlacement::Minor>,
        size_t channel_count,
        size_t element_count) {
         size_t n   = channel_count * element_count;
@@ -78,9 +60,7 @@ struct BasicOp {
 
     template <DType dtype, ChannelPlacement placement>
     static BasicArray
-    op(Values<Device::CPU, dtype, placement> /* coord */,
-       size_t channel_count,
-       size_t element_count) {
+    op(Tag<Device::CPU, dtype, placement>, size_t channel_count, size_t element_count) {
         using T  = DTypeToCpp_t<dtype>;
         size_t n = channel_count * element_count;
         T *data  = static_cast<T *>(allocMem(Device::CPU, n * sizeof(T)));
@@ -92,6 +72,18 @@ struct BasicOp {
             }
         return {Device::CPU, dtype, placement, channel_count, element_count, data};
     }
+
+    using DeviceAxis    = Values<Device::CPU, Device::GPU>;
+    using DtypeAxis     = Values<DType::Float32, DType::Float64, DType::Int32>;
+    using PlacementAxis = Values<ChannelPlacement::Major, ChannelPlacement::Minor>;
+    using Space         = ValueAxes<DeviceAxis, DtypeAxis, PlacementAxis>;
+    using GPUFloatSubspace =
+        ValueAxes<Values<Device::GPU>, DtypeAxis, Values<ChannelPlacement::Major>>;
+    using GPUInt32Subspace = Values<Device::GPU, DType::Int32, ChannelPlacement::Minor>;
+    using CPUSubspace      = ValueAxes<Values<Device::CPU>, DtypeAxis, PlacementAxis>;
+    using Dispatcher       = DispatchTable<Space, BasicArray(size_t, size_t)>;
+
+    Dispatcher table;
 
     BasicOp()
         : table(Dispatcher::from_op<BasicOp>(),
