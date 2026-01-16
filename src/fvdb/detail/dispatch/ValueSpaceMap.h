@@ -193,6 +193,8 @@ using ValueSpaceMap_t = std::
 // These utilities populate a ValueSpaceMap with entries created by a factory.
 // The factory is called with each coordinate and should return the value to store.
 
+namespace detail {
+
 // Visitor that creates and stores entries for each coordinate in a space
 template <ValueSpace Space, typename T, typename Factory> struct CreateAndStoreVisitor {
     std::reference_wrapper<ValueSpaceMap_t<Space, T>> map;
@@ -210,11 +212,9 @@ template <ValueSpace Space, typename T, typename Factory> struct CreateAndStoreV
 template <ValueSpace Space, typename T, typename Factory, ValuePack Coord>
     requires SpaceContains<Space, Coord>
 void
-create_and_store_coord(ValueSpaceMap_t<Space, T> &map, Factory &&factory, Coord coord) {
-    map.emplace(coord, std::forward<Factory>(factory)(coord));
+create_and_store_coord(ValueSpaceMap_t<Space, T> &map, Factory &factory, Coord coord) {
+    map.emplace(coord, factory(coord));
 }
-
-namespace detail {
 
 // Implementation helper: handle a single sub (either a coord or a subspace)
 template <ValueSpace Space, typename T, typename Factory, typename Sub>
@@ -225,8 +225,7 @@ create_and_store_one(ValueSpaceMap_t<Space, T> &map, Factory &factory, Sub sub) 
         CreateAndStoreVisitor<Space, T, Factory> visitor{map, factory};
         visit_value_space(visitor, sub);
     } else {
-        static_assert(SpaceContains<Space, Sub>, "Coord must be in Space");
-        map.emplace(sub, factory(sub));
+        create_and_store_coord(map, factory, sub);
     }
 }
 

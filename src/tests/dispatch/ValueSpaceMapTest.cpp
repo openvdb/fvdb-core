@@ -431,19 +431,6 @@ TEST(ValueSpaceMap, EqualWithValuePack) {
 // create_and_store Tests
 // ----------------------------------------------------------------------
 
-TEST(ValueSpaceMap, CreateAndStoreCoordSingle) {
-    using Space = ValueAxes<IntAxis>;
-    ValueSpaceMap_t<Space, int> map;
-
-    // Factory that returns the value itself
-    auto factory = [](auto coord) { return std::get<0>(coordToTuple(coord)); };
-
-    create_and_store_coord(map, factory, Values<4>{});
-
-    EXPECT_EQ(map.size(), 1u);
-    EXPECT_EQ(map.find(Values<4>{})->second, 4);
-}
-
 TEST(ValueSpaceMap, CreateAndStoreWithSingleCoord) {
     using Space = ValueAxes<IntAxis>;
     ValueSpaceMap_t<Space, int> map;
