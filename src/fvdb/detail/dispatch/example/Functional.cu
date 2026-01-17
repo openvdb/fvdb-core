@@ -61,7 +61,7 @@
 
 #include "fvdb/detail/dispatch/example/Functional.h"
 
-#include "fvdb/detail/dispatch/SparseDispatchTable.h"
+#include "fvdb/detail/dispatch/DispatchTable.h"
 #include "fvdb/detail/dispatch/TorchDispatch.h"
 #include "fvdb/detail/dispatch/TypesFwd.h"
 #include "fvdb/detail/dispatch/ValueSpace.h"

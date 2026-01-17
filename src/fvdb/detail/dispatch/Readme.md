@@ -92,7 +92,7 @@ The framework is built in layers, each adding capabilities on top of the previou
 ┌─────────────────────────────────────────────────────────────────┐
 │  TorchDispatch.h  - PyTorch-specific utilities and error msgs   │
 ├─────────────────────────────────────────────────────────────────┤
-│  SparseDispatchTable.h  - DispatchTable with sparse subspaces   │
+│  DispatchTable.h  - DispatchTable with sparse subspaces   │
 ├─────────────────────────────────────────────────────────────────┤
 │  ValueSpaceMap.h  - Map keyed by coordinates in a ValueSpace    │
 ├─────────────────────────────────────────────────────────────────┤
@@ -164,7 +164,7 @@ Features:
 - Graceful "not found" for invalid runtime lookups
 - Transparent hashing (no key object construction for lookups)
 
-### Layer 5: Dispatch Tables (`SparseDispatchTable.h`)
+### Layer 5: Dispatch Tables (`DispatchTable.h`)
 
 Combines everything into a dispatch table with sparse instantiation:
 
@@ -296,6 +296,6 @@ The trade-off is slightly more verbose syntax (`PackSize_v<Pack>()` vs `PackSize
 | `Values.h` | Value packs, compile-time operations, concepts |
 | `ValueSpace.h` | Value axes, value spaces (Cartesian products), coordinate conversion |
 | `ValueSpaceMap.h` | Hash map keyed by value space coordinates |
-| `SparseDispatchTable.h` | `DispatchTable` class with sparse subspace instantiation |
+| `DispatchTable.h` | `DispatchTable` class with sparse subspace instantiation |
 | `TorchDispatch.h` | PyTorch-specific axes, concepts, error handling |
 | `example/` | Working examples (ReLU, Functional, Op) with detailed headers |

@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef FVDB_DETAIL_DISPATCH_SPARSEDISPATCHTABLE_H
-#define FVDB_DETAIL_DISPATCH_SPARSEDISPATCHTABLE_H
+#ifndef FVDB_DETAIL_DISPATCH_DISPATCHTABLE_H
+#define FVDB_DETAIL_DISPATCH_DISPATCHTABLE_H
 
 #include "fvdb/detail/dispatch/ValueSpace.h"
 #include "fvdb/detail/dispatch/ValueSpaceMap.h"
@@ -116,4 +116,4 @@ class DispatchTable<Space, ReturnType(Args...)> {
 } // namespace dispatch
 } // namespace fvdb
 
-#endif // FVDB_DETAIL_DISPATCH_SPARSEDISPATCHTABLE_H
+#endif // FVDB_DETAIL_DISPATCH_DISPATCHTABLE_H
