@@ -47,12 +47,15 @@ inline torch::Tensor
 make_strided_relu_test_tensor(int64_t n,
                               torch::ScalarType dtype,
                               torch::Device device = torch::kCPU) {
-    // Create full tensor then slice to get stride=2
+    // Create full tensor directly in target dtype, then slice to get stride=2
+    // Note: We must NOT call .to(dtype) on a strided tensor - it creates a contiguous copy!
+    auto options = torch::TensorOptions().dtype(dtype).device(device);
+    auto full    = torch::zeros({n * 2}, options);
+    // Create values in float32 for the arithmetic, then copy_ handles conversion
     auto float_options = torch::TensorOptions().dtype(torch::kFloat32).device(device);
     auto values        = torch::arange(0, n, float_options) - static_cast<float>(n / 2);
-    auto full          = torch::zeros({n * 2}, float_options);
-    full.slice(0, 0, n * 2, 2).copy_(values);
-    return full.slice(0, 0, n * 2, 2).to(dtype); // stride of 2
+    full.slice(0, 0, n * 2, 2).copy_(values); // copy_ converts dtype automatically
+    return full.slice(0, 0, n * 2, 2);        // stride of 2, stays in target dtype
 }
 
 /// Compute expected ReLU output: max(0, x) for each element
