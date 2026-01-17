@@ -78,25 +78,6 @@ class DispatchTable<Space, ReturnType(Args...)> {
         return fptr(args...);
     }
 
-    // // For struct with static op() overloads
-    // template <typename Op>
-    // static auto
-    // from_op() {
-    //     return [](auto coord) {
-    //         using C = decltype(coord);
-    //         return [](Args... args) -> ReturnType { return Op::op(C{}, args...); };
-    //     };
-    // }
-
-    // // For overloaded/visitor pattern (default-constructible functor)
-    // template <typename Visitor>
-    // static auto
-    // from_visitor(Visitor) {
-    //     return [](auto coord) {
-    //         using C = decltype(coord);
-    //         return [](Args... args) -> ReturnType { return Visitor{}(C{}, args...); };
-    //     };
-    // }
   private:
     template <typename Op, typename Coord>
     static ReturnType

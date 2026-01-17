@@ -4,7 +4,7 @@
 #include "DispatchTableBasicUtils.cuh"
 
 #include <fvdb/detail/dispatch/SparseDispatchTable.h>
-#include <fvdb/detail/dispatch/Tag.h>
+#include <fvdb/detail/dispatch/TypesFwd.h>
 #include <fvdb/detail/dispatch/ValueSpace.h>
 #include <fvdb/detail/dispatch/Values.h>
 

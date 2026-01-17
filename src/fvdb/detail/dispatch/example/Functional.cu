@@ -4,7 +4,8 @@
 #include "fvdb/detail/dispatch/example/Functional.h"
 
 #include "fvdb/detail/dispatch/SparseDispatchTable.h"
-#include "fvdb/detail/dispatch/Tag.h"
+#include "fvdb/detail/dispatch/TorchDispatch.h"
+#include "fvdb/detail/dispatch/TypesFwd.h"
 #include "fvdb/detail/dispatch/ValueSpace.h"
 #include "fvdb/detail/dispatch/Values.h"
 #include "fvdb/detail/dispatch/example/ScanLib.h"
@@ -113,43 +114,33 @@ iscan_impl(Tag<torch::kCUDA, stype, Contiguity::Contiguous, Placement::OutOfPlac
     return {output, "cuda_cub"};
 }
 
-// torch::Tensor inclusiveScanFunctional(torch::Tensor input, Placement placement, Determinism
-// determinism) {
-//     return inclusiveScan(input, placement, determinism);
-// }
-
 // Dispatch space axes - must match the Tag parameters used in iscan_impl
-using IscanDeviceAxis      = Values<torch::kCPU, torch::kCUDA>;
-using IscanFloatDtypes     = Values<torch::kFloat, torch::kDouble>;
-using IscanIntDtypes       = Values<torch::kInt, torch::kLong>;
-using IscanDtypeAxis       = Values<torch::kFloat, torch::kDouble, torch::kInt, torch::kLong>;
-using IscanContiguityAxis  = Values<Contiguity::Strided, Contiguity::Contiguous>;
-using IscanPlacementAxis   = Values<Placement::InPlace, Placement::OutOfPlace>;
-using IscanDeterminismAxis = Values<Determinism::Deterministic, Determinism::NonDeterministic>;
+using IscanIntDtypes = Values<torch::kInt, torch::kLong>;
+using IscanDtypeAxis = Values<torch::kFloat, torch::kDouble, torch::kInt, torch::kLong>;
 
 // Full dispatch space
-using IscanSpace = ValueAxes<IscanDeviceAxis,
+using IscanSpace = ValueAxes<CpuCudaDeviceAxis,
                              IscanDtypeAxis,
-                             IscanContiguityAxis,
-                             IscanPlacementAxis,
-                             IscanDeterminismAxis>;
+                             FullContiguityAxis,
+                             FullPlacementAxis,
+                             FullDeterminismAxis>;
 
 // CPU: floats support both determinism modes, integers only Deterministic (promoted at call site)
 using IscanCPUFloatSubspace = ValueAxes<Values<torch::kCPU>,
-                                        IscanFloatDtypes,
-                                        IscanContiguityAxis,
-                                        IscanPlacementAxis,
-                                        IscanDeterminismAxis>;
+                                        BuiltinFloatDtypeAxis,
+                                        FullContiguityAxis,
+                                        FullPlacementAxis,
+                                        FullDeterminismAxis>;
 
 using IscanCPUIntSubspace = ValueAxes<Values<torch::kCPU>,
                                       IscanIntDtypes,
-                                      IscanContiguityAxis,
-                                      IscanPlacementAxis,
+                                      FullContiguityAxis,
+                                      FullPlacementAxis,
                                       Values<Determinism::Deterministic>>;
 
 // GPU: only Contiguous + OutOfPlace; floats need NonDeterministic, integers need Deterministic
 using IscanGPUFloatSubspace = ValueAxes<Values<torch::kCUDA>,
-                                        IscanFloatDtypes,
+                                        BuiltinFloatDtypeAxis,
                                         Values<Contiguity::Contiguous>,
                                         Values<Placement::OutOfPlace>,
                                         Values<Determinism::NonDeterministic>>;
@@ -164,6 +155,14 @@ using IscanDispatcher = DispatchTable<IscanSpace, TensorWithNotes(torch::Tensor)
 
 TensorWithNotes
 inclusiveScanFunctional(torch::Tensor input, Placement placement, Determinism determinism) {
+    static IscanDispatcher const table{
+        IscanDispatcher::from_visitor(
+            [](auto coord, torch::Tensor t) { return iscan_impl(coord, t); }),
+        IscanCPUFloatSubspace{},
+        IscanCPUIntSubspace{},
+        IscanGPUFloatSubspace{},
+        IscanGPUIntSubspace{}};
+
     // Validate input rank
     TORCH_CHECK_VALUE(
         input.dim() == 1, "inclusiveScanFunctional: expected 1D tensor, got ", input.dim(), "D");
@@ -177,14 +176,6 @@ inclusiveScanFunctional(torch::Tensor input, Placement placement, Determinism de
         }
     }
 
-    static IscanDispatcher const table{
-        IscanDispatcher::from_visitor(
-            [](auto coord, torch::Tensor t) { return iscan_impl(coord, t); }),
-        IscanCPUFloatSubspace{},
-        IscanCPUIntSubspace{},
-        IscanGPUFloatSubspace{},
-        IscanGPUIntSubspace{}};
-
     auto const dev        = input.device().type();
     auto const stype      = input.scalar_type();
     auto const contiguity = getContiguity(input);
@@ -194,22 +185,8 @@ inclusiveScanFunctional(torch::Tensor input, Placement placement, Determinism de
         determinism = Determinism::Deterministic;
     }
 
-    try {
-        return table(std::make_tuple(dev, stype, contiguity, placement, determinism), input);
-    } catch (std::runtime_error const &) {
-        TORCH_CHECK_VALUE(false,
-                          "inclusiveScanFunctional: unsupported dispatch combination - "
-                          "device=",
-                          c10::DeviceTypeName(dev),
-                          ", dtype=",
-                          c10::toString(stype),
-                          ", contiguity=",
-                          toString(contiguity),
-                          ", placement=",
-                          toString(placement),
-                          ", determinism=",
-                          toString(determinism));
-    }
+    auto const dispatch_coord = std::make_tuple(dev, stype, contiguity, placement, determinism);
+    return torchDispatch("inclusiveScanFunctional", table, dispatch_coord, input);
 }
 
 } // namespace example

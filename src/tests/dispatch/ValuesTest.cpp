@@ -128,6 +128,16 @@ TEST(PackSize, ReturnsCorrectSize) {
     EXPECT_EQ(packSize(Values<1, 2, 3>{}), 3u);
 }
 
+TEST(PackSize, WorksWithIntegerSequence) {
+    EXPECT_EQ((PackSize_v<std::index_sequence<>>()), 0u);
+    EXPECT_EQ((PackSize_v<std::index_sequence<42>>()), 1u);
+    EXPECT_EQ((PackSize_v<std::index_sequence<1, 2, 3>>()), 3u);
+    EXPECT_EQ((PackSize_v<std::integer_sequence<char, 'a', 'b'>>()), 2u);
+
+    EXPECT_EQ(packSize(std::index_sequence<>{}), 0u);
+    EXPECT_EQ(packSize(std::index_sequence<1, 2, 3>{}), 3u);
+}
+
 // =============================================================================
 // PackElement Tests
 // =============================================================================
@@ -151,12 +161,65 @@ TEST(PackElement, WorksWithSameTypePack) {
     EXPECT_EQ((PackElement_v<Pack, 2>()), 30);
 }
 
+TEST(PackElement, WorksWithIntegerSequence) {
+    using Seq = std::index_sequence<10, 20, 30>;
+
+    EXPECT_EQ((PackElement_v<Seq, 0>()), 10u);
+    EXPECT_EQ((PackElement_v<Seq, 1>()), 20u);
+    EXPECT_EQ((PackElement_v<Seq, 2>()), 30u);
+
+    static_assert(std::is_same_v<PackElement_t<Seq, 0>, size_t>);
+}
+
 TEST(PackElement, RuntimePackElementFunction) {
     using Pack = Values<10, 20, 30>;
 
     EXPECT_EQ(packElement(Pack{}, 0), 10);
     EXPECT_EQ(packElement(Pack{}, 1), 20);
     EXPECT_EQ(packElement(Pack{}, 2), 30);
+}
+
+// =============================================================================
+// PackHeadValue Tests
+// =============================================================================
+
+TEST(PackHeadValue, ReturnsFirstValue) {
+    EXPECT_EQ((PackHeadValue_v<Values<10, 20, 30>>()), 10);
+    EXPECT_EQ((PackHeadValue_v<Values<'a', 'b', 'c'>>()), 'a');
+    EXPECT_EQ((PackHeadValue_v<Values<42>>()), 42);
+
+    static_assert(std::is_same_v<PackHeadValue_t<Values<42, 'x'>>, int>);
+    static_assert(std::is_same_v<PackHeadValue_t<Values<'x', 42>>, char>);
+}
+
+TEST(PackHeadValue, WorksWithIntegerSequence) {
+    EXPECT_EQ((PackHeadValue_v<std::index_sequence<10, 20, 30>>()), 10u);
+    EXPECT_EQ((PackHeadValue_v<std::integer_sequence<char, 'a', 'b', 'c'>>()), 'a');
+
+    static_assert(std::is_same_v<PackHeadValue_t<std::index_sequence<1, 2>>, size_t>);
+    static_assert(std::is_same_v<PackHeadValue_t<std::integer_sequence<char, 'x'>>, char>);
+}
+
+// =============================================================================
+// PackTail Tests
+// =============================================================================
+
+TEST(PackTail, ReturnsTailAsValues) {
+    // PackTail always returns Values<...> regardless of input type
+    static_assert(std::is_same_v<PackTail_t<Values<10, 20, 30>>, Values<20, 30>>);
+    static_assert(std::is_same_v<PackTail_t<Values<42>>, Values<>>);
+
+    auto tail = packTail(Values<10, 20, 30>{});
+    static_assert(std::is_same_v<decltype(tail), Values<20, 30>>);
+}
+
+TEST(PackTail, IntegerSequenceReturnsValues) {
+    // PackTail of integer_sequence also returns Values<...>
+    static_assert(std::is_same_v<PackTail_t<std::index_sequence<10, 20, 30>>,
+                                 Values<size_t{20}, size_t{30}>>);
+
+    auto tail = packTail(std::index_sequence<10, 20, 30>{});
+    static_assert(std::is_same_v<decltype(tail), Values<size_t{20}, size_t{30}>>);
 }
 
 // =============================================================================
@@ -185,6 +248,17 @@ TEST(PackContains, DistinguishesByType) {
 
     EXPECT_TRUE((PackContains_v<Pack, 'A'>()));
     EXPECT_FALSE((PackContains_v<Pack, 65>())); // 65 == 'A' but different type
+}
+
+TEST(PackContains, WorksWithIntegerSequence) {
+    using Seq = std::index_sequence<10, 20, 30>;
+
+    EXPECT_TRUE((PackContains_v<Seq, size_t{10}>()));
+    EXPECT_TRUE((PackContains_v<Seq, size_t{20}>()));
+    EXPECT_TRUE((PackContains_v<Seq, size_t{30}>()));
+    EXPECT_FALSE((PackContains_v<Seq, size_t{99}>()));
+    // Type must match - index_sequence uses size_t
+    EXPECT_FALSE((PackContains_v<Seq, 10>())); // int != size_t
 }
 
 // =============================================================================
@@ -368,9 +442,6 @@ TEST(IndexSequencePrepend, RuntimeFunction) {
 
 // Non-pack types for negative testing
 struct NotAPack {};
-struct FakePackNoTag {
-    int value;
-};
 
 // =============================================================================
 // ValuePack Concept Tests
@@ -385,13 +456,21 @@ TEST(ValuePackConcept, ValuesTypesSatisfyConcept) {
     static_assert(is_value_pack<Values<1, 'x', true>>()); // Mixed types
 }
 
+TEST(ValuePackConcept, IntegerSequenceTypesSatisfyConcept) {
+    // std::integer_sequence and std::index_sequence also satisfy ValuePack
+    static_assert(is_value_pack<std::index_sequence<>>());
+    static_assert(is_value_pack<std::index_sequence<0>>());
+    static_assert(is_value_pack<std::index_sequence<0, 1, 2>>());
+    static_assert(is_value_pack<std::integer_sequence<int, 1, 2, 3>>());
+    static_assert(is_value_pack<std::integer_sequence<char, 'a', 'b', 'c'>>());
+}
+
 TEST(ValuePackConcept, NonPackTypesDoNotSatisfyConcept) {
-    // Types without value_pack_tag should not satisfy ValuePack
+    // Regular types should not satisfy ValuePack
     static_assert(!is_value_pack<int>());
     static_assert(!is_value_pack<double>());
     static_assert(!is_value_pack<NotAPack>());
-    static_assert(!is_value_pack<FakePackNoTag>());
-    static_assert(!is_value_pack<std::index_sequence<1, 2, 3>>());
+    static_assert(!is_value_pack<std::tuple<int, char>>());
 }
 
 // =============================================================================
@@ -434,6 +513,13 @@ TEST(EmptyNonEmptyValuePackConcept, NonPackTypesDoNotSatisfyEither) {
     static_assert(!is_non_empty_value_pack<NotAPack>());
 }
 
+TEST(EmptyNonEmptyValuePackConcept, IntegerSequenceWorks) {
+    static_assert(is_empty_value_pack<std::index_sequence<>>());
+    static_assert(!is_non_empty_value_pack<std::index_sequence<>>());
+    static_assert(!is_empty_value_pack<std::index_sequence<1, 2, 3>>());
+    static_assert(is_non_empty_value_pack<std::index_sequence<1, 2, 3>>());
+}
+
 // =============================================================================
 // SameTypeValuePack Concept Tests
 // =============================================================================
@@ -465,6 +551,13 @@ TEST(SameTypeValuePackConcept, MixedTypesDoNotSatisfySameType) {
 TEST(SameTypeValuePackConcept, NonPackTypesDoNotSatisfy) {
     static_assert(!is_same_type_value_pack<int>());
     static_assert(!is_same_type_value_pack<NotAPack>());
+}
+
+TEST(SameTypeValuePackConcept, IntegerSequenceAlwaysSameType) {
+    // std::integer_sequence always has same type by definition
+    static_assert(is_same_type_value_pack<std::index_sequence<>>());
+    static_assert(is_same_type_value_pack<std::index_sequence<1, 2, 3>>());
+    static_assert(is_same_type_value_pack<std::integer_sequence<char, 'a', 'b', 'c'>>());
 }
 
 // =============================================================================
@@ -502,6 +595,12 @@ TEST(UniqueValuePackConcept, SameNumericValueDifferentTypesAreUnique) {
 TEST(UniqueValuePackConcept, NonPackTypesDoNotSatisfy) {
     static_assert(!is_unique_value_pack<int>());
     static_assert(!is_unique_value_pack<NotAPack>());
+}
+
+TEST(UniqueValuePackConcept, IntegerSequenceUniqueness) {
+    static_assert(is_unique_value_pack<std::index_sequence<>>());
+    static_assert(is_unique_value_pack<std::index_sequence<1, 2, 3>>());
+    static_assert(!is_unique_value_pack<std::index_sequence<1, 2, 1>>());
 }
 
 // =============================================================================

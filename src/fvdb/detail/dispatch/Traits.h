@@ -4,6 +4,8 @@
 #ifndef FVDB_DETAIL_DISPATCH_TRAITS_H
 #define FVDB_DETAIL_DISPATCH_TRAITS_H
 
+#include "fvdb/detail/dispatch/TypesFwd.h"
+
 #include <array>
 #include <cstddef>
 #include <tuple>

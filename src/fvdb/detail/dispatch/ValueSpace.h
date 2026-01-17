@@ -6,6 +6,7 @@
 
 #include "fvdb/detail/dispatch/IndexSpace.h"
 #include "fvdb/detail/dispatch/Traits.h"
+#include "fvdb/detail/dispatch/TypesFwd.h"
 #include "fvdb/detail/dispatch/Values.h"
 
 #include <array>

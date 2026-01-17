@@ -46,7 +46,9 @@ TEST(ValueAxis, ConceptRequirements) {
 
     // Fails: not a value pack at all
     static_assert(!is_value_axis<int>());
-    static_assert(!is_value_axis<std::index_sequence<1, 2, 3>>());
+
+    // Succeeds! Index sequences are value packs.
+    static_assert(is_value_axis<std::index_sequence<1, 2, 3>>());
 }
 
 // =============================================================================
