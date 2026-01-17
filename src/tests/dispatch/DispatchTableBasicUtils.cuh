@@ -168,4 +168,4 @@ test(Device d, DType t, ChannelPlacement p, size_t C, size_t E) {
 } // namespace dispatch
 } // namespace fvdb
 
-#endif
+#endif // TESTS_DISPATCH_DISPATCHTABLEBASICUTILS_CUH

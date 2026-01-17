@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef FVDB_TESTS_DISPATCH_EXAMPLEUTILS_H
-#define FVDB_TESTS_DISPATCH_EXAMPLEUTILS_H
+#ifndef TESTS_DISPATCH_EXAMPLEUTILS_H
+#define TESTS_DISPATCH_EXAMPLEUTILS_H
 
 #include <torch/torch.h>
 
@@ -85,4 +85,4 @@ expect_scan_equal(torch::Tensor actual, std::vector<T> const &expected) {
 } // namespace dispatch
 } // namespace fvdb
 
-#endif // FVDB_TESTS_DISPATCH_EXAMPLEUTILS_H
+#endif // TESTS_DISPATCH_EXAMPLEUTILS_H
