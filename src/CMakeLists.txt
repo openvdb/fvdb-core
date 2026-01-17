@@ -162,6 +162,7 @@ set(FVDB_CU_FILES
     fvdb/detail/dispatch/example/ScanLib.cu
     fvdb/detail/dispatch/example/Functional.cu
     fvdb/detail/dispatch/example/Op.cu
+    fvdb/detail/dispatch/example/ReLU.cu
 )
 
 # Build library
