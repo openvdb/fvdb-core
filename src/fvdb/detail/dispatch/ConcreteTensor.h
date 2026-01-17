@@ -25,6 +25,7 @@ using ScalarCppTypeT = typename c10::impl::ScalarTypeToCPPType<S>::type;
 template <torch::DeviceType Device, torch::ScalarType Stype, size_t Rank> struct ConcreteTensor {
     static constexpr torch::DeviceType DeviceValue     = Device;
     static constexpr torch::ScalarType ScalarTypeValue = Stype;
+    using value_type                                   = ScalarCppTypeT<Stype>;
 
     torch::Tensor tensor;
     ConcreteTensor() = default;

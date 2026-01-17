@@ -1,5 +1,63 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
+//
+// ================================================================================================
+// Functional.cu - Dispatch via Overloaded Free Functions
+// ================================================================================================
+//
+// This file demonstrates dispatch across a 5-DIMENSIONAL SPACE using overloaded free functions.
+// The dispatch coordinates are: Device × Dtype × Contiguity × Placement × Determinism.
+//
+// THE FULL SPACE would be: 2 devices × 4 dtypes × 2 contiguities × 2 placements × 2 determinisms
+//                        = 64 possible instantiations. However, not all combinations are valid:
+//   - GPU only supports contiguous, out-of-place operations
+//   - Integer types are inherently deterministic
+//   - Some algorithms only work with specific constraints
+//
+// SPARSE INSTANTIATION:
+//   Instead of instantiating all 64 points, we define SUBSPACES that cover only valid combinations:
+//     - IscanCPUFloatSubspace:  CPU × {float,double} × {any contiguity} × {any placement} × {any
+//     determinism}
+//     - IscanCPUIntSubspace:    CPU × {int,long} × {any contiguity} × {any placement} ×
+//     {Deterministic only}
+//     - IscanGPUFloatSubspace:  CUDA × {float,double} × {Contiguous} × {OutOfPlace} ×
+//     {NonDeterministic}
+//     - IscanGPUIntSubspace:    CUDA × {int,long} × {Contiguous} × {OutOfPlace} × {Deterministic}
+//
+//   The union of these subspaces covers exactly the supported configurations. Points outside these
+//   subspaces will produce a runtime error with a clear message about unsupported coordinates.
+//
+// THE FUNCTIONAL IDIOM:
+//   Define multiple `iscan_impl` free function overloads, each taking a different Tag<...> type.
+//   The compiler uses overload resolution to select the most specific match:
+//
+//   1. Generic fallbacks use broad template parameters:
+//        template<stype, contiguity, determinism> iscan_impl(Tag<kCPU, stype, contiguity, ...>,
+//        ...)
+//
+//   2. Specialized versions use `requires` clauses to constrain selection:
+//        template<stype, contiguity> requires IntegerTorchScalarType<stype>
+//        iscan_impl(Tag<kCPU, stype, contiguity, OutOfPlace, Deterministic>, ...)
+//
+//   When multiple overloads match, the most constrained one wins. This allows natural expression of
+//   "integers use this algorithm" or "non-deterministic floats use that algorithm" without nested
+//   if-constexpr chains.
+//
+// DISPATCH TABLE CONSTRUCTION:
+//   The table is built using `from_visitor()` with a lambda that forwards to the overload set:
+//     from_visitor([](auto coord, torch::Tensor t) { return iscan_impl(coord, t); })
+//   The dispatcher instantiates this lambda for every point in the declared subspaces, and the
+//   lambda's call to iscan_impl uses overload resolution to select the right implementation.
+//
+// WHY FREE FUNCTIONS?
+//   - Natural for functional-style code that calls into external libraries
+//   - Easy to add new overloads without modifying existing code
+//   - Concepts and requires clauses provide fine-grained control over selection
+//   - Good when different algorithm variants have very different implementations
+//
+// Compare with Op.cu which achieves the same result using if-constexpr inside a single struct.
+//
+// ================================================================================================
 
 #include "fvdb/detail/dispatch/example/Functional.h"
 

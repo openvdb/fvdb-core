@@ -1,5 +1,40 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
+//
+// ================================================================================================
+// ReLU.cu - A Simple Dispatch Example
+// ================================================================================================
+//
+// This file demonstrates the simplest use of the dispatch system: dispatching across device types
+// (CPU/CUDA) and floating-point scalar types (float16, bfloat16, float, double).
+//
+// THE DISPATCH PATTERN:
+//   1. Define a struct (ReluOp) containing static `op` member function templates.
+//   2. Each `op` overload takes a Tag<...> as its first argument, which encodes compile-time
+//      information about the dispatch coordinate (device type, scalar type, etc.).
+//   3. Declare a `Space` type alias that defines all possible dispatch coordinates as a Cartesian
+//      product of value axes. Here: CpuCudaDeviceAxis × FullFloatDtypeAxis = 2 × 4 = 8 points.
+//   4. Declare a `Dispatcher` type alias that combines the Space with the function signature.
+//   5. At the call site, create a static dispatch table using `from_op<ReluOp>()` which
+//      automatically instantiates `ReluOp::op` for every point in the Space.
+//   6. Call `torchDispatch(name, table, coord, args...)` which looks up the runtime coordinate
+//      in the table and invokes the corresponding compile-time instantiation.
+//
+// HOW TAG DISPATCH WORKS:
+//   The Tag<torch::kCPU, stype> and Tag<torch::kCUDA, stype> overloads are distinguished by the
+//   device type in the tag. The dispatcher calls the appropriate overload based on runtime device.
+//   Within each overload, `stype` is a compile-time constant, allowing type-safe accessor usage.
+//
+// KEY TYPES:
+//   - Tag<DeviceType, ScalarType, ...>: A compile-time coordinate in the dispatch space.
+//   - ValueAxes<Axis1, Axis2, ...>: Cartesian product of value sets defining the full space.
+//   - DispatchTable<Space, Signature>: Maps runtime coordinates to function pointers.
+//   - torchDispatch(): Validates the coordinate and calls the appropriate instantiation.
+//
+// This example is intentionally minimal. For more complex dispatch with multiple axes, partial
+// coverage, and algorithm selection based on constraints, see Functional.cu and Op.cu.
+//
+// ================================================================================================
 
 #include "fvdb/detail/dispatch/example/ReLU.h"
 

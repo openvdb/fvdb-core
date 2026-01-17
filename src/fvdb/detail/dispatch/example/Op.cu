@@ -1,5 +1,61 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
+//
+// ================================================================================================
+// Op.cu - Dispatch via a Single Struct with if-constexpr
+// ================================================================================================
+//
+// This file demonstrates dispatch across a 5-DIMENSIONAL SPACE using a single struct with one
+// heavily-templated `op` function. The dispatch coordinates are the same as Functional.cu:
+// Device × Dtype × Contiguity × Placement × Determinism.
+//
+// THE FULL SPACE would be: 2 devices × 4 dtypes × 2 contiguities × 2 placements × 2 determinisms
+//                        = 64 possible instantiations.
+//
+// SPARSE INSTANTIATION:
+//   Like Functional.cu, we avoid instantiating all 64 points by declaring specific subspaces:
+//     - CPUFloatSubspace:  CPU × {float,double} × {any contiguity} × {any placement} × {any
+//     determinism}
+//     - CPUIntSubspace:    CPU × {int,long} × {any contiguity} × {any placement} × {Deterministic
+//     only}
+//     - GPUFloatSubspace:  CUDA × {float,double} × {Contiguous} × {OutOfPlace} × {NonDeterministic}
+//     - GPUIntSubspace:    CUDA × {int,long} × {Contiguous} × {OutOfPlace} × {Deterministic}
+//
+//   These subspaces are passed to the DispatchTable constructor. Only points in their union are
+//   instantiated; all others return a clear runtime error. This is crucial for compile times and
+//   binary size when working with high-dimensional dispatch spaces.
+//
+// THE OP STRUCT IDIOM:
+//   Define a struct (InclusiveScanOp) with:
+//     1. A static `op` template that takes Tag<device, stype, contiguity, placement, determinism>
+//        and uses if-constexpr to branch on the compile-time values.
+//     2. Type aliases for dtypes, the full Space, the supported Subspaces, and the Dispatcher.
+//
+//   All algorithm selection logic lives in one function body with compile-time branching:
+//     if constexpr (device == kCPU) {
+//         if constexpr (placement == InPlace) { ... }
+//         else if constexpr (IntegerTorchScalarType<stype>) { ... }
+//         ...
+//     } else { /* CUDA path */ }
+//
+//   The compiler eliminates dead branches, so each instantiation contains only the relevant code.
+//
+// DISPATCH TABLE CONSTRUCTION:
+//   The table is built using `from_op<InclusiveScanOp>()` which automatically finds and
+//   instantiates `InclusiveScanOp::op` for every point in the declared subspaces.
+//
+// WHY A SINGLE STRUCT?
+//   - All logic is centralized and easy to follow top-to-bottom
+//   - Type aliases for Space/Subspaces live with the implementation
+//   - Good when algorithm variants share significant code structure
+//   - Easier to see the complete decision tree at a glance
+//
+// Both Op.cu and Functional.cu wrap the same underlying library (ScanLib, a stand-in for something
+// like CUB or Thrust). They produce identical behavior but demonstrate different code organization
+// styles. Choose based on whether your algorithm variants are structurally similar (Op) or
+// fundamentally different implementations (Functional).
+//
+// ================================================================================================
 
 #include "fvdb/detail/dispatch/example/Op.h"
 
