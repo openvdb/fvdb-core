@@ -1700,8 +1700,23 @@ class TestJaggedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(sum_ours_jdata, sum_res_ptscatter, **tol))
         self.assertTrue(torch.allclose(grad_ours, grad_ptscatter, **tol))
 
-    @parameterized.expand([(torch.float16,), (torch.float32,), (torch.float64,)])
-    def test_sdpa(self, dtype):
+    @parameterized.expand(
+        [
+            # Flash Attention - only supports float16/bfloat16
+            (torch.float16, torch.nn.attention.SDPBackend.FLASH_ATTENTION),
+            (torch.bfloat16, torch.nn.attention.SDPBackend.FLASH_ATTENTION),
+            # Efficient Attention - only supports float16/bfloat16/float32
+            (torch.float16, torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION),
+            (torch.bfloat16, torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION),
+            (torch.float32, torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION),
+            # Math - supports all dtypes
+            (torch.float16, torch.nn.attention.SDPBackend.MATH),
+            (torch.bfloat16, torch.nn.attention.SDPBackend.MATH),
+            (torch.float32, torch.nn.attention.SDPBackend.MATH),
+            (torch.float64, torch.nn.attention.SDPBackend.MATH),
+        ]
+    )
+    def test_sdpa(self, dtype, backend):
         torch.random.manual_seed(0)
 
         # Get dimensions: query (B*Sq, H, D), key (B*Skv, H, D), value (B*Skv, H, T)
@@ -1709,7 +1724,8 @@ class TestJaggedTensor(unittest.TestCase):
         seqlen_q = [10, 20, 30]
         seqlen_kv = [15, 25, 35]
         dim_qk = 64
-        dim_v = 128
+        # Flash Attention requires q, k, v to all have the same last dimension
+        dim_v = dim_qk if backend == torch.nn.attention.SDPBackend.FLASH_ATTENTION else 128
         scale = 0.5
         device = "cuda"
 
@@ -1724,7 +1740,7 @@ class TestJaggedTensor(unittest.TestCase):
         self.check_lshape(k_jagged, k_list)
         self.check_lshape(v_jagged, v_list)
 
-        # Torch -- For-loop approach
+        # Torch -- For-loop approach (always use MATH for reference to ensure consistency)
         out_jagged_torch_forloop_list = []
         for b in range(batch_size):
             # From LHE to NHLE / SHV to NHSV
@@ -1741,8 +1757,8 @@ class TestJaggedTensor(unittest.TestCase):
         out_jagged_torch_forloop = fvdb.JaggedTensor(out_jagged_torch_forloop_list)
         self.check_lshape(out_jagged_torch_forloop, out_jagged_torch_forloop_list)
 
-        # fVDB
-        with torch.nn.attention.sdpa_kernel([torch.nn.attention.SDPBackend.MATH]):
+        # fVDB - test with the specified backend
+        with torch.nn.attention.sdpa_kernel([backend]):
             out_jagged_fvdb = fvdb.scaled_dot_product_attention(q_jagged, k_jagged, v_jagged, scale=scale)
             self.check_lshape(out_jagged_fvdb, out_jagged_torch_forloop_list)
 
@@ -1751,6 +1767,9 @@ class TestJaggedTensor(unittest.TestCase):
         if dtype == torch.float16:
             atol = 1e-3
             rtol = 1e-3
+        elif dtype == torch.bfloat16:
+            atol = 1e-2
+            rtol = 1e-2
         self.assertTrue(torch.allclose(out_jagged_torch_forloop.jdata, out_jagged_fvdb.jdata, atol=atol, rtol=rtol))
         self.assertTrue(torch.all(out_jagged_torch_forloop.joffsets == out_jagged_fvdb.joffsets))
 
