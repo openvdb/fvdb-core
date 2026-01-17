@@ -53,8 +53,7 @@ namespace example {
 
 template <typename T>
 __global__ void
-relu_kernel(torch::PackedTensorAccessor64<T, 1, torch::RestrictPtrTraits> input,
-            torch::PackedTensorAccessor64<T, 1, torch::RestrictPtrTraits> output) {
+relu_kernel(torch::PackedTensorAccessor64<T, 1> input, torch::PackedTensorAccessor64<T, 1> output) {
     int64_t const idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < input.size(0)) {
         T const val = input[idx];
@@ -85,8 +84,8 @@ struct ReluOp {
         c10::cuda::CUDAGuard device_guard(input.device());
         cudaStream_t stream = at::cuda::getCurrentCUDAStream().stream();
 
-        auto input_accessor  = input.packed_accessor64<T, 1, torch::RestrictPtrTraits>();
-        auto output_accessor = output.packed_accessor64<T, 1, torch::RestrictPtrTraits>();
+        auto input_accessor  = input.packed_accessor64<T, 1>();
+        auto output_accessor = output.packed_accessor64<T, 1>();
 
         int constexpr block_size = 256;
         int const num_blocks     = (input.numel() + block_size - 1) / block_size;
