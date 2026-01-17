@@ -238,7 +238,7 @@ computeTileOffsetsSparse(const uint32_t numIntersections,
                          const uint32_t numTiles,
                          const uint32_t tileIdBits,
                          const int64_t *__restrict__ sortedIntersectionKeys,
-                         const uint32_t *__restrict__ activeTiles,
+                         const int32_t *__restrict__ activeTiles,
                          const uint32_t numActiveTiles,
                          int32_t *__restrict__ outOffsets) { // [C, n_tiles] or [num_active_tiles]
 
@@ -541,7 +541,7 @@ gaussianTileIntersectionCUDAImpl(
                 totalTiles,
                 numTileIdBits,
                 intersectionKeys.data_ptr<int64_t>(),
-                activeTiles.value().data_ptr<uint32_t>(),
+                activeTiles.value().data_ptr<int32_t>(),
                 numActiveTiles,
                 tileJOffsets.data_ptr<int32_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
@@ -639,7 +639,7 @@ mergePathKernel(KeyIteratorIn keys1,
     mergePath(keys1, keys1Count, keys2, keys2Count, key1Intervals, key2Intervals, intervalIndex);
 }
 
-template <typename KeyT, typename ValueT, typename NumItemsT, typename OffsetT, typename CountT>
+template <typename KeyT, typename ValueT, typename NumItemsT>
 void
 radixSortAsync(KeyT *keysIn,
                KeyT *keysOut,
@@ -648,15 +648,30 @@ radixSortAsync(KeyT *keysIn,
                NumItemsT numItems,
                int beginBit,
                int endBit,
-               OffsetT *mergeIntervals,
-               const OffsetT *offsets,
-               const CountT *counts,
                cudaEvent_t *events) {
+    using OffsetT = int64_t;
+    using CountT  = int64_t;
+
+    auto hostOptions = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU);
+    auto itemOffsets = torch::empty({c10::cuda::device_count()}, hostOptions);
+    auto itemCounts  = torch::empty({c10::cuda::device_count()}, hostOptions);
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        std::tie(itemOffsets.data_ptr<OffsetT>()[deviceId],
+                 itemCounts.data_ptr<CountT>()[deviceId]) = deviceChunk(numItems, deviceId);
+    }
+    const auto *offsets = itemOffsets.const_data_ptr<OffsetT>();
+    const auto *counts  = itemCounts.const_data_ptr<CountT>();
+
+    torch::Tensor deviceMergeIntervals =
+        torch::empty({2 * c10::cuda::device_count()},
+                     torch::TensorOptions().dtype(torch::kInt64).device(torch::kPrivateUse1));
+    auto mergeIntervals = deviceMergeIntervals.data_ptr<OffsetT>();
+
     // Radix sort the subset of keys assigned to each device in parallel
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaEventSynchronize(events[deviceId]));
+        // C10_CUDA_CHECK(cudaEventSynchronize(events[deviceId]));
 
         const KeyT *deviceKeysIn     = keysIn + offsets[deviceId];
         const ValueT *deviceValuesIn = valuesIn + offsets[deviceId];
@@ -1037,13 +1052,6 @@ gaussianTileIntersectionPrivateUse1Impl(
         torch::Tensor keysSorted = torch::empty_like(intersectionKeys);
         torch::Tensor valsSorted = torch::empty_like(intersectionValues);
 
-        torch::Tensor deviceIntersectionOffsets =
-            torch::empty({c10::cuda::device_count()}, means2d.options().dtype(torch::kInt64));
-        torch::Tensor deviceIntersectionCounts =
-            torch::empty({c10::cuda::device_count()}, means2d.options().dtype(torch::kInt64));
-        torch::Tensor mergeIntervals =
-            torch::empty({2 * c10::cuda::device_count()}, means2d.options().dtype(torch::kInt64));
-
         std::vector<cudaEvent_t> events(c10::cuda::device_count());
 
         // Compute a joffsets tensor that stores the offsets into the sorted Gaussian
@@ -1100,9 +1108,6 @@ gaussianTileIntersectionPrivateUse1Impl(
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
             C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[0]));
-            std::tie(deviceIntersectionOffsets.data_ptr<int64_t>()[deviceId],
-                     deviceIntersectionCounts.data_ptr<int64_t>()[deviceId]) =
-                deviceChunk(totalIntersections, deviceId);
         }
 
         const int32_t numBits = 32 + numCamIdBits + numTileIdBits;
@@ -1113,9 +1118,6 @@ gaussianTileIntersectionPrivateUse1Impl(
                        totalIntersections,
                        0,
                        numBits,
-                       mergeIntervals.data_ptr<int64_t>(),
-                       deviceIntersectionOffsets.const_data_ptr<int64_t>(),
-                       deviceIntersectionCounts.const_data_ptr<int64_t>(),
                        events.data());
 
         {
@@ -1134,12 +1136,14 @@ gaussianTileIntersectionPrivateUse1Impl(
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
             C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[0]));
 
-            const int NUM_BLOCKS_2 =
-                (deviceIntersectionCounts.const_data_ptr<int64_t>()[deviceId] + NUM_THREADS - 1) /
-                NUM_THREADS;
+            int64_t deviceIntersectionOffset, deviceIntersectionCount;
+            std::tie(deviceIntersectionOffset, deviceIntersectionCount) =
+                deviceChunk(totalIntersections, deviceId);
+
+            const int NUM_BLOCKS_2 = (deviceIntersectionCount + NUM_THREADS - 1) / NUM_THREADS;
             computeTileOffsets<<<NUM_BLOCKS_2, NUM_THREADS, 0, stream>>>(
-                deviceIntersectionOffsets.const_data_ptr<int64_t>()[deviceId],
-                deviceIntersectionCounts.const_data_ptr<int64_t>()[deviceId],
+                deviceIntersectionOffset,
+                deviceIntersectionCount,
                 totalIntersections,
                 numCameras,
                 totalTiles,
@@ -1225,7 +1229,7 @@ dispatchGaussianTileIntersection<torch::kCPU>(
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor>
-dispatchGaussianTileIntersectionSparse<torch::kCUDA>(
+dispatchGaussianSparseTileIntersection<torch::kCUDA>(
     const torch::Tensor &means2d,                  // [C, N, 2] or [M, 2]
     const torch::Tensor &radii,                    // [C, N] or [M]
     const torch::Tensor &depths,                   // [C, N] or [M]
@@ -1251,7 +1255,7 @@ dispatchGaussianTileIntersectionSparse<torch::kCUDA>(
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor>
-dispatchGaussianTileIntersectionSparse<torch::kCPU>(
+dispatchGaussianSparseTileIntersection<torch::kPrivateUse1>(
     const torch::Tensor &means2d,                  // [C, N, 2] or [M, 2]
     const torch::Tensor &radii,                    // [C, N] or [M]
     const torch::Tensor &depths,                   // [C, N] or [M]
@@ -1263,16 +1267,35 @@ dispatchGaussianTileIntersectionSparse<torch::kCPU>(
     const uint32_t numTilesH,
     const uint32_t numTilesW) {
     FVDB_FUNC_RANGE();
-    return gaussianTileIntersectionCUDAImpl(means2d,
-                                            radii,
-                                            depths,
-                                            cameraJIdx,
-                                            tileMask,
-                                            activeTiles,
-                                            numCameras,
-                                            tileSize,
-                                            numTilesH,
-                                            numTilesW);
+    // Sparse tile intersection is not implemented for multi-GPU (PrivateUse1)
+    // The PrivateUse1 impl already checks for this and throws an appropriate error
+    return gaussianTileIntersectionPrivateUse1Impl(means2d,
+                                                   radii,
+                                                   depths,
+                                                   cameraJIdx,
+                                                   tileMask,
+                                                   activeTiles,
+                                                   numCameras,
+                                                   tileSize,
+                                                   numTilesH,
+                                                   numTilesW);
+}
+
+template <>
+std::tuple<torch::Tensor, torch::Tensor>
+dispatchGaussianSparseTileIntersection<torch::kCPU>(
+    const torch::Tensor &means2d,                  // [C, N, 2] or [M, 2]
+    const torch::Tensor &radii,                    // [C, N] or [M]
+    const torch::Tensor &depths,                   // [C, N] or [M]
+    const torch::Tensor &tileMask,                 // [C, H, W]
+    const torch::Tensor &activeTiles,              // [num_active_tiles]
+    const at::optional<torch::Tensor> &cameraJIdx, // NULL or [M]
+    const uint32_t numCameras,
+    const uint32_t tileSize,
+    const uint32_t numTilesH,
+    const uint32_t numTilesW) {
+    FVDB_FUNC_RANGE();
+    TORCH_CHECK(false, "CPU implementation not available for sparse tile intersection");
 }
 
 } // namespace ops

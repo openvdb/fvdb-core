@@ -243,14 +243,25 @@ loadGaussianPly(const std::string &filename, torch::Device device) {
     size_t vertex_count = meansData->count;
 
     // Create tensors to hold the data
-    torch::Tensor means = torch::from_blob(
-        meansData->buffer.get(), {static_cast<int64_t>(vertex_count), 3}, torch::kFloat32);
-    torch::Tensor logitOpacities = torch::from_blob(
-        logitOpacitiesData->buffer.get(), {static_cast<int64_t>(vertex_count)}, torch::kFloat32);
-    torch::Tensor logScales = torch::from_blob(
-        logScalesData->buffer.get(), {static_cast<int64_t>(vertex_count), 3}, torch::kFloat32);
-    torch::Tensor quats = torch::from_blob(
-        quatsData->buffer.get(), {static_cast<int64_t>(vertex_count), 4}, torch::kFloat32);
+    // NOTE: We must clone() after from_blob() because from_blob() does not take ownership of the
+    // underlying memory. The PlyData buffers will be freed when this function returns, so we need
+    // to copy the data into tensors that own their memory.
+    torch::Tensor means = torch::from_blob(meansData->buffer.get(),
+                                           {static_cast<int64_t>(vertex_count), 3},
+                                           torch::kFloat32)
+                              .clone();
+    torch::Tensor logitOpacities = torch::from_blob(logitOpacitiesData->buffer.get(),
+                                                    {static_cast<int64_t>(vertex_count)},
+                                                    torch::kFloat32)
+                                       .clone();
+    torch::Tensor logScales = torch::from_blob(logScalesData->buffer.get(),
+                                               {static_cast<int64_t>(vertex_count), 3},
+                                               torch::kFloat32)
+                                  .clone();
+    torch::Tensor quats = torch::from_blob(quatsData->buffer.get(),
+                                           {static_cast<int64_t>(vertex_count), 4},
+                                           torch::kFloat32)
+                              .clone();
 
     // Create tensor to hold SH coefficients
     const int numChannels  = static_cast<int>(sh0PlyPropertyNames.size());
@@ -261,7 +272,8 @@ loadGaussianPly(const std::string &filename, torch::Device device) {
     if (sh0Data && sh0Data->count > 0) {
         sh0Coeffs = torch::from_blob(sh0Data->buffer.get(),
                                      {static_cast<int64_t>(vertex_count), 1, numChannels},
-                                     torch::kFloat32);
+                                     torch::kFloat32)
+                        .clone();
     }
     torch::Tensor shNCoeffs; // (N, K-1, D)
     if (shNData && shNData->count > 0) {
@@ -284,7 +296,7 @@ loadGaussianPly(const std::string &filename, torch::Device device) {
         const auto tensorShape = std::get<1>(kv.second);
         const auto tensorDtype = plyTypeToTensorDtype(plyData->t);
         const auto tensor =
-            torch::from_blob(plyData->buffer.get(), tensorShape, tensorDtype).to(device);
+            torch::from_blob(plyData->buffer.get(), tensorShape, tensorDtype).clone().to(device);
 
         retMetadata[key] = tensor;
     }

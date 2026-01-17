@@ -924,7 +924,11 @@ callRasterizeBackwardWithTemplatedSharedChannels(
                                outDLossDOpacities);
     }
 
-    const uint32_t C = means2d.size(0);
+    // tileOffsets can be 3D (dense) or 1D (sparse)
+    const bool tileOffsetsAreSparse = tileOffsets.dim() == 1;
+    // Get C from tileOffsets for dense mode
+    // For sparse mode, C is unused, only used for output sizing for dense mode
+    const uint32_t C = tileOffsetsAreSparse ? 0 : tileOffsets.size(0);
     const uint32_t H = imageHeight;
     const uint32_t W = imageWidth;
 
@@ -1210,7 +1214,11 @@ callRasterizeBackwardPrivateUse1(
                                outDLossDOpacities);
     }
 
-    const uint32_t C = means2d.size(0);
+    // tileOffsets can be 3D (dense) or 1D (sparse)
+    const bool tileOffsetsAreSparse = tileOffsets.dim() == 1;
+    // Get C from tileOffsets for dense mode
+    // For sparse mode, C is unused, only used for output sizing for dense mode
+    const uint32_t C = tileOffsetsAreSparse ? 0 : tileOffsets.size(0);
     const uint32_t H = imageHeight;
     const uint32_t W = imageWidth;
 
@@ -1230,10 +1238,15 @@ callRasterizeBackwardPrivateUse1(
             renderedAlphas, lastGaussianIds, dLossDRenderedFeatures, dLossDRenderedAlphas);
     }();
 
-    const uint32_t tileExtentH = tileOffsets.size(1);
-    const uint32_t tileExtentW = tileOffsets.size(2);
-    uint32_t tileCount =
-        activeTiles.has_value() ? activeTiles.value().size(0) : C * tileExtentH * tileExtentW;
+    // Compute tile count: for sparse mode use activeTiles, for dense mode compute from image dims
+    uint32_t tileCount;
+    if (activeTiles.has_value()) {
+        tileCount = activeTiles.value().size(0);
+    } else {
+        const uint32_t tileExtentH = (imageHeight + tileSize - 1) / tileSize;
+        const uint32_t tileExtentW = (imageWidth + tileSize - 1) / tileSize;
+        tileCount                  = C * tileExtentH * tileExtentW;
+    }
 
     std::vector<cudaEvent_t> events(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
@@ -1608,7 +1621,7 @@ dispatchGaussianSparseRasterizeBackward<torch::kCUDA>(
     const uint32_t imageOriginW,
     const uint32_t imageOriginH,
     const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,                 // [C, tile_height, tile_width]
+    const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
     const torch::Tensor &tileGaussianIds,             // [n_isects]
     const fvdb::JaggedTensor &renderedAlphas,         // [C lists: varying sizes, each element [1]]
     const fvdb::JaggedTensor &lastGaussianIds,        // [C lists: varying sizes]
@@ -1721,7 +1734,7 @@ dispatchGaussianSparseRasterizeBackward<torch::kPrivateUse1>(
     const uint32_t imageOriginW,
     const uint32_t imageOriginH,
     const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,                 // [C, tile_height, tile_width]
+    const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
     const torch::Tensor &tileGaussianIds,             // [n_isects]
     const fvdb::JaggedTensor &renderedAlphas,         // [C lists: varying sizes, each element [1]]
     const fvdb::JaggedTensor &lastIds,                // [C lists: varying sizes]
@@ -1750,7 +1763,7 @@ dispatchGaussianSparseRasterizeBackward<torch::kCPU>(
     const uint32_t imageOriginW,
     const uint32_t imageOriginH,
     const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,                 // [C, tile_height, tile_width]
+    const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
     const torch::Tensor &tileGaussianIds,             // [n_isects]
     const fvdb::JaggedTensor &renderedAlphas,         // [C lists: varying sizes, each element [1]]
     const fvdb::JaggedTensor &lastIds,                // [C lists: varying sizes]

@@ -359,16 +359,22 @@ launchRasterizeTopContributingGaussianIdsForwardKernel(
 
     TORCH_CHECK_VALUE(settings.numDepthSamples > 0, "numDepthSamples must be greater than 0");
 
-    TORCH_CHECK_VALUE(tileOffsets.size(2) ==
-                          (settings.imageWidth + settings.tileSize - 1) / settings.tileSize,
-                      "tileOffsets width must match the number of tiles in image size");
-    TORCH_CHECK_VALUE(tileOffsets.size(1) ==
-                          (settings.imageHeight + settings.tileSize - 1) / settings.tileSize,
-                      "tileOffsets height must match the number of tiles in image size");
+    // tileOffsets can be 3D (dense) or 1D (sparse)
+    const bool tileOffsetsAreSparse = tileOffsets.dim() == 1;
+    if (!tileOffsetsAreSparse) {
+        TORCH_CHECK_VALUE(tileOffsets.size(2) ==
+                              (settings.imageWidth + settings.tileSize - 1) / settings.tileSize,
+                          "tileOffsets width must match the number of tiles in image size");
+        TORCH_CHECK_VALUE(tileOffsets.size(1) ==
+                              (settings.imageHeight + settings.tileSize - 1) / settings.tileSize,
+                          "tileOffsets height must match the number of tiles in image size");
+    }
 
-    const uint32_t C           = means2d.size(0); // number of cameras
-    const uint32_t tileExtentH = tileOffsets.size(1);
-    const uint32_t tileExtentW = tileOffsets.size(2);
+    // Get C from tileOffsets for dense mode
+    // For sparse mode, C is unused, only used for output sizing for dense mode
+    const uint32_t C           = tileOffsetsAreSparse ? 0 : tileOffsets.size(0);
+    const uint32_t tileExtentH = (settings.imageHeight + settings.tileSize - 1) / settings.tileSize;
+    const uint32_t tileExtentW = (settings.imageWidth + settings.tileSize - 1) / settings.tileSize;
 
     TORCH_CHECK_VALUE(pixelMap.has_value() == pixelsToRender.has_value(),
                       "pixelMap and pixelsToRender must be provided together");
@@ -387,7 +393,7 @@ launchRasterizeTopContributingGaussianIdsForwardKernel(
         idsToRenderVec.push_back(
             torch::empty({size, settings.numDepthSamples}, means2d.options().dtype(torch::kInt32)));
         weightsToRenderVec.push_back(
-            torch::empty({size, settings.numDepthSamples},
+            torch::zeros({size, settings.numDepthSamples},
                          means2d.options().dtype(c10::CppTypeToScalarType<ScalarType>::value)));
     }
 
@@ -452,9 +458,9 @@ template <>
 std::tuple<torch::Tensor, torch::Tensor>
 dispatchGaussianRasterizeTopContributingGaussianIds<torch::kCUDA>(
     // Gaussian parameters
-    const torch::Tensor &means2d,         // [C, N, 2]
-    const torch::Tensor &conics,          // [C, N, 3]
-    const torch::Tensor &opacities,       // [N]
+    const torch::Tensor &means2d,         // [C, N, 2] or [nnz, 2]
+    const torch::Tensor &conics,          // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &opacities,       // [C, N] or [nnz]
     const torch::Tensor &tileOffsets,     // [C, tile_height, tile_width]
     const torch::Tensor &tileGaussianIds, // [n_isects]
     const RenderSettings &settings        // render settings
@@ -489,7 +495,8 @@ dispatchGaussianRasterizeTopContributingGaussianIds<torch::kCUDA>(
                                tileOffsets,
                                tileGaussianIds,
                                settings);
-            const auto C = means2d.size(0);
+            // Get C from tileOffsets for dense mode
+            const auto C = tileOffsets.size(0);
             return std::make_tuple(
                 ids.jdata().reshape(
                     {C, settings.imageHeight, settings.imageWidth, settings.numDepthSamples}),
@@ -504,9 +511,9 @@ template <>
 std::tuple<torch::Tensor, torch::Tensor>
 dispatchGaussianRasterizeTopContributingGaussianIds<torch::kCPU>(
     // Gaussian parameters
-    const torch::Tensor &means2d,         // [C, N, 2]
-    const torch::Tensor &conics,          // [C, N, 3]
-    const torch::Tensor &opacities,       // [N]
+    const torch::Tensor &means2d,         // [C, N, 2] or [nnz, 2]
+    const torch::Tensor &conics,          // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &opacities,       // [C, N] or [nnz]
     const torch::Tensor &tileOffsets,     // [C, tile_height, tile_width]
     const torch::Tensor &tileGaussianIds, // [n_isects]
     const RenderSettings &settings        // render settings
@@ -517,9 +524,9 @@ dispatchGaussianRasterizeTopContributingGaussianIds<torch::kCPU>(
 template <>
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
 dispatchGaussianSparseRasterizeTopContributingGaussianIds<torch::kCUDA>(
-    const torch::Tensor &means2d,         // [C, N, 2]
-    const torch::Tensor &conics,          // [C, N, 3]
-    const torch::Tensor &opacities,       // [N]
+    const torch::Tensor &means2d,         // [C, N, 2] or [nnz, 2]
+    const torch::Tensor &conics,          // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &opacities,       // [C, N] or [nnz]
     const torch::Tensor &tileOffsets,     // [C, tile_height, tile_width]
     const torch::Tensor &tileGaussianIds, // [n_isects]
     const fvdb::JaggedTensor &pixelsToRender,
@@ -578,9 +585,9 @@ dispatchGaussianSparseRasterizeTopContributingGaussianIds<torch::kCUDA>(
 template <>
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
 dispatchGaussianSparseRasterizeTopContributingGaussianIds<torch::kCPU>(
-    const torch::Tensor &means2d,         // [C, N, 2]
-    const torch::Tensor &conics,          // [C, N, 3]
-    const torch::Tensor &opacities,       // [N]
+    const torch::Tensor &means2d,         // [C, N, 2] or [nnz, 2]
+    const torch::Tensor &conics,          // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &opacities,       // [C, N] or [nnz]
     const torch::Tensor &tileOffsets,     // [C, tile_height, tile_width]
     const torch::Tensor &tileGaussianIds, // [n_isects]
     const fvdb::JaggedTensor &pixelsToRender,

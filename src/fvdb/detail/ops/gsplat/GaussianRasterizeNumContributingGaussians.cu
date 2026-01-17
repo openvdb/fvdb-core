@@ -247,16 +247,22 @@ launchRasterizeNumContributingGaussiansForwardKernel(
     const std::optional<torch::Tensor> &pixelMap            = std::nullopt) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means2d));
 
-    TORCH_CHECK_VALUE(tileOffsets.size(2) ==
-                          (settings.imageWidth + settings.tileSize - 1) / settings.tileSize,
-                      "tileOffsets width must match the number of tiles in image size");
-    TORCH_CHECK_VALUE(tileOffsets.size(1) ==
-                          (settings.imageHeight + settings.tileSize - 1) / settings.tileSize,
-                      "tileOffsets height must match the number of tiles in image size");
+    // tileOffsets can be 3D (dense) or 1D (sparse)
+    const bool tileOffsetsAreSparse = tileOffsets.dim() == 1;
+    if (!tileOffsetsAreSparse) {
+        TORCH_CHECK_VALUE(tileOffsets.size(2) ==
+                              (settings.imageWidth + settings.tileSize - 1) / settings.tileSize,
+                          "tileOffsets width must match the number of tiles in image size");
+        TORCH_CHECK_VALUE(tileOffsets.size(1) ==
+                              (settings.imageHeight + settings.tileSize - 1) / settings.tileSize,
+                          "tileOffsets height must match the number of tiles in image size");
+    }
 
-    const uint32_t C           = means2d.size(0); // number of cameras
-    const uint32_t tileExtentH = tileOffsets.size(1);
-    const uint32_t tileExtentW = tileOffsets.size(2);
+    // Get C from tileOffsets for dense mode
+    // For sparse mode, C is unused, only used for output sizing for dense mode
+    const uint32_t C           = tileOffsetsAreSparse ? 0 : tileOffsets.size(0);
+    const uint32_t tileExtentH = (settings.imageHeight + settings.tileSize - 1) / settings.tileSize;
+    const uint32_t tileExtentW = (settings.imageWidth + settings.tileSize - 1) / settings.tileSize;
 
     TORCH_CHECK_VALUE(pixelMap.has_value() == pixelsToRender.has_value(),
                       "pixelMap and pixelsToRender must be provided together");
@@ -336,9 +342,9 @@ template <>
 std::tuple<torch::Tensor, torch::Tensor>
 dispatchGaussianRasterizeNumContributingGaussians<torch::kCUDA>(
     // Gaussian parameters
-    const torch::Tensor &means2d,         // [C, N, 2]
-    const torch::Tensor &conics,          // [C, N, 3]
-    const torch::Tensor &opacities,       // [N]
+    const torch::Tensor &means2d,         // [C, N, 2] or [nnz, 2]
+    const torch::Tensor &conics,          // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &opacities,       // [C, N] or [nnz]
     const torch::Tensor &tileOffsets,     // [C, tile_height, tile_width]
     const torch::Tensor &tileGaussianIds, // [n_isects]
     const RenderSettings &settings        // render settings
@@ -373,7 +379,8 @@ dispatchGaussianRasterizeNumContributingGaussians<torch::kCUDA>(
                                tileOffsets,
                                tileGaussianIds,
                                settings);
-            const auto C = means2d.size(0);
+            // Get C from tileOffsets for dense mode
+            const auto C = tileOffsets.size(0);
             return std::make_tuple(
                 numContributingGaussians.jdata().reshape(
                     {C, settings.imageHeight, settings.imageWidth}),
@@ -387,9 +394,9 @@ template <>
 std::tuple<torch::Tensor, torch::Tensor>
 dispatchGaussianRasterizeNumContributingGaussians<torch::kCPU>(
     // Gaussian parameters
-    const torch::Tensor &means2d,         // [C, N, 2]
-    const torch::Tensor &conics,          // [C, N, 3]
-    const torch::Tensor &opacities,       // [N]
+    const torch::Tensor &means2d,         // [C, N, 2] or [nnz, 2]
+    const torch::Tensor &conics,          // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &opacities,       // [C, N] or [nnz]
     const torch::Tensor &tileOffsets,     // [C, tile_height, tile_width]
     const torch::Tensor &tileGaussianIds, // [n_isects]
     const RenderSettings &settings        // render settings
@@ -400,18 +407,17 @@ dispatchGaussianRasterizeNumContributingGaussians<torch::kCPU>(
 template <>
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
 dispatchGaussianSparseRasterizeNumContributingGaussians<torch::kCUDA>(
-    const torch::Tensor &means2d,         // [C, N, 2]
-    const torch::Tensor &conics,          // [C, N, 3]
-    const torch::Tensor &opacities,       // [N]
-    const torch::Tensor &tileOffsets,     // [C, tile_height, tile_width]
+    const torch::Tensor &means2d,     // [C, N, 2] or [nnz, 2]
+    const torch::Tensor &conics,      // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &opacities,   // [C, N] or [nnz]
+    const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
     const torch::Tensor &tileGaussianIds, // [n_isects]
     const fvdb::JaggedTensor &pixelsToRender,
     const torch::Tensor &activeTiles,
     const torch::Tensor &tilePixelMask,
     const torch::Tensor &tilePixelCumsum,
     const torch::Tensor &pixelMap,
-    const RenderSettings &settings // render settings
-) {
+    const RenderSettings &settings) { // render settings
     FVDB_FUNC_RANGE();
     const bool isPacked = means2d.dim() == 2;
 
@@ -461,18 +467,17 @@ dispatchGaussianSparseRasterizeNumContributingGaussians<torch::kCUDA>(
 template <>
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
 dispatchGaussianSparseRasterizeNumContributingGaussians<torch::kCPU>(
-    const torch::Tensor &means2d,         // [C, N, 2]
-    const torch::Tensor &conics,          // [C, N, 3]
-    const torch::Tensor &opacities,       // [N]
-    const torch::Tensor &tileOffsets,     // [C, tile_height, tile_width]
+    const torch::Tensor &means2d,     // [C, N, 2] or [nnz, 2]
+    const torch::Tensor &conics,      // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &opacities,   // [C, N] or [nnz]
+    const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
     const torch::Tensor &tileGaussianIds, // [n_isects]
     const fvdb::JaggedTensor &pixelsToRender,
     const torch::Tensor &activeTiles,
     const torch::Tensor &tilePixelMask,
     const torch::Tensor &tilePixelCumsum,
     const torch::Tensor &pixelMap,
-    const RenderSettings &settings // render settings
-) {
+    const RenderSettings &settings) { // render settings
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
 }
 
