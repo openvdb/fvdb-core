@@ -44,6 +44,82 @@ binSearch(const T *arr, const uint32_t len, const T val) {
     return low - 1;
 }
 
+/// @brief Converts a 3x3 rotation matrix to a quaternion
+///
+/// This function takes a 3x3 rotation matrix and converts it to the equivalent
+/// quaternion representation. The quaternion is normalized to ensure it has unit length.
+///
+/// The conversion uses the standard formula:
+/// q = [w,x,y,z] = [sqrt(1+R[0][0]+R[1][1]+R[2][2])/2, (R[2][1]-R[1][2])/(4*w), (R[0][2]-R[2][0])/(4*w), (R[1][0]-R[0][1])/(4*w)]
+///
+/// Where w,x,y,z are the components of the normalized quaternion.
+///
+/// @param R Input 3x3 rotation matrix
+/// @return nanovdb::math::Vec4<T> Quaternion equivalent to the rotation matrix
+template <typename T>
+__host__ __device__ nanovdb::math::Vec4<T>
+rotationMatrixToQuaternion(const nanovdb::math::Mat3<T> &R) {
+    T trace = R[0][0] + R[1][1] + R[2][2];
+    T x, y, z, w;
+
+    if (trace > 0) {
+        T t = trace + T(1);
+        t   = (t > T(0)) ? t : T(0);
+        T s = sqrt(t) * T(2); // S=4*qw
+        w   = T(0.25) * s;
+        x   = (R[2][1] - R[1][2]) / s;
+        y   = (R[0][2] - R[2][0]) / s;
+        z   = (R[1][0] - R[0][1]) / s;
+    } else if ((R[0][0] > R[1][1]) && (R[0][0] > R[2][2])) {
+        T t = T(1) + R[0][0] - R[1][1] - R[2][2];
+        t   = (t > T(0)) ? t : T(0);
+        T s = sqrt(t) * T(2); // S=4*qx
+        w   = (R[2][1] - R[1][2]) / s;
+        x   = T(0.25) * s;
+        y   = (R[0][1] + R[1][0]) / s;
+        z   = (R[0][2] + R[2][0]) / s;
+    } else if (R[1][1] > R[2][2]) {
+        T t = T(1) + R[1][1] - R[0][0] - R[2][2];
+        t   = (t > T(0)) ? t : T(0);
+        T s = sqrt(t) * T(2); // S=4*qy
+        w   = (R[0][2] - R[2][0]) / s;
+        x   = (R[0][1] + R[1][0]) / s;
+        y   = T(0.25) * s;
+        z   = (R[1][2] + R[2][1]) / s;
+    } else {
+        T t = T(1) + R[2][2] - R[0][0] - R[1][1];
+        t   = (t > T(0)) ? t : T(0);
+        T s = sqrt(t) * T(2); // S=4*qz
+        w   = (R[1][0] - R[0][1]) / s;
+        x   = (R[0][2] + R[2][0]) / s;
+        y   = (R[1][2] + R[2][1]) / s;
+        z   = T(0.25) * s;
+    }
+
+    // Normalize to guard against accumulated FP error / slightly non-orthonormal inputs.
+    const T norm2 = (w * w + x * x + y * y + z * z);
+    if (norm2 > T(0)) {
+        const T invNorm = T(1) / sqrt(norm2);
+        w *= invNorm;
+        x *= invNorm;
+        y *= invNorm;
+        z *= invNorm;
+    } else {
+        // Degenerate input; fall back to identity.
+        w = T(1);
+        x = y = z = T(0);
+    }
+
+    // Optional convention: keep a consistent sign (q and -q represent the same rotation).
+    if (w < T(0)) {
+        w = -w;
+        x = -x;
+        y = -y;
+        z = -z;
+    }
+    return nanovdb::math::Vec4<T>(w, x, y, z);
+}
+
 /// @brief Converts a quaternion to a 3x3 rotation matrix
 ///
 /// This function takes a quaternion [w,x,y,z] and converts it to the equivalent
