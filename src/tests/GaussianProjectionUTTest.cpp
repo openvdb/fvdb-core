@@ -1,8 +1,6 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 
-#include "utils/Tensor.h"
-
 #include <fvdb/detail/ops/gsplat/GaussianProjectionUT.h>
 
 #include <torch/script.h>
