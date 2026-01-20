@@ -110,6 +110,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/gsplat/GaussianMCMCRelocation.cu
     fvdb/detail/ops/gsplat/GaussianProjectionBackward.cu
     fvdb/detail/ops/gsplat/GaussianProjectionForward.cu
+    fvdb/detail/ops/gsplat/GaussianProjectionUT.cu
     fvdb/detail/ops/gsplat/GaussianProjectionJaggedBackward.cu
     fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeBackward.cu
@@ -171,7 +172,7 @@ set_target_properties(
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED ON
     CXX_EXTENSIONS ON
-    CUDA_STANDARD 20
+              CUDA_STANDARD 20
     CUDA_STANDARD_REQUIRED ON
     POSITION_INDEPENDENT_CODE ON
     INTERFACE_POSITION_INDEPENDENT_CODE ON)
