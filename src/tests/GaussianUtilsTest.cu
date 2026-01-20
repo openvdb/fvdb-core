@@ -48,6 +48,7 @@ myCos(float x)
 inline Mat3f
 quatToRotationMatrixHost(const Vec4f& q_wxyz)
 {
+    // Normalize the quaternion
     float w = q_wxyz[0], x = q_wxyz[1], y = q_wxyz[2], z = q_wxyz[3];
     const float n2 = w * w + x * x + y * y + z * z;
     if (n2 > 0.0f) {
@@ -153,7 +154,7 @@ nlerpRefShortestPath(const Vec4f& q0, Vec4f q1, float u)
         q1[3] = -q1[3];
         dot   = -dot;
     }
-    (void)dot;
+    (void)dot; // suppress unused variable warning
     const float s = 1.0f - u;
     return normalizeQuat(Vec4f(s * q0[0] + u * q1[0],
                                s * q0[1] + u * q1[1],
