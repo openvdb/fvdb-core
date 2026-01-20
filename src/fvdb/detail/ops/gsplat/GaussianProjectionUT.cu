@@ -17,55 +17,7 @@
 
 namespace fvdb::detail::ops {
 
-template <typename T> class Quat;
-
 namespace {
-
-// Helper structure for rolling shutter pose
-template <typename T> struct ShutterPose {
-    Quat<T> q; // rotation quaternion
-    nanovdb::math::Vec3<T> t; // translation
-};
-
-// Interpolate between two camera poses for rolling shutter
-template <typename T>
-__device__ ShutterPose<T>
-interpolateShutterPose(T t, const nanovdb::math::Mat3<T> &R_start,
-                       const nanovdb::math::Vec3<T> &t_start,
-                       const nanovdb::math::Mat3<T> &R_end, const nanovdb::math::Vec3<T> &t_end) {
-    // Interpolate translation
-    nanovdb::math::Vec3<T> t_interp = t_start + t * (t_end - t_start);
-
-    // Interpolate rotation using SLERP
-    Quat<T> q_start = Quat<T>::fromRotationMatrix(R_start);
-    Quat<T> q_end   = Quat<T>::fromRotationMatrix(R_end);
-
-    // Simple linear interpolation for quaternions (can be improved with SLERP)
-    T dot = q_start.w * q_end.w + q_start.x * q_end.x + q_start.y * q_end.y + q_start.z * q_end.z;
-    if (dot < 0) {
-        q_end.w = -q_end.w;
-        q_end.x = -q_end.x;
-        q_end.y = -q_end.y;
-        q_end.z = -q_end.z;
-        dot     = -dot;
-    }
-
-    T s = 1.0 - t;
-    Quat<T> q_result(s * q_start.w + t * q_end.w, s * q_start.x + t * q_end.x,
-                     s * q_start.y + t * q_end.y, s * q_start.z + t * q_end.z);
-
-    // Normalize
-    T norm = sqrt(q_result.w * q_result.w + q_result.x * q_result.x + q_result.y * q_result.y +
-                  q_result.z * q_result.z);
-    if (norm > 1e-6) {
-        q_result.w /= norm;
-        q_result.x /= norm;
-        q_result.y /= norm;
-        q_result.z /= norm;
-    }
-
-    return {q_result, t_interp};
-}
 
 // Apply camera distortion to a normalized point
 template <typename T>
@@ -218,108 +170,6 @@ reconstructCovarianceFromSigmaPoints(const nanovdb::math::Vec2<T> *projected_poi
 
 } // namespace
 
-template <typename T> class Quat {
-  public:
-    T w, x, y, z;
-
-    __host__ __device__
-    Quat()
-        : w(1), x(0), y(0), z(0) {}
-
-    __host__ __device__
-    Quat(T w_, T x_, T y_, T z_)
-        : w(w_), x(x_), y(y_), z(z_) {}
-
-    __host__ __device__ nanovdb::math::Mat3<T>
-    toRotationMatrix() const {
-        nanovdb::math::Mat3<T> R;
-        const T xx = x * x;
-        const T yy = y * y;
-        const T zz = z * z;
-        const T xy = x * y;
-        const T xz = x * z;
-        const T yz = y * z;
-        const T wx = w * x;
-        const T wy = w * y;
-        const T wz = w * z;
-
-        R[0][0] = 1 - 2 * (yy + zz);
-        R[0][1] = 2 * (xy - wz);
-        R[0][2] = 2 * (xz + wy);
-
-        R[1][0] = 2 * (xy + wz);
-        R[1][1] = 1 - 2 * (xx + zz);
-        R[1][2] = 2 * (yz - wx);
-
-        R[2][0] = 2 * (xz - wy);
-        R[2][1] = 2 * (yz + wx);
-        R[2][2] = 1 - 2 * (xx + yy);
-
-        return R;
-    }
-
-    static __host__ __device__ Quat<T>
-    fromArray(const T *arr) {
-        return Quat(arr[0], arr[1], arr[2], arr[3]);
-    }
-
-    static __host__ __device__ Quat<T>
-    fromRotationMatrix(const nanovdb::math::Mat3<T> &R) {
-        T trace = R[0][0] + R[1][1] + R[2][2];
-        T x, y, z, w;
-
-        if (trace > 0) {
-            T s = sqrt(trace + 1.0) * 2; // S=4*qw
-            w   = 0.25 * s;
-            x   = (R[2][1] - R[1][2]) / s;
-            y   = (R[0][2] - R[2][0]) / s;
-            z   = (R[1][0] - R[0][1]) / s;
-        } else if ((R[0][0] > R[1][1]) && (R[0][0] > R[2][2])) {
-            T s = sqrt(1.0 + R[0][0] - R[1][1] - R[2][2]) * 2; // S=4*qx
-            w   = (R[2][1] - R[1][2]) / s;
-            x   = 0.25 * s;
-            y   = (R[0][1] + R[1][0]) / s;
-            z   = (R[0][2] + R[2][0]) / s;
-        } else if (R[1][1] > R[2][2]) {
-            T s = sqrt(1.0 + R[1][1] - R[0][0] - R[2][2]) * 2; // S=4*qy
-            w   = (R[0][2] - R[2][0]) / s;
-            x   = (R[0][1] + R[1][0]) / s;
-            y   = 0.25 * s;
-            z   = (R[1][2] + R[2][1]) / s;
-        } else {
-            T s = sqrt(1.0 + R[2][2] - R[0][0] - R[1][1]) * 2; // S=4*qz
-            w   = (R[1][0] - R[0][1]) / s;
-            x   = (R[0][2] + R[2][0]) / s;
-            y   = (R[1][2] + R[2][1]) / s;
-            z   = 0.25 * s;
-        }
-        return Quat(w, x, y, z);
-    }
-
-    __host__ __device__ nanovdb::math::Vec3<T>
-    rotate(const nanovdb::math::Vec3<T> &v) const {
-        // Convert vector to quaternion with w=0
-        Quat<T> qv(0, v.x(), v.y(), v.z());
-
-        // Perform quaternion multiplication: q * v * q_conjugate
-        Quat<T> q_result = this->multiply(qv).multiply(conjugate());
-
-        return nanovdb::math::Vec3<T>(q_result.x, q_result.y, q_result.z);
-    }
-
-    __host__ __device__ Quat<T>
-    multiply(const Quat<T> &other) const {
-        return Quat<T>(w * other.w - x * other.x - y * other.y - z * other.z,
-                       w * other.x + x * other.w + y * other.z - z * other.y,
-                       w * other.y - x * other.z + y * other.w + z * other.x,
-                       w * other.z + x * other.y - y * other.x + z * other.w);
-    }
-
-    __host__ __device__ Quat<T>
-    conjugate() const {
-        return Quat<T>(w, -x, -y, -z);
-    }
-};
 
 template <typename ScalarType> struct ProjectionForwardUT {
     using Mat3 = nanovdb::math::Mat3<ScalarType>;
@@ -559,12 +409,12 @@ template <typename ScalarType> struct ProjectionForwardUT {
         const Vec3 scale_world(::cuda::std::exp(logScaleAcc[0]), ::cuda::std::exp(logScaleAcc[1]),
                                ::cuda::std::exp(logScaleAcc[2]));
 
-        // Depth culling uses center shutter pose (matches reference kernel).
+        // Depth culling uses center shutter pose.
         {
-            const ShutterPose<ScalarType> shutter_pose_center =
-                interpolateShutterPose(ScalarType(0.5), worldToCamRotStart, worldToCamTransStart,
-                                       worldToCamRotEnd, worldToCamTransEnd);
-            const Mat3 R_center = shutter_pose_center.q.toRotationMatrix();
+            const Pose<ScalarType> shutter_pose_center =
+                interpolatePose(ScalarType(0.5), worldToCamRotStart, worldToCamTransStart,
+                                worldToCamRotEnd, worldToCamTransEnd);
+            const Mat3 R_center = quaternionToRotationMatrix(shutter_pose_center.q);
             const Vec3 t_center = shutter_pose_center.t;
             const Vec3 meanCamCenter =
                 transformPointWorldToCam(R_center, t_center, meanWorldSpace);
@@ -596,9 +446,9 @@ template <typename ScalarType> struct ProjectionForwardUT {
         auto project_world_point = [&] __device__ (const Vec3 &p_world, Vec2 &out_pixel) -> bool {
             // Rolling shutter projection similar to reference: iterate shutter pose based on the
             // current estimate of pixel coordinate.
-            auto project_with_pose = [&] __device__ (const ShutterPose<ScalarType> &pose,
+            auto project_with_pose = [&] __device__ (const Pose<ScalarType> &pose,
                                                      Vec2 &out_pix) -> bool {
-                const Vec3 p_cam = transformPointWorldToCam(pose.q.toRotationMatrix(), pose.t, p_world);
+                const Vec3 p_cam = transformPointWorldToCam(quaternionToRotationMatrix(pose.q), pose.t, p_world);
                 // Perspective only (ortho is not meaningful for distorted camera models).
                 if (p_cam[2] <= ScalarType(0)) {
                     return false;
@@ -613,12 +463,12 @@ template <typename ScalarType> struct ProjectionForwardUT {
             };
 
             // Start/end projections for initialization.
-            ShutterPose<ScalarType> pose_start =
-                interpolateShutterPose(ScalarType(0.0), worldToCamRotStart, worldToCamTransStart,
-                                       worldToCamRotEnd, worldToCamTransEnd);
-            ShutterPose<ScalarType> pose_end =
-                interpolateShutterPose(ScalarType(1.0), worldToCamRotStart, worldToCamTransStart,
-                                       worldToCamRotEnd, worldToCamTransEnd);
+            Pose<ScalarType> pose_start =
+                interpolatePose(ScalarType(0.0), worldToCamRotStart, worldToCamTransStart,
+                                worldToCamRotEnd, worldToCamTransEnd);
+            Pose<ScalarType> pose_end =
+                interpolatePose(ScalarType(1.0), worldToCamRotStart, worldToCamTransStart,
+                                worldToCamRotEnd, worldToCamTransEnd);
             Vec2 pix_start, pix_end;
             const bool valid_start = project_with_pose(pose_start, pix_start);
             const bool valid_end   = project_with_pose(pose_end, pix_end);
@@ -649,9 +499,9 @@ template <typename ScalarType> struct ProjectionForwardUT {
                     t_rs = floor(pix_prev[0]) / max(ScalarType(1), ScalarType(mImageWidth - 1));
                 }
                 t_rs = min(ScalarType(1), max(ScalarType(0), t_rs));
-                ShutterPose<ScalarType> pose_rs =
-                    interpolateShutterPose(t_rs, worldToCamRotStart, worldToCamTransStart,
-                                           worldToCamRotEnd, worldToCamTransEnd);
+                Pose<ScalarType> pose_rs =
+                    interpolatePose(t_rs, worldToCamRotStart, worldToCamTransStart,
+                                    worldToCamRotEnd, worldToCamTransEnd);
                 Vec2 pix_rs;
                 const bool valid_rs = project_with_pose(pose_rs, pix_rs);
                 pix_prev            = pix_rs;
@@ -729,10 +579,10 @@ template <typename ScalarType> struct ProjectionForwardUT {
         mOutMeans2dAcc[camId][gaussianId][1] = mean2d[1];
         // For depth we use the Gaussian mean under the center shutter pose (same as the cull check).
         {
-            const ShutterPose<ScalarType> shutter_pose_center =
-                interpolateShutterPose(ScalarType(0.5), worldToCamRotStart, worldToCamTransStart,
-                                       worldToCamRotEnd, worldToCamTransEnd);
-            const Mat3 R_center = shutter_pose_center.q.toRotationMatrix();
+            const Pose<ScalarType> shutter_pose_center =
+                interpolatePose(ScalarType(0.5), worldToCamRotStart, worldToCamTransStart,
+                                worldToCamRotEnd, worldToCamTransEnd);
+            const Mat3 R_center = quaternionToRotationMatrix(shutter_pose_center.q);
             const Vec3 t_center = shutter_pose_center.t;
             const Vec3 meanCamCenter =
                 transformPointWorldToCam(R_center, t_center, meanWorldSpace);

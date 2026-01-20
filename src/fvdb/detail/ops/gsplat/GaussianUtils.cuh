@@ -162,6 +162,80 @@ quaternionToRotationMatrix(nanovdb::math::Vec4<T> const &quat) {
     );
 }
 
+/// @brief A rigid pose represented as (rotation quaternion, translation).
+///
+/// Quaternion is stored as [w,x,y,z].
+template <typename T> struct Pose {
+    nanovdb::math::Vec4<T> q; // rotation quaternion [w,x,y,z]
+    nanovdb::math::Vec3<T> t; // translation
+};
+
+namespace {
+template <typename T>
+inline __host__ __device__ nanovdb::math::Vec4<T>
+normalizeQuaternionSafe(nanovdb::math::Vec4<T> q) {
+    const T n2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+    if (n2 > T(0)) {
+        const T invN = T(1) / sqrt(n2);
+        q[0] *= invN;
+        q[1] *= invN;
+        q[2] *= invN;
+        q[3] *= invN;
+    } else {
+        q[0] = T(1);
+        q[1] = q[2] = q[3] = T(0);
+    }
+    return q;
+}
+
+template <typename T>
+inline __host__ __device__ nanovdb::math::Vec4<T>
+nlerpQuaternionShortestPath(const nanovdb::math::Vec4<T> &q0,
+                            nanovdb::math::Vec4<T> q1,
+                            const T u) {
+    // Ensure shortest arc (q and -q represent the same rotation).
+    T dot = q0[0] * q1[0] + q0[1] * q1[1] + q0[2] * q1[2] + q0[3] * q1[3];
+    if (dot < T(0)) {
+        q1[0] = -q1[0];
+        q1[1] = -q1[1];
+        q1[2] = -q1[2];
+        q1[3] = -q1[3];
+    }
+
+    const T s = T(1) - u;
+    return normalizeQuaternionSafe<T>(
+        nanovdb::math::Vec4<T>(s * q0[0] + u * q1[0],
+                               s * q0[1] + u * q1[1],
+                               s * q0[2] + u * q1[2],
+                               s * q0[3] + u * q1[3]));
+}
+} // namespace
+
+/// @brief Interpolate between two camera poses.
+///
+/// Translation is linearly interpolated. Rotation is interpolated with **NLERP**
+/// (normalized linear interpolation) along the shortest quaternion arc.
+///
+/// @param u Interpolation factor in [0,1].
+template <typename T>
+inline __host__ __device__ Pose<T>
+interpolatePose(const T u,
+                const nanovdb::math::Mat3<T> &R_start,
+                const nanovdb::math::Vec3<T> &t_start,
+                const nanovdb::math::Mat3<T> &R_end,
+                const nanovdb::math::Vec3<T> &t_end) {
+    // Interpolate translation.
+    const nanovdb::math::Vec3<T> t_interp = t_start + u * (t_end - t_start);
+
+    // Convert and interpolate rotation in quaternion space.
+    const nanovdb::math::Vec4<T> q_start = rotationMatrixToQuaternion<T>(R_start);
+    const nanovdb::math::Vec4<T> q_end   = rotationMatrixToQuaternion<T>(R_end);
+
+    const nanovdb::math::Vec4<T> q_interp = nlerpQuaternionShortestPath<T>(q_start, q_end, u);
+
+    return Pose<T>{q_interp, t_interp};
+}
+
 /// @brief Computes the vector-Jacobian product for quaternion to rotation matrix transformation
 ///
 /// This function computes the gradient of the loss with respect to a quaternion (dL/dq)

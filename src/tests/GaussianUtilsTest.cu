@@ -12,6 +12,7 @@ namespace {
 
 using Mat3f = nanovdb::math::Mat3<float>;
 using Vec4f = nanovdb::math::Vec4<float>;
+using Vec3f = nanovdb::math::Vec3<float>;
 
 // Minimal math helpers (avoid pulling in <cmath> from a .cu test; CUDA provides these).
 __host__ __device__ inline float
@@ -101,6 +102,65 @@ axisAngleToQuatWxyz(float ax, float ay, float az, float angleRad)
     return Vec4f(c, s * ax, s * ay, s * az);
 }
 
+inline void
+expectVecNear(const Vec3f& a, const Vec3f& b, float tol)
+{
+    EXPECT_NEAR(a[0], b[0], tol);
+    EXPECT_NEAR(a[1], b[1], tol);
+    EXPECT_NEAR(a[2], b[2], tol);
+}
+
+inline void
+expectQuatNear(const Vec4f& a, const Vec4f& b, float tol)
+{
+    EXPECT_NEAR(a[0], b[0], tol);
+    EXPECT_NEAR(a[1], b[1], tol);
+    EXPECT_NEAR(a[2], b[2], tol);
+    EXPECT_NEAR(a[3], b[3], tol);
+}
+
+inline Vec4f
+normalizeQuat(Vec4f q)
+{
+    const float n2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+    if (n2 > 0.0f) {
+        const float invN = 1.0f / mySqrt(n2);
+        q[0] *= invN;
+        q[1] *= invN;
+        q[2] *= invN;
+        q[3] *= invN;
+    } else {
+        q[0] = 1.0f;
+        q[1] = q[2] = q[3] = 0.0f;
+    }
+    return q;
+}
+
+inline float
+quatDot(const Vec4f& a, const Vec4f& b)
+{
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+}
+
+inline Vec4f
+nlerpRefShortestPath(const Vec4f& q0, Vec4f q1, float u)
+{
+    float dot = quatDot(q0, q1);
+    if (dot < 0.0f) {
+        q1[0] = -q1[0];
+        q1[1] = -q1[1];
+        q1[2] = -q1[2];
+        q1[3] = -q1[3];
+        dot   = -dot;
+    }
+    (void)dot;
+    const float s = 1.0f - u;
+    return normalizeQuat(Vec4f(s * q0[0] + u * q1[0],
+                               s * q0[1] + u * q1[1],
+                               s * q0[2] + u * q1[2],
+                               s * q0[3] + u * q1[3]));
+}
+
 } // namespace
 
 TEST(GaussianUtilsTest, RotationMatrixToQuaternion_Identity)
@@ -179,6 +239,29 @@ TEST(GaussianUtilsTest, RotationMatrixToQuaternion_RoundTrip_DeterministicSample
         expectMatNear(R_in, R_out, 2e-5f);
         EXPECT_GE(q_out[0], 0.0f);
     }
+}
+
+TEST(GaussianUtilsTest, InterpolatePose_NlerpMatchesReference)
+{
+    const float pi = 3.14159265358979323846f;
+    const Vec4f q_start = axisAngleToQuatWxyz(1.0f, 0.0f, 0.0f, pi / 3.0f);     // 60deg about X
+    const Vec4f q_end   = axisAngleToQuatWxyz(0.0f, 1.0f, 0.0f, 2.0f * pi / 3.0f); // 120deg about Y
+
+    const Mat3f R_start = quatToRotationMatrixHost(q_start);
+    const Mat3f R_end   = quatToRotationMatrixHost(q_end);
+
+    const Vec3f t_start(1.0f, 2.0f, 3.0f);
+    const Vec3f t_end(-4.0f, 5.0f, 0.5f);
+    const float u = 0.25f;
+
+    const Pose<float> pose = interpolatePose<float>(u, R_start, t_start, R_end, t_end);
+
+    const Vec4f q0 = rotationMatrixToQuaternion<float>(R_start);
+    const Vec4f q1 = rotationMatrixToQuaternion<float>(R_end);
+    const Vec4f q_ref = nlerpRefShortestPath(q0, q1, u);
+
+    expectQuatNear(pose.q, q_ref, 2e-6f);
+    expectVecNear(pose.t, t_start + u * (t_end - t_start), 1e-6f);
 }
 
 } // namespace fvdb::detail::ops
