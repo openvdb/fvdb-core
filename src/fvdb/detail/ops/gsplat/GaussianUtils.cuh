@@ -170,7 +170,6 @@ template <typename T> struct Pose {
     nanovdb::math::Vec3<T> t; // translation
 };
 
-namespace {
 template <typename T>
 inline __host__ __device__ nanovdb::math::Vec4<T>
 normalizeQuaternionSafe(nanovdb::math::Vec4<T> q) {
@@ -209,7 +208,6 @@ nlerpQuaternionShortestPath(const nanovdb::math::Vec4<T> &q0,
                                s * q0[2] + u * q1[2],
                                s * q0[3] + u * q1[3]));
 }
-} // namespace
 
 /// @brief Interpolate between two camera poses.
 ///
