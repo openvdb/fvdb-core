@@ -108,13 +108,13 @@ dispatchGaussianMCMCAddNoise<torch::kCUDA>(torch::Tensor &means,                
     FVDB_FUNC_RANGE();
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means));
 
-    const auto N = means.size(0);
+    const auto N                      = means.size(0);
     const at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
     auto baseNoise = torch::randn_like(means);
 
-    launchGaussianMCMCAddNoise<float>(means, logScales, logitOpacities, quats, baseNoise,
-                                      noiseScale, t, k, 0, N, stream);
+    launchGaussianMCMCAddNoise<float>(
+        means, logScales, logitOpacities, quats, baseNoise, noiseScale, t, k, 0, N, stream);
 }
 
 template <>
@@ -133,7 +133,7 @@ dispatchGaussianMCMCAddNoise<torch::kPrivateUse1>(torch::Tensor &means, // [N, 3
     // Generate base noise once for all devices (unified memory)
     auto baseNoise = torch::randn_like(means);
 
-    for (const auto deviceId : c10::irange(c10::cuda::device_count())) {
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
@@ -141,8 +141,17 @@ dispatchGaussianMCMCAddNoise<torch::kPrivateUse1>(torch::Tensor &means, // [N, 3
         std::tie(deviceOffset, deviceSize) = deviceChunk(N, deviceId);
 
         if (deviceSize > 0) {
-            launchGaussianMCMCAddNoise<float>(means, logScales, logitOpacities, quats, baseNoise,
-                                              noiseScale, t, k, deviceOffset, deviceSize, stream);
+            launchGaussianMCMCAddNoise<float>(means,
+                                              logScales,
+                                              logitOpacities,
+                                              quats,
+                                              baseNoise,
+                                              noiseScale,
+                                              t,
+                                              k,
+                                              deviceOffset,
+                                              deviceSize,
+                                              stream);
         }
     }
 

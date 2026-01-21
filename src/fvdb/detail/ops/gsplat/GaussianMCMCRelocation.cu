@@ -190,7 +190,7 @@ dispatchGaussianRelocation<torch::kPrivateUse1>(const torch::Tensor &logScales, 
     auto logitOpacitiesNew = torch::empty_like(logitOpacities);
     auto logScalesNew      = torch::empty_like(logScales);
 
-    for (const auto deviceId : c10::irange(c10::cuda::device_count())) {
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
