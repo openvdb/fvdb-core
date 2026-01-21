@@ -7,12 +7,16 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <nanovdb/math/Math.h>
 
 #include <c10/cuda/CUDAGuard.h>
 
 namespace fvdb::detail::ops {
+
+using fvdb::detail::deviceChunk;
+using fvdb::detail::mergeStreams;
 
 template <typename ScalarType>
 inline __device__ ScalarType
@@ -22,7 +26,9 @@ sigmoid(ScalarType x) {
 
 template <typename ScalarType>
 __global__ void
-gaussianMCMCAddNoiseKernel(fvdb::TorchRAcc64<ScalarType, 2> outMeans,
+gaussianMCMCAddNoiseKernel(int64_t localToGlobalOffset,
+                           int64_t localSize,
+                           fvdb::TorchRAcc64<ScalarType, 2> outMeans,
                            fvdb::TorchRAcc64<ScalarType, 2> logScales,
                            fvdb::TorchRAcc64<ScalarType, 1> logitOpacities,
                            fvdb::TorchRAcc64<ScalarType, 2> quats,
@@ -31,7 +37,8 @@ gaussianMCMCAddNoiseKernel(fvdb::TorchRAcc64<ScalarType, 2> outMeans,
                            const ScalarType t,
                            const ScalarType k) {
     const auto N = outMeans.size(0);
-    for (uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < N;
+    for (uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x + localToGlobalOffset;
+         idx < localSize + localToGlobalOffset;
          idx += blockDim.x * gridDim.x) {
         const auto opacity = sigmoid(logitOpacities[idx]);
 
@@ -64,18 +71,19 @@ launchGaussianMCMCAddNoise(torch::Tensor &means,                // [N, 3]
                            const torch::Tensor &logScales,      // [N, 3]
                            const torch::Tensor &logitOpacities, // [N]
                            const torch::Tensor &quats,          // [N, 4]
+                           const torch::Tensor &baseNoise,      // [N, 3]
                            const ScalarType noiseScale,
                            const ScalarType t,
-                           const ScalarType k) {
-    const auto N = means.size(0);
-
-    const int blockDim                = DEFAULT_BLOCK_DIM;
-    const int gridDim                 = fvdb::GET_BLOCKS(N, blockDim);
-    const at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-
-    auto baseNoise = torch::randn_like(means);
+                           const ScalarType k,
+                           int64_t offset,
+                           int64_t size,
+                           cudaStream_t stream) {
+    const int blockDim = DEFAULT_BLOCK_DIM;
+    const int gridDim  = fvdb::GET_BLOCKS(size, blockDim);
 
     gaussianMCMCAddNoiseKernel<ScalarType><<<gridDim, blockDim, 0, stream>>>(
+        offset,
+        size,
         means.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>(),
         logScales.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>(),
         logitOpacities.packed_accessor64<ScalarType, 1, torch::RestrictPtrTraits>(),
@@ -101,8 +109,12 @@ dispatchGaussianMCMCAddNoise<torch::kCUDA>(torch::Tensor &means,                
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means));
 
     const auto N = means.size(0);
+    const at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
-    launchGaussianMCMCAddNoise<float>(means, logScales, logitOpacities, quats, noiseScale, t, k);
+    auto baseNoise = torch::randn_like(means);
+
+    launchGaussianMCMCAddNoise<float>(means, logScales, logitOpacities, quats, baseNoise,
+                                      noiseScale, t, k, 0, N, stream);
 }
 
 template <>
@@ -114,7 +126,27 @@ dispatchGaussianMCMCAddNoise<torch::kPrivateUse1>(torch::Tensor &means, // [N, 3
                                                   const float noiseScale,
                                                   const float t,
                                                   const float k) {
-    TORCH_CHECK_NOT_IMPLEMENTED(false, "GaussianMCMCAddNoise is not implemented for PrivateUse1");
+    FVDB_FUNC_RANGE();
+
+    const auto N = means.size(0);
+
+    // Generate base noise once for all devices (unified memory)
+    auto baseNoise = torch::randn_like(means);
+
+    for (const auto deviceId : c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+
+        int64_t deviceOffset, deviceSize;
+        std::tie(deviceOffset, deviceSize) = deviceChunk(N, deviceId);
+
+        if (deviceSize > 0) {
+            launchGaussianMCMCAddNoise<float>(means, logScales, logitOpacities, quats, baseNoise,
+                                              noiseScale, t, k, deviceOffset, deviceSize, stream);
+        }
+    }
+
+    mergeStreams();
 }
 
 template <>
