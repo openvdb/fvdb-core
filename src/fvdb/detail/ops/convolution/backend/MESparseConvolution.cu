@@ -128,6 +128,7 @@ gpu_gemm<at::Half>(const cublasOperation_t transA,
                               N,
                               CUDA_R_32F,
                               CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+    CUBLAS_CHECK(cublasSetMathMode(handle, CUBLAS_DEFAULT_MATH));
 }
 
 template <>
