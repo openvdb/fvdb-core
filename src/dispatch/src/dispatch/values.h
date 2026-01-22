@@ -1,11 +1,11 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef FVDB_DETAIL_DISPATCH_VALUES_H
-#define FVDB_DETAIL_DISPATCH_VALUES_H
+#ifndef DISPATCH_VALUES_H
+#define DISPATCH_VALUES_H
 
-#include "fvdb/detail/dispatch/Traits.h"
-#include "fvdb/detail/dispatch/TypesFwd.h"
+#include "dispatch/traits.h"
+#include "dispatch/types.h"
 
 #include <cassert>
 #include <cstdint>
@@ -13,8 +13,29 @@
 #include <stdexcept>
 #include <type_traits>
 
-namespace fvdb {
 namespace dispatch {
+
+template <typename T> struct is_value_pack {
+    static consteval bool
+    value() {
+        return false;
+    }
+};
+
+template <typename T>
+consteval bool
+is_value_pack_v() {
+    return is_value_pack<T>::value();
+}
+
+template <auto... values> struct is_value_pack<values<values...>> {
+    static consteval bool
+    value() {
+        return sizeof...(values) > 0;
+    }
+};
+
+concept value_pack = is_value_pack_v<T>();
 
 template <auto... values> struct ValuesSize {
     static consteval size_t

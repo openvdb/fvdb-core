@@ -1,13 +1,13 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef FVDB_DETAIL_DISPATCH_VALUESPACE_H
-#define FVDB_DETAIL_DISPATCH_VALUESPACE_H
+#ifndef DISPATCH_VALUE_SPACE_H
+#define DISPATCH_VALUE_SPACE_H
 
-#include "fvdb/detail/dispatch/IndexSpace.h"
-#include "fvdb/detail/dispatch/Traits.h"
-#include "fvdb/detail/dispatch/TypesFwd.h"
-#include "fvdb/detail/dispatch/Values.h"
+#include "dispatch/index_space.h"
+#include "dispatch/traits.h"
+#include "dispatch/types.h"
+#include "dispatch/values.h"
 
 #include <array>
 #include <concepts>
@@ -16,8 +16,15 @@
 #include <tuple>
 #include <type_traits>
 
-namespace fvdb {
 namespace dispatch {
+
+// A value axis involves these ideas.
+// It is value based, rather than index based.
+// It is monotyped across all the values in the axis, and thus admits an axis type.
+// It is unique valued across all the values in the axis.
+// It has a "size", which is not the same as ndim. Index points have ndim.
+//    I'm tempted to use "extent" because size is so overloaded.
+// It is not a space.
 
 // -----------------------------------------------------------------------------
 // ValueAxis concept
@@ -568,6 +575,5 @@ visit_value_spaces(Visitor &&visitor, Spaces... spaces) {
 }
 
 } // namespace dispatch
-} // namespace fvdb
 
-#endif // FVDB_DETAIL_DISPATCH_VALUESPACE_H
+#endif // DISPATCH_VALUE_SPACE_H
