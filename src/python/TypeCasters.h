@@ -10,6 +10,7 @@
 #include <fvdb/Types.h>
 
 #include <torch/extension.h>
+#include <torch/version.h>
 
 namespace pybind11 {
 namespace detail {
