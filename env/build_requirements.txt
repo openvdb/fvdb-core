@@ -3,4 +3,4 @@ scikit_build_core
 wheel
 ninja
 numpy
-torch
+torch==2.9.1
