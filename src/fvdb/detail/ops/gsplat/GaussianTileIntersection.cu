@@ -460,7 +460,11 @@ gaussianTileIntersectionCUDAImpl(
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
     // In place cumulative sum to get the total number of intersections
-    torch::cumsum_out(tilesPerGaussianCumsum, tilesPerGaussianCumsum, 0, torch::kInt32);
+    CUB_WRAPPER(cub::DeviceScan::InclusiveSum,
+                tilesPerGaussianCumsum.data_ptr<int32_t>(),
+                tilesPerGaussianCumsum.data_ptr<int32_t>(),
+                totalGaussians,
+                stream);
 
     // Allocate tensors to store the intersections
     const int64_t totalIntersections = tilesPerGaussianCumsum[-1].item<int64_t>();
@@ -1035,7 +1039,14 @@ gaussianTileIntersectionPrivateUse1Impl(
     mergeStreams();
 
     // In place cumulative sum to get the total number of intersections
-    torch::cumsum_out(tilesPerGaussianCumsum, tilesPerGaussianCumsum, 0, torch::kInt32);
+    {
+        auto stream = at::cuda::getCurrentCUDAStream(means2d.device().index());
+        CUB_WRAPPER(cub::DeviceScan::InclusiveSum,
+                    tilesPerGaussianCumsum.data_ptr<int32_t>(),
+                    tilesPerGaussianCumsum.data_ptr<int32_t>(),
+                    totalGaussians,
+                    stream);
+    }
 
     // Allocate tensors to store the intersections
     const int64_t totalIntersections = tilesPerGaussianCumsum[-1].item<int64_t>();
