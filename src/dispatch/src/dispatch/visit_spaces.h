@@ -18,6 +18,51 @@
 namespace dispatch {
 
 //------------------------------------------------------------------------------
+// Visiting extents with indices per visitation
+//------------------------------------------------------------------------------
+
+namespace detail {
+
+template <typename Extents, typename LinearPointSeq> struct extents_visit_helper {
+    static_assert(extents_like<Extents>, "Extents must be an extents type");
+    static_assert(index_sequence_like<LinearPointSeq>,
+                  "LinearPointSeq must be an index sequence like");
+};
+
+template <extents_like Extents, size_t... linearIndices>
+struct extents_visit_helper<Extents, std::index_sequence<linearIndices...>> {
+    template <typename Visitor>
+    static void
+    visit(Visitor &visitor) {
+        // Note: don't forward visitor in fold - it's invoked multiple times
+        (std::invoke(visitor, indices_from_linear_index_t<Extents, linearIndices>{}), ...);
+    }
+};
+
+} // namespace detail
+
+template <typename Visitor, typename Extents>
+void
+visit_extents_space(Visitor &visitor, Extents) {
+    static_assert(extents_like<Extents>, "Extents must be an extents type");
+    static_assert(non_empty<Extents>, "Extents must be non-empty space");
+
+    // Don't bother with forward - it's invoked multiple times
+    detail::extents_visit_helper<Extents, std::make_index_sequence<volume_v<Extents>()>>::visit(
+        visitor);
+}
+
+template <typename Visitor, typename... Extents>
+void
+visit_extents_spaces(Visitor &visitor, Extents... extents) {
+    static_assert((extents_like<Extents> && ...), "Extents must be an extents types");
+    static_assert((non_empty<Extents> && ...), "Extents must be non-empty spaces");
+
+    // Don't bother with forward - it's invoked multiple times
+    (visit_extents_space(visitor, extents), ...);
+}
+
+//------------------------------------------------------------------------------
 // Visiting axes with tags per visitation
 //------------------------------------------------------------------------------
 

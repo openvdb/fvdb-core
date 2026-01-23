@@ -1,170 +1,156 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#ifndef DISPATCH_TORCH_H
+#define DISPATCH_TORCH_H
 
-#ifndef FVDB_DETAIL_DISPATCH_TORCHDISPATCH_H
-#define FVDB_DETAIL_DISPATCH_TORCHDISPATCH_H
+#include "dispatch/torch_types.h"
 
-#include "fvdb/detail/dispatch/TypesFwd.h"
-
-#include <torch/types.h>
+#include <ATen/core/TensorAccessor.h>
 
 #include <concepts>
 #include <cstdint>
 #include <string>
 #include <type_traits>
 
-namespace fvdb {
 namespace dispatch {
 
-using CpuCudaDeviceAxis = Values<torch::kCPU, torch::kCUDA>;
-using FullDeviceAxis    = Values<torch::kCPU, torch::kCUDA, torch::kPrivateUse1>;
-
-// Use all the float dtypes in torch. Have one that's just regular built-in float types,
-// then add the weird float types. Don't use complex.
-using FullFloatDtypeAxis =
-    Values<torch::kBFloat16, torch::kFloat16, torch::kFloat32, torch::kFloat64>;
-
-// Just the builtin floats
-using BuiltinFloatDtypeAxis = Values<torch::kFloat32, torch::kFloat64>;
-
-// All the numeric integer dtypes in torch.
-using FullSignedIntDtypeAxis = Values<torch::kInt8, torch::kInt16, torch::kInt32, torch::kInt64>;
-
-// Add all the numeric dtypes in torch, using their bit-width as the value. Only the scalar though,
-// no complex.
-using FullNumericDtypeAxis = Values<torch::kInt8,
-                                    torch::kInt16,
-                                    torch::kInt32,
-                                    torch::kInt64,
-                                    torch::kBFloat16,
-                                    torch::kFloat16,
-                                    torch::kFloat32,
-                                    torch::kFloat64>;
-
-// Concept to match integer torch::ScalarTypes (compile-time)
-template <torch::ScalarType T>
-constexpr bool is_integer_scalar_type_v =
-    T == torch::kByte || T == torch::kChar || T == torch::kShort || T == torch::kInt ||
-    T == torch::kLong || T == torch::kBool;
-
-template <torch::ScalarType T>
-concept IntegerTorchScalarType = is_integer_scalar_type_v<T>;
-
-// Runtime check for integer scalar types
-inline bool
-isIntegerScalarType(torch::ScalarType stype) {
-    return stype == torch::kByte || stype == torch::kChar || stype == torch::kShort ||
-           stype == torch::kInt || stype == torch::kLong || stype == torch::kBool;
-}
-
-// Concept to match floating-point torch::ScalarTypes (compile-time)
-template <torch::ScalarType T>
-constexpr bool is_float_scalar_type_v =
-    T == torch::kFloat || T == torch::kDouble || T == torch::kHalf || T == torch::kBFloat16;
-
-template <torch::ScalarType T>
-concept FloatTorchScalarType = is_float_scalar_type_v<T>;
-
-// Runtime check for floating-point scalar types
-inline bool
-isFloatScalarType(torch::ScalarType stype) {
-    return stype == torch::kFloat || stype == torch::kDouble || stype == torch::kHalf ||
-           stype == torch::kBFloat16;
-}
-
-// =============================================================================
-// Dispatch Coordinate Stringification
-// =============================================================================
-//
-// Overloads of coordToString for each dispatch coordinate type.
-// Each overload produces a labeled string like "device=CUDA" or "dtype=Float".
+// -----------------------------------------------------------------------------
+// Dispatch coordinate stringification
+// -----------------------------------------------------------------------------
+// Overloads of torch_coord_to_string for each dispatch coordinate type.
+// Each overload produces a labeled string like "device=CUDA" or "stype=Float".
 // Add new overloads here when introducing new dispatch coordinate types.
-//
 
 inline std::string
-coordToString(c10::DeviceType dev) {
+torch_coord_to_string(c10::DeviceType dev) {
     return std::string("device=") + c10::DeviceTypeName(dev);
 }
 
 inline std::string
-coordToString(c10::ScalarType dtype) {
-    return std::string("dtype=") + c10::toString(dtype);
+torch_coord_to_string(c10::ScalarType stype) {
+    return std::string("stype=") + c10::toString(stype);
 }
 
 inline std::string
-coordToString(Placement p) {
-    return std::string("placement=") + toString(p);
+torch_coord_to_string(placement p) {
+    return std::string("placement=") + to_string(p);
 }
 
 inline std::string
-coordToString(Determinism d) {
-    return std::string("determinism=") + toString(d);
+torch_coord_to_string(determinism d) {
+    return std::string("determinism=") + to_string(d);
 }
 
 inline std::string
-coordToString(Contiguity c) {
-    return std::string("contiguity=") + toString(c);
+torch_coord_to_string(contiguity c) {
+    return std::string("contiguity=") + to_string(c);
 }
 
 // Fallback for arithmetic types (integers, floats) - no label, just the value
-template <typename T, std::enable_if_t<std::is_arithmetic_v<T>, int> = 0>
+template <typename T>
+    requires std::is_arithmetic_v<T>
 std::string
-coordToString(T value) {
+torch_coord_to_string(T value) {
     return std::to_string(value);
 }
 
-// -----
+// -----------------------------------------------------------------------------
+// Contiguity helper
+// -----------------------------------------------------------------------------
 
-inline Contiguity
-getContiguity(torch::Tensor tensor) {
-    return tensor.is_contiguous() ? Contiguity::Contiguous : Contiguity::Strided;
+inline contiguity
+torch_get_contiguity(torch::Tensor tensor) {
+    return tensor.is_contiguous() ? contiguity::contiguous : contiguity::strided;
 }
 
 // -----------------------------------------------------------------------------
-// formatDispatchCoords - format a tuple of dispatch coordinates as a string
+// torch_format_dispatch_coords - format a tuple of dispatch coordinates
 // -----------------------------------------------------------------------------
 // Produces a comma-separated list like:
-//   "device=CUDA, dtype=Float, contiguity=Contiguous"
+//   "device=CUDA, stype=Float, contiguity=contiguous"
 
 template <typename... CoordTypes>
 std::string
-formatDispatchCoords(std::tuple<CoordTypes...> const &coords) {
+torch_format_dispatch_coords(std::tuple<CoordTypes...> const &coords) {
     return std::apply(
         [](auto const &...values) {
             std::string result;
             bool first = true;
-            ((result += (first ? "" : ", ") + coordToString(values), first = false), ...);
+            ((result += (first ? "" : ", ") + torch_coord_to_string(values), first = false), ...);
             return result;
         },
         coords);
 }
 
-// =============================================================================
-// torchDispatch - invoke a dispatcher with Torch-friendly error handling
-// =============================================================================
-//
+// -----------------------------------------------------------------------------
+// torch_dispatch - invoke a dispatcher with Torch-friendly error handling
+// -----------------------------------------------------------------------------
 // Wraps dispatcher invocation, catching any exception from failed dispatch
 // lookups and converting them to a user-friendly TORCH_CHECK_VALUE error.
-//
 
 template <typename Dispatcher, typename... CoordTypes, typename... Args>
 auto
-torchDispatch(std::string_view function_name,
-              Dispatcher &&dispatcher,
-              std::tuple<CoordTypes...> const &dispatch_coord,
-              Args &&...args) {
+torch_dispatch(std::string_view function_name,
+               Dispatcher &&dispatcher,
+               std::tuple<CoordTypes...> const &dispatch_coord,
+               Args &&...args) {
     try {
         return std::invoke(dispatcher, dispatch_coord, std::forward<Args>(args)...);
     } catch (...) {
         TORCH_CHECK_VALUE(false,
                           function_name,
                           ": unsupported dispatch combination - ",
-                          formatDispatchCoords(dispatch_coord));
+                          torch_format_dispatch_coords(dispatch_coord));
     }
 }
 
-} // namespace dispatch
-} // namespace fvdb
+// -----------------------------------------------------------------------------
+// torch_concrete_tensor CPU accessor
+// -----------------------------------------------------------------------------
+// Extracts the C++ scalar type from the ScalarType enum to call torch's accessor.
+// Matches any torch_concrete_tensor with CPU device.
 
-#endif // FVDB_DETAIL_DISPATCH_TORCHDISPATCH_H
+template <torch::ScalarType Stype, size_t Rank>
+auto
+torch_accessor(torch_concrete_tensor<torch::kCPU, Stype, Rank> ct) {
+    using scalar_t = torch_scalar_cpp_type_t<Stype>;
+    // Note: Host TensorAccessor only takes <T, N>, no index type parameter
+    // (unlike packed_accessor64/32 for CUDA)
+    return ct.tensor.template accessor<scalar_t, Rank>();
+}
+
+#ifdef __CUDACC__
+// -----------------------------------------------------------------------------
+// torch_concrete_tensor CUDA/PrivateUse1 accessors (nvcc only)
+// -----------------------------------------------------------------------------
+// Extracts the C++ scalar type from the ScalarType enum to call torch's packed_accessor.
+// Matches any torch_concrete_tensor with CUDA or PrivateUse1 device.
+// These use RestrictPtrTraits which requires nvcc compilation.
+
+template <torch::ScalarType Stype, size_t Rank, typename IndexT = int64_t>
+auto
+torch_accessor(torch_concrete_tensor<torch::kCUDA, Stype, Rank> ct) {
+    using scalar_t = torch_scalar_cpp_type_t<Stype>;
+    if constexpr (std::is_same_v<IndexT, int64_t>) {
+        return ct.tensor.template packed_accessor64<scalar_t, Rank, at::RestrictPtrTraits>();
+    } else {
+        return ct.tensor.template packed_accessor32<scalar_t, Rank, at::RestrictPtrTraits>();
+    }
+}
+
+template <torch::ScalarType Stype, size_t Rank, typename IndexT = int64_t>
+auto
+torch_accessor(torch_concrete_tensor<torch::kPrivateUse1, Stype, Rank> ct) {
+    using scalar_t = torch_scalar_cpp_type_t<Stype>;
+    if constexpr (std::is_same_v<IndexT, int64_t>) {
+        return ct.tensor.template packed_accessor64<scalar_t, Rank, at::RestrictPtrTraits>();
+    } else {
+        return ct.tensor.template packed_accessor32<scalar_t, Rank, at::RestrictPtrTraits>();
+    }
+}
+#endif // __CUDACC__
+
+} // namespace dispatch
+
+#endif // DISPATCH_TORCH_H

@@ -46,6 +46,10 @@ concept axes_like = is_axes_v<T>();
 template <typename T>
 concept index_sequence_like = is_index_sequence_v<T>();
 
+//------------------------------------------------------------------------------
+// Axis value type trait
+//------------------------------------------------------------------------------
+
 template <typename T> struct axis_value_type {
     static_assert(axis_like<T>, "axis_value_type requires a axis type");
 };
@@ -432,6 +436,42 @@ struct index_of<Value, axis<AxisValue0, AxisValues...>> {
 };
 
 //------------------------------------------------------------------------------
+// index_of_value
+//------------------------------------------------------------------------------
+// Runtime version that gets an index of a value in an axis. The value has to
+// be the right (decayed) type, but it does not have to be within the axis.
+
+// Single value axis - there's no empty axis version, because we don't allow
+// an empty axis to be created.
+template <auto V0>
+constexpr std::optional<size_t>
+index_of_value(axis<V0> a, auto const v) {
+    using v_type   = std::decay_t<decltype(v)>;
+    using a_v_type = axis_value_type_t<axis<V0>>;
+    static_assert(std::is_same_v<v_type, a_v_type>, "value type mismatch");
+    if (v == V0) {
+        return 0;
+    }
+    return std::nullopt;
+}
+
+template <auto V0, auto... Vs>
+constexpr std::optional<size_t>
+index_of_value(axis<V0, Vs...> a, auto const v) {
+    using v_type   = std::decay_t<decltype(v)>;
+    using a_v_type = axis_value_type_t<axis<V0, Vs...>>;
+    static_assert(std::is_same_v<v_type, a_v_type>, "value type mismatch");
+    if (v == V0) {
+        return 0;
+    }
+    auto opt_index = index_of_value(axis<Vs...>{}, v);
+    if (opt_index.has_value()) {
+        return 1 + opt_index.value();
+    }
+    return std::nullopt;
+}
+
+//------------------------------------------------------------------------------
 // indices of - trait for getting the indices of a tag in an axes
 //------------------------------------------------------------------------------
 template <typename Tag, typename Axes> struct indices_of {
@@ -583,121 +623,99 @@ template <axes_like Axes, size_t linearIndex> struct tag_from_linear_index<Axes,
 template <typename Axes, size_t linearIndex>
 using tag_from_linear_index_t = typename tag_from_linear_index<Axes, linearIndex>::type;
 
-//------------------------------------------------------------------------------
-//
-
-template <typename Type, typename Sequence> struct prepend_type;
-
-template <typename Type, typename... Types> struct prepend_type<Type, types<Types...>> {
-    using type = types<Type, Types...>;
+template <typename Axes, typename Tag> struct linear_index_from_tag {
+    static_assert(axes_like<Axes>, "linear_index_from_tag requires an axes type");
+    static_assert(tag_like<Tag>, "linear_index_from_tag requires a tag type");
+    static_assert(within<Tag, Axes>,
+                  "linear_index_from_tag requires the tag to be within the axes");
+    static consteval bool
+    value() {
+        return 0;
+    }
 };
 
-template <typename Type, typename... Types> struct prepend_type<Type, axis<Types...>> {
-    using type = axis<Type, Types...>;
-};
-
-template <typename Type, typename Sequence>
-using prepend_type_t = typename prepend_type<Type, Sequence>::type;
-
-// -----------------------------------------------------------------------------
-// array_from_indices - convert index_sequence to std::array at compile time
-// -----------------------------------------------------------------------------
-
-template <typename T> struct array_from;
-
-template <size_t... I> struct array_from<std::index_sequence<I...>> {
-    static constexpr std::array<size_t, sizeof...(I)> value = {I...};
-};
-
-template <size_t... S> struct array_from<extents<S...>> {
-    static constexpr std::array<size_t, sizeof...(S)> value = {S...};
-};
-
-template <size_t... I> struct array_from<indices<I...>> {
-    static constexpr std::array<size_t, sizeof...(I)> value = {I...};
-};
-
-//------------------------------------------------------------------------------
-// index-based trait/concept
-//------------------------------------------------------------------------------
-template <typename T> struct is_index_based : consteval_false_type {};
-
-template <typename T>
-consteval bool
-is_index_based_v() {
-    return is_index_based<T>::value();
+template <typename Axes, typename Tag>
+consteval size_t
+linear_index_from_tag_v() {
+    return linear_index_from_tag<Axes, Tag>::value();
 }
 
-template <typename T>
-concept index_based = is_index_based_v<T>();
-
-//------------------------------------------------------------------------------
-// value-based trait/concept
-//------------------------------------------------------------------------------
-template <typename T> struct is_value_based : consteval_false_type {};
-
-template <typename T>
-consteval bool
-is_value_based_v() {
-    return is_value_based<T>::value();
-}
-
-template <typename T>
-concept value_based = is_value_based_v<T>();
-
-// =============================================================================
-// Tuple Utilities
-// =============================================================================
-//
-// Compile-time and constexpr utilities for tuple manipulation.
-//
-// =============================================================================
-
-// -----------------------------------------------------------------------------
-// tuple_head - extract the first element of a tuple
-// -----------------------------------------------------------------------------
-
-template <typename Tuple>
-constexpr auto
-tuple_head(Tuple const &t) {
-    return std::get<0>(t);
-}
-
-// -----------------------------------------------------------------------------
-// tuple_tail - extract all elements except the first
-// -----------------------------------------------------------------------------
-// Returns a new tuple containing elements [1, N) from the input tuple.
-// For a tuple of size 1, returns an empty tuple.
-
-template <typename Tuple>
-constexpr auto
-tuple_tail(Tuple const &t) {
-    return std::apply([](auto, auto... tail) { return std::make_tuple(tail...); }, t);
-}
-
-// -----------------------------------------------------------------------------
-// TupleTail_t - compile-time type of tuple_tail result
-// -----------------------------------------------------------------------------
-
-template <typename Tuple> struct TupleTail;
-
-template <typename Head, typename... Tail> struct TupleTail<std::tuple<Head, Tail...>> {
-    using type = std::tuple<Tail...>;
+template <axes_like Axes, tag_like Tag> struct linear_index_from_tag<Axes, Tag> {
+    static_assert(within<Tag, Axes>,
+                  "linear_index_from_tag requires the tag to be within the axes");
+    static consteval size_t
+    value() {
+        return index_of_v<Tag, Axes>();
+    }
 };
 
-template <typename Tuple> using TupleTail_t = typename TupleTail<Tuple>::type;
-
-// -----------------------------------------------------------------------------
-// TupleHead_t - compile-time type of the first element
-// -----------------------------------------------------------------------------
-
-template <typename Tuple> struct TupleHead;
-
-template <typename Head, typename... Tail> struct TupleHead<std::tuple<Head, Tail...>> {
-    using type = Head;
+template <typename Axes, typename Tag> struct linear_index_from_tag<Axes, Tag> {
+    static_assert(within<Tag, Axes>,
+                  "linear_index_from_tag requires the tag to be within the axes");
+    static consteval size_t
+    value() {
+        return linear_index_from_indices_v<indices_from_tag_t<Axes, Tag>>();
+    }
 };
 
-template <typename Tuple> using TupleHead_t = typename TupleHead<Tuple>::type;
+//------------------------------------------------------------------------------
+// value_tuple_type
+//------------------------------------------------------------------------------
+template <typename Axes> struct value_tuple_type {
+    static_assert(axes_like<Axes>, "value_tuple_type requires an axes type");
+};
+
+template <typename Axes> using value_tuple_type_t = typename value_tuple_type<Axes>::type;
+
+template <typename... Axes> struct value_tuple_type<axes<Axes...>> {
+    using type = std::tuple<axes_value_type_t<Axes>...>;
+};
+
+// -----------------------------------------------------------------------------
+// linear_index_from_value_tuple
+// -----------------------------------------------------------------------------
+// Runtime version that gets a linear index from a value tuple. The value tuple
+// has to be the right (decayed) type, but it does not have to be within the axes.
+
+// Single value axis - there's no empty axis version, because we don't allow
+// an empty axis to be created.
+template <typename Axis, typename T0>
+constexpr std::optional<size_t>
+linear_index_from_value_tuple(axes<Axis>, std::tuple<T0> const &t) {
+    static_assert(axis_like<Axis>, "linear_index_from_value_tuple requires an axis type");
+    using axis_value_type = axis_value_type_t<Axis>;
+    usint v_type          = std::decay_t<T0>;
+    static_assert(std::is_same_v<v_type, axis_value_type>, "value type mismatch");
+    return index_of_value(Axis{}, std::get<0>(t));
+}
+
+namespace detail {
+// Helper function to get the tail of a value tuple that definitely has more than one element.
+template <typename T0, typename... Ts>
+constexpr std::tuple<Ts...>
+tuple_tail(std::tuple<T0, Ts...> const &t) {
+    return std::apply(
+        [](auto const & /*head*/, auto const &...tail) { return std::make_tuple(tail...); }, t);
+}
+
+} // namespace detail
+
+// Multi-value axis - there's no empty axis version, because we don't allow
+// an empty axis to be created. The conformance tests are handled by the axis verison.
+template <typename Axis0, typename... Axes, typename T0, typename... Ts>
+constexpr std::optional<size_t>
+linear_index_from_value_tuple(axes<Axis0, Axes...>, std::tuple<T0, Ts...> const &t) {
+    auto opt_index_0 = index_of_value(Axis0{}, std::get<0>(t));
+    if (opt_index_0.has_value()) {
+        auto tail           = detail::tuple_tail(t);
+        auto opt_index_tail = linear_index_from_value_tuple(axes<Axes...>{}, tail);
+        if (opt_index_tail.has_value()) {
+            constexpr auto stride = volume_v<axes<Axes...>>();
+            return (opt_index_0.value() * stride) + opt_index_tail.value();
+        }
+    }
+    return std::nullopt;
+}
 
 } // namespace dispatch
 
