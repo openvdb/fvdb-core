@@ -615,25 +615,43 @@ launchRasterizeContributingGaussianIdsForwardKernel(
                           "pixelMap must have the same number of elements as pixelsToRender");
     }
 
-    auto sizes = pixelsToRender.has_value()
-                     ? pixelsToRender->lsizes1()
-                     : std::vector<int64_t>{C * settings.imageHeight * settings.imageWidth};
-    std::vector<torch::Tensor> idsToRenderVec;
-    std::vector<torch::Tensor> weightsToRenderVec;
+    const auto &sizes = pixelsToRender.has_value()
+                            ? pixelsToRender->lsizes1()
+                            : std::vector<int64_t>{C * settings.imageHeight * settings.imageWidth};
 
     // maximum possible number of depth samples per pixel
     const auto maxDepthSamplesPerPixel = numContributingGaussians.jdata().max().item<int32_t>();
 
+    // Calculate total size and build offsets
+    int64_t totalSize = 0;
+    std::vector<JOffsetsType> offsetsVec;
+    offsetsVec.reserve(sizes.size() + 1);
+    offsetsVec.push_back(0);
     for (const auto &size: sizes) {
-        idsToRenderVec.emplace_back(
-            torch::empty({size, maxDepthSamplesPerPixel}, means2d.options().dtype(torch::kInt32)));
-        weightsToRenderVec.emplace_back(
-            torch::empty({size, maxDepthSamplesPerPixel},
-                         means2d.options().dtype(c10::CppTypeToScalarType<ScalarType>::value)));
+        totalSize += size;
+        offsetsVec.push_back(static_cast<JOffsetsType>(totalSize));
     }
 
-    auto outIds     = fvdb::JaggedTensor(idsToRenderVec);
-    auto outWeights = fvdb::JaggedTensor(weightsToRenderVec);
+    auto outIdsData =
+        torch::empty({totalSize, maxDepthSamplesPerPixel}, means2d.options().dtype(torch::kInt32));
+    auto outWeightsData =
+        torch::empty({totalSize, maxDepthSamplesPerPixel},
+                     means2d.options().dtype(c10::CppTypeToScalarType<ScalarType>::value));
+
+    // Build offsets tensor on CPU, then transfer to GPU
+    auto offsets = torch::from_blob(offsetsVec.data(),
+                                    {static_cast<int64_t>(offsetsVec.size())},
+                                    torch::TensorOptions().dtype(JOffsetsScalarType))
+                       .clone()
+                       .to(means2d.device(), /*non_blocking=*/true);
+
+    // Empty list_ids for ldim == 1
+    auto listIds = torch::empty(
+        {0, 1}, torch::TensorOptions().dtype(JLIdxScalarType).device(means2d.device()));
+
+    auto outIds = JaggedTensor::from_data_offsets_and_list_ids(outIdsData, offsets, listIds);
+    auto outWeights =
+        JaggedTensor::from_data_offsets_and_list_ids(outWeightsData, offsets, listIds);
 
     // Each pixel in each tile will cache a gaussian consisting of:
     //   - int32_t  gaussian_id; -- 4 bytes
