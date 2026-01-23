@@ -1040,7 +1040,8 @@ gaussianTileIntersectionPrivateUse1Impl(
 
     // In place cumulative sum to get the total number of intersections
     {
-        auto stream = at::cuda::getCurrentCUDAStream(means2d.device().index());
+        const auto deviceGuard = at::cuda::OptionalCUDAGuard(at::device_of(means2d));
+        auto stream            = at::cuda::getCurrentCUDAStream(means2d.device().index());
         CUB_WRAPPER(cub::DeviceScan::InclusiveSum,
                     tilesPerGaussianCumsum.data_ptr<int32_t>(),
                     tilesPerGaussianCumsum.data_ptr<int32_t>(),
