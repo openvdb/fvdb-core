@@ -126,8 +126,8 @@ struct inclusive_scan_op_t {
     }
 
     // Dispatch space axes - must match the tag parameters used in op function
-    using int_stypes  = axis<torch::kInt, torch::kLong>;
-    using stype_axis  = axis<torch::kFloat, torch::kDouble, torch::kInt, torch::kLong>;
+    using int_stypes = axis<torch::kInt, torch::kLong>;
+    using stype_axis = axis<torch::kFloat, torch::kDouble, torch::kInt, torch::kLong>;
 
     // Full dispatch space
     using space = axes<torch_cpu_cuda_device_axis,

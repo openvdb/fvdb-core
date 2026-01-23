@@ -218,10 +218,8 @@ inclusive_scan_functional(torch::Tensor input, placement plc, determinism det) {
         iscan_gpu_int_subspace{}};
 
     // Validate input rank
-    TORCH_CHECK_VALUE(input.dim() == 1,
-                      "inclusive_scan_functional: expected 1D tensor, got ",
-                      input.dim(),
-                      "D");
+    TORCH_CHECK_VALUE(
+        input.dim() == 1, "inclusive_scan_functional: expected 1D tensor, got ", input.dim(), "D");
 
     // Handle empty tensor case
     if (input.size(0) == 0) {
