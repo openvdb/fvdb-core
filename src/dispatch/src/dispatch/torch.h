@@ -15,9 +15,9 @@
 
 namespace dispatch {
 
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // Dispatch coordinate stringification
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // Overloads of torch_coord_to_string for each dispatch coordinate type.
 // Each overload produces a labeled string like "device=CUDA" or "stype=Float".
 // Add new overloads here when introducing new dispatch coordinate types.
@@ -55,18 +55,18 @@ torch_coord_to_string(T value) {
     return std::to_string(value);
 }
 
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // Contiguity helper
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 
 inline contiguity
 torch_get_contiguity(torch::Tensor tensor) {
     return tensor.is_contiguous() ? contiguity::contiguous : contiguity::strided;
 }
 
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // torch_format_dispatch_coords - format a tuple of dispatch coordinates
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // Produces a comma-separated list like:
 //   "device=CUDA, stype=Float, contiguity=contiguous"
 
@@ -83,9 +83,9 @@ torch_format_dispatch_coords(std::tuple<CoordTypes...> const &coords) {
         coords);
 }
 
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // torch_dispatch - invoke a dispatcher with Torch-friendly error handling
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // Wraps dispatcher invocation, catching any exception from failed dispatch
 // lookups and converting them to a user-friendly TORCH_CHECK_VALUE error.
 
@@ -105,9 +105,9 @@ torch_dispatch(std::string_view function_name,
     }
 }
 
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // torch_concrete_tensor CPU accessor
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // Extracts the C++ scalar type from the ScalarType enum to call torch's accessor.
 // Matches any torch_concrete_tensor with CPU device.
 
@@ -121,9 +121,9 @@ torch_accessor(torch_concrete_tensor<torch::kCPU, Stype, Rank> ct) {
 }
 
 #ifdef __CUDACC__
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // torch_concrete_tensor CUDA/PrivateUse1 accessors (nvcc only)
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // Extracts the C++ scalar type from the ScalarType enum to call torch's packed_accessor.
 // Matches any torch_concrete_tensor with CUDA or PrivateUse1 device.
 // These use RestrictPtrTraits which requires nvcc compilation.

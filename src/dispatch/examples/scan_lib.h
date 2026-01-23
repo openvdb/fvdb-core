@@ -1,7 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-// ScanLib: A foundation library for inclusive scan operations.
+// scan_lib: A foundation library for inclusive scan operations.
 //
 // This library provides low-level scan primitives with explicit control over
 // determinism, parallelism, and memory layout. It is designed to be wrapped
@@ -29,8 +29,8 @@
 // - CPU functions support strided data (stride parameter)
 // - CUDA functions require contiguous data (no stride parameter)
 
-#ifndef FVDB_DETAIL_DISPATCH_EXAMPLE_SCANLIB_H
-#define FVDB_DETAIL_DISPATCH_EXAMPLE_SCANLIB_H
+#ifndef DISPATCH_EXAMPLES_SCAN_LIB_H
+#define DISPATCH_EXAMPLES_SCAN_LIB_H
 
 #include <cstddef>
 #include <cstdint>
@@ -42,7 +42,7 @@
 using cudaStream_t = void *;
 #endif
 
-namespace scanlib {
+namespace scan_lib {
 
 // =============================================================================
 // CPU Serial implementations
@@ -135,6 +135,6 @@ extern template void inclusive_scan_cuda<int32_t>(int32_t const *, int32_t *, in
 extern template void inclusive_scan_cuda<int64_t>(int64_t const *, int64_t *, int64_t, void *, size_t, cudaStream_t);
 // clang-format on
 
-} // namespace scanlib
+} // namespace scan_lib
 
-#endif // FVDB_DETAIL_DISPATCH_EXAMPLE_SCANLIB_H
+#endif // DISPATCH_EXAMPLES_SCAN_LIB_H

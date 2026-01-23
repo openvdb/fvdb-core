@@ -25,16 +25,9 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
     using axes_type             = axes<Axes...>;
     using return_type           = ReturnType;
     using function_pointer_type = ReturnType (*)(Args...);
-    using coord_tuple_type      = axes_tuple_type_t<axes_type>;
+    using coord_tuple_type      = value_tuple_type_t<axes_type>;
     using map_type              = axes_map<axes_type, function_pointer_type>;
 
-  private:
-    std::shared_ptr<map_type const> _data;
-
-    // Private constructor for internal use (from with())
-    explicit dispatch_table(std::shared_ptr<map_type const> data) : _data(std::move(data)) {}
-
-  public:
     // Default constructor - empty table
     dispatch_table() : _data(std::make_shared<map_type>()) {}
 
@@ -48,7 +41,7 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
     // Initial construction with factory and coordinates or subspaces
     template <typename Factory, typename... Subs>
     explicit dispatch_table(Factory &factory, Subs... subs) {
-        static_assert((within<subs, axes_type> && ... && true), "Subs must be within the axes");
+        static_assert((within<Subs, axes_type> && ... && true), "Subs must be within the axes");
         auto new_data = std::make_shared<map_type>();
         create_and_store(*new_data, factory, subs...);
         _data = std::move(new_data);
@@ -58,7 +51,7 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
     template <typename Factory, typename... Subs>
     dispatch_table
     with(Factory &&factory, Subs... subs) const {
-        static_assert((within<subs, axes_type> && ... && true), "Subs must be within the axes");
+        static_assert((within<Subs, axes_type> && ... && true), "Subs must be within the axes");
         auto new_data = std::make_shared<map_type>(*_data); // copy existing entries
         create_and_store(*new_data, factory, subs...);
         return dispatch_table(std::move(new_data));
@@ -78,20 +71,6 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
         return fptr(args...);
     }
 
-  private:
-    template <typename Op, typename Coord>
-    static return_type
-    op_call(Args... args) {
-        return Op::op(Coord{}, args...);
-    }
-
-    template <typename Visitor, typename Coord>
-    static return_type
-    visitor_call(Args... args) {
-        return Visitor{}(Coord{}, args...);
-    }
-
-  public:
     // For struct with static op() overloads
     template <typename Op>
     static auto
@@ -110,6 +89,24 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
             using C = decltype(coord);
             return &visitor_call<Visitor, C>;
         };
+    }
+
+  private:
+    std::shared_ptr<map_type const> _data;
+
+    // Private constructor for internal use (from with())
+    explicit dispatch_table(std::shared_ptr<map_type const> data) : _data(std::move(data)) {}
+
+    template <typename Op, typename Coord>
+    static return_type
+    op_call(Args... args) {
+        return Op::op(Coord{}, args...);
+    }
+
+    template <typename Visitor, typename Coord>
+    static return_type
+    visitor_call(Args... args) {
+        return Visitor{}(Coord{}, args...);
     }
 };
 

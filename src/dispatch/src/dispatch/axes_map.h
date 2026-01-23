@@ -13,12 +13,11 @@
 #include <unordered_map>
 #include <utility>
 
-namespace fvdb {
 namespace dispatch {
 
-// ----------------------------------------------------------------------
-// axes_map: A map keyed by coordinates in a Axes
-// ----------------------------------------------------------------------
+//------------------------------------------------------------------------------
+// axes_map: A map keyed by coordinates in an Axes
+//------------------------------------------------------------------------------
 //
 // This map enforces that only valid coordinates (tuples within the space) can
 // be inserted, but allows querying with any tuple. Invalid queries gracefully
@@ -31,7 +30,7 @@ namespace dispatch {
 // Usage:
 //
 //   using MyAxes = axes<DeviceAxis, ScalarAxis>;
-//   axes_map_t<MyAxes, std::function<void()>> dispatchTable;
+//   axes_map<MyAxes, std::function<void()>> dispatchTable;
 //
 //   auto validCoord   = std::make_tuple(Device::CUDA, Scalar::Float);
 //   auto invalidCoord = std::make_tuple(Device::CUDA, static_cast<Scalar>(999));
@@ -51,12 +50,10 @@ namespace dispatch {
 //
 //   // --- Insert with valid coordinate: succeeds ---
 //   dispatchTable.emplace(validCoord, []{ std::cout << "dispatched!\n"; });
-//
-// ----------------------------------------------------------------------
 
-// ----------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // axes_map_key
-// ----------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // The Key is only instantiated when an insert or an emplace is called,
 // it is not instantiated for a find. It is also instantiated with
 // operator[] (which takes a key).
@@ -66,12 +63,12 @@ template <typename Axes> struct axes_map_key {
     static_assert(non_empty<Axes>, "Axes must be non-empty space");
 
     using axes_type        = Axes;
-    using value_tuple_type = axes_value_tuple_t<Axes>;
+    using value_tuple_type = value_tuple_type_t<Axes>;
 
     size_t linear_index;
 
     constexpr explicit axes_map_key(value_tuple_type const &in_coord) {
-        auto const opt_linear_index = linear_index_from_value_tuple(space_type{}, in_coord);
+        auto const opt_linear_index = linear_index_from_value_tuple(axes_type{}, in_coord);
         if (!opt_linear_index) {
             throw std::runtime_error("Insert Error: Coordinate is not in space!");
         }
@@ -89,9 +86,9 @@ template <typename Axes> struct axes_map_key {
     }
 };
 
-// ----------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // axes_map_hash
-// ----------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // By marking the hash as transparent, we can use tuples as lookup keys
 // without instantiating the Key type.
 template <typename Axes> struct axes_map_hash {
@@ -99,7 +96,7 @@ template <typename Axes> struct axes_map_hash {
     static_assert(non_empty<Axes>, "Axes must be non-empty space");
 
     using axes_type        = Axes;
-    using value_tuple_type = axes_value_tuple_t<Axes>;
+    using value_tuple_type = value_tuple_type_t<Axes>;
     using key_type         = axes_map_key<Axes>;
 
     // Enable C++20 lookup via tuples without creating keys directly.
@@ -132,9 +129,9 @@ template <typename Axes> struct axes_map_hash {
     }
 };
 
-// ----------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // axes_map_equal
-// ----------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // Transparent equality allows tuple lookups. An invalid tuple is never
 // equal to any valid key, enabling graceful "not found" for bad coords.
 
@@ -143,7 +140,7 @@ template <typename Axes> struct axes_map_equal {
     static_assert(non_empty<Axes>, "Axes must be non-empty space");
 
     using axes_type        = Axes;
-    using value_tuple_type = axes_value_tuple_t<Axes>;
+    using value_tuple_type = value_tuple_type_t<Axes>;
     using key_type         = axes_map_key<Axes>;
 
     // Enable C++20 lookup via tuples without creating keys directly.
@@ -189,17 +186,17 @@ template <typename Axes> struct axes_map_equal {
     }
 };
 
-// ----------------------------------------------------------------------
-// axes_map_t
-// ----------------------------------------------------------------------
+//------------------------------------------------------------------------------
+// axes_map
+//------------------------------------------------------------------------------
 
 template <typename Axes, typename T>
 using axes_map =
     std::unordered_map<axes_map_key<Axes>, T, axes_map_hash<Axes>, axes_map_equal<Axes>>;
 
-// ----------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // create_and_store utilities
-// ----------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // These utilities populate a axes_map with entries created by a factory.
 // The factory is called with each coordinate and should return the value to store.
 
@@ -215,7 +212,7 @@ template <typename Axes, typename T, typename Factory> struct create_and_store_v
     static_assert(axes_like<Axes>, "Axes must be an axes type");
     static_assert(non_empty<Axes>, "Axes must be non-empty space");
 
-    using map_type = axes_map_t<Axes, T>;
+    using map_type = axes_map<Axes, T>;
 
     std::reference_wrapper<map_type> map;
     std::reference_wrapper<Factory> factory;
@@ -232,7 +229,7 @@ template <typename Axes, typename T, typename Factory> struct create_and_store_v
 // Implementation helper: handle a single sub (either a coord or a subspace)
 template <typename Axes, typename T, typename Factory, typename... SubAxes>
 void
-create_and_store_helper(axes_map_t<Axes, T> &map, Factory &factory, axes<SubAxes...> sub) {
+create_and_store_helper(axes_map<Axes, T> &map, Factory &factory, axes<SubAxes...> sub) {
     static_assert(axes_like<Axes>, "Axes must be an axes type");
     static_assert(non_empty<Axes>, "Axes must be non-empty space");
     static_assert(within<axes<SubAxes...>, Axes>, "SubAxes must be within the Axes");
@@ -243,7 +240,7 @@ create_and_store_helper(axes_map_t<Axes, T> &map, Factory &factory, axes<SubAxes
 // Create and store a single coordinate
 template <typename Axes, typename T, typename Factory, auto... Vs>
 void
-create_and_store_helper(axes_map_t<Axes, T> &map, Factory &factory, tag<Vs...> t) {
+create_and_store_helper(axes_map<Axes, T> &map, Factory &factory, tag<Vs...> t) {
     static_assert(axes_like<Axes>, "Axes must be an axes type");
     static_assert(non_empty<Axes>, "Axes must be non-empty space");
     static_assert(within<tag<Vs...>, Axes>, "tag must be within the axes");
@@ -252,9 +249,9 @@ create_and_store_helper(axes_map_t<Axes, T> &map, Factory &factory, tag<Vs...> t
 
 template <typename Axes, typename T, typename Factory, typename Other>
 void
-create_and_store_helper(axes_map_t<Axes, T> &map, Factory &factory, Other other) {
+create_and_store_helper(axes_map<Axes, T> &map, Factory &factory, Other other) {
     static_assert(within<Other, Axes>,
-                  "Creata and store target must be either a tag or a subspace");
+                  "create_and_store target must be either a tag or a subspace");
 }
 
 } // namespace detail
@@ -262,7 +259,7 @@ create_and_store_helper(axes_map_t<Axes, T> &map, Factory &factory, Other other)
 // Populate map entries for multiple subs (coords or subspaces)
 template <typename Axes, typename T, typename Factory, typename... Subs>
 void
-create_and_store(axes_map_t<Axes, T> &map, Factory &factory, Subs... subs) {
+create_and_store(axes_map<Axes, T> &map, Factory &factory, Subs... subs) {
     static_assert(axes_like<Axes>, "Axes must be an axes type");
     static_assert(non_empty<Axes>, "Axes must be non-empty space");
     static_assert((within<subs, Axes> && ... && true), "Subs must be within the Axes");
@@ -270,6 +267,5 @@ create_and_store(axes_map_t<Axes, T> &map, Factory &factory, Subs... subs) {
 }
 
 } // namespace dispatch
-} // namespace fvdb
 
-#endif // FVDB_DETAIL_DISPATCH_VALUESPACEMAP_H
+#endif // DISPATCH_AXES_MAP_H

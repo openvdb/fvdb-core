@@ -1,7 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 
-#include "fvdb/detail/dispatch/example/ScanLib.h"
+#include "examples/scan_lib.h"
 
 #include <algorithm>
 #include <vector>
@@ -10,7 +10,7 @@
 #include <omp.h>
 #endif
 
-namespace scanlib {
+namespace scan_lib {
 
 // =============================================================================
 // CPU Serial implementations
@@ -137,4 +137,4 @@ template void inclusive_scan_parallel<int32_t>(int32_t const *, int64_t, int32_t
 template void inclusive_scan_parallel<int64_t>(int64_t const *, int64_t, int64_t *, int64_t, int64_t);
 // clang-format on
 
-} // namespace scanlib
+} // namespace scan_lib

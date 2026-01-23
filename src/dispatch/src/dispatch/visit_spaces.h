@@ -1,11 +1,10 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef DISPATCH_VALUE_SPACE_H
-#define DISPATCH_VALUE_SPACE_H
+#ifndef DISPATCH_VISIT_SPACES_H
+#define DISPATCH_VISIT_SPACES_H
 
 #include "dispatch/detail.h"
-#include "dispatch/index_space.h"
 #include "dispatch/types.h"
 
 #include <array>
@@ -26,7 +25,7 @@ namespace detail {
 template <typename Extents, typename LinearPointSeq> struct extents_visit_helper {
     static_assert(extents_like<Extents>, "Extents must be an extents type");
     static_assert(index_sequence_like<LinearPointSeq>,
-                  "LinearPointSeq must be an index sequence like");
+                  "LinearPointSeq must be an index sequence type");
 };
 
 template <extents_like Extents, size_t... linearIndices>
@@ -69,9 +68,9 @@ visit_extents_spaces(Visitor &visitor, Extents... extents) {
 namespace detail {
 
 template <typename Axes, typename LinearPointSeq> struct axes_visit_helper {
-    static_assert(axes_like<Space>, "Space must be an axes type");
+    static_assert(axes_like<Axes>, "Axes must be an axes type");
     static_assert(index_sequence_like<LinearPointSeq>,
-                  "LinearPointSeq must be an index sequence like");
+                  "LinearPointSeq must be an index sequence type");
 };
 
 template <axes_like Axes, size_t... linearIndices>
@@ -108,4 +107,4 @@ visit_axes_spaces(Visitor &visitor, Axes... axes) {
 
 } // namespace dispatch
 
-#endif // DISPATCH_VALUE_SPACE_H
+#endif // DISPATCH_VISIT_SPACES_H

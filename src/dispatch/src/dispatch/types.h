@@ -10,12 +10,13 @@
 
 namespace dispatch {
 
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // By avoiding the creation of static constexpr variables in favor of
 // consteval functions, we guarantee that those values exist only at
 // compile-time and are never instantiated just because they might be passed
 // as a reference to some function. It's a little bit more verbose, but it
 // addresses a real issue with deeply nested templates and nvcc.
+//------------------------------------------------------------------------------
 
 template <bool B> struct consteval_bool_type {
     static consteval bool
@@ -90,13 +91,13 @@ template <auto V0> struct axis<V0> {
 };
 
 namespace detail {
-template <typename T>
+template <typename T, typename... Rest>
 consteval bool
-unique_values(T head, T... tail) {
+unique_values(T head, Rest... tail) {
     if constexpr (sizeof...(tail) == 0) {
         return true;
     } else {
-        return (head != tail && ...) && unique_values(tail...);
+        return ((head != tail) && ...) && unique_values(tail...);
     }
 }
 } // namespace detail
@@ -122,7 +123,6 @@ is_axis_v() {
 template <typename... Axes> struct axes {
     static_assert(sizeof...(Axes) > 0, "axes must have at least one axis");
     static_assert((is_axis_v<Axes>() && ... && true), "All template parameters must be axis types");
-    using axes_value_type = types<axis_value_t<Axes>...>;
 };
 
 template <typename T> struct is_axes : consteval_false_type {};

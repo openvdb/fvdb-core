@@ -1,11 +1,11 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 
-#include "fvdb/detail/dispatch/example/ScanLib.h"
+#include "examples/scan_lib.h"
 
 #include <cub/cub.cuh>
 
-namespace scanlib {
+namespace scan_lib {
 
 // =============================================================================
 // CUDA implementations (CUB)
@@ -65,4 +65,4 @@ template void inclusive_scan_cuda<int32_t>(int32_t const *, int32_t *, int64_t, 
 template void inclusive_scan_cuda<int64_t>(int64_t const *, int64_t *, int64_t, void *, size_t, cudaStream_t);
 // clang-format on
 
-} // namespace scanlib
+} // namespace scan_lib

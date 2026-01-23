@@ -177,9 +177,9 @@ volume_v() {
     return volume<T>::value();
 }
 
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // NON_EMPTY - concept and trait
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 template <typename T> struct is_non_empty : consteval_bool_type<(volume_v<T>() > 0)> {};
 
 template <typename T>
@@ -191,11 +191,11 @@ is_non_empty_v() {
 template <typename T>
 concept non_empty = is_non_empty_v<T>();
 
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // WITHIN (contained by)
-// concept and trait for checking if a point is within a space
-// or a space is a subspace of another space
-// -----------------------------------------------------------------------------
+// Concept and trait for checking if a point is within a space
+// or a space is a subspace of another space.
+//------------------------------------------------------------------------------
 
 template <typename Sub, typename Full> struct is_within : consteval_false_type {
     static_assert(equidimensional_with<Sub, Full>,
@@ -316,7 +316,7 @@ template <size_t I, typename T> struct at_index {
 };
 
 template <size_t I, typename T>
-static consteval axis_value_type_t<T>
+consteval axis_value_type_t<T>
 at_index_v() {
     return at_index<I, T>::value();
 }
@@ -336,14 +336,14 @@ template <size_t I, auto V0, auto... Vs> struct at_index<I, axis<V0, Vs...>> {
         if constexpr (I == 0) {
             return V0;
         } else {
-            return at_index_v<I - 1, Vs...>();
+            return at_index_v<I - 1, axis<Vs...>>();
         }
     }
 };
 
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // Prepend value - trait for adding a new value to a value sequence
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 
 template <auto Value, typename Sequence> struct prepend_value;
 
@@ -374,7 +374,6 @@ template <typename Indices, typename Axes> struct at_indices {
     static_assert(axes_like<Axes>, "at_indices requires an axes type");
     static_assert(equidimensional_with<Indices, Axes>,
                   "at_indices requires the indices and axes to be equidimensional");
-    static_assert(within<Indices, Axes>, "at_indices requires the indices to be within the axes");
 };
 
 template <typename Indices, typename Axes>
@@ -391,8 +390,7 @@ struct at_indices<indices<I0, Is...>, axes<AxisType0, AxisTypes...>> {
     using axes_type    = axes<AxisType0, AxisTypes...>;
     static_assert(equidimensional_with<indices_type, axes_type>,
                   "at_indices requires the indices and axes to be equidimensional");
-    static_assert(within<indices_type, axes_type>,
-                  "at_indices requires the indices to be within the axes");
+    // Note: bounds checking is implicit via at_index_v which will fail if I0 >= extent
 
     using tail_type = at_indices_t<indices<Is...>, axes<AxisTypes...>>;
     using type      = prepend_value_t<at_index_v<I0, AxisType0>(), tail_type>;
@@ -430,7 +428,7 @@ struct index_of<Value, axis<AxisValue0, AxisValues...>> {
         if constexpr (Value == AxisValue0) {
             return 0;
         } else {
-            return 1 + index_of_v<Value, AxisValues...>();
+            return 1 + index_of_v<Value, axis<AxisValues...>>();
         }
     }
 };
@@ -445,7 +443,7 @@ struct index_of<Value, axis<AxisValue0, AxisValues...>> {
 // an empty axis to be created.
 template <auto V0>
 constexpr std::optional<size_t>
-index_of_value(axis<V0> a, auto const v) {
+index_of_value(axis<V0>, auto const v) {
     using v_type   = std::decay_t<decltype(v)>;
     using a_v_type = axis_value_type_t<axis<V0>>;
     static_assert(std::is_same_v<v_type, a_v_type>, "value type mismatch");
@@ -457,7 +455,7 @@ index_of_value(axis<V0> a, auto const v) {
 
 template <auto V0, auto... Vs>
 constexpr std::optional<size_t>
-index_of_value(axis<V0, Vs...> a, auto const v) {
+index_of_value(axis<V0, Vs...>, auto const v) {
     using v_type   = std::decay_t<decltype(v)>;
     using a_v_type = axis_value_type_t<axis<V0, Vs...>>;
     static_assert(std::is_same_v<v_type, a_v_type>, "value type mismatch");
@@ -503,7 +501,7 @@ struct indices_of<tag<Value0, Values...>, axes<AxisType0, AxisTypes...>> {
 //------------------------------------------------------------------------------
 // linear index
 //------------------------------------------------------------------------------
-template <size_t I, typename Space struct is_linear_index_within : consteval_false_type {
+template <size_t I, typename Space> struct is_linear_index_within : consteval_false_type {
     static_assert(extents_like<Space>, "is_linear_index_within requires an extents type");
     static_assert(non_empty<Space>, "is_linear_index_within requires a non-empty space");
 };
@@ -520,9 +518,9 @@ is_linear_index_within_v() {
 template <size_t I, typename Space>
 concept linear_index_within = is_linear_index_within_v<I, Space>();
 
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // indices_from_linear_index
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 
 template <typename Space, size_t linearIndex> struct indices_from_linear_index {
     static_assert(extents_like<Space>, "indices_from_linear_index requires an extents type");
@@ -553,9 +551,9 @@ struct indices_from_linear_index<extents<S0, S...>, linearIndex> {
                         indices_from_linear_index_t<extents<S...>, linearIndex % stride()>>;
 };
 
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // linear_index_from_indices
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 
 template <typename Extents, typename Indices> struct linear_index_from_indices {
     static_assert(extents_like<Extents>, "linear_index_from_indices requires an extents type");
@@ -617,7 +615,7 @@ template <axes_like Axes, size_t linearIndex> struct tag_from_linear_index<Axes,
     static_assert(linear_index_within<linearIndex, extents_type>,
                   "tag_from_linear_index requires the linear index to be within the extents");
 
-    using type = at_indices_t<Axes, indices_from_linear_index_t<extents_type, linearIndex>>;
+    using type = at_indices_t<indices_from_linear_index_t<extents_type, linearIndex>, Axes>;
 };
 
 template <typename Axes, size_t linearIndex>
@@ -628,10 +626,6 @@ template <typename Axes, typename Tag> struct linear_index_from_tag {
     static_assert(tag_like<Tag>, "linear_index_from_tag requires a tag type");
     static_assert(within<Tag, Axes>,
                   "linear_index_from_tag requires the tag to be within the axes");
-    static consteval bool
-    value() {
-        return 0;
-    }
 };
 
 template <typename Axes, typename Tag>
@@ -645,16 +639,7 @@ template <axes_like Axes, tag_like Tag> struct linear_index_from_tag<Axes, Tag> 
                   "linear_index_from_tag requires the tag to be within the axes");
     static consteval size_t
     value() {
-        return index_of_v<Tag, Axes>();
-    }
-};
-
-template <typename Axes, typename Tag> struct linear_index_from_tag<Axes, Tag> {
-    static_assert(within<Tag, Axes>,
-                  "linear_index_from_tag requires the tag to be within the axes");
-    static consteval size_t
-    value() {
-        return linear_index_from_indices_v<indices_from_tag_t<Axes, Tag>>();
+        return linear_index_from_indices_v<extents_of_t<Axes>, indices_of_t<Tag, Axes>>();
     }
 };
 
@@ -668,12 +653,12 @@ template <typename Axes> struct value_tuple_type {
 template <typename Axes> using value_tuple_type_t = typename value_tuple_type<Axes>::type;
 
 template <typename... Axes> struct value_tuple_type<axes<Axes...>> {
-    using type = std::tuple<axes_value_type_t<Axes>...>;
+    using type = std::tuple<axis_value_type_t<Axes>...>;
 };
 
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // linear_index_from_value_tuple
-// -----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 // Runtime version that gets a linear index from a value tuple. The value tuple
 // has to be the right (decayed) type, but it does not have to be within the axes.
 
@@ -684,7 +669,7 @@ constexpr std::optional<size_t>
 linear_index_from_value_tuple(axes<Axis>, std::tuple<T0> const &t) {
     static_assert(axis_like<Axis>, "linear_index_from_value_tuple requires an axis type");
     using axis_value_type = axis_value_type_t<Axis>;
-    usint v_type          = std::decay_t<T0>;
+    using v_type          = std::decay_t<T0>;
     static_assert(std::is_same_v<v_type, axis_value_type>, "value type mismatch");
     return index_of_value(Axis{}, std::get<0>(t));
 }
