@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef DISPATCH_TRAITS_H
-#define DISPATCH_TRAITS_H
+#ifndef DISPATCH_DETAIL_H
+#define DISPATCH_DETAIL_H
 
 #include "dispatch/types.h"
 
@@ -719,4 +719,4 @@ linear_index_from_value_tuple(axes<Axis0, Axes...>, std::tuple<T0, Ts...> const 
 
 } // namespace dispatch
 
-#endif // DISPATCH_TRAITS_H
+#endif // DISPATCH_DETAIL_H

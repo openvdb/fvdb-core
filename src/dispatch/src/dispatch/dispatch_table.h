@@ -1,11 +1,11 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef DISPATCH_DISPATCH_H
-#define DISPATCH_DISPATCH_H
+#ifndef DISPATCH_DISPATCH_TABLE_H
+#define DISPATCH_DISPATCH_TABLE_H
 
 #include "dispatch/axes_map.h"
-#include "dispatch/traits.h"
+#include "dispatch/detail.h"
 #include "dispatch/types.h"
 
 #include <concepts>
@@ -115,4 +115,4 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
 
 } // namespace dispatch
 
-#endif // DISPATCH_DISPATCH_H
+#endif // DISPATCH_DISPATCH_TABLE_H

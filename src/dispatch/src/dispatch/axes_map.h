@@ -4,7 +4,7 @@
 #ifndef DISPATCH_AXES_MAP_H
 #define DISPATCH_AXES_MAP_H
 
-#include "dispatch/traits.h"
+#include "dispatch/detail.h"
 #include "dispatch/types.h"
 #include "dispatch/visit_spaces.h"
 

@@ -4,8 +4,8 @@
 #ifndef DISPATCH_VALUE_SPACE_H
 #define DISPATCH_VALUE_SPACE_H
 
+#include "dispatch/detail.h"
 #include "dispatch/index_space.h"
-#include "dispatch/traits.h"
 #include "dispatch/types.h"
 
 #include <array>
