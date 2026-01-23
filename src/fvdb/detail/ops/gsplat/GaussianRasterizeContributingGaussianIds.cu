@@ -43,10 +43,10 @@ namespace {
 /// @param dstOffsets Precomputed prefix sum of valid counts [numPixels + 1]
 /// @param maxSamplesPerPixel Maximum samples per pixel in source (including padding)
 void
-copyPaddedJaggedToJaggedOptimized(const fvdb::JaggedTensor &srcJagged,
-                                  fvdb::JaggedTensor &dstJagged,
-                                  const torch::Tensor &dstOffsets,
-                                  const int32_t maxSamplesPerPixel) {
+copyPaddedJaggedToJagged(const fvdb::JaggedTensor &srcJagged,
+                         fvdb::JaggedTensor &dstJagged,
+                         const torch::Tensor &dstOffsets,
+                         const int32_t maxSamplesPerPixel) {
     const int64_t numPixels  = dstOffsets.size(0) - 1;
     const int64_t totalValid = dstJagged.jdata().numel();
 
@@ -76,6 +76,138 @@ copyPaddedJaggedToJaggedOptimized(const fvdb::JaggedTensor &srcJagged,
     // Gather from source and copy directly to destination
     torch::Tensor srcFlat = srcData2D.flatten();
     dstJagged.jdata().copy_(srcFlat.index({srcLinearIndices}));
+}
+
+/// @brief Build output list IDs tensor for JaggedTensor construction
+///
+/// Supports two modes:
+/// - Uniform: pixels are evenly distributed across cameras (use division/modulo)
+/// - Non-uniform: pixels are distributed according to camera offsets (use searchsorted)
+///
+/// @param outputNumPixels Total number of output pixels
+/// @param pixelsPerCamera Pixels per camera for uniform mode (-1 to use non-uniform mode)
+/// @param cameraOffsets Camera offsets [numCameras+1] for non-uniform mode (ignored if uniform)
+/// @param device Device for output tensor
+/// @return outListIds tensor [outputNumPixels, 2]
+torch::Tensor
+buildOutListIds(int64_t outputNumPixels,
+                int64_t pixelsPerCamera,
+                const std::optional<torch::Tensor> &cameraOffsets,
+                const torch::Device &device) {
+    torch::Tensor pixelIndicesFlat =
+        torch::arange(outputNumPixels, torch::TensorOptions().dtype(torch::kInt64).device(device));
+
+    torch::Tensor cameraIndices, pixelIndices;
+
+    if (pixelsPerCamera >= 0) {
+        // Uniform mode: use division/modulo
+        cameraIndices = (pixelIndicesFlat / pixelsPerCamera).to(fvdb::JLIdxScalarType);
+        pixelIndices  = (pixelIndicesFlat % pixelsPerCamera).to(fvdb::JLIdxScalarType);
+    } else {
+        // Non-uniform mode: use searchsorted with camera offsets
+        TORCH_CHECK(cameraOffsets.has_value(), "cameraOffsets required for non-uniform mode");
+        torch::Tensor offsets = cameraOffsets.value().to(torch::kInt64);
+        cameraIndices = torch::searchsorted(offsets.slice(0, 1), pixelIndicesFlat, false, true)
+                            .to(fvdb::JLIdxScalarType);
+        torch::Tensor cameraStartOffsets = offsets.index({cameraIndices.to(torch::kInt64)});
+        pixelIndices = (pixelIndicesFlat - cameraStartOffsets).to(fvdb::JLIdxScalarType);
+    }
+
+    return torch::stack({cameraIndices, pixelIndices}, 1);
+}
+
+/// @brief Convert padded fixed-size output to variable-size JaggedTensor
+///
+/// Takes a counts-per-pixel tensor and converts padded source JaggedTensors
+/// to variable-size output JaggedTensors. This encapsulates the common pattern of:
+/// 1. Computing sample offsets via CUB inclusive sum
+/// 2. Computing output indices via searchsorted
+/// 3. Computing list IDs (camera/pixel indices)
+/// 4. Allocating output data
+/// 5. Creating JaggedTensors
+/// 6. Copying data from padded source to variable-size destination
+///
+/// @tparam ScalarType Scalar type for weights
+/// @param srcIds Source padded IDs JaggedTensor [numPixels, maxSamples]
+/// @param srcWeights Source padded weights JaggedTensor [numPixels, maxSamples]
+/// @param countsPerPixel Valid sample count per pixel [numPixels], int64_t contiguous
+/// @param totalCount Sum of countsPerPixel (total output samples)
+/// @param numCameras Number of cameras
+/// @param maxSamplesPerPixel Max samples per pixel in source (K)
+/// @param pixelsPerCamera Pixels per camera for uniform mode, or -1 for non-uniform
+/// @param cameraOffsets Camera offsets [C+1] for non-uniform mode, nullopt for uniform
+/// @param options Tensor options for output data allocation
+/// @return Tuple of (outIdsJagged, outWeightsJagged)
+template <typename ScalarType>
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
+convertPaddedToVariableSizeJagged(const fvdb::JaggedTensor &srcIds,
+                                  const fvdb::JaggedTensor &srcWeights,
+                                  const torch::Tensor &countsPerPixel,
+                                  int64_t totalCount,
+                                  int64_t numCameras,
+                                  int32_t maxSamplesPerPixel,
+                                  int64_t pixelsPerCamera,
+                                  const std::optional<torch::Tensor> &cameraOffsets,
+                                  const torch::TensorOptions &options) {
+    const int64_t outputNumPixels = countsPerPixel.numel();
+    const torch::Device device    = countsPerPixel.device();
+
+    // Handle empty case
+    if (totalCount == 0) {
+        torch::Tensor emptyData = torch::empty({0}, options.dtype(torch::kInt32));
+        torch::Tensor emptyWeights =
+            torch::empty({0}, options.dtype(c10::CppTypeToScalarType<ScalarType>::value));
+        torch::Tensor emptyIndices =
+            torch::empty({0}, torch::TensorOptions().dtype(fvdb::JIdxScalarType).device(device));
+        torch::Tensor emptyListIds = torch::empty(
+            {0, 2}, torch::TensorOptions().dtype(fvdb::JLIdxScalarType).device(device));
+
+        auto emptyIdsJagged = fvdb::JaggedTensor::from_data_indices_and_list_ids(
+            emptyData, emptyIndices, emptyListIds, outputNumPixels);
+        auto emptyWeightsJagged = fvdb::JaggedTensor::from_data_indices_and_list_ids(
+            emptyWeights, emptyIndices.clone(), emptyListIds.clone(), outputNumPixels);
+        return std::make_tuple(emptyIdsJagged, emptyWeightsJagged);
+    }
+
+    // Compute sample offsets via CUB inclusive sum
+    torch::Tensor sampleOffsets = torch::zeros(
+        {outputNumPixels + 1}, torch::TensorOptions().dtype(torch::kInt64).device(device));
+    {
+        auto stream = at::cuda::getCurrentCUDAStream(device.index());
+        CUB_WRAPPER(cub::DeviceScan::InclusiveSum,
+                    countsPerPixel.data_ptr<int64_t>(),
+                    sampleOffsets.data_ptr<int64_t>() + 1,
+                    static_cast<int>(outputNumPixels),
+                    stream);
+    }
+
+    // Compute output indices via searchsorted
+    torch::Tensor flatIndices =
+        torch::arange(totalCount, torch::TensorOptions().dtype(torch::kInt64).device(device));
+    torch::Tensor outIndices =
+        torch::searchsorted(sampleOffsets.slice(0, 1), flatIndices, false, true)
+            .to(fvdb::JIdxScalarType);
+
+    // Build list IDs
+    torch::Tensor outListIds =
+        buildOutListIds(outputNumPixels, pixelsPerCamera, cameraOffsets, device);
+
+    // Allocate output data
+    torch::Tensor outIdsData = torch::empty({totalCount}, options.dtype(torch::kInt32));
+    torch::Tensor outWeightsData =
+        torch::empty({totalCount}, options.dtype(c10::CppTypeToScalarType<ScalarType>::value));
+
+    // Create JaggedTensors
+    auto outIdsJagged = fvdb::JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
+        outIdsData, sampleOffsets, outIndices, outListIds, numCameras);
+    auto outWeightsJagged = fvdb::JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
+        outWeightsData, sampleOffsets, outIndices.clone(), outListIds.clone(), numCameras);
+
+    // Copy from padded source to variable-size destination
+    copyPaddedJaggedToJagged(srcIds, outIdsJagged, sampleOffsets, maxSamplesPerPixel);
+    copyPaddedJaggedToJagged(srcWeights, outWeightsJagged, sampleOffsets, maxSamplesPerPixel);
+
+    return std::make_tuple(outIdsJagged, outWeightsJagged);
 }
 
 // Structure to hold arguments and methods for the rasterize top contributing gaussian ids kernel
@@ -243,7 +375,7 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeContributingGauss
 
                     // Convert global gaussian ID to per-camera local ID (0 to N-1)
                     // In packed mode, gaussian.id is already the local ID
-                    int32_t localId = gaussian.id;
+                    int32_t localId;
                     if constexpr (IS_PACKED) {
                         localId = gaussian.id;
                     } else {
@@ -415,87 +547,21 @@ launchRasterizeContributingGaussianIdsForwardKernel(
         const auto C = tileOffsetsAreSparse ? outIds.num_outer_lists() : tileOffsets.size(0);
         const auto pixelsPerCamera = outputNumPixels / C;
 
-        // cumsum to get the offsets
-        torch::Tensor numValidSamplesInt64 = numValidSamples.to(torch::kInt64).contiguous();
-        torch::Tensor sampleOffsets =
-            torch::zeros({outputNumPixels + 1},
-                         torch::TensorOptions().dtype(torch::kInt64).device(means2d.device()));
-        {
-            auto stream = at::cuda::getCurrentCUDAStream(means2d.device().index());
-            CUB_WRAPPER(cub::DeviceScan::InclusiveSum,
-                        numValidSamplesInt64.data_ptr<int64_t>(),
-                        sampleOffsets.data_ptr<int64_t>() + 1, // Write starting at index 1
-                        static_cast<int>(outputNumPixels),
-                        stream);
-        }
+        // Prepare counts and compute total
+        torch::Tensor numValidSamplesData = numValidSamples.to(torch::kInt64).contiguous();
+        const auto totalCount             = numValidSamplesData.sum().item<int64_t>();
 
-        // Get total count
-        const auto numContributingGaussiansSum = sampleOffsets[outputNumPixels].item<int64_t>();
-
-        if (numContributingGaussiansSum == 0) {
-            // Early exit for empty case
-            torch::Tensor emptyData    = torch::empty({0}, means2d.options().dtype(torch::kInt32));
-            torch::Tensor emptyWeights = torch::empty(
-                {0}, means2d.options().dtype(c10::CppTypeToScalarType<ScalarType>::value));
-            torch::Tensor emptyIndices = torch::empty(
-                {0}, torch::TensorOptions().dtype(fvdb::JIdxScalarType).device(means2d.device()));
-            torch::Tensor emptyListIds = torch::empty(
-                {0, 2},
-                torch::TensorOptions().dtype(fvdb::JLIdxScalarType).device(means2d.device()));
-
-            auto emptyIdsJagged = fvdb::JaggedTensor::from_data_indices_and_list_ids(
-                emptyData, emptyIndices, emptyListIds, outputNumPixels);
-            auto emptyWeightsJagged = fvdb::JaggedTensor::from_data_indices_and_list_ids(
-                emptyWeights, emptyIndices.clone(), emptyListIds.clone(), outputNumPixels);
-            return std::make_tuple(emptyIdsJagged, emptyWeightsJagged);
-        }
-
-        // searchsorted finds which pixel each output sample belongs to
-        torch::Tensor flatIndices =
-            torch::arange(numContributingGaussiansSum,
-                          torch::TensorOptions().dtype(torch::kInt64).device(means2d.device()));
-        torch::Tensor outIndices =
-            torch::searchsorted(sampleOffsets.slice(0, 1), // exclude leading 0
-                                flatIndices,
-                                /*out_int32=*/false,
-                                /*right=*/true)
-                .to(fvdb::JIdxScalarType);
-
-        // Build list IDs using division/modulo instead of repeat_interleave
-        // For uniform pixels per camera, this is O(n) elementwise ops
-        torch::Tensor pixelIndicesFlat = torch::arange(
-            outputNumPixels,
-            torch::TensorOptions().dtype(fvdb::JLIdxScalarType).device(means2d.device()));
-
-        // Camera index for each pixel: pixel_idx / pixels_per_camera
-        torch::Tensor cameraIndicesPerPixel = pixelIndicesFlat / pixelsPerCamera;
-
-        // Pixel index within camera: pixel_idx % pixels_per_camera
-        torch::Tensor pixelIndicesPerPixel = pixelIndicesFlat % pixelsPerCamera;
-
-        torch::Tensor outListIds = torch::stack({cameraIndicesPerPixel, pixelIndicesPerPixel}, 1)
-                                       .to(fvdb::JLIdxScalarType);
-
-        // Allocate output data storage
-        torch::Tensor outIdsData =
-            torch::empty({numContributingGaussiansSum}, means2d.options().dtype(torch::kInt32));
-        torch::Tensor outWeightsData =
-            torch::empty({numContributingGaussiansSum},
-                         means2d.options().dtype(c10::CppTypeToScalarType<ScalarType>::value));
-
-        // Use from_jdata_joffsets_jidx_and_lidx_unsafe to avoid expensive unique_dim
-        auto outIdsJaggedSamples = fvdb::JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
-            outIdsData, sampleOffsets, outIndices, outListIds, C);
-        auto outWeightsJaggedSamples = fvdb::JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
-            outWeightsData, sampleOffsets, outIndices.clone(), outListIds.clone(), C);
-
-        // Copy valid samples from top-k output
-        copyPaddedJaggedToJaggedOptimized(
-            outIds, outIdsJaggedSamples, sampleOffsets, settings.numDepthSamples);
-        copyPaddedJaggedToJaggedOptimized(
-            outWeights, outWeightsJaggedSamples, sampleOffsets, settings.numDepthSamples);
-
-        return std::make_tuple(outIdsJaggedSamples, outWeightsJaggedSamples);
+        // Use uniform pixels per camera mode
+        return convertPaddedToVariableSizeJagged<ScalarType>(
+            outIds,
+            outWeights,
+            numValidSamplesData,
+            totalCount,
+            C,
+            settings.numDepthSamples,
+            pixelsPerCamera, // uniform mode
+            std::nullopt,    // no camera offsets needed
+            means2d.options());
     }
 
     TORCH_CHECK_VALUE(maybeNumContributingGaussians.has_value(),
@@ -627,71 +693,24 @@ launchRasterizeContributingGaussianIdsForwardKernel(
     //  public interface, but we leave this inefficient copy step for future work to refactor
     //  writing results directly to a JaggedTensor.
 
-    //  Allocate JaggedTensor output storage
-    const auto outputNumPixels  = numContributingGaussians.numel();
+    //  Convert padded output to variable-size JaggedTensor
     const auto outputNumCameras = numContributingGaussians.num_outer_lists();
 
+    // Prepare counts tensor
     torch::Tensor numContributingGaussiansData =
         numContributingGaussians.jdata().to(torch::kInt64).contiguous();
-    torch::Tensor sampleOffsets = torch::zeros(
-        {outputNumPixels + 1},
-        torch::TensorOptions().dtype(torch::kInt64).device(numContributingGaussians.device()));
-    {
-        auto stream = at::cuda::getCurrentCUDAStream(numContributingGaussians.device().index());
-        CUB_WRAPPER(cub::DeviceScan::InclusiveSum,
-                    numContributingGaussiansData.data_ptr<int64_t>(),
-                    sampleOffsets.data_ptr<int64_t>() + 1, // Write starting at index 1
-                    static_cast<int>(outputNumPixels),
-                    stream);
-    }
 
-    torch::Tensor flatIndices = torch::arange(
+    // Use non-uniform pixels per camera mode
+    return convertPaddedToVariableSizeJagged<ScalarType>(
+        outIds,
+        outWeights,
+        numContributingGaussiansData,
         numContributingGaussiansSum,
-        torch::TensorOptions().dtype(torch::kInt64).device(numContributingGaussians.device()));
-    torch::Tensor outIndices =
-        torch::searchsorted(
-            sampleOffsets.slice(0, 1), flatIndices, /*out_int32=*/false, /*right=*/true)
-            .to(fvdb::JIdxScalarType);
-
-    // Build list IDs using searchsorted instead of repeat_interleave
-    // This handles both uniform and non-uniform pixels per camera
-    torch::Tensor cameraOffsets    = numContributingGaussians.joffsets().to(torch::kInt64);
-    torch::Tensor pixelIndicesFlat = torch::arange(
-        outputNumPixels,
-        torch::TensorOptions().dtype(torch::kInt64).device(numContributingGaussians.device()));
-
-    // Camera index for each pixel: find which camera each pixel belongs to
-    torch::Tensor cameraIndices =
-        torch::searchsorted(
-            cameraOffsets.slice(0, 1), pixelIndicesFlat, /*out_int32=*/false, /*right=*/true)
-            .to(fvdb::JLIdxScalarType);
-
-    // Pixel index within camera: pixel_idx - camera_start_offset
-    torch::Tensor cameraStartOffsets = cameraOffsets.index({cameraIndices.to(torch::kInt64)});
-    torch::Tensor pixelIndices = (pixelIndicesFlat - cameraStartOffsets).to(fvdb::JLIdxScalarType);
-
-    // Stack into [totalPixels, 2]
-    torch::Tensor outListIds = torch::stack({cameraIndices, pixelIndices}, 1);
-
-    // Allocate output data storage
-    torch::Tensor outIdsData =
-        torch::empty({numContributingGaussiansSum}, means2d.options().dtype(torch::kInt32));
-    torch::Tensor outWeightsData =
-        torch::empty({numContributingGaussiansSum},
-                     means2d.options().dtype(c10::CppTypeToScalarType<ScalarType>::value));
-
-    auto outIdsJaggedSamples = fvdb::JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
-        outIdsData, sampleOffsets, outIndices, outListIds, outputNumCameras);
-    auto outWeightsJaggedSamples = fvdb::JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
-        outWeightsData, sampleOffsets, outIndices.clone(), outListIds.clone(), outputNumCameras);
-
-    // Copy valid samples from top-k output
-    copyPaddedJaggedToJaggedOptimized(
-        outIds, outIdsJaggedSamples, sampleOffsets, maxDepthSamplesPerPixel);
-    copyPaddedJaggedToJaggedOptimized(
-        outWeights, outWeightsJaggedSamples, sampleOffsets, maxDepthSamplesPerPixel);
-
-    return std::make_tuple(outIdsJaggedSamples, outWeightsJaggedSamples);
+        outputNumCameras,
+        maxDepthSamplesPerPixel,
+        -1,                                  // non-uniform mode
+        numContributingGaussians.joffsets(), // camera offsets
+        means2d.options());
 }
 
 } // namespace
