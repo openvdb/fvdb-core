@@ -15,22 +15,6 @@
 namespace dispatch {
 
 //------------------------------------------------------------------------------
-// index-based trait/concept
-//------------------------------------------------------------------------------
-template <typename T> struct is_index_based : consteval_false_type {};
-
-template <typename T>
-consteval bool
-is_index_based_v() {
-    return is_index_based<T>::value();
-}
-
-template <size_t... I> struct is_index_based<indices<I...>> : consteval_true_type {};
-
-template <typename T>
-concept index_based = is_index_based_v<T>();
-
-//------------------------------------------------------------------------------
 // Point specializations and trait specializations
 //------------------------------------------------------------------------------
 
@@ -46,28 +30,28 @@ template <size_t... I> struct ndim<indices<I...>> {
 };
 
 //------------------------------------------------------------------------------
-// Sizes specializations and trait specializations
+// Extents specializations and trait specializations
 //------------------------------------------------------------------------------
 
-template <size_t... S> struct is_index_based<sizes<S...>> : consteval_true_type {};
+template <size_t... S> struct is_index_based<extents<S...>> : consteval_true_type {};
 
-template <size_t... S> struct is_space<sizes<S...>> : consteval_true_type {};
+template <size_t... S> struct is_space<extents<S...>> : consteval_true_type {};
 
-template <size_t... S> struct ndim<sizes<S...>> {
+template <size_t... S> struct ndim<extents<S...>> {
     static consteval size_t
     value() {
         return sizeof...(S);
     }
 };
 
-template <> struct volume<sizes<>> {
+template <> struct volume<extents<>> {
     static consteval size_t
     value() {
         return 0;
     }
 };
 
-template <size_t... S> struct volume<sizes<S...>> {
+template <size_t... S> struct volume<extents<S...>> {
     static consteval size_t
     value() {
         return (S * ... * 1);
@@ -98,8 +82,8 @@ concept non_empty_index_space = index_space<T> && non_empty<T>;
 // -----------------------------------------------------------------------------
 
 template <size_t I, size_t S>
-    requires non_empty<sizes<S>>
-struct is_within<indices<I>, sizes<S>> {
+    requires non_empty<extents<S>>
+struct is_within<indices<I>, extents<S>> {
     static consteval bool
     value() {
         return I < S;
@@ -107,11 +91,12 @@ struct is_within<indices<I>, sizes<S>> {
 };
 
 template <size_t I, size_t... Is, size_t S, size_t... Ss>
-    requires non_empty<sizes<S, Ss...>> && equidimensional_with<indices<I, Is...>, sizes<S, Ss...>>
-struct is_within<indices<I, Is...>, sizes<S, Ss...>> {
+    requires non_empty<extents<S, Ss...>> &&
+             equidimensional_with<indices<I, Is...>, extents<S, Ss...>>
+struct is_within<indices<I, Is...>, extents<S, Ss...>> {
     static consteval bool
     value() {
-        return I < S && is_within_v<indices<Is...>, sizes<Ss...>>();
+        return I < S && is_within_v<indices<Is...>, extents<Ss...>>();
     }
 };
 
@@ -119,8 +104,8 @@ struct is_within<indices<I, Is...>, sizes<S, Ss...>> {
 // index_space within index_space
 //------------------------------------------------------------------------------
 template <size_t Sub, size_t S>
-    requires non_empty<sizes<Sub>> && non_empty<sizes<S>>
-struct is_within<sizes<Sub>, sizes<S>> {
+    requires non_empty<extents<Sub>> && non_empty<extents<S>>
+struct is_within<extents<Sub>, extents<S>> {
     static consteval bool
     value() {
         return Sub <= S;
@@ -128,12 +113,12 @@ struct is_within<sizes<Sub>, sizes<S>> {
 };
 
 template <size_t Sub, size_t... Subs, size_t S, size_t... Ss>
-    requires non_empty<sizes<Sub, Subs...>> && non_empty<sizes<S, Ss...>> &&
-             equidimensional_with<sizes<Sub, Subs...>, sizes<S, Ss...>>
-struct is_within<sizes<Sub, Subs...>, sizes<S, Ss...>> {
+    requires non_empty<extents<Sub, Subs...>> && non_empty<extents<S, Ss...>> &&
+             equidimensional_with<extents<Sub, Subs...>, extents<S, Ss...>>
+struct is_within<extents<Sub, Subs...>, extents<S, Ss...>> {
     static consteval bool
     value() {
-        return Sub <= S && is_within_v<sizes<Subs...>, sizes<Ss...>>();
+        return Sub <= S && is_within_v<extents<Subs...>, extents<Ss...>>();
     }
 };
 
@@ -169,21 +154,21 @@ template <typename Space, size_t linearIndex>
 using point_from_linear_index_t = typename point_from_linear_index<Space, linearIndex>::type;
 
 template <size_t S, size_t linearIndex>
-    requires linearly_indexes<linearIndex, sizes<S>>
-struct point_from_linear_index<sizes<S>, linearIndex> {
+    requires linearly_indexes<linearIndex, extents<S>>
+struct point_from_linear_index<extents<S>, linearIndex> {
     using type = indices<linearIndex>;
 };
 
 template <size_t S0, size_t... S, size_t linearIndex>
-    requires linearly_indexes<linearIndex, sizes<S0, S...>>
-struct point_from_linear_index<sizes<S0, S...>, linearIndex> {
+    requires linearly_indexes<linearIndex, extents<S0, S...>>
+struct point_from_linear_index<extents<S0, S...>, linearIndex> {
     static consteval size_t
     stride() {
-        return volume_v<sizes<S...>>();
+        return volume_v<extents<S...>>();
     }
 
     using type = prepend_value_t<linearIndex / stride(),
-                                 point_from_linear_index_t<sizes<S...>, linearIndex % stride()>>;
+                                 point_from_linear_index_t<extents<S...>, linearIndex % stride()>>;
 };
 
 // -----------------------------------------------------------------------------
@@ -202,8 +187,8 @@ linear_index_from_point_v() {
 }
 
 template <size_t S, size_t I>
-    requires index_point_within_space<indices<I>, sizes<S>>
-struct linear_index_from_point<sizes<S>, indices<I>> {
+    requires index_point_within_space<indices<I>, extents<S>>
+struct linear_index_from_point<extents<S>, indices<I>> {
     static consteval size_t
     value() {
         return I;
@@ -211,12 +196,12 @@ struct linear_index_from_point<sizes<S>, indices<I>> {
 };
 
 template <size_t S, size_t... Ss, size_t I, size_t... Is>
-    requires index_point_within_space<indices<I, Is...>, sizes<S, Ss...>>
-struct linear_index_from_point<sizes<S, Ss...>, indices<I, Is...>> {
+    requires index_point_within_space<indices<I, Is...>, extents<S, Ss...>>
+struct linear_index_from_point<extents<S, Ss...>, indices<I, Is...>> {
     static consteval size_t
     value() {
-        return I * volume_v<sizes<Ss...>>() +
-               linear_index_from_point_v<sizes<Ss...>, indices<Is...>>();
+        return I * volume_v<extents<Ss...>>() +
+               linear_index_from_point_v<extents<Ss...>, indices<Is...>>();
     }
 };
 
@@ -229,7 +214,7 @@ struct linear_index_from_point<sizes<S, Ss...>, indices<I, Is...>> {
 // by providing a visitor (callable) to visit_index_space.
 //
 // Example:
-//     using MySpace = Sizes<2, 3>; // 2x3 space
+//     using MySpace = Extents<2, 3>; // 2x3 space
 //     visit_index_space([](auto coord) {
 //         // coord is a Point<I0, I1> for each valid coordinate pair
 //     }, MySpace{});
