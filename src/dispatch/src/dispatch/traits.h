@@ -13,6 +13,24 @@
 
 namespace dispatch {
 
+//------------------------------------------------------------------------------
+// is_index_sequence - trait for checking if a type is an index sequence
+//------------------------------------------------------------------------------
+template <typename T> struct is_index_sequence : consteval_false_type {};
+
+template <std::size_t... Is>
+struct is_index_sequence<std::index_sequence<Is...>> : consteval_true_type {};
+
+template <typename T>
+consteval bool
+is_index_sequence_v() {
+    return is_index_sequence<T>::value();
+}
+
+//------------------------------------------------------------------------------
+// simple concepts for getting around the template indirection
+//------------------------------------------------------------------------------
+
 template <typename T>
 concept extents_like = is_extents_v<T>();
 template <typename T>
@@ -25,6 +43,8 @@ template <typename T>
 concept axis_like = is_axis_v<T>();
 template <typename T>
 concept axes_like = is_axes_v<T>();
+template <typename T>
+concept index_sequence_like = is_index_sequence_v<T>();
 
 template <typename T> struct axis_value_type {
     static_assert(axis_like<T>, "axis_value_type requires a axis type");
@@ -488,8 +508,9 @@ struct indices_from_linear_index<extents<S0, S...>, linearIndex> {
         return volume_v<extents<S...>>();
     }
 
-    using type = prepend_value_t<linearIndex / stride(),
-                                 indices_from_linear_index_t<extents<S...>, linearIndex % stride()>>;
+    using type =
+        prepend_value_t<linearIndex / stride(),
+                        indices_from_linear_index_t<extents<S...>, linearIndex % stride()>>;
 };
 
 // -----------------------------------------------------------------------------
@@ -529,6 +550,38 @@ struct linear_index_from_indices<extents<S, Ss...>, indices<I, Is...>> {
                linear_index_from_indices_v<extents<Ss...>, indices<Is...>>();
     }
 };
+
+//------------------------------------------------------------------------------
+// extents of axes
+//------------------------------------------------------------------------------
+template <typename Axes> struct extents_of {
+    static_assert(axes_like<Axes>, "extents_of requires an axes type");
+};
+
+template <typename Axes> using extents_of_t = typename extents_of<Axes>::type;
+
+template <typename... Axes> struct extents_of<axes<Axes...>> {
+    using type = extents<extent_v<Axes>()...>;
+    static_assert(non_empty<type>, "extents_of requires a non-empty axes space");
+};
+
+//------------------------------------------------------------------------------
+// tag from linear indices
+//------------------------------------------------------------------------------
+template <typename Axes, size_t linearIndex> struct tag_from_linear_index {
+    static_assert(axes_like<Axes>, "tag_from_linear_index requires an axes type");
+};
+
+template <axes_like Axes, size_t linearIndex> struct tag_from_linear_index<Axes, linearIndex> {
+    using extents_type = extents_of_t<Axes>;
+    static_assert(linear_index_within<linearIndex, extents_type>,
+                  "tag_from_linear_index requires the linear index to be within the extents");
+
+    using type = at_indices_t<Axes, indices_from_linear_index_t<extents_type, linearIndex>>;
+};
+
+template <typename Axes, size_t linearIndex>
+using tag_from_linear_index_t = typename tag_from_linear_index<Axes, linearIndex>::type;
 
 //------------------------------------------------------------------------------
 //
