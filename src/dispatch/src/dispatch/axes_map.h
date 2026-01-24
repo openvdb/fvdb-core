@@ -195,6 +195,43 @@ using axes_map =
     std::unordered_map<axes_map_key<Axes>, T, axes_map_hash<Axes>, axes_map_equal<Axes>>;
 
 //------------------------------------------------------------------------------
+// insert_or_assign
+//------------------------------------------------------------------------------
+// C++23 introduces an insert_or_assign that respects transparency, allowing
+// lookup with tag types or tuples without explicitly creating a key. Since
+// C++20's try_emplace doesn't support transparent keys, we use find + emplace.
+//
+// Thread-safety: Same as std::unordered_map - not safe for concurrent
+// modifications.
+//
+// The Key doesn't need to be a literal axes_map_key, because of the way we
+// are using transparent maps in C++20, it can be anything which fulfills the
+// hash and equal capabilities, so in our case - an instance of a tag will work,
+// as will a tuple with the right types.
+
+template <typename Axes, typename T, typename Key_like, typename V>
+void
+insert_or_assign(axes_map<Axes, T> &map, Key_like key, V &&value) {
+    // Validate the key type. Has to be a tag or a tuple, and to be within
+    // the axes.
+    if constexpr (tag_like<Key_like>) {
+        static_assert(within<Key_like, Axes>, "tag keys must be within axes");
+    } else {
+        static_assert(std::is_same_v<value_tuple_type_t<Axes>, Key_like>,
+                      "tuple keys must be the right types for axes");
+    }
+
+    // The key type above isn't expensive to create. The whole goal of the
+    // transparency is to let us test at runtime against tags or tuples that
+    // might *not* be within the axes, and still compile. It will throw an
+    // exception for a tag or a tuple that's outside the domain, but it won't
+    // fail to compile. (a goal of this class). In this case, though, we're
+    // actually trying to assign, so we require (and have just checked)
+    // that the key given is valid. Therefore, we can just do this:
+    map[axes_map_key<Axes>{key}] = std::forward<V>(value);
+}
+
+//------------------------------------------------------------------------------
 // create_and_store utilities
 //------------------------------------------------------------------------------
 // These utilities populate a axes_map with entries created by a factory.
@@ -222,7 +259,7 @@ template <typename Axes, typename T, typename Factory> struct create_and_store_v
     operator()(Tag coord) const {
         static_assert(tag_like<Tag>, "Tag must be a tag type");
         static_assert(within<Tag, Axes>, "Tag must be within the axes");
-        map.get().emplace(coord, factory.get()(coord));
+        insert_or_assign(map.get(), coord, factory.get()(coord));
     }
 };
 
@@ -244,7 +281,7 @@ create_and_store_helper(axes_map<Axes, T> &map, Factory &factory, tag<Vs...> t) 
     static_assert(axes_like<Axes>, "Axes must be an axes type");
     static_assert(non_empty<Axes>, "Axes must be non-empty space");
     static_assert(within<tag<Vs...>, Axes>, "tag must be within the axes");
-    map.emplace(t, factory(t));
+    insert_or_assign(map, t, factory(t));
 }
 
 template <typename Axes, typename T, typename Factory, typename Other>

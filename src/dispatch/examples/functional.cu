@@ -165,7 +165,11 @@ iscan_impl(tag<torch::kCUDA, stype, contiguity::contiguous, placement::out_of_pl
     scan_lib::inclusive_scan_cuda<T>(
         input.data_ptr<T>(), output.data_ptr<T>(), n, temp.data_ptr(), temp_bytes, stream);
 
-    return {output, "cuda_cub"};
+    if constexpr (torch_is_integer_stype_v<stype>) {
+        return {output, "cuda_int_deterministic"};
+    } else {
+        return {output, "cuda_float_nondeterministic"};
+    }
 }
 
 // Dispatch space axes - must match the tag parameters used in iscan_impl

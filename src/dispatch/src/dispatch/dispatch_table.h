@@ -29,7 +29,7 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
     using map_type              = axes_map<axes_type, function_pointer_type>;
 
     // Default constructor - empty table
-    dispatch_table() : _data(std::make_shared<map_type>()) {}
+    dispatch_table() : _data(std::make_shared<map_type const>()) {}
 
     // Rule of zero - all default (shared_ptr handles everything)
     dispatch_table(dispatch_table const &)            = default;
@@ -42,9 +42,13 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
     template <typename Factory, typename... Subs>
     explicit dispatch_table(Factory &&factory, Subs... subs) {
         static_assert((within<Subs, axes_type> && ... && true), "Subs must be within the axes");
-        auto new_data = std::make_shared<map_type>();
-        create_and_store(*new_data, factory, subs...);
-        _data = std::move(new_data);
+
+        // Can't put it in _data just yet, because _data is const.
+        auto mutable_data = std::make_unique<map_type>();
+        create_and_store(*mutable_data, factory, subs...);
+
+        // Then we make it shared to const
+        _data = std::shared_ptr<map_type const>{std::move(mutable_data)};
     }
 
     // Functional update - returns new table with additional entries
@@ -52,9 +56,16 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
     dispatch_table
     with(Factory &&factory, Subs... subs) const {
         static_assert((within<Subs, axes_type> && ... && true), "Subs must be within the axes");
-        auto new_data = std::make_shared<map_type>(*_data); // copy existing entries
-        create_and_store(*new_data, factory, subs...);
-        return dispatch_table(std::move(new_data));
+
+        // We make a mutable copy of the map data first, that we can modify.
+        auto mutable_data = std::make_unique<map_type>(*_data);
+        create_and_store(*mutable_data, factory, subs...);
+
+        // Then we convert it to shared const
+        std::shared_ptr<map_type const> const_data{std::move(mutable_data)};
+
+        // And move it along.
+        return dispatch_table(const_data);
     }
 
     // Dispatch - throws if coordinate not found or handler is null
@@ -95,7 +106,7 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
     std::shared_ptr<map_type const> _data;
 
     // Private constructor for internal use (from with())
-    explicit dispatch_table(std::shared_ptr<map_type const> data) : _data(std::move(data)) {}
+    explicit dispatch_table(std::shared_ptr<map_type const> data) : _data(data) {}
 
     template <typename Op, typename Coord>
     static return_type

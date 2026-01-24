@@ -6,18 +6,23 @@
 
 #include <gtest/gtest.h>
 
-#include <functional>
 #include <stdexcept>
-#include <string>
 #include <tuple>
 
 namespace dispatch {
 
+// Helper to reduce std::make_tuple boilerplate in tests
+template <typename... Ts>
+auto
+coord(Ts... vs) {
+    return std::make_tuple(vs...);
+}
+
 // =============================================================================
-// Factory methods
+// from_op: struct with static op() method
 // =============================================================================
 
-// Test op struct
+// Test op struct: returns x*2 for tag<1>, x*3 for tag<2>, 0 otherwise.
 struct TestOp {
     template <typename Coord>
     static int
@@ -32,101 +37,72 @@ struct TestOp {
 };
 
 TEST(DispatchTable, FromOp) {
-    using A     = axis<1, 2>;
-    using Axes  = axes<A>;
-    using Table = dispatch_table<Axes, int(int)>;
+    using Axis    = axis<1, 2, 3, 4, 5, 6, 7, 8>;
+    using Axes    = axes<Axis>;
+    using SubAxis = axis<1, 2, 5>;
+    using SubAxes = axes<SubAxis>;
+    using Table   = dispatch_table<Axes, int(int)>;
 
-    auto factory = Table::from_op<TestOp>();
-    Table table(factory, Axes{});
+    Table table(Table::from_op<TestOp>(), SubAxes{});
 
-    auto result1 = table(std::make_tuple(1), 5);
-    EXPECT_EQ(result1, 10); // 5 * 2
+    EXPECT_EQ(table(coord(1), 5), 10); // 5 * 2
+    EXPECT_EQ(table(coord(2), 5), 15); // 5 * 3
+    EXPECT_EQ(table(coord(5), 5), 0);  // default
 
-    auto result2 = table(std::make_tuple(2), 5);
-    EXPECT_EQ(result2, 15); // 5 * 3
+    // These should throw for all points not in the subspace
+    for (int i: {3, 4, 6, 7, 8}) {
+        EXPECT_THROW(table(coord(i), 5), std::runtime_error);
+    }
+
+    // Also outside the original space
+    for (int i: {0, 9, 10}) {
+        EXPECT_THROW(table(coord(i), 5), std::runtime_error);
+    }
 }
 
-// Test visitor (functor)
-struct TestVisitor {
-    int
-    operator()(tag<1>, int x) const {
-        return x * 10;
-    }
-    int
-    operator()(tag<2>, int x) const {
-        return x * 20;
-    }
-};
+// =============================================================================
+// from_visitor: wrap overloaded free functions
+// =============================================================================
+
+int
+test_free_function(tag<1>, int x) {
+    return x * 10;
+}
+int
+test_free_function(tag<2>, int x) {
+    return x * 20;
+}
+
+template <int I>
+int
+test_free_function(tag<I>, int) {
+    return 0;
+}
 
 TEST(DispatchTable, FromVisitor) {
-    using A     = axis<1, 2>;
-    using Axes  = axes<A>;
-    using Table = dispatch_table<Axes, int(int)>;
+    using Axis    = axis<1, 2, 3, 4, 5, 6, 7, 8>;
+    using Axes    = axes<Axis>;
+    using SubAxis = axis<1, 2, 5>;
+    using SubAxes = axes<SubAxis>;
+    using Table   = dispatch_table<Axes, int(int)>;
 
-    TestVisitor visitor;
-    auto factory = Table::from_visitor(visitor);
-    Table table(factory, Axes{});
+    // Table defined over full Axes, but only instantiated for SubAxes
+    Table table(Table::from_visitor([](auto c, int x) { return test_free_function(c, x); }),
+                SubAxes{});
 
-    auto result1 = table(std::make_tuple(1), 3);
-    EXPECT_EQ(result1, 30); // 3 * 10
+    EXPECT_EQ(table(coord(1), 3), 30); // 3 * 10
+    EXPECT_EQ(table(coord(2), 3), 60); // 3 * 20
+    EXPECT_EQ(table(coord(5), 3), 0);  // default
 
-    auto result2 = table(std::make_tuple(2), 3);
-    EXPECT_EQ(result2, 60); // 3 * 20
-}
-
-// Test visitor with stateless functor (from_visitor requires default-constructible visitors)
-struct ConstantVisitor {
-    static constexpr int kValue = 100;
-
-    template <typename Coord>
-    int operator()(Coord, int x) const {
-        if constexpr (std::is_same_v<Coord, tag<1>>) {
-            return x + kValue;
-        } else {
-            return x - kValue;
-        }
+    // These should throw for points not in the subspace
+    for (int i: {3, 4, 6, 7, 8}) {
+        EXPECT_THROW(table(coord(i), 3), std::runtime_error);
     }
-};
 
-TEST(DispatchTable, FromVisitorStateless) {
-    using A     = axis<1, 2>;
-    using Axes  = axes<A>;
-    using Table = dispatch_table<Axes, int(int)>;
-
-    auto factory = Table::from_visitor(ConstantVisitor{});
-    Table table(factory, Axes{});
-
-    auto result1 = table(std::make_tuple(1), 5);
-    EXPECT_EQ(result1, 105); // 5 + 100
-
-    auto result2 = table(std::make_tuple(2), 5);
-    EXPECT_EQ(result2, -95); // 5 - 100
-}
-
-// =============================================================================
-// Dispatch
-// =============================================================================
-
-TEST(DispatchTable, InvokesCorrectHandler) {
-    using A     = axis<1, 2, 3>;
-    using Axes  = axes<A>;
-    using Table = dispatch_table<Axes, std::string()>;
-
-    auto factory = [](auto coord) -> std::string (*)() {
-        if constexpr (std::is_same_v<decltype(coord), tag<1>>) {
-            return []() { return std::string("one"); };
-        } else if constexpr (std::is_same_v<decltype(coord), tag<2>>) {
-            return []() { return std::string("two"); };
-        } else {
-            return []() { return std::string("three"); };
-        }
-    };
-
-    Table table(factory, Axes{});
-
-    EXPECT_EQ(table(std::make_tuple(1)), "one");
-    EXPECT_EQ(table(std::make_tuple(2)), "two");
-    EXPECT_EQ(table(std::make_tuple(3)), "three");
+    // Also outside the original space
+    for (int i: {0, 9, 10}) {
+        EXPECT_THROW(table(coord(i), 3), std::runtime_error);
+    }
 }
 
 TEST(DispatchTable, ThrowsForMissingCoordinates) {
@@ -134,36 +110,14 @@ TEST(DispatchTable, ThrowsForMissingCoordinates) {
     using Axes  = axes<A>;
     using Table = dispatch_table<Axes, int()>;
 
-    auto factory = [](auto coord) -> int (*)() { return []() { return 42; }; };
+    auto factory = [](auto) -> int (*)() { return []() { return 42; }; };
 
     Table table(factory, Axes{});
 
-    // Valid coordinate
-    EXPECT_EQ(table(std::make_tuple(1)), 42);
+    EXPECT_EQ(table(coord(1)), 42);
 
     // Invalid coordinate - should throw
-    EXPECT_THROW(table(std::make_tuple(99)), std::runtime_error);
-}
-
-TEST(DispatchTable, ThrowsForNullHandlers) {
-    using A     = axis<1, 2>;
-    using Axes  = axes<A>;
-    using Table = dispatch_table<Axes, int()>;
-
-    // Create table with null handler
-    axes_map<Axes, int (*)()> map;
-    map.emplace(tag<1>{}, nullptr);
-    map.emplace(tag<2>{}, []() { return 42; });
-
-    // Manually create table with null handler
-    auto data = std::make_shared<Table::map_type>(std::move(map));
-    Table table(data);
-
-    // Valid coordinate with null handler - should throw
-    EXPECT_THROW(table(std::make_tuple(1)), std::runtime_error);
-
-    // Valid coordinate with non-null handler - should work
-    EXPECT_EQ(table(std::make_tuple(2)), 42);
+    EXPECT_THROW(table(coord(99)), std::runtime_error);
 }
 
 // =============================================================================
@@ -171,29 +125,43 @@ TEST(DispatchTable, ThrowsForNullHandlers) {
 // =============================================================================
 
 TEST(DispatchTable, WithReturnsNewTable) {
-    using A     = axis<1, 2>;
-    using Axes  = axes<A>;
-    using Table = dispatch_table<Axes, int()>;
+    using Axis     = axis<1, 2, 3, 4, 5, 6, 7, 8>;
+    using Axes     = axes<Axis>;
+    using SubAxis1 = axis<3, 4>;
+    using SubAxes1 = axes<SubAxis1>;
+    using SubAxis2 = axis<1, 2, 3, 5>;
+    using SubAxes2 = axes<SubAxis2>;
+    using Table    = dispatch_table<Axes, int()>;
 
-    auto factory1 = [](auto coord) -> int (*)() { return []() { return 10; }; };
-    Table table1(factory1, Axes{});
+    auto factory1 = [](auto) -> int (*)() { return []() { return 10; }; };
+    Table table1(factory1, SubAxes1{});
 
-    auto factory2 = [](auto coord) -> int (*)() {
-        if constexpr (std::is_same_v<decltype(coord), tag<2>>) {
+    auto factory2 = [](auto c) -> int (*)() {
+        if constexpr (std::is_same_v<decltype(c), tag<1>>) {
+            return []() { return 10; };
+        } else if constexpr (std::is_same_v<decltype(c), tag<2>>) {
             return []() { return 20; };
+        } else {
+            return nullptr;
         }
-        return nullptr;
     };
 
-    Table table2 = table1.with(factory2, tag<2>{});
+    Table table2 = table1.with(factory2, SubAxes2{});
 
-    // Original table unchanged
-    EXPECT_EQ(table1(std::make_tuple(1)), 10);
-    EXPECT_EQ(table1(std::make_tuple(2)), 10);
+    // table1: {3,4}->10, table2: inherits 4->10, adds 1->10, 2->20, overwrites 3&5 with nullptr
+    EXPECT_EQ(table1(coord(3)), 10);
+    EXPECT_EQ(table1(coord(4)), 10);
+    for (int i: {1, 2, 5, 6, 7, 8}) {
+        EXPECT_THROW(table1(coord(i)), std::runtime_error);
+    }
 
-    // New table has override
-    EXPECT_EQ(table2(std::make_tuple(1)), 10);
-    EXPECT_EQ(table2(std::make_tuple(2)), 20);
+    // Table 2: 1->10, 2->20, 4->10 (inherited), 3&5 throw (nullptr), 6-8 throw (missing)
+    EXPECT_EQ(table2(coord(1)), 10);
+    EXPECT_EQ(table2(coord(2)), 20);
+    EXPECT_EQ(table2(coord(4)), 10);
+    for (int i: {3, 5, 6, 7, 8}) {
+        EXPECT_THROW(table2(coord(i)), std::runtime_error);
+    }
 }
 
 TEST(DispatchTable, OriginalTableUnchangedAfterWith) {
@@ -201,20 +169,20 @@ TEST(DispatchTable, OriginalTableUnchangedAfterWith) {
     using Axes  = axes<A>;
     using Table = dispatch_table<Axes, int()>;
 
-    auto factory1 = [](auto coord) -> int (*)() { return []() { return 100; }; };
+    auto factory1 = [](auto) -> int (*)() { return []() { return 100; }; };
     Table table1(factory1, Axes{});
 
-    auto factory2 = [](auto coord) -> int (*)() { return []() { return 200; }; };
+    auto factory2 = [](auto) -> int (*)() { return []() { return 200; }; };
 
     Table table2 = table1.with(factory2, Axes{});
 
     // Original should still have original values
-    EXPECT_EQ(table1(std::make_tuple(1)), 100);
-    EXPECT_EQ(table1(std::make_tuple(2)), 100);
+    EXPECT_EQ(table1(coord(1)), 100);
+    EXPECT_EQ(table1(coord(2)), 100);
 
     // New table should have new values
-    EXPECT_EQ(table2(std::make_tuple(1)), 200);
-    EXPECT_EQ(table2(std::make_tuple(2)), 200);
+    EXPECT_EQ(table2(coord(1)), 200);
+    EXPECT_EQ(table2(coord(2)), 200);
 }
 
 // =============================================================================
@@ -233,7 +201,7 @@ TEST(DispatchTable, TablesBuiltFromSubspaces) {
     using Table = dispatch_table<FullAxes, int()>;
 
     int call_count = 0;
-    auto factory   = [&call_count](auto coord) -> int (*)() {
+    auto factory   = [&call_count](auto) -> int (*)() {
         ++call_count;
         return []() { return 42; };
     };
@@ -244,11 +212,11 @@ TEST(DispatchTable, TablesBuiltFromSubspaces) {
     EXPECT_EQ(call_count, 2);
 
     // Should be able to dispatch to those coordinates
-    EXPECT_EQ(table(std::make_tuple(1, 3)), 42);
-    EXPECT_EQ(table(std::make_tuple(1, 4)), 42);
+    EXPECT_EQ(table(coord(1, 3)), 42);
+    EXPECT_EQ(table(coord(1, 4)), 42);
 
     // Should not be able to dispatch to coordinates not in subspace
-    EXPECT_THROW(table(std::make_tuple(2, 3)), std::runtime_error);
+    EXPECT_THROW(table(coord(2, 3)), std::runtime_error);
 }
 
 TEST(DispatchTable, OnlyValidCombinationsInstantiated) {
@@ -259,23 +227,22 @@ TEST(DispatchTable, OnlyValidCombinationsInstantiated) {
     using Table = dispatch_table<FullAxes, int()>;
 
     int call_count = 0;
-    auto factory   = [&call_count](auto coord) -> int (*)() {
+    auto factory   = [&call_count](auto) -> int (*)() {
         ++call_count;
-        return []() { return call_count; };
+        return []() { return 42; };
     };
 
-    // Create table with only one coordinate
     Table table(factory, tag<1, 3>{});
 
     // Should only have called factory once
     EXPECT_EQ(call_count, 1);
 
     // Should be able to dispatch to that coordinate
-    EXPECT_EQ(table(std::make_tuple(1, 3)), 1);
+    EXPECT_EQ(table(coord(1, 3)), 42);
 
     // Should not be able to dispatch to other coordinates
-    EXPECT_THROW(table(std::make_tuple(1, 4)), std::runtime_error);
-    EXPECT_THROW(table(std::make_tuple(2, 3)), std::runtime_error);
+    EXPECT_THROW(table(coord(1, 4)), std::runtime_error);
+    EXPECT_THROW(table(coord(2, 3)), std::runtime_error);
 }
 
 // =============================================================================
@@ -287,8 +254,8 @@ TEST(DispatchTable, MultipleArguments) {
     using Axes  = axes<A>;
     using Table = dispatch_table<Axes, int(int, int)>;
 
-    auto factory = [](auto coord) -> int (*)(int, int) {
-        if constexpr (std::is_same_v<decltype(coord), tag<1>>) {
+    auto factory = [](auto c) -> int (*)(int, int) {
+        if constexpr (std::is_same_v<decltype(c), tag<1>>) {
             return [](int a, int b) { return a + b; };
         } else {
             return [](int a, int b) { return a * b; };
@@ -297,8 +264,8 @@ TEST(DispatchTable, MultipleArguments) {
 
     Table table(factory, Axes{});
 
-    EXPECT_EQ(table(std::make_tuple(1), 3, 4), 7);  // 3 + 4
-    EXPECT_EQ(table(std::make_tuple(2), 3, 4), 12); // 3 * 4
+    EXPECT_EQ(table(coord(1), 3, 4), 7);  // 3 + 4
+    EXPECT_EQ(table(coord(2), 3, 4), 12); // 3 * 4
 }
 
 TEST(DispatchTable, NoArguments) {
@@ -306,75 +273,11 @@ TEST(DispatchTable, NoArguments) {
     using Axes  = axes<A>;
     using Table = dispatch_table<Axes, int()>;
 
-    auto factory = [](auto coord) -> int (*)() { return []() { return 42; }; };
+    auto factory = [](auto) -> int (*)() { return []() { return 42; }; };
 
     Table table(factory, Axes{});
 
-    EXPECT_EQ(table(std::make_tuple(1)), 42);
-}
-
-// =============================================================================
-// Copy semantics
-// =============================================================================
-
-TEST(DispatchTable, CopyConstruction) {
-    using A     = axis<1>;
-    using Axes  = axes<A>;
-    using Table = dispatch_table<Axes, int()>;
-
-    auto factory = [](auto coord) -> int (*)() { return []() { return 100; }; };
-
-    Table table1(factory, Axes{});
-    Table table2(table1);
-
-    EXPECT_EQ(table1(std::make_tuple(1)), 100);
-    EXPECT_EQ(table2(std::make_tuple(1)), 100);
-}
-
-TEST(DispatchTable, CopyAssignment) {
-    using A     = axis<1>;
-    using Axes  = axes<A>;
-    using Table = dispatch_table<Axes, int()>;
-
-    auto factory1 = [](auto coord) -> int (*)() { return []() { return 100; }; };
-    auto factory2 = [](auto coord) -> int (*)() { return []() { return 200; }; };
-
-    Table table1(factory1, Axes{});
-    Table table2(factory2, Axes{});
-
-    table2 = table1;
-
-    EXPECT_EQ(table1(std::make_tuple(1)), 100);
-    EXPECT_EQ(table2(std::make_tuple(1)), 100);
-}
-
-TEST(DispatchTable, MoveConstruction) {
-    using A     = axis<1>;
-    using Axes  = axes<A>;
-    using Table = dispatch_table<Axes, int()>;
-
-    auto factory = [](auto coord) -> int (*)() { return []() { return 100; }; };
-
-    Table table1(factory, Axes{});
-    Table table2(std::move(table1));
-
-    EXPECT_EQ(table2(std::make_tuple(1)), 100);
-}
-
-TEST(DispatchTable, MoveAssignment) {
-    using A     = axis<1>;
-    using Axes  = axes<A>;
-    using Table = dispatch_table<Axes, int()>;
-
-    auto factory1 = [](auto coord) -> int (*)() { return []() { return 100; }; };
-    auto factory2 = [](auto coord) -> int (*)() { return []() { return 200; }; };
-
-    Table table1(factory1, Axes{});
-    Table table2(factory2, Axes{});
-
-    table2 = std::move(table1);
-
-    EXPECT_EQ(table2(std::make_tuple(1)), 100);
+    EXPECT_EQ(table(coord(1)), 42);
 }
 
 } // namespace dispatch

@@ -91,8 +91,7 @@ struct inclusive_scan_op_t {
                 return {input, "cpu_serial_in_place"};
             } else {
                 // CPU out-of-place: select based on stype and determinism
-                if constexpr ((torch_integer_stype<stype>) ||
-                              (torch_float_stype<stype> && det == determinism::not_required)) {
+                if constexpr (torch_integer_stype<stype>) {
                     // Integer types: use parallel scan (integers are always deterministic)
                     auto output = torch::empty_like(input);
                     scan_lib::inclusive_scan_parallel<T>(input.data_ptr<T>(),
@@ -100,7 +99,16 @@ struct inclusive_scan_op_t {
                                                          output.data_ptr<T>(),
                                                          output.stride(0),
                                                          input.size(0));
-                    return {output, "cpu_parallel_deterministic"};
+                    return {output, "cpu_parallel_int_deterministic"};
+                } else if constexpr (torch_float_stype<stype> && det == determinism::not_required) {
+                    // Float types with non-deterministic: use parallel scan
+                    auto output = torch::empty_like(input);
+                    scan_lib::inclusive_scan_parallel<T>(input.data_ptr<T>(),
+                                                         input.stride(0),
+                                                         output.data_ptr<T>(),
+                                                         output.stride(0),
+                                                         input.size(0));
+                    return {output, "cpu_parallel_float_nondeterministic"};
                 } else {
                     // Fallback: serial out-of-place (floats with deterministic)
                     auto output = torch::empty_like(input);
@@ -121,7 +129,11 @@ struct inclusive_scan_op_t {
                                      torch::dtype(torch::kByte).device(input.device()));
             scan_lib::inclusive_scan_cuda<T>(
                 input.data_ptr<T>(), output.data_ptr<T>(), n, temp.data_ptr(), temp_bytes, stream);
-            return {output, "cuda_non_deterministic"};
+            if constexpr (torch_integer_stype<stype>) {
+                return {output, "cuda_int_deterministic"};
+            } else {
+                return {output, "cuda_float_nondeterministic"};
+            }
         }
     }
 

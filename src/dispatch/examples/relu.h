@@ -9,10 +9,10 @@
 namespace dispatch_examples {
 
 // out-of-place
-torch::Tensor relu(torch::Tensor input);
+torch::Tensor example_relu(torch::Tensor input);
 
 // in-place
-torch::Tensor relu_(torch::Tensor input);
+torch::Tensor example_relu_(torch::Tensor input);
 
 } // namespace dispatch_examples
 

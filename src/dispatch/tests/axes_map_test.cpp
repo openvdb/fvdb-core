@@ -75,8 +75,8 @@ TEST(AxesMap, InsertValidCoordinate) {
     map.emplace(tag<2, 4>{}, 20);
 
     EXPECT_EQ(map.size(), 2u);
-    EXPECT_EQ(map[tag<1, 3>{}], 10);
-    EXPECT_EQ(map[tag<2, 4>{}], 20);
+    EXPECT_EQ((map[axes_map_key<Axes>{tag<1, 3>{}}]), 10);
+    EXPECT_EQ((map[axes_map_key<Axes>{tag<2, 4>{}}]), 20);
 }
 
 TEST(AxesMap, FindExistingKey) {
@@ -230,8 +230,8 @@ TEST(AxesMap, OperatorBracket) {
     using Axes = axes<A1, A2>;
     axes_map<Axes, int> map;
 
-    map[tag<1, 3>{}] = 10;
-    EXPECT_EQ(map[tag<1, 3>{}], 10);
+    map[axes_map_key<Axes>{tag<1, 3>{}}] = 10;
+    EXPECT_EQ((map[axes_map_key<Axes>{tag<1, 3>{}}]), 10);
     EXPECT_EQ(map.size(), 1u);
 }
 
@@ -243,8 +243,8 @@ TEST(AxesMap, AtMethod) {
 
     map.emplace(tag<1, 3>{}, 10);
 
-    EXPECT_EQ(map.at(tag<1, 3>{}), 10);
-    EXPECT_THROW(map.at(tag<2, 4>{}), std::out_of_range);
+    EXPECT_EQ((map.at(axes_map_key<Axes>{tag<1, 3>{}})), 10);
+    EXPECT_THROW((map.at(axes_map_key<Axes>{tag<2, 4>{}})), std::out_of_range);
 }
 
 TEST(AxesMap, Clear) {
@@ -259,6 +259,77 @@ TEST(AxesMap, Clear) {
     map.clear();
     EXPECT_TRUE(map.empty());
     EXPECT_EQ(map.size(), 0u);
+}
+
+// =============================================================================
+// insert_or_assign free function
+// =============================================================================
+
+TEST(AxesMap, InsertOrAssignInsertsWithTag) {
+    using A1   = axis<1, 2>;
+    using A2   = axis<3, 4>;
+    using Axes = axes<A1, A2>;
+    axes_map<Axes, int> map;
+
+    insert_or_assign(map, tag<1, 3>{}, 10);
+
+    EXPECT_EQ(map.size(), 1u);
+    auto it = map.find(tag<1, 3>{});
+    ASSERT_NE(it, map.end());
+    EXPECT_EQ(it->second, 10);
+}
+
+TEST(AxesMap, InsertOrAssignInsertsWithTuple) {
+    using A1   = axis<1, 2>;
+    using A2   = axis<3, 4>;
+    using Axes = axes<A1, A2>;
+    axes_map<Axes, int> map;
+
+    insert_or_assign(map, std::make_tuple(1, 3), 10);
+
+    EXPECT_EQ(map.size(), 1u);
+    auto it = map.find(std::make_tuple(1, 3));
+    ASSERT_NE(it, map.end());
+    EXPECT_EQ(it->second, 10);
+}
+
+TEST(AxesMap, InsertOrAssignOverwritesExisting) {
+    using A1   = axis<1, 2>;
+    using A2   = axis<3, 4>;
+    using Axes = axes<A1, A2>;
+    axes_map<Axes, int> map;
+
+    insert_or_assign(map, tag<1, 3>{}, 10);
+    EXPECT_EQ(map.find(tag<1, 3>{})->second, 10);
+
+    insert_or_assign(map, tag<1, 3>{}, 99);
+    EXPECT_EQ(map.size(), 1u); // Still only one entry
+    EXPECT_EQ(map.find(tag<1, 3>{})->second, 99);
+}
+
+TEST(AxesMap, InsertOrAssignOverwritesWithTuple) {
+    using A1   = axis<1, 2>;
+    using A2   = axis<3, 4>;
+    using Axes = axes<A1, A2>;
+    axes_map<Axes, int> map;
+
+    insert_or_assign(map, std::make_tuple(2, 4), 100);
+    insert_or_assign(map, std::make_tuple(2, 4), 200);
+
+    EXPECT_EQ(map.size(), 1u);
+    EXPECT_EQ(map.find(std::make_tuple(2, 4))->second, 200);
+}
+
+TEST(AxesMap, InsertOrAssignThrowsForOutOfSpaceTuple) {
+    using A1   = axis<1, 2>;
+    using A2   = axis<3, 4>;
+    using Axes = axes<A1, A2>;
+    axes_map<Axes, int> map;
+
+    // Tuple with values outside the axes should throw
+    EXPECT_THROW(insert_or_assign(map, std::make_tuple(99, 3), 10), std::runtime_error);
+    EXPECT_THROW(insert_or_assign(map, std::make_tuple(1, 99), 10), std::runtime_error);
+    EXPECT_TRUE(map.empty());
 }
 
 } // namespace dispatch

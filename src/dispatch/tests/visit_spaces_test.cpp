@@ -20,18 +20,18 @@ TEST(VisitExtentsSpace, VisitsAllIndices) {
     using E = extents<2, 3>;
     std::vector<std::tuple<size_t, size_t>> visited;
 
-    auto visitor = [&visited](auto indices) {
-        if constexpr (std::is_same_v<decltype(indices), indices<0, 0>>) {
+    auto visitor = [&visited](auto idx) {
+        if constexpr (std::is_same_v<decltype(idx), indices<0, 0>>) {
             visited.push_back({0, 0});
-        } else if constexpr (std::is_same_v<decltype(indices), indices<0, 1>>) {
+        } else if constexpr (std::is_same_v<decltype(idx), indices<0, 1>>) {
             visited.push_back({0, 1});
-        } else if constexpr (std::is_same_v<decltype(indices), indices<0, 2>>) {
+        } else if constexpr (std::is_same_v<decltype(idx), indices<0, 2>>) {
             visited.push_back({0, 2});
-        } else if constexpr (std::is_same_v<decltype(indices), indices<1, 0>>) {
+        } else if constexpr (std::is_same_v<decltype(idx), indices<1, 0>>) {
             visited.push_back({1, 0});
-        } else if constexpr (std::is_same_v<decltype(indices), indices<1, 1>>) {
+        } else if constexpr (std::is_same_v<decltype(idx), indices<1, 1>>) {
             visited.push_back({1, 1});
-        } else if constexpr (std::is_same_v<decltype(indices), indices<1, 2>>) {
+        } else if constexpr (std::is_same_v<decltype(idx), indices<1, 2>>) {
             visited.push_back({1, 2});
         }
     };
@@ -51,13 +51,13 @@ TEST(VisitExtentsSpace, SingleDimension) {
     using E   = extents<3>;
     int count = 0;
 
-    auto visitor = [&count](auto indices) {
+    auto visitor = [&count](auto idx) {
         ++count;
-        if constexpr (std::is_same_v<decltype(indices), indices<0>>) {
+        if constexpr (std::is_same_v<decltype(idx), indices<0>>) {
             // Expected
-        } else if constexpr (std::is_same_v<decltype(indices), indices<1>>) {
+        } else if constexpr (std::is_same_v<decltype(idx), indices<1>>) {
             // Expected
-        } else if constexpr (std::is_same_v<decltype(indices), indices<2>>) {
+        } else if constexpr (std::is_same_v<decltype(idx), indices<2>>) {
             // Expected
         }
     };
@@ -113,14 +113,14 @@ TEST(VisitAxesSpace, VisitsAllTags) {
     using Axes = axes<A1, A2>;
     std::vector<std::tuple<int, int>> visited;
 
-    auto visitor = [&visited](auto tag) {
-        if constexpr (std::is_same_v<decltype(tag), tag<1, 3>>) {
+    auto visitor = [&visited](auto coord) {
+        if constexpr (std::is_same_v<decltype(coord), tag<1, 3>>) {
             visited.push_back({1, 3});
-        } else if constexpr (std::is_same_v<decltype(tag), tag<1, 4>>) {
+        } else if constexpr (std::is_same_v<decltype(coord), tag<1, 4>>) {
             visited.push_back({1, 4});
-        } else if constexpr (std::is_same_v<decltype(tag), tag<2, 3>>) {
+        } else if constexpr (std::is_same_v<decltype(coord), tag<2, 3>>) {
             visited.push_back({2, 3});
-        } else if constexpr (std::is_same_v<decltype(tag), tag<2, 4>>) {
+        } else if constexpr (std::is_same_v<decltype(coord), tag<2, 4>>) {
             visited.push_back({2, 4});
         }
     };
@@ -141,13 +141,13 @@ TEST(VisitAxesSpace, SingleAxis) {
     int count  = 0;
     std::set<int> values;
 
-    auto visitor = [&count, &values](auto tag) {
+    auto visitor = [&count, &values](auto coord) {
         ++count;
-        if constexpr (std::is_same_v<decltype(tag), tag<10>>) {
+        if constexpr (std::is_same_v<decltype(coord), tag<10>>) {
             values.insert(10);
-        } else if constexpr (std::is_same_v<decltype(tag), tag<20>>) {
+        } else if constexpr (std::is_same_v<decltype(coord), tag<20>>) {
             values.insert(20);
-        } else if constexpr (std::is_same_v<decltype(tag), tag<30>>) {
+        } else if constexpr (std::is_same_v<decltype(coord), tag<30>>) {
             values.insert(30);
         }
     };
@@ -165,20 +165,20 @@ TEST(VisitAxesSpace, EnumValues) {
     using Axes = axes<full_placement_axis, full_determinism_axis>;
     int count  = 0;
 
-    auto visitor = [&count](auto tag) {
+    auto visitor = [&count](auto coord) {
         ++count;
         // Should visit all 4 combinations
-        if constexpr (std::is_same_v<decltype(tag),
+        if constexpr (std::is_same_v<decltype(coord),
                                      tag<placement::in_place, determinism::not_required>>) {
             // Expected
-        } else if constexpr (std::is_same_v<decltype(tag),
+        } else if constexpr (std::is_same_v<decltype(coord),
                                             tag<placement::in_place, determinism::required>>) {
             // Expected
         } else if constexpr (std::is_same_v<
-                                 decltype(tag),
+                                 decltype(coord),
                                  tag<placement::out_of_place, determinism::not_required>>) {
             // Expected
-        } else if constexpr (std::is_same_v<decltype(tag),
+        } else if constexpr (std::is_same_v<decltype(coord),
                                             tag<placement::out_of_place, determinism::required>>) {
             // Expected
         }
@@ -251,14 +251,14 @@ TEST(VisitExtentsSpace, EachCoordinateVisitedOnce) {
     using E = extents<2, 2>;
     std::set<std::tuple<size_t, size_t>> visited;
 
-    auto visitor = [&visited](auto indices) {
-        if constexpr (std::is_same_v<decltype(indices), indices<0, 0>>) {
+    auto visitor = [&visited](auto idx) {
+        if constexpr (std::is_same_v<decltype(idx), indices<0, 0>>) {
             visited.insert({0, 0});
-        } else if constexpr (std::is_same_v<decltype(indices), indices<0, 1>>) {
+        } else if constexpr (std::is_same_v<decltype(idx), indices<0, 1>>) {
             visited.insert({0, 1});
-        } else if constexpr (std::is_same_v<decltype(indices), indices<1, 0>>) {
+        } else if constexpr (std::is_same_v<decltype(idx), indices<1, 0>>) {
             visited.insert({1, 0});
-        } else if constexpr (std::is_same_v<decltype(indices), indices<1, 1>>) {
+        } else if constexpr (std::is_same_v<decltype(idx), indices<1, 1>>) {
             visited.insert({1, 1});
         }
     };
@@ -274,14 +274,14 @@ TEST(VisitAxesSpace, EachTagVisitedOnce) {
     using Axes = axes<A1, A2>;
     std::set<std::tuple<int, int>> visited;
 
-    auto visitor = [&visited](auto tag) {
-        if constexpr (std::is_same_v<decltype(tag), tag<1, 3>>) {
+    auto visitor = [&visited](auto coord) {
+        if constexpr (std::is_same_v<decltype(coord), tag<1, 3>>) {
             visited.insert({1, 3});
-        } else if constexpr (std::is_same_v<decltype(tag), tag<1, 4>>) {
+        } else if constexpr (std::is_same_v<decltype(coord), tag<1, 4>>) {
             visited.insert({1, 4});
-        } else if constexpr (std::is_same_v<decltype(tag), tag<2, 3>>) {
+        } else if constexpr (std::is_same_v<decltype(coord), tag<2, 3>>) {
             visited.insert({2, 3});
-        } else if constexpr (std::is_same_v<decltype(tag), tag<2, 4>>) {
+        } else if constexpr (std::is_same_v<decltype(coord), tag<2, 4>>) {
             visited.insert({2, 4});
         }
     };

@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include "dispatch/types.h"
 #include "examples/relu.h"
 #include "test_utils.h"
 
@@ -53,7 +54,7 @@ compute_expected_relu(torch::Tensor input) {
 struct ReluTestParams {
     torch::ScalarType dtype;
     torch::Device device;
-    placement placement;
+    dispatch::placement plc;
     bool contiguous;
 };
 
@@ -85,10 +86,10 @@ TEST_P(ReluTest, Correctness) {
     auto expected   = compute_expected_relu(input);
 
     torch::Tensor result;
-    if (params.placement == placement::in_place) {
-        result = relu_(input);
+    if (params.plc == dispatch::placement::in_place) {
+        result = example_relu_(input);
     } else {
-        result = relu(input);
+        result = example_relu(input);
     }
 
     // Verify ReLU math: max(0, x)
@@ -106,8 +107,8 @@ TEST_P(ReluTest, InPlaceModifiesInput) {
     auto input_clone   = input.clone();
     void *original_ptr = input.data_ptr();
 
-    if (params.placement == placement::in_place) {
-        auto result = relu_(input);
+    if (params.plc == dispatch::placement::in_place) {
+        auto result = example_relu_(input);
 
         // Should return same tensor
         EXPECT_EQ(result.data_ptr(), original_ptr);
@@ -122,8 +123,8 @@ TEST_P(ReluTest, OutOfPlaceDoesNotModifyInput) {
     auto input       = createInputTensor(n);
     auto input_clone = input.clone();
 
-    if (params.placement == placement::out_of_place) {
-        auto result = relu(input);
+    if (params.plc == dispatch::placement::out_of_place) {
+        auto result = example_relu(input);
 
         // Should return different tensor
         EXPECT_NE(result.data_ptr(), input.data_ptr());
@@ -138,10 +139,10 @@ TEST_P(ReluTest, DevicePreservation) {
     auto input      = createInputTensor(n);
 
     torch::Tensor result;
-    if (params.placement == placement::in_place) {
-        result = relu_(input);
+    if (params.plc == dispatch::placement::in_place) {
+        result = example_relu_(input);
     } else {
-        result = relu(input);
+        result = example_relu(input);
     }
 
     EXPECT_EQ(result.device().type(), params.device.type());
@@ -153,10 +154,10 @@ TEST_P(ReluTest, DtypePreservation) {
     auto input      = createInputTensor(n);
 
     torch::Tensor result;
-    if (params.placement == placement::in_place) {
-        result = relu_(input);
+    if (params.plc == dispatch::placement::in_place) {
+        result = example_relu_(input);
     } else {
-        result = relu(input);
+        result = example_relu(input);
     }
 
     EXPECT_EQ(result.scalar_type(), params.dtype);
@@ -169,15 +170,16 @@ GenerateAllTests() {
 
     torch::ScalarType dtypes[] = {
         torch::kFloat32, torch::kFloat64, torch::kFloat16, torch::kBFloat16};
-    torch::Device devices[] = {torch::kCPU, torch::kCUDA};
-    placement placements[]  = {placement::in_place, placement::out_of_place};
-    bool contiguities[]     = {true, false};
+    torch::DeviceType device_types[] = {torch::kCPU, torch::kCUDA};
+    dispatch::placement placements[] = {dispatch::placement::in_place,
+                                        dispatch::placement::out_of_place};
+    bool contiguities[]              = {true, false};
 
-    for (auto device: devices) {
+    for (auto device_type: device_types) {
         for (auto dtype: dtypes) {
             for (auto plc: placements) {
                 for (bool cont: contiguities) {
-                    params.push_back({dtype, device, plc, cont});
+                    params.push_back({dtype, torch::Device(device_type), plc, cont});
                 }
             }
         }
@@ -194,51 +196,51 @@ INSTANTIATE_TEST_SUITE_P(AllCombinations, ReluTest, ::testing::ValuesIn(Generate
 
 TEST(ReluEdgeCases, EmptyTensor) {
     auto tensor = torch::zeros({0}, torch::TensorOptions().dtype(torch::kFloat32));
-    auto result = relu(tensor);
+    auto result = example_relu(tensor);
     EXPECT_EQ(result.size(0), 0);
 }
 
 TEST(ReluEdgeCases, SingleElement_Positive) {
     auto tensor = torch::tensor({5.0f});
-    auto result = relu(tensor);
+    auto result = example_relu(tensor);
     EXPECT_FLOAT_EQ(result.cpu().data_ptr<float>()[0], 5.0f);
 }
 
 TEST(ReluEdgeCases, SingleElement_Negative) {
     auto tensor = torch::tensor({-5.0f});
-    auto result = relu(tensor);
+    auto result = example_relu(tensor);
     EXPECT_FLOAT_EQ(result.cpu().data_ptr<float>()[0], 0.0f);
 }
 
 TEST(ReluEdgeCases, SingleElement_Zero) {
     auto tensor = torch::tensor({0.0f});
-    auto result = relu(tensor);
+    auto result = example_relu(tensor);
     EXPECT_FLOAT_EQ(result.cpu().data_ptr<float>()[0], 0.0f);
 }
 
 TEST(ReluEdgeCases, AllNegative) {
     auto tensor   = torch::tensor({-1.0f, -2.0f, -3.0f});
-    auto result   = relu(tensor);
+    auto result   = example_relu(tensor);
     auto expected = torch::zeros_like(tensor);
     EXPECT_TRUE(torch::equal(result, expected));
 }
 
 TEST(ReluEdgeCases, AllPositive) {
     auto tensor = torch::tensor({1.0f, 2.0f, 3.0f});
-    auto result = relu(tensor);
+    auto result = example_relu(tensor);
     EXPECT_TRUE(torch::equal(result, tensor));
 }
 
 TEST(ReluEdgeCases, AllZero) {
     auto tensor = torch::zeros({10});
-    auto result = relu(tensor);
+    auto result = example_relu(tensor);
     EXPECT_TRUE(torch::equal(result, tensor));
 }
 
 TEST(ReluEdgeCases, LargeInput) {
     constexpr int64_t n = 100000;
     auto tensor         = make_relu_test_tensor(n, torch::kFloat32, torch::kCPU);
-    auto result         = relu(tensor);
+    auto result         = example_relu(tensor);
     auto expected       = compute_expected_relu(tensor);
     expect_relu_equal(result, expected);
 }
@@ -249,14 +251,14 @@ TEST(ReluEdgeCases, LargeInput) {
 
 TEST(ReluHalfPrecision, Float16) {
     auto tensor   = make_relu_test_tensor(100, torch::kFloat16, torch::kCPU);
-    auto result   = relu(tensor);
+    auto result   = example_relu(tensor);
     auto expected = compute_expected_relu(tensor);
     expect_relu_equal(result, expected, 1e-2); // Larger tolerance for half
 }
 
 TEST(ReluHalfPrecision, BFloat16) {
     auto tensor   = make_relu_test_tensor(100, torch::kBFloat16, torch::kCPU);
-    auto result   = relu(tensor);
+    auto result   = example_relu(tensor);
     auto expected = compute_expected_relu(tensor);
     expect_relu_equal(result, expected, 1e-2); // Larger tolerance for half
 }

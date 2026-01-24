@@ -99,12 +99,12 @@ struct relu_op_t {
 };
 
 torch::Tensor
-relu_impl(torch::Tensor input, placement plc) {
+example_relu_impl(torch::Tensor input, placement plc) {
     static relu_op_t::dispatcher const table{relu_op_t::dispatcher::from_op<relu_op_t>(),
                                              relu_op_t::space{}};
 
     // Validate input rank
-    TORCH_CHECK_VALUE(input.dim() == 1, "relu: expected 1D tensor, got ", input.dim(), "D");
+    TORCH_CHECK_VALUE(input.dim() == 1, "example_relu: expected 1D tensor, got ", input.dim(), "D");
 
     // Handle empty tensor case
     if (input.size(0) == 0) {
@@ -121,19 +121,19 @@ relu_impl(torch::Tensor input, placement plc) {
     auto const st  = input.scalar_type();
 
     auto const dispatch_coord = std::make_tuple(dev, st);
-    torch_dispatch("relu", table, dispatch_coord, input, output);
+    torch_dispatch("example_relu", table, dispatch_coord, input, output);
 
     return output;
 }
 
 torch::Tensor
-relu(torch::Tensor input) {
-    return relu_impl(input, placement::out_of_place);
+example_relu(torch::Tensor input) {
+    return example_relu_impl(input, placement::out_of_place);
 }
 
 torch::Tensor
-relu_(torch::Tensor input) {
-    return relu_impl(input, placement::in_place);
+example_relu_(torch::Tensor input) {
+    return example_relu_impl(input, placement::in_place);
 }
 
 } // namespace dispatch_examples

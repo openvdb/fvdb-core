@@ -310,7 +310,7 @@ TEST(IsWithin, AxesInAxes) {
     static_assert(is_within_v<SubAxes, FullAxes>());
 
     // Test case where sub is not within full
-    using BadSubA1  = axis<1, 5>;  // 5 is not in FullA1
+    using BadSubA1   = axis<1, 5>; // 5 is not in FullA1
     using BadSubAxes = axes<BadSubA1, SubA2>;
     static_assert(!is_within_v<BadSubAxes, FullAxes>());
 }

@@ -3,6 +3,11 @@
 //
 // Purpose: Test CUDA scan implementations and verify nvcc compilation of scan_lib templates.
 
+// Suppress nvcc warning about TEST() macro's unused test_info_ static member
+#ifdef __CUDACC__
+#pragma nv_diag_suppress 177
+#endif
+
 #include "examples/scan_lib.h"
 #include "test_utils.cuh"
 

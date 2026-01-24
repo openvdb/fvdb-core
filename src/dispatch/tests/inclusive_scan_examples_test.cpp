@@ -153,7 +153,6 @@ class CudaFloatScanTest : public ::testing::TestWithParam<Implementation> {
 };
 
 TEST_P(CudaFloatScanTest, Float_Valid_Contiguous_OutOfPlace_NonDeterministic) {
-    auto impl       = GetParam();
     int64_t const n = 1000;
 
     auto input = make_arange_tensor(n, torch::kFloat, torch::kCUDA);
@@ -165,7 +164,6 @@ TEST_P(CudaFloatScanTest, Float_Valid_Contiguous_OutOfPlace_NonDeterministic) {
 }
 
 TEST_P(CudaFloatScanTest, Float_Error_Deterministic) {
-    auto impl       = GetParam();
     int64_t const n = 100;
 
     auto input = make_arange_tensor(n, torch::kFloat, torch::kCUDA);
@@ -175,7 +173,6 @@ TEST_P(CudaFloatScanTest, Float_Error_Deterministic) {
 }
 
 TEST_P(CudaFloatScanTest, Float_Error_InPlace) {
-    auto impl       = GetParam();
     int64_t const n = 100;
 
     auto input = make_arange_tensor(n, torch::kFloat, torch::kCUDA);
@@ -185,7 +182,6 @@ TEST_P(CudaFloatScanTest, Float_Error_InPlace) {
 }
 
 TEST_P(CudaFloatScanTest, Float_Error_Strided) {
-    auto impl       = GetParam();
     int64_t const n = 100;
 
     auto input = make_strided_arange_tensor(n, torch::kFloat, torch::kCUDA);
@@ -203,7 +199,6 @@ INSTANTIATE_TEST_SUITE_P(CudaFloat,
 // =============================================================================
 
 TEST_P(CudaFloatScanTest, Int_Valid_Contiguous_OutOfPlace_Deterministic) {
-    auto impl       = GetParam();
     int64_t const n = 1000;
 
     auto input = make_arange_tensor(n, torch::kInt, torch::kCUDA);
@@ -215,7 +210,6 @@ TEST_P(CudaFloatScanTest, Int_Valid_Contiguous_OutOfPlace_Deterministic) {
 }
 
 TEST_P(CudaFloatScanTest, Int_NonDeterministic_PromotedToDeterministic) {
-    auto impl       = GetParam();
     int64_t const n = 1000;
 
     auto input = make_arange_tensor(n, torch::kInt, torch::kCUDA);
@@ -245,26 +239,23 @@ class InputValidationTest : public ::testing::TestWithParam<Implementation> {
 };
 
 TEST_P(InputValidationTest, Rank0_Scalar_Throws) {
-    auto impl   = GetParam();
     auto scalar = torch::tensor(42.0f);
 
     EXPECT_THROW(call_scan(scalar, placement::out_of_place, determinism::not_required), c10::Error);
 }
 
 TEST_P(InputValidationTest, Rank2_Throws) {
-    auto impl   = GetParam();
     auto tensor = torch::zeros({10, 20});
 
     EXPECT_THROW(call_scan(tensor, placement::out_of_place, determinism::not_required), c10::Error);
 }
 
 TEST_P(InputValidationTest, Rank1_Supported) {
-    auto impl   = GetParam();
     auto tensor = make_arange_tensor(100, torch::kFloat, torch::kCPU);
 
     // Should not throw
     auto result = call_scan(tensor, placement::out_of_place, determinism::not_required);
-    EXPECT_FALSE(result.tensor.is_empty());
+    EXPECT_GT(result.tensor.numel(), 0);
 }
 
 INSTANTIATE_TEST_SUITE_P(InputValidation,
@@ -276,7 +267,6 @@ INSTANTIATE_TEST_SUITE_P(InputValidation,
 // =============================================================================
 
 TEST_P(InputValidationTest, EmptyTensor) {
-    auto impl   = GetParam();
     auto tensor = torch::zeros({0}, torch::TensorOptions().dtype(torch::kFloat));
 
     auto result = call_scan(tensor, placement::out_of_place, determinism::not_required);
@@ -284,7 +274,6 @@ TEST_P(InputValidationTest, EmptyTensor) {
 }
 
 TEST_P(InputValidationTest, SingleElement) {
-    auto impl   = GetParam();
     auto tensor = torch::tensor({42.0f});
 
     auto result = call_scan(tensor, placement::out_of_place, determinism::not_required);
@@ -293,7 +282,6 @@ TEST_P(InputValidationTest, SingleElement) {
 }
 
 TEST_P(InputValidationTest, LargeInput) {
-    auto impl           = GetParam();
     constexpr int64_t n = 100000;
     auto tensor         = make_arange_tensor(n, torch::kFloat, torch::kCPU);
 
