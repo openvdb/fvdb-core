@@ -14,6 +14,9 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_cutlass.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_nanovdb.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_blosc.cmake)
 
+# Add dispatch interface library (header-only)
+add_subdirectory(dispatch)
+
 # Build options
 option(FVDB_BUILD_TESTS "Configure CMake to build tests" ON)
 option(FVDB_BUILD_BENCHMARKS "Configure CMake to build (google & nvbench) benchmarks" OFF)
@@ -226,7 +229,7 @@ target_compile_options(fvdb PRIVATE
     $<$<AND:$<BOOL:${FVDB_LINEINFO}>,$<COMPILE_LANGUAGE:CUDA>>:-lineinfo>)
 
 target_link_libraries(fvdb PRIVATE
-    ${TORCH_LIBRARIES} tinyply cutlass blosc::blosc)
+    ${TORCH_LIBRARIES} tinyply cutlass blosc::blosc dispatch)
 
 # Add linker flags for Debug builds to preserve symbols
 if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
