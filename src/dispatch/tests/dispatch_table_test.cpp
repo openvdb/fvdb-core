@@ -74,20 +74,26 @@ TEST(DispatchTable, FromVisitor) {
     EXPECT_EQ(result2, 60); // 3 * 20
 }
 
-// Test visitor lambda
-TEST(DispatchTable, FromVisitorLambda) {
+// Test visitor with stateless functor (from_visitor requires default-constructible visitors)
+struct ConstantVisitor {
+    static constexpr int kValue = 100;
+
+    template <typename Coord>
+    int operator()(Coord, int x) const {
+        if constexpr (std::is_same_v<Coord, tag<1>>) {
+            return x + kValue;
+        } else {
+            return x - kValue;
+        }
+    }
+};
+
+TEST(DispatchTable, FromVisitorStateless) {
     using A     = axis<1, 2>;
     using Axes  = axes<A>;
     using Table = dispatch_table<Axes, int(int)>;
 
-    int captured = 100;
-    auto factory = Table::from_visitor([captured](auto coord, int x) -> int {
-        if constexpr (std::is_same_v<decltype(coord), tag<1>>) {
-            return x + captured;
-        } else {
-            return x - captured;
-        }
-    });
+    auto factory = Table::from_visitor(ConstantVisitor{});
     Table table(factory, Axes{});
 
     auto result1 = table(std::make_tuple(1), 5);

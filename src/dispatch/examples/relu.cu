@@ -47,6 +47,8 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
 
+#include <algorithm>
+
 namespace dispatch_examples {
 
 using namespace dispatch;
@@ -56,8 +58,7 @@ __global__ void
 relu_kernel(torch::PackedTensorAccessor64<T, 1> input, torch::PackedTensorAccessor64<T, 1> output) {
     int64_t const idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < input.size(0)) {
-        T const val = input[idx];
-        output[idx] = val > T(0) ? val : T(0);
+        output[idx] = max(input[idx], T(0));
     }
 }
 
@@ -71,8 +72,7 @@ struct relu_op_t {
         auto output_accessor = output.accessor<T, 1>();
 
         for (int64_t i = 0; i < input.numel(); ++i) {
-            T const val        = input_accessor[i];
-            output_accessor[i] = val > T(0) ? val : T(0);
+            output_accessor[i] = std::max(input_accessor[i], T(0));
         }
     }
 

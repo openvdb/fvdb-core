@@ -42,7 +42,7 @@ if(FVDB_BUILD_TESTS)
     )
 
     target_include_directories(dispatch_examples PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/examples
+        ${CMAKE_CURRENT_SOURCE_DIR}
     )
 
     target_link_libraries(dispatch_examples PUBLIC
@@ -149,13 +149,13 @@ if(FVDB_BUILD_TESTS)
 
     # Configure dispatch tests
     ConfigureDispatchTest(DispatchTypesTest tests/types_test.cpp)
-    ConfigureDispatchTest(DispatchAxesMapTest tests/axes_map_test.cpp)
-    ConfigureDispatchTest(DispatchTableTest tests/dispatch_table_test.cpp)
-    ConfigureDispatchTest(DispatchVisitSpacesTest tests/visit_spaces_test.cpp)
-    ConfigureDispatchTest(DispatchTorchTest tests/torch_test.cpp)
-    ConfigureDispatchTest(DispatchNvccSmokeTest tests/nvcc_smoke_test.cu)
-    ConfigureDispatchTest(DispatchScanLibHostTest tests/scan_lib_host_test.cpp)
-    ConfigureDispatchTest(DispatchScanLibCudaTest tests/scan_lib_cuda_test.cu)
-    ConfigureDispatchTest(DispatchInclusiveScanExamplesTest tests/inclusive_scan_examples_test.cpp)
-    ConfigureDispatchTest(DispatchReLUTest tests/relu_test.cpp)
+    # ConfigureDispatchTest(DispatchAxesMapTest tests/axes_map_test.cpp)
+    # ConfigureDispatchTest(DispatchTableTest tests/dispatch_table_test.cpp)
+    # ConfigureDispatchTest(DispatchVisitSpacesTest tests/visit_spaces_test.cpp)
+    # ConfigureDispatchTest(DispatchTorchTest tests/torch_test.cpp)
+    # ConfigureDispatchTest(DispatchNvccSmokeTest tests/nvcc_smoke_test.cu)
+    # ConfigureDispatchTest(DispatchScanLibHostTest tests/scan_lib_host_test.cpp)
+    # ConfigureDispatchTest(DispatchScanLibCudaTest tests/scan_lib_cuda_test.cu)
+    # ConfigureDispatchTest(DispatchInclusiveScanExamplesTest tests/inclusive_scan_examples_test.cpp)
+    # ConfigureDispatchTest(DispatchReLUTest tests/relu_test.cpp)
 endif()

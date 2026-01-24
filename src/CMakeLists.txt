@@ -70,7 +70,6 @@ set(FVDB_CPP_FILES
     fvdb/GridBatch.cpp
     fvdb/JaggedTensor.cpp
     fvdb/SparseConvPackInfo.cpp
-    fvdb/detail/dispatch/example/ScanLib.cpp
 )
 
 set(FVDB_CU_FILES
@@ -162,10 +161,6 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/VoxelNeighborhood.cu
     fvdb/detail/ops/VoxelsAlongRays.cu
     fvdb/detail/utils/cuda/ForEachCUDA.cu
-    fvdb/detail/dispatch/example/ScanLib.cu
-    fvdb/detail/dispatch/example/Functional.cu
-    fvdb/detail/dispatch/example/Op.cu
-    fvdb/detail/dispatch/example/ReLU.cu
 )
 
 # Build library

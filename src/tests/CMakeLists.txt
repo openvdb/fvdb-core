@@ -155,25 +155,6 @@ ConfigureTest(GaussianRasterizeContributingGaussianIdsTest "GaussianRasterizeCon
 ConfigureTest(GaussianMCMCAddNoiseTest "GaussianMCMCAddNoiseTest.cpp")
 ConfigureTest(GaussianMCMCRelocationTest "GaussianMCMCRelocationTest.cpp")
 
-# Configure dispatch unit tests
-ConfigureTest(DispatchTraitsTest "dispatch/TraitsTest.cpp")
-ConfigureTest(DispatchIndexSpaceTest "dispatch/IndexSpaceTest.cpp")
-ConfigureTest(DispatchIndexSpaceCudaTest "dispatch/IndexSpaceCudaTest.cu")
-ConfigureTest(DispatchValuesTest "dispatch/ValuesTest.cpp")
-ConfigureTest(DispatchValuesCudaTest "dispatch/ValuesCudaTest.cu")
-ConfigureTest(DispatchValueSpaceTest "dispatch/ValueSpaceTest.cpp")
-ConfigureTest(DispatchValueSpaceCudaTest "dispatch/ValueSpaceCudaTest.cu")
-ConfigureTest(DispatchValueSpaceMapTest "dispatch/ValueSpaceMapTest.cpp")
-ConfigureTest(DispatchValueSpaceMapCudaTest "dispatch/ValueSpaceMapCudaTest.cu")
-ConfigureTest(DispatchTableBasicImplCudaTest "dispatch/DispatchTableBasicImplCudaTest.cu")
-ConfigureTest(DispatchTableBasicOpCudaTest "dispatch/DispatchTableBasicOpCudaTest.cu")
-
-ConfigureTest(DispatchScanLibHostTest "dispatch/ScanLibHostTest.cpp")
-ConfigureTest(DispatchScanLibCudaTest "dispatch/ScanLibCudaTest.cu")
-ConfigureTest(DispatchExampleFunctionalTest "dispatch/ExampleFunctionalTest.cpp")
-ConfigureTest(DispatchExampleOpTest "dispatch/ExampleOpTest.cpp")
-ConfigureTest(DispatchExampleReLUTest "dispatch/ExampleReLUTest.cpp")
-
 if(NOT NANOVDB_EDITOR_SKIP)
   #ConfigureTest(ViewerTest "ViewerTest.cpp")
 endif()

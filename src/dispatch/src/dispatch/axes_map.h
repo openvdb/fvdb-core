@@ -262,7 +262,7 @@ void
 create_and_store(axes_map<Axes, T> &map, Factory &factory, Subs... subs) {
     static_assert(axes_like<Axes>, "Axes must be an axes type");
     static_assert(non_empty<Axes>, "Axes must be non-empty space");
-    static_assert((within<subs, Axes> && ... && true), "Subs must be within the Axes");
+    static_assert((within<Subs, Axes> && ... && true), "Subs must be within the Axes");
     (detail::create_and_store_helper(map, factory, subs), ...);
 }
 

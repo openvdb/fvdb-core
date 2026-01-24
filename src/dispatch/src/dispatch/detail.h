@@ -8,6 +8,7 @@
 
 #include <array>
 #include <cstddef>
+#include <optional>
 #include <tuple>
 #include <utility>
 
@@ -220,11 +221,11 @@ template <size_t... Sub, size_t... Full> struct is_within<indices<Sub...>, exten
     static_assert(non_empty<full_type>, "is_within requires the full to be non-empty");
     static consteval bool
     value() {
-        return (Sub < Full && ... && true);
+        return ((Sub < Full) && ... && true);
     }
 };
 
-// index space in index space
+// index space in index space (strict less than - sub extent must be strictly smaller)
 template <size_t... Sub, size_t... Full> struct is_within<extents<Sub...>, extents<Full...>> {
     using sub_type  = extents<Sub...>;
     using full_type = extents<Full...>;
@@ -234,7 +235,7 @@ template <size_t... Sub, size_t... Full> struct is_within<extents<Sub...>, exten
                   "is_within requires the sub and full to be non-empty");
     static consteval bool
     value() {
-        return (Sub <= Full && ... && true);
+        return ((Sub < Full) && ... && true);
     }
 };
 
@@ -251,7 +252,7 @@ template <auto SubV, auto... FullV> struct is_within<axis<SubV>, axis<FullV...>>
     // to create an axis with non-unique values.
     static consteval bool
     value() {
-        return (SubV == FullV || ... || false);
+        return ((SubV == FullV) || ... || false);
     }
 };
 

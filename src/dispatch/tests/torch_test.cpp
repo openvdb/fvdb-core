@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include "dispatch/dispatch_table.h"
 #include "dispatch/torch.h"
 #include "dispatch/torch_types.h"
 

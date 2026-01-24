@@ -121,11 +121,6 @@ TEST(NvccSmoke, CoreTypeTemplates) {
     static_assert(is_axis_v<A>());
     static_assert(is_axes_v<Axes>());
 
-    // Exercise axes/tag types in device code
-    __device__ void test_types() {
-        // Types compile - that's what we're testing
-    }
-
     SUCCEED();
 }
 

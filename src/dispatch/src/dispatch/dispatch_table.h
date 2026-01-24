@@ -40,7 +40,7 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
 
     // Initial construction with factory and coordinates or subspaces
     template <typename Factory, typename... Subs>
-    explicit dispatch_table(Factory &factory, Subs... subs) {
+    explicit dispatch_table(Factory &&factory, Subs... subs) {
         static_assert((within<Subs, axes_type> && ... && true), "Subs must be within the axes");
         auto new_data = std::make_shared<map_type>();
         create_and_store(*new_data, factory, subs...);
