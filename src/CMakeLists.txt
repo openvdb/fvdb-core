@@ -14,6 +14,9 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_cutlass.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_nanovdb.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_blosc.cmake)
 
+# Enable testing at this level so CTest discovers tests from all subdirectories
+enable_testing()
+
 # Add dispatch interface library (header-only)
 add_subdirectory(dispatch)
 

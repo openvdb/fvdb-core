@@ -289,9 +289,9 @@ elif [ "$BUILD_TYPE" == "ctest" ]; then
 
     # --- Find and Run Tests ---
     echo "Searching for test build directory..."
-    # Find the directory containing the compiled tests (adjust if needed)
-    # Using -print -quit to stop after the first match for efficiency
-    BUILD_DIR=$(find build -name tests -type d -print -quit)
+    # Find the src/ subdirectory inside the build root (where CTestTestfile.cmake is generated)
+    # This discovers all tests from both src/tests/ and src/dispatch/
+    BUILD_DIR=$(dirname "$(find build -name CMakeCache.txt -type f -print -quit)")/src
 
     if [ -z "$BUILD_DIR" ]; then
         echo "Error: Could not find build directory with tests"
