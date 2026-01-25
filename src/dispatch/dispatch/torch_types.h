@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef DISPATCH_TORCH_TYPES_H
-#define DISPATCH_TORCH_TYPES_H
+#ifndef DISPATCH_DISPATCH_TORCH_TYPES_H
+#define DISPATCH_DISPATCH_TORCH_TYPES_H
 
 #include "dispatch/types.h"
 
@@ -122,4 +122,4 @@ using torch_pvt1_tensor = torch_concrete_tensor<torch::kPrivateUse1, Stype, Rank
 
 } // namespace dispatch
 
-#endif // DISPATCH_TORCH_TYPES_H
+#endif // DISPATCH_DISPATCH_TORCH_TYPES_H

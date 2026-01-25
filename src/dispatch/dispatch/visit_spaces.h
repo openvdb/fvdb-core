@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef DISPATCH_VISIT_SPACES_H
-#define DISPATCH_VISIT_SPACES_H
+#ifndef DISPATCH_DISPATCH_VISIT_SPACES_H
+#define DISPATCH_DISPATCH_VISIT_SPACES_H
 
 #include "dispatch/detail.h"
 #include "dispatch/types.h"
@@ -107,4 +107,4 @@ visit_axes_spaces(Visitor &visitor, Axes... axes) {
 
 } // namespace dispatch
 
-#endif // DISPATCH_VISIT_SPACES_H
+#endif // DISPATCH_DISPATCH_VISIT_SPACES_H

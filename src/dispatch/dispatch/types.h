@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef DISPATCH_TYPES_H
-#define DISPATCH_TYPES_H
+#ifndef DISPATCH_DISPATCH_TYPES_H
+#define DISPATCH_DISPATCH_TYPES_H
 
 #include <cstddef>
 #include <cstdint>
@@ -174,4 +174,4 @@ to_string(contiguity c) {
 
 } // namespace dispatch
 
-#endif // DISPATCH_TYPES_H
+#endif // DISPATCH_DISPATCH_TYPES_H
