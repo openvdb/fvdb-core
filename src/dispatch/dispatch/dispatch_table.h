@@ -5,8 +5,8 @@
 // Supports sparse instantiation via subspaces, with factory patterns
 // (from_op<Op>() / from_visitor()) for populating entries.
 //
-#ifndef DISPATCH_DISPATCH_TABLE_H
-#define DISPATCH_DISPATCH_TABLE_H
+#ifndef DISPATCH_DISPATCH_DISPATCH_TABLE_H
+#define DISPATCH_DISPATCH_DISPATCH_TABLE_H
 
 #include "dispatch/axes_map.h"
 #include "dispatch/detail.h"
@@ -132,4 +132,4 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
 
 } // namespace dispatch
 
-#endif // DISPATCH_DISPATCH_TABLE_H
+#endif // DISPATCH_DISPATCH_DISPATCH_TABLE_H
