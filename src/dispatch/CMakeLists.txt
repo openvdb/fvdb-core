@@ -189,7 +189,10 @@ if(FVDB_BUILD_TESTS)
                 --config $<CONFIG>
         )
 
-        set_tests_properties(${FULL_NAME} PROPERTIES WILL_FAIL TRUE)
+        set_tests_properties(${FULL_NAME} PROPERTIES
+            WILL_FAIL TRUE
+            LABELS "compile_fail"
+        )
     endfunction()
 
     ConfigureCompileFailTest(MixedAxisTypes      TEST_MIXED_AXIS_TYPES)

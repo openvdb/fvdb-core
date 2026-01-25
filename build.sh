@@ -306,9 +306,11 @@ elif [ "$BUILD_TYPE" == "ctest" ]; then
     add_python_pkg_lib_to_ld_path "nanovdb_editor" "NanoVDB Editor" "libpnanovdb*.so"
 
     # Run ctest within the test build directory
+    # Note: -LE compile_fail excludes compile-fail tests which require cmake at runtime
+    # (cmake may not be available in CI test runners). Run them manually if needed.
     pushd "$BUILD_DIR" > /dev/null
     echo "Running ctest..."
-    ctest --output-on-failure
+    ctest --output-on-failure -LE compile_fail
     CTEST_EXIT_CODE=$?
     popd > /dev/null # Back to SOURCE_DIR
 
