@@ -14,22 +14,10 @@
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
 
-#include <cub/cub.cuh>
-
 #include <optional>
 
 namespace fvdb::detail::ops {
 namespace {
-
-// Macro to handle CUB's two-pass temporary storage pattern
-#define CUB_WRAPPER(func, ...)                                                \
-    do {                                                                      \
-        size_t tempStorageBytes = 0;                                          \
-        func(nullptr, tempStorageBytes, __VA_ARGS__);                         \
-        auto &cachingAllocator = *::c10::cuda::CUDACachingAllocator::get();   \
-        auto tempStorage       = cachingAllocator.allocate(tempStorageBytes); \
-        func(tempStorage.get(), tempStorageBytes, __VA_ARGS__);               \
-    } while (false)
 
 /// @brief Optimized copy from padded 'Top Contributing Gaussian IDs' JaggedTensor to an unpadded
 /// 'Contributing Gaussian IDs' JaggedTensor
@@ -120,7 +108,7 @@ buildOutListIds(int64_t outputNumPixels,
 ///
 /// Takes a counts-per-pixel tensor and converts padded source JaggedTensors
 /// to variable-size output JaggedTensors. This encapsulates the common pattern of:
-/// 1. Computing sample offsets via CUB inclusive sum
+/// 1. Computing sample offsets via cumsum
 /// 2. Computing output indices via searchsorted
 /// 3. Computing list IDs (camera/pixel indices)
 /// 4. Allocating output data
@@ -169,17 +157,10 @@ convertPaddedToVariableSizeJagged(const fvdb::JaggedTensor &srcIds,
         return std::make_tuple(emptyIdsJagged, emptyWeightsJagged);
     }
 
-    // Compute sample offsets via CUB inclusive sum
-    torch::Tensor sampleOffsets = torch::zeros(
-        {outputNumPixels + 1}, torch::TensorOptions().dtype(torch::kInt64).device(device));
-    {
-        auto stream = at::cuda::getCurrentCUDAStream(device.index());
-        CUB_WRAPPER(cub::DeviceScan::InclusiveSum,
-                    countsPerPixel.data_ptr<int64_t>(),
-                    sampleOffsets.data_ptr<int64_t>() + 1,
-                    static_cast<int>(outputNumPixels),
-                    stream);
-    }
+    // Compute sample offsets via cumsum
+    torch::Tensor sampleOffsets =
+        torch::cat({torch::zeros({1}, torch::TensorOptions().dtype(torch::kInt64).device(device)),
+                    countsPerPixel.cumsum(0)});
 
     // Compute output indices via searchsorted
     torch::Tensor flatIndices =
