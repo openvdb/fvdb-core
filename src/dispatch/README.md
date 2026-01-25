@@ -100,7 +100,8 @@ clear runtime errors, not missing symbol linker errors or silent failures.
 
 ## Architecture
 
-The framework is built in layers, each adding capabilities on top of the previous:
+The framework is built in layers, each adding capabilities on top of the previous. The
+stack below is high-level on top, foundation on the bottom. (Read bottom to top).
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -126,6 +127,27 @@ The framework is built in layers, each adding capabilities on top of the previou
 |             Lightweight for forward declaration in headers      |
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+
+Most of the time, you'd only need the types files in header files, because they
+are lightweight.
+
+```cpp
+// header file
+#include "dispatch/torch_types.h"
+// OR
+#include "dispatch/types.h"
+```
+
+And in the .cpp or .cu files for instantiating the dispatch, you'd need only:
+
+```cpp
+// .cpp or .cu source file
+#include "dispatch/torch.h"
+// OR
+#include "dispatch/dispatch_table.h"
+```
+
 
 ### Layer 1: Types (`types.h`)
 

@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef TESTS_DISPATCH_TEST_UTILS_H
-#define TESTS_DISPATCH_TEST_UTILS_H
+#ifndef DISPATCH_TESTS_TEST_UTILS_H
+#define DISPATCH_TESTS_TEST_UTILS_H
 
 #include <torch/torch.h>
 
@@ -115,4 +115,4 @@ skip_if_no_cuda() {
 } // namespace test
 } // namespace dispatch
 
-#endif // TESTS_DISPATCH_TEST_UTILS_H
+#endif // DISPATCH_TESTS_TEST_UTILS_H
