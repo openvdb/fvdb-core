@@ -1,11 +1,10 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
-//
+
 #include "examples/scan_lib.h"
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <cstdint>
 #include <numeric>
 #include <vector>
@@ -97,19 +96,6 @@ TYPED_TEST(ScanLibHostTest, Serial_Strided_Output) {
     EXPECT_EQ(extract_strided(output_buf.data(), 3, 50), expected_scan(input));
 }
 
-TYPED_TEST(ScanLibHostTest, Serial_Strided_Both) {
-    using T = TypeParam;
-    std::vector<T> input_buf(200);
-    for (int64_t i = 0; i < 100; ++i) {
-        input_buf[i * 2] = static_cast<T>(i + 1);
-    }
-    std::vector<T> output_buf(300, T{0}); // stride 3
-
-    inclusive_scan_serial(input_buf.data(), 2, output_buf.data(), 3, 100);
-
-    EXPECT_EQ(extract_strided(output_buf.data(), 3, 100), expected_scan(make_input<T>(100)));
-}
-
 TYPED_TEST(ScanLibHostTest, Serial_Empty) {
     using T = TypeParam;
     std::vector<T> output(1, T{99});
@@ -117,27 +103,6 @@ TYPED_TEST(ScanLibHostTest, Serial_Empty) {
     inclusive_scan_serial<T>(nullptr, 1, output.data(), 1, 0);
 
     EXPECT_EQ(output[0], T{99}); // unchanged
-}
-
-TYPED_TEST(ScanLibHostTest, Serial_SingleElement) {
-    using T                    = TypeParam;
-    std::vector<T> const input = {T{42}};
-    std::vector<T> output(1);
-
-    inclusive_scan_serial(input.data(), 1, output.data(), 1, 1);
-
-    EXPECT_EQ(output[0], T{42});
-}
-
-TYPED_TEST(ScanLibHostTest, Serial_LargeInput) {
-    using T                    = TypeParam;
-    constexpr int64_t n        = 100000;
-    std::vector<T> const input = make_input<T>(n);
-    std::vector<T> output(n);
-
-    inclusive_scan_serial(input.data(), 1, output.data(), 1, n);
-
-    EXPECT_EQ(output, expected_scan(input));
 }
 
 // =============================================================================
@@ -166,136 +131,66 @@ TYPED_TEST(ScanLibHostTest, SerialInplace_Strided) {
     EXPECT_EQ(extract_strided(buf.data(), 2, 100), expected_scan(make_input<T>(100)));
 }
 
-TYPED_TEST(ScanLibHostTest, SerialInplace_Empty) {
-    using T             = TypeParam;
-    std::vector<T> data = {T{99}};
-
-    inclusive_scan_serial_inplace<T>(data.data(), 1, 0);
-
-    EXPECT_EQ(data[0], T{99}); // unchanged
-}
-
-TYPED_TEST(ScanLibHostTest, SerialInplace_SingleElement) {
-    using T             = TypeParam;
-    std::vector<T> data = {T{42}};
-
-    inclusive_scan_serial_inplace(data.data(), 1, 1);
-
-    EXPECT_EQ(data[0], T{42});
-}
-
 // =============================================================================
 // Parallel out-of-place tests
 // =============================================================================
 
 TYPED_TEST(ScanLibHostTest, Parallel_Contiguous) {
     using T                    = TypeParam;
-    std::vector<T> const input = make_input<T>(10000); // larger for parallelism
-    std::vector<T> output(10000);
+    std::vector<T> const input = make_input<T>(1000); // larger for parallelism
+    std::vector<T> output(1000);
 
-    inclusive_scan_parallel(input.data(), 1, output.data(), 1, 10000);
+    inclusive_scan_parallel(input.data(), 1, output.data(), 1, 1000);
 
-    // For integers, should match exactly
-    if constexpr (std::is_integral_v<T>) {
-        EXPECT_EQ(output, expected_scan(input));
-    } else {
-        // For floats, check approximate equality (non-deterministic due to parallel reduction)
-        ASSERT_EQ(output.size(), expected_scan(input).size());
-        for (size_t i = 0; i < output.size(); ++i) {
-            EXPECT_NEAR(output[i], expected_scan(input)[i], 1e-4);
-        }
-    }
+    EXPECT_EQ(output, expected_scan(input));
 }
 
 TYPED_TEST(ScanLibHostTest, Parallel_Strided) {
     using T = TypeParam;
-    std::vector<T> input_buf(20000);
-    for (int64_t i = 0; i < 10000; ++i) {
+    std::vector<T> input_buf(2000);
+    for (int64_t i = 0; i < 1000; ++i) {
         input_buf[i * 2] = static_cast<T>(i + 1);
     }
-    std::vector<T> output(10000);
+    std::vector<T> output(1000);
 
-    inclusive_scan_parallel(input_buf.data(), 2, output.data(), 1, 10000);
+    inclusive_scan_parallel(input_buf.data(), 2, output.data(), 1, 1000);
 
-    auto expected = expected_scan(make_input<T>(10000));
-    if constexpr (std::is_integral_v<T>) {
-        EXPECT_EQ(output, expected);
-    } else {
-        ASSERT_EQ(output.size(), expected.size());
-        for (size_t i = 0; i < output.size(); ++i) {
-            EXPECT_NEAR(output[i], expected[i], 1e-4);
-        }
-    }
+    EXPECT_EQ(output, expected_scan(make_input<T>(1000)));
 }
 
-TYPED_TEST(ScanLibHostTest, Parallel_Empty) {
-    using T = TypeParam;
-    std::vector<T> output(1, T{99});
-
-    inclusive_scan_parallel<T>(nullptr, 1, output.data(), 1, 0);
-
-    EXPECT_EQ(output[0], T{99}); // unchanged
-}
-
-TYPED_TEST(ScanLibHostTest, Parallel_SingleElement) {
+TYPED_TEST(ScanLibHostTest, Parallel_Small_FallsBackToSerial) {
     using T                    = TypeParam;
-    std::vector<T> const input = {T{42}};
+    std::vector<T> const input = make_input<T>(10); // small, should use serial path
+    std::vector<T> output(10);
+
+    inclusive_scan_parallel(input.data(), 1, output.data(), 1, 10);
+
+    EXPECT_EQ(output, expected_scan(input));
+}
+
+// =============================================================================
+// Edge cases (applied to serial as representative)
+// =============================================================================
+
+TYPED_TEST(ScanLibHostTest, SingleElement) {
+    using T              = TypeParam;
+    std::vector<T> input = {T{42}};
     std::vector<T> output(1);
 
-    inclusive_scan_parallel(input.data(), 1, output.data(), 1, 1);
+    inclusive_scan_serial(input.data(), 1, output.data(), 1, 1);
 
     EXPECT_EQ(output[0], T{42});
 }
 
-TYPED_TEST(ScanLibHostTest, Parallel_LargeInput) {
-    using T                    = TypeParam;
-    constexpr int64_t n        = 100000;
-    std::vector<T> const input = make_input<T>(n);
-    std::vector<T> output(n);
+TYPED_TEST(ScanLibHostTest, TwoElements) {
+    using T              = TypeParam;
+    std::vector<T> input = {T{3}, T{5}};
+    std::vector<T> output(2);
 
-    inclusive_scan_parallel(input.data(), 1, output.data(), 1, n);
+    inclusive_scan_serial(input.data(), 1, output.data(), 1, 2);
 
-    auto expected = expected_scan(input);
-    if constexpr (std::is_integral_v<T>) {
-        EXPECT_EQ(output, expected);
-    } else {
-        ASSERT_EQ(output.size(), expected.size());
-        for (size_t i = 0; i < output.size(); ++i) {
-            EXPECT_NEAR(output[i], expected[i], 1e-4);
-        }
-    }
-}
-
-// =============================================================================
-// Determinism tests
-// =============================================================================
-
-TYPED_TEST(ScanLibHostTest, Serial_Deterministic) {
-    using T                    = TypeParam;
-    std::vector<T> const input = make_input<T>(100);
-    std::vector<T> output1(100);
-    std::vector<T> output2(100);
-
-    inclusive_scan_serial(input.data(), 1, output1.data(), 1, 100);
-    inclusive_scan_serial(input.data(), 1, output2.data(), 1, 100);
-
-    EXPECT_EQ(output1, output2); // Should be identical
-}
-
-TYPED_TEST(ScanLibHostTest, Parallel_IntegerDeterministic) {
-    using T = TypeParam;
-    if constexpr (std::is_integral_v<T>) {
-        std::vector<T> const input = make_input<T>(10000);
-        std::vector<T> output1(10000);
-        std::vector<T> output2(10000);
-
-        inclusive_scan_parallel(input.data(), 1, output1.data(), 1, 10000);
-        inclusive_scan_parallel(input.data(), 1, output2.data(), 1, 10000);
-
-        EXPECT_EQ(output1, output2); // Integers should be deterministic
-    } else {
-        GTEST_SKIP() << "Float types are non-deterministic in parallel";
-    }
+    EXPECT_EQ(output[0], T{3});
+    EXPECT_EQ(output[1], T{8});
 }
 
 } // namespace

@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef TESTS_DISPATCH_TEST_UTILS_CUH
-#define TESTS_DISPATCH_TEST_UTILS_CUH
+#ifndef DISPATCH_TESTS_TEST_UTILS_CUH
+#define DISPATCH_TESTS_TEST_UTILS_CUH
 
 #include <cuda_runtime.h>
 
@@ -103,4 +103,4 @@ copy_to_host(T const *device, T *host, int64_t n) {
 } // namespace test
 } // namespace dispatch
 
-#endif // TESTS_DISPATCH_TEST_UTILS_CUH
+#endif // DISPATCH_TESTS_TEST_UTILS_CUH

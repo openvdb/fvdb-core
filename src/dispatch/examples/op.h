@@ -10,9 +10,8 @@
 
 namespace dispatch_examples {
 
-tensor_with_notes inclusive_scan_op(torch::Tensor input,
-                                    dispatch::placement placement,
-                                    dispatch::determinism determinism);
+tensor_with_notes
+inclusive_scan_op(torch::Tensor input, dispatch::placement plc, dispatch::determinism det);
 
 } // namespace dispatch_examples
 

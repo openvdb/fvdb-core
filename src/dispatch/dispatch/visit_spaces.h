@@ -1,8 +1,12 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef DISPATCH_VISIT_SPACES_H
-#define DISPATCH_VISIT_SPACES_H
+// Compile-time visitation over axes/extents spaces. Instantiates the visitor
+// separately for each coordinate in the space, enabling per-coordinate template
+// instantiation (used internally by dispatch_table construction).
+//
+#ifndef DISPATCH_DISPATCH_VISIT_SPACES_H
+#define DISPATCH_DISPATCH_VISIT_SPACES_H
 
 #include "dispatch/detail.h"
 #include "dispatch/types.h"
@@ -40,6 +44,8 @@ struct extents_visit_helper<Extents, std::index_sequence<linearIndices...>> {
 
 } // namespace detail
 
+// Compile-time visit all index coordinates in an extents space.
+// Instantiates visitor separately for each indices<...> coordinate.
 template <typename Visitor, typename Extents>
 void
 visit_extents_space(Visitor &visitor, Extents) {
@@ -85,6 +91,8 @@ struct axes_visit_helper<Axes, std::index_sequence<linearIndices...>> {
 
 } // namespace detail
 
+// Compile-time visit all tag coordinates in an axes space.
+// Instantiates visitor separately for each tag<...> coordinate.
 template <typename Visitor, typename Axes>
 void
 visit_axes_space(Visitor &visitor, Axes) {
@@ -107,4 +115,4 @@ visit_axes_spaces(Visitor &visitor, Axes... axes) {
 
 } // namespace dispatch
 
-#endif // DISPATCH_VISIT_SPACES_H
+#endif // DISPATCH_DISPATCH_VISIT_SPACES_H

@@ -1,8 +1,12 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef DISPATCH_TORCH_TYPES_H
-#define DISPATCH_TORCH_TYPES_H
+// PyTorch-specific type mappings and axis typedefs. Lightweight header suitable
+// for forward declarations in user headers. Provides torch_scalar_cpp_type_t,
+// pre-defined device/scalar-type axes, and torch_concrete_tensor wrapper.
+//
+#ifndef DISPATCH_DISPATCH_TORCH_TYPES_H
+#define DISPATCH_DISPATCH_TORCH_TYPES_H
 
 #include "dispatch/types.h"
 
@@ -122,4 +126,4 @@ using torch_pvt1_tensor = torch_concrete_tensor<torch::kPrivateUse1, Stype, Rank
 
 } // namespace dispatch
 
-#endif // DISPATCH_TORCH_TYPES_H
+#endif // DISPATCH_DISPATCH_TORCH_TYPES_H
