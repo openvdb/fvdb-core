@@ -769,6 +769,7 @@ radixSortAsync(KeyT *keysIn,
             const ValueT *rightDeviceValuesIn =
                 valuesIn + offsets[leftDeviceId] + leftDeviceItemCount;
 
+            // Synchronize to read back the results of the merge path kernel
             C10_CUDA_CHECK(cudaEventSynchronize(events[leftDeviceId]));
             C10_CUDA_CHECK(cudaEventSynchronize(events[rightDeviceId]));
 
@@ -883,14 +884,22 @@ radixSortAsync(KeyT *keysIn,
 
         for (int leftDeviceId = 0; leftDeviceId < deviceCount; leftDeviceId += 2 * deviceInc) {
             const int rightDeviceId = leftDeviceId + deviceInc;
-            C10_CUDA_CHECK(cudaEventSynchronize(events[leftDeviceId]));
-            C10_CUDA_CHECK(cudaEventSynchronize(events[rightDeviceId]));
+
+            C10_CUDA_CHECK(cudaSetDevice(leftDeviceId));
+            auto leftStream = c10::cuda::getCurrentCUDAStream(leftDeviceId);
+            C10_CUDA_CHECK(cudaStreamWaitEvent(leftStream, events[rightDeviceId]));
+
+            C10_CUDA_CHECK(cudaSetDevice(rightDeviceId));
+            auto rightStream = c10::cuda::getCurrentCUDAStream(rightDeviceId);
+            C10_CUDA_CHECK(cudaStreamWaitEvent(rightStream, events[leftDeviceId]));
         }
     }
 
     // There is no merging required for a single device so we simply copy the sorted result to the
     // destination array (where the sort would have been merged to).
     if (log2DeviceCount % 2) {
+        mergeStreams();
+
         std::swap(keysIn, keysOut);
         std::swap(valuesIn, valuesOut);
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
