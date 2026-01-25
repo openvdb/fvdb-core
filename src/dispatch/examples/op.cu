@@ -41,8 +41,8 @@
 //   The compiler eliminates dead branches, so each instantiation contains only the relevant code.
 //
 // DISPATCH TABLE CONSTRUCTION:
-//   The table is built using `from_op<inclusive_scan_op_t>()` which automatically finds and
-//   instantiates `inclusive_scan_op_t::op` for every point in the declared subspaces.
+//   The table is built using `from_op<iscan_op>()` which automatically finds and
+//   instantiates `iscan_op::op` for every point in the declared subspaces.
 //
 // WHY A SINGLE STRUCT?
 //   - All logic is centralized and easy to follow top-to-bottom
@@ -54,6 +54,11 @@
 // like CUB or Thrust). They produce identical behavior but demonstrate different code organization
 // styles. Choose based on whether your algorithm variants are structurally similar (op) or
 // fundamentally different implementations (functional).
+//
+// Note also that the use of a single "op" function with a big constexpr switch in it
+// is orthogonal to the op structure vs. the free-function structure. We could just as easily
+// have made one big free-function called iscan_impl that did constexpr switching and broken
+// out the static "op" methods analogous to what the functional version does now.
 //
 // ================================================================================================
 
@@ -72,7 +77,7 @@ namespace dispatch_examples {
 
 using namespace dispatch;
 
-struct inclusive_scan_op_t {
+struct iscan_op {
     template <torch::DeviceType device,
               torch::ScalarType stype,
               contiguity cont,
@@ -180,12 +185,11 @@ struct inclusive_scan_op_t {
 
 tensor_with_notes
 inclusive_scan_op(torch::Tensor input, placement plc, determinism det) {
-    static inclusive_scan_op_t::dispatcher const table{
-        inclusive_scan_op_t::dispatcher::from_op<inclusive_scan_op_t>(),
-        inclusive_scan_op_t::cpu_float_subspace{},
-        inclusive_scan_op_t::cpu_int_subspace{},
-        inclusive_scan_op_t::gpu_float_subspace{},
-        inclusive_scan_op_t::gpu_int_subspace{}};
+    static iscan_op::dispatcher const table{iscan_op::dispatcher::from_op<iscan_op>(),
+                                            iscan_op::cpu_float_subspace{},
+                                            iscan_op::cpu_int_subspace{},
+                                            iscan_op::gpu_float_subspace{},
+                                            iscan_op::gpu_int_subspace{}};
 
     // Validate input rank
     TORCH_CHECK_VALUE(

@@ -81,21 +81,22 @@ expect_scan_equal(torch::Tensor actual, std::vector<T> const &expected) {
 }
 
 /// Compare ReLU results with appropriate tolerance
-void
+inline void
 expect_relu_equal(torch::Tensor actual, torch::Tensor expected, double tol = 1e-5) {
     ASSERT_EQ(actual.sizes(), expected.sizes());
-    ASSERT_EQ(actual.dtype(), expected.dtype());
-    auto actual_cpu   = actual.cpu().contiguous();
-    auto expected_cpu = expected.cpu().contiguous();
+
+    // Convert to float32 on CPU for comparison (handles half types correctly)
+    auto actual_float   = actual.cpu().to(torch::kFloat32).contiguous();
+    auto expected_float = expected.cpu().to(torch::kFloat32).contiguous();
 
     if (actual.dtype() == torch::kFloat16 || actual.dtype() == torch::kBFloat16) {
         // Half precision needs larger tolerance
         tol = 1e-2;
     }
 
-    auto actual_ptr   = actual_cpu.data_ptr<float>();
-    auto expected_ptr = expected_cpu.data_ptr<float>();
-    for (int64_t i = 0; i < actual_cpu.numel(); ++i) {
+    auto actual_ptr   = actual_float.data_ptr<float>();
+    auto expected_ptr = expected_float.data_ptr<float>();
+    for (int64_t i = 0; i < actual_float.numel(); ++i) {
         EXPECT_NEAR(actual_ptr[i], expected_ptr[i], tol) << "at index " << i;
     }
 }

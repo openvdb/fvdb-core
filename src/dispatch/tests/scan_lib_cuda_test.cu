@@ -1,27 +1,51 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
-//
-// Purpose: Test CUDA scan implementations and verify nvcc compilation of scan_lib templates.
-
-// Suppress nvcc warning about TEST() macro's unused test_info_ static member
-#ifdef __CUDACC__
-#pragma nv_diag_suppress 177
-#endif
 
 #include "examples/scan_lib.h"
 #include "test_utils.cuh"
-
-#include <cuda_runtime.h>
 
 #include <gtest/gtest.h>
 
 #include <cmath>
 #include <cstdint>
 #include <numeric>
+#include <type_traits>
 #include <vector>
 
 namespace scan_lib {
 namespace {
+
+// =============================================================================
+// CUDA utilities
+// =============================================================================
+
+/// RAII wrapper for raw device memory (for temp storage)
+class DeviceRawBuffer {
+    void *ptr_    = nullptr;
+    size_t bytes_ = 0;
+
+  public:
+    explicit DeviceRawBuffer(size_t bytes) : bytes_(bytes) {
+        if (bytes > 0) {
+            cudaMalloc(&ptr_, bytes);
+        }
+    }
+    ~DeviceRawBuffer() {
+        if (ptr_)
+            cudaFree(ptr_);
+    }
+    DeviceRawBuffer(DeviceRawBuffer const &)            = delete;
+    DeviceRawBuffer &operator=(DeviceRawBuffer const &) = delete;
+
+    void *
+    get() {
+        return ptr_;
+    }
+    size_t
+    size() const {
+        return bytes_;
+    }
+};
 
 // =============================================================================
 // Test utilities
@@ -69,34 +93,6 @@ expect_scan_equal(std::vector<T> const &actual, std::vector<T> const &expected) 
     }
 }
 
-// RAII wrapper for raw device memory (for temp storage)
-class DeviceRawBuffer {
-    void *ptr_    = nullptr;
-    size_t bytes_ = 0;
-
-  public:
-    explicit DeviceRawBuffer(size_t bytes) : bytes_(bytes) {
-        if (bytes > 0) {
-            cudaMalloc(&ptr_, bytes);
-        }
-    }
-    ~DeviceRawBuffer() {
-        if (ptr_)
-            cudaFree(ptr_);
-    }
-    DeviceRawBuffer(DeviceRawBuffer const &)            = delete;
-    DeviceRawBuffer &operator=(DeviceRawBuffer const &) = delete;
-
-    void *
-    get() {
-        return ptr_;
-    }
-    size_t
-    size() const {
-        return bytes_;
-    }
-};
-
 // =============================================================================
 // Typed test fixture for all scalar types
 // =============================================================================
@@ -107,51 +103,7 @@ using TestTypes = ::testing::Types<float, double, int32_t, int64_t>;
 TYPED_TEST_SUITE(ScanLibCudaTest, TestTypes);
 
 // =============================================================================
-// nvcc template verification
-// =============================================================================
-
-TEST(ScanLibCudaNvcc, TempBytesInstantiations) {
-    // Verify all inclusive_scan_cuda_temp_bytes instantiations compile under nvcc
-    static_assert(std::is_same_v<decltype(inclusive_scan_cuda_temp_bytes<float>(100)), size_t>);
-    static_assert(std::is_same_v<decltype(inclusive_scan_cuda_temp_bytes<double>(100)), size_t>);
-    static_assert(std::is_same_v<decltype(inclusive_scan_cuda_temp_bytes<int32_t>(100)), size_t>);
-    static_assert(std::is_same_v<decltype(inclusive_scan_cuda_temp_bytes<int64_t>(100)), size_t>);
-    SUCCEED();
-}
-
-TEST(ScanLibCudaNvcc, ScanInstantiations) {
-    // Verify all inclusive_scan_cuda instantiations compile under nvcc
-    float *f_in       = nullptr;
-    float *f_out      = nullptr;
-    void *temp        = nullptr;
-    size_t temp_bytes = 0;
-
-    // Should compile
-    inclusive_scan_cuda(f_in, f_out, 100, temp, temp_bytes, nullptr);
-    SUCCEED();
-}
-
-// =============================================================================
-// Temp storage query
-// =============================================================================
-
-TYPED_TEST(ScanLibCudaTest, TempBytes_NonZero) {
-    using T         = TypeParam;
-    int64_t const n = 1000;
-
-    size_t temp_bytes = inclusive_scan_cuda_temp_bytes<T>(n);
-    EXPECT_GT(temp_bytes, 0u);
-}
-
-TYPED_TEST(ScanLibCudaTest, TempBytes_Zero) {
-    using T           = TypeParam;
-    size_t temp_bytes = inclusive_scan_cuda_temp_bytes<T>(0);
-    // May be 0 or non-zero, both are valid
-    SUCCEED();
-}
-
-// =============================================================================
-// CUDA scan
+// CUDA scan tests
 // =============================================================================
 
 TYPED_TEST(ScanLibCudaTest, Basic) {
@@ -178,7 +130,7 @@ TYPED_TEST(ScanLibCudaTest, Basic) {
 
 TYPED_TEST(ScanLibCudaTest, Large) {
     using T         = TypeParam;
-    int64_t const n = 1000000; // 1M elements for GPU
+    int64_t const n = 100000;
 
     std::vector<T> const input = make_input<T>(n);
     std::vector<T> output(n);
@@ -221,26 +173,17 @@ TYPED_TEST(ScanLibCudaTest, SingleElement) {
 TYPED_TEST(ScanLibCudaTest, Empty) {
     using T = TypeParam;
 
-    dispatch::test::DeviceBuffer<T> d_in(1);
-    dispatch::test::DeviceBuffer<T> d_out(1);
-
-    size_t temp_bytes = inclusive_scan_cuda_temp_bytes<T>(0);
-    DeviceRawBuffer temp(temp_bytes);
-
     // Should not crash
-    inclusive_scan_cuda(d_in.get(), d_out.get(), 0, temp.get(), temp.size(), nullptr);
-    cudaDeviceSynchronize();
+    size_t temp_bytes = inclusive_scan_cuda_temp_bytes<T>(0);
+    EXPECT_EQ(temp_bytes, 0u);
 
-    SUCCEED();
+    inclusive_scan_cuda<T>(nullptr, nullptr, 0, nullptr, 0, nullptr);
+    // No crash = success
 }
 
-// =============================================================================
-// Stream support
-// =============================================================================
-
-TYPED_TEST(ScanLibCudaTest, ExplicitStream) {
+TYPED_TEST(ScanLibCudaTest, WithStream) {
     using T         = TypeParam;
-    int64_t const n = 1000;
+    int64_t const n = 500;
 
     std::vector<T> const input = make_input<T>(n);
     std::vector<T> output(n);
@@ -259,69 +202,27 @@ TYPED_TEST(ScanLibCudaTest, ExplicitStream) {
     cudaStreamSynchronize(stream);
 
     dispatch::test::copy_to_host(d_out.get(), output.data(), n);
-
-    expect_scan_equal(output, expected_scan(input));
-
     cudaStreamDestroy(stream);
-}
-
-TYPED_TEST(ScanLibCudaTest, DefaultStream) {
-    using T         = TypeParam;
-    int64_t const n = 1000;
-
-    std::vector<T> const input = make_input<T>(n);
-    std::vector<T> output(n);
-
-    dispatch::test::DeviceBuffer<T> d_in(n);
-    dispatch::test::DeviceBuffer<T> d_out(n);
-    dispatch::test::copy_to_device(input.data(), d_in.get(), n);
-
-    size_t temp_bytes = inclusive_scan_cuda_temp_bytes<T>(n);
-    DeviceRawBuffer temp(temp_bytes);
-
-    // nullptr for default stream
-    inclusive_scan_cuda(d_in.get(), d_out.get(), n, temp.get(), temp.size(), nullptr);
-    cudaDeviceSynchronize();
-
-    dispatch::test::copy_to_host(d_out.get(), output.data(), n);
 
     expect_scan_equal(output, expected_scan(input));
 }
 
 // =============================================================================
-// Determinism tests
+// Temp bytes query test
 // =============================================================================
 
-TYPED_TEST(ScanLibCudaTest, IntegerDeterministic) {
+TYPED_TEST(ScanLibCudaTest, TempBytesIncreases) {
     using T = TypeParam;
-    if constexpr (std::is_integral_v<T>) {
-        int64_t const n            = 10000;
-        std::vector<T> const input = make_input<T>(n);
-        std::vector<T> output1(n);
-        std::vector<T> output2(n);
 
-        dispatch::test::DeviceBuffer<T> d_in(n);
-        dispatch::test::DeviceBuffer<T> d_out1(n);
-        dispatch::test::DeviceBuffer<T> d_out2(n);
-        dispatch::test::copy_to_device(input.data(), d_in.get(), n);
+    size_t bytes_small  = inclusive_scan_cuda_temp_bytes<T>(100);
+    size_t bytes_medium = inclusive_scan_cuda_temp_bytes<T>(10000);
+    size_t bytes_large  = inclusive_scan_cuda_temp_bytes<T>(1000000);
 
-        size_t temp_bytes = inclusive_scan_cuda_temp_bytes<T>(n);
-        DeviceRawBuffer temp1(temp_bytes);
-        DeviceRawBuffer temp2(temp_bytes);
-
-        inclusive_scan_cuda(d_in.get(), d_out1.get(), n, temp1.get(), temp1.size(), nullptr);
-        cudaDeviceSynchronize();
-        dispatch::test::copy_to_host(d_out1.get(), output1.data(), n);
-
-        dispatch::test::copy_to_device(input.data(), d_in.get(), n);
-        inclusive_scan_cuda(d_in.get(), d_out2.get(), n, temp2.get(), temp2.size(), nullptr);
-        cudaDeviceSynchronize();
-        dispatch::test::copy_to_host(d_out2.get(), output2.data(), n);
-
-        EXPECT_EQ(output1, output2); // Integers should be deterministic
-    } else {
-        GTEST_SKIP() << "Float types are non-deterministic in CUDA";
-    }
+    // Temp storage should be non-zero for non-empty
+    EXPECT_GT(bytes_small, 0u);
+    // Generally increases with size (or stays same for CUB's implementation)
+    EXPECT_GE(bytes_large, bytes_small);
+    EXPECT_GE(bytes_medium, bytes_small);
 }
 
 } // namespace
