@@ -315,7 +315,7 @@ computeSparseInfo(const int32_t tileSideLength,
 
     // Compute a bitmask for each tile indicating which pixels are active in that tile
     torch::Tensor tileBitMask =
-        torch::zeros({numUniqueTiles, numWordsPerTileBitmask(tileSideLength)},
+        torch::empty({numUniqueTiles, numWordsPerTileBitmask(tileSideLength)},
                      torch::TensorOptions().device(device).dtype(torch::kUInt64));
 
     // TODO: Check available shared memory and adjust block size accordingly
