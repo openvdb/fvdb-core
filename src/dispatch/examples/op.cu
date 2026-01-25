@@ -26,7 +26,7 @@
 //   binary size when working with high-dimensional dispatch spaces.
 //
 // THE OP STRUCT IDIOM:
-//   Define a struct (inclusive_scan_op_t) with:
+//   Define a struct (iscan_op) with:
 //     1. A static `op` template that takes tag<device, stype, contiguity, placement, determinism>
 //        and uses if-constexpr to branch on the compile-time values.
 //     2. Type aliases for stypes, the full space, the supported subspaces, and the dispatcher.

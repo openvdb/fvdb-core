@@ -1,6 +1,10 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+// dispatch_table: Sparse-subspace dispatch table with runtime lookup.
+// Supports sparse instantiation via subspaces, with factory patterns
+// (from_op<Op>() / from_visitor()) for populating entries.
+//
 #ifndef DISPATCH_DISPATCH_TABLE_H
 #define DISPATCH_DISPATCH_TABLE_H
 
@@ -17,6 +21,8 @@
 
 namespace dispatch {
 
+// Sparse dispatch table: only instantiates entries for declared subspaces.
+// Runtime dispatch via operator() throws if coordinate not found.
 template <typename Axes, typename FunctionSignature> class dispatch_table;
 
 template <typename... Axes, typename ReturnType, typename... Args>
@@ -68,7 +74,8 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
         return dispatch_table(const_data);
     }
 
-    // Dispatch - throws if coordinate not found or handler is null
+    // Runtime dispatch: looks up coordinate and invokes registered handler.
+    // Throws std::runtime_error if coordinate not found or handler is null.
     return_type
     operator()(coord_tuple_type const &coord_tuple, Args... args) const {
         auto const it = _data->find(coord_tuple);
@@ -82,7 +89,8 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
         return fptr(args...);
     }
 
-    // For struct with static op() overloads
+    // Factory for struct-based dispatch: Op must have static op(tag<...>, args...)
+    // overloads matching the dispatch space coordinates.
     template <typename Op>
     static auto
     from_op() {
@@ -92,7 +100,8 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
         };
     }
 
-    // For overloaded/visitor pattern (default-constructible functor)
+    // Factory for visitor-based dispatch: Visitor must be default-constructible
+    // and callable as visitor(tag<...>, args...) for each coordinate.
     template <typename Visitor>
     static auto
     from_visitor(Visitor) {
