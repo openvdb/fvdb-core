@@ -206,7 +206,9 @@ TYPED_TEST(ScanLibCudaTest, WithStream) {
     DeviceRawBuffer temp(temp_bytes);
 
     cudaStream_t stream;
-    cudaStreamCreate(&stream);
+    cudaError_t stream_err = cudaStreamCreate(&stream);
+    ASSERT_EQ(cudaSuccess, stream_err)
+        << "cudaStreamCreate failed: " << cudaGetErrorString(stream_err);
 
     inclusive_scan_cuda(d_in.get(), d_out.get(), n, temp.get(), temp.size(), stream);
     cudaStreamSynchronize(stream);

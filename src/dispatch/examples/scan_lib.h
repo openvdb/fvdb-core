@@ -32,15 +32,10 @@
 #ifndef DISPATCH_EXAMPLES_SCAN_LIB_H
 #define DISPATCH_EXAMPLES_SCAN_LIB_H
 
+#include <cuda_runtime.h>
+
 #include <cstddef>
 #include <cstdint>
-
-#ifdef __CUDACC__
-#include <cuda_runtime.h>
-#else
-// Forward declare cudaStream_t for header compatibility when not compiling with nvcc
-using cudaStream_t = void *;
-#endif
 
 namespace scan_lib {
 
