@@ -11,6 +11,8 @@
 #include <ATen/OpMathType.h>
 #include <c10/cuda/CUDAException.h>
 
+#include <cstdint>
+
 namespace fvdb {
 namespace detail {
 namespace ops {
@@ -65,19 +67,8 @@ sampleTrilinearCallbackVec4(int32_t bidx,
                             JaggedAccessor<float, 2> points,
                             TensorAccessor<float, 2> gridData,
                             BatchGridAccessor batchAccessor,
-                            TensorAccessor<float, 2> outFeatures,
-                            int32_t numChannels) {
+                            TensorAccessor<float, 2> outFeatures) {
     const int32_t cBase = cidx * 4; // starting channel for this group
-
-    // Handle boundary: if this group goes past numChannels, fall back to scalar
-    if (cBase + 4 > numChannels) {
-        // Process remaining channels individually
-        for (int32_t c = cBase; c < numChannels; ++c) {
-            sampleTrilinearCallback<float, JaggedAccessor, TensorAccessor>(
-                bidx, eidx, c, points, gridData, batchAccessor, outFeatures);
-        }
-        return;
-    }
 
     const auto &pointsData               = points.data();
     const nanovdb::OnIndexGrid *gpuGrid  = batchAccessor.grid(bidx);
@@ -99,7 +90,8 @@ sampleTrilinearCallbackVec4(int32_t bidx,
         if (gridAcc.isActive(ijk)) {
             const int64_t indexIjk = gridAcc.getValue(ijk) - 1 + baseOffset;
             // Vectorized load: load 4 consecutive floats
-            const float4 gridVal = *reinterpret_cast<const float4 *>(&gridData[indexIjk][cBase]);
+            const float4 gridVal = *reinterpret_cast<const float4 *>(
+                __builtin_assume_aligned(&gridData[indexIjk][cBase], 16));
             accum.x += wTrilinear * gridVal.x;
             accum.y += wTrilinear * gridVal.y;
             accum.z += wTrilinear * gridVal.z;
@@ -108,7 +100,7 @@ sampleTrilinearCallbackVec4(int32_t bidx,
     }
 
     // Vectorized store: write 4 consecutive floats
-    *reinterpret_cast<float4 *>(&outFeatures[eidx][cBase]) = accum;
+    *reinterpret_cast<float4 *>(__builtin_assume_aligned(&outFeatures[eidx][cBase], 16)) = accum;
 }
 
 template <torch::DeviceType DeviceTag, typename scalar_t>
@@ -120,10 +112,10 @@ SampleGridTrilinear(const GridBatchImpl &batchHdl,
                     .dtype(gridData.dtype())
                     .device(gridData.device())
                     .requires_grad(gridData.requires_grad());
-    torch::Tensor gridDataReshape = featureCoalescedView(gridData);     // [B*N, -1]
+    torch::Tensor gridDataReshape = featureCoalescedView(gridData).contiguous();     // [B*N, -1]
     torch::Tensor outFeatures =
-        torch::zeros({points.rsize(0), gridDataReshape.size(1)}, opts); // [B*M, -1]
-    auto outShape = spliceShape({points.rsize(0)}, gridData, 1);        // [B*M, *]
+        torch::zeros({points.rsize(0), gridDataReshape.size(1)}, opts).contiguous(); // [B*M, -1]
+    auto outShape = spliceShape({points.rsize(0)}, gridData, 1);                     // [B*M, *]
 
     auto batchAcc             = gridBatchAccessor<DeviceTag>(batchHdl);
     auto gridDataAcc          = tensorAccessor<DeviceTag, scalar_t, 2>(gridDataReshape);
@@ -141,23 +133,18 @@ SampleGridTrilinear(const GridBatchImpl &batchHdl,
         };
 
         // Use vectorized float4 loads for float32 when channels is a multiple of 4
-        // (alignment requirement: numChannels % 4 == 0 ensures all rows are 16-byte aligned)
+        // and base pointers are 16-byte aligned
         if constexpr (std::is_same_v<scalar_t, float>) {
-            if (numChannels >= 4 && numChannels % 4 == 0) {
+            if (numChannels >= 4 && numChannels % 4 == 0 &&
+                reinterpret_cast<uintptr_t>(gridDataReshape.data_ptr<float>()) % 16 == 0 &&
+                reinterpret_cast<uintptr_t>(outFeatures.data_ptr<float>()) % 16 == 0) {
                 const auto numChannelGroups = (numChannels + 3) / 4;
                 auto cb                     = [=] __device__(int32_t bidx,
                                          int32_t eidx,
                                          int32_t cidx,
                                          JaggedRAcc32<float, 2> pts) {
                     sampleTrilinearCallbackVec4<JaggedRAcc32, TorchRAcc32>(
-                        bidx,
-                        eidx,
-                        cidx,
-                        pts,
-                        gridDataAcc,
-                        batchAcc,
-                        outFeaturesAcc,
-                        static_cast<int32_t>(numChannels));
+                        bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc);
                 };
                 dispatchForEach(numChannelGroups, cb);
             } else {
