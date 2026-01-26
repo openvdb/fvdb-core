@@ -5,6 +5,16 @@ cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
 
 project(fvdb LANGUAGES CXX CUDA)
 
+# Build options - must be defined before subdirectories that use them
+option(FVDB_BUILD_TESTS "Configure CMake to build tests" ON)
+option(FVDB_BUILD_BENCHMARKS "Configure CMake to build (google & nvbench) benchmarks" OFF)
+option(FVDB_STRIP_SYMBOLS "Strip symbols from the build" OFF)
+option(FVDB_LINEINFO "Enable lineinfo in the build" OFF)
+
+message(STATUS "FVDB: Configure CMake to build tests: ${FVDB_BUILD_TESTS}")
+message(STATUS "FVDB: Configure CMake to build (google & nvbench) benchmarks: ${FVDB_BUILD_BENCHMARKS}")
+message(STATUS "FVDB_STRIP_SYMBOLS: ${FVDB_STRIP_SYMBOLS}")
+
 # Get dependencies
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_cpm.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_nvtx.cmake)
@@ -19,16 +29,6 @@ enable_testing()
 
 # Add dispatch interface library (header-only)
 add_subdirectory(dispatch)
-
-# Build options
-option(FVDB_BUILD_TESTS "Configure CMake to build tests" ON)
-option(FVDB_BUILD_BENCHMARKS "Configure CMake to build (google & nvbench) benchmarks" OFF)
-option(FVDB_STRIP_SYMBOLS "Strip symbols from the build" OFF)
-option(FVDB_LINEINFO "Enable lineinfo in the build" OFF)
-
-message(STATUS "FVDB: Configure CMake to build tests: ${FVDB_BUILD_TESTS}")
-message(STATUS "FVDB: Configure CMake to build (google & nvbench) benchmarks: ${FVDB_BUILD_BENCHMARKS}")
-message(STATUS "FVDB_STRIP_SYMBOLS: ${FVDB_STRIP_SYMBOLS}")
 
 
 # Generate compile_commands.json
