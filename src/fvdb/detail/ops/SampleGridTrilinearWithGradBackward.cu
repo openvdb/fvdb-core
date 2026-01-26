@@ -103,18 +103,13 @@ sampleTrilinearWithGradBackwardCallbackVec4(int32_t bidx,
         static_cast<const float *>(__builtin_assume_aligned(&gradOutFeatures[eidx][cBase], 16));
 
     // Load gradOutGradFeatures for 4 channels (each has 3 components)
-    const float gradGrad0_x = gradOutGradFeatures[eidx][cBase + 0][0];
-    const float gradGrad0_y = gradOutGradFeatures[eidx][cBase + 0][1];
-    const float gradGrad0_z = gradOutGradFeatures[eidx][cBase + 0][2];
-    const float gradGrad1_x = gradOutGradFeatures[eidx][cBase + 1][0];
-    const float gradGrad1_y = gradOutGradFeatures[eidx][cBase + 1][1];
-    const float gradGrad1_z = gradOutGradFeatures[eidx][cBase + 1][2];
-    const float gradGrad2_x = gradOutGradFeatures[eidx][cBase + 2][0];
-    const float gradGrad2_y = gradOutGradFeatures[eidx][cBase + 2][1];
-    const float gradGrad2_z = gradOutGradFeatures[eidx][cBase + 2][2];
-    const float gradGrad3_x = gradOutGradFeatures[eidx][cBase + 3][0];
-    const float gradGrad3_y = gradOutGradFeatures[eidx][cBase + 3][1];
-    const float gradGrad3_z = gradOutGradFeatures[eidx][cBase + 3][2];
+    float gradGrad[4][3];
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        gradGrad[i][0] = gradOutGradFeatures[eidx][cBase + i][0];
+        gradGrad[i][1] = gradOutGradFeatures[eidx][cBase + i][1];
+        gradGrad[i][2] = gradOutGradFeatures[eidx][cBase + i][2];
+    }
 
 #pragma unroll
     for (auto it = TrilinearInterpolationWithGradIterator<float>(xyz); it.isValid(); ++it) {
@@ -123,33 +118,23 @@ sampleTrilinearWithGradBackwardCallbackVec4(int32_t bidx,
             const nanovdb::math::Vec4<float> &wXYZ = it->second;
 
             // Compute addValue for each of the 4 channels
-            float addValue0 = wXYZ[0] * gradFeat[0] + wXYZ[1] * gradGrad0_x * gradTransform[0] +
-                              wXYZ[2] * gradGrad0_y * gradTransform[1] +
-                              wXYZ[3] * gradGrad0_z * gradTransform[2];
-
-            float addValue1 = wXYZ[0] * gradFeat[1] + wXYZ[1] * gradGrad1_x * gradTransform[0] +
-                              wXYZ[2] * gradGrad1_y * gradTransform[1] +
-                              wXYZ[3] * gradGrad1_z * gradTransform[2];
-
-            float addValue2 = wXYZ[0] * gradFeat[2] + wXYZ[1] * gradGrad2_x * gradTransform[0] +
-                              wXYZ[2] * gradGrad2_y * gradTransform[1] +
-                              wXYZ[3] * gradGrad2_z * gradTransform[2];
-
-            float addValue3 = wXYZ[0] * gradFeat[3] + wXYZ[1] * gradGrad3_x * gradTransform[0] +
-                              wXYZ[2] * gradGrad3_y * gradTransform[1] +
-                              wXYZ[3] * gradGrad3_z * gradTransform[2];
+            float addValue[4];
+#pragma unroll
+            for (int i = 0; i < 4; ++i) {
+                addValue[i] = wXYZ[0] * gradFeat[i] + wXYZ[1] * gradGrad[i][0] * gradTransform[0] +
+                              wXYZ[2] * gradGrad[i][1] * gradTransform[1] +
+                              wXYZ[3] * gradGrad[i][2] * gradTransform[2];
+            }
 
             // Scalar atomic writes
             if constexpr (DeviceTag == torch::kCUDA) {
-                gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 0], addValue0);
-                gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 1], addValue1);
-                gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 2], addValue2);
-                gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 3], addValue3);
+#pragma unroll
+                for (int i = 0; i < 4; ++i)
+                    gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + i], addValue[i]);
             } else if constexpr (DeviceTag == torch::kPrivateUse1) {
-                atomicAdd_system(&outGridData[indexIjk][cBase + 0], addValue0);
-                atomicAdd_system(&outGridData[indexIjk][cBase + 1], addValue1);
-                atomicAdd_system(&outGridData[indexIjk][cBase + 2], addValue2);
-                atomicAdd_system(&outGridData[indexIjk][cBase + 3], addValue3);
+#pragma unroll
+                for (int i = 0; i < 4; ++i)
+                    atomicAdd_system(&outGridData[indexIjk][cBase + i], addValue[i]);
             }
         }
     }

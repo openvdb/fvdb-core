@@ -98,15 +98,13 @@ splatIntoGridTrilinearCallbackVec4(int32_t bidx,
             const float weight     = it->second;
 
             if constexpr (DeviceTag == torch::kCUDA) {
-                gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 0], weight * pData[0]);
-                gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 1], weight * pData[1]);
-                gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 2], weight * pData[2]);
-                gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 3], weight * pData[3]);
+#pragma unroll
+                for (int i = 0; i < 4; ++i)
+                    gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + i], weight * pData[i]);
             } else if constexpr (DeviceTag == torch::kPrivateUse1) {
-                atomicAdd_system(&outGridData[indexIjk][cBase + 0], weight * pData[0]);
-                atomicAdd_system(&outGridData[indexIjk][cBase + 1], weight * pData[1]);
-                atomicAdd_system(&outGridData[indexIjk][cBase + 2], weight * pData[2]);
-                atomicAdd_system(&outGridData[indexIjk][cBase + 3], weight * pData[3]);
+#pragma unroll
+                for (int i = 0; i < 4; ++i)
+                    atomicAdd_system(&outGridData[indexIjk][cBase + i], weight * pData[i]);
             }
         }
     }

@@ -107,52 +107,30 @@ sampleTrilinearWithGradCallbackVec4(int32_t bidx,
             auto gridVal = static_cast<const float *>(
                 __builtin_assume_aligned(&gridData[indexIjk][cBase], 16));
 
-            accumFeat[0] += wXYZ[0] * gridVal[0];
-            accumFeat[1] += wXYZ[0] * gridVal[1];
-            accumFeat[2] += wXYZ[0] * gridVal[2];
-            accumFeat[3] += wXYZ[0] * gridVal[3];
-
-            accumGradX[0] += wXYZ[1] * gridVal[0];
-            accumGradX[1] += wXYZ[1] * gridVal[1];
-            accumGradX[2] += wXYZ[1] * gridVal[2];
-            accumGradX[3] += wXYZ[1] * gridVal[3];
-
-            accumGradY[0] += wXYZ[2] * gridVal[0];
-            accumGradY[1] += wXYZ[2] * gridVal[1];
-            accumGradY[2] += wXYZ[2] * gridVal[2];
-            accumGradY[3] += wXYZ[2] * gridVal[3];
-
-            accumGradZ[0] += wXYZ[3] * gridVal[0];
-            accumGradZ[1] += wXYZ[3] * gridVal[1];
-            accumGradZ[2] += wXYZ[3] * gridVal[2];
-            accumGradZ[3] += wXYZ[3] * gridVal[3];
+#pragma unroll
+            for (int i = 0; i < 4; ++i) {
+                accumFeat[i] += wXYZ[0] * gridVal[i];
+                accumGradX[i] += wXYZ[1] * gridVal[i];
+                accumGradY[i] += wXYZ[2] * gridVal[i];
+                accumGradZ[i] += wXYZ[3] * gridVal[i];
+            }
         }
     }
 
     // Vectorized store for features
     auto outPtr = static_cast<float *>(__builtin_assume_aligned(&outFeatures[eidx][cBase], 16));
-    outPtr[0]   = accumFeat[0];
-    outPtr[1]   = accumFeat[1];
-    outPtr[2]   = accumFeat[2];
-    outPtr[3]   = accumFeat[3];
+#pragma unroll
+    for (int i = 0; i < 4; ++i)
+        outPtr[i] = accumFeat[i];
 
-    // Store gradients (need to apply gradTransform and store to 3D tensor)
-    // outGradFeatures has shape [M, C, 3], so we store each dimension separately
-    outGradFeatures[eidx][cBase + 0][0] = accumGradX[0] * gradTransform[0];
-    outGradFeatures[eidx][cBase + 0][1] = accumGradY[0] * gradTransform[1];
-    outGradFeatures[eidx][cBase + 0][2] = accumGradZ[0] * gradTransform[2];
-
-    outGradFeatures[eidx][cBase + 1][0] = accumGradX[1] * gradTransform[0];
-    outGradFeatures[eidx][cBase + 1][1] = accumGradY[1] * gradTransform[1];
-    outGradFeatures[eidx][cBase + 1][2] = accumGradZ[1] * gradTransform[2];
-
-    outGradFeatures[eidx][cBase + 2][0] = accumGradX[2] * gradTransform[0];
-    outGradFeatures[eidx][cBase + 2][1] = accumGradY[2] * gradTransform[1];
-    outGradFeatures[eidx][cBase + 2][2] = accumGradZ[2] * gradTransform[2];
-
-    outGradFeatures[eidx][cBase + 3][0] = accumGradX[3] * gradTransform[0];
-    outGradFeatures[eidx][cBase + 3][1] = accumGradY[3] * gradTransform[1];
-    outGradFeatures[eidx][cBase + 3][2] = accumGradZ[3] * gradTransform[2];
+        // Store gradients (need to apply gradTransform and store to 3D tensor)
+        // outGradFeatures has shape [M, C, 3], so we store each dimension separately
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        outGradFeatures[eidx][cBase + i][0] = accumGradX[i] * gradTransform[0];
+        outGradFeatures[eidx][cBase + i][1] = accumGradY[i] * gradTransform[1];
+        outGradFeatures[eidx][cBase + i][2] = accumGradZ[i] * gradTransform[2];
+    }
 }
 
 template <torch::DeviceType DeviceTag, typename scalar_t>

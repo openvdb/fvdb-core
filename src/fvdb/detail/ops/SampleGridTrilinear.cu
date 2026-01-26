@@ -92,19 +92,17 @@ sampleTrilinearCallbackVec4(int32_t bidx,
             // Vectorized load: load 4 consecutive floats
             auto gridVal = static_cast<const float *>(
                 __builtin_assume_aligned(&gridData[indexIjk][cBase], 16));
-            accum[0] += wTrilinear * gridVal[0];
-            accum[1] += wTrilinear * gridVal[1];
-            accum[2] += wTrilinear * gridVal[2];
-            accum[3] += wTrilinear * gridVal[3];
+#pragma unroll
+            for (int i = 0; i < 4; ++i)
+                accum[i] += wTrilinear * gridVal[i];
         }
     }
 
     // Vectorized store: write 4 consecutive floats
     auto outPtr = static_cast<float *>(__builtin_assume_aligned(&outFeatures[eidx][cBase], 16));
-    outPtr[0]   = accum[0];
-    outPtr[1]   = accum[1];
-    outPtr[2]   = accum[2];
-    outPtr[3]   = accum[3];
+#pragma unroll
+    for (int i = 0; i < 4; ++i)
+        outPtr[i] = accum[i];
 }
 
 template <torch::DeviceType DeviceTag, typename scalar_t>
