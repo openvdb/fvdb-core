@@ -526,23 +526,44 @@ launchRasterizeContributingGaussianIdsForwardKernel(
         // Build JaggedTensor structure
         const bool tileOffsetsAreSparse = tileOffsets.dim() == 1;
         const auto C = tileOffsetsAreSparse ? outIds.num_outer_lists() : tileOffsets.size(0);
-        const auto pixelsPerCamera = outputNumPixels / C;
 
         // Prepare counts and compute total
         torch::Tensor numValidSamplesData = numValidSamples.to(torch::kInt64).contiguous();
         const auto totalCount             = numValidSamplesData.sum().item<int64_t>();
 
-        // Use uniform pixels per camera mode
-        return convertPaddedToVariableSizeJagged<ScalarType>(
-            outIds,
-            outWeights,
-            numValidSamplesData,
-            totalCount,
-            C,
-            settings.numDepthSamples,
-            pixelsPerCamera, // uniform mode
-            std::nullopt,    // no camera offsets needed
-            means2d.options());
+        bool isUniformPixelsPerCameraDistribution = false;
+        if (pixelsToRender.has_value()) {
+            // sparse mode, check if pixels are uniformly distributed across cameras
+            torch::Tensor offsets                = outIds.joffsets();
+            torch::Tensor diffs                  = offsets.slice(0, 1) - offsets.slice(0, 0, -1);
+            isUniformPixelsPerCameraDistribution = (diffs == diffs[0]).all().item<bool>();
+        } else {
+            // dense mode, always uniform pixels per camera distribution
+            isUniformPixelsPerCameraDistribution = true;
+        }
+
+        if (isUniformPixelsPerCameraDistribution) {
+            return convertPaddedToVariableSizeJagged<ScalarType>(outIds,
+                                                                 outWeights,
+                                                                 numValidSamplesData,
+                                                                 totalCount,
+                                                                 C,
+                                                                 settings.numDepthSamples,
+                                                                 -1,
+                                                                 outIds.joffsets(),
+                                                                 means2d.options());
+        } else {
+            const auto pixelsPerCamera = outputNumPixels / C;
+            return convertPaddedToVariableSizeJagged<ScalarType>(outIds,
+                                                                 outWeights,
+                                                                 numValidSamplesData,
+                                                                 totalCount,
+                                                                 C,
+                                                                 settings.numDepthSamples,
+                                                                 pixelsPerCamera,
+                                                                 std::nullopt,
+                                                                 means2d.options());
+        }
     }
 
     TORCH_CHECK_VALUE(maybeNumContributingGaussians.has_value(),
