@@ -100,11 +100,43 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
         };
     }
 
-    // Factory for visitor-based dispatch: Visitor must be default-constructible
-    // and callable as visitor(tag<...>, args...) for each coordinate.
+    // Factory for visitor-based dispatch: creates dispatch entries from a visitor type.
+    //
+    // IMPORTANT: The visitor instance is used ONLY for type deduction. A fresh
+    // Visitor{} is default-constructed for each dispatch call. This means:
+    //   - Capturing lambdas are NOT supported (they aren't default-constructible)
+    //   - Stateful visitors will lose their state
+    //   - Only stateless, default-constructible visitors work correctly
+    //
+    // This design enables the std::visit "overloaded" idiom (C++20):
+    //
+    //   // Helper type for combining multiple lambdas into one visitor
+    //   template<class... Ts>
+    //   struct overloaded : Ts... { using Ts::operator()...; };
+    //
+    //   // Usage with dispatch_table (analogous to std::visit):
+    //   auto table = dispatch_table<MyAxes, void(int)>(
+    //       dispatch_table<MyAxes, void(int)>::from_visitor(overloaded{
+    //           [](tag<A>, int x) { /* handle A */ },
+    //           [](tag<B>, int x) { /* handle B */ },
+    //           [](auto, int x)   { /* fallback */ }
+    //       }),
+    //       full_space<MyAxes>
+    //   );
+    //
+    // In C++20, non-capturing lambdas are default-constructible, so the
+    // overloaded type inheriting from them is also default-constructible.
+    //
+    // See: https://en.cppreference.com/w/cpp/utility/variant/visit
+    //
     template <typename Visitor>
     static auto
     from_visitor(Visitor) {
+        static_assert(std::is_default_constructible_v<Visitor>,
+                      "Visitor must be default-constructible. The passed instance is used "
+                      "only for type deduction; a fresh Visitor{} is constructed for each "
+                      "dispatch call. Capturing lambdas are not supported.");
+
         return [](auto coord) -> function_pointer_type {
             using C = decltype(coord);
             return &visitor_call<Visitor, C>;

@@ -36,6 +36,30 @@
 // coverage, and algorithm selection based on constraints, see functional.cu and op.cu.
 //
 // ================================================================================================
+//
+// PORTABLE SCALAR OPERATIONS FOR HALF-PRECISION TYPES
+// ====================================================
+//
+// When writing CUDA kernels that must work across float, double, at::Half, and at::BFloat16,
+// avoid using:
+//
+//   - max(x, T(0)) or std::max(x, T(0)):
+//     Unqualified max() may not have overloads for at::Half/at::BFloat16, or may resolve to
+//     an incorrect overload. std::max requires operator< which these types may not define
+//     in device code.
+//
+//   - Ternary expressions like (x > T(0)) ? x : T(0):
+//     at::Half and at::BFloat16 may lack comparison operators (operator>, operator<, etc.)
+//     in CUDA device code, causing compilation failures or SFINAE-related instantiation errors.
+//
+// SOLUTION: Use relu_scalar(x) defined below, with concept-constrained overloads:
+//   - half_like (at::Half/at::BFloat16): casts to float for comparison (always supported).
+//   - builtin_float_like (float/double): native comparison preserves full precision.
+//
+// This pattern generalizes: scalar comparisons on half-precision types should cast to float
+// for the comparison while preserving the original type for the result.
+//
+// ================================================================================================
 
 #include "examples/relu.h"
 
@@ -48,17 +72,46 @@
 #include <c10/cuda/CUDAGuard.h>
 
 #include <algorithm>
+#include <type_traits>
 
 namespace dispatch_examples {
 
 using namespace dispatch;
+
+// ------------------------------------------------------------------------------------------------
+// relu_scalar: Portable ReLU for all types in torch_full_float_stype_axis.
+// See "PORTABLE SCALAR OPERATIONS" above for rationale.
+// ------------------------------------------------------------------------------------------------
+
+template <typename T>
+concept half_like = std::is_same_v<T, at::Half> || std::is_same_v<T, at::BFloat16>;
+
+template <typename T>
+concept builtin_float_like = std::is_same_v<T, float> || std::is_same_v<T, double>;
+
+__host__ __device__ inline auto
+relu_scalar(half_like auto x) -> decltype(x) {
+    // Compare in float; half types may lack comparison operators in device code.
+    if (static_cast<float>(x) > 0.0f) {
+        return x;
+    }
+    return {};
+}
+
+__host__ __device__ inline auto
+relu_scalar(builtin_float_like auto x) -> decltype(x) {
+    if (x > 0) {
+        return x;
+    }
+    return {};
+}
 
 template <typename T>
 __global__ void
 relu_kernel(torch::PackedTensorAccessor64<T, 1> input, torch::PackedTensorAccessor64<T, 1> output) {
     int64_t const idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < input.size(0)) {
-        output[idx] = max(input[idx], T(0));
+        output[idx] = relu_scalar(input[idx]);
     }
 }
 
@@ -71,8 +124,10 @@ struct relu_op_t {
         auto input_accessor  = input.accessor<T, 1>();
         auto output_accessor = output.accessor<T, 1>();
 
+        // A "real" implementation would parallelize this loop on the host, but
+        // we're keeping it simple here to illustrate the dispatch pattern.
         for (int64_t i = 0; i < input.numel(); ++i) {
-            output_accessor[i] = std::max(input_accessor[i], T(0));
+            output_accessor[i] = relu_scalar(input_accessor[i]);
         }
     }
 

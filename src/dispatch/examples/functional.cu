@@ -53,9 +53,17 @@
 //   - Natural for functional-style code that calls into external libraries
 //   - Easy to add new overloads without modifying existing code
 //   - Concepts and requires clauses provide fine-grained control over selection
-//   - Good when different algorithm variants have very different implementations
+//   - Enables the "overloaded" idiom for combining multiple lambdas
 //
-// Compare with op.cu which achieves the same result using if-constexpr inside a single struct.
+// FUNCTIONAL vs OP - HOW THEY FIND THE IMPLEMENTATION:
+//   Both functional.cu and op.cu use the same overload-based dispatch pattern. The only difference
+//   is how the dispatch table locates the implementation:
+//
+//   - functional.cu: Uses `from_visitor(lambda)` where the lambda forwards to free functions.
+//   - op.cu: Uses `from_op<Op>()` which calls `Op::op(tag<...>, args...)` directly.
+//
+//   Choose based on organizational preference: free functions allow more separation and the
+//   overloaded idiom, struct-based keeps implementations and type aliases together.
 //
 // ================================================================================================
 

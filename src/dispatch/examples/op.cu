@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // ================================================================================================
-// op.cu - Dispatch via a Single Struct with if-constexpr
+// op.cu - Dispatch via a Struct with Static Method Overloads
 // ================================================================================================
 //
-// This file demonstrates dispatch across a 5-DIMENSIONAL SPACE using a single struct with one
-// heavily-templated `op` function. The dispatch coordinates are the same as functional.cu:
+// This file demonstrates dispatch across a 5-DIMENSIONAL SPACE using a struct with overloaded
+// static `op` methods. The dispatch coordinates are the same as functional.cu:
 // Device × ScalarType × Contiguity × Placement × Determinism.
 //
 // THE FULL SPACE would be: 2 devices × 4 stypes × 2 contiguities × 2 placements × 2 determinisms
@@ -27,38 +27,34 @@
 //
 // THE OP STRUCT IDIOM:
 //   Define a struct (iscan_op) with:
-//     1. A static `op` template that takes tag<device, stype, contiguity, placement, determinism>
-//        and uses if-constexpr to branch on the compile-time values.
-//     2. Type aliases for stypes, the full space, the supported subspaces, and the dispatcher.
+//     1. Multiple static `op` overloads, each taking a different tag<...> signature
+//     2. Type aliases for stypes, the full space, the supported subspaces, and the dispatcher
 //
-//   All algorithm selection logic lives in one function body with compile-time branching:
-//     if constexpr (device == kCPU) {
-//         if constexpr (placement == in_place) { ... }
-//         else if constexpr (torch_integer_stype<stype>) { ... }
-//         ...
-//     } else { /* CUDA path */ }
-//
-//   The compiler eliminates dead branches, so each instantiation contains only the relevant code.
+//   The compiler uses overload resolution to select the most specific match, just like with
+//   free functions in functional.cu. Use `requires` clauses to constrain which overloads match.
 //
 // DISPATCH TABLE CONSTRUCTION:
 //   The table is built using `from_op<iscan_op>()` which automatically finds and
 //   instantiates `iscan_op::op` for every point in the declared subspaces.
 //
-// WHY A SINGLE STRUCT?
-//   - All logic is centralized and easy to follow top-to-bottom
-//   - Type aliases for space/subspaces live with the implementation
-//   - Good when algorithm variants share significant code structure
-//   - Easier to see the complete decision tree at a glance
+// OP vs FUNCTIONAL - HOW THEY FIND THE IMPLEMENTATION:
+//   Both examples use the same overload-based dispatch pattern with concepts/requires. The only
+//   difference is how the dispatch table locates the implementation:
+//
+//   - op.cu: Uses `from_op<Op>()` which calls `Op::op(tag<...>, args...)` directly.
+//     The implementations are static methods in a struct, and all related type aliases
+//     (space, subspaces, dispatcher) live together in that struct.
+//
+//   - functional.cu: Uses `from_visitor(lambda)` where the lambda forwards to free functions.
+//     This enables the "overloaded" idiom for combining multiple lambdas, or simply calling
+//     into an overload set of free functions.
+//
+//   Choose based on organizational preference: struct-based keeps everything together,
+//   functional-style allows more separation and the overloaded idiom.
 //
 // Both op.cu and functional.cu wrap the same underlying library (scan_lib, a stand-in for something
 // like CUB or Thrust). They produce identical behavior but demonstrate different code organization
-// styles. Choose based on whether your algorithm variants are structurally similar (op) or
-// fundamentally different implementations (functional).
-//
-// Note also that the use of a single "op" function with a big constexpr switch in it
-// is orthogonal to the op structure vs. the free-function structure. We could just as easily
-// have made one big free-function called iscan_impl that did constexpr switching and broken
-// out the static "op" methods analogous to what the functional version does now.
+// styles.
 //
 // ================================================================================================
 
@@ -78,67 +74,95 @@ namespace dispatch_examples {
 using namespace dispatch;
 
 struct iscan_op {
-    template <torch::DeviceType device,
-              torch::ScalarType stype,
-              contiguity cont,
-              placement plc,
-              determinism det>
-    static tensor_with_notes
-    op(tag<device, stype, cont, plc, det>, torch::Tensor input) {
-        using T      = torch_scalar_cpp_type_t<stype>;
-        auto const n = input.size(0);
+    // we don't check that the input matches the tag, we rely on the dispatch system working
+    // correctly.
 
-        if constexpr (device == torch::kCPU) {
-            if constexpr (plc == placement::in_place) {
-                // CPU in-place: always use serial in-place scan
-                scan_lib::inclusive_scan_serial_inplace<T>(
-                    input.data_ptr<T>(), input.stride(0), input.size(0));
-                return {input, "cpu_serial_in_place"};
-            } else {
-                // CPU out-of-place: select based on stype and determinism
-                if constexpr (torch_integer_stype<stype>) {
-                    // Integer types: use parallel scan (integers are always deterministic)
-                    auto output = torch::empty_like(input);
-                    scan_lib::inclusive_scan_parallel<T>(input.data_ptr<T>(),
-                                                         input.stride(0),
-                                                         output.data_ptr<T>(),
-                                                         output.stride(0),
-                                                         input.size(0));
-                    return {output, "cpu_parallel_int_deterministic"};
-                } else if constexpr (torch_float_stype<stype> && det == determinism::not_required) {
-                    // Float types with non-deterministic: use parallel scan
-                    auto output = torch::empty_like(input);
-                    scan_lib::inclusive_scan_parallel<T>(input.data_ptr<T>(),
-                                                         input.stride(0),
-                                                         output.data_ptr<T>(),
-                                                         output.stride(0),
-                                                         input.size(0));
-                    return {output, "cpu_parallel_float_nondeterministic"};
-                } else {
-                    // Fallback: serial out-of-place (floats with deterministic)
-                    auto output = torch::empty_like(input);
-                    scan_lib::inclusive_scan_serial<T>(input.data_ptr<T>(),
-                                                       input.stride(0),
-                                                       output.data_ptr<T>(),
-                                                       output.stride(0),
-                                                       input.size(0));
-                    return {output, "cpu_serial_out_of_place"};
-                }
-            }
+    // On cpu, for out of place with any stype, contiguity or determinism, we will use the serial
+    // option.
+    template <torch::ScalarType stype, contiguity cont, determinism det>
+    static tensor_with_notes
+    op(tag<torch::kCPU, stype, cont, placement::out_of_place, det>, torch::Tensor input) {
+        using T     = torch_scalar_cpp_type_t<stype>;
+        auto output = torch::empty_like(input);
+        scan_lib::inclusive_scan_serial<T>(input.data_ptr<T>(),
+                                           input.stride(0),
+                                           output.data_ptr<T>(),
+                                           output.stride(0),
+                                           input.size(0));
+        return {output, "cpu_serial_out_of_place"};
+    }
+
+    // On cpu, for in place with any stype, contiguity or determinism, we will use the serial
+    // option.
+    template <torch::ScalarType stype, contiguity cont, determinism det>
+    static tensor_with_notes
+    op(tag<torch::kCPU, stype, cont, placement::in_place, det>, torch::Tensor input) {
+        using T = torch_scalar_cpp_type_t<stype>;
+        scan_lib::inclusive_scan_serial_inplace<T>(
+            input.data_ptr<T>(), input.stride(0), input.size(0));
+        return {input, "cpu_serial_in_place"};
+    }
+
+    // out of place for integer types on cpu will choose parallel option, regardless of determinism.
+    // This is more constrained than above because of the concept on stype. We will simply say that
+    // integer types are always constrained to deterministic, which we can fix in the calling code.
+    template <torch::ScalarType stype, contiguity cont>
+        requires torch_integer_stype<stype>
+    static tensor_with_notes
+    op(tag<torch::kCPU, stype, cont, placement::out_of_place, determinism::required>,
+       torch::Tensor input) {
+        using T     = torch_scalar_cpp_type_t<stype>;
+        auto output = torch::empty_like(input);
+        scan_lib::inclusive_scan_parallel<T>(input.data_ptr<T>(),
+                                             input.stride(0),
+                                             output.data_ptr<T>(),
+                                             output.stride(0),
+                                             input.size(0));
+        return {output, "cpu_parallel_int_deterministic"};
+    }
+
+    // on cpu, for float types and whatever contiguity, with non-deterministic we choose parallel
+    // option.
+    template <torch::ScalarType stype, contiguity cont>
+        requires torch_float_stype<stype>
+    static tensor_with_notes
+    op(tag<torch::kCPU, stype, cont, placement::out_of_place, determinism::not_required>,
+       torch::Tensor input) {
+        using T     = torch_scalar_cpp_type_t<stype>;
+        auto output = torch::empty_like(input);
+        scan_lib::inclusive_scan_parallel<T>(input.data_ptr<T>(),
+                                             input.stride(0),
+                                             output.data_ptr<T>(),
+                                             output.stride(0),
+                                             input.size(0));
+        return {output, "cpu_parallel_float_nondeterministic"};
+    }
+
+    // on gpu, for contiguous, out-of-place:
+    // - integer types require deterministic (integers are deterministic on CUDA)
+    // - float types require non-deterministic (floats are non-deterministic on CUDA)
+    template <torch::ScalarType stype, determinism det>
+        requires cuda_scan_allowed<stype, det>
+    static tensor_with_notes
+    op(tag<torch::kCUDA, stype, contiguity::contiguous, placement::out_of_place, det>,
+       torch::Tensor input) {
+        using T = torch_scalar_cpp_type_t<stype>;
+
+        c10::cuda::CUDAGuard device_guard(input.device());
+        cudaStream_t stream = at::cuda::getCurrentCUDAStream().stream();
+        auto const n        = input.size(0);
+        auto output         = torch::empty_like(input);
+        auto temp_bytes     = scan_lib::inclusive_scan_cuda_temp_bytes<T>(n);
+        auto temp           = torch::empty({static_cast<int64_t>(temp_bytes)},
+                                 torch::dtype(torch::kByte).device(input.device()));
+
+        scan_lib::inclusive_scan_cuda<T>(
+            input.data_ptr<T>(), output.data_ptr<T>(), n, temp.data_ptr(), temp_bytes, stream);
+
+        if constexpr (torch_is_integer_stype_v<stype>) {
+            return {output, "cuda_int_deterministic"};
         } else {
-            c10::cuda::CUDAGuard device_guard(input.device());
-            cudaStream_t stream   = at::cuda::getCurrentCUDAStream().stream();
-            auto output           = torch::empty_like(input);
-            auto const temp_bytes = scan_lib::inclusive_scan_cuda_temp_bytes<T>(n);
-            auto temp             = torch::empty({static_cast<int64_t>(temp_bytes)},
-                                     torch::dtype(torch::kByte).device(input.device()));
-            scan_lib::inclusive_scan_cuda<T>(
-                input.data_ptr<T>(), output.data_ptr<T>(), n, temp.data_ptr(), temp_bytes, stream);
-            if constexpr (torch_integer_stype<stype>) {
-                return {output, "cuda_int_deterministic"};
-            } else {
-                return {output, "cuda_float_nondeterministic"};
-            }
+            return {output, "cuda_float_nondeterministic"};
         }
     }
 

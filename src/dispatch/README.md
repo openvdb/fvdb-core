@@ -293,29 +293,44 @@ tensor_with_notes iscan_impl(tag<torch::kCPU, stype, cont, placement::out_of_pla
 The compiler's overload resolution picks the most specific match. **Sparse instantiation**: only
 4 subspaces are declared, not the full 64-point space.
 
-### `op.cu` — Single Struct with if-constexpr
+The dispatch table is built using `from_visitor()` with a lambda that forwards to the overload set:
 
-Same 5D space, same sparse subspaces, but uses a **single templated `op` function** with `if
-constexpr` branching:
+```cpp
+dispatcher::from_visitor([](auto coord, torch::Tensor t) { return iscan_impl(coord, t); })
+```
+
+### `op.cu` — Struct with Static Method Overloads
+
+Same 5D space, same sparse subspaces, same overload-based dispatch pattern. The only difference
+is organizational: implementations are **static methods in a struct** instead of free functions:
 
 ```cpp
 struct iscan_op {
-    template <torch::DeviceType device, torch::ScalarType stype, contiguity cont,
-              placement plc, determinism det>
-    static tensor_with_notes op(tag<device, stype, cont, plc, det>,
-                                 torch::Tensor input) {
-        if constexpr (device == torch::kCPU) {
-            if constexpr (plc == placement::in_place) {
-                // CPU in-place implementation
-            } else {
-                // CPU out-of-place implementation
-            }
-        } else {
-            // CUDA implementation
-        }
-    }
+    template <torch::ScalarType stype, contiguity cont, determinism det>
+    static tensor_with_notes
+    op(tag<torch::kCPU, stype, cont, placement::out_of_place, det>, torch::Tensor input) { ... }
+
+    template <torch::ScalarType stype, contiguity cont>
+        requires torch_integer_stype<stype>
+    static tensor_with_notes
+    op(tag<torch::kCPU, stype, cont, placement::out_of_place, determinism::required>,
+       torch::Tensor input) { ... }
+
+    // Type aliases for space, subspaces, and dispatcher live here too
+    using space = axes<...>;
+    using dispatcher = dispatch_table<space, ...>;
 };
 ```
+
+The dispatch table is built using `from_op<Op>()` which directly calls `Op::op(tag<...>, args...)`:
+
+```cpp
+dispatcher::from_op<iscan_op>()
+```
+
+**Choosing between them**: Both use the same overload resolution mechanics. The struct-based
+approach keeps implementations and type aliases together. The free-function approach allows
+more separation and enables the `overloaded` idiom for combining multiple lambdas.
 
 Both `functional.cu` and `op.cu` wrap the same stand-in "external library" (`scan_lib.h`),
 demonstrating how to integrate with libraries like CUB, Thrust, or CUTLASS.
