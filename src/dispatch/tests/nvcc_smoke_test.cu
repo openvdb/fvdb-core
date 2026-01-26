@@ -59,16 +59,25 @@ test_dispatch_kernel(int *result) {
 
 TEST(NvccSmoke, DispatchTableInDeviceCode) {
     int *d_result;
-    cudaMalloc(&d_result, sizeof(int));
+    cudaError_t err = cudaMalloc(&d_result, sizeof(int));
+    ASSERT_EQ(cudaSuccess, err);
 
     test_dispatch_kernel<<<1, 1>>>(d_result);
 
+    err = cudaGetLastError();
+    ASSERT_EQ(cudaSuccess, err);
+
+    err = cudaDeviceSynchronize();
+    ASSERT_EQ(cudaSuccess, err);
+
     int h_result;
-    cudaMemcpy(&h_result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
+    err = cudaMemcpy(&h_result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
+    ASSERT_EQ(cudaSuccess, err);
 
     EXPECT_EQ(h_result, 42);
 
-    cudaFree(d_result);
+    err = cudaFree(d_result);
+    ASSERT_EQ(cudaSuccess, err);
 }
 
 // =============================================================================

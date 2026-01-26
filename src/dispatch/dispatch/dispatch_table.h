@@ -20,8 +20,23 @@
 
 namespace dispatch {
 
+//------------------------------------------------------------------------------
+// Exception for dispatch lookup failures
+//------------------------------------------------------------------------------
+
+// Exception thrown when dispatch lookup fails (coordinate not in space or no handler).
+// This allows callers to distinguish dispatch failures from other runtime errors.
+class dispatch_lookup_error : public std::runtime_error {
+  public:
+    using std::runtime_error::runtime_error;
+};
+
+//------------------------------------------------------------------------------
+// Sparse dispatch table
+//------------------------------------------------------------------------------
+
 // Sparse dispatch table: only instantiates entries for declared subspaces.
-// Runtime dispatch via operator() throws if coordinate not found.
+// Runtime dispatch via operator() throws dispatch_lookup_error if coordinate not found.
 template <typename Axes, typename FunctionSignature> class dispatch_table;
 
 template <typename... Axes, typename ReturnType, typename... Args>
@@ -74,15 +89,15 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
     }
 
     // Runtime dispatch: looks up coordinate and invokes registered handler.
-    // Throws std::runtime_error if coordinate not found or handler is null.
+    // Throws dispatch_lookup_error if coordinate not found or handler is null.
     return_type
     operator()(coord_tuple_type const &coord_tuple, Args... args) const {
         auto const it = _data->find(coord_tuple);
         if (it == _data->end()) {
-            throw std::runtime_error("Dispatch failed: coordinate not in space");
+            throw dispatch_lookup_error("Dispatch failed: coordinate not in space");
         }
         if (it->second == nullptr) {
-            throw std::runtime_error("Dispatch failed: no handler registered for coordinate");
+            throw dispatch_lookup_error("Dispatch failed: no handler registered for coordinate");
         }
         function_pointer_type fptr = it->second;
         return fptr(args...);

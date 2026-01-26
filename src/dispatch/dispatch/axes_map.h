@@ -228,8 +228,17 @@ insert_or_assign(axes_map<Axes, T> &map, Key_like key, V &&value) {
     // exception for a tag or a tuple that's outside the domain, but it won't
     // fail to compile. (a goal of this class). In this case, though, we're
     // actually trying to assign, so we require (and have just checked)
-    // that the key given is valid. Therefore, we can just do this:
-    map[axes_map_key<Axes>{key}] = std::forward<V>(value);
+    // that the key given is valid. Therefore, we can rely on a find +
+    // emplace/assign pattern that doesn't require T to be default-constructible.
+    // Use transparent lookup with the provided key-like type.
+    auto it = map.find(key);
+    if (it == map.end()) {
+        // Key not present: emplace the value.
+        map.emplace(key, std::forward<V>(value));
+    } else {
+        // Key present: assign directly without default-constructing T.
+        it->second = std::forward<V>(value);
+    }
 }
 
 //------------------------------------------------------------------------------

@@ -9,6 +9,8 @@
 #include <cmath>
 #include <cstdint>
 #include <numeric>
+#include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -27,7 +29,11 @@ class DeviceRawBuffer {
   public:
     explicit DeviceRawBuffer(size_t bytes) : bytes_(bytes) {
         if (bytes > 0) {
-            cudaMalloc(&ptr_, bytes);
+            cudaError_t err = cudaMalloc(&ptr_, bytes);
+            if (err != cudaSuccess) {
+                throw std::runtime_error(std::string("cudaMalloc failed: ") +
+                                         cudaGetErrorString(err));
+            }
         }
     }
     ~DeviceRawBuffer() {

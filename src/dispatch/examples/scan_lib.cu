@@ -5,6 +5,9 @@
 
 #include <cub/cub.cuh>
 
+#include <stdexcept>
+#include <string>
+
 namespace scan_lib {
 
 // =============================================================================
@@ -40,13 +43,17 @@ inclusive_scan_cuda(
         return;
 
     // Run CUB inclusive scan
-    cub::DeviceScan::InclusiveSum(temp,       // d_temp_storage
-                                  temp_bytes, // temp_storage_bytes
-                                  in,         // d_in
-                                  out,        // d_out
-                                  n,          // num_items
-                                  stream      // stream
+    cudaError_t err = cub::DeviceScan::InclusiveSum(temp,       // d_temp_storage
+                                                    temp_bytes, // temp_storage_bytes
+                                                    in,         // d_in
+                                                    out,        // d_out
+                                                    n,          // num_items
+                                                    stream      // stream
     );
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string("CUB InclusiveSum failed: ") +
+                                 cudaGetErrorString(err));
+    }
 }
 
 // =============================================================================

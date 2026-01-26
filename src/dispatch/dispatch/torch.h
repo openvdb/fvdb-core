@@ -4,6 +4,7 @@
 #ifndef DISPATCH_DISPATCH_TORCH_H
 #define DISPATCH_DISPATCH_TORCH_H
 
+#include "dispatch/dispatch_table.h"
 #include "dispatch/torch_types.h"
 
 #include <ATen/core/TensorAccessor.h>
@@ -98,7 +99,8 @@ torch_dispatch(std::string_view function_name,
                Args &&...args) {
     try {
         return std::invoke(dispatcher, dispatch_coord, std::forward<Args>(args)...);
-    } catch (...) {
+    } catch (dispatch_lookup_error const &) {
+        // Only catch dispatch lookup failures - other exceptions propagate unchanged
         TORCH_CHECK_VALUE(false,
                           function_name,
                           ": unsupported dispatch combination - ",
