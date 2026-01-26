@@ -80,8 +80,8 @@ sampleTrilinearCallbackVec4(int32_t bidx,
     const nanovdb::math::Vec3<float> xyz =
         transform.apply(pointsData[eidx][0], pointsData[eidx][1], pointsData[eidx][2]);
 
-    // Accumulate in float4
-    float4 accum = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    // Accumulate in float array
+    alignas(16) float accum[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
 #pragma unroll
     for (auto it = TrilinearInterpolationIterator<float>(xyz); it.isValid(); ++it) {
@@ -90,17 +90,21 @@ sampleTrilinearCallbackVec4(int32_t bidx,
         if (gridAcc.isActive(ijk)) {
             const int64_t indexIjk = gridAcc.getValue(ijk) - 1 + baseOffset;
             // Vectorized load: load 4 consecutive floats
-            const float4 gridVal = *reinterpret_cast<const float4 *>(
+            auto gridVal = static_cast<const float *>(
                 __builtin_assume_aligned(&gridData[indexIjk][cBase], 16));
-            accum.x += wTrilinear * gridVal.x;
-            accum.y += wTrilinear * gridVal.y;
-            accum.z += wTrilinear * gridVal.z;
-            accum.w += wTrilinear * gridVal.w;
+            accum[0] += wTrilinear * gridVal[0];
+            accum[1] += wTrilinear * gridVal[1];
+            accum[2] += wTrilinear * gridVal[2];
+            accum[3] += wTrilinear * gridVal[3];
         }
     }
 
     // Vectorized store: write 4 consecutive floats
-    *reinterpret_cast<float4 *>(__builtin_assume_aligned(&outFeatures[eidx][cBase], 16)) = accum;
+    auto outPtr = static_cast<float *>(__builtin_assume_aligned(&outFeatures[eidx][cBase], 16));
+    outPtr[0]   = accum[0];
+    outPtr[1]   = accum[1];
+    outPtr[2]   = accum[2];
+    outPtr[3]   = accum[3];
 }
 
 template <torch::DeviceType DeviceTag, typename scalar_t>

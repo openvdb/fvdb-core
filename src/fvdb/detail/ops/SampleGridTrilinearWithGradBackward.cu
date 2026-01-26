@@ -99,8 +99,8 @@ sampleTrilinearWithGradBackwardCallbackVec4(int32_t bidx,
     auto gradTransform = transform.template applyGrad<float>(xyz);
 
     // Vectorized load of gradOutFeatures
-    const float4 gradFeat = *reinterpret_cast<const float4 *>(
-        __builtin_assume_aligned(&gradOutFeatures[eidx][cBase], 16));
+    auto gradFeat =
+        static_cast<const float *>(__builtin_assume_aligned(&gradOutFeatures[eidx][cBase], 16));
 
     // Load gradOutGradFeatures for 4 channels (each has 3 components)
     const float gradGrad0_x = gradOutGradFeatures[eidx][cBase + 0][0];
@@ -123,19 +123,19 @@ sampleTrilinearWithGradBackwardCallbackVec4(int32_t bidx,
             const nanovdb::math::Vec4<float> &wXYZ = it->second;
 
             // Compute addValue for each of the 4 channels
-            float addValue0 = wXYZ[0] * gradFeat.x + wXYZ[1] * gradGrad0_x * gradTransform[0] +
+            float addValue0 = wXYZ[0] * gradFeat[0] + wXYZ[1] * gradGrad0_x * gradTransform[0] +
                               wXYZ[2] * gradGrad0_y * gradTransform[1] +
                               wXYZ[3] * gradGrad0_z * gradTransform[2];
 
-            float addValue1 = wXYZ[0] * gradFeat.y + wXYZ[1] * gradGrad1_x * gradTransform[0] +
+            float addValue1 = wXYZ[0] * gradFeat[1] + wXYZ[1] * gradGrad1_x * gradTransform[0] +
                               wXYZ[2] * gradGrad1_y * gradTransform[1] +
                               wXYZ[3] * gradGrad1_z * gradTransform[2];
 
-            float addValue2 = wXYZ[0] * gradFeat.z + wXYZ[1] * gradGrad2_x * gradTransform[0] +
+            float addValue2 = wXYZ[0] * gradFeat[2] + wXYZ[1] * gradGrad2_x * gradTransform[0] +
                               wXYZ[2] * gradGrad2_y * gradTransform[1] +
                               wXYZ[3] * gradGrad2_z * gradTransform[2];
 
-            float addValue3 = wXYZ[0] * gradFeat.w + wXYZ[1] * gradGrad3_x * gradTransform[0] +
+            float addValue3 = wXYZ[0] * gradFeat[3] + wXYZ[1] * gradGrad3_x * gradTransform[0] +
                               wXYZ[2] * gradGrad3_y * gradTransform[1] +
                               wXYZ[3] * gradGrad3_z * gradTransform[2];
 

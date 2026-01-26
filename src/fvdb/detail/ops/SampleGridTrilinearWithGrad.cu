@@ -92,10 +92,10 @@ sampleTrilinearWithGradCallbackVec4(int32_t bidx,
     auto gradTransform = transform.template applyGrad<float>(xyz);
 
     // Accumulators for features and gradients (4 channels each)
-    float4 accumFeat  = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    float4 accumGradX = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    float4 accumGradY = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    float4 accumGradZ = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    alignas(16) float accumFeat[4]  = {0.0f, 0.0f, 0.0f, 0.0f};
+    alignas(16) float accumGradX[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    alignas(16) float accumGradY[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    alignas(16) float accumGradZ[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
 #pragma unroll
     for (auto it = TrilinearInterpolationWithGradIterator<float>(xyz); it.isValid(); ++it) {
@@ -104,52 +104,55 @@ sampleTrilinearWithGradCallbackVec4(int32_t bidx,
         if (gridAcc.isActive(ijk)) {
             const int64_t indexIjk = gridAcc.getValue(ijk) - 1 + baseOffset;
             // Vectorized load
-            const float4 gridVal = *reinterpret_cast<const float4 *>(
+            auto gridVal = static_cast<const float *>(
                 __builtin_assume_aligned(&gridData[indexIjk][cBase], 16));
 
-            accumFeat.x += wXYZ[0] * gridVal.x;
-            accumFeat.y += wXYZ[0] * gridVal.y;
-            accumFeat.z += wXYZ[0] * gridVal.z;
-            accumFeat.w += wXYZ[0] * gridVal.w;
+            accumFeat[0] += wXYZ[0] * gridVal[0];
+            accumFeat[1] += wXYZ[0] * gridVal[1];
+            accumFeat[2] += wXYZ[0] * gridVal[2];
+            accumFeat[3] += wXYZ[0] * gridVal[3];
 
-            accumGradX.x += wXYZ[1] * gridVal.x;
-            accumGradX.y += wXYZ[1] * gridVal.y;
-            accumGradX.z += wXYZ[1] * gridVal.z;
-            accumGradX.w += wXYZ[1] * gridVal.w;
+            accumGradX[0] += wXYZ[1] * gridVal[0];
+            accumGradX[1] += wXYZ[1] * gridVal[1];
+            accumGradX[2] += wXYZ[1] * gridVal[2];
+            accumGradX[3] += wXYZ[1] * gridVal[3];
 
-            accumGradY.x += wXYZ[2] * gridVal.x;
-            accumGradY.y += wXYZ[2] * gridVal.y;
-            accumGradY.z += wXYZ[2] * gridVal.z;
-            accumGradY.w += wXYZ[2] * gridVal.w;
+            accumGradY[0] += wXYZ[2] * gridVal[0];
+            accumGradY[1] += wXYZ[2] * gridVal[1];
+            accumGradY[2] += wXYZ[2] * gridVal[2];
+            accumGradY[3] += wXYZ[2] * gridVal[3];
 
-            accumGradZ.x += wXYZ[3] * gridVal.x;
-            accumGradZ.y += wXYZ[3] * gridVal.y;
-            accumGradZ.z += wXYZ[3] * gridVal.z;
-            accumGradZ.w += wXYZ[3] * gridVal.w;
+            accumGradZ[0] += wXYZ[3] * gridVal[0];
+            accumGradZ[1] += wXYZ[3] * gridVal[1];
+            accumGradZ[2] += wXYZ[3] * gridVal[2];
+            accumGradZ[3] += wXYZ[3] * gridVal[3];
         }
     }
 
     // Vectorized store for features
-    *reinterpret_cast<float4 *>(__builtin_assume_aligned(&outFeatures[eidx][cBase], 16)) =
-        accumFeat;
+    auto outPtr = static_cast<float *>(__builtin_assume_aligned(&outFeatures[eidx][cBase], 16));
+    outPtr[0]   = accumFeat[0];
+    outPtr[1]   = accumFeat[1];
+    outPtr[2]   = accumFeat[2];
+    outPtr[3]   = accumFeat[3];
 
     // Store gradients (need to apply gradTransform and store to 3D tensor)
     // outGradFeatures has shape [M, C, 3], so we store each dimension separately
-    outGradFeatures[eidx][cBase + 0][0] = accumGradX.x * gradTransform[0];
-    outGradFeatures[eidx][cBase + 0][1] = accumGradY.x * gradTransform[1];
-    outGradFeatures[eidx][cBase + 0][2] = accumGradZ.x * gradTransform[2];
+    outGradFeatures[eidx][cBase + 0][0] = accumGradX[0] * gradTransform[0];
+    outGradFeatures[eidx][cBase + 0][1] = accumGradY[0] * gradTransform[1];
+    outGradFeatures[eidx][cBase + 0][2] = accumGradZ[0] * gradTransform[2];
 
-    outGradFeatures[eidx][cBase + 1][0] = accumGradX.y * gradTransform[0];
-    outGradFeatures[eidx][cBase + 1][1] = accumGradY.y * gradTransform[1];
-    outGradFeatures[eidx][cBase + 1][2] = accumGradZ.y * gradTransform[2];
+    outGradFeatures[eidx][cBase + 1][0] = accumGradX[1] * gradTransform[0];
+    outGradFeatures[eidx][cBase + 1][1] = accumGradY[1] * gradTransform[1];
+    outGradFeatures[eidx][cBase + 1][2] = accumGradZ[1] * gradTransform[2];
 
-    outGradFeatures[eidx][cBase + 2][0] = accumGradX.z * gradTransform[0];
-    outGradFeatures[eidx][cBase + 2][1] = accumGradY.z * gradTransform[1];
-    outGradFeatures[eidx][cBase + 2][2] = accumGradZ.z * gradTransform[2];
+    outGradFeatures[eidx][cBase + 2][0] = accumGradX[2] * gradTransform[0];
+    outGradFeatures[eidx][cBase + 2][1] = accumGradY[2] * gradTransform[1];
+    outGradFeatures[eidx][cBase + 2][2] = accumGradZ[2] * gradTransform[2];
 
-    outGradFeatures[eidx][cBase + 3][0] = accumGradX.w * gradTransform[0];
-    outGradFeatures[eidx][cBase + 3][1] = accumGradY.w * gradTransform[1];
-    outGradFeatures[eidx][cBase + 3][2] = accumGradZ.w * gradTransform[2];
+    outGradFeatures[eidx][cBase + 3][0] = accumGradX[3] * gradTransform[0];
+    outGradFeatures[eidx][cBase + 3][1] = accumGradY[3] * gradTransform[1];
+    outGradFeatures[eidx][cBase + 3][2] = accumGradZ[3] * gradTransform[2];
 }
 
 template <torch::DeviceType DeviceTag, typename scalar_t>

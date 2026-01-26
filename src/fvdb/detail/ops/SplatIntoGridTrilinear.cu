@@ -89,8 +89,7 @@ splatIntoGridTrilinearCallbackVec4(int32_t bidx,
         transform.apply(pointCoordData[eidx][0], pointCoordData[eidx][1], pointCoordData[eidx][2]);
 
     // Vectorized load of 4 channels from pointsData
-    const float4 pData =
-        *reinterpret_cast<const float4 *>(__builtin_assume_aligned(&pointsData[eidx][cBase], 16));
+    auto pData = static_cast<const float *>(__builtin_assume_aligned(&pointsData[eidx][cBase], 16));
 
 #pragma unroll
     for (auto it = TrilinearInterpolationIterator<float>(xyz); it.isValid(); ++it) {
@@ -99,15 +98,15 @@ splatIntoGridTrilinearCallbackVec4(int32_t bidx,
             const float weight     = it->second;
 
             if constexpr (DeviceTag == torch::kCUDA) {
-                gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 0], weight * pData.x);
-                gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 1], weight * pData.y);
-                gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 2], weight * pData.z);
-                gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 3], weight * pData.w);
+                gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 0], weight * pData[0]);
+                gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 1], weight * pData[1]);
+                gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 2], weight * pData[2]);
+                gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 3], weight * pData[3]);
             } else if constexpr (DeviceTag == torch::kPrivateUse1) {
-                atomicAdd_system(&outGridData[indexIjk][cBase + 0], weight * pData.x);
-                atomicAdd_system(&outGridData[indexIjk][cBase + 1], weight * pData.y);
-                atomicAdd_system(&outGridData[indexIjk][cBase + 2], weight * pData.z);
-                atomicAdd_system(&outGridData[indexIjk][cBase + 3], weight * pData.w);
+                atomicAdd_system(&outGridData[indexIjk][cBase + 0], weight * pData[0]);
+                atomicAdd_system(&outGridData[indexIjk][cBase + 1], weight * pData[1]);
+                atomicAdd_system(&outGridData[indexIjk][cBase + 2], weight * pData[2]);
+                atomicAdd_system(&outGridData[indexIjk][cBase + 3], weight * pData[3]);
             }
         }
     }
