@@ -11,6 +11,8 @@
 #include <THC/THCAtomics.cuh>
 #include <c10/cuda/CUDAException.h>
 
+#include <cstdint>
+
 namespace fvdb {
 namespace detail {
 namespace ops {
@@ -73,18 +75,8 @@ splatIntoGridTrilinearCallbackVec4(int32_t bidx,
                                    JaggedAccessor<float, 2> points,
                                    TensorAccessor<float, 2> pointsData,
                                    BatchGridAccessor batchAccessor,
-                                   TensorAccessor<float, 2> outGridData,
-                                   int32_t numChannels) {
+                                   TensorAccessor<float, 2> outGridData) {
     const int32_t cBase = cidx * 4;
-
-    // Handle boundary
-    if (cBase + 4 > numChannels) {
-        for (int32_t c = cBase; c < numChannels; ++c) {
-            splatIntoGridTrilinearCallback<DeviceTag, float, JaggedAccessor, TensorAccessor>(
-                bidx, eidx, c, points, pointsData, batchAccessor, outGridData);
-        }
-        return;
-    }
 
     const auto &pointCoordData = points.data();
 
@@ -97,7 +89,8 @@ splatIntoGridTrilinearCallbackVec4(int32_t bidx,
         transform.apply(pointCoordData[eidx][0], pointCoordData[eidx][1], pointCoordData[eidx][2]);
 
     // Vectorized load of 4 channels from pointsData
-    const float4 pData = *reinterpret_cast<const float4 *>(&pointsData[eidx][cBase]);
+    const float4 pData =
+        *reinterpret_cast<const float4 *>(__builtin_assume_aligned(&pointsData[eidx][cBase], 16));
 
 #pragma unroll
     for (auto it = TrilinearInterpolationIterator<float>(xyz); it.isValid(); ++it) {
@@ -128,10 +121,10 @@ SplatIntoGridTrilinear(const GridBatchImpl &batchHdl,
     int64_t numOutputValues = batchHdl.totalVoxels();
     auto opts               = torch::TensorOptions().dtype(points.dtype()).device(points.device());
     torch::Tensor outGridData =
-        torch::zeros(spliceShape({numOutputValues}, pointsData, 1), opts); // [N, *]
+        torch::zeros(spliceShape({numOutputValues}, pointsData, 1), opts);            // [N, *]
 
-    torch::Tensor pointsDataReshape  = featureCoalescedView(pointsData);   // [B*M, -1]
-    torch::Tensor outGridDataReshape = featureCoalescedView(outGridData);  // [N, -1]
+    torch::Tensor pointsDataReshape  = featureCoalescedView(pointsData).contiguous(); // [B*M, -1]
+    torch::Tensor outGridDataReshape = featureCoalescedView(outGridData);             // [N, -1]
 
     torch::Tensor _outGridData;
     if (points.scalar_type() == at::kHalf) {
@@ -141,9 +134,9 @@ SplatIntoGridTrilinear(const GridBatchImpl &batchHdl,
     }
 
     auto batchAcc       = gridBatchAccessor<DeviceTag>(batchHdl);
-    auto pointsDataAcc  = tensorAccessor<DeviceTag, scalar_t, 2>(pointsData);
+    auto pointsDataAcc  = tensorAccessor<DeviceTag, scalar_t, 2>(pointsDataReshape);
     auto outGridDataAcc = tensorAccessor<DeviceTag, at::opmath_type<scalar_t>, 2>(_outGridData);
-    const int64_t numChannels = pointsData.size(1);
+    const int64_t numChannels = pointsDataReshape.size(1);
 
     if constexpr (DeviceTag == torch::kCUDA || DeviceTag == torch::kPrivateUse1) {
         auto dispatchForEach = [&](auto numCh, const auto &cb) {
@@ -155,23 +148,17 @@ SplatIntoGridTrilinear(const GridBatchImpl &batchHdl,
         };
 
         // Use vectorized float4 loads for float32 when channels is a multiple of 4
-        // (alignment requirement: numChannels % 4 == 0 ensures all rows are 16-byte aligned)
+        // and base pointers are 16-byte aligned
         if constexpr (std::is_same_v<scalar_t, float>) {
-            if (numChannels >= 4 && numChannels % 4 == 0) {
+            if (numChannels >= 4 && numChannels % 4 == 0 &&
+                reinterpret_cast<uintptr_t>(pointsDataReshape.data_ptr<float>()) % 16 == 0) {
                 const auto numChannelGroups = (numChannels + 3) / 4;
                 auto cb                     = [=] __device__(int32_t bidx,
                                          int32_t eidx,
                                          int32_t cidx,
                                          JaggedRAcc32<float, 2> pts) {
                     splatIntoGridTrilinearCallbackVec4<DeviceTag, JaggedRAcc32, TorchRAcc32>(
-                        bidx,
-                        eidx,
-                        cidx,
-                        pts,
-                        pointsDataAcc,
-                        batchAcc,
-                        outGridDataAcc,
-                        static_cast<int32_t>(numChannels));
+                        bidx, eidx, cidx, pts, pointsDataAcc, batchAcc, outGridDataAcc);
                 };
                 dispatchForEach(numChannelGroups, cb);
             } else {

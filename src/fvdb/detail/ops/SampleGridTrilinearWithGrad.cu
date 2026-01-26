@@ -11,6 +11,8 @@
 #include <ATen/OpMathType.h>
 #include <c10/cuda/CUDAException.h>
 
+#include <cstdint>
+
 namespace fvdb {
 namespace detail {
 namespace ops {
@@ -74,18 +76,8 @@ sampleTrilinearWithGradCallbackVec4(int32_t bidx,
                                     TensorAccessor<float, 2> gridData,
                                     BatchGridAccessor batchAccessor,
                                     TensorAccessor<float, 2> outFeatures,
-                                    TensorAccessor<float, 3> outGradFeatures,
-                                    int32_t numChannels) {
+                                    TensorAccessor<float, 3> outGradFeatures) {
     const int32_t cBase = cidx * 4;
-
-    // Handle boundary: fall back to scalar for remaining channels
-    if (cBase + 4 > numChannels) {
-        for (int32_t c = cBase; c < numChannels; ++c) {
-            sampleTrilinearWithGradCallback<float, JaggedAccessor, TensorAccessor>(
-                bidx, eidx, c, points, gridData, batchAccessor, outFeatures, outGradFeatures);
-        }
-        return;
-    }
 
     const auto &pointsData               = points.data();
     const nanovdb::OnIndexGrid *gpuGrid  = batchAccessor.grid(bidx);
@@ -112,7 +104,8 @@ sampleTrilinearWithGradCallbackVec4(int32_t bidx,
         if (gridAcc.isActive(ijk)) {
             const int64_t indexIjk = gridAcc.getValue(ijk) - 1 + baseOffset;
             // Vectorized load
-            const float4 gridVal = *reinterpret_cast<const float4 *>(&gridData[indexIjk][cBase]);
+            const float4 gridVal = *reinterpret_cast<const float4 *>(
+                __builtin_assume_aligned(&gridData[indexIjk][cBase], 16));
 
             accumFeat.x += wXYZ[0] * gridVal.x;
             accumFeat.y += wXYZ[0] * gridVal.y;
@@ -137,7 +130,8 @@ sampleTrilinearWithGradCallbackVec4(int32_t bidx,
     }
 
     // Vectorized store for features
-    *reinterpret_cast<float4 *>(&outFeatures[eidx][cBase]) = accumFeat;
+    *reinterpret_cast<float4 *>(__builtin_assume_aligned(&outFeatures[eidx][cBase], 16)) =
+        accumFeat;
 
     // Store gradients (need to apply gradTransform and store to 3D tensor)
     // outGradFeatures has shape [M, C, 3], so we store each dimension separately
@@ -167,9 +161,9 @@ SampleGridTrilinearWithGrad(const GridBatchImpl &batchHdl,
                     .dtype(gridData.dtype())
                     .device(gridData.device())
                     .requires_grad(gridData.requires_grad());
-    torch::Tensor gridDataReshape = featureCoalescedView(gridData);                  // [B*N, -1]
+    torch::Tensor gridDataReshape = featureCoalescedView(gridData).contiguous();     // [B*N, -1]
     torch::Tensor outFeatures =
-        torch::zeros({points.rsize(0), gridDataReshape.size(1)}, opts);              // [B*M, -1]
+        torch::zeros({points.rsize(0), gridDataReshape.size(1)}, opts).contiguous(); // [B*M, -1]
     torch::Tensor outGradFeatures =
         torch::zeros({points.rsize(0), gridDataReshape.size(1), 3}, opts);           // [B*M, -1, 3]
     std::vector<int64_t> outShape     = spliceShape({points.rsize(0)}, gridData, 1); // [B*M, *]
@@ -192,9 +186,11 @@ SampleGridTrilinearWithGrad(const GridBatchImpl &batchHdl,
         };
 
         // Use vectorized float4 loads for float32 when channels is a multiple of 4
-        // (alignment requirement: numChannels % 4 == 0 ensures all rows are 16-byte aligned)
+        // and base pointers are 16-byte aligned
         if constexpr (std::is_same_v<scalar_t, float>) {
-            if (numChannels >= 4 && numChannels % 4 == 0) {
+            if (numChannels >= 4 && numChannels % 4 == 0 &&
+                reinterpret_cast<uintptr_t>(gridDataReshape.data_ptr<float>()) % 16 == 0 &&
+                reinterpret_cast<uintptr_t>(outFeatures.data_ptr<float>()) % 16 == 0) {
                 const auto numChannelGroups = (numChannels + 3) / 4;
                 auto cb                     = [=] __device__(int32_t bidx,
                                          int32_t eidx,
@@ -208,8 +204,7 @@ SampleGridTrilinearWithGrad(const GridBatchImpl &batchHdl,
                         gridDataAcc,
                         batchAcc,
                         outFeaturesAcc,
-                        outGradFeaturesAcc,
-                        static_cast<int32_t>(numChannels));
+                        outGradFeaturesAcc);
                 };
                 dispatchForEach(numChannelGroups, cb);
             } else {

@@ -12,6 +12,8 @@
 #include <THC/THCAtomics.cuh>
 #include <c10/cuda/CUDAException.h>
 
+#include <cstdint>
+
 namespace fvdb {
 namespace detail {
 namespace ops {
@@ -81,27 +83,8 @@ sampleTrilinearWithGradBackwardCallbackVec4(int32_t bidx,
                                             TensorAccessor<float, 2> gradOutFeatures,
                                             TensorAccessor<float, 3> gradOutGradFeatures,
                                             BatchGridAccessor batchAccessor,
-                                            TensorAccessor<float, 2> outGridData,
-                                            int32_t numChannels) {
+                                            TensorAccessor<float, 2> outGridData) {
     const int32_t cBase = cidx * 4;
-
-    // Handle boundary
-    if (cBase + 4 > numChannels) {
-        for (int32_t c = cBase; c < numChannels; ++c) {
-            sampleTrilinearWithGradBackwardCallback<DeviceTag,
-                                                    float,
-                                                    JaggedAccessor,
-                                                    TensorAccessor>(bidx,
-                                                                    eidx,
-                                                                    c,
-                                                                    points,
-                                                                    gradOutFeatures,
-                                                                    gradOutGradFeatures,
-                                                                    batchAccessor,
-                                                                    outGridData);
-        }
-        return;
-    }
 
     const auto &pointsData = points.data();
 
@@ -116,7 +99,8 @@ sampleTrilinearWithGradBackwardCallbackVec4(int32_t bidx,
     auto gradTransform = transform.template applyGrad<float>(xyz);
 
     // Vectorized load of gradOutFeatures
-    const float4 gradFeat = *reinterpret_cast<const float4 *>(&gradOutFeatures[eidx][cBase]);
+    const float4 gradFeat = *reinterpret_cast<const float4 *>(
+        __builtin_assume_aligned(&gradOutFeatures[eidx][cBase], 16));
 
     // Load gradOutGradFeatures for 4 channels (each has 3 components)
     const float gradGrad0_x = gradOutGradFeatures[eidx][cBase + 0][0];
@@ -184,8 +168,11 @@ SampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
     torch::Tensor outGrad = torch::zeros_like(dataReshape);          // [N, -1]
     auto outShape         = spliceShape({outGrad.size(0)}, data, 1); // [B*M, *]
 
+    // Make gradOutFeatures contiguous for vectorized reads
+    torch::Tensor gradOutFeaturesContig = gradOutFeatures.contiguous();
+
     auto batchAcc               = gridBatchAccessor<DeviceTag>(batchHdl);
-    auto gradOutFeaturesAcc     = tensorAccessor<DeviceTag, scalar_t, 2>(gradOutFeatures);
+    auto gradOutFeaturesAcc     = tensorAccessor<DeviceTag, scalar_t, 2>(gradOutFeaturesContig);
     auto gradOutGradFeaturesAcc = tensorAccessor<DeviceTag, scalar_t, 3>(gradOutGradFeatures);
     auto outGradAcc             = tensorAccessor<DeviceTag, scalar_t, 2>(outGrad);
     const int64_t numChannels   = outGrad.size(1);
@@ -200,9 +187,10 @@ SampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
         };
 
         // Use vectorized float4 loads for float32 when channels is a multiple of 4
-        // (alignment requirement: numChannels % 4 == 0 ensures all rows are 16-byte aligned)
+        // and base pointers are 16-byte aligned
         if constexpr (std::is_same_v<scalar_t, float>) {
-            if (numChannels >= 4 && numChannels % 4 == 0) {
+            if (numChannels >= 4 && numChannels % 4 == 0 &&
+                reinterpret_cast<uintptr_t>(gradOutFeaturesContig.data_ptr<float>()) % 16 == 0) {
                 const auto numChannelGroups = (numChannels + 3) / 4;
                 auto cb                     = [=] __device__(int32_t bidx,
                                          int32_t eidx,
@@ -210,16 +198,14 @@ SampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
                                          JaggedRAcc32<float, 2> pts) {
                     sampleTrilinearWithGradBackwardCallbackVec4<DeviceTag,
                                                                                     JaggedRAcc32,
-                                                                                    TorchRAcc32>(
-                        bidx,
-                        eidx,
-                        cidx,
-                        pts,
-                        gradOutFeaturesAcc,
-                        gradOutGradFeaturesAcc,
-                        batchAcc,
-                        outGradAcc,
-                        static_cast<int32_t>(numChannels));
+                                                                                    TorchRAcc32>(bidx,
+                                                                             eidx,
+                                                                             cidx,
+                                                                             pts,
+                                                                             gradOutFeaturesAcc,
+                                                                             gradOutGradFeaturesAcc,
+                                                                             batchAcc,
+                                                                             outGradAcc);
                 };
                 dispatchForEach(numChannelGroups, cb);
             } else {
