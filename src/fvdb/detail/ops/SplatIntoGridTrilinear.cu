@@ -59,6 +59,67 @@ splatIntoGridTrilinearCallback(int32_t bidx,
     }
 }
 
+// Vectorized callback for float32 - processes 4 channels per thread
+// Uses vectorized reads for pointsData, but scalar atomic writes
+template <torch::DeviceType DeviceTag,
+          template <typename T, int32_t D>
+          typename JaggedAccessor,
+          template <typename T, int32_t D>
+          typename TensorAccessor>
+__device__ void
+splatIntoGridTrilinearCallbackVec4(int32_t bidx,
+                                   int32_t eidx,
+                                   int32_t cidx, // channel group index
+                                   JaggedAccessor<float, 2> points,
+                                   TensorAccessor<float, 2> pointsData,
+                                   BatchGridAccessor batchAccessor,
+                                   TensorAccessor<float, 2> outGridData,
+                                   int32_t numChannels) {
+    const int32_t cBase = cidx * 4;
+
+    // Handle boundary
+    if (cBase + 4 > numChannels) {
+        for (int32_t c = cBase; c < numChannels; ++c) {
+            splatIntoGridTrilinearCallback<DeviceTag, float, JaggedAccessor, TensorAccessor>(
+                bidx, eidx, c, points, pointsData, batchAccessor, outGridData);
+        }
+        return;
+    }
+
+    const auto &pointCoordData = points.data();
+
+    const nanovdb::OnIndexGrid *gpuGrid  = batchAccessor.grid(bidx);
+    auto gridAcc                         = gpuGrid->getAccessor();
+    const int64_t baseOffset             = batchAccessor.voxelOffset(bidx);
+    const VoxelCoordTransform &transform = batchAccessor.primalTransform(bidx);
+
+    const nanovdb::math::Vec3<float> xyz =
+        transform.apply(pointCoordData[eidx][0], pointCoordData[eidx][1], pointCoordData[eidx][2]);
+
+    // Vectorized load of 4 channels from pointsData
+    const float4 pData = *reinterpret_cast<const float4 *>(&pointsData[eidx][cBase]);
+
+#pragma unroll
+    for (auto it = TrilinearInterpolationIterator<float>(xyz); it.isValid(); ++it) {
+        if (gridAcc.isActive(it->first)) {
+            const int64_t indexIjk = gridAcc.getValue(it->first) - 1 + baseOffset;
+            const float weight     = it->second;
+
+            if constexpr (DeviceTag == torch::kCUDA) {
+                gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 0], weight * pData.x);
+                gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 1], weight * pData.y);
+                gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 2], weight * pData.z);
+                gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 3], weight * pData.w);
+            } else if constexpr (DeviceTag == torch::kPrivateUse1) {
+                atomicAdd_system(&outGridData[indexIjk][cBase + 0], weight * pData.x);
+                atomicAdd_system(&outGridData[indexIjk][cBase + 1], weight * pData.y);
+                atomicAdd_system(&outGridData[indexIjk][cBase + 2], weight * pData.z);
+                atomicAdd_system(&outGridData[indexIjk][cBase + 3], weight * pData.w);
+            }
+        }
+    }
+}
+
 template <torch::DeviceType DeviceTag, typename scalar_t>
 torch::Tensor
 SplatIntoGridTrilinear(const GridBatchImpl &batchHdl,
@@ -82,27 +143,63 @@ SplatIntoGridTrilinear(const GridBatchImpl &batchHdl,
     auto batchAcc       = gridBatchAccessor<DeviceTag>(batchHdl);
     auto pointsDataAcc  = tensorAccessor<DeviceTag, scalar_t, 2>(pointsData);
     auto outGridDataAcc = tensorAccessor<DeviceTag, at::opmath_type<scalar_t>, 2>(_outGridData);
+    const int64_t numChannels = pointsData.size(1);
 
-    if constexpr (DeviceTag == torch::kCUDA) {
-        auto cb = [=]
-            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc32<scalar_t, 2> pts) {
+    if constexpr (DeviceTag == torch::kCUDA || DeviceTag == torch::kPrivateUse1) {
+        auto dispatchForEach = [&](auto numCh, const auto &cb) {
+            if constexpr (DeviceTag == torch::kCUDA) {
+                forEachJaggedElementChannelCUDA<scalar_t, 2>(DEFAULT_BLOCK_DIM, numCh, points, cb);
+            } else {
+                forEachJaggedElementChannelPrivateUse1<scalar_t, 2>(numCh, points, cb);
+            }
+        };
+
+        // Use vectorized float4 loads for float32 when channels is a multiple of 4
+        // (alignment requirement: numChannels % 4 == 0 ensures all rows are 16-byte aligned)
+        if constexpr (std::is_same_v<scalar_t, float>) {
+            if (numChannels >= 4 && numChannels % 4 == 0) {
+                const auto numChannelGroups = (numChannels + 3) / 4;
+                auto cb                     = [=] __device__(int32_t bidx,
+                                         int32_t eidx,
+                                         int32_t cidx,
+                                         JaggedRAcc32<float, 2> pts) {
+                    splatIntoGridTrilinearCallbackVec4<DeviceTag, JaggedRAcc32, TorchRAcc32>(
+                        bidx,
+                        eidx,
+                        cidx,
+                        pts,
+                        pointsDataAcc,
+                        batchAcc,
+                        outGridDataAcc,
+                        static_cast<int32_t>(numChannels));
+                };
+                dispatchForEach(numChannelGroups, cb);
+            } else {
+                auto cb = [=] __device__(int32_t bidx,
+                                         int32_t eidx,
+                                         int32_t cidx,
+                                         JaggedRAcc32<float, 2> pts) {
+                    splatIntoGridTrilinearCallback<DeviceTag, float, JaggedRAcc32, TorchRAcc32>(
+                        bidx, eidx, cidx, pts, pointsDataAcc, batchAcc, outGridDataAcc);
+                };
+                dispatchForEach(numChannels, cb);
+            }
+        } else {
+            auto cb = [=] __device__(int32_t bidx,
+                                     int32_t eidx,
+                                     int32_t cidx,
+                                     JaggedRAcc32<scalar_t, 2> pts) {
                 splatIntoGridTrilinearCallback<DeviceTag, scalar_t, JaggedRAcc32, TorchRAcc32>(
                     bidx, eidx, cidx, pts, pointsDataAcc, batchAcc, outGridDataAcc);
             };
-        forEachJaggedElementChannelCUDA<scalar_t, 2>(256, pointsData.size(1), points, cb);
-    } else if constexpr (DeviceTag == torch::kPrivateUse1) {
-        auto cb = [=]
-            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc32<scalar_t, 2> pts) {
-                splatIntoGridTrilinearCallback<DeviceTag, scalar_t, JaggedRAcc32, TorchRAcc32>(
-                    bidx, eidx, cidx, pts, pointsDataAcc, batchAcc, outGridDataAcc);
-            };
-        forEachJaggedElementChannelPrivateUse1<scalar_t, 2>(pointsData.size(1), points, cb);
+            dispatchForEach(numChannels, cb);
+        }
     } else {
         auto cb = [=](int32_t bidx, int32_t eidx, int32_t cidx, JaggedAcc<scalar_t, 2> pts) {
             splatIntoGridTrilinearCallback<DeviceTag, scalar_t, JaggedAcc, TorchAcc>(
                 bidx, eidx, cidx, pts, pointsDataAcc, batchAcc, outGridDataAcc);
         };
-        forEachJaggedElementChannelCPU<scalar_t, 2>(pointsData.size(1), points, cb);
+        forEachJaggedElementChannelCPU<scalar_t, 2>(numChannels, points, cb);
     }
 
     if (points.scalar_type() == at::kHalf) {
