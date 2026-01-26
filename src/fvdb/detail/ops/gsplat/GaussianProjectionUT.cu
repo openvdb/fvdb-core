@@ -22,33 +22,19 @@ namespace {
 // OpenCV camera distortion conventions:
 // https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html
 // Distortion coefficients are interpreted as:
-// - Radial: k1, k2, k3, k4, k5, k6 (k4..k6 used only for rational model)
+// - Radial (rational): k1..k6
 // - Tangential: p1, p2
-// - Thin prism: s1, s2, s3, s4
+// - Thin prism: s1..s4
 //
-// Note: the UT kernel currently receives these as *separate* tensors (radial/tangential/thin-prism),
-// but the math matches OpenCV's ordering/meaning.
+// When `DistortionModel::OPENCV` is selected, coefficients are provided as a single per-camera
+// vector in the order:
+//   [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]
 enum class OpenCVDistortionModel : uint8_t {
     NONE          = 0,  // no distortion
     RADTAN_5      = 5,  // k1,k2,p1,p2,k3 (polynomial radial up to r^6)
     RATIONAL_8    = 8,  // k1,k2,p1,p2,k3,k4,k5,k6 (rational radial)
     THIN_PRISM_12 = 12, // RATIONAL_8 + s1,s2,s3,s4
 };
-
-__host__ __device__ inline OpenCVDistortionModel
-pickOpenCVDistortionModel(const int numRadial, const int numTangential, const int numThinPrism) {
-    if (numRadial == 0 && numTangential == 0 && numThinPrism == 0) {
-        return OpenCVDistortionModel::NONE;
-    }
-    // Prefer the "largest" model that can represent the provided coefficients.
-    if (numThinPrism > 0) {
-        return OpenCVDistortionModel::THIN_PRISM_12;
-    }
-    if (numRadial >= 6) {
-        return OpenCVDistortionModel::RATIONAL_8;
-    }
-    return OpenCVDistortionModel::RADTAN_5;
-}
 
 template <typename T> struct OpenCVDistortion {
     using Vec2 = nanovdb::math::Vec2<T>;
@@ -231,10 +217,8 @@ template <typename ScalarType> struct ProjectionForwardUT {
     const ScalarType mRadiusClip;
     const RollingShutterType mRollingShutterType;
     const UTParams mUTParams;
-    const int64_t numRadialCoeffs;     // Number of radial distortion coeffs. One of (6, 3, 0).
-    const int64_t numTangentialCoeffs; // Number of tangential distortion coeffs. One of (2, 0).
-    const int64_t numThinPrismCoeffs;  // Number of thin prism distortion coeffs. One of (4, 0).
-    const OpenCVDistortionModel mDistortionModel;
+    const DistortionModel mDistortionModel;
+    const int64_t mNumDistortionCoeffs; // Number of distortion coeffs per camera (e.g. 12 for OPENCV)
 
     // Tensor Inputs
     const fvdb::TorchRAcc64<ScalarType, 2> mMeansAcc;                   // [N, 3]
@@ -243,9 +227,7 @@ template <typename ScalarType> struct ProjectionForwardUT {
     const fvdb::TorchRAcc32<ScalarType, 3> mWorldToCamMatricesStartAcc; // [C, 4, 4]
     const fvdb::TorchRAcc32<ScalarType, 3> mWorldToCamMatricesEndAcc;   // [C, 4, 4]
     const fvdb::TorchRAcc32<ScalarType, 3> mProjectionMatricesAcc;      // [C, 3, 3]
-    const fvdb::TorchRAcc64<ScalarType, 2> mRadialCoeffsAcc;     // [C, 6] or [C, 3] or [C, 0]
-    const fvdb::TorchRAcc64<ScalarType, 2> mTangentialCoeffsAcc; // [C, 2] or [C, 0]
-    const fvdb::TorchRAcc64<ScalarType, 2> mThinPrismCoeffsAcc;  // [C, 4] or [C, 0]
+    const fvdb::TorchRAcc64<ScalarType, 2> mDistortionCoeffsAcc;        // [C, K]
 
     // Outputs
     fvdb::TorchRAcc64<int32_t, 2> mOutRadiiAcc;      // [C, N]
@@ -262,9 +244,7 @@ template <typename ScalarType> struct ProjectionForwardUT {
     Mat3 *__restrict__ worldToCamRotMatsEndShared       = nullptr;
     Vec3 *__restrict__ worldToCamTranslationStartShared = nullptr;
     Vec3 *__restrict__ worldToCamTranslationEndShared   = nullptr;
-    ScalarType *__restrict__ radialCoeffsShared         = nullptr;
-    ScalarType *__restrict__ tangentialCoeffsShared     = nullptr;
-    ScalarType *__restrict__ thinPrismCoeffsShared      = nullptr;
+    ScalarType *__restrict__ distortionCoeffsShared     = nullptr;
 
     ProjectionForwardUT(
         const int64_t imageWidth,
@@ -275,6 +255,7 @@ template <typename ScalarType> struct ProjectionForwardUT {
         const ScalarType minRadius2d,
         const RollingShutterType rollingShutterType,
         const UTParams &utParams,
+        const DistortionModel distortionModel,
         const bool calcCompensations,
         const torch::Tensor &means,                   // [N, 3]
         const torch::Tensor &quats,                   // [N, 4]
@@ -282,9 +263,7 @@ template <typename ScalarType> struct ProjectionForwardUT {
         const torch::Tensor &worldToCamMatricesStart, // [C, 4, 4]
         const torch::Tensor &worldToCamMatricesEnd,   // [C, 4, 4]
         const torch::Tensor &projectionMatrices,      // [C, 3, 3]
-        const torch::Tensor &radialCoeffs,     // [C, 6] or [C, 3] or [C, 0] distortion coefficients
-        const torch::Tensor &tangentialCoeffs, // [C, 2]
-        const torch::Tensor &thinPrismCoeffs,  // [C, 4]
+        const torch::Tensor &distortionCoeffs, // [C, K]
         torch::Tensor &outRadii,               // [C, N]
         torch::Tensor &outMeans2d,             // [C, N, 2]
         torch::Tensor &outDepths,              // [C, N]
@@ -296,12 +275,8 @@ template <typename ScalarType> struct ProjectionForwardUT {
           mImageHeight(static_cast<int32_t>(imageHeight)), mEps2d(eps2d), mNearPlane(nearPlane),
           mFarPlane(farPlane), mRadiusClip(minRadius2d), mRollingShutterType(rollingShutterType),
           mUTParams(utParams),
-          numRadialCoeffs(radialCoeffs.size(1)),
-          numTangentialCoeffs(tangentialCoeffs.size(1)),
-          numThinPrismCoeffs(thinPrismCoeffs.size(1)),
-          mDistortionModel(pickOpenCVDistortionModel((int)radialCoeffs.size(1),
-                                                     (int)tangentialCoeffs.size(1),
-                                                     (int)thinPrismCoeffs.size(1))),
+          mDistortionModel(distortionModel),
+          mNumDistortionCoeffs(distortionCoeffs.size(1)),
           mMeansAcc(means.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
           mQuatsAcc(quats.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
           mLogScalesAcc(logScales.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
@@ -309,12 +284,8 @@ template <typename ScalarType> struct ProjectionForwardUT {
           mWorldToCamMatricesEndAcc(worldToCamMatricesEnd.packed_accessor32<ScalarType, 3, torch::RestrictPtrTraits>()),
           mProjectionMatricesAcc(
               projectionMatrices.packed_accessor32<ScalarType, 3, torch::RestrictPtrTraits>()),
-          mRadialCoeffsAcc(
-              radialCoeffs.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
-          mTangentialCoeffsAcc(
-              tangentialCoeffs.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
-          mThinPrismCoeffsAcc(
-              thinPrismCoeffs.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
+          mDistortionCoeffsAcc(
+              distortionCoeffs.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
           mOutRadiiAcc(outRadii.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>()),
           mOutMeans2dAcc(outMeans2d.packed_accessor64<ScalarType, 3, torch::RestrictPtrTraits>()),
           mOutDepthsAcc(outDepths.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
@@ -345,17 +316,9 @@ template <typename ScalarType> struct ProjectionForwardUT {
         worldToCamTranslationEndShared = reinterpret_cast<Vec3 *>(pointer);
         pointer += C * sizeof(Vec3);
 
-        radialCoeffsShared =
-            numRadialCoeffs > 0 ? reinterpret_cast<ScalarType *>(pointer) : nullptr;
-        pointer += C * numRadialCoeffs * sizeof(ScalarType);
-
-        tangentialCoeffsShared =
-            numTangentialCoeffs > 0 ? reinterpret_cast<ScalarType *>(pointer) : nullptr;
-        pointer += C * numTangentialCoeffs * sizeof(ScalarType);
-
-        thinPrismCoeffsShared =
-            numThinPrismCoeffs > 0 ? reinterpret_cast<ScalarType *>(pointer) : nullptr;
-        pointer += C * numThinPrismCoeffs * sizeof(ScalarType);
+        distortionCoeffsShared =
+            mNumDistortionCoeffs > 0 ? reinterpret_cast<ScalarType *>(pointer) : nullptr;
+        pointer += C * mNumDistortionCoeffs * sizeof(ScalarType);
 
         // Layout in element units:
         const int64_t projectionOffset      = 0;
@@ -363,10 +326,8 @@ template <typename ScalarType> struct ProjectionForwardUT {
         const int64_t rotEndOffset          = rotStartOffset + C * 9;
         const int64_t transStartOffset      = rotEndOffset + C * 9;
         const int64_t transEndOffset        = transStartOffset + C * 3;
-        const int64_t radialOffset          = transEndOffset + C * 3;
-        const int64_t tangentialOffset      = radialOffset + C * numRadialCoeffs;
-        const int64_t thinPrismOffset       = tangentialOffset + C * numTangentialCoeffs;
-        const int64_t totalElements         = thinPrismOffset + C * numThinPrismCoeffs;
+        const int64_t distortionOffset      = transEndOffset + C * 3;
+        const int64_t totalElements         = distortionOffset + C * mNumDistortionCoeffs;
 
         for (int64_t i = threadIdx.x; i < totalElements; i += blockDim.x) {
             if (i < rotStartOffset) {
@@ -395,29 +356,17 @@ template <typename ScalarType> struct ProjectionForwardUT {
                 const auto entryId = (i - transStartOffset) % 3;
                 worldToCamTranslationStartShared[camId][entryId] =
                     mWorldToCamMatricesStartAcc[camId][entryId][3];
-            } else if (i < radialOffset) {
+            } else if (i < distortionOffset) {
                 const auto camId   = (i - transEndOffset) / 3;
                 const auto entryId = (i - transEndOffset) % 3;
                 worldToCamTranslationEndShared[camId][entryId] =
                     mWorldToCamMatricesEndAcc[camId][entryId][3];
-            } else if (i < tangentialOffset && numRadialCoeffs > 0) {
-                const auto baseIdx = i - radialOffset;
-                const auto camId   = baseIdx / numRadialCoeffs;
-                const auto entryId = baseIdx % numRadialCoeffs;
-                radialCoeffsShared[camId * numRadialCoeffs + entryId] =
-                    mRadialCoeffsAcc[camId][entryId];
-            } else if (i < thinPrismOffset && numTangentialCoeffs > 0) {
-                const auto baseIdx = i - tangentialOffset;
-                const auto camId   = baseIdx / numTangentialCoeffs;
-                const auto entryId = baseIdx % numTangentialCoeffs;
-                tangentialCoeffsShared[camId * numTangentialCoeffs + entryId] =
-                    mTangentialCoeffsAcc[camId][entryId];
-            } else if (numThinPrismCoeffs > 0) {
-                const auto baseIdx = i - thinPrismOffset;
-                const auto camId   = baseIdx / numThinPrismCoeffs;
-                const auto entryId = baseIdx % numThinPrismCoeffs;
-                thinPrismCoeffsShared[camId * numThinPrismCoeffs + entryId] =
-                    mThinPrismCoeffsAcc[camId][entryId];
+            } else if (mNumDistortionCoeffs > 0) {
+                const auto baseIdx = i - distortionOffset;
+                const auto camId   = baseIdx / mNumDistortionCoeffs;
+                const auto entryId = baseIdx % mNumDistortionCoeffs;
+                distortionCoeffsShared[camId * mNumDistortionCoeffs + entryId] =
+                    mDistortionCoeffsAcc[camId][entryId];
             }
         }
     }
@@ -438,13 +387,26 @@ template <typename ScalarType> struct ProjectionForwardUT {
         const Vec3 &worldToCamTransStart = worldToCamTranslationStartShared[camId];
         const Vec3 &worldToCamTransEnd   = worldToCamTranslationEndShared[camId];
 
-        // Get distortion coefficients
-        const ScalarType *radial_coeffs =
-            numRadialCoeffs > 0 ? &radialCoeffsShared[camId * numRadialCoeffs] : nullptr;
-        const ScalarType *tangential_coeffs =
-            numTangentialCoeffs > 0 ? &tangentialCoeffsShared[camId * numTangentialCoeffs] : nullptr;
-        const ScalarType *thin_prism_coeffs =
-            numThinPrismCoeffs > 0 ? &thinPrismCoeffsShared[camId * numThinPrismCoeffs] : nullptr;
+        OpenCVDistortion<ScalarType> distortion;
+        if (mDistortionModel == DistortionModel::NONE) {
+            distortion.model = OpenCVDistortionModel::NONE;
+        } else if (mDistortionModel == DistortionModel::OPENCV) {
+            if (mNumDistortionCoeffs < 12 || distortionCoeffsShared == nullptr) {
+                mOutRadiiAcc[camId][gaussianId] = 0;
+                return;
+            }
+            const ScalarType *coeffs = &distortionCoeffsShared[camId * mNumDistortionCoeffs];
+            distortion.radial        = coeffs + 0;
+            distortion.numRadial     = 6;
+            distortion.tangential    = coeffs + 6;
+            distortion.numTangential = 2;
+            distortion.thinPrism     = coeffs + 8;
+            distortion.numThinPrism  = 4;
+            distortion.model         = OpenCVDistortionModel::THIN_PRISM_12;
+        } else {
+            mOutRadiiAcc[camId][gaussianId] = 0;
+            return;
+        }
 
         // Get Gaussian parameters
         const Vec3 meanWorldSpace(mMeansAcc[gaussianId][0], mMeansAcc[gaussianId][1],
@@ -499,15 +461,6 @@ template <typename ScalarType> struct ProjectionForwardUT {
                 if (p_cam[2] <= ScalarType(0)) {
                     return false;
                 }
-                const OpenCVDistortion<ScalarType> distortion{
-                    radial_coeffs,
-                    (int)numRadialCoeffs,
-                    tangential_coeffs,
-                    (int)numTangentialCoeffs,
-                    thin_prism_coeffs,
-                    (int)numThinPrismCoeffs,
-                    mDistortionModel,
-                };
                 out_pix = projectPointWithDistortion(p_cam, projectionMatrix, distortion);
                 const bool in_img = (out_pix[0] >= -margin_x) && (out_pix[0] < ScalarType(mImageWidth) + margin_x) &&
                                     (out_pix[1] >= -margin_y) && (out_pix[1] < ScalarType(mImageHeight) + margin_y);
@@ -675,9 +628,8 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]
     const RollingShutterType rollingShutterType,
     const UTParams &utParams,
-    const torch::Tensor &radialCoeffs,     // [C, 6] or [C, 3] or [C, 0] distortion coefficients
-    const torch::Tensor &tangentialCoeffs, // [C, 2] or [C, 0] distortion coefficients
-    const torch::Tensor &thinPrismCoeffs,  // [C, 4] or [C, 0] distortion coefficients
+    const DistortionModel distortionModel,
+    const torch::Tensor &distortionCoeffs, // [C,12] for OPENCV, [C,0] for NONE
     const int64_t imageWidth,
     const int64_t imageHeight,
     const float eps2d,
@@ -696,24 +648,26 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
     TORCH_CHECK_VALUE(worldToCamMatricesEnd.is_cuda(),
                       "worldToCamMatricesEnd must be a CUDA tensor");
     TORCH_CHECK_VALUE(projectionMatrices.is_cuda(), "projectionMatrices must be a CUDA tensor");
-    TORCH_CHECK_VALUE(radialCoeffs.is_cuda(), "radialCoeffs must be a CUDA tensor");
-    TORCH_CHECK_VALUE(tangentialCoeffs.is_cuda(), "tangentialCoeffs must be a CUDA tensor");
-    TORCH_CHECK_VALUE(thinPrismCoeffs.is_cuda(), "thinPrismCoeffs must be a CUDA tensor");
-    TORCH_CHECK_VALUE(radialCoeffs.dim() == 2, "radialCoeffs must be 2D");
-    TORCH_CHECK_VALUE(tangentialCoeffs.dim() == 2, "tangentialCoeffs must be 2D");
-    TORCH_CHECK_VALUE(thinPrismCoeffs.dim() == 2, "thinPrismCoeffs must be 2D");
-    TORCH_CHECK_VALUE((radialCoeffs.size(1) == 0 || radialCoeffs.size(1) == 3 || radialCoeffs.size(1) == 6),
-                      "radialCoeffs must have shape [C,0], [C,3] (k1,k2,k3) or [C,6] (k1..k6)");
-    TORCH_CHECK_VALUE((tangentialCoeffs.size(1) == 0 || tangentialCoeffs.size(1) == 2),
-                      "tangentialCoeffs must have shape [C,0] or [C,2] (p1,p2)");
-    TORCH_CHECK_VALUE((thinPrismCoeffs.size(1) == 0 || thinPrismCoeffs.size(1) == 4),
-                      "thinPrismCoeffs must have shape [C,0] or [C,4] (s1..s4)");
+    TORCH_CHECK_VALUE(distortionCoeffs.is_cuda(), "distortionCoeffs must be a CUDA tensor");
+    TORCH_CHECK_VALUE(distortionCoeffs.dim() == 2, "distortionCoeffs must be 2D");
+    if (distortionModel == DistortionModel::NONE) {
+        // Accept any K (including 0); ignored.
+    } else if (distortionModel == DistortionModel::OPENCV) {
+        TORCH_CHECK_VALUE(distortionCoeffs.size(1) == 12,
+                          "For DistortionModel::OPENCV, distortionCoeffs must have shape [C,12] "
+                          "as [k1..k6,p1,p2,s1..s4]");
+    } else {
+        TORCH_CHECK_VALUE(false, "Unknown DistortionModel for GaussianProjectionForwardUT");
+    }
 
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means));
 
     const auto N                = means.size(0);              // number of gaussians
     const auto C                = projectionMatrices.size(0); // number of cameras
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(means.device().index());
+
+    TORCH_CHECK_VALUE(distortionCoeffs.size(0) == C,
+                      "distortionCoeffs must have shape [C,K] matching projectionMatrices.size(0)");
 
     torch::Tensor outRadii   = torch::empty({C, N}, means.options().dtype(torch::kInt32));
     torch::Tensor outMeans2d = torch::empty({C, N, 2}, means.options());
@@ -737,13 +691,12 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
 
     const size_t SHARED_MEM_SIZE =
         C * (3 * sizeof(nanovdb::math::Mat3<scalar_t>) + 2 * sizeof(nanovdb::math::Vec3<scalar_t>)) +
-        C * (radialCoeffs.size(1) + tangentialCoeffs.size(1) + thinPrismCoeffs.size(1)) *
-            sizeof(scalar_t);
+        C * distortionCoeffs.size(1) * sizeof(scalar_t);
 
     ProjectionForwardUT<scalar_t> projectionForward(
         imageWidth, imageHeight, eps2d, nearPlane, farPlane, minRadius2d, rollingShutterType,
-        utParams, calcCompensations, means, quats, torch::log(scales), worldToCamMatricesStart,
-        worldToCamMatricesEnd, projectionMatrices, radialCoeffs, tangentialCoeffs, thinPrismCoeffs,
+        utParams, distortionModel, calcCompensations, means, quats, torch::log(scales),
+        worldToCamMatricesStart, worldToCamMatricesEnd, projectionMatrices, distortionCoeffs,
         outRadii, outMeans2d, outDepths, outConics, outCompensations);
 
     projectionForwardUTKernel<scalar_t><<<NUM_BLOCKS, 256, SHARED_MEM_SIZE, stream>>>(
@@ -764,9 +717,8 @@ dispatchGaussianProjectionForwardUT<torch::kCPU>(
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]
     const RollingShutterType rollingShutterType,
     const UTParams &utParams,
-    const torch::Tensor &radialCoeffs,     // [C, 6] or [C, 3] or [C, 0] distortion coefficients
-    const torch::Tensor &tangentialCoeffs, // [C, 2] or [C, 0] distortion coefficients
-    const torch::Tensor &thinPrismCoeffs,  // [C, 4] or [C, 0] distortion coefficients
+    const DistortionModel distortionModel,
+    const torch::Tensor &distortionCoeffs, // [C,12] for OPENCV, [C,0] for NONE
     const int64_t imageWidth,
     const int64_t imageHeight,
     const float eps2d,
@@ -775,6 +727,8 @@ dispatchGaussianProjectionForwardUT<torch::kCPU>(
     const float minRadius2d,
     const bool calcCompensations,
     const bool ortho) {
+    (void)distortionModel;
+    (void)distortionCoeffs;
     TORCH_CHECK_NOT_IMPLEMENTED(false, "GaussianProjectionForwardUT not implemented on the CPU");
 }
 
@@ -789,9 +743,8 @@ dispatchGaussianProjectionForwardUT<torch::kPrivateUse1>(
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]
     const RollingShutterType rollingShutterType,
     const UTParams &utParams,
-    const torch::Tensor &radialCoeffs,     // [C, 6] or [C, 3] or [C, 0] distortion coefficients
-    const torch::Tensor &tangentialCoeffs, // [C, 2] or [C, 0] distortion coefficients
-    const torch::Tensor &thinPrismCoeffs,  // [C, 4] or [C, 0] distortion coefficients
+    const DistortionModel distortionModel,
+    const torch::Tensor &distortionCoeffs, // [C,12] for OPENCV, [C,0] for NONE
     const int64_t imageWidth,
     const int64_t imageHeight,
     const float eps2d,
@@ -800,6 +753,8 @@ dispatchGaussianProjectionForwardUT<torch::kPrivateUse1>(
     const float minRadius2d,
     const bool calcCompensations,
     const bool ortho) {
+    (void)distortionModel;
+    (void)distortionCoeffs;
     TORCH_CHECK_NOT_IMPLEMENTED(false,
                                 "GaussianProjectionForwardUT not implemented for this device type");
 }

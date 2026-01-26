@@ -15,6 +15,15 @@ namespace ops {
 
 enum class RollingShutterType { NONE = 0, VERTICAL = 1, HORIZONTAL = 2 };
 
+// Distortion model for camera projection in the UT kernel.
+//
+// Distortion coefficients are supplied as a single tensor `distortionCoeffs` and interpreted
+// according to this enum.
+enum class DistortionModel : int32_t {
+    NONE   = 0,
+    OPENCV = 1, // OpenCV pinhole distortion (radial + tangential + thin-prism)
+};
+
 struct UTParams {
     float alpha         = 0.1f; // Blending parameter for UT
     float beta          = 2.0f; // Scaling parameter for UT
@@ -52,14 +61,12 @@ struct UTParams {
 /// @param[in] projectionMatrices Camera intrinsic matrices [C, 3, 3]
 /// @param[in] rollingShutterType Type of rolling shutter effect to apply
 /// @param[in] utParams Unscented Transform parameters
-/// @param[in] radialCoeffs Radial distortion coefficients (OpenCV convention):
-///   - Polynomial: k1,k2,k3 in a [C,3] tensor
-///   - Rational:   k1..k6 in a [C,6] tensor
-///   - None:       [C,0]
-/// @param[in] tangentialCoeffs Tangential distortion coefficients (OpenCV convention) p1,p2 in a
-///   [C,2] tensor (or [C,0] for none).
-/// @param[in] thinPrismCoeffs Thin prism distortion coefficients (OpenCV convention) s1..s4.
-///   This kernel accepts [C,4] (full OpenCV) or [C,0] for none.
+/// @param[in] distortionModel Distortion model used to interpret `distortionCoeffs`.
+/// @param[in] distortionCoeffs Distortion coefficients for each camera.
+///   - DistortionModel::NONE: ignored (use [C,0] or [C,K] tensor).
+///   - DistortionModel::OPENCV: expects [C,12] coefficients in the following order:
+///       [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]
+///     where k1..k6 are radial (rational), p1,p2 are tangential, and s1..s4 are thin-prism.
 /// @param[in] imageWidth Width of the output image in pixels
 /// @param[in] imageHeight Height of the output image in pixels
 /// @param[in] eps2d 2D projection epsilon for numerical stability
@@ -86,9 +93,8 @@ dispatchGaussianProjectionForwardUT(
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]
     const RollingShutterType rollingShutterType,
     const UTParams &utParams,
-    const torch::Tensor &radialCoeffs,     // [C, 6] or [C, 3] or [C, 0] distortion coefficients
-    const torch::Tensor &tangentialCoeffs, // [C, 2] or [C, 0] distortion coefficients
-    const torch::Tensor &thinPrismCoeffs,  // [C, 4] or [C, 0] distortion coefficients
+    const DistortionModel distortionModel,
+    const torch::Tensor &distortionCoeffs, // [C, 12] for OPENCV, or [C, 0] for NONE
     const int64_t imageWidth,
     const int64_t imageHeight,
     const float eps2d,

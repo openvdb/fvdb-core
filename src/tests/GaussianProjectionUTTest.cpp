@@ -107,9 +107,8 @@ struct GaussianProjectionUTTestFixture : public ::testing::Test {
     torch::Tensor worldToCamMatricesStart; // [C, 4, 4]
     torch::Tensor worldToCamMatricesEnd;  // [C, 4, 4]
     torch::Tensor projectionMatrices;     // [C, 3, 3]
-    torch::Tensor radialCoeffs;           // [C, 0] or [C, 3] or [C, 6]
-    torch::Tensor tangentialCoeffs;        // [C, 0] or [C, 2]
-    torch::Tensor thinPrismCoeffs;        // [C, 0] or [C, 4]
+    DistortionModel distortionModel = DistortionModel::NONE;
+    torch::Tensor distortionCoeffs; // [C, 12] for OPENCV, or [C, 0] for NONE
 
     int64_t imageWidth;
     int64_t imageHeight;
@@ -146,9 +145,8 @@ TEST_F(GaussianProjectionUTTestFixture, CenteredGaussian_NoDistortion_AnalyticMe
     projectionMatrices[0][1][2] = cy;
     projectionMatrices[0][2][2] = 1.0f;
 
-    radialCoeffs     = torch::zeros({C, 0}, torch::kFloat32);
-    tangentialCoeffs = torch::zeros({C, 0}, torch::kFloat32);
-    thinPrismCoeffs  = torch::zeros({C, 0}, torch::kFloat32);
+    distortionModel  = DistortionModel::NONE;
+    distortionCoeffs = torch::zeros({C, 0}, torch::kFloat32);
 
     imageWidth  = 640;
     imageHeight = 480;
@@ -170,14 +168,12 @@ TEST_F(GaussianProjectionUTTestFixture, CenteredGaussian_NoDistortion_AnalyticMe
     worldToCamMatricesStart = worldToCamMatricesStart.cuda();
     worldToCamMatricesEnd   = worldToCamMatricesEnd.cuda();
     projectionMatrices     = projectionMatrices.cuda();
-    radialCoeffs           = radialCoeffs.cuda();
-    tangentialCoeffs       = tangentialCoeffs.cuda();
-    thinPrismCoeffs        = thinPrismCoeffs.cuda();
+    distortionCoeffs       = distortionCoeffs.cuda();
 
     const auto [radii, means2d, depths, conics, compensations] =
         dispatchGaussianProjectionForwardUT<torch::kCUDA>(
             means, quats, scales, worldToCamMatricesStart, worldToCamMatricesEnd, projectionMatrices,
-            RollingShutterType::NONE, utParams, radialCoeffs, tangentialCoeffs, thinPrismCoeffs,
+            RollingShutterType::NONE, utParams, distortionModel, distortionCoeffs,
             imageWidth, imageHeight, eps2d, nearPlane, farPlane, minRadius2d, false, false);
 
     auto means2d_cpu = means2d.cpu();
@@ -230,9 +226,8 @@ TEST_F(GaussianProjectionUTTestFixture, OffAxisTinyGaussian_NoDistortion_MeanMat
     projectionMatrices[0][1][2] = cy;
     projectionMatrices[0][2][2] = 1.0f;
 
-    radialCoeffs     = torch::zeros({C, 0}, torch::kFloat32);
-    tangentialCoeffs = torch::zeros({C, 0}, torch::kFloat32);
-    thinPrismCoeffs  = torch::zeros({C, 0}, torch::kFloat32);
+    distortionModel  = DistortionModel::NONE;
+    distortionCoeffs = torch::zeros({C, 0}, torch::kFloat32);
 
     imageWidth  = 640;
     imageHeight = 480;
@@ -253,14 +248,12 @@ TEST_F(GaussianProjectionUTTestFixture, OffAxisTinyGaussian_NoDistortion_MeanMat
     worldToCamMatricesStart = worldToCamMatricesStart.cuda();
     worldToCamMatricesEnd   = worldToCamMatricesEnd.cuda();
     projectionMatrices     = projectionMatrices.cuda();
-    radialCoeffs           = radialCoeffs.cuda();
-    tangentialCoeffs       = tangentialCoeffs.cuda();
-    thinPrismCoeffs        = thinPrismCoeffs.cuda();
+    distortionCoeffs       = distortionCoeffs.cuda();
 
     const auto [radii, means2d, depths, conics, compensations] =
         dispatchGaussianProjectionForwardUT<torch::kCUDA>(
             means, quats, scales, worldToCamMatricesStart, worldToCamMatricesEnd, projectionMatrices,
-            RollingShutterType::NONE, utParams, radialCoeffs, tangentialCoeffs, thinPrismCoeffs,
+            RollingShutterType::NONE, utParams, distortionModel, distortionCoeffs,
             imageWidth, imageHeight, eps2d, nearPlane, farPlane, minRadius2d, false, false);
 
     auto means2d_cpu = means2d.cpu();
@@ -300,9 +293,14 @@ TEST_F(GaussianProjectionUTTestFixture, OffAxisTinyGaussian_RadTanDistortion_Mea
     const float p1 = 0.001f;
     const float p2 = -0.0005f;
 
-    radialCoeffs     = torch::tensor({{k1, k2, k3}}, torch::kFloat32);
-    tangentialCoeffs = torch::tensor({{p1, p2}}, torch::kFloat32);
-    thinPrismCoeffs  = torch::zeros({C, 0}, torch::kFloat32);
+    distortionModel  = DistortionModel::OPENCV;
+    // [k1..k6,p1,p2,s1..s4] (use polynomial by setting k4..k6 = 0, and no thin-prism by zeroing s*)
+    distortionCoeffs = torch::zeros({C, 12}, torch::kFloat32);
+    distortionCoeffs[0][0] = k1;
+    distortionCoeffs[0][1] = k2;
+    distortionCoeffs[0][2] = k3;
+    distortionCoeffs[0][6] = p1;
+    distortionCoeffs[0][7] = p2;
 
     imageWidth  = 800;
     imageHeight = 600;
@@ -323,14 +321,12 @@ TEST_F(GaussianProjectionUTTestFixture, OffAxisTinyGaussian_RadTanDistortion_Mea
     worldToCamMatricesStart = worldToCamMatricesStart.cuda();
     worldToCamMatricesEnd   = worldToCamMatricesEnd.cuda();
     projectionMatrices     = projectionMatrices.cuda();
-    radialCoeffs           = radialCoeffs.cuda();
-    tangentialCoeffs       = tangentialCoeffs.cuda();
-    thinPrismCoeffs        = thinPrismCoeffs.cuda();
+    distortionCoeffs       = distortionCoeffs.cuda();
 
     const auto [radii, means2d, depths, conics, compensations] =
         dispatchGaussianProjectionForwardUT<torch::kCUDA>(
             means, quats, scales, worldToCamMatricesStart, worldToCamMatricesEnd, projectionMatrices,
-            RollingShutterType::NONE, utParams, radialCoeffs, tangentialCoeffs, thinPrismCoeffs,
+            RollingShutterType::NONE, utParams, distortionModel, distortionCoeffs,
             imageWidth, imageHeight, eps2d, nearPlane, farPlane, minRadius2d, false, false);
 
     auto radii_cpu   = radii.cpu();
@@ -373,9 +369,16 @@ TEST_F(GaussianProjectionUTTestFixture, OffAxisTinyGaussian_RationalDistortion_M
     const float p1 = -0.0007f;
     const float p2 = 0.0003f;
 
-    radialCoeffs     = torch::tensor({{k1, k2, k3, k4, k5, k6}}, torch::kFloat32);
-    tangentialCoeffs = torch::tensor({{p1, p2}}, torch::kFloat32);
-    thinPrismCoeffs  = torch::zeros({C, 0}, torch::kFloat32);
+    distortionModel  = DistortionModel::OPENCV;
+    distortionCoeffs = torch::zeros({C, 12}, torch::kFloat32);
+    distortionCoeffs[0][0] = k1;
+    distortionCoeffs[0][1] = k2;
+    distortionCoeffs[0][2] = k3;
+    distortionCoeffs[0][3] = k4;
+    distortionCoeffs[0][4] = k5;
+    distortionCoeffs[0][5] = k6;
+    distortionCoeffs[0][6] = p1;
+    distortionCoeffs[0][7] = p2;
 
     imageWidth  = 800;
     imageHeight = 600;
@@ -396,14 +399,12 @@ TEST_F(GaussianProjectionUTTestFixture, OffAxisTinyGaussian_RationalDistortion_M
     worldToCamMatricesStart = worldToCamMatricesStart.cuda();
     worldToCamMatricesEnd   = worldToCamMatricesEnd.cuda();
     projectionMatrices     = projectionMatrices.cuda();
-    radialCoeffs           = radialCoeffs.cuda();
-    tangentialCoeffs       = tangentialCoeffs.cuda();
-    thinPrismCoeffs        = thinPrismCoeffs.cuda();
+    distortionCoeffs       = distortionCoeffs.cuda();
 
     const auto [radii, means2d, depths, conics, compensations] =
         dispatchGaussianProjectionForwardUT<torch::kCUDA>(
             means, quats, scales, worldToCamMatricesStart, worldToCamMatricesEnd, projectionMatrices,
-            RollingShutterType::NONE, utParams, radialCoeffs, tangentialCoeffs, thinPrismCoeffs,
+            RollingShutterType::NONE, utParams, distortionModel, distortionCoeffs,
             imageWidth, imageHeight, eps2d, nearPlane, farPlane, minRadius2d, false, false);
 
     auto radii_cpu   = radii.cpu();
@@ -450,9 +451,20 @@ TEST_F(GaussianProjectionUTTestFixture, OffAxisTinyGaussian_ThinPrismDistortion_
     const float s3 = 0.0005f;
     const float s4 = 0.0001f;
 
-    radialCoeffs     = torch::tensor({{k1, k2, k3, k4, k5, k6}}, torch::kFloat32);
-    tangentialCoeffs = torch::tensor({{p1, p2}}, torch::kFloat32);
-    thinPrismCoeffs  = torch::tensor({{s1, s2, s3, s4}}, torch::kFloat32);
+    distortionModel  = DistortionModel::OPENCV;
+    distortionCoeffs = torch::zeros({C, 12}, torch::kFloat32);
+    distortionCoeffs[0][0]  = k1;
+    distortionCoeffs[0][1]  = k2;
+    distortionCoeffs[0][2]  = k3;
+    distortionCoeffs[0][3]  = k4;
+    distortionCoeffs[0][4]  = k5;
+    distortionCoeffs[0][5]  = k6;
+    distortionCoeffs[0][6]  = p1;
+    distortionCoeffs[0][7]  = p2;
+    distortionCoeffs[0][8]  = s1;
+    distortionCoeffs[0][9]  = s2;
+    distortionCoeffs[0][10] = s3;
+    distortionCoeffs[0][11] = s4;
 
     imageWidth  = 1200;
     imageHeight = 900;
@@ -473,14 +485,12 @@ TEST_F(GaussianProjectionUTTestFixture, OffAxisTinyGaussian_ThinPrismDistortion_
     worldToCamMatricesStart = worldToCamMatricesStart.cuda();
     worldToCamMatricesEnd   = worldToCamMatricesEnd.cuda();
     projectionMatrices     = projectionMatrices.cuda();
-    radialCoeffs           = radialCoeffs.cuda();
-    tangentialCoeffs       = tangentialCoeffs.cuda();
-    thinPrismCoeffs        = thinPrismCoeffs.cuda();
+    distortionCoeffs       = distortionCoeffs.cuda();
 
     const auto [radii, means2d, depths, conics, compensations] =
         dispatchGaussianProjectionForwardUT<torch::kCUDA>(
             means, quats, scales, worldToCamMatricesStart, worldToCamMatricesEnd, projectionMatrices,
-            RollingShutterType::NONE, utParams, radialCoeffs, tangentialCoeffs, thinPrismCoeffs,
+            RollingShutterType::NONE, utParams, distortionModel, distortionCoeffs,
             imageWidth, imageHeight, eps2d, nearPlane, farPlane, minRadius2d, false, false);
 
     auto radii_cpu   = radii.cpu();
