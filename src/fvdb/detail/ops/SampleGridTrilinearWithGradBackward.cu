@@ -161,6 +161,11 @@ sampleTrilinearWithGradBackwardCallbackVec4(int32_t bidx,
                 gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 1], addValue1);
                 gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 2], addValue2);
                 gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + 3], addValue3);
+            } else if constexpr (DeviceTag == torch::kPrivateUse1) {
+                atomicAdd_system(&outGridData[indexIjk][cBase + 0], addValue0);
+                atomicAdd_system(&outGridData[indexIjk][cBase + 1], addValue1);
+                atomicAdd_system(&outGridData[indexIjk][cBase + 2], addValue2);
+                atomicAdd_system(&outGridData[indexIjk][cBase + 3], addValue3);
             }
         }
     }
@@ -196,7 +201,7 @@ SampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
 
         // Use vectorized float4 loads for float32 when channels is a multiple of 4
         // (alignment requirement: numChannels % 4 == 0 ensures all rows are 16-byte aligned)
-        if constexpr (DeviceTag == torch::kCUDA && std::is_same_v<scalar_t, float>) {
+        if constexpr (std::is_same_v<scalar_t, float>) {
             if (numChannels >= 4 && numChannels % 4 == 0) {
                 const auto numChannelGroups = (numChannels + 3) / 4;
                 auto cb                     = [=] __device__(int32_t bidx,
