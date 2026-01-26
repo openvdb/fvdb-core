@@ -45,7 +45,7 @@ copyPaddedJaggedToJagged(const fvdb::JaggedTensor &srcJagged,
     torch::Tensor srcData2D =
         srcJagged.jdata().view({numPixels, maxSamplesPerPixel}); //[numPixels, K]
 
-    // Use searchsorted to expand pixel indices instead of repeat_interleave
+    // Use searchsorted to expand pixel indices
     // We use dstOffsets directly (the authoritative source of valid counts per pixel)
     // instead of re-scanning source data which may have uninitialized padding
     // For each output index i, find which pixel it belongs to
