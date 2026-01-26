@@ -21,11 +21,13 @@ inclusive_scan_cuda_temp_bytes(int64_t n) {
     size_t temp_bytes = 0;
     // Query CUB for required temporary storage size
     // Pass nullptr for temp storage to get size only
+    // Note: CUB's NumItemsT is a template parameter that accepts any integral type,
+    // so we can pass int64_t directly without truncation concerns.
     cub::DeviceScan::InclusiveSum(nullptr,                         // d_temp_storage
                                   temp_bytes,                      // temp_storage_bytes (output)
                                   static_cast<T const *>(nullptr), // d_in
                                   static_cast<T *>(nullptr),       // d_out
-                                  static_cast<int>(n)              // num_items
+                                  n                                // num_items
     );
     return temp_bytes;
 }
@@ -38,12 +40,12 @@ inclusive_scan_cuda(
         return;
 
     // Run CUB inclusive scan
-    cub::DeviceScan::InclusiveSum(temp,                // d_temp_storage
-                                  temp_bytes,          // temp_storage_bytes
-                                  in,                  // d_in
-                                  out,                 // d_out
-                                  static_cast<int>(n), // num_items
-                                  stream               // stream
+    cub::DeviceScan::InclusiveSum(temp,       // d_temp_storage
+                                  temp_bytes, // temp_storage_bytes
+                                  in,         // d_in
+                                  out,        // d_out
+                                  n,          // num_items
+                                  stream      // stream
     );
 }
 

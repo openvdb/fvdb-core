@@ -62,13 +62,17 @@ expected_scan(std::vector<T> const &input) {
     return result;
 }
 
-/// Create test input: [1, 2, 3, ..., n] cast to T
+/// Create test input with cyclic pattern: [1, 2, ..., k, 1, 2, ..., k, ...]
+/// Using bounded cyclic values avoids integer overflow in scan results for large n,
+/// while still providing varied data that can catch index/ordering bugs.
+/// For n=100000 with k=100, the maximum scan sum is ~5 million, safely within int32_t.
 template <typename T>
 std::vector<T>
 make_input(int64_t n) {
+    constexpr int64_t k = 100; // cycle length
     std::vector<T> v(n);
     for (int64_t i = 0; i < n; ++i) {
-        v[i] = static_cast<T>(i + 1);
+        v[i] = static_cast<T>((i % k) + 1);
     }
     return v;
 }
