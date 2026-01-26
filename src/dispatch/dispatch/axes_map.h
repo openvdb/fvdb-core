@@ -8,6 +8,7 @@
 #include "dispatch/types.h"
 #include "dispatch/visit_spaces.h"
 
+#include <functional>
 #include <stdexcept>
 #include <tuple>
 #include <unordered_map>

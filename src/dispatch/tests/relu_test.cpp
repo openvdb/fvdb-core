@@ -10,6 +10,9 @@
 #include <dispatch/types.h>
 #include <gtest/gtest.h>
 
+#include <string>
+#include <vector>
+
 namespace dispatch_examples {
 namespace {
 

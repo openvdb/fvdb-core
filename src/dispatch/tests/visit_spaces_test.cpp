@@ -8,6 +8,8 @@
 
 #include <cstddef>
 #include <set>
+#include <tuple>
+#include <type_traits>
 #include <vector>
 
 namespace dispatch {

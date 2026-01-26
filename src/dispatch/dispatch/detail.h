@@ -6,10 +6,10 @@
 
 #include "dispatch/types.h"
 
-#include <array>
 #include <cstddef>
 #include <optional>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 
 namespace dispatch {

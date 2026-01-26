@@ -13,7 +13,6 @@
 #include <torch/types.h>
 
 #include <cstddef>
-#include <cstdint>
 #include <type_traits>
 
 namespace dispatch {

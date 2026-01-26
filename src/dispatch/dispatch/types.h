@@ -9,7 +9,6 @@
 #define DISPATCH_DISPATCH_TYPES_H
 
 #include <cstddef>
-#include <cstdint>
 #include <type_traits>
 
 namespace dispatch {

@@ -17,6 +17,8 @@
 
 #include <gtest/gtest.h>
 
+#include <tuple>
+
 namespace dispatch {
 
 // =============================================================================

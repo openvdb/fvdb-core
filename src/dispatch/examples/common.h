@@ -9,7 +9,6 @@
 
 #include <torch/types.h>
 
-#include <concepts>
 #include <string>
 
 namespace dispatch_examples {

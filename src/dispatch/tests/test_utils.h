@@ -10,6 +10,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <type_traits>
 #include <vector>
 
 namespace dispatch {

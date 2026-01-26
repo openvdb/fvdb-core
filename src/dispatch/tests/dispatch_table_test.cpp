@@ -8,6 +8,7 @@
 
 #include <stdexcept>
 #include <tuple>
+#include <type_traits>
 
 namespace dispatch {
 

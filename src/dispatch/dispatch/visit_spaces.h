@@ -11,12 +11,8 @@
 #include "dispatch/detail.h"
 #include "dispatch/types.h"
 
-#include <array>
-#include <concepts>
 #include <functional>
-#include <optional>
-#include <tuple>
-#include <type_traits>
+#include <utility>
 
 namespace dispatch {
 

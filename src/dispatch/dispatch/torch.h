@@ -8,8 +8,8 @@
 
 #include <ATen/core/TensorAccessor.h>
 
-#include <concepts>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <tuple>
 #include <type_traits>

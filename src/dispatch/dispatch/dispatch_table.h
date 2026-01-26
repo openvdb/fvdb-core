@@ -12,7 +12,6 @@
 #include "dispatch/detail.h"
 #include "dispatch/types.h"
 
-#include <concepts>
 #include <functional>
 #include <memory>
 #include <stdexcept>

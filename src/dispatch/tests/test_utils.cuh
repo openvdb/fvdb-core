@@ -7,7 +7,6 @@
 #include <cuda_runtime.h>
 
 #include <cstdint>
-#include <memory>
 #include <stdexcept>
 
 namespace dispatch {
