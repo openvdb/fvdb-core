@@ -11,6 +11,7 @@
 #include <ATen/Dispatch_v2.h>
 #include <c10/util/Half.h>
 #include <torch/types.h>
+#include <torch/version.h>
 
 #include <iostream>
 #include <memory>

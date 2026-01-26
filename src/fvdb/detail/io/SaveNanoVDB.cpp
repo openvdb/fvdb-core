@@ -335,8 +335,12 @@ getIndexGrid(const GridBatch &gridBatch, const std::vector<std::string> names = 
                               "Grid name " + name + " exceeds maximum character length of " +
                                   std::to_string(nanovdb::GridData::MaxNameSize) + ".");
             nanovdb::GridData *retGridData = (nanovdb::GridData *)(retHandle.gridData(bi));
+#pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wstringop-truncation"
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+#pragma GCC diagnostic ignored "-Warray-bounds"
             strncpy(retGridData->mGridName, names[bi].c_str(), nanovdb::GridData::MaxNameSize);
+#pragma GCC diagnostic pop
         }
     }
 
