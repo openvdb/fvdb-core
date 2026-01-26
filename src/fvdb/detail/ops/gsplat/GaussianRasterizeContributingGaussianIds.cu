@@ -128,13 +128,13 @@ buildOutListIds(int64_t outputNumPixels,
 template <typename ScalarType>
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
 convertPaddedToNestedJaggedTensorImpl(const fvdb::JaggedTensor &srcIds,
-                                  const fvdb::JaggedTensor &srcWeights,
-                                  const torch::Tensor &countsPerPixel,
-                                  int64_t totalCount,
-                                  int64_t numCameras,
-                                  int32_t maxSamplesPerPixel,
-                                  int64_t pixelsPerCamera,
-                                  const std::optional<torch::Tensor> &cameraOffsets) {
+                                      const fvdb::JaggedTensor &srcWeights,
+                                      const torch::Tensor &countsPerPixel,
+                                      int64_t totalCount,
+                                      int64_t numCameras,
+                                      int32_t maxSamplesPerPixel,
+                                      int64_t pixelsPerCamera,
+                                      const std::optional<torch::Tensor> &cameraOffsets) {
     const int64_t outputNumPixels = countsPerPixel.numel();
     const torch::Device device    = countsPerPixel.device();
     const auto options            = srcIds.jdata().options();
@@ -232,22 +232,22 @@ convertPaddedToNestedJaggedTensor(const fvdb::JaggedTensor &srcIds,
     if (isUniformDistribution) {
         const auto pixelsPerCamera = outputNumPixels / numCameras;
         return convertPaddedToNestedJaggedTensorImpl<ScalarType>(srcIds,
-                                                             srcWeights,
-                                                             countsPerPixel,
-                                                             totalCount,
-                                                             numCameras,
-                                                             maxSamplesPerPixel,
-                                                             pixelsPerCamera,
-                                                             std::nullopt);
+                                                                 srcWeights,
+                                                                 countsPerPixel,
+                                                                 totalCount,
+                                                                 numCameras,
+                                                                 maxSamplesPerPixel,
+                                                                 pixelsPerCamera,
+                                                                 std::nullopt);
     } else {
         return convertPaddedToNestedJaggedTensorImpl<ScalarType>(srcIds,
-                                                             srcWeights,
-                                                             countsPerPixel,
-                                                             totalCount,
-                                                             numCameras,
-                                                             maxSamplesPerPixel,
-                                                             -1,
-                                                             cameraOffsets);
+                                                                 srcWeights,
+                                                                 countsPerPixel,
+                                                                 totalCount,
+                                                                 numCameras,
+                                                                 maxSamplesPerPixel,
+                                                                 -1,
+                                                                 cameraOffsets);
     }
 }
 
