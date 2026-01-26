@@ -386,8 +386,8 @@ jobs:
           uv venv
           uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130 --index-strategy unsafe-best-match
           uv pip install --no-cache-dir setuptools
-          # TORCH_CUDA_ARCH_LIST="8.9+PTX" uv pip install -v --no-build-isolation git+https://github.com/rusty1s/pytorch_scatter.git
-          # TORCH_CUDA_ARCH_LIST="8.9+PTX" uv pip install -v --no-build-isolation git+https://github.com/heiwang1997/torchsparse.git
+          TORCH_CUDA_ARCH_LIST="8.9+PTX" uv pip install -v --no-build-isolation git+https://github.com/rusty1s/pytorch_scatter.git
+          TORCH_CUDA_ARCH_LIST="8.9+PTX" uv pip install -v --no-build-isolation git+https://github.com/heiwang1997/torchsparse.git
 
       - name: Download package
         uses: actions/download-artifact@v4
@@ -404,8 +404,7 @@ jobs:
         run: |
           source .venv/bin/activate
           cd tests;
-          python -m torch.utils.collect_env
-          pytest -v unit/test_gaussian_splat_3d.py
+          pytest -v unit
 
       - name: Cleanup
         if: always()
