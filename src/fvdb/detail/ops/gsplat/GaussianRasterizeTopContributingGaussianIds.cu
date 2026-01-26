@@ -370,6 +370,9 @@ launchRasterizeTopContributingGaussianIdsForwardKernel(
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means2d));
 
     TORCH_CHECK_VALUE(settings.numDepthSamples > 0, "numDepthSamples must be greater than 0");
+    if (IS_PACKED) {
+        TORCH_CHECK_VALUE(means2d.size(1) > 0, "means2d cannot be empty");
+    }
 
     // tileOffsets can be 3D (dense) or 1D (sparse)
     const bool tileOffsetsAreSparse = tileOffsets.dim() == 1;

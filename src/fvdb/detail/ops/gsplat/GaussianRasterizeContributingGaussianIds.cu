@@ -530,6 +530,10 @@ launchRasterizeContributingGaussianIdsForwardKernel(
     const std::optional<torch::Tensor> &pixelMap            = std::nullopt) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means2d));
 
+    if (IS_PACKED) {
+        TORCH_CHECK_VALUE(means2d.size(1) > 0, "means2d cannot be empty");
+    }
+
     // Check if we're in top-k mode (numDepthSamples > 0 indicates top-k)
     // If so, call the top-k kernel and reformat the results
     if (settings.numDepthSamples > 0) {

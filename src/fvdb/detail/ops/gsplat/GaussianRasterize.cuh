@@ -195,7 +195,6 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
         } else {
             TORCH_CHECK_VALUE(mNumCameras == mMeans2d.size(0), "Bad size for means2d");
             TORCH_CHECK_VALUE(mNumGaussiansPerCamera == mMeans2d.size(1), "Bad size for means2d");
-            TORCH_CHECK_VALUE(mMeans2d.size(1) == 0, "Zero size for means2d");
             TORCH_CHECK_VALUE(mNumCameras == mConics.size(0), "Bad size for conics");
             TORCH_CHECK_VALUE(mNumGaussiansPerCamera == mConics.size(1), "Bad size for conics");
             TORCH_CHECK_VALUE(mNumCameras == mOpacities.size(0), "Bad size for opacities");
