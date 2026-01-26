@@ -19,7 +19,7 @@
 namespace fvdb::detail::ops {
 namespace {
 
-/// @brief Optimized copy from padded 'Top Contributing Gaussian IDs' JaggedTensor to an unpadded
+/// @brief Copy from padded 'Top Contributing Gaussian IDs' JaggedTensor to an unpadded
 /// 'Contributing Gaussian IDs' JaggedTensor
 ///
 /// This function copies data from srcJagged (ldim=1 with fixed-size padding) to dstJagged (ldim=2
@@ -104,16 +104,16 @@ buildOutListIds(int64_t outputNumPixels,
     return torch::stack({cameraIndices, pixelIndices}, 1);
 }
 
-/// @brief Convert padded fixed-size output to variable-size JaggedTensor
+/// @brief Convert padded fixed-size output to nested JaggedTensor (ldim=2).
 ///
 /// Takes a counts-per-pixel tensor and converts padded source JaggedTensors
-/// to variable-size output JaggedTensors. This encapsulates the common pattern of:
+/// to nested JaggedTensors (ldim=2). This encapsulates the common pattern of:
 /// 1. Computing sample offsets via cumsum
 /// 2. Computing output indices via searchsorted
 /// 3. Computing list IDs (camera/pixel indices)
 /// 4. Allocating output data
 /// 5. Creating JaggedTensors
-/// 6. Copying data from padded source to variable-size destination
+/// 6. Copying data from padded source to nested JaggedTensor (ldim=2) destination
 ///
 /// @tparam ScalarType Scalar type for weights
 /// @param srcIds Source padded IDs JaggedTensor [numPixels, maxSamples]
@@ -124,21 +124,20 @@ buildOutListIds(int64_t outputNumPixels,
 /// @param maxSamplesPerPixel Max samples per pixel in source (K)
 /// @param pixelsPerCamera Pixels per camera for uniform mode, or -1 for non-uniform
 /// @param cameraOffsets Camera offsets [C+1] for non-uniform mode, nullopt for uniform
-/// @param options Tensor options for output data allocation
 /// @return Tuple of (outIdsJagged, outWeightsJagged)
 template <typename ScalarType>
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
-convertPaddedToVariableSizeJagged(const fvdb::JaggedTensor &srcIds,
+convertPaddedToNestedJaggedTensorImpl(const fvdb::JaggedTensor &srcIds,
                                   const fvdb::JaggedTensor &srcWeights,
                                   const torch::Tensor &countsPerPixel,
                                   int64_t totalCount,
                                   int64_t numCameras,
                                   int32_t maxSamplesPerPixel,
                                   int64_t pixelsPerCamera,
-                                  const std::optional<torch::Tensor> &cameraOffsets,
-                                  const torch::TensorOptions &options) {
+                                  const std::optional<torch::Tensor> &cameraOffsets) {
     const int64_t outputNumPixels = countsPerPixel.numel();
     const torch::Device device    = countsPerPixel.device();
+    const auto options            = srcIds.jdata().options();
 
     // Handle empty case
     if (totalCount == 0) {
@@ -189,6 +188,67 @@ convertPaddedToVariableSizeJagged(const fvdb::JaggedTensor &srcIds,
     copyPaddedJaggedToJagged(srcWeights, outWeightsJagged, sampleOffsets, maxSamplesPerPixel);
 
     return std::make_tuple(outIdsJagged, outWeightsJagged);
+}
+
+/// @brief Convert padded output to nested JaggedTensor (ldim=2).
+///
+/// Checks if the pixel distribution across cameras is uniform and uses the optimized
+/// uniform path (division/modulo) when possible, falling back to non-uniform path
+/// (searchsorted) otherwise.
+///
+/// @tparam ScalarType Scalar type for weights
+/// @param srcIds Source padded IDs JaggedTensor
+/// @param srcWeights Source padded weights JaggedTensor
+/// @param countsPerPixel Valid sample count per pixel [numPixels], int64_t contiguous
+/// @param totalCount Sum of countsPerPixel (total output samples)
+/// @param numCameras Number of cameras
+/// @param maxSamplesPerPixel Max samples per pixel in source (K)
+/// @param cameraOffsets Camera offsets from source JaggedTensor (used for uniform check and
+/// non-uniform mode)
+/// @param isSparseMode Whether this is sparse rendering (pixelsToRender was provided)
+/// @return Tuple of (outIdsJagged, outWeightsJagged)
+template <typename ScalarType>
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
+convertPaddedToNestedJaggedTensor(const fvdb::JaggedTensor &srcIds,
+                                  const fvdb::JaggedTensor &srcWeights,
+                                  const torch::Tensor &countsPerPixel,
+                                  int64_t totalCount,
+                                  int64_t numCameras,
+                                  int32_t maxSamplesPerPixel,
+                                  const torch::Tensor &cameraOffsets,
+                                  bool isSparseMode) {
+    const int64_t outputNumPixels = countsPerPixel.numel();
+
+    // Check if pixels are uniformly distributed across cameras
+    // Dense mode is always uniform; sparse mode requires checking offset differences
+    bool isUniformDistribution = false;
+    if (isSparseMode) {
+        torch::Tensor diffs   = cameraOffsets.slice(0, 1) - cameraOffsets.slice(0, 0, -1);
+        isUniformDistribution = (diffs == diffs[0]).all().item<bool>();
+    } else {
+        isUniformDistribution = true;
+    }
+
+    if (isUniformDistribution) {
+        const auto pixelsPerCamera = outputNumPixels / numCameras;
+        return convertPaddedToNestedJaggedTensorImpl<ScalarType>(srcIds,
+                                                             srcWeights,
+                                                             countsPerPixel,
+                                                             totalCount,
+                                                             numCameras,
+                                                             maxSamplesPerPixel,
+                                                             pixelsPerCamera,
+                                                             std::nullopt);
+    } else {
+        return convertPaddedToNestedJaggedTensorImpl<ScalarType>(srcIds,
+                                                             srcWeights,
+                                                             countsPerPixel,
+                                                             totalCount,
+                                                             numCameras,
+                                                             maxSamplesPerPixel,
+                                                             -1,
+                                                             cameraOffsets);
+    }
 }
 
 // Structure to hold arguments and methods for the rasterize top contributing gaussian ids kernel
@@ -521,8 +581,6 @@ launchRasterizeContributingGaussianIdsForwardKernel(
         // Now convert from fixed-size top-k format to variable-size format
         torch::Tensor numValidSamples = (outIds.jdata() != -1).to(torch::kInt32).sum(-1);
 
-        const auto outputNumPixels = numValidSamples.numel();
-
         // Build JaggedTensor structure
         const bool tileOffsetsAreSparse = tileOffsets.dim() == 1;
         const auto C = tileOffsetsAreSparse ? outIds.num_outer_lists() : tileOffsets.size(0);
@@ -531,40 +589,17 @@ launchRasterizeContributingGaussianIdsForwardKernel(
         torch::Tensor numValidSamplesData = numValidSamples.to(torch::kInt64).contiguous();
         const auto totalCount             = numValidSamplesData.sum().item<int64_t>();
 
-        bool isUniformPixelsPerCameraDistribution = false;
-        if (pixelsToRender.has_value()) {
-            // sparse mode, check if pixels are uniformly distributed across cameras
-            torch::Tensor offsets                = outIds.joffsets();
-            torch::Tensor diffs                  = offsets.slice(0, 1) - offsets.slice(0, 0, -1);
-            isUniformPixelsPerCameraDistribution = (diffs == diffs[0]).all().item<bool>();
-        } else {
-            // dense mode, always uniform pixels per camera distribution
-            isUniformPixelsPerCameraDistribution = true;
-        }
-
-        if (isUniformPixelsPerCameraDistribution) {
-            return convertPaddedToVariableSizeJagged<ScalarType>(outIds,
-                                                                 outWeights,
-                                                                 numValidSamplesData,
-                                                                 totalCount,
-                                                                 C,
-                                                                 settings.numDepthSamples,
-                                                                 -1,
-                                                                 outIds.joffsets(),
-                                                                 means2d.options());
-        } else {
-            const auto pixelsPerCamera = outputNumPixels / C;
-            return convertPaddedToVariableSizeJagged<ScalarType>(outIds,
-                                                                 outWeights,
-                                                                 numValidSamplesData,
-                                                                 totalCount,
-                                                                 C,
-                                                                 settings.numDepthSamples,
-                                                                 pixelsPerCamera,
-                                                                 std::nullopt,
-                                                                 means2d.options());
-        }
+        return convertPaddedToNestedJaggedTensor<ScalarType>(outIds,
+                                                             outWeights,
+                                                             numValidSamplesData,
+                                                             totalCount,
+                                                             C,
+                                                             settings.numDepthSamples,
+                                                             outIds.joffsets(),
+                                                             pixelsToRender.has_value());
     }
+
+    // …otherwise, in non-top-k mode, returning all samples for each pixel
 
     TORCH_CHECK_VALUE(maybeNumContributingGaussians.has_value(),
                       "numContributingGaussians must be provided if not using top-k mode");
@@ -715,45 +750,19 @@ launchRasterizeContributingGaussianIdsForwardKernel(
 
     //  Convert padded output to variable-size JaggedTensor
     const auto outputNumCameras = numContributingGaussians.num_outer_lists();
-    const auto outputNumPixels  = numContributingGaussians.numel();
 
     // Prepare counts tensor
     torch::Tensor numContributingGaussiansData =
         numContributingGaussians.jdata().to(torch::kInt64).contiguous();
 
-    // Check if pixels are uniformly distributed across cameras
-    // Dense mode is always uniform; sparse mode may or may not be
-    bool isUniformPixelsPerCameraDistribution = false;
-    if (pixelsToRender.has_value()) {
-        torch::Tensor offsets                = numContributingGaussians.joffsets();
-        torch::Tensor diffs                  = offsets.slice(0, 1) - offsets.slice(0, 0, -1);
-        isUniformPixelsPerCameraDistribution = (diffs == diffs[0]).all().item<bool>();
-    } else {
-        isUniformPixelsPerCameraDistribution = true;
-    }
-
-    if (isUniformPixelsPerCameraDistribution) {
-        const auto pixelsPerCamera = outputNumPixels / outputNumCameras;
-        return convertPaddedToVariableSizeJagged<ScalarType>(outIds,
-                                                             outWeights,
-                                                             numContributingGaussiansData,
-                                                             numContributingGaussiansSum,
-                                                             outputNumCameras,
-                                                             maxDepthSamplesPerPixel,
-                                                             pixelsPerCamera,
-                                                             std::nullopt,
-                                                             means2d.options());
-    } else {
-        return convertPaddedToVariableSizeJagged<ScalarType>(outIds,
-                                                             outWeights,
-                                                             numContributingGaussiansData,
-                                                             numContributingGaussiansSum,
-                                                             outputNumCameras,
-                                                             maxDepthSamplesPerPixel,
-                                                             -1,
-                                                             numContributingGaussians.joffsets(),
-                                                             means2d.options());
-    }
+    return convertPaddedToNestedJaggedTensor<ScalarType>(outIds,
+                                                         outWeights,
+                                                         numContributingGaussiansData,
+                                                         numContributingGaussiansSum,
+                                                         outputNumCameras,
+                                                         maxDepthSamplesPerPixel,
+                                                         numContributingGaussians.joffsets(),
+                                                         pixelsToRender.has_value());
 }
 
 } // namespace
