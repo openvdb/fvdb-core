@@ -162,14 +162,12 @@ quaternionToRotationMatrix(nanovdb::math::Vec4<T> const &quat) {
     );
 }
 
-/// @brief A rigid pose represented as (rotation quaternion, translation).
+/// @brief Normalizes a quaternion to unit length
 ///
-/// Quaternion is stored as [w,x,y,z].
-template <typename T> struct Pose {
-    nanovdb::math::Vec4<T> q; // rotation quaternion [w,x,y,z]
-    nanovdb::math::Vec3<T> t; // translation
-};
-
+/// This function normalizes a quaternion to unit length. If the quaternion is zero, it is set to the identity quaternion.
+///
+/// @param q Input quaternion [w,x,y,z]
+/// @return nanovdb::math::Vec4<T> Normalized quaternion
 template <typename T>
 inline __host__ __device__ nanovdb::math::Vec4<T>
 normalizeQuaternionSafe(nanovdb::math::Vec4<T> q) {
@@ -187,6 +185,14 @@ normalizeQuaternionSafe(nanovdb::math::Vec4<T> q) {
     return q;
 }
 
+/// @brief Interpolates between two quaternions using normalized linear interpolation along the shortest path
+///
+/// This function interpolates between two quaternions using normalized linear interpolation along the shortest path.
+///
+/// @param q0 First quaternion [w,x,y,z]
+/// @param q1 Second quaternion [w,x,y,z]
+/// @param u Interpolation factor in [0,1]
+/// @return nanovdb::math::Vec4<T> Interpolated quaternion
 template <typename T>
 inline __host__ __device__ nanovdb::math::Vec4<T>
 nlerpQuaternionShortestPath(const nanovdb::math::Vec4<T> &q0,
@@ -208,6 +214,81 @@ nlerpQuaternionShortestPath(const nanovdb::math::Vec4<T> &q0,
                                s * q0[2] + u * q1[2],
                                s * q0[3] + u * q1[3]));
 }
+
+/// @brief A rigid pose represented as (rotation quaternion, translation).
+///
+/// Quaternion is stored as [w,x,y,z].
+template <typename T> struct Pose {
+    nanovdb::math::Vec4<T> q; // rotation quaternion [w,x,y,z]
+    nanovdb::math::Vec3<T> t; // translation
+
+    __host__ __device__ Pose(const nanovdb::math::Vec4<T> &q, const nanovdb::math::Vec3<T> &t) : q(q), t(t) {}
+    __host__ __device__ Pose(const nanovdb::math::Mat3<T> &R, const nanovdb::math::Vec3<T> &t) : q(rotationMatrixToQuaternion<T>(R)), t(t) {}
+    __host__ __device__ Pose(const nanovdb::math::Mat3<T> &R) : q(rotationMatrixToQuaternion<T>(R)), t(nanovdb::math::Vec3<T>(0, 0, 0)) {}
+    __host__ __device__ Pose() : q(nanovdb::math::Vec4<T>(1, 0, 0, 0)), t(nanovdb::math::Vec3<T>(0, 0, 0)) {}
+    __host__ __device__ Pose(const Pose<T> &other) : q(other.q), t(other.t) {}
+    __host__ __device__ Pose<T> &operator=(const Pose<T> &other) {
+        q = other.q;
+        t = other.t;
+        return *this;
+    }
+    __host__ __device__ Pose<T> &operator=(Pose<T> &&other) noexcept {
+        q = std::move(other.q);
+        t = std::move(other.t);
+        return *this;
+    }
+
+    /// @brief Transforms a point from world space to camera space
+    ///
+    /// This function transforms a point from world space to camera space using the pose's rotation and translation.
+    ///
+    /// @param p Point in world space [x,y,z]
+    /// @return nanovdb::math::Vec3<T> Point in camera space [x,y,z]
+    nanovdb::math::Vec3<T> transformPointWorldToCam(const nanovdb::math::Vec3<T> &p) const {
+        const nanovdb::math::Vec4<T> pQuat(0, p[0], p[1], p[2]);
+        const nanovdb::math::Vec4<T> qConjugate = nanovdb::math::Vec4<T>(q[0], -q[1], -q[2], -q[3]);
+        const nanovdb::math::Vec4<T> pQuatCam = q * pQuat * qConjugate;
+        return nanovdb::math::Vec3<T>(pQuatCam[1], pQuatCam[2], pQuatCam[3]) + t;
+    }
+
+    /// @brief Transforms a point from camera space to world space
+    ///
+    /// This function transforms a point from camera space to world space using the pose's rotation and translation.
+    ///
+    /// @param p Point in camera space [x,y,z]
+    /// @return nanovdb::math::Vec3<T> Point in world space [x,y,z]
+    nanovdb::math::Vec3<T> transformPointCamToWorld(const nanovdb::math::Vec3<T> &p) const {
+        const nanovdb::math::Vec4<T> pQuat(0, p[0], p[1], p[2]);
+        const nanovdb::math::Vec4<T> qConjugate = nanovdb::math::Vec4<T>(q[0], -q[1], -q[2], -q[3]);
+        const nanovdb::math::Vec4<T> pQuatWorld = qConjugate * pQuat * q;
+        return nanovdb::math::Vec3<T>(pQuatWorld[1], pQuatWorld[2], pQuatWorld[3]) - t;
+    }
+
+    static __host__ __device__ Pose<T> identity() {
+        return Pose<T>(nanovdb::math::Vec4<T>(1, 0, 0, 0), nanovdb::math::Vec3<T>(0, 0, 0));
+    }
+
+    static __host__ __device__ Pose<T> fromRotationMatrix(const nanovdb::math::Mat3<T> &R) {
+        return Pose<T>(R, nanovdb::math::Vec3<T>(0, 0, 0));
+    }
+
+    static __host__ __device__ Pose<T> fromQuaternion(const nanovdb::math::Vec4<T> &q) {
+        return Pose<T>(q, nanovdb::math::Vec3<T>(0, 0, 0));
+    }
+
+    static __host__ __device__ Pose<T> fromTranslation(const nanovdb::math::Vec3<T> &t) {
+        return Pose<T>(nanovdb::math::Vec4<T>(1, 0, 0, 0), t);
+    }
+
+    static __host__ __device__ Pose<T> fromTransformMatrix(const nanovdb::math::Mat4<T> &m) {
+        return Pose<T>(nanovdb::math::Mat3<T>(m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2]), nanovdb::math::Vec3<T>(m[0][3], m[1][3], m[2][3]));
+    }
+
+    static __host__ __device__ Pose<T> interpolateNlerp(const Pose<T> &a, const Pose<T> &b, const T u) {
+        return Pose<T>(nlerpQuaternionShortestPath<T>(a.q, b.q, u), a.t + u * (b.t - a.t));
+    }
+};
+
 
 /// @brief Interpolate between two camera poses.
 ///

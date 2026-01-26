@@ -52,9 +52,14 @@ struct UTParams {
 /// @param[in] projectionMatrices Camera intrinsic matrices [C, 3, 3]
 /// @param[in] rollingShutterType Type of rolling shutter effect to apply
 /// @param[in] utParams Unscented Transform parameters
-/// @param[in] radialCoeffs Radial distortion coefficients [C, 6] or [C, 4] or [C, 0]
-/// @param[in] tangentialCoeffs Tangential distortion coefficients [C, 2] or [C, 0]
-/// @param[in] thinPrismCoeffs Thin prism distortion coefficients [C, 3] or [C, 0]
+/// @param[in] radialCoeffs Radial distortion coefficients (OpenCV convention):
+///   - Polynomial: k1,k2,k3 in a [C,3] tensor
+///   - Rational:   k1..k6 in a [C,6] tensor
+///   - None:       [C,0]
+/// @param[in] tangentialCoeffs Tangential distortion coefficients (OpenCV convention) p1,p2 in a
+///   [C,2] tensor (or [C,0] for none).
+/// @param[in] thinPrismCoeffs Thin prism distortion coefficients (OpenCV convention) s1..s4.
+///   This kernel accepts [C,4] (full OpenCV) or [C,0] for none.
 /// @param[in] imageWidth Width of the output image in pixels
 /// @param[in] imageHeight Height of the output image in pixels
 /// @param[in] eps2d 2D projection epsilon for numerical stability
@@ -81,9 +86,9 @@ dispatchGaussianProjectionForwardUT(
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]
     const RollingShutterType rollingShutterType,
     const UTParams &utParams,
-    const torch::Tensor &radialCoeffs,     // [C, 6] or [C, 4] or [C, 0] distortion coefficients
+    const torch::Tensor &radialCoeffs,     // [C, 6] or [C, 3] or [C, 0] distortion coefficients
     const torch::Tensor &tangentialCoeffs, // [C, 2] or [C, 0] distortion coefficients
-    const torch::Tensor &thinPrismCoeffs,  // [C, 3] or [C, 0] distortion coefficients
+    const torch::Tensor &thinPrismCoeffs,  // [C, 4] or [C, 0] distortion coefficients
     const int64_t imageWidth,
     const int64_t imageHeight,
     const float eps2d,

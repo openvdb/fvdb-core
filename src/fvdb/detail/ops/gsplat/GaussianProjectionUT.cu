@@ -19,85 +19,127 @@ namespace fvdb::detail::ops {
 
 namespace {
 
-// Apply camera distortion to a normalized point
-template <typename T>
-__device__ nanovdb::math::Vec2<T>
-applyDistortion(const nanovdb::math::Vec2<T> &p_normalized, const T *radial_coeffs, int num_radial,
-                const T *tangential_coeffs, int num_tangential, const T *thin_prism_coeffs,
-                int num_thin_prism) {
-    T x = p_normalized[0];
-    T y = p_normalized[1];
-    T x2 = x * x;
-    T y2 = y * y;
-    T xy = x * y;
-    T r2 = x2 + y2;
-    T r4 = r2 * r2;
-    T r6 = r4 * r2;
+// OpenCV camera distortion conventions:
+// https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html
+// Distortion coefficients are interpreted as:
+// - Radial: k1, k2, k3, k4, k5, k6 (k4..k6 used only for rational model)
+// - Tangential: p1, p2
+// - Thin prism: s1, s2, s3, s4
+//
+// Note: the UT kernel currently receives these as *separate* tensors (radial/tangential/thin-prism),
+// but the math matches OpenCV's ordering/meaning.
+enum class OpenCVDistortionModel : uint8_t {
+    NONE          = 0,  // no distortion
+    RADTAN_5      = 5,  // k1,k2,p1,p2,k3 (polynomial radial up to r^6)
+    RATIONAL_8    = 8,  // k1,k2,p1,p2,k3,k4,k5,k6 (rational radial)
+    THIN_PRISM_12 = 12, // RATIONAL_8 + s1,s2,s3,s4
+};
 
-    // Default: no radial distortion
-    T radial_dist = T(1);
-    // Support both:
-    // - 4 coeffs: polynomial k1,k2  (1 + k1 r^2 + k2 r^4)
-    // - 6 coeffs: OpenCV rational k1..k6  (num/den)
-    if (radial_coeffs != nullptr) {
-        if (num_radial == 4) {
-            radial_dist = T(1) + radial_coeffs[0] * r2 + radial_coeffs[1] * r4;
-        } else if (num_radial == 6) {
-            const T k1 = radial_coeffs[0], k2 = radial_coeffs[1], k3 = radial_coeffs[2];
-            const T k4 = radial_coeffs[3], k5 = radial_coeffs[4], k6 = radial_coeffs[5];
-            const T num = T(1) + r2 * (k1 + r2 * (k2 + r2 * k3));
-            const T den = T(1) + r2 * (k4 + r2 * (k5 + r2 * k6));
-            // Avoid division by 0 / negative flips. Mark invalid later if needed.
-            radial_dist = den != T(0) ? (num / den) : T(0);
-        } else if (num_radial >= 2) {
-            // Best-effort fallback: interpret as polynomial k1,k2,k3...
-            radial_dist = T(1) + radial_coeffs[0] * r2;
-            if (num_radial > 1) radial_dist += radial_coeffs[1] * r4;
-            if (num_radial > 2) radial_dist += radial_coeffs[2] * r6;
-        }
+__host__ __device__ inline OpenCVDistortionModel
+pickOpenCVDistortionModel(const int numRadial, const int numTangential, const int numThinPrism) {
+    if (numRadial == 0 && numTangential == 0 && numThinPrism == 0) {
+        return OpenCVDistortionModel::NONE;
     }
-
-    T x_dist = x * radial_dist;
-    T y_dist = y * radial_dist;
-
-    if (tangential_coeffs != nullptr && num_tangential >= 2) {
-        x_dist += 2 * tangential_coeffs[0] * xy + tangential_coeffs[1] * (r2 + 2 * x2);
-        y_dist += tangential_coeffs[0] * (r2 + 2 * y2) + 2 * tangential_coeffs[1] * xy;
+    // Prefer the "largest" model that can represent the provided coefficients.
+    if (numThinPrism > 0) {
+        return OpenCVDistortionModel::THIN_PRISM_12;
     }
-
-    // Thin-prism distortion: OpenCV uses 4 coeffs (s1,s2,s3,s4) as r2 and r4 terms in x/y.
-    if (thin_prism_coeffs != nullptr && num_thin_prism >= 2) {
-        const T s1 = thin_prism_coeffs[0];
-        const T s2 = thin_prism_coeffs[1];
-        const T s3 = (num_thin_prism > 2) ? thin_prism_coeffs[2] : T(0);
-        const T s4 = (num_thin_prism > 3) ? thin_prism_coeffs[3] : T(0);
-        x_dist += s1 * r2 + s2 * r4;
-        y_dist += s3 * r2 + s4 * r4;
+    if (numRadial >= 6) {
+        return OpenCVDistortionModel::RATIONAL_8;
     }
-
-    return nanovdb::math::Vec2<T>(x_dist, y_dist);
+    return OpenCVDistortionModel::RADTAN_5;
 }
 
-// Project a 3D point to 2D with distortion
+template <typename T> struct OpenCVDistortion {
+    using Vec2 = nanovdb::math::Vec2<T>;
+
+    const T *radial      = nullptr; // k1..k6 (but k4..k6 only used in rational model)
+    int numRadial        = 0;
+    const T *tangential  = nullptr; // p1,p2
+    int numTangential    = 0;
+    const T *thinPrism   = nullptr; // s1..s4
+    int numThinPrism     = 0;
+    OpenCVDistortionModel model = OpenCVDistortionModel::NONE;
+
+    __host__ __device__ inline T
+    coeffOrZero(const T *ptr, const int n, const int i) const {
+        return (ptr != nullptr && i >= 0 && i < n) ? ptr[i] : T(0);
+    }
+
+    __device__ Vec2
+    apply(const Vec2 &p_normalized) const {
+        const T x  = p_normalized[0];
+        const T y  = p_normalized[1];
+        const T x2 = x * x;
+        const T y2 = y * y;
+        const T xy = x * y;
+
+        const T r2 = x2 + y2;
+        const T r4 = r2 * r2;
+        const T r6 = r4 * r2;
+
+        // Radial distortion.
+        T radial_dist = T(1);
+        if (model == OpenCVDistortionModel::RATIONAL_8 || model == OpenCVDistortionModel::THIN_PRISM_12) {
+            const T k1 = coeffOrZero(radial, numRadial, 0);
+            const T k2 = coeffOrZero(radial, numRadial, 1);
+            const T k3 = coeffOrZero(radial, numRadial, 2);
+            const T k4 = coeffOrZero(radial, numRadial, 3);
+            const T k5 = coeffOrZero(radial, numRadial, 4);
+            const T k6 = coeffOrZero(radial, numRadial, 5);
+            const T num = T(1) + r2 * (k1 + r2 * (k2 + r2 * k3));
+            const T den = T(1) + r2 * (k4 + r2 * (k5 + r2 * k6));
+            radial_dist = (den != T(0)) ? (num / den) : T(0);
+        } else if (model == OpenCVDistortionModel::RADTAN_5) {
+            // Polynomial radial (up to k3 / r^6).
+            const T k1 = coeffOrZero(radial, numRadial, 0);
+            const T k2 = coeffOrZero(radial, numRadial, 1);
+            const T k3 = coeffOrZero(radial, numRadial, 2);
+            radial_dist = T(1) + k1 * r2 + k2 * r4 + k3 * r6;
+        }
+
+        T x_dist = x * radial_dist;
+        T y_dist = y * radial_dist;
+
+        // Tangential distortion.
+        // OpenCV: x += 2*p1*x*y + p2*(r^2 + 2*x^2)
+        //         y += p1*(r^2 + 2*y^2) + 2*p2*x*y
+        const T p1 = coeffOrZero(tangential, numTangential, 0);
+        const T p2 = coeffOrZero(tangential, numTangential, 1);
+        x_dist += T(2) * p1 * xy + p2 * (r2 + T(2) * x2);
+        y_dist += p1 * (r2 + T(2) * y2) + T(2) * p2 * xy;
+
+        // Thin-prism distortion.
+        if (model == OpenCVDistortionModel::THIN_PRISM_12) {
+            const T s1 = coeffOrZero(thinPrism, numThinPrism, 0);
+            const T s2 = coeffOrZero(thinPrism, numThinPrism, 1);
+            const T s3 = coeffOrZero(thinPrism, numThinPrism, 2);
+            const T s4 = coeffOrZero(thinPrism, numThinPrism, 3);
+            x_dist += s1 * r2 + s2 * r4;
+            y_dist += s3 * r2 + s4 * r4;
+        }
+
+        return Vec2(x_dist, y_dist);
+    }
+};
+
+// Project a 3D point to 2D (pixel coords) with OpenCV-style distortion.
 template <typename T>
 __device__ nanovdb::math::Vec2<T>
-projectPointWithDistortion(const nanovdb::math::Vec3<T> &p_cam, const nanovdb::math::Mat3<T> &K,
-                           const T *radial_coeffs, int num_radial, const T *tangential_coeffs,
-                           int num_tangential, const T *thin_prism_coeffs, int num_thin_prism) {
-    // Normalize by depth
-    T z_inv = T(1) / max(p_cam[2], T(1e-6));
-    nanovdb::math::Vec2<T> p_normalized(p_cam[0] * z_inv, p_cam[1] * z_inv);
+projectPointWithDistortion(const nanovdb::math::Vec3<T> &p_cam,
+                           const nanovdb::math::Mat3<T> &K,
+                           const OpenCVDistortion<T> &distortion) {
+    // Normalize by depth.
+    const T z_inv = T(1) / max(p_cam[2], T(1e-6));
+    const nanovdb::math::Vec2<T> p_normalized(p_cam[0] * z_inv, p_cam[1] * z_inv);
 
-    // Apply distortion
-    nanovdb::math::Vec2<T> p_distorted =
-        applyDistortion(p_normalized, radial_coeffs, num_radial, tangential_coeffs,
-                       num_tangential, thin_prism_coeffs, num_thin_prism);
+    const nanovdb::math::Vec2<T> p_distorted = distortion.apply(p_normalized);
 
-    // Project to pixel coordinates
-    T fx = K[0][0];
-    T fy = K[1][1];
-    T cx = K[0][2];
-    T cy = K[1][2];
+    // Project to pixel coordinates.
+    const T fx = K[0][0];
+    const T fy = K[1][1];
+    const T cx = K[0][2];
+    const T cy = K[1][2];
 
     return nanovdb::math::Vec2<T>(fx * p_distorted[0] + cx, fy * p_distorted[1] + cy);
 }
@@ -189,9 +231,10 @@ template <typename ScalarType> struct ProjectionForwardUT {
     const ScalarType mRadiusClip;
     const RollingShutterType mRollingShutterType;
     const UTParams mUTParams;
-    const int64_t numRadialCoeffs;     // Number of radial distortion coeffs. One of (6, 4, 0).
+    const int64_t numRadialCoeffs;     // Number of radial distortion coeffs. One of (6, 3, 0).
     const int64_t numTangentialCoeffs; // Number of tangential distortion coeffs. One of (2, 0).
-    const int64_t numThinPrismCoeffs;  // Number of thin prism distortion coeffs. One of (3, 0).
+    const int64_t numThinPrismCoeffs;  // Number of thin prism distortion coeffs. One of (4, 0).
+    const OpenCVDistortionModel mDistortionModel;
 
     // Tensor Inputs
     const fvdb::TorchRAcc64<ScalarType, 2> mMeansAcc;                   // [N, 3]
@@ -200,9 +243,9 @@ template <typename ScalarType> struct ProjectionForwardUT {
     const fvdb::TorchRAcc32<ScalarType, 3> mWorldToCamMatricesStartAcc; // [C, 4, 4]
     const fvdb::TorchRAcc32<ScalarType, 3> mWorldToCamMatricesEndAcc;   // [C, 4, 4]
     const fvdb::TorchRAcc32<ScalarType, 3> mProjectionMatricesAcc;      // [C, 3, 3]
-    const fvdb::TorchRAcc64<ScalarType, 2> mRadialCoeffsAcc;     // [C, 6] or [C, 4] or [C, 0]
+    const fvdb::TorchRAcc64<ScalarType, 2> mRadialCoeffsAcc;     // [C, 6] or [C, 3] or [C, 0]
     const fvdb::TorchRAcc64<ScalarType, 2> mTangentialCoeffsAcc; // [C, 2] or [C, 0]
-    const fvdb::TorchRAcc64<ScalarType, 2> mThinPrismCoeffsAcc;  // [C, 3] or [C, 0]
+    const fvdb::TorchRAcc64<ScalarType, 2> mThinPrismCoeffsAcc;  // [C, 4] or [C, 0]
 
     // Outputs
     fvdb::TorchRAcc64<int32_t, 2> mOutRadiiAcc;      // [C, N]
@@ -239,9 +282,9 @@ template <typename ScalarType> struct ProjectionForwardUT {
         const torch::Tensor &worldToCamMatricesStart, // [C, 4, 4]
         const torch::Tensor &worldToCamMatricesEnd,   // [C, 4, 4]
         const torch::Tensor &projectionMatrices,      // [C, 3, 3]
-        const torch::Tensor &radialCoeffs,     // [C, 6] or [C, 4] or [C, 0] distortion coefficients
+        const torch::Tensor &radialCoeffs,     // [C, 6] or [C, 3] or [C, 0] distortion coefficients
         const torch::Tensor &tangentialCoeffs, // [C, 2]
-        const torch::Tensor &thinPrismCoeffs,  // [C, 3]
+        const torch::Tensor &thinPrismCoeffs,  // [C, 4]
         torch::Tensor &outRadii,               // [C, N]
         torch::Tensor &outMeans2d,             // [C, N, 2]
         torch::Tensor &outDepths,              // [C, N]
@@ -256,6 +299,9 @@ template <typename ScalarType> struct ProjectionForwardUT {
           numRadialCoeffs(radialCoeffs.size(1)),
           numTangentialCoeffs(tangentialCoeffs.size(1)),
           numThinPrismCoeffs(thinPrismCoeffs.size(1)),
+          mDistortionModel(pickOpenCVDistortionModel((int)radialCoeffs.size(1),
+                                                     (int)tangentialCoeffs.size(1),
+                                                     (int)thinPrismCoeffs.size(1))),
           mMeansAcc(means.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
           mQuatsAcc(quats.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
           mLogScalesAcc(logScales.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
@@ -453,10 +499,16 @@ template <typename ScalarType> struct ProjectionForwardUT {
                 if (p_cam[2] <= ScalarType(0)) {
                     return false;
                 }
-                out_pix = projectPointWithDistortion(p_cam, projectionMatrix, radial_coeffs,
-                                                     (int)numRadialCoeffs, tangential_coeffs,
-                                                     (int)numTangentialCoeffs, thin_prism_coeffs,
-                                                     (int)numThinPrismCoeffs);
+                const OpenCVDistortion<ScalarType> distortion{
+                    radial_coeffs,
+                    (int)numRadialCoeffs,
+                    tangential_coeffs,
+                    (int)numTangentialCoeffs,
+                    thin_prism_coeffs,
+                    (int)numThinPrismCoeffs,
+                    mDistortionModel,
+                };
+                out_pix = projectPointWithDistortion(p_cam, projectionMatrix, distortion);
                 const bool in_img = (out_pix[0] >= -margin_x) && (out_pix[0] < ScalarType(mImageWidth) + margin_x) &&
                                     (out_pix[1] >= -margin_y) && (out_pix[1] < ScalarType(mImageHeight) + margin_y);
                 return in_img;
@@ -623,9 +675,9 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]
     const RollingShutterType rollingShutterType,
     const UTParams &utParams,
-    const torch::Tensor &radialCoeffs,     // [C, 6] or [C, 4] or [C, 0] distortion coefficients
+    const torch::Tensor &radialCoeffs,     // [C, 6] or [C, 3] or [C, 0] distortion coefficients
     const torch::Tensor &tangentialCoeffs, // [C, 2] or [C, 0] distortion coefficients
-    const torch::Tensor &thinPrismCoeffs,  // [C, 3] or [C, 0] distortion coefficients
+    const torch::Tensor &thinPrismCoeffs,  // [C, 4] or [C, 0] distortion coefficients
     const int64_t imageWidth,
     const int64_t imageHeight,
     const float eps2d,
@@ -647,6 +699,15 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
     TORCH_CHECK_VALUE(radialCoeffs.is_cuda(), "radialCoeffs must be a CUDA tensor");
     TORCH_CHECK_VALUE(tangentialCoeffs.is_cuda(), "tangentialCoeffs must be a CUDA tensor");
     TORCH_CHECK_VALUE(thinPrismCoeffs.is_cuda(), "thinPrismCoeffs must be a CUDA tensor");
+    TORCH_CHECK_VALUE(radialCoeffs.dim() == 2, "radialCoeffs must be 2D");
+    TORCH_CHECK_VALUE(tangentialCoeffs.dim() == 2, "tangentialCoeffs must be 2D");
+    TORCH_CHECK_VALUE(thinPrismCoeffs.dim() == 2, "thinPrismCoeffs must be 2D");
+    TORCH_CHECK_VALUE((radialCoeffs.size(1) == 0 || radialCoeffs.size(1) == 3 || radialCoeffs.size(1) == 6),
+                      "radialCoeffs must have shape [C,0], [C,3] (k1,k2,k3) or [C,6] (k1..k6)");
+    TORCH_CHECK_VALUE((tangentialCoeffs.size(1) == 0 || tangentialCoeffs.size(1) == 2),
+                      "tangentialCoeffs must have shape [C,0] or [C,2] (p1,p2)");
+    TORCH_CHECK_VALUE((thinPrismCoeffs.size(1) == 0 || thinPrismCoeffs.size(1) == 4),
+                      "thinPrismCoeffs must have shape [C,0] or [C,4] (s1..s4)");
 
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means));
 
@@ -703,9 +764,9 @@ dispatchGaussianProjectionForwardUT<torch::kCPU>(
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]
     const RollingShutterType rollingShutterType,
     const UTParams &utParams,
-    const torch::Tensor &radialCoeffs,     // [C, 6] or [C, 4] or [C, 0] distortion coefficients
+    const torch::Tensor &radialCoeffs,     // [C, 6] or [C, 3] or [C, 0] distortion coefficients
     const torch::Tensor &tangentialCoeffs, // [C, 2] or [C, 0] distortion coefficients
-    const torch::Tensor &thinPrismCoeffs,  // [C, 3] or [C, 0] distortion coefficients
+    const torch::Tensor &thinPrismCoeffs,  // [C, 4] or [C, 0] distortion coefficients
     const int64_t imageWidth,
     const int64_t imageHeight,
     const float eps2d,
@@ -728,9 +789,9 @@ dispatchGaussianProjectionForwardUT<torch::kPrivateUse1>(
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]
     const RollingShutterType rollingShutterType,
     const UTParams &utParams,
-    const torch::Tensor &radialCoeffs,     // [C, 6] or [C, 4] or [C, 0] distortion coefficients
+    const torch::Tensor &radialCoeffs,     // [C, 6] or [C, 3] or [C, 0] distortion coefficients
     const torch::Tensor &tangentialCoeffs, // [C, 2] or [C, 0] distortion coefficients
-    const torch::Tensor &thinPrismCoeffs,  // [C, 3] or [C, 0] distortion coefficients
+    const torch::Tensor &thinPrismCoeffs,  // [C, 4] or [C, 0] distortion coefficients
     const int64_t imageWidth,
     const int64_t imageHeight,
     const float eps2d,
