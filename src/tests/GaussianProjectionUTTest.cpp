@@ -104,7 +104,7 @@ struct GaussianProjectionUTTestFixture : public ::testing::Test {
 
     torch::Tensor means;                   // [N, 3]
     torch::Tensor quats;                   // [N, 4]
-    torch::Tensor scales;                  // [N, 3]
+    torch::Tensor logScales;               // [N, 3]
     torch::Tensor worldToCamMatricesStart; // [C, 4, 4]
     torch::Tensor worldToCamMatricesEnd;   // [C, 4, 4]
     torch::Tensor projectionMatrices;      // [C, 3, 3]
@@ -132,7 +132,7 @@ TEST_F(GaussianProjectionUTTestFixture, CenteredGaussian_NoDistortion_AnalyticMe
     quats = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32);
 
     const float sx = 0.2f, sy = 0.3f, sz = 0.4f;
-    scales = torch::tensor({{sx, sy, sz}}, torch::kFloat32);
+    logScales = torch::log(torch::tensor({{sx, sy, sz}}, torch::kFloat32));
 
     worldToCamMatricesStart =
         torch::eye(4, torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(0).expand({C, 4, 4});
@@ -165,7 +165,7 @@ TEST_F(GaussianProjectionUTTestFixture, CenteredGaussian_NoDistortion_AnalyticMe
     // CUDA
     means                   = means.cuda();
     quats                   = quats.cuda();
-    scales                  = scales.cuda();
+    logScales               = logScales.cuda();
     worldToCamMatricesStart = worldToCamMatricesStart.cuda();
     worldToCamMatricesEnd   = worldToCamMatricesEnd.cuda();
     projectionMatrices      = projectionMatrices.cuda();
@@ -174,7 +174,7 @@ TEST_F(GaussianProjectionUTTestFixture, CenteredGaussian_NoDistortion_AnalyticMe
     const auto [radii, means2d, depths, conics, compensations] =
         dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
                                                           quats,
-                                                          scales,
+                                                          logScales,
                                                           worldToCamMatricesStart,
                                                           worldToCamMatricesEnd,
                                                           projectionMatrices,
@@ -226,7 +226,7 @@ TEST_F(GaussianProjectionUTTestFixture, OffAxisTinyGaussian_NoDistortion_MeanMat
     quats = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32);
     // Extremely small Gaussian so UT mean should match the point projection closely
     // (off-axis + perspective nonlinearity can otherwise introduce a tiny UT mean shift).
-    scales = torch::tensor({{1e-6f, 1e-6f, 1e-6f}}, torch::kFloat32);
+    logScales = torch::log(torch::tensor({{1e-6f, 1e-6f, 1e-6f}}, torch::kFloat32));
 
     worldToCamMatricesStart =
         torch::eye(4, torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(0).expand({C, 4, 4});
@@ -258,7 +258,7 @@ TEST_F(GaussianProjectionUTTestFixture, OffAxisTinyGaussian_NoDistortion_MeanMat
 
     means                   = means.cuda();
     quats                   = quats.cuda();
-    scales                  = scales.cuda();
+    logScales               = logScales.cuda();
     worldToCamMatricesStart = worldToCamMatricesStart.cuda();
     worldToCamMatricesEnd   = worldToCamMatricesEnd.cuda();
     projectionMatrices      = projectionMatrices.cuda();
@@ -267,7 +267,7 @@ TEST_F(GaussianProjectionUTTestFixture, OffAxisTinyGaussian_NoDistortion_MeanMat
     const auto [radii, means2d, depths, conics, compensations] =
         dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
                                                           quats,
-                                                          scales,
+                                                          logScales,
                                                           worldToCamMatricesStart,
                                                           worldToCamMatricesEnd,
                                                           projectionMatrices,
@@ -300,7 +300,7 @@ TEST_F(GaussianProjectionUTTestFixture,
     const float x = 0.2f, y = -0.1f, z = 2.0f;
     means  = torch::tensor({{x, y, z}}, torch::kFloat32);
     quats  = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32);
-    scales = torch::tensor({{1e-6f, 1e-6f, 1e-6f}}, torch::kFloat32);
+    logScales = torch::log(torch::tensor({{1e-6f, 1e-6f, 1e-6f}}, torch::kFloat32));
 
     worldToCamMatricesStart =
         torch::eye(4, torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(0).expand({C, 4, 4});
@@ -345,7 +345,7 @@ TEST_F(GaussianProjectionUTTestFixture,
 
     means                   = means.cuda();
     quats                   = quats.cuda();
-    scales                  = scales.cuda();
+    logScales               = logScales.cuda();
     worldToCamMatricesStart = worldToCamMatricesStart.cuda();
     worldToCamMatricesEnd   = worldToCamMatricesEnd.cuda();
     projectionMatrices      = projectionMatrices.cuda();
@@ -354,7 +354,7 @@ TEST_F(GaussianProjectionUTTestFixture,
     const auto [radii, means2d, depths, conics, compensations] =
         dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
                                                           quats,
-                                                          scales,
+                                                          logScales,
                                                           worldToCamMatricesStart,
                                                           worldToCamMatricesEnd,
                                                           projectionMatrices,
@@ -388,7 +388,7 @@ TEST_F(GaussianProjectionUTTestFixture,
     const float x = -0.15f, y = 0.12f, z = 3.0f;
     means  = torch::tensor({{x, y, z}}, torch::kFloat32);
     quats  = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32);
-    scales = torch::tensor({{1e-6f, 1e-6f, 1e-6f}}, torch::kFloat32);
+    logScales = torch::log(torch::tensor({{1e-6f, 1e-6f, 1e-6f}}, torch::kFloat32));
 
     worldToCamMatricesStart =
         torch::eye(4, torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(0).expand({C, 4, 4});
@@ -437,7 +437,7 @@ TEST_F(GaussianProjectionUTTestFixture,
 
     means                   = means.cuda();
     quats                   = quats.cuda();
-    scales                  = scales.cuda();
+    logScales               = logScales.cuda();
     worldToCamMatricesStart = worldToCamMatricesStart.cuda();
     worldToCamMatricesEnd   = worldToCamMatricesEnd.cuda();
     projectionMatrices      = projectionMatrices.cuda();
@@ -446,7 +446,7 @@ TEST_F(GaussianProjectionUTTestFixture,
     const auto [radii, means2d, depths, conics, compensations] =
         dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
                                                           quats,
-                                                          scales,
+                                                          logScales,
                                                           worldToCamMatricesStart,
                                                           worldToCamMatricesEnd,
                                                           projectionMatrices,
@@ -480,7 +480,7 @@ TEST_F(GaussianProjectionUTTestFixture,
     const float x = 0.1f, y = 0.08f, z = 2.5f;
     means  = torch::tensor({{x, y, z}}, torch::kFloat32);
     quats  = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32);
-    scales = torch::tensor({{1e-6f, 1e-6f, 1e-6f}}, torch::kFloat32);
+    logScales = torch::log(torch::tensor({{1e-6f, 1e-6f, 1e-6f}}, torch::kFloat32));
 
     worldToCamMatricesStart =
         torch::eye(4, torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(0).expand({C, 4, 4});
@@ -537,7 +537,7 @@ TEST_F(GaussianProjectionUTTestFixture,
 
     means                   = means.cuda();
     quats                   = quats.cuda();
-    scales                  = scales.cuda();
+    logScales               = logScales.cuda();
     worldToCamMatricesStart = worldToCamMatricesStart.cuda();
     worldToCamMatricesEnd   = worldToCamMatricesEnd.cuda();
     projectionMatrices      = projectionMatrices.cuda();
@@ -546,7 +546,7 @@ TEST_F(GaussianProjectionUTTestFixture,
     const auto [radii, means2d, depths, conics, compensations] =
         dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
                                                           quats,
-                                                          scales,
+                                                          logScales,
                                                           worldToCamMatricesStart,
                                                           worldToCamMatricesEnd,
                                                           projectionMatrices,
@@ -580,7 +580,7 @@ TEST_F(GaussianProjectionUTTestFixture,
     const float x = 0.07f, y = -0.11f, z = 2.2f;
     means  = torch::tensor({{x, y, z}}, torch::kFloat32);
     quats  = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32);
-    scales = torch::tensor({{1e-6f, 1e-6f, 1e-6f}}, torch::kFloat32);
+    logScales = torch::log(torch::tensor({{1e-6f, 1e-6f, 1e-6f}}, torch::kFloat32));
 
     worldToCamMatricesStart =
         torch::eye(4, torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(0).expand({C, 4, 4});
@@ -632,7 +632,7 @@ TEST_F(GaussianProjectionUTTestFixture,
 
     means                   = means.cuda();
     quats                   = quats.cuda();
-    scales                  = scales.cuda();
+    logScales               = logScales.cuda();
     worldToCamMatricesStart = worldToCamMatricesStart.cuda();
     worldToCamMatricesEnd   = worldToCamMatricesEnd.cuda();
     projectionMatrices      = projectionMatrices.cuda();
@@ -641,7 +641,7 @@ TEST_F(GaussianProjectionUTTestFixture,
     const auto [radii, means2d, depths, conics, compensations] =
         dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
                                                           quats,
-                                                          scales,
+                                                          logScales,
                                                           worldToCamMatricesStart,
                                                           worldToCamMatricesEnd,
                                                           projectionMatrices,
@@ -673,7 +673,7 @@ TEST_F(GaussianProjectionUTTestFixture, RadTanThinPrism_RejectsNonZeroK456) {
 
     means  = torch::tensor({{0.1f, 0.05f, 2.0f}}, torch::kFloat32).cuda();
     quats  = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32).cuda();
-    scales = torch::tensor({{1e-6f, 1e-6f, 1e-6f}}, torch::kFloat32).cuda();
+    logScales = torch::log(torch::tensor({{1e-6f, 1e-6f, 1e-6f}}, torch::kFloat32)).cuda();
 
     worldToCamMatricesStart = torch::eye(4, torch::TensorOptions().dtype(torch::kFloat32))
                                   .unsqueeze(0)
@@ -705,7 +705,7 @@ TEST_F(GaussianProjectionUTTestFixture, RadTanThinPrism_RejectsNonZeroK456) {
 
     EXPECT_THROW((dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
                                                                     quats,
-                                                                    scales,
+                                                                    logScales,
                                                                     worldToCamMatricesStart,
                                                                     worldToCamMatricesEnd,
                                                                     projectionMatrices,

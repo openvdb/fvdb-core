@@ -61,7 +61,8 @@ struct UTParams {
 ///
 /// @param[in] means 3D positions of Gaussians [N, 3] where N is number of Gaussians
 /// @param[in] quats Quaternion rotations of Gaussians [N, 4] in format (w, x, y, z)
-/// @param[in] scales Scale factors of Gaussians [N, 3] representing extent in each dimension
+/// @param[in] logScales Log-scale factors of Gaussians [N, 3] (natural log), representing extent in
+/// each dimension
 /// @param[in] worldToCamMatricesStart Camera view matrices at the start of the frame. Shape [C, 4,
 /// 4] where C is number of cameras
 /// @param[in] worldToCamMatricesEnd Camera view matrices at the end of the frame. Shape [C, 4, 4]
@@ -95,7 +96,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 dispatchGaussianProjectionForwardUT(
     const torch::Tensor &means,                   // [N, 3]
     const torch::Tensor &quats,                   // [N, 4]
-    const torch::Tensor &scales,                  // [N, 3]
+    const torch::Tensor &logScales,               // [N, 3]
     const torch::Tensor &worldToCamMatricesStart, // [C, 4, 4]
     const torch::Tensor &worldToCamMatricesEnd,   // [C, 4, 4]
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]

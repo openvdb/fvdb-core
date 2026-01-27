@@ -676,7 +676,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 dispatchGaussianProjectionForwardUT<torch::kCUDA>(
     const torch::Tensor &means,                   // [N, 3]
     const torch::Tensor &quats,                   // [N, 4]
-    const torch::Tensor &scales,                  // [N, 3]
+    const torch::Tensor &logScales,               // [N, 3]
     const torch::Tensor &worldToCamMatricesStart, // [C, 4, 4]
     const torch::Tensor &worldToCamMatricesEnd,   // [C, 4, 4]
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]
@@ -696,7 +696,7 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
 
     TORCH_CHECK_VALUE(means.is_cuda(), "means must be a CUDA tensor");
     TORCH_CHECK_VALUE(quats.is_cuda(), "quats must be a CUDA tensor");
-    TORCH_CHECK_VALUE(scales.is_cuda(), "scales must be a CUDA tensor");
+    TORCH_CHECK_VALUE(logScales.is_cuda(), "logScales must be a CUDA tensor");
     TORCH_CHECK_VALUE(worldToCamMatricesStart.is_cuda(),
                       "worldToCamMatricesStart must be a CUDA tensor");
     TORCH_CHECK_VALUE(worldToCamMatricesEnd.is_cuda(),
@@ -784,7 +784,7 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
                                                     calcCompensations,
                                                     means,
                                                     quats,
-                                                    torch::log(scales),
+                                                    logScales,
                                                     worldToCamMatricesStart,
                                                     worldToCamMatricesEnd,
                                                     projectionMatrices,
@@ -807,7 +807,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 dispatchGaussianProjectionForwardUT<torch::kCPU>(
     const torch::Tensor &means,                   // [N, 3]
     const torch::Tensor &quats,                   // [N, 4]
-    const torch::Tensor &scales,                  // [N, 3]
+    const torch::Tensor &logScales,               // [N, 3]
     const torch::Tensor &worldToCamMatricesStart, // [C, 4, 4]
     const torch::Tensor &worldToCamMatricesEnd,   // [C, 4, 4]
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]
@@ -823,6 +823,7 @@ dispatchGaussianProjectionForwardUT<torch::kCPU>(
     const float minRadius2d,
     const bool calcCompensations,
     const bool ortho) {
+    (void)logScales;
     (void)distortionModel;
     (void)distortionCoeffs;
     TORCH_CHECK_NOT_IMPLEMENTED(false, "GaussianProjectionForwardUT not implemented on the CPU");
@@ -833,7 +834,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 dispatchGaussianProjectionForwardUT<torch::kPrivateUse1>(
     const torch::Tensor &means,                   // [N, 3]
     const torch::Tensor &quats,                   // [N, 4]
-    const torch::Tensor &scales,                  // [N, 3]
+    const torch::Tensor &logScales,               // [N, 3]
     const torch::Tensor &worldToCamMatricesStart, // [C, 4, 4]
     const torch::Tensor &worldToCamMatricesEnd,   // [C, 4, 4]
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]
@@ -849,6 +850,7 @@ dispatchGaussianProjectionForwardUT<torch::kPrivateUse1>(
     const float minRadius2d,
     const bool calcCompensations,
     const bool ortho) {
+    (void)logScales;
     (void)distortionModel;
     (void)distortionCoeffs;
     TORCH_CHECK_NOT_IMPLEMENTED(false,
