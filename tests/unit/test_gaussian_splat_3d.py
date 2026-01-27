@@ -3168,7 +3168,17 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         sh0 = torch.randn(N, 1, D, device=self.device)
         shN = torch.randn(N, 3, D, device=self.device)  # 3 coefficients for degree 1
 
-        # Should work with view directions
+        # Should raise error when view_directions is not provided for degree > 0
+        with self.assertRaises(RuntimeError):
+            evaluate_spherical_harmonics(
+                sh_degree=1,
+                num_cameras=C,
+                sh0=sh0,
+                shN=shN,
+                view_directions=None,
+            )
+
+        # Should work when view directions are provided
         view_dirs = torch.randn(C, N, 3, device=self.device)
         result = evaluate_spherical_harmonics(
             sh_degree=1,
