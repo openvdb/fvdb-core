@@ -248,4 +248,24 @@ TEST(GaussianUtilsTest, InterpolatePose_NlerpMatchesReference) {
     expectVecNear(pose.t, t_start + u * (t_end - t_start), 1e-6f);
 }
 
+TEST(GaussianUtilsTest, Pose_WorldToCamAndBack_RoundTrip) {
+    const float pi = 3.14159265358979323846f;
+
+    // Non-identity rotation + non-zero translation to catch ordering bugs.
+    const Vec4f q = axisAngleToQuatWxyz(0.2f, 0.9f, -0.4f, 0.37f * pi);
+    const Vec3f t(1.25f, -2.5f, 0.75f);
+    const Pose<float> pose(q, t);
+
+    const Vec3f p_world(0.3f, -1.1f, 2.7f);
+    const Vec3f p_cam = pose.transformPointWorldToCam(p_world);
+    const Vec3f p_world_rt = pose.transformPointCamToWorld(p_cam);
+    expectVecNear(p_world_rt, p_world, 2e-5f);
+
+    // Also verify the opposite direction for completeness.
+    const Vec3f p_cam_in(-0.2f, 0.4f, 1.8f);
+    const Vec3f p_world_from_cam = pose.transformPointCamToWorld(p_cam_in);
+    const Vec3f p_cam_rt = pose.transformPointWorldToCam(p_world_from_cam);
+    expectVecNear(p_cam_rt, p_cam_in, 2e-5f);
+}
+
 } // namespace fvdb::detail::ops

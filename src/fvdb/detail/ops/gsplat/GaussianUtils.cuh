@@ -225,6 +225,24 @@ template <typename T> struct Pose {
     nanovdb::math::Vec4<T> q; // rotation quaternion [w,x,y,z]
     nanovdb::math::Vec3<T> t; // translation
 
+    // Rotate vector by unit quaternion q = (w,x,y,z).
+    // Uses: v' = v + w*(2*(u×v)) + (u×(2*(u×v))) where u=(x,y,z).
+    static inline __host__ __device__ nanovdb::math::Vec3<T>
+    rotateVecByQuat(const nanovdb::math::Vec4<T> &q_wxyz, const nanovdb::math::Vec3<T> &v) {
+        const nanovdb::math::Vec3<T> u(q_wxyz[1], q_wxyz[2], q_wxyz[3]);
+
+        const nanovdb::math::Vec3<T> uv(u[1] * v[2] - u[2] * v[1],
+                                        u[2] * v[0] - u[0] * v[2],
+                                        u[0] * v[1] - u[1] * v[0]);
+        const nanovdb::math::Vec3<T> t2 = T(2) * uv;
+
+        const nanovdb::math::Vec3<T> u_t2(u[1] * t2[2] - u[2] * t2[1],
+                                          u[2] * t2[0] - u[0] * t2[2],
+                                          u[0] * t2[1] - u[1] * t2[0]);
+
+        return v + q_wxyz[0] * t2 + u_t2;
+    }
+
     __host__ __device__
     Pose(const nanovdb::math::Vec4<T> &q, const nanovdb::math::Vec3<T> &t)
         : q(q), t(t) {}
@@ -262,10 +280,8 @@ template <typename T> struct Pose {
     /// @return nanovdb::math::Vec3<T> Point in camera space [x,y,z]
     nanovdb::math::Vec3<T>
     transformPointWorldToCam(const nanovdb::math::Vec3<T> &p) const {
-        const nanovdb::math::Vec4<T> pQuat(0, p[0], p[1], p[2]);
-        const nanovdb::math::Vec4<T> qConjugate = nanovdb::math::Vec4<T>(q[0], -q[1], -q[2], -q[3]);
-        const nanovdb::math::Vec4<T> pQuatCam   = q * pQuat * qConjugate;
-        return nanovdb::math::Vec3<T>(pQuatCam[1], pQuatCam[2], pQuatCam[3]) + t;
+        const nanovdb::math::Vec4<T> qn = normalizeQuaternionSafe<T>(q);
+        return rotateVecByQuat(qn, p) + t;
     }
 
     /// @brief Transforms a point from camera space to world space
@@ -277,10 +293,12 @@ template <typename T> struct Pose {
     /// @return nanovdb::math::Vec3<T> Point in world space [x,y,z]
     nanovdb::math::Vec3<T>
     transformPointCamToWorld(const nanovdb::math::Vec3<T> &p) const {
-        const nanovdb::math::Vec4<T> pQuat(0, p[0], p[1], p[2]);
-        const nanovdb::math::Vec4<T> qConjugate = nanovdb::math::Vec4<T>(q[0], -q[1], -q[2], -q[3]);
-        const nanovdb::math::Vec4<T> pQuatWorld = qConjugate * pQuat * q;
-        return nanovdb::math::Vec3<T>(pQuatWorld[1], pQuatWorld[2], pQuatWorld[3]) - t;
+        // Inverse of transformPointWorldToCam:
+        //   cam = R * world + t
+        //   world = R^{-1} * (cam - t)
+        const nanovdb::math::Vec4<T> qn = normalizeQuaternionSafe<T>(q);
+        const nanovdb::math::Vec4<T> qConj(qn[0], -qn[1], -qn[2], -qn[3]);
+        return rotateVecByQuat(qConj, p - t);
     }
 
     static __host__ __device__ Pose<T>
