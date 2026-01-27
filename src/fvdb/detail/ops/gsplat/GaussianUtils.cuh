@@ -264,12 +264,6 @@ template <typename T> struct Pose {
         t = other.t;
         return *this;
     }
-    __host__ __device__ Pose<T> &
-    operator=(Pose<T> &&other) noexcept {
-        q = std::move(other.q);
-        t = std::move(other.t);
-        return *this;
-    }
 
     /// @brief Transforms a point from world space to camera space
     ///
