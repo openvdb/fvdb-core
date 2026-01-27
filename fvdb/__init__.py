@@ -59,6 +59,7 @@ if _spec is not None and _spec.origin is not None:
 from ._fvdb_cpp import ConvPackBackend
 from ._fvdb_cpp import scaled_dot_product_attention as _scaled_dot_product_attention_cpp
 from ._fvdb_cpp import gaussian_render_jagged as _gaussian_render_jagged_cpp
+from ._fvdb_cpp import evaluate_spherical_harmonics
 from ._fvdb_cpp import (
     config,
     volume_render,
@@ -203,6 +204,7 @@ __all__ = [
     "scaled_dot_product_attention",
     "volume_render",
     "gaussian_render_jagged",
+    "evaluate_spherical_harmonics",
     # Torch-compatible functions (work with both Tensor and JaggedTensor)
     "relu",
     "relu_",
