@@ -4,22 +4,15 @@
 #ifndef DISPATCH_EXAMPLES_COMMON_H
 #define DISPATCH_EXAMPLES_COMMON_H
 
-#include "dispatch/torch.h"
-#include "dispatch/torch_types.h"
+#include "dispatch/macros.h"
+#include "dispatch/torch/dispatch.h"
+#include "dispatch/torch/types.h"
 
 #include <torch/types.h>
 
 #include <string>
 
 namespace dispatch_examples {
-
-#ifndef __hostdev__
-#if defined(__CUDACC__) || defined(__CUDA_ARCH__)
-#define __hostdev__ __host__ __device__
-#else
-#define __hostdev__
-#endif
-#endif
 
 struct tensor_with_notes {
     torch::Tensor tensor;

@@ -6,8 +6,9 @@
 
 #include "dispatch/axes_map.h"
 #include "dispatch/dispatch_table.h"
-#include "dispatch/torch.h"
-#include "dispatch/torch_types.h"
+#include "dispatch/torch/accessors.h"
+#include "dispatch/torch/dispatch.h"
+#include "dispatch/torch/types.h"
 #include "dispatch/types.h"
 #include "dispatch/visit_spaces.h"
 

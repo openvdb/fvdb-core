@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include "dispatch/detail.h"
+#include "dispatch/iteration_policy.h"
 #include "dispatch/tag_match.h"
 #include "dispatch/types.h"
 
@@ -705,6 +706,173 @@ TEST(IsTagMatch, Complex) {
     // Matching trailing axes only fails (first stype is F32, not F16)
     static_assert(!is_tag_match_v<TagIO2, FakeStype::F16, FakeMethod::Quick>());
     static_assert(!is_tag_match_v<TagIO2, FakeMethod::Lazy>()); // method is Quick, not Lazy
+}
+
+// =============================================================================
+// iteration_policy.h - N-D iteration utilities
+// =============================================================================
+
+TEST(IterationPolicy, RowMajor_1D) {
+    // 1D case: linear index == output index
+    std::array<int64_t, 1> shape = {5};
+    std::array<int64_t, 1> indices;
+
+    linear_to_nd<1, row_major>(0, shape, indices);
+    EXPECT_EQ(indices[0], 0);
+
+    linear_to_nd<1, row_major>(3, shape, indices);
+    EXPECT_EQ(indices[0], 3);
+
+    linear_to_nd<1, row_major>(4, shape, indices);
+    EXPECT_EQ(indices[0], 4);
+}
+
+TEST(IterationPolicy, RowMajor_2D) {
+    // 2D case: shape [2, 3] means last index varies fastest
+    // Linear order: (0,0), (0,1), (0,2), (1,0), (1,1), (1,2)
+    std::array<int64_t, 2> shape = {2, 3};
+    std::array<int64_t, 2> indices;
+
+    linear_to_nd<2, row_major>(0, shape, indices);
+    EXPECT_EQ(indices[0], 0);
+    EXPECT_EQ(indices[1], 0);
+
+    linear_to_nd<2, row_major>(1, shape, indices);
+    EXPECT_EQ(indices[0], 0);
+    EXPECT_EQ(indices[1], 1);
+
+    linear_to_nd<2, row_major>(2, shape, indices);
+    EXPECT_EQ(indices[0], 0);
+    EXPECT_EQ(indices[1], 2);
+
+    linear_to_nd<2, row_major>(3, shape, indices);
+    EXPECT_EQ(indices[0], 1);
+    EXPECT_EQ(indices[1], 0);
+
+    linear_to_nd<2, row_major>(5, shape, indices);
+    EXPECT_EQ(indices[0], 1);
+    EXPECT_EQ(indices[1], 2);
+}
+
+TEST(IterationPolicy, ColMajor_2D) {
+    // 2D case with col_major: first index varies fastest
+    // Linear order: (0,0), (1,0), (0,1), (1,1), (0,2), (1,2)
+    std::array<int64_t, 2> shape = {2, 3};
+    std::array<int64_t, 2> indices;
+
+    linear_to_nd<2, col_major>(0, shape, indices);
+    EXPECT_EQ(indices[0], 0);
+    EXPECT_EQ(indices[1], 0);
+
+    linear_to_nd<2, col_major>(1, shape, indices);
+    EXPECT_EQ(indices[0], 1);
+    EXPECT_EQ(indices[1], 0);
+
+    linear_to_nd<2, col_major>(2, shape, indices);
+    EXPECT_EQ(indices[0], 0);
+    EXPECT_EQ(indices[1], 1);
+
+    linear_to_nd<2, col_major>(3, shape, indices);
+    EXPECT_EQ(indices[0], 1);
+    EXPECT_EQ(indices[1], 1);
+
+    linear_to_nd<2, col_major>(5, shape, indices);
+    EXPECT_EQ(indices[0], 1);
+    EXPECT_EQ(indices[1], 2);
+}
+
+TEST(IterationPolicy, RowMajor_3D) {
+    // 3D case: shape [2, 3, 4]
+    std::array<int64_t, 3> shape = {2, 3, 4};
+    std::array<int64_t, 3> indices;
+
+    // First element
+    linear_to_nd<3, row_major>(0, shape, indices);
+    EXPECT_EQ(indices[0], 0);
+    EXPECT_EQ(indices[1], 0);
+    EXPECT_EQ(indices[2], 0);
+
+    // Last element in first "row"
+    linear_to_nd<3, row_major>(3, shape, indices);
+    EXPECT_EQ(indices[0], 0);
+    EXPECT_EQ(indices[1], 0);
+    EXPECT_EQ(indices[2], 3);
+
+    // First element of second row in first plane
+    linear_to_nd<3, row_major>(4, shape, indices);
+    EXPECT_EQ(indices[0], 0);
+    EXPECT_EQ(indices[1], 1);
+    EXPECT_EQ(indices[2], 0);
+
+    // First element of second plane
+    linear_to_nd<3, row_major>(12, shape, indices);
+    EXPECT_EQ(indices[0], 1);
+    EXPECT_EQ(indices[1], 0);
+    EXPECT_EQ(indices[2], 0);
+
+    // Last element
+    linear_to_nd<3, row_major>(23, shape, indices);
+    EXPECT_EQ(indices[0], 1);
+    EXPECT_EQ(indices[1], 2);
+    EXPECT_EQ(indices[2], 3);
+}
+
+TEST(IterationPolicy, NdToLinear_RowMajor) {
+    std::array<int64_t, 2> shape = {2, 3};
+
+    EXPECT_EQ((nd_to_linear<2, row_major>(std::array<int64_t, 2>{0, 0}, shape)), 0);
+    EXPECT_EQ((nd_to_linear<2, row_major>(std::array<int64_t, 2>{0, 1}, shape)), 1);
+    EXPECT_EQ((nd_to_linear<2, row_major>(std::array<int64_t, 2>{0, 2}, shape)), 2);
+    EXPECT_EQ((nd_to_linear<2, row_major>(std::array<int64_t, 2>{1, 0}, shape)), 3);
+    EXPECT_EQ((nd_to_linear<2, row_major>(std::array<int64_t, 2>{1, 2}, shape)), 5);
+}
+
+TEST(IterationPolicy, NdToLinear_ColMajor) {
+    std::array<int64_t, 2> shape = {2, 3};
+
+    EXPECT_EQ((nd_to_linear<2, col_major>(std::array<int64_t, 2>{0, 0}, shape)), 0);
+    EXPECT_EQ((nd_to_linear<2, col_major>(std::array<int64_t, 2>{1, 0}, shape)), 1);
+    EXPECT_EQ((nd_to_linear<2, col_major>(std::array<int64_t, 2>{0, 1}, shape)), 2);
+    EXPECT_EQ((nd_to_linear<2, col_major>(std::array<int64_t, 2>{1, 1}, shape)), 3);
+    EXPECT_EQ((nd_to_linear<2, col_major>(std::array<int64_t, 2>{1, 2}, shape)), 5);
+}
+
+TEST(IterationPolicy, RoundTrip_RowMajor) {
+    // Test that linear_to_nd and nd_to_linear are inverses
+    std::array<int64_t, 3> shape = {2, 3, 4};
+    int64_t total                = shape_volume<3>(shape);
+
+    for (int64_t i = 0; i < total; ++i) {
+        auto indices = linear_to_nd<3, row_major>(i, shape);
+        auto back    = nd_to_linear<3, row_major>(indices, shape);
+        EXPECT_EQ(back, i) << "RoundTrip failed for linear index " << i;
+    }
+}
+
+TEST(IterationPolicy, RoundTrip_ColMajor) {
+    std::array<int64_t, 3> shape = {2, 3, 4};
+    int64_t total                = shape_volume<3>(shape);
+
+    for (int64_t i = 0; i < total; ++i) {
+        auto indices = linear_to_nd<3, col_major>(i, shape);
+        auto back    = nd_to_linear<3, col_major>(indices, shape);
+        EXPECT_EQ(back, i) << "RoundTrip failed for linear index " << i;
+    }
+}
+
+TEST(IterationPolicy, ShapeVolume) {
+    EXPECT_EQ((shape_volume<1>(std::array<int64_t, 1>{5})), 5);
+    EXPECT_EQ((shape_volume<2>(std::array<int64_t, 2>{2, 3})), 6);
+    EXPECT_EQ((shape_volume<3>(std::array<int64_t, 3>{2, 3, 4})), 24);
+}
+
+TEST(IterationPolicy, ReturnByValue) {
+    // Test the return-by-value overload
+    std::array<int64_t, 2> shape = {2, 3};
+
+    auto indices = linear_to_nd<2, row_major>(4, shape);
+    EXPECT_EQ(indices[0], 1);
+    EXPECT_EQ(indices[1], 1);
 }
 
 } // namespace dispatch

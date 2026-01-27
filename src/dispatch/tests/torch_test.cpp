@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include "dispatch/dispatch_table.h"
-#include "dispatch/torch.h"
-#include "dispatch/torch_types.h"
+#include "dispatch/torch/accessors.h"
+#include "dispatch/torch/dispatch.h"
+#include "dispatch/torch/types.h"
 
 #include <torch/torch.h>
 

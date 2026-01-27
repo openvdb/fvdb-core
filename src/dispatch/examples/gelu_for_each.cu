@@ -4,7 +4,7 @@
 
 #include "examples/gelu_for_each.h"
 
-#include "dispatch/unary_elementwise.h"
+#include "dispatch/torch/unary_elementwise.h"
 #include "examples/gelu_scalar.h"
 
 namespace dispatch_examples {
