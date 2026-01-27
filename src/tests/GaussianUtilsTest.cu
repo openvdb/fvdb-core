@@ -16,8 +16,7 @@ using Vec3f = nanovdb::math::Vec3<float>;
 
 // Minimal math helpers (avoid pulling in <cmath> from a .cu test; CUDA provides these).
 __host__ __device__ inline float
-mySqrt(float x)
-{
+mySqrt(float x) {
 #if defined(__CUDA_ARCH__)
     return sqrtf(x);
 #else
@@ -26,8 +25,7 @@ mySqrt(float x)
 }
 
 __host__ __device__ inline float
-mySin(float x)
-{
+mySin(float x) {
 #if defined(__CUDA_ARCH__)
     return sinf(x);
 #else
@@ -36,8 +34,7 @@ mySin(float x)
 }
 
 __host__ __device__ inline float
-myCos(float x)
-{
+myCos(float x) {
 #if defined(__CUDA_ARCH__)
     return cosf(x);
 #else
@@ -46,8 +43,7 @@ myCos(float x)
 }
 
 inline Mat3f
-quatToRotationMatrixHost(const Vec4f& q_wxyz)
-{
+quatToRotationMatrixHost(const Vec4f &q_wxyz) {
     // Normalize the quaternion
     float w = q_wxyz[0], x = q_wxyz[1], y = q_wxyz[2], z = q_wxyz[3];
     const float n2 = w * w + x * x + y * y + z * z;
@@ -68,10 +64,10 @@ quatToRotationMatrixHost(const Vec4f& q_wxyz)
 
     return Mat3f((1.0f - 2.0f * (y2 + z2)),
                  (2.0f * (xy - wz)),
-                 (2.0f * (xz + wy)), // 1st row
+                 (2.0f * (xz + wy)),       // 1st row
                  (2.0f * (xy + wz)),
                  (1.0f - 2.0f * (x2 + z2)),
-                 (2.0f * (yz - wx)), // 2nd row
+                 (2.0f * (yz - wx)),       // 2nd row
                  (2.0f * (xz - wy)),
                  (2.0f * (yz + wx)),
                  (1.0f - 2.0f * (x2 + y2)) // 3rd row
@@ -79,8 +75,7 @@ quatToRotationMatrixHost(const Vec4f& q_wxyz)
 }
 
 inline void
-expectMatNear(const Mat3f& A, const Mat3f& B, float tol)
-{
+expectMatNear(const Mat3f &A, const Mat3f &B, float tol) {
     for (int r = 0; r < 3; ++r) {
         for (int c = 0; c < 3; ++c) {
             EXPECT_NEAR(A[r][c], B[r][c], tol) << "Mismatch at (" << r << "," << c << ")";
@@ -89,10 +84,10 @@ expectMatNear(const Mat3f& A, const Mat3f& B, float tol)
 }
 
 inline Vec4f
-axisAngleToQuatWxyz(float ax, float ay, float az, float angleRad)
-{
+axisAngleToQuatWxyz(float ax, float ay, float az, float angleRad) {
     const float n = mySqrt(ax * ax + ay * ay + az * az);
-    if (n <= 0.0f) return Vec4f(1.0f, 0.0f, 0.0f, 0.0f);
+    if (n <= 0.0f)
+        return Vec4f(1.0f, 0.0f, 0.0f, 0.0f);
     ax /= n;
     ay /= n;
     az /= n;
@@ -104,16 +99,14 @@ axisAngleToQuatWxyz(float ax, float ay, float az, float angleRad)
 }
 
 inline void
-expectVecNear(const Vec3f& a, const Vec3f& b, float tol)
-{
+expectVecNear(const Vec3f &a, const Vec3f &b, float tol) {
     EXPECT_NEAR(a[0], b[0], tol);
     EXPECT_NEAR(a[1], b[1], tol);
     EXPECT_NEAR(a[2], b[2], tol);
 }
 
 inline void
-expectQuatNear(const Vec4f& a, const Vec4f& b, float tol)
-{
+expectQuatNear(const Vec4f &a, const Vec4f &b, float tol) {
     EXPECT_NEAR(a[0], b[0], tol);
     EXPECT_NEAR(a[1], b[1], tol);
     EXPECT_NEAR(a[2], b[2], tol);
@@ -121,8 +114,7 @@ expectQuatNear(const Vec4f& a, const Vec4f& b, float tol)
 }
 
 inline Vec4f
-normalizeQuat(Vec4f q)
-{
+normalizeQuat(Vec4f q) {
     const float n2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
     if (n2 > 0.0f) {
         const float invN = 1.0f / mySqrt(n2);
@@ -138,14 +130,12 @@ normalizeQuat(Vec4f q)
 }
 
 inline float
-quatDot(const Vec4f& a, const Vec4f& b)
-{
+quatDot(const Vec4f &a, const Vec4f &b) {
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
 }
 
 inline Vec4f
-nlerpRefShortestPath(const Vec4f& q0, Vec4f q1, float u)
-{
+nlerpRefShortestPath(const Vec4f &q0, Vec4f q1, float u) {
     float dot = quatDot(q0, q1);
     if (dot < 0.0f) {
         q1[0] = -q1[0];
@@ -164,11 +154,8 @@ nlerpRefShortestPath(const Vec4f& q0, Vec4f q1, float u)
 
 } // namespace
 
-TEST(GaussianUtilsTest, RotationMatrixToQuaternion_Identity)
-{
-    const Mat3f R(1.0f, 0.0f, 0.0f,
-                  0.0f, 1.0f, 0.0f,
-                  0.0f, 0.0f, 1.0f);
+TEST(GaussianUtilsTest, RotationMatrixToQuaternion_Identity) {
+    const Mat3f R(1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f);
     const Vec4f q = rotationMatrixToQuaternion<float>(R);
 
     EXPECT_NEAR(q[0], 1.0f, 1e-6f);
@@ -181,9 +168,8 @@ TEST(GaussianUtilsTest, RotationMatrixToQuaternion_Identity)
     EXPECT_GE(q[0], 0.0f); // sign convention
 }
 
-TEST(GaussianUtilsTest, RotationMatrixToQuaternion_RoundTrip_KnownAxes)
-{
-    const float pi = 3.14159265358979323846f;
+TEST(GaussianUtilsTest, RotationMatrixToQuaternion_RoundTrip_KnownAxes) {
+    const float pi   = 3.14159265358979323846f;
     const Vec4f qs[] = {
         axisAngleToQuatWxyz(1.0f, 0.0f, 0.0f, 0.5f * pi), // +90° about X
         axisAngleToQuatWxyz(0.0f, 1.0f, 0.0f, 0.5f * pi), // +90° about Y
@@ -191,7 +177,7 @@ TEST(GaussianUtilsTest, RotationMatrixToQuaternion_RoundTrip_KnownAxes)
         axisAngleToQuatWxyz(0.0f, 1.0f, 0.0f, 1.0f * pi), // 180° about Y (w=0 edge case)
     };
 
-    for (const auto& q_in : qs) {
+    for (const auto &q_in: qs) {
         const Mat3f R_in  = quatToRotationMatrixHost(q_in);
         const Vec4f q_out = rotationMatrixToQuaternion<float>(R_in);
         const Mat3f R_out = quatToRotationMatrixHost(q_out);
@@ -201,9 +187,8 @@ TEST(GaussianUtilsTest, RotationMatrixToQuaternion_RoundTrip_KnownAxes)
     }
 }
 
-TEST(GaussianUtilsTest, RotationMatrixToQuaternion_ProducesPositiveWForEquivalentRotation)
-{
-    const float pi = 3.14159265358979323846f;
+TEST(GaussianUtilsTest, RotationMatrixToQuaternion_ProducesPositiveWForEquivalentRotation) {
+    const float pi    = 3.14159265358979323846f;
     const Vec4f q     = axisAngleToQuatWxyz(0.0f, 0.0f, 1.0f, pi / 3.0f);
     const Vec4f q_neg = Vec4f(-q[0], -q[1], -q[2], -q[3]);
 
@@ -215,8 +200,7 @@ TEST(GaussianUtilsTest, RotationMatrixToQuaternion_ProducesPositiveWForEquivalen
     expectMatNear(R, R_out, 2e-5f);
 }
 
-TEST(GaussianUtilsTest, RotationMatrixToQuaternion_RoundTrip_DeterministicSamples)
-{
+TEST(GaussianUtilsTest, RotationMatrixToQuaternion_RoundTrip_DeterministicSamples) {
     const float pi = 3.14159265358979323846f;
     const struct Sample {
         float ax, ay, az, ang;
@@ -231,7 +215,7 @@ TEST(GaussianUtilsTest, RotationMatrixToQuaternion_RoundTrip_DeterministicSample
         {0.6f, -0.3f, 0.7f, 1.9f * pi},
     };
 
-    for (const auto& s : samples) {
+    for (const auto &s: samples) {
         const Vec4f q_in  = axisAngleToQuatWxyz(s.ax, s.ay, s.az, s.ang);
         const Mat3f R_in  = quatToRotationMatrixHost(q_in);
         const Vec4f q_out = rotationMatrixToQuaternion<float>(R_in);
@@ -242,10 +226,9 @@ TEST(GaussianUtilsTest, RotationMatrixToQuaternion_RoundTrip_DeterministicSample
     }
 }
 
-TEST(GaussianUtilsTest, InterpolatePose_NlerpMatchesReference)
-{
-    const float pi = 3.14159265358979323846f;
-    const Vec4f q_start = axisAngleToQuatWxyz(1.0f, 0.0f, 0.0f, pi / 3.0f);     // 60deg about X
+TEST(GaussianUtilsTest, InterpolatePose_NlerpMatchesReference) {
+    const float pi      = 3.14159265358979323846f;
+    const Vec4f q_start = axisAngleToQuatWxyz(1.0f, 0.0f, 0.0f, pi / 3.0f);        // 60deg about X
     const Vec4f q_end   = axisAngleToQuatWxyz(0.0f, 1.0f, 0.0f, 2.0f * pi / 3.0f); // 120deg about Y
 
     const Mat3f R_start = quatToRotationMatrixHost(q_start);
@@ -257,8 +240,8 @@ TEST(GaussianUtilsTest, InterpolatePose_NlerpMatchesReference)
 
     const Pose<float> pose = interpolatePose<float>(u, R_start, t_start, R_end, t_end);
 
-    const Vec4f q0 = rotationMatrixToQuaternion<float>(R_start);
-    const Vec4f q1 = rotationMatrixToQuaternion<float>(R_end);
+    const Vec4f q0    = rotationMatrixToQuaternion<float>(R_start);
+    const Vec4f q1    = rotationMatrixToQuaternion<float>(R_end);
     const Vec4f q_ref = nlerpRefShortestPath(q0, q1, u);
 
     expectQuatNear(pose.q, q_ref, 2e-6f);
@@ -266,4 +249,3 @@ TEST(GaussianUtilsTest, InterpolatePose_NlerpMatchesReference)
 }
 
 } // namespace fvdb::detail::ops
-
