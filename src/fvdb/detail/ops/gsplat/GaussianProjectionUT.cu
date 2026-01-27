@@ -26,7 +26,7 @@ namespace {
 // - Tangential: p1, p2
 // - Thin prism: s1..s4
 //
-// When `DistortionModel::OPENCV` is selected, coefficients are provided as a single per-camera
+// When an OpenCV distortion model is selected, coefficients are provided as a single per-camera
 // vector in the order:
 //   [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]
 enum class OpenCVDistortionModel : uint8_t {
@@ -418,9 +418,7 @@ template <typename ScalarType> struct ProjectionForwardUT {
                 distortion.thinPrism     = nullptr;
                 distortion.numThinPrism  = 0;
                 distortion.model         = OpenCVDistortionModel::RATIONAL_8;
-            } else if (mDistortionModel == DistortionModel::OPENCV_THIN_PRISM_12 ||
-                       mDistortionModel == DistortionModel::OPENCV) {
-                // Backward-compatible: DistortionModel::OPENCV maps to THIN_PRISM_12.
+            } else if (mDistortionModel == DistortionModel::OPENCV_THIN_PRISM_12) {
                 distortion.radial        = radial;
                 distortion.numRadial     = 6; // k1..k6
                 distortion.tangential    = tang;
@@ -693,8 +691,7 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
     constexpr float kCoeffTol = 1e-8f;
     if (distortionModel == DistortionModel::NONE) {
         // Accept any K (including 0); ignored.
-    } else if (distortionModel == DistortionModel::OPENCV ||
-               distortionModel == DistortionModel::OPENCV_RADTAN_5 ||
+    } else if (distortionModel == DistortionModel::OPENCV_RADTAN_5 ||
                distortionModel == DistortionModel::OPENCV_RATIONAL_8 ||
                distortionModel == DistortionModel::OPENCV_RADTAN_THIN_PRISM_9 ||
                distortionModel == DistortionModel::OPENCV_THIN_PRISM_12) {
