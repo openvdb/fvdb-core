@@ -231,14 +231,12 @@ template <typename T> struct Pose {
     rotateVecByQuat(const nanovdb::math::Vec4<T> &q_wxyz, const nanovdb::math::Vec3<T> &v) {
         const nanovdb::math::Vec3<T> u(q_wxyz[1], q_wxyz[2], q_wxyz[3]);
 
-        const nanovdb::math::Vec3<T> uv(u[1] * v[2] - u[2] * v[1],
-                                        u[2] * v[0] - u[0] * v[2],
-                                        u[0] * v[1] - u[1] * v[0]);
+        const nanovdb::math::Vec3<T> uv(
+            u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]);
         const nanovdb::math::Vec3<T> t2 = T(2) * uv;
 
-        const nanovdb::math::Vec3<T> u_t2(u[1] * t2[2] - u[2] * t2[1],
-                                          u[2] * t2[0] - u[0] * t2[2],
-                                          u[0] * t2[1] - u[1] * t2[0]);
+        const nanovdb::math::Vec3<T> u_t2(
+            u[1] * t2[2] - u[2] * t2[1], u[2] * t2[0] - u[0] * t2[2], u[0] * t2[1] - u[1] * t2[0]);
 
         return v + q_wxyz[0] * t2 + u_t2;
     }

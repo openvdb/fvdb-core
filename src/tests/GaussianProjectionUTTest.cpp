@@ -909,7 +909,7 @@ TEST_F(GaussianProjectionUTTestFixture, RollingShutterNone_DepthUsesStartPoseNot
     farPlane    = 100.0f;
     minRadius2d = 0.0f;
 
-    utParams = UTParams{};
+    utParams                              = UTParams{};
     utParams.requireAllSigmaPointsInImage = true;
 
     means                   = means.cuda();
