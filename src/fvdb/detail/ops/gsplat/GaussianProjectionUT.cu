@@ -5,8 +5,8 @@
 #include <fvdb/detail/ops/gsplat/GaussianProjectionUT.h>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
-#include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <c10/core/DeviceType.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -39,12 +39,12 @@ enum class OpenCVDistortionModel : uint8_t {
 template <typename T> struct OpenCVDistortion {
     using Vec2 = nanovdb::math::Vec2<T>;
 
-    const T *radial      = nullptr; // k1..k6 (but k4..k6 only used in rational model)
-    int numRadial        = 0;
-    const T *tangential  = nullptr; // p1,p2
-    int numTangential    = 0;
-    const T *thinPrism   = nullptr; // s1..s4
-    int numThinPrism     = 0;
+    const T *radial             = nullptr; // k1..k6 (but k4..k6 only used in rational model)
+    int numRadial               = 0;
+    const T *tangential         = nullptr; // p1,p2
+    int numTangential           = 0;
+    const T *thinPrism          = nullptr; // s1..s4
+    int numThinPrism            = 0;
     OpenCVDistortionModel model = OpenCVDistortionModel::NONE;
 
     __host__ __device__ inline T
@@ -66,21 +66,22 @@ template <typename T> struct OpenCVDistortion {
 
         // Radial distortion.
         T radial_dist = T(1);
-        if (model == OpenCVDistortionModel::RATIONAL_8 || model == OpenCVDistortionModel::THIN_PRISM_12) {
-            const T k1 = coeffOrZero(radial, numRadial, 0);
-            const T k2 = coeffOrZero(radial, numRadial, 1);
-            const T k3 = coeffOrZero(radial, numRadial, 2);
-            const T k4 = coeffOrZero(radial, numRadial, 3);
-            const T k5 = coeffOrZero(radial, numRadial, 4);
-            const T k6 = coeffOrZero(radial, numRadial, 5);
+        if (model == OpenCVDistortionModel::RATIONAL_8 ||
+            model == OpenCVDistortionModel::THIN_PRISM_12) {
+            const T k1  = coeffOrZero(radial, numRadial, 0);
+            const T k2  = coeffOrZero(radial, numRadial, 1);
+            const T k3  = coeffOrZero(radial, numRadial, 2);
+            const T k4  = coeffOrZero(radial, numRadial, 3);
+            const T k5  = coeffOrZero(radial, numRadial, 4);
+            const T k6  = coeffOrZero(radial, numRadial, 5);
             const T num = T(1) + r2 * (k1 + r2 * (k2 + r2 * k3));
             const T den = T(1) + r2 * (k4 + r2 * (k5 + r2 * k6));
             radial_dist = (den != T(0)) ? (num / den) : T(0);
         } else if (model == OpenCVDistortionModel::RADTAN_5) {
             // Polynomial radial (up to k3 / r^6).
-            const T k1 = coeffOrZero(radial, numRadial, 0);
-            const T k2 = coeffOrZero(radial, numRadial, 1);
-            const T k3 = coeffOrZero(radial, numRadial, 2);
+            const T k1  = coeffOrZero(radial, numRadial, 0);
+            const T k2  = coeffOrZero(radial, numRadial, 1);
+            const T k3  = coeffOrZero(radial, numRadial, 2);
             radial_dist = T(1) + k1 * r2 + k2 * r4 + k3 * r6;
         }
 
@@ -140,24 +141,24 @@ generateWorldSigmaPoints(const nanovdb::math::Vec3<T> &mean_world,
                          const nanovdb::math::Vec4<T> &quat_wxyz,
                          const nanovdb::math::Vec3<T> &scale_world,
                          const UTParams &params,
-                         nanovdb::math::Vec3<T> *sigma_points,     // [7]
-                         T *weights_mean,                          // [7]
-                         T *weights_cov) {                         // [7]
+                         nanovdb::math::Vec3<T> *sigma_points, // [7]
+                         T *weights_mean,                      // [7]
+                         T *weights_cov) {                     // [7]
     constexpr int D = 3;
     // This kernel currently supports only the canonical 3D UT with 2D+1 points.
     // (We keep the arrays fixed-size for performance and simplicity.)
-    const T alpha   = T(params.alpha);
-    const T beta    = T(params.beta);
-    const T kappa   = T(params.kappa);
-    const T lambda  = alpha * alpha * (T(D) + kappa) - T(D);
-    const T denom   = T(D) + lambda;
+    const T alpha  = T(params.alpha);
+    const T beta   = T(params.beta);
+    const T kappa  = T(params.kappa);
+    const T lambda = alpha * alpha * (T(D) + kappa) - T(D);
+    const T denom  = T(D) + lambda;
 
     // Rotation matrix from quaternion. NOTE: `quaternionToRotationMatrix` expects [w,x,y,z].
     const nanovdb::math::Mat3<T> R = quaternionToRotationMatrix<T>(quat_wxyz);
 
-    sigma_points[0]  = mean_world;
-    weights_mean[0]  = lambda / denom;
-    weights_cov[0]   = lambda / denom + (T(1) - alpha * alpha + beta);
+    sigma_points[0] = mean_world;
+    weights_mean[0] = lambda / denom;
+    weights_cov[0]  = lambda / denom + (T(1) - alpha * alpha + beta);
 
     const T wi = T(1) / (T(2) * denom);
     for (int i = 0; i < 2 * D; ++i) {
@@ -173,8 +174,8 @@ generateWorldSigmaPoints(const nanovdb::math::Vec3<T> &mean_world,
     for (int i = 0; i < D; ++i) {
         const nanovdb::math::Vec3<T> col_i(R[0][i], R[1][i], R[2][i]);
         const nanovdb::math::Vec3<T> delta = (gamma * scale_world[i]) * col_i;
-        sigma_points[i + 1]     = mean_world + delta;
-        sigma_points[i + 1 + D] = mean_world - delta;
+        sigma_points[i + 1]                = mean_world + delta;
+        sigma_points[i + 1 + D]            = mean_world - delta;
     }
 }
 
@@ -198,7 +199,6 @@ reconstructCovarianceFromSigmaPoints(const nanovdb::math::Vec2<T> *projected_poi
 
 } // namespace
 
-
 template <typename ScalarType> struct ProjectionForwardUT {
     using Mat3 = nanovdb::math::Mat3<ScalarType>;
     using Vec3 = nanovdb::math::Vec3<ScalarType>;
@@ -218,7 +218,8 @@ template <typename ScalarType> struct ProjectionForwardUT {
     const RollingShutterType mRollingShutterType;
     const UTParams mUTParams;
     const DistortionModel mDistortionModel;
-    const int64_t mNumDistortionCoeffs; // Number of distortion coeffs per camera (e.g. 12 for OPENCV)
+    const int64_t
+        mNumDistortionCoeffs; // Number of distortion coeffs per camera (e.g. 12 for OPENCV)
 
     // Tensor Inputs
     const fvdb::TorchRAcc64<ScalarType, 2> mMeansAcc;                   // [N, 3]
@@ -246,42 +247,42 @@ template <typename ScalarType> struct ProjectionForwardUT {
     Vec3 *__restrict__ worldToCamTranslationEndShared   = nullptr;
     ScalarType *__restrict__ distortionCoeffsShared     = nullptr;
 
-    ProjectionForwardUT(
-        const int64_t imageWidth,
-        const int64_t imageHeight,
-        const ScalarType eps2d,
-        const ScalarType nearPlane,
-        const ScalarType farPlane,
-        const ScalarType minRadius2d,
-        const RollingShutterType rollingShutterType,
-        const UTParams &utParams,
-        const DistortionModel distortionModel,
-        const bool calcCompensations,
-        const torch::Tensor &means,                   // [N, 3]
-        const torch::Tensor &quats,                   // [N, 4]
-        const torch::Tensor &logScales,               // [N, 3]
-        const torch::Tensor &worldToCamMatricesStart, // [C, 4, 4]
-        const torch::Tensor &worldToCamMatricesEnd,   // [C, 4, 4]
-        const torch::Tensor &projectionMatrices,      // [C, 3, 3]
-        const torch::Tensor &distortionCoeffs, // [C, K]
-        torch::Tensor &outRadii,               // [C, N]
-        torch::Tensor &outMeans2d,             // [C, N, 2]
-        torch::Tensor &outDepths,              // [C, N]
-        torch::Tensor &outConics,              // [C, N, 3]
-        torch::Tensor &outCompensations        // [C, N] optional
-        )
+    ProjectionForwardUT(const int64_t imageWidth,
+                        const int64_t imageHeight,
+                        const ScalarType eps2d,
+                        const ScalarType nearPlane,
+                        const ScalarType farPlane,
+                        const ScalarType minRadius2d,
+                        const RollingShutterType rollingShutterType,
+                        const UTParams &utParams,
+                        const DistortionModel distortionModel,
+                        const bool calcCompensations,
+                        const torch::Tensor &means,                   // [N, 3]
+                        const torch::Tensor &quats,                   // [N, 4]
+                        const torch::Tensor &logScales,               // [N, 3]
+                        const torch::Tensor &worldToCamMatricesStart, // [C, 4, 4]
+                        const torch::Tensor &worldToCamMatricesEnd,   // [C, 4, 4]
+                        const torch::Tensor &projectionMatrices,      // [C, 3, 3]
+                        const torch::Tensor &distortionCoeffs,        // [C, K]
+                        torch::Tensor &outRadii,                      // [C, N]
+                        torch::Tensor &outMeans2d,                    // [C, N, 2]
+                        torch::Tensor &outDepths,                     // [C, N]
+                        torch::Tensor &outConics,                     // [C, N, 3]
+                        torch::Tensor &outCompensations               // [C, N] optional
+                        )
         : C(projectionMatrices.size(0)), N(means.size(0)),
           mImageWidth(static_cast<int32_t>(imageWidth)),
           mImageHeight(static_cast<int32_t>(imageHeight)), mEps2d(eps2d), mNearPlane(nearPlane),
           mFarPlane(farPlane), mRadiusClip(minRadius2d), mRollingShutterType(rollingShutterType),
-          mUTParams(utParams),
-          mDistortionModel(distortionModel),
+          mUTParams(utParams), mDistortionModel(distortionModel),
           mNumDistortionCoeffs(distortionCoeffs.size(1)),
           mMeansAcc(means.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
           mQuatsAcc(quats.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
           mLogScalesAcc(logScales.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
-          mWorldToCamMatricesStartAcc(worldToCamMatricesStart.packed_accessor32<ScalarType, 3, torch::RestrictPtrTraits>()),
-          mWorldToCamMatricesEndAcc(worldToCamMatricesEnd.packed_accessor32<ScalarType, 3, torch::RestrictPtrTraits>()),
+          mWorldToCamMatricesStartAcc(
+              worldToCamMatricesStart.packed_accessor32<ScalarType, 3, torch::RestrictPtrTraits>()),
+          mWorldToCamMatricesEndAcc(
+              worldToCamMatricesEnd.packed_accessor32<ScalarType, 3, torch::RestrictPtrTraits>()),
           mProjectionMatricesAcc(
               projectionMatrices.packed_accessor32<ScalarType, 3, torch::RestrictPtrTraits>()),
           mDistortionCoeffsAcc(
@@ -321,13 +322,13 @@ template <typename ScalarType> struct ProjectionForwardUT {
         pointer += C * mNumDistortionCoeffs * sizeof(ScalarType);
 
         // Layout in element units:
-        const int64_t projectionOffset      = 0;
-        const int64_t rotStartOffset        = projectionOffset + C * 9;
-        const int64_t rotEndOffset          = rotStartOffset + C * 9;
-        const int64_t transStartOffset      = rotEndOffset + C * 9;
-        const int64_t transEndOffset        = transStartOffset + C * 3;
-        const int64_t distortionOffset      = transEndOffset + C * 3;
-        const int64_t totalElements         = distortionOffset + C * mNumDistortionCoeffs;
+        const int64_t projectionOffset = 0;
+        const int64_t rotStartOffset   = projectionOffset + C * 9;
+        const int64_t rotEndOffset     = rotStartOffset + C * 9;
+        const int64_t transStartOffset = rotEndOffset + C * 9;
+        const int64_t transEndOffset   = transStartOffset + C * 3;
+        const int64_t distortionOffset = transEndOffset + C * 3;
+        const int64_t totalElements    = distortionOffset + C * mNumDistortionCoeffs;
 
         for (int64_t i = threadIdx.x; i < totalElements; i += blockDim.x) {
             if (i < rotStartOffset) {
@@ -381,9 +382,9 @@ template <typename ScalarType> struct ProjectionForwardUT {
         const int64_t gaussianId = idx % N;
 
         // Get camera parameters
-        const Mat3 &projectionMatrix = projectionMatsShared[camId];
-        const Mat3 &worldToCamRotStart = worldToCamRotMatsStartShared[camId];
-        const Mat3 &worldToCamRotEnd   = worldToCamRotMatsEndShared[camId];
+        const Mat3 &projectionMatrix     = projectionMatsShared[camId];
+        const Mat3 &worldToCamRotStart   = worldToCamRotMatsStartShared[camId];
+        const Mat3 &worldToCamRotEnd     = worldToCamRotMatsEndShared[camId];
         const Vec3 &worldToCamTransStart = worldToCamTranslationStartShared[camId];
         const Vec3 &worldToCamTransEnd   = worldToCamTranslationEndShared[camId];
 
@@ -444,23 +445,25 @@ template <typename ScalarType> struct ProjectionForwardUT {
         }
 
         // Get Gaussian parameters
-        const Vec3 meanWorldSpace(mMeansAcc[gaussianId][0], mMeansAcc[gaussianId][1],
-                                  mMeansAcc[gaussianId][2]);
+        const Vec3 meanWorldSpace(
+            mMeansAcc[gaussianId][0], mMeansAcc[gaussianId][1], mMeansAcc[gaussianId][2]);
         const auto quatAcc     = mQuatsAcc[gaussianId];
         const auto logScaleAcc = mLogScalesAcc[gaussianId];
         const Vec4 quat_wxyz(quatAcc[0], quatAcc[1], quatAcc[2], quatAcc[3]);
-        const Vec3 scale_world(::cuda::std::exp(logScaleAcc[0]), ::cuda::std::exp(logScaleAcc[1]),
+        const Vec3 scale_world(::cuda::std::exp(logScaleAcc[0]),
+                               ::cuda::std::exp(logScaleAcc[1]),
                                ::cuda::std::exp(logScaleAcc[2]));
 
         // Depth culling uses center shutter pose.
         {
-            const Pose<ScalarType> shutter_pose_center =
-                interpolatePose(ScalarType(0.5), worldToCamRotStart, worldToCamTransStart,
-                                worldToCamRotEnd, worldToCamTransEnd);
-            const Mat3 R_center = quaternionToRotationMatrix(shutter_pose_center.q);
-            const Vec3 t_center = shutter_pose_center.t;
-            const Vec3 meanCamCenter =
-                transformPointWorldToCam(R_center, t_center, meanWorldSpace);
+            const Pose<ScalarType> shutter_pose_center = interpolatePose(ScalarType(0.5),
+                                                                         worldToCamRotStart,
+                                                                         worldToCamTransStart,
+                                                                         worldToCamRotEnd,
+                                                                         worldToCamTransEnd);
+            const Mat3 R_center      = quaternionToRotationMatrix(shutter_pose_center.q);
+            const Vec3 t_center      = shutter_pose_center.t;
+            const Vec3 meanCamCenter = transformPointWorldToCam(R_center, t_center, meanWorldSpace);
             if (meanCamCenter[2] < mNearPlane || meanCamCenter[2] > mFarPlane) {
                 mOutRadiiAcc[camId][gaussianId] = 0;
                 return;
@@ -476,39 +479,51 @@ template <typename ScalarType> struct ProjectionForwardUT {
             mOutRadiiAcc[camId][gaussianId] = 0;
             return;
         }
-        generateWorldSigmaPoints(meanWorldSpace, quat_wxyz, scale_world, mUTParams, sigma_points_world,
-                                 weights_mean, weights_cov);
+        generateWorldSigmaPoints(meanWorldSpace,
+                                 quat_wxyz,
+                                 scale_world,
+                                 mUTParams,
+                                 sigma_points_world,
+                                 weights_mean,
+                                 weights_cov);
         constexpr int num_sigma_points = 7;
 
         // Project sigma points through camera model
         nanovdb::math::Vec2<ScalarType> projected_points[7];
-        bool valid_any = false;
+        bool valid_any            = false;
         const ScalarType margin_x = ScalarType(mImageWidth) * ScalarType(mUTParams.inImageMargin);
         const ScalarType margin_y = ScalarType(mImageHeight) * ScalarType(mUTParams.inImageMargin);
 
-        auto project_world_point = [&] __device__ (const Vec3 &p_world, Vec2 &out_pixel) -> bool {
+        auto project_world_point = [&] __device__(const Vec3 &p_world, Vec2 &out_pixel) -> bool {
             // Rolling shutter projection similar to reference: iterate shutter pose based on the
             // current estimate of pixel coordinate.
-            auto project_with_pose = [&] __device__ (const Pose<ScalarType> &pose,
-                                                     Vec2 &out_pix) -> bool {
-                const Vec3 p_cam = transformPointWorldToCam(quaternionToRotationMatrix(pose.q), pose.t, p_world);
+            auto project_with_pose = [&]
+                __device__(const Pose<ScalarType> &pose, Vec2 &out_pix) -> bool {
+                const Vec3 p_cam =
+                    transformPointWorldToCam(quaternionToRotationMatrix(pose.q), pose.t, p_world);
                 // Perspective only (ortho is not meaningful for distorted camera models).
                 if (p_cam[2] <= ScalarType(0)) {
                     return false;
                 }
-                out_pix = projectPointWithDistortion(p_cam, projectionMatrix, distortion);
-                const bool in_img = (out_pix[0] >= -margin_x) && (out_pix[0] < ScalarType(mImageWidth) + margin_x) &&
-                                    (out_pix[1] >= -margin_y) && (out_pix[1] < ScalarType(mImageHeight) + margin_y);
+                out_pix           = projectPointWithDistortion(p_cam, projectionMatrix, distortion);
+                const bool in_img = (out_pix[0] >= -margin_x) &&
+                                    (out_pix[0] < ScalarType(mImageWidth) + margin_x) &&
+                                    (out_pix[1] >= -margin_y) &&
+                                    (out_pix[1] < ScalarType(mImageHeight) + margin_y);
                 return in_img;
             };
 
             // Start/end projections for initialization.
-            Pose<ScalarType> pose_start =
-                interpolatePose(ScalarType(0.0), worldToCamRotStart, worldToCamTransStart,
-                                worldToCamRotEnd, worldToCamTransEnd);
-            Pose<ScalarType> pose_end =
-                interpolatePose(ScalarType(1.0), worldToCamRotStart, worldToCamTransStart,
-                                worldToCamRotEnd, worldToCamTransEnd);
+            Pose<ScalarType> pose_start = interpolatePose(ScalarType(0.0),
+                                                          worldToCamRotStart,
+                                                          worldToCamTransStart,
+                                                          worldToCamRotEnd,
+                                                          worldToCamTransEnd);
+            Pose<ScalarType> pose_end   = interpolatePose(ScalarType(1.0),
+                                                        worldToCamRotStart,
+                                                        worldToCamTransStart,
+                                                        worldToCamRotEnd,
+                                                        worldToCamTransEnd);
             Vec2 pix_start, pix_end;
             const bool valid_start = project_with_pose(pose_start, pix_start);
             const bool valid_end   = project_with_pose(pose_end, pix_end);
@@ -538,10 +553,12 @@ template <typename ScalarType> struct ProjectionForwardUT {
                 } else if (mRollingShutterType == RollingShutterType::HORIZONTAL) {
                     t_rs = floor(pix_prev[0]) / max(ScalarType(1), ScalarType(mImageWidth - 1));
                 }
-                t_rs = min(ScalarType(1), max(ScalarType(0), t_rs));
-                Pose<ScalarType> pose_rs =
-                    interpolatePose(t_rs, worldToCamRotStart, worldToCamTransStart,
-                                    worldToCamRotEnd, worldToCamTransEnd);
+                t_rs                     = min(ScalarType(1), max(ScalarType(0), t_rs));
+                Pose<ScalarType> pose_rs = interpolatePose(t_rs,
+                                                           worldToCamRotStart,
+                                                           worldToCamTransStart,
+                                                           worldToCamRotEnd,
+                                                           worldToCamTransEnd);
                 Vec2 pix_rs;
                 const bool valid_rs = project_with_pose(pose_rs, pix_rs);
                 pix_prev            = pix_rs;
@@ -557,7 +574,7 @@ template <typename ScalarType> struct ProjectionForwardUT {
 
         for (int i = 0; i < num_sigma_points; ++i) {
             Vec2 pix;
-            const bool valid_i = project_world_point(sigma_points_world[i], pix);
+            const bool valid_i  = project_world_point(sigma_points_world[i], pix);
             projected_points[i] = pix;
             valid_any |= valid_i;
             if (mUTParams.requireAllSigmaPointsInImage && !valid_i) {
@@ -617,20 +634,22 @@ template <typename ScalarType> struct ProjectionForwardUT {
         mOutRadiiAcc[camId][gaussianId]      = int32_t(max(radius_x, radius_y));
         mOutMeans2dAcc[camId][gaussianId][0] = mean2d[0];
         mOutMeans2dAcc[camId][gaussianId][1] = mean2d[1];
-        // For depth we use the Gaussian mean under the center shutter pose (same as the cull check).
+        // For depth we use the Gaussian mean under the center shutter pose (same as the cull
+        // check).
         {
-            const Pose<ScalarType> shutter_pose_center =
-                interpolatePose(ScalarType(0.5), worldToCamRotStart, worldToCamTransStart,
-                                worldToCamRotEnd, worldToCamTransEnd);
-            const Mat3 R_center = quaternionToRotationMatrix(shutter_pose_center.q);
-            const Vec3 t_center = shutter_pose_center.t;
-            const Vec3 meanCamCenter =
-                transformPointWorldToCam(R_center, t_center, meanWorldSpace);
+            const Pose<ScalarType> shutter_pose_center = interpolatePose(ScalarType(0.5),
+                                                                         worldToCamRotStart,
+                                                                         worldToCamTransStart,
+                                                                         worldToCamRotEnd,
+                                                                         worldToCamTransEnd);
+            const Mat3 R_center      = quaternionToRotationMatrix(shutter_pose_center.q);
+            const Vec3 t_center      = shutter_pose_center.t;
+            const Vec3 meanCamCenter = transformPointWorldToCam(R_center, t_center, meanWorldSpace);
             mOutDepthsAcc[camId][gaussianId] = meanCamCenter[2];
         }
-        mOutConicsAcc[camId][gaussianId][0]   = covar2dInverse[0][0];
-        mOutConicsAcc[camId][gaussianId][1]   = covar2dInverse[0][1];
-        mOutConicsAcc[camId][gaussianId][2]   = covar2dInverse[1][1];
+        mOutConicsAcc[camId][gaussianId][0] = covar2dInverse[0][0];
+        mOutConicsAcc[camId][gaussianId][1] = covar2dInverse[0][1];
+        mOutConicsAcc[camId][gaussianId][2] = covar2dInverse[1][1];
         if (mOutCompensationsAcc != nullptr) {
             mOutCompensationsAcc[idx] = compensation;
         }
@@ -700,7 +719,7 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
                           "as [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]");
 
         // Enforce that unused coefficients are zero for the explicit variants.
-        const float max_abs_k456 = max_abs(distortionCoeffs.narrow(1, 3, 3));
+        const float max_abs_k456  = max_abs(distortionCoeffs.narrow(1, 3, 3));
         const float max_abs_s1234 = max_abs(distortionCoeffs.narrow(1, 8, 4));
         if (distortionModel == DistortionModel::OPENCV_RADTAN_5) {
             TORCH_CHECK_VALUE(max_abs_k456 <= kCoeffTol,
@@ -746,20 +765,38 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
     const size_t NUM_BLOCKS = GET_BLOCKS(C * N, 256);
     // This kernel currently implements the (distorted) perspective camera model.
     // Keep parity with the reference kernel: orthographic is not supported here.
-    TORCH_CHECK_VALUE(!ortho, "GaussianProjectionForwardUT does not support orthographic projection");
+    TORCH_CHECK_VALUE(!ortho,
+                      "GaussianProjectionForwardUT does not support orthographic projection");
 
-    const size_t SHARED_MEM_SIZE =
-        C * (3 * sizeof(nanovdb::math::Mat3<scalar_t>) + 2 * sizeof(nanovdb::math::Vec3<scalar_t>)) +
-        C * distortionCoeffs.size(1) * sizeof(scalar_t);
+    const size_t SHARED_MEM_SIZE = C * (3 * sizeof(nanovdb::math::Mat3<scalar_t>) +
+                                        2 * sizeof(nanovdb::math::Vec3<scalar_t>)) +
+                                   C * distortionCoeffs.size(1) * sizeof(scalar_t);
 
-    ProjectionForwardUT<scalar_t> projectionForward(
-        imageWidth, imageHeight, eps2d, nearPlane, farPlane, minRadius2d, rollingShutterType,
-        utParams, distortionModel, calcCompensations, means, quats, torch::log(scales),
-        worldToCamMatricesStart, worldToCamMatricesEnd, projectionMatrices, distortionCoeffs,
-        outRadii, outMeans2d, outDepths, outConics, outCompensations);
+    ProjectionForwardUT<scalar_t> projectionForward(imageWidth,
+                                                    imageHeight,
+                                                    eps2d,
+                                                    nearPlane,
+                                                    farPlane,
+                                                    minRadius2d,
+                                                    rollingShutterType,
+                                                    utParams,
+                                                    distortionModel,
+                                                    calcCompensations,
+                                                    means,
+                                                    quats,
+                                                    torch::log(scales),
+                                                    worldToCamMatricesStart,
+                                                    worldToCamMatricesEnd,
+                                                    projectionMatrices,
+                                                    distortionCoeffs,
+                                                    outRadii,
+                                                    outMeans2d,
+                                                    outDepths,
+                                                    outConics,
+                                                    outCompensations);
 
-    projectionForwardUTKernel<scalar_t><<<NUM_BLOCKS, 256, SHARED_MEM_SIZE, stream>>>(
-        0, C * N, projectionForward);
+    projectionForwardUTKernel<scalar_t>
+        <<<NUM_BLOCKS, 256, SHARED_MEM_SIZE, stream>>>(0, C * N, projectionForward);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
     return std::make_tuple(outRadii, outMeans2d, outDepths, outConics, outCompensations);

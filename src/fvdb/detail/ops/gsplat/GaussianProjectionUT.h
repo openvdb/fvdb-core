@@ -26,16 +26,16 @@ enum class DistortionModel : int32_t {
     //   [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]
     //
     // The enum exists mostly for clarity + runtime validation of coefficient usage.
-    OPENCV_RADTAN_5 = 1,            // polynomial radial (k1,k2,k3) + tangential (p1,p2)
-    OPENCV_RATIONAL_8 = 2,          // rational radial (k1..k6) + tangential (p1,p2)
+    OPENCV_RADTAN_5            = 1, // polynomial radial (k1,k2,k3) + tangential (p1,p2)
+    OPENCV_RATIONAL_8          = 2, // rational radial (k1..k6) + tangential (p1,p2)
     OPENCV_RADTAN_THIN_PRISM_9 = 3, // polynomial radial + tangential + thin-prism (s1..s4)
-    OPENCV_THIN_PRISM_12 = 4,       // rational radial + tangential + thin-prism (s1..s4)
+    OPENCV_THIN_PRISM_12       = 4, // rational radial + tangential + thin-prism (s1..s4)
 };
 
 struct UTParams {
-    float alpha         = 0.1f; // Blending parameter for UT
-    float beta          = 2.0f; // Scaling parameter for UT
-    float kappa         = 0.0f; // Additional scaling parameter for UT
+    float alpha = 0.1f; // Blending parameter for UT
+    float beta  = 2.0f; // Scaling parameter for UT
+    float kappa = 0.0f; // Additional scaling parameter for UT
     // For a 3D Unscented Transform with the standard \(2D+1\) formulation, D=3 => 7 points.
     // This implementation currently supports only this 3D case.
     int numSigmaPoints  = 7;
