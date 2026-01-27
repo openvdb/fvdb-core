@@ -874,4 +874,75 @@ TEST_F(GaussianProjectionUTTestFixture,
     EXPECT_GT(radii_cpu[0][0].item<int32_t>(), 0);
 }
 
+TEST_F(GaussianProjectionUTTestFixture, RollingShutterNone_DepthUsesStartPoseNotCenter) {
+    const int64_t C = 1;
+
+    // If RollingShutterType::NONE, projection uses the start pose. Depth culling and outDepths
+    // should therefore also use the start pose. This test ensures we don't accidentally use the
+    // center pose (t=0.5) when start/end differ.
+    const float z = 5.0f;
+    means         = torch::tensor({{0.0f, 0.0f, z}}, torch::kFloat32);
+    quats         = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32);
+    logScales     = torch::log(torch::tensor({{0.2f, 0.2f, 0.2f}}, torch::kFloat32));
+
+    worldToCamMatricesStart =
+        torch::eye(4, torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(0).expand({C, 4, 4});
+    worldToCamMatricesEnd = worldToCamMatricesStart.clone();
+    // End pose translates camera forward in +z, so p_cam.z is larger at t=1.0.
+    worldToCamMatricesEnd[0][2][3] = 1.0f;
+
+    const float fx = 100.0f, fy = 100.0f, cx = 320.0f, cy = 240.0f;
+    projectionMatrices = torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32));
+    projectionMatrices[0][0][0] = fx;
+    projectionMatrices[0][1][1] = fy;
+    projectionMatrices[0][0][2] = cx;
+    projectionMatrices[0][1][2] = cy;
+    projectionMatrices[0][2][2] = 1.0f;
+
+    distortionModel  = DistortionModel::NONE;
+    distortionCoeffs = torch::zeros({C, 0}, torch::kFloat32);
+
+    imageWidth  = 640;
+    imageHeight = 480;
+    eps2d       = 0.3f;
+    nearPlane   = 0.1f;
+    farPlane    = 100.0f;
+    minRadius2d = 0.0f;
+
+    utParams = UTParams{};
+    utParams.requireAllSigmaPointsInImage = true;
+
+    means                   = means.cuda();
+    quats                   = quats.cuda();
+    logScales               = logScales.cuda();
+    worldToCamMatricesStart = worldToCamMatricesStart.cuda();
+    worldToCamMatricesEnd   = worldToCamMatricesEnd.cuda();
+    projectionMatrices      = projectionMatrices.cuda();
+    distortionCoeffs        = distortionCoeffs.cuda();
+
+    const auto [radii, means2d, depths, conics, compensations] =
+        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
+                                                          quats,
+                                                          logScales,
+                                                          worldToCamMatricesStart,
+                                                          worldToCamMatricesEnd,
+                                                          projectionMatrices,
+                                                          RollingShutterType::NONE,
+                                                          utParams,
+                                                          distortionModel,
+                                                          distortionCoeffs,
+                                                          imageWidth,
+                                                          imageHeight,
+                                                          eps2d,
+                                                          nearPlane,
+                                                          farPlane,
+                                                          minRadius2d,
+                                                          false,
+                                                          false);
+
+    auto depths_cpu = depths.cpu();
+    // Start pose is identity, so depth should be exactly z (not z + 0.5).
+    EXPECT_NEAR(depths_cpu[0][0].item<float>(), z, 1e-4f);
+}
+
 } // namespace fvdb::detail::ops

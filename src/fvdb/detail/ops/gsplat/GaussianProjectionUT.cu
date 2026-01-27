@@ -453,17 +453,22 @@ template <typename ScalarType> struct ProjectionForwardUT {
                                ::cuda::std::exp(logScaleAcc[1]),
                                ::cuda::std::exp(logScaleAcc[2]));
 
-        // Depth culling uses center shutter pose.
+        // Depth culling should use the same shutter pose as projection:
+        // - RollingShutterType::NONE: use start pose (t=0.0), matching `project_world_point`.
+        // - Rolling shutter modes: use center pose (t=0.5) as a conservative/stable cull.
         {
-            const Pose<ScalarType> shutter_pose_center = interpolatePose(ScalarType(0.5),
-                                                                         worldToCamRotStart,
-                                                                         worldToCamTransStart,
-                                                                         worldToCamRotEnd,
-                                                                         worldToCamTransEnd);
-            const Mat3 R_center      = quaternionToRotationMatrix(shutter_pose_center.q);
-            const Vec3 t_center      = shutter_pose_center.t;
-            const Vec3 meanCamCenter = transformPointWorldToCam(R_center, t_center, meanWorldSpace);
-            if (meanCamCenter[2] < mNearPlane || meanCamCenter[2] > mFarPlane) {
+            const ScalarType t_depth            = (mRollingShutterType == RollingShutterType::NONE)
+                                                      ? ScalarType(0.0)
+                                                      : ScalarType(0.5);
+            const Pose<ScalarType> shutter_pose = interpolatePose(t_depth,
+                                                                  worldToCamRotStart,
+                                                                  worldToCamTransStart,
+                                                                  worldToCamRotEnd,
+                                                                  worldToCamTransEnd);
+            const Mat3 R_depth                  = quaternionToRotationMatrix(shutter_pose.q);
+            const Vec3 t_depth_v                = shutter_pose.t;
+            const Vec3 meanCam = transformPointWorldToCam(R_depth, t_depth_v, meanWorldSpace);
+            if (meanCam[2] < mNearPlane || meanCam[2] > mFarPlane) {
                 mOutRadiiAcc[camId][gaussianId] = 0;
                 return;
             }
@@ -657,18 +662,20 @@ template <typename ScalarType> struct ProjectionForwardUT {
         mOutRadiiAcc[camId][gaussianId]      = int32_t(max(radius_x, radius_y));
         mOutMeans2dAcc[camId][gaussianId][0] = mean2d[0];
         mOutMeans2dAcc[camId][gaussianId][1] = mean2d[1];
-        // For depth we use the Gaussian mean under the center shutter pose (same as the cull
-        // check).
+        // For depth we use the same shutter pose as the cull check above.
         {
-            const Pose<ScalarType> shutter_pose_center = interpolatePose(ScalarType(0.5),
-                                                                         worldToCamRotStart,
-                                                                         worldToCamTransStart,
-                                                                         worldToCamRotEnd,
-                                                                         worldToCamTransEnd);
-            const Mat3 R_center      = quaternionToRotationMatrix(shutter_pose_center.q);
-            const Vec3 t_center      = shutter_pose_center.t;
-            const Vec3 meanCamCenter = transformPointWorldToCam(R_center, t_center, meanWorldSpace);
-            mOutDepthsAcc[camId][gaussianId] = meanCamCenter[2];
+            const ScalarType t_depth            = (mRollingShutterType == RollingShutterType::NONE)
+                                                      ? ScalarType(0.0)
+                                                      : ScalarType(0.5);
+            const Pose<ScalarType> shutter_pose = interpolatePose(t_depth,
+                                                                  worldToCamRotStart,
+                                                                  worldToCamTransStart,
+                                                                  worldToCamRotEnd,
+                                                                  worldToCamTransEnd);
+            const Mat3 R_depth                  = quaternionToRotationMatrix(shutter_pose.q);
+            const Vec3 t_depth_v                = shutter_pose.t;
+            const Vec3 meanCam = transformPointWorldToCam(R_depth, t_depth_v, meanWorldSpace);
+            mOutDepthsAcc[camId][gaussianId] = meanCam[2];
         }
         mOutConicsAcc[camId][gaussianId][0] = covar2dInverse[0][0];
         mOutConicsAcc[camId][gaussianId][1] = covar2dInverse[0][1];
