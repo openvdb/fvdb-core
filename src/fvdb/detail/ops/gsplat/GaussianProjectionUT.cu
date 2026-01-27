@@ -853,9 +853,6 @@ dispatchGaussianProjectionForwardUT<torch::kCPU>(
     const float minRadius2d,
     const bool calcCompensations,
     const bool ortho) {
-    (void)logScales;
-    (void)distortionModel;
-    (void)distortionCoeffs;
     TORCH_CHECK_NOT_IMPLEMENTED(false, "GaussianProjectionForwardUT not implemented on the CPU");
 }
 
@@ -880,9 +877,6 @@ dispatchGaussianProjectionForwardUT<torch::kPrivateUse1>(
     const float minRadius2d,
     const bool calcCompensations,
     const bool ortho) {
-    (void)logScales;
-    (void)distortionModel;
-    (void)distortionCoeffs;
     TORCH_CHECK_NOT_IMPLEMENTED(false,
                                 "GaussianProjectionForwardUT not implemented for this device type");
 }
