@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include "dispatch/detail.h"
+#include "dispatch/tag_match.h"
 #include "dispatch/types.h"
 
 #include <gtest/gtest.h>
@@ -462,24 +463,6 @@ TEST(TagFromLinearIndex, MultipleAxes) {
     static_assert(std::is_same_v<T3, tag<2, 4>>);
 }
 
-// Note: Runtime linear_index_from_value_tuple function is not yet implemented
-// TEST(LinearIndexFromValueTuple, Runtime) {
-//     using A1   = axis<1, 2>;
-//     using A2   = axis<3, 4>;
-//     using Axes = axes<A1, A2>;
-//
-//     auto opt0 = linear_index_from_value_tuple(Axes{}, std::make_tuple(1, 3));
-//     ASSERT_TRUE(opt0.has_value());
-//     EXPECT_EQ(*opt0, 0u);
-//
-//     auto opt1 = linear_index_from_value_tuple(Axes{}, std::make_tuple(2, 4));
-//     ASSERT_TRUE(opt1.has_value());
-//     EXPECT_EQ(*opt1, 3u);
-//
-//     auto opt_invalid = linear_index_from_value_tuple(Axes{}, std::make_tuple(99, 3));
-//     ASSERT_FALSE(opt_invalid.has_value());
-// }
-
 TEST(LinearIndexRoundTrip, Extents) {
     using E                 = extents<2, 3, 4>;
     constexpr size_t volume = volume_v<E>();
@@ -552,6 +535,176 @@ TEST(ValueTupleType, MultipleAxes) {
     using Axes = axes<A1, A2>;
     using T    = value_tuple_type_t<Axes>;
     static_assert(std::is_same_v<T, std::tuple<placement, determinism>>);
+}
+
+// =============================================================================
+// tag_match.h - is_tag_match
+// =============================================================================
+
+TEST(IsTagMatch, Basic) {
+    using T = tag<1, 2, 3>;
+    static_assert(is_tag_match_v<T, 1>());
+    static_assert(!is_tag_match_v<T, 4>());
+
+    // It won't match this because the first valid axis is 1, and it doesn't
+    // equal 2 even though a later axis is 2.
+    static_assert(!is_tag_match_v<T, 2>());
+
+    // However, this will work because the axes get peeled off one at a time.
+    static_assert(is_tag_match_v<T, 1, 2>());
+}
+
+enum class FakeDevice { CPU, GPU, PVT1 };
+enum class FakeStype { F16, F32, F64, I32, I64 };
+enum class FakeMethod { Clever, Quick, Lazy, Stupid };
+
+TEST(IsTagMatch, Complex) {
+    // Testing is_tag_match with realistic, mixed-type axes.
+
+    using Tag1 = tag<FakeDevice::CPU, FakeStype::F32, 2, FakeMethod::Clever, 7>;
+    // Match just FakeDevice
+    static_assert(is_tag_match_v<Tag1, FakeDevice::CPU>());
+    static_assert(!is_tag_match_v<Tag1, FakeDevice::GPU>());
+    // Match FakeStype (skips CPU since it's a different type)
+    static_assert(is_tag_match_v<Tag1, FakeDevice::CPU, FakeStype::F32>());
+    static_assert(is_tag_match_v<Tag1, FakeStype::F32>());                   // skips CPU, finds F32
+    static_assert(!is_tag_match_v<Tag1, FakeStype::F64>());                  // wrong value blocks
+    static_assert(!is_tag_match_v<Tag1, FakeDevice::CPU, FakeStype::I32>()); // wrong stype value
+    // Match int value (2), only matches if all previous types in sequence match
+    static_assert(is_tag_match_v<Tag1, FakeDevice::CPU, FakeStype::F32, 2>());
+    static_assert(!is_tag_match_v<Tag1, FakeDevice::CPU, FakeStype::F32, 3>());
+    // Try matching method far in tag
+    static_assert(is_tag_match_v<Tag1, FakeDevice::CPU, FakeStype::F32, 2, FakeMethod::Clever>());
+    static_assert(!is_tag_match_v<Tag1, FakeDevice::CPU, FakeStype::F32, 2, FakeMethod::Quick>());
+
+    // Test that repeated integer values work
+    using Tag2 = tag<1, FakeDevice::GPU, 3, 1, FakeStype::F64>;
+    static_assert(is_tag_match_v<Tag2, 1>());                        // matches first axis
+    static_assert(!is_tag_match_v<Tag2, 2>());                       // wrong first int blocks
+    static_assert(is_tag_match_v<Tag2, 1, FakeDevice::GPU>());
+    static_assert(!is_tag_match_v<Tag2, 1, FakeDevice::CPU>());      // wrong device blocks
+    static_assert(is_tag_match_v<Tag2, 1, FakeDevice::GPU, 3>());
+    static_assert(!is_tag_match_v<Tag2, 1, FakeDevice::GPU, 5>());   // wrong second int blocks
+    static_assert(is_tag_match_v<Tag2, 1, FakeDevice::GPU, 3, 1>()); // matches repeated 1, but must
+                                                                     // be in order
+    static_assert(
+        !is_tag_match_v<Tag2, 1, FakeDevice::GPU, 1>()); // first int after GPU is 3, not 1
+    static_assert(is_tag_match_v<Tag2, 1, FakeDevice::GPU, 3, 1, FakeStype::F64>());
+    static_assert(
+        !is_tag_match_v<Tag2, 1, FakeDevice::GPU, 3, 1, FakeStype::F32>()); // wrong stype blocks
+    static_assert(!is_tag_match_v<Tag2, FakeStype::F32>()); // F64 is the only FakeStype, F32 blocks
+
+    // Tag with shuffled types and values, only matching select axes
+    using Tag3 = tag<42, FakeStype::I32, FakeMethod::Lazy, FakeDevice::PVT1, 42>;
+    static_assert(is_tag_match_v<Tag3, 42>());
+    static_assert(!is_tag_match_v<Tag3, 99>());                           // wrong first int blocks
+    static_assert(is_tag_match_v<Tag3, 42, FakeStype::I32>());
+    static_assert(!is_tag_match_v<Tag3, 42, FakeStype::F32>());           // wrong stype blocks
+    static_assert(is_tag_match_v<Tag3, 42, FakeStype::I32, FakeMethod::Lazy>());
+    static_assert(
+        !is_tag_match_v<Tag3, 42, FakeStype::I32, FakeMethod::Clever>()); // wrong method blocks
+    static_assert(is_tag_match_v<Tag3, 42, FakeStype::I32, FakeMethod::Lazy, FakeDevice::PVT1>());
+    static_assert(
+        !is_tag_match_v<Tag3, 42, FakeStype::I32, FakeMethod::Lazy, FakeDevice::CPU>()); // wrong
+                                                                                         // device
+    static_assert(
+        is_tag_match_v<Tag3, FakeDevice::PVT1>()); // skips int, FakeStype, FakeMethod to find PVT1
+    static_assert(!is_tag_match_v<Tag3, FakeDevice::GPU>()); // wrong device blocks
+
+    // Matching different types in any order works (types are independent)
+    static_assert(is_tag_match_v<Tag3, FakeStype::I32, 42>()); // I32 found, residual starts with 42
+    static_assert(!is_tag_match_v<Tag3, FakeStype::I32, 99>()); // I32 found, but residual's first
+                                                                // int is 42, not 99
+
+    // Match last int (42)
+    static_assert(
+        is_tag_match_v<Tag3, 42, FakeStype::I32, FakeMethod::Lazy, FakeDevice::PVT1, 42>());
+    static_assert(!is_tag_match_v<Tag3,
+                                  42,
+                                  FakeStype::I32,
+                                  FakeMethod::Lazy,
+                                  FakeDevice::PVT1,
+                                  99>()); // second
+                                          // int
+                                          // is
+                                          // 42
+
+    // Matching subset of values (different types can be matched in any order)
+    static_assert(
+        is_tag_match_v<Tag3, FakeStype::I32, FakeMethod::Lazy>()); // skips int to find each type
+    static_assert(!is_tag_match_v<Tag3, FakeStype::F64, FakeMethod::Lazy>()); // wrong stype blocks
+    static_assert(is_tag_match_v<Tag3, 42, FakeStype::I32, FakeMethod::Lazy>());
+
+    // Typical real-world tag: device, input stype, output stype, method
+    using TagIO = tag<FakeDevice::GPU, FakeStype::F32, FakeStype::F16, FakeMethod::Quick>;
+
+    // Match device only
+    static_assert(is_tag_match_v<TagIO, FakeDevice::GPU>());
+    static_assert(!is_tag_match_v<TagIO, FakeDevice::CPU>());
+
+    // Match device + input stype
+    static_assert(is_tag_match_v<TagIO, FakeDevice::GPU, FakeStype::F32>());
+    static_assert(!is_tag_match_v<TagIO, FakeDevice::GPU, FakeStype::F64>());
+    static_assert(is_tag_match_v<TagIO, FakeStype::F32>()); // skips GPU to find F32
+
+    // Match input and output stypes
+    static_assert(is_tag_match_v<TagIO, FakeDevice::GPU, FakeStype::F32, FakeStype::F16>());
+    static_assert(!is_tag_match_v<TagIO, FakeDevice::GPU, FakeStype::F32, FakeStype::F32>());
+
+    // Match both stypes (skips device, matches F32 then F16)
+    static_assert(is_tag_match_v<TagIO, FakeStype::F32, FakeStype::F16>());
+    static_assert(
+        !is_tag_match_v<TagIO, FakeStype::F32, FakeStype::F64>()); // second stype is F16, not F64
+    static_assert(
+        !is_tag_match_v<TagIO, FakeStype::F16, FakeStype::F32>()); // first stype is F32, F16 blocks
+    static_assert(is_tag_match_v<TagIO, FakeStype::F32>());        // skips GPU to find F32
+
+    // Match device, both stypes, method
+    static_assert(is_tag_match_v<TagIO,
+                                 FakeDevice::GPU,
+                                 FakeStype::F32,
+                                 FakeStype::F16,
+                                 FakeMethod::Quick>());
+    static_assert(!is_tag_match_v<TagIO,
+                                  FakeDevice::GPU,
+                                  FakeStype::F32,
+                                  FakeStype::F16,
+                                  FakeMethod::Clever>());
+
+    // Try to match output stype only (can't skip previous types)
+    static_assert(!is_tag_match_v<TagIO, FakeStype::F16>());
+
+    // Try matching device and output stype only (should block: must match axes in order)
+    static_assert(!is_tag_match_v<TagIO, FakeDevice::GPU, FakeStype::F16>());
+
+    // Match device, input stype, and method (F16 preserved in residual, not blocking)
+    static_assert(is_tag_match_v<TagIO, FakeDevice::GPU, FakeStype::F32, FakeMethod::Quick>());
+
+    // Fully match including method
+    static_assert(is_tag_match_v<TagIO,
+                                 FakeDevice::GPU,
+                                 FakeStype::F32,
+                                 FakeStype::F16,
+                                 FakeMethod::Quick>());
+
+    // Add an integer axis before input stype to check detection
+    using TagIO2 = tag<FakeDevice::GPU, 8, FakeStype::F32, FakeStype::F16, FakeMethod::Quick>;
+    static_assert(is_tag_match_v<TagIO2, FakeDevice::GPU, 8, FakeStype::F32>()); // correct sequence
+    static_assert(
+        !is_tag_match_v<TagIO2, FakeDevice::GPU, 9, FakeStype::F32>());          // wrong int blocks
+    static_assert(
+        !is_tag_match_v<TagIO2, FakeDevice::CPU, 8, FakeStype::F32>()); // wrong device blocks
+    static_assert(
+        is_tag_match_v<TagIO2, 8, FakeDevice::GPU>()); // finds 8 (skips GPU), GPU in residual
+    static_assert(!is_tag_match_v<TagIO2, 8, FakeDevice::CPU>());   // GPU in residual, not CPU
+    static_assert(
+        is_tag_match_v<TagIO2, FakeDevice::GPU, FakeStype::F32>()); // skips 8 when looking for
+                                                                    // FakeStype
+    static_assert(!is_tag_match_v<TagIO2, FakeDevice::GPU, FakeStype::I64>()); // wrong stype blocks
+
+    // Matching trailing axes only fails (first stype is F32, not F16)
+    static_assert(!is_tag_match_v<TagIO2, FakeStype::F16, FakeMethod::Quick>());
+    static_assert(!is_tag_match_v<TagIO2, FakeMethod::Lazy>()); // method is Quick, not Lazy
 }
 
 } // namespace dispatch

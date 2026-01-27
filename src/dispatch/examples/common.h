@@ -13,6 +13,14 @@
 
 namespace dispatch_examples {
 
+#ifndef __hostdev__
+#if defined(__CUDACC__) || defined(__CUDA_ARCH__)
+#define __hostdev__ __host__ __device__
+#else
+#define __hostdev__
+#endif
+#endif
+
 struct tensor_with_notes {
     torch::Tensor tensor;
     std::string notes;

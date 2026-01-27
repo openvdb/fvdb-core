@@ -26,6 +26,7 @@ if(FVDB_BUILD_TESTS)
         examples/functional.cu
         examples/op.cu
         examples/relu.cu
+        examples/gelu_for_each.cu
         examples/scan_lib.cpp
         examples/scan_lib.cu
     )
@@ -158,6 +159,7 @@ if(FVDB_BUILD_TESTS)
     ConfigureDispatchTest(DispatchScanLibCudaTest tests/scan_lib_cuda_test.cu)
     ConfigureDispatchTest(DispatchInclusiveScanExamplesTest tests/inclusive_scan_examples_test.cpp)
     ConfigureDispatchTest(DispatchReLUTest tests/relu_test.cpp)
+    ConfigureDispatchTest(DispatchGeLUForEachTest tests/gelu_for_each_test.cpp)
 
     # ============================================================================
     # Negative Compilation Tests (Expected Failures)
