@@ -298,8 +298,8 @@ TEST_F(GaussianProjectionUTTestFixture,
     const int64_t C = 1;
 
     const float x = 0.2f, y = -0.1f, z = 2.0f;
-    means  = torch::tensor({{x, y, z}}, torch::kFloat32);
-    quats  = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32);
+    means     = torch::tensor({{x, y, z}}, torch::kFloat32);
+    quats     = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32);
     logScales = torch::log(torch::tensor({{1e-6f, 1e-6f, 1e-6f}}, torch::kFloat32));
 
     worldToCamMatricesStart =
@@ -386,8 +386,8 @@ TEST_F(GaussianProjectionUTTestFixture,
     const int64_t C = 1;
 
     const float x = -0.15f, y = 0.12f, z = 3.0f;
-    means  = torch::tensor({{x, y, z}}, torch::kFloat32);
-    quats  = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32);
+    means     = torch::tensor({{x, y, z}}, torch::kFloat32);
+    quats     = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32);
     logScales = torch::log(torch::tensor({{1e-6f, 1e-6f, 1e-6f}}, torch::kFloat32));
 
     worldToCamMatricesStart =
@@ -478,8 +478,8 @@ TEST_F(GaussianProjectionUTTestFixture,
     const int64_t C = 1;
 
     const float x = 0.1f, y = 0.08f, z = 2.5f;
-    means  = torch::tensor({{x, y, z}}, torch::kFloat32);
-    quats  = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32);
+    means     = torch::tensor({{x, y, z}}, torch::kFloat32);
+    quats     = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32);
     logScales = torch::log(torch::tensor({{1e-6f, 1e-6f, 1e-6f}}, torch::kFloat32));
 
     worldToCamMatricesStart =
@@ -578,8 +578,8 @@ TEST_F(GaussianProjectionUTTestFixture,
     const int64_t C = 1;
 
     const float x = 0.07f, y = -0.11f, z = 2.2f;
-    means  = torch::tensor({{x, y, z}}, torch::kFloat32);
-    quats  = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32);
+    means     = torch::tensor({{x, y, z}}, torch::kFloat32);
+    quats     = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32);
     logScales = torch::log(torch::tensor({{1e-6f, 1e-6f, 1e-6f}}, torch::kFloat32));
 
     worldToCamMatricesStart =
@@ -671,8 +671,8 @@ TEST_F(GaussianProjectionUTTestFixture,
 TEST_F(GaussianProjectionUTTestFixture, RadTanThinPrism_RejectsNonZeroK456) {
     const int64_t C = 1;
 
-    means  = torch::tensor({{0.1f, 0.05f, 2.0f}}, torch::kFloat32).cuda();
-    quats  = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32).cuda();
+    means     = torch::tensor({{0.1f, 0.05f, 2.0f}}, torch::kFloat32).cuda();
+    quats     = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32).cuda();
     logScales = torch::log(torch::tensor({{1e-6f, 1e-6f, 1e-6f}}, torch::kFloat32)).cuda();
 
     worldToCamMatricesStart = torch::eye(4, torch::TensorOptions().dtype(torch::kFloat32))
