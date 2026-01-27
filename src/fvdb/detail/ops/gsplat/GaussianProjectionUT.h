@@ -20,8 +20,20 @@ enum class RollingShutterType { NONE = 0, VERTICAL = 1, HORIZONTAL = 2 };
 // Distortion coefficients are supplied as a single tensor `distortionCoeffs` and interpreted
 // according to this enum.
 enum class DistortionModel : int32_t {
-    NONE   = 0,
-    OPENCV = 1, // OpenCV pinhole distortion (radial + tangential + thin-prism)
+    NONE = 0,
+
+    // Backward-compatible alias: historically this code used a single "OPENCV" mode.
+    // We keep it and map it to the most general OpenCV model below.
+    OPENCV = 1,
+
+    // OpenCV variants (all use the same [C,12] coefficient layout):
+    //   [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]
+    //
+    // The enum exists mostly for clarity + runtime validation of coefficient usage.
+    OPENCV_RADTAN_5 = 2,          // polynomial radial (k1,k2,k3) + tangential (p1,p2)
+    OPENCV_RATIONAL_8 = 3,        // rational radial (k1..k6) + tangential (p1,p2)
+    OPENCV_RADTAN_THIN_PRISM_9 = 4, // polynomial radial + tangential + thin-prism (s1..s4)
+    OPENCV_THIN_PRISM_12 = 5,     // rational radial + tangential + thin-prism (s1..s4)
 };
 
 struct UTParams {
@@ -64,7 +76,7 @@ struct UTParams {
 /// @param[in] distortionModel Distortion model used to interpret `distortionCoeffs`.
 /// @param[in] distortionCoeffs Distortion coefficients for each camera.
 ///   - DistortionModel::NONE: ignored (use [C,0] or [C,K] tensor).
-///   - DistortionModel::OPENCV: expects [C,12] coefficients in the following order:
+///   - DistortionModel::{OPENCV,OPENCV_*}: expects [C,12] coefficients in the following order:
 ///       [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]
 ///     where k1..k6 are radial (rational), p1,p2 are tangential, and s1..s4 are thin-prism.
 /// @param[in] imageWidth Width of the output image in pixels
