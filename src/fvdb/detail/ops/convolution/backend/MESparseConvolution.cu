@@ -10,6 +10,7 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <torch/types.h>
+#include <torch/version.h>
 
 #include <cublas_v2.h>
 
@@ -95,7 +96,14 @@ gpu_gemm<at::Half>(const cublasOperation_t transA,
     int lda                   = (transA == CUBLAS_OP_N) ? K : M;
     int ldb                   = (transB == CUBLAS_OP_N) ? N : K;
     cublasMath_t cublas_flags = CUBLAS_DEFAULT_MATH;
+
+#if (!defined(TORCH_VERSION_MAJOR) || (TORCH_VERSION_MAJOR < 2) || \
+     (TORCH_VERSION_MAJOR >= 2 && TORCH_VERSION_MINOR < 10))
     if (!at::globalContext().allowFP16ReductionCuBLAS()) {
+#else
+    if (at::globalContext().allowFP16ReductionCuBLAS() !=
+        at::CuBLASReductionOption::AllowReducedPrecisionWithSplitK) {
+#endif
         cublas_flags = static_cast<cublasMath_t>(cublas_flags |
                                                  CUBLAS_MATH_DISALLOW_REDUCED_PRECISION_REDUCTION);
     }
@@ -120,6 +128,7 @@ gpu_gemm<at::Half>(const cublasOperation_t transA,
                               N,
                               CUDA_R_32F,
                               CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+    CUBLAS_CHECK(cublasSetMathMode(handle, CUBLAS_DEFAULT_MATH));
 }
 
 template <>

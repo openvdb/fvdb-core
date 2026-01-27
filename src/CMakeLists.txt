@@ -5,6 +5,16 @@ cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
 
 project(fvdb LANGUAGES CXX CUDA)
 
+# Build options - must be defined before subdirectories that use them
+option(FVDB_BUILD_TESTS "Configure CMake to build tests" ON)
+option(FVDB_BUILD_BENCHMARKS "Configure CMake to build (google & nvbench) benchmarks" OFF)
+option(FVDB_STRIP_SYMBOLS "Strip symbols from the build" OFF)
+option(FVDB_LINEINFO "Enable lineinfo in the build" OFF)
+
+message(STATUS "FVDB: Configure CMake to build tests: ${FVDB_BUILD_TESTS}")
+message(STATUS "FVDB: Configure CMake to build (google & nvbench) benchmarks: ${FVDB_BUILD_BENCHMARKS}")
+message(STATUS "FVDB_STRIP_SYMBOLS: ${FVDB_STRIP_SYMBOLS}")
+
 # Get dependencies
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_cpm.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_nvtx.cmake)
@@ -14,15 +24,11 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_cutlass.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_nanovdb.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_blosc.cmake)
 
-# Build options
-option(FVDB_BUILD_TESTS "Configure CMake to build tests" ON)
-option(FVDB_BUILD_BENCHMARKS "Configure CMake to build (google & nvbench) benchmarks" OFF)
-option(FVDB_STRIP_SYMBOLS "Strip symbols from the build" OFF)
-option(FVDB_LINEINFO "Enable lineinfo in the build" OFF)
+# Enable testing at this level so CTest discovers tests from all subdirectories
+enable_testing()
 
-message(STATUS "FVDB: Configure CMake to build tests: ${FVDB_BUILD_TESTS}")
-message(STATUS "FVDB: Configure CMake to build (google & nvbench) benchmarks: ${FVDB_BUILD_BENCHMARKS}")
-message(STATUS "FVDB_STRIP_SYMBOLS: ${FVDB_STRIP_SYMBOLS}")
+# Add dispatch interface library (header-only)
+add_subdirectory(dispatch)
 
 
 # Generate compile_commands.json
@@ -221,7 +227,7 @@ target_compile_options(fvdb PRIVATE
     $<$<AND:$<BOOL:${FVDB_LINEINFO}>,$<COMPILE_LANGUAGE:CUDA>>:-lineinfo>)
 
 target_link_libraries(fvdb PRIVATE
-    ${TORCH_LIBRARIES} tinyply cutlass blosc::blosc)
+    ${TORCH_LIBRARIES} tinyply cutlass blosc::blosc dispatch)
 
 # Add linker flags for Debug builds to preserve symbols
 if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")

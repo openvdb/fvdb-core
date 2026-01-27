@@ -289,14 +289,24 @@ elif [ "$BUILD_TYPE" == "ctest" ]; then
 
     # --- Find and Run Tests ---
     echo "Searching for test build directory..."
-    # Find the directory containing the compiled tests (adjust if needed)
-    # Using -print -quit to stop after the first match for efficiency
-    BUILD_DIR=$(find build -name tests -type d -print -quit)
+    # Find CMakeCache.txt to locate the build root
+    CMAKE_CACHE=$(find build -name CMakeCache.txt -type f -print -quit 2>/dev/null)
 
-    if [ -z "$BUILD_DIR" ]; then
-        echo "Error: Could not find build directory with tests"
-        echo "Please enable tests by building with pip argument"
-        echo "-C cmake.define.FVDB_BUILD_TESTS=ON"
+    if [ -z "$CMAKE_CACHE" ]; then
+        echo "Error: Could not find CMakeCache.txt in build directory"
+        echo "Please build the project first with tests enabled:"
+        echo "pip install . -C cmake.define.FVDB_BUILD_TESTS=ON"
+        exit 1
+    fi
+
+    # Construct the test directory path (where CTestTestfile.cmake is generated)
+    # This discovers all tests from both src/tests/ and src/dispatch/
+    BUILD_DIR="$(dirname "$CMAKE_CACHE")/src"
+
+    if [ ! -f "$BUILD_DIR/CTestTestfile.cmake" ]; then
+        echo "Error: No CTestTestfile.cmake found in $BUILD_DIR"
+        echo "Please enable tests by building with:"
+        echo "pip install . -C cmake.define.FVDB_BUILD_TESTS=ON"
         exit 1
     fi
     echo "Found test build directory: $BUILD_DIR"
@@ -306,9 +316,11 @@ elif [ "$BUILD_TYPE" == "ctest" ]; then
     add_python_pkg_lib_to_ld_path "nanovdb_editor" "NanoVDB Editor" "libpnanovdb*.so"
 
     # Run ctest within the test build directory
+    # Note: -LE compile_fail excludes compile-fail tests which require cmake at runtime
+    # (cmake may not be available in CI test runners). Run them manually if needed.
     pushd "$BUILD_DIR" > /dev/null
     echo "Running ctest..."
-    ctest --output-on-failure
+    ctest --output-on-failure -LE compile_fail
     CTEST_EXIT_CODE=$?
     popd > /dev/null # Back to SOURCE_DIR
 
