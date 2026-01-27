@@ -493,23 +493,32 @@ template <typename ScalarType> struct ProjectionForwardUT {
         const ScalarType margin_x = ScalarType(mImageWidth) * ScalarType(mUTParams.inImageMargin);
         const ScalarType margin_y = ScalarType(mImageHeight) * ScalarType(mUTParams.inImageMargin);
 
-        auto project_world_point = [&] __device__(const Vec3 &p_world, Vec2 &out_pixel) -> bool {
+        enum class ProjStatus : uint8_t { BehindCamera, OutOfBounds, InImage };
+
+        auto project_world_point = [&]
+            __device__(const Vec3 &p_world, Vec2 &out_pixel) -> ProjStatus {
             // Rolling shutter projection similar to reference: iterate shutter pose based on the
             // current estimate of pixel coordinate.
+            auto isInImage = []
+                __device__(const ProjStatus s) -> bool { return s == ProjStatus::InImage; };
             auto project_with_pose = [&]
-                __device__(const Pose<ScalarType> &pose, Vec2 &out_pix) -> bool {
+                __device__(const Pose<ScalarType> &pose, Vec2 &out_pix) -> ProjStatus {
                 const Vec3 p_cam =
                     transformPointWorldToCam(quaternionToRotationMatrix(pose.q), pose.t, p_world);
                 // Perspective only (ortho is not meaningful for distorted camera models).
                 if (p_cam[2] <= ScalarType(0)) {
-                    return false;
+                    // Ensure deterministic output to avoid UB on callers that assign/read even on
+                    // invalid projections. This value is ignored when we treat BehindCamera as a
+                    // hard reject (see below).
+                    out_pix = Vec2(ScalarType(0), ScalarType(0));
+                    return ProjStatus::BehindCamera;
                 }
                 out_pix           = projectPointWithDistortion(p_cam, projectionMatrix, distortion);
                 const bool in_img = (out_pix[0] >= -margin_x) &&
                                     (out_pix[0] < ScalarType(mImageWidth) + margin_x) &&
                                     (out_pix[1] >= -margin_y) &&
                                     (out_pix[1] < ScalarType(mImageHeight) + margin_y);
-                return in_img;
+                return in_img ? ProjStatus::InImage : ProjStatus::OutOfBounds;
             };
 
             // Start/end projections for initialization.
@@ -523,26 +532,31 @@ template <typename ScalarType> struct ProjectionForwardUT {
                                                         worldToCamTransStart,
                                                         worldToCamRotEnd,
                                                         worldToCamTransEnd);
-            Vec2 pix_start, pix_end;
-            const bool valid_start = project_with_pose(pose_start, pix_start);
-            const bool valid_end   = project_with_pose(pose_end, pix_end);
+            Vec2 pix_start(ScalarType(0), ScalarType(0));
+            Vec2 pix_end(ScalarType(0), ScalarType(0));
+            const ProjStatus status_start = project_with_pose(pose_start, pix_start);
+            const ProjStatus status_end   = project_with_pose(pose_end, pix_end);
 
             if (mRollingShutterType == RollingShutterType::NONE) {
-                if (!valid_start) {
-                    out_pixel = pix_start;
-                    return false;
-                }
                 out_pixel = pix_start;
-                return true;
+                return status_start;
             }
 
-            // If neither endpoint is valid, treat as invalid.
-            if (!valid_start && !valid_end) {
+            // If both endpoints are behind the camera, treat as a hard invalid (discontinuous).
+            if (status_start == ProjStatus::BehindCamera &&
+                status_end == ProjStatus::BehindCamera) {
                 out_pixel = pix_end;
-                return false;
+                return ProjStatus::BehindCamera;
             }
 
-            Vec2 pix_prev = valid_start ? pix_start : pix_end;
+            // If neither endpoint is in image (but at least one is in front), treat as invalid.
+            // (Keep parity with the old behavior which required an in-image endpoint to iterate.)
+            if (!isInImage(status_start) && !isInImage(status_end)) {
+                out_pixel = (status_end != ProjStatus::BehindCamera) ? pix_end : pix_start;
+                return ProjStatus::OutOfBounds;
+            }
+
+            Vec2 pix_prev = isInImage(status_start) ? pix_start : pix_end;
             // Iteration count: small fixed number (reference uses 10).
             constexpr int kIters = 6;
             for (int it = 0; it < kIters; ++it) {
@@ -558,22 +572,32 @@ template <typename ScalarType> struct ProjectionForwardUT {
                                                            worldToCamTransStart,
                                                            worldToCamRotEnd,
                                                            worldToCamTransEnd);
-                Vec2 pix_rs;
-                const bool valid_rs = project_with_pose(pose_rs, pix_rs);
-                pix_prev            = pix_rs;
-                if (!valid_rs) {
+                Vec2 pix_rs(ScalarType(0), ScalarType(0));
+                const ProjStatus status_rs = project_with_pose(pose_rs, pix_rs);
+                pix_prev                   = pix_rs;
+                if (status_rs == ProjStatus::BehindCamera) {
                     out_pixel = pix_rs;
-                    return false;
+                    return ProjStatus::BehindCamera;
+                }
+                if (!isInImage(status_rs)) {
+                    out_pixel = pix_rs;
+                    return ProjStatus::OutOfBounds;
                 }
             }
 
             out_pixel = pix_prev;
-            return true;
+            return ProjStatus::InImage;
         };
 
         for (int i = 0; i < num_sigma_points; ++i) {
             Vec2 pix;
-            const bool valid_i  = project_world_point(sigma_points_world[i], pix);
+            const ProjStatus status = project_world_point(sigma_points_world[i], pix);
+            // Hard reject if any sigma point is behind the camera (discontinuous projection).
+            if (status == ProjStatus::BehindCamera) {
+                mOutRadiiAcc[camId][gaussianId] = 0;
+                return;
+            }
+            const bool valid_i  = (status == ProjStatus::InImage);
             projected_points[i] = pix;
             valid_any |= valid_i;
             if (mUTParams.requireAllSigmaPointsInImage && !valid_i) {

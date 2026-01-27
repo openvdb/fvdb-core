@@ -724,4 +724,154 @@ TEST_F(GaussianProjectionUTTestFixture, RadTanThinPrism_RejectsNonZeroK456) {
                  c10::Error);
 }
 
+TEST_F(GaussianProjectionUTTestFixture,
+       SigmaPointBehindCamera_HardRejectsEvenWhenNotRequiringAllInImage) {
+    const int64_t C = 1;
+
+    // Place the Gaussian mean just in front of the camera, but give it a large Z scale so one
+    // UT sigma point crosses behind the camera (z <= 0). The UT kernel should hard-reject such
+    // Gaussians (new behavior), regardless of requireAllSigmaPointsInImage.
+    const float z = 0.20f;
+    means         = torch::tensor({{0.0f, 0.0f, z}}, torch::kFloat32);
+    quats         = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32);
+
+    // With UT alpha=0.1, gamma ~= sqrt(0.03) ~= 0.173. Choose sz so z - gamma*sz <= 0.
+    const float sx = 1e-3f, sy = 1e-3f, sz = 2.0f;
+    logScales = torch::log(torch::tensor({{sx, sy, sz}}, torch::kFloat32));
+
+    worldToCamMatricesStart =
+        torch::eye(4, torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(0).expand({C, 4, 4});
+    worldToCamMatricesEnd = worldToCamMatricesStart.clone();
+
+    const float fx = 500.0f, fy = 500.0f, cx = 320.0f, cy = 240.0f;
+    projectionMatrices = torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32));
+    projectionMatrices[0][0][0] = fx;
+    projectionMatrices[0][1][1] = fy;
+    projectionMatrices[0][0][2] = cx;
+    projectionMatrices[0][1][2] = cy;
+    projectionMatrices[0][2][2] = 1.0f;
+
+    distortionModel  = DistortionModel::NONE;
+    distortionCoeffs = torch::zeros({C, 0}, torch::kFloat32);
+
+    imageWidth  = 640;
+    imageHeight = 480;
+    eps2d       = 0.3f;
+    nearPlane   = 0.05f;
+    farPlane    = 100.0f;
+    minRadius2d = 0.0f;
+
+    utParams.alpha                        = 0.1f;
+    utParams.beta                         = 2.0f;
+    utParams.kappa                        = 0.0f;
+    utParams.numSigmaPoints               = 7;
+    utParams.inImageMargin                = 0.1f;
+    utParams.requireAllSigmaPointsInImage = false;
+
+    means                   = means.cuda();
+    quats                   = quats.cuda();
+    logScales               = logScales.cuda();
+    worldToCamMatricesStart = worldToCamMatricesStart.cuda();
+    worldToCamMatricesEnd   = worldToCamMatricesEnd.cuda();
+    projectionMatrices      = projectionMatrices.cuda();
+    distortionCoeffs        = distortionCoeffs.cuda();
+
+    const auto [radii, means2d, depths, conics, compensations] =
+        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
+                                                          quats,
+                                                          logScales,
+                                                          worldToCamMatricesStart,
+                                                          worldToCamMatricesEnd,
+                                                          projectionMatrices,
+                                                          RollingShutterType::NONE,
+                                                          utParams,
+                                                          distortionModel,
+                                                          distortionCoeffs,
+                                                          imageWidth,
+                                                          imageHeight,
+                                                          eps2d,
+                                                          nearPlane,
+                                                          farPlane,
+                                                          minRadius2d,
+                                                          false,
+                                                          false);
+
+    // When the UT kernel discards a Gaussian, only radii are defined to be 0; other outputs are
+    // undefined (may contain garbage). Only assert radii here.
+    auto radii_cpu = radii.cpu();
+    EXPECT_EQ(radii_cpu[0][0].item<int32_t>(), 0);
+}
+
+TEST_F(GaussianProjectionUTTestFixture,
+       SomeSigmaPointsOutOfBoundsButInFront_NotHardRejectedWhenNotRequiringAllInImage) {
+    const int64_t C = 1;
+
+    // Centered mean in front of camera; huge X scale so +/-X sigma points project outside the
+    // image, but remain in front of the camera. With requireAllSigmaPointsInImage=false this should
+    // still produce a valid Gaussian (radii > 0).
+    const float z = 5.0f;
+    means         = torch::tensor({{0.0f, 0.0f, z}}, torch::kFloat32);
+    quats         = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32);
+
+    // Choose sx large enough that projected sigma points fall outside image+margin.
+    const float sx = 30.0f, sy = 1e-3f, sz = 1e-3f;
+    logScales = torch::log(torch::tensor({{sx, sy, sz}}, torch::kFloat32));
+
+    worldToCamMatricesStart =
+        torch::eye(4, torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(0).expand({C, 4, 4});
+    worldToCamMatricesEnd = worldToCamMatricesStart.clone();
+
+    const float fx = 500.0f, fy = 500.0f, cx = 320.0f, cy = 240.0f;
+    projectionMatrices = torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32));
+    projectionMatrices[0][0][0] = fx;
+    projectionMatrices[0][1][1] = fy;
+    projectionMatrices[0][0][2] = cx;
+    projectionMatrices[0][1][2] = cy;
+    projectionMatrices[0][2][2] = 1.0f;
+
+    distortionModel  = DistortionModel::NONE;
+    distortionCoeffs = torch::zeros({C, 0}, torch::kFloat32);
+
+    imageWidth  = 640;
+    imageHeight = 480;
+    eps2d       = 0.3f;
+    nearPlane   = 0.1f;
+    farPlane    = 100.0f;
+    minRadius2d = 0.0f;
+
+    utParams                              = UTParams{};
+    utParams.requireAllSigmaPointsInImage = false;
+
+    means                   = means.cuda();
+    quats                   = quats.cuda();
+    logScales               = logScales.cuda();
+    worldToCamMatricesStart = worldToCamMatricesStart.cuda();
+    worldToCamMatricesEnd   = worldToCamMatricesEnd.cuda();
+    projectionMatrices      = projectionMatrices.cuda();
+    distortionCoeffs        = distortionCoeffs.cuda();
+
+    const auto [radii, means2d, depths, conics, compensations] =
+        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
+                                                          quats,
+                                                          logScales,
+                                                          worldToCamMatricesStart,
+                                                          worldToCamMatricesEnd,
+                                                          projectionMatrices,
+                                                          RollingShutterType::NONE,
+                                                          utParams,
+                                                          distortionModel,
+                                                          distortionCoeffs,
+                                                          imageWidth,
+                                                          imageHeight,
+                                                          eps2d,
+                                                          nearPlane,
+                                                          farPlane,
+                                                          minRadius2d,
+                                                          false,
+                                                          false);
+
+    auto radii_cpu = radii.cpu();
+    EXPECT_GT(radii_cpu[0][0].item<int32_t>(), 0);
+}
+
 } // namespace fvdb::detail::ops
