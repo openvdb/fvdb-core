@@ -132,7 +132,6 @@ projectPointWithDistortion(const nanovdb::math::Vec3<T> &p_cam,
 }
 
 // Generate 3D sigma points and weights for the (scaled) Unscented Transform.
-// Mirrors the reference (2*D+1) formulation used in 3DGUT/LichtFeld-Studio.
 // Sigma points are generated in WORLD space directly from (mean, scale, quaternion),
 // exploiting the closed form SVD of the Gaussian covariance.
 template <typename T>
