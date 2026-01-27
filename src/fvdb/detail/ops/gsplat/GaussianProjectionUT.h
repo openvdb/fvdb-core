@@ -81,7 +81,8 @@ struct UTParams {
 /// @param[in] eps2d 2D projection epsilon for numerical stability
 /// @param[in] nearPlane Near clipping plane distance
 /// @param[in] farPlane Far clipping plane distance
-/// @param[in] minRadius2d Minimum 2D radius threshold; Gaussians with projected radius <= this value are clipped/discarded
+/// @param[in] minRadius2d Minimum 2D radius threshold; Gaussians with projected radius <= this
+/// value are clipped/discarded
 /// @param[in] calcCompensations Whether to calculate view-dependent compensation factors
 /// @param[in] ortho Whether to use orthographic projection instead of perspective
 ///
