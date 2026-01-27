@@ -86,10 +86,10 @@ struct UTParams {
 /// @param[in] ortho Whether to use orthographic projection instead of perspective
 ///
 /// @return std::tuple containing:
+///         - Radii of 2D Gaussians [C, N]
 ///         - 2D projected Gaussian centers [C, N, 2]
 ///         - Depths of Gaussians [C, N]
 ///         - Covariance matrices in conic form [C, N, 3] representing (a, b, c) in ax² + 2bxy + cy²
-///         - Radii of 2D Gaussians [C, N]
 ///         - Compensation factors [C, N] (if calc_compensations is true, otherwise empty tensor)
 template <torch::DeviceType>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
