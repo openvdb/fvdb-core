@@ -5,7 +5,12 @@
 
 #include <gtest/gtest.h>
 
+// This is a `.cu` test, compiled by NVCC in (at least) two passes:
+// - host pass: we use `std::{sqrt,sin,cos}` for the reference helpers (needs `<cmath>`)
+// - device pass: we use `sqrtf/sinf/cosf` intrinsics instead (so avoid pulling in `<cmath>` there)
+#if !defined(__CUDA_ARCH__)
 #include <cmath>
+#endif
 
 namespace fvdb::detail::ops {
 namespace {
@@ -14,7 +19,7 @@ using Mat3f = nanovdb::math::Mat3<float>;
 using Vec4f = nanovdb::math::Vec4<float>;
 using Vec3f = nanovdb::math::Vec3<float>;
 
-// Minimal math helpers (avoid pulling in <cmath> from a .cu test; CUDA provides these).
+// Minimal math helpers: CUDA intrinsics on device, `std::` on host.
 __host__ __device__ inline float
 mySqrt(float x) {
 #if defined(__CUDA_ARCH__)
