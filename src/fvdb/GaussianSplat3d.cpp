@@ -287,6 +287,7 @@ GaussianSplat3d::projectGaussiansImpl(const torch::Tensor &worldToCameraMatrices
     const int C      = worldToCameraMatrices.size(0); // number of cameras
     const int N      = mMeans.size(0);                // number of gaussians
 
+    TORCH_CHECK(C > 0, "At least one camera must be provided (got 0)");
     TORCH_CHECK(worldToCameraMatrices.sizes() == torch::IntArrayRef({C, 4, 4}),
                 "worldToCameraMatrices must have shape (C, 4, 4)");
     TORCH_CHECK(projectionMatrices.sizes() == torch::IntArrayRef({C, 3, 3}),
@@ -399,6 +400,7 @@ GaussianSplat3d::sparseProjectGaussiansImpl(const JaggedTensor &pixelsToRender,
     const int C      = worldToCameraMatrices.size(0); // number of cameras
     const int N      = mMeans.size(0);                // number of gaussians
 
+    TORCH_CHECK(C > 0, "At least one camera must be provided (got 0)");
     TORCH_CHECK(worldToCameraMatrices.sizes() == torch::IntArrayRef({C, 4, 4}),
                 "worldToCameraMatrices must have shape (C, 4, 4)");
     TORCH_CHECK(projectionMatrices.sizes() == torch::IntArrayRef({C, 3, 3}),
