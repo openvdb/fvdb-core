@@ -140,11 +140,12 @@ TEST_F(GaussianProjectionUTTestFixture, CenteredGaussian_NoDistortion_AnalyticMe
 
     const float fx = 100.0f, fy = 200.0f, cx = 320.0f, cy = 240.0f;
     projectionMatrices = torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32));
-    projectionMatrices[0][0][0] = fx;
-    projectionMatrices[0][1][1] = fy;
-    projectionMatrices[0][0][2] = cx;
-    projectionMatrices[0][1][2] = cy;
-    projectionMatrices[0][2][2] = 1.0f;
+    auto projectionMatricesAcc     = projectionMatrices.accessor<float, 3>();
+    projectionMatricesAcc[0][0][0] = fx;
+    projectionMatricesAcc[0][1][1] = fy;
+    projectionMatricesAcc[0][0][2] = cx;
+    projectionMatricesAcc[0][1][2] = cy;
+    projectionMatricesAcc[0][2][2] = 1.0f;
 
     distortionModel  = DistortionModel::NONE;
     distortionCoeffs = torch::zeros({C, 0}, torch::kFloat32);
@@ -234,11 +235,12 @@ TEST_F(GaussianProjectionUTTestFixture, OffAxisTinyGaussian_NoDistortion_MeanMat
 
     const float fx = 123.0f, fy = 77.0f, cx = 320.0f, cy = 240.0f;
     projectionMatrices = torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32));
-    projectionMatrices[0][0][0] = fx;
-    projectionMatrices[0][1][1] = fy;
-    projectionMatrices[0][0][2] = cx;
-    projectionMatrices[0][1][2] = cy;
-    projectionMatrices[0][2][2] = 1.0f;
+    auto projectionMatricesAcc     = projectionMatrices.accessor<float, 3>();
+    projectionMatricesAcc[0][0][0] = fx;
+    projectionMatricesAcc[0][1][1] = fy;
+    projectionMatricesAcc[0][0][2] = cx;
+    projectionMatricesAcc[0][1][2] = cy;
+    projectionMatricesAcc[0][2][2] = 1.0f;
 
     distortionModel  = DistortionModel::NONE;
     distortionCoeffs = torch::zeros({C, 0}, torch::kFloat32);
@@ -308,11 +310,12 @@ TEST_F(GaussianProjectionUTTestFixture,
 
     const float fx = 500.0f, fy = 450.0f, cx = 400.0f, cy = 300.0f;
     projectionMatrices = torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32));
-    projectionMatrices[0][0][0] = fx;
-    projectionMatrices[0][1][1] = fy;
-    projectionMatrices[0][0][2] = cx;
-    projectionMatrices[0][1][2] = cy;
-    projectionMatrices[0][2][2] = 1.0f;
+    auto projectionMatricesAcc     = projectionMatrices.accessor<float, 3>();
+    projectionMatricesAcc[0][0][0] = fx;
+    projectionMatricesAcc[0][1][1] = fy;
+    projectionMatricesAcc[0][0][2] = cx;
+    projectionMatricesAcc[0][1][2] = cy;
+    projectionMatricesAcc[0][2][2] = 1.0f;
 
     // coefficients chosen to be non-trivial but not extreme
     const float k1 = 0.10f;
@@ -324,11 +327,12 @@ TEST_F(GaussianProjectionUTTestFixture,
     distortionModel = DistortionModel::OPENCV_RADTAN_5;
     // [k1..k6,p1,p2,s1..s4] (use polynomial by setting k4..k6 = 0, and no thin-prism by zeroing s*)
     distortionCoeffs       = torch::zeros({C, 12}, torch::kFloat32);
-    distortionCoeffs[0][0] = k1;
-    distortionCoeffs[0][1] = k2;
-    distortionCoeffs[0][2] = k3;
-    distortionCoeffs[0][6] = p1;
-    distortionCoeffs[0][7] = p2;
+    auto distortionCoeffsAcc       = distortionCoeffs.accessor<float, 2>();
+    distortionCoeffsAcc[0][0]      = k1;
+    distortionCoeffsAcc[0][1]      = k2;
+    distortionCoeffsAcc[0][2]      = k3;
+    distortionCoeffsAcc[0][6]      = p1;
+    distortionCoeffsAcc[0][7]      = p2;
 
     imageWidth  = 800;
     imageHeight = 600;
@@ -396,11 +400,12 @@ TEST_F(GaussianProjectionUTTestFixture,
 
     const float fx = 600.0f, fy = 550.0f, cx = 320.0f, cy = 240.0f;
     projectionMatrices = torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32));
-    projectionMatrices[0][0][0] = fx;
-    projectionMatrices[0][1][1] = fy;
-    projectionMatrices[0][0][2] = cx;
-    projectionMatrices[0][1][2] = cy;
-    projectionMatrices[0][2][2] = 1.0f;
+    auto projectionMatricesAcc     = projectionMatrices.accessor<float, 3>();
+    projectionMatricesAcc[0][0][0] = fx;
+    projectionMatricesAcc[0][1][1] = fy;
+    projectionMatricesAcc[0][0][2] = cx;
+    projectionMatricesAcc[0][1][2] = cy;
+    projectionMatricesAcc[0][2][2] = 1.0f;
 
     const float k1 = 0.08f;
     const float k2 = -0.02f;
@@ -413,14 +418,15 @@ TEST_F(GaussianProjectionUTTestFixture,
 
     distortionModel        = DistortionModel::OPENCV_RATIONAL_8;
     distortionCoeffs       = torch::zeros({C, 12}, torch::kFloat32);
-    distortionCoeffs[0][0] = k1;
-    distortionCoeffs[0][1] = k2;
-    distortionCoeffs[0][2] = k3;
-    distortionCoeffs[0][3] = k4;
-    distortionCoeffs[0][4] = k5;
-    distortionCoeffs[0][5] = k6;
-    distortionCoeffs[0][6] = p1;
-    distortionCoeffs[0][7] = p2;
+    auto distortionCoeffsAcc  = distortionCoeffs.accessor<float, 2>();
+    distortionCoeffsAcc[0][0] = k1;
+    distortionCoeffsAcc[0][1] = k2;
+    distortionCoeffsAcc[0][2] = k3;
+    distortionCoeffsAcc[0][3] = k4;
+    distortionCoeffsAcc[0][4] = k5;
+    distortionCoeffsAcc[0][5] = k6;
+    distortionCoeffsAcc[0][6] = p1;
+    distortionCoeffsAcc[0][7] = p2;
 
     imageWidth  = 800;
     imageHeight = 600;
@@ -488,11 +494,12 @@ TEST_F(GaussianProjectionUTTestFixture,
 
     const float fx = 700.0f, fy = 650.0f, cx = 500.0f, cy = 400.0f;
     projectionMatrices = torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32));
-    projectionMatrices[0][0][0] = fx;
-    projectionMatrices[0][1][1] = fy;
-    projectionMatrices[0][0][2] = cx;
-    projectionMatrices[0][1][2] = cy;
-    projectionMatrices[0][2][2] = 1.0f;
+    auto projectionMatricesAcc     = projectionMatrices.accessor<float, 3>();
+    projectionMatricesAcc[0][0][0] = fx;
+    projectionMatricesAcc[0][1][1] = fy;
+    projectionMatricesAcc[0][0][2] = cx;
+    projectionMatricesAcc[0][1][2] = cy;
+    projectionMatricesAcc[0][2][2] = 1.0f;
 
     const float k1 = 0.05f;
     const float k2 = -0.01f;
@@ -509,18 +516,19 @@ TEST_F(GaussianProjectionUTTestFixture,
 
     distortionModel         = DistortionModel::OPENCV_THIN_PRISM_12;
     distortionCoeffs        = torch::zeros({C, 12}, torch::kFloat32);
-    distortionCoeffs[0][0]  = k1;
-    distortionCoeffs[0][1]  = k2;
-    distortionCoeffs[0][2]  = k3;
-    distortionCoeffs[0][3]  = k4;
-    distortionCoeffs[0][4]  = k5;
-    distortionCoeffs[0][5]  = k6;
-    distortionCoeffs[0][6]  = p1;
-    distortionCoeffs[0][7]  = p2;
-    distortionCoeffs[0][8]  = s1;
-    distortionCoeffs[0][9]  = s2;
-    distortionCoeffs[0][10] = s3;
-    distortionCoeffs[0][11] = s4;
+    auto distortionCoeffsAcc   = distortionCoeffs.accessor<float, 2>();
+    distortionCoeffsAcc[0][0]  = k1;
+    distortionCoeffsAcc[0][1]  = k2;
+    distortionCoeffsAcc[0][2]  = k3;
+    distortionCoeffsAcc[0][3]  = k4;
+    distortionCoeffsAcc[0][4]  = k5;
+    distortionCoeffsAcc[0][5]  = k6;
+    distortionCoeffsAcc[0][6]  = p1;
+    distortionCoeffsAcc[0][7]  = p2;
+    distortionCoeffsAcc[0][8]  = s1;
+    distortionCoeffsAcc[0][9]  = s2;
+    distortionCoeffsAcc[0][10] = s3;
+    distortionCoeffsAcc[0][11] = s4;
 
     imageWidth  = 1200;
     imageHeight = 900;
@@ -588,11 +596,12 @@ TEST_F(GaussianProjectionUTTestFixture,
 
     const float fx = 620.0f, fy = 590.0f, cx = 410.0f, cy = 305.0f;
     projectionMatrices = torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32));
-    projectionMatrices[0][0][0] = fx;
-    projectionMatrices[0][1][1] = fy;
-    projectionMatrices[0][0][2] = cx;
-    projectionMatrices[0][1][2] = cy;
-    projectionMatrices[0][2][2] = 1.0f;
+    auto projectionMatricesAcc     = projectionMatrices.accessor<float, 3>();
+    projectionMatricesAcc[0][0][0] = fx;
+    projectionMatricesAcc[0][1][1] = fy;
+    projectionMatricesAcc[0][0][2] = cx;
+    projectionMatricesAcc[0][1][2] = cy;
+    projectionMatricesAcc[0][2][2] = 1.0f;
 
     const float k1 = 0.06f;
     const float k2 = -0.015f;
@@ -606,16 +615,17 @@ TEST_F(GaussianProjectionUTTestFixture,
 
     distortionModel        = DistortionModel::OPENCV_RADTAN_THIN_PRISM_9;
     distortionCoeffs       = torch::zeros({C, 12}, torch::kFloat32);
-    distortionCoeffs[0][0] = k1;
-    distortionCoeffs[0][1] = k2;
-    distortionCoeffs[0][2] = k3;
+    auto distortionCoeffsAcc  = distortionCoeffs.accessor<float, 2>();
+    distortionCoeffsAcc[0][0] = k1;
+    distortionCoeffsAcc[0][1] = k2;
+    distortionCoeffsAcc[0][2] = k3;
     // k4..k6 must be 0 for this explicit model
-    distortionCoeffs[0][6]  = p1;
-    distortionCoeffs[0][7]  = p2;
-    distortionCoeffs[0][8]  = s1;
-    distortionCoeffs[0][9]  = s2;
-    distortionCoeffs[0][10] = s3;
-    distortionCoeffs[0][11] = s4;
+    distortionCoeffsAcc[0][6]  = p1;
+    distortionCoeffsAcc[0][7]  = p2;
+    distortionCoeffsAcc[0][8]  = s1;
+    distortionCoeffsAcc[0][9]  = s2;
+    distortionCoeffsAcc[0][10] = s3;
+    distortionCoeffsAcc[0][11] = s4;
 
     imageWidth  = 900;
     imageHeight = 700;
@@ -682,17 +692,19 @@ TEST_F(GaussianProjectionUTTestFixture, RadTanThinPrism_RejectsNonZeroK456) {
     worldToCamMatricesEnd = worldToCamMatricesStart.clone();
     projectionMatrices =
         torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32)).cuda();
-    projectionMatrices[0][0][0] = 500.0f;
-    projectionMatrices[0][1][1] = 500.0f;
-    projectionMatrices[0][0][2] = 320.0f;
-    projectionMatrices[0][1][2] = 240.0f;
-    projectionMatrices[0][2][2] = 1.0f;
+    auto projectionMatricesAcc     = projectionMatrices.accessor<float, 3>();
+    projectionMatricesAcc[0][0][0] = 500.0f;
+    projectionMatricesAcc[0][1][1] = 500.0f;
+    projectionMatricesAcc[0][0][2] = 320.0f;
+    projectionMatricesAcc[0][1][2] = 240.0f;
+    projectionMatricesAcc[0][2][2] = 1.0f;
 
     distortionModel        = DistortionModel::OPENCV_RADTAN_THIN_PRISM_9;
     distortionCoeffs       = torch::zeros({C, 12}, torch::kFloat32).cuda();
-    distortionCoeffs[0][0] = 0.01f;  // k1
-    distortionCoeffs[0][3] = 0.1f;   // k4 (invalid for RADTAN_THIN_PRISM_9)
-    distortionCoeffs[0][8] = 0.001f; // s1
+    auto distortionCoeffsAcc  = distortionCoeffs.accessor<float, 2>();
+    distortionCoeffsAcc[0][0] = 0.01f;  // k1
+    distortionCoeffsAcc[0][3] = 0.1f;   // k4 (invalid for RADTAN_THIN_PRISM_9)
+    distortionCoeffsAcc[0][8] = 0.001f; // s1
 
     imageWidth  = 640;
     imageHeight = 480;
@@ -745,11 +757,12 @@ TEST_F(GaussianProjectionUTTestFixture,
 
     const float fx = 500.0f, fy = 500.0f, cx = 320.0f, cy = 240.0f;
     projectionMatrices = torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32));
-    projectionMatrices[0][0][0] = fx;
-    projectionMatrices[0][1][1] = fy;
-    projectionMatrices[0][0][2] = cx;
-    projectionMatrices[0][1][2] = cy;
-    projectionMatrices[0][2][2] = 1.0f;
+    auto projectionMatricesAcc     = projectionMatrices.accessor<float, 3>();
+    projectionMatricesAcc[0][0][0] = fx;
+    projectionMatricesAcc[0][1][1] = fy;
+    projectionMatricesAcc[0][0][2] = cx;
+    projectionMatricesAcc[0][1][2] = cy;
+    projectionMatricesAcc[0][2][2] = 1.0f;
 
     distortionModel  = DistortionModel::NONE;
     distortionCoeffs = torch::zeros({C, 0}, torch::kFloat32);
@@ -823,11 +836,12 @@ TEST_F(GaussianProjectionUTTestFixture,
 
     const float fx = 500.0f, fy = 500.0f, cx = 320.0f, cy = 240.0f;
     projectionMatrices = torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32));
-    projectionMatrices[0][0][0] = fx;
-    projectionMatrices[0][1][1] = fy;
-    projectionMatrices[0][0][2] = cx;
-    projectionMatrices[0][1][2] = cy;
-    projectionMatrices[0][2][2] = 1.0f;
+    auto projectionMatricesAcc     = projectionMatrices.accessor<float, 3>();
+    projectionMatricesAcc[0][0][0] = fx;
+    projectionMatricesAcc[0][1][1] = fy;
+    projectionMatricesAcc[0][0][2] = cx;
+    projectionMatricesAcc[0][1][2] = cy;
+    projectionMatricesAcc[0][2][2] = 1.0f;
 
     distortionModel  = DistortionModel::NONE;
     distortionCoeffs = torch::zeros({C, 0}, torch::kFloat32);
@@ -889,15 +903,17 @@ TEST_F(GaussianProjectionUTTestFixture, RollingShutterNone_DepthUsesStartPoseNot
         torch::eye(4, torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(0).expand({C, 4, 4});
     worldToCamMatricesEnd = worldToCamMatricesStart.clone();
     // End pose translates camera forward in +z, so p_cam.z is larger at t=1.0.
-    worldToCamMatricesEnd[0][2][3] = 1.0f;
+    auto worldToCamEndAcc       = worldToCamMatricesEnd.accessor<float, 3>();
+    worldToCamEndAcc[0][2][3]   = 1.0f;
 
     const float fx = 100.0f, fy = 100.0f, cx = 320.0f, cy = 240.0f;
     projectionMatrices = torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32));
-    projectionMatrices[0][0][0] = fx;
-    projectionMatrices[0][1][1] = fy;
-    projectionMatrices[0][0][2] = cx;
-    projectionMatrices[0][1][2] = cy;
-    projectionMatrices[0][2][2] = 1.0f;
+    auto projectionMatricesAcc     = projectionMatrices.accessor<float, 3>();
+    projectionMatricesAcc[0][0][0] = fx;
+    projectionMatricesAcc[0][1][1] = fy;
+    projectionMatricesAcc[0][0][2] = cx;
+    projectionMatricesAcc[0][1][2] = cy;
+    projectionMatricesAcc[0][2][2] = 1.0f;
 
     distortionModel  = DistortionModel::NONE;
     distortionCoeffs = torch::zeros({C, 0}, torch::kFloat32);
