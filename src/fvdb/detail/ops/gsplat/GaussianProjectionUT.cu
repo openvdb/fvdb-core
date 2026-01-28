@@ -768,6 +768,14 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
         TORCH_CHECK_VALUE(false, "Unknown DistortionModel for GaussianProjectionForwardUT");
     }
 
+    // This kernel currently implements only the canonical 3D UT with 2D+1 sigma points (7).
+    // Validate on the host so misconfiguration is reported loudly instead of silently discarding.
+    TORCH_CHECK_VALUE(
+        utParams.numSigmaPoints == 7,
+        "GaussianProjectionForwardUT currently supports only utParams.numSigmaPoints == 7 "
+        "(3D UT with 2D+1 sigma points). Got ",
+        utParams.numSigmaPoints);
+
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means));
 
     const auto N                = means.size(0);              // number of gaussians

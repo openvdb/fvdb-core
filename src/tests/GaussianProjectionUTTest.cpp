@@ -963,4 +963,65 @@ TEST_F(GaussianProjectionUTTestFixture, RollingShutterNone_DepthUsesStartPoseNot
     EXPECT_NEAR(depths_cpu[0][0].item<float>(), z, 1e-4f);
 }
 
+TEST_F(GaussianProjectionUTTestFixture, RejectsNonSevenSigmaPointsOnHost) {
+    const int64_t C = 1;
+
+    means     = torch::tensor({{0.0f, 0.0f, 5.0f}}, torch::kFloat32);
+    quats     = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32);
+    logScales = torch::log(torch::tensor({{0.2f, 0.2f, 0.2f}}, torch::kFloat32));
+
+    worldToCamMatricesStart =
+        torch::eye(4, torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(0).expand({C, 4, 4});
+    worldToCamMatricesEnd = worldToCamMatricesStart.clone();
+
+    projectionMatrices = torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32));
+    auto projectionMatricesAcc     = projectionMatrices.accessor<float, 3>();
+    projectionMatricesAcc[0][0][0] = 100.0f;
+    projectionMatricesAcc[0][1][1] = 100.0f;
+    projectionMatricesAcc[0][0][2] = 320.0f;
+    projectionMatricesAcc[0][1][2] = 240.0f;
+    projectionMatricesAcc[0][2][2] = 1.0f;
+
+    distortionModel  = DistortionModel::NONE;
+    distortionCoeffs = torch::zeros({C, 0}, torch::kFloat32);
+
+    imageWidth  = 640;
+    imageHeight = 480;
+    eps2d       = 0.3f;
+    nearPlane   = 0.1f;
+    farPlane    = 100.0f;
+    minRadius2d = 0.0f;
+
+    utParams                = UTParams{};
+    utParams.numSigmaPoints = 5; // invalid: kernel supports only 7
+
+    means                   = means.cuda();
+    quats                   = quats.cuda();
+    logScales               = logScales.cuda();
+    worldToCamMatricesStart = worldToCamMatricesStart.cuda();
+    worldToCamMatricesEnd   = worldToCamMatricesEnd.cuda();
+    projectionMatrices      = projectionMatrices.cuda();
+    distortionCoeffs        = distortionCoeffs.cuda();
+
+    EXPECT_THROW((dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
+                                                                    quats,
+                                                                    logScales,
+                                                                    worldToCamMatricesStart,
+                                                                    worldToCamMatricesEnd,
+                                                                    projectionMatrices,
+                                                                    RollingShutterType::NONE,
+                                                                    utParams,
+                                                                    distortionModel,
+                                                                    distortionCoeffs,
+                                                                    imageWidth,
+                                                                    imageHeight,
+                                                                    eps2d,
+                                                                    nearPlane,
+                                                                    farPlane,
+                                                                    minRadius2d,
+                                                                    false,
+                                                                    false)),
+                 c10::Error);
+}
+
 } // namespace fvdb::detail::ops
