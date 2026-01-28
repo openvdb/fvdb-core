@@ -5,7 +5,9 @@
 // Reduces boilerplate for simple ops like relu, gelu, sigmoid, etc.
 //
 // Supports N-dimensional tensors with configurable iteration policy.
-// Uses stride-aware accessors for non-contiguous tensor support.
+// Dispatches on contiguity for optimized access:
+//   - Contiguous tensors: direct data[idx] access (no stride math)
+//   - Strided tensors: N-D indexing with stride computation
 //
 // Performance tuning:
 //   GrainSize: Elements per thread (improves ILP). Default 4.
@@ -20,9 +22,9 @@
 #include "dispatch/dispatch_table.h"
 #include "dispatch/iteration_policy.h"
 #include "dispatch/macros.h"
+#include "dispatch/torch/accessors.h"
 #include "dispatch/torch/dispatch.h"
 #include "dispatch/torch/for_each.h"
-#include "dispatch/torch/nd_accessor.h"
 #include "dispatch/torch/types.h"
 #include "dispatch/types.h"
 
@@ -79,35 +81,45 @@ template <typename Derived,
 struct unary_elementwise_op {
     static constexpr int64_t rank = Rank;
 
-    template <torch::DeviceType dev, torch::ScalarType stype>
+    template <torch::DeviceType dev, torch::ScalarType stype, contiguity contig>
     static void
-    op(tag<dev, stype>, torch::Tensor in_tensor, torch::Tensor out_tensor) {
+    op(tag<dev, stype, contig>, torch::Tensor in_tensor, torch::Tensor out_tensor) {
         // Guard device context for CUDA/PrivateUse1 to ensure correct stream selection
         c10::OptionalDeviceGuard device_guard;
         if constexpr (dev == torch::kCUDA || dev == torch::kPrivateUse1) {
             device_guard.reset_device(in_tensor.device());
         }
 
-        using scalar_t = torch_scalar_cpp_type_t<stype>;
+        // Accessor derives value_type internally from stype
+        auto in_acc  = accessor<stype, contig, Rank>::from_tensor(in_tensor);
+        auto out_acc = accessor<stype, contig, Rank>::from_tensor(out_tensor);
 
-        auto in  = nd_accessor<scalar_t, Rank>::from_tensor(in_tensor);
-        auto out = nd_accessor<scalar_t, Rank>::from_tensor(out_tensor);
+        if constexpr (contig == contiguity::contiguous) {
+            // Contiguous path: linear iteration with direct data[idx] access
+            for_each<GrainSize, BlockDim>(tag<dev>{},
+                                          in_tensor.numel(),
+                                          [in_acc, out_acc]
+                                          __hostdev__(tag<dev>, int64_t idx) mutable {
+                                              out_acc[idx] = Derived::scalar_op(in_acc[idx]);
+                                          });
+        } else {
+            // Strided path: N-D iteration with stride-based access
+            std::array<int64_t, Rank> shape;
+            for (int64_t d = 0; d < Rank; ++d) {
+                shape[d] = in_tensor.size(d);
+            }
 
-        // Build shape array
-        std::array<int64_t, Rank> shape;
-        for (int64_t d = 0; d < Rank; ++d) {
-            shape[d] = in_tensor.size(d);
+            for_each_nd<Rank, IterPolicy, GrainSize, BlockDim>(
+                tag<dev>{},
+                shape,
+                [in_acc, out_acc]
+                __hostdev__(tag<dev>, std::array<int64_t, Rank> const &idx) mutable {
+                    out_acc(idx) = Derived::scalar_op(in_acc(idx));
+                });
         }
-
-        for_each_nd<Rank, IterPolicy, GrainSize, BlockDim>(
-            tag<dev, stype>{},
-            shape,
-            [in, out] __hostdev__(tag<dev, stype>, std::array<int64_t, Rank> const &idx) mutable {
-                out(idx) = Derived::scalar_op(in(idx));
-            });
     }
 
-    using space      = axes<DeviceAxis, StypeAxis>;
+    using space      = axes<DeviceAxis, StypeAxis, full_contiguity_axis>;
     using dispatcher = dispatch_table<space, void(torch::Tensor, torch::Tensor)>;
 };
 
@@ -142,9 +154,11 @@ unary_elementwise_impl(torch::Tensor input, placement plc, char const *name) {
 
     auto output = (plc == placement::in_place) ? input : torch::empty_like(input);
 
-    auto const dev            = input.device().type();
-    auto const st             = input.scalar_type();
-    auto const dispatch_coord = std::make_tuple(dev, st);
+    auto const dev    = input.device().type();
+    auto const st     = input.scalar_type();
+    auto const contig = combined_contiguity(input, output);
+
+    auto const dispatch_coord = std::make_tuple(dev, st, contig);
 
     torch_dispatch(name, table, dispatch_coord, input, output);
 

@@ -58,12 +58,27 @@ torch_coord_to_string(T value) {
 }
 
 //------------------------------------------------------------------------------
-// Contiguity helper
+// Contiguity helpers
 //------------------------------------------------------------------------------
 
 inline contiguity
 torch_get_contiguity(torch::Tensor tensor) {
     return tensor.is_contiguous() ? contiguity::contiguous : contiguity::strided;
+}
+
+// Returns contiguous ONLY if ALL tensors are contiguous.
+// Prevents combinatorial explosion in binary/ternary ops by making contiguity
+// a single boolean decision rather than 2^N dispatch combinations.
+//
+// Usage:
+//   auto contig = combined_contiguity(input, output);
+//   auto contig = combined_contiguity(lhs, rhs, output);
+template <typename... Tensors>
+    requires(std::is_same_v<std::remove_cvref_t<Tensors>, torch::Tensor> && ...)
+contiguity
+combined_contiguity(Tensors const &...tensors) {
+    bool const all_contiguous = (tensors.is_contiguous() && ...);
+    return all_contiguous ? contiguity::contiguous : contiguity::strided;
 }
 
 //------------------------------------------------------------------------------

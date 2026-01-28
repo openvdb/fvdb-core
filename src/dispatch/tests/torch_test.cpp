@@ -125,26 +125,6 @@ TEST(TorchRuntimeChecks, IsTorchFloatStype) {
 }
 
 // =============================================================================
-// torch_types.h - torch_concrete_tensor
-// =============================================================================
-
-TEST(TorchConcreteTensor, Construction) {
-    auto tensor =
-        torch::zeros({2, 3}, torch::TensorOptions().dtype(torch::kFloat).device(torch::kCPU));
-    torch_cpu_tensor<torch::kFloat, 2> ct(tensor);
-    EXPECT_EQ(ct.tensor.sizes(), tensor.sizes());
-}
-
-TEST(TorchConcreteTensor, ConvenienceAliases) {
-    static_assert(std::is_same_v<torch_cpu_tensor<torch::kFloat, 2>,
-                                 torch_concrete_tensor<torch::kCPU, torch::kFloat, 2>>);
-    static_assert(std::is_same_v<torch_cuda_tensor<torch::kFloat, 2>,
-                                 torch_concrete_tensor<torch::kCUDA, torch::kFloat, 2>>);
-    static_assert(std::is_same_v<torch_pvt1_tensor<torch::kFloat, 2>,
-                                 torch_concrete_tensor<torch::kPrivateUse1, torch::kFloat, 2>>);
-}
-
-// =============================================================================
 // torch.h - Stringification
 // =============================================================================
 
@@ -240,27 +220,155 @@ TEST(TorchDispatch, ErrorPath) {
 }
 
 // =============================================================================
-// torch.h - CPU accessor
+// dispatch.h - combined_contiguity
 // =============================================================================
 
-TEST(TorchAccessor, CpuTensor) {
-    auto tensor =
-        torch::zeros({2, 3}, torch::TensorOptions().dtype(torch::kFloat).device(torch::kCPU));
-    torch_cpu_tensor<torch::kFloat, 2> ct(tensor);
-
-    auto accessor = torch_accessor(ct);
-    EXPECT_EQ(accessor.size(0), 2);
-    EXPECT_EQ(accessor.size(1), 3);
+TEST(CombinedContiguity, AllContiguous) {
+    auto t1 = torch::zeros({2, 3});
+    auto t2 = torch::zeros({2, 3});
+    EXPECT_TRUE(t1.is_contiguous());
+    EXPECT_TRUE(t2.is_contiguous());
+    EXPECT_EQ(combined_contiguity(t1, t2), contiguity::contiguous);
 }
 
-TEST(TorchAccessor, CpuTensorInt) {
-    auto tensor =
-        torch::zeros({2, 3}, torch::TensorOptions().dtype(torch::kInt).device(torch::kCPU));
-    torch_cpu_tensor<torch::kInt, 2> ct(tensor);
+TEST(CombinedContiguity, OneStrided) {
+    auto t1       = torch::zeros({2, 3});
+    auto t2       = torch::zeros({3, 2}).t(); // transposed = strided
+    bool strided2 = !t2.is_contiguous();
+    if (strided2) {
+        EXPECT_EQ(combined_contiguity(t1, t2), contiguity::strided);
+    }
+}
 
-    auto accessor = torch_accessor(ct);
-    EXPECT_EQ(accessor.size(0), 2);
-    EXPECT_EQ(accessor.size(1), 3);
+TEST(CombinedContiguity, ThreeTensors) {
+    auto t1 = torch::zeros({2, 3});
+    auto t2 = torch::zeros({2, 3});
+    auto t3 = torch::zeros({2, 3});
+    EXPECT_EQ(combined_contiguity(t1, t2, t3), contiguity::contiguous);
+}
+
+// =============================================================================
+// accessors.h - Contiguous accessor
+// =============================================================================
+
+TEST(Accessor, ContiguousFloat1D) {
+    auto tensor = torch::arange(10, torch::kFloat32);
+    auto acc    = accessor<torch::kFloat32, contiguity::contiguous, 1>::from_tensor(tensor);
+
+    // Check value_type
+    static_assert(std::is_same_v<decltype(acc)::value_type, float>);
+
+    // Check linear access
+    EXPECT_FLOAT_EQ(acc[0], 0.0f);
+    EXPECT_FLOAT_EQ(acc[5], 5.0f);
+    EXPECT_FLOAT_EQ(acc[9], 9.0f);
+}
+
+TEST(Accessor, ContiguousFloat2D) {
+    auto tensor = torch::arange(6, torch::kFloat32).reshape({2, 3});
+    auto acc    = accessor<torch::kFloat32, contiguity::contiguous, 2>::from_tensor(tensor);
+
+    // Linear access treats as flat array
+    EXPECT_FLOAT_EQ(acc[0], 0.0f);
+    EXPECT_FLOAT_EQ(acc[3], 3.0f);
+    EXPECT_FLOAT_EQ(acc[5], 5.0f);
+}
+
+TEST(Accessor, ContiguousWrite) {
+    auto tensor = torch::zeros({5}, torch::kFloat32);
+    auto acc    = accessor<torch::kFloat32, contiguity::contiguous, 1>::from_tensor(tensor);
+
+    acc[2] = 42.0f;
+    EXPECT_FLOAT_EQ(tensor[2].item<float>(), 42.0f);
+}
+
+// =============================================================================
+// accessors.h - Strided accessor
+// =============================================================================
+
+TEST(Accessor, StridedFloat2D) {
+    auto tensor = torch::arange(6, torch::kFloat32).reshape({2, 3});
+    auto acc    = accessor<torch::kFloat32, contiguity::strided, 2>::from_tensor(tensor);
+
+    // Check value_type
+    static_assert(std::is_same_v<decltype(acc)::value_type, float>);
+
+    // N-D access with variadic operator()
+    EXPECT_FLOAT_EQ(acc(0, 0), 0.0f);
+    EXPECT_FLOAT_EQ(acc(0, 2), 2.0f);
+    EXPECT_FLOAT_EQ(acc(1, 0), 3.0f);
+    EXPECT_FLOAT_EQ(acc(1, 2), 5.0f);
+}
+
+TEST(Accessor, StridedArrayAccess) {
+    auto tensor = torch::arange(6, torch::kFloat32).reshape({2, 3});
+    auto acc    = accessor<torch::kFloat32, contiguity::strided, 2>::from_tensor(tensor);
+
+    // Access via std::array
+    std::array<int64_t, 2> idx = {1, 1};
+    EXPECT_FLOAT_EQ(acc(idx), 4.0f);
+}
+
+TEST(Accessor, StridedWrite) {
+    auto tensor = torch::zeros({2, 3}, torch::kFloat32);
+    auto acc    = accessor<torch::kFloat32, contiguity::strided, 2>::from_tensor(tensor);
+
+    acc(1, 2) = 42.0f;
+    EXPECT_FLOAT_EQ(tensor[1][2].item<float>(), 42.0f);
+}
+
+TEST(Accessor, StridedNonContiguousTensor) {
+    // Create a transposed tensor (non-contiguous)
+    auto tensor     = torch::arange(6, torch::kFloat32).reshape({2, 3});
+    auto transposed = tensor.t(); // Now shape {3, 2}, strides {1, 3}
+
+    if (!transposed.is_contiguous()) {
+        auto acc = accessor<torch::kFloat32, contiguity::strided, 2>::from_tensor(transposed);
+
+        // Verify stride-based access works correctly on non-contiguous tensor
+        // Original: [[0, 1, 2], [3, 4, 5]]
+        // Transposed: [[0, 3], [1, 4], [2, 5]]
+        EXPECT_FLOAT_EQ(acc(0, 0), 0.0f);
+        EXPECT_FLOAT_EQ(acc(0, 1), 3.0f);
+        EXPECT_FLOAT_EQ(acc(1, 0), 1.0f);
+        EXPECT_FLOAT_EQ(acc(2, 1), 5.0f);
+    }
+}
+
+TEST(Accessor, StridedStride) {
+    auto tensor = torch::arange(6, torch::kFloat32).reshape({2, 3});
+    auto acc    = accessor<torch::kFloat32, contiguity::strided, 2>::from_tensor(tensor);
+
+    EXPECT_EQ(acc.stride(0), 3); // stride of first dimension
+    EXPECT_EQ(acc.stride(1), 1); // stride of second dimension
+}
+
+// =============================================================================
+// accessors.h - Different scalar types
+// =============================================================================
+
+TEST(Accessor, DoubleType) {
+    auto tensor = torch::arange(5, torch::kFloat64);
+    auto acc    = accessor<torch::kFloat64, contiguity::contiguous, 1>::from_tensor(tensor);
+
+    static_assert(std::is_same_v<decltype(acc)::value_type, double>);
+    EXPECT_DOUBLE_EQ(acc[3], 3.0);
+}
+
+TEST(Accessor, IntType) {
+    auto tensor = torch::arange(5, torch::kInt32);
+    auto acc    = accessor<torch::kInt32, contiguity::contiguous, 1>::from_tensor(tensor);
+
+    static_assert(std::is_same_v<decltype(acc)::value_type, int32_t>);
+    EXPECT_EQ(acc[3], 3);
+}
+
+TEST(Accessor, LongType) {
+    auto tensor = torch::arange(5, torch::kInt64);
+    auto acc    = accessor<torch::kInt64, contiguity::contiguous, 1>::from_tensor(tensor);
+
+    static_assert(std::is_same_v<decltype(acc)::value_type, int64_t>);
+    EXPECT_EQ(acc[3], 3);
 }
 
 } // namespace dispatch

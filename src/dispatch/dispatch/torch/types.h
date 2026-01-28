@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // PyTorch-specific type mappings and axis typedefs. Lightweight header suitable
-// for forward declarations in user headers. Provides torch_scalar_cpp_type_t,
-// pre-defined device/scalar-type axes, and torch_concrete_tensor wrapper.
+// for forward declarations in user headers. Provides torch_scalar_cpp_type_t
+// and pre-defined device/scalar-type axes.
 //
 #ifndef DISPATCH_DISPATCH_TORCH_TYPES_H
 #define DISPATCH_DISPATCH_TORCH_TYPES_H
@@ -90,38 +90,6 @@ is_torch_float_stype(torch::ScalarType stype) {
     return stype == torch::kFloat || stype == torch::kDouble || stype == torch::kHalf ||
            stype == torch::kBFloat16;
 }
-
-//------------------------------------------------------------------------------
-// torch_concrete_tensor - tensor wrapper parameterized by device and scalar type
-//------------------------------------------------------------------------------
-// Keeps the interface consistent with the dispatch system by using torch enum
-// values as template parameters rather than C++ scalar types.
-
-template <torch::DeviceType Device, torch::ScalarType Stype, size_t Rank>
-struct torch_concrete_tensor {
-    static constexpr torch::DeviceType device_value      = Device;
-    static constexpr torch::ScalarType scalar_type_value = Stype;
-    using value_type                                     = torch_scalar_cpp_type_t<Stype>;
-
-    torch::Tensor tensor;
-
-    torch_concrete_tensor() = default;
-
-    explicit torch_concrete_tensor(torch::Tensor t) : tensor(t) {
-        TORCH_CHECK_VALUE(t.device().type() == device_value, "Device mismatch");
-        TORCH_CHECK_VALUE(t.scalar_type() == scalar_type_value, "Scalar type mismatch");
-    }
-};
-
-// Convenience aliases using device tags and scalar type enum values
-template <torch::ScalarType Stype, size_t Rank>
-using torch_cpu_tensor = torch_concrete_tensor<torch::kCPU, Stype, Rank>;
-
-template <torch::ScalarType Stype, size_t Rank>
-using torch_cuda_tensor = torch_concrete_tensor<torch::kCUDA, Stype, Rank>;
-
-template <torch::ScalarType Stype, size_t Rank>
-using torch_pvt1_tensor = torch_concrete_tensor<torch::kPrivateUse1, Stype, Rank>;
 
 } // namespace dispatch
 

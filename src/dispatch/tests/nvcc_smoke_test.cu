@@ -82,37 +82,41 @@ TEST(NvccSmoke, DispatchTableInDeviceCode) {
 }
 
 // =============================================================================
-// torch.h CUDA paths
+// accessors.h CUDA paths
 // =============================================================================
 
-TEST(NvccSmoke, TorchAccessorCudaOverloads) {
+TEST(NvccSmoke, AccessorContiguousCuda) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";
     }
 
-    // Verify torch_accessor() CUDA overloads instantiate under nvcc
+    // Verify contiguous accessor compiles under nvcc
     auto tensor =
-        torch::zeros({2, 3}, torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
-    torch_cuda_tensor<torch::kFloat, 2> ct(tensor);
+        torch::arange(6, torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
 
-    // This should compile with nvcc
-    auto accessor = torch_accessor(ct);
-    EXPECT_EQ(accessor.size(0), 2);
-    EXPECT_EQ(accessor.size(1), 3);
+    auto acc = accessor<torch::kFloat, contiguity::contiguous, 1>::from_tensor(tensor);
+
+    // The accessor should be created successfully
+    // (We can't easily test device access from host in a unit test,
+    // but compilation with nvcc is the key verification)
+    EXPECT_NE(acc.data, nullptr);
 }
 
-TEST(NvccSmoke, TorchConcreteTensorCuda) {
+TEST(NvccSmoke, AccessorStridedCuda) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";
     }
 
-    // Exercise torch_concrete_tensor with CUDA device tags
-    auto tensor =
-        torch::zeros({2, 3}, torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
-    torch_cuda_tensor<torch::kFloat, 2> ct(tensor);
+    // Verify strided accessor compiles under nvcc
+    auto tensor = torch::arange(6, torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA))
+                      .reshape({2, 3});
 
-    EXPECT_EQ(ct.tensor.device().type(), torch::kCUDA);
-    EXPECT_EQ(ct.tensor.scalar_type(), torch::kFloat);
+    auto acc = accessor<torch::kFloat, contiguity::strided, 2>::from_tensor(tensor);
+
+    // Verify strides are captured correctly
+    EXPECT_EQ(acc.stride(0), 3);
+    EXPECT_EQ(acc.stride(1), 1);
+    EXPECT_NE(acc.data, nullptr);
 }
 
 // =============================================================================
