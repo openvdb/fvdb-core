@@ -690,21 +690,23 @@ TEST_F(GaussianProjectionUTTestFixture, RadTanThinPrism_RejectsNonZeroK456) {
                                   .expand({C, 4, 4})
                                   .cuda();
     worldToCamMatricesEnd = worldToCamMatricesStart.clone();
-    projectionMatrices =
-        torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32)).cuda();
+    // NOTE: `.accessor<>()` is a host-side view; only use it on CPU tensors, then move to CUDA.
+    projectionMatrices = torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32));
     auto projectionMatricesAcc     = projectionMatrices.accessor<float, 3>();
     projectionMatricesAcc[0][0][0] = 500.0f;
     projectionMatricesAcc[0][1][1] = 500.0f;
     projectionMatricesAcc[0][0][2] = 320.0f;
     projectionMatricesAcc[0][1][2] = 240.0f;
     projectionMatricesAcc[0][2][2] = 1.0f;
+    projectionMatrices             = projectionMatrices.cuda();
 
     distortionModel        = DistortionModel::OPENCV_RADTAN_THIN_PRISM_9;
-    distortionCoeffs       = torch::zeros({C, 12}, torch::kFloat32).cuda();
+    distortionCoeffs       = torch::zeros({C, 12}, torch::kFloat32);
     auto distortionCoeffsAcc  = distortionCoeffs.accessor<float, 2>();
     distortionCoeffsAcc[0][0] = 0.01f;  // k1
     distortionCoeffsAcc[0][3] = 0.1f;   // k4 (invalid for RADTAN_THIN_PRISM_9)
     distortionCoeffsAcc[0][8] = 0.001f; // s1
+    distortionCoeffs          = distortionCoeffs.cuda();
 
     imageWidth  = 640;
     imageHeight = 480;
