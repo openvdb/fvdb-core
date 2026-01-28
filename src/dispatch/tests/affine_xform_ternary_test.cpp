@@ -66,7 +66,7 @@ inline torch::Tensor
 make_positions(int64_t N, torch::ScalarType dtype, torch::Device device) {
     auto options = torch::TensorOptions().dtype(torch::kFloat32).device(device);
     // Create positions like (1, 0, 0), (2, 0, 0), ...
-    auto x = torch::zeros({N, 3}, options);
+    auto x         = torch::zeros({N, 3}, options);
     x.select(1, 0) = torch::arange(1, N + 1, options);
     return x.to(dtype);
 }
@@ -101,9 +101,9 @@ compute_expected(torch::Tensor R, torch::Tensor T, torch::Tensor x) {
 
     // y = R @ x + T
     // x has shape (N, 3), need to make it (N, 3, 1) for bmm
-    auto x_col  = x_float.unsqueeze(2);             // (N, 3, 1)
-    auto Rx     = torch::bmm(R_float, x_col);       // (N, 3, 1)
-    auto result = Rx.squeeze(2) + T_float;          // (N, 3)
+    auto x_col  = x_float.unsqueeze(2);       // (N, 3, 1)
+    auto Rx     = torch::bmm(R_float, x_col); // (N, 3, 1)
+    auto result = Rx.squeeze(2) + T_float;    // (N, 3)
 
     return result.to(x.scalar_type());
 }
@@ -119,7 +119,7 @@ expect_affine_equal(torch::Tensor actual, torch::Tensor expected, double tol = 1
     if (actual.dtype() == torch::kFloat16) {
         tol = 1e-2; // Larger tolerance for half precision
     } else if (actual.dtype() == torch::kBFloat16) {
-        tol = 0.1; // BFloat16 has only 7 mantissa bits, needs larger tolerance
+        tol = 0.1;  // BFloat16 has only 7 mantissa bits, needs larger tolerance
     }
 
     auto actual_ptr   = actual_float.data_ptr<float>();
@@ -137,9 +137,9 @@ expect_affine_equal(torch::Tensor actual, torch::Tensor expected, double tol = 1
 struct AffineXformTestParams {
     torch::ScalarType dtype;
     torch::Device device;
-    bool R_broadcast;      // R is (1, 3, 3) instead of (N, 3, 3)
-    bool T_broadcast;      // T is (1, 3) instead of (N, 3)
-    bool strided;          // Use strided (non-contiguous) tensors
+    bool R_broadcast; // R is (1, 3, 3) instead of (N, 3, 3)
+    bool T_broadcast; // T is (1, 3) instead of (N, 3)
+    bool strided;     // Use strided (non-contiguous) tensors
 };
 
 class AffineXformTest : public ::testing::TestWithParam<AffineXformTestParams> {
@@ -161,12 +161,11 @@ TEST_P(AffineXformTest, Correctness) {
     auto x = make_positions(N, params.dtype, params.device);
     auto R = params.R_broadcast ? make_rotation_z(0.5f, params.dtype, params.device).unsqueeze(0)
                                 : make_rotation_matrices(N, params.dtype, params.device);
-    auto T = params.T_broadcast ? torch::tensor({1.0f, 2.0f, 3.0f},
-                                                torch::TensorOptions()
-                                                    .dtype(params.dtype)
-                                                    .device(params.device))
-                                      .unsqueeze(0)
-                                : make_translations(N, params.dtype, params.device);
+    auto T = params.T_broadcast
+                 ? torch::tensor({1.0f, 2.0f, 3.0f},
+                                 torch::TensorOptions().dtype(params.dtype).device(params.device))
+                       .unsqueeze(0)
+                 : make_translations(N, params.dtype, params.device);
 
     // Make strided if requested
     if (params.strided) {
@@ -241,14 +240,15 @@ std::vector<AffineXformTestParams>
 generate_all_tests() {
     std::vector<AffineXformTestParams> params;
 
-    torch::ScalarType dtypes[] = {torch::kFloat32, torch::kFloat64, torch::kFloat16, torch::kBFloat16};
-    torch::Device devices[]    = {torch::kCPU, torch::kCUDA};
+    torch::ScalarType dtypes[] = {
+        torch::kFloat32, torch::kFloat64, torch::kFloat16, torch::kBFloat16};
+    torch::Device devices[] = {torch::kCPU, torch::kCUDA};
 
-    for (auto device : devices) {
-        for (auto dtype : dtypes) {
-            for (bool R_broadcast : {false, true}) {
-                for (bool T_broadcast : {false, true}) {
-                    for (bool strided : {false, true}) {
+    for (auto device: devices) {
+        for (auto dtype: dtypes) {
+            for (bool R_broadcast: {false, true}) {
+                for (bool T_broadcast: {false, true}) {
+                    for (bool strided: {false, true}) {
                         params.push_back({dtype, device, R_broadcast, T_broadcast, strided});
                     }
                 }
@@ -282,9 +282,9 @@ TEST_F(AffineXformEdgeCases, EmptyTensor) {
 
 TEST_F(AffineXformEdgeCases, SinglePoint) {
     // Identity rotation, zero translation
-    auto R = torch::eye(3, torch::kFloat32).unsqueeze(0);  // (1, 3, 3)
+    auto R = torch::eye(3, torch::kFloat32).unsqueeze(0); // (1, 3, 3)
     auto T = torch::zeros({1, 3}, torch::kFloat32);
-    auto x = torch::tensor({{1.0f, 2.0f, 3.0f}});          // (1, 3)
+    auto x = torch::tensor({{1.0f, 2.0f, 3.0f}});         // (1, 3)
 
     auto result = example_affine_xform(R, T, x);
 
@@ -364,9 +364,9 @@ TEST_F(AffineXformPackedStorageTest, ViewsFromPacked_CPU) {
 
     // Create views: R from first 9 columns, T from last 3
     // Note: these are strided views!
-    auto R_flat = packed.narrow(1, 0, 9);   // (N, 9)
-    auto R      = R_flat.view({N, 3, 3});   // (N, 3, 3) - this creates a view
-    auto T      = packed.narrow(1, 9, 3);   // (N, 3)
+    auto R_flat = packed.narrow(1, 0, 9); // (N, 9)
+    auto R      = R_flat.view({N, 3, 3}); // (N, 3, 3) - this creates a view
+    auto T      = packed.narrow(1, 9, 3); // (N, 3)
     auto x      = torch::randn({N, 3}, torch::kFloat32);
 
     // Verify they're views (non-contiguous or sharing storage)
@@ -446,7 +446,8 @@ TEST_F(AffineXformValidation, MixedDevices) {
     }
 
     auto R = torch::randn({5, 3, 3}, torch::kFloat32);
-    auto T = torch::randn({5, 3}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    auto T =
+        torch::randn({5, 3}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
     auto x = torch::randn({5, 3}, torch::kFloat32);
 
     EXPECT_THROW(example_affine_xform(R, T, x), c10::Error);

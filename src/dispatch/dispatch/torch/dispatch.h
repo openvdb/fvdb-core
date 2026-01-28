@@ -8,7 +8,10 @@
 #define DISPATCH_DISPATCH_TORCH_DISPATCH_H
 
 #include "dispatch/dispatch_table.h"
+#include "dispatch/tag_match.h"
 #include "dispatch/torch/types.h"
+
+#include <c10/core/DeviceGuard.h>
 
 #include <functional>
 #include <string>
@@ -121,6 +124,27 @@ torch_dispatch(std::string_view function_name,
                           ": unsupported dispatch combination - ",
                           torch_format_dispatch_coords(dispatch_coord));
     }
+}
+
+template <typename Tag>
+concept cpu_tag = tag_match<Tag, torch::kCPU>;
+
+template <typename Tag>
+concept gpu_tag = tag_match<Tag, torch::kCUDA> || tag_match<Tag, torch::kPrivateUse1>;
+
+//------------------------------------------------------------------------------
+// make_device_guard: returns appropriate guard based on device
+//------------------------------------------------------------------------------
+
+// (intentionally empty - nothing needs to be defined here)
+c10::OptionalDeviceGuard
+make_device_guard(cpu_tag auto tag, torch::Tensor const &t) {
+    return c10::OptionalDeviceGuard{}; // empty guard, no-op
+}
+
+c10::OptionalDeviceGuard
+make_device_guard(gpu_tag auto tag, torch::Tensor const &t) {
+    return c10::OptionalDeviceGuard{t.device()};
 }
 
 } // namespace dispatch

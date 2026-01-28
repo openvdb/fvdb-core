@@ -186,6 +186,107 @@ template <torch::ScalarType Stype, int64_t Rank> struct accessor<Stype, contigui
     }
 };
 
+//------------------------------------------------------------------------------
+// Accessor for structured elements with broadcast support
+//------------------------------------------------------------------------------
+// Provides pointer access to elements at a given iteration index, handling:
+//   - Contiguous vs strided storage
+//   - Broadcast on iteration dimension (size(0) == 1)
+//
+// Template parameters:
+//   ElementRank - rank of element shape (1 for vectors, 2 for matrices)
+//
+// Usage:
+//   auto acc = element_accessor<2>::from_tensor(tag<dev, stype, contig>{}, tensor);
+//   T* ptr = acc.at(n);  // pointer to element at iteration index n
+
+template <int64_t ElementRank> struct element_accessor {
+    //--------------------------------------------------------------------------
+    // Contiguous accessor type
+    //--------------------------------------------------------------------------
+    template <torch::ScalarType Stype> struct contiguous {
+        using value_type = torch_scalar_cpp_type_t<Stype>;
+
+        value_type *data;
+        int64_t element_size; // product of element shape dimensions
+        int64_t iter_size;    // size of iteration dimension (for broadcast check)
+
+        // Get pointer to element at iteration index n
+        __hostdev__ value_type *
+        at(int64_t n) const {
+            // Handle broadcast: if iter_size == 1, always use index 0
+            int64_t const idx = (iter_size == 1) ? 0 : n;
+            return data + idx * element_size;
+        }
+    };
+
+    //--------------------------------------------------------------------------
+    // Strided accessor type
+    //--------------------------------------------------------------------------
+    template <torch::ScalarType Stype> struct strided {
+        using value_type = torch_scalar_cpp_type_t<Stype>;
+
+        static constexpr int64_t total_rank = 1 + ElementRank; // iteration dim + element dims
+
+        value_type *data;
+        int64_t strides[total_rank];
+        int64_t sizes[total_rank];
+
+        // Get pointer to start of element at iteration index n
+        // For strided tensors, this returns a pointer to the first value of the element
+        // The caller must use inner strides to access within the element
+        __hostdev__ value_type *
+        at(int64_t n) const {
+            // Handle broadcast: if sizes[0] == 1, always use index 0
+            int64_t const idx = (sizes[0] == 1) ? 0 : n;
+            return data + idx * strides[0];
+        }
+
+        // Get stride for element dimension d (0-indexed within element shape)
+        __hostdev__ int64_t
+        element_stride(int64_t d) const {
+            return strides[1 + d];
+        }
+    };
+
+    //--------------------------------------------------------------------------
+    // Factory: contiguous specialization
+    //--------------------------------------------------------------------------
+    template <torch::DeviceType Dev, torch::ScalarType Stype, contiguity Contig>
+        requires(Contig == contiguity::contiguous)
+    static contiguous<Stype>
+    from_tensor(tag<Dev, Stype, Contig>, torch::Tensor t) {
+        using value_type = torch_scalar_cpp_type_t<Stype>;
+        contiguous<Stype> acc;
+        acc.data      = t.data_ptr<value_type>();
+        acc.iter_size = t.size(0);
+
+        // Compute element size as product of dimensions after the first
+        acc.element_size = 1;
+        for (int64_t d = 1; d < t.dim(); ++d) {
+            acc.element_size *= t.size(d);
+        }
+        return acc;
+    }
+
+    //--------------------------------------------------------------------------
+    // Factory: strided specialization
+    //--------------------------------------------------------------------------
+    template <torch::DeviceType Dev, torch::ScalarType Stype, contiguity Contig>
+        requires(Contig == contiguity::strided)
+    static strided<Stype>
+    from_tensor(tag<Dev, Stype, Contig>, torch::Tensor t) {
+        using value_type = torch_scalar_cpp_type_t<Stype>;
+        strided<Stype> acc;
+        acc.data = t.data_ptr<value_type>();
+        for (int64_t d = 0; d < strided<Stype>::total_rank; ++d) {
+            acc.strides[d] = t.stride(d);
+            acc.sizes[d]   = t.size(d);
+        }
+        return acc;
+    }
+};
+
 } // namespace dispatch
 
 #endif // DISPATCH_DISPATCH_TORCH_ACCESSORS_H

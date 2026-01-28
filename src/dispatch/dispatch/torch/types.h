@@ -32,6 +32,45 @@ using torch_cpu_cuda_device_axis = axis<torch::kCPU, torch::kCUDA>;
 using torch_full_device_axis     = axis<torch::kCPU, torch::kCUDA, torch::kPrivateUse1>;
 
 //------------------------------------------------------------------------------
+// Device type classification - compile-time
+//------------------------------------------------------------------------------
+
+template <torch::DeviceType D> constexpr bool torch_is_cpu_device_v = (D == torch::kCPU);
+
+template <torch::DeviceType D>
+concept torch_cpu_device = torch_is_cpu_device_v<D>;
+
+template <torch::DeviceType D> constexpr bool torch_is_cuda_device_v = (D == torch::kCUDA);
+
+template <torch::DeviceType D>
+concept torch_cuda_device = torch_is_cuda_device_v<D>;
+
+template <torch::DeviceType D>
+constexpr bool torch_is_gpu_device_v = (D == torch::kCUDA || D == torch::kPrivateUse1);
+
+template <torch::DeviceType D>
+concept torch_gpu_device = torch_is_gpu_device_v<D>;
+
+//------------------------------------------------------------------------------
+// Device type classification - runtime
+//------------------------------------------------------------------------------
+
+inline bool
+is_torch_cpu_device(torch::DeviceType dev) {
+    return dev == torch::kCPU;
+}
+
+inline bool
+is_torch_cuda_device(torch::DeviceType dev) {
+    return dev == torch::kCUDA;
+}
+
+inline bool
+is_torch_gpu_device(torch::DeviceType dev) {
+    return dev == torch::kCUDA || dev == torch::kPrivateUse1;
+}
+
+//------------------------------------------------------------------------------
 // Scalar type axes
 //------------------------------------------------------------------------------
 
