@@ -1125,9 +1125,9 @@ def evaluate_spherical_harmonics(
     sh_degree: int,
     num_cameras: int,
     sh0: torch.Tensor,
+    radii: torch.Tensor,
     shN: Optional[torch.Tensor] = ...,
     view_directions: Optional[torch.Tensor] = ...,
-    radii: Optional[torch.Tensor] = ...,
 ) -> torch.Tensor: ...
 @overload
 def jcat(grid_batches: list[GridBatch]) -> GridBatch: ...

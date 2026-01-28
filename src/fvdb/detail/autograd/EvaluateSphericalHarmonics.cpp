@@ -58,11 +58,12 @@ EvaluateSphericalHarmonics::backward(EvaluateSphericalHarmonics::AutogradContext
     Variable viewDirs  = saved.at(0);
     Variable shNCoeffs = saved.at(1);
 
-    const int shDegreeToUse          = static_cast<int>(ctx->saved_data["shDegreeToUse"].toInt());
-    const int numCameras             = static_cast<int>(ctx->saved_data["numCameras"].toInt());
-    const int numGaussians           = static_cast<int>(ctx->saved_data["numGaussians"].toInt());
-    const bool hasRadii              = ctx->saved_data["hasRadii"].toBool();
-    const bool computeDLossDViewDirs = ctx->needs_input_grad(1);
+    const int shDegreeToUse = static_cast<int>(ctx->saved_data["shDegreeToUse"].toInt());
+    const int numCameras    = static_cast<int>(ctx->saved_data["numCameras"].toInt());
+    const int numGaussians  = static_cast<int>(ctx->saved_data["numGaussians"].toInt());
+    const bool hasRadii     = ctx->saved_data["hasRadii"].toBool();
+    // Only compute viewDirs gradients if viewDirs is defined and requires grad
+    const bool computeDLossDViewDirs = viewDirs.defined() && viewDirs.requires_grad();
 
     // Radii is only saved if it was defined in forward
     Variable radii = hasRadii ? saved.at(2) : torch::Tensor();
