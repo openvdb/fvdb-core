@@ -326,13 +326,13 @@ TEST_F(GaussianProjectionUTTestFixture,
 
     distortionModel = DistortionModel::OPENCV_RADTAN_5;
     // [k1..k6,p1,p2,s1..s4] (use polynomial by setting k4..k6 = 0, and no thin-prism by zeroing s*)
-    distortionCoeffs       = torch::zeros({C, 12}, torch::kFloat32);
-    auto distortionCoeffsAcc       = distortionCoeffs.accessor<float, 2>();
-    distortionCoeffsAcc[0][0]      = k1;
-    distortionCoeffsAcc[0][1]      = k2;
-    distortionCoeffsAcc[0][2]      = k3;
-    distortionCoeffsAcc[0][6]      = p1;
-    distortionCoeffsAcc[0][7]      = p2;
+    distortionCoeffs          = torch::zeros({C, 12}, torch::kFloat32);
+    auto distortionCoeffsAcc  = distortionCoeffs.accessor<float, 2>();
+    distortionCoeffsAcc[0][0] = k1;
+    distortionCoeffsAcc[0][1] = k2;
+    distortionCoeffsAcc[0][2] = k3;
+    distortionCoeffsAcc[0][6] = p1;
+    distortionCoeffsAcc[0][7] = p2;
 
     imageWidth  = 800;
     imageHeight = 600;
@@ -416,8 +416,8 @@ TEST_F(GaussianProjectionUTTestFixture,
     const float p1 = -0.0007f;
     const float p2 = 0.0003f;
 
-    distortionModel        = DistortionModel::OPENCV_RATIONAL_8;
-    distortionCoeffs       = torch::zeros({C, 12}, torch::kFloat32);
+    distortionModel           = DistortionModel::OPENCV_RATIONAL_8;
+    distortionCoeffs          = torch::zeros({C, 12}, torch::kFloat32);
     auto distortionCoeffsAcc  = distortionCoeffs.accessor<float, 2>();
     distortionCoeffsAcc[0][0] = k1;
     distortionCoeffsAcc[0][1] = k2;
@@ -514,8 +514,8 @@ TEST_F(GaussianProjectionUTTestFixture,
     const float s3 = 0.0005f;
     const float s4 = 0.0001f;
 
-    distortionModel         = DistortionModel::OPENCV_THIN_PRISM_12;
-    distortionCoeffs        = torch::zeros({C, 12}, torch::kFloat32);
+    distortionModel            = DistortionModel::OPENCV_THIN_PRISM_12;
+    distortionCoeffs           = torch::zeros({C, 12}, torch::kFloat32);
     auto distortionCoeffsAcc   = distortionCoeffs.accessor<float, 2>();
     distortionCoeffsAcc[0][0]  = k1;
     distortionCoeffsAcc[0][1]  = k2;
@@ -613,8 +613,8 @@ TEST_F(GaussianProjectionUTTestFixture,
     const float s3 = 0.0005f;
     const float s4 = 0.0001f;
 
-    distortionModel        = DistortionModel::OPENCV_RADTAN_THIN_PRISM_9;
-    distortionCoeffs       = torch::zeros({C, 12}, torch::kFloat32);
+    distortionModel           = DistortionModel::OPENCV_RADTAN_THIN_PRISM_9;
+    distortionCoeffs          = torch::zeros({C, 12}, torch::kFloat32);
     auto distortionCoeffsAcc  = distortionCoeffs.accessor<float, 2>();
     distortionCoeffsAcc[0][0] = k1;
     distortionCoeffsAcc[0][1] = k2;
@@ -700,8 +700,8 @@ TEST_F(GaussianProjectionUTTestFixture, RadTanThinPrism_RejectsNonZeroK456) {
     projectionMatricesAcc[0][2][2] = 1.0f;
     projectionMatrices             = projectionMatrices.cuda();
 
-    distortionModel        = DistortionModel::OPENCV_RADTAN_THIN_PRISM_9;
-    distortionCoeffs       = torch::zeros({C, 12}, torch::kFloat32);
+    distortionModel           = DistortionModel::OPENCV_RADTAN_THIN_PRISM_9;
+    distortionCoeffs          = torch::zeros({C, 12}, torch::kFloat32);
     auto distortionCoeffsAcc  = distortionCoeffs.accessor<float, 2>();
     distortionCoeffsAcc[0][0] = 0.01f;  // k1
     distortionCoeffsAcc[0][3] = 0.1f;   // k4 (invalid for RADTAN_THIN_PRISM_9)
@@ -905,8 +905,8 @@ TEST_F(GaussianProjectionUTTestFixture, RollingShutterNone_DepthUsesStartPoseNot
         torch::eye(4, torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(0).expand({C, 4, 4});
     worldToCamMatricesEnd = worldToCamMatricesStart.clone();
     // End pose translates camera forward in +z, so p_cam.z is larger at t=1.0.
-    auto worldToCamEndAcc       = worldToCamMatricesEnd.accessor<float, 3>();
-    worldToCamEndAcc[0][2][3]   = 1.0f;
+    auto worldToCamEndAcc     = worldToCamMatricesEnd.accessor<float, 3>();
+    worldToCamEndAcc[0][2][3] = 1.0f;
 
     const float fx = 100.0f, fy = 100.0f, cx = 320.0f, cy = 240.0f;
     projectionMatrices = torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32));

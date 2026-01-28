@@ -372,7 +372,7 @@ template <typename ScalarType> struct ProjectionForwardUT {
     }
 
     inline __device__ void
-    projectionForward(int idx) {
+    projectionForward(int64_t idx) {
         if (idx >= C * N) {
             return;
         }
