@@ -19,7 +19,7 @@ struct EvaluateSphericalHarmonics : public torch::autograd::Function<EvaluateSph
     forward(AutogradContext *ctx,
             const ssize_t shDegreeToUse,
             const size_t numCameras,
-            const std::optional<Variable> viewDirections, // [N, 3] or empty for deg 0
+            const std::optional<Variable> viewDirections, // [C, N, 3] or empty for deg 0
             const Variable &sh0Coeffs,                    // [N, 1, D]
             const std::optional<Variable> &shNCoeffs,     // [N, K-1, D]
             const Variable &radii                         // [C, N]

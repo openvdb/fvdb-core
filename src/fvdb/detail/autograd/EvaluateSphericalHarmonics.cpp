@@ -42,7 +42,7 @@ EvaluateSphericalHarmonics::backward(EvaluateSphericalHarmonics::AutogradContext
     FVDB_FUNC_RANGE_WITH_NAME("EvaluateSphericalHarmonics::backward");
 
     // ensure the gradients are contiguous if they are not None
-    auto const dLossdColors =
+    auto const dLossDColors =
         gradOutput.at(0).defined() ? gradOutput.at(0).contiguous() : gradOutput.at(0);
 
     VariableList saved = ctx->get_saved_variables();
@@ -56,13 +56,13 @@ EvaluateSphericalHarmonics::backward(EvaluateSphericalHarmonics::AutogradContext
     // Only compute viewDirs gradients if viewDirs is defined and requires grad
     const bool computeDLossDViewDirs = viewDirs.defined() && viewDirs.requires_grad();
 
-    auto variables           = FVDB_DISPATCH_KERNEL(dLossdColors.device(), [&]() {
+    auto variables           = FVDB_DISPATCH_KERNEL(dLossDColors.device(), [&]() {
         return ops::dispatchSphericalHarmonicsBackward<DeviceTag>(shDegreeToUse,
                                                                   numCameras,
                                                                   numGaussians,
                                                                   viewDirs,
                                                                   shNCoeffs,
-                                                                  dLossdColors,
+                                                                  dLossDColors,
                                                                   radii,
                                                                   computeDLossDViewDirs);
     });
