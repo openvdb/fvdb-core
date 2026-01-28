@@ -1,7 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-// CRTP base class and helper for unary element-wise operations.
+// Wrapper for unary element-wise operations.
 // Reduces boilerplate for simple ops like relu, gelu, sigmoid, etc.
 //
 // Supports N-dimensional tensors with configurable iteration policy.
@@ -36,14 +36,14 @@
 namespace dispatch {
 
 //------------------------------------------------------------------------------
-// CRTP base class for unary element-wise operations
+// Wrapper for unary element-wise operations
 //------------------------------------------------------------------------------
-// Derived class must provide:
+// ScalarOp must provide:
 //   template <typename T>
 //   __hostdev__ static T scalar_op(T x);
 //
 // Template parameters:
-//   Derived    - CRTP derived class
+//   ScalarOp   - Class providing the scalar_op static method
 //   DeviceAxis - Axis of supported devices (e.g., torch_full_device_axis)
 //   StypeAxis  - Axis of supported scalar types (e.g., torch_full_float_stype_axis)
 //   Rank       - Tensor rank (1 for 1D, 2 for 2D, etc.)
@@ -52,33 +52,37 @@ namespace dispatch {
 //   BlockDim   - CUDA threads per block (default: 256)
 //
 // Usage:
-//   struct my_op : unary_elementwise_op<my_op,
-//                                        torch_full_device_axis,
-//                                        torch_full_float_stype_axis, 1> {
+//   struct my_scalar_op {
 //       template <typename T>
 //       __hostdev__ static T scalar_op(T x) { return my_scalar_func(x); }
 //   };
 //
+//   using my_op = unary_elementwise<my_scalar_op,
+//                                   torch_full_device_axis,
+//                                   torch_full_float_stype_axis, 1>;
+//
+//   torch::Tensor result = my_op::map(input, placement::out_of_place, "my_op");
+//
 // For 2D tensors:
-//   struct my_2d_op : unary_elementwise_op<my_2d_op,
-//                                           torch_full_device_axis,
-//                                           torch_full_float_stype_axis, 2> { ... };
+//   using my_2d_op = unary_elementwise<my_scalar_op,
+//                                      torch_full_device_axis,
+//                                      torch_full_float_stype_axis, 2>;
 //
 // With custom tuning:
-//   struct my_op : unary_elementwise_op<my_op,
-//                                        torch_full_device_axis,
-//                                        torch_full_float_stype_axis, 1,
-//                                        row_major,
-//                                        /*GrainSize=*/8, /*BlockDim=*/128> { ... };
+//   using my_op = unary_elementwise<my_scalar_op,
+//                                   torch_full_device_axis,
+//                                   torch_full_float_stype_axis, 1,
+//                                   row_major,
+//                                   /*GrainSize=*/8, /*BlockDim=*/128>;
 
-template <typename Derived,
+template <typename ScalarOp,
           typename DeviceAxis,
           typename StypeAxis,
           int64_t Rank,
           typename IterPolicy = row_major,
           int64_t GrainSize   = for_each_config::default_grain_size,
           int BlockDim        = for_each_config::default_block_dim>
-struct unary_elementwise_op {
+struct unary_elementwise {
     static constexpr int64_t rank = Rank;
 
     template <torch::DeviceType dev, torch::ScalarType stype, contiguity contig>
@@ -100,7 +104,7 @@ struct unary_elementwise_op {
                                           in_tensor.numel(),
                                           [in_acc, out_acc]
                                           __hostdev__(tag<dev>, int64_t idx) mutable {
-                                              out_acc[idx] = Derived::scalar_op(in_acc[idx]);
+                                              out_acc[idx] = ScalarOp::scalar_op(in_acc[idx]);
                                           });
         } else {
             // Strided path: N-D iteration with stride-based access
@@ -114,56 +118,42 @@ struct unary_elementwise_op {
                 shape,
                 [in_acc, out_acc]
                 __hostdev__(tag<dev>, std::array<int64_t, Rank> const &idx) mutable {
-                    out_acc(idx) = Derived::scalar_op(in_acc(idx));
+                    out_acc(idx) = ScalarOp::scalar_op(in_acc(idx));
                 });
         }
     }
 
     using space      = axes<DeviceAxis, StypeAxis, full_contiguity_axis>;
     using dispatcher = dispatch_table<space, void(torch::Tensor, torch::Tensor)>;
-};
 
-//------------------------------------------------------------------------------
-// Implementation helper for unary element-wise operations
-//------------------------------------------------------------------------------
-// Handles: validation, empty tensors, output allocation, dispatch.
-//
-// Usage:
-//   torch::Tensor my_func(torch::Tensor input) {
-//       return unary_elementwise_impl<my_op>(input, placement::out_of_place, "my_func");
-//   }
+    //--------------------------------------------------------------------------
+    // Map the scalar operation over the input tensor
+    //--------------------------------------------------------------------------
+    // Handles: validation, empty tensors, output allocation, dispatch.
+    static torch::Tensor
+    map(torch::Tensor input, placement plc, char const *name) {
+        static dispatcher const table{dispatcher::template from_op<unary_elementwise>(), space{}};
 
-template <typename Op>
-torch::Tensor
-unary_elementwise_impl(torch::Tensor input, placement plc, char const *name) {
-    static typename Op::dispatcher const table{Op::dispatcher::template from_op<Op>(),
-                                               typename Op::space{}};
+        // Validate input rank
+        TORCH_CHECK_VALUE(
+            input.dim() == rank, name, ": expected ", rank, "D tensor, got ", input.dim(), "D");
 
-    // Validate input rank
-    TORCH_CHECK_VALUE(
-        input.dim() == Op::rank, name, ": expected ", Op::rank, "D tensor, got ", input.dim(), "D");
-
-    // Handle empty tensor case
-    if (input.numel() == 0) {
-        if (plc == placement::in_place) {
-            return input;
-        } else {
-            return torch::empty_like(input);
+        // Handle empty tensor case
+        if (input.numel() == 0) {
+            return (plc == placement::in_place) ? input : torch::empty_like(input);
         }
+
+        auto output = (plc == placement::in_place) ? input : torch::empty_like(input);
+
+        auto const dev    = input.device().type();
+        auto const st     = input.scalar_type();
+        auto const contig = combined_contiguity(input, output);
+
+        torch_dispatch(name, table, std::make_tuple(dev, st, contig), input, output);
+
+        return output;
     }
-
-    auto output = (plc == placement::in_place) ? input : torch::empty_like(input);
-
-    auto const dev    = input.device().type();
-    auto const st     = input.scalar_type();
-    auto const contig = combined_contiguity(input, output);
-
-    auto const dispatch_coord = std::make_tuple(dev, st, contig);
-
-    torch_dispatch(name, table, dispatch_coord, input, output);
-
-    return output;
-}
+};
 
 } // namespace dispatch
 

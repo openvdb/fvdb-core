@@ -11,8 +11,7 @@ namespace dispatch_examples {
 
 using namespace dispatch;
 
-struct gelu_op
-    : unary_elementwise_op<gelu_op, torch_full_device_axis, torch_full_float_stype_axis, 1> {
+struct gelu_scalar_op {
     template <typename T>
     __hostdev__ static T
     scalar_op(T x) {
@@ -20,14 +19,17 @@ struct gelu_op
     }
 };
 
+using gelu_op =
+    unary_elementwise<gelu_scalar_op, torch_full_device_axis, torch_full_float_stype_axis, 1>;
+
 torch::Tensor
 example_gelu_for_each(torch::Tensor input) {
-    return unary_elementwise_impl<gelu_op>(input, placement::out_of_place, "example_gelu_for_each");
+    return gelu_op::map(input, placement::out_of_place, "example_gelu_for_each");
 }
 
 torch::Tensor
 example_gelu_for_each_(torch::Tensor input) {
-    return unary_elementwise_impl<gelu_op>(input, placement::in_place, "example_gelu_for_each_");
+    return gelu_op::map(input, placement::in_place, "example_gelu_for_each_");
 }
 
 } // namespace dispatch_examples
