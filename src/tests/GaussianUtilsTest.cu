@@ -231,6 +231,35 @@ TEST(GaussianUtilsTest, RotationMatrixToQuaternion_RoundTrip_DeterministicSample
     }
 }
 
+TEST(GaussianUtilsTest, RotationMatrixToQuaternion_DegenerateInput_ReturnsFiniteIdentity) {
+    // Construct a deliberately degenerate/NaN matrix which previously could trigger s=0 with a
+    // finite numerator, producing inf/NaN and bypassing the "degenerate input" fallback.
+#if !defined(__CUDA_ARCH__)
+    const float nan = std::nanf("");
+#else
+    const float nan = nanf("");
+#endif
+
+    // Force comparisons/trace paths to be ill-defined (NaN), but keep some off-diagonals finite.
+    // This makes `t` clamp to 0 -> s=0, while (R10-R01) is finite and non-zero.
+    const Mat3f R(nan, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f);
+
+    const Vec4f q = rotationMatrixToQuaternion<float>(R);
+
+#if !defined(__CUDA_ARCH__)
+    EXPECT_TRUE(std::isfinite(q[0]));
+    EXPECT_TRUE(std::isfinite(q[1]));
+    EXPECT_TRUE(std::isfinite(q[2]));
+    EXPECT_TRUE(std::isfinite(q[3]));
+#endif
+
+    // We choose identity as the explicit safe fallback for degenerate inputs.
+    EXPECT_NEAR(q[0], 1.0f, 1e-6f);
+    EXPECT_NEAR(q[1], 0.0f, 1e-6f);
+    EXPECT_NEAR(q[2], 0.0f, 1e-6f);
+    EXPECT_NEAR(q[3], 0.0f, 1e-6f);
+}
+
 TEST(GaussianUtilsTest, InterpolatePose_NlerpMatchesReference) {
     const float pi      = 3.14159265358979323846f;
     const Vec4f q_start = axisAngleToQuatWxyz(1.0f, 0.0f, 0.0f, pi / 3.0f);        // 60deg about X

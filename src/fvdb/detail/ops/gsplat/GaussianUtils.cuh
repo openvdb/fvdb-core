@@ -63,38 +63,64 @@ rotationMatrixToQuaternion(const nanovdb::math::Mat3<T> &R) {
     T trace = R[0][0] + R[1][1] + R[2][2];
     T x, y, z, w;
 
+    // Guard against division by ~0 in the branch formulas below.
+    // This can happen for degenerate / NaN inputs where `t` underflows to 0 or is clamped to 0,
+    // causing `s = 2*sqrt(t)` to be 0, while the numerators remain finite -> inf/NaN.
+    const T s_min = (sizeof(T) == sizeof(float)) ? T(1e-8) : T(1e-12);
+
     if (trace > 0) {
         T t = trace + T(1);
         t   = (t > T(0)) ? t : T(0);
         T s = sqrt(t) * T(2); // S=4*qw
-        w   = T(0.25) * s;
-        x   = (R[2][1] - R[1][2]) / s;
-        y   = (R[0][2] - R[2][0]) / s;
-        z   = (R[1][0] - R[0][1]) / s;
+        if (!(s > s_min)) {
+            // Degenerate input; fall back to identity.
+            w = T(1);
+            x = y = z = T(0);
+        } else {
+            w = T(0.25) * s;
+            x = (R[2][1] - R[1][2]) / s;
+            y = (R[0][2] - R[2][0]) / s;
+            z = (R[1][0] - R[0][1]) / s;
+        }
     } else if ((R[0][0] > R[1][1]) && (R[0][0] > R[2][2])) {
         T t = T(1) + R[0][0] - R[1][1] - R[2][2];
         t   = (t > T(0)) ? t : T(0);
         T s = sqrt(t) * T(2); // S=4*qx
-        w   = (R[2][1] - R[1][2]) / s;
-        x   = T(0.25) * s;
-        y   = (R[0][1] + R[1][0]) / s;
-        z   = (R[0][2] + R[2][0]) / s;
+        if (!(s > s_min)) {
+            w = T(1);
+            x = y = z = T(0);
+        } else {
+            w = (R[2][1] - R[1][2]) / s;
+            x = T(0.25) * s;
+            y = (R[0][1] + R[1][0]) / s;
+            z = (R[0][2] + R[2][0]) / s;
+        }
     } else if (R[1][1] > R[2][2]) {
         T t = T(1) + R[1][1] - R[0][0] - R[2][2];
         t   = (t > T(0)) ? t : T(0);
         T s = sqrt(t) * T(2); // S=4*qy
-        w   = (R[0][2] - R[2][0]) / s;
-        x   = (R[0][1] + R[1][0]) / s;
-        y   = T(0.25) * s;
-        z   = (R[1][2] + R[2][1]) / s;
+        if (!(s > s_min)) {
+            w = T(1);
+            x = y = z = T(0);
+        } else {
+            w = (R[0][2] - R[2][0]) / s;
+            x = (R[0][1] + R[1][0]) / s;
+            y = T(0.25) * s;
+            z = (R[1][2] + R[2][1]) / s;
+        }
     } else {
         T t = T(1) + R[2][2] - R[0][0] - R[1][1];
         t   = (t > T(0)) ? t : T(0);
         T s = sqrt(t) * T(2); // S=4*qz
-        w   = (R[1][0] - R[0][1]) / s;
-        x   = (R[0][2] + R[2][0]) / s;
-        y   = (R[1][2] + R[2][1]) / s;
-        z   = T(0.25) * s;
+        if (!(s > s_min)) {
+            w = T(1);
+            x = y = z = T(0);
+        } else {
+            w = (R[1][0] - R[0][1]) / s;
+            x = (R[0][2] + R[2][0]) / s;
+            y = (R[1][2] + R[2][1]) / s;
+            z = T(0.25) * s;
+        }
     }
 
     // Normalize to guard against accumulated FP error / slightly non-orthonormal inputs.
