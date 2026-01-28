@@ -138,7 +138,7 @@ TEST_F(GaussianMCMCAddNoiseTest, ZeroNoiseScaleNoOp) {
     EXPECT_TRUE(torch::allclose(means, origMeans));
 }
 
-TEST_F(GaussianMCMCAddNoiseTest, CpuAndPrivateUseNotImplemented) {
+TEST_F(GaussianMCMCAddNoiseTest, CpuNotImplemented) {
     auto means                = torch::zeros({1, 3}, fvdb::test::tensorOpts<float>(torch::kCPU));
     const auto logScales      = torch::zeros({1, 3}, fvdb::test::tensorOpts<float>(torch::kCPU));
     const auto logitOpacities = torch::zeros({1}, fvdb::test::tensorOpts<float>(torch::kCPU));
@@ -147,14 +147,6 @@ TEST_F(GaussianMCMCAddNoiseTest, CpuAndPrivateUseNotImplemented) {
 
     EXPECT_THROW((fvdb::detail::ops::dispatchGaussianMCMCAddNoise<torch::kCPU>(
                      means, logScales, logitOpacities, quats, 1.0f, 0.005, 100)),
-                 c10::Error);
-
-    auto meansCuda          = means.cuda();
-    auto logScalesCuda      = logScales.cuda();
-    auto logitOpacitiesCuda = logitOpacities.cuda();
-    auto quatsCuda          = quats.cuda();
-    EXPECT_THROW((fvdb::detail::ops::dispatchGaussianMCMCAddNoise<torch::kPrivateUse1>(
-                     meansCuda, logScalesCuda, logitOpacitiesCuda, quatsCuda, 1.0f, 0.005, 100.0)),
                  c10::Error);
 }
 

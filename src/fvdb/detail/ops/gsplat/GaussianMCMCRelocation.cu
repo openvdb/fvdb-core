@@ -6,6 +6,7 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -15,11 +16,17 @@
 #include <algorithm>
 
 namespace fvdb::detail::ops {
+
+using fvdb::detail::deviceChunk;
+using fvdb::detail::mergeStreams;
+
 namespace {
 
 template <typename ScalarType>
 __global__ void
-gaussianRelocationKernel(fvdb::TorchRAcc64<ScalarType, 2> logScales,
+gaussianRelocationKernel(int64_t localToGlobalOffset,
+                         int64_t localSize,
+                         fvdb::TorchRAcc64<ScalarType, 2> logScales,
                          fvdb::TorchRAcc64<ScalarType, 1> logitOpacities,
                          fvdb::TorchRAcc64<int32_t, 1> ratios,
                          fvdb::TorchRAcc64<ScalarType, 2> binomialCoeffs,
@@ -28,7 +35,8 @@ gaussianRelocationKernel(fvdb::TorchRAcc64<ScalarType, 2> logScales,
                          std::size_t nMax,
                          float minOpacity) {
     const auto N = logScales.size(0);
-    for (uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < N;
+    for (uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x + localToGlobalOffset;
+         idx < localSize + localToGlobalOffset;
          idx += blockDim.x * gridDim.x) {
         // Clamp nIdx to prevent out-of-bounds access to binomialCoeffs
         const int32_t nIdx = min(ratios[idx], static_cast<int32_t>(nMax));
@@ -60,23 +68,24 @@ gaussianRelocationKernel(fvdb::TorchRAcc64<ScalarType, 2> logScales,
 }
 
 template <typename ScalarType>
-std::tuple<torch::Tensor, torch::Tensor>
+void
 launchGaussianRelocation(const torch::Tensor &logScales,      // [N, 3]
                          const torch::Tensor &logitOpacities, // [N]
                          const torch::Tensor &ratios,         // [N]
                          const torch::Tensor &binomialCoeffs, // [nMax, nMax]
+                         torch::Tensor &logScalesNew,         // [N, 3] output
+                         torch::Tensor &logitOpacitiesNew,    // [N] output
                          const int nMax,
-                         ScalarType minOpacity) {
-    const auto N = logitOpacities.size(0);
-
-    auto logitOpacitiesNew = torch::empty_like(logitOpacities);
-    auto logScalesNew      = torch::empty_like(logScales);
-
-    const int blockDim                = DEFAULT_BLOCK_DIM;
-    const int gridDim                 = fvdb::GET_BLOCKS(N, blockDim);
-    const at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+                         ScalarType minOpacity,
+                         int64_t offset,
+                         int64_t size,
+                         cudaStream_t stream) {
+    const int blockDim = DEFAULT_BLOCK_DIM;
+    const int gridDim  = fvdb::GET_BLOCKS(size, blockDim);
 
     gaussianRelocationKernel<ScalarType><<<gridDim, blockDim, 0, stream>>>(
+        offset,
+        size,
         logScales.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>(),
         logitOpacities.packed_accessor64<ScalarType, 1, torch::RestrictPtrTraits>(),
         ratios.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>(),
@@ -87,7 +96,6 @@ launchGaussianRelocation(const torch::Tensor &logScales,      // [N, 3]
         minOpacity);
 
     C10_CUDA_KERNEL_LAUNCH_CHECK();
-    return std::make_tuple(logitOpacitiesNew, logScalesNew);
 }
 
 } // namespace
@@ -123,13 +131,26 @@ dispatchGaussianRelocation<torch::kCUDA>(const torch::Tensor &logScales,      //
     TORCH_CHECK_VALUE(ratios.size(0) == N, "ratios must have shape [N]");
     TORCH_CHECK_VALUE(ratios.dtype() == torch::kInt32, "ratios must be an int32 tensor");
 
+    // Allocate output tensors
+    auto logitOpacitiesNew = torch::empty_like(logitOpacities);
+    auto logScalesNew      = torch::empty_like(logScales);
+
+    const at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+
     // Only float is supported for now, matching the kernel math (powf/rsqrtf).
-    return launchGaussianRelocation<float>(logScales.contiguous(),
-                                           logitOpacities.contiguous(),
-                                           ratios.contiguous(),
-                                           binomialCoeffs,
-                                           nMax,
-                                           minOpacity);
+    launchGaussianRelocation<float>(logScales.contiguous(),
+                                    logitOpacities.contiguous(),
+                                    ratios.contiguous(),
+                                    binomialCoeffs,
+                                    logScalesNew,
+                                    logitOpacitiesNew,
+                                    nMax,
+                                    minOpacity,
+                                    0,
+                                    N,
+                                    stream);
+
+    return std::make_tuple(logitOpacitiesNew, logScalesNew);
 }
 
 template <>
@@ -140,8 +161,60 @@ dispatchGaussianRelocation<torch::kPrivateUse1>(const torch::Tensor &logScales, 
                                                 const torch::Tensor &binomialCoeffs, // [nMax, nMax]
                                                 const int nMax,
                                                 float minOpacity) {
-    // TODO: Implement PrivateUse1
-    TORCH_CHECK_NOT_IMPLEMENTED(false, "PrivateUse1 implementation not available");
+    FVDB_FUNC_RANGE();
+
+    const auto N = logScales.size(0);
+
+    // Input validation (same as CUDA version)
+    TORCH_CHECK_VALUE(binomialCoeffs.is_privateuseone(),
+                      "binomialCoeffs must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(binomialCoeffs.dim() == 2, "binomialCoeffs must have shape [nMax, nMax]");
+    TORCH_CHECK_VALUE(binomialCoeffs.size(0) == nMax,
+                      "binomialCoeffs must have shape [nMax, nMax]");
+    TORCH_CHECK_VALUE(binomialCoeffs.size(1) == nMax,
+                      "binomialCoeffs must have shape [nMax, nMax]");
+    TORCH_CHECK_VALUE(logScales.is_privateuseone(), "logScales must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(logScales.dim() == 2, "logScales must have shape [N, 3]");
+    TORCH_CHECK_VALUE(logScales.size(0) == N, "logScales must have shape [N, 3]");
+    TORCH_CHECK_VALUE(logScales.size(1) == 3, "logScales must have shape [N, 3]");
+    TORCH_CHECK_VALUE(logitOpacities.is_privateuseone(),
+                      "logitOpacities must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(logitOpacities.dim() == 1, "logitOpacities must have shape [N]");
+    TORCH_CHECK_VALUE(logitOpacities.size(0) == N, "logitOpacities must have shape [N]");
+    TORCH_CHECK_VALUE(ratios.is_privateuseone(), "ratios must be a PrivateUse1 tensor");
+    TORCH_CHECK_VALUE(ratios.dim() == 1, "ratios must have shape [N]");
+    TORCH_CHECK_VALUE(ratios.size(0) == N, "ratios must have shape [N]");
+    TORCH_CHECK_VALUE(ratios.dtype() == torch::kInt32, "ratios must be an int32 tensor");
+
+    // Allocate output tensors once (unified memory accessible from all devices)
+    auto logitOpacitiesNew = torch::empty_like(logitOpacities);
+    auto logScalesNew      = torch::empty_like(logScales);
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+
+        int64_t deviceOffset, deviceSize;
+        std::tie(deviceOffset, deviceSize) = deviceChunk(N, deviceId);
+
+        if (deviceSize > 0) {
+            launchGaussianRelocation<float>(logScales.contiguous(),
+                                            logitOpacities.contiguous(),
+                                            ratios.contiguous(),
+                                            binomialCoeffs,
+                                            logScalesNew,
+                                            logitOpacitiesNew,
+                                            nMax,
+                                            minOpacity,
+                                            deviceOffset,
+                                            deviceSize,
+                                            stream);
+        }
+    }
+
+    mergeStreams();
+
+    return std::make_tuple(logitOpacitiesNew, logScalesNew);
 }
 
 template <>
