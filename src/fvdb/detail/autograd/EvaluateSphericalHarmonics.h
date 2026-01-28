@@ -22,7 +22,7 @@ struct EvaluateSphericalHarmonics : public torch::autograd::Function<EvaluateSph
             const std::optional<Variable> viewDirections, // [N, 3] or empty for deg 0
             const Variable &sh0Coeffs,                    // [N, 1, D]
             const std::optional<Variable> &shNCoeffs,     // [N, K-1, D]
-            const std::optional<Variable> &radii          // [C, N] (optional)
+            const Variable &radii                         // [C, N]
     );
 
     static VariableList backward(AutogradContext *ctx, VariableList gradOutput);
