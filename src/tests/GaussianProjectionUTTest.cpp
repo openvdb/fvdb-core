@@ -678,7 +678,7 @@ TEST_F(GaussianProjectionUTTestFixture,
     EXPECT_NEAR(means2d_cpu[0][0][1].item<float>(), expected_v, 5e-3f);
 }
 
-TEST_F(GaussianProjectionUTTestFixture, RadTanThinPrism_RejectsNonZeroK456) {
+TEST_F(GaussianProjectionUTTestFixture, RadTanThinPrism_IgnoresK456EvenIfNonZero) {
     const int64_t C = 1;
 
     means     = torch::tensor({{0.1f, 0.05f, 2.0f}}, torch::kFloat32).cuda();
@@ -704,7 +704,7 @@ TEST_F(GaussianProjectionUTTestFixture, RadTanThinPrism_RejectsNonZeroK456) {
     distortionCoeffs          = torch::zeros({C, 12}, torch::kFloat32);
     auto distortionCoeffsAcc  = distortionCoeffs.accessor<float, 2>();
     distortionCoeffsAcc[0][0] = 0.01f;  // k1
-    distortionCoeffsAcc[0][3] = 0.1f;   // k4 (invalid for RADTAN_THIN_PRISM_9)
+    distortionCoeffsAcc[0][3] = 0.1f;   // k4: should be ignored for RADTAN_THIN_PRISM_9
     distortionCoeffsAcc[0][8] = 0.001f; // s1
     distortionCoeffs          = distortionCoeffs.cuda();
 
@@ -717,25 +717,37 @@ TEST_F(GaussianProjectionUTTestFixture, RadTanThinPrism_RejectsNonZeroK456) {
 
     utParams = UTParams{};
 
-    EXPECT_THROW((dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
-                                                                    quats,
-                                                                    logScales,
-                                                                    worldToCamMatricesStart,
-                                                                    worldToCamMatricesEnd,
-                                                                    projectionMatrices,
-                                                                    RollingShutterType::NONE,
-                                                                    utParams,
-                                                                    distortionModel,
-                                                                    distortionCoeffs,
-                                                                    imageWidth,
-                                                                    imageHeight,
-                                                                    eps2d,
-                                                                    nearPlane,
-                                                                    farPlane,
-                                                                    minRadius2d,
-                                                                    false,
-                                                                    false)),
-                 c10::Error);
+    const auto [radii, means2d, depths, conics, compensations] =
+        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
+                                                          quats,
+                                                          logScales,
+                                                          worldToCamMatricesStart,
+                                                          worldToCamMatricesEnd,
+                                                          projectionMatrices,
+                                                          RollingShutterType::NONE,
+                                                          utParams,
+                                                          distortionModel,
+                                                          distortionCoeffs,
+                                                          imageWidth,
+                                                          imageHeight,
+                                                          eps2d,
+                                                          nearPlane,
+                                                          farPlane,
+                                                          minRadius2d,
+                                                          false,
+                                                          false);
+
+    auto radii_cpu   = radii.cpu();
+    auto means2d_cpu = means2d.cpu();
+    EXPECT_GT(radii_cpu[0][0].item<int32_t>(), 0);
+
+    // Verify we effectively use polynomial radial + thin-prism (ignore k4..k6).
+    const float fx = 500.0f, fy = 500.0f, cx = 320.0f, cy = 240.0f;
+    const float x = 0.1f, y = 0.05f, z = 2.0f;
+    const auto [expected_u, expected_v] = projectPointWithOpenCVDistortion(
+        x, y, z, fx, fy, cx, cy, {0.01f, 0.0f, 0.0f}, {0.0f, 0.0f}, {0.001f, 0.0f, 0.0f, 0.0f});
+    EXPECT_NEAR(means2d_cpu[0][0][0].item<float>(), expected_u, 5e-3f);
+    EXPECT_NEAR(means2d_cpu[0][0][1].item<float>(), expected_v, 5e-3f);
 }
 
 TEST_F(GaussianProjectionUTTestFixture,

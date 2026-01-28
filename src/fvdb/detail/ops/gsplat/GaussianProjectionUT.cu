@@ -33,6 +33,7 @@ enum class OpenCVDistortionModel : uint8_t {
     NONE          = 0,  // no distortion
     RADTAN_5      = 5,  // k1,k2,p1,p2,k3 (polynomial radial up to r^6)
     RATIONAL_8    = 8,  // k1,k2,p1,p2,k3,k4,k5,k6 (rational radial)
+    RADTAN_THIN_9 = 9,  // RADTAN_5 + thin prism s1..s4 (polynomial radial + thin-prism)
     THIN_PRISM_12 = 12, // RATIONAL_8 + s1,s2,s3,s4
 };
 
@@ -83,6 +84,12 @@ template <typename T> struct OpenCVDistortion {
             const T k2  = coeffOrZero(radial, numRadial, 1);
             const T k3  = coeffOrZero(radial, numRadial, 2);
             radial_dist = T(1) + k1 * r2 + k2 * r4 + k3 * r6;
+        } else if (model == OpenCVDistortionModel::RADTAN_THIN_9) {
+            // Polynomial radial (same as RADTAN_5). Thin-prism terms are applied below.
+            const T k1  = coeffOrZero(radial, numRadial, 0);
+            const T k2  = coeffOrZero(radial, numRadial, 1);
+            const T k3  = coeffOrZero(radial, numRadial, 2);
+            radial_dist = T(1) + k1 * r2 + k2 * r4 + k3 * r6;
         }
 
         T x_dist = x * radial_dist;
@@ -97,7 +104,8 @@ template <typename T> struct OpenCVDistortion {
         y_dist += p1 * (r2 + T(2) * y2) + T(2) * p2 * xy;
 
         // Thin-prism distortion.
-        if (model == OpenCVDistortionModel::THIN_PRISM_12) {
+        if (model == OpenCVDistortionModel::THIN_PRISM_12 ||
+            model == OpenCVDistortionModel::RADTAN_THIN_9) {
             const T s1 = coeffOrZero(thinPrism, numThinPrism, 0);
             const T s2 = coeffOrZero(thinPrism, numThinPrism, 1);
             const T s3 = coeffOrZero(thinPrism, numThinPrism, 2);
@@ -427,16 +435,13 @@ template <typename ScalarType> struct ProjectionForwardUT {
                 distortion.numThinPrism  = 4; // s1..s4
                 distortion.model         = OpenCVDistortionModel::THIN_PRISM_12;
             } else if (mDistortionModel == DistortionModel::OPENCV_RADTAN_THIN_PRISM_9) {
-                // Polynomial radial + thin-prism.
-                // We reuse the rational+thin-prism math path; with k4..k6 == 0 it reduces to
-                // polynomial radial while still applying thin-prism terms.
                 distortion.radial        = radial;
-                distortion.numRadial     = 6; // k1..k6 (k4..k6 must be 0 by validation)
+                distortion.numRadial     = 3; // k1,k2,k3 (polynomial radial)
                 distortion.tangential    = tang;
                 distortion.numTangential = 2;
                 distortion.thinPrism     = thin;
                 distortion.numThinPrism  = 4;
-                distortion.model         = OpenCVDistortionModel::THIN_PRISM_12;
+                distortion.model         = OpenCVDistortionModel::RADTAN_THIN_9;
             } else {
                 mOutRadiiAcc[camId][gaussianId] = 0;
                 return;
@@ -734,10 +739,6 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
     TORCH_CHECK_VALUE(projectionMatrices.is_cuda(), "projectionMatrices must be a CUDA tensor");
     TORCH_CHECK_VALUE(distortionCoeffs.is_cuda(), "distortionCoeffs must be a CUDA tensor");
     TORCH_CHECK_VALUE(distortionCoeffs.dim() == 2, "distortionCoeffs must be 2D");
-    const auto max_abs = [&](const torch::Tensor &t) -> float {
-        return (t.numel() == 0) ? 0.0f : t.abs().max().item<float>();
-    };
-    constexpr float kCoeffTol = 1e-8f;
     if (distortionModel == DistortionModel::NONE) {
         // Accept any K (including 0); ignored.
     } else if (distortionModel == DistortionModel::OPENCV_RADTAN_5 ||
@@ -747,23 +748,6 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
         TORCH_CHECK_VALUE(distortionCoeffs.size(1) == 12,
                           "For DistortionModel::OPENCV_* , distortionCoeffs must have shape [C,12] "
                           "as [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]");
-
-        // Enforce that unused coefficients are zero for the explicit variants.
-        const float max_abs_k456  = max_abs(distortionCoeffs.narrow(1, 3, 3));
-        const float max_abs_s1234 = max_abs(distortionCoeffs.narrow(1, 8, 4));
-        if (distortionModel == DistortionModel::OPENCV_RADTAN_5) {
-            TORCH_CHECK_VALUE(max_abs_k456 <= kCoeffTol,
-                              "OPENCV_RADTAN_5 expects k4..k6 == 0 in distortionCoeffs");
-            TORCH_CHECK_VALUE(max_abs_s1234 <= kCoeffTol,
-                              "OPENCV_RADTAN_5 expects s1..s4 == 0 in distortionCoeffs");
-        } else if (distortionModel == DistortionModel::OPENCV_RATIONAL_8) {
-            TORCH_CHECK_VALUE(max_abs_s1234 <= kCoeffTol,
-                              "OPENCV_RATIONAL_8 expects s1..s4 == 0 in distortionCoeffs");
-        } else if (distortionModel == DistortionModel::OPENCV_RADTAN_THIN_PRISM_9) {
-            TORCH_CHECK_VALUE(max_abs_k456 <= kCoeffTol,
-                              "OPENCV_RADTAN_THIN_PRISM_9 expects k4..k6 == 0 in distortionCoeffs");
-        }
-        // OPENCV_THIN_PRISM_12 (and the OPENCV alias) may use all coefficients.
     } else {
         TORCH_CHECK_VALUE(false, "Unknown DistortionModel for GaussianProjectionForwardUT");
     }
