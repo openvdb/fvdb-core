@@ -402,9 +402,8 @@ bind_gaussian_splat3d(py::module &m) {
            const std::optional<torch::Tensor> &shN,
            const std::optional<torch::Tensor> &viewDirections,
            const std::optional<torch::Tensor> &radii) {
-            torch::Tensor radiiValue = radii.value_or(torch::Tensor());
             return fvdb::detail::autograd::EvaluateSphericalHarmonics::apply(
-                shDegree, numCameras, viewDirections, sh0, shN, radiiValue)[0];
+                shDegree, numCameras, viewDirections, sh0, shN, radii)[0];
         },
         R"doc(
 Evaluate spherical harmonics to compute view-dependent features/colors.

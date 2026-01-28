@@ -3138,6 +3138,103 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         # since there's no view dependence
         self.assertTrue(torch.allclose(result[0], result[1], atol=1e-6))
 
+    def test_optional_parameters_omitted(self):
+        """Test that optional parameters (shN, view_directions, radii) can be omitted.
+
+        This is a regression test for an issue where passing undefined tensors
+        to save_for_backward caused 'tensor does not have a device' errors.
+        """
+        N = 50
+        D = 3
+        C = 2
+
+        sh0 = torch.randn(N, 1, D, device=self.device)
+
+        # Test degree 0 with no optional parameters
+        result = evaluate_spherical_harmonics(
+            sh_degree=0,
+            num_cameras=C,
+            sh0=sh0,
+        )
+        self.assertEqual(result.shape, (C, N, D))
+        self.assertFalse(torch.isnan(result).any())
+
+        # Test degree 0 with explicit None for optional parameters
+        result = evaluate_spherical_harmonics(
+            sh_degree=0,
+            num_cameras=C,
+            sh0=sh0,
+            shN=None,
+            view_directions=None,
+            radii=None,
+        )
+        self.assertEqual(result.shape, (C, N, D))
+        self.assertFalse(torch.isnan(result).any())
+
+        # Test higher degree without radii
+        shN = torch.randn(N, 15, D, device=self.device)
+        view_dirs = torch.randn(C, N, 3, device=self.device)
+
+        result = evaluate_spherical_harmonics(
+            sh_degree=3,
+            num_cameras=C,
+            sh0=sh0,
+            shN=shN,
+            view_directions=view_dirs,
+            # radii intentionally omitted
+        )
+        self.assertEqual(result.shape, (C, N, D))
+        self.assertFalse(torch.isnan(result).any())
+
+        # Test higher degree with explicit radii=None
+        result = evaluate_spherical_harmonics(
+            sh_degree=3,
+            num_cameras=C,
+            sh0=sh0,
+            shN=shN,
+            view_directions=view_dirs,
+            radii=None,
+        )
+        self.assertEqual(result.shape, (C, N, D))
+        self.assertFalse(torch.isnan(result).any())
+
+    def test_optional_parameters_gradient_flow(self):
+        """Test gradient flow works when optional parameters are omitted.
+
+        Regression test to ensure backward pass works without radii.
+        """
+        N = 20
+        D = 3
+        C = 2
+
+        sh0 = torch.randn(N, 1, D, device=self.device, requires_grad=True)
+        shN = torch.randn(N, 15, D, device=self.device, requires_grad=True)
+        view_dirs = torch.randn(C, N, 3, device=self.device)
+
+        # Forward without radii
+        result = evaluate_spherical_harmonics(
+            sh_degree=3,
+            num_cameras=C,
+            sh0=sh0,
+            shN=shN,
+            view_directions=view_dirs,
+            # radii intentionally omitted
+        )
+
+        # Backward
+        loss = result.sum()
+        loss.backward()
+
+        # Check gradients exist and are valid
+        self.assertIsNotNone(sh0.grad)
+        self.assertIsNotNone(shN.grad)
+        assert sh0.grad is not None  # for type narrowing
+        assert shN.grad is not None  # for type narrowing
+        self.assertTrue(torch.any(sh0.grad != 0))
+        self.assertTrue(torch.any(shN.grad != 0))
+        self.assertFalse(torch.isnan(sh0.grad).any())
+        self.assertFalse(torch.isnan(shN.grad).any())
+
     def test_degree_0_matches_expected(self):
         """Test that degree 0 SH evaluation produces expected output."""
         N = 10
