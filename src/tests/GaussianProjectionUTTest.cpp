@@ -295,6 +295,109 @@ TEST_F(GaussianProjectionUTTestFixture, OffAxisTinyGaussian_NoDistortion_MeanMat
     EXPECT_NEAR(means2d_cpu[0][0][1].item<float>(), expected_v, 2e-3f);
 }
 
+TEST_F(GaussianProjectionUTTestFixture, MultiCamera_RadTanDistortion_PerCameraParams) {
+    const int64_t C = 2;
+
+    const float x = 0.2f, y = -0.1f, z = 2.0f;
+    means     = torch::tensor({{x, y, z}}, torch::kFloat32);
+    quats     = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32);
+    logScales = torch::log(torch::tensor({{1e-6f, 1e-6f, 1e-6f}}, torch::kFloat32));
+
+    worldToCamMatricesStart =
+        torch::eye(4, torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(0).expand({C, 4, 4});
+    worldToCamMatricesEnd = worldToCamMatricesStart.clone();
+
+    // Different intrinsics per camera.
+    projectionMatrices = torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32));
+    auto K             = projectionMatrices.accessor<float, 3>();
+    // Cam0
+    const float fx0 = 500.0f, fy0 = 450.0f, cx0 = 400.0f, cy0 = 300.0f;
+    K[0][0][0] = fx0;
+    K[0][1][1] = fy0;
+    K[0][0][2] = cx0;
+    K[0][1][2] = cy0;
+    K[0][2][2] = 1.0f;
+    // Cam1
+    const float fx1 = 300.0f, fy1 = 350.0f, cx1 = 320.0f, cy1 = 240.0f;
+    K[1][0][0] = fx1;
+    K[1][1][1] = fy1;
+    K[1][0][2] = cx1;
+    K[1][1][2] = cy1;
+    K[1][2][2] = 1.0f;
+
+    // Different distortion coeffs per camera.
+    distortionModel  = DistortionModel::OPENCV_RADTAN_5;
+    distortionCoeffs = torch::zeros({C, 12}, torch::kFloat32);
+    auto dc          = distortionCoeffs.accessor<float, 2>();
+    // Cam0: non-trivial coefficients
+    const float k1_0 = 0.10f, k2_0 = -0.05f, k3_0 = 0.01f, p1_0 = 0.001f, p2_0 = -0.0005f;
+    dc[0][0] = k1_0;
+    dc[0][1] = k2_0;
+    dc[0][2] = k3_0;
+    dc[0][6] = p1_0;
+    dc[0][7] = p2_0;
+    // Cam1: different coefficients
+    const float k1_1 = -0.02f, k2_1 = 0.03f, k3_1 = 0.0f, p1_1 = -0.0008f, p2_1 = 0.0002f;
+    dc[1][0] = k1_1;
+    dc[1][1] = k2_1;
+    dc[1][2] = k3_1;
+    dc[1][6] = p1_1;
+    dc[1][7] = p2_1;
+
+    imageWidth  = 800;
+    imageHeight = 600;
+    eps2d       = 0.3f;
+    nearPlane   = 0.1f;
+    farPlane    = 100.0f;
+    minRadius2d = 0.0f;
+
+    utParams                              = UTParams{};
+    utParams.requireAllSigmaPointsInImage = true;
+
+    means                   = means.cuda();
+    quats                   = quats.cuda();
+    logScales               = logScales.cuda();
+    worldToCamMatricesStart = worldToCamMatricesStart.cuda();
+    worldToCamMatricesEnd   = worldToCamMatricesEnd.cuda();
+    projectionMatrices      = projectionMatrices.cuda();
+    distortionCoeffs        = distortionCoeffs.cuda();
+
+    const auto [radii, means2d, depths, conics, compensations] =
+        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
+                                                          quats,
+                                                          logScales,
+                                                          worldToCamMatricesStart,
+                                                          worldToCamMatricesEnd,
+                                                          projectionMatrices,
+                                                          RollingShutterType::NONE,
+                                                          utParams,
+                                                          distortionModel,
+                                                          distortionCoeffs,
+                                                          imageWidth,
+                                                          imageHeight,
+                                                          eps2d,
+                                                          nearPlane,
+                                                          farPlane,
+                                                          minRadius2d,
+                                                          false,
+                                                          false);
+
+    auto radii_cpu   = radii.cpu();
+    auto means2d_cpu = means2d.cpu();
+    EXPECT_GT(radii_cpu[0][0].item<int32_t>(), 0);
+    EXPECT_GT(radii_cpu[1][0].item<int32_t>(), 0);
+
+    const auto [u0, v0] = projectPointWithOpenCVDistortion(
+        x, y, z, fx0, fy0, cx0, cy0, {k1_0, k2_0, k3_0}, {p1_0, p2_0}, {});
+    const auto [u1, v1] = projectPointWithOpenCVDistortion(
+        x, y, z, fx1, fy1, cx1, cy1, {k1_1, k2_1, k3_1}, {p1_1, p2_1}, {});
+
+    EXPECT_NEAR(means2d_cpu[0][0][0].item<float>(), u0, 5e-3f);
+    EXPECT_NEAR(means2d_cpu[0][0][1].item<float>(), v0, 5e-3f);
+    EXPECT_NEAR(means2d_cpu[1][0][0].item<float>(), u1, 5e-3f);
+    EXPECT_NEAR(means2d_cpu[1][0][1].item<float>(), v1, 5e-3f);
+}
+
 TEST_F(GaussianProjectionUTTestFixture,
        OffAxisTinyGaussian_RadTanDistortion_MeanMatchesOpenCVPoint) {
     const int64_t C = 1;

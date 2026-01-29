@@ -33,7 +33,8 @@ namespace {
 /// @see https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html
 ///
 /// @tparam T Scalar type
-template <typename T> struct OpenCVCameraModel {
+template <typename T> class OpenCVCameraModel {
+  public:
     using Vec2 = nanovdb::math::Vec2<T>;
     using Vec3 = nanovdb::math::Vec3<T>;
     using Mat3 = nanovdb::math::Mat3<T>;
@@ -48,44 +49,31 @@ template <typename T> struct OpenCVCameraModel {
         THIN_PRISM_12 = 12, // RATIONAL_8 + s1,s2,s3,s4
     };
 
-    // Camera intrinsics. Must be set by the caller before use.
-    Mat3 K = Mat3();
-
-    // Coefficients for the distortion model.
-    const T *radial     = nullptr;     // k1..k6 (but k4..k6 only used in rational model)
-    int numRadial       = 0;           // Number of radial coefficients
-    const T *tangential = nullptr;     // p1,p2
-    int numTangential   = 0;           // Number of tangential coefficients
-    const T *thinPrism  = nullptr;     // s1..s4 (but s1..s3 only used in thin prism model)
-    int numThinPrism    = 0;           // Number of thin prism coefficients
-    Model model         = Model::NONE; // Distortion model
-
-    // Initialize this camera model from the public DistortionModel enum and a per-camera
-    // coefficient vector in OpenCV's packed layout:
+    // Construct this camera model from the public DistortionModel enum.
+    //
+    // For OpenCV models, coefficients are read from a per-camera packed layout:
     //   [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]
     //
-    // Returns false if the coefficient layout is not available for the requested model.
-    __device__ bool
-    init(const DistortionModel distortionModel,
-         const Mat3 &K_in,
-         const T *coeffs,
-         const int nCoeffs) {
-        K = K_in;
+    // Preconditions are asserted on-device (trap) rather than returning false.
+    __device__ __forceinline__
+    OpenCVCameraModel(const DistortionModel distortionModel,
+                      const Mat3 *K_in,
+                      const T *distortionCoeffs)
+        : K(K_in) {
+        deviceAssertOrTrap(K != nullptr);
 
         if (distortionModel == DistortionModel::NONE) {
             radial = tangential = thinPrism = nullptr;
             numRadial = numTangential = numThinPrism = 0;
             model                                    = Model::NONE;
-            return true;
+            return;
         }
 
         // OpenCV models require the packed coefficient layout.
-        if (coeffs == nullptr || nCoeffs < 12) {
-            return false;
-        }
-        const T *radial_in = coeffs + 0; // k1..k6
-        const T *tang_in   = coeffs + 6; // p1,p2
-        const T *thin_in   = coeffs + 8; // s1..s4
+        deviceAssertOrTrap(distortionCoeffs != nullptr);
+        const T *radial_in = distortionCoeffs + 0; // k1..k6
+        const T *tang_in   = distortionCoeffs + 6; // p1,p2
+        const T *thin_in   = distortionCoeffs + 8; // s1..s4
 
         if (distortionModel == DistortionModel::OPENCV_RADTAN_5) {
             radial        = radial_in;
@@ -95,7 +83,7 @@ template <typename T> struct OpenCVCameraModel {
             thinPrism     = nullptr;
             numThinPrism  = 0;
             model         = Model::RADTAN_5;
-            return true;
+            return;
         }
         if (distortionModel == DistortionModel::OPENCV_RATIONAL_8) {
             radial        = radial_in;
@@ -105,7 +93,7 @@ template <typename T> struct OpenCVCameraModel {
             thinPrism     = nullptr;
             numThinPrism  = 0;
             model         = Model::RATIONAL_8;
-            return true;
+            return;
         }
         if (distortionModel == DistortionModel::OPENCV_THIN_PRISM_12) {
             radial        = radial_in;
@@ -115,7 +103,7 @@ template <typename T> struct OpenCVCameraModel {
             thinPrism     = thin_in;
             numThinPrism  = 4; // s1..s4
             model         = Model::THIN_PRISM_12;
-            return true;
+            return;
         }
         if (distortionModel == DistortionModel::OPENCV_RADTAN_THIN_PRISM_9) {
             // Polynomial radial + thin-prism; ignore k4..k6 by construction.
@@ -126,30 +114,60 @@ template <typename T> struct OpenCVCameraModel {
             thinPrism     = thin_in;
             numThinPrism  = 4; // s1..s4
             model         = Model::RADTAN_THIN_9;
-            return true;
+            return;
         }
 
-        // Unknown distortion model.
-        return false;
+        // Unknown distortion model: should be unreachable if host validation is correct.
+        deviceAssertOrTrap(false);
     }
 
-    /// @brief Get a coefficient or zero if the pointer is null.
-    ///
-    /// @param[in] ptr Pointer to the coefficients
-    /// @param[in] n Number of coefficients
-    /// @param[in] i Index of the coefficient
-    ///
-    /// @return Coefficient or zero if the pointer is null
+    // Project a 3D point in camera coordinates to pixel coordinates using this camera model
+    // (pinhole + distortion + intrinsics).
+    __device__ Vec2
+    project(const Vec3 &p_cam) const {
+        // Normalize by depth.
+        const T z_inv = T(1) / max(p_cam[2], T(1e-6));
+        const Vec2 p_normalized(p_cam[0] * z_inv, p_cam[1] * z_inv);
+
+        const Vec2 p_distorted = applyDistortion(p_normalized);
+
+        // Project to pixel coordinates.
+        const Mat3 &K_ref = *K;
+        const T fx        = K_ref[0][0];
+        const T fy        = K_ref[1][1];
+        const T cx        = K_ref[0][2];
+        const T cy        = K_ref[1][2];
+        return Vec2(fx * p_distorted[0] + cx, fy * p_distorted[1] + cy);
+    }
+
+  private:
+    __device__ __forceinline__ static void
+    deviceAssertOrTrap(const bool cond) {
+        if (!cond) {
+            // `assert()` is typically compiled out in release builds; use a trap to guarantee a
+            // loud failure when invariants are violated.
+            asm volatile("trap;");
+        }
+    }
+
+    // Camera intrinsics pointer (typically points into shared memory).
+    // This avoids copying a Mat3 into registers per-thread.
+    const Mat3 *K = nullptr;
+
+    // Coefficients for the distortion model.
+    const T *radial     = nullptr;     // k1..k6 (but k4..k6 only used in rational model)
+    int numRadial       = 0;           // Number of radial coefficients
+    const T *tangential = nullptr;     // p1,p2
+    int numTangential   = 0;           // Number of tangential coefficients
+    const T *thinPrism  = nullptr;     // s1..s4 (but s1..s3 only used in thin prism model)
+    int numThinPrism    = 0;           // Number of thin prism coefficients
+    Model model         = Model::NONE; // Distortion model
+
     __host__ __device__ inline T
     coeffOrZero(const T *ptr, const int n, const int i) const {
         return (ptr != nullptr && i >= 0 && i < n) ? ptr[i] : T(0);
     }
 
-    /// @brief Apply the distortion to a 2D point.
-    ///
-    /// @param[in] p_normalized Normalized 2D point [x, y] in camera coordinates
-    ///
-    /// @return Distorted 2D point [x_dist, y_dist] in camera coordinates
     __device__ Vec2
     applyDistortion(const Vec2 &p_normalized) const {
         const T x  = p_normalized[0];
@@ -192,8 +210,6 @@ template <typename T> struct OpenCVCameraModel {
         T y_dist = y * radial_dist;
 
         // Tangential distortion.
-        // OpenCV: x += 2*p1*x*y + p2*(r^2 + 2*x^2)
-        //         y += p1*(r^2 + 2*y^2) + 2*p2*x*y
         const T p1 = coeffOrZero(tangential, numTangential, 0);
         const T p2 = coeffOrZero(tangential, numTangential, 1);
         x_dist += T(2) * p1 * xy + p2 * (r2 + T(2) * x2);
@@ -210,24 +226,6 @@ template <typename T> struct OpenCVCameraModel {
         }
 
         return Vec2(x_dist, y_dist);
-    }
-
-    // Project a 3D point in camera coordinates to pixel coordinates using this camera model
-    // (pinhole + distortion + intrinsics).
-    __device__ Vec2
-    project(const Vec3 &p_cam) const {
-        // Normalize by depth.
-        const T z_inv = T(1) / max(p_cam[2], T(1e-6));
-        const Vec2 p_normalized(p_cam[0] * z_inv, p_cam[1] * z_inv);
-
-        const Vec2 p_distorted = applyDistortion(p_normalized);
-
-        // Project to pixel coordinates.
-        const T fx = K[0][0];
-        const T fy = K[1][1];
-        const T cx = K[0][2];
-        const T cy = K[1][2];
-        return Vec2(fx * p_distorted[0] + cx, fy * p_distorted[1] + cy);
     }
 };
 
@@ -481,20 +479,14 @@ template <typename ScalarType> struct ProjectionForwardUT {
         const int64_t gaussianId = idx % N;
 
         // Get camera parameters
-        const Mat3 &projectionMatrix     = projectionMatsShared[camId];
-        const Mat3 &worldToCamRotStart   = worldToCamRotMatsStartShared[camId];
-        const Mat3 &worldToCamRotEnd     = worldToCamRotMatsEndShared[camId];
-        const Vec3 &worldToCamTransStart = worldToCamTranslationStartShared[camId];
-        const Vec3 &worldToCamTransEnd   = worldToCamTranslationEndShared[camId];
+        const Mat3 &projectionMatrix       = projectionMatsShared[camId];
+        const Mat3 &worldToCamRotStart     = worldToCamRotMatsStartShared[camId];
+        const Mat3 &worldToCamRotEnd       = worldToCamRotMatsEndShared[camId];
+        const Vec3 &worldToCamTransStart   = worldToCamTranslationStartShared[camId];
+        const Vec3 &worldToCamTransEnd     = worldToCamTranslationEndShared[camId];
+        const ScalarType *distortionCoeffs = &distortionCoeffsShared[camId * mNumDistortionCoeffs];
 
-        OpenCVCameraModel<ScalarType> camera;
-        const ScalarType *coeffs = (distortionCoeffsShared != nullptr)
-                                       ? &distortionCoeffsShared[camId * mNumDistortionCoeffs]
-                                       : nullptr;
-        if (!camera.init(mDistortionModel, projectionMatrix, coeffs, int(mNumDistortionCoeffs))) {
-            mOutRadiiAcc[camId][gaussianId] = 0;
-            return;
-        }
+        OpenCVCameraModel<ScalarType> camera(mDistortionModel, &projectionMatrix, distortionCoeffs);
 
         // Get Gaussian parameters
         const Vec3 meanWorldSpace(
