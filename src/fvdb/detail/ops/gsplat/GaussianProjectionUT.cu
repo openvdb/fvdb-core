@@ -229,24 +229,24 @@ template <typename T> class OpenCVCameraModel {
     }
 };
 
-// UT-local pose concept (rotation quaternion + translation).
+// UT-local rigid transform (rotation quaternion + translation).
 // Quaternion is stored as [w,x,y,z].
-template <typename T> struct Pose {
+template <typename T> struct RigidTransform {
     nanovdb::math::Vec4<T> q;
     nanovdb::math::Vec3<T> t;
 
-    __device__ Pose() = default;
+    __device__ RigidTransform() = default;
 
     __device__
-    Pose(const nanovdb::math::Vec4<T> &q_in, const nanovdb::math::Vec3<T> &t_in)
+    RigidTransform(const nanovdb::math::Vec4<T> &q_in, const nanovdb::math::Vec3<T> &t_in)
         : q(q_in), t(t_in) {}
 
     __device__
-    Pose(const nanovdb::math::Mat3<T> &R_in, const nanovdb::math::Vec3<T> &t_in)
+    RigidTransform(const nanovdb::math::Mat3<T> &R_in, const nanovdb::math::Vec3<T> &t_in)
         : q(rotationMatrixToQuaternion<T>(R_in)), t(t_in) {}
 
     // UT-local pose interpolation (a UT concept).
-    static inline __device__ Pose<T>
+    static inline __device__ RigidTransform<T>
     interpolate(const T u,
                 const nanovdb::math::Mat3<T> &R_start,
                 const nanovdb::math::Vec3<T> &t_start,
@@ -260,7 +260,7 @@ template <typename T> struct Pose {
         const nanovdb::math::Vec4<T> q_end    = rotationMatrixToQuaternion<T>(R_end);
         const nanovdb::math::Vec4<T> q_interp = nlerpQuaternionShortestPath<T>(q_start, q_end, u);
 
-        return Pose<T>(q_interp, t_interp);
+        return RigidTransform<T>(q_interp, t_interp);
     }
 };
 
@@ -540,12 +540,12 @@ template <typename ScalarType> struct ProjectionForwardUT {
             const ScalarType t_depth = (mRollingShutterType == RollingShutterType::NONE)
                                            ? ScalarType(0.0)
                                            : ScalarType(0.5);
-            const Pose<ScalarType> shutter_pose =
-                Pose<ScalarType>::interpolate(t_depth,
-                                              worldToCamRotStart,
-                                              worldToCamTransStart,
-                                              worldToCamRotEnd,
-                                              worldToCamTransEnd);
+            const RigidTransform<ScalarType> shutter_pose =
+                RigidTransform<ScalarType>::interpolate(t_depth,
+                                                        worldToCamRotStart,
+                                                        worldToCamTransStart,
+                                                        worldToCamRotEnd,
+                                                        worldToCamTransEnd);
             const Mat3 R_depth   = quaternionToRotationMatrix(shutter_pose.q);
             const Vec3 t_depth_v = shutter_pose.t;
             const Vec3 meanCam   = transformPointWorldToCam(R_depth, t_depth_v, meanWorldSpace);
@@ -588,7 +588,7 @@ template <typename ScalarType> struct ProjectionForwardUT {
             auto isInImage = []
                 __device__(const ProjStatus s) -> bool { return s == ProjStatus::InImage; };
             auto project_with_pose = [&]
-                __device__(const Pose<ScalarType> &pose, Vec2 &out_pix) -> ProjStatus {
+                __device__(const RigidTransform<ScalarType> &pose, Vec2 &out_pix) -> ProjStatus {
                 const Vec3 p_cam =
                     transformPointWorldToCam(quaternionToRotationMatrix(pose.q), pose.t, p_world);
                 // Perspective only (ortho is not meaningful for distorted camera models).
@@ -608,8 +608,8 @@ template <typename ScalarType> struct ProjectionForwardUT {
             };
 
             // Start/end projections for initialization.
-            Pose<ScalarType> pose_start(worldToCamRotStart, worldToCamTransStart);
-            Pose<ScalarType> pose_end(worldToCamRotEnd, worldToCamTransEnd);
+            RigidTransform<ScalarType> pose_start(worldToCamRotStart, worldToCamTransStart);
+            RigidTransform<ScalarType> pose_end(worldToCamRotEnd, worldToCamTransEnd);
             Vec2 pix_start(ScalarType(0), ScalarType(0));
             Vec2 pix_end(ScalarType(0), ScalarType(0));
             const ProjStatus status_start = project_with_pose(pose_start, pix_start);
@@ -644,12 +644,13 @@ template <typename ScalarType> struct ProjectionForwardUT {
                 } else if (mRollingShutterType == RollingShutterType::HORIZONTAL) {
                     t_rs = floor(pix_prev[0]) / max(ScalarType(1), ScalarType(mImageWidth - 1));
                 }
-                t_rs                     = min(ScalarType(1), max(ScalarType(0), t_rs));
-                Pose<ScalarType> pose_rs = Pose<ScalarType>::interpolate(t_rs,
-                                                                         worldToCamRotStart,
-                                                                         worldToCamTransStart,
-                                                                         worldToCamRotEnd,
-                                                                         worldToCamTransEnd);
+                t_rs = min(ScalarType(1), max(ScalarType(0), t_rs));
+                RigidTransform<ScalarType> pose_rs =
+                    RigidTransform<ScalarType>::interpolate(t_rs,
+                                                            worldToCamRotStart,
+                                                            worldToCamTransStart,
+                                                            worldToCamRotEnd,
+                                                            worldToCamTransEnd);
                 Vec2 pix_rs(ScalarType(0), ScalarType(0));
                 const ProjStatus status_rs = project_with_pose(pose_rs, pix_rs);
                 pix_prev                   = pix_rs;
@@ -740,12 +741,12 @@ template <typename ScalarType> struct ProjectionForwardUT {
             const ScalarType t_depth = (mRollingShutterType == RollingShutterType::NONE)
                                            ? ScalarType(0.0)
                                            : ScalarType(0.5);
-            const Pose<ScalarType> shutter_pose =
-                Pose<ScalarType>::interpolate(t_depth,
-                                              worldToCamRotStart,
-                                              worldToCamTransStart,
-                                              worldToCamRotEnd,
-                                              worldToCamTransEnd);
+            const RigidTransform<ScalarType> shutter_pose =
+                RigidTransform<ScalarType>::interpolate(t_depth,
+                                                        worldToCamRotStart,
+                                                        worldToCamTransStart,
+                                                        worldToCamRotEnd,
+                                                        worldToCamTransEnd);
             const Mat3 R_depth   = quaternionToRotationMatrix(shutter_pose.q);
             const Vec3 t_depth_v = shutter_pose.t;
             const Vec3 meanCam   = transformPointWorldToCam(R_depth, t_depth_v, meanWorldSpace);
