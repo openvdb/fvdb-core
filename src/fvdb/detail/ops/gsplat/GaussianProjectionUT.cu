@@ -245,22 +245,122 @@ template <typename T> struct RigidTransform {
     RigidTransform(const nanovdb::math::Mat3<T> &R_in, const nanovdb::math::Vec3<T> &t_in)
         : q(rotationMatrixToQuaternion<T>(R_in)), t(t_in) {}
 
-    // UT-local pose interpolation (a UT concept).
+    __device__ __forceinline__ nanovdb::math::Vec3<T>
+    apply(const nanovdb::math::Vec3<T> &p_world) const {
+        // p_cam = R(q) * p_world + t
+        return quaternionToRotationMatrix(q) * p_world + t;
+    }
+
+    // More efficient interpolation when start/end are already in quaternion form.
     static inline __device__ RigidTransform<T>
-    interpolate(const T u,
-                const nanovdb::math::Mat3<T> &R_start,
-                const nanovdb::math::Vec3<T> &t_start,
-                const nanovdb::math::Mat3<T> &R_end,
-                const nanovdb::math::Vec3<T> &t_end) {
-        // Translation: linear interpolation.
-        const nanovdb::math::Vec3<T> t_interp = t_start + u * (t_end - t_start);
-
-        // Rotation: NLERP along the shortest arc.
-        const nanovdb::math::Vec4<T> q_start  = rotationMatrixToQuaternion<T>(R_start);
-        const nanovdb::math::Vec4<T> q_end    = rotationMatrixToQuaternion<T>(R_end);
-        const nanovdb::math::Vec4<T> q_interp = nlerpQuaternionShortestPath<T>(q_start, q_end, u);
-
+    interpolate(const T u, const RigidTransform<T> &start, const RigidTransform<T> &end) {
+        const nanovdb::math::Vec3<T> t_interp = start.t + u * (end.t - start.t);
+        const nanovdb::math::Vec4<T> q_interp = nlerpQuaternionShortestPath<T>(start.q, end.q, u);
         return RigidTransform<T>(q_interp, t_interp);
+    }
+};
+
+enum class ProjStatus : uint8_t { BehindCamera, OutOfBounds, InImage };
+
+template <typename ScalarType> struct WorldToPixelTransform {
+    using Vec2 = nanovdb::math::Vec2<ScalarType>;
+    using Vec3 = nanovdb::math::Vec3<ScalarType>;
+    using Mat3 = nanovdb::math::Mat3<ScalarType>;
+
+    const OpenCVCameraModel<ScalarType> *camera = nullptr;
+    RollingShutterType rollingShutterType;
+    int64_t imageWidth;
+    int64_t imageHeight;
+    ScalarType inImageMargin;
+    RigidTransform<ScalarType> worldToCamStart;
+    RigidTransform<ScalarType> worldToCamEnd;
+
+    __device__ __forceinline__ static bool
+    isInImage(const ProjStatus s) {
+        return s == ProjStatus::InImage;
+    }
+
+    __device__ __forceinline__ ProjStatus
+    projectWithTransform(const Vec3 &p_world,
+                         const RigidTransform<ScalarType> &xf,
+                         Vec2 &out_pix) const {
+        const Vec3 p_cam = xf.apply(p_world);
+        // Perspective only (ortho is not meaningful for distorted camera models).
+        if (p_cam[2] <= ScalarType(0)) {
+            // Ensure deterministic output to avoid UB on callers that assign/read even on invalid
+            // projections. This value is ignored when we treat BehindCamera as a hard reject.
+            out_pix = Vec2(ScalarType(0), ScalarType(0));
+            return ProjStatus::BehindCamera;
+        }
+
+        out_pix                   = camera->project(p_cam);
+        const ScalarType margin_x = ScalarType(imageWidth) * inImageMargin;
+        const ScalarType margin_y = ScalarType(imageHeight) * inImageMargin;
+        const bool in_img =
+            (out_pix[0] >= -margin_x) && (out_pix[0] < ScalarType(imageWidth) + margin_x) &&
+            (out_pix[1] >= -margin_y) && (out_pix[1] < ScalarType(imageHeight) + margin_y);
+        return in_img ? ProjStatus::InImage : ProjStatus::OutOfBounds;
+    }
+
+    __device__ __forceinline__ ProjStatus
+    projectWorldPoint(const Vec3 &p_world, Vec2 &out_pixel) const {
+        // Rolling shutter projection similar to reference: iterate shutter pose based on the
+        // current estimate of pixel coordinate.
+
+        // Start/end projections for initialization.
+        const RigidTransform<ScalarType> &pose_start = worldToCamStart;
+        const RigidTransform<ScalarType> &pose_end   = worldToCamEnd;
+        Vec2 pix_start(ScalarType(0), ScalarType(0));
+        Vec2 pix_end(ScalarType(0), ScalarType(0));
+        const ProjStatus status_start = projectWithTransform(p_world, pose_start, pix_start);
+        const ProjStatus status_end   = projectWithTransform(p_world, pose_end, pix_end);
+
+        if (rollingShutterType == RollingShutterType::NONE) {
+            out_pixel = pix_start;
+            return status_start;
+        }
+
+        // If both endpoints are behind the camera, treat as a hard invalid (discontinuous).
+        if (status_start == ProjStatus::BehindCamera && status_end == ProjStatus::BehindCamera) {
+            out_pixel = pix_end;
+            return ProjStatus::BehindCamera;
+        }
+
+        // If neither endpoint is in image (but at least one is in front), treat as invalid.
+        // (Keep parity with the old behavior which required an in-image endpoint to iterate.)
+        if (!isInImage(status_start) && !isInImage(status_end)) {
+            out_pixel = (status_end != ProjStatus::BehindCamera) ? pix_end : pix_start;
+            return ProjStatus::OutOfBounds;
+        }
+
+        Vec2 pix_prev = isInImage(status_start) ? pix_start : pix_end;
+        // Iteration count: small fixed number (reference uses 10).
+        constexpr int kIters = 6;
+        for (int it = 0; it < kIters; ++it) {
+            ScalarType t_rs = ScalarType(0);
+            if (rollingShutterType == RollingShutterType::VERTICAL) {
+                t_rs = floor(pix_prev[1]) / max(ScalarType(1), ScalarType(imageHeight - 1));
+            } else if (rollingShutterType == RollingShutterType::HORIZONTAL) {
+                t_rs = floor(pix_prev[0]) / max(ScalarType(1), ScalarType(imageWidth - 1));
+            }
+            t_rs = min(ScalarType(1), max(ScalarType(0), t_rs));
+            const RigidTransform<ScalarType> pose_rs =
+                RigidTransform<ScalarType>::interpolate(t_rs, worldToCamStart, worldToCamEnd);
+            Vec2 pix_rs(ScalarType(0), ScalarType(0));
+            const ProjStatus status_rs = projectWithTransform(p_world, pose_rs, pix_rs);
+            pix_prev                   = pix_rs;
+            if (status_rs == ProjStatus::BehindCamera) {
+                out_pixel = pix_rs;
+                return ProjStatus::BehindCamera;
+            }
+            if (!isInImage(status_rs)) {
+                out_pixel = pix_rs;
+                return ProjStatus::OutOfBounds;
+            }
+        }
+
+        out_pixel = pix_prev;
+        return ProjStatus::InImage;
     }
 };
 
@@ -522,33 +622,31 @@ template <typename ScalarType> struct ProjectionForwardUT {
         const ScalarType *distortionCoeffs = &distortionCoeffsShared[camId * mNumDistortionCoeffs];
 
         OpenCVCameraModel<ScalarType> camera(mDistortionModel, &projectionMatrix, distortionCoeffs);
+        const RigidTransform<ScalarType> worldToCamStart(worldToCamRotStart, worldToCamTransStart);
+        const RigidTransform<ScalarType> worldToCamEnd(worldToCamRotEnd, worldToCamTransEnd);
 
         // Get Gaussian parameters
         const Vec3 meanWorldSpace(
             mMeansAcc[gaussianId][0], mMeansAcc[gaussianId][1], mMeansAcc[gaussianId][2]);
-        const auto quatAcc     = mQuatsAcc[gaussianId];
-        const auto logScaleAcc = mLogScalesAcc[gaussianId];
-        const Vec4 quat_wxyz(quatAcc[0], quatAcc[1], quatAcc[2], quatAcc[3]);
-        const Vec3 scale_world(::cuda::std::exp(logScaleAcc[0]),
-                               ::cuda::std::exp(logScaleAcc[1]),
-                               ::cuda::std::exp(logScaleAcc[2]));
+        const Vec4 quat_wxyz(mQuatsAcc[gaussianId][0],
+                             mQuatsAcc[gaussianId][1],
+                             mQuatsAcc[gaussianId][2],
+                             mQuatsAcc[gaussianId][3]);
+        const Vec3 scale_world(exp(mLogScalesAcc[gaussianId][0]),
+                               exp(mLogScalesAcc[gaussianId][1]),
+                               exp(mLogScalesAcc[gaussianId][2]));
 
         // Depth culling should use the same shutter pose as projection:
-        // - RollingShutterType::NONE: use start pose (t=0.0), matching `project_world_point`.
+        // - RollingShutterType::NONE: use start pose (t=0.0), matching
+        //   `WorldToPixelTransform::projectWorldPoint` which uses the start transform when NONE.
         // - Rolling shutter modes: use center pose (t=0.5) as a conservative/stable cull.
         {
-            const ScalarType t_depth = (mRollingShutterType == RollingShutterType::NONE)
-                                           ? ScalarType(0.0)
-                                           : ScalarType(0.5);
             const RigidTransform<ScalarType> shutter_pose =
-                RigidTransform<ScalarType>::interpolate(t_depth,
-                                                        worldToCamRotStart,
-                                                        worldToCamTransStart,
-                                                        worldToCamRotEnd,
-                                                        worldToCamTransEnd);
-            const Mat3 R_depth   = quaternionToRotationMatrix(shutter_pose.q);
-            const Vec3 t_depth_v = shutter_pose.t;
-            const Vec3 meanCam   = transformPointWorldToCam(R_depth, t_depth_v, meanWorldSpace);
+                (mRollingShutterType == RollingShutterType::NONE)
+                    ? worldToCamStart
+                    : RigidTransform<ScalarType>::interpolate(
+                          ScalarType(0.5), worldToCamStart, worldToCamEnd);
+            const Vec3 meanCam = shutter_pose.apply(meanWorldSpace);
             if (meanCam[2] < mNearPlane || meanCam[2] > mFarPlane) {
                 mOutRadiiAcc[camId][gaussianId] = 0;
                 return;
@@ -571,106 +669,21 @@ template <typename ScalarType> struct ProjectionForwardUT {
                                  sigma_points_world,
                                  weights_mean,
                                  weights_cov);
-        constexpr int num_sigma_points = 7;
+
+        const WorldToPixelTransform<ScalarType> worldToPixel{&camera,
+                                                             mRollingShutterType,
+                                                             mImageWidth,
+                                                             mImageHeight,
+                                                             ScalarType(mUTParams.inImageMargin),
+                                                             worldToCamStart,
+                                                             worldToCamEnd};
 
         // Project sigma points through camera model
         nanovdb::math::Vec2<ScalarType> projected_points[7];
-        bool valid_any            = false;
-        const ScalarType margin_x = ScalarType(mImageWidth) * ScalarType(mUTParams.inImageMargin);
-        const ScalarType margin_y = ScalarType(mImageHeight) * ScalarType(mUTParams.inImageMargin);
-
-        enum class ProjStatus : uint8_t { BehindCamera, OutOfBounds, InImage };
-
-        auto project_world_point = [&]
-            __device__(const Vec3 &p_world, Vec2 &out_pixel) -> ProjStatus {
-            // Rolling shutter projection similar to reference: iterate shutter pose based on the
-            // current estimate of pixel coordinate.
-            auto isInImage = []
-                __device__(const ProjStatus s) -> bool { return s == ProjStatus::InImage; };
-            auto project_with_pose = [&]
-                __device__(const RigidTransform<ScalarType> &pose, Vec2 &out_pix) -> ProjStatus {
-                const Vec3 p_cam =
-                    transformPointWorldToCam(quaternionToRotationMatrix(pose.q), pose.t, p_world);
-                // Perspective only (ortho is not meaningful for distorted camera models).
-                if (p_cam[2] <= ScalarType(0)) {
-                    // Ensure deterministic output to avoid UB on callers that assign/read even on
-                    // invalid projections. This value is ignored when we treat BehindCamera as a
-                    // hard reject (see below).
-                    out_pix = Vec2(ScalarType(0), ScalarType(0));
-                    return ProjStatus::BehindCamera;
-                }
-                out_pix           = camera.project(p_cam);
-                const bool in_img = (out_pix[0] >= -margin_x) &&
-                                    (out_pix[0] < ScalarType(mImageWidth) + margin_x) &&
-                                    (out_pix[1] >= -margin_y) &&
-                                    (out_pix[1] < ScalarType(mImageHeight) + margin_y);
-                return in_img ? ProjStatus::InImage : ProjStatus::OutOfBounds;
-            };
-
-            // Start/end projections for initialization.
-            RigidTransform<ScalarType> pose_start(worldToCamRotStart, worldToCamTransStart);
-            RigidTransform<ScalarType> pose_end(worldToCamRotEnd, worldToCamTransEnd);
-            Vec2 pix_start(ScalarType(0), ScalarType(0));
-            Vec2 pix_end(ScalarType(0), ScalarType(0));
-            const ProjStatus status_start = project_with_pose(pose_start, pix_start);
-            const ProjStatus status_end   = project_with_pose(pose_end, pix_end);
-
-            if (mRollingShutterType == RollingShutterType::NONE) {
-                out_pixel = pix_start;
-                return status_start;
-            }
-
-            // If both endpoints are behind the camera, treat as a hard invalid (discontinuous).
-            if (status_start == ProjStatus::BehindCamera &&
-                status_end == ProjStatus::BehindCamera) {
-                out_pixel = pix_end;
-                return ProjStatus::BehindCamera;
-            }
-
-            // If neither endpoint is in image (but at least one is in front), treat as invalid.
-            // (Keep parity with the old behavior which required an in-image endpoint to iterate.)
-            if (!isInImage(status_start) && !isInImage(status_end)) {
-                out_pixel = (status_end != ProjStatus::BehindCamera) ? pix_end : pix_start;
-                return ProjStatus::OutOfBounds;
-            }
-
-            Vec2 pix_prev = isInImage(status_start) ? pix_start : pix_end;
-            // Iteration count: small fixed number (reference uses 10).
-            constexpr int kIters = 6;
-            for (int it = 0; it < kIters; ++it) {
-                ScalarType t_rs = ScalarType(0);
-                if (mRollingShutterType == RollingShutterType::VERTICAL) {
-                    t_rs = floor(pix_prev[1]) / max(ScalarType(1), ScalarType(mImageHeight - 1));
-                } else if (mRollingShutterType == RollingShutterType::HORIZONTAL) {
-                    t_rs = floor(pix_prev[0]) / max(ScalarType(1), ScalarType(mImageWidth - 1));
-                }
-                t_rs = min(ScalarType(1), max(ScalarType(0), t_rs));
-                RigidTransform<ScalarType> pose_rs =
-                    RigidTransform<ScalarType>::interpolate(t_rs,
-                                                            worldToCamRotStart,
-                                                            worldToCamTransStart,
-                                                            worldToCamRotEnd,
-                                                            worldToCamTransEnd);
-                Vec2 pix_rs(ScalarType(0), ScalarType(0));
-                const ProjStatus status_rs = project_with_pose(pose_rs, pix_rs);
-                pix_prev                   = pix_rs;
-                if (status_rs == ProjStatus::BehindCamera) {
-                    out_pixel = pix_rs;
-                    return ProjStatus::BehindCamera;
-                }
-                if (!isInImage(status_rs)) {
-                    out_pixel = pix_rs;
-                    return ProjStatus::OutOfBounds;
-                }
-            }
-
-            out_pixel = pix_prev;
-            return ProjStatus::InImage;
-        };
-
-        for (int i = 0; i < num_sigma_points; ++i) {
+        bool valid_any = false;
+        for (int i = 0; i < mUTParams.numSigmaPoints; ++i) {
             Vec2 pix;
-            const ProjStatus status = project_world_point(sigma_points_world[i], pix);
+            const ProjStatus status = worldToPixel.projectWorldPoint(sigma_points_world[i], pix);
             // Hard reject if any sigma point is behind the camera (discontinuous projection).
             if (status == ProjStatus::BehindCamera) {
                 mOutRadiiAcc[camId][gaussianId] = 0;
@@ -692,14 +705,14 @@ template <typename ScalarType> struct ProjectionForwardUT {
 
         // Compute mean of projected points
         nanovdb::math::Vec2<ScalarType> mean2d(ScalarType(0), ScalarType(0));
-        for (int i = 0; i < num_sigma_points; ++i) {
+        for (int i = 0; i < mUTParams.numSigmaPoints; ++i) {
             mean2d[0] += weights_mean[i] * projected_points[i][0];
             mean2d[1] += weights_mean[i] * projected_points[i][1];
         }
 
         // Reconstruct 2D covariance from projected sigma points
         Mat2 covar2d = reconstructCovarianceFromSigmaPoints(
-            projected_points, weights_cov, num_sigma_points, mean2d);
+            projected_points, weights_cov, mUTParams.numSigmaPoints, mean2d);
 
         // Add blur for numerical stability
         ScalarType compensation;
@@ -742,14 +755,8 @@ template <typename ScalarType> struct ProjectionForwardUT {
                                            ? ScalarType(0.0)
                                            : ScalarType(0.5);
             const RigidTransform<ScalarType> shutter_pose =
-                RigidTransform<ScalarType>::interpolate(t_depth,
-                                                        worldToCamRotStart,
-                                                        worldToCamTransStart,
-                                                        worldToCamRotEnd,
-                                                        worldToCamTransEnd);
-            const Mat3 R_depth   = quaternionToRotationMatrix(shutter_pose.q);
-            const Vec3 t_depth_v = shutter_pose.t;
-            const Vec3 meanCam   = transformPointWorldToCam(R_depth, t_depth_v, meanWorldSpace);
+                RigidTransform<ScalarType>::interpolate(t_depth, worldToCamStart, worldToCamEnd);
+            const Vec3 meanCam               = shutter_pose.apply(meanWorldSpace);
             mOutDepthsAcc[camId][gaussianId] = meanCam[2];
         }
         mOutConicsAcc[camId][gaussianId][0] = covar2dInverse[0][0];
