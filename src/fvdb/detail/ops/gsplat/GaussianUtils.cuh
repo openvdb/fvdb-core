@@ -244,31 +244,6 @@ nlerpQuaternionShortestPath(const nanovdb::math::Vec4<T> &q0,
                                                              s * q0[3] + u * q1[3]));
 }
 
-/// @brief Interpolate between two camera transforms (rotation + translation).
-///
-/// Translation is linearly interpolated. Rotation is interpolated with **NLERP**
-/// (normalized linear interpolation) along the shortest quaternion arc.
-///
-/// @param u Interpolation factor in [0,1].
-template <typename T>
-inline __host__ __device__ void
-interpolatePoseRt(nanovdb::math::Vec4<T> &q_out,
-                  nanovdb::math::Vec3<T> &t_out,
-                  const T u,
-                  const nanovdb::math::Mat3<T> &R_start,
-                  const nanovdb::math::Vec3<T> &t_start,
-                  const nanovdb::math::Mat3<T> &R_end,
-                  const nanovdb::math::Vec3<T> &t_end) {
-    // Interpolate translation.
-    t_out = t_start + u * (t_end - t_start);
-
-    // Convert and interpolate rotation in quaternion space.
-    const nanovdb::math::Vec4<T> q_start = rotationMatrixToQuaternion<T>(R_start);
-    const nanovdb::math::Vec4<T> q_end   = rotationMatrixToQuaternion<T>(R_end);
-
-    q_out = nlerpQuaternionShortestPath<T>(q_start, q_end, u);
-}
-
 /// @brief Computes the vector-Jacobian product for quaternion to rotation matrix transformation
 ///
 /// This function computes the gradient of the loss with respect to a quaternion (dL/dq)

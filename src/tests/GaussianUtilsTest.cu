@@ -260,7 +260,7 @@ TEST(GaussianUtilsTest, RotationMatrixToQuaternion_DegenerateInput_ReturnsFinite
     EXPECT_NEAR(q[3], 0.0f, 1e-6f);
 }
 
-TEST(GaussianUtilsTest, InterpolatePose_NlerpMatchesReference) {
+TEST(GaussianUtilsTest, NlerpQuaternionShortestPath_MatchesReference) {
     const float pi      = 3.14159265358979323846f;
     const Vec4f q_start = axisAngleToQuatWxyz(1.0f, 0.0f, 0.0f, pi / 3.0f);        // 60deg about X
     const Vec4f q_end   = axisAngleToQuatWxyz(0.0f, 1.0f, 0.0f, 2.0f * pi / 3.0f); // 120deg about Y
@@ -272,13 +272,11 @@ TEST(GaussianUtilsTest, InterpolatePose_NlerpMatchesReference) {
     const Vec3f t_end(-4.0f, 5.0f, 0.5f);
     const float u = 0.25f;
 
-    Vec4f q_interp(0.0f, 0.0f, 0.0f, 0.0f);
-    Vec3f t_interp(0.0f, 0.0f, 0.0f);
-    interpolatePoseRt<float>(q_interp, t_interp, u, R_start, t_start, R_end, t_end);
-
-    const Vec4f q0    = rotationMatrixToQuaternion<float>(R_start);
-    const Vec4f q1    = rotationMatrixToQuaternion<float>(R_end);
-    const Vec4f q_ref = nlerpRefShortestPath(q0, q1, u);
+    const Vec4f q0       = rotationMatrixToQuaternion<float>(R_start);
+    const Vec4f q1       = rotationMatrixToQuaternion<float>(R_end);
+    const Vec4f q_ref    = nlerpRefShortestPath(q0, q1, u);
+    const Vec4f q_interp = nlerpQuaternionShortestPath<float>(q0, q1, u);
+    const Vec3f t_interp = t_start + u * (t_end - t_start);
 
     expectQuatNear(q_interp, q_ref, 2e-6f);
     expectVecNear(t_interp, t_start + u * (t_end - t_start), 1e-6f);

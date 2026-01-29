@@ -236,8 +236,7 @@ template <typename T> struct Pose {
     nanovdb::math::Vec3<T> t;
 };
 
-// UT-local wrapper returning Pose, implemented using the reusable interpolation math in
-// `GaussianUtils.cuh`.
+// UT-local pose interpolation (a UT concept).
 template <typename T>
 inline __device__ Pose<T>
 interpolatePose(const T u,
@@ -245,10 +244,15 @@ interpolatePose(const T u,
                 const nanovdb::math::Vec3<T> &t_start,
                 const nanovdb::math::Mat3<T> &R_end,
                 const nanovdb::math::Vec3<T> &t_end) {
-    nanovdb::math::Vec4<T> q(T(1), T(0), T(0), T(0));
-    nanovdb::math::Vec3<T> t(T(0), T(0), T(0));
-    interpolatePoseRt<T>(q, t, u, R_start, t_start, R_end, t_end);
-    return Pose<T>{q, t};
+    // Translation: linear interpolation.
+    const nanovdb::math::Vec3<T> t_interp = t_start + u * (t_end - t_start);
+
+    // Rotation: NLERP along the shortest arc.
+    const nanovdb::math::Vec4<T> q_start  = rotationMatrixToQuaternion<T>(R_start);
+    const nanovdb::math::Vec4<T> q_end    = rotationMatrixToQuaternion<T>(R_end);
+    const nanovdb::math::Vec4<T> q_interp = nlerpQuaternionShortestPath<T>(q_start, q_end, u);
+
+    return Pose<T>{q_interp, t_interp};
 }
 
 // Generate 3D sigma points and weights for the (scaled) Unscented Transform.
