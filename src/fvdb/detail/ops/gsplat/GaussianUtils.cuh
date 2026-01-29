@@ -139,30 +139,32 @@ quaternionToRotationMatrixVectorJacobianProduct(const nanovdb::math::Vec4<T> &qu
            inverseNormalization;
 }
 
-/// @brief Computes gradients of loss with respect to quaternion and scale parameters
+/// @brief Computes gradients of loss with respect to quaternion and log_scale parameters
 ///
-/// This function calculates the vector-Jacobian product for quaternion and scale parameters
+/// This function calculates the vector-Jacobian product for quaternion and log_scale parameters
 /// that were used to generate a covariance matrix. It's used in the backward pass of
 /// automatic differentiation when computing gradients through the covariance matrix computation.
 ///
 /// The covariance matrix is computed as C = M * M^T where M = R * S, with:
 /// - R being the rotation matrix derived from the quaternion
-/// - S being the diagonal scale matrix
+/// - S being the diagonal scale matrix where scale = exp(log_scale)
 ///
 /// The function implements the chain rule to propagate gradients from the covariance matrix
-/// back to the quaternion and scale parameters.
+/// back to the quaternion and log_scale parameters.
 ///
 /// Mathematical details:
 /// 1. For matrix operations D = M * M^T, the gradient follows:
 ///    dL/dM = (dL/dD + (dL/dD)^T) * M
 /// 2. For D = R * S, the gradient follows:
 ///    dL/dR = (dL/dD) * S^T and dL/dS = R^T * (dL/dD)
+/// 3. For scale = exp(log_scale), chain rule gives:
+///    dL/d(log_scale) = dL/d(scale) * scale
 ///
 /// @param quat Input quaternion [w,x,y,z]
-/// @param scale Scale parameters [sx,sy,sz]
+/// @param scale Scale parameters [sx,sy,sz] where scale = exp(log_scale)
 /// @param R Precomputed rotation matrix from the quaternion
 /// @param dLossDCovar Gradient of loss with respect to the covariance matrix
-/// @return Tuple containing gradients for quaternion and scale parameters
+/// @return Tuple containing gradients for quaternion and log_scale parameters
 template <typename T>
 inline __device__ std::tuple<nanovdb::math::Vec4<T>, nanovdb::math::Vec3<T>>
 quaternionAndScaleToCovarianceVectorJacobianProduct(const nanovdb::math::Vec4<T> &quat,
@@ -191,13 +193,15 @@ quaternionAndScaleToCovarianceVectorJacobianProduct(const nanovdb::math::Vec4<T>
     const nanovdb::math::Vec4<T> &dLossDQuat =
         quaternionToRotationMatrixVectorJacobianProduct<T>(quat, dLossDR);
 
-    // Row-major dot products for gradients
-    const nanovdb::math::Vec3<T> dLossDScale(
-        R[0][0] * dLossDM[0][0] + R[1][0] * dLossDM[1][0] + R[2][0] * dLossDM[2][0],
-        R[0][1] * dLossDM[0][1] + R[1][1] * dLossDM[1][1] + R[2][1] * dLossDM[2][1],
-        R[0][2] * dLossDM[0][2] + R[1][2] * dLossDM[1][2] + R[2][2] * dLossDM[2][2]);
+    // Row-major dot products for gradients w.r.t. scale
+    // Then apply chain rule for log_scale: dL/d(log_scale) = dL/d(scale) * scale
+    // since scale = exp(log_scale), d(scale)/d(log_scale) = scale
+    const nanovdb::math::Vec3<T> dLossDLogScale(
+        sx * (R[0][0] * dLossDM[0][0] + R[1][0] * dLossDM[1][0] + R[2][0] * dLossDM[2][0]),
+        sy * (R[0][1] * dLossDM[0][1] + R[1][1] * dLossDM[1][1] + R[2][1] * dLossDM[2][1]),
+        sz * (R[0][2] * dLossDM[0][2] + R[1][2] * dLossDM[1][2] + R[2][2] * dLossDM[2][2]));
 
-    return {dLossDQuat, dLossDScale};
+    return {dLossDQuat, dLossDLogScale};
 }
 
 /// @brief Convert a quaternion and scale to a covariance matrix
