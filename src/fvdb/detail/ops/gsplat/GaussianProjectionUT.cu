@@ -621,9 +621,15 @@ template <typename ScalarType> struct ProjectionForwardUT {
         const Vec3 &worldToCamTransEnd     = worldToCamTranslationEndShared[camId];
         const ScalarType *distortionCoeffs = &distortionCoeffsShared[camId * mNumDistortionCoeffs];
 
+        // Define the camera model (projection and distortion) using the shared memory pointers
         OpenCVCameraModel<ScalarType> camera(mDistortionModel, &projectionMatrix, distortionCoeffs);
-        const RigidTransform<ScalarType> worldToCamStart(worldToCamRotStart, worldToCamTransStart);
-        const RigidTransform<ScalarType> worldToCamEnd(worldToCamRotEnd, worldToCamTransEnd);
+
+        // Define the world-to-camera transforms using the shared memory pointers at the start and
+        // end of the shutter period
+        const RigidTransform<ScalarType> worldToCamStart(worldToCamRotStart,
+                                                         worldToCamTransStart); // t=0.0
+        const RigidTransform<ScalarType> worldToCamEnd(worldToCamRotEnd,
+                                                       worldToCamTransEnd);     // t=1.0
 
         // Get Gaussian parameters
         const Vec3 meanWorldSpace(
@@ -657,11 +663,6 @@ template <typename ScalarType> struct ProjectionForwardUT {
         nanovdb::math::Vec3<ScalarType> sigma_points_world[7];
         ScalarType weights_mean[7];
         ScalarType weights_cov[7];
-        // Enforce supported sigma-point count (2*3+1=7).
-        if (mUTParams.numSigmaPoints != 7) {
-            mOutRadiiAcc[camId][gaussianId] = 0;
-            return;
-        }
         generateWorldSigmaPoints(meanWorldSpace,
                                  quat_wxyz,
                                  scale_world,
@@ -680,11 +681,13 @@ template <typename ScalarType> struct ProjectionForwardUT {
 
         // Project sigma points through camera model
         nanovdb::math::Vec2<ScalarType> projected_points[7];
-        bool valid_any = false;
-        for (int i = 0; i < mUTParams.numSigmaPoints; ++i) {
+        bool valid_any                = false;
+        constexpr int kNumSigmaPoints = 7;
+        for (int i = 0; i < kNumSigmaPoints; ++i) {
             Vec2 pix;
             const ProjStatus status = worldToPixel.projectWorldPoint(sigma_points_world[i], pix);
-            // Hard reject if any sigma point is behind the camera (discontinuous projection).
+            // Hard reject if any sigma point is behind the camera since the projection will be
+            // discontinuous.
             if (status == ProjStatus::BehindCamera) {
                 mOutRadiiAcc[camId][gaussianId] = 0;
                 return;
@@ -705,14 +708,14 @@ template <typename ScalarType> struct ProjectionForwardUT {
 
         // Compute mean of projected points
         nanovdb::math::Vec2<ScalarType> mean2d(ScalarType(0), ScalarType(0));
-        for (int i = 0; i < mUTParams.numSigmaPoints; ++i) {
+        for (int i = 0; i < kNumSigmaPoints; ++i) {
             mean2d[0] += weights_mean[i] * projected_points[i][0];
             mean2d[1] += weights_mean[i] * projected_points[i][1];
         }
 
         // Reconstruct 2D covariance from projected sigma points
         Mat2 covar2d = reconstructCovarianceFromSigmaPoints(
-            projected_points, weights_cov, mUTParams.numSigmaPoints, mean2d);
+            projected_points, weights_cov, kNumSigmaPoints, mean2d);
 
         // Add blur for numerical stability
         ScalarType compensation;
@@ -829,13 +832,7 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
         TORCH_CHECK_VALUE(false, "Unknown DistortionModel for GaussianProjectionForwardUT");
     }
 
-    // This kernel currently implements only the canonical 3D UT with 2D+1 sigma points (7).
-    // Validate on the host so misconfiguration is reported loudly instead of silently discarding.
-    TORCH_CHECK_VALUE(
-        utParams.numSigmaPoints == 7,
-        "GaussianProjectionForwardUT currently supports only utParams.numSigmaPoints == 7 "
-        "(3D UT with 2D+1 sigma points). Got ",
-        utParams.numSigmaPoints);
+    // This kernel implements only the canonical 3D UT with 2D+1 sigma points (7).
 
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means));
 

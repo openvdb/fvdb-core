@@ -33,12 +33,9 @@ enum class DistortionModel : int32_t {
 };
 
 struct UTParams {
-    float alpha = 0.1f; // Blending parameter for UT
-    float beta  = 2.0f; // Scaling parameter for UT
-    float kappa = 0.0f; // Additional scaling parameter for UT
-    // For a 3D Unscented Transform with the standard \(2D+1\) formulation, D=3 => 7 points.
-    // This implementation currently supports only this 3D case.
-    int numSigmaPoints  = 7;
+    float alpha         = 0.1f; // Blending parameter for UT
+    float beta          = 2.0f; // Scaling parameter for UT
+    float kappa         = 0.0f; // Additional scaling parameter for UT
     float inImageMargin = 0.1f; // Margin for in-image check
     bool requireAllSigmaPointsInImage =
         true; // Require all sigma points to be in image to consider a Gaussian valid
