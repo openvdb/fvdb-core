@@ -7,6 +7,7 @@
 
 #include <fvdb/FVDB.h>
 #include <fvdb/GaussianSplat3d.h>
+#include <fvdb/detail/autograd/EvaluateSphericalHarmonics.h>
 
 #include <torch/extension.h>
 
@@ -392,4 +393,47 @@ bind_gaussian_splat3d(py::module &m) {
           py::arg("render_depth_only")    = false,
           py::arg("ortho")                = false,
           py::arg("backgrounds")          = std::nullopt);
+
+    m.def(
+        "evaluate_spherical_harmonics",
+        [](int64_t shDegree,
+           int64_t numCameras,
+           const torch::Tensor &sh0,
+           const torch::Tensor &radii,
+           const std::optional<torch::Tensor> &shN,
+           const std::optional<torch::Tensor> &viewDirections) {
+            return fvdb::detail::autograd::EvaluateSphericalHarmonics::apply(
+                shDegree, numCameras, viewDirections, sh0, shN, radii)[0];
+        },
+        R"doc(
+Evaluate spherical harmonics to compute view-dependent features/colors.
+
+This function evaluates spherical harmonics (SH) coefficients to compute
+features (typically RGB colors) for a set of points, optionally considering
+view directions for view-dependent appearance.
+
+Args:
+    sh_degree: Degree of spherical harmonics to use (0-3 typically).
+               Degree 0 uses only sh0 (view-independent).
+               Higher degrees require view_directions and shN.
+    num_cameras: Number of camera views (C). The output will have shape [C, N, D].
+    sh0: DC term coefficients with shape [N, 1, D] where N is the number of
+         points and D is the number of feature channels.
+    radii: Projected radii with shape [C, N] (int32). Points with radii <= 0
+           will output zeros (used to skip invisible gaussians). Pass a tensor
+           of ones to evaluate all points.
+    shN: Higher-order SH coefficients with shape [N, K-1, D] where
+         K = (sh_degree+1)^2. Required when sh_degree > 0. Pass None for degree 0.
+    view_directions: Unnormalized view directions with shape [C, N, 3].
+                     Required when sh_degree > 0. Pass None for degree 0.
+
+Returns:
+    Tensor of shape [C, N, D] containing the evaluated features/colors.
+)doc",
+        py::arg("sh_degree"),
+        py::arg("num_cameras"),
+        py::arg("sh0"),
+        py::arg("radii"),
+        py::arg("shN")             = std::nullopt,
+        py::arg("view_directions") = std::nullopt);
 }

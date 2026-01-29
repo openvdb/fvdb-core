@@ -92,6 +92,14 @@ def gaussian_render_jagged(
     ortho: bool = False,
     backgrounds: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]: ...
+def evaluate_spherical_harmonics(
+    sh_degree: int,
+    num_cameras: int,
+    sh0: torch.Tensor,
+    radii: torch.Tensor,
+    shN: torch.Tensor | None = None,
+    view_directions: torch.Tensor | None = None,
+) -> torch.Tensor: ...
 
 __all__ = [
     # Core classes
@@ -115,6 +123,7 @@ __all__ = [
     "scaled_dot_product_attention",
     "volume_render",
     "gaussian_render_jagged",
+    "evaluate_spherical_harmonics",
     # Torch-compatible functions (work with both Tensor and JaggedTensor)
     "relu",
     "relu_",

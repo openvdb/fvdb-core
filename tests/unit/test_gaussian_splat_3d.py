@@ -17,7 +17,13 @@ from fvdb.utils.tests import (
 )
 from parameterized import parameterized, parameterized_class
 
-from fvdb import GaussianSplat3d, Grid, JaggedTensor, gaussian_render_jagged
+from fvdb import (
+    GaussianSplat3d,
+    Grid,
+    JaggedTensor,
+    evaluate_spherical_harmonics,
+    gaussian_render_jagged,
+)
 
 
 def compare_images(pixels_or_path_a, pixels_or_path_b):
@@ -3102,6 +3108,319 @@ class TestGaussianSplatMCMC(BaseGaussianTestCase):
         expected_means = means.cpu() + delta
 
         self.assertTrue(torch.allclose(gs.means.cpu(), expected_means, atol=1e-5, rtol=1e-6))
+
+
+class TestEvaluateSphericalHarmonics(unittest.TestCase):
+    """Tests for the standalone evaluate_spherical_harmonics function."""
+
+    def setUp(self):
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA required for spherical harmonics evaluation")
+        torch.random.manual_seed(42)
+        self.device = "cuda:0"
+
+    def test_degree_0_basic(self):
+        """Test degree 0 SH evaluation (DC term only, view-independent)."""
+        N = 100  # number of gaussians
+        D = 3  # number of channels (e.g., RGB)
+        C = 2  # number of cameras
+
+        sh0 = torch.randn(N, 1, D, device=self.device)
+        radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
+
+        result = evaluate_spherical_harmonics(
+            sh_degree=0,
+            num_cameras=C,
+            sh0=sh0,
+            radii=radii,
+        )
+
+        self.assertEqual(result.shape, (C, N, D))
+        # For degree 0, the result should be the same for all cameras
+        # since there's no view dependence
+        self.assertTrue(torch.allclose(result[0], result[1], atol=1e-6))
+
+    def test_degree_0_matches_expected(self):
+        """Test that degree 0 SH evaluation produces expected output."""
+        N = 10
+        D = 3
+        C = 1
+
+        # Known sh0 values
+        sh0 = torch.ones(N, 1, D, device=self.device)
+        radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
+
+        result = evaluate_spherical_harmonics(
+            sh_degree=0,
+            num_cameras=C,
+            sh0=sh0,
+            radii=radii,
+        )
+
+        # For degree 0: result = 0.2820947917738781 * sh0 + 0.5
+        # With sh0 = 1, result should be approximately 0.7821
+        C0 = 0.2820947917738781
+        expected = C0 * 1.0 + 0.5
+        self.assertTrue(torch.allclose(result, torch.full_like(result, expected), atol=1e-5))
+
+    def test_degree_1_requires_view_directions(self):
+        """Test that degree 1+ requires view directions."""
+        N = 10
+        D = 3
+        C = 1
+
+        sh0 = torch.randn(N, 1, D, device=self.device)
+        shN = torch.randn(N, 3, D, device=self.device)  # 3 coefficients for degree 1
+        radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
+
+        # Should raise ValueError when view_directions is not provided for degree > 0
+        with self.assertRaises(ValueError):
+            evaluate_spherical_harmonics(
+                sh_degree=1,
+                num_cameras=C,
+                sh0=sh0,
+                radii=radii,
+                shN=shN,
+                view_directions=None,
+            )
+
+        # Should work when view directions are provided
+        view_dirs = torch.randn(C, N, 3, device=self.device)
+        result = evaluate_spherical_harmonics(
+            sh_degree=1,
+            num_cameras=C,
+            sh0=sh0,
+            radii=radii,
+            shN=shN,
+            view_directions=view_dirs,
+        )
+        self.assertEqual(result.shape, (C, N, D))
+
+    def test_degree_3_full(self):
+        """Test full degree 3 SH evaluation."""
+        N = 50
+        D = 3
+        C = 4
+
+        sh0 = torch.randn(N, 1, D, device=self.device)
+        # Degree 3 has (3+1)^2 = 16 bases, so K-1 = 15 higher order coefficients
+        shN = torch.randn(N, 15, D, device=self.device)
+        view_dirs = torch.randn(C, N, 3, device=self.device)
+        radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
+
+        result = evaluate_spherical_harmonics(
+            sh_degree=3,
+            num_cameras=C,
+            sh0=sh0,
+            radii=radii,
+            shN=shN,
+            view_directions=view_dirs,
+        )
+
+        self.assertEqual(result.shape, (C, N, D))
+        # Results should differ per camera due to view dependence
+        self.assertFalse(torch.allclose(result[0], result[1], atol=1e-3))
+
+    def test_radii_masks_output(self):
+        """Test that radii parameter correctly masks output."""
+        N = 20
+        D = 3
+        C = 2
+
+        sh0 = torch.randn(N, 1, D, device=self.device)
+
+        # Create radii where some are <= 0 (should output zeros)
+        radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
+        radii[0, :5] = 0  # First 5 gaussians for camera 0 should be masked
+        radii[1, 10:15] = -1  # Gaussians 10-14 for camera 1 should be masked
+
+        result = evaluate_spherical_harmonics(
+            sh_degree=0,
+            num_cameras=C,
+            sh0=sh0,
+            radii=radii,
+        )
+
+        # Check that masked entries are zero
+        self.assertTrue(torch.all(result[0, :5, :] == 0))
+        self.assertTrue(torch.all(result[1, 10:15, :] == 0))
+        # Check that non-masked entries are non-zero
+        self.assertFalse(torch.all(result[0, 5:, :] == 0))
+        self.assertFalse(torch.all(result[1, :10, :] == 0))
+
+    def test_gradient_flow_sh0(self):
+        """Test that gradients flow through sh0."""
+        N = 10
+        D = 3
+        C = 1
+
+        sh0 = torch.randn(N, 1, D, device=self.device, requires_grad=True)
+        # Note: radii must be provided for backward pass to work correctly
+        # (matches GaussianSplat3d usage pattern)
+        radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
+
+        result = evaluate_spherical_harmonics(
+            sh_degree=0,
+            num_cameras=C,
+            sh0=sh0,
+            radii=radii,
+        )
+
+        loss = result.sum()
+        loss.backward()
+
+        self.assertIsNotNone(sh0.grad)
+        self.assertTrue(torch.any(sh0.grad != 0))
+
+    def test_gradient_flow_shN(self):
+        """Test that gradients flow through shN for higher degrees."""
+        N = 10
+        D = 3
+        C = 2
+
+        sh0 = torch.randn(N, 1, D, device=self.device, requires_grad=True)
+        shN = torch.randn(N, 15, D, device=self.device, requires_grad=True)
+        view_dirs = torch.randn(C, N, 3, device=self.device)
+        # Note: radii must be provided for backward pass to work correctly
+        radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
+
+        result = evaluate_spherical_harmonics(
+            sh_degree=3,
+            num_cameras=C,
+            sh0=sh0,
+            radii=radii,
+            shN=shN,
+            view_directions=view_dirs,
+        )
+
+        loss = result.sum()
+        loss.backward()
+
+        self.assertIsNotNone(sh0.grad)
+        self.assertIsNotNone(shN.grad)
+        self.assertTrue(torch.any(sh0.grad != 0))
+        self.assertTrue(torch.any(shN.grad != 0))
+
+    def test_gradient_flow_view_directions(self):
+        """Test that gradients flow through view directions."""
+        N = 10
+        D = 3
+        C = 2
+
+        sh0 = torch.randn(N, 1, D, device=self.device)
+        shN = torch.randn(N, 15, D, device=self.device)
+        view_dirs = torch.randn(C, N, 3, device=self.device, requires_grad=True)
+        radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
+
+        result = evaluate_spherical_harmonics(
+            sh_degree=3,
+            num_cameras=C,
+            sh0=sh0,
+            radii=radii,
+            shN=shN,
+            view_directions=view_dirs,
+        )
+
+        loss = result.sum()
+        loss.backward()
+
+        self.assertIsNotNone(view_dirs.grad)
+        self.assertTrue(torch.any(view_dirs.grad != 0))
+
+    def test_single_gaussian(self):
+        """Test with a single gaussian."""
+        N = 1
+        D = 3
+        C = 4
+
+        sh0 = torch.randn(N, 1, D, device=self.device)
+        shN = torch.randn(N, 15, D, device=self.device)
+        view_dirs = torch.randn(C, N, 3, device=self.device)
+        radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
+
+        result = evaluate_spherical_harmonics(
+            sh_degree=3,
+            num_cameras=C,
+            sh0=sh0,
+            radii=radii,
+            shN=shN,
+            view_directions=view_dirs,
+        )
+
+        self.assertEqual(result.shape, (C, N, D))
+
+    def test_many_channels(self):
+        """Test with many feature channels."""
+        N = 50
+        D = 64  # Many channels
+        C = 2
+
+        sh0 = torch.randn(N, 1, D, device=self.device)
+        shN = torch.randn(N, 15, D, device=self.device)
+        view_dirs = torch.randn(C, N, 3, device=self.device)
+        radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
+
+        result = evaluate_spherical_harmonics(
+            sh_degree=3,
+            num_cameras=C,
+            sh0=sh0,
+            radii=radii,
+            shN=shN,
+            view_directions=view_dirs,
+        )
+
+        self.assertEqual(result.shape, (C, N, D))
+
+    @parameterized.expand([(1,), (2,), (3,)])
+    def test_different_sh_degrees(self, sh_degree):
+        """Test different SH degrees."""
+        N = 20
+        D = 3
+        C = 2
+
+        sh0 = torch.randn(N, 1, D, device=self.device)
+        K = (sh_degree + 1) ** 2
+        shN = torch.randn(N, K - 1, D, device=self.device)
+        view_dirs = torch.randn(C, N, 3, device=self.device)
+        radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
+
+        result = evaluate_spherical_harmonics(
+            sh_degree=sh_degree,
+            num_cameras=C,
+            sh0=sh0,
+            radii=radii,
+            shN=shN,
+            view_directions=view_dirs,
+        )
+
+        self.assertEqual(result.shape, (C, N, D))
+
+    def test_view_directions_not_prenormalized(self):
+        """Test that view directions don't need to be pre-normalized."""
+        N = 10
+        D = 3
+        C = 1
+
+        sh0 = torch.randn(N, 1, D, device=self.device)
+        shN = torch.randn(N, 15, D, device=self.device)
+        radii = torch.ones(C, N, dtype=torch.int32, device=self.device)
+
+        # Unnormalized view directions (varying magnitudes)
+        view_dirs = torch.randn(C, N, 3, device=self.device) * 10.0
+
+        # Should not crash and produce valid output
+        result = evaluate_spherical_harmonics(
+            sh_degree=3,
+            num_cameras=C,
+            sh0=sh0,
+            radii=radii,
+            shN=shN,
+            view_directions=view_dirs,
+        )
+
+        self.assertEqual(result.shape, (C, N, D))
+        self.assertFalse(torch.isnan(result).any())
+        self.assertFalse(torch.isinf(result).any())
 
 
 if __name__ == "__main__":
