@@ -229,6 +229,28 @@ template <typename T> class OpenCVCameraModel {
     }
 };
 
+// UT-local pose concept (rotation quaternion + translation).
+// Quaternion is stored as [w,x,y,z].
+template <typename T> struct Pose {
+    nanovdb::math::Vec4<T> q;
+    nanovdb::math::Vec3<T> t;
+};
+
+// UT-local wrapper returning Pose, implemented using the reusable interpolation math in
+// `GaussianUtils.cuh`.
+template <typename T>
+inline __device__ Pose<T>
+interpolatePose(const T u,
+                const nanovdb::math::Mat3<T> &R_start,
+                const nanovdb::math::Vec3<T> &t_start,
+                const nanovdb::math::Mat3<T> &R_end,
+                const nanovdb::math::Vec3<T> &t_end) {
+    nanovdb::math::Vec4<T> q(T(1), T(0), T(0), T(0));
+    nanovdb::math::Vec3<T> t(T(0), T(0), T(0));
+    interpolatePoseRt<T>(q, t, u, R_start, t_start, R_end, t_end);
+    return Pose<T>{q, t};
+}
+
 // Generate 3D sigma points and weights for the (scaled) Unscented Transform.
 // Sigma points are generated in WORLD space directly from (mean, scale, quaternion),
 // exploiting the closed form SVD of the Gaussian covariance.
