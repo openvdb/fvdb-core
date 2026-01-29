@@ -26,35 +26,132 @@ namespace {
 // - Tangential: p1, p2
 // - Thin prism: s1..s4
 //
-// When an OpenCV distortion model is selected, coefficients are provided as a single per-camera
-// vector in the order:
-//   [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]
-enum class OpenCVDistortionModel : uint8_t {
-    NONE          = 0,  // no distortion
-    RADTAN_5      = 5,  // k1,k2,p1,p2,k3 (polynomial radial up to r^6)
-    RATIONAL_8    = 8,  // k1,k2,p1,p2,k3,k4,k5,k6 (rational radial)
-    RADTAN_THIN_9 = 9,  // RADTAN_5 + thin prism s1..s4 (polynomial radial + thin-prism)
-    THIN_PRISM_12 = 12, // RATIONAL_8 + s1,s2,s3,s4
-};
-
-template <typename T> struct OpenCVDistortion {
+/// @brief OpenCV camera model (pinhole intrinsics + distortion).
+///
+/// This is an internal helper used by the UT projection kernel. It owns the camera intrinsics
+/// `K` and the distortion coefficient pointers and can project `p_cam -> pixel`.
+/// @see https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html
+///
+/// @tparam T Scalar type
+template <typename T> struct OpenCVCameraModel {
     using Vec2 = nanovdb::math::Vec2<T>;
+    using Vec3 = nanovdb::math::Vec3<T>;
+    using Mat3 = nanovdb::math::Mat3<T>;
 
-    const T *radial             = nullptr; // k1..k6 (but k4..k6 only used in rational model)
-    int numRadial               = 0;
-    const T *tangential         = nullptr; // p1,p2
-    int numTangential           = 0;
-    const T *thinPrism          = nullptr; // s1..s4
-    int numThinPrism            = 0;
-    OpenCVDistortionModel model = OpenCVDistortionModel::NONE;
+    // Internal "math mode" for OpenCV distortion evaluation.
+    // Kept inside the struct to avoid confusion with the public API `DistortionModel`.
+    enum class Model : uint8_t {
+        NONE          = 0,  // no distortion
+        RADTAN_5      = 5,  // k1,k2,p1,p2,k3 (polynomial radial up to r^6)
+        RATIONAL_8    = 8,  // k1,k2,p1,p2,k3,k4,k5,k6 (rational radial)
+        RADTAN_THIN_9 = 9,  // RADTAN_5 + thin prism s1..s4 (polynomial radial + thin-prism)
+        THIN_PRISM_12 = 12, // RATIONAL_8 + s1,s2,s3,s4
+    };
 
+    // Camera intrinsics. Must be set by the caller before use.
+    Mat3 K = Mat3();
+
+    // Coefficients for the distortion model.
+    const T *radial     = nullptr;     // k1..k6 (but k4..k6 only used in rational model)
+    int numRadial       = 0;           // Number of radial coefficients
+    const T *tangential = nullptr;     // p1,p2
+    int numTangential   = 0;           // Number of tangential coefficients
+    const T *thinPrism  = nullptr;     // s1..s4 (but s1..s3 only used in thin prism model)
+    int numThinPrism    = 0;           // Number of thin prism coefficients
+    Model model         = Model::NONE; // Distortion model
+
+    // Initialize this camera model from the public DistortionModel enum and a per-camera
+    // coefficient vector in OpenCV's packed layout:
+    //   [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]
+    //
+    // Returns false if the coefficient layout is not available for the requested model.
+    __device__ bool
+    init(const DistortionModel distortionModel,
+         const Mat3 &K_in,
+         const T *coeffs,
+         const int nCoeffs) {
+        K = K_in;
+
+        if (distortionModel == DistortionModel::NONE) {
+            radial = tangential = thinPrism = nullptr;
+            numRadial = numTangential = numThinPrism = 0;
+            model                                    = Model::NONE;
+            return true;
+        }
+
+        // OpenCV models require the packed coefficient layout.
+        if (coeffs == nullptr || nCoeffs < 12) {
+            return false;
+        }
+        const T *radial_in = coeffs + 0; // k1..k6
+        const T *tang_in   = coeffs + 6; // p1,p2
+        const T *thin_in   = coeffs + 8; // s1..s4
+
+        if (distortionModel == DistortionModel::OPENCV_RADTAN_5) {
+            radial        = radial_in;
+            numRadial     = 3; // k1,k2,k3 (polynomial)
+            tangential    = tang_in;
+            numTangential = 2;
+            thinPrism     = nullptr;
+            numThinPrism  = 0;
+            model         = Model::RADTAN_5;
+            return true;
+        }
+        if (distortionModel == DistortionModel::OPENCV_RATIONAL_8) {
+            radial        = radial_in;
+            numRadial     = 6; // k1..k6 (rational)
+            tangential    = tang_in;
+            numTangential = 2;
+            thinPrism     = nullptr;
+            numThinPrism  = 0;
+            model         = Model::RATIONAL_8;
+            return true;
+        }
+        if (distortionModel == DistortionModel::OPENCV_THIN_PRISM_12) {
+            radial        = radial_in;
+            numRadial     = 6; // k1..k6 (rational)
+            tangential    = tang_in;
+            numTangential = 2;
+            thinPrism     = thin_in;
+            numThinPrism  = 4; // s1..s4
+            model         = Model::THIN_PRISM_12;
+            return true;
+        }
+        if (distortionModel == DistortionModel::OPENCV_RADTAN_THIN_PRISM_9) {
+            // Polynomial radial + thin-prism; ignore k4..k6 by construction.
+            radial        = radial_in;
+            numRadial     = 3; // k1,k2,k3 (polynomial)
+            tangential    = tang_in;
+            numTangential = 2;
+            thinPrism     = thin_in;
+            numThinPrism  = 4; // s1..s4
+            model         = Model::RADTAN_THIN_9;
+            return true;
+        }
+
+        // Unknown distortion model.
+        return false;
+    }
+
+    /// @brief Get a coefficient or zero if the pointer is null.
+    ///
+    /// @param[in] ptr Pointer to the coefficients
+    /// @param[in] n Number of coefficients
+    /// @param[in] i Index of the coefficient
+    ///
+    /// @return Coefficient or zero if the pointer is null
     __host__ __device__ inline T
     coeffOrZero(const T *ptr, const int n, const int i) const {
         return (ptr != nullptr && i >= 0 && i < n) ? ptr[i] : T(0);
     }
 
+    /// @brief Apply the distortion to a 2D point.
+    ///
+    /// @param[in] p_normalized Normalized 2D point [x, y] in camera coordinates
+    ///
+    /// @return Distorted 2D point [x_dist, y_dist] in camera coordinates
     __device__ Vec2
-    apply(const Vec2 &p_normalized) const {
+    applyDistortion(const Vec2 &p_normalized) const {
         const T x  = p_normalized[0];
         const T y  = p_normalized[1];
         const T x2 = x * x;
@@ -67,8 +164,7 @@ template <typename T> struct OpenCVDistortion {
 
         // Radial distortion.
         T radial_dist = T(1);
-        if (model == OpenCVDistortionModel::RATIONAL_8 ||
-            model == OpenCVDistortionModel::THIN_PRISM_12) {
+        if (model == Model::RATIONAL_8 || model == Model::THIN_PRISM_12) {
             const T k1  = coeffOrZero(radial, numRadial, 0);
             const T k2  = coeffOrZero(radial, numRadial, 1);
             const T k3  = coeffOrZero(radial, numRadial, 2);
@@ -78,13 +174,13 @@ template <typename T> struct OpenCVDistortion {
             const T num = T(1) + r2 * (k1 + r2 * (k2 + r2 * k3));
             const T den = T(1) + r2 * (k4 + r2 * (k5 + r2 * k6));
             radial_dist = (den != T(0)) ? (num / den) : T(0);
-        } else if (model == OpenCVDistortionModel::RADTAN_5) {
+        } else if (model == Model::RADTAN_5) {
             // Polynomial radial (up to k3 / r^6).
             const T k1  = coeffOrZero(radial, numRadial, 0);
             const T k2  = coeffOrZero(radial, numRadial, 1);
             const T k3  = coeffOrZero(radial, numRadial, 2);
             radial_dist = T(1) + k1 * r2 + k2 * r4 + k3 * r6;
-        } else if (model == OpenCVDistortionModel::RADTAN_THIN_9) {
+        } else if (model == Model::RADTAN_THIN_9) {
             // Polynomial radial (same as RADTAN_5). Thin-prism terms are applied below.
             const T k1  = coeffOrZero(radial, numRadial, 0);
             const T k2  = coeffOrZero(radial, numRadial, 1);
@@ -104,8 +200,7 @@ template <typename T> struct OpenCVDistortion {
         y_dist += p1 * (r2 + T(2) * y2) + T(2) * p2 * xy;
 
         // Thin-prism distortion.
-        if (model == OpenCVDistortionModel::THIN_PRISM_12 ||
-            model == OpenCVDistortionModel::RADTAN_THIN_9) {
+        if (model == Model::THIN_PRISM_12 || model == Model::RADTAN_THIN_9) {
             const T s1 = coeffOrZero(thinPrism, numThinPrism, 0);
             const T s2 = coeffOrZero(thinPrism, numThinPrism, 1);
             const T s3 = coeffOrZero(thinPrism, numThinPrism, 2);
@@ -116,28 +211,25 @@ template <typename T> struct OpenCVDistortion {
 
         return Vec2(x_dist, y_dist);
     }
+
+    // Project a 3D point in camera coordinates to pixel coordinates using this camera model
+    // (pinhole + distortion + intrinsics).
+    __device__ Vec2
+    project(const Vec3 &p_cam) const {
+        // Normalize by depth.
+        const T z_inv = T(1) / max(p_cam[2], T(1e-6));
+        const Vec2 p_normalized(p_cam[0] * z_inv, p_cam[1] * z_inv);
+
+        const Vec2 p_distorted = applyDistortion(p_normalized);
+
+        // Project to pixel coordinates.
+        const T fx = K[0][0];
+        const T fy = K[1][1];
+        const T cx = K[0][2];
+        const T cy = K[1][2];
+        return Vec2(fx * p_distorted[0] + cx, fy * p_distorted[1] + cy);
+    }
 };
-
-// Project a 3D point to 2D (pixel coords) with OpenCV-style distortion.
-template <typename T>
-__device__ nanovdb::math::Vec2<T>
-projectPointWithDistortion(const nanovdb::math::Vec3<T> &p_cam,
-                           const nanovdb::math::Mat3<T> &K,
-                           const OpenCVDistortion<T> &distortion) {
-    // Normalize by depth.
-    const T z_inv = T(1) / max(p_cam[2], T(1e-6));
-    const nanovdb::math::Vec2<T> p_normalized(p_cam[0] * z_inv, p_cam[1] * z_inv);
-
-    const nanovdb::math::Vec2<T> p_distorted = distortion.apply(p_normalized);
-
-    // Project to pixel coordinates.
-    const T fx = K[0][0];
-    const T fy = K[1][1];
-    const T cx = K[0][2];
-    const T cy = K[1][2];
-
-    return nanovdb::math::Vec2<T>(fx * p_distorted[0] + cx, fy * p_distorted[1] + cy);
-}
 
 // Generate 3D sigma points and weights for the (scaled) Unscented Transform.
 // Sigma points are generated in WORLD space directly from (mean, scale, quaternion),
@@ -395,57 +487,13 @@ template <typename ScalarType> struct ProjectionForwardUT {
         const Vec3 &worldToCamTransStart = worldToCamTranslationStartShared[camId];
         const Vec3 &worldToCamTransEnd   = worldToCamTranslationEndShared[camId];
 
-        OpenCVDistortion<ScalarType> distortion;
-        if (mDistortionModel == DistortionModel::NONE) {
-            distortion.model = OpenCVDistortionModel::NONE;
-        } else {
-            if (mNumDistortionCoeffs < 12 || distortionCoeffsShared == nullptr) {
-                mOutRadiiAcc[camId][gaussianId] = 0;
-                return;
-            }
-            const ScalarType *coeffs = &distortionCoeffsShared[camId * mNumDistortionCoeffs];
-            const ScalarType *radial = coeffs + 0; // k1..k6
-            const ScalarType *tang   = coeffs + 6; // p1,p2
-            const ScalarType *thin   = coeffs + 8; // s1..s4
-
-            // Note: host-side validation ensures unused coeffs are zero when using the
-            // stricter OPENCV_* enum variants.
-            if (mDistortionModel == DistortionModel::OPENCV_RADTAN_5) {
-                distortion.radial        = radial;
-                distortion.numRadial     = 3; // k1,k2,k3
-                distortion.tangential    = tang;
-                distortion.numTangential = 2;
-                distortion.thinPrism     = nullptr;
-                distortion.numThinPrism  = 0;
-                distortion.model         = OpenCVDistortionModel::RADTAN_5;
-            } else if (mDistortionModel == DistortionModel::OPENCV_RATIONAL_8) {
-                distortion.radial        = radial;
-                distortion.numRadial     = 6; // k1..k6
-                distortion.tangential    = tang;
-                distortion.numTangential = 2;
-                distortion.thinPrism     = nullptr;
-                distortion.numThinPrism  = 0;
-                distortion.model         = OpenCVDistortionModel::RATIONAL_8;
-            } else if (mDistortionModel == DistortionModel::OPENCV_THIN_PRISM_12) {
-                distortion.radial        = radial;
-                distortion.numRadial     = 6; // k1..k6
-                distortion.tangential    = tang;
-                distortion.numTangential = 2;
-                distortion.thinPrism     = thin;
-                distortion.numThinPrism  = 4; // s1..s4
-                distortion.model         = OpenCVDistortionModel::THIN_PRISM_12;
-            } else if (mDistortionModel == DistortionModel::OPENCV_RADTAN_THIN_PRISM_9) {
-                distortion.radial        = radial;
-                distortion.numRadial     = 3; // k1,k2,k3 (polynomial radial)
-                distortion.tangential    = tang;
-                distortion.numTangential = 2;
-                distortion.thinPrism     = thin;
-                distortion.numThinPrism  = 4;
-                distortion.model         = OpenCVDistortionModel::RADTAN_THIN_9;
-            } else {
-                mOutRadiiAcc[camId][gaussianId] = 0;
-                return;
-            }
+        OpenCVCameraModel<ScalarType> camera;
+        const ScalarType *coeffs = (distortionCoeffsShared != nullptr)
+                                       ? &distortionCoeffsShared[camId * mNumDistortionCoeffs]
+                                       : nullptr;
+        if (!camera.init(mDistortionModel, projectionMatrix, coeffs, int(mNumDistortionCoeffs))) {
+            mOutRadiiAcc[camId][gaussianId] = 0;
+            return;
         }
 
         // Get Gaussian parameters
@@ -523,7 +571,7 @@ template <typename ScalarType> struct ProjectionForwardUT {
                     out_pix = Vec2(ScalarType(0), ScalarType(0));
                     return ProjStatus::BehindCamera;
                 }
-                out_pix           = projectPointWithDistortion(p_cam, projectionMatrix, distortion);
+                out_pix           = camera.project(p_cam);
                 const bool in_img = (out_pix[0] >= -margin_x) &&
                                     (out_pix[0] < ScalarType(mImageWidth) + margin_x) &&
                                     (out_pix[1] >= -margin_y) &&
