@@ -44,7 +44,8 @@ struct UTParams {
         true; // Require all sigma points to be in image to consider a Gaussian valid
 };
 
-/// @brief Project 3D Gaussians to 2D screen space pixel coordinates for rendering
+/// @brief Project 3D Gaussians to 2D screen space pixel coordinates for rendering using the
+/// Unscented Transform (UT) algorithm.
 ///
 /// This function transforms 3D Gaussians to 2D screen space by applying camera projections.
 /// It computes the 2D means, depths, 2D covariance matrices (conics), and potentially compensation
@@ -56,6 +57,17 @@ struct UTParams {
 /// @attention The output radii of 3D Gaussians that are discarded (due to clipping or projection
 /// too small) are set to zero, but the other output values of discarded Gaussians are uninitialized
 /// (undefined).
+///
+/// The UT algorithm is a non-parametric method for approximating the mean and covariance of a
+/// probability distribution. It is used to project 3D Gaussians to 2D screen space by applying
+/// camera projections.
+///
+/// The UT algorithm is based on the following steps:
+/// 1. Generate a set of sigma points around the mean of the Gaussian.
+/// 2. Project the sigma points to 2D screen space.
+/// 3. Compute the mean and covariance of the projected sigma points.
+/// 4. Use the mean and covariance to compute the 2D means, depths, 2D covariance matrices (conics),
+/// and potentially compensation factors.
 ///
 /// @tparam DeviceType Device type template parameter (torch::kCUDA or torch::kCPU)
 ///
