@@ -260,6 +260,7 @@ projectionBackwardKernel(const int32_t offset,
         auto [dLossDQuat, dLossDScale] = quaternionAndScaleToCovarianceVectorJacobianProduct<T>(
             quat, scale, rotmat, dLossDCovar);
 
+        warpSum(dLossDQuat, warp_group_g);
         warpSum(dLossDScale, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
             outDLossDQuats += gId * 4;
