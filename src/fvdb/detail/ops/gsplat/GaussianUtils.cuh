@@ -44,19 +44,22 @@ binSearch(const T *arr, const uint32_t len, const T val) {
     return low - 1;
 }
 
-/// @brief Converts a 3x3 rotation matrix to a quaternion
+/// @brief Converts a 3x3 rotation matrix to a quaternion.
 ///
-/// This function takes a 3x3 rotation matrix and converts it to the equivalent
-/// quaternion representation. The quaternion is normalized to ensure it has unit length.
+/// This function converts a 3x3 rotation matrix to the equivalent quaternion \([w,x,y,z]\) and
+/// normalizes the result.
 ///
-/// The conversion uses the standard formula:
-/// q = [w,x,y,z] = [sqrt(1+R[0][0]+R[1][1]+R[2][2])/2, (R[2][1]-R[1][2])/(4*w),
-/// (R[0][2]-R[2][0])/(4*w), (R[1][0]-R[0][1])/(4*w)]
+/// The implementation uses the standard **branch-based** algorithm for numerical robustness:
+/// - If \(\mathrm{trace}(R) > 0\), it uses the closed-form trace formula
+///   \(w = \tfrac{1}{2}\sqrt{1 + \mathrm{trace}(R)}\) and derives \((x,y,z)\) from the off-diagonals.
+/// - Otherwise it selects the largest diagonal element and computes the quaternion from that
+///   branch (x-dominant / y-dominant / z-dominant cases).
 ///
-/// Where w,x,y,z are the components of the normalized quaternion.
+/// Degenerate inputs (e.g. non-rotation matrices, NaNs) are guarded against to avoid division by
+/// near-zero intermediates; in such cases the function falls back to the identity quaternion.
 ///
-/// @param R Input 3x3 rotation matrix
-/// @return nanovdb::math::Vec4<T> Quaternion equivalent to the rotation matrix
+/// @param R Input 3x3 rotation matrix.
+/// @return nanovdb::math::Vec4<T> Quaternion equivalent to the rotation matrix.
 template <typename T>
 __host__ __device__ nanovdb::math::Vec4<T>
 rotationMatrixToQuaternion(const nanovdb::math::Mat3<T> &R) {
