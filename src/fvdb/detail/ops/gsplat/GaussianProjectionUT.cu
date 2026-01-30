@@ -40,7 +40,7 @@ template <typename T> class OpenCVCameraModel {
     using Mat3 = nanovdb::math::Mat3<T>;
 
     // Internal "math mode" for OpenCV distortion evaluation.
-    // Kept inside the struct to avoid confusion with the public API `DistortionModel`.
+    // Kept inside the struct to avoid confusion with the public API `CameraModel`.
     enum class Model : uint8_t {
         NONE          = 0,  // no distortion
         RADTAN_5      = 5,  // k1,k2,p1,p2,k3 (polynomial radial up to r^6)
@@ -49,20 +49,18 @@ template <typename T> class OpenCVCameraModel {
         THIN_PRISM_12 = 12, // RATIONAL_8 + s1,s2,s3,s4
     };
 
-    // Construct this camera model from the public DistortionModel enum.
+    // Construct this camera model from the public CameraModel enum.
     //
     // For OpenCV models, coefficients are read from a per-camera packed layout:
     //   [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]
     //
     // Preconditions are asserted on-device (trap) rather than returning false.
     __device__ __forceinline__
-    OpenCVCameraModel(const DistortionModel distortionModel,
-                      const Mat3 *K_in,
-                      const T *distortionCoeffs)
+    OpenCVCameraModel(const CameraModel cameraModel, const Mat3 *K_in, const T *distortionCoeffs)
         : K(K_in) {
         deviceAssertOrTrap(K != nullptr);
 
-        if (distortionModel == DistortionModel::NONE) {
+        if (cameraModel == CameraModel::PINHOLE) {
             radial = tangential = thinPrism = nullptr;
             numRadial = numTangential = numThinPrism = 0;
             model                                    = Model::NONE;
@@ -75,7 +73,7 @@ template <typename T> class OpenCVCameraModel {
         const T *tang_in   = distortionCoeffs + 6; // p1,p2
         const T *thin_in   = distortionCoeffs + 8; // s1..s4
 
-        if (distortionModel == DistortionModel::OPENCV_RADTAN_5) {
+        if (cameraModel == CameraModel::OPENCV_RADTAN_5) {
             radial        = radial_in;
             numRadial     = 3; // k1,k2,k3 (polynomial)
             tangential    = tang_in;
@@ -85,7 +83,7 @@ template <typename T> class OpenCVCameraModel {
             model         = Model::RADTAN_5;
             return;
         }
-        if (distortionModel == DistortionModel::OPENCV_RATIONAL_8) {
+        if (cameraModel == CameraModel::OPENCV_RATIONAL_8) {
             radial        = radial_in;
             numRadial     = 6; // k1..k6 (rational)
             tangential    = tang_in;
@@ -95,7 +93,7 @@ template <typename T> class OpenCVCameraModel {
             model         = Model::RATIONAL_8;
             return;
         }
-        if (distortionModel == DistortionModel::OPENCV_THIN_PRISM_12) {
+        if (cameraModel == CameraModel::OPENCV_THIN_PRISM_12) {
             radial        = radial_in;
             numRadial     = 6; // k1..k6 (rational)
             tangential    = tang_in;
@@ -105,7 +103,7 @@ template <typename T> class OpenCVCameraModel {
             model         = Model::THIN_PRISM_12;
             return;
         }
-        if (distortionModel == DistortionModel::OPENCV_RADTAN_THIN_PRISM_9) {
+        if (cameraModel == CameraModel::OPENCV_RADTAN_THIN_PRISM_9) {
             // Polynomial radial + thin-prism; ignore k4..k6 by construction.
             radial        = radial_in;
             numRadial     = 3; // k1,k2,k3 (polynomial)
@@ -117,7 +115,7 @@ template <typename T> class OpenCVCameraModel {
             return;
         }
 
-        // Unknown distortion model: should be unreachable if host validation is correct.
+        // Unknown camera model: should be unreachable if host validation is correct.
         deviceAssertOrTrap(false);
     }
 
@@ -449,7 +447,7 @@ template <typename ScalarType> struct ProjectionForwardUT {
     const ScalarType mRadiusClip;
     const RollingShutterType mRollingShutterType;
     const UTParams mUTParams;
-    const DistortionModel mDistortionModel;
+    const CameraModel mCameraModel;
     const int64_t
         mNumDistortionCoeffs; // Number of distortion coeffs per camera (e.g. 12 for OPENCV)
 
@@ -487,7 +485,7 @@ template <typename ScalarType> struct ProjectionForwardUT {
                         const ScalarType minRadius2d,
                         const RollingShutterType rollingShutterType,
                         const UTParams &utParams,
-                        const DistortionModel distortionModel,
+                        const CameraModel cameraModel,
                         const bool calcCompensations,
                         const torch::Tensor &means,                   // [N, 3]
                         const torch::Tensor &quats,                   // [N, 4]
@@ -506,7 +504,7 @@ template <typename ScalarType> struct ProjectionForwardUT {
           mImageWidth(static_cast<int32_t>(imageWidth)),
           mImageHeight(static_cast<int32_t>(imageHeight)), mEps2d(eps2d), mNearPlane(nearPlane),
           mFarPlane(farPlane), mRadiusClip(minRadius2d), mRollingShutterType(rollingShutterType),
-          mUTParams(utParams), mDistortionModel(distortionModel),
+          mUTParams(utParams), mCameraModel(cameraModel),
           mNumDistortionCoeffs(distortionCoeffs.size(1)),
           mMeansAcc(means.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
           mQuatsAcc(quats.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
@@ -622,7 +620,7 @@ template <typename ScalarType> struct ProjectionForwardUT {
         const ScalarType *distortionCoeffs = &distortionCoeffsShared[camId * mNumDistortionCoeffs];
 
         // Define the camera model (projection and distortion) using the shared memory pointers
-        OpenCVCameraModel<ScalarType> camera(mDistortionModel, &projectionMatrix, distortionCoeffs);
+        OpenCVCameraModel<ScalarType> camera(mCameraModel, &projectionMatrix, distortionCoeffs);
 
         // Define the world-to-camera transforms using the shared memory pointers at the start and
         // end of the shutter period
@@ -797,7 +795,7 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]
     const RollingShutterType rollingShutterType,
     const UTParams &utParams,
-    const DistortionModel distortionModel,
+    const CameraModel cameraModel,
     const torch::Tensor &distortionCoeffs, // [C,12] for OPENCV, [C,0] for NONE
     const int64_t imageWidth,
     const int64_t imageHeight,
@@ -819,17 +817,17 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
     TORCH_CHECK_VALUE(projectionMatrices.is_cuda(), "projectionMatrices must be a CUDA tensor");
     TORCH_CHECK_VALUE(distortionCoeffs.is_cuda(), "distortionCoeffs must be a CUDA tensor");
     TORCH_CHECK_VALUE(distortionCoeffs.dim() == 2, "distortionCoeffs must be 2D");
-    if (distortionModel == DistortionModel::NONE) {
+    if (cameraModel == CameraModel::PINHOLE) {
         // Accept any K (including 0); ignored.
-    } else if (distortionModel == DistortionModel::OPENCV_RADTAN_5 ||
-               distortionModel == DistortionModel::OPENCV_RATIONAL_8 ||
-               distortionModel == DistortionModel::OPENCV_RADTAN_THIN_PRISM_9 ||
-               distortionModel == DistortionModel::OPENCV_THIN_PRISM_12) {
+    } else if (cameraModel == CameraModel::OPENCV_RADTAN_5 ||
+               cameraModel == CameraModel::OPENCV_RATIONAL_8 ||
+               cameraModel == CameraModel::OPENCV_RADTAN_THIN_PRISM_9 ||
+               cameraModel == CameraModel::OPENCV_THIN_PRISM_12) {
         TORCH_CHECK_VALUE(distortionCoeffs.size(1) == 12,
-                          "For DistortionModel::OPENCV_* , distortionCoeffs must have shape [C,12] "
+                          "For CameraModel::OPENCV_* , distortionCoeffs must have shape [C,12] "
                           "as [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]");
     } else {
-        TORCH_CHECK_VALUE(false, "Unknown DistortionModel for GaussianProjectionForwardUT");
+        TORCH_CHECK_VALUE(false, "Unknown CameraModel for GaussianProjectionForwardUT");
     }
 
     // This kernel implements only the canonical 3D UT with 2D+1 sigma points (7).
@@ -876,7 +874,7 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
                                                     minRadius2d,
                                                     rollingShutterType,
                                                     utParams,
-                                                    distortionModel,
+                                                    cameraModel,
                                                     calcCompensations,
                                                     means,
                                                     quats,
@@ -909,7 +907,7 @@ dispatchGaussianProjectionForwardUT<torch::kCPU>(
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]
     const RollingShutterType rollingShutterType,
     const UTParams &utParams,
-    const DistortionModel distortionModel,
+    const CameraModel cameraModel,
     const torch::Tensor &distortionCoeffs, // [C,12] for OPENCV, [C,0] for NONE
     const int64_t imageWidth,
     const int64_t imageHeight,
@@ -933,7 +931,7 @@ dispatchGaussianProjectionForwardUT<torch::kPrivateUse1>(
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]
     const RollingShutterType rollingShutterType,
     const UTParams &utParams,
-    const DistortionModel distortionModel,
+    const CameraModel cameraModel,
     const torch::Tensor &distortionCoeffs, // [C,12] for OPENCV, [C,0] for NONE
     const int64_t imageWidth,
     const int64_t imageHeight,

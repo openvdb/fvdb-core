@@ -108,7 +108,7 @@ struct GaussianProjectionUTTestFixture : public ::testing::Test {
     torch::Tensor worldToCamMatricesStart; // [C, 4, 4]
     torch::Tensor worldToCamMatricesEnd;   // [C, 4, 4]
     torch::Tensor projectionMatrices;      // [C, 3, 3]
-    DistortionModel distortionModel = DistortionModel::NONE;
+    CameraModel cameraModel = CameraModel::PINHOLE;
     torch::Tensor distortionCoeffs;        // [C, 12] for OPENCV, or [C, 0] for NONE
 
     int64_t imageWidth;
@@ -147,7 +147,7 @@ TEST_F(GaussianProjectionUTTestFixture, CenteredGaussian_NoDistortion_AnalyticMe
     projectionMatricesAcc[0][1][2] = cy;
     projectionMatricesAcc[0][2][2] = 1.0f;
 
-    distortionModel  = DistortionModel::NONE;
+    cameraModel      = CameraModel::PINHOLE;
     distortionCoeffs = torch::zeros({C, 0}, torch::kFloat32);
 
     imageWidth  = 640;
@@ -181,7 +181,7 @@ TEST_F(GaussianProjectionUTTestFixture, CenteredGaussian_NoDistortion_AnalyticMe
                                                           projectionMatrices,
                                                           RollingShutterType::NONE,
                                                           utParams,
-                                                          distortionModel,
+                                                          cameraModel,
                                                           distortionCoeffs,
                                                           imageWidth,
                                                           imageHeight,
@@ -242,7 +242,7 @@ TEST_F(GaussianProjectionUTTestFixture, OffAxisTinyGaussian_NoDistortion_MeanMat
     projectionMatricesAcc[0][1][2] = cy;
     projectionMatricesAcc[0][2][2] = 1.0f;
 
-    distortionModel  = DistortionModel::NONE;
+    cameraModel      = CameraModel::PINHOLE;
     distortionCoeffs = torch::zeros({C, 0}, torch::kFloat32);
 
     imageWidth  = 640;
@@ -275,7 +275,7 @@ TEST_F(GaussianProjectionUTTestFixture, OffAxisTinyGaussian_NoDistortion_MeanMat
                                                           projectionMatrices,
                                                           RollingShutterType::NONE,
                                                           utParams,
-                                                          distortionModel,
+                                                          cameraModel,
                                                           distortionCoeffs,
                                                           imageWidth,
                                                           imageHeight,
@@ -326,7 +326,7 @@ TEST_F(GaussianProjectionUTTestFixture, MultiCamera_RadTanDistortion_PerCameraPa
     K[1][2][2] = 1.0f;
 
     // Different distortion coeffs per camera.
-    distortionModel  = DistortionModel::OPENCV_RADTAN_5;
+    cameraModel      = CameraModel::OPENCV_RADTAN_5;
     distortionCoeffs = torch::zeros({C, 12}, torch::kFloat32);
     auto dc          = distortionCoeffs.accessor<float, 2>();
     // Cam0: non-trivial coefficients
@@ -371,7 +371,7 @@ TEST_F(GaussianProjectionUTTestFixture, MultiCamera_RadTanDistortion_PerCameraPa
                                                           projectionMatrices,
                                                           RollingShutterType::NONE,
                                                           utParams,
-                                                          distortionModel,
+                                                          cameraModel,
                                                           distortionCoeffs,
                                                           imageWidth,
                                                           imageHeight,
@@ -427,7 +427,7 @@ TEST_F(GaussianProjectionUTTestFixture,
     const float p1 = 0.001f;
     const float p2 = -0.0005f;
 
-    distortionModel = DistortionModel::OPENCV_RADTAN_5;
+    cameraModel = CameraModel::OPENCV_RADTAN_5;
     // [k1..k6,p1,p2,s1..s4] (use polynomial by setting k4..k6 = 0, and no thin-prism by zeroing s*)
     distortionCoeffs          = torch::zeros({C, 12}, torch::kFloat32);
     auto distortionCoeffsAcc  = distortionCoeffs.accessor<float, 2>();
@@ -467,7 +467,7 @@ TEST_F(GaussianProjectionUTTestFixture,
                                                           projectionMatrices,
                                                           RollingShutterType::NONE,
                                                           utParams,
-                                                          distortionModel,
+                                                          cameraModel,
                                                           distortionCoeffs,
                                                           imageWidth,
                                                           imageHeight,
@@ -519,7 +519,7 @@ TEST_F(GaussianProjectionUTTestFixture,
     const float p1 = -0.0007f;
     const float p2 = 0.0003f;
 
-    distortionModel           = DistortionModel::OPENCV_RATIONAL_8;
+    cameraModel               = CameraModel::OPENCV_RATIONAL_8;
     distortionCoeffs          = torch::zeros({C, 12}, torch::kFloat32);
     auto distortionCoeffsAcc  = distortionCoeffs.accessor<float, 2>();
     distortionCoeffsAcc[0][0] = k1;
@@ -561,7 +561,7 @@ TEST_F(GaussianProjectionUTTestFixture,
                                                           projectionMatrices,
                                                           RollingShutterType::NONE,
                                                           utParams,
-                                                          distortionModel,
+                                                          cameraModel,
                                                           distortionCoeffs,
                                                           imageWidth,
                                                           imageHeight,
@@ -617,7 +617,7 @@ TEST_F(GaussianProjectionUTTestFixture,
     const float s3 = 0.0005f;
     const float s4 = 0.0001f;
 
-    distortionModel            = DistortionModel::OPENCV_THIN_PRISM_12;
+    cameraModel                = CameraModel::OPENCV_THIN_PRISM_12;
     distortionCoeffs           = torch::zeros({C, 12}, torch::kFloat32);
     auto distortionCoeffsAcc   = distortionCoeffs.accessor<float, 2>();
     distortionCoeffsAcc[0][0]  = k1;
@@ -663,7 +663,7 @@ TEST_F(GaussianProjectionUTTestFixture,
                                                           projectionMatrices,
                                                           RollingShutterType::NONE,
                                                           utParams,
-                                                          distortionModel,
+                                                          cameraModel,
                                                           distortionCoeffs,
                                                           imageWidth,
                                                           imageHeight,
@@ -716,7 +716,7 @@ TEST_F(GaussianProjectionUTTestFixture,
     const float s3 = 0.0005f;
     const float s4 = 0.0001f;
 
-    distortionModel           = DistortionModel::OPENCV_RADTAN_THIN_PRISM_9;
+    cameraModel               = CameraModel::OPENCV_RADTAN_THIN_PRISM_9;
     distortionCoeffs          = torch::zeros({C, 12}, torch::kFloat32);
     auto distortionCoeffsAcc  = distortionCoeffs.accessor<float, 2>();
     distortionCoeffsAcc[0][0] = k1;
@@ -760,7 +760,7 @@ TEST_F(GaussianProjectionUTTestFixture,
                                                           projectionMatrices,
                                                           RollingShutterType::NONE,
                                                           utParams,
-                                                          distortionModel,
+                                                          cameraModel,
                                                           distortionCoeffs,
                                                           imageWidth,
                                                           imageHeight,
@@ -803,7 +803,7 @@ TEST_F(GaussianProjectionUTTestFixture, RadTanThinPrism_IgnoresK456EvenIfNonZero
     projectionMatricesAcc[0][2][2] = 1.0f;
     projectionMatrices             = projectionMatrices.cuda();
 
-    distortionModel           = DistortionModel::OPENCV_RADTAN_THIN_PRISM_9;
+    cameraModel               = CameraModel::OPENCV_RADTAN_THIN_PRISM_9;
     distortionCoeffs          = torch::zeros({C, 12}, torch::kFloat32);
     auto distortionCoeffsAcc  = distortionCoeffs.accessor<float, 2>();
     distortionCoeffsAcc[0][0] = 0.01f;  // k1
@@ -829,7 +829,7 @@ TEST_F(GaussianProjectionUTTestFixture, RadTanThinPrism_IgnoresK456EvenIfNonZero
                                                           projectionMatrices,
                                                           RollingShutterType::NONE,
                                                           utParams,
-                                                          distortionModel,
+                                                          cameraModel,
                                                           distortionCoeffs,
                                                           imageWidth,
                                                           imageHeight,
@@ -881,7 +881,7 @@ TEST_F(GaussianProjectionUTTestFixture,
     projectionMatricesAcc[0][1][2] = cy;
     projectionMatricesAcc[0][2][2] = 1.0f;
 
-    distortionModel  = DistortionModel::NONE;
+    cameraModel      = CameraModel::PINHOLE;
     distortionCoeffs = torch::zeros({C, 0}, torch::kFloat32);
 
     imageWidth  = 640;
@@ -914,7 +914,7 @@ TEST_F(GaussianProjectionUTTestFixture,
                                                           projectionMatrices,
                                                           RollingShutterType::NONE,
                                                           utParams,
-                                                          distortionModel,
+                                                          cameraModel,
                                                           distortionCoeffs,
                                                           imageWidth,
                                                           imageHeight,
@@ -959,7 +959,7 @@ TEST_F(GaussianProjectionUTTestFixture,
     projectionMatricesAcc[0][1][2] = cy;
     projectionMatricesAcc[0][2][2] = 1.0f;
 
-    distortionModel  = DistortionModel::NONE;
+    cameraModel      = CameraModel::PINHOLE;
     distortionCoeffs = torch::zeros({C, 0}, torch::kFloat32);
 
     imageWidth  = 640;
@@ -989,7 +989,7 @@ TEST_F(GaussianProjectionUTTestFixture,
                                                           projectionMatrices,
                                                           RollingShutterType::NONE,
                                                           utParams,
-                                                          distortionModel,
+                                                          cameraModel,
                                                           distortionCoeffs,
                                                           imageWidth,
                                                           imageHeight,
@@ -1031,7 +1031,7 @@ TEST_F(GaussianProjectionUTTestFixture, RollingShutterNone_DepthUsesStartPoseNot
     projectionMatricesAcc[0][1][2] = cy;
     projectionMatricesAcc[0][2][2] = 1.0f;
 
-    distortionModel  = DistortionModel::NONE;
+    cameraModel      = CameraModel::PINHOLE;
     distortionCoeffs = torch::zeros({C, 0}, torch::kFloat32);
 
     imageWidth  = 640;
@@ -1061,7 +1061,7 @@ TEST_F(GaussianProjectionUTTestFixture, RollingShutterNone_DepthUsesStartPoseNot
                                                           projectionMatrices,
                                                           RollingShutterType::NONE,
                                                           utParams,
-                                                          distortionModel,
+                                                          cameraModel,
                                                           distortionCoeffs,
                                                           imageWidth,
                                                           imageHeight,
