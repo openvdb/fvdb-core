@@ -277,10 +277,13 @@ template <typename T> class OpenCVCameraModel {
     }
 };
 
-/// @brief UT-local rigid transform (rotation quaternion + translation).
+/// @brief UT-local rigid transform (cached rotation + translation).
 ///
 /// Quaternion is stored as \([w,x,y,z]\) and is assumed to represent a rotation.
+/// The corresponding rotation matrix \(R(q)\) is cached to avoid recomputing it for every point
+/// transform (UT sigma points, rolling-shutter iterations, depth culls, etc.).
 template <typename T> struct RigidTransform {
+    nanovdb::math::Mat3<T> R;
     nanovdb::math::Vec4<T> q;
     nanovdb::math::Vec3<T> t;
 
@@ -289,29 +292,32 @@ template <typename T> struct RigidTransform {
     /// Initializes to unit quaternion \([1,0,0,0]\) and zero translation.
     __device__
     RigidTransform()
-        : q(T(1), T(0), T(0), T(0)), t(T(0), T(0), T(0)) {}
+        : R(nanovdb::math::Mat3<T>(nanovdb::math::Vec3<T>(T(1), T(0), T(0)),
+                                   nanovdb::math::Vec3<T>(T(0), T(1), T(0)),
+                                   nanovdb::math::Vec3<T>(T(0), T(0), T(1)))),
+          q(T(1), T(0), T(0), T(0)), t(T(0), T(0), T(0)) {}
 
     /// @brief Construct from quaternion and translation.
     /// @param[in] q_in Rotation quaternion \([w,x,y,z]\).
     /// @param[in] t_in Translation vector.
     __device__
     RigidTransform(const nanovdb::math::Vec4<T> &q_in, const nanovdb::math::Vec3<T> &t_in)
-        : q(q_in), t(t_in) {}
+        : R(quaternionToRotationMatrix(q_in)), q(q_in), t(t_in) {}
 
     /// @brief Construct from rotation matrix and translation.
     /// @param[in] R_in Rotation matrix.
     /// @param[in] t_in Translation vector.
     __device__
     RigidTransform(const nanovdb::math::Mat3<T> &R_in, const nanovdb::math::Vec3<T> &t_in)
-        : q(rotationMatrixToQuaternion<T>(R_in)), t(t_in) {}
+        : R(R_in), q(rotationMatrixToQuaternion<T>(R_in)), t(t_in) {}
 
     /// @brief Apply the transform to a 3D point: \(R(q)\,p + t\).
     /// @param[in] p_world Point to transform.
     /// @return Transformed point.
     __device__ __forceinline__ nanovdb::math::Vec3<T>
     apply(const nanovdb::math::Vec3<T> &p_world) const {
-        // p_cam = R(q) * p_world + t
-        return quaternionToRotationMatrix(q) * p_world + t;
+        // p_cam = R * p_world + t
+        return R * p_world + t;
     }
 
     /// @brief Interpolate between two rigid transforms.
