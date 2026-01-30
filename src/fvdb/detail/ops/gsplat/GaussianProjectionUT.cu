@@ -60,6 +60,17 @@ template <typename T> class OpenCVCameraModel {
         : K(K_in) {
         deviceAssertOrTrap(K != nullptr);
 
+        // Orthographic is a camera model choice; it is only supported for the undistorted pinhole
+        // math path (no OpenCV distortion).
+        orthographic = (cameraModel == CameraModel::ORTHOGRAPHIC);
+
+        if (cameraModel == CameraModel::ORTHOGRAPHIC) {
+            radial = tangential = thinPrism = nullptr;
+            numRadial = numTangential = numThinPrism = 0;
+            model                                    = Model::NONE;
+            return;
+        }
+
         if (cameraModel == CameraModel::PINHOLE) {
             radial = tangential = thinPrism = nullptr;
             numRadial = numTangential = numThinPrism = 0;
@@ -120,12 +131,17 @@ template <typename T> class OpenCVCameraModel {
     }
 
     // Project a 3D point in camera coordinates to pixel coordinates using this camera model
-    // (pinhole + distortion + intrinsics).
+    // (pinhole/orthographic + distortion + intrinsics).
     __device__ Vec2
     project(const Vec3 &p_cam) const {
-        // Normalize by depth.
-        const T z_inv = T(1) / max(p_cam[2], T(1e-6));
-        const Vec2 p_normalized(p_cam[0] * z_inv, p_cam[1] * z_inv);
+        // Normalize to camera plane.
+        Vec2 p_normalized;
+        if (orthographic) {
+            p_normalized = Vec2(p_cam[0], p_cam[1]);
+        } else {
+            const T z_inv = T(1) / max(p_cam[2], T(1e-6));
+            p_normalized  = Vec2(p_cam[0] * z_inv, p_cam[1] * z_inv);
+        }
 
         const Vec2 p_distorted = applyDistortion(p_normalized);
 
@@ -150,7 +166,8 @@ template <typename T> class OpenCVCameraModel {
 
     // Camera intrinsics pointer (typically points into shared memory).
     // This avoids copying a Mat3 into registers per-thread.
-    const Mat3 *K = nullptr;
+    const Mat3 *K     = nullptr;
+    bool orthographic = false;
 
     // Coefficients for the distortion model.
     const T *radial     = nullptr;     // k1..k6 (but k4..k6 only used in rational model)
@@ -283,7 +300,8 @@ template <typename ScalarType> struct WorldToPixelTransform {
                          const RigidTransform<ScalarType> &xf,
                          Vec2 &out_pix) const {
         const Vec3 p_cam = xf.apply(p_world);
-        // Perspective only (ortho is not meaningful for distorted camera models).
+        // Note: `CameraModel::ORTHOGRAPHIC` still uses the same behind-camera check, but does not
+        // divide by depth in the camera model projection step.
         if (p_cam[2] <= ScalarType(0)) {
             // Ensure deterministic output to avoid UB on callers that assign/read even on invalid
             // projections. This value is ignored when we treat BehindCamera as a hard reject.
@@ -803,8 +821,7 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
     const float nearPlane,
     const float farPlane,
     const float minRadius2d,
-    const bool calcCompensations,
-    const bool ortho) {
+    const bool calcCompensations) {
     FVDB_FUNC_RANGE();
 
     TORCH_CHECK_VALUE(means.is_cuda(), "means must be a CUDA tensor");
@@ -817,7 +834,7 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
     TORCH_CHECK_VALUE(projectionMatrices.is_cuda(), "projectionMatrices must be a CUDA tensor");
     TORCH_CHECK_VALUE(distortionCoeffs.is_cuda(), "distortionCoeffs must be a CUDA tensor");
     TORCH_CHECK_VALUE(distortionCoeffs.dim() == 2, "distortionCoeffs must be 2D");
-    if (cameraModel == CameraModel::PINHOLE) {
+    if (cameraModel == CameraModel::PINHOLE || cameraModel == CameraModel::ORTHOGRAPHIC) {
         // Accept any K (including 0); ignored.
     } else if (cameraModel == CameraModel::OPENCV_RADTAN_5 ||
                cameraModel == CameraModel::OPENCV_RATIONAL_8 ||
@@ -857,10 +874,7 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
     using scalar_t = float;
 
     const size_t NUM_BLOCKS = GET_BLOCKS(C * N, 256);
-    // This kernel currently implements the (distorted) perspective camera model.
-    // Keep parity with the reference kernel: orthographic is not supported here.
-    TORCH_CHECK_VALUE(!ortho,
-                      "GaussianProjectionForwardUT does not support orthographic projection");
+    // Orthographic is supported only for CameraModel::ORTHOGRAPHIC (undistorted).
 
     const size_t SHARED_MEM_SIZE = C * (3 * sizeof(nanovdb::math::Mat3<scalar_t>) +
                                         2 * sizeof(nanovdb::math::Vec3<scalar_t>)) +
@@ -915,8 +929,7 @@ dispatchGaussianProjectionForwardUT<torch::kCPU>(
     const float nearPlane,
     const float farPlane,
     const float minRadius2d,
-    const bool calcCompensations,
-    const bool ortho) {
+    const bool calcCompensations) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "GaussianProjectionForwardUT not implemented on the CPU");
 }
 
@@ -939,8 +952,7 @@ dispatchGaussianProjectionForwardUT<torch::kPrivateUse1>(
     const float nearPlane,
     const float farPlane,
     const float minRadius2d,
-    const bool calcCompensations,
-    const bool ortho) {
+    const bool calcCompensations) {
     TORCH_CHECK_NOT_IMPLEMENTED(false,
                                 "GaussianProjectionForwardUT not implemented for this device type");
 }

@@ -25,6 +25,9 @@ enum class CameraModel : int32_t {
     // Pinhole intrinsics only (no distortion).
     PINHOLE = 0,
 
+    // Orthographic intrinsics (no distortion).
+    ORTHOGRAPHIC = 5,
+
     // OpenCV variants which are just pinhole intrinsics + optional distortion (all of them use the
     // same [C,12] distortion coefficients layout: [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]).
     OPENCV_RADTAN_5            = 1, // polynomial radial (k1,k2,k3) + tangential (p1,p2)).
@@ -83,6 +86,7 @@ struct UTParams {
 /// @param[in] cameraModel Camera model used to interpret `distortionCoeffs`.
 /// @param[in] distortionCoeffs Distortion coefficients for each camera.
 ///   - CameraModel::PINHOLE: ignored (use [C,0] or [C,K] tensor).
+///   - CameraModel::ORTHOGRAPHIC: ignored (use [C,0] or [C,K] tensor).
 ///   - CameraModel::OPENCV_*: expects [C,12] coefficients in the following order:
 ///       [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]
 ///     where k1..k6 are radial (rational), p1,p2 are tangential, and s1..s4 are thin-prism.
@@ -94,7 +98,6 @@ struct UTParams {
 /// @param[in] minRadius2d Minimum 2D radius threshold; Gaussians with projected radius <= this
 /// value are clipped/discarded
 /// @param[in] calcCompensations Whether to calculate view-dependent compensation factors
-/// @param[in] ortho Whether to use orthographic projection instead of perspective
 ///
 /// @return std::tuple containing:
 ///         - Radii of 2D Gaussians [C, N]
@@ -114,15 +117,14 @@ dispatchGaussianProjectionForwardUT(
     const RollingShutterType rollingShutterType,
     const UTParams &utParams,
     const CameraModel cameraModel,
-    const torch::Tensor &distortionCoeffs, // [C, 12] for OPENCV_*, or [C, 0] for NONE
+    const torch::Tensor &distortionCoeffs, // [C, 12] for OPENCV_*, or [C, 0] for PINHOLE/ORTHO
     const int64_t imageWidth,
     const int64_t imageHeight,
     const float eps2d,
     const float nearPlane,
     const float farPlane,
     const float minRadius2d,
-    const bool calcCompensations,
-    const bool ortho);
+    const bool calcCompensations);
 
 } // namespace ops
 } // namespace detail

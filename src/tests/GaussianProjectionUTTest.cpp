@@ -189,7 +189,6 @@ TEST_F(GaussianProjectionUTTestFixture, CenteredGaussian_NoDistortion_AnalyticMe
                                                           nearPlane,
                                                           farPlane,
                                                           minRadius2d,
-                                                          false,
                                                           false);
 
     auto means2d_cpu = means2d.cpu();
@@ -217,6 +216,78 @@ TEST_F(GaussianProjectionUTTestFixture, CenteredGaussian_NoDistortion_AnalyticMe
     EXPECT_NEAR(conics_cpu[0][0][0].item<float>(), expected_a, 1e-3f);
     EXPECT_NEAR(conics_cpu[0][0][1].item<float>(), expected_b, 1e-3f);
     EXPECT_NEAR(conics_cpu[0][0][2].item<float>(), expected_c, 1e-3f);
+}
+
+TEST_F(GaussianProjectionUTTestFixture, Orthographic_NoDistortion_AnalyticMeanAndDepth) {
+    const int64_t C = 1;
+
+    const float x = 1.0f, y = -2.0f, z = 10.0f;
+    means     = torch::tensor({{x, y, z}}, torch::kFloat32);
+    quats     = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32);
+    logScales = torch::log(torch::tensor({{0.2f, 0.3f, 0.4f}}, torch::kFloat32));
+
+    worldToCamMatricesStart =
+        torch::eye(4, torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(0).expand({C, 4, 4});
+    worldToCamMatricesEnd = worldToCamMatricesStart.clone();
+
+    const float fx = 123.0f, fy = 77.0f, cx = 320.0f, cy = 240.0f;
+    projectionMatrices = torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32));
+    auto projectionMatricesAcc     = projectionMatrices.accessor<float, 3>();
+    projectionMatricesAcc[0][0][0] = fx;
+    projectionMatricesAcc[0][1][1] = fy;
+    projectionMatricesAcc[0][0][2] = cx;
+    projectionMatricesAcc[0][1][2] = cy;
+    projectionMatricesAcc[0][2][2] = 1.0f;
+
+    cameraModel      = CameraModel::ORTHOGRAPHIC;
+    distortionCoeffs = torch::zeros({C, 0}, torch::kFloat32);
+
+    imageWidth  = 640;
+    imageHeight = 480;
+    eps2d       = 0.3f;
+    nearPlane   = 0.1f;
+    farPlane    = 100.0f;
+    minRadius2d = 0.0f;
+
+    utParams                              = UTParams{};
+    utParams.inImageMargin                = 0.1f;
+    utParams.requireAllSigmaPointsInImage = true;
+
+    means                   = means.cuda();
+    quats                   = quats.cuda();
+    logScales               = logScales.cuda();
+    worldToCamMatricesStart = worldToCamMatricesStart.cuda();
+    worldToCamMatricesEnd   = worldToCamMatricesEnd.cuda();
+    projectionMatrices      = projectionMatrices.cuda();
+    distortionCoeffs        = distortionCoeffs.cuda();
+
+    const auto [radii, means2d, depths, conics, compensations] =
+        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
+                                                          quats,
+                                                          logScales,
+                                                          worldToCamMatricesStart,
+                                                          worldToCamMatricesEnd,
+                                                          projectionMatrices,
+                                                          RollingShutterType::NONE,
+                                                          utParams,
+                                                          cameraModel,
+                                                          distortionCoeffs,
+                                                          imageWidth,
+                                                          imageHeight,
+                                                          eps2d,
+                                                          nearPlane,
+                                                          farPlane,
+                                                          minRadius2d,
+                                                          false);
+
+    auto means2d_cpu = means2d.cpu();
+    auto depths_cpu  = depths.cpu();
+    auto radii_cpu   = radii.cpu();
+
+    EXPECT_GT(radii_cpu[0][0].item<int32_t>(), 0);
+    EXPECT_NEAR(depths_cpu[0][0].item<float>(), z, 1e-4f);
+    EXPECT_NEAR(means2d_cpu[0][0][0].item<float>(), fx * x + cx, 1e-3f);
+    EXPECT_NEAR(means2d_cpu[0][0][1].item<float>(), fy * y + cy, 1e-3f);
 }
 
 TEST_F(GaussianProjectionUTTestFixture, OffAxisTinyGaussian_NoDistortion_MeanMatchesPinhole) {
@@ -283,7 +354,6 @@ TEST_F(GaussianProjectionUTTestFixture, OffAxisTinyGaussian_NoDistortion_MeanMat
                                                           nearPlane,
                                                           farPlane,
                                                           minRadius2d,
-                                                          false,
                                                           false);
 
     auto means2d_cpu       = means2d.cpu();
@@ -379,7 +449,6 @@ TEST_F(GaussianProjectionUTTestFixture, MultiCamera_RadTanDistortion_PerCameraPa
                                                           nearPlane,
                                                           farPlane,
                                                           minRadius2d,
-                                                          false,
                                                           false);
 
     auto radii_cpu   = radii.cpu();
@@ -475,7 +544,6 @@ TEST_F(GaussianProjectionUTTestFixture,
                                                           nearPlane,
                                                           farPlane,
                                                           minRadius2d,
-                                                          false,
                                                           false);
 
     auto radii_cpu   = radii.cpu();
@@ -569,7 +637,6 @@ TEST_F(GaussianProjectionUTTestFixture,
                                                           nearPlane,
                                                           farPlane,
                                                           minRadius2d,
-                                                          false,
                                                           false);
 
     auto radii_cpu   = radii.cpu();
@@ -671,7 +738,6 @@ TEST_F(GaussianProjectionUTTestFixture,
                                                           nearPlane,
                                                           farPlane,
                                                           minRadius2d,
-                                                          false,
                                                           false);
 
     auto radii_cpu   = radii.cpu();
@@ -768,7 +834,6 @@ TEST_F(GaussianProjectionUTTestFixture,
                                                           nearPlane,
                                                           farPlane,
                                                           minRadius2d,
-                                                          false,
                                                           false);
 
     auto radii_cpu   = radii.cpu();
@@ -837,7 +902,6 @@ TEST_F(GaussianProjectionUTTestFixture, RadTanThinPrism_IgnoresK456EvenIfNonZero
                                                           nearPlane,
                                                           farPlane,
                                                           minRadius2d,
-                                                          false,
                                                           false);
 
     auto radii_cpu   = radii.cpu();
@@ -922,7 +986,6 @@ TEST_F(GaussianProjectionUTTestFixture,
                                                           nearPlane,
                                                           farPlane,
                                                           minRadius2d,
-                                                          false,
                                                           false);
 
     // When the UT kernel discards a Gaussian, only radii are defined to be 0; other outputs are
@@ -997,7 +1060,6 @@ TEST_F(GaussianProjectionUTTestFixture,
                                                           nearPlane,
                                                           farPlane,
                                                           minRadius2d,
-                                                          false,
                                                           false);
 
     auto radii_cpu = radii.cpu();
@@ -1069,7 +1131,6 @@ TEST_F(GaussianProjectionUTTestFixture, RollingShutterNone_DepthUsesStartPoseNot
                                                           nearPlane,
                                                           farPlane,
                                                           minRadius2d,
-                                                          false,
                                                           false);
 
     auto depths_cpu = depths.cpu();
