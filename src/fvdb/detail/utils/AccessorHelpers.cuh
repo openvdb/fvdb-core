@@ -17,30 +17,31 @@ namespace fvdb {
 /// @tparam ScalarType The type of the tensor
 /// @tparam DIMS The number of dimensions of the tensor
 template <typename ScalarType, int32_t DIMS>
-using TorchRAcc32 = at::PackedTensorAccessor32<ScalarType, DIMS, at::RestrictPtrTraits>;
+using TorchRAcc32 = torch::PackedTensorAccessor32<ScalarType, DIMS, torch::RestrictPtrTraits>;
 
 /// @brief Shorthand for torch::PackedTensorAccessor64 with RestrictPtrTraits
 /// @tparam ScalarType The type of the tensor
 /// @tparam DIMS The number of dimensions of the tensor
 template <typename ScalarType, int32_t DIMS>
-using TorchRAcc64 = at::PackedTensorAccessor64<ScalarType, DIMS, at::RestrictPtrTraits>;
+using TorchRAcc64 = torch::PackedTensorAccessor64<ScalarType, DIMS, torch::RestrictPtrTraits>;
 
 /// @brief Shorthand for a torch::TensorAccessor with DefaultPtrTraits
 /// @tparam ScalarType The type of the tensor
 /// @tparam DIMS The number of dimensions of the tensor
-template <typename ScalarType, int32_t DIMS> using TorchAcc = at::TensorAccessor<ScalarType, DIMS>;
+template <typename ScalarType, int32_t DIMS>
+using TorchAcc = torch::TensorAccessor<ScalarType, DIMS>;
 
 /// @brief Shorthand for fvdb::PackedJaggedAccessor32 with RestrictPtrTraits
 /// @tparam ScalarType The type of the tensor
 /// @tparam DIMS The number of dimensions of the tensor
 template <typename ScalarType, int32_t DIMS>
-using JaggedRAcc32 = fvdb::PackedJaggedAccessor32<ScalarType, DIMS, at::RestrictPtrTraits>;
+using JaggedRAcc32 = fvdb::PackedJaggedAccessor32<ScalarType, DIMS, torch::RestrictPtrTraits>;
 
 /// @brief Shorthand for fvdb::PackedJaggedAccessor64 with RestrictPtrTraits
 /// @tparam ScalarType The type of the tensor
 /// @tparam DIMS The number of dimensions of the tensor
 template <typename ScalarType, int32_t DIMS>
-using JaggedRAcc64 = fvdb::PackedJaggedAccessor64<ScalarType, DIMS, at::RestrictPtrTraits>;
+using JaggedRAcc64 = fvdb::PackedJaggedAccessor64<ScalarType, DIMS, torch::RestrictPtrTraits>;
 
 /// @brief Shorthand for fvdb::JaggedAccessor
 /// @tparam ScalarType The type of the tensor
@@ -56,12 +57,13 @@ using JaggedAcc = fvdb::JaggedAccessor<ScalarType, DIMS>;
 /// @param tensor The tensor to get an accessor for
 /// @return A tensor accessor (either torch::TensorAccessor or torch::PackedTensorAccessor32)
 template <c10::DeviceType DeviceTag, typename T, size_t N, typename IndexT = int32_t>
-typename std::conditional<DeviceTag == torch::kCUDA || DeviceTag == torch::kPrivateUse1,
-                          at::GenericPackedTensorAccessor<T, N, at::RestrictPtrTraits, IndexT>,
-                          at::TensorAccessor<T, N>>::type
+typename std::conditional<
+    DeviceTag == torch::kCUDA || DeviceTag == torch::kPrivateUse1,
+    torch::GenericPackedTensorAccessor<T, N, torch::RestrictPtrTraits, IndexT>,
+    torch::TensorAccessor<T, N>>::type
 tensorAccessor(const torch::Tensor &tensor) {
     if constexpr (DeviceTag == torch::kCUDA || DeviceTag == torch::kPrivateUse1) {
-        return tensor.generic_packed_accessor<T, N, at::RestrictPtrTraits, IndexT>();
+        return tensor.generic_packed_accessor<T, N, torch::RestrictPtrTraits, IndexT>();
     } else {
         return tensor.accessor<T, N>();
     }
