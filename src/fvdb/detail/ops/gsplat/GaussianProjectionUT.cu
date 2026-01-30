@@ -40,8 +40,11 @@ template <typename T> class OpenCVCameraModel {
     using Vec3 = nanovdb::math::Vec3<T>;
     using Mat3 = nanovdb::math::Mat3<T>;
 
-    // Internal "math mode" for OpenCV distortion evaluation.
-    // Kept inside the struct to avoid confusion with the public API `CameraModel`.
+    /// @brief Internal distortion evaluation mode.
+    ///
+    /// This is intentionally separate from the public API `CameraModel` to keep the math paths
+    /// explicit and avoid implying that `CameraModel` is “just distortion” (since it also includes
+    /// projection as well).
     enum class Model : uint8_t {
         NONE          = 0,  // no distortion
         RADTAN_5      = 5,  // k1,k2,p1,p2,k3 (polynomial radial up to r^6)
@@ -50,14 +53,19 @@ template <typename T> class OpenCVCameraModel {
         THIN_PRISM_12 = 12, // RATIONAL_8 + s1,s2,s3,s4
     };
 
-    // Construct this camera model from the public CameraModel enum.
-    //
-    // For OpenCV models, coefficients are read from a per-camera packed layout:
-    //   [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]
-    //
-    // For PINHOLE / ORTHOGRAPHIC, distortionCoeffs is ignored.
-    //
-    // Preconditions are asserted on-device (trap) rather than returning false.
+    /// @brief Construct a camera model for projection.
+    ///
+    /// For OpenCV models, coefficients are read from a per-camera packed layout:
+    /// `[k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]`.
+    ///
+    /// For `CameraModel::PINHOLE` / `CameraModel::ORTHOGRAPHIC`, `distortionCoeffs` is ignored.
+    ///
+    /// Preconditions are asserted on-device (trap) rather than returning status codes.
+    ///
+    /// @param[in] cameraModel Public camera model selector.
+    /// @param[in] K_in Pointer to 3x3 intrinsics matrix (typically points into shared memory).
+    /// @param[in] distortionCoeffs Pointer to per-camera distortion coefficients (layout depends on
+    ///            cameraModel).
     __device__ __forceinline__
     OpenCVCameraModel(const CameraModel cameraModel, const Mat3 *K_in, const T *distortionCoeffs)
         : K(K_in) {
@@ -133,8 +141,13 @@ template <typename T> class OpenCVCameraModel {
         deviceAssertOrTrap(false);
     }
 
-    // Project a 3D point in camera coordinates to pixel coordinates using this camera model
-    // (pinhole/orthographic + distortion + intrinsics).
+    /// @brief Project a 3D point in camera coordinates to pixel coordinates.
+    ///
+    /// - Perspective (`PINHOLE`/`OPENCV_*`): normalize by depth \(x/z, y/z\).
+    /// - Orthographic (`ORTHOGRAPHIC`): no divide; uses \(x,y\) directly.
+    ///
+    /// @param[in] p_cam Point in camera coordinates.
+    /// @return Pixel coordinates (u,v).
     __device__ Vec2
     project(const Vec3 &p_cam) const {
         // Normalize to camera plane.
@@ -158,6 +171,9 @@ template <typename T> class OpenCVCameraModel {
     }
 
   private:
+    /// @brief Device-side assert that always traps on failure.
+    ///
+    /// @param[in] cond Condition that must hold.
     __device__ __forceinline__ static void
     deviceAssertOrTrap(const bool cond) {
         if (!cond) {
@@ -181,11 +197,25 @@ template <typename T> class OpenCVCameraModel {
     int numThinPrism    = 0;           // Number of thin prism coefficients
     Model model         = Model::NONE; // Distortion model
 
+    /// @brief Read a coefficient if present, otherwise return 0.
+    ///
+    /// @param[in] ptr Coefficient array (may be null).
+    /// @param[in] n Number of coefficients in ptr.
+    /// @param[in] i Index to read.
+    /// @return Coefficient value or 0 if out-of-range / null.
     __host__ __device__ inline T
     coeffOrZero(const T *ptr, const int n, const int i) const {
         return (ptr != nullptr && i >= 0 && i < n) ? ptr[i] : T(0);
     }
 
+    /// @brief Apply OpenCV distortion to a normalized camera-plane point.
+    ///
+    /// Input coordinates are assumed to already be normalized to the camera plane:
+    /// - perspective: \((x/z, y/z)\)
+    /// - orthographic: \((x, y)\)
+    ///
+    /// @param[in] p_normalized Normalized camera-plane coordinates.
+    /// @return Distorted normalized coordinates.
     __device__ Vec2
     applyDistortion(const Vec2 &p_normalized) const {
         const T x  = p_normalized[0];
@@ -247,29 +277,50 @@ template <typename T> class OpenCVCameraModel {
     }
 };
 
-// UT-local rigid transform (rotation quaternion + translation).
-// Quaternion is stored as [w,x,y,z].
+/// @brief UT-local rigid transform (rotation quaternion + translation).
+///
+/// Quaternion is stored as \([w,x,y,z]\) and is assumed to represent a rotation.
 template <typename T> struct RigidTransform {
     nanovdb::math::Vec4<T> q;
     nanovdb::math::Vec3<T> t;
 
-    __device__ RigidTransform() = default;
+    /// @brief Default constructor (identity transform).
+    ///
+    /// Initializes to unit quaternion \([1,0,0,0]\) and zero translation.
+    __device__ RigidTransform()
+        : q(T(1), T(0), T(0), T(0)), t(T(0), T(0), T(0)) {}
 
+    /// @brief Construct from quaternion and translation.
+    /// @param[in] q_in Rotation quaternion \([w,x,y,z]\).
+    /// @param[in] t_in Translation vector.
     __device__
     RigidTransform(const nanovdb::math::Vec4<T> &q_in, const nanovdb::math::Vec3<T> &t_in)
         : q(q_in), t(t_in) {}
 
+    /// @brief Construct from rotation matrix and translation.
+    /// @param[in] R_in Rotation matrix.
+    /// @param[in] t_in Translation vector.
     __device__
     RigidTransform(const nanovdb::math::Mat3<T> &R_in, const nanovdb::math::Vec3<T> &t_in)
         : q(rotationMatrixToQuaternion<T>(R_in)), t(t_in) {}
 
+    /// @brief Apply the transform to a 3D point: \(R(q)\,p + t\).
+    /// @param[in] p_world Point to transform.
+    /// @return Transformed point.
     __device__ __forceinline__ nanovdb::math::Vec3<T>
     apply(const nanovdb::math::Vec3<T> &p_world) const {
         // p_cam = R(q) * p_world + t
         return quaternionToRotationMatrix(q) * p_world + t;
     }
 
-    // More efficient interpolation when start/end are already in quaternion form.
+    /// @brief Interpolate between two rigid transforms.
+    ///
+    /// Translation is linearly interpolated; rotation uses NLERP along the shortest arc.
+    ///
+    /// @param[in] u Interpolation parameter in \([0,1]\).
+    /// @param[in] start Start transform.
+    /// @param[in] end End transform.
+    /// @return Interpolated transform.
     static inline __device__ RigidTransform<T>
     interpolate(const T u, const RigidTransform<T> &start, const RigidTransform<T> &end) {
         const nanovdb::math::Vec3<T> t_interp = start.t + u * (end.t - start.t);
@@ -278,8 +329,18 @@ template <typename T> struct RigidTransform {
     }
 };
 
+/// @brief Projection status for a single world point.
+///
+/// The kernel treats `BehindCamera` as a hard failure (discontinuous projection), while
+/// `OutOfBounds` may still be usable depending on UTParams.
 enum class ProjStatus : uint8_t { BehindCamera, OutOfBounds, InImage };
 
+/// @brief World-space point -> pixel transform with rolling shutter.
+///
+/// This wraps the camera model, rolling shutter policy, and in-image bounds checks used when
+/// projecting UT sigma points.
+///
+/// @tparam ScalarType Scalar type (float).
 template <typename ScalarType> struct WorldToPixelTransform {
     using Vec2 = nanovdb::math::Vec2<ScalarType>;
     using Vec3 = nanovdb::math::Vec3<ScalarType>;
@@ -293,11 +354,20 @@ template <typename ScalarType> struct WorldToPixelTransform {
     RigidTransform<ScalarType> worldToCamStart;
     RigidTransform<ScalarType> worldToCamEnd;
 
+    /// @brief Helper: whether a projection status is in-image.
+    /// @param[in] s Projection status.
+    /// @return True if s is InImage.
     __device__ __forceinline__ static bool
     isInImage(const ProjStatus s) {
         return s == ProjStatus::InImage;
     }
 
+    /// @brief Transform a world-space point with a given world->cam transform and project to pixel.
+    ///
+    /// @param[in] p_world World-space point.
+    /// @param[in] xf World->camera transform.
+    /// @param[out] out_pix Pixel coordinate output (always written).
+    /// @return Projection status.
     __device__ __forceinline__ ProjStatus
     projectWithTransform(const Vec3 &p_world,
                          const RigidTransform<ScalarType> &xf,
@@ -321,6 +391,14 @@ template <typename ScalarType> struct WorldToPixelTransform {
         return in_img ? ProjStatus::InImage : ProjStatus::OutOfBounds;
     }
 
+    /// @brief Project a world-space point to pixel coordinates.
+    ///
+    /// For rolling shutter modes, this uses a small fixed-point iteration that estimates shutter
+    /// time from the current pixel coordinate (row/col -> time).
+    ///
+    /// @param[in] p_world World-space point.
+    /// @param[out] out_pixel Pixel coordinate output (always written).
+    /// @return Projection status.
     __device__ __forceinline__ ProjStatus
     projectWorldPoint(const Vec3 &p_world, Vec2 &out_pixel) const {
         // Rolling shutter: iterate pose based on the current pixel estimate (row/col -> time).
@@ -382,9 +460,20 @@ template <typename ScalarType> struct WorldToPixelTransform {
     }
 };
 
-// Generate 3D sigma points and weights for the (scaled) Unscented Transform.
-// Sigma points are generated in WORLD space directly from (mean, scale, quaternion),
-// exploiting the closed form SVD of the Gaussian covariance.
+/// @brief Generate 3D UT sigma points and weights (fixed 7-point UT in 3D).
+///
+/// Sigma points are generated in **world space** from \((\mu, R, s)\) where \(R\) comes from the
+/// input quaternion and \(s\) are the axis scales. For a 3D UT with the canonical \(2D+1\)
+/// formulation, D=3 => 7 sigma points.
+///
+/// @tparam T Scalar type.
+/// @param[in] mean_world Mean in world space.
+/// @param[in] quat_wxyz Rotation quaternion \([w,x,y,z]\).
+/// @param[in] scale_world Axis-aligned scale in world space (per-axis standard deviation).
+/// @param[in] params UT hyperparameters.
+/// @param[out] sigma_points Output sigma points (size 7).
+/// @param[out] weights_mean UT mean weights (size 7).
+/// @param[out] weights_cov UT covariance weights (size 7).
 template <typename T>
 __device__ void
 generateWorldSigmaPoints(const nanovdb::math::Vec3<T> &mean_world,
@@ -429,7 +518,16 @@ generateWorldSigmaPoints(const nanovdb::math::Vec3<T> &mean_world,
     }
 }
 
-// Reconstruct 2D covariance from projected sigma points and a precomputed mean.
+/// @brief Reconstruct a 2D covariance matrix from projected sigma points.
+///
+/// This computes \(\Sigma = \sum_i w_i (x_i-\mu)(x_i-\mu)^T\).
+///
+/// @tparam T Scalar type.
+/// @param[in] projected_points Projected sigma points (size num_points).
+/// @param[in] weights_cov Covariance weights (size num_points).
+/// @param[in] num_points Number of sigma points.
+/// @param[in] mean2d Precomputed 2D mean.
+/// @return 2x2 covariance matrix.
 template <typename T>
 __device__ nanovdb::math::Mat2<T>
 reconstructCovarianceFromSigmaPoints(const nanovdb::math::Vec2<T> *projected_points,
@@ -449,6 +547,10 @@ reconstructCovarianceFromSigmaPoints(const nanovdb::math::Vec2<T> *projected_poi
 
 } // namespace
 
+/// @brief CUDA kernel functor for UT forward projection.
+///
+/// This struct owns tensor accessors, shared memory pointers, and scalar configuration for
+/// projecting N gaussians into C camera views.
 template <typename ScalarType> struct ProjectionForwardUT {
     using Mat3 = nanovdb::math::Mat3<ScalarType>;
     using Vec3 = nanovdb::math::Vec3<ScalarType>;
@@ -497,6 +599,30 @@ template <typename ScalarType> struct ProjectionForwardUT {
     Vec3 *__restrict__ worldToCamTranslationEndShared   = nullptr;
     ScalarType *__restrict__ distortionCoeffsShared     = nullptr;
 
+    /// @brief Construct the functor with configuration and tensor references.
+    ///
+    /// @param[in] imageWidth Image width in pixels.
+    /// @param[in] imageHeight Image height in pixels.
+    /// @param[in] eps2d Blur epsilon added to covariance for numerical stability.
+    /// @param[in] nearPlane Near-plane threshold for depth culling.
+    /// @param[in] farPlane Far-plane threshold for depth culling.
+    /// @param[in] minRadius2d Minimum radius threshold; smaller gaussians are discarded.
+    /// @param[in] rollingShutterType Rolling shutter policy.
+    /// @param[in] utParams UT hyperparameters.
+    /// @param[in] cameraModel Camera model selector.
+    /// @param[in] calcCompensations Whether to compute compensation factors.
+    /// @param[in] means [N,3] tensor.
+    /// @param[in] quats [N,4] tensor.
+    /// @param[in] logScales [N,3] tensor.
+    /// @param[in] worldToCamMatricesStart [C,4,4] tensor.
+    /// @param[in] worldToCamMatricesEnd [C,4,4] tensor.
+    /// @param[in] projectionMatrices [C,3,3] tensor.
+    /// @param[in] distortionCoeffs [C,K] tensor (K=0 for PINHOLE/ORTHOGRAPHIC; K=12 for OPENCV).
+    /// @param[out] outRadii [C,N] tensor.
+    /// @param[out] outMeans2d [C,N,2] tensor.
+    /// @param[out] outDepths [C,N] tensor.
+    /// @param[out] outConics [C,N,3] tensor.
+    /// @param[out] outCompensations [C,N] tensor (optional, may be undefined).
     ProjectionForwardUT(const int64_t imageWidth,
                         const int64_t imageHeight,
                         const ScalarType eps2d,
@@ -544,6 +670,9 @@ template <typename ScalarType> struct ProjectionForwardUT {
           mOutCompensationsAcc(outCompensations.defined() ? outCompensations.data_ptr<ScalarType>()
                                                           : nullptr) {}
 
+    /// @brief Load per-camera matrices/coeffs into shared memory for faster access.
+    ///
+    /// Layout is `[K, R_start, R_end, t_start, t_end, distortionCoeffs]` per camera.
     inline __device__ void
     loadCameraInfoIntoSharedMemory() {
         // Load projection matrices and world-to-camera matrices into shared memory
@@ -622,6 +751,9 @@ template <typename ScalarType> struct ProjectionForwardUT {
         }
     }
 
+    /// @brief Project one gaussian for one camera.
+    ///
+    /// @param[in] idx Flattened index in \([0, C*N)\) mapping to (camId, gaussianId).
     inline __device__ void
     projectionForward(int64_t idx) {
         if (idx >= C * N) {
@@ -789,6 +921,9 @@ template <typename ScalarType> struct ProjectionForwardUT {
     }
 };
 
+/// @brief CUDA kernel wrapper for `ProjectionForwardUT`.
+///
+/// Each thread processes multiple (camera, gaussian) pairs in a grid-stride loop.
 template <typename ScalarType>
 __global__ __launch_bounds__(256) void
 projectionForwardUTKernel(int64_t offset,
@@ -804,6 +939,9 @@ projectionForwardUTKernel(int64_t offset,
     }
 }
 
+/// @brief CUDA specialization for UT forward projection dispatch.
+///
+/// Performs host-side validation and launches `projectionForwardUTKernel`.
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchGaussianProjectionForwardUT<torch::kCUDA>(
@@ -913,6 +1051,7 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
     return std::make_tuple(outRadii, outMeans2d, outDepths, outConics, outCompensations);
 }
 
+/// @brief CPU specialization (not implemented).
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchGaussianProjectionForwardUT<torch::kCPU>(
@@ -936,6 +1075,7 @@ dispatchGaussianProjectionForwardUT<torch::kCPU>(
     TORCH_CHECK_NOT_IMPLEMENTED(false, "GaussianProjectionForwardUT not implemented on the CPU");
 }
 
+/// @brief PrivateUse1 specialization (not implemented).
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchGaussianProjectionForwardUT<torch::kPrivateUse1>(

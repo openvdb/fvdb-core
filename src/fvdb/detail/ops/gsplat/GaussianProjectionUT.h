@@ -15,12 +15,14 @@ namespace ops {
 
 enum class RollingShutterType { NONE = 0, VERTICAL = 1, HORIZONTAL = 2 };
 
-// Camera model for projection in the UT kernel.
-//
-// Today, all supported camera models are pinhole intrinsics + optional OpenCV-style distortion.
-//
-// Distortion coefficients are supplied as a single tensor `distortionCoeffs` and interpreted
-// according to this enum for the OpenCV variants.
+/// @brief Camera model for projection in the UT kernel.
+///
+/// This enum describes the camera projection family used by the UT kernel. It is intentionally
+/// broader than "distortion model" so we can add more complex models (e.g. RPC) later.
+///
+/// Notes:
+/// - `PINHOLE` and `ORTHOGRAPHIC` ignore `distortionCoeffs`.
+/// - `OPENCV_*` variants are pinhole + OpenCV-style distortion, and require packed coefficients.
 enum class CameraModel : int32_t {
     // Pinhole intrinsics only (no distortion).
     PINHOLE = 0,
@@ -36,6 +38,10 @@ enum class CameraModel : int32_t {
     OPENCV_THIN_PRISM_12       = 4, // rational radial + tangential + thin-prism (s1..s4)).
 };
 
+/// @brief Unscented Transform hyperparameters.
+///
+/// This kernel implements the canonical 3D UT with a fixed \(2D+1\) sigma point set (7 points).
+/// The parameters here control the standard UT scaling / weighting.
 struct UTParams {
     float alpha         = 0.1f; // Blending parameter for UT
     float beta          = 2.0f; // Scaling parameter for UT
@@ -63,12 +69,14 @@ struct UTParams {
 /// probability distribution. It is used to project 3D Gaussians to 2D screen space by applying
 /// camera projections.
 ///
-/// The UT algorithm is based on the following steps:
-/// 1. Generate a set of sigma points around the mean of the Gaussian.
-/// 2. Project the sigma points to 2D screen space.
-/// 3. Compute the mean and covariance of the projected sigma points.
-/// 4. Use the mean and covariance to compute the 2D means, depths, 2D covariance matrices (conics),
-/// and potentially compensation factors.
+/// High-level algorithm:
+/// 1. **Generate sigma points** in world space for each 3D Gaussian (fixed 7-point UT in 3D).
+/// 2. **Project** each sigma point to pixels using the selected `CameraModel` and rolling-shutter
+///    policy.
+/// 3. **Reconstruct** the 2D mean and covariance from the projected sigma points + UT weights.
+/// 4. **Stabilize** covariance by adding a small blur term (`eps2d`) and compute the conic form.
+/// 5. **Cull** gaussians that are out-of-range (near/far) or too small (min radius), and write
+///    outputs for the survivors.
 ///
 /// @tparam DeviceType Device type template parameter (torch::kCUDA or torch::kCPU)
 ///
@@ -83,7 +91,7 @@ struct UTParams {
 /// @param[in] projectionMatrices Camera intrinsic matrices [C, 3, 3]
 /// @param[in] rollingShutterType Type of rolling shutter effect to apply
 /// @param[in] utParams Unscented Transform parameters
-/// @param[in] cameraModel Camera model used to interpret `distortionCoeffs`.
+/// @param[in] cameraModel Camera model for projection.
 /// @param[in] distortionCoeffs Distortion coefficients for each camera.
 ///   - CameraModel::PINHOLE: ignored (use [C,0] or [C,K] tensor).
 ///   - CameraModel::ORTHOGRAPHIC: ignored (use [C,0] or [C,K] tensor).
