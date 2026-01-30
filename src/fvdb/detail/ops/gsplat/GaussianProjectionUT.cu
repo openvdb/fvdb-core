@@ -12,6 +12,8 @@
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/util/Exception.h>
 
+#include <cuda/std/cmath>
+
 #include <cmath>
 #include <tuple>
 
@@ -797,9 +799,9 @@ template <typename ScalarType> struct ProjectionForwardUT {
                              mQuatsAcc[gaussianId][1],
                              mQuatsAcc[gaussianId][2],
                              mQuatsAcc[gaussianId][3]);
-        const Vec3 scale_world(exp(mLogScalesAcc[gaussianId][0]),
-                               exp(mLogScalesAcc[gaussianId][1]),
-                               exp(mLogScalesAcc[gaussianId][2]));
+        const Vec3 scale_world(::cuda::std::exp(mLogScalesAcc[gaussianId][0]),
+                               ::cuda::std::exp(mLogScalesAcc[gaussianId][1]),
+                               ::cuda::std::exp(mLogScalesAcc[gaussianId][2]));
 
         // Depth culling should use the same shutter pose as projection:
         // - RollingShutterType::NONE: use start pose (t=0.0), matching
