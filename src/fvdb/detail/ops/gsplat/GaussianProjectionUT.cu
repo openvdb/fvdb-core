@@ -157,7 +157,10 @@ template <typename T> class OpenCVCameraModel {
         if (orthographic) {
             p_normalized = Vec2(p_cam[0], p_cam[1]);
         } else {
-            const T z_inv = T(1) / max(p_cam[2], T(1e-6));
+            // For perspective models, callers are expected to reject points with small/invalid
+            // depth before calling `project()`. Avoid clamping z here so the pinhole math remains
+            // consistent near the camera plane.
+            const T z_inv = T(1) / p_cam[2];
             p_normalized  = Vec2(p_cam[0] * z_inv, p_cam[1] * z_inv);
         }
 
@@ -170,6 +173,13 @@ template <typename T> class OpenCVCameraModel {
         const T cx        = K_ref[0][2];
         const T cy        = K_ref[1][2];
         return Vec2(fx * p_distorted[0] + cx, fy * p_distorted[1] + cy);
+    }
+
+    /// @brief Whether this camera model is orthographic.
+    /// @return True for `CameraModel::ORTHOGRAPHIC`.
+    __device__ __forceinline__ bool
+    isOrthographic() const {
+        return orthographic;
     }
 
   private:
@@ -382,9 +392,14 @@ template <typename ScalarType> struct WorldToPixelTransform {
                          const RigidTransform<ScalarType> &xf,
                          Vec2 &out_pix) const {
         const Vec3 p_cam = xf.apply(p_world);
-        // Reject points with z<=0 to avoid projecting behind the camera. For ORTHOGRAPHIC this is a
-        // policy choice (not a mathematical necessity), but we keep it consistent across models.
-        if (p_cam[2] <= ScalarType(0)) {
+        // Reject points close to/behind the camera plane.
+        //
+        // For perspective cameras, we reject z <= z_eps to avoid numerical instability and to avoid
+        // clamping z in the projection math (which would change the pinhole model near z=0).
+        // For ORTHOGRAPHIC this is a policy choice (not a mathematical necessity); we keep the
+        // original z<=0 behavior.
+        const ScalarType z_eps = camera->isOrthographic() ? ScalarType(0) : ScalarType(1e-6);
+        if (p_cam[2] <= z_eps) {
             // Ensure deterministic output to avoid UB on callers that assign/read even on invalid
             // projections. This value is ignored when we treat BehindCamera as a hard reject.
             out_pix = Vec2(ScalarType(0), ScalarType(0));
