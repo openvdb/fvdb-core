@@ -287,7 +287,8 @@ template <typename T> struct RigidTransform {
     /// @brief Default constructor (identity transform).
     ///
     /// Initializes to unit quaternion \([1,0,0,0]\) and zero translation.
-    __device__ RigidTransform()
+    __device__
+    RigidTransform()
         : q(T(1), T(0), T(0), T(0)), t(T(0), T(0), T(0)) {}
 
     /// @brief Construct from quaternion and translation.
@@ -764,11 +765,11 @@ template <typename ScalarType> struct ProjectionForwardUT {
         const int64_t gaussianId = idx % N;
 
         // Get camera parameters
-        const Mat3 &projectionMatrix       = projectionMatsShared[camId];
-        const Mat3 &worldToCamRotStart     = worldToCamRotMatsStartShared[camId];
-        const Mat3 &worldToCamRotEnd       = worldToCamRotMatsEndShared[camId];
-        const Vec3 &worldToCamTransStart   = worldToCamTranslationStartShared[camId];
-        const Vec3 &worldToCamTransEnd     = worldToCamTranslationEndShared[camId];
+        const Mat3 &projectionMatrix     = projectionMatsShared[camId];
+        const Mat3 &worldToCamRotStart   = worldToCamRotMatsStartShared[camId];
+        const Mat3 &worldToCamRotEnd     = worldToCamRotMatsEndShared[camId];
+        const Vec3 &worldToCamTransStart = worldToCamTranslationStartShared[camId];
+        const Vec3 &worldToCamTransEnd   = worldToCamTranslationEndShared[camId];
         const ScalarType *distortionCoeffs =
             (mNumDistortionCoeffs > 0) ? &distortionCoeffsShared[camId * mNumDistortionCoeffs]
                                        : nullptr;
