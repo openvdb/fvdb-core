@@ -983,6 +983,23 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
     TORCH_CHECK_VALUE(projectionMatrices.is_cuda(), "projectionMatrices must be a CUDA tensor");
     TORCH_CHECK_VALUE(distortionCoeffs.is_cuda(), "distortionCoeffs must be a CUDA tensor");
     TORCH_CHECK_VALUE(distortionCoeffs.dim() == 2, "distortionCoeffs must be 2D");
+
+    // Validate UT hyperparameters on the host to avoid inf/NaNs from invalid scaling/weights.
+    // In the 3D UT, D=3 and:
+    //   lambda = alpha^2 * (D + kappa) - D
+    //   denom  = D + lambda = alpha^2 * (D + kappa)
+    // denom must be finite and strictly positive.
+    constexpr float kUtDim = 3.0f;
+    TORCH_CHECK_VALUE(std::isfinite(utParams.alpha), "utParams.alpha must be finite");
+    TORCH_CHECK_VALUE(std::isfinite(utParams.beta), "utParams.beta must be finite");
+    TORCH_CHECK_VALUE(std::isfinite(utParams.kappa), "utParams.kappa must be finite");
+    TORCH_CHECK_VALUE(utParams.alpha > 0.0f, "utParams.alpha must be > 0");
+    TORCH_CHECK_VALUE(kUtDim + utParams.kappa > 0.0f,
+                      "utParams.kappa must satisfy (D + kappa) > 0 for the 3D UT (D=3)");
+    const float denom = utParams.alpha * utParams.alpha * (kUtDim + utParams.kappa);
+    TORCH_CHECK_VALUE(std::isfinite(denom) && denom > 0.0f,
+                      "Invalid UTParams: expected denom = alpha^2*(D+kappa) to be finite and > 0");
+
     if (cameraModel == CameraModel::PINHOLE || cameraModel == CameraModel::ORTHOGRAPHIC) {
         // Distortion coefficients are ignored for these camera models.
         // (Intrinsics `projectionMatrices` are always used.)
