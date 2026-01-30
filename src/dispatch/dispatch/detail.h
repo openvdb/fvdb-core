@@ -192,6 +192,12 @@ is_non_empty_v() {
 template <typename T>
 concept non_empty = is_non_empty_v<T>();
 
+template <typename T>
+concept non_empty_extents = extents_like<T> && non_empty<T>;
+
+template <typename T>
+concept non_empty_axes = axes_like<T> && non_empty<T>;
+
 //------------------------------------------------------------------------------
 // WITHIN (contained by)
 // Concept and trait for checking if a point is within a space

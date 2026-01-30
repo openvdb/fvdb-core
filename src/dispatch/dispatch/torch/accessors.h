@@ -287,6 +287,16 @@ template <int64_t ElementRank> struct element_accessor {
     }
 };
 
+
+
+template <torch::DeviceType dev, torch::ScalarType stype, contiguity contig, size_t IndexRank, typename Shape>
+struct element_accessor {
+    static_assert(extents_like<Shape>, "Shape must be an extents type");
+};
+
+
+
+
 } // namespace dispatch
 
 #endif // DISPATCH_DISPATCH_TORCH_ACCESSORS_H
