@@ -28,8 +28,9 @@ namespace {
 //
 /// @brief OpenCV camera model (pinhole intrinsics + distortion).
 ///
-/// This is an internal helper used by the UT projection kernel. It owns the camera intrinsics
-/// `K` and the distortion coefficient pointers and can project `p_cam -> pixel`.
+/// This is an internal helper used by the UT projection kernel.
+/// It owns the camera intrinsics pointer `K` and the distortion coefficient pointers and can
+/// project `p_cam -> pixel`.
 /// @see https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html
 ///
 /// @tparam T Scalar type
@@ -54,14 +55,16 @@ template <typename T> class OpenCVCameraModel {
     // For OpenCV models, coefficients are read from a per-camera packed layout:
     //   [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]
     //
+    // For PINHOLE / ORTHOGRAPHIC, distortionCoeffs is ignored.
+    //
     // Preconditions are asserted on-device (trap) rather than returning false.
     __device__ __forceinline__
     OpenCVCameraModel(const CameraModel cameraModel, const Mat3 *K_in, const T *distortionCoeffs)
         : K(K_in) {
         deviceAssertOrTrap(K != nullptr);
 
-        // Orthographic is a camera model choice; it is only supported for the undistorted pinhole
-        // math path (no OpenCV distortion).
+        // ORTHOGRAPHIC is implemented as pinhole intrinsics without the perspective divide.
+        // Distortion is intentionally not supported for orthographic projection.
         orthographic = (cameraModel == CameraModel::ORTHOGRAPHIC);
 
         if (cameraModel == CameraModel::ORTHOGRAPHIC) {
@@ -174,7 +177,7 @@ template <typename T> class OpenCVCameraModel {
     int numRadial       = 0;           // Number of radial coefficients
     const T *tangential = nullptr;     // p1,p2
     int numTangential   = 0;           // Number of tangential coefficients
-    const T *thinPrism  = nullptr;     // s1..s4 (but s1..s3 only used in thin prism model)
+    const T *thinPrism  = nullptr;     // s1..s4
     int numThinPrism    = 0;           // Number of thin prism coefficients
     Model model         = Model::NONE; // Distortion model
 
@@ -300,8 +303,8 @@ template <typename ScalarType> struct WorldToPixelTransform {
                          const RigidTransform<ScalarType> &xf,
                          Vec2 &out_pix) const {
         const Vec3 p_cam = xf.apply(p_world);
-        // Note: `CameraModel::ORTHOGRAPHIC` still uses the same behind-camera check, but does not
-        // divide by depth in the camera model projection step.
+        // Reject points with z<=0 to avoid projecting behind the camera. For ORTHOGRAPHIC this is a
+        // policy choice (not a mathematical necessity), but we keep it consistent across models.
         if (p_cam[2] <= ScalarType(0)) {
             // Ensure deterministic output to avoid UB on callers that assign/read even on invalid
             // projections. This value is ignored when we treat BehindCamera as a hard reject.
@@ -320,8 +323,7 @@ template <typename ScalarType> struct WorldToPixelTransform {
 
     __device__ __forceinline__ ProjStatus
     projectWorldPoint(const Vec3 &p_world, Vec2 &out_pixel) const {
-        // Rolling shutter projection similar to reference: iterate shutter pose based on the
-        // current estimate of pixel coordinate.
+        // Rolling shutter: iterate pose based on the current pixel estimate (row/col -> time).
 
         // Start/end projections for initialization.
         const RigidTransform<ScalarType> &pose_start = worldToCamStart;
@@ -342,15 +344,15 @@ template <typename ScalarType> struct WorldToPixelTransform {
             return ProjStatus::BehindCamera;
         }
 
-        // If neither endpoint is in image (but at least one is in front), treat as invalid.
-        // (Keep parity with the old behavior which required an in-image endpoint to iterate.)
+        // If neither endpoint is in-image (but at least one is in front), treat as invalid.
+        // (We require an in-image seed for the fixed-point iteration.)
         if (!isInImage(status_start) && !isInImage(status_end)) {
             out_pixel = (status_end != ProjStatus::BehindCamera) ? pix_end : pix_start;
             return ProjStatus::OutOfBounds;
         }
 
         Vec2 pix_prev = isInImage(status_start) ? pix_start : pix_end;
-        // Iteration count: small fixed number (reference uses 10).
+        // Fixed small iteration count (good enough for convergence in practice).
         constexpr int kIters = 6;
         for (int it = 0; it < kIters; ++it) {
             ScalarType t_rs = ScalarType(0);
@@ -835,7 +837,8 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
     TORCH_CHECK_VALUE(distortionCoeffs.is_cuda(), "distortionCoeffs must be a CUDA tensor");
     TORCH_CHECK_VALUE(distortionCoeffs.dim() == 2, "distortionCoeffs must be 2D");
     if (cameraModel == CameraModel::PINHOLE || cameraModel == CameraModel::ORTHOGRAPHIC) {
-        // Accept any K (including 0); ignored.
+        // Distortion coefficients are ignored for these camera models.
+        // (Intrinsics `projectionMatrices` are always used.)
     } else if (cameraModel == CameraModel::OPENCV_RADTAN_5 ||
                cameraModel == CameraModel::OPENCV_RATIONAL_8 ||
                cameraModel == CameraModel::OPENCV_RADTAN_THIN_PRISM_9 ||
