@@ -467,6 +467,92 @@ TEST_F(GaussianProjectionUTTestFixture, MultiCamera_RadTanDistortion_PerCameraPa
     EXPECT_NEAR(means2d_cpu[1][0][1].item<float>(), v1, 5e-3f);
 }
 
+TEST_F(GaussianProjectionUTTestFixture, MultiCamera_Pinhole_ZeroCoeffTensor_PerCameraIntrinsics) {
+    const int64_t C = 2;
+
+    // Put the mean on the optical axis so the UT mean should be exactly (cx,cy) per camera.
+    const float z = 5.0f;
+    means         = torch::tensor({{0.0f, 0.0f, z}}, torch::kFloat32);
+    quats         = torch::tensor({{1.0f, 0.0f, 0.0f, 0.0f}}, torch::kFloat32);
+    logScales     = torch::log(torch::tensor({{0.2f, 0.3f, 0.4f}}, torch::kFloat32));
+
+    worldToCamMatricesStart =
+        torch::eye(4, torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(0).expand({C, 4, 4});
+    worldToCamMatricesEnd = worldToCamMatricesStart.clone();
+
+    // Different intrinsics per camera.
+    projectionMatrices = torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32));
+    auto K             = projectionMatrices.accessor<float, 3>();
+    // Cam0
+    const float fx0 = 100.0f, fy0 = 200.0f, cx0 = 111.0f, cy0 = 222.0f;
+    K[0][0][0] = fx0;
+    K[0][1][1] = fy0;
+    K[0][0][2] = cx0;
+    K[0][1][2] = cy0;
+    K[0][2][2] = 1.0f;
+    // Cam1
+    const float fx1 = 300.0f, fy1 = 400.0f, cx1 = 333.0f, cy1 = 444.0f;
+    K[1][0][0] = fx1;
+    K[1][1][1] = fy1;
+    K[1][0][2] = cx1;
+    K[1][1][2] = cy1;
+    K[1][2][2] = 1.0f;
+
+    // Pinhole projection should ignore distortionCoeffs. Use a [C,0] tensor to exercise the
+    // mNumDistortionCoeffs==0 shared-memory path.
+    cameraModel      = CameraModel::PINHOLE;
+    distortionCoeffs = torch::zeros({C, 0}, torch::kFloat32);
+
+    imageWidth  = 800;
+    imageHeight = 600;
+    eps2d       = 0.3f;
+    nearPlane   = 0.1f;
+    farPlane    = 100.0f;
+    minRadius2d = 0.0f;
+
+    utParams                              = UTParams{};
+    utParams.requireAllSigmaPointsInImage = true;
+
+    means                   = means.cuda();
+    quats                   = quats.cuda();
+    logScales               = logScales.cuda();
+    worldToCamMatricesStart = worldToCamMatricesStart.cuda();
+    worldToCamMatricesEnd   = worldToCamMatricesEnd.cuda();
+    projectionMatrices      = projectionMatrices.cuda();
+    distortionCoeffs        = distortionCoeffs.cuda();
+
+    const auto [radii, means2d, depths, conics, compensations] =
+        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
+                                                          quats,
+                                                          logScales,
+                                                          worldToCamMatricesStart,
+                                                          worldToCamMatricesEnd,
+                                                          projectionMatrices,
+                                                          RollingShutterType::NONE,
+                                                          utParams,
+                                                          cameraModel,
+                                                          distortionCoeffs,
+                                                          imageWidth,
+                                                          imageHeight,
+                                                          eps2d,
+                                                          nearPlane,
+                                                          farPlane,
+                                                          minRadius2d,
+                                                          false);
+
+    auto radii_cpu   = radii.cpu();
+    auto means2d_cpu = means2d.cpu();
+    EXPECT_GT(radii_cpu[0][0].item<int32_t>(), 0);
+    EXPECT_GT(radii_cpu[1][0].item<int32_t>(), 0);
+
+    // UT projects sigma points through a nonlinear model; tiny mean shifts can occur due to
+    // floating point and second-order effects. Keep a slightly relaxed tolerance.
+    EXPECT_NEAR(means2d_cpu[0][0][0].item<float>(), cx0, 3e-3f);
+    EXPECT_NEAR(means2d_cpu[0][0][1].item<float>(), cy0, 3e-3f);
+    EXPECT_NEAR(means2d_cpu[1][0][0].item<float>(), cx1, 3e-3f);
+    EXPECT_NEAR(means2d_cpu[1][0][1].item<float>(), cy1, 3e-3f);
+}
+
 TEST_F(GaussianProjectionUTTestFixture,
        OffAxisTinyGaussian_RadTanDistortion_MeanMatchesOpenCVPoint) {
     const int64_t C = 1;

@@ -769,7 +769,9 @@ template <typename ScalarType> struct ProjectionForwardUT {
         const Mat3 &worldToCamRotEnd       = worldToCamRotMatsEndShared[camId];
         const Vec3 &worldToCamTransStart   = worldToCamTranslationStartShared[camId];
         const Vec3 &worldToCamTransEnd     = worldToCamTranslationEndShared[camId];
-        const ScalarType *distortionCoeffs = &distortionCoeffsShared[camId * mNumDistortionCoeffs];
+        const ScalarType *distortionCoeffs =
+            (mNumDistortionCoeffs > 0) ? &distortionCoeffsShared[camId * mNumDistortionCoeffs]
+                                       : nullptr;
 
         // Define the camera model (projection and distortion) using the shared memory pointers
         OpenCVCameraModel<ScalarType> camera(mCameraModel, &projectionMatrix, distortionCoeffs);
