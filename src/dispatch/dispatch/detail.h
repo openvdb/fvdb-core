@@ -179,6 +179,62 @@ volume_v() {
 }
 
 //------------------------------------------------------------------------------
+// extent_at - get the extent value at a specific dimension index
+//------------------------------------------------------------------------------
+// For extents<S0, S1, ...>, extent_at<I, extents<...>> returns the I-th extent.
+
+template <size_t I, typename T> struct extent_at;
+
+template <size_t I, size_t S0, size_t... Ss> struct extent_at<I, extents<S0, Ss...>> {
+    static_assert(I < (1 + sizeof...(Ss)), "extent_at: index out of bounds");
+    static consteval size_t
+    value() {
+        if constexpr (I == 0) {
+            return S0;
+        } else {
+            return extent_at<I - 1, extents<Ss...>>::value();
+        }
+    }
+};
+
+template <size_t I, typename T>
+consteval size_t
+extent_at_v() {
+    return extent_at<I, T>::value();
+}
+
+//------------------------------------------------------------------------------
+// volume_suffix - product of all extents after dimension I (exclusive)
+//------------------------------------------------------------------------------
+// Used for computing strides in row-major layout.
+// For extents<S0, S1, S2>, volume_suffix<0> = S1 * S2, volume_suffix<1> = S2,
+// volume_suffix<2> = 1.
+
+template <size_t I, typename T> struct volume_suffix;
+
+template <size_t I, size_t S0, size_t... Ss> struct volume_suffix<I, extents<S0, Ss...>> {
+    static_assert(I < (1 + sizeof...(Ss)), "volume_suffix: index out of bounds");
+    static consteval size_t
+    value() {
+        if constexpr (I >= sizeof...(Ss)) {
+            // Last dimension or beyond - suffix is 1
+            return 1;
+        } else if constexpr (I == 0) {
+            // Suffix after first = volume of tail
+            return volume_v<extents<Ss...>>();
+        } else {
+            return volume_suffix<I - 1, extents<Ss...>>::value();
+        }
+    }
+};
+
+template <size_t I, typename T>
+consteval size_t
+volume_suffix_v() {
+    return volume_suffix<I, T>::value();
+}
+
+//------------------------------------------------------------------------------
 // NON_EMPTY - concept and trait
 //------------------------------------------------------------------------------
 template <typename T> struct is_non_empty : consteval_bool_type<(volume_v<T>() > 0)> {};

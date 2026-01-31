@@ -21,9 +21,8 @@ namespace dispatch {
 namespace design {
 
 // A compile-time shape with known dimensions
-template <int64_t... Dims>
-struct shape {
-    static constexpr int64_t rank = sizeof...(Dims);
+template <int64_t... Dims> struct shape {
+    static constexpr int64_t rank       = sizeof...(Dims);
     static constexpr int64_t dims[rank] = {Dims...};
 
     static constexpr int64_t
@@ -43,8 +42,7 @@ using vector3   = shape<3>;
 using matrix3x3 = shape<3, 3>;
 
 // A dynamic shape (runtime-known iteration dimension)
-template <int64_t... StaticDims>
-struct dynamic_shape {
+template <int64_t... StaticDims> struct dynamic_shape {
     int64_t dynamic_dim; // The iteration dimension (N)
     // Static element dimensions follow
 
@@ -62,8 +60,7 @@ struct dynamic_shape {
 // indexed<Shape>: An N-D space with explicit indices
 // - Used for the "outer" iteration dimension
 // - Runtime-sized (we don't know N at compile time)
-template <typename Shape = shape<>>
-struct indexed {
+template <typename Shape = shape<>> struct indexed {
     using element_shape = Shape;
     int64_t count; // Runtime iteration count
 };
@@ -71,29 +68,25 @@ struct indexed {
 // elemental<Shape>: A contiguous chunk treated as a unit
 // - Used for the "inner" element shape
 // - Compile-time sized
-template <typename Shape>
-struct elemental {
+template <typename Shape> struct elemental {
     using shape_type                    = Shape;
     static constexpr int64_t rank       = Shape::rank;
     static constexpr int64_t total_size = Shape::size();
 };
 
 // Convenience: elemental from dimension pack
-template <int64_t... Dims>
-using elem = elemental<shape<Dims...>>;
+template <int64_t... Dims> using elem = elemental<shape<Dims...>>;
 
 // flattened<Space>: Linearize an N-D space to 1-D
 // - Converts multi-index iteration to linear iteration
-template <typename Space>
-struct flattened {
+template <typename Space> struct flattened {
     using inner_space = Space;
 };
 
 // zipped<Spaces...>: Synchronous iteration over multiple spaces
 // - All spaces must have compatible iteration dimensions
 // - Used to describe multi-input operations
-template <typename... Spaces>
-struct zipped {
+template <typename... Spaces> struct zipped {
     static constexpr size_t arity = sizeof...(Spaces);
 };
 
@@ -108,8 +101,7 @@ struct zipped {
 //
 // This separation is key: we iterate over N things, each thing is a 3x3 matrix.
 
-template <typename ElemShape, typename Tag>
-struct tensor_view {
+template <typename ElemShape, typename Tag> struct tensor_view {
     using element_shape = ElemShape;
     using tag_type      = Tag;
 
@@ -146,8 +138,7 @@ make_view(Tag, torch::Tensor t) {
 // This abstraction hides the gather/scatter logic inside the accessor.
 
 // element_ref: Pointer-like access for contiguous data
-template <typename T, typename Shape>
-struct element_ref {
+template <typename T, typename Shape> struct element_ref {
     T *data;
 
     __hostdev__ T &
@@ -169,8 +160,7 @@ struct element_ref {
 };
 
 // element_val: Value-like access for strided data (gathered into registers)
-template <typename T, typename Shape>
-struct element_val {
+template <typename T, typename Shape> struct element_val {
     T data[Shape::size()];
 
     __hostdev__ T &
@@ -209,8 +199,8 @@ struct element_val {
 
 // The accessor returns the appropriate type based on contiguity
 template <typename T, typename Shape, contiguity Contig>
-using element_access_t =
-    std::conditional_t<Contig == contiguity::contiguous, element_ref<T, Shape>, element_val<T, Shape>>;
+using element_access_t = std::
+    conditional_t<Contig == contiguity::contiguous, element_ref<T, Shape>, element_val<T, Shape>>;
 
 //==============================================================================
 // PART 5: SINGLE-TENSOR ACCESSOR
@@ -219,8 +209,7 @@ using element_access_t =
 // An accessor wraps a tensor and provides element access at iteration indices.
 // The contiguity determines whether we return pointers or gathered values.
 
-template <typename ElemShape, torch::ScalarType Stype, contiguity Contig>
-struct single_accessor;
+template <typename ElemShape, torch::ScalarType Stype, contiguity Contig> struct single_accessor;
 
 // Contiguous specialization: direct pointer access
 template <typename ElemShape, torch::ScalarType Stype>
@@ -261,8 +250,8 @@ struct single_accessor<ElemShape, Stype, contiguity::strided> {
     __hostdev__ element_type
     get(int64_t n) const {
         element_type elem;
-        int64_t idx  = (sizes[0] == 1) ? 0 : n;
-        T *base      = data + idx * strides[0];
+        int64_t idx = (sizes[0] == 1) ? 0 : n;
+        T *base     = data + idx * strides[0];
 
         // Gather based on element shape rank
         if constexpr (ElemShape::rank == 1) {
@@ -304,8 +293,7 @@ struct single_accessor<ElemShape, Stype, contiguity::strided> {
 // synchronized access. At each iteration index n, it returns a tuple
 // of elements from all inputs.
 
-template <typename... Accessors>
-struct zipped_accessor {
+template <typename... Accessors> struct zipped_accessor {
     cuda::std::tuple<Accessors...> accessors;
 
     // Get element tuple at iteration index n
@@ -335,12 +323,11 @@ make_zipped_accessor_impl(Tag tag,
                           std::index_sequence<Is...>,
                           types<ElemShapes...>,
                           torch::Tensor const &...tensors) {
-    using Stype                  = decltype(Tag::stype)::value;
-    constexpr contiguity Contig  = Tag::contig;
+    using Stype                 = decltype(Tag::stype)::value;
+    constexpr contiguity Contig = Tag::contig;
 
     return zipped_accessor<single_accessor<ElemShapes, Stype, Contig>...>{
-        cuda::std::make_tuple(
-            single_accessor<ElemShapes, Stype, Contig>::from_tensor(tensors)...)};
+        cuda::std::make_tuple(single_accessor<ElemShapes, Stype, Contig>::from_tensor(tensors)...)};
 }
 
 template <typename... ElemShapes, typename Tag, typename... Tensors>
@@ -362,8 +349,7 @@ make_zipped_accessor(Tag tag, types<ElemShapes...> shapes, Tensors const &...ten
 //------------------------------------------------------------------------------
 // This is essentially for_each but expressed as a composable type.
 
-template <typename F>
-struct Each {
+template <typename F> struct Each {
     // Apply F to each element in the iteration space
     template <typename Tag, typename Accessor>
     static void
@@ -377,8 +363,7 @@ struct Each {
 //------------------------------------------------------------------------------
 // Like J's rank conjunction. f Over<0> applies to scalars, Over<1> to vectors.
 
-template <int64_t Rank>
-struct Over {
+template <int64_t Rank> struct Over {
     // Rank 0: scalar operation (current unary_elementwise)
     // Rank 1: vector operation (apply to each vector)
     // Rank 2: matrix operation (apply to each matrix)
@@ -389,14 +374,13 @@ struct Over {
 //------------------------------------------------------------------------------
 // The core abstraction for multi-input elementwise operations.
 
-template <typename F, typename InputShapes, typename OutputShape>
-struct ZipMap;
+template <typename F, typename InputShapes, typename OutputShape> struct ZipMap;
 
 // Specialization for zipped inputs
 template <typename F, typename... InShapes, typename OutShape>
 struct ZipMap<F, zipped<elemental<InShapes>...>, elemental<OutShape>> {
-    using input_shapes  = types<InShapes...>;
-    using output_shape  = OutShape;
+    using input_shapes                  = types<InShapes...>;
+    using output_shape                  = OutShape;
     static constexpr size_t input_arity = sizeof...(InShapes);
 
     //--------------------------------------------------------------------------
@@ -418,7 +402,7 @@ struct ZipMap<F, zipped<elemental<InShapes>...>, elemental<OutShape>> {
         int64_t const N = output.size(0);
 
         for_each(t, N, [=] __hostdev__(tag<Dev, Stype, Contig>, int64_t n) mutable {
-            auto in_elements  = in_acc.get(n);
+            auto in_elements = in_acc.get(n);
             auto out_element = out_acc.get(n);
             F::apply(t, in_elements, out_element);
         });
@@ -427,7 +411,8 @@ struct ZipMap<F, zipped<elemental<InShapes>...>, elemental<OutShape>> {
     //--------------------------------------------------------------------------
     // Dispatch space definition
     //--------------------------------------------------------------------------
-    using space = axes<torch_cpu_cuda_device_axis, torch_full_float_stype_axis, full_contiguity_axis>;
+    using space =
+        axes<torch_cpu_cuda_device_axis, torch_full_float_stype_axis, full_contiguity_axis>;
 
     // ... dispatcher and map() similar to unary_elementwise
 };
@@ -464,7 +449,7 @@ struct affine_element_op {
 // GENERIC WIRING (could be even more concise with macros/helpers):
 using affine_op = ZipMap<affine_element_op,
                          zipped<elem<3, 3>, elem<3>, elem<3>>, // inputs: R, t, x
-                         elem<3>>;                              // output: y
+                         elem<3>>;                             // output: y
 
 // PUBLIC API:
 torch::Tensor
@@ -522,8 +507,7 @@ example_affine_xform_v2(torch::Tensor R, torch::Tensor T, torch::Tensor x) {
 // For strided outputs, we need to scatter the result back to memory.
 // The accessor should handle this transparently.
 
-template <typename ElemShape, torch::ScalarType Stype>
-struct output_accessor_strided {
+template <typename ElemShape, torch::ScalarType Stype> struct output_accessor_strided {
     using T            = torch_scalar_cpp_type_t<Stype>;
     using element_type = element_val<T, ElemShape>;
 
@@ -559,8 +543,7 @@ struct output_accessor_strided {
 };
 
 // Alternative: RAII-style scatterer
-template <typename Accessor, typename Element>
-struct scoped_scatter {
+template <typename Accessor, typename Element> struct scoped_scatter {
     Accessor &acc;
     int64_t n;
     Element elem;
@@ -569,10 +552,7 @@ struct scoped_scatter {
     scoped_scatter(Accessor &a, int64_t idx)
         : acc(a), n(idx), elem(a.get(idx)) {}
 
-    __hostdev__
-    ~scoped_scatter() {
-        acc.set(n, elem);
-    }
+    __hostdev__ ~scoped_scatter() { acc.set(n, elem); }
 
     __hostdev__ Element &
     operator*() {
@@ -587,11 +567,10 @@ struct scoped_scatter {
 // The for_each machinery has GrainSize for ILP. We could extend accessors
 // to work with chunks for better memory access patterns.
 
-template <int64_t ChunkSize, typename ElemShape, torch::ScalarType Stype>
-struct chunked_accessor {
-    using T                    = torch_scalar_cpp_type_t<Stype>;
-    using single_element       = element_ref<T, ElemShape>;
-    using chunk_type           = std::array<single_element, ChunkSize>;
+template <int64_t ChunkSize, typename ElemShape, torch::ScalarType Stype> struct chunked_accessor {
+    using T              = torch_scalar_cpp_type_t<Stype>;
+    using single_element = element_ref<T, ElemShape>;
+    using chunk_type     = std::array<single_element, ChunkSize>;
 
     T *data;
     int64_t element_size;
@@ -753,8 +732,7 @@ torch::Tensor result = my_op::map("my_op", input1, input2, input3);
 // Takes values, returns value. No mutation, no pointers.
 // Easiest to reason about, compose, and test.
 
-template <typename T>
-struct affine_pure {
+template <typename T> struct affine_pure {
     // Input: R (3x3), t (3), x (3) as value arrays
     // Output: y (3) as returned value array
     __hostdev__ static std::array<T, 3>
@@ -778,8 +756,7 @@ struct affine_pure {
 // Takes input values, writes to output reference.
 // More efficient (no copy on return), but less composable.
 
-template <typename T>
-struct affine_mutate {
+template <typename T> struct affine_mutate {
     __hostdev__ static void
     apply(T const (&R)[3][3], T const (&t)[3], T const (&x)[3], T (&y)[3]) {
         for (int i = 0; i < 3; ++i) {
@@ -797,8 +774,7 @@ struct affine_mutate {
 // Takes pointers. Compatible with both contiguous and gathered data.
 // Matches what accessors naturally provide.
 
-template <typename T>
-struct affine_pointer {
+template <typename T> struct affine_pointer {
     __hostdev__ static void
     apply(T const *R, T const *t, T const *x, T *y) {
         for (int i = 0; i < 3; ++i) {
@@ -816,8 +792,7 @@ struct affine_pointer {
 // Takes element wrappers that abstract contiguous vs strided.
 // The wrapper provides operator[] regardless of underlying storage.
 
-template <typename T, typename RWrap, typename VWrap>
-struct affine_wrapped {
+template <typename T, typename RWrap, typename VWrap> struct affine_wrapped {
     __hostdev__ static void
     apply(RWrap const &R, VWrap const &t, VWrap const &x, VWrap &y) {
         for (int i = 0; i < 3; ++i) {
@@ -835,8 +810,7 @@ struct affine_wrapped {
 // For reductions, the calculation takes an accumulator.
 // This shows how the same operation morphs for reduce vs map.
 
-template <typename T>
-struct dot_accumulator {
+template <typename T> struct dot_accumulator {
     // This is the "kernel" of a dot product
     // Applied via reduce: result = fold(dot_accumulator, 0, zip(a, b))
     __hostdev__ static T
@@ -853,35 +827,50 @@ struct dot_accumulator {
 // Express affine as composition of smaller operations.
 // This is the most "APL-like" approach.
 
-template <typename T>
-struct primitives {
+template <typename T> struct primitives {
     // Scalar operations
-    __hostdev__ static T add(T a, T b) { return a + b; }
-    __hostdev__ static T mul(T a, T b) { return a * b; }
-    __hostdev__ static T fma(T a, T b, T c) { return a + b * c; }  // a + b*c
+    __hostdev__ static T
+    add(T a, T b) {
+        return a + b;
+    }
+    __hostdev__ static T
+    mul(T a, T b) {
+        return a * b;
+    }
+    __hostdev__ static T
+    fma(T a, T b, T c) {
+        return a + b * c;
+    } // a + b*c
 
     // Vector operations (operate on pointers with known size)
     template <int N>
-    __hostdev__ static T dot(T const *a, T const *b) {
+    __hostdev__ static T
+    dot(T const *a, T const *b) {
         T sum = T(0);
-        for (int i = 0; i < N; ++i) sum += a[i] * b[i];
+        for (int i = 0; i < N; ++i)
+            sum += a[i] * b[i];
         return sum;
     }
 
     template <int N>
-    __hostdev__ static void axpy(T a, T const *x, T const *y, T *out) {
+    __hostdev__ static void
+    axpy(T a, T const *x, T const *y, T *out) {
         // out = a*x + y
-        for (int i = 0; i < N; ++i) out[i] = a * x[i] + y[i];
+        for (int i = 0; i < N; ++i)
+            out[i] = a * x[i] + y[i];
     }
 
     template <int N>
-    __hostdev__ static void add_vec(T const *a, T const *b, T *out) {
-        for (int i = 0; i < N; ++i) out[i] = a[i] + b[i];
+    __hostdev__ static void
+    add_vec(T const *a, T const *b, T *out) {
+        for (int i = 0; i < N; ++i)
+            out[i] = a[i] + b[i];
     }
 
     // Matrix-vector: y = R @ x
     template <int M, int N>
-    __hostdev__ static void matvec(T const *R, T const *x, T *y) {
+    __hostdev__ static void
+    matvec(T const *R, T const *x, T *y) {
         for (int i = 0; i < M; ++i) {
             y[i] = dot<N>(R + i * N, x);
         }
@@ -889,9 +878,10 @@ struct primitives {
 
     // Affine: y = R @ x + t (composed from primitives)
     template <int N>
-    __hostdev__ static void affine(T const *R, T const *t, T const *x, T *y) {
-        matvec<N, N>(R, x, y);   // y = R @ x
-        add_vec<N>(y, t, y);     // y = y + t (in-place)
+    __hostdev__ static void
+    affine(T const *R, T const *t, T const *x, T *y) {
+        matvec<N, N>(R, x, y); // y = R @ x
+        add_vec<N>(y, t, y);   // y = y + t (in-place)
     }
 };
 
@@ -1030,10 +1020,10 @@ affine_v3(T const *R, T const *t, T const *x, T *y) {
     // y[i] = fma(R[i,2], x[2], fma(R[i,1], x[1], fma(R[i,0], x[0], t[i])))
     for (int i = 0; i < 3; ++i) {
         T acc = t[i];
-        acc = fma(R[i * 3 + 0], x[0], acc);
-        acc = fma(R[i * 3 + 1], x[1], acc);
-        acc = fma(R[i * 3 + 2], x[2], acc);
-        y[i] = acc;
+        acc   = fma(R[i * 3 + 0], x[0], acc);
+        acc   = fma(R[i * 3 + 1], x[1], acc);
+        acc   = fma(R[i * 3 + 2], x[2], acc);
+        y[i]  = acc;
     }
 }
 
@@ -1045,7 +1035,9 @@ template <typename T>
 __hostdev__ void
 affine_v4(T const *R, T const *t, T const *x, T *y) {
     // Initialize with t
-    y[0] = t[0]; y[1] = t[1]; y[2] = t[2];
+    y[0] = t[0];
+    y[1] = t[1];
+    y[2] = t[2];
 
     // Accumulate R @ x column-by-column
     for (int j = 0; j < 3; ++j) {
@@ -1063,9 +1055,9 @@ affine_v4(T const *R, T const *t, T const *x, T *y) {
 template <typename T>
 __hostdev__ void
 affine_v5(T const *R, T const *t, T const *x, T *y) {
-    y[0] = t[0] + R[0]*x[0] + R[1]*x[1] + R[2]*x[2];
-    y[1] = t[1] + R[3]*x[0] + R[4]*x[1] + R[5]*x[2];
-    y[2] = t[2] + R[6]*x[0] + R[7]*x[1] + R[8]*x[2];
+    y[0] = t[0] + R[0] * x[0] + R[1] * x[1] + R[2] * x[2];
+    y[1] = t[1] + R[3] * x[0] + R[4] * x[1] + R[5] * x[2];
+    y[2] = t[2] + R[6] * x[0] + R[7] * x[1] + R[8] * x[2];
 }
 
 //------------------------------------------------------------------------------
@@ -1213,7 +1205,8 @@ struct affine_soa_input {
 // No interaction between elements.
 
 template <typename F, typename In, typename Out>
-void map_pattern(int64_t N, In in, Out out, F f) {
+void
+map_pattern(int64_t N, In in, Out out, F f) {
     for (int64_t n = 0; n < N; ++n) {
         out[n] = f(in[n]);
     }
@@ -1226,7 +1219,8 @@ void map_pattern(int64_t N, In in, Out out, F f) {
 // All elements contribute to one output.
 
 template <typename F, typename In, typename T>
-T reduce_pattern(int64_t N, In in, T init, F f) {
+T
+reduce_pattern(int64_t N, In in, T init, F f) {
     T acc = init;
     for (int64_t n = 0; n < N; ++n) {
         acc = f(acc, in[n]);
@@ -1243,11 +1237,13 @@ T reduce_pattern(int64_t N, In in, T init, F f) {
 // ...
 
 template <typename F, typename In, typename Out>
-void scan_pattern(int64_t N, In in, Out out, F f) {
-    if (N == 0) return;
+void
+scan_pattern(int64_t N, In in, Out out, F f) {
+    if (N == 0)
+        return;
     out[0] = in[0];
     for (int64_t n = 1; n < N; ++n) {
-        out[n] = f(out[n-1], in[n]);
+        out[n] = f(out[n - 1], in[n]);
     }
 }
 
@@ -1258,8 +1254,9 @@ void scan_pattern(int64_t N, In in, Out out, F f) {
 // This is APL's +.× (plus dot times)
 
 template <typename T, typename Combine, typename Multiply>
-T inner_product_pattern(int64_t N, T const* a, T const* b,
-                        T init, Combine combine, Multiply multiply) {
+T
+inner_product_pattern(
+    int64_t N, T const *a, T const *b, T init, Combine combine, Multiply multiply) {
     T acc = init;
     for (int64_t n = 0; n < N; ++n) {
         acc = combine(acc, multiply(a[n], b[n]));
@@ -1274,7 +1271,8 @@ T inner_product_pattern(int64_t N, T const* a, T const* b,
 // This is APL's ∘.f (jot dot f)
 
 template <typename F, typename A, typename B, typename Out>
-void outer_product_pattern(int64_t M, int64_t N, A a, B b, Out out, F f) {
+void
+outer_product_pattern(int64_t M, int64_t N, A a, B b, Out out, F f) {
     for (int64_t i = 0; i < M; ++i) {
         for (int64_t j = 0; j < N; ++j) {
             out[i * N + j] = f(a[i], b[j]);
@@ -1391,33 +1389,42 @@ using affine_op = Map<add_scalar> ∘ Zip<matvec_op, Identity>;
 // This is a VALUE type. The user treats it like a mathematical vector.
 // How it's stored (pointer, gathered values, shared memory) is invisible.
 
-template <int N, typename T>
-struct Vec {
+template <int N, typename T> struct Vec {
     T data[N];
 
-    __hostdev__ T &operator[](int i) { return data[i]; }
-    __hostdev__ T const &operator[](int i) const { return data[i]; }
+    __hostdev__ T &
+    operator[](int i) {
+        return data[i];
+    }
+    __hostdev__ T const &
+    operator[](int i) const {
+        return data[i];
+    }
 
     // Vector operations
-    __hostdev__ Vec operator+(Vec const &other) const {
+    __hostdev__ Vec
+    operator+(Vec const &other) const {
         Vec result;
         DISPATCH_UNROLL for (int i = 0; i < N; ++i) result[i] = data[i] + other[i];
         return result;
     }
 
-    __hostdev__ Vec operator-(Vec const &other) const {
+    __hostdev__ Vec
+    operator-(Vec const &other) const {
         Vec result;
         DISPATCH_UNROLL for (int i = 0; i < N; ++i) result[i] = data[i] - other[i];
         return result;
     }
 
-    __hostdev__ Vec operator*(T scalar) const {
+    __hostdev__ Vec
+    operator*(T scalar) const {
         Vec result;
         DISPATCH_UNROLL for (int i = 0; i < N; ++i) result[i] = data[i] * scalar;
         return result;
     }
 
-    __hostdev__ T dot(Vec const &other) const {
+    __hostdev__ T
+    dot(Vec const &other) const {
         T sum = T(0);
         DISPATCH_UNROLL for (int i = 0; i < N; ++i) sum += data[i] * other[i];
         return sum;
@@ -1427,22 +1434,29 @@ struct Vec {
 // Mat<M, N, T>: An MxN matrix of type T (row-major)
 // Also a VALUE type. Mathematical matrix operations.
 
-template <int M, int N, typename T>
-struct Mat {
+template <int M, int N, typename T> struct Mat {
     T data[M * N];
 
-    __hostdev__ T &operator()(int i, int j) { return data[i * N + j]; }
-    __hostdev__ T const &operator()(int i, int j) const { return data[i * N + j]; }
+    __hostdev__ T &
+    operator()(int i, int j) {
+        return data[i * N + j];
+    }
+    __hostdev__ T const &
+    operator()(int i, int j) const {
+        return data[i * N + j];
+    }
 
     // Row access
-    __hostdev__ Vec<N, T> row(int i) const {
+    __hostdev__ Vec<N, T>
+    row(int i) const {
         Vec<N, T> r;
         DISPATCH_UNROLL for (int j = 0; j < N; ++j) r[j] = (*this)(i, j);
         return r;
     }
 
     // Matrix-vector multiply
-    __hostdev__ Vec<M, T> operator*(Vec<N, T> const &v) const {
+    __hostdev__ Vec<M, T>
+    operator*(Vec<N, T> const &v) const {
         Vec<M, T> result;
         DISPATCH_UNROLL for (int i = 0; i < M; ++i) {
             result[i] = row(i).dot(v);
@@ -1518,7 +1532,7 @@ struct sdf_sphere {
     __hostdev__ static T
     apply(Vec3<T> const &center, T radius, Vec3<T> const &query) {
         Vec3<T> diff = query - center;
-        T dist_sq = diff.dot(diff);
+        T dist_sq    = diff.dot(diff);
         return sqrt(dist_sq) - radius;
     }
 };
@@ -1548,46 +1562,37 @@ struct bilinear_interp {
 //   - Handle contiguity transparently
 
 // Element shape descriptor
-template <int... Dims>
-struct elem_shape {
-    static constexpr int rank = sizeof...(Dims);
+template <int... Dims> struct elem_shape {
+    static constexpr int rank   = sizeof...(Dims);
     static constexpr int dims[] = {Dims...};
-    static constexpr int size = (Dims * ... * 1);
+    static constexpr int size   = (Dims * ... * 1);
 };
 
 // Input/output pattern declaration
-template <typename... InputShapes>
-struct inputs {};
+template <typename... InputShapes> struct inputs {};
 
-template <typename OutputShape>
-struct output {};
+template <typename OutputShape> struct output {};
 
 // The complete pattern for an operation
-template <typename Func, typename Inputs, typename Output>
-struct op_pattern;
+template <typename Func, typename Inputs, typename Output> struct op_pattern;
 
 // Example: affine transform pattern
 // Input: Mat3 (3x3), Vec3 (3), Vec3 (3)
 // Output: Vec3 (3)
-using affine_pattern = op_pattern<
-    affine_transform,
-    inputs<elem_shape<3, 3>, elem_shape<3>, elem_shape<3>>,
-    output<elem_shape<3>>
->;
+using affine_pattern = op_pattern<affine_transform,
+                                  inputs<elem_shape<3, 3>, elem_shape<3>, elem_shape<3>>,
+                                  output<elem_shape<3>>>;
 
 // Example: quaternion rotate pattern
-using quat_rotate_pattern = op_pattern<
-    quaternion_rotate,
-    inputs<elem_shape<4>, elem_shape<3>>,
-    output<elem_shape<3>>
->;
+using quat_rotate_pattern =
+    op_pattern<quaternion_rotate, inputs<elem_shape<4>, elem_shape<3>>, output<elem_shape<3>>>;
 
 // Example: SDF sphere pattern
-using sdf_sphere_pattern = op_pattern<
-    sdf_sphere,
-    inputs<elem_shape<3>, elem_shape<>, elem_shape<3>>,  // center, radius (scalar), query
-    output<elem_shape<>>  // scalar output
->;
+using sdf_sphere_pattern =
+    op_pattern<sdf_sphere,
+               inputs<elem_shape<3>, elem_shape<>, elem_shape<3>>, // center, radius (scalar), query
+               output<elem_shape<>>                                // scalar output
+               >;
 
 //==============================================================================
 // PART 24: HOW THE FRAMEWORK USES THIS
@@ -1596,12 +1601,10 @@ using sdf_sphere_pattern = op_pattern<
 // The framework takes the pattern and generates everything else.
 // Here's a sketch of what the framework does internally.
 
-template <typename Pattern>
-struct elementwise_executor;
+template <typename Pattern> struct elementwise_executor;
 
 template <typename Func, typename... InShapes, typename OutShape>
 struct elementwise_executor<op_pattern<Func, inputs<InShapes...>, output<OutShape>>> {
-
     // The element types, derived from shapes
     // (In real code, also parameterized by scalar type T)
     // using input_element_types = std::tuple<shape_to_element_t<InShapes>...>;
@@ -1680,11 +1683,9 @@ struct my_affine_op {
 };
 
 // STEP 2: Declare the pattern
-using my_affine_pattern = op_pattern<
-    my_affine_op,
-    inputs<elem_shape<3, 3>, elem_shape<3>, elem_shape<3>>,
-    output<elem_shape<3>>
->;
+using my_affine_pattern = op_pattern<my_affine_op,
+                                     inputs<elem_shape<3, 3>, elem_shape<3>, elem_shape<3>>,
+                                     output<elem_shape<3>>>;
 
 // STEP 3: Instantiate the operation with dispatch axes
 /*
@@ -1737,12 +1738,12 @@ affine_xform(torch::Tensor R, torch::Tensor T, torch::Tensor x) {
 // How do we go from torch::Tensor to Vec3<T>? The accessor layer.
 
 // Contiguous accessor: Vec3 wraps pointer
-template <typename T>
-struct vec3_contiguous_accessor {
+template <typename T> struct vec3_contiguous_accessor {
     T *data;
     int64_t stride; // = 3 for contiguous
 
-    __hostdev__ Vec3<T> get(int64_t n) const {
+    __hostdev__ Vec3<T>
+    get(int64_t n) const {
         T *p = data + n * stride;
         return Vec3<T>{{p[0], p[1], p[2]}};
     }
@@ -1752,13 +1753,13 @@ struct vec3_contiguous_accessor {
 };
 
 // Strided accessor: Vec3 contains gathered values
-template <typename T>
-struct vec3_strided_accessor {
+template <typename T> struct vec3_strided_accessor {
     T *data;
     int64_t outer_stride;
     int64_t inner_stride;
 
-    __hostdev__ Vec3<T> get(int64_t n) const {
+    __hostdev__ Vec3<T>
+    get(int64_t n) const {
         T *p = data + n * outer_stride;
         return Vec3<T>{{p[0 * inner_stride], p[1 * inner_stride], p[2 * inner_stride]}};
     }
