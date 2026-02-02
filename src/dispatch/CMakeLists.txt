@@ -27,7 +27,6 @@ if(FVDB_BUILD_TESTS)
         examples/op.cu
         examples/relu.cu
         examples/gelu_for_each.cu
-        examples/affine_xform_ternary.cu
         examples/scan_lib.cpp
         examples/scan_lib.cu
     )
@@ -161,7 +160,8 @@ if(FVDB_BUILD_TESTS)
     ConfigureDispatchTest(DispatchInclusiveScanExamplesTest tests/inclusive_scan_examples_test.cpp)
     ConfigureDispatchTest(DispatchReLUTest tests/relu_test.cpp)
     ConfigureDispatchTest(DispatchGeLUForEachTest tests/gelu_for_each_test.cpp)
-    ConfigureDispatchTest(DispatchAffineXformTernaryTest tests/affine_xform_ternary_test.cpp)
+    ConfigureDispatchTest(DispatchForEachTest tests/for_each_test.cu)
+    ConfigureDispatchTest(DispatchGatherScatterTest tests/gather_scatter_test.cu)
 
     # ============================================================================
     # Negative Compilation Tests (Expected Failures)

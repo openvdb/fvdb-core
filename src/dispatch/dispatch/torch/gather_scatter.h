@@ -41,6 +41,8 @@ template <torch::DeviceType dev, torch::ScalarType stype> struct device_scalar_p
 /// 2D read-only view: (rows x cols) matrix
 template <torch::DeviceType Dev, torch::ScalarType Stype>
 struct matrix_const_view : device_scalar_pair<Dev, Stype> {
+    using typename device_scalar_pair<Dev, Stype>::value_type;
+
     value_type const *data;
     int64_t rows;
     int64_t cols;
@@ -54,6 +56,8 @@ struct matrix_const_view : device_scalar_pair<Dev, Stype> {
 /// 2D mutable view: (rows x cols) matrix
 template <torch::DeviceType Dev, torch::ScalarType Stype>
 struct matrix_mutable_view : device_scalar_pair<Dev, Stype> {
+    using typename device_scalar_pair<Dev, Stype>::value_type;
+
     value_type *data;
     int64_t rows;
     int64_t cols;
@@ -67,6 +71,8 @@ struct matrix_mutable_view : device_scalar_pair<Dev, Stype> {
 /// 1D read-only view with stride: for index arrays
 template <torch::DeviceType Dev, torch::ScalarType Stype>
 struct vector_const_view : device_scalar_pair<Dev, Stype> {
+    using typename device_scalar_pair<Dev, Stype>::value_type;
+
     value_type const *data;
     int64_t count;
     int64_t stride;
