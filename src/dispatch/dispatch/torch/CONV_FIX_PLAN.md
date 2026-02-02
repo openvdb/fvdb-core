@@ -18,7 +18,7 @@ def execute(self, data, weights):
     # Wrap tensor -> JaggedTensor if flat
     if is_flat:
         data = JaggedTensor(data)
-    
+
     # For GATHER_SCATTER backend:
     result = JaggedTensor(impl=self._pack_info.sparse_conv_3d(data._impl, weights, self._backend))
 ```
@@ -53,10 +53,10 @@ static variable_list forward(AutogradContext *ctx, Variable inFeatures,
     // WEIGHT PERMUTATION: (out_ch, in_ch, D, H, W) → (K^3, in_ch, out_ch)
     // THIS ALLOCATES A NEW TENSOR EVERY FORWARD CALL!
     kernels = kernels.permute({2, 3, 4, 1, 0}).reshape({-1, inC, outC}).contiguous();
-    
+
     // CPU COPY EVERY CALL! (for std::max_element in backend)
     nbsizes.cpu().contiguous();
-    
+
     // Finally dispatch to backend
     ops::dispatchSparseConvolutionKernelMap<DeviceTag>(...);
 }
@@ -84,7 +84,7 @@ The algorithm is ~10 lines of pseudocode buried under 620 lines of boilerplate:
 for each kernel_weight_position i in [0, kernel_volume):
     if n_active[i] == 0: skip
     if i == mid_kernel and precompute_mid: skip (already done via mm)
-    
+
     1. GATHER:  in_buffer[j] = in_feat[kmap[j].src]   for j in [0, n_active[i])
     2. GEMM:    out_buffer = in_buffer @ kernel[i]
     3. SCATTER: out_feat[kmap[j].dst] += out_buffer[j]
@@ -146,116 +146,94 @@ Python: plan.execute(data, weights)
         │
         └─► AT_DISPATCH once, outside loop
               │
-              └─► sparse_conv_forward_impl<Dev, ScalarT>()
+              └─► sparse_conv_forward_impl<Dev, Stype>()
                     │
                     └─► for k in kernel_positions:
-                          ├─► gather<Dev, ScalarT>(...)
+                          ├─► gather(tag<Dev, Stype>{}, src_view, dst_view, idx_view)
                           ├─► torch::mm_out(...)
-                          └─► scatter_add<Dev, ScalarT>(...)
+                          └─► scatter_add(tag<Dev, Stype>{}, src_view, dst_view, idx_view)
 ```
 
 ---
 
 ## Implementation Steps
 
-### Step 1: Create Unified for_each Wrapper
+### Step 1: for_each Wrapper (DONE)
 
-**File:** `dispatch/torch/for_each.h`
+**File:** `dispatch/torch/for_each.h` - **Already exists**
 
-Create a device-templated `for_each` that handles CUDA/CPU dispatch:
+The dispatch framework already provides a device-templated `for_each`:
 
 ```cpp
-#pragma once
+// Current interface (tag-based):
+template <typename Tag, typename Func>
+    requires tag_match<Tag, torch::kCUDA>  // or kCPU or kPrivateUse1
+void for_each(Tag t, int64_t count, Func &&func);
 
-#include <torch/types.h>
-#include <cstdint>
-
-namespace dispatch {
-
-// Primary template - must be specialized per device
-template <torch::DeviceType Dev, typename Func>
-void for_each(int64_t count, Func&& func);
-
-// CPU specialization: parallel for loop
-template <>
-template <typename Func>
-void for_each<torch::kCPU, Func>(int64_t count, Func&& func) {
-    #pragma omp parallel for
-    for (int64_t i = 0; i < count; ++i) {
-        func(i);
-    }
-}
-
-// CUDA specialization: kernel launch
-// (Implementation in .cu file using existing forEachCUDA pattern)
-
-} // namespace dispatch
+// Functor receives: func(tag, index)
 ```
 
-This wraps the existing `forEachCUDA` / `forEachCPU` patterns into a single interface.
-The key insight is that the lambda can be `__hostdev__`, allowing the same user code
-to work on both devices.
+For gather/scatter, we'll use this directly with a minimal tag:
 
-### Step 2: Create gather/scatter_add Primitives
+```cpp
+// Usage in gather_scatter.h:
+dispatch::for_each(tag<Dev>{}, count, [=] __hostdev__ (auto, int64_t idx) {
+    // idx is the linear index
+});
+```
+
+The existing implementation handles:
+- CUDA: grid-stride loop with configurable grain size
+- CPU: ATen `parallel_for` with PyTorch's thread pool
+- PrivateUse1: Multi-GPU work distribution
+
+### Step 2: Create gather/scatter_add Primitives (DONE)
 
 **File:** `dispatch/torch/gather_scatter.h`
 
+The implementation uses tag-based dispatch with lightweight view types that carry device
+and scalar type as template parameters:
+
 ```cpp
-#pragma once
-
-#include "dispatch/torch/for_each.h"
-#include <cstdint>
-
 namespace dispatch {
 
-// Gather: dst[i, :] = src[indices[i], :] for each i
-// indices[i] == -1 means skip (leave dst unchanged)
-template <torch::DeviceType Dev, typename ScalarT>
-void gather(
-    const ScalarT* src, int64_t src_rows, int64_t C,
-    ScalarT* dst, int64_t dst_rows,
-    const int32_t* indices,
-    int64_t index_offset = 0)
-{
-    const int32_t* idx = indices + index_offset;
-    
-    for_each<Dev>(dst_rows * C, [=] __hostdev__ (int64_t linear) {
-        int64_t i = linear / C;
-        int64_t j = linear % C;
-        int32_t src_row = idx[i];
-        if (src_row >= 0) {
-            dst[i * C + j] = src[src_row * C + j];
-        }
-    });
-}
+// View types - carry device + scalar type, enabling type-safe dispatch
+template <torch::DeviceType Dev, torch::ScalarType Stype>
+struct matrix_const_view : device_scalar_pair<Dev, Stype> {
+    value_type const *data;
+    int64_t rows;
+    int64_t cols;
+    __hostdev__ value_type operator()(int64_t row, int64_t col) const;
+};
 
-// Scatter-add: dst[indices[i], :] += src[i, :] for each i
-// indices[i] == -1 means skip
-template <torch::DeviceType Dev, typename ScalarT>
-void scatter_add(
-    const ScalarT* src, int64_t src_rows, int64_t C,
-    ScalarT* dst, int64_t dst_rows,
-    const int32_t* indices,
-    int64_t index_offset = 0)
-{
-    const int32_t* idx = indices + index_offset;
-    
-    for_each<Dev>(src_rows * C, [=] __hostdev__ (int64_t linear) {
-        int64_t i = linear / C;
-        int64_t j = linear % C;
-        int32_t dst_row = idx[i];
-        if (dst_row >= 0) {
-            if constexpr (Dev == torch::kCUDA) {
-                atomicAdd(&dst[dst_row * C + j], src[i * C + j]);
-            } else {
-                dst[dst_row * C + j] += src[i * C + j];
-            }
-        }
-    });
-}
+template <torch::DeviceType Dev, torch::ScalarType Stype>
+struct matrix_mutable_view : device_scalar_pair<Dev, Stype> { /* similar */ };
+
+template <torch::DeviceType Dev, torch::ScalarType Stype>
+struct vector_const_view : device_scalar_pair<Dev, Stype> {
+    value_type const *data;
+    int64_t count;
+    int64_t stride;  // For interleaved kmap format
+    __hostdev__ value_type operator[](int64_t i) const;
+};
+
+// Unified gather - works on CPU and GPU via __hostdev__
+template <typename Tag, typename SrcView, typename DstView, typename IdxView>
+void gather(Tag t, SrcView src, DstView dst, IdxView idx);
+
+// Unified scatter_add - delegates to atomic_add_helper for device-specific atomics
+template <typename Tag, typename SrcView, typename DstView, typename IdxView>
+void scatter_add(Tag t, SrcView src, DstView dst, IdxView idx);
 
 } // namespace dispatch
 ```
+
+**Key design choices:**
+- **Tag-based dispatch**: `tag<Dev, Stype>` flows through, enabling `tag_match` constraints
+- **View types**: Encapsulate pointer + dimensions, carry device/scalar type for specialization
+- **Minimal specialization**: Only `atomic_add_helper` is device-specialized (CPU: `std::atomic_ref`, GPU: `atomicAdd`)
+- **`for_each_nd<2>`**: 2D iteration space, views handle indexing
+- **Stride support**: `vector_const_view.stride` handles interleaved kmap format
 
 ### Step 3: Rewrite SparseConvolutionKernelMap Core
 
@@ -275,79 +253,73 @@ void sparse_conv_kernel_map_forward_impl(
     bool middle_accel)
 {
     auto guard = c10::cuda::CUDAGuard(in_feat.device());  // no-op for CPU
-    
+
     const int64_t kernel_volume = kernel.size(0);
     const int64_t C_in = in_feat.size(1);
     const int64_t C_out = kernel.size(2);
     const int64_t N_in = in_feat.size(0);
     const int64_t N_out = out_feat.size(0);
-    
+
     // Compute max buffer size needed
     int64_t max_active = *std::max_element(
         neighbor_offset.data_ptr<int>(),
         neighbor_offset.data_ptr<int>() + kernel_volume);
     max_active = std::max(max_active, int64_t(1));
-    
+
     // Allocate buffers once
     auto opts = in_feat.options();
     auto in_buffer = torch::empty({max_active, C_in}, opts);
     auto out_buffer = torch::empty({max_active, C_out}, opts);
-    
+
     // Middle kernel acceleration
     int64_t mid = kernel_volume / 2;
-    bool do_mid_accel = middle_accel && 
-                        (kernel_volume % 2 == 1) && 
+    bool do_mid_accel = middle_accel &&
+                        (kernel_volume % 2 == 1) &&
                         (N_in == N_out);
     if (do_mid_accel) {
         torch::mm_out(out_feat, in_feat, kernel[mid]);
     }
-    
+
     // Get raw pointers
     auto* in_ptr = in_feat.data_ptr<ScalarT>();
     auto* out_ptr = out_feat.data_ptr<ScalarT>();
     auto* kmap_ptr = neighbor_map.data_ptr<int32_t>();
     auto* noff_ptr = neighbor_offset.data_ptr<int>();
-    
+
     int64_t kmap_offset = 0;
     for (int64_t k = 0; k < kernel_volume; ++k) {
         int64_t n_active = noff_ptr[k];
-        
+
         if (n_active == 0) continue;
-        
+
         if (do_mid_accel && k == mid) {
             kmap_offset += 2 * n_active;  // skip pairs
             continue;
         }
-        
+
         // Buffer views (no allocation, just narrowing)
         auto in_buf = in_buffer.narrow(0, 0, n_active);
         auto out_buf = out_buffer.narrow(0, 0, n_active);
-        
+
         // GATHER: in_buf[i] = in_feat[kmap[i].src]
         int src_col = transpose ? 1 : 0;
-        dispatch::gather<Dev, ScalarT>(
-            in_ptr, N_in, C_in,
-            in_buf.data_ptr<ScalarT>(), n_active,
-            kmap_ptr + kmap_offset + src_col,
-            0);  // indices are at kmap[offset + src_col], stride 2
-        
-        // Note: The kmap is interleaved (src, dst, src, dst, ...)
-        // So we need to handle stride-2 access. Two options:
-        //   a) Modify gather to take a stride parameter
-        //   b) Pre-process kmap into separate src/dst arrays
-        // Option (a) is cleaner for this refactor.
-        
+        dispatch::gather(
+            tag<Dev, Stype>{},
+            matrix_const_view<Dev, Stype>{in_ptr, N_in, C_in},
+            matrix_mutable_view<Dev, Stype>{in_buf.data_ptr<ScalarT>(), n_active, C_in},
+            vector_const_view<Dev, torch::kInt32>{kmap_ptr + kmap_offset + src_col, n_active, 2});
+
         // GEMM: out_buf = in_buf @ kernel[k]
         torch::mm_out(out_buf, in_buf, kernel[k]);
-        
+
         // SCATTER: out_feat[kmap[i].dst] += out_buf[i]
         int dst_col = transpose ? 0 : 1;
-        dispatch::scatter_add<Dev, ScalarT>(
-            out_buf.data_ptr<ScalarT>(), n_active, C_out,
-            out_ptr, N_out,
-            kmap_ptr + kmap_offset + dst_col,
-            0);
-        
+        dispatch::scatter_add(
+            tag<Dev, Stype>{},
+            matrix_const_view<Dev, Stype>{out_buf.data_ptr<ScalarT>(), n_active, C_out},
+            matrix_mutable_view<Dev, Stype>{out_ptr, N_out, C_out},
+            vector_const_view<Dev, torch::kInt32>{kmap_ptr + kmap_offset + dst_col, n_active, 2});
+
         kmap_offset += 2 * n_active;
     }
 }
@@ -374,14 +346,14 @@ void dispatchSparseConvolutionKernelMap(
     TORCH_CHECK(in_feat.device() == kernel.device());
     TORCH_CHECK(in_feat.device() == neighbor_map.device());
     TORCH_CHECK(neighbor_offset.device().is_cpu(), "neighbor_offset must be on CPU");
-    
+
     auto dev = in_feat.device().type();
-    
+
     // Dispatch dtype ONCE, outside all loops
     AT_DISPATCH_FLOATING_TYPES_AND2(
-        at::kHalf, at::kBFloat16, 
-        in_feat.scalar_type(), 
-        "SparseConvKernelMap", 
+        at::kHalf, at::kBFloat16,
+        in_feat.scalar_type(),
+        "SparseConvKernelMap",
         [&] {
             if (dev == torch::kCUDA) {
                 c10::cuda::CUDAGuard guard(in_feat.device());
@@ -417,19 +389,19 @@ nbsizes.cpu().contiguous()
    ```cpp
    // In SparseConvPackInfo.h
    int64_t maxBufferSize() const { return mMaxBufferSize; }
-   
+
    // Computed once in buildGatherScatter():
    mMaxBufferSize = *std::max_element(nbsizes.begin(), nbsizes.end());
    ```
 
 2. **Accept pre-permuted weights or permute at plan creation:**
-   
+
    Option A (minimal change): Accept weights in internal format from caller
    ```cpp
    // Caller ensures weights are (K^3, C_in, C_out)
    // No permute needed in forward
    ```
-   
+
    Option B (better UX): Store permuted weights in ConvolutionPlan at creation
    ```python
    # In ConvolutionPlan.__init__:
@@ -461,7 +433,7 @@ void sparse_conv_kernel_map_backward_impl(
     // Similar structure:
     // For each kernel position k:
     //   1. GATHER grad_out into buffer
-    //   2. GATHER in_feat into buffer  
+    //   2. GATHER in_feat into buffer
     //   3. GEMM: grad_in_buffer = grad_out_buffer @ kernel[k].T
     //   4. GEMM: grad_kernel[k] = in_buffer.T @ grad_out_buffer
     //   5. SCATTER-ADD grad_in_buffer into grad_in_feat
@@ -474,8 +446,8 @@ void sparse_conv_kernel_map_backward_impl(
 
 | File | Action |
 |------|--------|
-| `dispatch/torch/for_each.h` | **Create** - unified for_each wrapper |
-| `dispatch/torch/gather_scatter.h` | **Create** - gather/scatter_add primitives |
+| `dispatch/torch/for_each.h` | **Exists** - no changes needed |
+| `dispatch/torch/gather_scatter.h` | **DONE** - gather/scatter_add primitives |
 | `fvdb/detail/autograd/SparseConvolutionKernelMap.cpp` | **Fix** - remove weight permute, cache max_buffer_size |
 | `fvdb/detail/ops/convolution/backend/SparseConvolutionKernelMap.cu` | **Rewrite** - use new primitives |
 | `fvdb/detail/ops/convolution/backend/SparseConvolutionKernelMap.cpp` | **Delete** - merged into .cu via templates |
@@ -487,12 +459,17 @@ void sparse_conv_kernel_map_backward_impl(
 
 ## Open Questions / Refinements
 
-### 1. kmap Index Stride
+### 1. kmap Index Stride (RESOLVED)
 
-The current `neighbor_map` is interleaved. Options:
-- **Option A:** Add `index_stride` parameter to gather/scatter (minimal change)
-- **Option B:** Restructure kmap to be `(N, 2)` contiguous columns (breaking change)
-- **Recommendation:** Option A for this refactor
+The current `neighbor_map` is interleaved `(src0, dst0, src1, dst1, ...)`.
+
+**Solution:** Use `vector_const_view.stride = 2`. The gather call becomes:
+```cpp
+gather(tag<Dev, Stype>{},
+       matrix_const_view<Dev, Stype>{in_ptr, N_in, C_in},
+       matrix_mutable_view<Dev, Stype>{buf_ptr, n_active, C_in},
+       vector_const_view<Dev, torch::kInt32>{kmap_ptr + src_col, n_active, 2});  // stride=2
+```
 
 ### 2. Weight Format Convention
 
@@ -503,23 +480,25 @@ Where should the weight permutation happen?
 - **Option C (Do nothing):** Keep current behavior (permute every call)
 - **Recommendation:** Option B - best UX with no API break. Can be phase 2.
 
-### 3. PrivateUse1 Support
+### 3. PrivateUse1 Support (NEEDS ATOMIC_ADD_HELPER SPECIALIZATION)
 
-Not in initial scope. Can be added later by:
-1. Adding `for_each<torch::kPrivateUse1>` specialization
-2. Adding device case in the dispatch entry point
+The existing `for_each.h` already supports PrivateUse1 (multi-GPU) via `tag_match<Tag, torch::kPrivateUse1>`.
+The gather primitive works out of the box (unified via `__hostdev__`).
 
-### 4. Atomics for CPU scatter_add
+For scatter_add, need to add a PrivateUse1 specialization of `atomic_add_helper` that uses
+`atomicAdd` (same as CUDA). Currently only CPU and CUDA specializations exist.
 
-The current implementation uses `+=` which is not thread-safe if the same output
-location is written by multiple threads. Options:
-- Use `#pragma omp atomic` (slower)
-- Accept non-determinism for CPU (matches CUDA behavior)
-- Sequential scatter for CPU (current behavior actually loops sequentially over i)
+### 4. Atomics for CPU scatter_add (RESOLVED)
 
-**Note:** Looking at the current code, the CPU version uses a sequential outer loop
-over `i` with parallel inner loop over channels. This is safe. We should preserve
-this pattern.
+**Solution:** Use C++20 `std::atomic_ref` for thread-safe atomic add on CPU:
+```cpp
+std::atomic_ref<scalar_t>(dst[...]).fetch_add(src[...], std::memory_order_relaxed);
+```
+
+This is implemented via `atomic_add_helper` specialization - the only device-specific
+code in gather_scatter.h. The helper is specialized per device:
+- CPU: `std::atomic_ref<T>::fetch_add`
+- GPU: `atomicAdd`
 
 ### 5. ME (MinkowskiEngine) Backward Path
 
@@ -551,8 +530,8 @@ This needs to be preserved or unified into the same pattern.
 
 Fix the worst offender - the 620-line backend file.
 
-1. Create `for_each.h` wrapper
-2. Create `gather_scatter.h` primitives  
+1. ~~Create `for_each.h` wrapper~~ **DONE** - already exists in dispatch framework
+2. ~~Create `gather_scatter.h` primitives~~ **DONE** - `dispatch/torch/gather_scatter.h`
 3. Rewrite `SparseConvolutionKernelMap.cu` to use new primitives
 4. Delete `SparseConvolutionKernelMap.cpp` (CPU code now in .cu via templates)
 5. Add `maxBufferSize()` to `SparseConvPackInfo` (avoids CPU copy per call)
@@ -584,13 +563,13 @@ Simplify `convolution_plan.py`.
 
 ### Phase 1 (Backend Cleanup)
 
-- **for_each.h:** 1-2 hours (wrapping existing patterns)
-- **gather_scatter.h:** 1-2 hours (simple primitives)
+- ~~**for_each.h:** 1-2 hours~~ **DONE** - already exists
+- ~~**gather_scatter.h:** 1 hour~~ **DONE** - primitives created
 - **SparseConvolutionKernelMap rewrite:** 2-3 hours (main work)
 - **maxBufferSize cache:** 30 min
 - **Testing and debugging:** 1-2 hours
 
-**Phase 1 Total:** ~6-8 hours
+**Phase 1 Total:** ~4-6 hours
 
 ### Phase 2 (Autograd Cleanup)
 

@@ -6,19 +6,16 @@
 #ifndef DISPATCH_DISPATCH_TORCH_FOR_EACH_H
 #define DISPATCH_DISPATCH_TORCH_FOR_EACH_H
 
-#include "dispatch/dispatch_table.h"
 #include "dispatch/iteration_policy.h"
 #include "dispatch/macros.h"
 #include "dispatch/tag_match.h"
-#include "dispatch/torch/dispatch.h"
-#include "dispatch/torch/types.h"
 #include "dispatch/types.h"
 
 #include <ATen/Parallel.h>
 #include <c10/cuda/CUDAStream.h>
+#include <torch/types.h>
 
 #include <array>
-#include <concepts>
 #include <cstdint>
 #include <functional>
 
