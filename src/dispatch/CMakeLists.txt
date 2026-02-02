@@ -14,14 +14,11 @@ target_include_directories(dispatch INTERFACE
 )
 
 # ============================================================================
-# Examples Library (built when tests are enabled)
+# Examples Library (built when tests or benchmarks are enabled)
 # ============================================================================
-# Examples are compiled as a library that tests link against.
+# Examples are compiled as a library that tests and benchmarks link against.
 
-if(FVDB_BUILD_TESTS)
-    # Get GTest via CPM (same as main tests)
-    include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/get_google_test.cmake)
-
+if(FVDB_BUILD_TESTS OR FVDB_BUILD_BENCHMARKS)
     set(DISPATCH_EXAMPLE_SOURCES
         examples/functional.cu
         examples/op.cu
@@ -67,10 +64,15 @@ if(FVDB_BUILD_TESTS)
             ${TORCH_CUDA_COMMON_FLAGS}
         >
     )
+endif()
 
-    # ============================================================================
-    # Tests
-    # ============================================================================
+# ============================================================================
+# Tests (only built when tests are enabled)
+# ============================================================================
+if(FVDB_BUILD_TESTS)
+    # Get GTest via CPM (same as main tests)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/get_google_test.cmake)
+
     enable_testing()
     include(GoogleTest)
 

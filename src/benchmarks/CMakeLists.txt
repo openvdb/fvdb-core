@@ -51,3 +51,66 @@ endfunction()
 
 # Configure the benchmarks
 ConfigureBench(simple "simple/simple.cpp")
+
+# ============================================================================
+# GELU Comparison Benchmark (requires C++20 for dispatch framework)
+# ============================================================================
+# This benchmark compares:
+# - torch::gelu (PyTorch native)
+# - gelu_old (old-style fvdb ForEach)
+# - example_gelu_for_each (new dispatch framework)
+
+add_executable(gelu_comparison
+    gelu_comparison/gelu_benchmark.cu
+    gelu_comparison/gelu_old.cu
+)
+
+set_target_properties(gelu_comparison
+    PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${BENCHMARKS_BINARY_DIRECTORY}
+    INSTALL_RPATH "\$ORIGIN/../../../lib"
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+    CUDA_STANDARD 20
+    CUDA_STANDARD_REQUIRED ON
+)
+
+target_include_directories(gelu_comparison PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../dispatch
+)
+
+target_link_libraries(gelu_comparison
+    fvdb
+    dispatch_examples
+    ${TORCH_LIBRARIES}
+    benchmark::benchmark_main
+    $<TARGET_NAME_IF_EXISTS:conda_env>
+)
+
+target_compile_options(gelu_comparison PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:
+        "-Wall"
+        "-Werror"
+    >
+    $<$<COMPILE_LANGUAGE:CUDA>:
+        "--extended-lambda"
+        "-Xfatbin=-compress-all"
+        "-Xcompiler=-Wall,-Werror"
+        ${TORCH_CUDA_COMMON_FLAGS}
+    >
+)
+
+add_custom_command(
+    OUTPUT FVDB_BENCHMARKS
+    COMMAND gelu_comparison --benchmark_out_format=json
+            --benchmark_out=results/gelu_comparison.json
+    APPEND
+    COMMENT "Adding gelu_comparison"
+)
+
+install(
+    TARGETS gelu_comparison
+    COMPONENT testing
+    DESTINATION bin/benchmarks/fvdb
+    EXCLUDE_FROM_ALL
+)
