@@ -20,11 +20,16 @@
 
 namespace dispatch {
 
-template <torch::DeviceType dev, torch::ScalarType stype>
-struct device_scalar_pair {
+template <torch::DeviceType dev, torch::ScalarType stype> struct device_scalar_pair {
     using value_type = torch_scalar_cpp_type_t<stype>;
-    static consteval torch::DeviceType device() { return dev; }
-    static consteval torch::ScalarType scalar_type() { return stype; }
+    static consteval torch::DeviceType
+    device() {
+        return dev;
+    }
+    static consteval torch::ScalarType
+    scalar_type() {
+        return stype;
+    }
 };
 
 //------------------------------------------------------------------------------
@@ -36,7 +41,6 @@ struct device_scalar_pair {
 /// 2D read-only view: (rows x cols) matrix
 template <torch::DeviceType Dev, torch::ScalarType Stype>
 struct matrix_const_view : device_scalar_pair<Dev, Stype> {
-
     value_type const *data;
     int64_t rows;
     int64_t cols;
@@ -79,25 +83,21 @@ namespace detail {
 // atomic_add_helper - single-element atomic add, specialized per device
 //------------------------------------------------------------------------------
 
-template <torch::DeviceType Dev, torch::ScalarType Stype>
-struct atomic_add_helper;
+template <torch::DeviceType Dev, torch::ScalarType Stype> struct atomic_add_helper;
 
 /// CPU: std::atomic_ref (C++20)
-template <torch::ScalarType Stype>
-struct atomic_add_helper<torch::kCPU, Stype> {
+template <torch::ScalarType Stype> struct atomic_add_helper<torch::kCPU, Stype> {
     using value_type = torch_scalar_cpp_type_t<Stype>;
     static void
     apply(value_type *dst, value_type src) {
-        std::atomic_ref<value_type>(*dst)
-            .fetch_add(src, std::memory_order_relaxed);
+        std::atomic_ref<value_type>(*dst).fetch_add(src, std::memory_order_relaxed);
     }
 };
 
 #if defined(__CUDACC__)
 
 /// GPU: CUDA atomicAdd
-template <torch::ScalarType Stype>
-struct atomic_add_helper<torch::kCUDA, Stype> {
+template <torch::ScalarType Stype> struct atomic_add_helper<torch::kCUDA, Stype> {
     using value_type = torch_scalar_cpp_type_t<Stype>;
     __device__ static void
     apply(value_type *dst, value_type src) {
@@ -105,8 +105,7 @@ struct atomic_add_helper<torch::kCUDA, Stype> {
     }
 };
 
-template <torch::ScalarType Stype>
-struct atomic_add_helper<torch::kPrivateUse1, Stype> {
+template <torch::ScalarType Stype> struct atomic_add_helper<torch::kPrivateUse1, Stype> {
     using value_type = torch_scalar_cpp_type_t<Stype>;
     __device__ static void
     apply(value_type *dst, value_type src) {
@@ -120,8 +119,7 @@ struct atomic_add_helper<torch::kPrivateUse1, Stype> {
 // gather_helper
 //------------------------------------------------------------------------------
 
-template <typename Tag, typename SrcView, typename DstView, typename IdxView>
-struct gather_helper;
+template <typename Tag, typename SrcView, typename DstView, typename IdxView> struct gather_helper;
 
 template <typename Tag, torch::DeviceType Dev, torch::ScalarType Stype>
     requires tag_match<Tag, Dev, Stype>
