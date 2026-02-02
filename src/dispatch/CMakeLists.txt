@@ -162,6 +162,7 @@ if(FVDB_BUILD_TESTS)
     ConfigureDispatchTest(DispatchGeLUForEachTest tests/gelu_for_each_test.cpp)
     ConfigureDispatchTest(DispatchForEachTest tests/for_each_test.cu)
     ConfigureDispatchTest(DispatchGatherScatterTest tests/gather_scatter_test.cu)
+    ConfigureDispatchTest(DispatchViewsTest tests/views_test.cu)
 
     # ============================================================================
     # Negative Compilation Tests (Expected Failures)

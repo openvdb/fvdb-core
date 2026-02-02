@@ -9,6 +9,9 @@
 // Unlike relu.cu which manually launches kernels, this uses the for_each abstraction
 // which handles device dispatch (CPU/CUDA/PrivateUse1) automatically.
 //
+// The flat_view abstraction handles tensors of any rank and stride, iterating over
+// all elements in linear order with correct offset computation.
+//
 // ================================================================================================
 
 #include "examples/gelu_for_each.h"
@@ -16,7 +19,7 @@
 #include "dispatch/dispatch_table.h"
 #include "dispatch/torch/dispatch.h"
 #include "dispatch/torch/for_each.h"
-#include "dispatch/torch/types.h"
+#include "dispatch/torch/views.h"
 #include "examples/gelu_scalar.h"
 
 namespace dispatch_examples {
@@ -27,33 +30,24 @@ struct gelu_op {
     template <torch::DeviceType dev, torch::ScalarType stype>
     static void
     op(tag<dev, stype>, torch::Tensor input, torch::Tensor output) {
-        using Tag  = tag<dev, stype>;
-        using T    = torch_scalar_cpp_type_t<stype>;
-        T *in_ptr  = input.data_ptr<T>();
-        T *out_ptr = output.data_ptr<T>();
+        using Tag = tag<dev, stype>;
 
-        int64_t const stride_in  = input.stride(0);
-        int64_t const stride_out = output.stride(0);
-        int64_t const count      = input.numel();
+        flat_const_view<dev, stype> in{input};
+        flat_mutable_view<dev, stype> out{output};
 
-        for_each(Tag{}, count, [=] __hostdev__(Tag, int64_t i) {
-            out_ptr[i * stride_out] = gelu_scalar(in_ptr[i * stride_in]);
-        });
+        for_each(Tag{}, in.numel, [=] __hostdev__(Tag, int64_t i) { out[i] = gelu_scalar(in[i]); });
     }
 
     using space      = axes<torch_full_device_axis, torch_full_float_stype_axis>;
+    using subspaces  = coverage<space>;
     using dispatcher = dispatch_table<space, void(torch::Tensor, torch::Tensor)>;
 };
 
 torch::Tensor
 example_gelu_for_each_impl(torch::Tensor input, placement plc) {
-    static gelu_op::dispatcher const table{gelu_op::dispatcher::from_op<gelu_op>(),
-                                           gelu_op::space{}};
+    static auto const table = dispatch_table_from_op<gelu_op>();
 
-    TORCH_CHECK_VALUE(
-        input.dim() == 1, "example_gelu_for_each: expected 1D tensor, got ", input.dim(), "D");
-
-    if (input.size(0) == 0) {
+    if (input.numel() == 0) {
         if (plc == placement::in_place) {
             return input;
         } else {

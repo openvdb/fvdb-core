@@ -150,13 +150,13 @@ struct relu_op_t {
     }
 
     using space      = axes<torch_cpu_cuda_device_axis, torch_full_float_stype_axis>;
+    using subspaces  = coverage<space>;
     using dispatcher = dispatch_table<space, void(torch::Tensor, torch::Tensor)>;
 };
 
 torch::Tensor
 example_relu_impl(torch::Tensor input, placement plc) {
-    static relu_op_t::dispatcher const table{relu_op_t::dispatcher::from_op<relu_op_t>(),
-                                             relu_op_t::space{}};
+    static auto const table = dispatch_table_from_op<relu_op_t>();
 
     // Validate input rank
     TORCH_CHECK_VALUE(input.dim() == 1, "example_relu: expected 1D tensor, got ", input.dim(), "D");

@@ -204,16 +204,15 @@ struct iscan_op {
                                   axis<placement::out_of_place>,
                                   axis<determinism::required>>;
 
+    using subspaces =
+        coverage<cpu_float_subspace, cpu_int_subspace, gpu_float_subspace, gpu_int_subspace>;
+
     using dispatcher = dispatch_table<space, tensor_with_notes(torch::Tensor)>;
 };
 
 tensor_with_notes
 inclusive_scan_op(torch::Tensor input, placement plc, determinism det) {
-    static iscan_op::dispatcher const table{iscan_op::dispatcher::from_op<iscan_op>(),
-                                            iscan_op::cpu_float_subspace{},
-                                            iscan_op::cpu_int_subspace{},
-                                            iscan_op::gpu_float_subspace{},
-                                            iscan_op::gpu_int_subspace{}};
+    static auto const table = dispatch_table_from_op<iscan_op>();
 
     // Validate input rank
     TORCH_CHECK_VALUE(

@@ -176,6 +176,55 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
     }
 };
 
+//------------------------------------------------------------------------------
+// coverage: Collection of subspaces for dispatch table instantiation
+//------------------------------------------------------------------------------
+
+// Holds multiple subspaces (each an axes<...> or a single tag<...>) to define
+// the set of coordinates that should be instantiated in a dispatch table.
+// Conceptually dual to `within<Sub, Space>` - coverage declares which subspaces
+// are instantiated, and each must satisfy within<Sub, Space>.
+//
+// Usage:
+//   using subspaces = dispatch::coverage<cpu_subspace, gpu_subspace>;
+//   using subspaces = dispatch::coverage<space>;  // Full space instantiation
+//
+template <typename... Subs> struct coverage {};
+
+//------------------------------------------------------------------------------
+// dispatch_table_from_op: Create dispatch table from Op struct
+//------------------------------------------------------------------------------
+
+// Creates a dispatch table for an Op struct with static `op()` method overloads.
+//
+// Op must define:
+//   - using space = axes<...>;  // Full dispatch space
+//   - using subspaces = dispatch::coverage<...>;  // Subspaces to instantiate
+//   - using dispatcher = dispatch_table<space, ReturnType(Args...)>;
+//
+// Usage:
+//   static auto const table = dispatch_table_from_op<MyOp>();
+//
+namespace detail {
+
+template <typename Op, typename Coverage> struct dispatch_table_from_op_helper;
+
+template <typename Op, typename... Subs>
+struct dispatch_table_from_op_helper<Op, coverage<Subs...>> {
+    static typename Op::dispatcher
+    create() {
+        return typename Op::dispatcher{Op::dispatcher::template from_op<Op>(), Subs{}...};
+    }
+};
+
+} // namespace detail
+
+template <typename Op>
+typename Op::dispatcher
+dispatch_table_from_op() {
+    return detail::dispatch_table_from_op_helper<Op, typename Op::subspaces>::create();
+}
+
 } // namespace dispatch
 
 #endif // DISPATCH_DISPATCH_DISPATCH_TABLE_H

@@ -13,87 +13,13 @@
 #include "dispatch/tag_match.h"
 #include "dispatch/torch/for_each.h"
 #include "dispatch/torch/types.h"
+#include "dispatch/torch/views.h"
 
 #include <array>
 #include <atomic>
 #include <cstdint>
 
 namespace dispatch {
-
-template <torch::DeviceType dev, torch::ScalarType stype> struct device_scalar_pair {
-    using value_type = torch_scalar_cpp_type_t<stype>;
-    static consteval torch::DeviceType
-    device() {
-        return dev;
-    }
-    static consteval torch::ScalarType
-    scalar_type() {
-        return stype;
-    }
-};
-
-//------------------------------------------------------------------------------
-// View types - lightweight wrappers for pointer + dimensions
-//------------------------------------------------------------------------------
-// These carry device and scalar type as template parameters, enabling
-// type-safe dispatch through the helper struct specialization pattern.
-
-/// 2D read-only view: (rows x cols) matrix
-template <torch::DeviceType Dev, torch::ScalarType Stype>
-struct matrix_const_view : device_scalar_pair<Dev, Stype> {
-    using typename device_scalar_pair<Dev, Stype>::value_type;
-
-    value_type const *data;
-    int64_t rows;
-    int64_t cols;
-
-    __hostdev__
-    matrix_const_view(value_type const *d, int64_t r, int64_t c)
-        : data(d), rows(r), cols(c) {}
-
-    __hostdev__ value_type
-    operator()(int64_t row, int64_t col) const {
-        return data[row * cols + col];
-    }
-};
-
-/// 2D mutable view: (rows x cols) matrix
-template <torch::DeviceType Dev, torch::ScalarType Stype>
-struct matrix_mutable_view : device_scalar_pair<Dev, Stype> {
-    using typename device_scalar_pair<Dev, Stype>::value_type;
-
-    value_type *data;
-    int64_t rows;
-    int64_t cols;
-
-    __hostdev__
-    matrix_mutable_view(value_type *d, int64_t r, int64_t c)
-        : data(d), rows(r), cols(c) {}
-
-    __hostdev__ value_type &
-    operator()(int64_t row, int64_t col) const {
-        return data[row * cols + col];
-    }
-};
-
-/// 1D read-only view with stride: for index arrays
-template <torch::DeviceType Dev, torch::ScalarType Stype>
-struct vector_const_view : device_scalar_pair<Dev, Stype> {
-    using typename device_scalar_pair<Dev, Stype>::value_type;
-
-    value_type const *data;
-    int64_t count;
-    int64_t stride;
-
-    __hostdev__
-    vector_const_view(value_type const *d, int64_t c, int64_t s)
-        : data(d), count(c), stride(s) {}
-
-    __hostdev__ value_type
-    operator[](int64_t i) const {
-        return data[i * stride];
-    }
-};
 
 namespace detail {
 

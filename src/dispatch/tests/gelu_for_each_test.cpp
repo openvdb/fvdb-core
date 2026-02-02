@@ -389,5 +389,171 @@ TEST_F(GeluForEachHalfPrecision, BFloat16_CUDA) {
     }
 }
 
+// =============================================================================
+// Multi-rank tensor tests (flat_view enables arbitrary rank support)
+// =============================================================================
+
+class GeluForEachMultiRank : public ::testing::Test {};
+
+TEST_F(GeluForEachMultiRank, CPU_2D) {
+    auto tensor   = torch::randn({10, 20}, torch::kFloat32);
+    auto expected = torch::gelu(tensor);
+
+    auto result = example_gelu_for_each(tensor);
+
+    EXPECT_EQ(result.sizes(), tensor.sizes());
+    expect_gelu_equal(result, expected);
+}
+
+TEST_F(GeluForEachMultiRank, CPU_3D) {
+    auto tensor   = torch::randn({4, 5, 6}, torch::kFloat32);
+    auto expected = torch::gelu(tensor);
+
+    auto result = example_gelu_for_each(tensor);
+
+    EXPECT_EQ(result.sizes(), tensor.sizes());
+    expect_gelu_equal(result, expected);
+}
+
+TEST_F(GeluForEachMultiRank, CPU_4D) {
+    auto tensor   = torch::randn({2, 3, 4, 5}, torch::kFloat32);
+    auto expected = torch::gelu(tensor);
+
+    auto result = example_gelu_for_each(tensor);
+
+    EXPECT_EQ(result.sizes(), tensor.sizes());
+    expect_gelu_equal(result, expected);
+}
+
+TEST_F(GeluForEachMultiRank, CPU_5D) {
+    auto tensor   = torch::randn({2, 3, 4, 5, 6}, torch::kFloat32);
+    auto expected = torch::gelu(tensor);
+
+    auto result = example_gelu_for_each(tensor);
+
+    EXPECT_EQ(result.sizes(), tensor.sizes());
+    expect_gelu_equal(result, expected);
+}
+
+TEST_F(GeluForEachMultiRank, CPU_Scalar) {
+    // 0-dimensional tensor (scalar)
+    auto tensor   = torch::tensor(2.5f);
+    auto expected = torch::gelu(tensor);
+
+    auto result = example_gelu_for_each(tensor);
+
+    EXPECT_EQ(result.dim(), 0);
+    EXPECT_NEAR(result.item<float>(), expected.item<float>(), 1e-5f);
+}
+
+TEST_F(GeluForEachMultiRank, CPU_2D_Transposed) {
+    // Transposed 2D tensor (non-contiguous)
+    auto tensor   = torch::randn({10, 20}, torch::kFloat32).t();
+    auto expected = torch::gelu(tensor);
+
+    EXPECT_FALSE(tensor.is_contiguous());
+
+    auto result = example_gelu_for_each(tensor);
+
+    EXPECT_EQ(result.sizes(), tensor.sizes());
+    expect_gelu_equal(result, expected);
+}
+
+TEST_F(GeluForEachMultiRank, CPU_3D_Permuted) {
+    // Permuted 3D tensor (non-contiguous)
+    auto tensor   = torch::randn({4, 5, 6}, torch::kFloat32).permute({2, 0, 1});
+    auto expected = torch::gelu(tensor);
+
+    EXPECT_FALSE(tensor.is_contiguous());
+
+    auto result = example_gelu_for_each(tensor);
+
+    EXPECT_EQ(result.sizes(), tensor.sizes());
+    expect_gelu_equal(result, expected);
+}
+
+TEST_F(GeluForEachMultiRank, CPU_2D_InPlace) {
+    auto tensor        = torch::randn({10, 20}, torch::kFloat32);
+    auto expected      = torch::gelu(tensor);
+    void *original_ptr = tensor.data_ptr();
+
+    auto result = example_gelu_for_each_(tensor);
+
+    EXPECT_EQ(result.data_ptr(), original_ptr);
+    EXPECT_EQ(result.sizes(), expected.sizes());
+    expect_gelu_equal(result, expected);
+}
+
+TEST_F(GeluForEachMultiRank, CUDA_2D) {
+    skip_if_no_cuda();
+
+    auto tensor =
+        torch::randn({10, 20}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    auto expected = torch::gelu(tensor);
+
+    auto result = example_gelu_for_each(tensor);
+
+    EXPECT_EQ(result.sizes(), tensor.sizes());
+    expect_gelu_equal(result, expected);
+}
+
+TEST_F(GeluForEachMultiRank, CUDA_3D) {
+    skip_if_no_cuda();
+
+    auto tensor =
+        torch::randn({4, 5, 6}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    auto expected = torch::gelu(tensor);
+
+    auto result = example_gelu_for_each(tensor);
+
+    EXPECT_EQ(result.sizes(), tensor.sizes());
+    expect_gelu_equal(result, expected);
+}
+
+TEST_F(GeluForEachMultiRank, CUDA_4D) {
+    skip_if_no_cuda();
+
+    auto tensor   = torch::randn({2, 3, 4, 5},
+                               torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    auto expected = torch::gelu(tensor);
+
+    auto result = example_gelu_for_each(tensor);
+
+    EXPECT_EQ(result.sizes(), tensor.sizes());
+    expect_gelu_equal(result, expected);
+}
+
+TEST_F(GeluForEachMultiRank, CUDA_Large4D) {
+    skip_if_no_cuda();
+
+    // Typical CNN feature map shape
+    auto tensor   = torch::randn({8, 64, 32, 32},
+                               torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    auto expected = torch::gelu(tensor);
+
+    auto result = example_gelu_for_each(tensor);
+
+    EXPECT_EQ(result.sizes(), tensor.sizes());
+    expect_gelu_equal(result, expected);
+}
+
+TEST_F(GeluForEachMultiRank, CPU_Empty2D) {
+    auto tensor = torch::zeros({0, 10}, torch::kFloat32);
+
+    auto result = example_gelu_for_each(tensor);
+
+    EXPECT_EQ(result.sizes(), tensor.sizes());
+    EXPECT_EQ(result.numel(), 0);
+}
+
+TEST_F(GeluForEachMultiRank, CPU_Empty3D) {
+    auto tensor = torch::zeros({5, 0, 10}, torch::kFloat32);
+
+    auto result = example_gelu_for_each(tensor);
+
+    EXPECT_EQ(result.sizes(), tensor.sizes());
+    EXPECT_EQ(result.numel(), 0);
+}
+
 } // namespace
 } // namespace dispatch_examples
