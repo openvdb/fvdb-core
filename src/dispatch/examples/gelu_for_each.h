@@ -11,6 +11,9 @@ namespace dispatch_examples {
 // out-of-place
 torch::Tensor example_gelu_for_each(torch::Tensor input);
 
+// out-of-place with pre-allocated output (for benchmarking without allocation)
+void example_gelu_for_each_out(torch::Tensor input, torch::Tensor output);
+
 // in-place
 torch::Tensor example_gelu_for_each_(torch::Tensor input);
 

@@ -2,22 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // ================================================================================================
-// gelu_for_each.cu - GELU implementation using the for_each primitive with fragment views
+// gelu_for_each.cu - GELU implementation using the for_each primitive
 // ================================================================================================
 //
-// This example demonstrates using dispatch::for_each with fragment views for element-wise
-// operations. Fragment views load/store multiple elements at once (16 bytes = 4 floats)
-// for improved memory bandwidth and instruction-level parallelism on GPU.
+// This example demonstrates using dispatch::for_each with flat views for element-wise
+// operations. The implementation is optimized for contiguous GPU tensors using vectorized
+// loads/stores (float4/double2) for improved memory throughput.
 //
-// Contiguity dispatch:
-//   - contiguous: Vectorized fragment loads (elements_per_frag = 4 for float32 on GPU)
-//   - strided: Scalar access via offset computation (elements_per_frag = 1)
-//
-// The loop structure is uniform for both:
-//   1. Fragment loop: processes num_fragments() fragments
-//   2. Tail loop: handles remaining elements (only non-empty for contiguous with frag_size > 1)
-//
-// CPU always uses elements_per_fragment=1 regardless of contiguity.
+// Dispatch paths:
+//   - CUDA contiguous: Vectorized loads (128-bit transactions) + scalar tail
+//   - CUDA strided: Scalar access via offset computation
+//   - CPU: Scalar access (no vectorization benefit on CPU for this op)
 //
 // ================================================================================================
 
@@ -29,43 +24,84 @@
 #include "dispatch/torch/views.h"
 #include "examples/gelu_scalar.h"
 
+#ifdef __CUDACC__
+#include "examples/gelu_vectorized.cuh"
+#endif
+
 namespace dispatch_examples {
 
 using namespace dispatch;
+
+//------------------------------------------------------------------------------
+// CUDA contiguous: vectorized path (float4/double2)
+//------------------------------------------------------------------------------
+#ifdef __CUDACC__
+
+template <torch::ScalarType stype>
+void
+gelu_cuda_contiguous(torch::Tensor input, torch::Tensor output) {
+    using scalar_t = torch_scalar_cpp_type_t<stype>;
+    using Tag      = tag<torch::kCUDA, stype>;
+
+    scalar_t const *in_ptr = input.data_ptr<scalar_t>();
+    scalar_t *out_ptr      = output.data_ptr<scalar_t>();
+    int64_t const numel    = input.numel();
+
+    // Vector configuration
+    constexpr int64_t vec_size = vector_traits<scalar_t>::vector_size;
+    int64_t const num_vecs     = numel / vec_size;
+    int64_t const tail_start   = num_vecs * vec_size;
+    int64_t const tail_count   = numel - tail_start;
+
+    // Process vectorized portion
+    if (num_vecs > 0) {
+        for_each(Tag{}, num_vecs, [=] __device__(Tag, int64_t vec_idx) {
+            int64_t const offset = vec_idx * vec_size;
+            auto vec_in          = load_vector<scalar_t>(in_ptr + offset);
+            auto vec_out         = gelu_vector<scalar_t>(vec_in);
+            store_vector<scalar_t>(out_ptr + offset, vec_out);
+        });
+    }
+
+    // Process tail (always less than vec_size elements)
+    if (tail_count > 0) {
+        for_each(Tag{}, tail_count, [=] __device__(Tag, int64_t i) {
+            int64_t const idx = tail_start + i;
+            out_ptr[idx]      = gelu_scalar(in_ptr[idx]);
+        });
+    }
+}
+
+#endif // __CUDACC__
+
+//------------------------------------------------------------------------------
+// Generic scalar path (strided CUDA, all CPU)
+//------------------------------------------------------------------------------
 
 struct gelu_op {
     template <torch::DeviceType dev, torch::ScalarType stype, contiguity contig>
     static void
     op(tag<dev, stype, contig>, torch::Tensor input, torch::Tensor output) {
-        using Tag           = tag<dev, stype>;
-        using FragConstView = flat_fragment_const_view<dev, stype, contig>;
-        using FragMutView   = flat_fragment_mutable_view<dev, stype, contig>;
-        using frag_type     = typename FragConstView::fragment_type;
+#ifdef __CUDACC__
+        // Use vectorized path for contiguous CUDA float/double
+        if constexpr (dev == torch::kCUDA && contig == contiguity::contiguous &&
+                      (stype == torch::kFloat32 || stype == torch::kFloat64)) {
+            gelu_cuda_contiguous<stype>(input, output);
+            return;
+        }
+#endif
 
-        constexpr int64_t frag_size = FragConstView::elements_per_frag();
+        // Scalar fallback for strided CUDA, half types, and all CPU
+        using Tag       = tag<dev, stype>;
+        using ConstView = flat_const_view<dev, stype>;
+        using MutView   = flat_mutable_view<dev, stype>;
 
-        FragConstView in{input};
-        FragMutView out{output};
+        ConstView in{input};
+        MutView out{output};
+        int64_t const numel = in.numel;
 
-        // Process complete fragments
-        int64_t const num_frags = in.num_fragments();
-        for_each(Tag{}, num_frags, [=] __hostdev__(Tag, int64_t frag_idx) {
-            frag_type in_frag = in.load_fragment(frag_idx);
-            frag_type out_frag;
-            DISPATCH_UNROLL
-            for (int64_t i = 0; i < frag_size; ++i) {
-                out_frag[i] = gelu_scalar(in_frag[i]);
-            }
-            out.store_fragment(frag_idx, out_frag);
-        });
-
-        // Process tail elements (only non-empty when frag_size > 1)
-        int64_t const tail_count  = in.tail_count();
-        int64_t const tail_offset = in.tail_offset();
-        for_each(Tag{}, tail_count, [=] __hostdev__(Tag, int64_t i) {
-            int64_t const idx = tail_offset + i;
-            out[idx]          = gelu_scalar(in[idx]);
-        });
+        for_each(
+            Tag{}, numel, [=] __hostdev__(Tag, int64_t idx) { out[idx] = gelu_scalar(in[idx]); });
     }
 
     using space = axes<torch_full_device_axis, torch_full_float_stype_axis, full_contiguity_axis>;
@@ -73,19 +109,14 @@ struct gelu_op {
     using dispatcher = dispatch_table<space, void(torch::Tensor, torch::Tensor)>;
 };
 
-torch::Tensor
-example_gelu_for_each_impl(torch::Tensor input, placement plc) {
+// Internal implementation that operates on pre-allocated input/output
+void
+example_gelu_for_each_kernel(torch::Tensor input, torch::Tensor output) {
     static auto const table = dispatch_table_from_op<gelu_op>();
 
     if (input.numel() == 0) {
-        if (plc == placement::in_place) {
-            return input;
-        } else {
-            return torch::empty_like(input);
-        }
+        return;
     }
-
-    auto output = (plc == placement::in_place) ? input : torch::empty_like(input);
 
     auto const dev            = input.device().type();
     auto const st             = input.scalar_type();
@@ -93,18 +124,33 @@ example_gelu_for_each_impl(torch::Tensor input, placement plc) {
     auto const dispatch_coord = std::make_tuple(dev, st, contig);
 
     torch_dispatch("example_gelu_for_each", table, dispatch_coord, input, output);
-
-    return output;
 }
 
 torch::Tensor
 example_gelu_for_each(torch::Tensor input) {
-    return example_gelu_for_each_impl(input, placement::out_of_place);
+    if (input.numel() == 0) {
+        return torch::empty_like(input);
+    }
+    auto output = torch::empty_like(input);
+    example_gelu_for_each_kernel(input, output);
+    return output;
+}
+
+void
+example_gelu_for_each_out(torch::Tensor input, torch::Tensor output) {
+    TORCH_CHECK(input.sizes() == output.sizes(),
+                "example_gelu_for_each_out: input and output must have the same shape");
+    TORCH_CHECK(input.scalar_type() == output.scalar_type(),
+                "example_gelu_for_each_out: input and output must have the same dtype");
+    TORCH_CHECK(input.device() == output.device(),
+                "example_gelu_for_each_out: input and output must be on the same device");
+    example_gelu_for_each_kernel(input, output);
 }
 
 torch::Tensor
 example_gelu_for_each_(torch::Tensor input) {
-    return example_gelu_for_each_impl(input, placement::in_place);
+    example_gelu_for_each_kernel(input, input);
+    return input;
 }
 
 } // namespace dispatch_examples

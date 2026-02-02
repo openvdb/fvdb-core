@@ -23,17 +23,6 @@
 namespace {
 
 // ============================================================================
-// Helper: Ensure CUDA operations complete before timing ends
-// ============================================================================
-
-inline void
-sync_if_cuda(torch::Device device) {
-    if (device.is_cuda()) {
-        torch::cuda::synchronize();
-    }
-}
-
-// ============================================================================
 // Helper: Create test tensors
 // ============================================================================
 
@@ -333,6 +322,117 @@ BM_GeluNew_Float16_CUDA(benchmark::State &state) {
 }
 
 // ============================================================================
+// Benchmark: NoAlloc variants (pre-allocated output tensors)
+// These isolate kernel performance from allocation overhead
+// ============================================================================
+
+static void
+BM_TorchGelu_Contiguous_CUDA_NoAlloc(benchmark::State &state) {
+    if (!torch::cuda::is_available()) {
+        state.SkipWithError("CUDA not available");
+        return;
+    }
+
+    auto input  = make_contiguous_tensor(state.range(0), torch::kFloat32, torch::kCUDA);
+    auto output = torch::empty_like(input);
+    torch::cuda::synchronize();
+
+    for (auto _: state) {
+        torch::gelu_outf(input, "none", output);
+        torch::cuda::synchronize();
+        benchmark::DoNotOptimize(output.data_ptr());
+    }
+
+    state.SetItemsProcessed(state.iterations() * state.range(0));
+}
+
+static void
+BM_GeluNew_Contiguous_CUDA_NoAlloc(benchmark::State &state) {
+    if (!torch::cuda::is_available()) {
+        state.SkipWithError("CUDA not available");
+        return;
+    }
+
+    auto input  = make_contiguous_tensor(state.range(0), torch::kFloat32, torch::kCUDA);
+    auto output = torch::empty_like(input);
+    torch::cuda::synchronize();
+
+    for (auto _: state) {
+        dispatch_examples::example_gelu_for_each_out(input, output);
+        torch::cuda::synchronize();
+        benchmark::DoNotOptimize(output.data_ptr());
+    }
+
+    state.SetItemsProcessed(state.iterations() * state.range(0));
+}
+
+static void
+BM_TorchGelu_Contiguous_CPU_NoAlloc(benchmark::State &state) {
+    auto input  = make_contiguous_tensor(state.range(0), torch::kFloat32, torch::kCPU);
+    auto output = torch::empty_like(input);
+
+    for (auto _: state) {
+        torch::gelu_outf(input, "none", output);
+        benchmark::DoNotOptimize(output.data_ptr());
+    }
+
+    state.SetItemsProcessed(state.iterations() * state.range(0));
+}
+
+static void
+BM_GeluNew_Contiguous_CPU_NoAlloc(benchmark::State &state) {
+    auto input  = make_contiguous_tensor(state.range(0), torch::kFloat32, torch::kCPU);
+    auto output = torch::empty_like(input);
+
+    for (auto _: state) {
+        dispatch_examples::example_gelu_for_each_out(input, output);
+        benchmark::DoNotOptimize(output.data_ptr());
+    }
+
+    state.SetItemsProcessed(state.iterations() * state.range(0));
+}
+
+static void
+BM_TorchGelu_Strided_CUDA_NoAlloc(benchmark::State &state) {
+    if (!torch::cuda::is_available()) {
+        state.SkipWithError("CUDA not available");
+        return;
+    }
+
+    auto input  = make_strided_tensor(state.range(0), torch::kFloat32, torch::kCUDA);
+    auto output = torch::empty_like(input);
+    torch::cuda::synchronize();
+
+    for (auto _: state) {
+        torch::gelu_outf(input, "none", output);
+        torch::cuda::synchronize();
+        benchmark::DoNotOptimize(output.data_ptr());
+    }
+
+    state.SetItemsProcessed(state.iterations() * state.range(0));
+}
+
+static void
+BM_GeluNew_Strided_CUDA_NoAlloc(benchmark::State &state) {
+    if (!torch::cuda::is_available()) {
+        state.SkipWithError("CUDA not available");
+        return;
+    }
+
+    auto input  = make_strided_tensor(state.range(0), torch::kFloat32, torch::kCUDA);
+    auto output = torch::empty_like(input);
+    torch::cuda::synchronize();
+
+    for (auto _: state) {
+        dispatch_examples::example_gelu_for_each_out(input, output);
+        torch::cuda::synchronize();
+        benchmark::DoNotOptimize(output.data_ptr());
+    }
+
+    state.SetItemsProcessed(state.iterations() * state.range(0));
+}
+
+// ============================================================================
 // Register benchmarks
 // ============================================================================
 
@@ -365,6 +465,14 @@ BENCHMARK(BM_GeluNew_InPlace_CUDA) BENCHMARK_SIZES;
 BENCHMARK(BM_TorchGelu_Float16_CUDA) BENCHMARK_SIZES;
 BENCHMARK(BM_GeluOld_Float16_CUDA) BENCHMARK_SIZES;
 BENCHMARK(BM_GeluNew_Float16_CUDA) BENCHMARK_SIZES;
+
+// NoAlloc variants - isolate kernel performance from allocation
+BENCHMARK(BM_TorchGelu_Contiguous_CUDA_NoAlloc) BENCHMARK_SIZES;
+BENCHMARK(BM_GeluNew_Contiguous_CUDA_NoAlloc) BENCHMARK_SIZES;
+BENCHMARK(BM_TorchGelu_Strided_CUDA_NoAlloc) BENCHMARK_SIZES;
+BENCHMARK(BM_GeluNew_Strided_CUDA_NoAlloc) BENCHMARK_SIZES;
+BENCHMARK(BM_TorchGelu_Contiguous_CPU_NoAlloc) BENCHMARK_SIZES;
+BENCHMARK(BM_GeluNew_Contiguous_CPU_NoAlloc) BENCHMARK_SIZES;
 
 } // namespace
 
