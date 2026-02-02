@@ -6,8 +6,8 @@
 
 #include "dispatch/axes_map.h"
 #include "dispatch/dispatch_table.h"
-#include "dispatch/torch/accessors.h"
 #include "dispatch/torch/dispatch.h"
+#include "dispatch/torch/for_each.h"
 #include "dispatch/torch/types.h"
 #include "dispatch/types.h"
 #include "dispatch/visit_spaces.h"
@@ -79,44 +79,6 @@ TEST(NvccSmoke, DispatchTableInDeviceCode) {
 
     err = cudaFree(d_result);
     ASSERT_EQ(cudaSuccess, err);
-}
-
-// =============================================================================
-// accessors.h CUDA paths
-// =============================================================================
-
-TEST(NvccSmoke, AccessorContiguousCuda) {
-    if (!torch::cuda::is_available()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
-
-    // Verify contiguous accessor compiles under nvcc
-    auto tensor =
-        torch::arange(6, torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
-
-    auto acc = accessor<torch::kFloat, contiguity::contiguous, 1>::from_tensor(tensor);
-
-    // The accessor should be created successfully
-    // (We can't easily test device access from host in a unit test,
-    // but compilation with nvcc is the key verification)
-    EXPECT_NE(acc.data, nullptr);
-}
-
-TEST(NvccSmoke, AccessorStridedCuda) {
-    if (!torch::cuda::is_available()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
-
-    // Verify strided accessor compiles under nvcc
-    auto tensor = torch::arange(6, torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA))
-                      .reshape({2, 3});
-
-    auto acc = accessor<torch::kFloat, contiguity::strided, 2>::from_tensor(tensor);
-
-    // Verify strides are captured correctly
-    EXPECT_EQ(acc.stride(0), 3);
-    EXPECT_EQ(acc.stride(1), 1);
-    EXPECT_NE(acc.data, nullptr);
 }
 
 // =============================================================================

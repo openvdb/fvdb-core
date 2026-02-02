@@ -26,7 +26,8 @@ using namespace dispatch;
 struct gelu_op {
     template <torch::DeviceType dev, torch::ScalarType stype>
     static void
-    op(tag<dev, stype> Tag, torch::Tensor input, torch::Tensor output) {
+    op(tag<dev, stype>, torch::Tensor input, torch::Tensor output) {
+        using Tag  = tag<dev, stype>;
         using T    = torch_scalar_cpp_type_t<stype>;
         T *in_ptr  = input.data_ptr<T>();
         T *out_ptr = output.data_ptr<T>();
@@ -35,7 +36,7 @@ struct gelu_op {
         int64_t const stride_out = output.stride(0);
         int64_t const count      = input.numel();
 
-        for_each(Tag, count, [=] __hostdev__(Tag, int64_t i) {
+        for_each(Tag{}, count, [=] __hostdev__(Tag, int64_t i) {
             out_ptr[i * stride_out] = gelu_scalar(in_ptr[i * stride_in]);
         });
     }

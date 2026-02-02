@@ -47,6 +47,10 @@ struct matrix_const_view : device_scalar_pair<Dev, Stype> {
     int64_t rows;
     int64_t cols;
 
+    __hostdev__
+    matrix_const_view(value_type const *d, int64_t r, int64_t c)
+        : data(d), rows(r), cols(c) {}
+
     __hostdev__ value_type
     operator()(int64_t row, int64_t col) const {
         return data[row * cols + col];
@@ -62,6 +66,10 @@ struct matrix_mutable_view : device_scalar_pair<Dev, Stype> {
     int64_t rows;
     int64_t cols;
 
+    __hostdev__
+    matrix_mutable_view(value_type *d, int64_t r, int64_t c)
+        : data(d), rows(r), cols(c) {}
+
     __hostdev__ value_type &
     operator()(int64_t row, int64_t col) const {
         return data[row * cols + col];
@@ -76,6 +84,10 @@ struct vector_const_view : device_scalar_pair<Dev, Stype> {
     value_type const *data;
     int64_t count;
     int64_t stride;
+
+    __hostdev__
+    vector_const_view(value_type const *d, int64_t c, int64_t s)
+        : data(d), count(c), stride(s) {}
 
     __hostdev__ value_type
     operator[](int64_t i) const {
