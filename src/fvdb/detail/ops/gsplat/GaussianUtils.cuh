@@ -51,7 +51,8 @@ binSearch(const T *arr, const uint32_t len, const T val) {
 ///
 /// The implementation uses the standard **branch-based** algorithm for numerical robustness:
 /// - If \(\mathrm{trace}(R) > 0\), it uses the closed-form trace formula
-///   \(w = \tfrac{1}{2}\sqrt{1 + \mathrm{trace}(R)}\) and derives \((x,y,z)\) from the off-diagonals.
+///   \(w = \tfrac{1}{2}\sqrt{1 + \mathrm{trace}(R)}\) and derives \((x,y,z)\) from the
+///   off-diagonals.
 /// - Otherwise it selects the largest diagonal element and computes the quaternion from that
 ///   branch (x-dominant / y-dominant / z-dominant cases).
 ///
