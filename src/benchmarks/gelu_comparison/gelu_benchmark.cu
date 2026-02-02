@@ -19,8 +19,21 @@
 
 #include <benchmark/benchmark.h>
 #include <examples/gelu_for_each.h>
+#include <examples/gelu_scalar.h>
+
+#include <cmath>
 
 namespace {
+
+// ============================================================================
+// Raw scalar GELU for diagnostic baselines (no dispatch, no views)
+// ============================================================================
+
+inline float
+raw_gelu_scalar(float x) {
+    constexpr float sqrt2 = 1.4142135623730951f;
+    return 0.5f * x * (1.0f + std::erf(x / sqrt2));
+}
 
 // ============================================================================
 // Helper: Create test tensors
@@ -433,6 +446,88 @@ BM_GeluNew_Strided_CUDA_NoAlloc(benchmark::State &state) {
 }
 
 // ============================================================================
+// RAW DIAGNOSTIC BENCHMARKS - validate timing infrastructure
+// These use raw pointer loops, no dispatch, no views, no parallelism
+// ============================================================================
+
+// Raw serial loop on CPU - absolute baseline
+static void
+BM_Raw_SerialLoop_CPU(benchmark::State &state) {
+    const int64_t n = state.range(0);
+    std::vector<float> input(n), output(n);
+    for (int64_t i = 0; i < n; ++i) {
+        input[i] = static_cast<float>(i) * 0.001f;
+    }
+
+    for (auto _: state) {
+        for (int64_t i = 0; i < n; ++i) {
+            output[i] = raw_gelu_scalar(input[i]);
+        }
+        benchmark::DoNotOptimize(output.data());
+        benchmark::ClobberMemory();
+    }
+
+    state.SetItemsProcessed(state.iterations() * n);
+}
+
+// Raw serial loop using torch tensors but raw pointer access
+static void
+BM_Raw_TorchTensor_SerialLoop_CPU(benchmark::State &state) {
+    auto input  = make_contiguous_tensor(state.range(0), torch::kFloat32, torch::kCPU);
+    auto output = torch::empty_like(input);
+    float *in_ptr  = input.data_ptr<float>();
+    float *out_ptr = output.data_ptr<float>();
+    const int64_t n = input.numel();
+
+    for (auto _: state) {
+        for (int64_t i = 0; i < n; ++i) {
+            out_ptr[i] = raw_gelu_scalar(in_ptr[i]);
+        }
+        benchmark::DoNotOptimize(out_ptr);
+        benchmark::ClobberMemory();
+    }
+
+    state.SetItemsProcessed(state.iterations() * n);
+}
+
+// Just measure overhead of iterating (no computation)
+static void
+BM_Raw_LoopOverhead_CPU(benchmark::State &state) {
+    const int64_t n = state.range(0);
+    std::vector<float> input(n), output(n);
+
+    for (auto _: state) {
+        for (int64_t i = 0; i < n; ++i) {
+            output[i] = input[i];  // Just copy, no erf
+        }
+        benchmark::DoNotOptimize(output.data());
+        benchmark::ClobberMemory();
+    }
+
+    state.SetItemsProcessed(state.iterations() * n);
+}
+
+// Using dispatch gelu_scalar directly (tests the scalar function itself)
+static void
+BM_Raw_DispatchGeluScalar_CPU(benchmark::State &state) {
+    auto input  = make_contiguous_tensor(state.range(0), torch::kFloat32, torch::kCPU);
+    auto output = torch::empty_like(input);
+    float *in_ptr  = input.data_ptr<float>();
+    float *out_ptr = output.data_ptr<float>();
+    const int64_t n = input.numel();
+
+    for (auto _: state) {
+        for (int64_t i = 0; i < n; ++i) {
+            out_ptr[i] = dispatch_examples::gelu_scalar(in_ptr[i]);
+        }
+        benchmark::DoNotOptimize(out_ptr);
+        benchmark::ClobberMemory();
+    }
+
+    state.SetItemsProcessed(state.iterations() * n);
+}
+
+// ============================================================================
 // Register benchmarks
 // ============================================================================
 
@@ -473,6 +568,12 @@ BENCHMARK(BM_TorchGelu_Strided_CUDA_NoAlloc) BENCHMARK_SIZES;
 BENCHMARK(BM_GeluNew_Strided_CUDA_NoAlloc) BENCHMARK_SIZES;
 BENCHMARK(BM_TorchGelu_Contiguous_CPU_NoAlloc) BENCHMARK_SIZES;
 BENCHMARK(BM_GeluNew_Contiguous_CPU_NoAlloc) BENCHMARK_SIZES;
+
+// Raw diagnostic benchmarks - validate timing
+BENCHMARK(BM_Raw_LoopOverhead_CPU) BENCHMARK_SIZES;
+BENCHMARK(BM_Raw_SerialLoop_CPU) BENCHMARK_SIZES;
+BENCHMARK(BM_Raw_TorchTensor_SerialLoop_CPU) BENCHMARK_SIZES;
+BENCHMARK(BM_Raw_DispatchGeluScalar_CPU) BENCHMARK_SIZES;
 
 } // namespace
 
