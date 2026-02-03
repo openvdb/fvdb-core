@@ -218,6 +218,103 @@ TEST_F(GaussianProjectionUTTestFixture, CenteredGaussian_NoDistortion_AnalyticMe
     EXPECT_NEAR(conics_cpu[0][0][2].item<float>(), expected_c, 1e-3f);
 }
 
+TEST_F(GaussianProjectionUTTestFixture, NonlinearUTCovariance_ProducesFinitePositiveConic) {
+    const int64_t C = 1;
+
+    // Construct a case where nonlinear projection + negative UT covariance weights can yield an
+    // indefinite covariance if not handled carefully. The expected behavior is that outputs remain
+    // finite and the resulting conic (inverse covariance) is positive on the diagonal.
+    means = torch::tensor({{0.2f, 0.1f, 2.0f}}, torch::kFloat32);
+
+    // Rotate about +Y to couple X and Z under the UT sigma points.
+    // Quaternion is [w,x,y,z].
+    const float angle_rad = static_cast<float>(M_PI) / 3.0f; // 60 degrees
+    const float w         = std::cos(0.5f * angle_rad);
+    const float y         = std::sin(0.5f * angle_rad);
+    quats                 = torch::tensor({{w, 0.0f, y, 0.0f}}, torch::kFloat32);
+
+    // Relatively large scales to produce noticeable nonlinear effects.
+    logScales = torch::log(torch::tensor({{1.0f, 0.7f, 0.8f}}, torch::kFloat32));
+
+    worldToCamMatricesStart =
+        torch::eye(4, torch::TensorOptions().dtype(torch::kFloat32)).unsqueeze(0).expand({C, 4, 4});
+    worldToCamMatricesEnd = worldToCamMatricesStart.clone();
+
+    const float fx = 700.0f, fy = 700.0f, cx = 640.0f, cy = 360.0f;
+    projectionMatrices = torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32));
+    {
+        auto K             = projectionMatrices.accessor<float, 3>();
+        K[0][0][0]         = fx;
+        K[0][1][1]         = fy;
+        K[0][0][2]         = cx;
+        K[0][1][2]         = cy;
+        K[0][2][2]         = 1.0f;
+    }
+
+    cameraModel      = CameraModel::PINHOLE;
+    distortionCoeffs = torch::zeros({C, 0}, torch::kFloat32);
+
+    imageWidth  = 1280;
+    imageHeight = 720;
+    eps2d       = 0.3f;
+    nearPlane   = 0.05f;
+    farPlane    = 100.0f;
+    minRadius2d = 0.0f;
+
+    utParams                              = UTParams{};
+    utParams.alpha                        = 0.2f;
+    utParams.beta                         = 2.0f;
+    utParams.kappa                        = 0.0f;
+    utParams.inImageMargin                = 1.0f; // very lenient bounds
+    utParams.requireAllSigmaPointsInImage = true;
+
+    means                   = means.cuda();
+    quats                   = quats.cuda();
+    logScales               = logScales.cuda();
+    worldToCamMatricesStart = worldToCamMatricesStart.cuda();
+    worldToCamMatricesEnd   = worldToCamMatricesEnd.cuda();
+    projectionMatrices      = projectionMatrices.cuda();
+    distortionCoeffs        = distortionCoeffs.cuda();
+
+    const auto [radii, means2d, depths, conics, compensations] =
+        dispatchGaussianProjectionForwardUT<torch::kCUDA>(means,
+                                                          quats,
+                                                          logScales,
+                                                          worldToCamMatricesStart,
+                                                          worldToCamMatricesEnd,
+                                                          projectionMatrices,
+                                                          RollingShutterType::NONE,
+                                                          utParams,
+                                                          cameraModel,
+                                                          distortionCoeffs,
+                                                          imageWidth,
+                                                          imageHeight,
+                                                          eps2d,
+                                                          nearPlane,
+                                                          farPlane,
+                                                          minRadius2d,
+                                                          false);
+
+    auto radii_cpu  = radii.cpu();
+    auto conics_cpu = conics.cpu();
+    auto means2d_cpu = means2d.cpu();
+
+    ASSERT_GT(radii_cpu[0][0].item<int32_t>(), 0);
+
+    const float a = conics_cpu[0][0][0].item<float>();
+    const float b = conics_cpu[0][0][1].item<float>();
+    const float c_out = conics_cpu[0][0][2].item<float>();
+
+    EXPECT_TRUE(std::isfinite(a));
+    EXPECT_TRUE(std::isfinite(b));
+    EXPECT_TRUE(std::isfinite(c_out));
+    EXPECT_GT(a, 0.0f);
+    EXPECT_GT(c_out, 0.0f);
+
+    EXPECT_TRUE(std::isfinite(means2d_cpu[0][0][0].item<float>()));
+    EXPECT_TRUE(std::isfinite(means2d_cpu[0][0][1].item<float>()));
+}
+
 TEST_F(GaussianProjectionUTTestFixture, UTParams_InvalidAlpha_ThrowsOnHost) {
     const int64_t C = 1;
 

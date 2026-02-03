@@ -581,6 +581,69 @@ reconstructCovarianceFromSigmaPoints(const nanovdb::math::Vec2<T> (&projected_po
     return covar2d;
 }
 
+/// @brief Enforce a positive-semidefinite 2x2 covariance matrix.
+///
+/// UT covariance reconstruction can produce an indefinite (or even negative definite) matrix due
+/// to negative covariance weights combined with the nonlinear projection. This function clamps the
+/// eigenvalues to a minimum threshold and reconstructs the matrix, ensuring downstream operations
+/// (sqrt, inverse) remain numerically well-defined.
+template <typename T>
+__device__ __forceinline__ void
+enforcePSD2x2(const T minEigen, nanovdb::math::Mat2<T> &covar2d) {
+    using Vec2 = nanovdb::math::Vec2<T>;
+
+    // Symmetrize defensively.
+    const T a = covar2d[0][0];
+    const T c = covar2d[1][1];
+    const T b = T(0.5) * (covar2d[0][1] + covar2d[1][0]);
+
+    const T trace = a + c;
+    const T det   = a * c - b * b;
+
+    const T half_trace = T(0.5) * trace;
+    T disc             = half_trace * half_trace - det;
+    disc               = max(T(0), disc);
+    const T s          = sqrt(disc);
+
+    // Eigenvalues (v1 >= v2).
+    const T v1 = half_trace + s;
+    const T v2 = half_trace - s;
+
+    // Clamp eigenvalues to ensure PSD + invertibility.
+    const T v1c = max(v1, minEigen);
+    const T v2c = max(v2, minEigen);
+
+    // Eigenvector for v1. For a 2x2 symmetric matrix, we can form a stable vector from either:
+    //   [b, v1-a] or [v1-c, b]
+    Vec2 u(T(1), T(0));
+    const T eps = (sizeof(T) == sizeof(float)) ? T(1e-8) : T(1e-12);
+    if (::cuda::std::fabs(b) > eps || ::cuda::std::fabs(v1 - a) > eps || ::cuda::std::fabs(v1 - c) > eps) {
+        T ux = b;
+        T uy = v1 - a;
+        // Prefer the formulation with the larger component to avoid cancellation.
+        if (::cuda::std::fabs(v1 - c) > ::cuda::std::fabs(v1 - a)) {
+            ux = v1 - c;
+            uy = b;
+        }
+        const T n = sqrt(ux * ux + uy * uy);
+        if (n > eps) {
+            u = Vec2(ux / n, uy / n);
+        }
+    } else {
+        // Diagonal (or near-diagonal) case.
+        u = (a >= c) ? Vec2(T(1), T(0)) : Vec2(T(0), T(1));
+    }
+
+    // Orthonormal basis.
+    const Vec2 v(-u[1], u[0]);
+
+    // Reconstruct: cov = Q * diag(v1c, v2c) * Q^T
+    covar2d[0][0] = v1c * u[0] * u[0] + v2c * v[0] * v[0];
+    covar2d[0][1] = v1c * u[0] * u[1] + v2c * v[0] * v[1];
+    covar2d[1][0] = covar2d[0][1];
+    covar2d[1][1] = v1c * u[1] * u[1] + v2c * v[1] * v[1];
+}
+
 } // namespace
 
 /// @brief CUDA kernel functor for UT forward projection.
@@ -919,8 +982,18 @@ template <typename ScalarType> struct ProjectionForwardUT {
 
         // Add blur for numerical stability
         ScalarType compensation;
-        const ScalarType det = addBlur(mEps2d, covar2d, compensation);
-        if (det <= 0.f) {
+        const ScalarType det_blur = addBlur(mEps2d, covar2d, compensation);
+        if (det_blur <= ScalarType(0)) {
+            mOutRadiiAcc[camId][gaussianId] = 0;
+            return;
+        }
+
+        // Ensure reconstructed covariance is PSD to avoid NaNs when taking square-roots or
+        // inverting.
+        enforcePSD2x2(mEps2d, covar2d);
+
+        const ScalarType det_psd = covar2d[0][0] * covar2d[1][1] - covar2d[0][1] * covar2d[1][0];
+        if (!(det_psd > ScalarType(0))) {
             mOutRadiiAcc[camId][gaussianId] = 0;
             return;
         }
@@ -929,7 +1002,7 @@ template <typename ScalarType> struct ProjectionForwardUT {
 
         // Compute bounding box radius (similar to standard projection)
         const ScalarType b      = 0.5f * (covar2d[0][0] + covar2d[1][1]);
-        const ScalarType tmp    = sqrtf(max(0.01f, b * b - det));
+        const ScalarType tmp    = sqrtf(max(0.01f, b * b - det_psd));
         const ScalarType v1     = b + tmp; // larger eigenvalue
         const ScalarType extend = 3.0f;    // 3 sigma
         ScalarType r1           = extend * sqrtf(v1);
