@@ -475,12 +475,8 @@ TEST_F(GaussianProjectionBackwardTestFixture, TestOrthographicProjection) {
     double atol = tol2.second;
     EXPECT_TRUE(torch::allclose(dLossDMeans, expectedDLossDMeans, rtol, atol));
     // EXPECT_TRUE(torch::allclose(dLossDCovars, expectedDLossDCovars, rtol, atol));
-    // We use fairly large atol here since the original data was generated using scales not
-    // log(scales) so there is some numerical drift.
-    // The range of dLossDQuats is around [-20, 20] so atol=0.005 is reasonable
-    // The range of dLossDScales is around [-2, 0.1] so atol=0.05 is very reasonable
-    EXPECT_TRUE(torch::allclose(dLossDQuats, expectedDLossDQuats, rtol, 0.005));
-    EXPECT_TRUE(torch::allclose(dLossDScales, expectedDLossDScales, rtol, 0.05));
+    EXPECT_TRUE(torch::allclose(dLossDQuats, expectedDLossDQuats, rtol, atol));
+    EXPECT_TRUE(torch::allclose(dLossDScales, expectedDLossDScales, rtol, atol));
     EXPECT_TRUE(torch::allclose(dLossDCamToWorlds, expectedDLossDCamToWorlds, rtol, atol));
     EXPECT_TRUE(torch::allclose(
         outNormalizeddLossdMeans2dNormAccum, expectedNormalizeddLossdMeans2dNormAccum, rtol, atol));

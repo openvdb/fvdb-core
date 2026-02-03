@@ -205,13 +205,16 @@ jaggedProjectionBackwardKernel(
             gpuAtomicAdd(outDLossDCovars + 5, dLossDCovar[2][2]);
         }
     } else {
-        // Directly output gradients w.r.t. the quaternion and log_scale
+        // Directly output gradients w.r.t. the quaternion and scale
+        // NOTE: The jagged API takes raw scales (not log_scales), so we use
+        // ApplyLogScaleChainRule=false to get dL/d(scale) instead of dL/d(log_scale)
         const nanovdb::math::Mat3<T> &rotmat = quaternionToRotationMatrix<T>(quat);
 
-        auto [dLossDQuat, dLossDLogScale] = quaternionAndScaleToCovarianceVectorJacobianProduct<T>(
-            quat, scale, rotmat, dLossDCovar);
+        auto [dLossDQuat, dLossDScale] =
+            quaternionAndScaleToCovarianceVectorJacobianProduct<T, false>(
+                quat, scale, rotmat, dLossDCovar);
 
-        warpSum(dLossDLogScale, warp_group_g);
+        warpSum(dLossDScale, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
             outDLossDQuats += gId * 4;
             outDLossDScales += gId * 3;
@@ -219,9 +222,9 @@ jaggedProjectionBackwardKernel(
             gpuAtomicAdd(outDLossDQuats + 1, dLossDQuat[1]);
             gpuAtomicAdd(outDLossDQuats + 2, dLossDQuat[2]);
             gpuAtomicAdd(outDLossDQuats + 3, dLossDQuat[3]);
-            gpuAtomicAdd(outDLossDScales, dLossDLogScale[0]);
-            gpuAtomicAdd(outDLossDScales + 1, dLossDLogScale[1]);
-            gpuAtomicAdd(outDLossDScales + 2, dLossDLogScale[2]);
+            gpuAtomicAdd(outDLossDScales, dLossDScale[0]);
+            gpuAtomicAdd(outDLossDScales + 1, dLossDScale[1]);
+            gpuAtomicAdd(outDLossDScales + 2, dLossDScale[2]);
         }
     }
     if (outDLossDWorldToCamMatrices != nullptr) {

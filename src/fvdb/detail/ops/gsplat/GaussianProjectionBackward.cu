@@ -257,8 +257,11 @@ projectionBackwardKernel(const int32_t offset,
         // Directly output gradients w.r.t. the quaternion and log_scale
         const nanovdb::math::Mat3<T> &rotmat = quaternionToRotationMatrix<T>(quat);
 
-        auto [dLossDQuat, dLossDLogScale] = quaternionAndScaleToCovarianceVectorJacobianProduct<T>(
-            quat, scale, rotmat, dLossDCovar);
+        // ApplyLogScaleChainRule=true because this backward pass receives log_scales as input
+        // and must return dL/d(log_scale) gradients
+        auto [dLossDQuat, dLossDLogScale] =
+            quaternionAndScaleToCovarianceVectorJacobianProduct<T, true>(
+                quat, scale, rotmat, dLossDCovar);
 
         warpSum(dLossDLogScale, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
