@@ -211,7 +211,7 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
             fvdb::detail::ops::dispatchGaussianProjectionBackward<torch::kCUDA>(
                 means,
                 quats,
-                scales,
+                torch::log(scales),
                 viewmats,
                 Ks,
                 compensations_proj,
@@ -287,7 +287,7 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
             fvdb::detail::ops::dispatchGaussianProjectionBackward<torch::kCUDA>(
                 means,
                 quats,
-                scales,
+                torch::log(scales),
                 viewmats,
                 Ks,
                 compensations_proj,
