@@ -10,10 +10,10 @@ set(_GET_TORCH_CMAKE_INCLUDED TRUE)
 # find Python3
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
 
-# Check that PyTorch package uses the C++11 ABI
+# Check that PyTorch package uses the C++11 ABI and find site-packages directory
 execute_process(
-  COMMAND "${CMAKE_COMMAND}" -E env PYTHONPATH="${Python3_SITELIB}" "${Python3_EXECUTABLE}" -c "import torch; print(torch._C._GLIBCXX_USE_CXX11_ABI)"
-  OUTPUT_VARIABLE TORCH_CXX11_ABI
+  COMMAND "${CMAKE_COMMAND}" -E env PYTHONPATH="${Python3_SITELIB}" "${Python3_EXECUTABLE}" -c "import os; import torch; print(f\"{torch._C._GLIBCXX_USE_CXX11_ABI};{os.path.dirname(torch.__file__)}\")"
+  OUTPUT_VARIABLE TORCH_CXX11_ABI_AND_PACKAGE_DIR
   OUTPUT_STRIP_TRAILING_WHITESPACE
   RESULT_VARIABLE TORCH_IMPORT_RESULT)
 
@@ -21,16 +21,13 @@ if(NOT TORCH_IMPORT_RESULT EQUAL 0)
   message(FATAL_ERROR "Failed to import PyTorch. Please ensure PyTorch is installed in the conda environment.")
 endif()
 
+list(GET TORCH_CXX11_ABI_AND_PACKAGE_DIR 0 TORCH_CXX11_ABI)
+list(GET TORCH_CXX11_ABI_AND_PACKAGE_DIR 1 TORCH_PACKAGE_DIR)
+
 if(NOT TORCH_CXX11_ABI)
   message(FATAL_ERROR "PyTorch package does not use the C++11 ABI. "
     "Please install PyTorch with the C++11 ABI (e.g. conda-forge package).")
 endif()
-
-# find site-packages directory
-execute_process(
-  COMMAND "${CMAKE_COMMAND}" -E env PYTHONPATH="${Python3_SITELIB}" "${Python3_EXECUTABLE}" -c "import os; import torch; print(os.path.dirname(torch.__file__))"
-  OUTPUT_VARIABLE TORCH_PACKAGE_DIR
-  OUTPUT_STRIP_TRAILING_WHITESPACE)
 
 # needed to correctly configure Torch with the conda-forge build
 if(DEFINED ENV{CONDA_PREFIX})
