@@ -91,9 +91,9 @@ template <typename T> class OpenCVCameraModel {
 
         // OpenCV models require the packed coefficient layout.
         deviceAssertOrTrap(distortionCoeffs != nullptr);
-        const T *radial_in = distortionCoeffs + 0; // k1..k6
-        const T *tang_in   = distortionCoeffs + 6; // p1,p2
-        const T *thin_in   = distortionCoeffs + 8; // s1..s4
+        const T *radial_in = distortionCoeffs + kRadialOffset;     // k1..k6
+        const T *tang_in   = distortionCoeffs + kTangentialOffset; // p1,p2
+        const T *thin_in   = distortionCoeffs + kThinPrismOffset;  // s1..s4
 
         if (cameraModel == CameraModel::OPENCV_RADTAN_5) {
             radial        = radial_in;
@@ -196,6 +196,12 @@ template <typename T> class OpenCVCameraModel {
     const Mat3 &K;
     bool orthographic = false;
 
+    // Packed OpenCV coefficient layout offsets:
+    // [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]
+    static constexpr int kRadialOffset     = 0; // k1..k6
+    static constexpr int kTangentialOffset = 6; // p1,p2
+    static constexpr int kThinPrismOffset  = 8; // s1..s4
+
     // Coefficients for the distortion model.
     const T *radial     = nullptr;     // k1..k6 (but k4..k6 only used in rational model)
     int numRadial       = 0;           // Number of radial coefficients
@@ -248,14 +254,8 @@ template <typename T> class OpenCVCameraModel {
             const T num = T(1) + r2 * (k1 + r2 * (k2 + r2 * k3));
             const T den = T(1) + r2 * (k4 + r2 * (k5 + r2 * k6));
             radial_dist = (den != T(0)) ? (num / den) : T(0);
-        } else if (model == Model::RADTAN_5) {
-            // Polynomial radial (up to k3 / r^6).
-            const T k1  = coeffOrZero(radial, numRadial, 0);
-            const T k2  = coeffOrZero(radial, numRadial, 1);
-            const T k3  = coeffOrZero(radial, numRadial, 2);
-            radial_dist = T(1) + k1 * r2 + k2 * r4 + k3 * r6;
-        } else if (model == Model::RADTAN_THIN_9) {
-            // Polynomial radial (same as RADTAN_5). Thin-prism terms are applied below.
+        } else if (model == Model::RADTAN_5 || model == Model::RADTAN_THIN_9) {
+            // Polynomial radial (up to k3 / r^6). Thin-prism terms are applied below if enabled.
             const T k1  = coeffOrZero(radial, numRadial, 0);
             const T k2  = coeffOrZero(radial, numRadial, 1);
             const T k3  = coeffOrZero(radial, numRadial, 2);
@@ -717,6 +717,15 @@ template <typename ScalarType> struct ProjectionForwardUT {
         // Load projection matrices and world-to-camera matrices into shared memory
         alignas(Mat3) extern __shared__ char sharedMemory[];
 
+        // Alignment sanity checks for the shared-memory layout below. If any of these fail, the
+        // pointer-bump scheme could produce misaligned pointers and UB.
+        static_assert(alignof(Mat3) >= alignof(Vec3), "Mat3 alignment must cover Vec3 alignment");
+        static_assert(alignof(Mat3) >= alignof(ScalarType),
+                      "Mat3 alignment must cover ScalarType alignment");
+
+        constexpr int64_t kMat3Elements = 9; // 3x3
+        constexpr int64_t kVec3Elements = 3; // 3
+
         // Keep a running pointer which we increment to assign shared memory blocks
         uint8_t *pointer = reinterpret_cast<uint8_t *>(sharedMemory);
 
@@ -741,43 +750,43 @@ template <typename ScalarType> struct ProjectionForwardUT {
 
         // Layout in element units:
         const int64_t projectionOffset = 0;
-        const int64_t rotStartOffset   = projectionOffset + C * 9;
-        const int64_t rotEndOffset     = rotStartOffset + C * 9;
-        const int64_t transStartOffset = rotEndOffset + C * 9;
-        const int64_t transEndOffset   = transStartOffset + C * 3;
-        const int64_t distortionOffset = transEndOffset + C * 3;
+        const int64_t rotStartOffset   = projectionOffset + C * kMat3Elements;
+        const int64_t rotEndOffset     = rotStartOffset + C * kMat3Elements;
+        const int64_t transStartOffset = rotEndOffset + C * kMat3Elements;
+        const int64_t transEndOffset   = transStartOffset + C * kVec3Elements;
+        const int64_t distortionOffset = transEndOffset + C * kVec3Elements;
         const int64_t totalElements    = distortionOffset + C * mNumDistortionCoeffs;
 
         for (int64_t i = threadIdx.x; i < totalElements; i += blockDim.x) {
             if (i < rotStartOffset) {
-                const auto camId   = (i - projectionOffset) / 9;
-                const auto entryId = (i - projectionOffset) % 9;
-                const auto rowId   = entryId / 3;
-                const auto colId   = entryId % 3;
+                const auto camId   = (i - projectionOffset) / kMat3Elements;
+                const auto entryId = (i - projectionOffset) % kMat3Elements;
+                const auto rowId   = entryId / kVec3Elements;
+                const auto colId   = entryId % kVec3Elements;
                 projectionMatsShared[camId][rowId][colId] =
                     mProjectionMatricesAcc[camId][rowId][colId];
             } else if (i < rotEndOffset) {
-                const auto camId   = (i - rotStartOffset) / 9;
-                const auto entryId = (i - rotStartOffset) % 9;
-                const auto rowId   = entryId / 3;
-                const auto colId   = entryId % 3;
+                const auto camId   = (i - rotStartOffset) / kMat3Elements;
+                const auto entryId = (i - rotStartOffset) % kMat3Elements;
+                const auto rowId   = entryId / kVec3Elements;
+                const auto colId   = entryId % kVec3Elements;
                 worldToCamRotMatsStartShared[camId][rowId][colId] =
                     mWorldToCamMatricesStartAcc[camId][rowId][colId];
             } else if (i < transStartOffset) {
-                const auto camId   = (i - rotEndOffset) / 9;
-                const auto entryId = (i - rotEndOffset) % 9;
-                const auto rowId   = entryId / 3;
-                const auto colId   = entryId % 3;
+                const auto camId   = (i - rotEndOffset) / kMat3Elements;
+                const auto entryId = (i - rotEndOffset) % kMat3Elements;
+                const auto rowId   = entryId / kVec3Elements;
+                const auto colId   = entryId % kVec3Elements;
                 worldToCamRotMatsEndShared[camId][rowId][colId] =
                     mWorldToCamMatricesEndAcc[camId][rowId][colId];
             } else if (i < transEndOffset) {
-                const auto camId   = (i - transStartOffset) / 3;
-                const auto entryId = (i - transStartOffset) % 3;
+                const auto camId   = (i - transStartOffset) / kVec3Elements;
+                const auto entryId = (i - transStartOffset) % kVec3Elements;
                 worldToCamTranslationStartShared[camId][entryId] =
                     mWorldToCamMatricesStartAcc[camId][entryId][3];
             } else if (i < distortionOffset) {
-                const auto camId   = (i - transEndOffset) / 3;
-                const auto entryId = (i - transEndOffset) % 3;
+                const auto camId   = (i - transEndOffset) / kVec3Elements;
+                const auto entryId = (i - transEndOffset) % kVec3Elements;
                 worldToCamTranslationEndShared[camId][entryId] =
                     mWorldToCamMatricesEndAcc[camId][entryId][3];
             } else if (mNumDistortionCoeffs > 0) {
