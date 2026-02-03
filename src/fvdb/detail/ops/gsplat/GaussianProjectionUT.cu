@@ -65,14 +65,12 @@ template <typename T> class OpenCVCameraModel {
     /// Preconditions are asserted on-device (trap) rather than returning status codes.
     ///
     /// @param[in] cameraModel Public camera model selector.
-    /// @param[in] K_in Pointer to 3x3 intrinsics matrix (typically points into shared memory).
+    /// @param[in] K_in 3x3 intrinsics matrix (typically backed by shared memory).
     /// @param[in] distortionCoeffs Pointer to per-camera distortion coefficients (layout depends on
     ///            cameraModel).
     __device__ __forceinline__
-    OpenCVCameraModel(const CameraModel cameraModel, const Mat3 *K_in, const T *distortionCoeffs)
+    OpenCVCameraModel(const CameraModel cameraModel, const Mat3 &K_in, const T *distortionCoeffs)
         : K(K_in) {
-        deviceAssertOrTrap(K != nullptr);
-
         // ORTHOGRAPHIC is implemented as pinhole intrinsics without the perspective divide.
         // Distortion is intentionally not supported for orthographic projection.
         orthographic = (cameraModel == CameraModel::ORTHOGRAPHIC);
@@ -167,11 +165,10 @@ template <typename T> class OpenCVCameraModel {
         const Vec2 p_distorted = applyDistortion(p_normalized);
 
         // Project to pixel coordinates.
-        const Mat3 &K_ref = *K;
-        const T fx        = K_ref[0][0];
-        const T fy        = K_ref[1][1];
-        const T cx        = K_ref[0][2];
-        const T cy        = K_ref[1][2];
+        const T fx = K[0][0];
+        const T fy = K[1][1];
+        const T cx = K[0][2];
+        const T cy = K[1][2];
         return Vec2(fx * p_distorted[0] + cx, fy * p_distorted[1] + cy);
     }
 
@@ -195,9 +192,8 @@ template <typename T> class OpenCVCameraModel {
         }
     }
 
-    // Camera intrinsics pointer (typically points into shared memory).
-    // This avoids copying a Mat3 into registers per-thread.
-    const Mat3 *K     = nullptr;
+    // Camera intrinsics (typically backed by shared memory).
+    const Mat3 &K;
     bool orthographic = false;
 
     // Coefficients for the distortion model.
@@ -365,13 +361,29 @@ template <typename ScalarType> struct WorldToPixelTransform {
     using Vec3 = nanovdb::math::Vec3<ScalarType>;
     using Mat3 = nanovdb::math::Mat3<ScalarType>;
 
-    const OpenCVCameraModel<ScalarType> *camera = nullptr;
+    const OpenCVCameraModel<ScalarType> &camera;
     RollingShutterType rollingShutterType;
     int64_t imageWidth;
     int64_t imageHeight;
     ScalarType inImageMargin;
     RigidTransform<ScalarType> worldToCamStart;
     RigidTransform<ScalarType> worldToCamEnd;
+
+    __device__ __forceinline__
+    WorldToPixelTransform(const OpenCVCameraModel<ScalarType> &camera_in,
+                          const RollingShutterType rollingShutterType_in,
+                          const int64_t imageWidth_in,
+                          const int64_t imageHeight_in,
+                          const ScalarType inImageMargin_in,
+                          const RigidTransform<ScalarType> &worldToCamStart_in,
+                          const RigidTransform<ScalarType> &worldToCamEnd_in)
+        : camera(camera_in)
+        , rollingShutterType(rollingShutterType_in)
+        , imageWidth(imageWidth_in)
+        , imageHeight(imageHeight_in)
+        , inImageMargin(inImageMargin_in)
+        , worldToCamStart(worldToCamStart_in)
+        , worldToCamEnd(worldToCamEnd_in) {}
 
     /// @brief Helper: whether a projection status is in-image.
     /// @param[in] s Projection status.
@@ -398,7 +410,7 @@ template <typename ScalarType> struct WorldToPixelTransform {
         // clamping z in the projection math (which would change the pinhole model near z=0).
         // For ORTHOGRAPHIC this is a policy choice (not a mathematical necessity); we keep the
         // original z<=0 behavior.
-        const ScalarType z_eps = camera->isOrthographic() ? ScalarType(0) : ScalarType(1e-6);
+        const ScalarType z_eps = camera.isOrthographic() ? ScalarType(0) : ScalarType(1e-6);
         if (p_cam[2] <= z_eps) {
             // Ensure deterministic output to avoid UB on callers that assign/read even on invalid
             // projections. This value is ignored when we treat BehindCamera as a hard reject.
@@ -406,7 +418,7 @@ template <typename ScalarType> struct WorldToPixelTransform {
             return ProjStatus::BehindCamera;
         }
 
-        out_pix                   = camera->project(p_cam);
+        out_pix                   = camera.project(p_cam);
         const ScalarType margin_x = ScalarType(imageWidth) * inImageMargin;
         const ScalarType margin_y = ScalarType(imageHeight) * inImageMargin;
         const bool in_img =
@@ -504,9 +516,9 @@ generateWorldSigmaPoints(const nanovdb::math::Vec3<T> &mean_world,
                          const nanovdb::math::Vec4<T> &quat_wxyz,
                          const nanovdb::math::Vec3<T> &scale_world,
                          const UTParams &params,
-                         nanovdb::math::Vec3<T> *sigma_points, // [7]
-                         T *weights_mean,                      // [7]
-                         T *weights_cov) {                     // [7]
+                         nanovdb::math::Vec3<T> (&sigma_points)[7],
+                         T (&weights_mean)[7],
+                         T (&weights_cov)[7]) {
     constexpr int D = 3;
     // This kernel currently supports only the canonical 3D UT with 2D+1 points.
     // (We keep the arrays fixed-size for performance and simplicity.)
@@ -554,12 +566,12 @@ generateWorldSigmaPoints(const nanovdb::math::Vec3<T> &mean_world,
 /// @return 2x2 covariance matrix.
 template <typename T>
 __device__ nanovdb::math::Mat2<T>
-reconstructCovarianceFromSigmaPoints(const nanovdb::math::Vec2<T> *projected_points,
-                                     const T *weights_cov,
-                                     int num_points,
+reconstructCovarianceFromSigmaPoints(const nanovdb::math::Vec2<T> (&projected_points)[7],
+                                     const T (&weights_cov)[7],
                                      const nanovdb::math::Vec2<T> &mean2d) {
     nanovdb::math::Mat2<T> covar2d(T(0), T(0), T(0), T(0));
-    for (int i = 0; i < num_points; ++i) {
+    constexpr int kNumSigmaPoints = 7;
+    for (int i = 0; i < kNumSigmaPoints; ++i) {
         const nanovdb::math::Vec2<T> diff = projected_points[i] - mean2d;
         covar2d[0][0] += weights_cov[i] * diff[0] * diff[0];
         covar2d[0][1] += weights_cov[i] * diff[0] * diff[1];
@@ -612,7 +624,10 @@ template <typename ScalarType> struct ProjectionForwardUT {
     fvdb::TorchRAcc64<ScalarType, 2> mOutDepthsAcc;  // [C, N]
     fvdb::TorchRAcc64<ScalarType, 3> mOutConicsAcc;  // [C, N, 3]
 
-    // Optional Outputs (need to be pointers since they may be null)
+    // Optional Outputs
+    //
+    // NOTE: This is intentionally a raw pointer to represent optional (nullable) outputs.
+    // Required inputs are passed/stored as references where possible to avoid null-deref hazards.
     ScalarType *__restrict__ mOutCompensationsAcc; // [C, N] optional
 
     // Shared memory pointers
@@ -798,7 +813,7 @@ template <typename ScalarType> struct ProjectionForwardUT {
                                        : nullptr;
 
         // Define the camera model (projection and distortion) using the shared memory pointers
-        OpenCVCameraModel<ScalarType> camera(mCameraModel, &projectionMatrix, distortionCoeffs);
+        OpenCVCameraModel<ScalarType> camera(mCameraModel, projectionMatrix, distortionCoeffs);
 
         // Define the world-to-camera transforms using the shared memory pointers at the start and
         // end of the shutter period
@@ -847,13 +862,13 @@ template <typename ScalarType> struct ProjectionForwardUT {
                                  weights_mean,
                                  weights_cov);
 
-        const WorldToPixelTransform<ScalarType> worldToPixel{&camera,
+        const WorldToPixelTransform<ScalarType> worldToPixel(camera,
                                                              mRollingShutterType,
                                                              mImageWidth,
                                                              mImageHeight,
                                                              ScalarType(mUTParams.inImageMargin),
                                                              worldToCamStart,
-                                                             worldToCamEnd};
+                                                             worldToCamEnd);
 
         // Project sigma points through camera model
         nanovdb::math::Vec2<ScalarType> projected_points[7];
@@ -890,8 +905,8 @@ template <typename ScalarType> struct ProjectionForwardUT {
         }
 
         // Reconstruct 2D covariance from projected sigma points
-        Mat2 covar2d = reconstructCovarianceFromSigmaPoints(
-            projected_points, weights_cov, kNumSigmaPoints, mean2d);
+        Mat2 covar2d =
+            reconstructCovarianceFromSigmaPoints(projected_points, weights_cov, mean2d);
 
         // Add blur for numerical stability
         ScalarType compensation;
