@@ -243,12 +243,12 @@ TEST_F(GaussianProjectionUTTestFixture, NonlinearUTCovariance_ProducesFinitePosi
     const float fx = 700.0f, fy = 700.0f, cx = 640.0f, cy = 360.0f;
     projectionMatrices = torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32));
     {
-        auto K             = projectionMatrices.accessor<float, 3>();
-        K[0][0][0]         = fx;
-        K[0][1][1]         = fy;
-        K[0][0][2]         = cx;
-        K[0][1][2]         = cy;
-        K[0][2][2]         = 1.0f;
+        auto K     = projectionMatrices.accessor<float, 3>();
+        K[0][0][0] = fx;
+        K[0][1][1] = fy;
+        K[0][0][2] = cx;
+        K[0][1][2] = cy;
+        K[0][2][2] = 1.0f;
     }
 
     cameraModel      = CameraModel::PINHOLE;
@@ -295,14 +295,14 @@ TEST_F(GaussianProjectionUTTestFixture, NonlinearUTCovariance_ProducesFinitePosi
                                                           minRadius2d,
                                                           false);
 
-    auto radii_cpu  = radii.cpu();
-    auto conics_cpu = conics.cpu();
+    auto radii_cpu   = radii.cpu();
+    auto conics_cpu  = conics.cpu();
     auto means2d_cpu = means2d.cpu();
 
     ASSERT_GT(radii_cpu[0][0].item<int32_t>(), 0);
 
-    const float a = conics_cpu[0][0][0].item<float>();
-    const float b = conics_cpu[0][0][1].item<float>();
+    const float a     = conics_cpu[0][0][0].item<float>();
+    const float b     = conics_cpu[0][0][1].item<float>();
     const float c_out = conics_cpu[0][0][2].item<float>();
 
     EXPECT_TRUE(std::isfinite(a));

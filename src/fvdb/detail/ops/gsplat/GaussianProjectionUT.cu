@@ -377,13 +377,9 @@ template <typename ScalarType> struct WorldToPixelTransform {
                           const ScalarType inImageMargin_in,
                           const RigidTransform<ScalarType> &worldToCamStart_in,
                           const RigidTransform<ScalarType> &worldToCamEnd_in)
-        : camera(camera_in)
-        , rollingShutterType(rollingShutterType_in)
-        , imageWidth(imageWidth_in)
-        , imageHeight(imageHeight_in)
-        , inImageMargin(inImageMargin_in)
-        , worldToCamStart(worldToCamStart_in)
-        , worldToCamEnd(worldToCamEnd_in) {}
+        : camera(camera_in), rollingShutterType(rollingShutterType_in), imageWidth(imageWidth_in),
+          imageHeight(imageHeight_in), inImageMargin(inImageMargin_in),
+          worldToCamStart(worldToCamStart_in), worldToCamEnd(worldToCamEnd_in) {}
 
     /// @brief Helper: whether a projection status is in-image.
     /// @param[in] s Projection status.
@@ -617,7 +613,8 @@ enforcePSD2x2(const T minEigen, nanovdb::math::Mat2<T> &covar2d) {
     //   [b, v1-a] or [v1-c, b]
     Vec2 u(T(1), T(0));
     const T eps = (sizeof(T) == sizeof(float)) ? T(1e-8) : T(1e-12);
-    if (::cuda::std::fabs(b) > eps || ::cuda::std::fabs(v1 - a) > eps || ::cuda::std::fabs(v1 - c) > eps) {
+    if (::cuda::std::fabs(b) > eps || ::cuda::std::fabs(v1 - a) > eps ||
+        ::cuda::std::fabs(v1 - c) > eps) {
         T ux = b;
         T uy = v1 - a;
         // Prefer the formulation with the larger component to avoid cancellation.
@@ -977,8 +974,7 @@ template <typename ScalarType> struct ProjectionForwardUT {
         }
 
         // Reconstruct 2D covariance from projected sigma points
-        Mat2 covar2d =
-            reconstructCovarianceFromSigmaPoints(projected_points, weights_cov, mean2d);
+        Mat2 covar2d = reconstructCovarianceFromSigmaPoints(projected_points, weights_cov, mean2d);
 
         // Add blur for numerical stability
         ScalarType compensation;
