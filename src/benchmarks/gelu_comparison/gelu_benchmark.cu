@@ -18,6 +18,7 @@
 #include <torch/torch.h>
 
 #include <benchmark/benchmark.h>
+#include <dispatch/thread_pool.h>
 #include <examples/gelu_for_each.h>
 #include <examples/gelu_scalar.h>
 
@@ -191,6 +192,9 @@ static void
 BM_GeluNew_Contiguous_CPU(benchmark::State &state) {
     auto tensor = make_contiguous_tensor(state.range(0), torch::kFloat32, torch::kCPU);
 
+    // Ensure thread pool is created before timing
+    (void)dispatch::thread_pool::instance();
+
     for (auto _: state) {
         auto result = dispatch_examples::example_gelu_for_each(tensor);
         benchmark::DoNotOptimize(result.data_ptr());
@@ -202,6 +206,9 @@ BM_GeluNew_Contiguous_CPU(benchmark::State &state) {
 static void
 BM_GeluNew_Strided_CPU(benchmark::State &state) {
     auto tensor = make_strided_tensor(state.range(0), torch::kFloat32, torch::kCPU);
+
+    // Ensure thread pool is created before timing
+    (void)dispatch::thread_pool::instance();
 
     for (auto _: state) {
         auto result = dispatch_examples::example_gelu_for_each(tensor);
@@ -397,6 +404,9 @@ BM_GeluNew_Contiguous_CPU_NoAlloc(benchmark::State &state) {
     auto input  = make_contiguous_tensor(state.range(0), torch::kFloat32, torch::kCPU);
     auto output = torch::empty_like(input);
 
+    // Ensure thread pool is created before timing
+    (void)dispatch::thread_pool::instance();
+
     for (auto _: state) {
         dispatch_examples::example_gelu_for_each_out(input, output);
         benchmark::DoNotOptimize(output.data_ptr());
@@ -473,10 +483,10 @@ BM_Raw_SerialLoop_CPU(benchmark::State &state) {
 // Raw serial loop using torch tensors but raw pointer access
 static void
 BM_Raw_TorchTensor_SerialLoop_CPU(benchmark::State &state) {
-    auto input  = make_contiguous_tensor(state.range(0), torch::kFloat32, torch::kCPU);
-    auto output = torch::empty_like(input);
-    float *in_ptr  = input.data_ptr<float>();
-    float *out_ptr = output.data_ptr<float>();
+    auto input      = make_contiguous_tensor(state.range(0), torch::kFloat32, torch::kCPU);
+    auto output     = torch::empty_like(input);
+    float *in_ptr   = input.data_ptr<float>();
+    float *out_ptr  = output.data_ptr<float>();
     const int64_t n = input.numel();
 
     for (auto _: state) {
@@ -498,7 +508,7 @@ BM_Raw_LoopOverhead_CPU(benchmark::State &state) {
 
     for (auto _: state) {
         for (int64_t i = 0; i < n; ++i) {
-            output[i] = input[i];  // Just copy, no erf
+            output[i] = input[i]; // Just copy, no erf
         }
         benchmark::DoNotOptimize(output.data());
         benchmark::ClobberMemory();
@@ -510,10 +520,10 @@ BM_Raw_LoopOverhead_CPU(benchmark::State &state) {
 // Using dispatch gelu_scalar directly (tests the scalar function itself)
 static void
 BM_Raw_DispatchGeluScalar_CPU(benchmark::State &state) {
-    auto input  = make_contiguous_tensor(state.range(0), torch::kFloat32, torch::kCPU);
-    auto output = torch::empty_like(input);
-    float *in_ptr  = input.data_ptr<float>();
-    float *out_ptr = output.data_ptr<float>();
+    auto input      = make_contiguous_tensor(state.range(0), torch::kFloat32, torch::kCPU);
+    auto output     = torch::empty_like(input);
+    float *in_ptr   = input.data_ptr<float>();
+    float *out_ptr  = output.data_ptr<float>();
     const int64_t n = input.numel();
 
     for (auto _: state) {

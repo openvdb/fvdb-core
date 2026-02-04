@@ -50,6 +50,7 @@ dependencies:
   - python=3.12
   - pytorch-gpu=2.8.0
   - rich
+  - seaborn
   - scikit-build-core
   - setuptools>=68.2.2
   - sparsehash
