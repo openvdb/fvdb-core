@@ -206,10 +206,13 @@ jaggedProjectionBackwardKernel(
         }
     } else {
         // Directly output gradients w.r.t. the quaternion and scale
+        // NOTE: The jagged API takes raw scales (not log_scales), so we use
+        // ApplyLogScaleChainRule=false to get dL/d(scale) instead of dL/d(log_scale)
         const nanovdb::math::Mat3<T> &rotmat = quaternionToRotationMatrix<T>(quat);
 
-        auto [dLossDQuat, dLossDScale] = quaternionAndScaleToCovarianceVectorJacobianProduct<T>(
-            quat, scale, rotmat, dLossDCovar);
+        auto [dLossDQuat, dLossDScale] =
+            quaternionAndScaleToCovarianceVectorJacobianProduct<T, false>(
+                quat, scale, rotmat, dLossDCovar);
 
         warpSum(dLossDScale, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {

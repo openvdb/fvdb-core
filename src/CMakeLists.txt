@@ -210,6 +210,8 @@ target_compile_options(fvdb PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:
     "-Wno-unknown-pragmas"
     "-Wno-class-memaccess"
+    "-Wno-array-bounds"
+    "-Wno-stringop-overflow"
     "-fdiagnostics-color=always"
     "-DNANOVDB_USE_BLOSC"
     "-fvisibility=default"

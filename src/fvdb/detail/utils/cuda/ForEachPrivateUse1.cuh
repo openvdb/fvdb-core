@@ -149,9 +149,7 @@ forEachLeafPrivateUse1(int64_t numChannels,
         }
     }
 
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-    }
+    fvdb::detail::mergeStreams();
 }
 
 template <typename Func, typename... Args>
@@ -197,9 +195,7 @@ forEachVoxelPrivateUse1(int64_t numChannels,
         }
     }
 
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-    }
+    fvdb::detail::mergeStreams();
 }
 
 template <typename ScalarT, int32_t NDIMS, typename Func, typename... Args>
@@ -233,9 +229,7 @@ forEachJaggedElementChannelPrivateUse1(int64_t numChannels,
         }
     }
 
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-    }
+    fvdb::detail::mergeStreams();
 }
 
 template <typename ScalarT, int32_t NDIMS, typename Func, typename... Args>
@@ -268,9 +262,7 @@ forEachTensorElementChannelPrivateUse1(int64_t numChannels,
         }
     }
 
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-    }
+    fvdb::detail::mergeStreams();
 }
 
 } // namespace fvdb
