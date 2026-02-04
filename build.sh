@@ -148,15 +148,27 @@ PY
 
 # --- Path Sanitization for Virtualized Environments ---
 # In certain virtualized or hybrid environments, the PATH may include directories
-# on slow or remote-mounted filesystems (e.g., /mnt/* host mounts).
-# CMake's find_library() searches these paths, and each filesystem operation on
-# such mounts can go through slow protocols, causing significant delays during configuration.
-# By filtering out /mnt/* paths, we prevent CMake from crawling these slow directories.
+# on slow or remote-mounted filesystems (e.g., /mnt/* host mounts, /media/sf_* for
+# VirtualBox, /mnt/hgfs/* for VMware). CMake's find_library() searches these paths,
+# and each filesystem operation on such mounts can go through slow protocols (9P, vboxsf,
+# vmhgfs-fuse), causing significant delays during configuration.
+# By filtering out these paths, we prevent CMake from crawling slow directories.
 
 has_slow_host_mounts() {
-  # Detect virtualized environments where /mnt/* paths may be slow host filesystem mounts
+  # Detect virtualized environments that may have slow host filesystem mounts
+  # - WSL/WSL2: /mnt/* paths use 9P protocol
+  # - VirtualBox: /media/sf_* paths use vboxsf
+  # - VMware: /mnt/hgfs/* paths use vmhgfs-fuse
   if [ -f /proc/version ]; then
     grep -qi "microsoft\|wsl" /proc/version && return 0
+  fi
+  # VirtualBox Guest Additions
+  if [ -d /media/sf_* ] 2>/dev/null || grep -q vboxsf /proc/filesystems 2>/dev/null; then
+    return 0
+  fi
+  # VMware Tools
+  if [ -d /mnt/hgfs ] || grep -q vmhgfs /proc/filesystems 2>/dev/null; then
+    return 0
   fi
   return 1
 }
@@ -164,8 +176,10 @@ has_slow_host_mounts() {
 filter_slow_mount_paths() {
   local input_path="$1"
   if has_slow_host_mounts; then
-    # Filter out /mnt/* paths (typically slow host filesystem mounts)
-    echo "$input_path" | tr ':' '\n' | grep -v "^/mnt/" | tr '\n' ':' | sed 's/:$//'
+    # Filter out paths on slow host filesystem mounts:
+    # - /mnt/* (WSL host mounts, VMware hgfs)
+    # - /media/sf_* (VirtualBox shared folders)
+    echo "$input_path" | tr ':' '\n' | grep -v -E "^/mnt/|^/media/sf_" | tr '\n' ':' | sed 's/:$//'
   else
     echo "$input_path"
   fi
@@ -200,7 +214,7 @@ run_with_sanitized_paths() {
   if has_slow_host_mounts; then
     local sanitized_path
     sanitized_path=$(filter_slow_mount_paths "$PATH")
-    echo "Virtualized environment detected: Running with sanitized PATH (excluding /mnt/* for performance)"
+    echo "Virtualized environment detected: Running with sanitized PATH (excluding slow host mounts for performance)"
     env PATH="$sanitized_path" "$@"
   else
     "$@"
