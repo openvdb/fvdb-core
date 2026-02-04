@@ -185,37 +185,26 @@ filter_slow_mount_paths() {
   fi
 }
 
-get_sanitized_env() {
-  # Returns environment variable assignments for running commands with sanitized paths
-  # This prevents CMake from searching slow host-mounted filesystems in virtualized environments
+run_with_sanitized_paths() {
+  # Run a command with sanitized paths in virtualized environments, or normally otherwise.
+  # This prevents CMake from searching slow host-mounted filesystems.
   if has_slow_host_mounts; then
     local sanitized_path
     sanitized_path=$(filter_slow_mount_paths "$PATH")
+
+    # Build env command with sanitized variables
+    local env_args=("PATH=$sanitized_path")
 
     # Also sanitize CMAKE_PREFIX_PATH and CMAKE_LIBRARY_PATH if set
-    local sanitized_cmake_prefix=""
     if [ -n "$CMAKE_PREFIX_PATH" ]; then
-      sanitized_cmake_prefix=$(filter_slow_mount_paths "$CMAKE_PREFIX_PATH")
+      env_args+=("CMAKE_PREFIX_PATH=$(filter_slow_mount_paths "$CMAKE_PREFIX_PATH")")
     fi
-
-    local sanitized_cmake_library=""
     if [ -n "$CMAKE_LIBRARY_PATH" ]; then
-      sanitized_cmake_library=$(filter_slow_mount_paths "$CMAKE_LIBRARY_PATH")
+      env_args+=("CMAKE_LIBRARY_PATH=$(filter_slow_mount_paths "$CMAKE_LIBRARY_PATH")")
     fi
 
-    echo "PATH=$sanitized_path"
-    [ -n "$sanitized_cmake_prefix" ] && echo "CMAKE_PREFIX_PATH=$sanitized_cmake_prefix"
-    [ -n "$sanitized_cmake_library" ] && echo "CMAKE_LIBRARY_PATH=$sanitized_cmake_library"
-  fi
-}
-
-run_with_sanitized_paths() {
-  # Run a command with sanitized paths in virtualized environments, or normally otherwise
-  if has_slow_host_mounts; then
-    local sanitized_path
-    sanitized_path=$(filter_slow_mount_paths "$PATH")
-    echo "Virtualized environment detected: Running with sanitized PATH (excluding slow host mounts for performance)"
-    env PATH="$sanitized_path" "$@"
+    echo "Virtualized environment detected: Running with sanitized paths (excluding slow host mounts for performance)"
+    env "${env_args[@]}" "$@"
   else
     "$@"
   fi
@@ -247,21 +236,36 @@ CUDA_ARCH_LIST_ARG="default"
 
 # --- Set CUDA_HOME / Hints ---
 # This helps scikit-build-core find the CUDA toolkit directly.
-# We only set CUDA_HOME automatically for Conda environments; in venv environments,
-# PyTorch ships with rpathed CUDA libraries, so we leave CUDA_HOME unset to avoid
-# version mismatches. Users can still set CUDA_HOME explicitly if needed.
+#
+# We only auto-detect CUDA_HOME for Conda environments, and only when:
+#   1. CUDA_HOME is not already set (respect user's explicit choice)
+#   2. The Conda environment actually has nvcc installed
+#
+# In venv environments, PyTorch ships with rpathed CUDA libraries, so we leave
+# CUDA_HOME unset to avoid version mismatches. Users can still set CUDA_HOME
+# explicitly if needed.
 
-if [ -n "$CONDA_PREFIX" ]; then
-    echo "Conda environment detected. Pinning CUDA_HOME to $CONDA_PREFIX"
+if [ -n "$CONDA_PREFIX" ] && [ -z "$CUDA_HOME" ] && [ -x "$CONDA_PREFIX/bin/nvcc" ]; then
+    echo "Conda environment with CUDA detected. Setting CUDA_HOME to $CONDA_PREFIX"
     export CUDA_HOME="$CONDA_PREFIX"
+elif [ -n "$CONDA_PREFIX" ] && [ -n "$CUDA_HOME" ]; then
+    echo "Conda environment detected, but CUDA_HOME is already set to $CUDA_HOME (keeping existing value)"
 fi
 
 # Export hints to help CMake find CUDA (only if CUDA_HOME is set)
 if [ -n "$CUDA_HOME" ]; then
-    export CUDACXX="${CUDA_HOME}/bin/nvcc"
-    # These defines help scikit-build-core locate CUDA immediately
+    # Always pass CUDA_TOOLKIT_ROOT_DIR as a search hint
     CONFIG_SETTINGS+=" --config-settings=cmake.define.CUDA_TOOLKIT_ROOT_DIR=$CUDA_HOME"
-    CONFIG_SETTINGS+=" --config-settings=cmake.define.CMAKE_CUDA_COMPILER=$CUDACXX"
+
+    # Only set CUDACXX and CMAKE_CUDA_COMPILER if nvcc actually exists at that location.
+    # This avoids hard failures when CUDA_HOME points to a runtime-only installation.
+    if [ -x "$CUDA_HOME/bin/nvcc" ]; then
+        export CUDACXX="${CUDA_HOME}/bin/nvcc"
+        CONFIG_SETTINGS+=" --config-settings=cmake.define.CMAKE_CUDA_COMPILER=$CUDACXX"
+    else
+        echo "Warning: CUDA_HOME is set to $CUDA_HOME but nvcc not found at $CUDA_HOME/bin/nvcc"
+        echo "         CMake will attempt to find nvcc elsewhere."
+    fi
 fi
 
 # Default values for nanovdb_editor build options
