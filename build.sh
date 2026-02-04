@@ -147,24 +147,25 @@ PY
   fi
 }
 
-# --- WSL2 Path Sanitization ---
-# On WSL2, the PATH often includes Windows directories like /mnt/c/Windows/System32.
-# CMake's find_library() searches these paths, and each filesystem operation on /mnt/*
-# goes through the slow 9P protocol, causing ~60 second delays during configuration.
-# By filtering out /mnt/* paths, we prevent CMake from crawling Windows directories.
+# --- Path Sanitization for Virtualized Environments ---
+# In certain virtualized or hybrid environments, the PATH may include directories
+# on slow or remote-mounted filesystems (e.g., /mnt/* host mounts).
+# CMake's find_library() searches these paths, and each filesystem operation on
+# such mounts can go through slow protocols, causing significant delays during configuration.
+# By filtering out /mnt/* paths, we prevent CMake from crawling these slow directories.
 
-is_wsl() {
-  # Check for WSL kernel signature (works for both WSL1 and WSL2)
+has_slow_host_mounts() {
+  # Detect virtualized environments where /mnt/* paths may be slow host filesystem mounts
   if [ -f /proc/version ]; then
     grep -qi "microsoft\|wsl" /proc/version && return 0
   fi
   return 1
 }
 
-sanitize_path_for_wsl() {
+filter_slow_mount_paths() {
   local input_path="$1"
-  if is_wsl; then
-    # Filter out /mnt/* paths (Windows filesystem mounts)
+  if has_slow_host_mounts; then
+    # Filter out /mnt/* paths (typically slow host filesystem mounts)
     echo "$input_path" | tr ':' '\n' | grep -v "^/mnt/" | tr '\n' ':' | sed 's/:$//'
   else
     echo "$input_path"
@@ -173,20 +174,20 @@ sanitize_path_for_wsl() {
 
 get_sanitized_env() {
   # Returns environment variable assignments for running commands with sanitized paths
-  # This prevents CMake from searching slow Windows filesystems on WSL2
-  if is_wsl; then
+  # This prevents CMake from searching slow host-mounted filesystems in virtualized environments
+  if has_slow_host_mounts; then
     local sanitized_path
-    sanitized_path=$(sanitize_path_for_wsl "$PATH")
+    sanitized_path=$(filter_slow_mount_paths "$PATH")
 
     # Also sanitize CMAKE_PREFIX_PATH and CMAKE_LIBRARY_PATH if set
     local sanitized_cmake_prefix=""
     if [ -n "$CMAKE_PREFIX_PATH" ]; then
-      sanitized_cmake_prefix=$(sanitize_path_for_wsl "$CMAKE_PREFIX_PATH")
+      sanitized_cmake_prefix=$(filter_slow_mount_paths "$CMAKE_PREFIX_PATH")
     fi
 
     local sanitized_cmake_library=""
     if [ -n "$CMAKE_LIBRARY_PATH" ]; then
-      sanitized_cmake_library=$(sanitize_path_for_wsl "$CMAKE_LIBRARY_PATH")
+      sanitized_cmake_library=$(filter_slow_mount_paths "$CMAKE_LIBRARY_PATH")
     fi
 
     echo "PATH=$sanitized_path"
@@ -196,11 +197,11 @@ get_sanitized_env() {
 }
 
 run_with_sanitized_paths() {
-  # Run a command with sanitized paths on WSL2, or normally on other systems
-  if is_wsl; then
+  # Run a command with sanitized paths in virtualized environments, or normally otherwise
+  if has_slow_host_mounts; then
     local sanitized_path
-    sanitized_path=$(sanitize_path_for_wsl "$PATH")
-    echo "WSL2 detected: Running with sanitized PATH (excluding /mnt/* for performance)"
+    sanitized_path=$(filter_slow_mount_paths "$PATH")
+    echo "Virtualized environment detected: Running with sanitized PATH (excluding /mnt/* for performance)"
     env PATH="$sanitized_path" "$@"
   else
     "$@"
