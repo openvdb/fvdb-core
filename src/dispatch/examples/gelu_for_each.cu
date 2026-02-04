@@ -20,6 +20,7 @@
 
 #include "dispatch/dispatch_table.h"
 #include "dispatch/thread_pool.h"
+#include "dispatch/basic_thread_pool.h"
 #include "dispatch/work_stealing_pool.h"
 #include "dispatch/torch/dispatch.h"
 #include "dispatch/torch/for_each.h"
@@ -647,7 +648,8 @@ void fast_gelu_cpu(torch::Tensor in, torch::Tensor out) {
         //constexpr int64_t grain_size = 1024;
 
         //dispatch::work_stealing_pool::instance().parallel_for(
-        dispatch::thread_pool::instance().parallel_for(
+        //dispatch::thread_pool::instance().parallel_for(
+        dispatch::basic_thread_pool::instance().parallel_for(
             int64_t{0}, numel,
             [in_ptr, out_ptr](int64_t begin, int64_t end) {
                 for (int64_t i = begin; i < end; i++) {
