@@ -30,7 +30,6 @@ usage() {
   echo "  strip_symbols  Strip symbols from the build (will be ignored if debug is enabled)."
   echo "  verbose        Enable verbose build output for pip and CMake."
   echo "  trace          Enable CMake trace output for debugging configuration."
-  echo "  clean          Force a clean build (adds --force-reinstall)."
   echo ""
   echo "  Any modifier arguments not matching above are passed through to pip."
   exit 0
@@ -234,17 +233,16 @@ CUDA_ARCH_LIST_ARG="default"
 
 # --- Set CUDA_HOME / Hints ---
 # This helps scikit-build-core find the CUDA toolkit directly.
+# We only set CUDA_HOME automatically for Conda environments; in venv environments,
+# PyTorch ships with rpathed CUDA libraries, so we leave CUDA_HOME unset to avoid
+# version mismatches. Users can still set CUDA_HOME explicitly if needed.
 
-# 1. Prefer the active Conda environment if available
 if [ -n "$CONDA_PREFIX" ]; then
     echo "Conda environment detected. Pinning CUDA_HOME to $CONDA_PREFIX"
     export CUDA_HOME="$CONDA_PREFIX"
-# 2. Fallback to standard system location if not in Conda
-elif [ -d "/usr/local/cuda" ] && [ -z "$CUDA_HOME" ]; then
-    export CUDA_HOME="/usr/local/cuda"
 fi
 
-# 3. Export hints to help CMake find CUDA
+# Export hints to help CMake find CUDA (only if CUDA_HOME is set)
 if [ -n "$CUDA_HOME" ]; then
     export CUDACXX="${CUDA_HOME}/bin/nvcc"
     # These defines help scikit-build-core locate CUDA immediately
@@ -255,9 +253,6 @@ fi
 # Default values for nanovdb_editor build options
 NANOVDB_EDITOR_SKIP=OFF
 NANOVDB_EDITOR_FORCE=OFF
-
-# Default value for force_reinstall option
-FORCE_REINSTALL=false
 
 while (( "$#" )); do
   is_config_arg_handled=false
@@ -277,10 +272,6 @@ while (( "$#" )); do
     elif [[ "$1" == "trace" ]]; then
       echo "Enabling CMake trace"
       CONFIG_SETTINGS+=" --config-settings=cmake.args=--trace-expand"
-      is_config_arg_handled=true
-    elif [[ "$1" == "clean" ]]; then
-      echo "Enabling force reinstall (clean build)"
-      FORCE_REINSTALL=true
       is_config_arg_handled=true
     elif [[ "$1" == "debug" ]]; then
       echo "Enabling debug build"
@@ -346,12 +337,11 @@ if [ "$BUILD_TYPE" == "wheel" ]; then
 
 elif [ "$BUILD_TYPE" == "install" ]; then
     echo "Build and install package"
-    REINSTALL_FLAG=""
-    if [ "$FORCE_REINSTALL" = true ]; then
-        REINSTALL_FLAG="--force-reinstall"
-    fi
-    echo "pip install --no-deps $REINSTALL_FLAG $PIP_ARGS ."
-    run_with_sanitized_paths pip install --no-deps $REINSTALL_FLAG $PIP_ARGS .
+    # Always use --force-reinstall to ensure the freshly built package is installed,
+    # even if pip thinks the version is already satisfied. The --no-deps flag ensures
+    # this only affects fvdb-core itself, not dependencies like torch.
+    echo "pip install --no-deps --force-reinstall $PIP_ARGS ."
+    run_with_sanitized_paths pip install --no-deps --force-reinstall $PIP_ARGS .
 
 elif [ "$BUILD_TYPE" == "ctest" ]; then
 
