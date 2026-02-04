@@ -30,6 +30,7 @@ usage() {
   echo "  strip_symbols  Strip symbols from the build (will be ignored if debug is enabled)."
   echo "  verbose        Enable verbose build output for pip and CMake."
   echo "  trace          Enable CMake trace output for debugging configuration."
+  echo "  clean          Force a clean build (adds --force-reinstall)."
   echo ""
   echo "  Any modifier arguments not matching above are passed through to pip."
   exit 0
@@ -146,6 +147,66 @@ PY
   fi
 }
 
+# --- WSL2 Path Sanitization ---
+# On WSL2, the PATH often includes Windows directories like /mnt/c/Windows/System32.
+# CMake's find_library() searches these paths, and each filesystem operation on /mnt/*
+# goes through the slow 9P protocol, causing ~60 second delays during configuration.
+# By filtering out /mnt/* paths, we prevent CMake from crawling Windows directories.
+
+is_wsl() {
+  # Check for WSL kernel signature (works for both WSL1 and WSL2)
+  if [ -f /proc/version ]; then
+    grep -qi "microsoft\|wsl" /proc/version && return 0
+  fi
+  return 1
+}
+
+sanitize_path_for_wsl() {
+  local input_path="$1"
+  if is_wsl; then
+    # Filter out /mnt/* paths (Windows filesystem mounts)
+    echo "$input_path" | tr ':' '\n' | grep -v "^/mnt/" | tr '\n' ':' | sed 's/:$//'
+  else
+    echo "$input_path"
+  fi
+}
+
+get_sanitized_env() {
+  # Returns environment variable assignments for running commands with sanitized paths
+  # This prevents CMake from searching slow Windows filesystems on WSL2
+  if is_wsl; then
+    local sanitized_path
+    sanitized_path=$(sanitize_path_for_wsl "$PATH")
+
+    # Also sanitize CMAKE_PREFIX_PATH and CMAKE_LIBRARY_PATH if set
+    local sanitized_cmake_prefix=""
+    if [ -n "$CMAKE_PREFIX_PATH" ]; then
+      sanitized_cmake_prefix=$(sanitize_path_for_wsl "$CMAKE_PREFIX_PATH")
+    fi
+
+    local sanitized_cmake_library=""
+    if [ -n "$CMAKE_LIBRARY_PATH" ]; then
+      sanitized_cmake_library=$(sanitize_path_for_wsl "$CMAKE_LIBRARY_PATH")
+    fi
+
+    echo "PATH=$sanitized_path"
+    [ -n "$sanitized_cmake_prefix" ] && echo "CMAKE_PREFIX_PATH=$sanitized_cmake_prefix"
+    [ -n "$sanitized_cmake_library" ] && echo "CMAKE_LIBRARY_PATH=$sanitized_cmake_library"
+  fi
+}
+
+run_with_sanitized_paths() {
+  # Run a command with sanitized paths on WSL2, or normally on other systems
+  if is_wsl; then
+    local sanitized_path
+    sanitized_path=$(sanitize_path_for_wsl "$PATH")
+    echo "WSL2 detected: Running with sanitized PATH (excluding /mnt/* for performance)"
+    env PATH="$sanitized_path" "$@"
+  else
+    "$@"
+  fi
+}
+
 if [[ "$1" == "-h" || "$1" == "--help" ]]; then
   usage
 fi
@@ -170,9 +231,32 @@ CONFIG_SETTINGS=""
 PASS_THROUGH_ARGS=""
 CUDA_ARCH_LIST_ARG="default"
 
+# --- Set CUDA_HOME / Hints ---
+# This helps scikit-build-core find the CUDA toolkit directly.
+
+# 1. Prefer the active Conda environment if available
+if [ -n "$CONDA_PREFIX" ]; then
+    echo "Conda environment detected. Pinning CUDA_HOME to $CONDA_PREFIX"
+    export CUDA_HOME="$CONDA_PREFIX"
+# 2. Fallback to standard system location if not in Conda
+elif [ -d "/usr/local/cuda" ] && [ -z "$CUDA_HOME" ]; then
+    export CUDA_HOME="/usr/local/cuda"
+fi
+
+# 3. Export hints to help CMake find CUDA
+if [ -n "$CUDA_HOME" ]; then
+    export CUDACXX="${CUDA_HOME}/bin/nvcc"
+    # These defines help scikit-build-core locate CUDA immediately
+    CONFIG_SETTINGS+=" --config-settings=cmake.define.CUDA_TOOLKIT_ROOT_DIR=$CUDA_HOME"
+    CONFIG_SETTINGS+=" --config-settings=cmake.define.CMAKE_CUDA_COMPILER=$CUDACXX"
+fi
+
 # Default values for nanovdb_editor build options
 NANOVDB_EDITOR_SKIP=OFF
 NANOVDB_EDITOR_FORCE=OFF
+
+# Default value for force_reinstall option
+FORCE_REINSTALL=false
 
 while (( "$#" )); do
   is_config_arg_handled=false
@@ -192,6 +276,10 @@ while (( "$#" )); do
     elif [[ "$1" == "trace" ]]; then
       echo "Enabling CMake trace"
       CONFIG_SETTINGS+=" --config-settings=cmake.args=--trace-expand"
+      is_config_arg_handled=true
+    elif [[ "$1" == "clean" || "$1" == "force_reinstall" ]]; then
+      echo "Enabling force reinstall (clean build)"
+      FORCE_REINSTALL=true
       is_config_arg_handled=true
     elif [[ "$1" == "debug" ]]; then
       echo "Enabling debug build"
@@ -253,16 +341,17 @@ fi
 if [ "$BUILD_TYPE" == "wheel" ]; then
     echo "Build wheel"
     echo "pip wheel . --no-deps --wheel-dir dist/ $PIP_ARGS"
-    pip wheel . --no-deps --wheel-dir dist/ $PIP_ARGS
+    run_with_sanitized_paths pip wheel . --no-deps --wheel-dir dist/ $PIP_ARGS
+
 elif [ "$BUILD_TYPE" == "install" ]; then
     echo "Build and install package"
-    echo "pip install --no-deps --force-reinstall $PIP_ARGS ."
-    pip install --no-deps --force-reinstall $PIP_ARGS .
-# TODO: Fix editable install
-# else
-#     echo "Build and install editable package"
-#     echo "pip install $PIP_ARGS -e .  "
-#     pip install $PIP_ARGS -e .
+    REINSTALL_FLAG=""
+    if [ "$FORCE_REINSTALL" = true ]; then
+        REINSTALL_FLAG="--force-reinstall"
+    fi
+    echo "pip install --no-deps $REINSTALL_FLAG $PIP_ARGS ."
+    run_with_sanitized_paths pip install --no-deps $REINSTALL_FLAG $PIP_ARGS .
+
 elif [ "$BUILD_TYPE" == "ctest" ]; then
 
     # --- Ensure Test Data is Cached via CMake Configure Step ---
@@ -284,7 +373,7 @@ elif [ "$BUILD_TYPE" == "ctest" ]; then
 
     echo "Running CMake configure in temporary directory ($TEMP_BUILD_DIR) to trigger data download..."
     pushd "$TEMP_BUILD_DIR" > /dev/null
-    cmake "$SOURCE_DIR/src/cmake/download_test_data"
+    run_with_sanitized_paths cmake "$SOURCE_DIR/src/cmake/download_test_data"
     popd > /dev/null # Back to SOURCE_DIR
 
     # Clean up temporary directory
@@ -321,8 +410,7 @@ elif [ "$BUILD_TYPE" == "ctest" ]; then
     add_python_pkg_lib_to_ld_path "nanovdb_editor" "NanoVDB Editor" "libpnanovdb*.so"
 
     # Run ctest within the test build directory
-    # Note: -LE compile_fail excludes compile-fail tests which require cmake at runtime
-    # (cmake may not be available in CI test runners). Run them manually if needed.
+    # Note: ctest doesn't need path sanitization as it doesn't search for libraries
     pushd "$BUILD_DIR" > /dev/null
     echo "Running ctest..."
     ctest --output-on-failure -LE compile_fail

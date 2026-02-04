@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <concepts>
 #include <condition_variable>
@@ -44,12 +45,19 @@ namespace dispatch {
 // =============================================================================
 
 template <typename T> class work_stealing_deque {
+    // T must be trivially copyable for std::atomic<T> to be well-formed
+    static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable for atomic<T>");
+
   public:
     static constexpr std::size_t kDefaultCapacity = 65536;
 
     explicit work_stealing_deque(std::size_t capacity = kDefaultCapacity)
-        : capacity_(capacity), mask_(capacity - 1),
-          buffer_(std::make_unique<std::atomic<T>[]>(capacity)), top_(0), bottom_(0) {}
+        : capacity_(round_up_to_power_of_two(capacity)), mask_(capacity_ - 1),
+          buffer_(std::make_unique<std::atomic<T>[]>(capacity_)), top_(0), bottom_(0) {
+        // Capacity must be a power of two for the & mask_ indexing to work correctly.
+        // We round up to ensure this invariant; assert in debug to catch misuse.
+        assert(is_power_of_two(capacity_) && "Chase-Lev deque capacity must be a power of two");
+    }
 
     work_stealing_deque(work_stealing_deque const &)            = delete;
     work_stealing_deque &operator=(work_stealing_deque const &) = delete;
@@ -57,20 +65,29 @@ template <typename T> class work_stealing_deque {
     void
     push(T item) noexcept {
         std::int64_t b = bottom_.load(std::memory_order_relaxed);
+        // Assert deque is not full - caller must ensure this via grain normalization
+        // Note: t is only used in debug builds for the assertion
+        [[maybe_unused]] std::int64_t t = top_.load(std::memory_order_relaxed);
+        assert(static_cast<std::size_t>(b - t) < capacity_ && "Chase-Lev deque overflow");
         buffer_[static_cast<std::size_t>(b) & mask_].store(item, std::memory_order_relaxed);
         std::atomic_thread_fence(std::memory_order_release);
         bottom_.store(b + 1, std::memory_order_relaxed);
     }
 
+    // Canonical Chase-Lev pop() with proper memory ordering.
+    // Uses store(relaxed) + fence(seq_cst) pattern to prevent store->load reordering
+    // that could cause both owner and thief to claim the same last element.
     std::optional<T>
     pop() noexcept {
         std::int64_t b = bottom_.load(std::memory_order_relaxed) - 1;
-        bottom_.store(b, std::memory_order_seq_cst);
+        bottom_.store(b, std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_seq_cst);
         std::int64_t t = top_.load(std::memory_order_relaxed);
 
         if (t <= b) {
             T item = buffer_[static_cast<std::size_t>(b) & mask_].load(std::memory_order_relaxed);
             if (t == b) {
+                // Last element - race with potential thieves
                 if (!top_.compare_exchange_strong(
                         t, t + 1, std::memory_order_seq_cst, std::memory_order_relaxed)) {
                     bottom_.store(b + 1, std::memory_order_relaxed);
@@ -84,6 +101,33 @@ template <typename T> class work_stealing_deque {
             return std::nullopt;
         }
     }
+
+  private:
+    [[nodiscard]] static constexpr bool
+    is_power_of_two(std::size_t x) noexcept {
+        return x != 0 && (x & (x - 1)) == 0;
+    }
+
+    [[nodiscard]] static constexpr std::size_t
+    round_up_to_power_of_two(std::size_t x) noexcept {
+        if (x == 0)
+            return 1;
+        if (is_power_of_two(x))
+            return x;
+        // Find next power of two
+        --x;
+        x |= x >> 1;
+        x |= x >> 2;
+        x |= x >> 4;
+        x |= x >> 8;
+        x |= x >> 16;
+        if constexpr (sizeof(std::size_t) > 4) {
+            x |= x >> 32;
+        }
+        return x + 1;
+    }
+
+  public:
 
     std::optional<T>
     steal() noexcept {
@@ -131,6 +175,24 @@ template <typename T> class work_stealing_deque {
 // =============================================================================
 // Work-Stealing Pool
 // =============================================================================
+//
+// IMPORTANT USAGE NOTES:
+//
+// 1. Pool lifetime: The pool must outlive all parallel_for() calls. Since this
+//    is a singleton, this is normally satisfied. Destroying the pool with
+//    outstanding work will deadlock.
+//
+// 2. Nested parallel_for: Calling parallel_for() from within a task is SAFE.
+//    The nested call executes synchronously (serially) on the calling thread.
+//    This avoids deadlock and is often the desired behavior when the outer
+//    loop already saturates available cores. No crash, no deadlock - just
+//    serial execution of the inner loop.
+//
+// 3. No cross-thread nested submission: Tasks must not spawn new threads that
+//    call parallel_for() and then wait/join on them. This causes deadlock
+//    because submit_mutex_ is held for the job duration. Same-thread nested
+//    calls (point 2 above) are safe.
+//
 
 class work_stealing_pool {
   public:
@@ -182,6 +244,13 @@ class work_stealing_pool {
         // Serialize job submission
         std::unique_lock<std::mutex> submit_lock(submit_mutex_);
 
+        // Track active jobs for destructor safety check
+        active_jobs_.fetch_add(1, std::memory_order_relaxed);
+
+        // Reset worker exit counter - workers increment this AFTER calling participant_done()
+        // This ensures we don't destroy the job while workers are still inside count_down()
+        worker_exit_count_.store(0, std::memory_order_relaxed);
+
         // Distribute tasks round-robin
         for (std::size_t w = 0; w < num_workers_; ++w) {
             worker_deques_[w]->clear();
@@ -195,9 +264,9 @@ class work_stealing_pool {
             main_deque_.push(t);
         }
 
-        // Publish job
-        current_job_.store(&job_ctx, std::memory_order_release);
+        // Publish job - increment epoch BEFORE storing pointer for acquire/release pairing
         job_epoch_.fetch_add(1, std::memory_order_release);
+        current_job_.store(&job_ctx, std::memory_order_release);
 
         // Wake workers
         { std::lock_guard<std::mutex> lk(cv_mutex_); }
@@ -211,11 +280,23 @@ class work_stealing_pool {
         // Signal main thread is done working
         job_ctx.participant_done();
 
-        // Wait for all participants (workers + main) to finish
+        // Wait for all participants (workers + main) to signal via latch
         job_ctx.wait();
 
-        // Clear job pointer (workers already exited based on remaining == 0)
+        // CRITICAL: Wait for all workers to fully exit participant_done().
+        // The latch guarantees all workers have called count_down(), but they might
+        // still be inside that function. We wait until all workers have incremented
+        // worker_exit_count_, which happens AFTER they return from participant_done().
+        // This prevents use-after-free of the stack-allocated latch.
+        while (worker_exit_count_.load(std::memory_order_acquire) < num_workers_) {
+            DISPATCH_WS_SPIN_PAUSE();
+        }
+
+        // Now safe to destroy job_ctx - all workers have fully exited
         current_job_.store(nullptr, std::memory_order_release);
+
+        // Track active jobs for destructor safety check
+        active_jobs_.fetch_sub(1, std::memory_order_relaxed);
 
         if (job_ctx.eptr) {
             std::rethrow_exception(job_ctx.eptr);
@@ -237,11 +318,18 @@ class work_stealing_pool {
     struct job_base {
         using exec_fn_t = void (*)(job_base *, std::size_t task_id) noexcept;
 
+        // Read-only fields (set once at construction) - group together
         exec_fn_t exec        = nullptr;
         std::size_t num_tasks = 0;
-        std::atomic<std::size_t> remaining{0};
-        std::latch done_latch; // Tracks when all participants have exited
 
+        // Heavily contended atomic - align to its own cache line to prevent false sharing
+        // with the read-only fields above and the rarely-written fields below
+        alignas(64) std::atomic<std::size_t> remaining{0};
+
+        // Synchronization latch - align to separate cache line
+        alignas(64) std::latch done_latch; // Tracks when all participants have exited
+
+        // Rarely-written fields - cancelled is only written on exception
         std::atomic<bool> cancelled{false};
         std::exception_ptr eptr;
         std::mutex eptr_mutex;
@@ -251,7 +339,8 @@ class work_stealing_pool {
 
         void
         complete_task() noexcept {
-            remaining.fetch_sub(1, std::memory_order_release);
+            // Use relaxed - no ordering dependency on completion count
+            remaining.fetch_sub(1, std::memory_order_relaxed);
         }
 
         void
@@ -266,7 +355,7 @@ class work_stealing_pool {
 
         [[nodiscard]] bool
         all_tasks_done() const noexcept {
-            return remaining.load(std::memory_order_acquire) == 0;
+            return remaining.load(std::memory_order_relaxed) == 0;
         }
     };
 
@@ -286,10 +375,26 @@ class work_stealing_pool {
             auto *self = static_cast<job *>(base);
             try {
                 if (!self->cancelled.load(std::memory_order_relaxed)) {
-                    Index task_start = self->start + static_cast<Index>(task_id) * self->grain;
-                    Index task_end   = task_start + self->grain;
-                    if (task_end > self->end)
-                        task_end = self->end;
+                    // Use wider arithmetic to prevent overflow when computing task bounds.
+                    // task_id * grain could overflow Index type if near max value.
+                    using WideIndex = std::conditional_t<std::is_signed_v<Index>, std::int64_t, std::uint64_t>;
+
+                    WideIndex const wide_start = static_cast<WideIndex>(self->start);
+                    WideIndex const wide_end   = static_cast<WideIndex>(self->end);
+                    WideIndex const wide_grain = static_cast<WideIndex>(self->grain);
+
+                    WideIndex task_start_wide = wide_start + static_cast<WideIndex>(task_id) * wide_grain;
+                    WideIndex task_end_wide   = task_start_wide + wide_grain;
+
+                    // Clamp to valid range - handles overflow and ensures bounds
+                    if (task_start_wide > wide_end)
+                        task_start_wide = wide_end;
+                    if (task_end_wide > wide_end)
+                        task_end_wide = wide_end;
+
+                    Index task_start = static_cast<Index>(task_start_wide);
+                    Index task_end   = static_cast<Index>(task_end_wide);
+
                     if (task_start < task_end)
                         std::invoke(self->func, task_start, task_end);
                 }
@@ -422,20 +527,48 @@ class work_stealing_pool {
             if (stop_.load(std::memory_order_acquire))
                 break;
 
+            // Read epoch - this is the epoch we think we're processing
             std::uint64_t const e = job_epoch_.load(std::memory_order_acquire);
             if (e == local_epoch)
                 continue;
-            local_epoch = e;
 
+            // Load job pointer
             job_base *ctx = current_job_.load(std::memory_order_acquire);
             if (!ctx)
                 continue;
 
+            // FIX FOR DOUBLE-DIP EPOCH RACE: Verify epoch hasn't changed between
+            // reading the epoch and loading the job pointer. If a worker is preempted
+            // between these reads, it could load a job pointer for a different epoch
+            // than it recorded, leading to double-execution of the new job.
+            //
+            // Scenario without this check:
+            // 1. Worker reads e=1, sets local_epoch=1
+            // 2. Worker is preempted
+            // 3. Job 1 ends, Job 2 starts, epoch becomes 2
+            // 4. Worker resumes, loads ctx (which now points to Job 2)
+            // 5. Worker executes Job 2 thinking it's Job 1
+            // 6. Worker loops, sees epoch=2 != local_epoch=1, loads Job 2 again
+            // 7. Worker executes Job 2 AGAIN -> latch underflow, crash
+            if (job_epoch_.load(std::memory_order_relaxed) != e) {
+                // Epoch changed during our read sequence - retry to get consistent state
+                continue;
+            }
+
+            // Now we have a consistent epoch/job pair
+            local_epoch = e;
+
             // Execute work - exits when remaining == 0
             execute_work(ctx, *worker_deques_[worker_index], worker_index);
 
-            // Signal this participant is done
+            // Signal this participant is done via latch
             ctx->participant_done();
+
+            // CRITICAL: Signal that we've fully exited participant_done().
+            // The main thread waits for this counter before destroying the job.
+            // This must happen AFTER participant_done() returns to prevent
+            // use-after-free of the latch inside count_down().
+            worker_exit_count_.fetch_add(1, std::memory_order_release);
         }
     }
 
@@ -464,6 +597,12 @@ class work_stealing_pool {
     }
 
     ~work_stealing_pool() {
+        // Debug check: pool must not be destroyed with outstanding work.
+        // If this fires, a job is still in progress when the pool is being destroyed,
+        // which will cause deadlock (workers waiting on job, destructor waiting on workers).
+        assert(active_jobs_.load(std::memory_order_relaxed) == 0 &&
+               "work_stealing_pool destroyed with outstanding work - this will deadlock");
+
         stop_.store(true, std::memory_order_release);
         { std::lock_guard<std::mutex> lk(cv_mutex_); }
         cv_.notify_all();
@@ -483,6 +622,14 @@ class work_stealing_pool {
     std::atomic<bool> stop_{false};
     std::atomic<job_base *> current_job_{nullptr};
     std::atomic<std::uint64_t> job_epoch_{0};
+
+    // Worker exit synchronization: workers increment this AFTER returning from
+    // participant_done(). Main thread waits for this to reach num_workers_ before
+    // destroying the job, preventing use-after-free of the stack-allocated latch.
+    alignas(64) std::atomic<std::size_t> worker_exit_count_{0};
+
+    // Debug counter for active jobs - used to detect destruction during active work
+    std::atomic<std::size_t> active_jobs_{0};
 
     std::mutex cv_mutex_;
     std::condition_variable cv_;
