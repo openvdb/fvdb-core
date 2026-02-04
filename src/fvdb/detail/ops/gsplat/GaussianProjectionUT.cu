@@ -862,6 +862,7 @@ template <typename ScalarType> struct ProjectionForwardUT {
     /// @brief Project one gaussian for one camera.
     ///
     /// @param[in] idx Flattened index in \([0, C*N)\) mapping to (camId, gaussianId).
+    /// @return True if the gaussian is projected successfully, false otherwise.
     inline __device__ void
     projectionForward(int64_t idx) {
         if (idx >= C * N) {
