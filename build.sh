@@ -278,7 +278,7 @@ while (( "$#" )); do
       echo "Enabling CMake trace"
       CONFIG_SETTINGS+=" --config-settings=cmake.args=--trace-expand"
       is_config_arg_handled=true
-    elif [[ "$1" == "clean" || "$1" == "force_reinstall" ]]; then
+    elif [[ "$1" == "clean" ]]; then
       echo "Enabling force reinstall (clean build)"
       FORCE_REINSTALL=true
       is_config_arg_handled=true
