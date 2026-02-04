@@ -2,16 +2,34 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # ============================================================================
-# Dispatch Interface Library
+# Dispatch Library
 # ============================================================================
-# This is a header-only interface library that provides dispatch utilities.
-# It inherits CUDA and C++20 settings from the parent build.
+# Provides dispatch utilities for CPU/CUDA parallelization.
+# Uses a stub .cu file to enable propagating compile options to consumers.
 
-add_library(dispatch INTERFACE)
+add_library(dispatch STATIC dispatch_stub.cu)
 
-target_include_directories(dispatch INTERFACE
+set_target_properties(dispatch
+    PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+    CUDA_STANDARD 20
+    CUDA_STANDARD_REQUIRED ON
+    POSITION_INDEPENDENT_CODE ON
+)
+
+target_include_directories(dispatch PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
+
+# OpenMP flags - PUBLIC so they propagate to consumers (e.g., fvdb)
+if(FVDB_USE_OPENMP)
+    target_compile_options(dispatch PUBLIC
+        $<$<COMPILE_LANGUAGE:CXX>:-fopenmp>
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-fopenmp>
+    )
+    target_link_options(dispatch PUBLIC "-fopenmp")
+endif()
 
 # ============================================================================
 # Examples Library (built when tests or benchmarks are enabled)
@@ -64,6 +82,15 @@ if(FVDB_BUILD_TESTS OR FVDB_BUILD_BENCHMARKS)
             ${TORCH_CUDA_COMMON_FLAGS}
         >
     )
+
+    # OpenMP for at::parallel_for and other CPU parallelization
+    if(FVDB_USE_OPENMP)
+        target_compile_options(dispatch_examples PRIVATE
+            $<$<COMPILE_LANGUAGE:CXX>:-fopenmp>
+            $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-fopenmp>
+        )
+        target_link_options(dispatch_examples PUBLIC "-fopenmp")
+    endif()
 endif()
 
 # ============================================================================

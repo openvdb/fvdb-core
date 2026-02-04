@@ -22,20 +22,25 @@
 namespace dispatch {
 
 // ============================================================================
-// thread_pool - Hybrid Direct Distribution
+// thread_pool - Static Distribution with Spin-Wait
 //
-// Design: Workers use a two-phase wait:
-//   1. Brief spin on generation counter (fast wake-up for small/medium work)
-//   2. Fall back to condition variable (no interference for large work)
+// Design: Workers spin on a generation counter, ready for instant wake-up.
+// Falls back to condition variable only after extended idle periods.
 //
-// This gives us the best of both worlds:
-//   - Low latency for frequent small parallel_for calls
-//   - No CPU burn / cache pollution for large workloads
+// Key optimizations:
+//   - No mutex on the hot path (just atomic generation bump)
+//   - Workers spin aggressively (~10k iterations before sleeping)
+//   - Static partitioning (one chunk per thread, no queuing overhead)
+//   - Caller participates (N+1 threads for N workers)
 // ============================================================================
 
 class thread_pool {
     static constexpr size_t kMaxWorkers = 128;
-    static constexpr int kSpinCount = 64;  // Brief spin before blocking
+
+    // Spin count before falling back to CV sleep.
+    // At ~10ns per pause, 10000 spins = ~100us of hot waiting.
+    // This covers typical benchmark inter-call gaps.
+    static constexpr int kSpinCount = 10000;
 
     // TLS: Prevent recursion / nested parallel_for
     inline static thread_local bool tls_in_parallel_region_ = false;
@@ -63,7 +68,7 @@ class thread_pool {
     std::atomic<bool> stop_{false};
     size_t num_workers_{0};
 
-    // Condition variable for fallback blocking (reduces CPU burn on large workloads)
+    // Condition variable for fallback blocking (only used after extended idle)
     std::mutex cv_mutex_;
     std::condition_variable cv_;
 
@@ -74,7 +79,7 @@ class thread_pool {
         while (!stop_.load(std::memory_order_relaxed)) {
             uint64_t gen;
 
-            // Phase 1: Brief spin for fast wake-up
+            // Phase 1: Aggressive spin for fast wake-up
             int spins = 0;
             while ((gen = state_.generation.load(std::memory_order_acquire)) == last_gen) {
                 if (stop_.load(std::memory_order_relaxed)) return;
@@ -83,7 +88,7 @@ class thread_pool {
                     DISPATCH_PAUSE();
                     ++spins;
                 } else {
-                    // Phase 2: Fall back to condition variable (no CPU burn)
+                    // Phase 2: Fall back to condition variable
                     std::unique_lock lock(cv_mutex_);
                     cv_.wait(lock, [&] {
                         gen = state_.generation.load(std::memory_order_acquire);
@@ -139,14 +144,15 @@ public:
     }
 
     ~thread_pool() {
+        // Signal stop
         stop_.store(true, std::memory_order_release);
-        // Bump generation and notify to wake all workers
-        // Note: Must hold cv_mutex_ while incrementing to prevent lost wakeups.
+
+        // Wake up everyone with the lock held
         {
-            std::lock_guard lock(cv_mutex_);
+            std::lock_guard<std::mutex> lock(cv_mutex_);
             state_.generation.fetch_add(1, std::memory_order_release);
+            cv_.notify_all();
         }
-        cv_.notify_all();
 
         for (auto& t : workers_) {
             if (t.joinable()) t.join();
@@ -154,39 +160,35 @@ public:
     }
 
     // -------------------------------------------------------------------------
-    // parallel_for - Direct Work Distribution with Hybrid Wake
+    // parallel_for - Direct Work Distribution with Spin Wake
     // -------------------------------------------------------------------------
     template <typename Index, typename Func>
     void parallel_for(Index start, Index end, Func&& f) {
-        // 1. Recursion Guard
+        static_assert(std::is_integral_v<Index>, "Index must be integral");
+
+        // 1. Recursion Guard - run nested parallel_for serially
         if (tls_in_parallel_region_) {
             f(start, end);
             return;
         }
 
-        // 2. Serial fallback (existing logic)
-        if (num_workers_ == 0 || (end - start) < 32768) {
-            f(start, end);
-            return;
-        }
-
-        // 3. Mark main thread as "in region" for the duration
-        struct Guard {
-            Guard() { tls_in_parallel_region_ = true; }
-            ~Guard() { tls_in_parallel_region_ = false; }
-        } guard;
-
-        static_assert(std::is_integral_v<Index>, "Index must be integral");
-
+        // 2. Early exit for empty range
         if (start >= end) return;
 
         const Index range = end - start;
 
-        // Serial path for small work or no workers
-        if (num_workers_ == 0 || range < 32768) {
+        // 3. Serial fallback for small work or no workers
+        // Threshold tuned for typical SIMD workloads (~2K elements is break-even)
+        if (num_workers_ == 0 || range < 2048) {
             f(start, end);
             return;
         }
+
+        // 4. Mark main thread as "in region" for the duration
+        struct Guard {
+            Guard() { tls_in_parallel_region_ = true; }
+            ~Guard() { tls_in_parallel_region_ = false; }
+        } guard;
 
         // Static partitioning: one chunk per thread
         const size_t total_threads = num_workers_ + 1;
@@ -212,22 +214,24 @@ public:
             slots_[i].end.store(static_cast<int64_t>(worker_end), std::memory_order_relaxed);
         }
 
-        // Set up shared state (relaxed stores, will be synchronized by generation release)
+        // Set up shared state (relaxed stores, synchronized by generation release below)
         state_.func.store(trampoline, std::memory_order_relaxed);
         state_.ctx.store(&func_copy, std::memory_order_relaxed);
         state_.done.store(&done, std::memory_order_relaxed);
 
-        // Release barrier: make all stores visible, then bump generation
-        // Note: Must hold cv_mutex_ while incrementing to prevent lost wakeups.
-        // Without this, a worker checking the predicate (gen == last_gen) could
-        // see the old value, then we increment + notify, then worker blocks forever.
+        // --------------------------------------------------------------------
+        // CRITICAL FIX: Hold lock during update and notify
+        // --------------------------------------------------------------------
         {
-            std::lock_guard lock(cv_mutex_);
-            state_.generation.fetch_add(1, std::memory_order_release);
-        }
+            std::lock_guard<std::mutex> lock(cv_mutex_);
 
-        // Wake any workers that fell asleep (for large workloads)
-        cv_.notify_all();
+            // Now we bump generation. If a worker is currently inside cv_.wait(),
+            // it holds the lock (or is trying to), so we are synchronized.
+            state_.generation.fetch_add(1, std::memory_order_release);
+
+            cv_.notify_all();
+        }
+        // --------------------------------------------------------------------
 
         // Caller executes chunk 0 immediately
         Index caller_end = std::min(start + chunk_size, end);
@@ -235,9 +239,6 @@ public:
 
         // Wait for workers to complete
         done.wait();
-
-        // Note: No need to clear state - next parallel_for will overwrite before
-        // bumping generation, and workers only read after seeing new generation.
     }
 
     // Convenience overload with grain_size parameter (ignored for static scheduling)

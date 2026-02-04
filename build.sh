@@ -29,6 +29,7 @@ usage() {
   echo "  lineinfo       Enable CUDA lineinfo (sets FVDB_LINEINFO=ON)."
   echo "  strip_symbols  Strip symbols from the build (will be ignored if debug is enabled)."
   echo "  verbose        Enable verbose build output for pip and CMake."
+  echo "  trace          Enable CMake trace output for debugging configuration."
   echo ""
   echo "  Any modifier arguments not matching above are passed through to pip."
   exit 0
@@ -187,6 +188,10 @@ while (( "$#" )); do
     elif [[ "$1" == "verbose" ]]; then
       echo "Enabling verbose build"
       CONFIG_SETTINGS+=" -v -C build.verbose=true"
+      is_config_arg_handled=true
+    elif [[ "$1" == "trace" ]]; then
+      echo "Enabling CMake trace"
+      CONFIG_SETTINGS+=" --config-settings=cmake.args=--trace-expand"
       is_config_arg_handled=true
     elif [[ "$1" == "debug" ]]; then
       echo "Enabling debug build"

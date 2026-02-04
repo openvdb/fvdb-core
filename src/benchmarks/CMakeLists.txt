@@ -114,3 +114,121 @@ install(
     DESTINATION bin/benchmarks/fvdb
     EXCLUDE_FROM_ALL
 )
+
+# ============================================================================
+# CPU Pool Comparison Benchmark
+# ============================================================================
+# Compares basic_thread_pool, thread_pool, work_stealing_pool, and adaptive
+# wrapper for CPU SIMD GELU.
+# Also includes OpenMP benchmark (in separate .cpp for proper pragma support).
+
+message(STATUS "cpu_pool_comparison: FVDB_USE_OPENMP = ${FVDB_USE_OPENMP}")
+
+# All .cpp files compiled by g++ directly, enabling proper OpenMP pragma support.
+add_executable(cpu_pool_comparison
+    gelu_comparison/cpu_pool_comparison.cpp
+    gelu_comparison/omp_gelu.cpp
+)
+
+set_target_properties(cpu_pool_comparison
+    PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${BENCHMARKS_BINARY_DIRECTORY}
+    INSTALL_RPATH "\$ORIGIN/../../../lib"
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+)
+
+target_include_directories(cpu_pool_comparison PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../dispatch
+    ${CMAKE_CURRENT_SOURCE_DIR}/gelu_comparison
+)
+
+target_link_libraries(cpu_pool_comparison
+    fvdb
+    ${TORCH_LIBRARIES}
+    benchmark::benchmark_main
+    $<TARGET_NAME_IF_EXISTS:conda_env>
+)
+
+target_compile_options(cpu_pool_comparison PRIVATE
+    "-Wall"
+    "-Werror"
+)
+
+# OpenMP flags (compile and link)
+if(FVDB_USE_OPENMP)
+    target_compile_options(cpu_pool_comparison PRIVATE "-fopenmp")
+    target_link_options(cpu_pool_comparison PRIVATE "-fopenmp")
+endif()
+
+add_custom_command(
+    OUTPUT FVDB_BENCHMARKS
+    COMMAND cpu_pool_comparison --benchmark_out_format=json
+            --benchmark_out=results/cpu_pool_comparison.json
+    APPEND
+    COMMENT "Adding cpu_pool_comparison"
+)
+
+install(
+    TARGETS cpu_pool_comparison
+    COMPONENT testing
+    DESTINATION bin/benchmarks/fvdb
+    EXCLUDE_FROM_ALL
+)
+
+# ============================================================================
+# Synthetic Voxel Benchmark
+# ============================================================================
+# Tests parallel_for implementations with compute-bound workloads:
+# - Uniform heavy compute (50 FMA iterations per element)
+# - Unbalanced compute (10% active voxels with 200 iterations, 90% trivial)
+
+add_executable(synthetic_voxel_benchmark
+    gelu_comparison/synthetic_voxel_benchmark.cpp
+)
+
+set_target_properties(synthetic_voxel_benchmark
+    PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${BENCHMARKS_BINARY_DIRECTORY}
+    INSTALL_RPATH "\$ORIGIN/../../../lib"
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+)
+
+target_include_directories(synthetic_voxel_benchmark PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../dispatch
+    ${CMAKE_CURRENT_SOURCE_DIR}/gelu_comparison
+)
+
+target_link_libraries(synthetic_voxel_benchmark
+    fvdb
+    ${TORCH_LIBRARIES}
+    benchmark::benchmark_main
+    $<TARGET_NAME_IF_EXISTS:conda_env>
+)
+
+target_compile_options(synthetic_voxel_benchmark PRIVATE
+    "-Wall"
+    "-Werror"
+)
+
+# OpenMP flags (compile and link)
+if(FVDB_USE_OPENMP)
+    target_compile_options(synthetic_voxel_benchmark PRIVATE "-fopenmp")
+    target_link_options(synthetic_voxel_benchmark PRIVATE "-fopenmp")
+endif()
+
+add_custom_command(
+    OUTPUT FVDB_BENCHMARKS
+    COMMAND synthetic_voxel_benchmark --benchmark_out_format=json
+            --benchmark_out=results/synthetic_voxel_benchmark.json
+    APPEND
+    COMMENT "Adding synthetic_voxel_benchmark"
+)
+
+install(
+    TARGETS synthetic_voxel_benchmark
+    COMPONENT testing
+    DESTINATION bin/benchmarks/fvdb
+    EXCLUDE_FROM_ALL
+)
