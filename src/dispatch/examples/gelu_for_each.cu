@@ -539,7 +539,8 @@ void fast_gelu_cpu_simd(torch::Tensor in, torch::Tensor out) {
         // 1024 floats = 4KB, good balance for work-stealing overhead
         //constexpr int64_t grain_size = 1024;
 
-        dispatch::thread_pool::instance().parallel_for(
+        //dispatch::thread_pool::instance().parallel_for(
+        dispatch::basic_thread_pool::instance().parallel_for(
             int64_t{0}, numel,
             [in_ptr, out_ptr, vec_len](int64_t begin, int64_t end) {
                 // Process full vectors
@@ -669,7 +670,8 @@ example_gelu_for_each(torch::Tensor input) {
     if (input.device().type() == torch::kCUDA && input.is_contiguous() && output.is_contiguous()) {
         fast_gelu(input, output);
     } else if (input.device().type() == torch::kCPU && input.is_contiguous() && output.is_contiguous()) {
-        fast_gelu_cpu(input, output);
+        //fast_gelu_cpu(input, output);
+        fast_gelu_cpu_simd(input, output);
     } else {
         example_gelu_for_each_kernel(input, output);
     }
