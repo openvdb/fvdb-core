@@ -18,15 +18,14 @@
 
 #include "examples/gelu_for_each.h"
 
+#include "dispatch/basic_thread_pool.h"
+#include "dispatch/broadcast_pool.h"
 #include "dispatch/dispatch_table.h"
 #include "dispatch/thread_pool.h"
-#include "dispatch/basic_thread_pool.h"
-#include "dispatch/work_stealing_pool.h"
 #include "dispatch/torch/dispatch.h"
 #include "dispatch/torch/for_each.h"
 #include "dispatch/torch/views.h"
 #include "examples/gelu_scalar.h"
-
 
 #include <ATen/cpu/vec/vec.h>
 
@@ -380,7 +379,6 @@ fast_gelu(torch::Tensor in, torch::Tensor out) {
     // or AT_DISPATCH_FLOATING_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16, ...
 }
 
-
 // -------------------------------------------------------------------------
 // 1. Vectorized Math Logic (Polynomial Approx)
 // -------------------------------------------------------------------------
@@ -390,7 +388,8 @@ fast_gelu(torch::Tensor in, torch::Tensor out) {
 // Here we manually implement the polynomial for maximum control and parity.
 
 template <typename T>
-inline at::vec::Vectorized<T> gelu_simd_op(const at::vec::Vectorized<T>& x) {
+inline at::vec::Vectorized<T>
+gelu_simd_op(const at::vec::Vectorized<T> &x) {
     using Vec = at::vec::Vectorized<T>;
 
     // Constants broadcasted to vector registers
@@ -402,7 +401,7 @@ inline at::vec::Vectorized<T> gelu_simd_op(const at::vec::Vectorized<T>& x) {
 
     // x^3 term:  inner = 0.044715 * x^3 + x
     // Fused Multiply-Add (FMA) is crucial for speed here
-    Vec x_sq = x * x;
+    Vec x_sq  = x * x;
     Vec inner = at::vec::fmadd(kBeta, x_sq * x, x);
 
     // tanh(sqrt(2/pi) * inner)
@@ -418,8 +417,9 @@ inline at::vec::Vectorized<T> gelu_simd_op(const at::vec::Vectorized<T>& x) {
 // -------------------------------------------------------------------------
 
 template <typename scalar_t>
-void gelu_cpu_kernel(const scalar_t* in, scalar_t* out, int64_t numel) {
-    using Vec = at::vec::Vectorized<scalar_t>;
+void
+gelu_cpu_kernel(const scalar_t *in, scalar_t *out, int64_t numel) {
+    using Vec                 = at::vec::Vectorized<scalar_t>;
     constexpr int64_t vec_len = Vec::size(); // e.g., 8 for AVX2 float, 16 for AVX512
 
     // 1. Threading Strategy
@@ -469,28 +469,26 @@ void gelu_cpu_kernel(const scalar_t* in, scalar_t* out, int64_t numel) {
 // 3. Host Dispatcher
 // -------------------------------------------------------------------------
 
-void fast_gelu_cpu_old(torch::Tensor in, torch::Tensor out) {
+void
+fast_gelu_cpu_old(torch::Tensor in, torch::Tensor out) {
     // Basic checks
     TORCH_CHECK(!in.is_cuda(), "Input must be a CPU tensor");
     TORCH_CHECK(!out.is_cuda(), "Output must be a CPU tensor");
     TORCH_CHECK(in.is_contiguous() && out.is_contiguous(), "Tensors must be contiguous");
 
     const int64_t numel = in.numel();
-    if (numel == 0) return;
+    if (numel == 0)
+        return;
 
     // Dispatcher handles float, double, etc.
     // Note: at::vec::Vectorized supports Half/BFloat16 on modern builds,
     // but usually requires specific compiler flags (AVX512_BF16 etc).
     // For standard safety, we usually dispatch float/double.
     AT_DISPATCH_FLOATING_TYPES(in.scalar_type(), "fast_gelu_cpu", ([&] {
-        gelu_cpu_kernel<scalar_t>(
-            in.data_ptr<scalar_t>(),
-            out.data_ptr<scalar_t>(),
-            numel
-        );
-    }));
+                                   gelu_cpu_kernel<scalar_t>(
+                                       in.data_ptr<scalar_t>(), out.data_ptr<scalar_t>(), numel);
+                               }));
 }
-
 
 // // Heuristic for element-wise operations (add, mul, gelu, relu)
 // inline int64_t
@@ -516,33 +514,33 @@ void fast_gelu_cpu_old(torch::Tensor in, torch::Tensor out) {
 //     return std::max(MIN_GRAIN_SIZE, grain_size);
 // }
 
-
-void fast_gelu_cpu_simd(torch::Tensor in, torch::Tensor out) {
+void
+fast_gelu_cpu_simd(torch::Tensor in, torch::Tensor out) {
     TORCH_CHECK(!in.is_cuda(), "Input must be a CPU tensor");
     TORCH_CHECK(!out.is_cuda(), "Output must be a CPU tensor");
     TORCH_CHECK(in.is_contiguous() && out.is_contiguous(), "Tensors must be contiguous");
 
     const int64_t numel = in.numel();
-    if (numel == 0) return;
+    if (numel == 0)
+        return;
 
     AT_DISPATCH_FLOATING_TYPES(in.scalar_type(), "fast_gelu_cpu", [&] {
-        using Vec = at::vec::Vectorized<scalar_t>;
+        using Vec                 = at::vec::Vectorized<scalar_t>;
         constexpr int64_t vec_len = Vec::size();
 
-        const scalar_t* __restrict__ in_ptr  = in.data_ptr<scalar_t>();
-        scalar_t* __restrict__       out_ptr = out.data_ptr<scalar_t>();
+        const scalar_t *__restrict__ in_ptr = in.data_ptr<scalar_t>();
+        scalar_t *__restrict__ out_ptr      = out.data_ptr<scalar_t>();
 
         // Work-stealing grain size tuning:
         // - Small enough for good load balancing (more steal opportunities)
         // - Large enough for cache efficiency (~4-8KB per task fits in L1)
         // - Multiple of vector width for clean SIMD boundaries
         // 1024 floats = 4KB, good balance for work-stealing overhead
-        //constexpr int64_t grain_size = 1024;
+        // constexpr int64_t grain_size = 1024;
 
-        //dispatch::thread_pool::instance().parallel_for(
+        // dispatch::thread_pool::instance().parallel_for(
         dispatch::basic_thread_pool::instance().parallel_for(
-            int64_t{0}, numel,
-            [in_ptr, out_ptr, vec_len](int64_t begin, int64_t end) {
+            int64_t{0}, numel, [in_ptr, out_ptr, vec_len](int64_t begin, int64_t end) {
                 // Process full vectors
                 int64_t i     = begin;
                 int64_t limit = end - (end - begin) % vec_len;
@@ -550,14 +548,14 @@ void fast_gelu_cpu_simd(torch::Tensor in, torch::Tensor out) {
                 // Main SIMD loop
                 for (; i + vec_len <= limit; i += vec_len) {
                     Vec data0 = Vec::loadu(in_ptr + i);
-                    data0 = gelu_simd_op(data0);
+                    data0     = gelu_simd_op(data0);
                     data0.store(out_ptr + i);
                 }
 
                 // Tail elements
                 if (i < end) {
                     int64_t remaining = end - i;
-                    Vec     data      = Vec::loadu(in_ptr + i, remaining);
+                    Vec data          = Vec::loadu(in_ptr + i, remaining);
                     data              = gelu_simd_op(data);
                     data.store(out_ptr + i, remaining);
                 }
@@ -570,10 +568,13 @@ void fast_gelu_cpu_simd(torch::Tensor in, torch::Tensor out) {
 // Uses Padé [7,6] rational approximation, accurate to ~1e-5 for |x| < 5
 // =============================================================================
 
-inline float fast_tanh(float x) {
+inline float
+fast_tanh(float x) {
     // Clamp to asymptotic region
-    if (x > 5.0f) return 1.0f;
-    if (x < -5.0f) return -1.0f;
+    if (x > 5.0f)
+        return 1.0f;
+    if (x < -5.0f)
+        return -1.0f;
 
     float x2 = x * x;
     // Padé rational approximation coefficients
@@ -582,11 +583,14 @@ inline float fast_tanh(float x) {
     return num / den;
 }
 
-inline double fast_tanh(double x) {
-    if (x > 5.0) return 1.0;
-    if (x < -5.0) return -1.0;
+inline double
+fast_tanh(double x) {
+    if (x > 5.0)
+        return 1.0;
+    if (x < -5.0)
+        return -1.0;
 
-    double x2 = x * x;
+    double x2  = x * x;
     double num = x * (135135.0 + x2 * (17325.0 + x2 * (378.0 + x2)));
     double den = 135135.0 + x2 * (62370.0 + x2 * (3150.0 + x2 * 28.0));
     return num / den;
@@ -596,7 +600,8 @@ inline double fast_tanh(double x) {
 // fast_gelu_host: Host-side scalar GELU for benchmarking
 // =============================================================================
 
-inline float fast_gelu_host(float x) {
+inline float
+fast_gelu_host(float x) {
     constexpr float kAlpha = 0.79788456080286535587989211986876f;
     constexpr float kBeta  = 0.044715f;
 
@@ -607,7 +612,8 @@ inline float fast_gelu_host(float x) {
     return 0.5f * x * (1.0f + tanh_res);
 }
 
-inline double fast_gelu_host(double x) {
+inline double
+fast_gelu_host(double x) {
     constexpr double kAlpha = 0.79788456080286535587989211986876;
     constexpr double kBeta  = 0.044715;
 
@@ -619,40 +625,41 @@ inline double fast_gelu_host(double x) {
 }
 
 // Half types: compute in float, cast back
-inline at::Half fast_gelu_host(at::Half x) {
+inline at::Half
+fast_gelu_host(at::Half x) {
     return static_cast<at::Half>(fast_gelu_host(static_cast<float>(x)));
 }
 
-inline at::BFloat16 fast_gelu_host(at::BFloat16 x) {
+inline at::BFloat16
+fast_gelu_host(at::BFloat16 x) {
     return static_cast<at::BFloat16>(fast_gelu_host(static_cast<float>(x)));
 }
 
-
-void fast_gelu_cpu(torch::Tensor in, torch::Tensor out) {
+void
+fast_gelu_cpu(torch::Tensor in, torch::Tensor out) {
     TORCH_CHECK(!in.is_cuda(), "Input must be a CPU tensor");
     TORCH_CHECK(!out.is_cuda(), "Output must be a CPU tensor");
     TORCH_CHECK(in.is_contiguous() && out.is_contiguous(), "Tensors must be contiguous");
 
     const int64_t numel = in.numel();
-    if (numel == 0) return;
+    if (numel == 0)
+        return;
 
     AT_DISPATCH_FLOATING_TYPES(in.scalar_type(), "fast_gelu_cpu", [&] {
+        const scalar_t *__restrict__ in_ptr = in.data_ptr<scalar_t>();
+        scalar_t *__restrict__ out_ptr      = out.data_ptr<scalar_t>();
 
-        const scalar_t* __restrict__ in_ptr  = in.data_ptr<scalar_t>();
-        scalar_t* __restrict__       out_ptr = out.data_ptr<scalar_t>();
-
-        // Work-stealing grain size tuning:
-        // - Small enough for good load balancing (more steal opportunities)
+        // Broadcast pool grain size tuning:
+        // - Small enough for good load balancing
         // - Large enough for cache efficiency (~4-8KB per task fits in L1)
         // - Multiple of vector width for clean SIMD boundaries
-        // 1024 floats = 4KB, good balance for work-stealing overhead
-        //constexpr int64_t grain_size = 1024;
+        // 1024 floats = 4KB, good balance for overhead
+        // constexpr int64_t grain_size = 1024;
 
-        //dispatch::work_stealing_pool::instance().parallel_for(
-        //dispatch::thread_pool::instance().parallel_for(
+        // dispatch::broadcast_pool::instance().parallel_for(
+        // dispatch::thread_pool::instance().parallel_for(
         dispatch::basic_thread_pool::instance().parallel_for(
-            int64_t{0}, numel,
-            [in_ptr, out_ptr](int64_t begin, int64_t end) {
+            int64_t{0}, numel, [in_ptr, out_ptr](int64_t begin, int64_t end) {
                 for (int64_t i = begin; i < end; i++) {
                     out_ptr[i] = fast_gelu_host(in_ptr[i]);
                 }
@@ -669,8 +676,9 @@ example_gelu_for_each(torch::Tensor input) {
 
     if (input.device().type() == torch::kCUDA && input.is_contiguous() && output.is_contiguous()) {
         fast_gelu(input, output);
-    } else if (input.device().type() == torch::kCPU && input.is_contiguous() && output.is_contiguous()) {
-        //fast_gelu_cpu(input, output);
+    } else if (input.device().type() == torch::kCPU && input.is_contiguous() &&
+               output.is_contiguous()) {
+        // fast_gelu_cpu(input, output);
         fast_gelu_cpu_simd(input, output);
     } else {
         example_gelu_for_each_kernel(input, output);
@@ -688,7 +696,8 @@ example_gelu_for_each_out(torch::Tensor input, torch::Tensor output) {
                 "example_gelu_for_each_out: input and output must be on the same device");
     if (input.device().type() == torch::kCUDA && input.is_contiguous() && output.is_contiguous()) {
         fast_gelu(input, output);
-    } else if (input.device().type() == torch::kCPU && input.is_contiguous() && output.is_contiguous()) {
+    } else if (input.device().type() == torch::kCPU && input.is_contiguous() &&
+               output.is_contiguous()) {
         fast_gelu_cpu(input, output);
     } else {
         example_gelu_for_each_kernel(input, output);

@@ -46,7 +46,7 @@ class thread_pool {
     inline static thread_local bool tls_in_parallel_region_ = false;
 
     // Type-erased function pointer for the current parallel_for
-    using RangeFunc = void (*)(int64_t begin, int64_t end, void* ctx);
+    using RangeFunc = void (*)(int64_t begin, int64_t end, void *ctx);
 
     // Per-worker slot (cache-line aligned to prevent false sharing)
     struct alignas(64) WorkerSlot {
@@ -58,8 +58,8 @@ class thread_pool {
     struct alignas(64) SharedState {
         std::atomic<uint64_t> generation{0};
         std::atomic<RangeFunc> func{nullptr};
-        std::atomic<void*> ctx{nullptr};
-        std::atomic<std::latch*> done{nullptr};
+        std::atomic<void *> ctx{nullptr};
+        std::atomic<std::latch *> done{nullptr};
     };
 
     SharedState state_;
@@ -72,9 +72,10 @@ class thread_pool {
     std::mutex cv_mutex_;
     std::condition_variable cv_;
 
-    void worker_loop(size_t my_idx) {
+    void
+    worker_loop(size_t my_idx) {
         tls_in_parallel_region_ = true; // Mark worker as "in a region"
-        uint64_t last_gen = 0;
+        uint64_t last_gen       = 0;
 
         while (!stop_.load(std::memory_order_relaxed)) {
             uint64_t gen;
@@ -82,7 +83,8 @@ class thread_pool {
             // Phase 1: Aggressive spin for fast wake-up
             int spins = 0;
             while ((gen = state_.generation.load(std::memory_order_acquire)) == last_gen) {
-                if (stop_.load(std::memory_order_relaxed)) return;
+                if (stop_.load(std::memory_order_relaxed))
+                    return;
 
                 if (spins < kSpinCount) {
                     DISPATCH_PAUSE();
@@ -98,7 +100,8 @@ class thread_pool {
                 }
             }
 
-            if (stop_.load(std::memory_order_relaxed)) return;
+            if (stop_.load(std::memory_order_relaxed))
+                return;
             last_gen = gen;
 
             // Read my assigned range (relaxed OK, synchronized by generation acquire)
@@ -106,9 +109,9 @@ class thread_pool {
             int64_t e = slots_[my_idx].end.load(std::memory_order_relaxed);
 
             // Read shared state (relaxed OK, synchronized by generation acquire)
-            RangeFunc func = state_.func.load(std::memory_order_relaxed);
-            void* ctx = state_.ctx.load(std::memory_order_relaxed);
-            std::latch* done = state_.done.load(std::memory_order_relaxed);
+            RangeFunc func   = state_.func.load(std::memory_order_relaxed);
+            void *ctx        = state_.ctx.load(std::memory_order_relaxed);
+            std::latch *done = state_.done.load(std::memory_order_relaxed);
 
             // Execute if valid range
             if (b < e && func) {
@@ -122,20 +125,23 @@ class thread_pool {
         }
     }
 
-public:
-    static thread_pool& instance() {
+  public:
+    static thread_pool &
+    instance() {
         static thread_pool pool;
         return pool;
     }
 
-    size_t num_threads() const noexcept {
+    size_t
+    num_threads() const noexcept {
         return num_workers_;
     }
 
     thread_pool() {
-        size_t hw = std::thread::hardware_concurrency();
+        size_t hw    = std::thread::hardware_concurrency();
         num_workers_ = (hw > 1) ? (hw - 1) : 0;
-        if (num_workers_ > kMaxWorkers) num_workers_ = kMaxWorkers;
+        if (num_workers_ > kMaxWorkers)
+            num_workers_ = kMaxWorkers;
 
         workers_.reserve(num_workers_);
         for (size_t i = 0; i < num_workers_; ++i) {
@@ -154,8 +160,9 @@ public:
             cv_.notify_all();
         }
 
-        for (auto& t : workers_) {
-            if (t.joinable()) t.join();
+        for (auto &t: workers_) {
+            if (t.joinable())
+                t.join();
         }
     }
 
@@ -163,7 +170,8 @@ public:
     // parallel_for - Direct Work Distribution with Spin Wake
     // -------------------------------------------------------------------------
     template <typename Index, typename Func>
-    void parallel_for(Index start, Index end, Func&& f) {
+    void
+    parallel_for(Index start, Index end, Func &&f) {
         static_assert(std::is_integral_v<Index>, "Index must be integral");
 
         // 1. Recursion Guard - run nested parallel_for serially
@@ -173,7 +181,8 @@ public:
         }
 
         // 2. Early exit for empty range
-        if (start >= end) return;
+        if (start >= end)
+            return;
 
         const Index range = end - start;
 
@@ -192,23 +201,23 @@ public:
 
         // Static partitioning: one chunk per thread
         const size_t total_threads = num_workers_ + 1;
-        const Index chunk_size = (range + static_cast<Index>(total_threads) - 1)
-                                / static_cast<Index>(total_threads);
+        const Index chunk_size =
+            (range + static_cast<Index>(total_threads) - 1) / static_cast<Index>(total_threads);
 
         std::latch done(static_cast<std::ptrdiff_t>(num_workers_));
 
         // Type-erase the functor via a trampoline
-        using FuncDecay = std::decay_t<Func>;
+        using FuncDecay     = std::decay_t<Func>;
         FuncDecay func_copy = std::forward<Func>(f);
 
-        auto trampoline = [](int64_t b, int64_t e, void* ctx) {
-            (*static_cast<FuncDecay*>(ctx))(static_cast<Index>(b), static_cast<Index>(e));
+        auto trampoline = [](int64_t b, int64_t e, void *ctx) {
+            (*static_cast<FuncDecay *>(ctx))(static_cast<Index>(b), static_cast<Index>(e));
         };
 
         // Assign ranges to workers (workers get chunks 1..N, caller gets chunk 0)
         for (size_t i = 0; i < num_workers_; ++i) {
             Index worker_start = start + static_cast<Index>(i + 1) * chunk_size;
-            Index worker_end = std::min(worker_start + chunk_size, end);
+            Index worker_end   = std::min(worker_start + chunk_size, end);
 
             slots_[i].begin.store(static_cast<int64_t>(worker_start), std::memory_order_relaxed);
             slots_[i].end.store(static_cast<int64_t>(worker_end), std::memory_order_relaxed);
@@ -243,7 +252,8 @@ public:
 
     // Convenience overload with grain_size parameter (ignored for static scheduling)
     template <typename Index, typename Func>
-    void parallel_for(Index start, Index end, Index /*grain_size*/, Func&& f) {
+    void
+    parallel_for(Index start, Index end, Index /*grain_size*/, Func &&f) {
         parallel_for(start, end, std::forward<Func>(f));
     }
 };

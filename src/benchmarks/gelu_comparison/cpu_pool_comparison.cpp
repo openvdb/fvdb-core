@@ -3,11 +3,12 @@
 //
 // CPU Thread Pool Comparison Benchmark
 //
-// Compares three thread pool implementations with SIMD GELU:
+// Compares four thread pool implementations with SIMD GELU:
 // 1. basic_thread_pool - Simple queue-based pool (best for large N)
 // 2. thread_pool - Hybrid direct distribution (attempts medium N optimization)
-// 3. work_stealing_pool - Static partitioning with work stealing
-// 4. adaptive_pool - Wrapper that chooses based on N
+// 3. broadcast_pool - Static partitioning with broadcast-style dispatch
+// 4. work_stealing_pool - Chase-Lev deque work stealing (for unbalanced workloads)
+// 5. adaptive_pool - Wrapper that chooses based on N
 //
 // Also compares against torch::gelu as baseline.
 //
@@ -15,16 +16,16 @@
 // Run:   ./build/.../gbenchmarks/cpu_pool_comparison
 //
 
+#include <ATen/Functions.h>
+#include <ATen/Parallel.h>
+#include <ATen/cpu/vec/vec.h>
 #include <torch/torch.h>
-#include <benchmark/benchmark.h>
 
+#include <benchmark/benchmark.h>
 #include <dispatch/basic_thread_pool.h>
+#include <dispatch/broadcast_pool.h>
 #include <dispatch/thread_pool.h>
 #include <dispatch/work_stealing_pool.h>
-
-#include <ATen/cpu/vec/vec.h>
-#include <ATen/Parallel.h>
-#include <ATen/Functions.h>
 
 // OpenMP GELU implementation (in separate .cpp for proper pragma support)
 #include "omp_gelu.h"
@@ -42,7 +43,8 @@ namespace {
 // Set thread count to match typical PyTorch default for fair comparison
 constexpr int kNumThreads = 16;
 
-static void SetupThreads() {
+static void
+SetupThreads() {
     // Force PyTorch and ATen to use consistent thread count
     torch::set_num_threads(kNumThreads);
     at::set_num_threads(kNumThreads);
@@ -56,7 +58,8 @@ static void SetupThreads() {
 // This avoids tanh() which can be slower on some architectures.
 
 template <typename T>
-inline at::vec::Vectorized<T> gelu_simd_op(const at::vec::Vectorized<T>& x) {
+inline at::vec::Vectorized<T>
+gelu_simd_op(const at::vec::Vectorized<T> &x) {
     using Vec = at::vec::Vectorized<T>;
 
     // kAlphaTwo = sqrt(2/pi) * 2 = 1.5957691216...
@@ -66,7 +69,7 @@ inline at::vec::Vectorized<T> gelu_simd_op(const at::vec::Vectorized<T>& x) {
     const Vec kOne(static_cast<T>(1.0));
 
     // Calculate 2u = 2 * sqrt(2/pi) * (x + 0.044715 * x^3)
-    Vec x_sq = x * x;
+    Vec x_sq  = x * x;
     Vec inner = at::vec::fmadd(kBeta, x_sq * x, x);
     Vec two_u = kAlphaTwo * inner;
 
@@ -85,59 +88,61 @@ inline at::vec::Vectorized<T> gelu_simd_op(const at::vec::Vectorized<T>& x) {
 // ============================================================================
 
 template <typename Pool>
-void gelu_with_pool(Pool& pool, const float* in_ptr, float* out_ptr, int64_t numel) {
-    using Vec = at::vec::Vectorized<float>;
+void
+gelu_with_pool(Pool &pool, const float *in_ptr, float *out_ptr, int64_t numel) {
+    using Vec                 = at::vec::Vectorized<float>;
     constexpr int64_t vec_len = Vec::size();
 
-    pool.parallel_for(
-        int64_t{0}, numel,
-        [in_ptr, out_ptr, vec_len](int64_t begin, int64_t end) {
-            int64_t i = begin;
-            int64_t limit = end - (end - begin) % vec_len;
+    pool.parallel_for(int64_t{0}, numel, [in_ptr, out_ptr, vec_len](int64_t begin, int64_t end) {
+        int64_t i     = begin;
+        int64_t limit = end - (end - begin) % vec_len;
 
-            // Main SIMD loop
-            for (; i + vec_len <= limit; i += vec_len) {
-                Vec data = Vec::loadu(in_ptr + i);
-                data = gelu_simd_op(data);
-                data.store(out_ptr + i);
-            }
+        // Main SIMD loop
+        for (; i + vec_len <= limit; i += vec_len) {
+            Vec data = Vec::loadu(in_ptr + i);
+            data     = gelu_simd_op(data);
+            data.store(out_ptr + i);
+        }
 
-            // Tail elements
-            if (i < end) {
-                int64_t remaining = end - i;
-                Vec data = Vec::loadu(in_ptr + i, remaining);
-                data = gelu_simd_op(data);
-                data.store(out_ptr + i, remaining);
-            }
-        });
+        // Tail elements
+        if (i < end) {
+            int64_t remaining = end - i;
+            Vec data          = Vec::loadu(in_ptr + i, remaining);
+            data              = gelu_simd_op(data);
+            data.store(out_ptr + i, remaining);
+        }
+    });
 }
 
 // Wrapper functions for each pool
-void gelu_basic_pool(torch::Tensor in, torch::Tensor out) {
-    gelu_with_pool(
-        dispatch::basic_thread_pool::instance(),
-        in.data_ptr<float>(),
-        out.data_ptr<float>(),
-        in.numel()
-    );
+void
+gelu_basic_pool(torch::Tensor in, torch::Tensor out) {
+    gelu_with_pool(dispatch::basic_thread_pool::instance(),
+                   in.data_ptr<float>(),
+                   out.data_ptr<float>(),
+                   in.numel());
 }
 
-void gelu_thread_pool(torch::Tensor in, torch::Tensor out) {
+void
+gelu_thread_pool(torch::Tensor in, torch::Tensor out) {
     gelu_with_pool(
-        dispatch::thread_pool::instance(),
-        in.data_ptr<float>(),
-        out.data_ptr<float>(),
-        in.numel()
-    );
+        dispatch::thread_pool::instance(), in.data_ptr<float>(), out.data_ptr<float>(), in.numel());
 }
 
-void gelu_work_stealing_pool(torch::Tensor in, torch::Tensor out) {
-    gelu_with_pool(
-        dispatch::work_stealing_pool::instance(),
-        in.data_ptr<float>(),
-        out.data_ptr<float>(),
-        in.numel()
-    );
+void
+gelu_broadcast_pool(torch::Tensor in, torch::Tensor out) {
+    gelu_with_pool(dispatch::broadcast_pool::instance(),
+                   in.data_ptr<float>(),
+                   out.data_ptr<float>(),
+                   in.numel());
+}
+
+void
+gelu_work_stealing_pool(torch::Tensor in, torch::Tensor out) {
+    gelu_with_pool(dispatch::work_stealing_pool::instance(),
+                   in.data_ptr<float>(),
+                   out.data_ptr<float>(),
+                   in.numel());
 }
 
 // ============================================================================
@@ -145,54 +150,51 @@ void gelu_work_stealing_pool(torch::Tensor in, torch::Tensor out) {
 // ============================================================================
 // Chooses between pools based on tensor size:
 // - Small N: run serial (no threading overhead)
-// - Medium N: use work_stealing_pool or thread_pool (lower latency)
+// - Medium N: use broadcast_pool or thread_pool (lower latency)
 // - Large N: use basic_thread_pool (best throughput)
 //
 // These thresholds are tuned based on the benchmark results.
 
-enum class PoolChoice {
-    Serial,
-    WorkStealing,
-    ThreadPool,
-    Basic
-};
+enum class PoolChoice { Serial, Broadcast, ThreadPool, Basic };
 
 // Threshold constants - tuned based on benchmark results:
 //   N < 4K:    Serial wins (threading overhead > benefit)
-//   4K - 1M:   WorkStealing wins (1.2-1.9 G/s vs BasicPool's 0.15-0.32 G/s)
-//   N >= 1M:   BasicPool wins (2.8-25 G/s vs WorkStealing's 1.6-1.8 G/s)
-constexpr int64_t kSerialThreshold = 4096;      // Below this, run serial
-constexpr int64_t kBasicThreshold = 1000000;    // At/above this, use basic_thread_pool
+//   4K - 1M:   Broadcast wins (1.2-1.9 G/s vs BasicPool's 0.15-0.32 G/s)
+//   N >= 1M:   BasicPool wins (2.8-25 G/s vs Broadcast's 1.6-1.8 G/s)
+constexpr int64_t kSerialThreshold = 4096;    // Below this, run serial
+constexpr int64_t kBasicThreshold  = 1000000; // At/above this, use basic_thread_pool
 
-inline PoolChoice choose_pool(int64_t numel) {
+inline PoolChoice
+choose_pool(int64_t numel) {
     if (numel < kSerialThreshold) {
         return PoolChoice::Serial;
     } else if (numel < kBasicThreshold) {
-        // Medium: work_stealing has better latency and throughput up to ~1M
-        return PoolChoice::WorkStealing;
+        // Medium: broadcast_pool has better latency and throughput up to ~1M
+        return PoolChoice::Broadcast;
     } else {
         // Large: basic_thread_pool scales better with size
         return PoolChoice::Basic;
     }
 }
 
-void gelu_serial(const float* in_ptr, float* out_ptr, int64_t numel) {
-    using Vec = at::vec::Vectorized<float>;
+void
+gelu_serial(const float *in_ptr, float *out_ptr, int64_t numel) {
+    using Vec                 = at::vec::Vectorized<float>;
     constexpr int64_t vec_len = Vec::size();
 
-    int64_t i = 0;
+    int64_t i     = 0;
     int64_t limit = numel - numel % vec_len;
 
     for (; i + vec_len <= limit; i += vec_len) {
         Vec data = Vec::loadu(in_ptr + i);
-        data = gelu_simd_op(data);
+        data     = gelu_simd_op(data);
         data.store(out_ptr + i);
     }
 
     if (i < numel) {
         int64_t remaining = numel - i;
-        Vec data = Vec::loadu(in_ptr + i, remaining);
-        data = gelu_simd_op(data);
+        Vec data          = Vec::loadu(in_ptr + i, remaining);
+        data              = gelu_simd_op(data);
         data.store(out_ptr + i, remaining);
     }
 }
@@ -205,50 +207,50 @@ void gelu_serial(const float* in_ptr, float* out_ptr, int64_t numel) {
 // #pragma omp properly even with -Xcompiler=-fopenmp.
 
 // at::parallel_for (uses PyTorch's internal threading - may be TBB or OpenMP)
-void gelu_at_parallel_for(const float* in_ptr, float* out_ptr, int64_t numel) {
-    using Vec = at::vec::Vectorized<float>;
-    constexpr int64_t vec_len = Vec::size();
+void
+gelu_at_parallel_for(const float *in_ptr, float *out_ptr, int64_t numel) {
+    using Vec                    = at::vec::Vectorized<float>;
+    constexpr int64_t vec_len    = Vec::size();
     constexpr int64_t grain_size = 2048;
 
     at::parallel_for(0, numel, grain_size, [&](int64_t begin, int64_t end) {
-        int64_t i = begin;
+        int64_t i     = begin;
         int64_t limit = end - (end - begin) % vec_len;
 
         // Main SIMD loop
         for (; i + vec_len <= limit; i += vec_len) {
             Vec data = Vec::loadu(in_ptr + i);
-            data = gelu_simd_op(data);
+            data     = gelu_simd_op(data);
             data.store(out_ptr + i);
         }
 
         // Tail elements
         if (i < end) {
             int64_t remaining = end - i;
-            Vec data = Vec::loadu(in_ptr + i, remaining);
-            data = gelu_simd_op(data);
+            Vec data          = Vec::loadu(in_ptr + i, remaining);
+            data              = gelu_simd_op(data);
             data.store(out_ptr + i, remaining);
         }
     });
 }
 
-void gelu_adaptive(torch::Tensor in, torch::Tensor out) {
+void
+gelu_adaptive(torch::Tensor in, torch::Tensor out) {
     const int64_t numel = in.numel();
-    const float* in_ptr = in.data_ptr<float>();
-    float* out_ptr = out.data_ptr<float>();
+    const float *in_ptr = in.data_ptr<float>();
+    float *out_ptr      = out.data_ptr<float>();
 
     switch (choose_pool(numel)) {
-        case PoolChoice::Serial:
-            gelu_serial(in_ptr, out_ptr, numel);
-            break;
-        case PoolChoice::WorkStealing:
-            gelu_with_pool(dispatch::work_stealing_pool::instance(), in_ptr, out_ptr, numel);
-            break;
-        case PoolChoice::ThreadPool:
-            gelu_with_pool(dispatch::thread_pool::instance(), in_ptr, out_ptr, numel);
-            break;
-        case PoolChoice::Basic:
-            gelu_with_pool(dispatch::basic_thread_pool::instance(), in_ptr, out_ptr, numel);
-            break;
+    case PoolChoice::Serial: gelu_serial(in_ptr, out_ptr, numel); break;
+    case PoolChoice::Broadcast:
+        gelu_with_pool(dispatch::broadcast_pool::instance(), in_ptr, out_ptr, numel);
+        break;
+    case PoolChoice::ThreadPool:
+        gelu_with_pool(dispatch::thread_pool::instance(), in_ptr, out_ptr, numel);
+        break;
+    case PoolChoice::Basic:
+        gelu_with_pool(dispatch::basic_thread_pool::instance(), in_ptr, out_ptr, numel);
+        break;
     }
 }
 
@@ -269,12 +271,12 @@ make_contiguous_tensor(int64_t size, torch::ScalarType dtype, torch::Device devi
 // so simply iterating guarantees RAM hits. No need for PauseTiming tricks.
 
 static void
-BM_Torch_CPU_NoAlloc(benchmark::State& state) {
+BM_Torch_CPU_NoAlloc(benchmark::State &state) {
     SetupThreads();
     const int64_t numel = state.range(0);
 
     // Allocate once - 40MB buffer exceeds L3 cache, guaranteeing RAM access
-    auto input = torch::randn({numel}, torch::kFloat32);
+    auto input  = torch::randn({numel}, torch::kFloat32);
     auto output = torch::empty_like(input);
 
     for (auto _: state) {
@@ -291,11 +293,11 @@ BM_Torch_CPU_NoAlloc(benchmark::State& state) {
 // ============================================================================
 
 static void
-BM_BasicPool_CPU_NoAlloc(benchmark::State& state) {
+BM_BasicPool_CPU_NoAlloc(benchmark::State &state) {
     SetupThreads();
     const int64_t numel = state.range(0);
-    auto input = torch::randn({numel}, torch::kFloat32);
-    auto output = torch::empty_like(input);
+    auto input          = torch::randn({numel}, torch::kFloat32);
+    auto output         = torch::empty_like(input);
 
     // Warm up pool
     (void)dispatch::basic_thread_pool::instance();
@@ -310,11 +312,11 @@ BM_BasicPool_CPU_NoAlloc(benchmark::State& state) {
 }
 
 static void
-BM_ThreadPool_CPU_NoAlloc(benchmark::State& state) {
+BM_ThreadPool_CPU_NoAlloc(benchmark::State &state) {
     SetupThreads();
     const int64_t numel = state.range(0);
-    auto input = torch::randn({numel}, torch::kFloat32);
-    auto output = torch::empty_like(input);
+    auto input          = torch::randn({numel}, torch::kFloat32);
+    auto output         = torch::empty_like(input);
 
     // Warm up pool
     (void)dispatch::thread_pool::instance();
@@ -329,11 +331,30 @@ BM_ThreadPool_CPU_NoAlloc(benchmark::State& state) {
 }
 
 static void
-BM_WorkStealingPool_CPU_NoAlloc(benchmark::State& state) {
+BM_BroadcastPool_CPU_NoAlloc(benchmark::State &state) {
     SetupThreads();
     const int64_t numel = state.range(0);
-    auto input = torch::randn({numel}, torch::kFloat32);
-    auto output = torch::empty_like(input);
+    auto input          = torch::randn({numel}, torch::kFloat32);
+    auto output         = torch::empty_like(input);
+
+    // Warm up pool
+    (void)dispatch::broadcast_pool::instance();
+
+    for (auto _: state) {
+        gelu_broadcast_pool(input, output);
+        benchmark::DoNotOptimize(output.data_ptr<float>());
+        benchmark::ClobberMemory();
+    }
+
+    state.SetItemsProcessed(state.iterations() * numel);
+}
+
+static void
+BM_WorkStealingPool_CPU_NoAlloc(benchmark::State &state) {
+    SetupThreads();
+    const int64_t numel = state.range(0);
+    auto input          = torch::randn({numel}, torch::kFloat32);
+    auto output         = torch::empty_like(input);
 
     // Warm up pool
     (void)dispatch::work_stealing_pool::instance();
@@ -352,15 +373,16 @@ BM_WorkStealingPool_CPU_NoAlloc(benchmark::State& state) {
 // ============================================================================
 
 static void
-BM_Adaptive_CPU_NoAlloc(benchmark::State& state) {
+BM_Adaptive_CPU_NoAlloc(benchmark::State &state) {
     SetupThreads();
     const int64_t numel = state.range(0);
-    auto input = torch::randn({numel}, torch::kFloat32);
-    auto output = torch::empty_like(input);
+    auto input          = torch::randn({numel}, torch::kFloat32);
+    auto output         = torch::empty_like(input);
 
     // Warm up all pools
     (void)dispatch::basic_thread_pool::instance();
     (void)dispatch::thread_pool::instance();
+    (void)dispatch::broadcast_pool::instance();
     (void)dispatch::work_stealing_pool::instance();
 
     for (auto _: state) {
@@ -377,13 +399,13 @@ BM_Adaptive_CPU_NoAlloc(benchmark::State& state) {
 // ============================================================================
 
 static void
-BM_Serial_CPU_NoAlloc(benchmark::State& state) {
+BM_Serial_CPU_NoAlloc(benchmark::State &state) {
     SetupThreads();
     const int64_t numel = state.range(0);
-    auto input = torch::randn({numel}, torch::kFloat32);
-    auto output = torch::empty_like(input);
-    const float* in_ptr = input.data_ptr<float>();
-    float* out_ptr = output.data_ptr<float>();
+    auto input          = torch::randn({numel}, torch::kFloat32);
+    auto output         = torch::empty_like(input);
+    const float *in_ptr = input.data_ptr<float>();
+    float *out_ptr      = output.data_ptr<float>();
 
     for (auto _: state) {
         gelu_serial(in_ptr, out_ptr, numel);
@@ -399,19 +421,20 @@ BM_Serial_CPU_NoAlloc(benchmark::State& state) {
 // ============================================================================
 
 static void
-BM_OpenMP_CPU_NoAlloc(benchmark::State& state) {
+BM_OpenMP_CPU_NoAlloc(benchmark::State &state) {
     SetupThreads();
     const int64_t numel = state.range(0);
-    auto input = torch::randn({numel}, torch::kFloat32);
-    auto output = torch::empty_like(input);
-    const float* in_ptr = input.data_ptr<float>();
-    float* out_ptr = output.data_ptr<float>();
+    auto input          = torch::randn({numel}, torch::kFloat32);
+    auto output         = torch::empty_like(input);
+    const float *in_ptr = input.data_ptr<float>();
+    float *out_ptr      = output.data_ptr<float>();
 
     // Print thread count once on first benchmark
     static bool printed = false;
     if (!printed) {
         printf("OpenMP threads: %d, PyTorch threads: %d\n",
-               omp_gelu::get_num_threads(), torch::get_num_threads());
+               omp_gelu::get_num_threads(),
+               torch::get_num_threads());
         printed = true;
     }
 
@@ -425,13 +448,13 @@ BM_OpenMP_CPU_NoAlloc(benchmark::State& state) {
 }
 
 static void
-BM_ATParallelFor_CPU_NoAlloc(benchmark::State& state) {
+BM_ATParallelFor_CPU_NoAlloc(benchmark::State &state) {
     SetupThreads();
     const int64_t numel = state.range(0);
-    auto input = torch::randn({numel}, torch::kFloat32);
-    auto output = torch::empty_like(input);
-    const float* in_ptr = input.data_ptr<float>();
-    float* out_ptr = output.data_ptr<float>();
+    auto input          = torch::randn({numel}, torch::kFloat32);
+    auto output         = torch::empty_like(input);
+    const float *in_ptr = input.data_ptr<float>();
+    float *out_ptr      = output.data_ptr<float>();
 
     for (auto _: state) {
         gelu_at_parallel_for(in_ptr, out_ptr, numel);
@@ -452,21 +475,22 @@ BM_ATParallelFor_CPU_NoAlloc(benchmark::State& state) {
 // UseRealTime() makes Google Benchmark use wall clock time instead of CPU time
 // for throughput calculations. This is essential for fair comparison of parallel
 // implementations - CPU time measures differently for different threading models.
-#define BENCHMARK_SIZES \
-    ->Args({1024}) \
-    ->Args({4096}) \
-    ->Args({10000}) \
-    ->Args({100000}) \
-    ->Args({1000000}) \
-    ->Args({10000000}) \
-    ->Args({10485760}) \
-    ->UseRealTime()
+#define BENCHMARK_SIZES    \
+    ->Args({1024})         \
+        ->Args({4096})     \
+        ->Args({10000})    \
+        ->Args({100000})   \
+        ->Args({1000000})  \
+        ->Args({10000000}) \
+        ->Args({10485760}) \
+        ->UseRealTime()
 
 // Register all benchmarks
 BENCHMARK(BM_Torch_CPU_NoAlloc) BENCHMARK_SIZES;
 BENCHMARK(BM_Serial_CPU_NoAlloc) BENCHMARK_SIZES;
 BENCHMARK(BM_BasicPool_CPU_NoAlloc) BENCHMARK_SIZES;
 BENCHMARK(BM_ThreadPool_CPU_NoAlloc) BENCHMARK_SIZES;
+BENCHMARK(BM_BroadcastPool_CPU_NoAlloc) BENCHMARK_SIZES;
 BENCHMARK(BM_WorkStealingPool_CPU_NoAlloc) BENCHMARK_SIZES;
 BENCHMARK(BM_Adaptive_CPU_NoAlloc) BENCHMARK_SIZES;
 

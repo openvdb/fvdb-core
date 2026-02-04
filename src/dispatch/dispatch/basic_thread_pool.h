@@ -37,19 +37,19 @@ namespace dispatch {
 ///         });
 /// @endcode
 class basic_thread_pool {
-public:
+  public:
     /// @brief Get the global thread pool instance (lazy-initialized, thread-safe).
-    static basic_thread_pool&
+    static basic_thread_pool &
     instance() {
         static basic_thread_pool pool;
         return pool;
     }
 
     // Non-copyable, non-movable
-    basic_thread_pool(const basic_thread_pool&)            = delete;
-    basic_thread_pool& operator=(const basic_thread_pool&) = delete;
-    basic_thread_pool(basic_thread_pool&&)                 = delete;
-    basic_thread_pool& operator=(basic_thread_pool&&)      = delete;
+    basic_thread_pool(const basic_thread_pool &)            = delete;
+    basic_thread_pool &operator=(const basic_thread_pool &) = delete;
+    basic_thread_pool(basic_thread_pool &&)                 = delete;
+    basic_thread_pool &operator=(basic_thread_pool &&)      = delete;
 
     /// @brief Execute a function in parallel over a range [start, end).
     ///
@@ -65,7 +65,7 @@ public:
     template <typename Index, typename Func>
         requires std::integral<Index> && std::invocable<Func, Index, Index>
     void
-    parallel_for(Index start, Index end, Index grain_size, Func&& func) {
+    parallel_for(Index start, Index end, Index grain_size, Func &&func) {
         if (start >= end) {
             return;
         }
@@ -80,18 +80,16 @@ public:
         }
 
         // Calculate number of chunks based on grain_size
-        const size_t num_chunks =
-            std::min(num_workers, (range + static_cast<size_t>(grain_size) - 1) /
-                                      static_cast<size_t>(grain_size));
-        const auto chunk_size = (range + num_chunks - 1) / num_chunks;
+        const size_t num_chunks = std::min(num_workers,
+                                           (range + static_cast<size_t>(grain_size) - 1) /
+                                               static_cast<size_t>(grain_size));
+        const auto chunk_size   = (range + num_chunks - 1) / num_chunks;
 
         std::latch work_done(static_cast<std::ptrdiff_t>(num_chunks));
 
         for (size_t i = 0; i < num_chunks; ++i) {
-            const auto chunk_start =
-                start + static_cast<Index>(i * chunk_size);
-            const auto chunk_end =
-                std::min(chunk_start + static_cast<Index>(chunk_size), end);
+            const auto chunk_start = start + static_cast<Index>(i * chunk_size);
+            const auto chunk_end   = std::min(chunk_start + static_cast<Index>(chunk_size), end);
 
             enqueue([&func, chunk_start, chunk_end, &work_done]() {
                 func(chunk_start, chunk_end);
@@ -105,7 +103,7 @@ public:
     // a parallel for that uses a default grain size
     template <typename Index, typename Func>
     void
-    parallel_for(Index start, Index end, Func&& func) {
+    parallel_for(Index start, Index end, Func &&func) {
         constexpr Index default_grain_size = 2048;
         parallel_for(start, end, default_grain_size, std::forward<Func>(func));
     }
@@ -116,9 +114,8 @@ public:
         return workers_.size();
     }
 
-private:
-    explicit basic_thread_pool(
-        size_t num_threads = std::thread::hardware_concurrency())
+  private:
+    explicit basic_thread_pool(size_t num_threads = std::thread::hardware_concurrency())
         : stop_flag_(false) {
         // Ensure at least 1 thread if hardware_concurrency returns 0
         if (num_threads == 0) {
@@ -162,7 +159,7 @@ private:
     }
 
     void
-    enqueue(std::function<void()>&& task) {
+    enqueue(std::function<void()> &&task) {
         {
             std::scoped_lock lock(mutex_);
             tasks_.emplace(std::move(task));
@@ -170,11 +167,11 @@ private:
         cv_.notify_one();
     }
 
-    std::vector<std::jthread>         workers_;
+    std::vector<std::jthread> workers_;
     std::queue<std::function<void()>> tasks_;
-    std::mutex                        mutex_;
-    std::condition_variable           cv_;
-    bool                              stop_flag_;
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    bool stop_flag_;
 };
 
 } // namespace dispatch

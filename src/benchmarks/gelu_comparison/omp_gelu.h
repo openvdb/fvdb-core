@@ -15,7 +15,7 @@ namespace omp_gelu {
 /// @param in_ptr Input float array
 /// @param out_ptr Output float array
 /// @param numel Number of elements
-void gelu_openmp(const float* in_ptr, float* out_ptr, int64_t numel);
+void gelu_openmp(const float *in_ptr, float *out_ptr, int64_t numel);
 
 /// @brief Returns the number of OpenMP threads that will be used.
 int get_num_threads();

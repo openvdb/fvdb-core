@@ -118,7 +118,7 @@ install(
 # ============================================================================
 # CPU Pool Comparison Benchmark
 # ============================================================================
-# Compares basic_thread_pool, thread_pool, work_stealing_pool, and adaptive
+# Compares basic_thread_pool, thread_pool, broadcast_pool, and adaptive
 # wrapper for CPU SIMD GELU.
 # Also includes OpenMP benchmark (in separate .cpp for proper pragma support).
 
