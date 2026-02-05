@@ -7,6 +7,7 @@ from typing import Any, Mapping, Sequence, TypeVar, overload
 import torch
 from fvdb.enums import ProjectionType
 
+from ._fvdb_cpp import CameraModel
 from ._fvdb_cpp import GaussianSplat3d as GaussianSplat3dCpp
 from ._fvdb_cpp import JaggedTensor as JaggedTensorCpp
 from ._fvdb_cpp import ProjectedGaussianSplats as ProjectedGaussianSplatsCpp
@@ -1869,6 +1870,47 @@ class GaussianSplat3d:
             near=near,
             far=far,
             projection_type=self._proj_type_to_cpp(projection_type),
+            sh_degree_to_use=sh_degree_to_use,
+            tile_size=tile_size,
+            min_radius_2d=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+            backgrounds=backgrounds,
+        )
+
+    def render_images_from_world_3dgs(
+        self,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        image_width: int,
+        image_height: int,
+        near: float,
+        far: float,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        distortion_coeffs: torch.Tensor | None = None,
+        sh_degree_to_use: int = -1,
+        tile_size: int = 16,
+        min_radius_2d: float = 0.0,
+        eps_2d: float = 0.3,
+        antialias: bool = False,
+        backgrounds: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Render images using the differentiable 3DGS ray-ellipsoid rasterizer.
+
+        This is similar to :meth:`render_images`, but rasterization is performed directly from
+        world-space Gaussians. This enables geometry gradients through rasterization (useful for
+        UT camera models).
+        """
+        return self._impl.render_images_from_world_3dgs(
+            world_to_camera_matrices=world_to_camera_matrices,
+            projection_matrices=projection_matrices,
+            image_width=image_width,
+            image_height=image_height,
+            near=near,
+            far=far,
+            camera_model=camera_model,
+            distortion_coeffs=distortion_coeffs,
             sh_degree_to_use=sh_degree_to_use,
             tile_size=tile_size,
             min_radius_2d=min_radius_2d,
