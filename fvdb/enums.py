@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-from enum import Enum
+from enum import Enum, IntEnum
 
 
 class ProjectionType(str, Enum):
@@ -50,6 +50,30 @@ class ShOrderingMode(str, Enum):
     """
 
 
-# Camera / rolling shutter enums are defined in the C++ extension module and exposed to Python via pybind11.
-# We re-export them here so users can consistently import enums from `fvdb.enums`.
-from ._fvdb_cpp import CameraModel, RollingShutterType  # noqa: E402
+class RollingShutterType(IntEnum):
+    """
+    Rolling shutter policy for camera projection / ray generation.
+    """
+
+    NONE = 0
+    VERTICAL = 1
+    HORIZONTAL = 2
+
+
+class CameraModel(IntEnum):
+    """
+    Camera model for projection.
+
+    Notes:
+    - ``PINHOLE`` and ``ORTHOGRAPHIC`` have no distortion.
+    - ``OPENCV_*`` variants are pinhole + OpenCV-style distortion and expect packed coefficients.
+    """
+
+    PINHOLE = 0
+
+    OPENCV_RADTAN_5 = 1
+    OPENCV_RATIONAL_8 = 2
+    OPENCV_RADTAN_THIN_PRISM_9 = 3
+    OPENCV_THIN_PRISM_12 = 4
+
+    ORTHOGRAPHIC = 5
