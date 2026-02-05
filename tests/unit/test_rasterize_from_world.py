@@ -443,6 +443,89 @@ def test_gaussiansplat3d_render_images_from_world_shN_grads_match_finite_differe
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_gaussiansplat3d_render_images_from_world_backward_with_backgrounds_and_masks():
+    """
+    Regression test: exercise autograd backward when *both* backgrounds and masks are provided.
+
+    Historically, mismatches between the number of forward inputs and backward returns can cause
+    runtime errors in some PyTorch builds. This test ensures the code path runs end-to-end.
+    """
+    import fvdb
+
+    device = torch.device("cuda")
+    dtype = torch.float32
+
+    C, N, D = 1, 1, 3
+    image_width = 16
+    image_height = 16
+    tile_size = 16  # single tile -> masks is [C,1,1]
+
+    means = torch.tensor([[0.05, 0.05, 2.5]], device=device, dtype=dtype, requires_grad=True)
+    quats = torch.tensor([[0.97, 0.05, 0.20, -0.10]], device=device, dtype=dtype, requires_grad=True)
+    log_scales = torch.tensor([[-0.6, -0.9, -0.4]], device=device, dtype=dtype, requires_grad=True)
+    logit_opacities = torch.tensor([2.0], device=device, dtype=dtype, requires_grad=True)
+    sh0 = torch.randn((N, 1, D), device=device, dtype=dtype, requires_grad=True)
+    shN = torch.empty((N, 0, D), device=device, dtype=dtype, requires_grad=True)
+
+    gs = fvdb.GaussianSplat3d.from_tensors(
+        means=means,
+        quats=quats,
+        log_scales=log_scales,
+        logit_opacities=logit_opacities,
+        sh0=sh0,
+        shN=shN,
+        accumulate_mean_2d_gradients=False,
+        accumulate_max_2d_radii=False,
+        detach=False,
+    )
+
+    world_to_cam = torch.eye(4, device=device, dtype=dtype).unsqueeze(0)
+    K = torch.tensor(
+        [[[18.0, 0.0, 7.5], [0.0, 18.0, 7.5], [0.0, 0.0, 1.0]]],
+        device=device,
+        dtype=dtype,
+    )
+
+    backgrounds = torch.tensor([[0.1, -0.2, 0.3]], device=device, dtype=dtype)  # [C,D]
+    masks = torch.ones((C, 1, 1), device=device, dtype=torch.bool)  # enable the only tile
+
+    rendered, alphas = gs.render_images_from_world(
+        world_to_camera_matrices=world_to_cam,
+        projection_matrices=K,
+        image_width=image_width,
+        image_height=image_height,
+        near=0.01,
+        far=1e10,
+        camera_model=fvdb.CameraModel.PINHOLE,
+        distortion_coeffs=None,
+        sh_degree_to_use=0,
+        tile_size=tile_size,
+        min_radius_2d=0.0,
+        eps_2d=0.3,
+        antialias=False,
+        backgrounds=backgrounds,
+        masks=masks,
+    )
+
+    loss = (rendered * rendered).sum() + 0.5 * alphas.sum()
+    loss.backward()
+
+    assert means.grad is not None and torch.isfinite(means.grad).all() and means.grad.abs().sum().item() > 0.0
+    assert quats.grad is not None and torch.isfinite(quats.grad).all() and quats.grad.abs().sum().item() > 0.0
+    assert (
+        log_scales.grad is not None
+        and torch.isfinite(log_scales.grad).all()
+        and log_scales.grad.abs().sum().item() > 0.0
+    )
+    assert (
+        logit_opacities.grad is not None
+        and torch.isfinite(logit_opacities.grad).all()
+        and logit_opacities.grad.abs().sum().item() > 0.0
+    )
+    assert sh0.grad is not None and torch.isfinite(sh0.grad).all() and sh0.grad.abs().sum().item() > 0.0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_gaussiansplat3d_render_images_from_world_masks_write_background_and_zero_grads():
     import fvdb
 
