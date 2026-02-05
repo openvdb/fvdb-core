@@ -889,21 +889,21 @@ GaussianSplat3d::renderImages(const torch::Tensor &worldToCameraMatrices,
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
-GaussianSplat3d::renderImagesFromWorld3DGS(const torch::Tensor &worldToCameraMatrices,
-                                           const torch::Tensor &projectionMatrices,
-                                           const size_t imageWidth,
-                                           const size_t imageHeight,
-                                           const float near,
-                                           const float far,
-                                           const fvdb::detail::ops::CameraModel cameraModel,
-                                           const std::optional<torch::Tensor> &distortionCoeffs,
-                                           const int64_t shDegreeToUse,
-                                           const size_t tileSize,
-                                           const float minRadius2d,
-                                           const float eps2d,
-                                           const bool antialias,
-                                           const std::optional<torch::Tensor> &backgrounds,
-                                           const std::optional<torch::Tensor> &masks) {
+GaussianSplat3d::renderImagesFromWorld(const torch::Tensor &worldToCameraMatrices,
+                                       const torch::Tensor &projectionMatrices,
+                                       const size_t imageWidth,
+                                       const size_t imageHeight,
+                                       const float near,
+                                       const float far,
+                                       const fvdb::detail::ops::CameraModel cameraModel,
+                                       const std::optional<torch::Tensor> &distortionCoeffs,
+                                       const int64_t shDegreeToUse,
+                                       const size_t tileSize,
+                                       const float minRadius2d,
+                                       const float eps2d,
+                                       const bool antialias,
+                                       const std::optional<torch::Tensor> &backgrounds,
+                                       const std::optional<torch::Tensor> &masks) {
     FVDB_FUNC_RANGE();
     const int C = worldToCameraMatrices.size(0); // number of cameras
     TORCH_CHECK(C > 0, "At least one camera must be provided (got 0)");

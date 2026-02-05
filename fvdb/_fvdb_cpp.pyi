@@ -208,7 +208,7 @@ class GaussianSplat3d:
         antialias: bool = ...,
         backgrounds: Optional[torch.Tensor] = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
-    def render_images_from_world_3dgs(
+    def render_images_from_world(
         self,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,

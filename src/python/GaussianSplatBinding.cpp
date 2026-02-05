@@ -217,8 +217,8 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("antialias")        = false,
              py::arg("backgrounds")      = std::nullopt)
 
-        .def("render_images_from_world_3dgs",
-             &fvdb::GaussianSplat3d::renderImagesFromWorld3DGS,
+        .def("render_images_from_world",
+             &fvdb::GaussianSplat3d::renderImagesFromWorld,
              py::arg("world_to_camera_matrices"),
              py::arg("projection_matrices"),
              py::arg("image_width"),
