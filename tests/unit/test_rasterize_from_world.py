@@ -277,6 +277,172 @@ def test_gaussiansplat3d_render_images_from_world_grads_match_finite_differences
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_gaussiansplat3d_render_images_from_world_grads_nonzero_with_shN():
+    import fvdb
+
+    device = torch.device("cuda")
+    C, N, D = 1, 1, 3
+
+    means = torch.tensor([[0.05, 0.05, 2.5]], device=device, dtype=torch.float32, requires_grad=True)
+    quats = torch.tensor([[0.97, 0.05, 0.20, -0.10]], device=device, dtype=torch.float32, requires_grad=True)
+    log_scales = torch.tensor([[-0.6, -0.9, -0.4]], device=device, dtype=torch.float32, requires_grad=True)
+    logit_opacities = torch.tensor([2.0], device=device, dtype=torch.float32, requires_grad=True)
+
+    # Degree 1 uses 4 SH bases total; sh0 is [N,1,D] and shN holds the remaining K-1=3 bases.
+    sh0 = torch.randn((N, 1, D), device=device, dtype=torch.float32, requires_grad=True)
+    shN = torch.randn((N, 3, D), device=device, dtype=torch.float32, requires_grad=True)
+
+    gs = fvdb.GaussianSplat3d.from_tensors(
+        means=means,
+        quats=quats,
+        log_scales=log_scales,
+        logit_opacities=logit_opacities,
+        sh0=sh0,
+        shN=shN,
+        accumulate_mean_2d_gradients=False,
+        accumulate_max_2d_radii=False,
+        detach=False,
+    )
+
+    image_width = 16
+    image_height = 16
+    world_to_cam = torch.eye(4, device=device, dtype=torch.float32).unsqueeze(0)
+    K = torch.tensor(
+        [[[18.0, 0.0, 7.5], [0.0, 18.0, 7.5], [0.0, 0.0, 1.0]]],
+        device=device,
+        dtype=torch.float32,
+    )
+
+    rendered, alphas = gs.render_images_from_world(
+        world_to_camera_matrices=world_to_cam,
+        projection_matrices=K,
+        image_width=image_width,
+        image_height=image_height,
+        near=0.01,
+        far=1e10,
+        camera_model=fvdb.CameraModel.PINHOLE,
+        distortion_coeffs=None,
+        sh_degree_to_use=1,
+        tile_size=16,
+        min_radius_2d=0.0,
+        eps_2d=0.3,
+        antialias=False,
+        backgrounds=None,
+    )
+
+    loss = (rendered * rendered).sum() + alphas.sum()
+    loss.backward()
+
+    assert means.grad is not None and torch.isfinite(means.grad).all() and means.grad.abs().sum().item() > 0.0
+    assert quats.grad is not None and torch.isfinite(quats.grad).all() and quats.grad.abs().sum().item() > 0.0
+    assert (
+        log_scales.grad is not None
+        and torch.isfinite(log_scales.grad).all()
+        and log_scales.grad.abs().sum().item() > 0.0
+    )
+    assert (
+        logit_opacities.grad is not None
+        and torch.isfinite(logit_opacities.grad).all()
+        and logit_opacities.grad.abs().sum().item() > 0.0
+    )
+    assert sh0.grad is not None and torch.isfinite(sh0.grad).all() and sh0.grad.abs().sum().item() > 0.0
+    assert shN.grad is not None and torch.isfinite(shN.grad).all() and shN.grad.abs().sum().item() > 0.0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_gaussiansplat3d_render_images_from_world_shN_grads_match_finite_differences():
+    """
+    Finite-difference check for SHN coefficients (non-constant SH terms).
+    """
+    import fvdb
+
+    device = torch.device("cuda")
+    dtype = torch.float32
+
+    C, N, D = 1, 1, 3
+    image_width = 16
+    image_height = 16
+
+    world_to_cam = torch.eye(4, device=device, dtype=dtype).unsqueeze(0)  # [1,4,4]
+    K = torch.tensor(
+        [[[18.0, 0.0, 7.5], [0.0, 18.0, 7.5], [0.0, 0.0, 1.0]]],
+        device=device,
+        dtype=dtype,
+    )
+
+    means = torch.tensor([[0.05, 0.05, 2.5]], device=device, dtype=dtype)
+    quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=dtype)
+    log_scales = torch.tensor([[-0.6, -0.9, -0.4]], device=device, dtype=dtype)
+    logit_opacities = torch.tensor([2.0], device=device, dtype=dtype)
+
+    sh0 = torch.tensor([[[0.8, -0.2, 0.3]]], device=device, dtype=dtype)  # [N,1,D]
+    shN0 = torch.tensor([[[0.05, -0.01, 0.02], [0.00, 0.03, -0.04], [0.01, 0.02, 0.00]]], device=device, dtype=dtype)
+
+    def loss_from_shN(shN_t: torch.Tensor) -> torch.Tensor:
+        gs = fvdb.GaussianSplat3d.from_tensors(
+            means=means,
+            quats=quats,
+            log_scales=log_scales,
+            logit_opacities=logit_opacities,
+            sh0=sh0,
+            shN=shN_t,
+            accumulate_mean_2d_gradients=False,
+            accumulate_max_2d_radii=False,
+            detach=False,
+        )
+
+        rendered, alphas = gs.render_images_from_world(
+            world_to_camera_matrices=world_to_cam,
+            projection_matrices=K,
+            image_width=image_width,
+            image_height=image_height,
+            near=0.01,
+            far=1e10,
+            camera_model=fvdb.CameraModel.PINHOLE,
+            distortion_coeffs=None,
+            sh_degree_to_use=1,
+            tile_size=16,
+            min_radius_2d=0.0,
+            eps_2d=0.3,
+            antialias=False,
+            backgrounds=None,
+        )
+
+        return (rendered * rendered).sum() + 0.5 * alphas.sum()
+
+    shN = shN0.detach().clone().requires_grad_(True)
+    loss = loss_from_shN(shN)
+    loss.backward()
+    assert shN.grad is not None
+
+    eps = 1.0e-3
+    rtol = 2.5e-2
+    atol = 2.5e-2
+
+    def fd_shN(i1: int, i2: int) -> float:
+        with torch.no_grad():
+            shN_p = shN0.detach().clone()
+            shN_m = shN0.detach().clone()
+            shN_p[0, i1, i2] += eps
+            shN_m[0, i1, i2] -= eps
+            lp = loss_from_shN(shN_p).item()
+            lm = loss_from_shN(shN_m).item()
+            return (lp - lm) / (2.0 * eps)
+
+    checks = [
+        ("shN[0,0,0]", float(shN.grad[0, 0, 0].item()), fd_shN(0, 0)),
+        ("shN[0,2,1]", float(shN.grad[0, 2, 1].item()), fd_shN(2, 1)),
+    ]
+
+    for name, grad_autograd, grad_fd in checks:
+        assert torch.isfinite(torch.tensor(grad_autograd))
+        assert torch.isfinite(torch.tensor(grad_fd))
+        assert grad_autograd == pytest.approx(
+            grad_fd, rel=rtol, abs=atol
+        ), f"{name}: autograd={grad_autograd} fd={grad_fd}"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_gaussiansplat3d_render_images_from_world_masks_write_background_and_zero_grads():
     import fvdb
 
