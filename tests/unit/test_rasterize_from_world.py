@@ -359,7 +359,6 @@ def test_gaussiansplat3d_render_images_from_world_shN_grads_match_finite_differe
     device = torch.device("cuda")
     dtype = torch.float32
 
-    C, N, D = 1, 1, 3
     image_width = 16
     image_height = 16
 
