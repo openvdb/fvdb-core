@@ -101,20 +101,21 @@ def test_gaussiansplat3d_render_images_from_world_grads_match_finite_differences
         dtype=dtype,
     )
 
-    # Fixed SH (degree 0 only), so the only learnable feature is the SH0 coefficient itself.
-    # We keep SH fixed for this test; we are checking geometry + opacity grads.
-    sh0 = torch.tensor([[[0.8, -0.2, 0.3]]], device=device, dtype=dtype)  # [N,1,D]
     shN = torch.empty((N, 0, D), device=device, dtype=dtype)
 
     def loss_from_params(
-        means_t: torch.Tensor, quats_t: torch.Tensor, log_scales_t: torch.Tensor, logit_opacities_t: torch.Tensor
+        means_t: torch.Tensor,
+        quats_t: torch.Tensor,
+        log_scales_t: torch.Tensor,
+        logit_opacities_t: torch.Tensor,
+        sh0_t: torch.Tensor,
     ) -> torch.Tensor:
         gs = fvdb.GaussianSplat3d.from_tensors(
             means=means_t,
             quats=quats_t,
             log_scales=log_scales_t,
             logit_opacities=logit_opacities_t,
-            sh0=sh0,
+            sh0=sh0_t,
             shN=shN,
             accumulate_mean_2d_gradients=False,
             accumulate_max_2d_radii=False,
@@ -143,36 +144,47 @@ def test_gaussiansplat3d_render_images_from_world_grads_match_finite_differences
 
     # Baseline parameters.
     means = torch.tensor([[0.05, 0.05, 2.5]], device=device, dtype=dtype, requires_grad=True)
-    quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=dtype)  # fixed
+    quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=dtype, requires_grad=True)
     log_scales = torch.tensor([[-0.6, -0.9, -0.4]], device=device, dtype=dtype, requires_grad=True)
     logit_opacities = torch.tensor([2.0], device=device, dtype=dtype, requires_grad=True)
+    sh0 = torch.tensor([[[0.8, -0.2, 0.3]]], device=device, dtype=dtype, requires_grad=True)  # [N,1,D]
 
     # Autograd gradients.
-    loss = loss_from_params(means, quats, log_scales, logit_opacities)
+    loss = loss_from_params(means, quats, log_scales, logit_opacities, sh0)
     loss.backward()
 
     assert means.grad is not None
+    assert quats.grad is not None
     assert log_scales.grad is not None
     assert logit_opacities.grad is not None
+    assert sh0.grad is not None
 
     # Centered finite differences for a small subset of scalars.
     eps = 1.0e-3
     rtol = 2.5e-2
     atol = 2.5e-2
 
-    def fd_scalar(param_name: str, i0: int, i1: int | None = None) -> float:
+    def fd_scalar(param_name: str, i0: int, i1: int | None = None, i2: int | None = None) -> float:
         with torch.no_grad():
             means_p = means.detach().clone()
             means_m = means.detach().clone()
+            quats_p = quats.detach().clone()
+            quats_m = quats.detach().clone()
             log_scales_p = log_scales.detach().clone()
             log_scales_m = log_scales.detach().clone()
             logit_p = logit_opacities.detach().clone()
             logit_m = logit_opacities.detach().clone()
+            sh0_p = sh0.detach().clone()
+            sh0_m = sh0.detach().clone()
 
             if param_name == "means":
                 assert i1 is not None
                 means_p[i0, i1] += eps
                 means_m[i0, i1] -= eps
+            elif param_name == "quats":
+                assert i1 is not None
+                quats_p[i0, i1] += eps
+                quats_m[i0, i1] -= eps
             elif param_name == "log_scales":
                 assert i1 is not None
                 log_scales_p[i0, i1] += eps
@@ -181,11 +193,15 @@ def test_gaussiansplat3d_render_images_from_world_grads_match_finite_differences
                 assert i1 is None
                 logit_p[i0] += eps
                 logit_m[i0] -= eps
+            elif param_name == "sh0":
+                assert i1 is not None and i2 is not None
+                sh0_p[i0, i1, i2] += eps
+                sh0_m[i0, i1, i2] -= eps
             else:
                 raise AssertionError(f"Unknown param_name: {param_name}")
 
-            lp = loss_from_params(means_p, quats, log_scales_p, logit_p).item()
-            lm = loss_from_params(means_m, quats, log_scales_m, logit_m).item()
+            lp = loss_from_params(means_p, quats_p, log_scales_p, logit_p, sh0_p).item()
+            lm = loss_from_params(means_m, quats_m, log_scales_m, logit_m, sh0_m).item()
             return (lp - lm) / (2.0 * eps)
 
     checks: list[tuple[str, float, float]] = []
@@ -194,6 +210,8 @@ def test_gaussiansplat3d_render_images_from_world_grads_match_finite_differences
     checks.append(("log_scales[0,0]", float(log_scales.grad[0, 0].item()), fd_scalar("log_scales", 0, 0)))
     checks.append(("log_scales[0,2]", float(log_scales.grad[0, 2].item()), fd_scalar("log_scales", 0, 2)))
     checks.append(("logit_opacities[0]", float(logit_opacities.grad[0].item()), fd_scalar("logit_opacities", 0)))
+    checks.append(("sh0[0,0,0]", float(sh0.grad[0, 0, 0].item()), fd_scalar("sh0", 0, 0, 0)))
+    checks.append(("sh0[0,0,2]", float(sh0.grad[0, 0, 2].item()), fd_scalar("sh0", 0, 0, 2)))
 
     for name, grad_autograd, grad_fd in checks:
         assert torch.isfinite(torch.tensor(grad_autograd))
@@ -201,6 +219,61 @@ def test_gaussiansplat3d_render_images_from_world_grads_match_finite_differences
         assert grad_autograd == pytest.approx(
             grad_fd, rel=rtol, abs=atol
         ), f"{name}: autograd={grad_autograd} fd={grad_fd}"
+
+    # Quaternion tangent-space finite-difference check.
+    # We compare the FD directional derivative along a small axis-angle perturbation to the
+    # autograd gradient dotted with dq/dt (estimated numerically).
+    def quat_mul_wxyz(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
+        w1, x1, y1, z1 = q1.unbind(-1)
+        w2, x2, y2, z2 = q2.unbind(-1)
+        return torch.stack(
+            (
+                w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+                w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+                w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+                w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+            ),
+            dim=-1,
+        )
+
+    def quat_exp_axis_angle_wxyz(v: torch.Tensor) -> torch.Tensor:
+        theta = torch.linalg.norm(v)
+        half = 0.5 * theta
+        if float(theta.item()) < 1.0e-12:
+            return torch.tensor([1.0, 0.0, 0.0, 0.0], device=v.device, dtype=v.dtype)
+        axis = v / theta
+        return torch.cat((torch.cos(half).view(1), torch.sin(half) * axis), dim=0)
+
+    with torch.no_grad():
+        q0 = quats.detach()[0]  # [4] wxyz
+        # Two independent tangent directions.
+        dirs = [
+            torch.tensor([1.0, 0.0, 0.0], device=device, dtype=dtype),
+            torch.tensor([0.0, 1.0, 0.2], device=device, dtype=dtype),
+        ]
+        for j, d in enumerate(dirs):
+            d = d / torch.linalg.norm(d)
+            dq_plus = quat_exp_axis_angle_wxyz(eps * d)
+            dq_minus = quat_exp_axis_angle_wxyz(-eps * d)
+            q_plus = quat_mul_wxyz(dq_plus, q0).view(1, 4)
+            q_minus = quat_mul_wxyz(dq_minus, q0).view(1, 4)
+
+            lp = loss_from_params(
+                means.detach(), q_plus, log_scales.detach(), logit_opacities.detach(), sh0.detach()
+            ).item()
+            lm = loss_from_params(
+                means.detach(), q_minus, log_scales.detach(), logit_opacities.detach(), sh0.detach()
+            ).item()
+            fd_dir = (lp - lm) / (2.0 * eps)
+
+            dqdt = (q_plus - q_minus) / (2.0 * eps)  # [1,4]
+            dir_autograd = float((quats.grad.detach() * dqdt).sum().item())
+
+            assert torch.isfinite(torch.tensor(fd_dir))
+            assert torch.isfinite(torch.tensor(dir_autograd))
+            assert dir_autograd == pytest.approx(
+                fd_dir, rel=rtol, abs=atol
+            ), f"quats tangent dir {j}: autograd={dir_autograd} fd={fd_dir}"
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
