@@ -29,14 +29,15 @@ namespace fvdb::detail::ops {
 ///
 /// @tparam DeviceType torch::kCUDA (CPU not implemented).
 template <torch::DeviceType>
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> dispatchGaussianRasterizeFromWorld3DGSForward(
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchGaussianRasterizeFromWorld3DGSForward(
     // Gaussian parameters (world space)
     const torch::Tensor &means,     // [N, 3]
     const torch::Tensor &quats,     // [N, 4] (w,x,y,z)
     const torch::Tensor &logScales, // [N, 3]
     // Per-camera quantities
-    const torch::Tensor &features,  // [C, N, D]
-    const torch::Tensor &opacities, // [C, N]
+    const torch::Tensor &features,                // [C, N, D]
+    const torch::Tensor &opacities,               // [C, N]
     const torch::Tensor &worldToCamMatricesStart, // [C, 4, 4]
     const torch::Tensor &worldToCamMatricesEnd,   // [C, 4, 4]
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]

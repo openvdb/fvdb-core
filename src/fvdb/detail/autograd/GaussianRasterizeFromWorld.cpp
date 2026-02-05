@@ -91,12 +91,12 @@ RasterizeGaussiansToPixelsFromWorld3DGS::forward(
     }
     ctx->save_for_backward(toSave);
 
-    ctx->saved_data["imageWidth"]   = (int64_t)imageWidth;
-    ctx->saved_data["imageHeight"]  = (int64_t)imageHeight;
-    ctx->saved_data["imageOriginW"] = (int64_t)imageOriginW;
-    ctx->saved_data["imageOriginH"] = (int64_t)imageOriginH;
-    ctx->saved_data["tileSize"]     = (int64_t)tileSize;
-    ctx->saved_data["cameraModel"]  = (int64_t)cameraModel;
+    ctx->saved_data["imageWidth"]         = (int64_t)imageWidth;
+    ctx->saved_data["imageHeight"]        = (int64_t)imageHeight;
+    ctx->saved_data["imageOriginW"]       = (int64_t)imageOriginW;
+    ctx->saved_data["imageOriginH"]       = (int64_t)imageOriginH;
+    ctx->saved_data["tileSize"]           = (int64_t)tileSize;
+    ctx->saved_data["cameraModel"]        = (int64_t)cameraModel;
     ctx->saved_data["rollingShutterType"] = (int64_t)rollingShutterType;
 
     return {renderedFeatures, renderedAlphas};
@@ -117,12 +117,12 @@ RasterizeGaussiansToPixelsFromWorld3DGS::backward(
         dLossDRenderedAlphas = dLossDRenderedAlphas.contiguous();
     }
 
-    VariableList saved = ctx->get_saved_variables();
-    Variable means     = saved.at(0);
-    Variable quats     = saved.at(1);
-    Variable logScales = saved.at(2);
-    Variable features  = saved.at(3);
-    Variable opacities = saved.at(4);
+    VariableList saved               = ctx->get_saved_variables();
+    Variable means                   = saved.at(0);
+    Variable quats                   = saved.at(1);
+    Variable logScales               = saved.at(2);
+    Variable features                = saved.at(3);
+    Variable opacities               = saved.at(4);
     Variable worldToCamMatricesStart = saved.at(5);
     Variable worldToCamMatricesEnd   = saved.at(6);
     Variable projectionMatrices      = saved.at(7);
@@ -189,28 +189,9 @@ RasterizeGaussiansToPixelsFromWorld3DGS::backward(
     Variable dOpacities = std::get<4>(grads);
 
     // Return gradients in the same order as forward inputs.
-    return {dMeans,
-            dQuats,
-            dLogScales,
-            dFeatures,
-            dOpacities,
-            Variable(),
-            Variable(),
-            Variable(),
-            Variable(),
-            Variable(),
-            Variable(),
-            Variable(),
-            Variable(),
-            Variable(),
-            Variable(),
-            Variable(),
-            Variable(),
-            Variable(),
-            Variable(),
-            Variable(),
-            Variable()};
+    return {dMeans,     dQuats,     dLogScales, dFeatures,  dOpacities, Variable(), Variable(),
+            Variable(), Variable(), Variable(), Variable(), Variable(), Variable(), Variable(),
+            Variable(), Variable(), Variable(), Variable(), Variable(), Variable(), Variable()};
 }
 
 } // namespace fvdb::detail::autograd
-

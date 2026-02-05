@@ -31,8 +31,8 @@ dispatchGaussianRasterizeFromWorld3DGSBackward(
     const torch::Tensor &quats,     // [N, 4]
     const torch::Tensor &logScales, // [N, 3]
     // Per-camera quantities
-    const torch::Tensor &features,  // [C, N, D]
-    const torch::Tensor &opacities, // [C, N]
+    const torch::Tensor &features,                // [C, N, D]
+    const torch::Tensor &opacities,               // [C, N]
     const torch::Tensor &worldToCamMatricesStart, // [C, 4, 4]
     const torch::Tensor &worldToCamMatricesEnd,   // [C, 4, 4]
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]

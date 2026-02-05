@@ -947,13 +947,12 @@ GaussianSplat3d::renderImagesFromWorld(const torch::Tensor &worldToCameraMatrice
     } else {
         // OpenCV camera models: use UT projection to compute radii/depths for tiling/sorting.
         // Rasterization itself is still performed with the 3DGS ray-ellipsoid kernel.
-        const torch::Tensor distortionCoeffs_ =
-            distortionCoeffs.has_value()
-                ? distortionCoeffs.value()
-                : torch::empty({C, 0}, mMeans.options());
+        const torch::Tensor distortionCoeffs_ = distortionCoeffs.has_value()
+                                                    ? distortionCoeffs.value()
+                                                    : torch::empty({C, 0}, mMeans.options());
 
         fvdb::detail::ops::UTParams utParams = fvdb::detail::ops::UTParams{};
-        const auto projectionResults = FVDB_DISPATCH_KERNEL(mMeans.device(), [&]() {
+        const auto projectionResults         = FVDB_DISPATCH_KERNEL(mMeans.device(), [&]() {
             return fvdb::detail::ops::dispatchGaussianProjectionForwardUT<DeviceTag>(
                 mMeans,
                 mQuats,
@@ -983,8 +982,9 @@ GaussianSplat3d::renderImagesFromWorld(const torch::Tensor &worldToCameraMatrice
         perGaussianOpacity = opacities().repeat({C, 1});
         if (antialias) {
             const torch::Tensor compensations = std::get<4>(projectionResults);
-            TORCH_CHECK(compensations.defined(),
-                        "UT projection returned an undefined compensation tensor in antialias mode");
+            TORCH_CHECK(
+                compensations.defined(),
+                "UT projection returned an undefined compensation tensor in antialias mode");
             perGaussianOpacity *= compensations;
             perGaussianOpacity = perGaussianOpacity.contiguous();
         }
@@ -1007,10 +1007,9 @@ GaussianSplat3d::renderImagesFromWorld(const torch::Tensor &worldToCameraMatrice
         });
     }
 
-    const torch::Tensor distortionCoeffsForRaster =
-        distortionCoeffs.has_value()
-            ? distortionCoeffs.value()
-            : torch::empty({C, 0}, mMeans.options());
+    const torch::Tensor distortionCoeffsForRaster = distortionCoeffs.has_value()
+                                                        ? distortionCoeffs.value()
+                                                        : torch::empty({C, 0}, mMeans.options());
 
     auto outputs = detail::autograd::RasterizeGaussiansToPixelsFromWorld3DGS::apply(
         mMeans,
