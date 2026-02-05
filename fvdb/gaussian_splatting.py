@@ -5,9 +5,8 @@ import pathlib
 from typing import Any, Mapping, Sequence, TypeVar, overload
 
 import torch
-from fvdb.enums import ProjectionType
+from fvdb.enums import CameraModel, ProjectionType
 
-from ._fvdb_cpp import CameraModel
 from ._fvdb_cpp import GaussianSplat3d as GaussianSplat3dCpp
 from ._fvdb_cpp import JaggedTensor as JaggedTensorCpp
 from ._fvdb_cpp import ProjectedGaussianSplats as ProjectedGaussianSplatsCpp
