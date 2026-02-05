@@ -405,27 +405,26 @@ rasterizeFromWorld3DGSBackwardKernel(
                 float *dFeatPtr = dFeatures + ((cid * (int32_t)means.size(0) + gid) * (int32_t)NUM_CHANNELS);
 #pragma unroll
                 for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                    at::cuda::CUDA_KERNEL_ATOMIC_ADD(dFeatPtr + k, v_feat_local[k]);
+                    atomicAdd_system(dFeatPtr + k, v_feat_local[k]);
                 }
-                at::cuda::CUDA_KERNEL_ATOMIC_ADD(dOpacities + (cid * (int32_t)means.size(0) + gid),
-                                                 v_opacity_local);
+                atomicAdd_system(dOpacities + (cid * (int32_t)means.size(0) + gid), v_opacity_local);
 
                 // Geometry grads (shared across cameras)
                 float *dMeanPtr = dMeans + gid * 3;
-                at::cuda::CUDA_KERNEL_ATOMIC_ADD(dMeanPtr + 0, v_mean_local[0]);
-                at::cuda::CUDA_KERNEL_ATOMIC_ADD(dMeanPtr + 1, v_mean_local[1]);
-                at::cuda::CUDA_KERNEL_ATOMIC_ADD(dMeanPtr + 2, v_mean_local[2]);
+                atomicAdd_system(dMeanPtr + 0, v_mean_local[0]);
+                atomicAdd_system(dMeanPtr + 1, v_mean_local[1]);
+                atomicAdd_system(dMeanPtr + 2, v_mean_local[2]);
 
                 float *dQuatPtr = dQuats + gid * 4;
-                at::cuda::CUDA_KERNEL_ATOMIC_ADD(dQuatPtr + 0, v_quat_local[0]);
-                at::cuda::CUDA_KERNEL_ATOMIC_ADD(dQuatPtr + 1, v_quat_local[1]);
-                at::cuda::CUDA_KERNEL_ATOMIC_ADD(dQuatPtr + 2, v_quat_local[2]);
-                at::cuda::CUDA_KERNEL_ATOMIC_ADD(dQuatPtr + 3, v_quat_local[3]);
+                atomicAdd_system(dQuatPtr + 0, v_quat_local[0]);
+                atomicAdd_system(dQuatPtr + 1, v_quat_local[1]);
+                atomicAdd_system(dQuatPtr + 2, v_quat_local[2]);
+                atomicAdd_system(dQuatPtr + 3, v_quat_local[3]);
 
                 float *dLsPtr = dLogScales + gid * 3;
-                at::cuda::CUDA_KERNEL_ATOMIC_ADD(dLsPtr + 0, v_logscale_local[0]);
-                at::cuda::CUDA_KERNEL_ATOMIC_ADD(dLsPtr + 1, v_logscale_local[1]);
-                at::cuda::CUDA_KERNEL_ATOMIC_ADD(dLsPtr + 2, v_logscale_local[2]);
+                atomicAdd_system(dLsPtr + 0, v_logscale_local[0]);
+                atomicAdd_system(dLsPtr + 1, v_logscale_local[1]);
+                atomicAdd_system(dLsPtr + 2, v_logscale_local[2]);
             }
         }
     }

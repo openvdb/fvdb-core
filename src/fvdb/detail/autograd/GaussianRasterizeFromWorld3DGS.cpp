@@ -5,6 +5,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorld3DGSBackward.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorld3DGSForward.h>
 #include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/Utils.h>
 
 namespace fvdb::detail::autograd {
 
@@ -32,7 +33,7 @@ RasterizeGaussiansToPixelsFromWorld3DGS::forward(
     std::optional<RasterizeGaussiansToPixelsFromWorld3DGS::Variable> backgrounds) {
     FVDB_FUNC_RANGE_WITH_NAME("RasterizeGaussiansToPixelsFromWorld3DGS::forward");
 
-    auto outputs = FVDB_DISPATCH_KERNEL(means.device(), [&]() {
+    auto outputs = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
         return ops::dispatchGaussianRasterizeFromWorld3DGSForward<DeviceTag>(
             means,
             quats,
@@ -149,7 +150,7 @@ RasterizeGaussiansToPixelsFromWorld3DGS::backward(
     const auto rollingShutterType = static_cast<fvdb::detail::ops::RollingShutterType>(
         ctx->saved_data["rollingShutterType"].toInt());
 
-    auto grads = FVDB_DISPATCH_KERNEL(means.device(), [&]() {
+    auto grads = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
         return ops::dispatchGaussianRasterizeFromWorld3DGSBackward<DeviceTag>(
             means,
             quats,
