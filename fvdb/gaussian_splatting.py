@@ -7,6 +7,7 @@ from typing import Any, Mapping, Sequence, TypeVar, overload
 import torch
 from fvdb.enums import CameraModel, ProjectionType
 
+from . import _fvdb_cpp as _C
 from ._fvdb_cpp import GaussianSplat3d as GaussianSplat3dCpp
 from ._fvdb_cpp import JaggedTensor as JaggedTensorCpp
 from ._fvdb_cpp import ProjectedGaussianSplats as ProjectedGaussianSplatsCpp
@@ -1901,6 +1902,11 @@ class GaussianSplat3d:
         world-space Gaussians. This enables geometry gradients through rasterization (useful for
         UT camera models).
         """
+        if isinstance(camera_model, CameraModel):
+            camera_model_cpp = getattr(_C.CameraModel, camera_model.name)
+        else:
+            camera_model_cpp = camera_model
+
         return self._impl.render_images_from_world_3dgs(
             world_to_camera_matrices=world_to_camera_matrices,
             projection_matrices=projection_matrices,
@@ -1908,7 +1914,7 @@ class GaussianSplat3d:
             image_height=image_height,
             near=near,
             far=far,
-            camera_model=camera_model,
+            camera_model=camera_model_cpp,
             distortion_coeffs=distortion_coeffs,
             sh_degree_to_use=sh_degree_to_use,
             tile_size=tile_size,
