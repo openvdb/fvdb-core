@@ -6,6 +6,83 @@ import pytest
 import torch
 
 
+def _render_images_from_world_masked_edge_tile_worker(queue) -> None:
+    """
+    Subprocess worker for the masked edge-tile deadlock regression test.
+
+    Must be top-level for multiprocessing "spawn" pickling.
+    """
+    try:
+        import fvdb
+
+        device = torch.device("cuda")
+        dtype = torch.float32
+
+        C, N, D = 1, 1, 3
+        image_width = 17
+        image_height = 17
+        tile_size = 16  # -> tileH=tileW=2, with a 1-pixel edge tile at (1,1)
+
+        # Place the Gaussian so it projects into the bottom-right edge tile.
+        means = torch.tensor([[1.11, 1.11, 2.5]], device=device, dtype=dtype, requires_grad=True)
+        quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=dtype, requires_grad=True)
+        log_scales = torch.tensor([[-0.6, -0.9, -0.4]], device=device, dtype=dtype, requires_grad=True)
+        logit_opacities = torch.tensor([2.0], device=device, dtype=dtype, requires_grad=True)
+        sh0 = torch.tensor([[[0.8, -0.2, 0.3]]], device=device, dtype=dtype, requires_grad=True)
+        shN = torch.empty((N, 0, D), device=device, dtype=dtype, requires_grad=True)
+
+        gs = fvdb.GaussianSplat3d.from_tensors(
+            means=means,
+            quats=quats,
+            log_scales=log_scales,
+            logit_opacities=logit_opacities,
+            sh0=sh0,
+            shN=shN,
+            accumulate_mean_2d_gradients=False,
+            accumulate_max_2d_radii=False,
+            detach=False,
+        )
+
+        world_to_cam = torch.eye(4, device=device, dtype=dtype).unsqueeze(0)
+        K = torch.tensor(
+            [[[18.0, 0.0, 8.0], [0.0, 18.0, 8.0], [0.0, 0.0, 1.0]]],
+            device=device,
+            dtype=dtype,
+        )
+
+        backgrounds = torch.tensor([[0.10, -0.20, 0.30]], device=device, dtype=dtype)  # [C,D]
+        masks = torch.ones((C, 2, 2), device=device, dtype=torch.bool)
+        masks[0, 1, 1] = False  # mask out the bottom-right edge tile
+
+        rendered, alphas = gs.render_images_from_world(
+            world_to_camera_matrices=world_to_cam,
+            projection_matrices=K,
+            image_width=image_width,
+            image_height=image_height,
+            near=0.01,
+            far=1e10,
+            camera_model=fvdb.CameraModel.PINHOLE,
+            distortion_coeffs=None,
+            sh_degree_to_use=0,
+            tile_size=tile_size,
+            min_radius_2d=0.0,
+            eps_2d=0.3,
+            antialias=False,
+            backgrounds=backgrounds,
+            masks=masks,
+        )
+
+        loss = rendered.sum() + alphas.sum()
+        loss.backward()
+        torch.cuda.synchronize()
+
+        queue.put(("ok", None))
+    except Exception:  # pragma: no cover
+        import traceback
+
+        queue.put(("err", traceback.format_exc()))
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_gaussiansplat3d_render_images_from_world_grads_nonzero():
     # Import inside the test so CPU-only environments can still collect this file.
@@ -617,6 +694,38 @@ def test_gaussiansplat3d_render_images_from_world_masks_write_background_and_zer
     assert logit_opacities.grad is not None and torch.equal(
         logit_opacities.grad, torch.zeros_like(logit_opacities.grad)
     )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_gaussiansplat3d_render_images_from_world_masks_edge_tile_does_not_deadlock():
+    """
+    Regression test: masked *edge tiles* must not deadlock.
+
+    Edge tiles (where image dimensions are not multiples of tile size) have threads that are
+    `!inside`, but the kernel still uses block-level barriers. Any early-return taken by only
+    the `inside` threads (e.g. for masked tiles) can deadlock the whole kernel launch.
+
+    We run the render+backward in a subprocess with a timeout; a deadlock will cause the test
+    to hang and fail deterministically.
+    """
+
+    import multiprocessing as mp
+
+    ctx = mp.get_context("spawn")
+    q = ctx.Queue()
+
+    p = ctx.Process(target=_render_images_from_world_masked_edge_tile_worker, args=(q,))
+    p.start()
+    p.join(timeout=20.0)
+
+    if p.is_alive():
+        p.terminate()
+        p.join(timeout=5.0)
+        pytest.fail("CUDA kernel deadlocked on masked edge tile (process timeout).")
+
+    status, payload = q.get(timeout=5.0)
+    if status != "ok":
+        raise AssertionError(payload)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")

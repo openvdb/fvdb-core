@@ -86,14 +86,22 @@ rasterizeFromWorld3DGSForwardKernel(
     const uint32_t imgBasePix = (camId * imageHeight * imageWidth + pixId); // alpha/last base
 
     // Parity with classic rasterizer: masked tiles write background and exit.
-    if (inside && masks != nullptr &&
-        !masks[camId * tileExtentH * tileExtentW + tileRow * tileExtentW + tileCol]) {
-        outAlphas[imgBasePix]  = 0.0f;
-        outLastIds[imgBasePix] = 0;
+    //
+    // IMPORTANT: this kernel uses block-level barriers later (`__syncthreads_count`, `block.sync`).
+    // Any early return must be taken by *all* threads in the block, otherwise edge tiles can
+    // deadlock when some threads are `!inside`. So we make the return block-wide.
+    const bool tileMasked =
+        (masks != nullptr) &&
+        (!masks[camId * tileExtentH * tileExtentW + tileRow * tileExtentW + tileCol]);
+    if (tileMasked) {
+        if (inside) {
+            outAlphas[imgBasePix]  = 0.0f;
+            outLastIds[imgBasePix] = 0;
 #pragma unroll
-        for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-            outFeatures[imgBaseFeat + k] =
-                (backgrounds != nullptr) ? backgrounds[camId * NUM_CHANNELS + k] : 0.0f;
+            for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
+                outFeatures[imgBaseFeat + k] =
+                    (backgrounds != nullptr) ? backgrounds[camId * NUM_CHANNELS + k] : 0.0f;
+            }
         }
         return;
     }
@@ -182,14 +190,18 @@ rasterizeFromWorld3DGSForwardKernel(
     }
 
     // If no intersections, just write background.
-    if (inside && rangeEnd <= rangeStart) {
-        // alpha=0, output background if provided else 0.
-        outAlphas[imgBasePix]  = 0.0f;
-        outLastIds[imgBasePix] = 0;
+    //
+    // As above, this must be a block-wide return to avoid deadlocks on edge tiles.
+    if (rangeEnd <= rangeStart) {
+        if (inside) {
+            // alpha=0, output background if provided else 0.
+            outAlphas[imgBasePix]  = 0.0f;
+            outLastIds[imgBasePix] = 0;
 #pragma unroll
-        for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-            outFeatures[imgBaseFeat + k] =
-                (backgrounds != nullptr) ? backgrounds[camId * NUM_CHANNELS + k] : 0.0f;
+            for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
+                outFeatures[imgBaseFeat + k] =
+                    (backgrounds != nullptr) ? backgrounds[camId * NUM_CHANNELS + k] : 0.0f;
+            }
         }
         return;
     }

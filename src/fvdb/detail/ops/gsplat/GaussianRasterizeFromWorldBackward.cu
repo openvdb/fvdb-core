@@ -95,8 +95,14 @@ rasterizeFromWorld3DGSBackwardKernel(
     const bool inside  = (row < imageHeight && col < imageWidth);
 
     // Parity with classic rasterizer: masked tiles contribute nothing.
-    if (inside && masks != nullptr &&
-        !masks[camId * tileExtentH * tileExtentW + tileRow * tileExtentW + tileCol]) {
+    //
+    // IMPORTANT: this kernel uses block-level barriers later (`block.sync`). Any early return must
+    // be taken by *all* threads in the block, otherwise edge tiles can deadlock when some threads
+    // are `!inside`. So we make the return block-wide.
+    const bool tileMasked =
+        (masks != nullptr) &&
+        (!masks[camId * tileExtentH * tileExtentW + tileRow * tileExtentW + tileCol]);
+    if (tileMasked) {
         return;
     }
 
@@ -157,7 +163,10 @@ rasterizeFromWorld3DGSBackwardKernel(
                                                        rollingShutterType,
                                                        cameraModel);
 
-    bool done = inside && ray.valid;
+    // Whether this pixel participates in the backward pass.
+    //
+    // NOTE: We must *not* early-return for `!inside` because the kernel uses `block.sync` later.
+    const bool done = inside && ray.valid;
 
     // Gaussian range for this tile.
     const int32_t rangeStart = tileOffsets[camId][tileRow][tileCol];
@@ -175,22 +184,36 @@ rasterizeFromWorld3DGSBackwardKernel(
         }
     }
 
-    if (!done || rangeEnd <= rangeStart) {
+    // If the tile has no intersections, there is nothing to do. This must be a block-wide return.
+    if (rangeEnd <= rangeStart) {
         return;
     }
 
     // Forward state for this pixel.
-    const int32_t binFinal = lastIds[camId][row][col];
-    const float alphaFinal = renderedAlphas[camId][row][col][0];
-    float T_final          = 1.0f - alphaFinal;
-    float T                = T_final;
+    int32_t binFinal = -1;
+    float T_final    = 1.0f;
+    float T          = 1.0f;
 
     float v_render_c[NUM_CHANNELS];
 #pragma unroll
     for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-        v_render_c[k] = dLossDRenderedFeatures[camId][row][col][k];
+        v_render_c[k] = 0.f;
     }
-    const float v_render_a = dLossDRenderedAlphas[camId][row][col][0];
+    float v_render_a = 0.f;
+
+    if (done) {
+        binFinal = lastIds[camId][row][col];
+
+        const float alphaFinal = renderedAlphas[camId][row][col][0];
+        T_final                = 1.0f - alphaFinal;
+        T                      = T_final;
+
+#pragma unroll
+        for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
+            v_render_c[k] = dLossDRenderedFeatures[camId][row][col][k];
+        }
+        v_render_a = dLossDRenderedAlphas[camId][row][col][0];
+    }
 
     float buffer[NUM_CHANNELS];
 #pragma unroll
