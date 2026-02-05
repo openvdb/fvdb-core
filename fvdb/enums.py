@@ -48,3 +48,8 @@ class ShOrderingMode(str, Enum):
     The feature channels of spherical harmonics are stored in separate blocks for each coefficient. *i.e.* The spherical harmonics
     tensor corresponds to a (row-major) contiguous tensor of shape ``[num_coefficients, channels, num_sh_bases]``, where channels=3 for RGB.
     """
+
+
+# Camera / rolling shutter enums are defined in the C++ extension module and exposed to Python via pybind11.
+# We re-export them here so users can consistently import enums from `fvdb.enums`.
+from ._fvdb_cpp import CameraModel, RollingShutterType  # noqa: E402
