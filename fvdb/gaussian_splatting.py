@@ -1894,6 +1894,7 @@ class GaussianSplat3d:
         eps_2d: float = 0.3,
         antialias: bool = False,
         backgrounds: torch.Tensor | None = None,
+        masks: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Render images using the differentiable 3DGS ray-ellipsoid rasterizer.
@@ -1922,6 +1923,7 @@ class GaussianSplat3d:
             eps_2d=eps_2d,
             antialias=antialias,
             backgrounds=backgrounds,
+            masks=masks,
         )
 
     def sparse_render_images(
