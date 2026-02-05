@@ -261,11 +261,10 @@ rasterizeGaussiansForward(RasterizeForwardArgs<ScalarType, NUM_CHANNELS, IS_PACK
 
     // Parity with classic semantics: masked tiles write background and contribute nothing.
     //
-    // IMPORTANT: this kernel uses block-level barriers later (`__syncthreads_count`, `__syncthreads`).
-    // Any early return must be taken by *all* threads in the block, otherwise edge tiles can
-    // deadlock when some threads are outside the image bounds.
-    const bool tileMasked =
-        commonArgs.mHasMasks && !commonArgs.mMasks[cameraId][tileRow][tileCol];
+    // IMPORTANT: this kernel uses block-level barriers later (`__syncthreads_count`,
+    // `__syncthreads`). Any early return must be taken by *all* threads in the block, otherwise
+    // edge tiles can deadlock when some threads are outside the image bounds.
+    const bool tileMasked = commonArgs.mHasMasks && !commonArgs.mMasks[cameraId][tileRow][tileCol];
     if (tileMasked) {
         if (pixelInImage) {
             auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
@@ -597,8 +596,8 @@ dispatchGaussianRasterizeForward<torch::kCUDA>(
     const uint32_t imageOriginW,
     const uint32_t imageOriginH,
     const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,              // [C, tile_height, tile_width]
-    const torch::Tensor &tileGaussianIds,          // [n_isects]
+    const torch::Tensor &tileOffsets,               // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds,           // [n_isects]
     const at::optional<torch::Tensor> &backgrounds, // [C, D]
     const at::optional<torch::Tensor> &masks        // [C, tile_height, tile_width] bool
 ) {
@@ -688,8 +687,8 @@ dispatchGaussianRasterizeForward<torch::kPrivateUse1>(
     const uint32_t imageOriginH,
     const uint32_t tileSize,
     // intersections
-    const torch::Tensor &tileOffsets,              // [C, tile_height, tile_width]
-    const torch::Tensor &tileGaussianIds,          // [n_isects]
+    const torch::Tensor &tileOffsets,               // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds,           // [n_isects]
     const at::optional<torch::Tensor> &backgrounds, // [C, D]
     const at::optional<torch::Tensor> &masks        // [C, tile_height, tile_width] bool
 ) {
@@ -779,8 +778,8 @@ dispatchGaussianRasterizeForward<torch::kCPU>(
     const uint32_t imageOriginH,
     const uint32_t tileSize,
     // intersections
-    const torch::Tensor &tileOffsets,              // [C, tile_height, tile_width]
-    const torch::Tensor &tileGaussianIds,          // [n_isects]
+    const torch::Tensor &tileOffsets,               // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds,           // [n_isects]
     const at::optional<torch::Tensor> &backgrounds, // [C, D]
     const at::optional<torch::Tensor> &masks        // [C, tile_height, tile_width] bool
 ) {

@@ -56,10 +56,10 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> dispatchGaussianRasteriz
     const uint32_t imageOriginW,
     const uint32_t imageOriginH,
     const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,                            // [C, tile_height, tile_width]
-    const torch::Tensor &tileGaussianIds,                        // [n_isects]
+    const torch::Tensor &tileOffsets,                             // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds,                         // [n_isects]
     const at::optional<torch::Tensor> &backgrounds = at::nullopt, // [C, D]
-    const at::optional<torch::Tensor> &masks       = at::nullopt  // [C, tile_height, tile_width] bool
+    const at::optional<torch::Tensor> &masks = at::nullopt // [C, tile_height, tile_width] bool
 );
 
 /// @brief Dispatches the sparse Gaussian rasterization forward pass to the specified device.
