@@ -382,7 +382,6 @@ launchForward(const torch::Tensor &means,
 }
 
 } // namespace
-} // namespace
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
