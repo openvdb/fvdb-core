@@ -1878,7 +1878,7 @@ class GaussianSplat3d:
             backgrounds=backgrounds,
         )
 
-    def render_images_from_world_3dgs(
+    def render_images_from_world(
         self,
         world_to_camera_matrices: torch.Tensor,
         projection_matrices: torch.Tensor,
@@ -1908,7 +1908,7 @@ class GaussianSplat3d:
         else:
             camera_model_cpp = camera_model
 
-        return self._impl.render_images_from_world_3dgs(
+        return self._impl.render_images_from_world(
             world_to_camera_matrices=world_to_camera_matrices,
             projection_matrices=projection_matrices,
             image_width=image_width,
@@ -1925,6 +1925,7 @@ class GaussianSplat3d:
             backgrounds=backgrounds,
             masks=masks,
         )
+
 
     def sparse_render_images(
         self,

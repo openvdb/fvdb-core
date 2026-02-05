@@ -7,7 +7,7 @@ import torch
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-def test_gaussiansplat3d_render_images_from_world_3dgs_grads_nonzero():
+def test_gaussiansplat3d_render_images_from_world_grads_nonzero():
     import fvdb
 
     device = torch.device("cuda")
@@ -42,7 +42,7 @@ def test_gaussiansplat3d_render_images_from_world_3dgs_grads_nonzero():
         dtype=torch.float32,
     )
 
-    rendered, alphas = gs.render_images_from_world_3dgs(
+    rendered, alphas = gs.render_images_from_world(
         world_to_camera_matrices=world_to_cam,
         projection_matrices=K,
         image_width=image_width,
@@ -72,7 +72,7 @@ def test_gaussiansplat3d_render_images_from_world_3dgs_grads_nonzero():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-def test_gaussiansplat3d_render_images_from_world_3dgs_grads_match_finite_differences():
+def test_gaussiansplat3d_render_images_from_world_grads_match_finite_differences():
     """
     Finite-difference check for the 3DGS dense rasterizer backward pass.
 
@@ -115,7 +115,7 @@ def test_gaussiansplat3d_render_images_from_world_3dgs_grads_match_finite_differ
             detach=False,
         )
 
-        rendered, alphas = gs.render_images_from_world_3dgs(
+        rendered, alphas = gs.render_images_from_world(
             world_to_camera_matrices=world_to_cam,
             projection_matrices=K,
             image_width=image_width,
@@ -198,7 +198,7 @@ def test_gaussiansplat3d_render_images_from_world_3dgs_grads_match_finite_differ
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-def test_gaussiansplat3d_render_images_from_world_3dgs_masks_write_background_and_zero_grads():
+def test_gaussiansplat3d_render_images_from_world_masks_write_background_and_zero_grads():
     import fvdb
 
     device = torch.device("cuda")
@@ -238,7 +238,7 @@ def test_gaussiansplat3d_render_images_from_world_3dgs_masks_write_background_an
     backgrounds = torch.tensor([[0.10, -0.20, 0.30]], device=device, dtype=dtype)  # [C,D]
     masks = torch.zeros((C, 1, 1), device=device, dtype=torch.bool)  # mask out the only tile
 
-    rendered, alphas = gs.render_images_from_world_3dgs(
+    rendered, alphas = gs.render_images_from_world(
         world_to_camera_matrices=world_to_cam,
         projection_matrices=K,
         image_width=image_width,
@@ -273,7 +273,7 @@ def test_gaussiansplat3d_render_images_from_world_3dgs_masks_write_background_an
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-def test_gaussiansplat3d_render_images_from_world_3dgs_backgrounds_used_when_no_intersections():
+def test_gaussiansplat3d_render_images_from_world_backgrounds_used_when_no_intersections():
     """
     If no Gaussians intersect the image, rasterization should return the background (if provided)
     with alpha=0 everywhere.
@@ -315,7 +315,7 @@ def test_gaussiansplat3d_render_images_from_world_3dgs_backgrounds_used_when_no_
     )
 
     backgrounds = torch.tensor([[0.25, 0.50, -0.75]], device=device, dtype=dtype)
-    rendered, alphas = gs.render_images_from_world_3dgs(
+    rendered, alphas = gs.render_images_from_world(
         world_to_camera_matrices=world_to_cam,
         projection_matrices=K,
         image_width=image_width,
