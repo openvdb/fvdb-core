@@ -902,7 +902,8 @@ GaussianSplat3d::renderImagesFromWorld3DGS(const torch::Tensor &worldToCameraMat
                                            const float minRadius2d,
                                            const float eps2d,
                                            const bool antialias,
-                                           const std::optional<torch::Tensor> &backgrounds) {
+                                           const std::optional<torch::Tensor> &backgrounds,
+                                           const std::optional<torch::Tensor> &masks) {
     FVDB_FUNC_RANGE();
     const int C = worldToCameraMatrices.size(0); // number of cameras
     TORCH_CHECK(C > 0, "At least one camera must be provided (got 0)");
@@ -1030,7 +1031,8 @@ GaussianSplat3d::renderImagesFromWorld3DGS(const torch::Tensor &worldToCameraMat
         static_cast<uint32_t>(tileSize),
         tileOffsets,
         tileGaussianIds,
-        backgrounds);
+        backgrounds,
+        masks);
 
     return {outputs[0], outputs[1]};
 }

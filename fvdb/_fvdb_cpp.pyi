@@ -224,6 +224,7 @@ class GaussianSplat3d:
         eps_2d: float = ...,
         antialias: bool = ...,
         backgrounds: Optional[torch.Tensor] = ...,
+        masks: Optional[torch.Tensor] = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
     def sparse_render_images(
         self,

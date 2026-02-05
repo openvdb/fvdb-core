@@ -232,7 +232,8 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("min_radius_2d")      = 0.0,
              py::arg("eps_2d")             = 0.3,
              py::arg("antialias")          = false,
-             py::arg("backgrounds")        = std::nullopt)
+             py::arg("backgrounds")        = std::nullopt,
+             py::arg("masks")              = std::nullopt)
 
         .def("render_depths",
              &fvdb::GaussianSplat3d::renderDepths,

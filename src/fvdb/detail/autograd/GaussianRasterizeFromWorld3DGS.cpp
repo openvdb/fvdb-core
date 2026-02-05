@@ -208,6 +208,7 @@ RasterizeGaussiansToPixelsFromWorld3DGS::backward(
             Variable(),
             Variable(),
             Variable(),
+            Variable(),
             Variable()};
 }
 

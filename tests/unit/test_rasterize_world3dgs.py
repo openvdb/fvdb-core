@@ -195,3 +195,144 @@ def test_gaussiansplat3d_render_images_from_world_3dgs_grads_match_finite_differ
         assert grad_autograd == pytest.approx(
             grad_fd, rel=rtol, abs=atol
         ), f"{name}: autograd={grad_autograd} fd={grad_fd}"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_gaussiansplat3d_render_images_from_world_3dgs_masks_write_background_and_zero_grads():
+    import fvdb
+
+    device = torch.device("cuda")
+    dtype = torch.float32
+
+    C, N, D = 1, 1, 3
+    image_width = 16
+    image_height = 16
+    tile_size = 16  # single tile -> mask is [C,1,1]
+
+    means = torch.tensor([[0.05, 0.05, 2.5]], device=device, dtype=dtype, requires_grad=True)
+    quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=dtype, requires_grad=True)
+    log_scales = torch.tensor([[-0.6, -0.9, -0.4]], device=device, dtype=dtype, requires_grad=True)
+    logit_opacities = torch.tensor([2.0], device=device, dtype=dtype, requires_grad=True)
+    sh0 = torch.randn((N, 1, D), device=device, dtype=dtype, requires_grad=True)
+    shN = torch.empty((N, 0, D), device=device, dtype=dtype, requires_grad=True)
+
+    gs = fvdb.GaussianSplat3d.from_tensors(
+        means=means,
+        quats=quats,
+        log_scales=log_scales,
+        logit_opacities=logit_opacities,
+        sh0=sh0,
+        shN=shN,
+        accumulate_mean_2d_gradients=False,
+        accumulate_max_2d_radii=False,
+        detach=False,
+    )
+
+    world_to_cam = torch.eye(4, device=device, dtype=dtype).unsqueeze(0)
+    K = torch.tensor(
+        [[[18.0, 0.0, 7.5], [0.0, 18.0, 7.5], [0.0, 0.0, 1.0]]],
+        device=device,
+        dtype=dtype,
+    )
+
+    backgrounds = torch.tensor([[0.10, -0.20, 0.30]], device=device, dtype=dtype)  # [C,D]
+    masks = torch.zeros((C, 1, 1), device=device, dtype=torch.bool)  # mask out the only tile
+
+    rendered, alphas = gs.render_images_from_world_3dgs(
+        world_to_camera_matrices=world_to_cam,
+        projection_matrices=K,
+        image_width=image_width,
+        image_height=image_height,
+        near=0.01,
+        far=1e10,
+        camera_model=fvdb.CameraModel.PINHOLE,
+        distortion_coeffs=None,
+        sh_degree_to_use=0,
+        tile_size=tile_size,
+        min_radius_2d=0.0,
+        eps_2d=0.3,
+        antialias=False,
+        backgrounds=backgrounds,
+        masks=masks,
+    )
+
+    expected = backgrounds.view(C, 1, 1, D).expand(C, image_height, image_width, D)
+    assert torch.equal(alphas, torch.zeros_like(alphas))
+    assert torch.equal(rendered, expected)
+
+    loss = rendered.sum() + alphas.sum()
+    loss.backward()
+
+    # Masked pixels contribute nothing: grads should be exactly zero.
+    assert means.grad is not None and torch.equal(means.grad, torch.zeros_like(means.grad))
+    assert quats.grad is not None and torch.equal(quats.grad, torch.zeros_like(quats.grad))
+    assert log_scales.grad is not None and torch.equal(log_scales.grad, torch.zeros_like(log_scales.grad))
+    assert logit_opacities.grad is not None and torch.equal(
+        logit_opacities.grad, torch.zeros_like(logit_opacities.grad)
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_gaussiansplat3d_render_images_from_world_3dgs_backgrounds_used_when_no_intersections():
+    """
+    If no Gaussians intersect the image, rasterization should return the background (if provided)
+    with alpha=0 everywhere.
+    """
+    import fvdb
+
+    device = torch.device("cuda")
+    dtype = torch.float32
+
+    C, N, D = 1, 1, 3
+    image_width = 16
+    image_height = 16
+
+    # Put the Gaussian in front of the camera but closer than near plane so it should be clipped.
+    means = torch.tensor([[0.0, 0.0, 1.0e-4]], device=device, dtype=dtype)
+    quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=dtype)
+    log_scales = torch.tensor([[-0.6, -0.9, -0.4]], device=device, dtype=dtype)
+    logit_opacities = torch.tensor([2.0], device=device, dtype=dtype)
+    sh0 = torch.randn((N, 1, D), device=device, dtype=dtype)
+    shN = torch.empty((N, 0, D), device=device, dtype=dtype)
+
+    gs = fvdb.GaussianSplat3d.from_tensors(
+        means=means,
+        quats=quats,
+        log_scales=log_scales,
+        logit_opacities=logit_opacities,
+        sh0=sh0,
+        shN=shN,
+        accumulate_mean_2d_gradients=False,
+        accumulate_max_2d_radii=False,
+        detach=False,
+    )
+
+    world_to_cam = torch.eye(4, device=device, dtype=dtype).unsqueeze(0)
+    K = torch.tensor(
+        [[[18.0, 0.0, 7.5], [0.0, 18.0, 7.5], [0.0, 0.0, 1.0]]],
+        device=device,
+        dtype=dtype,
+    )
+
+    backgrounds = torch.tensor([[0.25, 0.50, -0.75]], device=device, dtype=dtype)
+    rendered, alphas = gs.render_images_from_world_3dgs(
+        world_to_camera_matrices=world_to_cam,
+        projection_matrices=K,
+        image_width=image_width,
+        image_height=image_height,
+        near=0.01,
+        far=1e10,
+        camera_model=fvdb.CameraModel.PINHOLE,
+        distortion_coeffs=None,
+        sh_degree_to_use=0,
+        tile_size=16,
+        min_radius_2d=0.0,
+        eps_2d=0.3,
+        antialias=False,
+        backgrounds=backgrounds,
+        masks=None,
+    )
+
+    expected = backgrounds.view(C, 1, 1, D).expand(C, image_height, image_width, D)
+    assert torch.equal(alphas, torch.zeros_like(alphas))
+    assert torch.equal(rendered, expected)

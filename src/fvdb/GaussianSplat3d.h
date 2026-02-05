@@ -928,7 +928,8 @@ class GaussianSplat3d {
                               const float minRadius2d                               = 0.0,
                               const float eps2d                                     = 0.3,
                               const bool antialias                                  = false,
-                              const std::optional<torch::Tensor> &backgrounds       = std::nullopt);
+                              const std::optional<torch::Tensor> &backgrounds       = std::nullopt,
+                              const std::optional<torch::Tensor> &masks             = std::nullopt);
 
     /// @brief Render depths of this Gaussian splat scene from the given camera matrices and
     /// projection matrices.
