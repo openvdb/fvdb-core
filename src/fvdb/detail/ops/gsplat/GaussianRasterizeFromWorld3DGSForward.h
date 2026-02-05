@@ -53,7 +53,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> dispatchGaussianRasteriz
     const torch::Tensor &tileOffsets,     // [C, tileH, tileW]
     const torch::Tensor &tileGaussianIds, // [n_isects] values in [0, C*N)
     // Optional background
-    const at::optional<torch::Tensor> &backgrounds = at::nullopt // [C, D]
+    const at::optional<torch::Tensor> &backgrounds = at::nullopt, // [C, D]
+    // Optional tile masks (parity with classic rasterizer)
+    const at::optional<torch::Tensor> &masks = at::nullopt // [C, tileH, tileW] bool
 );
 
 } // namespace fvdb::detail::ops

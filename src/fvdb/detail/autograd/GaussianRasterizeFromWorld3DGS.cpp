@@ -7,6 +7,8 @@
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
 
+#include <vector>
+
 namespace fvdb::detail::autograd {
 
 RasterizeGaussiansToPixelsFromWorld3DGS::VariableList
@@ -30,7 +32,8 @@ RasterizeGaussiansToPixelsFromWorld3DGS::forward(
     const uint32_t tileSize,
     const RasterizeGaussiansToPixelsFromWorld3DGS::Variable &tileOffsets,
     const RasterizeGaussiansToPixelsFromWorld3DGS::Variable &tileGaussianIds,
-    std::optional<RasterizeGaussiansToPixelsFromWorld3DGS::Variable> backgrounds) {
+    std::optional<RasterizeGaussiansToPixelsFromWorld3DGS::Variable> backgrounds,
+    std::optional<RasterizeGaussiansToPixelsFromWorld3DGS::Variable> masks) {
     FVDB_FUNC_RANGE_WITH_NAME("RasterizeGaussiansToPixelsFromWorld3DGS::forward");
 
     auto outputs = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
@@ -53,45 +56,40 @@ RasterizeGaussiansToPixelsFromWorld3DGS::forward(
             tileSize,
             tileOffsets,
             tileGaussianIds,
-            backgrounds);
+            backgrounds,
+            masks);
     });
 
     Variable renderedFeatures = std::get<0>(outputs);
     Variable renderedAlphas   = std::get<1>(outputs);
     Variable lastIds          = std::get<2>(outputs);
 
+    std::vector<Variable> toSave = {means,
+                                    quats,
+                                    logScales,
+                                    features,
+                                    opacities,
+                                    worldToCamMatricesStart,
+                                    worldToCamMatricesEnd,
+                                    projectionMatrices,
+                                    distortionCoeffs,
+                                    tileOffsets,
+                                    tileGaussianIds,
+                                    renderedAlphas,
+                                    lastIds};
     if (backgrounds.has_value()) {
-        ctx->save_for_backward({means,
-                                quats,
-                                logScales,
-                                features,
-                                opacities,
-                                worldToCamMatricesStart,
-                                worldToCamMatricesEnd,
-                                projectionMatrices,
-                                distortionCoeffs,
-                                tileOffsets,
-                                tileGaussianIds,
-                                renderedAlphas,
-                                lastIds,
-                                backgrounds.value()});
+        toSave.push_back(backgrounds.value());
         ctx->saved_data["has_backgrounds"] = true;
     } else {
-        ctx->save_for_backward({means,
-                                quats,
-                                logScales,
-                                features,
-                                opacities,
-                                worldToCamMatricesStart,
-                                worldToCamMatricesEnd,
-                                projectionMatrices,
-                                distortionCoeffs,
-                                tileOffsets,
-                                tileGaussianIds,
-                                renderedAlphas,
-                                lastIds});
         ctx->saved_data["has_backgrounds"] = false;
     }
+    if (masks.has_value()) {
+        toSave.push_back(masks.value());
+        ctx->saved_data["has_masks"] = true;
+    } else {
+        ctx->saved_data["has_masks"] = false;
+    }
+    ctx->save_for_backward(toSave);
 
     ctx->saved_data["imageWidth"]   = (int64_t)imageWidth;
     ctx->saved_data["imageHeight"]  = (int64_t)imageHeight;
@@ -135,9 +133,15 @@ RasterizeGaussiansToPixelsFromWorld3DGS::backward(
     Variable lastIds                 = saved.at(12);
 
     const bool hasBackgrounds                = ctx->saved_data["has_backgrounds"].toBool();
+    const bool hasMasks                      = ctx->saved_data["has_masks"].toBool();
     std::optional<torch::Tensor> backgrounds = std::nullopt;
+    std::optional<torch::Tensor> masks       = std::nullopt;
+    int64_t optIdx                           = 13;
     if (hasBackgrounds) {
-        backgrounds = saved.at(13);
+        backgrounds = saved.at(optIdx++);
+    }
+    if (hasMasks) {
+        masks = saved.at(optIdx++);
     }
 
     const uint32_t imageWidth   = (uint32_t)ctx->saved_data["imageWidth"].toInt();
@@ -174,7 +178,8 @@ RasterizeGaussiansToPixelsFromWorld3DGS::backward(
             lastIds,
             dLossDRenderedFeatures,
             dLossDRenderedAlphas,
-            backgrounds);
+            backgrounds,
+            masks);
     });
 
     Variable dMeans     = std::get<0>(grads);
@@ -189,6 +194,7 @@ RasterizeGaussiansToPixelsFromWorld3DGS::backward(
             dLogScales,
             dFeatures,
             dOpacities,
+            Variable(),
             Variable(),
             Variable(),
             Variable(),

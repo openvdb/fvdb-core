@@ -65,6 +65,8 @@ rasterizeFromWorld3DGSForwardKernel(
     const int32_t totalIntersections,
     // Backgrounds
     const float *__restrict__ backgrounds, // [C, D] or nullptr
+    // Optional tile masks
+    const bool *__restrict__ masks, // [C, tileExtentH, tileExtentW] or nullptr
     // Outputs
     float *__restrict__ outFeatures, // [C,H,W,D]
     float *__restrict__ outAlphas,   // [C,H,W,1] packed as [C*H*W]
@@ -89,10 +91,18 @@ rasterizeFromWorld3DGSForwardKernel(
         (camId * imageHeight * imageWidth + pixId) * NUM_CHANNELS; // feature base
     const uint32_t imgBasePix = (camId * imageHeight * imageWidth + pixId); // alpha/last base
 
-    // If tile masked out, write background and exit.
-    if (inside && backgrounds != nullptr) {
-        // no mask support in this dense-only kernel (yet)
-        (void)backgrounds;
+    // Parity with classic rasterizer: masked tiles write background and exit.
+    if (inside && masks != nullptr &&
+        !masks[camId * tileExtentH * tileExtentW + tileRow * tileExtentW + tileCol]) {
+        outAlphas[imgBasePix]  = 0.0f;
+        outLastIds[imgBasePix] = 0;
+#pragma unroll
+        for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
+            outFeatures[imgBaseFeat + k] = (backgrounds != nullptr)
+                                               ? backgrounds[camId * NUM_CHANNELS + k]
+                                               : 0.0f;
+        }
+        return;
     }
 
     // Build camera pose for this camera (start/end).
@@ -322,7 +332,8 @@ launchForward(const torch::Tensor &means,
               const uint32_t tileSize,
               const torch::Tensor &tileOffsets,
               const torch::Tensor &tileGaussianIds,
-              const at::optional<torch::Tensor> &backgrounds) {
+              const at::optional<torch::Tensor> &backgrounds,
+              const at::optional<torch::Tensor> &masks) {
     const int64_t C = features.size(0);
 
     auto opts = features.options();
@@ -343,6 +354,15 @@ launchForward(const torch::Tensor &means,
     const int64_t numDistCoeffs      = distortionCoeffs.size(1);
 
     const float *bgPtr = backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr;
+    const bool *maskPtr = nullptr;
+    torch::Tensor masksContig;
+    if (masks.has_value()) {
+        TORCH_CHECK_VALUE(masks.value().scalar_type() == torch::kBool, "masks must have dtype=bool");
+        TORCH_CHECK_VALUE(masks.value().sizes() == torch::IntArrayRef({C, (int64_t)tileExtentH, (int64_t)tileExtentW}),
+                          "masks must have shape [C, tileExtentH, tileExtentW]");
+        masksContig = masks.value().contiguous();
+        maskPtr     = masksContig.data_ptr<bool>();
+    }
 
     const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
     const size_t sharedMem =
@@ -373,6 +393,7 @@ launchForward(const torch::Tensor &means,
         tileGaussianIds.packed_accessor32<int32_t, 1, torch::RestrictPtrTraits>(),
         totalIntersections,
         bgPtr,
+        maskPtr,
         outFeatures.data_ptr<float>(),
         outAlphas.data_ptr<float>(),
         outLastIds.data_ptr<int32_t>());
@@ -404,7 +425,8 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,
     const torch::Tensor &tileGaussianIds,
-    const at::optional<torch::Tensor> &backgrounds) {
+    const at::optional<torch::Tensor> &backgrounds,
+    const at::optional<torch::Tensor> &masks) {
     FVDB_FUNC_RANGE();
 
     TORCH_CHECK_VALUE(means.is_cuda(), "means must be CUDA");
@@ -463,7 +485,8 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
                                   tileSize,                                                          \
                                   tileOffsets,                                                       \
                                   tileGaussianIds,                                                   \
-                                  backgrounds);
+                                  backgrounds,                                                       \
+                                  masks);
 
     switch (channels) {
         CALL_FWD(1)
@@ -514,6 +537,7 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCPU>(
     const uint32_t,
     const torch::Tensor &,
     const torch::Tensor &,
+    const at::optional<torch::Tensor> &,
     const at::optional<torch::Tensor> &) {
     TORCH_CHECK_VALUE(false, "dispatchGaussianRasterizeFromWorld3DGSForward is CUDA-only");
 }

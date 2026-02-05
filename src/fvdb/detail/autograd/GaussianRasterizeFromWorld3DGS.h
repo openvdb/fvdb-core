@@ -38,7 +38,8 @@ struct RasterizeGaussiansToPixelsFromWorld3DGS
                                 const uint32_t tileSize,
                                 const Variable &tileOffsets,     // [C, tileH, tileW]
                                 const Variable &tileGaussianIds, // [n_isects]
-                                std::optional<Variable> backgrounds = std::nullopt); // [C,D]
+                                std::optional<Variable> backgrounds = std::nullopt, // [C,D]
+                                std::optional<Variable> masks = std::nullopt); // [C,tileH,tileW] bool
 
     static VariableList backward(AutogradContext *ctx, VariableList gradOutput);
 };
