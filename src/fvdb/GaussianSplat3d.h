@@ -902,7 +902,7 @@ class GaussianSplat3d {
                  const bool antialias                            = false,
                  const std::optional<torch::Tensor> &backgrounds = std::nullopt);
 
-    /// @brief Render images using the differentiable 3DGS ray-ellipsoid rasterizer.
+    /// @brief Render images by rasterizing directly from world-space 3D Gaussians.
     ///
     /// This is similar to @ref renderImages but performs rasterization directly from world-space
     /// Gaussians (means/quats/log-scales) rather than from their 2D projections. This enables
