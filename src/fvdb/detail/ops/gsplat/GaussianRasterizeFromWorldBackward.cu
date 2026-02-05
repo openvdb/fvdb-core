@@ -473,7 +473,20 @@ launchBackward(const torch::Tensor &means,
     const int32_t totalIntersections = (int32_t)tileGaussianIds.size(0);
     const int64_t numDistCoeffs      = distortionCoeffs.size(1);
 
-    const float *bgPtr  = backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr;
+    const float *bgPtr = nullptr;
+    torch::Tensor backgroundsContig;
+    if (backgrounds.has_value()) {
+        TORCH_CHECK_VALUE(backgrounds.value().is_cuda(), "backgrounds must be CUDA");
+        TORCH_CHECK_VALUE(backgrounds.value().device() == features.device(),
+                          "backgrounds must be on the same device as features");
+        TORCH_CHECK_VALUE(backgrounds.value().scalar_type() == torch::kFloat32,
+                          "backgrounds must have dtype=float32");
+        TORCH_CHECK_VALUE(backgrounds.value().sizes() ==
+                              torch::IntArrayRef({C, (int64_t)NUM_CHANNELS}),
+                          "backgrounds must have shape [C, NUM_CHANNELS]");
+        backgroundsContig = backgrounds.value().contiguous();
+        bgPtr             = backgroundsContig.data_ptr<float>();
+    }
     const bool *maskPtr = nullptr;
     torch::Tensor masksContig;
     if (masks.has_value()) {
