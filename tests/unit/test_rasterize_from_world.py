@@ -8,13 +8,20 @@ import torch
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_gaussiansplat3d_render_images_from_world_grads_nonzero():
+    # Import inside the test so CPU-only environments can still collect this file.
     import fvdb
 
     device = torch.device("cuda")
     C, N, D = 1, 1, 3
 
     means = torch.tensor([[0.05, 0.05, 2.5]], device=device, dtype=torch.float32, requires_grad=True)
-    quats = torch.tensor([[0.97, 0.05, 0.20, -0.10]], device=device, dtype=torch.float32, requires_grad=True)
+    # Unit quaternion (normalized).
+    quats = torch.tensor(
+        [[0.97321693, 0.05016582, 0.20066328, -0.10033164]],
+        device=device,
+        dtype=torch.float32,
+        requires_grad=True,
+    )
     log_scales = torch.tensor([[-0.6, -0.9, -0.4]], device=device, dtype=torch.float32, requires_grad=True)
     logit_opacities = torch.tensor([2.0], device=device, dtype=torch.float32, requires_grad=True)
 
@@ -284,7 +291,13 @@ def test_gaussiansplat3d_render_images_from_world_grads_nonzero_with_shN():
     C, N, D = 1, 1, 3
 
     means = torch.tensor([[0.05, 0.05, 2.5]], device=device, dtype=torch.float32, requires_grad=True)
-    quats = torch.tensor([[0.97, 0.05, 0.20, -0.10]], device=device, dtype=torch.float32, requires_grad=True)
+    # Unit quaternion (normalized).
+    quats = torch.tensor(
+        [[0.97321693, 0.05016582, 0.20066328, -0.10033164]],
+        device=device,
+        dtype=torch.float32,
+        requires_grad=True,
+    )
     log_scales = torch.tensor([[-0.6, -0.9, -0.4]], device=device, dtype=torch.float32, requires_grad=True)
     logit_opacities = torch.tensor([2.0], device=device, dtype=torch.float32, requires_grad=True)
 
@@ -359,7 +372,7 @@ def test_gaussiansplat3d_render_images_from_world_shN_grads_match_finite_differe
     device = torch.device("cuda")
     dtype = torch.float32
 
-    C, N, D = 1, 1, 3
+    N, D = 1, 3
     image_width = 16
     image_height = 16
 
@@ -461,7 +474,13 @@ def test_gaussiansplat3d_render_images_from_world_backward_with_backgrounds_and_
     tile_size = 16  # single tile -> masks is [C,1,1]
 
     means = torch.tensor([[0.05, 0.05, 2.5]], device=device, dtype=dtype, requires_grad=True)
-    quats = torch.tensor([[0.97, 0.05, 0.20, -0.10]], device=device, dtype=dtype, requires_grad=True)
+    # Unit quaternion (normalized).
+    quats = torch.tensor(
+        [[0.97321693, 0.05016582, 0.20066328, -0.10033164]],
+        device=device,
+        dtype=dtype,
+        requires_grad=True,
+    )
     log_scales = torch.tensor([[-0.6, -0.9, -0.4]], device=device, dtype=dtype, requires_grad=True)
     logit_opacities = torch.tensor([2.0], device=device, dtype=dtype, requires_grad=True)
     sh0 = torch.randn((N, 1, D), device=device, dtype=dtype, requires_grad=True)
