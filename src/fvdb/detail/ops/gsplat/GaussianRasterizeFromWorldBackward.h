@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLD3DGSFORWARD_H
-#define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLD3DGSFORWARD_H
+#ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLDBACKWARD_H
+#define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLDBACKWARD_H
 
 #include <fvdb/detail/ops/gsplat/GaussianCameraModels.h>
 
@@ -13,26 +13,22 @@
 
 namespace fvdb::detail::ops {
 
-/// @brief Rasterize images directly from 3D Gaussians using per-pixel rays.
+/// @brief Backward pass for dense rasterization from 3D Gaussians using per-pixel rays.
 ///
-/// This kernel follows the gsplat "RasterizeToPixelsFromWorld3DGS" algorithm, but is wired to
-/// FVDB's existing tile intersection representation (`tileOffsets`, `tileGaussianIds`).
-///
-/// Inputs are world-space Gaussians (means/quats/logScales) and per-camera per-gaussian features
-/// and opacities. The camera is defined via world->camera matrices (start/end), intrinsics,
-/// `CameraModel`, rolling shutter policy, and packed OpenCV distortion coefficients.
-///
-/// This is a dense-only rasterizer: outputs are dense tensors of shape
-/// - renderedFeatures: [C, H, W, D]
-/// - renderedAlphas:   [C, H, W, 1]
-/// - lastIds:          [C, H, W]
+/// Gradients are produced for:
+/// - means:     [N, 3]
+/// - quats:     [N, 4]
+/// - logScales: [N, 3]
+/// - features:  [C, N, D]
+/// - opacities: [C, N]
 ///
 /// @tparam DeviceType torch::kCUDA (CPU not implemented).
 template <torch::DeviceType>
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> dispatchGaussianRasterizeFromWorld3DGSForward(
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchGaussianRasterizeFromWorld3DGSBackward(
     // Gaussian parameters (world space)
     const torch::Tensor &means,     // [N, 3]
-    const torch::Tensor &quats,     // [N, 4] (w,x,y,z)
+    const torch::Tensor &quats,     // [N, 4]
     const torch::Tensor &logScales, // [N, 3]
     // Per-camera quantities
     const torch::Tensor &features,  // [C, N, D]
@@ -52,7 +48,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> dispatchGaussianRasteriz
     // Intersections
     const torch::Tensor &tileOffsets,     // [C, tileH, tileW]
     const torch::Tensor &tileGaussianIds, // [n_isects] values in [0, C*N)
-    // Optional background
+    // Forward outputs needed for backward
+    const torch::Tensor &renderedAlphas, // [C, H, W, 1]
+    const torch::Tensor &lastIds,        // [C, H, W]
+    // Gradients of outputs
+    const torch::Tensor &dLossDRenderedFeatures, // [C, H, W, D]
+    const torch::Tensor &dLossDRenderedAlphas,   // [C, H, W, 1]
+    // Optional background (only affects alpha gradient term)
     const at::optional<torch::Tensor> &backgrounds = at::nullopt, // [C, D]
     // Optional tile masks (parity with classic rasterizer)
     const at::optional<torch::Tensor> &masks = at::nullopt // [C, tileH, tileW] bool
@@ -60,4 +62,4 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> dispatchGaussianRasteriz
 
 } // namespace fvdb::detail::ops
 
-#endif // FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLD3DGSFORWARD_H
+#endif // FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLDBACKWARD_H

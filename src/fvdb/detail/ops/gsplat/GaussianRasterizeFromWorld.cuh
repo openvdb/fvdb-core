@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLD3DGS_CUH
-#define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLD3DGS_CUH
+#ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLD_CUH
+#define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLD_CUH
 
 #include <fvdb/detail/ops/gsplat/GaussianCameraModels.h>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
@@ -278,4 +278,4 @@ isclRotVectorJacobianProduct(const nanovdb::math::Vec4<T> &quat_wxyz,
 
 } // namespace fvdb::detail::ops
 
-#endif // FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLD3DGS_CUH
+#endif // FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLD_CUH
