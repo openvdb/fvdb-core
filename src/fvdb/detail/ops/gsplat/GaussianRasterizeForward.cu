@@ -259,11 +259,22 @@ rasterizeGaussiansForward(RasterizeForwardArgs<ScalarType, NUM_CHANNELS, IS_PACK
     uint32_t activePixelIndex{0};
     cuda::std::tie(pixelInImage, activePixelIndex) = commonArgs.activePixelIndex(row, col);
 
-    if (commonArgs.mHasMasks && pixelInImage && !commonArgs.mMasks[cameraId][tileRow][tileCol]) {
-        auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
-        args.writeFeatures(pixIdx, [&](uint32_t k) {
-            return commonArgs.mHasBackgrounds ? commonArgs.mBackgrounds[cameraId][k] : 0.0f;
-        });
+    // Parity with classic semantics: masked tiles write background and contribute nothing.
+    //
+    // IMPORTANT: this kernel uses block-level barriers later (`__syncthreads_count`, `__syncthreads`).
+    // Any early return must be taken by *all* threads in the block, otherwise edge tiles can
+    // deadlock when some threads are outside the image bounds.
+    const bool tileMasked =
+        commonArgs.mHasMasks && !commonArgs.mMasks[cameraId][tileRow][tileCol];
+    if (tileMasked) {
+        if (pixelInImage) {
+            auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
+            args.writeAlpha(pixIdx, 0.0f);
+            args.writeLastId(pixIdx, -1);
+            args.writeFeatures(pixIdx, [&](uint32_t k) {
+                return commonArgs.mHasBackgrounds ? commonArgs.mBackgrounds[cameraId][k] : 0.0f;
+            });
+        }
         return;
     }
 
