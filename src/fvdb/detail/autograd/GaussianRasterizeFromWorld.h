@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef FVDB_DETAIL_AUTOGRAD_GAUSSIANRASTERIZEFROMWORLD3DGS_H
-#define FVDB_DETAIL_AUTOGRAD_GAUSSIANRASTERIZEFROMWORLD3DGS_H
+#ifndef FVDB_DETAIL_AUTOGRAD_GAUSSIANRASTERIZEFROMWORLD_H
+#define FVDB_DETAIL_AUTOGRAD_GAUSSIANRASTERIZEFROMWORLD_H
 
 #include <fvdb/detail/ops/gsplat/GaussianCameraModels.h>
 
@@ -46,5 +46,5 @@ struct RasterizeGaussiansToPixelsFromWorld3DGS
 
 } // namespace fvdb::detail::autograd
 
-#endif // FVDB_DETAIL_AUTOGRAD_GAUSSIANRASTERIZEFROMWORLD3DGS_H
+#endif // FVDB_DETAIL_AUTOGRAD_GAUSSIANRASTERIZEFROMWORLD_H
 

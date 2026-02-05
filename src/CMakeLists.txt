@@ -49,7 +49,7 @@ set(FVDB_CPP_FILES
     fvdb/detail/autograd/Inject.cpp
     fvdb/detail/autograd/GaussianProjection.cpp
     fvdb/detail/autograd/GaussianRasterize.cpp
-    fvdb/detail/autograd/GaussianRasterizeFromWorld3DGS.cpp
+    fvdb/detail/autograd/GaussianRasterizeFromWorld.cpp
     fvdb/detail/autograd/GaussianRasterizeSparse.cpp
     fvdb/detail/autograd/JaggedReduce.cpp
     fvdb/detail/autograd/MaxPoolGrid.cpp
@@ -122,8 +122,8 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeBackward.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeForward.cu
-    fvdb/detail/ops/gsplat/GaussianRasterizeFromWorld3DGSBackward.cu
-    fvdb/detail/ops/gsplat/GaussianRasterizeFromWorld3DGSForward.cu
+    fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldBackward.cu
+    fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldForward.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeNumContributingGaussians.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeTopContributingGaussianIds.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeContributingGaussianIds.cu

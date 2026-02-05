@@ -12,7 +12,7 @@
 #include <fvdb/detail/autograd/EvaluateSphericalHarmonics.h>
 #include <fvdb/detail/autograd/GaussianProjection.h>
 #include <fvdb/detail/autograd/GaussianRasterize.h>
-#include <fvdb/detail/autograd/GaussianRasterizeFromWorld3DGS.h>
+#include <fvdb/detail/autograd/GaussianRasterizeFromWorld.h>
 
 // Ops headers
 #include <fvdb/detail/ops/gsplat/GaussianProjectionUT.h>

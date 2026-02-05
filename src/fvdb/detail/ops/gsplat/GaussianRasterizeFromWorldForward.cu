@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorld3DGS.cuh>
-#include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorld3DGSForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorld.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldForward.h>
 
 #include <fvdb/detail/utils/Nvtx.h>
 
