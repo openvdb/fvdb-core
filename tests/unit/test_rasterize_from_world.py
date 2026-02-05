@@ -69,6 +69,12 @@ def test_gaussiansplat3d_render_images_from_world_grads_nonzero():
         and torch.isfinite(log_scales.grad).all()
         and log_scales.grad.abs().sum().item() > 0.0
     )
+    assert (
+        logit_opacities.grad is not None
+        and torch.isfinite(logit_opacities.grad).all()
+        and logit_opacities.grad.abs().sum().item() > 0.0
+    )
+    assert sh0.grad is not None and torch.isfinite(sh0.grad).all() and sh0.grad.abs().sum().item() > 0.0
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
