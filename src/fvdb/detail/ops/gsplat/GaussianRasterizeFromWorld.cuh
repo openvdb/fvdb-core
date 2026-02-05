@@ -59,7 +59,8 @@ applyOpenCVDistortionPacked(const CameraModel cameraModel,
     const T s4 = distortionCoeffs[11];
 
     T radial = T(1);
-    if (cameraModel == CameraModel::OPENCV_RATIONAL_8 || cameraModel == CameraModel::OPENCV_THIN_PRISM_12) {
+    if (cameraModel == CameraModel::OPENCV_RATIONAL_8 ||
+        cameraModel == CameraModel::OPENCV_THIN_PRISM_12) {
         const T num = T(1) + r2 * (k1 + r2 * (k2 + r2 * k3));
         const T den = T(1) + r2 * (k4 + r2 * (k5 + r2 * k6));
         radial      = (den != T(0)) ? (num / den) : T(0);
@@ -137,7 +138,8 @@ normalizeSafeVJP(const nanovdb::math::Vec3<T> &x, const nanovdb::math::Vec3<T> &
 template <typename T>
 inline __device__ nanovdb::math::Mat3<T>
 mat3FromWorldToCam(const T *m44 /* row-major 4x4 */) {
-    return nanovdb::math::Mat3<T>(m44[0], m44[1], m44[2], m44[4], m44[5], m44[6], m44[8], m44[9], m44[10]);
+    return nanovdb::math::Mat3<T>(
+        m44[0], m44[1], m44[2], m44[4], m44[5], m44[6], m44[8], m44[9], m44[10]);
 }
 
 template <typename T>
@@ -155,11 +157,11 @@ interpolateWorldToCam(const nanovdb::math::Mat3<T> &R0,
                       const T u,
                       nanovdb::math::Mat3<T> &R_out,
                       nanovdb::math::Vec3<T> &t_out) {
-    t_out = t0 + u * (t1 - t0);
+    t_out                           = t0 + u * (t1 - t0);
     const nanovdb::math::Vec4<T> q0 = rotationMatrixToQuaternion<T>(R0);
     const nanovdb::math::Vec4<T> q1 = rotationMatrixToQuaternion<T>(R1);
     const nanovdb::math::Vec4<T> qi = nlerpQuaternionShortestPath<T>(q0, q1, u);
-    R_out                            = quaternionToRotationMatrix<T>(qi);
+    R_out                           = quaternionToRotationMatrix<T>(qi);
 }
 
 template <typename T>
@@ -227,9 +229,9 @@ pixelToWorldRay(const uint32_t row,
 
     // Perspective (pinhole / OpenCV distorted pinhole): origin at camera center.
     const nanovdb::math::Vec3<T> d_cam = normalizeSafe(nanovdb::math::Vec3<T>(p[0], p[1], T(1)));
-    ray.origin                          = R_cw * (nanovdb::math::Vec3<T>(T(0), T(0), T(0)) - t_wc);
-    ray.dir                             = normalizeSafe(R_cw * d_cam);
-    ray.valid                           = true;
+    ray.origin                         = R_cw * (nanovdb::math::Vec3<T>(T(0), T(0), T(0)) - t_wc);
+    ray.dir                            = normalizeSafe(R_cw * d_cam);
+    ray.valid                          = true;
     return ray;
 }
 
@@ -262,7 +264,8 @@ isclRotVectorJacobianProduct(const nanovdb::math::Vec4<T> &quat_wxyz,
     // For D = A * B, dA = G * B^T, dB = A^T * G.
     // Here A = S_inv (diag), B = R^T.
     const nanovdb::math::Mat3<T> dA = dLossDIsclRot * R; // since (R^T)^T = R
-    const nanovdb::math::Mat3<T> A(invScale[0], T(0), T(0), T(0), invScale[1], T(0), T(0), T(0), invScale[2]);
+    const nanovdb::math::Mat3<T> A(
+        invScale[0], T(0), T(0), T(0), invScale[1], T(0), T(0), T(0), invScale[2]);
     const nanovdb::math::Mat3<T> dB = A * dLossDIsclRot;
     const nanovdb::math::Mat3<T> dR = dB.transpose(); // B = R^T
 
@@ -271,9 +274,8 @@ isclRotVectorJacobianProduct(const nanovdb::math::Vec4<T> &quat_wxyz,
     // Diagonal of dA gives gradients w.r.t invScale.
     const nanovdb::math::Vec3<T> dInvScale(dA[0][0], dA[1][1], dA[2][2]);
     // invScale = 1/scale => dlogScale = dscale * scale = -dInvScale / scale
-    dLossDLogScale = nanovdb::math::Vec3<T>(-dInvScale[0] * invScale[0],
-                                            -dInvScale[1] * invScale[1],
-                                            -dInvScale[2] * invScale[2]);
+    dLossDLogScale = nanovdb::math::Vec3<T>(
+        -dInvScale[0] * invScale[0], -dInvScale[1] * invScale[1], -dInvScale[2] * invScale[2]);
 }
 
 } // namespace fvdb::detail::ops

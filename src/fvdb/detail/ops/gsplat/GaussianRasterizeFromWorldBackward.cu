@@ -4,7 +4,6 @@
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorld.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldBackward.h>
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
-
 #include <fvdb/detail/utils/Nvtx.h>
 
 #include <ATen/cuda/Atomic.cuh>
@@ -19,8 +18,7 @@ namespace cg = cooperative_groups;
 
 namespace {
 
-template <uint32_t NUM_CHANNELS>
-struct SharedGaussian {
+template <uint32_t NUM_CHANNELS> struct SharedGaussian {
     int32_t id;                       // flattened id in [0, C*N)
     nanovdb::math::Vec3<float> mean;  // world mean
     nanovdb::math::Vec4<float> quat;  // wxyz
@@ -37,18 +35,15 @@ rasterizeFromWorld3DGSBackwardKernel(
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> quats,     // [N,4]
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> logScales, // [N,3]
     // Per-camera
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> features,  // [C,N,D]
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> opacities, // [C,N]
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
-        features, // [C,N,D]
+        worldToCamStart,                                                               // [C,4,4]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
+        worldToCamEnd,                                                                 // [C,4,4]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> K,         // [C,3,3]
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits>
-        opacities, // [C,N]
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
-        worldToCamStart, // [C,4,4]
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
-        worldToCamEnd, // [C,4,4]
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
-        K, // [C,3,3]
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits>
-        distortionCoeffs, // [C,K]
+        distortionCoeffs,                                                              // [C,K]
     const int64_t numDistCoeffs,
     const RollingShutterType rollingShutterType,
     const CameraModel cameraModel,
@@ -62,20 +57,19 @@ rasterizeFromWorld3DGSBackwardKernel(
     const uint32_t tileExtentH,
     // Intersections
     const torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits>
-        tileOffsets, // [C, tileExtentH, tileExtentW]
+        tileOffsets,     // [C, tileExtentH, tileExtentW]
     const torch::PackedTensorAccessor32<int32_t, 1, torch::RestrictPtrTraits>
         tileGaussianIds, // [n_isects]
     const int32_t totalIntersections,
     // Forward outputs
     const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits>
-        renderedAlphas, // [C,H,W,1]
-    const torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits>
-        lastIds, // [C,H,W]
+        renderedAlphas,                                                                // [C,H,W,1]
+    const torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> lastIds, // [C,H,W]
     // Grad outputs
     const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits>
         dLossDRenderedFeatures, // [C,H,W,D]
     const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits>
-        dLossDRenderedAlphas, // [C,H,W,1]
+        dLossDRenderedAlphas,   // [C,H,W,1]
     // Backgrounds
     const float *__restrict__ backgrounds, // [C,D] or nullptr
     // Optional tile masks
@@ -87,7 +81,7 @@ rasterizeFromWorld3DGSBackwardKernel(
     float *__restrict__ dFeatures,  // [C,N,D]
     float *__restrict__ dOpacities  // [C,N]
 ) {
-    auto block          = cg::this_thread_block();
+    auto block               = cg::this_thread_block();
     const uint32_t blockSize = blockDim.x * blockDim.y;
 
     const uint32_t globalLinearBlock = blockIdx.x;
@@ -123,7 +117,7 @@ rasterizeFromWorld3DGSBackwardKernel(
                                                 worldToCamStart[camId][1][3],
                                                 worldToCamStart[camId][2][3]);
 
-        R_wc_end   = nanovdb::math::Mat3<float>(worldToCamEnd[camId][0][0],
+        R_wc_end = nanovdb::math::Mat3<float>(worldToCamEnd[camId][0][0],
                                               worldToCamEnd[camId][0][1],
                                               worldToCamEnd[camId][0][2],
                                               worldToCamEnd[camId][1][0],
@@ -132,9 +126,8 @@ rasterizeFromWorld3DGSBackwardKernel(
                                               worldToCamEnd[camId][2][0],
                                               worldToCamEnd[camId][2][1],
                                               worldToCamEnd[camId][2][2]);
-        t_wc_end   = nanovdb::math::Vec3<float>(worldToCamEnd[camId][0][3],
-                                              worldToCamEnd[camId][1][3],
-                                              worldToCamEnd[camId][2][3]);
+        t_wc_end = nanovdb::math::Vec3<float>(
+            worldToCamEnd[camId][0][3], worldToCamEnd[camId][1][3], worldToCamEnd[camId][2][3]);
     }
 
     nanovdb::math::Mat3<float> K_cam(K[camId][0][0],
@@ -146,8 +139,7 @@ rasterizeFromWorld3DGSBackwardKernel(
                                      K[camId][2][0],
                                      K[camId][2][1],
                                      K[camId][2][2]);
-    const float *distPtr =
-        (numDistCoeffs > 0) ? &distortionCoeffs[camId][0] : nullptr;
+    const float *distPtr = (numDistCoeffs > 0) ? &distortionCoeffs[camId][0] : nullptr;
 
     const WorldRay<float> ray = pixelToWorldRay<float>(row,
                                                        col,
@@ -170,8 +162,8 @@ rasterizeFromWorld3DGSBackwardKernel(
     // Gaussian range for this tile.
     const int32_t rangeStart = tileOffsets[camId][tileRow][tileCol];
     int32_t rangeEnd         = 0;
-    if ((camId == (uint32_t)(features.size(0) - 1)) &&
-        (tileRow == tileExtentH - 1) && (tileCol == tileExtentW - 1)) {
+    if ((camId == (uint32_t)(features.size(0) - 1)) && (tileRow == tileExtentH - 1) &&
+        (tileCol == tileExtentW - 1)) {
         rangeEnd = totalIntersections;
     } else if (tileCol + 1 < tileExtentW) {
         rangeEnd = tileOffsets[camId][tileRow][tileCol + 1];
@@ -208,11 +200,11 @@ rasterizeFromWorld3DGSBackwardKernel(
 
     // Shared memory for gaussian batches.
     extern __shared__ char smem[];
-    int32_t *idBatch = reinterpret_cast<int32_t *>(smem); // [blockSize]
+    int32_t *idBatch = reinterpret_cast<int32_t *>(smem);                      // [blockSize]
     auto *gBatch =
         reinterpret_cast<SharedGaussian<NUM_CHANNELS> *>(&idBatch[blockSize]); // [blockSize]
 
-    const uint32_t threadRank = block.thread_rank();
+    const uint32_t threadRank      = block.thread_rank();
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
 
     const int32_t nIsects   = rangeEnd - rangeStart;
@@ -273,18 +265,18 @@ rasterizeFromWorld3DGSBackwardKernel(
 
             if (valid) {
                 const SharedGaussian<NUM_CHANNELS> g = gBatch[t];
-                mean_w    = g.mean;
-                quat_wxyz = g.quat;
-                scale     = g.scale;
-                Mt        = g.isclR;
-                opac      = g.opacity;
+                mean_w                               = g.mean;
+                quat_wxyz                            = g.quat;
+                scale                                = g.scale;
+                Mt                                   = g.isclR;
+                opac                                 = g.opacity;
 
-                o_minus_mu = ray.origin - mean_w;
-                gro        = Mt * o_minus_mu;
-                grd        = Mt * ray.dir;
-                grd_n      = normalizeSafe<float>(grd);
-                gcrod      = grd_n.cross(gro);
-                grayDist   = gcrod.dot(gcrod);
+                o_minus_mu        = ray.origin - mean_w;
+                gro               = Mt * o_minus_mu;
+                grd               = Mt * ray.dir;
+                grd_n             = normalizeSafe<float>(grd);
+                gcrod             = grd_n.cross(gro);
+                grayDist          = gcrod.dot(gcrod);
                 const float power = -0.5f * grayDist;
                 vis               = __expf(power);
                 alpha             = min(kAlphaThreshold, opac * vis);
@@ -319,7 +311,7 @@ rasterizeFromWorld3DGSBackwardKernel(
                 }
 
                 // v_alpha accumulation
-                float v_alpha = 0.f;
+                float v_alpha        = 0.f;
                 const int32_t flatId = idBatch[t];
                 const int32_t cid    = flatId / (int32_t)means.size(0);
                 const int32_t gid    = flatId % (int32_t)means.size(0);
@@ -342,8 +334,8 @@ rasterizeFromWorld3DGSBackwardKernel(
                 }
 
                 if (opac * vis <= kAlphaThreshold) {
-                    const float v_vis       = opac * v_alpha;
-                    const float v_gradDist  = -0.5f * vis * v_vis;
+                    const float v_vis                        = opac * v_alpha;
+                    const float v_gradDist                   = -0.5f * vis * v_vis;
                     const nanovdb::math::Vec3<float> v_gcrod = 2.0f * v_gradDist * gcrod;
                     const nanovdb::math::Vec3<float> v_grd_n = -(v_gcrod.cross(gro));
                     const nanovdb::math::Vec3<float> v_gro   = v_gcrod.cross(grd_n);
@@ -376,8 +368,7 @@ rasterizeFromWorld3DGSBackwardKernel(
 
                     nanovdb::math::Vec4<float> dQuat(0.f);
                     nanovdb::math::Vec3<float> dLogScale(0.f);
-                    isclRotVectorJacobianProduct<float>(
-                        quat_wxyz, scale, v_Mt, dQuat, dLogScale);
+                    isclRotVectorJacobianProduct<float>(quat_wxyz, scale, v_Mt, dQuat, dLogScale);
                     v_quat_local[0] += dQuat[0];
                     v_quat_local[1] += dQuat[1];
                     v_quat_local[2] += dQuat[2];
@@ -410,12 +401,14 @@ rasterizeFromWorld3DGSBackwardKernel(
                 const int32_t gid    = flatId % (int32_t)means.size(0);
 
                 // Per-camera grads
-                float *dFeatPtr = dFeatures + ((cid * (int32_t)means.size(0) + gid) * (int32_t)NUM_CHANNELS);
+                float *dFeatPtr =
+                    dFeatures + ((cid * (int32_t)means.size(0) + gid) * (int32_t)NUM_CHANNELS);
 #pragma unroll
                 for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
                     atomicAdd_system(dFeatPtr + k, v_feat_local[k]);
                 }
-                atomicAdd_system(dOpacities + (cid * (int32_t)means.size(0) + gid), v_opacity_local);
+                atomicAdd_system(dOpacities + (cid * (int32_t)means.size(0) + gid),
+                                 v_opacity_local);
 
                 // Geometry grads (shared across cameras)
                 float *dMeanPtr = dMeans + gid * 3;
@@ -467,10 +460,10 @@ launchBackward(const torch::Tensor &means,
     const int64_t C = features.size(0);
     const int64_t N = means.size(0);
 
-    torch::Tensor dMeans = torch::zeros_like(means);
-    torch::Tensor dQuats = torch::zeros_like(quats);
+    torch::Tensor dMeans     = torch::zeros_like(means);
+    torch::Tensor dQuats     = torch::zeros_like(quats);
     torch::Tensor dLogScales = torch::zeros_like(logScales);
-    torch::Tensor dFeatures = torch::zeros_like(features);
+    torch::Tensor dFeatures  = torch::zeros_like(features);
     torch::Tensor dOpacities = torch::zeros_like(opacities);
 
     const uint32_t tileExtentW = (imageWidth + tileSize - 1) / tileSize;
@@ -480,12 +473,14 @@ launchBackward(const torch::Tensor &means,
     const int32_t totalIntersections = (int32_t)tileGaussianIds.size(0);
     const int64_t numDistCoeffs      = distortionCoeffs.size(1);
 
-    const float *bgPtr = backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr;
+    const float *bgPtr  = backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr;
     const bool *maskPtr = nullptr;
     torch::Tensor masksContig;
     if (masks.has_value()) {
-        TORCH_CHECK_VALUE(masks.value().scalar_type() == torch::kBool, "masks must have dtype=bool");
-        TORCH_CHECK_VALUE(masks.value().sizes() == torch::IntArrayRef({C, (int64_t)tileExtentH, (int64_t)tileExtentW}),
+        TORCH_CHECK_VALUE(masks.value().scalar_type() == torch::kBool,
+                          "masks must have dtype=bool");
+        TORCH_CHECK_VALUE(masks.value().sizes() ==
+                              torch::IntArrayRef({C, (int64_t)tileExtentH, (int64_t)tileExtentW}),
                           "masks must have shape [C, tileExtentH, tileExtentW]");
         masksContig = masks.value().contiguous();
         maskPtr     = masksContig.data_ptr<bool>();
@@ -571,31 +566,31 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
 
     const uint32_t channels = (uint32_t)features.size(2);
 
-#define CALL_BWD(NCH)                                                                       \
-    case NCH:                                                                               \
-        return launchBackward<NCH>(means,                                                   \
-                                   quats,                                                   \
-                                   logScales,                                               \
-                                   features,                                                \
-                                   opacities,                                               \
-                                   worldToCamMatricesStart,                                 \
-                                   worldToCamMatricesEnd,                                   \
-                                   projectionMatrices,                                      \
-                                   distortionCoeffs,                                        \
-                                   rollingShutterType,                                      \
-                                   cameraModel,                                             \
-                                   imageWidth,                                              \
-                                   imageHeight,                                             \
-                                   imageOriginW,                                            \
-                                   imageOriginH,                                            \
-                                   tileSize,                                                \
-                                   tileOffsets,                                             \
-                                   tileGaussianIds,                                         \
-                                   renderedAlphas,                                          \
-                                   lastIds,                                                 \
-                                   dLossDRenderedFeatures,                                  \
-                                   dLossDRenderedAlphas,                                    \
-                                   backgrounds,                                             \
+#define CALL_BWD(NCH)                                       \
+    case NCH:                                               \
+        return launchBackward<NCH>(means,                   \
+                                   quats,                   \
+                                   logScales,               \
+                                   features,                \
+                                   opacities,               \
+                                   worldToCamMatricesStart, \
+                                   worldToCamMatricesEnd,   \
+                                   projectionMatrices,      \
+                                   distortionCoeffs,        \
+                                   rollingShutterType,      \
+                                   cameraModel,             \
+                                   imageWidth,              \
+                                   imageHeight,             \
+                                   imageOriginW,            \
+                                   imageOriginH,            \
+                                   tileSize,                \
+                                   tileOffsets,             \
+                                   tileGaussianIds,         \
+                                   renderedAlphas,          \
+                                   lastIds,                 \
+                                   dLossDRenderedFeatures,  \
+                                   dLossDRenderedAlphas,    \
+                                   backgrounds,             \
                                    masks);
 
     switch (channels) {
@@ -620,7 +615,9 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
         CALL_BWD(257)
         CALL_BWD(512)
         CALL_BWD(513)
-    default: TORCH_CHECK_VALUE(false, "Unsupported channels for rasterize-from-world-3dgs backward: ", channels);
+    default:
+        TORCH_CHECK_VALUE(
+            false, "Unsupported channels for rasterize-from-world-3dgs backward: ", channels);
     }
 
 #undef CALL_BWD
@@ -628,33 +625,31 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCPU>(
-    const torch::Tensor &,
-    const torch::Tensor &,
-    const torch::Tensor &,
-    const torch::Tensor &,
-    const torch::Tensor &,
-    const torch::Tensor &,
-    const torch::Tensor &,
-    const torch::Tensor &,
-    const torch::Tensor &,
-    const RollingShutterType,
-    const CameraModel,
-    const uint32_t,
-    const uint32_t,
-    const uint32_t,
-    const uint32_t,
-    const uint32_t,
-    const torch::Tensor &,
-    const torch::Tensor &,
-    const torch::Tensor &,
-    const torch::Tensor &,
-    const torch::Tensor &,
-    const torch::Tensor &,
-    const at::optional<torch::Tensor> &,
-    const at::optional<torch::Tensor> &) {
+dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCPU>(const torch::Tensor &,
+                                                            const torch::Tensor &,
+                                                            const torch::Tensor &,
+                                                            const torch::Tensor &,
+                                                            const torch::Tensor &,
+                                                            const torch::Tensor &,
+                                                            const torch::Tensor &,
+                                                            const torch::Tensor &,
+                                                            const torch::Tensor &,
+                                                            const RollingShutterType,
+                                                            const CameraModel,
+                                                            const uint32_t,
+                                                            const uint32_t,
+                                                            const uint32_t,
+                                                            const uint32_t,
+                                                            const uint32_t,
+                                                            const torch::Tensor &,
+                                                            const torch::Tensor &,
+                                                            const torch::Tensor &,
+                                                            const torch::Tensor &,
+                                                            const torch::Tensor &,
+                                                            const torch::Tensor &,
+                                                            const at::optional<torch::Tensor> &,
+                                                            const at::optional<torch::Tensor> &) {
     TORCH_CHECK_VALUE(false, "dispatchGaussianRasterizeFromWorld3DGSBackward is CUDA-only");
 }
 
 } // namespace fvdb::detail::ops
-

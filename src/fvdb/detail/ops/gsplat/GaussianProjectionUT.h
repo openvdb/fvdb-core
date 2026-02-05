@@ -4,10 +4,10 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONUT_H
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONUT_H
 
+#include <fvdb/detail/ops/gsplat/GaussianCameraModels.h>
+
 #include <ATen/core/TensorBody.h>
 #include <torch/types.h>
-
-#include <fvdb/detail/ops/gsplat/GaussianCameraModels.h>
 
 #include <tuple>
 
