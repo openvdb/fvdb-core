@@ -78,6 +78,8 @@ rasterizeFromWorld3DGSBackwardKernel(
         dLossDRenderedAlphas, // [C,H,W,1]
     // Backgrounds
     const float *__restrict__ backgrounds, // [C,D] or nullptr
+    // Optional tile masks
+    const bool *__restrict__ masks, // [C, tileExtentH, tileExtentW] or nullptr
     // Outputs (grads)
     float *__restrict__ dMeans,     // [N,3]
     float *__restrict__ dQuats,     // [N,4]
@@ -97,6 +99,12 @@ rasterizeFromWorld3DGSBackwardKernel(
     const uint32_t row = tileRow * tileSize + threadIdx.y;
     const uint32_t col = tileCol * tileSize + threadIdx.x;
     const bool inside  = (row < imageHeight && col < imageWidth);
+
+    // Parity with classic rasterizer: masked tiles contribute nothing.
+    if (inside && masks != nullptr &&
+        !masks[camId * tileExtentH * tileExtentW + tileRow * tileExtentW + tileCol]) {
+        return;
+    }
 
     // Camera pose for this camera.
     nanovdb::math::Mat3<float> R_wc_start, R_wc_end;
@@ -454,7 +462,8 @@ launchBackward(const torch::Tensor &means,
                const torch::Tensor &lastIds,
                const torch::Tensor &dLossDRenderedFeatures,
                const torch::Tensor &dLossDRenderedAlphas,
-               const at::optional<torch::Tensor> &backgrounds) {
+               const at::optional<torch::Tensor> &backgrounds,
+               const at::optional<torch::Tensor> &masks) {
     const int64_t C = features.size(0);
     const int64_t N = means.size(0);
 
@@ -472,6 +481,15 @@ launchBackward(const torch::Tensor &means,
     const int64_t numDistCoeffs      = distortionCoeffs.size(1);
 
     const float *bgPtr = backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr;
+    const bool *maskPtr = nullptr;
+    torch::Tensor masksContig;
+    if (masks.has_value()) {
+        TORCH_CHECK_VALUE(masks.value().scalar_type() == torch::kBool, "masks must have dtype=bool");
+        TORCH_CHECK_VALUE(masks.value().sizes() == torch::IntArrayRef({C, (int64_t)tileExtentH, (int64_t)tileExtentW}),
+                          "masks must have shape [C, tileExtentH, tileExtentW]");
+        masksContig = masks.value().contiguous();
+        maskPtr     = masksContig.data_ptr<bool>();
+    }
 
     const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
     const size_t sharedMem = blockSize * (sizeof(int32_t) + sizeof(SharedGaussian<NUM_CHANNELS>));
@@ -505,6 +523,7 @@ launchBackward(const torch::Tensor &means,
         dLossDRenderedFeatures.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
         dLossDRenderedAlphas.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
         bgPtr,
+        maskPtr,
         dMeans.data_ptr<float>(),
         dQuats.data_ptr<float>(),
         dLogScales.data_ptr<float>(),
@@ -541,7 +560,8 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
     const torch::Tensor &lastIds,
     const torch::Tensor &dLossDRenderedFeatures,
     const torch::Tensor &dLossDRenderedAlphas,
-    const at::optional<torch::Tensor> &backgrounds) {
+    const at::optional<torch::Tensor> &backgrounds,
+    const at::optional<torch::Tensor> &masks) {
     FVDB_FUNC_RANGE();
 
     TORCH_CHECK_VALUE(means.is_cuda(), "means must be CUDA");
@@ -575,7 +595,8 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
                                    lastIds,                                                 \
                                    dLossDRenderedFeatures,                                  \
                                    dLossDRenderedAlphas,                                    \
-                                   backgrounds);
+                                   backgrounds,                                             \
+                                   masks);
 
     switch (channels) {
         CALL_BWD(1)
@@ -630,6 +651,7 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCPU>(
     const torch::Tensor &,
     const torch::Tensor &,
     const torch::Tensor &,
+    const at::optional<torch::Tensor> &,
     const at::optional<torch::Tensor> &) {
     TORCH_CHECK_VALUE(false, "dispatchGaussianRasterizeFromWorld3DGSBackward is CUDA-only");
 }

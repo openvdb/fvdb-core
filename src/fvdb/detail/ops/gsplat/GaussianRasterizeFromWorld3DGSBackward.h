@@ -55,7 +55,9 @@ dispatchGaussianRasterizeFromWorld3DGSBackward(
     const torch::Tensor &dLossDRenderedFeatures, // [C, H, W, D]
     const torch::Tensor &dLossDRenderedAlphas,   // [C, H, W, 1]
     // Optional background (only affects alpha gradient term)
-    const at::optional<torch::Tensor> &backgrounds = at::nullopt // [C, D]
+    const at::optional<torch::Tensor> &backgrounds = at::nullopt, // [C, D]
+    // Optional tile masks (parity with classic rasterizer)
+    const at::optional<torch::Tensor> &masks = at::nullopt // [C, tileH, tileW] bool
 );
 
 } // namespace fvdb::detail::ops
