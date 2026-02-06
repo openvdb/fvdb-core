@@ -466,11 +466,7 @@ def test_gaussiansplat3d_render_images_from_world_shN_grads_match_finite_differe
     log_scales = torch.tensor([[-0.6, -0.9, -0.4]], device=device, dtype=dtype)
     logit_opacities = torch.tensor([2.0], device=device, dtype=dtype)
 
-    sh0 = (
-        torch.tensor([0.8, -0.2, 0.3], device=device, dtype=dtype)
-        .view(N, 1, D)
-        .contiguous()
-    )
+    sh0 = torch.tensor([0.8, -0.2, 0.3], device=device, dtype=dtype).view(N, 1, D).contiguous()
     shN0 = (
         torch.tensor(
             [[0.05, -0.01, 0.02], [0.00, 0.03, -0.04], [0.01, 0.02, 0.00]],
