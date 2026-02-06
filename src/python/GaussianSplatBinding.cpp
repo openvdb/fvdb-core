@@ -8,11 +8,28 @@
 #include <fvdb/FVDB.h>
 #include <fvdb/GaussianSplat3d.h>
 #include <fvdb/detail/autograd/EvaluateSphericalHarmonics.h>
+#include <fvdb/detail/ops/gsplat/GaussianCameraModels.h>
 
 #include <torch/extension.h>
 
 void
 bind_gaussian_splat3d(py::module &m) {
+    py::enum_<fvdb::detail::ops::RollingShutterType>(m, "RollingShutterType")
+        .value("NONE", fvdb::detail::ops::RollingShutterType::NONE)
+        .value("VERTICAL", fvdb::detail::ops::RollingShutterType::VERTICAL)
+        .value("HORIZONTAL", fvdb::detail::ops::RollingShutterType::HORIZONTAL)
+        .export_values();
+
+    py::enum_<fvdb::detail::ops::CameraModel>(m, "CameraModel")
+        .value("PINHOLE", fvdb::detail::ops::CameraModel::PINHOLE)
+        .value("OPENCV_RADTAN_5", fvdb::detail::ops::CameraModel::OPENCV_RADTAN_5)
+        .value("OPENCV_RATIONAL_8", fvdb::detail::ops::CameraModel::OPENCV_RATIONAL_8)
+        .value("OPENCV_RADTAN_THIN_PRISM_9",
+               fvdb::detail::ops::CameraModel::OPENCV_RADTAN_THIN_PRISM_9)
+        .value("OPENCV_THIN_PRISM_12", fvdb::detail::ops::CameraModel::OPENCV_THIN_PRISM_12)
+        .value("ORTHOGRAPHIC", fvdb::detail::ops::CameraModel::ORTHOGRAPHIC)
+        .export_values();
+
     py::class_<fvdb::GaussianSplat3d::ProjectedGaussianSplats>(m, "ProjectedGaussianSplats")
         .def_property_readonly("means2d", &fvdb::GaussianSplat3d::ProjectedGaussianSplats::means2d)
         .def_property_readonly("conics", &fvdb::GaussianSplat3d::ProjectedGaussianSplats::conics)
@@ -200,6 +217,24 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("eps_2d")           = 0.3,
              py::arg("antialias")        = false,
              py::arg("backgrounds")      = std::nullopt)
+
+        .def("render_images_from_world",
+             &fvdb::GaussianSplat3d::renderImagesFromWorld,
+             py::arg("world_to_camera_matrices"),
+             py::arg("projection_matrices"),
+             py::arg("image_width"),
+             py::arg("image_height"),
+             py::arg("near"),
+             py::arg("far"),
+             py::arg("camera_model")      = fvdb::detail::ops::CameraModel::PINHOLE,
+             py::arg("distortion_coeffs") = std::nullopt,
+             py::arg("sh_degree_to_use")  = -1,
+             py::arg("tile_size")         = 16,
+             py::arg("min_radius_2d")     = 0.0,
+             py::arg("eps_2d")            = 0.3,
+             py::arg("antialias")         = false,
+             py::arg("backgrounds")       = std::nullopt,
+             py::arg("masks")             = std::nullopt)
 
         .def("render_depths",
              &fvdb::GaussianSplat3d::renderDepths,

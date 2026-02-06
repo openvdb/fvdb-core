@@ -4,6 +4,8 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONUT_H
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONUT_H
 
+#include <fvdb/detail/ops/gsplat/GaussianCameraModels.h>
+
 #include <ATen/core/TensorBody.h>
 #include <torch/types.h>
 
@@ -12,31 +14,6 @@
 namespace fvdb {
 namespace detail {
 namespace ops {
-
-enum class RollingShutterType { NONE = 0, VERTICAL = 1, HORIZONTAL = 2 };
-
-/// @brief Camera model for projection in the UT kernel.
-///
-/// This enum describes the camera projection family used by the UT kernel. It is intentionally
-/// broader than "distortion model" so we can add more complex models (e.g. RPC) later.
-///
-/// Notes:
-/// - `PINHOLE` and `ORTHOGRAPHIC` ignore `distortionCoeffs`.
-/// - `OPENCV_*` variants are pinhole + OpenCV-style distortion, and require packed coefficients.
-enum class CameraModel : int32_t {
-    // Pinhole intrinsics only (no distortion).
-    PINHOLE = 0,
-
-    // Orthographic intrinsics (no distortion).
-    ORTHOGRAPHIC = 5,
-
-    // OpenCV variants which are just pinhole intrinsics + optional distortion (all of them use the
-    // same [C,12] distortion coefficients layout: [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]).
-    OPENCV_RADTAN_5            = 1, // polynomial radial (k1,k2,k3) + tangential (p1,p2)).
-    OPENCV_RATIONAL_8          = 2, // rational radial (k1..k6) + tangential (p1,p2)).
-    OPENCV_RADTAN_THIN_PRISM_9 = 3, // polynomial radial + tangential + thin-prism (s1..s4)).
-    OPENCV_THIN_PRISM_12       = 4, // rational radial + tangential + thin-prism (s1..s4)).
-};
 
 /// @brief Unscented Transform hyperparameters.
 ///
