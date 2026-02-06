@@ -8,9 +8,8 @@
 #include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
 #include <fvdb/detail/ops/gsplat/GaussianTileIntersection.h>
 
-#include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAFunctions.h>
-
+#include <c10/cuda/CUDAGuard.h>
 #include <torch/script.h>
 #include <torch/types.h>
 
@@ -329,28 +328,22 @@ TEST(GaussianRasterizeForwardMaskedEdgeTile, Child) {
     auto fopts = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32);
 
     // Single Gaussian that intersects the bottom-right edge tile.
-    const auto means2d      = torch::tensor({{{16.5f, 16.5f}}}, fopts);         // [C,N,2]
-    const auto conics       = torch::tensor({{{1.0f, 0.0f, 1.0f}}}, fopts);     // [C,N,3]
-    const auto features     = torch::tensor({{{0.4f, 0.5f, -0.6f}}}, fopts); // [C,N,D]
-    const auto opacities    = torch::tensor({{0.9f}}, fopts);                  // [C,N]
-    const auto radii =
-        torch::tensor({{1}}, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt32)); // [C,N]
-    const auto depths       = torch::tensor({{1.0f}}, fopts);                  // [C,N]
-    const auto backgrounds  = torch::tensor({{0.1f, -0.2f, 0.3f}}, fopts);     // [C,D]
+    const auto means2d   = torch::tensor({{{16.5f, 16.5f}}}, fopts);                  // [C,N,2]
+    const auto conics    = torch::tensor({{{1.0f, 0.0f, 1.0f}}}, fopts);              // [C,N,3]
+    const auto features  = torch::tensor({{{0.4f, 0.5f, -0.6f}}}, fopts);             // [C,N,D]
+    const auto opacities = torch::tensor({{0.9f}}, fopts);                            // [C,N]
+    const auto radii     = torch::tensor(
+        {{1}}, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt32)); // [C,N]
+    const auto depths      = torch::tensor({{1.0f}}, fopts);                          // [C,N]
+    const auto backgrounds = torch::tensor({{0.1f, -0.2f, 0.3f}}, fopts);             // [C,D]
 
-    auto masks = torch::ones({C, (int64_t)tileExtentH, (int64_t)tileExtentW},
+    auto masks     = torch::ones({C, (int64_t)tileExtentH, (int64_t)tileExtentW},
                              torch::TensorOptions().device(torch::kCUDA).dtype(torch::kBool));
     masks[0][1][1] = false; // mask out bottom-right edge tile
 
     auto [tileOffsets, tileGaussianIds] =
-        fvdb::detail::ops::dispatchGaussianTileIntersection<torch::kCUDA>(means2d,
-                                                                          radii,
-                                                                          depths,
-                                                                          at::nullopt,
-                                                                          (uint32_t)C,
-                                                                          tileSize,
-                                                                          tileExtentH,
-                                                                          tileExtentW);
+        fvdb::detail::ops::dispatchGaussianTileIntersection<torch::kCUDA>(
+            means2d, radii, depths, at::nullopt, (uint32_t)C, tileSize, tileExtentH, tileExtentW);
 
     auto [outFeatures, outAlphas, outLastIds] =
         fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(means2d,
