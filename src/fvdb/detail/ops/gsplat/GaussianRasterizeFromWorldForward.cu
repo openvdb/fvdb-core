@@ -96,7 +96,7 @@ rasterizeFromWorld3DGSForwardKernel(
     if (tileMasked) {
         if (inside) {
             outAlphas[imgBasePix]  = 0.0f;
-            outLastIds[imgBasePix] = 0;
+            outLastIds[imgBasePix] = -1;
 #pragma unroll
             for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
                 outFeatures[imgBaseFeat + k] =
@@ -196,7 +196,7 @@ rasterizeFromWorld3DGSForwardKernel(
         if (inside) {
             // alpha=0, output background if provided else 0.
             outAlphas[imgBasePix]  = 0.0f;
-            outLastIds[imgBasePix] = 0;
+            outLastIds[imgBasePix] = -1;
 #pragma unroll
             for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
                 outFeatures[imgBaseFeat + k] =
@@ -212,8 +212,8 @@ rasterizeFromWorld3DGSForwardKernel(
     auto *gaussBatch =
         reinterpret_cast<SharedGaussian<NUM_CHANNELS> *>(&idBatch[blockSize]); // [blockSize]
 
-    float T         = 1.0f;
-    uint32_t curIdx = 0;
+    float T        = 1.0f;
+    int32_t curIdx = -1;
     float pixOut[NUM_CHANNELS];
 #pragma unroll
     for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
@@ -289,7 +289,7 @@ rasterizeFromWorld3DGSForwardKernel(
     }
 
     outAlphas[imgBasePix]  = 1.0f - T;
-    outLastIds[imgBasePix] = (int32_t)curIdx;
+    outLastIds[imgBasePix] = curIdx;
 #pragma unroll
     for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
         outFeatures[imgBaseFeat + k] = (backgrounds != nullptr)
