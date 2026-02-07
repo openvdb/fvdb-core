@@ -183,8 +183,8 @@ if(FVDB_BUILD_TESTS)
     ConfigureDispatchTest(DispatchScanLibHostTest tests/scan_lib_host_test.cpp)
     ConfigureDispatchTest(DispatchScanLibCudaTest tests/scan_lib_cuda_test.cu)
 
+    ConfigureDispatchTest(DispatchDetailIndexMathTest tests/detail_index_math_test.cpp)
     # ---- Temporarily disabled — bring up incrementally ----
-    # ConfigureDispatchTest(DispatchDetailIndexMathTest tests/detail_index_math_test.cpp)
     # ConfigureDispatchTest(DispatchWithValueTest tests/with_value_test.cpp)
     # ConfigureDispatchTest(DispatchAxesMapTest tests/axes_map_test.cpp)
     # ConfigureDispatchTest(DispatchTableTest tests/dispatch_table_test.cpp)

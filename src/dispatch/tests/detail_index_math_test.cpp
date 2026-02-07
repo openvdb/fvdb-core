@@ -188,7 +188,8 @@ TEST(IsWithin, IndexSpaceInIndexSpace) {
 
 TEST(IsWithin, SingleValueInAxis) {
     static_assert(is_within_v<axis<device::cpu>, device_axis>());
-    static_assert(!is_within_v<axis<method::fast>, device_axis>()); // wrong type won't compile
+    // Note: is_within_v<axis<method::fast>, device_axis>() would static_assert
+    // at compile time (type mismatch) — tested via compile-fail tests instead.
 }
 
 TEST(IsWithin, SubAxisInAxis) {
