@@ -53,12 +53,9 @@ endfunction()
 ConfigureBench(simple "simple/simple.cpp")
 
 # ============================================================================
-# GELU Comparison Benchmark (requires C++20 for dispatch framework)
+# Phase 3: GELU and thread pool benchmarks (require for_each)
 # ============================================================================
-# This benchmark compares:
-# - torch::gelu (PyTorch native)
-# - gelu_old (old-style fvdb ForEach)
-# - example_gelu_for_each (new dispatch framework)
+if(FALSE) # Temporarily disabled — requires for_each (phase 3)
 
 add_executable(gelu_comparison
     gelu_comparison/gelu_benchmark.cu
@@ -232,3 +229,5 @@ install(
     DESTINATION bin/benchmarks/fvdb
     EXCLUDE_FROM_ALL
 )
+
+endif() # Phase 3: for_each benchmarks

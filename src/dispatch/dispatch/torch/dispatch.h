@@ -1,19 +1,19 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-// PyTorch dispatch utilities: coordinate stringification and dispatch wrapper
-// with Torch-friendly error handling.
+// PyTorch dispatch utilities: coordinate stringification, contiguity helpers,
+// and device guard dispatch via concepts.
 //
 #ifndef DISPATCH_DISPATCH_TORCH_DISPATCH_H
 #define DISPATCH_DISPATCH_TORCH_DISPATCH_H
 
+#include "dispatch/dispatch_set.h"
 #include "dispatch/dispatch_table.h"
-#include "dispatch/tag_match.h"
 #include "dispatch/torch/types.h"
+#include "dispatch/with_value.h"
 
 #include <c10/core/DeviceGuard.h>
 
-#include <functional>
 #include <string>
 #include <tuple>
 #include <type_traits>
@@ -72,10 +72,6 @@ torch_get_contiguity(torch::Tensor tensor) {
 // Returns contiguous ONLY if ALL tensors are contiguous.
 // Prevents combinatorial explosion in binary/ternary ops by making contiguity
 // a single boolean decision rather than 2^N dispatch combinations.
-//
-// Usage:
-//   auto contig = combined_contiguity(input, output);
-//   auto contig = combined_contiguity(lhs, rhs, output);
 template <typename... Tensors>
     requires(std::is_same_v<std::remove_cvref_t<Tensors>, torch::Tensor> && ...)
 contiguity
@@ -104,39 +100,19 @@ torch_format_dispatch_coords(std::tuple<CoordTypes...> const &coords) {
 }
 
 //------------------------------------------------------------------------------
-// torch_dispatch - invoke a dispatcher with Torch-friendly error handling
+// Device concepts
 //------------------------------------------------------------------------------
-// Wraps dispatcher invocation, catching any exception from failed dispatch
-// lookups and converting them to a user-friendly TORCH_CHECK_VALUE error.
-
-template <typename Dispatcher, typename... CoordTypes, typename... Args>
-auto
-torch_dispatch(std::string_view function_name,
-               Dispatcher &&dispatcher,
-               std::tuple<CoordTypes...> const &dispatch_coord,
-               Args &&...args) {
-    try {
-        return std::invoke(dispatcher, dispatch_coord, std::forward<Args>(args)...);
-    } catch (dispatch_lookup_error const &) {
-        // Only catch dispatch lookup failures - other exceptions propagate unchanged
-        TORCH_CHECK_VALUE(false,
-                          function_name,
-                          ": unsupported dispatch combination - ",
-                          torch_format_dispatch_coords(dispatch_coord));
-    }
-}
 
 template <typename Tag>
-concept cpu_tag = tag_match<Tag, torch::kCPU>;
+concept cpu_tag = with_value<Tag, torch::kCPU>;
 
 template <typename Tag>
-concept gpu_tag = tag_match<Tag, torch::kCUDA> || tag_match<Tag, torch::kPrivateUse1>;
+concept gpu_tag = with_value<Tag, torch::kCUDA> || with_value<Tag, torch::kPrivateUse1>;
 
 //------------------------------------------------------------------------------
 // make_device_guard: returns appropriate guard based on device
 //------------------------------------------------------------------------------
 
-// (intentionally empty - nothing needs to be defined here)
 c10::OptionalDeviceGuard
 make_device_guard(cpu_tag auto tag, torch::Tensor const &t) {
     return c10::OptionalDeviceGuard{}; // empty guard, no-op

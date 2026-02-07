@@ -69,10 +69,10 @@
 
 #include "examples/functional.h"
 
+#include "dispatch/dispatch_set.h"
 #include "dispatch/dispatch_table.h"
 #include "dispatch/torch/dispatch.h"
 #include "dispatch/torch/types.h"
-#include "dispatch/types.h"
 #include "examples/scan_lib.h"
 
 #include <ATen/cuda/CUDAContext.h>
@@ -222,6 +222,7 @@ using iscan_dispatcher = dispatch_table<iscan_space, tensor_with_notes(torch::Te
 tensor_with_notes
 inclusive_scan_functional(torch::Tensor input, placement plc, determinism det) {
     static iscan_dispatcher const table{
+        "inclusive_scan_functional",
         iscan_dispatcher::from_visitor(
             [](auto coord, torch::Tensor t) { return iscan_impl(coord, t); }),
         iscan_cpu_float_subspace{},
@@ -251,8 +252,8 @@ inclusive_scan_functional(torch::Tensor input, placement plc, determinism det) {
         det = determinism::required;
     }
 
-    auto const dispatch_coord = std::make_tuple(dev, st, cont, plc, det);
-    return torch_dispatch("inclusive_scan_functional", table, dispatch_coord, input);
+    auto const fn = table.select(dispatch_set{dev, st, cont, plc, det});
+    return fn(input);
 }
 
 } // namespace dispatch_examples

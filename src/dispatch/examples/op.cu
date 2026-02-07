@@ -60,10 +60,10 @@
 
 #include "examples/op.h"
 
+#include "dispatch/dispatch_set.h"
 #include "dispatch/dispatch_table.h"
 #include "dispatch/torch/dispatch.h"
 #include "dispatch/torch/types.h"
-#include "dispatch/types.h"
 #include "examples/scan_lib.h"
 
 #include <ATen/cuda/CUDAContext.h>
@@ -212,7 +212,7 @@ struct iscan_op {
 
 tensor_with_notes
 inclusive_scan_op(torch::Tensor input, placement plc, determinism det) {
-    static auto const table = dispatch_table_from_op<iscan_op>();
+    static auto const table = dispatch_table_from_op<iscan_op>("inclusive_scan_op");
 
     // Validate input rank
     TORCH_CHECK_VALUE(
@@ -236,8 +236,8 @@ inclusive_scan_op(torch::Tensor input, placement plc, determinism det) {
         det = determinism::required;
     }
 
-    auto const dispatch_coord = std::make_tuple(dev, st, cont, plc, det);
-    return torch_dispatch("inclusive_scan_op", table, dispatch_coord, input);
+    auto const fn = table.select(dispatch_set{dev, st, cont, plc, det});
+    return fn(input);
 }
 
 } // namespace dispatch_examples

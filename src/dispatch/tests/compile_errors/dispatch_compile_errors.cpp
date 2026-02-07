@@ -6,6 +6,7 @@
 //
 #include "dispatch/detail.h"
 #include "dispatch/dispatch_table.h"
+#include "dispatch/enums.h"
 
 int
 main() {
@@ -17,29 +18,29 @@ main() {
 
 #if defined(TEST_SUBSPACE_NOT_WITHIN)
     // ERROR: "Subs must be within the axes"
-    using MainAxes   = dispatch::axes<dispatch::axis<1, 2, 3>>;
-    using BadSubAxes = dispatch::axes<dispatch::axis<1, 99>>;
-    using Table      = dispatch::dispatch_table<MainAxes, int()>;
-    Table table([](auto) -> int (*)() { return nullptr; }, BadSubAxes{});
+    using main_axes = dispatch::axes<dispatch::full_placement_axis>;
+    using bad_sub   = dispatch::axes<dispatch::axis<dispatch::determinism::required>>;
+    using table     = dispatch::dispatch_table<main_axes, int()>;
+    table t("compile_error_test", [](auto) -> int (*)() { return nullptr; }, bad_sub{});
 #endif
 
 #if defined(TEST_OP_MISSING_OVERLOAD)
-    // ERROR: Template instantiation failure - no matching op() for tag<2>
-    struct IncompleteOp {
+    // ERROR: Template instantiation failure - no matching op() for tag<out_of_place>
+    struct incomplete_op {
         static int
-        op(dispatch::tag<1>, int x) {
+        op(dispatch::tag<dispatch::placement::in_place>, int x) {
             return x;
         }
     };
-    using Axes  = dispatch::axes<dispatch::axis<1, 2>>;
-    using Table = dispatch::dispatch_table<Axes, int(int)>;
-    Table table(Table::from_op<IncompleteOp>(), Axes{});
+    using test_axes = dispatch::axes<dispatch::full_placement_axis>;
+    using table     = dispatch::dispatch_table<test_axes, int(int)>;
+    table t("compile_error_test", table::from_op<incomplete_op>(), test_axes{});
 #endif
 
 #if defined(TEST_WRONG_TUPLE_TYPE)
     // ERROR: "value type mismatch"
-    using Axes  = dispatch::axes<dispatch::axis<1, 2>>;
-    auto result = dispatch::linear_index_from_value_tuple(Axes{}, std::make_tuple(1.0f));
+    using test_axes = dispatch::axes<dispatch::full_placement_axis>;
+    auto result     = dispatch::linear_index_from_value_tuple(test_axes{}, std::make_tuple(1.0f));
     (void)result;
 #endif
 

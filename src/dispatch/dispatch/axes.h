@@ -64,18 +64,7 @@ struct axes_label_extractor {
     }
 };
 
-// Check that all axes have unique value types
-template <typename... Axes>
-consteval bool
-unique_axis_value_types() {
-    if constexpr (sizeof...(Axes) <= 1) {
-        return true;
-    } else {
-        // Check by comparing labels — if any two axes have the same label,
-        // they have the same value type
-        return unique_axis_labels_impl<Axes...>();
-    }
-}
+// Check that all axes have unique value types by comparing their labels.
 
 template <typename Head, typename... Tail>
 consteval bool
@@ -89,6 +78,16 @@ unique_axis_labels_impl() {
               0) &&
              ...);
         return head_unique && unique_axis_labels_impl<Tail...>();
+    }
+}
+
+template <typename... Axes>
+consteval bool
+unique_axis_value_types() {
+    if constexpr (sizeof...(Axes) <= 1) {
+        return true;
+    } else {
+        return unique_axis_labels_impl<Axes...>();
     }
 }
 

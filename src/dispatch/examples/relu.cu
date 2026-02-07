@@ -18,8 +18,8 @@
 //   4. Declare a `dispatcher` type alias that combines the space with the function signature.
 //   5. At the call site, create a static dispatch table using `from_op<relu_op_t>()` which
 //      automatically instantiates `relu_op_t::op` for every point in the space.
-//   6. Call `torch_dispatch(name, table, coord, args...)` which looks up the runtime coordinate
-//      in the table and invokes the corresponding compile-time instantiation.
+//   6. Call `table.select(dispatch_set{dev, st})(args...)` which looks up the runtime
+//      coordinate in the table and invokes the corresponding compile-time instantiation.
 //
 // HOW TAG DISPATCH WORKS:
 //   The tag<torch::kCPU, stype> and tag<torch::kCUDA, stype> overloads are distinguished by the
@@ -30,7 +30,7 @@
 //   - tag<DeviceType, ScalarType, ...>: A compile-time coordinate in the dispatch space.
 //   - axes<axis1, axis2, ...>: Cartesian product of value sets defining the full space.
 //   - dispatch_table<space, signature>: Maps runtime coordinates to function pointers.
-//   - torch_dispatch(): Validates the coordinate and calls the appropriate instantiation.
+//   - table.select(dispatch_set{...}): Validates the coordinate and returns the function pointer.
 //
 // This example is intentionally minimal. For more complex dispatch with multiple axes, partial
 // coverage, and algorithm selection based on constraints, see functional.cu and op.cu.
@@ -63,10 +63,10 @@
 
 #include "examples/relu.h"
 
+#include "dispatch/dispatch_set.h"
 #include "dispatch/dispatch_table.h"
 #include "dispatch/torch/dispatch.h"
 #include "dispatch/torch/types.h"
-#include "dispatch/types.h"
 
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -156,7 +156,7 @@ struct relu_op_t {
 
 torch::Tensor
 example_relu_impl(torch::Tensor input, placement plc) {
-    static auto const table = dispatch_table_from_op<relu_op_t>();
+    static auto const table = dispatch_table_from_op<relu_op_t>("example_relu");
 
     // Validate input rank
     TORCH_CHECK_VALUE(input.dim() == 1, "example_relu: expected 1D tensor, got ", input.dim(), "D");
@@ -175,8 +175,8 @@ example_relu_impl(torch::Tensor input, placement plc) {
     auto const dev = input.device().type();
     auto const st  = input.scalar_type();
 
-    auto const dispatch_coord = std::make_tuple(dev, st);
-    torch_dispatch("example_relu", table, dispatch_coord, input, output);
+    auto const fn = table.select(dispatch_set{dev, st});
+    fn(input, output);
 
     return output;
 }
