@@ -128,7 +128,6 @@ template <typename T> class work_stealing_deque {
     }
 
   public:
-
     std::optional<T>
     steal() noexcept {
         std::int64_t t = top_.load(std::memory_order_acquire);
@@ -377,14 +376,16 @@ class work_stealing_pool {
                 if (!self->cancelled.load(std::memory_order_relaxed)) {
                     // Use wider arithmetic to prevent overflow when computing task bounds.
                     // task_id * grain could overflow Index type if near max value.
-                    using WideIndex = std::conditional_t<std::is_signed_v<Index>, std::int64_t, std::uint64_t>;
+                    using WideIndex =
+                        std::conditional_t<std::is_signed_v<Index>, std::int64_t, std::uint64_t>;
 
                     WideIndex const wide_start = static_cast<WideIndex>(self->start);
                     WideIndex const wide_end   = static_cast<WideIndex>(self->end);
                     WideIndex const wide_grain = static_cast<WideIndex>(self->grain);
 
-                    WideIndex task_start_wide = wide_start + static_cast<WideIndex>(task_id) * wide_grain;
-                    WideIndex task_end_wide   = task_start_wide + wide_grain;
+                    WideIndex task_start_wide =
+                        wide_start + static_cast<WideIndex>(task_id) * wide_grain;
+                    WideIndex task_end_wide = task_start_wide + wide_grain;
 
                     // Clamp to valid range - handles overflow and ensures bounds
                     if (task_start_wide > wide_end)

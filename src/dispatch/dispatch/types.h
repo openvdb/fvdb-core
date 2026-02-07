@@ -71,7 +71,28 @@ is_types_v() {
 //------------------------------------------------------------------------------
 // TAG
 //------------------------------------------------------------------------------
-template <auto... V> struct tag {};
+template <auto... V> struct tag {
+    static_assert(sizeof...(V) > 0, "tag must have at least one value");
+};
+
+template <auto V0> struct tag<V0> {};
+
+namespace detail {
+template <typename T, typename... Rest>
+consteval bool
+unique_value_types(T head, Rest... tail) {
+    if constexpr (sizeof...(tail) == 0) {
+        return true;
+    } else {
+        return ((!std::is_same_v<T, Rest>) && ...) && unique_value_types(tail...);
+    }
+}
+} // namespace detail
+
+template <auto V0, auto... V> struct tag<V0, V...> {
+    static_assert(detail::unique_value_types(V0, V...), "tag values must have unique types");
+};
+
 template <typename T> struct is_tag : consteval_false_type {};
 template <auto... V> struct is_tag<tag<V...>> : consteval_true_type {};
 template <typename T>

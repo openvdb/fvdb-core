@@ -17,6 +17,22 @@
 // Interface preserved:
 //   dispatch::broadcast_pool::instance().parallel_for(start, end, grain, func);
 //
+// IMPORTANT USAGE NOTES:
+//
+// 1. Pool lifetime: The pool must outlive all parallel_for() calls. Since this
+//    is a singleton, this is normally satisfied. Destroying the pool with
+//    outstanding work will deadlock.
+//
+// 2. Nested parallel_for: Calling parallel_for() from within a task is SAFE.
+//    The nested call executes synchronously (serially) on the calling thread.
+//    This avoids deadlock and is often the desired behavior when the outer
+//    loop already saturates available cores.
+//
+// 3. No cross-thread nested submission: Tasks must NOT spawn new threads that
+//    call parallel_for() and then wait/join on them. This causes deadlock
+//    because submit_mutex_ is held for the job duration. Same-thread nested
+//    calls (point 2 above) are safe.
+//
 // Notes:
 //  - This is intentionally range-parallel, not a general task scheduler.
 //  - If you need nested *parallel* regions (true nested parallelism), you need a
@@ -28,6 +44,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <concepts>
 #include <condition_variable>
@@ -35,7 +52,6 @@
 #include <cstdlib>
 #include <exception>
 #include <functional>
-#include <latch>
 #include <limits>
 #include <mutex>
 #include <thread>
@@ -121,12 +137,17 @@ class broadcast_pool {
         // Serialize jobs: this runtime runs exactly one broadcast job at a time.
         std::unique_lock<std::mutex> submit_lock(submit_mutex_);
 
+        // Track active jobs for destructor safety check.
+        active_jobs_.fetch_add(1, std::memory_order_relaxed);
+
         // job lives on stack; workers only use it until we wait for completion.
         job<Index, F> j(start, end, grain, participants, std::move(f));
 
         // Publish job to workers.
-        current_job_.store(&j, std::memory_order_release);
+        // Increment epoch BEFORE storing pointer for acquire/release pairing.
+        // This ensures workers that see the new epoch will also see the new pointer.
         job_epoch_.fetch_add(1, std::memory_order_release);
+        current_job_.store(&j, std::memory_order_release);
 
         // Wake sleepers (hot threads observe epoch change without kernel wake).
         { std::lock_guard<std::mutex> lk(cv_mutex_); }
@@ -141,6 +162,8 @@ class broadcast_pool {
 
         // Clear published job.
         current_job_.store(nullptr, std::memory_order_release);
+
+        active_jobs_.fetch_sub(1, std::memory_order_relaxed);
 
         // Propagate exception if any participant threw.
         if (j.eptr) {
@@ -267,26 +290,32 @@ class broadcast_pool {
         std::size_t participants = 0;
         std::size_t blocks       = 0;
 
-        std::latch done_latch;
+        // Atomic ref-count instead of std::latch. This fixes potential use-after-free:
+        // unlike std::latch, a raw atomic decrement has no complex internal logic
+        // (like notifying waiters) that runs after the counter hits zero.
+        // Aligned to prevent false sharing with the read-only fields above.
+        alignas(64) std::atomic<std::ptrdiff_t> ref_count{0};
 
         std::atomic<bool> cancelled{false};
         std::exception_ptr eptr;
         std::mutex eptr_mutex;
 
-        explicit job_base(std::ptrdiff_t count) : done_latch(count) {}
+        explicit job_base(std::ptrdiff_t count) : ref_count(count) {}
 
         void
         finish_participant() noexcept {
-            // Decrements the latch. Safe even if the parent destroys the Job
-            // object immediately after the last count_down returns.
-            done_latch.count_down();
+            // Atomic decrement is safe as the final instruction. Unlike std::latch,
+            // this has no side effects (like notifying waiters) that could race
+            // against the main thread destroying 'this'.
+            ref_count.fetch_sub(1, std::memory_order_release);
         }
 
         void
         wait() {
-            // Blocks until internal counter reaches zero. Implementations
-            // typically spin briefly before falling back to OS sleep.
-            done_latch.wait();
+            // Spin-wait until all participants have fully checked out.
+            while (ref_count.load(std::memory_order_acquire) > 0) {
+                DISPATCH_BROADCAST_SPIN_PAUSE();
+            }
         }
 
       protected:
@@ -294,7 +323,14 @@ class broadcast_pool {
         mul_div(std::size_t a, std::size_t b, std::size_t d) {
 #if defined(__SIZEOF_INT128__)
             return static_cast<std::size_t>((static_cast<__uint128_t>(a) * b) / d);
+#elif defined(_MSC_VER) && defined(_M_X64)
+            // Use MSVC intrinsics to prevent overflow on 64-bit Windows.
+            unsigned __int64 high;
+            unsigned __int64 low = _umul128(a, b, &high);
+            unsigned __int64 rem;
+            return _udiv128(high, low, d, &rem);
 #else
+            // 32-bit fallback - may overflow for huge inputs.
             return (a * b) / d;
 #endif
         }
@@ -345,11 +381,24 @@ class broadcast_pool {
                     std::size_t const b0 = mul_div(B, pid, P);
                     std::size_t const b1 = mul_div(B, pid + 1, P);
 
-                    // Convert blocks to element indices, aligned to grain.
-                    Index begin  = start + static_cast<Index>(b0) * grain;
-                    Index finish = start + static_cast<Index>(b1) * grain;
-                    if (finish > end)
-                        finish = end;
+                    // Use wide arithmetic to prevent integer overflow.
+                    // (b0 * grain) can overflow 32-bit Index types for large ranges.
+                    using wide_index_t =
+                        std::conditional_t<std::is_signed_v<Index>, std::int64_t, std::uint64_t>;
+
+                    wide_index_t const w_start = static_cast<wide_index_t>(start);
+                    wide_index_t const w_end   = static_cast<wide_index_t>(end);
+                    wide_index_t const w_grain = static_cast<wide_index_t>(grain);
+
+                    wide_index_t begin_w  = w_start + static_cast<wide_index_t>(b0) * w_grain;
+                    wide_index_t finish_w = w_start + static_cast<wide_index_t>(b1) * w_grain;
+
+                    // Clamp to valid range.
+                    if (finish_w > w_end)
+                        finish_w = w_end;
+
+                    Index begin  = static_cast<Index>(begin_w);
+                    Index finish = static_cast<Index>(finish_w);
 
                     if (begin < finish) {
                         std::invoke(func, begin, finish);
@@ -394,6 +443,12 @@ class broadcast_pool {
     }
 
     ~broadcast_pool() {
+        // Debug check: pool must not be destroyed with outstanding work.
+        // If this fires, a job is still in progress when the pool is being destroyed,
+        // which will cause deadlock (workers waiting on job, destructor waiting on workers).
+        assert(active_jobs_.load(std::memory_order_relaxed) == 0 &&
+               "broadcast_pool destroyed with outstanding work - this will deadlock");
+
         stop_.store(true, std::memory_order_release);
         { std::lock_guard<std::mutex> lk(cv_mutex_); }
         cv_.notify_all();
@@ -455,11 +510,25 @@ class broadcast_pool {
             std::uint64_t const e = job_epoch_.load(std::memory_order_acquire);
             if (e == local_epoch)
                 continue;
-            local_epoch = e;
 
             job_base *j = current_job_.load(std::memory_order_acquire);
+
+            // If pointer is null, the publisher may still be in the window between
+            // incrementing epoch and storing the pointer. Retry without committing
+            // to this epoch, otherwise we'd miss the job entirely.
             if (!j)
                 continue;
+
+            // Double-dip epoch check: Verify epoch didn't change while loading pointer.
+            // If a worker is preempted between reading the epoch and loading the pointer,
+            // it could load a job pointer for a different epoch than it recorded, leading
+            // to double-execution of the new job.
+            if (job_epoch_.load(std::memory_order_relaxed) != e)
+                continue;
+
+            // Only update local_epoch after we have BOTH a consistent epoch AND
+            // a non-null pointer. This ensures we don't skip a job.
+            local_epoch = e;
 
             // Workers get participant IDs [0, participants-2]; caller is participants-1.
             std::size_t const workers_to_use = (j->participants > 0) ? (j->participants - 1) : 0;
@@ -485,6 +554,9 @@ class broadcast_pool {
 
     // Serialize jobs (one at a time).
     std::mutex submit_mutex_;
+
+    // Debug counter for active jobs - used to detect destruction during active work.
+    std::atomic<std::size_t> active_jobs_{0};
 
     // TLS: worker id (>= 0 if pool thread).
     inline static thread_local int tls_worker_index_ = -1;
