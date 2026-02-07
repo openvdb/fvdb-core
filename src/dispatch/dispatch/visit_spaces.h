@@ -9,7 +9,6 @@
 #define DISPATCH_DISPATCH_VISIT_SPACES_H
 
 #include "dispatch/detail.h"
-#include "dispatch/types.h"
 
 #include <functional>
 #include <utility>

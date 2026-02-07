@@ -5,7 +5,6 @@
 #define DISPATCH_DISPATCH_AXES_MAP_H
 
 #include "dispatch/detail.h"
-#include "dispatch/types.h"
 #include "dispatch/visit_spaces.h"
 
 #include <functional>
@@ -276,10 +275,10 @@ template <typename Axes, typename T, typename Factory> struct create_and_store_v
 // Implementation helper: handle a single sub (either a coord or a subspace)
 template <typename Axes, typename T, typename Factory, typename... SubAxes>
 void
-create_and_store_helper(axes_map<Axes, T> &map, Factory &factory, axes<SubAxes...> sub) {
+create_and_store_helper(axes_map<Axes, T> &map, Factory &factory, axes_storage<SubAxes...> sub) {
     static_assert(axes_like<Axes>, "Axes must be an axes type");
     static_assert(non_empty<Axes>, "Axes must be non-empty space");
-    static_assert(within<axes<SubAxes...>, Axes>, "SubAxes must be within the Axes");
+    static_assert(within<axes_storage<SubAxes...>, Axes>, "SubAxes must be within the Axes");
     create_and_store_visitor<Axes, T, Factory> visitor{map, factory};
     visit_axes_space(visitor, sub);
 }
@@ -287,10 +286,10 @@ create_and_store_helper(axes_map<Axes, T> &map, Factory &factory, axes<SubAxes..
 // Create and store a single coordinate
 template <typename Axes, typename T, typename Factory, auto... Vs>
 void
-create_and_store_helper(axes_map<Axes, T> &map, Factory &factory, tag<Vs...> t) {
+create_and_store_helper(axes_map<Axes, T> &map, Factory &factory, tag_storage<Vs...> t) {
     static_assert(axes_like<Axes>, "Axes must be an axes type");
     static_assert(non_empty<Axes>, "Axes must be non-empty space");
-    static_assert(within<tag<Vs...>, Axes>, "tag must be within the axes");
+    static_assert(within<tag_storage<Vs...>, Axes>, "tag must be within the axes");
     insert_or_assign(map, t, factory(t));
 }
 
