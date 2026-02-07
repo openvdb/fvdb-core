@@ -23,24 +23,21 @@ enum class dev { cpu, gpu, pvt1 };
 enum class stype { f16, f32, f64, i32, i64 };
 enum class algo { clever, quick, lazy, stupid };
 
-template <>
-struct type_label<dev> {
+template <> struct type_label<dev> {
     static consteval auto
     value() {
         return fixed_label("test.dev");
     }
 };
 
-template <>
-struct type_label<stype> {
+template <> struct type_label<stype> {
     static consteval auto
     value() {
         return fixed_label("test.stype");
     }
 };
 
-template <>
-struct type_label<algo> {
+template <> struct type_label<algo> {
     static consteval auto
     value() {
         return fixed_label("test.algo");
@@ -183,9 +180,9 @@ TEST(WithValue, SubsumptionRelationship) {
     static_assert(with_type<T, dev>);
 
     // with_type does not imply with_value
-    static_assert(with_type<T, dev>);             // true
-    static_assert(with_value<T, dev::cpu>);        // true
-    static_assert(!with_value<T, dev::gpu>);       // false — type present, value wrong
+    static_assert(with_type<T, dev>);        // true
+    static_assert(with_value<T, dev::cpu>);  // true
+    static_assert(!with_value<T, dev::gpu>); // false — type present, value wrong
 }
 
 // ============================================================================
@@ -207,6 +204,91 @@ TEST(IsWithValue, Trait) {
     static_assert(!is_with_value_v<T, dev::gpu>());
     static_assert(is_with_value_v<T, stype::f32>());
     static_assert(!is_with_value_v<T, stype::f64>());
+}
+
+// ============================================================================
+// tag_get: extract value(s) from a tag by type
+// ============================================================================
+
+TEST(TagGet, SingleType) {
+    using T = tag<dev::cpu, stype::f32, algo::clever>;
+
+    constexpr auto d = tag_get<dev>(T{});
+    constexpr auto s = tag_get<stype>(T{});
+    constexpr auto a = tag_get<algo>(T{});
+
+    static_assert(d == dev::cpu);
+    static_assert(s == stype::f32);
+    static_assert(a == algo::clever);
+}
+
+TEST(TagGet, SingleTypeDefaultArg) {
+    using T = tag<dev::gpu, stype::f64>;
+
+    // Can call without an argument when Tag is explicit
+    constexpr auto d = tag_get<dev, T>();
+    constexpr auto s = tag_get<stype, T>();
+
+    static_assert(d == dev::gpu);
+    static_assert(s == stype::f64);
+}
+
+TEST(TagGet, MultipleTypes) {
+    using T = tag<dev::cpu, stype::f32, algo::clever>;
+
+    auto const [d, s]       = tag_get<dev, stype>(T{});
+    auto const [d2, a]      = tag_get<dev, algo>(T{});
+    auto const [s2, a2]     = tag_get<stype, algo>(T{});
+    auto const [d3, s3, a3] = tag_get<dev, stype, algo>(T{});
+
+    EXPECT_EQ(d, dev::cpu);
+    EXPECT_EQ(s, stype::f32);
+    EXPECT_EQ(d2, dev::cpu);
+    EXPECT_EQ(a, algo::clever);
+    EXPECT_EQ(s2, stype::f32);
+    EXPECT_EQ(a2, algo::clever);
+    EXPECT_EQ(d3, dev::cpu);
+    EXPECT_EQ(s3, stype::f32);
+    EXPECT_EQ(a3, algo::clever);
+
+    // Verify multi-type result is constexpr-usable
+    static_assert(std::get<0>(tag_get<dev, stype>(T{})) == dev::cpu);
+    static_assert(std::get<1>(tag_get<dev, stype>(T{})) == stype::f32);
+    static_assert(std::get<0>(tag_get<dev, stype, algo>(T{})) == dev::cpu);
+    static_assert(std::get<1>(tag_get<dev, stype, algo>(T{})) == stype::f32);
+    static_assert(std::get<2>(tag_get<dev, stype, algo>(T{})) == algo::clever);
+}
+
+TEST(TagGet, OrderIndependent) {
+    using T1 = tag<dev::gpu, stype::f16>;
+    using T2 = tag<stype::f16, dev::gpu>;
+
+    // Same tag, same results
+    static_assert(tag_get<dev>(T1{}) == tag_get<dev>(T2{}));
+    static_assert(tag_get<stype>(T1{}) == tag_get<stype>(T2{}));
+
+    // Multi-type extraction also order-independent
+    static_assert(std::get<0>(tag_get<dev, stype>(T1{})) == std::get<0>(tag_get<dev, stype>(T2{})));
+    static_assert(std::get<1>(tag_get<dev, stype>(T1{})) == std::get<1>(tag_get<dev, stype>(T2{})));
+}
+
+TEST(TagGet, WithDispatchEnums) {
+    using T = tag<placement::in_place, determinism::required, contiguity::contiguous>;
+
+    constexpr auto p = tag_get<placement>(T{});
+    constexpr auto d = tag_get<determinism>(T{});
+    constexpr auto c = tag_get<contiguity>(T{});
+
+    static_assert(p == placement::in_place);
+    static_assert(d == determinism::required);
+    static_assert(c == contiguity::contiguous);
+
+    static_assert(std::get<0>(tag_get<placement, determinism, contiguity>(T{})) ==
+                  placement::in_place);
+    static_assert(std::get<1>(tag_get<placement, determinism, contiguity>(T{})) ==
+                  determinism::required);
+    static_assert(std::get<2>(tag_get<placement, determinism, contiguity>(T{})) ==
+                  contiguity::contiguous);
 }
 
 } // namespace dispatch

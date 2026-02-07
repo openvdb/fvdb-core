@@ -115,11 +115,12 @@ relu_kernel(torch::PackedTensorAccessor64<T, 1> input, torch::PackedTensorAccess
     }
 }
 
-struct relu_op_t {
-    template <torch::ScalarType stype>
+struct relu_op {
+    template <typename Tag>
+        requires with_value<Tag, torch::kCPU> && with_type<Tag, torch::ScalarType>
     static void
-    op(tag<torch::kCPU, stype>, torch::Tensor input, torch::Tensor output) {
-        using T = torch_scalar_cpp_type_t<stype>;
+    op(Tag, torch::Tensor input, torch::Tensor output) {
+        using T = torch_scalar_cpp_type<Tag>;
 
         auto input_accessor  = input.accessor<T, 1>();
         auto output_accessor = output.accessor<T, 1>();
@@ -131,10 +132,11 @@ struct relu_op_t {
         }
     }
 
-    template <torch::ScalarType stype>
+    template <typename Tag>
+        requires with_value<Tag, torch::kCUDA> && with_type<Tag, torch::ScalarType>
     static void
-    op(tag<torch::kCUDA, stype>, torch::Tensor input, torch::Tensor output) {
-        using T = torch_scalar_cpp_type_t<stype>;
+    op(Tag, torch::Tensor input, torch::Tensor output) {
+        using T = torch_scalar_cpp_type<Tag>;
 
         c10::cuda::CUDAGuard device_guard(input.device());
         cudaStream_t stream = at::cuda::getCurrentCUDAStream().stream();
@@ -156,7 +158,7 @@ struct relu_op_t {
 
 torch::Tensor
 example_relu_impl(torch::Tensor input, placement plc) {
-    static auto const table = dispatch_table_from_op<relu_op_t>("example_relu");
+    static auto const table = dispatch_table_from_op<relu_op>("example_relu");
 
     // Validate input rank
     TORCH_CHECK_VALUE(input.dim() == 1, "example_relu: expected 1D tensor, got ", input.dim(), "D");

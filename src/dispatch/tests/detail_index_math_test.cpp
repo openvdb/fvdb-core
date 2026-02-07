@@ -26,24 +26,21 @@ enum class device { cpu, gpu };
 enum class stype { f32, f64 };
 enum class method { fast, slow, auto_select };
 
-template <>
-struct type_label<device> {
+template <> struct type_label<device> {
     static consteval auto
     value() {
         return fixed_label("test.device");
     }
 };
 
-template <>
-struct type_label<stype> {
+template <> struct type_label<stype> {
     static consteval auto
     value() {
         return fixed_label("test.stype");
     }
 };
 
-template <>
-struct type_label<method> {
+template <> struct type_label<method> {
     static consteval auto
     value() {
         return fixed_label("test.method");
@@ -123,7 +120,7 @@ TEST(Volume, Extents) {
 }
 
 TEST(Volume, AxesStorage) {
-    static_assert(volume_v<axes_storage<device_axis, stype_axis>>() == 4); // 2 * 2
+    static_assert(volume_v<axes_storage<device_axis, stype_axis>>() == 4);  // 2 * 2
     static_assert(volume_v<axes_storage<device_axis, method_axis>>() == 6); // 2 * 3
 }
 
@@ -358,8 +355,8 @@ TEST(TagFromLinearIndex, MultipleAxes) {
 // ============================================================================
 
 TEST(LinearIndexRoundTrip, Extents) {
-    using E                 = extents<2, 3, 4>;
-    constexpr size_t vol    = volume_v<E>();
+    using E              = extents<2, 3, 4>;
+    constexpr size_t vol = volume_v<E>();
     static_assert(vol == 24);
 
     // Spot-check a few
@@ -382,8 +379,8 @@ TEST(LinearIndexRoundTrip, Extents) {
 }
 
 TEST(LinearIndexRoundTrip, Axes) {
-    using TestAxes          = axes_storage<device_axis, stype_axis>;
-    constexpr size_t vol    = volume_v<TestAxes>();
+    using TestAxes       = axes_storage<device_axis, stype_axis>;
+    constexpr size_t vol = volume_v<TestAxes>();
     static_assert(vol == 4);
 
     {
@@ -446,8 +443,8 @@ TEST(VisitAxesSpace, ThreeAxes) {
 }
 
 TEST(VisitExtentsSpace, Basic) {
-    using E  = extents<2, 3>;
-    int count = 0;
+    using E      = extents<2, 3>;
+    int count    = 0;
     auto visitor = [&count](auto /*indices*/) { ++count; };
     visit_extents_space(visitor, E{});
     EXPECT_EQ(count, 6); // 2 * 3

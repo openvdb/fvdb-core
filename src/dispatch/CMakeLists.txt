@@ -38,10 +38,9 @@ endif()
 
 if(FVDB_BUILD_TESTS OR FVDB_BUILD_BENCHMARKS)
     set(DISPATCH_EXAMPLE_SOURCES
-        # Temporarily disabled — bringing up incrementally
-        # examples/functional.cu
-        # examples/op.cu
-        # examples/relu.cu
+        examples/functional.cu
+        examples/op.cu
+        examples/relu.cu
         # Phase 3: examples/gelu_for_each.cu (requires for_each)
         examples/scan_lib.cpp
         examples/scan_lib.cu
@@ -184,13 +183,12 @@ if(FVDB_BUILD_TESTS)
     ConfigureDispatchTest(DispatchScanLibCudaTest tests/scan_lib_cuda_test.cu)
 
     ConfigureDispatchTest(DispatchDetailIndexMathTest tests/detail_index_math_test.cpp)
-    # ---- Temporarily disabled — bring up incrementally ----
-    # ConfigureDispatchTest(DispatchWithValueTest tests/with_value_test.cpp)
-    # ConfigureDispatchTest(DispatchAxesMapTest tests/axes_map_test.cpp)
-    # ConfigureDispatchTest(DispatchTableTest tests/dispatch_table_test.cpp)
-    # ConfigureDispatchTest(DispatchVisitSpacesTest tests/visit_spaces_test.cpp)
-    # ConfigureDispatchTest(DispatchTorchTest tests/torch_test.cpp)
-    # ConfigureDispatchTest(DispatchNvccSmokeTest tests/nvcc_smoke_test.cu)
-    # ConfigureDispatchTest(DispatchInclusiveScanExamplesTest tests/inclusive_scan_examples_test.cpp)
-    # ConfigureDispatchTest(DispatchReLUTest tests/relu_test.cpp)
+    ConfigureDispatchTest(DispatchWithValueTest tests/with_value_test.cpp)
+    ConfigureDispatchTest(DispatchVisitSpacesTest tests/visit_spaces_test.cpp)
+    ConfigureDispatchTest(DispatchAxesMapTest tests/axes_map_test.cpp)
+    ConfigureDispatchTest(DispatchTableTest tests/dispatch_table_test.cpp)
+    ConfigureDispatchTest(DispatchTorchTest tests/torch_test.cpp)
+    ConfigureDispatchTest(DispatchNvccSmokeTest tests/nvcc_smoke_test.cu)
+    ConfigureDispatchTest(DispatchReLUTest tests/relu_test.cpp)
+    ConfigureDispatchTest(DispatchInclusiveScanExamplesTest tests/inclusive_scan_examples_test.cpp)
 endif()

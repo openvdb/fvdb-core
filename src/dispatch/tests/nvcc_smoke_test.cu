@@ -82,10 +82,10 @@ TEST(NvccSmoke, DispatchTypesInDeviceCode) {
 // =============================================================================
 
 TEST(NvccSmoke, CoreTypeTemplates) {
-    using E    = extents<2, 3>;
-    using I    = indices<0, 1>;
-    using T    = tag<placement::in_place>;
-    using A    = axis<placement::in_place, placement::out_of_place>;
+    using E      = extents<2, 3>;
+    using I      = indices<0, 1>;
+    using T      = tag<placement::in_place>;
+    using A      = axis<placement::in_place, placement::out_of_place>;
     using MyAxes = axes<A>;
 
     static_assert(is_extents_v<E>());

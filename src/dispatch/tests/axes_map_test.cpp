@@ -22,16 +22,14 @@ namespace dispatch {
 enum class color { red, green, blue };
 enum class shape { circle, square };
 
-template <>
-struct type_label<color> {
+template <> struct type_label<color> {
     static consteval auto
     value() {
         return fixed_label("test.color");
     }
 };
 
-template <>
-struct type_label<shape> {
+template <> struct type_label<shape> {
     static consteval auto
     value() {
         return fixed_label("test.shape");
@@ -60,8 +58,7 @@ TEST(AxesMap, CreateAndStoreSingleCoordinate) {
     axes_map<test_axes, int> map;
 
     auto factory = [](auto coord) -> int {
-        if constexpr (std::is_same_v<decltype(coord),
-                                     tag_storage<color::red, shape::circle>>) {
+        if constexpr (std::is_same_v<decltype(coord), tag_storage<color::red, shape::circle>>) {
             return 10;
         }
         return 0;
@@ -154,7 +151,7 @@ TEST(AxesMap, FindReturnsEndForOutOfSpaceCoordinate) {
     map.emplace(tag<color::red>{}, 10);
 
     auto const bad_color = static_cast<color>(99);
-    auto it = map.find(std::make_tuple(bad_color));
+    auto it              = map.find(std::make_tuple(bad_color));
     EXPECT_EQ(it, map.end());
 }
 

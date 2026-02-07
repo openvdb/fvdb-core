@@ -25,16 +25,14 @@ namespace dispatch {
 enum class fruit { apple, banana, cherry };
 enum class drink { water, juice, tea };
 
-template <>
-struct type_label<fruit> {
+template <> struct type_label<fruit> {
     static consteval auto
     value() {
         return fixed_label("test.fruit");
     }
 };
 
-template <>
-struct type_label<drink> {
+template <> struct type_label<drink> {
     static consteval auto
     value() {
         return fixed_label("test.drink");
@@ -79,33 +77,33 @@ TEST(VisitExtentsSpace, VisitsAllIndices) {
 }
 
 TEST(VisitExtentsSpace, SingleDimension) {
-    using E   = extents<3>;
-    int count = 0;
+    using E      = extents<3>;
+    int count    = 0;
     auto visitor = [&count](auto /*idx*/) { ++count; };
     visit_extents_space(visitor, E{});
     EXPECT_EQ(count, 3);
 }
 
 TEST(VisitExtentsSpace, LargeSpace) {
-    using E   = extents<10, 10>;
-    int count = 0;
+    using E      = extents<10, 10>;
+    int count    = 0;
     auto visitor = [&count](auto /*idx*/) { ++count; };
     visit_extents_space(visitor, E{});
     EXPECT_EQ(count, 100);
 }
 
 TEST(VisitExtentsSpace, CountEqualsVolume) {
-    using E   = extents<3, 4, 5>;
-    int count = 0;
+    using E      = extents<3, 4, 5>;
+    int count    = 0;
     auto visitor = [&count](auto /*idx*/) { ++count; };
     visit_extents_space(visitor, E{});
     EXPECT_EQ(count, 60);
 }
 
 TEST(VisitExtentsSpaces, VisitsMultipleSpaces) {
-    using E1  = extents<2>;
-    using E2  = extents<3>;
-    int count = 0;
+    using E1     = extents<2>;
+    using E2     = extents<3>;
+    int count    = 0;
     auto visitor = [&count](auto /*idx*/) { ++count; };
     visit_extents_spaces(visitor, E1{}, E2{});
     EXPECT_EQ(count, 5);
@@ -175,9 +173,9 @@ TEST(VisitAxesSpace, CountEqualsVolume) {
 }
 
 TEST(VisitAxesSpaces, VisitsMultipleSpaces) {
-    using Axes1 = axes<full_placement_axis>;
-    using Axes2 = axes<full_determinism_axis>;
-    int count   = 0;
+    using Axes1  = axes<full_placement_axis>;
+    using Axes2  = axes<full_determinism_axis>;
+    int count    = 0;
     auto visitor = [&count](auto /*coord*/) { ++count; };
     visit_axes_spaces(visitor, Axes1{}, Axes2{});
     EXPECT_EQ(count, 4); // 2 + 2

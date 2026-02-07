@@ -26,24 +26,21 @@ enum class color { red, green, blue };
 enum class shape { circle, square, triangle };
 enum class size { small, medium, large };
 
-template <>
-struct type_label<color> {
+template <> struct type_label<color> {
     static consteval auto
     value() {
         return fixed_label("test.color");
     }
 };
 
-template <>
-struct type_label<shape> {
+template <> struct type_label<shape> {
     static consteval auto
     value() {
         return fixed_label("test.shape");
     }
 };
 
-template <>
-struct type_label<size> {
+template <> struct type_label<size> {
     static consteval auto
     value() {
         return fixed_label("test.size");
@@ -134,7 +131,7 @@ TEST(Named, DistinctTypes) {
 
 TEST(Named, SelfRegisteringTypeLabel) {
     // type_label for named<Label, T> returns Label
-    using N = named<fixed_label("my.label"), int>;
+    using N              = named<fixed_label("my.label"), int>;
     constexpr auto label = type_label<N>::value();
     static_assert(label == fixed_label("my.label"));
 }
@@ -227,7 +224,7 @@ TEST(Tag, IsNotTag) {
 // ============================================================================
 
 TEST(Axes, SingleAxis) {
-    using A    = axis<color::red, color::green, color::blue>;
+    using A      = axis<color::red, color::green, color::blue>;
     using MyAxes = axes<A>;
     static_assert(is_axes_v<MyAxes>());
 }

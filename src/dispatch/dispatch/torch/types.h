@@ -10,6 +10,9 @@
 
 #include "dispatch/types.h"
 
+#include "dispatch/label.h"
+#include "dispatch/with_value.h"
+
 #include <torch/types.h>
 
 #include <cstddef>
@@ -18,11 +21,41 @@
 namespace dispatch {
 
 //------------------------------------------------------------------------------
+// type_label specializations for torch types
+//------------------------------------------------------------------------------
+
+template <> struct type_label<c10::DeviceType> {
+    static consteval auto
+    value() {
+        return fixed_label("torch.device_type");
+    }
+};
+
+template <> struct type_label<c10::ScalarType> {
+    static consteval auto
+    value() {
+        return fixed_label("torch.scalar_type");
+    }
+};
+
+//------------------------------------------------------------------------------
 // Scalar C++ type mapping
 //------------------------------------------------------------------------------
 
 template <torch::ScalarType S>
 using torch_scalar_cpp_type_t = typename c10::impl::ScalarTypeToCPPType<S>::type;
+
+// Shortcut: extract the C++ scalar type directly from a tag.
+//
+//     using T = torch_scalar_cpp_type<Tag>;
+//
+// Equivalent to:
+//     constexpr auto stype = tag_get<torch::ScalarType>(Tag{});
+//     using T = torch_scalar_cpp_type_t<stype>;
+//
+template <typename Tag>
+    requires with_type<Tag, torch::ScalarType>
+using torch_scalar_cpp_type = torch_scalar_cpp_type_t<tag_get<torch::ScalarType, Tag>()>;
 
 //------------------------------------------------------------------------------
 // Device axes

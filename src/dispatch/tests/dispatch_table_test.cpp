@@ -8,6 +8,7 @@
 #include "dispatch/dispatch_table.h"
 #include "dispatch/enums.h"
 #include "dispatch/label.h"
+#include "dispatch/with_value.h"
 
 #include <gtest/gtest.h>
 
@@ -23,16 +24,14 @@ namespace dispatch {
 enum class color { red, green, blue };
 enum class shape { circle, square, triangle };
 
-template <>
-struct type_label<color> {
+template <> struct type_label<color> {
     static consteval auto
     value() {
         return fixed_label("test.color");
     }
 };
 
-template <>
-struct type_label<shape> {
+template <> struct type_label<shape> {
     static consteval auto
     value() {
         return fixed_label("test.shape");
@@ -50,9 +49,9 @@ struct test_op {
     template <typename Coord>
     static int
     op(Coord, int x) {
-        if constexpr (std::is_same_v<Coord, tag<color::red>>) {
+        if constexpr (with_value<Coord, color::red>) {
             return x * 2;
-        } else if constexpr (std::is_same_v<Coord, tag<color::green>>) {
+        } else if constexpr (with_value<Coord, color::green>) {
             return x * 3;
         }
         return 0;
@@ -106,9 +105,10 @@ test_free_function(tag<color::green>, int x) {
     return x * 20;
 }
 
-template <color C>
+template <typename Tag>
+    requires tag_like<Tag>
 int
-test_free_function(tag<C>, int) {
+test_free_function(Tag, int x) {
     return 0;
 }
 
@@ -122,7 +122,7 @@ TEST(DispatchTable, FromVisitor) {
                 Table::from_visitor([](auto c, int x) { return test_free_function(c, x); }),
                 SubAxes{});
 
-    EXPECT_EQ(table.select(dispatch_set{color::red})(3), 30);  // 3 * 10
+    EXPECT_EQ(table.select(dispatch_set{color::red})(3), 30);   // 3 * 10
     EXPECT_EQ(table.select(dispatch_set{color::green})(3), 60); // 3 * 20
     EXPECT_EQ(table.select(dispatch_set{color::blue})(3), 0);   // default
 }
@@ -132,15 +132,16 @@ TEST(DispatchTable, FromVisitor) {
 // ============================================================================
 
 struct multi_axis_op {
-    template <color C, shape S>
+    template <typename Tag>
     static int
-    op(tag<C, S>) {
-        if constexpr (C == color::red && S == shape::circle) {
+    op(Tag) {
+        if constexpr (with_value<Tag, color::red> && with_value<Tag, shape::circle>) {
             return 1;
-        } else if constexpr (C == color::green && S == shape::square) {
+        } else if constexpr (with_value<Tag, color::green> && with_value<Tag, shape::square>) {
             return 2;
+        } else {
+            return 0;
         }
-        return 0;
     }
 };
 
@@ -154,7 +155,7 @@ TEST(DispatchTable, MultiAxisSelectWithDispatchSet) {
 
     // Order doesn't matter in dispatch_set — matched by type
     EXPECT_EQ(table.select(dispatch_set{color::red, shape::circle})(), 1);
-    EXPECT_EQ(table.select(dispatch_set{shape::circle, color::red})(), 1);  // reversed order
+    EXPECT_EQ(table.select(dispatch_set{shape::circle, color::red})(), 1); // reversed order
     EXPECT_EQ(table.select(dispatch_set{color::green, shape::square})(), 2);
 
     // Not in subspace
@@ -181,8 +182,8 @@ TEST(DispatchTable, WithReturnsNewTable) {
     EXPECT_THROW(table1.select(dispatch_set{color::green}), dispatch_lookup_error);
 
     // table2 has both
-    EXPECT_EQ(table2.select(dispatch_set{color::red})(), 10);    // inherited
-    EXPECT_EQ(table2.select(dispatch_set{color::green})(), 20);  // added
+    EXPECT_EQ(table2.select(dispatch_set{color::red})(), 10);   // inherited
+    EXPECT_EQ(table2.select(dispatch_set{color::green})(), 20); // added
 }
 
 TEST(DispatchTable, OriginalUnchangedAfterWith) {
@@ -235,7 +236,7 @@ TEST(DispatchTable, MultipleArguments) {
 
     Table table("multi_args", factory, axes<color_axis>{});
 
-    EXPECT_EQ(table.select(dispatch_set{color::red})(3, 4), 7);   // 3 + 4
+    EXPECT_EQ(table.select(dispatch_set{color::red})(3, 4), 7);    // 3 + 4
     EXPECT_EQ(table.select(dispatch_set{color::green})(3, 4), 12); // 3 * 4
 }
 
@@ -275,19 +276,46 @@ struct simple_op {
     template <typename Coord>
     static int
     op(Coord, int x) {
-        return x * 2;
+        // Vary behavior based on which coordinate was dispatched
+        if constexpr (with_value<Coord, color::red> && with_value<Coord, shape::circle>) {
+            return x * 10;  // red circle: scale by 10
+        } else if constexpr (with_value<Coord, color::red>) {
+            return x + 100; // red non-circle: offset
+        } else if constexpr (with_value<Coord, shape::triangle>) {
+            return -x;      // any triangle: negate
+        } else {
+            return x;       // identity fallback
+        }
     }
 
-    using space      = axes<color_axis>;
-    using subspaces  = coverage<space>;
+    using space = axes<color_axis, shape_axis>;
+    using subspaces =
+        coverage<axes<axis<color::red>, shape_axis>,             // red × all shapes
+                 axes<axis<color::green>, axis<shape::triangle>> // green triangle only
+                 >;
     using dispatcher = dispatch_table<space, int(int)>;
 };
 
-TEST(DispatchTableFromOp, Basic) {
+TEST(DispatchTableFromOp, MultiAxisWithSparseCoverage) {
     auto table = dispatch_table_from_op<simple_op>("simple_op");
-    EXPECT_EQ(table.select(dispatch_set{color::red})(5), 10);
-    EXPECT_EQ(table.select(dispatch_set{color::green})(5), 10);
-    EXPECT_EQ(table.select(dispatch_set{color::blue})(5), 10);
+
+    // red + circle: x * 10
+    EXPECT_EQ(table.select(dispatch_set{color::red, shape::circle})(5), 50);
+
+    // red + square: x + 100  (red non-circle path)
+    EXPECT_EQ(table.select(dispatch_set{color::red, shape::square})(5), 105);
+
+    // red + triangle: x + 100  (red takes priority over triangle)
+    EXPECT_EQ(table.select(dispatch_set{color::red, shape::triangle})(5), 105);
+
+    // green + triangle: -x  (triangle path)
+    EXPECT_EQ(table.select(dispatch_set{shape::triangle, color::green})(7), -7);
+
+    // green + circle is NOT in coverage — should throw
+    EXPECT_THROW(table.select(dispatch_set{color::green, shape::circle}), dispatch_lookup_error);
+
+    // blue is entirely absent from coverage
+    EXPECT_THROW(table.select(dispatch_set{color::blue, shape::square}), dispatch_lookup_error);
 }
 
 } // namespace dispatch

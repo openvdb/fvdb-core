@@ -79,10 +79,12 @@ struct iscan_op {
 
     // On cpu, for out of place with any stype, contiguity or determinism, we will use the serial
     // option.
-    template <torch::ScalarType stype, contiguity cont, determinism det>
+    template <typename Tag>
+        requires with_value<Tag, torch::kCPU> && with_value<Tag, placement::out_of_place> &&
+                 with_type<Tag, torch::ScalarType>
     static tensor_with_notes
-    op(tag<torch::kCPU, stype, cont, placement::out_of_place, det>, torch::Tensor input) {
-        using T     = torch_scalar_cpp_type_t<stype>;
+    op(Tag, torch::Tensor input) {
+        using T     = torch_scalar_cpp_type<Tag>;
         auto output = torch::empty_like(input);
         scan_lib::inclusive_scan_serial<T>(input.data_ptr<T>(),
                                            input.stride(0),
@@ -94,24 +96,26 @@ struct iscan_op {
 
     // On cpu, for in place with any stype, contiguity or determinism, we will use the serial
     // option.
-    template <torch::ScalarType stype, contiguity cont, determinism det>
+    template <typename Tag>
+        requires with_value<Tag, torch::kCPU> && with_value<Tag, placement::in_place> &&
+                 with_type<Tag, torch::ScalarType>
     static tensor_with_notes
-    op(tag<torch::kCPU, stype, cont, placement::in_place, det>, torch::Tensor input) {
-        using T = torch_scalar_cpp_type_t<stype>;
+    op(Tag, torch::Tensor input) {
+        using T = torch_scalar_cpp_type<Tag>;
         scan_lib::inclusive_scan_serial_inplace<T>(
             input.data_ptr<T>(), input.stride(0), input.size(0));
         return {input, "cpu_serial_in_place"};
     }
 
-    // out of place for integer types on cpu will choose parallel option, regardless of determinism.
-    // This is more constrained than above because of the concept on stype. We will simply say that
-    // integer types are always constrained to deterministic, which we can fix in the calling code.
-    template <torch::ScalarType stype, contiguity cont>
-        requires torch_integer_stype<stype>
+    // out of place for integer types on cpu will choose parallel option.
+    // This is more constrained than above: integer stype + out_of_place + deterministic.
+    template <typename Tag>
+        requires with_value<Tag, torch::kCPU> && with_value<Tag, placement::out_of_place> &&
+                 with_value<Tag, determinism::required> && with_type<Tag, torch::ScalarType> &&
+                 torch_integer_stype<tag_get<torch::ScalarType, Tag>()>
     static tensor_with_notes
-    op(tag<torch::kCPU, stype, cont, placement::out_of_place, determinism::required>,
-       torch::Tensor input) {
-        using T     = torch_scalar_cpp_type_t<stype>;
+    op(Tag, torch::Tensor input) {
+        using T     = torch_scalar_cpp_type<Tag>;
         auto output = torch::empty_like(input);
         scan_lib::inclusive_scan_parallel<T>(input.data_ptr<T>(),
                                              input.stride(0),
@@ -123,12 +127,13 @@ struct iscan_op {
 
     // on cpu, for float types and whatever contiguity, with non-deterministic we choose parallel
     // option.
-    template <torch::ScalarType stype, contiguity cont>
-        requires torch_float_stype<stype>
+    template <typename Tag>
+        requires with_value<Tag, torch::kCPU> && with_value<Tag, placement::out_of_place> &&
+                 with_value<Tag, determinism::not_required> && with_type<Tag, torch::ScalarType> &&
+                 torch_float_stype<tag_get<torch::ScalarType, Tag>()>
     static tensor_with_notes
-    op(tag<torch::kCPU, stype, cont, placement::out_of_place, determinism::not_required>,
-       torch::Tensor input) {
-        using T     = torch_scalar_cpp_type_t<stype>;
+    op(Tag, torch::Tensor input) {
+        using T     = torch_scalar_cpp_type<Tag>;
         auto output = torch::empty_like(input);
         scan_lib::inclusive_scan_parallel<T>(input.data_ptr<T>(),
                                              input.stride(0),
@@ -141,12 +146,12 @@ struct iscan_op {
     // on gpu, for contiguous, out-of-place:
     // - integer types require deterministic (integers are deterministic on CUDA)
     // - float types require non-deterministic (floats are non-deterministic on CUDA)
-    template <torch::ScalarType stype, determinism det>
-        requires cuda_scan_allowed<stype, det>
+    template <typename Tag>
+        requires with_value<Tag, torch::kCUDA> && with_value<Tag, contiguity::contiguous> &&
+                 with_value<Tag, placement::out_of_place> && cuda_scan_allowed_tag<Tag>
     static tensor_with_notes
-    op(tag<torch::kCUDA, stype, contiguity::contiguous, placement::out_of_place, det>,
-       torch::Tensor input) {
-        using T = torch_scalar_cpp_type_t<stype>;
+    op(Tag, torch::Tensor input) {
+        using T = torch_scalar_cpp_type<Tag>;
 
         c10::cuda::CUDAGuard device_guard(input.device());
         cudaStream_t stream = at::cuda::getCurrentCUDAStream().stream();
@@ -159,6 +164,7 @@ struct iscan_op {
         scan_lib::inclusive_scan_cuda<T>(
             input.data_ptr<T>(), output.data_ptr<T>(), n, temp.data_ptr(), temp_bytes, stream);
 
+        constexpr auto stype = tag_get<torch::ScalarType>(Tag{});
         if constexpr (torch_is_integer_stype_v<stype>) {
             return {output, "cuda_int_deterministic"};
         } else {
