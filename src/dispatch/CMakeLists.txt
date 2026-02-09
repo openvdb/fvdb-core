@@ -190,6 +190,7 @@ if(FVDB_BUILD_TESTS)
     ConfigureDispatchTest(DispatchNvccSmokeTest tests/nvcc_smoke_test.cu)
     ConfigureDispatchTest(DispatchReLUTest tests/relu_test.cpp)
     ConfigureDispatchTest(DispatchInclusiveScanExamplesTest tests/inclusive_scan_examples_test.cpp)
+    ConfigureDispatchTest(DispatchThreadPoolTest tests/thread_pool_test.cpp)
 
      # ============================================================================
     # Negative Compilation Tests (Expected Failures)
