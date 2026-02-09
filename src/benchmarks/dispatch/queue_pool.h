@@ -16,8 +16,8 @@
 //   - Constructor barrier (all workers started before returning)
 //   - Destructor assertion for outstanding work
 //
-#ifndef DISPATCH_BENCH_QUEUE_POOL_H
-#define DISPATCH_BENCH_QUEUE_POOL_H
+#ifndef BENCHMARKS_DISPATCH_QUEUE_POOL_H
+#define BENCHMARKS_DISPATCH_QUEUE_POOL_H
 
 #include <atomic>
 #include <cassert>
@@ -197,4 +197,4 @@ class queue_pool {
 
 } // namespace dispatch_bench
 
-#endif // DISPATCH_BENCH_QUEUE_POOL_H
+#endif // BENCHMARKS_DISPATCH_QUEUE_POOL_H

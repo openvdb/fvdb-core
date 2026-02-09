@@ -7,6 +7,8 @@
 
 #pragma once
 
+#ifndef BENCHMARKS_DISPATCH_OMP_GELU_H
+#define BENCHMARKS_DISPATCH_OMP_GELU_H
 #include <cstdint>
 
 namespace omp_gelu {
@@ -21,3 +23,5 @@ void gelu_openmp(const float *in_ptr, float *out_ptr, int64_t numel);
 int get_num_threads();
 
 } // namespace omp_gelu
+
+#endif // BENCHMARKS_DISPATCH_OMP_GELU_H

@@ -1,3 +1,8 @@
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+#
+
+
 import argparse
 import json
 import os
@@ -360,9 +365,7 @@ def plot_for_each_benchmarks(df):
 
             # Add SoL baselines to the bar chart
             for sol_impl in sol_data["Implementation"].unique():
-                sol_at_size = sol_data[
-                    (sol_data["Implementation"] == sol_impl) & (sol_data["Size"] == largest_size)
-                ]
+                sol_at_size = sol_data[(sol_data["Implementation"] == sol_impl) & (sol_data["Size"] == largest_size)]
                 if not sol_at_size.empty:
                     labels.append(sol_impl.replace("SoL_", "SoL: "))
                     values.append(sol_at_size["Throughput"].values[0])
@@ -373,11 +376,7 @@ def plot_for_each_benchmarks(df):
 
                 max_val = max(values) if values else 1
                 for bar, val in zip(bars, values):
-                    tp_str = (
-                        f"{val / 1e9:.2f} G/s"
-                        if val >= 1e9
-                        else f"{val / 1e6:.0f} M/s"
-                    )
+                    tp_str = f"{val / 1e9:.2f} G/s" if val >= 1e9 else f"{val / 1e6:.0f} M/s"
                     ax2.text(
                         bar.get_width() + max_val * 0.02,
                         bar.get_y() + bar.get_height() / 2,
@@ -511,8 +510,7 @@ def plot_synthetic_benchmarks(df):
 
         for bar, speedup in zip(bars, bar_data["Speedup"]):
             ax2.text(
-                bar.get_width() + 0.3, bar.get_y() + bar.get_height() / 2,
-                f"{speedup:.1f}x", va="center", fontsize=10
+                bar.get_width() + 0.3, bar.get_y() + bar.get_height() / 2, f"{speedup:.1f}x", va="center", fontsize=10
             )
 
         ax2.set_xlabel(f"Speedup vs Serial (N={largest_size / 1e6:.0f}M)")
@@ -602,9 +600,7 @@ def plot_cpu_pool_benchmarks(df):
     serial_data = df[df["Implementation"] == "Serial"]
     if not serial_data.empty:
         serial_throughput = serial_data.set_index("Size")["Throughput"].to_dict()
-        df["Speedup"] = df.apply(
-            lambda row: row["Throughput"] / serial_throughput.get(row["Size"], 1), axis=1
-        )
+        df["Speedup"] = df.apply(lambda row: row["Throughput"] / serial_throughput.get(row["Size"], 1), axis=1)
     else:
         df["Speedup"] = 1
 
@@ -641,10 +637,7 @@ def plot_cpu_pool_benchmarks(df):
     bars = ax2.barh(bar_data["Implementation"], bar_data["Speedup"], color=colors)
 
     for bar, speedup in zip(bars, bar_data["Speedup"]):
-        ax2.text(
-            bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
-            f"{speedup:.1f}x", va="center", fontsize=10
-        )
+        ax2.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2, f"{speedup:.1f}x", va="center", fontsize=10)
 
     ax2.set_xlabel(f"Speedup vs Serial (N={largest_size / 1e6:.0f}M)")
     ax2.set_title("Parallel Speedup")

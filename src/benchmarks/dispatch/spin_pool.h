@@ -17,8 +17,8 @@
 //   - Constructor barrier (all workers started before returning)
 //   - Destructor assertion for outstanding work
 //
-#ifndef DISPATCH_BENCH_SPIN_POOL_H
-#define DISPATCH_BENCH_SPIN_POOL_H
+#ifndef BENCHMARKS_DISPATCH_SPIN_POOL_H
+#define BENCHMARKS_DISPATCH_SPIN_POOL_H
 
 #include "dispatch/macros.h"
 
@@ -345,4 +345,4 @@ class spin_pool {
 
 } // namespace dispatch_bench
 
-#endif // DISPATCH_BENCH_SPIN_POOL_H
+#endif // BENCHMARKS_DISPATCH_SPIN_POOL_H
