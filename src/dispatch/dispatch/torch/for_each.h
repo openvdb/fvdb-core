@@ -25,6 +25,12 @@
 //   The CUDA and PrivateUse1 overloads extract block_dim from the tag if
 //   present, otherwise use 256.
 //
+// GPU grid size:
+//   Determined by cudaOccupancyMaxActiveBlocksPerMultiprocessor — launches
+//   exactly enough blocks to saturate all SMs on the current device, capped
+//   at the number of blocks the work actually requires. The grid-stride loop
+//   handles any count regardless of grid size.
+//
 // Vectorization:
 //   for_each is a scalar index generator — one element per functor call,
 //   one thread per element (interleaved), optimal coalescing for scalar
@@ -90,6 +96,26 @@ for_each_block_dim() {
     }
 }
 
+// Compute the grid size for a grid-stride kernel: enough blocks to saturate
+// all SMs on the current device, but no more than the work requires.
+template <int BlockDim, typename Kernel>
+int
+for_each_grid_dim(Kernel kernel, int64_t count) {
+    int blocks_per_sm = 0;
+    C10_CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &blocks_per_sm, kernel, BlockDim, /*dynamicSMemSize=*/0));
+
+    int device = 0;
+    C10_CUDA_CHECK(cudaGetDevice(&device));
+
+    int sm_count = 0;
+    C10_CUDA_CHECK(cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device));
+
+    int64_t const max_active_blocks = static_cast<int64_t>(blocks_per_sm) * sm_count;
+    int64_t const blocks_needed     = (count + BlockDim - 1) / BlockDim;
+    return static_cast<int>(std::min(blocks_needed, max_active_blocks));
+}
+
 } // namespace detail
 
 template <int BlockDim, typename Tag, typename Func>
@@ -111,16 +137,14 @@ for_each(Tag tag, int64_t count, Func &&func) {
     if (count == 0)
         return;
 
-    constexpr int kBlockDim   = detail::for_each_block_dim<Tag>();
-    constexpr int kMaxGridDim = 65535;
+    constexpr int kBlockDim = detail::for_each_block_dim<Tag>();
 
-    int64_t const blocks_needed = (count + kBlockDim - 1) / kBlockDim;
+    using F = std::decay_t<Func>;
     int const grid_dim =
-        static_cast<int>(std::min(blocks_needed, static_cast<int64_t>(kMaxGridDim)));
+        detail::for_each_grid_dim<kBlockDim>(for_each_cuda_kernel<kBlockDim, Tag, F>, count);
 
     cudaStream_t stream = c10::cuda::getCurrentCUDAStream().stream();
 
-    using F = std::decay_t<Func>;
     for_each_cuda_kernel<kBlockDim>
         <<<grid_dim, kBlockDim, 0, stream>>>(tag, count, F(std::forward<Func>(func)));
     C10_CUDA_KERNEL_LAUNCH_CHECK();
@@ -149,8 +173,7 @@ for_each(Tag tag, int64_t count, Func &&func) {
     if (count == 0)
         return;
 
-    constexpr int kBlockDim   = detail::for_each_block_dim<Tag>();
-    constexpr int kMaxGridDim = 65535;
+    constexpr int kBlockDim = detail::for_each_block_dim<Tag>();
 
     using F = std::decay_t<Func>;
     F f(std::forward<Func>(func));
@@ -173,9 +196,8 @@ for_each(Tag tag, int64_t count, Func &&func) {
         }
 
         if (chunk_count > 0) {
-            int64_t const blocks_needed = (chunk_count + kBlockDim - 1) / kBlockDim;
-            int const grid_dim =
-                static_cast<int>(std::min(blocks_needed, static_cast<int64_t>(kMaxGridDim)));
+            int const grid_dim = detail::for_each_grid_dim<kBlockDim>(
+                for_each_pvt1_kernel<kBlockDim, Tag, F>, chunk_count);
 
             for_each_pvt1_kernel<kBlockDim>
                 <<<grid_dim, kBlockDim, 0, stream>>>(tag, chunk_count, chunk_offset, f);
