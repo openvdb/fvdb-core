@@ -4,12 +4,11 @@
 // Purpose: Single .cu file that exercises all library templates under nvcc
 // to catch compiler-specific issues. Excludes for_each (phase 3).
 
-#include "dispatch/axes_map.h"
-#include "dispatch/dispatch_set.h"
+#include "dispatch/detail/axes_map.h"
+#include "dispatch/detail/visit_spaces.h"
 #include "dispatch/dispatch_table.h"
 #include "dispatch/torch/dispatch.h"
 #include "dispatch/torch/types.h"
-#include "dispatch/visit_spaces.h"
 #include "dispatch/with_value.h"
 
 #include <torch/torch.h>

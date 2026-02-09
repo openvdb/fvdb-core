@@ -4,7 +4,6 @@
 // Tests for torch dispatch utilities: type mappings, axes, stringification,
 // contiguity helpers, and device concepts.
 //
-#include "dispatch/dispatch_set.h"
 #include "dispatch/dispatch_table.h"
 #include "dispatch/torch/dispatch.h"
 #include "dispatch/torch/types.h"

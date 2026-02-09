@@ -6,9 +6,9 @@
 // aliases) because the index math is positional — it operates on the internal
 // ordered representation regardless of normalization.
 //
-#include "dispatch/detail.h"
-#include "dispatch/enums.h"
-#include "dispatch/visit_spaces.h"
+#include "dispatch/detail/core_types.h"
+#include "dispatch/detail/index_math.h"
+#include "dispatch/detail/visit_spaces.h"
 
 #include <gtest/gtest.h>
 

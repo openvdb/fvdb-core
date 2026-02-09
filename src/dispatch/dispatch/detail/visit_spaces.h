@@ -5,10 +5,10 @@
 // separately for each coordinate in the space, enabling per-coordinate template
 // instantiation (used internally by dispatch_table construction).
 //
-#ifndef DISPATCH_DISPATCH_VISIT_SPACES_H
-#define DISPATCH_DISPATCH_VISIT_SPACES_H
+#ifndef DISPATCH_DISPATCH_DETAIL_VISIT_SPACES_H
+#define DISPATCH_DISPATCH_DETAIL_VISIT_SPACES_H
 
-#include "dispatch/detail.h"
+#include "dispatch/detail/index_math.h"
 
 #include <functional>
 #include <utility>
@@ -110,4 +110,4 @@ visit_axes_spaces(Visitor &visitor, Axes... axes) {
 
 } // namespace dispatch
 
-#endif // DISPATCH_DISPATCH_VISIT_SPACES_H
+#endif // DISPATCH_DISPATCH_DETAIL_VISIT_SPACES_H

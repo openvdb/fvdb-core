@@ -3,9 +3,8 @@
 //
 // Tests for axes_map: sparse dispatch map with transparent lookup.
 //
-#include "dispatch/axes_map.h"
-#include "dispatch/enums.h"
-#include "dispatch/label.h"
+#include "dispatch/detail/axes_map.h"
+#include "dispatch/detail/core_types.h"
 
 #include <gtest/gtest.h>
 

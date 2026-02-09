@@ -37,7 +37,7 @@
 #ifndef DISPATCH_DISPATCH_THREAD_POOL_H
 #define DISPATCH_DISPATCH_THREAD_POOL_H
 
-#include "dispatch/enums.h"
+#include "dispatch/detail/core_types.h"
 #include "dispatch/macros.h"
 
 #include <algorithm>

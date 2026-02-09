@@ -4,9 +4,7 @@
 // Tests for with_type and with_value concepts.
 // These are the primary matching primitives for concept-constrained dispatch.
 //
-#include "dispatch/enums.h"
-#include "dispatch/label.h"
-#include "dispatch/tag.h"
+#include "dispatch/detail/core_types.h"
 #include "dispatch/with_value.h"
 
 #include <gtest/gtest.h>

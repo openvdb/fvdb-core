@@ -4,13 +4,7 @@
 // Tests for the label system (fixed_label, type_label, named),
 // self-normalizing tag, axis, and self-normalizing axes.
 //
-#include "dispatch/axes.h"
-#include "dispatch/axis.h"
-#include "dispatch/consteval_types.h"
-#include "dispatch/enums.h"
-#include "dispatch/label.h"
-#include "dispatch/label_sorted.h"
-#include "dispatch/tag.h"
+#include "dispatch/detail/core_types.h"
 
 #include <gtest/gtest.h>
 

@@ -3,10 +3,9 @@
 //
 // Tests for compile-time visitation over axes and extents spaces.
 //
-#include "dispatch/detail.h"
-#include "dispatch/enums.h"
-#include "dispatch/label.h"
-#include "dispatch/visit_spaces.h"
+#include "dispatch/detail/core_types.h"
+#include "dispatch/detail/index_math.h"
+#include "dispatch/detail/visit_spaces.h"
 
 #include <gtest/gtest.h>
 

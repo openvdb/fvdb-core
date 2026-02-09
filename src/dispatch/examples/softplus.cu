@@ -35,7 +35,6 @@
 
 #include "examples/softplus.h"
 
-#include "dispatch/dispatch_set.h"
 #include "dispatch/dispatch_table.h"
 #include "dispatch/torch/dispatch.h"
 #include "dispatch/torch/for_each.h"

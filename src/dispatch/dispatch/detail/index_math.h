@@ -5,15 +5,10 @@
 // Provides compile-time and runtime mapping between tags, axes, indices,
 // extents, and linear indices.
 //
-#ifndef DISPATCH_DISPATCH_DETAIL_H
-#define DISPATCH_DISPATCH_DETAIL_H
+#ifndef DISPATCH_DISPATCH_DETAIL_INDEX_MATH_H
+#define DISPATCH_DISPATCH_DETAIL_INDEX_MATH_H
 
-#include "dispatch/axes.h"
-#include "dispatch/axis.h"
-#include "dispatch/consteval_types.h"
-#include "dispatch/extents.h"
-#include "dispatch/indices.h"
-#include "dispatch/tag.h"
+#include "dispatch/detail/core_types.h"
 
 #include <cstddef>
 #include <optional>
@@ -745,4 +740,4 @@ linear_index_from_value_tuple(axes_storage<Axis0, Axes...>, std::tuple<T0, Ts...
 
 } // namespace dispatch
 
-#endif // DISPATCH_DISPATCH_DETAIL_H
+#endif // DISPATCH_DISPATCH_DETAIL_INDEX_MATH_H

@@ -7,7 +7,6 @@
 #ifndef DISPATCH_DISPATCH_TORCH_DISPATCH_H
 #define DISPATCH_DISPATCH_TORCH_DISPATCH_H
 
-#include "dispatch/dispatch_set.h"
 #include "dispatch/dispatch_table.h"
 #include "dispatch/torch/types.h"
 #include "dispatch/with_value.h"

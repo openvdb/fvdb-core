@@ -12,9 +12,8 @@
 #ifndef DISPATCH_DISPATCH_DISPATCH_TABLE_H
 #define DISPATCH_DISPATCH_DISPATCH_TABLE_H
 
-#include "dispatch/axes_map.h"
-#include "dispatch/detail.h"
-#include "dispatch/dispatch_set.h"
+#include "dispatch/detail/axes_map.h"
+#include "dispatch/detail/index_math.h"
 
 #include <memory>
 #include <stdexcept>
@@ -24,6 +23,25 @@
 #include <type_traits>
 
 namespace dispatch {
+
+//------------------------------------------------------------------------------
+// dispatch_set: curly-brace constructible runtime dispatch coordinates
+//------------------------------------------------------------------------------
+
+template <typename... Ts> struct dispatch_set {
+    std::tuple<Ts...> values;
+
+    constexpr dispatch_set(Ts... args) : values{args...} {}
+
+    template <typename T>
+    constexpr T const &
+    get() const {
+        return std::get<T>(values);
+    }
+};
+
+// CTAD
+template <typename... Ts> dispatch_set(Ts...) -> dispatch_set<Ts...>;
 
 //------------------------------------------------------------------------------
 // Exception for dispatch lookup failures

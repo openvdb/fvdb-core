@@ -28,7 +28,7 @@
 #ifndef DISPATCH_DISPATCH_TORCH_VIEWS_H
 #define DISPATCH_DISPATCH_TORCH_VIEWS_H
 
-#include "dispatch/enums.h"
+#include "dispatch/detail/core_types.h"
 #include "dispatch/macros.h"
 #include "dispatch/torch/types.h"
 

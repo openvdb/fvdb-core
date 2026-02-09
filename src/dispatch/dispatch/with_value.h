@@ -24,8 +24,7 @@
 #ifndef DISPATCH_DISPATCH_WITH_VALUE_H
 #define DISPATCH_DISPATCH_WITH_VALUE_H
 
-#include "dispatch/consteval_types.h"
-#include "dispatch/tag.h"
+#include "dispatch/detail/core_types.h"
 
 #include <tuple>
 #include <type_traits>

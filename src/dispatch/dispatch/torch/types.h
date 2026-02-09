@@ -8,9 +8,7 @@
 #ifndef DISPATCH_DISPATCH_TORCH_TYPES_H
 #define DISPATCH_DISPATCH_TORCH_TYPES_H
 
-#include "dispatch/types.h"
-
-#include "dispatch/label.h"
+#include "dispatch/detail/core_types.h"
 #include "dispatch/with_value.h"
 
 #include <torch/types.h>

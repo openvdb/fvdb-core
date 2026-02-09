@@ -4,10 +4,8 @@
 // Tests for dispatch_table: sparse subspace instantiation, select/try_select
 // with dispatch_set, functional update, and factory patterns.
 //
-#include "dispatch/dispatch_set.h"
+#include "dispatch/detail/core_types.h"
 #include "dispatch/dispatch_table.h"
-#include "dispatch/enums.h"
-#include "dispatch/label.h"
 #include "dispatch/with_value.h"
 
 #include <gtest/gtest.h>

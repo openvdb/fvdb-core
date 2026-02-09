@@ -1,11 +1,11 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef DISPATCH_DISPATCH_AXES_MAP_H
-#define DISPATCH_DISPATCH_AXES_MAP_H
+#ifndef DISPATCH_DISPATCH_DETAIL_AXES_MAP_H
+#define DISPATCH_DISPATCH_DETAIL_AXES_MAP_H
 
-#include "dispatch/detail.h"
-#include "dispatch/visit_spaces.h"
+#include "dispatch/detail/index_math.h"
+#include "dispatch/detail/visit_spaces.h"
 
 #include <functional>
 #include <stdexcept>
@@ -314,4 +314,4 @@ create_and_store(axes_map<Axes, T> &map, Factory &factory, Subs... subs) {
 
 } // namespace dispatch
 
-#endif // DISPATCH_DISPATCH_AXES_MAP_H
+#endif // DISPATCH_DISPATCH_DETAIL_AXES_MAP_H

@@ -7,9 +7,9 @@
 // Existing tests validate axis/dispatch_table invariants.
 // New tests validate tag uniqueness and axes label uniqueness.
 //
-#include "dispatch/detail.h"
+#include "dispatch/detail/core_types.h"
+#include "dispatch/detail/index_math.h"
 #include "dispatch/dispatch_table.h"
-#include "dispatch/enums.h"
 #include "dispatch/with_value.h"
 
 int
