@@ -1,36 +1,43 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-// for_each: Element-wise iteration over tensors for CPU, CUDA, and PrivateUse1.
+// for_each: Parallel index generation for CPU, CUDA, and PrivateUse1.
+//
+// for_each is a parallel index generator. It iterates [0, count) on the device
+// specified by the tag. What those indices mean is the functor's business.
+//
+// Functor signature: void(Tag, int64_t idx)
+//
+// The tag is passed through to the functor, enabling concept-constrained
+// overload sets that specialize per-device or per-scalar-type.
+//
+// Device selection:
+//   CUDA:        grid-stride kernel with configurable ILP grain
+//   CPU:         default_thread_pool (work-stealing)
+//   PrivateUse1: multi-GPU distribution
 //
 #ifndef DISPATCH_DISPATCH_TORCH_FOR_EACH_H
 #define DISPATCH_DISPATCH_TORCH_FOR_EACH_H
 
-#include "dispatch/iteration_policy.h"
 #include "dispatch/macros.h"
-#include "dispatch/tag_match.h"
-#include "dispatch/types.h"
+#include "dispatch/thread_pool.h"
+#include "dispatch/with_value.h"
 
-#include <ATen/Parallel.h>
-#include <c10/cuda/CUDAStream.h>
-#include <torch/types.h>
-
-#include <array>
+#include <algorithm>
 #include <cstdint>
 #include <functional>
+#include <type_traits>
+#include <utility>
+
+#if defined(__CUDACC__)
+#include <c10/cuda/CUDAStream.h>
+#endif
 
 namespace dispatch {
 
-//------------------------------------------------------------------------------
-// for_each configuration
-//------------------------------------------------------------------------------
-// Template parameters for performance tuning:
-//   - GrainSize: Elements processed per thread/task in sequence
-//   - BlockDim: Threads per block (CUDA only, affects occupancy and register pressure)
-//
-// Defaults are tuned per-device:
-//   - CUDA: Small grain size (4) for ILP via grid-stride, many threads
-//   - CPU: Large grain size (10000) to amortize thread pool overhead
+// =============================================================================
+// Configuration
+// =============================================================================
 
 struct for_each_cuda_config {
     static consteval int64_t
@@ -48,101 +55,96 @@ struct for_each_cuda_config {
 };
 
 struct for_each_cpu_config {
-    // CPU parallel_for grain_size should be large to amortize threading overhead.
-    // at::parallel_for uses grain_size as minimum work per thread.
-    // With 10K elements per thread, we get good load balancing without
-    // excessive synchronization overhead.
     static consteval int64_t
     default_grain_size() {
-        return 10000;
+        return 0; // Let the thread pool decide
     }
 };
 
-// Legacy alias for compatibility
-using for_each_config = for_each_cuda_config;
+// =============================================================================
+// CPU for_each
+// =============================================================================
+
+template <typename Tag, typename Func>
+    requires with_value<Tag, torch::kCPU>
+void
+for_each(Tag tag, int64_t count, Func &&func) {
+    if (count == 0)
+        return;
+
+    default_thread_pool::instance().parallel_for(
+        int64_t{0}, count, [&](int64_t begin, int64_t end) {
+            for (int64_t i = begin; i < end; ++i)
+                std::invoke(func, tag, i);
+        });
+}
+
+// =============================================================================
+// CUDA for_each
+// =============================================================================
 
 #if defined(__CUDACC__)
 
-//------------------------------------------------------------------------------
-// CUDA for_each implementation
-//------------------------------------------------------------------------------
-// Uses grid-stride loop pattern with configurable grain size for ILP.
-// Each thread processes GrainSize elements in sequence before striding.
-//
-// Memory access pattern (GrainSize=4, BlockDim=256):
-//   Thread 0: elements 0,1,2,3, then 4096,4097,4098,4099, ...
-//   Thread 1: elements 4,5,6,7, then 4100,4101,4102,4103, ...
-//   ...
-// This provides:
-//   - Coalesced memory access (consecutive threads access consecutive memory)
-//   - Improved ILP (compiler can overlap loads/stores within grain)
-//   - Good load balancing via grid-stride
-
 template <int64_t GrainSize, typename Tag, typename Func>
-    requires tag_match<Tag, torch::kCUDA>
+    requires with_value<Tag, torch::kCUDA>
 __global__ void
-for_each_cuda_kernel(Tag t, int64_t count, Func func) {
-    // Each thread handles GrainSize consecutive elements, then strides by grid size
+for_each_cuda_kernel(Tag tag, int64_t count, Func func) {
     int64_t const thread_id    = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     int64_t const grid_stride  = static_cast<int64_t>(gridDim.x) * blockDim.x;
     int64_t const grain_stride = grid_stride * GrainSize;
 
-    // Process elements in grain-sized chunks
     for (int64_t base = thread_id * GrainSize; base < count; base += grain_stride) {
-// Unrolled inner loop for ILP
-#pragma unroll
+        DISPATCH_UNROLL
         for (int64_t g = 0; g < GrainSize; ++g) {
             int64_t const idx = base + g;
             if (idx < count) {
-                func(t, idx);
+                func(tag, idx);
             }
         }
     }
 }
 
-// Primary for_each interface with configurable performance parameters
 template <int64_t GrainSize = for_each_cuda_config::default_grain_size(),
           int BlockDim      = for_each_cuda_config::default_block_dim(),
           typename Tag,
           typename Func>
-    requires tag_match<Tag, torch::kCUDA>
+    requires with_value<Tag, torch::kCUDA>
 void
-for_each(Tag t, int64_t count, Func &&func) {
+for_each(Tag tag, int64_t count, Func &&func) {
     if (count == 0)
         return;
 
-    // Calculate grid size: enough threads to cover count, but capped
     int64_t const threads_needed = (count + GrainSize - 1) / GrainSize;
     int64_t const blocks_needed  = (threads_needed + BlockDim - 1) / BlockDim;
     int const grid_dim           = static_cast<int>(std::min(
         blocks_needed, static_cast<int64_t>(for_each_cuda_config::default_max_grid_dim())));
 
     cudaStream_t stream = c10::cuda::getCurrentCUDAStream().stream();
+
+    using F = std::decay_t<Func>;
     for_each_cuda_kernel<GrainSize>
-        <<<grid_dim, BlockDim, 0, stream>>>(t, count, std::forward<Func>(func));
+        <<<grid_dim, BlockDim, 0, stream>>>(tag, count, F(std::forward<Func>(func)));
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
-//------------------------------------------------------------------------------
-// PrivateUse1 (Universal Memory) for_each implementation
-//------------------------------------------------------------------------------
-// Distributes work across all available CUDA devices.
-// Uses same grain-stride pattern as single-GPU version.
+// =============================================================================
+// PrivateUse1 for_each (multi-GPU)
+// =============================================================================
 
 template <int64_t GrainSize, typename Tag, typename Func>
-    requires tag_match<Tag, torch::kPrivateUse1>
+    requires with_value<Tag, torch::kPrivateUse1>
 __global__ void
-for_each_pvt1_kernel(Tag t, int64_t chunk_count, int64_t chunk_offset, Func func) {
+for_each_pvt1_kernel(Tag tag, int64_t chunk_count, int64_t chunk_offset, Func func) {
     int64_t const thread_id    = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     int64_t const grid_stride  = static_cast<int64_t>(gridDim.x) * blockDim.x;
     int64_t const grain_stride = grid_stride * GrainSize;
 
     for (int64_t base = thread_id * GrainSize; base < chunk_count; base += grain_stride) {
-#pragma unroll
+        DISPATCH_UNROLL
         for (int64_t g = 0; g < GrainSize; ++g) {
             int64_t const local_idx = base + g;
             if (local_idx < chunk_count) {
-                func(t, local_idx + chunk_offset);
+                func(tag, local_idx + chunk_offset);
             }
         }
     }
@@ -152,11 +154,14 @@ template <int64_t GrainSize = for_each_cuda_config::default_grain_size(),
           int BlockDim      = for_each_cuda_config::default_block_dim(),
           typename Tag,
           typename Func>
-    requires tag_match<Tag, torch::kPrivateUse1>
+    requires with_value<Tag, torch::kPrivateUse1>
 void
-for_each(Tag t, int64_t count, Func &&func) {
+for_each(Tag tag, int64_t count, Func &&func) {
     if (count == 0)
         return;
+
+    using F = std::decay_t<Func>;
+    F f(std::forward<Func>(func));
 
     auto const device_count = c10::cuda::device_count();
 
@@ -164,12 +169,10 @@ for_each(Tag t, int64_t count, Func &&func) {
         C10_CUDA_CHECK(cudaSetDevice(device_id));
         cudaStream_t stream = c10::cuda::getCurrentCUDAStream(device_id).stream();
 
-        // Divide work evenly across devices
         auto const base_chunk  = count / device_count;
         auto const remainder   = count % device_count;
         auto const chunk_count = base_chunk + (device_id < remainder ? 1 : 0);
 
-        // Calculate offset
         int64_t chunk_offset = 0;
         if (device_id < remainder) {
             chunk_offset = device_id * (base_chunk + 1);
@@ -184,211 +187,17 @@ for_each(Tag t, int64_t count, Func &&func) {
                 blocks_needed, static_cast<int64_t>(for_each_cuda_config::default_max_grid_dim())));
 
             for_each_pvt1_kernel<GrainSize>
-                <<<grid_dim, BlockDim, 0, stream>>>(t, chunk_count, chunk_offset, func);
+                <<<grid_dim, BlockDim, 0, stream>>>(tag, chunk_count, chunk_offset, f);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
     }
 
-    // Synchronize all streams
     for (c10::DeviceIndex device_id = 0; device_id < device_count; ++device_id) {
         c10::cuda::getCurrentCUDAStream(device_id).synchronize();
     }
 }
 
 #endif // __CUDACC__
-
-//------------------------------------------------------------------------------
-// CPU for_each implementation
-//------------------------------------------------------------------------------
-// Uses ATen's parallel_for which respects PyTorch's thread pool settings.
-// GrainSize is the minimum work unit per thread - larger values reduce threading overhead.
-
-template <int64_t GrainSize = for_each_cpu_config::default_grain_size(),
-          int BlockDim      = 0, // unused on CPU, for API consistency
-          typename Tag,
-          typename Func>
-    requires tag_match<Tag, torch::kCPU>
-void
-for_each(Tag t, int64_t count, Func &&func) {
-    if (count == 0)
-        return;
-
-    // ATen's parallel_for handles work distribution
-    // grain_size hints at minimum work per thread
-    at::parallel_for(0, count, /*grain_size=*/GrainSize, [&](int64_t begin, int64_t end) {
-        for (int64_t i = begin; i < end; ++i) {
-            std::invoke(func, t, i);
-        }
-    });
-}
-
-//==============================================================================
-// N-Dimensional for_each (for_each_nd)
-//==============================================================================
-// Iterates over an N-dimensional index space, providing N-D indices to the functor.
-// Uses iteration_policy to convert linear thread indices to N-D indices.
-//
-// Functor signature: func(Tag, std::array<int64_t, Rank> const& indices)
-//
-// Template parameters:
-//   Rank      - Number of dimensions
-//   Policy    - Iteration policy (row_major or col_major)
-//   GrainSize - Elements per thread for ILP
-//   BlockDim  - CUDA threads per block
-
-#if defined(__CUDACC__)
-
-//------------------------------------------------------------------------------
-// CUDA for_each_nd implementation
-//------------------------------------------------------------------------------
-
-template <int64_t Rank, typename Policy, int64_t GrainSize, typename Tag, typename Func>
-    requires tag_match<Tag, torch::kCUDA>
-__global__ void
-for_each_nd_cuda_kernel(Tag t, int64_t count, std::array<int64_t, Rank> shape, Func func) {
-    int64_t const thread_id    = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    int64_t const grid_stride  = static_cast<int64_t>(gridDim.x) * blockDim.x;
-    int64_t const grain_stride = grid_stride * GrainSize;
-
-    for (int64_t base = thread_id * GrainSize; base < count; base += grain_stride) {
-        DISPATCH_UNROLL
-        for (int64_t g = 0; g < GrainSize; ++g) {
-            int64_t const linear_idx = base + g;
-            if (linear_idx < count) {
-                std::array<int64_t, Rank> indices;
-                linear_to_nd<Rank, Policy>(linear_idx, shape, indices);
-                func(t, indices);
-            }
-        }
-    }
-}
-
-template <int64_t Rank,
-          typename Policy   = row_major,
-          int64_t GrainSize = for_each_cuda_config::default_grain_size(),
-          int BlockDim      = for_each_cuda_config::default_block_dim(),
-          typename Tag,
-          typename Func>
-    requires tag_match<Tag, torch::kCUDA>
-void
-for_each_nd(Tag t, std::array<int64_t, Rank> const &shape, Func &&func) {
-    int64_t const count = shape_volume<Rank>(shape);
-    if (count == 0)
-        return;
-
-    int64_t const threads_needed = (count + GrainSize - 1) / GrainSize;
-    int64_t const blocks_needed  = (threads_needed + BlockDim - 1) / BlockDim;
-    int const grid_dim           = static_cast<int>(std::min(
-        blocks_needed, static_cast<int64_t>(for_each_cuda_config::default_max_grid_dim())));
-
-    cudaStream_t stream = c10::cuda::getCurrentCUDAStream().stream();
-    for_each_nd_cuda_kernel<Rank, Policy, GrainSize>
-        <<<grid_dim, BlockDim, 0, stream>>>(t, count, shape, std::forward<Func>(func));
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
-}
-
-//------------------------------------------------------------------------------
-// PrivateUse1 for_each_nd implementation
-//------------------------------------------------------------------------------
-
-template <int64_t Rank, typename Policy, int64_t GrainSize, typename Tag, typename Func>
-    requires tag_match<Tag, torch::kPrivateUse1>
-__global__ void
-for_each_nd_pvt1_kernel(
-    Tag t, int64_t chunk_count, int64_t chunk_offset, std::array<int64_t, Rank> shape, Func func) {
-    int64_t const thread_id    = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    int64_t const grid_stride  = static_cast<int64_t>(gridDim.x) * blockDim.x;
-    int64_t const grain_stride = grid_stride * GrainSize;
-
-    for (int64_t base = thread_id * GrainSize; base < chunk_count; base += grain_stride) {
-        DISPATCH_UNROLL
-        for (int64_t g = 0; g < GrainSize; ++g) {
-            int64_t const local_idx = base + g;
-            if (local_idx < chunk_count) {
-                int64_t const linear_idx = local_idx + chunk_offset;
-                std::array<int64_t, Rank> indices;
-                linear_to_nd<Rank, Policy>(linear_idx, shape, indices);
-                func(t, indices);
-            }
-        }
-    }
-}
-
-template <int64_t Rank,
-          typename Policy   = row_major,
-          int64_t GrainSize = for_each_cuda_config::default_grain_size(),
-          int BlockDim      = for_each_cuda_config::default_block_dim(),
-          typename Tag,
-          typename Func>
-    requires tag_match<Tag, torch::kPrivateUse1>
-void
-for_each_nd(Tag t, std::array<int64_t, Rank> const &shape, Func &&func) {
-    int64_t const count = shape_volume<Rank>(shape);
-    if (count == 0)
-        return;
-
-    auto const device_count = c10::cuda::device_count();
-
-    for (c10::DeviceIndex device_id = 0; device_id < device_count; ++device_id) {
-        C10_CUDA_CHECK(cudaSetDevice(device_id));
-        cudaStream_t stream = c10::cuda::getCurrentCUDAStream(device_id).stream();
-
-        auto const base_chunk  = count / device_count;
-        auto const remainder   = count % device_count;
-        auto const chunk_count = base_chunk + (device_id < remainder ? 1 : 0);
-
-        int64_t chunk_offset = 0;
-        if (device_id < remainder) {
-            chunk_offset = device_id * (base_chunk + 1);
-        } else {
-            chunk_offset = remainder * (base_chunk + 1) + (device_id - remainder) * base_chunk;
-        }
-
-        if (chunk_count > 0) {
-            int64_t const threads_needed = (chunk_count + GrainSize - 1) / GrainSize;
-            int64_t const blocks_needed  = (threads_needed + BlockDim - 1) / BlockDim;
-            int const grid_dim           = static_cast<int>(std::min(
-                blocks_needed, static_cast<int64_t>(for_each_cuda_config::default_max_grid_dim())));
-
-            for_each_nd_pvt1_kernel<Rank, Policy, GrainSize>
-                <<<grid_dim, BlockDim, 0, stream>>>(t, chunk_count, chunk_offset, shape, func);
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
-        }
-    }
-
-    // Synchronize all streams
-    for (c10::DeviceIndex device_id = 0; device_id < device_count; ++device_id) {
-        c10::cuda::getCurrentCUDAStream(device_id).synchronize();
-    }
-}
-
-#endif // __CUDACC__
-
-//------------------------------------------------------------------------------
-// CPU for_each_nd implementation
-//------------------------------------------------------------------------------
-
-template <int64_t Rank,
-          typename Policy   = row_major,
-          int64_t GrainSize = for_each_cpu_config::default_grain_size(),
-          int BlockDim      = 0, // unused on CPU
-          typename Tag,
-          typename Func>
-    requires tag_match<Tag, torch::kCPU>
-void
-for_each_nd(Tag t, std::array<int64_t, Rank> const &shape, Func &&func) {
-    int64_t const count = shape_volume<Rank>(shape);
-    if (count == 0)
-        return;
-
-    at::parallel_for(0, count, /*grain_size=*/GrainSize, [&](int64_t begin, int64_t end) {
-        for (int64_t linear_idx = begin; linear_idx < end; ++linear_idx) {
-            std::array<int64_t, Rank> indices;
-            linear_to_nd<Rank, Policy>(linear_idx, shape, indices);
-            std::invoke(func, t, indices);
-        }
-    });
-}
 
 } // namespace dispatch
 

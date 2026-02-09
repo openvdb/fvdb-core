@@ -68,11 +68,10 @@ class queue_pool {
             return;
         }
 
-        std::size_t const num_chunks =
-            std::min(num_workers,
-                     (range + static_cast<std::size_t>(grain_size) - 1) /
-                         static_cast<std::size_t>(grain_size));
-        auto const chunk_size = (range + num_chunks - 1) / num_chunks;
+        std::size_t const num_chunks = std::min(num_workers,
+                                                (range + static_cast<std::size_t>(grain_size) - 1) /
+                                                    static_cast<std::size_t>(grain_size));
+        auto const chunk_size        = (range + num_chunks - 1) / num_chunks;
 
         active_jobs_.fetch_add(1, std::memory_order_relaxed);
 

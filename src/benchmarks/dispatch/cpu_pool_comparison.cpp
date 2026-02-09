@@ -15,6 +15,9 @@
 // Run:   ./build/.../gbenchmarks/cpu_pool_comparison
 //
 
+#include "queue_pool.h"
+#include "spin_pool.h"
+
 #include <ATen/Functions.h>
 #include <ATen/Parallel.h>
 #include <ATen/cpu/vec/vec.h>
@@ -22,9 +25,6 @@
 
 #include <benchmark/benchmark.h>
 #include <dispatch/thread_pool.h>
-
-#include "queue_pool.h"
-#include "spin_pool.h"
 
 // OpenMP GELU implementation (in separate .cpp for proper pragma support)
 #include "omp_gelu.h"
@@ -124,8 +124,10 @@ gelu_queue_pool(torch::Tensor in, torch::Tensor out) {
 
 void
 gelu_spin_pool(torch::Tensor in, torch::Tensor out) {
-    gelu_with_pool(
-        dispatch_bench::spin_pool::instance(), in.data_ptr<float>(), out.data_ptr<float>(), in.numel());
+    gelu_with_pool(dispatch_bench::spin_pool::instance(),
+                   in.data_ptr<float>(),
+                   out.data_ptr<float>(),
+                   in.numel());
 }
 
 void

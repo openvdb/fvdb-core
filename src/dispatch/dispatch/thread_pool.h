@@ -66,8 +66,7 @@ namespace dispatch {
 // Primary template (never instantiated directly)
 // =============================================================================
 
-template <scheduling S>
-class thread_pool;
+template <scheduling S> class thread_pool;
 
 // =============================================================================
 // thread_pool<scheduling::uniform> — broadcast-style static partitioning
@@ -80,8 +79,7 @@ class thread_pool;
 //  - Caller participates as the last worker (N+1 threads for N workers).
 //  - Nested parallel_for runs serially to prevent deadlocks.
 
-template <>
-class thread_pool<scheduling::uniform> {
+template <> class thread_pool<scheduling::uniform> {
   public:
     static thread_pool &
     instance() {
@@ -523,7 +521,7 @@ class thread_pool<scheduling::uniform> {
 
     std::atomic<std::size_t> active_jobs_{0};
 
-    inline static thread_local int tls_worker_index_ = -1;
+    inline static thread_local int tls_worker_index_        = -1;
     inline static thread_local bool tls_in_parallel_region_ = false;
 };
 
@@ -548,7 +546,7 @@ template <typename T> class work_stealing_deque {
 
     void
     push(T item) noexcept {
-        std::int64_t b = bottom_.load(std::memory_order_relaxed);
+        std::int64_t b                  = bottom_.load(std::memory_order_relaxed);
         [[maybe_unused]] std::int64_t t = top_.load(std::memory_order_relaxed);
         assert(static_cast<std::size_t>(b - t) < capacity_ && "Chase-Lev deque overflow");
         buffer_[static_cast<std::size_t>(b) & mask_].store(item, std::memory_order_relaxed);
@@ -656,8 +654,7 @@ template <typename T> class work_stealing_deque {
 //  - Caller participates as a worker (N+1 threads for N workers).
 //  - Optimal for imbalanced workloads where static partitioning leaves threads idle.
 
-template <>
-class thread_pool<scheduling::adaptive> {
+template <> class thread_pool<scheduling::adaptive> {
   public:
     static thread_pool &
     instance() {

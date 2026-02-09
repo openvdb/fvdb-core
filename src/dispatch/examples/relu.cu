@@ -9,15 +9,15 @@
 // (CPU/CUDA) and floating-point scalar types (float16, bfloat16, float, double).
 //
 // THE DISPATCH PATTERN:
-//   1. Define a struct (relu_op_t) containing static `op` member function templates.
+//   1. Define a struct (relu_op) containing static `op` member function templates.
 //   2. Each `op` overload takes a tag<...> as its first argument, which encodes compile-time
 //      information about the dispatch coordinate (device type, scalar type, etc.).
 //   3. Declare a `space` type alias that defines all possible dispatch coordinates as a Cartesian
 //      product of value axes. Here: torch_cpu_cuda_device_axis × torch_full_float_stype_axis = 2 ×
 //      4 = 8 points.
 //   4. Declare a `dispatcher` type alias that combines the space with the function signature.
-//   5. At the call site, create a static dispatch table using `from_op<relu_op_t>()` which
-//      automatically instantiates `relu_op_t::op` for every point in the space.
+//   5. At the call site, create a static dispatch table using `from_op<relu_op>()` which
+//      automatically instantiates `relu_op::op` for every point in the space.
 //   6. Call `table.select(dispatch_set{dev, st})(args...)` which looks up the runtime
 //      coordinate in the table and invokes the corresponding compile-time instantiation.
 //

@@ -4,14 +4,14 @@
 // Synthetic benchmarks to test parallel_for implementations with
 // compute-bound workloads that avoid PyTorch's hyper-optimized kernels.
 
+#include "queue_pool.h"
+#include "spin_pool.h"
+
 #include <ATen/Parallel.h>
 #include <torch/torch.h>
 
 #include <benchmark/benchmark.h>
 #include <dispatch/thread_pool.h>
-
-#include "queue_pool.h"
-#include "spin_pool.h"
 
 #include <cmath>
 

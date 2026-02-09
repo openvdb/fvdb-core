@@ -100,13 +100,14 @@ TEST_P(ThreadPoolTest, NestedParallelForRunsSerially) {
 
 TEST_P(ThreadPoolTest, ExceptionPropagation) {
     // An exception thrown in a task must be rethrown to the caller.
-    EXPECT_THROW(
-        pool_parallel_for(int64_t{0}, int64_t{100000}, [](int64_t begin, int64_t) {
-            if (begin == 0) {
-                throw std::runtime_error("test exception");
-            }
-        }),
-        std::runtime_error);
+    EXPECT_THROW(pool_parallel_for(int64_t{0},
+                                   int64_t{100000},
+                                   [](int64_t begin, int64_t) {
+                                       if (begin == 0) {
+                                           throw std::runtime_error("test exception");
+                                       }
+                                   }),
+                 std::runtime_error);
 }
 
 // =============================================================================

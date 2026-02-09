@@ -1,8 +1,11 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-// Compatibility shim — includes the modular headers that replaced this file.
-// Will be removed once all consumers are updated.
+// Compatibility shim — bundles the core dispatch type headers.
+//
+// This includes only the core dispatch types (tags, axes, enums, labels).
+// Torch-specific headers (torch/dispatch.h, torch/types.h, torch/for_each.h,
+// torch/views.h) and the thread pool (thread_pool.h) are separate includes.
 //
 #ifndef DISPATCH_DISPATCH_TYPES_H
 #define DISPATCH_DISPATCH_TYPES_H

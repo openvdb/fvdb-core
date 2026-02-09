@@ -41,6 +41,7 @@ if(FVDB_BUILD_TESTS OR FVDB_BUILD_BENCHMARKS)
         examples/functional.cu
         examples/op.cu
         examples/relu.cu
+        examples/softplus.cu
         examples/scan_lib.cpp
         examples/scan_lib.cu
     )
@@ -191,6 +192,7 @@ if(FVDB_BUILD_TESTS)
     ConfigureDispatchTest(DispatchReLUTest tests/relu_test.cpp)
     ConfigureDispatchTest(DispatchInclusiveScanExamplesTest tests/inclusive_scan_examples_test.cpp)
     ConfigureDispatchTest(DispatchThreadPoolTest tests/thread_pool_test.cpp)
+    ConfigureDispatchTest(DispatchForEachTest tests/for_each_test.cu)
 
      # ============================================================================
     # Negative Compilation Tests (Expected Failures)

@@ -126,3 +126,8 @@ ConfigureDispatchBench(cpu_pool_comparison
 ConfigureDispatchBench(synthetic_voxel_benchmark
     dispatch/synthetic_voxel_benchmark.cpp
 )
+
+# for_each + views benchmark — contiguous/strided x CPU/CUDA x float32/float64
+ConfigureDispatchBench(for_each_benchmark
+    dispatch/for_each_benchmark.cu
+)

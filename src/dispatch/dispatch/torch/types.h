@@ -45,6 +45,32 @@ template <> struct type_label<c10::ScalarType> {
 template <torch::ScalarType S>
 using torch_scalar_cpp_type_t = typename c10::impl::ScalarTypeToCPPType<S>::type;
 
+//------------------------------------------------------------------------------
+// Compute type mapping
+//------------------------------------------------------------------------------
+// The type to use for arithmetic operations in device code. Identity for float
+// and double; promotes half types (at::Half, at::BFloat16) to float to avoid
+// ambiguous operator> and ternary in CUDA device code.
+//
+// Usage:
+//     using T = torch_scalar_cpp_type_t<stype>;       // storage type
+//     using C = torch_compute_type_t<stype>;           // compute type
+//     C val = static_cast<C>(view(idx));               // promote for math
+//     view(idx) = static_cast<T>(result);              // demote for storage
+
+template <torch::ScalarType S> struct torch_compute_type {
+    using type = torch_scalar_cpp_type_t<S>;
+};
+
+template <> struct torch_compute_type<torch::kFloat16> {
+    using type = float;
+};
+template <> struct torch_compute_type<torch::kBFloat16> {
+    using type = float;
+};
+
+template <torch::ScalarType S> using torch_compute_type_t = typename torch_compute_type<S>::type;
+
 // Shortcut: extract the C++ scalar type directly from a tag.
 //
 //     using T = torch_scalar_cpp_type<Tag>;
@@ -56,6 +82,14 @@ using torch_scalar_cpp_type_t = typename c10::impl::ScalarTypeToCPPType<S>::type
 template <typename Tag>
     requires with_type<Tag, torch::ScalarType>
 using torch_scalar_cpp_type = torch_scalar_cpp_type_t<tag_get<torch::ScalarType, Tag>()>;
+
+// Shortcut: extract the compute type directly from a tag.
+//
+//     using C = torch_compute_cpp_type<Tag>;
+//
+template <typename Tag>
+    requires with_type<Tag, torch::ScalarType>
+using torch_compute_cpp_type = torch_compute_type_t<tag_get<torch::ScalarType, Tag>()>;
 
 //------------------------------------------------------------------------------
 // Device axes

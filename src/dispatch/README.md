@@ -1,396 +1,271 @@
-# Multi-Axis Dispatch Framework
+# Dispatch Framework
 
-A modern C++20 compile-time dispatch system for multi-dimensional type and value dispatch.
-Designed for high-performance GPU/CPU code where you need to dispatch tensors to different
-kernel implementations based on device type, scalar type, memory layout, and other runtime
-properties.
-
-## Why This Exists
-
-When writing CUDA kernels that work with PyTorch tensors, you often need code like this:
-
-```cpp
-if (tensor.device().is_cuda()) {
-    if (tensor.scalar_type() == torch::kFloat32) {
-        my_kernel<float><<<...>>>(tensor.data_ptr<float>(), ...);
-    } else if (tensor.scalar_type() == torch::kFloat64) {
-        my_kernel<double><<<...>>>(tensor.data_ptr<double>(), ...);
-    } // ... more types
-} else {
-    // CPU implementations...
-}
-```
-
-This gets unwieldy fast. Add memory contiguity, in-place vs out-of-place, determinism
-requirements, and suddenly you're looking at a 5-dimensional dispatch space with potentially
-64+ combinations. Traditional approaches use:
-
-- **Macro soup** (`AT_DISPATCH_FLOATING_TYPES`, `DISPATCH_DEVICE`, etc.) - hard to compose,
-  harder to debug
-- **Deeply nested lambdas** - poor error messages, unclear instantiation control
-- **Manual switch statements** - verbose, error-prone, no compile-time safety
-
-This framework provides a different approach: **composable, type-safe multi-axis dispatch
-with explicit instantiation control and zero macros**.
-
-## Design Philosophy
-
-### No Macros
-
-The entire framework is built using C++20 templates, concepts, and consteval functions,
-without any macros. This means:
-
-- Full IDE support (autocomplete, go-to-definition, refactoring)
-- Readable error messages that point to actual code
-- Debuggable—you can step through dispatch logic
-- Composable—combine axes naturally with type aliases
-
-### Minimal Lambda Nesting
-
-Traditional dispatch approaches often look like:
-
-```cpp
-AT_DISPATCH_FLOATING_TYPES(dtype, "my_op", [&] {
-    AT_DISPATCH_INDEX_TYPES(itype, "my_op", [&] {
-        DISPATCH_DEVICE(device, [&] {
-            // finally, your actual code, 3 lambdas deep
-        });
-    });
-});
-```
-
-This framework uses **tag dispatch** instead. This is similar to the NVidia thrust library.
-Your implementation is a normal function (or struct with static methods) that takes a
-`tag<...>` as its first parameter:
-
-```cpp
-template <torch::ScalarType stype>
-void my_op(tag<torch::kCUDA, stype>, torch::Tensor input, torch::Tensor output) {
-    using T = torch_scalar_cpp_type_t<stype>;
-    my_kernel<T><<<...>>>(input.data_ptr<T>(), output.data_ptr<T>(), ...);
-}
-```
-
-The dispatch table calls your function with the appropriate `tag<...>` instantiation. No
-nested lambdas, no captured state complications, no closure overhead.
-
-### Sparse Instantiation
-
-A 5-dimensional dispatch space (device × dtype × contiguity × placement × determinism) has
-2×4×2×2×2 = 64 points. But you probably don't support all combinations:
-
-- GPU might only support contiguous tensors
-- Integer types might only support deterministic operations
-- Some dtypes might not be implemented yet
-
-This framework lets you declare **subspaces**—hyper-rectangles within the full space that you
-actually support:
-
-```cpp
-// GPU: only contiguous, out-of-place, float types with non-deterministic
-using gpu_float_subspace = axes<axis<torch::kCUDA>,
-                                axis<torch::kFloat32, torch::kFloat64>,
-                                axis<contiguity::contiguous>,
-                                axis<placement::out_of_place>,
-                                axis<determinism::not_required>>;
-```
-
-Only the points in your declared subspaces get instantiated. Unsupported combinations produce
-clear runtime errors, not missing symbol linker errors or silent failures.
+A C++20 dispatch system for multi-dimensional type and value dispatch, parallel
+iteration, and stride-correct tensor access. Designed for high-performance GPU/CPU
+code that needs to dispatch tensors to different kernel implementations based on
+device type, scalar type, memory layout, and other runtime properties.
 
 ## Architecture
 
-The framework is built in layers, each adding capabilities on top of the previous. The
-stack below is high-level on top, foundation on the bottom. (Read bottom to top).
+The framework is built in layers. Read bottom to top.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  torch.h - PyTorch-specific dispatch launcher with TORCH_CHECK  │
-|             Heavyweight, included in .cpp/.cu                   |
+│  for_each (torch/for_each.h)                                    │
+│    Parallel index generation: CPU thread pool, CUDA grid-stride │
 ├─────────────────────────────────────────────────────────────────┤
-│  torch_types.h  - PyTorch-specific typedefs                     │
-|             Lightweight for forward declaration in headers      |
+│  views (torch/views.h)                                          │
+│    flat_in/flat_out (rank-free) + tensor_in/tensor_out (ranked) │
 ├─────────────────────────────────────────────────────────────────┤
-│  dispatch_table.h  - dispatch_table with sparse subspaces       │
-|             Heavyweight, included in .cpp/.cu                   |
+│  torch utilities (torch/dispatch.h, torch/types.h)              │
+│    Device guards, type mappings, contiguity helpers             │
 ├─────────────────────────────────────────────────────────────────┤
-│  axes_map.h  - Map keyed by coordinates in an axes space        │
-|             Heavyweight, included in .cpp/.cu                   |
+│  thread_pool (thread_pool.h)                                    │
+│    broadcast_pool (static) and work_stealing_pool (adaptive)    │
 ├─────────────────────────────────────────────────────────────────┤
-│  visit_spaces.h  - Visiting and iterating over axes spaces      │
-|             Heavyweight, included in .cpp/.cu                   |
+│  dispatch_table (dispatch_table.h)                              │
+│    Sparse subspace instantiation, runtime select + invoke       │
 ├─────────────────────────────────────────────────────────────────┤
-│  detail.h  - Internal utilities and helper traits               │
-|             Heavyweight, indirectly included in .cpp/.cu        |
-├─────────────────────────────────────────────────────────────────┤
-│  types.h  - axis, axes, tag, and basic type traits              │
-|             Lightweight for forward declaration in headers      |
+│  core types (tag.h, with_value.h, axis.h, axes.h, enums.h)     │
+│    Tags, concepts, axes, dispatch coordinates                   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+## Design Philosophy
 
-Most of the time, you'd only need the types files in header files, because they
-are lightweight.
+- **No macros.** The entire framework uses C++20 templates, concepts, and consteval.
+- **Tags encode semantics.** A `tag<torch::kCUDA, torch::kFloat32, contiguity::contiguous>`
+  carries all dispatch coordinates as compile-time values. Order doesn't matter.
+- **Call-site readability over implementation elegance.** The user's code should parse
+  at a glance by someone who doesn't know the framework.
+- **Separation of concerns.** Dispatch coordinates (tag) are resolved before invocation.
+  Select and invoke are separate steps.
+
+## Core Dispatch System
+
+### Tags and Constraints
+
+A **tag** is an unordered set of compile-time values. `tag<A, B>` and `tag<B, A>`
+resolve to the same type.
 
 ```cpp
-// header file
-#include "dispatch/torch_types.h"
-// OR
-#include "dispatch/types.h"
+using my_tag = tag<torch::kCUDA, torch::kFloat32, contiguity::contiguous>;
 ```
 
-And in the .cpp or .cu files for instantiating the dispatch, you'd need only:
+**Concepts** constrain template parameters on tags:
 
 ```cpp
-// .cpp or .cu source file
-#include "dispatch/torch.h"
-// OR
-#include "dispatch/dispatch_table.h"
-```
-
-
-### Layer 1: Types (`types.h`)
-
-The foundation. Defines the core types:
-
-```cpp
-// An axis is a collection of unique values of the same type
-using device_axis = axis<torch::kCPU, torch::kCUDA>;
-using dtype_axis  = axis<torch::kFloat32, torch::kFloat64, torch::kInt32>;
-
-// Axes combine to form a dispatch space (Cartesian product)
-using my_space = axes<device_axis, dtype_axis>;  // 2×3 = 6 combinations
-
-// A tag represents a specific coordinate in the space
-using coord = tag<torch::kCUDA, torch::kFloat32>;
-```
-
-Provides:
-- `axis<V...>` - compile-time sequences of unique, same-type values
-- `axes<Axis1, Axis2, ...>` - Cartesian products of axes
-- `tag<V...>` - compile-time coordinate tags
-- Basic type traits and enum definitions
-- Pre-defined axis typedefs: `full_placement_axis`, `full_determinism_axis`,
-  `full_contiguity_axis` (from `types.h`)
-- Pre-defined PyTorch axis typedefs: `torch_cpu_cuda_device_axis`,
-  `torch_full_device_axis`, `torch_full_float_stype_axis`,
-  `torch_builtin_float_stype_axis`, `torch_full_signed_int_stype_axis`,
-  `torch_full_numeric_stype_axis` (from `torch_types.h`)
-
-### Layer 2: Space Visiting (`visit_spaces.h`)
-
-Compile-time visiting utilities that instantiate a visitor separately for each permutation in
-a defined space:
-
-```cpp
-visit_axes_space(visitor, my_space{});
-```
-
-This is **compile-time visiting**, not runtime iteration. The function uses fold expressions
-to expand all tag types in the space at compile time. Each call to the visitor receives a
-different `tag<...>` type (e.g., `tag<torch::kCPU, torch::kFloat32>`,
-`tag<torch::kCPU, torch::kFloat64>`, etc.), and if the visitor is a generic lambda or
-template, it gets instantiated separately for each tag type. This is used internally by
-`dispatch_table` construction to instantiate function pointers for each coordinate.
-
-Provides:
-- `visit_axes_space()` - compile-time visit all tag coordinates in an axes space (separate
-  instantiation per permutation)
-- `visit_extents_space()` - compile-time iterate over extents (size-based spaces)
-- Coordinate ↔ index conversions
-
-### Layer 3: Axes Maps (`axes_map.h`)
-
-A regular `std::unordered_map` from C++20, using **transparent hash and equality
-comparators** to enable flexible key lookups:
-
-```cpp
-axes_map<my_space, FunctionPtr> table;
-
-// Both tags and tuples work with emplace and find (thanks to transparency)
-auto coord_tuple = std::make_tuple(torch::kCUDA, torch::kFloat32);
-table.emplace(coord_tuple, &my_implementation);
-
-auto it1 = table.find(coord_tuple);           // O(1) lookup with tuple
-auto it2 = table.find(tag<torch::kCUDA, torch::kFloat32>{});  // O(1) lookup with tag
-
-// Helper function that works with both tags and tuples
-insert_or_assign(table, coord_tuple, &my_implementation);
-insert_or_assign(table, tag<torch::kCUDA, torch::kFloat32>{}, &my_implementation);
-```
-
-The transparency feature (via `is_transparent` in the hash and equality comparators) allows
-both `tag<...>` types and tuples to be used directly as keys in `emplace()` and `find()`
-operations without needing to construct an explicit key object. The free function
-`insert_or_assign()` provides the same convenience for insert/update operations.
-
-Features:
-- Regular `std::unordered_map` with transparent comparators (C++20 feature)
-- Both `tag<...>` types and tuples work as keys in `emplace()` and `find()`
-- Compile-time coordinate validation on insert
-- Graceful "not found" for invalid runtime lookups (returns `end()`)
-- No key object construction needed for lookups (transparent hashing)
-
-### Layer 4: Dispatch Tables (`dispatch_table.h`)
-
-Combines everything into a dispatch table with sparse instantiation:
-
-```cpp
-using dispatcher = dispatch_table<full_space, ReturnType(Args...)>;
-
-// Instantiate only specific subspaces
-static dispatcher const table{
-    dispatcher::from_op<my_op>(),
-    cpu_subspace{},
-    gpu_subspace{}
-};
-
-// Runtime dispatch
-return table(coord_tuple, args...);
-```
-
-Two instantiation patterns:
-- `from_op<Op>()` — Op is a struct with `static op(tag<...>, args...)` overloads
-- `from_visitor(lambda)` — lambda takes `(auto coord, args...)` and calls overloaded
-  functions
-
-### Layer 5: Torch Utilities (`torch.h` / `torch_types.h`)
-
-PyTorch-specific conveniences:
-- Pre-defined axes: `torch_cpu_cuda_device_axis`, `torch_full_float_stype_axis`, etc.
-- Concepts: `torch_integer_stype`, `torch_float_stype`
-- `torch_dispatch()` wrapper with friendly error messages
-- Coordinate stringification for diagnostics
-- `torch_scalar_cpp_type_t<Stype>` - map ScalarType enum to C++ type
-
-## Examples
-
-The `examples/` directory contains three demonstrations:
-
-### `relu.cu` — Simple 2D Dispatch
-
-Shows the minimal pattern: dispatch across device (CPU/CUDA) and dtype (float types). The full
-space is just 2×4 = 8 points, all instantiated.
-
-Key pattern: separate `op` overloads for CPU and CUDA, each templated on scalar type.
-
-### `functional.cu` — Free Function Overloads
-
-A 5-dimensional dispatch space (device × dtype × contiguity × placement × determinism). Uses
-**overloaded free functions** with `requires` clauses to select implementations:
-
-```cpp
-template <torch::ScalarType stype, contiguity cont, determinism det>
-tensor_with_notes iscan_impl(tag<torch::kCPU, stype, cont, placement::out_of_place, det>,
-                              torch::Tensor input) { ... }
-
-template <torch::ScalarType stype, contiguity cont>
-    requires torch_integer_stype<stype>
-tensor_with_notes iscan_impl(tag<torch::kCPU, stype, cont, placement::out_of_place, determinism::required>,
-                              torch::Tensor input) { ... }
-```
-
-The compiler's overload resolution picks the most specific match. **Sparse instantiation**: only
-4 subspaces are declared, not the full 64-point space.
-
-The dispatch table is built using `from_visitor()` with a lambda that forwards to the overload set:
-
-```cpp
-dispatcher::from_visitor([](auto coord, torch::Tensor t) { return iscan_impl(coord, t); })
-```
-
-### `op.cu` — Struct with Static Method Overloads
-
-Same 5D space, same sparse subspaces, same overload-based dispatch pattern. The only difference
-is organizational: implementations are **static methods in a struct** instead of free functions:
-
-```cpp
-struct iscan_op {
-    template <torch::ScalarType stype, contiguity cont, determinism det>
-    static tensor_with_notes
-    op(tag<torch::kCPU, stype, cont, placement::out_of_place, det>, torch::Tensor input) { ... }
-
-    template <torch::ScalarType stype, contiguity cont>
-        requires torch_integer_stype<stype>
-    static tensor_with_notes
-    op(tag<torch::kCPU, stype, cont, placement::out_of_place, determinism::required>,
-       torch::Tensor input) { ... }
-
-    // Type aliases for space, subspaces, and dispatcher live here too
-    using space = axes<...>;
-    using dispatcher = dispatch_table<space, ...>;
-};
-```
-
-The dispatch table is built using `from_op<Op>()` which directly calls `Op::op(tag<...>, args...)`:
-
-```cpp
-dispatcher::from_op<iscan_op>()
-```
-
-**Choosing between them**: Both use the same overload resolution mechanics. The struct-based
-approach keeps implementations and type aliases together. The free-function approach allows
-more separation and enables the `overloaded` idiom for combining multiple lambdas.
-
-Both `functional.cu` and `op.cu` wrap the same stand-in "external library" (`scan_lib.h`),
-demonstrating how to integrate with libraries like CUB, Thrust, or CUTLASS.
-
-## Usage Pattern Summary
-
-1. **Define your space** as an `axes<Axis1, Axis2, ...>`
-2. **Define subspaces** that cover only the combinations you support
-3. **Write your implementation** as either:
-   - A struct with `static op(tag<...>, args...)` overloads, or
-   - Free functions that take `tag<...>` as the first parameter
-4. **Create a static dispatch table** using `from_op<>()` or `from_visitor()`
-5. **Call `torch_dispatch()`** with the runtime coordinate tuple
-
-## Technical Appendix: Why `consteval` Functions Instead of `constexpr` Variables?
-
-Throughout this codebase, you'll notice patterns like:
-
-```cpp
-template <typename T>
-consteval size_t extent_v() {
-    return extent<T>::value();
+template <typename Tag>
+    requires with_value<Tag, torch::kCUDA>     // specific value
+          && with_type<Tag, torch::ScalarType>  // any value of this type
+void my_impl(Tag tag, ...) {
+    constexpr auto stype = tag_get<torch::ScalarType>(Tag{});
+    using scalar_t = torch_scalar_cpp_type_t<stype>;
 }
 ```
 
-Instead of the more traditional:
+`with_value` subsumes `with_type` — the compiler selects the most specific overload.
+
+### Dispatch Tables
+
+A **dispatch table** maps runtime values to compile-time tag instantiations:
 
 ```cpp
-template <typename T>
-constexpr size_t extent_v = extent<T>::value;
+struct my_op {
+    template <typename Tag>
+    static void op(Tag tag, torch::Tensor input, torch::Tensor output) { ... }
+
+    using space      = axes<torch_cpu_cuda_device_axis, torch_full_float_stype_axis, full_contiguity_axis>;
+    using subspaces  = coverage<space>;
+    using dispatcher = dispatch_table<space, void(torch::Tensor, torch::Tensor)>;
+};
+
+// Build table (instantiates op for every point in the space)
+static auto const table = dispatch_table_from_op<my_op>("my_op");
+
+// Runtime dispatch
+table.select(dispatch_set{dev, stype, contig})(input, output);
 ```
 
-This is intentional. When a `static constexpr` variable is passed to a function that takes it
-by const reference, the compiler may generate an address for that variable. With deeply nested
-templates (common in this dispatch machinery), this can cause:
+Only declared subspaces are instantiated. Unsupported combinations produce clear
+runtime errors.
 
-1. **Symbol explosion**: Each unique template instantiation gets its own static storage
-2. **Link-time bloat**: Especially problematic with nvcc, which can generate enormous object
-   files
-3. **ODR complications**: Multiple translation units may each define the same symbol
+### Enums
 
-`consteval` functions are guaranteed to be evaluated at compile-time with **zero instantiation
-footprint**. There's no storage, no symbol, no address—just a compile-time computation that
-produces a value. This is critical when you're instantiating across a 5-dimensional dispatch
-space.
+Pre-defined dispatch coordinates with `type_label` specializations:
 
-The trade-off is slightly more verbose syntax (`extent_v<T>()` vs `extent_v<T>`), but the
-compile-time and binary-size benefits are substantial for template-heavy code targeting nvcc.
+- `placement { in_place, out_of_place }`
+- `determinism { not_required, required }`
+- `contiguity { strided, contiguous }`
+- `scheduling { uniform, adaptive }`
 
----
+## Thread Pool (`thread_pool.h`)
+
+Two scheduling strategies as template specializations:
+
+- `thread_pool<scheduling::uniform>` (alias: `broadcast_pool`) — static partitioning,
+  lowest dispatch overhead, optimal for uniform workloads
+- `thread_pool<scheduling::adaptive>` (alias: `work_stealing_pool`) — Chase-Lev
+  work-stealing, optimal for imbalanced workloads
+- `default_thread_pool` — aliases `work_stealing_pool` (best general-purpose choice)
+
+Interface: `pool.parallel_for(start, end, grain, func)` where func receives
+`(begin, end)` range.
+
+## for_each (`torch/for_each.h`)
+
+Parallel index generation over `[0, count)`, dispatched by device tag:
+
+```cpp
+for_each(tag, count, [=] __hostdev__ (Tag, int64_t idx) {
+    out[idx] = some_computation(in[idx]);
+});
+```
+
+- **CPU:** Uses `default_thread_pool` (work-stealing)
+- **CUDA:** Grid-stride kernel with ILP grain (configurable)
+- **PrivateUse1:** Multi-GPU work distribution
+
+The functor receives `(Tag, int64_t idx)`. The tag is passed through so the functor
+can be concept-constrained.
+
+## Views (`torch/views.h`)
+
+Two view families, both specialized on contiguity and trivially copyable (safe for
+CUDA kernel capture). Contiguity is a dispatch axis — resolved once at dispatch time.
+
+### Flat views: `flat_in` / `flat_out`
+
+Rank-free elementwise access via `operator[]`. Designed for `for_each` patterns where
+the tensor's shape is irrelevant — we just need every element visited once.
+
+```cpp
+auto in  = flat_in<dev, stype, contig>(input);    // read-only, any rank
+auto out = flat_out<dev, stype, contig>(output);   // writable, any rank
+
+out[idx] = f(in[idx]);   // flat linear index, handles any tensor rank
+```
+
+- **`contiguity::contiguous`:** Just `data[flat_idx]`. Zero overhead regardless of rank.
+- **`contiguity::strided`:** Unravels `flat_idx` via div/mod chain using runtime
+  sizes/strides. Handles transposed, sliced, and broadcast (stride-0) tensors.
+
+### Ranked views: `tensor_in` / `tensor_out`
+
+Multi-index access via `operator()(i, j, ...)` with compile-time `Rank`. For structured
+patterns where you need explicit dimensional indices (gather-scatter, morton encoding).
+
+```cpp
+auto ijk = tensor_in<dev, torch::kInt32, 2, contig>(coords);   // [N, 3]
+auto out = tensor_out<dev, torch::kInt64, 1, contig>(codes);    // [N]
+
+auto i = ijk(idx, 0);   // explicit multi-index access
+```
+
+### Broadcasting
+
+Broadcast dimensions (stride 0) work naturally in both families. For binary ops,
+the entry-point function handles `expand_as()` internally (following PyTorch convention),
+so the caller never has to pre-expand.
+
+## Examples
+
+### `softplus.cu` — for_each + Flat Views (Recommended Pattern)
+
+The showcase example. Demonstrates how `for_each` + flat views eliminate all manual work
+and handle tensors of any rank:
+
+```cpp
+// ONE __hostdev__ scalar function. T = storage type, C = compute type.
+// torch_compute_type_t promotes half types to float; identity for float/double.
+template <typename T, typename C>
+__hostdev__ T softplus_scalar(T x, T beta, T threshold) {
+    C const bx = static_cast<C>(beta) * static_cast<C>(x);
+    if (bx > static_cast<C>(threshold)) return x;
+    return static_cast<T>(log1p(exp(bx)) / static_cast<C>(beta));
+}
+
+// ONE impl — all devices, all scalar types, both contiguities, ANY tensor rank
+template <typename Tag>
+    requires with_type<Tag, torch::DeviceType>
+          && with_type<Tag, torch::ScalarType>
+          && with_type<Tag, contiguity>
+void softplus_impl(Tag tag, torch::Tensor const& input, torch::Tensor& output,
+                     double beta_d, double threshold_d) {
+    constexpr auto dev    = tag_get<torch::DeviceType>(Tag{});
+    constexpr auto stype  = tag_get<torch::ScalarType>(Tag{});
+    constexpr auto contig = tag_get<contiguity>(Tag{});
+    using scalar_t  = torch_scalar_cpp_type_t<stype>;
+    using compute_t = torch_compute_type_t<stype>;  // float for halves, identity otherwise
+
+    auto guard = make_device_guard(tag, input);
+    auto in    = flat_in<dev, stype, contig>(input);    // rank-free flat access
+    auto out   = flat_out<dev, stype, contig>(output);
+
+    auto const beta      = static_cast<scalar_t>(beta_d);
+    auto const threshold = static_cast<scalar_t>(threshold_d);
+
+    for_each(tag, input.numel(), [=] __hostdev__ (Tag, int64_t idx) {
+        out[idx] = softplus_scalar<scalar_t, compute_t>(in[idx], beta, threshold);
+    });
+}
+```
+
+**Contrast with `relu.cu`** (the "before"):
+- relu needs 2 scalar function overloads (half vs builtin float comparison issues)
+- relu needs a separate `__global__` CUDA kernel
+- relu needs 2 `op()` overloads (CPU serial loop, CUDA manual launch)
+- relu only handles 1D contiguous tensors
+
+softplus needs none of that. Zero device-specific, contiguity-specific, or rank-specific code.
+
+### `relu.cu` — Manual Dispatch (Baseline)
+
+Shows the traditional pattern without `for_each`: separate CPU and CUDA overloads,
+manual device guard, manual kernel launch. Useful for understanding what the framework
+automates.
+
+### `functional.cu` / `op.cu` — Multi-Axis Sparse Dispatch
+
+5-dimensional dispatch space with partial coverage. Demonstrates overload resolution
+with `requires` clauses and sparse subspace instantiation. `functional.cu` uses free
+functions; `op.cu` uses a struct with static methods.
 
 ## File Reference
 
 | File | Purpose |
 |------|---------|
-| `types.h` | Core types: `axis<>`, `axes<>`, `tag<>`, enums (`placement`, `determinism`, `contiguity`) |
-| `detail.h` | Internal utilities, helper traits, and type concepts |
-| `visit_spaces.h` | Space visitation utilities for iterating over axes and extents |
+| `tag.h` | Self-normalizing compile-time value tags |
+| `with_value.h` | `with_value`, `with_type` concepts, `tag_get` extraction |
+| `axis.h`, `axes.h` | Value sets and Cartesian products |
+| `enums.h` | `placement`, `determinism`, `contiguity`, `scheduling` |
+| `label.h`, `label_sorted.h` | Compile-time label infrastructure for tag ordering |
+| `consteval_types.h` | Compile-time type traits |
+| `dispatch_set.h` | Runtime dispatch coordinates |
+| `dispatch_table.h` | Sparse dispatch table with select/invoke |
+| `detail.h` | Internal utilities and helper traits |
+| `visit_spaces.h` | Compile-time space visitation |
 | `axes_map.h` | Hash map keyed by axes space coordinates |
-| `dispatch_table.h` | `dispatch_table` class with sparse subspace instantiation |
-| `torch_types.h` | PyTorch-specific axes, scalar type mappings, concepts |
-| `torch.h` | PyTorch-specific utilities, error handling, coordinate stringification |
-| `examples/` | Working examples (`relu.cu`, `functional.cu`, `op.cu`) with detailed headers |
+| `indices.h`, `extents.h` | Index/extent utilities |
+| `types.h` | Compatibility shim bundling core headers |
+| `macros.h` | `__hostdev__`, `DISPATCH_SPIN_PAUSE`, `DISPATCH_UNROLL` |
+| `thread_pool.h` | `broadcast_pool`, `work_stealing_pool`, `default_thread_pool` |
+| `torch/types.h` | PyTorch type labels, axes, scalar type mappings, `torch_compute_type_t` |
+| `torch/dispatch.h` | Device guards, contiguity helpers, device concepts |
+| `torch/for_each.h` | Parallel index generation (CPU, CUDA, PrivateUse1) |
+| `torch/views.h` | `flat_in`/`flat_out` (rank-free), `tensor_in`/`tensor_out` (ranked) |
+| `examples/` | `relu.cu`, `softplus.cu`, `functional.cu`, `op.cu` |
+
+## Technical Note: `consteval` Functions
+
+Throughout this codebase, compile-time values use `consteval` functions instead of
+`constexpr` variables:
+
+```cpp
+template <typename T>
+consteval size_t extent_v() { return extent<T>::value(); }
+```
+
+This avoids symbol explosion, link-time bloat, and ODR complications that arise with
+`static constexpr` variables in deeply nested template instantiations — especially
+with nvcc.

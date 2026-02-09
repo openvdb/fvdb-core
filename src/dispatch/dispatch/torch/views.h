@@ -1,538 +1,410 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-// views: Lightweight device- and type-aware tensor wrappers.
+// views.h — Stride-correct tensor access for CPU and GPU.
 //
-// These provide type-safe access to tensor data by carrying device and scalar type
-// as template parameters, enabling efficient, low-overhead operations across devices.
+// Two view families:
+//
+//   flat_in / flat_out   — Rank-free flat access via operator[](int64_t).
+//                          Designed for for_each elementwise patterns where the
+//                          tensor's shape is irrelevant and we just need every
+//                          element visited once. Handles arbitrary rank internally.
+//
+//   tensor_in / tensor_out — Multi-index access via operator()(i, j, ...).
+//                            Rank is a compile-time template parameter. For
+//                            structured access patterns (gather-scatter, morton
+//                            encoding, channel ops with explicit indices).
+//
+// Both families are specialized on contiguity:
+//   contiguous — row-major offset, no stride multiply
+//   strided    — full stride computation (non-contiguous, transposed, broadcast)
+//
+// Contiguity is resolved at dispatch time (it's a dispatch axis), not per-element.
+// The op author writes one kernel; the dispatch table instantiates both specializations.
+//
+// All views are trivially copyable PODs after construction, safe for CUDA kernel capture.
+// Constructors are host-only (call torch API); access methods are __hostdev__.
 //
 #ifndef DISPATCH_DISPATCH_TORCH_VIEWS_H
 #define DISPATCH_DISPATCH_TORCH_VIEWS_H
 
+#include "dispatch/enums.h"
 #include "dispatch/macros.h"
-#include "dispatch/tag_match.h"
-#include "dispatch/torch/for_each.h"
 #include "dispatch/torch/types.h"
 
-#include <array>
-#include <atomic>
+#include <torch/types.h>
+
+#include <cassert>
 #include <cstdint>
 
 namespace dispatch {
 
-template <torch::DeviceType dev, torch::ScalarType stype> struct device_scalar_pair {
-    using value_type = torch_scalar_cpp_type_t<stype>;
-    static consteval torch::DeviceType
-    device() {
-        return dev;
-    }
-    static consteval torch::ScalarType
-    scalar_type() {
-        return stype;
-    }
-};
+// =============================================================================
+// tensor_in — read-only tensor access
+// =============================================================================
 
-//------------------------------------------------------------------------------
-// View types - lightweight wrappers for pointer + dimensions
-//------------------------------------------------------------------------------
-// These carry device and scalar type as template parameters, enabling
-// type-safe dispatch through the helper struct specialization pattern.
+template <torch::DeviceType Dev,
+          torch::ScalarType Stype,
+          int64_t Rank,
+          contiguity Contig = contiguity::strided>
+struct tensor_in;
 
-/// Same as PyTorch's max tensor rank
-constexpr int64_t view_max_rank = 8;
+// -----------------------------------------------------------------------------
+// tensor_in — strided specialization
+// -----------------------------------------------------------------------------
 
-/// Flat read-only view: any-rank tensor accessed as linear elements
-/// Handles both contiguous and strided tensors efficiently.
-template <torch::DeviceType Dev, torch::ScalarType Stype>
-struct flat_const_view : device_scalar_pair<Dev, Stype> {
-    using typename device_scalar_pair<Dev, Stype>::value_type;
+template <torch::DeviceType Dev, torch::ScalarType Stype, int64_t Rank>
+struct tensor_in<Dev, Stype, Rank, contiguity::strided> {
+    static_assert(Rank > 0, "Rank must be positive");
+
+    using value_type = torch_scalar_cpp_type_t<Stype>;
 
     value_type const *data;
-    int64_t sizes[view_max_rank];
-    int64_t strides[view_max_rank];
-    int64_t rank;
-    int64_t numel;
-    bool is_contiguous;
+    int64_t sizes[Rank];
+    int64_t strides[Rank];
 
-    __hostdev__
-    flat_const_view(value_type const *d,
-                    int64_t const *sz,
-                    int64_t const *st,
-                    int64_t r,
-                    int64_t n,
-                    bool contig)
-        : data(d), rank(r), numel(n), is_contiguous(contig) {
-        for (int64_t i = 0; i < r; ++i) {
-            sizes[i]   = sz[i];
-            strides[i] = st[i];
+    explicit tensor_in(torch::Tensor const &t) : data(t.data_ptr<value_type>()) {
+        assert(t.dim() >= Rank && "Tensor rank must be >= view Rank");
+        for (int64_t d = 0; d < Rank; ++d) {
+            sizes[d]   = t.size(d);
+            strides[d] = t.stride(d);
         }
     }
 
-    explicit flat_const_view(torch::Tensor const &t)
-        : data(t.data_ptr<value_type>()), rank(t.dim()), numel(t.numel()),
-          is_contiguous(t.is_contiguous()) {
-        for (int64_t i = 0; i < rank; ++i) {
-            sizes[i]   = t.size(i);
-            strides[i] = t.stride(i);
-        }
-    }
-
-    __hostdev__ int64_t
-    offset(int64_t i) const {
-        if (is_contiguous)
-            return i;
-        int64_t off = 0;
-        for (int64_t d = rank - 1; d >= 0; --d) {
-            off += (i % sizes[d]) * strides[d];
-            i /= sizes[d];
-        }
-        return off;
-    }
-
+    template <typename... Idx>
     __hostdev__ value_type
-    operator[](int64_t i) const {
-        return data[offset(i)];
-    }
-};
-
-/// Flat mutable view: any-rank tensor accessed as linear elements
-template <torch::DeviceType Dev, torch::ScalarType Stype>
-struct flat_mutable_view : device_scalar_pair<Dev, Stype> {
-    using typename device_scalar_pair<Dev, Stype>::value_type;
-
-    value_type *data;
-    int64_t sizes[view_max_rank];
-    int64_t strides[view_max_rank];
-    int64_t rank;
-    int64_t numel;
-    bool is_contiguous;
-
-    __hostdev__
-    flat_mutable_view(
-        value_type *d, int64_t const *sz, int64_t const *st, int64_t r, int64_t n, bool contig)
-        : data(d), rank(r), numel(n), is_contiguous(contig) {
-        for (int64_t i = 0; i < r; ++i) {
-            sizes[i]   = sz[i];
-            strides[i] = st[i];
-        }
-    }
-
-    explicit flat_mutable_view(torch::Tensor &t)
-        : data(t.data_ptr<value_type>()), rank(t.dim()), numel(t.numel()),
-          is_contiguous(t.is_contiguous()) {
-        for (int64_t i = 0; i < rank; ++i) {
-            sizes[i]   = t.size(i);
-            strides[i] = t.stride(i);
-        }
+    operator()(Idx... idx) const {
+        static_assert(sizeof...(Idx) == Rank, "Number of indices must equal Rank");
+        int64_t const indices[] = {static_cast<int64_t>(idx)...};
+        int64_t offset          = 0;
+        for (int64_t d = 0; d < Rank; ++d)
+            offset += indices[d] * strides[d];
+        return data[offset];
     }
 
     __hostdev__ int64_t
-    offset(int64_t i) const {
-        if (is_contiguous)
-            return i;
-        int64_t off = 0;
-        for (int64_t d = rank - 1; d >= 0; --d) {
-            off += (i % sizes[d]) * strides[d];
-            i /= sizes[d];
-        }
-        return off;
+    size(int64_t d) const {
+        return sizes[d];
     }
 
-    __hostdev__ value_type &
-    operator[](int64_t i) const {
-        return data[offset(i)];
+    __hostdev__ int64_t
+    stride(int64_t d) const {
+        return strides[d];
+    }
+
+    __hostdev__ int64_t
+    numel() const {
+        int64_t n = 1;
+        for (int64_t d = 0; d < Rank; ++d)
+            n *= sizes[d];
+        return n;
     }
 };
 
-/// 2D read-only view: (rows x cols) matrix
-template <torch::DeviceType Dev, torch::ScalarType Stype>
-struct matrix_const_view : device_scalar_pair<Dev, Stype> {
-    using typename device_scalar_pair<Dev, Stype>::value_type;
+// -----------------------------------------------------------------------------
+// tensor_in — contiguous specialization
+// -----------------------------------------------------------------------------
+
+template <torch::DeviceType Dev, torch::ScalarType Stype, int64_t Rank>
+struct tensor_in<Dev, Stype, Rank, contiguity::contiguous> {
+    static_assert(Rank > 0, "Rank must be positive");
+
+    using value_type = torch_scalar_cpp_type_t<Stype>;
 
     value_type const *data;
-    int64_t rows;
-    int64_t cols;
+    int64_t sizes[Rank];
 
-    __hostdev__
-    matrix_const_view(value_type const *d, int64_t r, int64_t c)
-        : data(d), rows(r), cols(c) {}
+    explicit tensor_in(torch::Tensor const &t) : data(t.data_ptr<value_type>()) {
+        assert(t.dim() >= Rank && "Tensor rank must be >= view Rank");
+        assert(t.is_contiguous() && "Contiguous view requires contiguous tensor");
+        for (int64_t d = 0; d < Rank; ++d) {
+            sizes[d] = t.size(d);
+        }
+    }
 
-    explicit matrix_const_view(torch::Tensor const &t)
-        : data(t.data_ptr<value_type>()), rows(t.size(0)), cols(t.size(1)) {}
-
+    template <typename... Idx>
     __hostdev__ value_type
-    operator()(int64_t row, int64_t col) const {
-        return data[row * cols + col];
+    operator()(Idx... idx) const {
+        static_assert(sizeof...(Idx) == Rank, "Number of indices must equal Rank");
+        int64_t const indices[] = {static_cast<int64_t>(idx)...};
+        int64_t offset          = indices[0];
+        for (int64_t d = 1; d < Rank; ++d)
+            offset = offset * sizes[d] + indices[d];
+        return data[offset];
+    }
+
+    __hostdev__ int64_t
+    size(int64_t d) const {
+        return sizes[d];
+    }
+
+    __hostdev__ int64_t
+    stride(int64_t d) const {
+        // Compute row-major stride on the fly
+        int64_t s = 1;
+        for (int64_t i = Rank - 1; i > d; --i)
+            s *= sizes[i];
+        return s;
+    }
+
+    __hostdev__ int64_t
+    numel() const {
+        int64_t n = 1;
+        for (int64_t d = 0; d < Rank; ++d)
+            n *= sizes[d];
+        return n;
     }
 };
 
-/// 2D mutable view: (rows x cols) matrix
-template <torch::DeviceType Dev, torch::ScalarType Stype>
-struct matrix_mutable_view : device_scalar_pair<Dev, Stype> {
-    using typename device_scalar_pair<Dev, Stype>::value_type;
+// =============================================================================
+// tensor_out — writable tensor access
+// =============================================================================
+
+template <torch::DeviceType Dev,
+          torch::ScalarType Stype,
+          int64_t Rank,
+          contiguity Contig = contiguity::strided>
+struct tensor_out;
+
+// -----------------------------------------------------------------------------
+// tensor_out — strided specialization
+// -----------------------------------------------------------------------------
+
+template <torch::DeviceType Dev, torch::ScalarType Stype, int64_t Rank>
+struct tensor_out<Dev, Stype, Rank, contiguity::strided> {
+    static_assert(Rank > 0, "Rank must be positive");
+
+    using value_type = torch_scalar_cpp_type_t<Stype>;
 
     value_type *data;
-    int64_t rows;
-    int64_t cols;
+    int64_t sizes[Rank];
+    int64_t strides[Rank];
 
-    __hostdev__
-    matrix_mutable_view(value_type *d, int64_t r, int64_t c)
-        : data(d), rows(r), cols(c) {}
+    explicit tensor_out(torch::Tensor &t) : data(t.data_ptr<value_type>()) {
+        assert(t.dim() >= Rank && "Tensor rank must be >= view Rank");
+        for (int64_t d = 0; d < Rank; ++d) {
+            sizes[d]   = t.size(d);
+            strides[d] = t.stride(d);
+        }
+    }
 
-    explicit matrix_mutable_view(torch::Tensor &t)
-        : data(t.data_ptr<value_type>()), rows(t.size(0)), cols(t.size(1)) {}
-
+    template <typename... Idx>
     __hostdev__ value_type &
-    operator()(int64_t row, int64_t col) const {
-        return data[row * cols + col];
+    operator()(Idx... idx) const {
+        static_assert(sizeof...(Idx) == Rank, "Number of indices must equal Rank");
+        int64_t const indices[] = {static_cast<int64_t>(idx)...};
+        int64_t offset          = 0;
+        for (int64_t d = 0; d < Rank; ++d)
+            offset += indices[d] * strides[d];
+        return data[offset];
+    }
+
+    __hostdev__ int64_t
+    size(int64_t d) const {
+        return sizes[d];
+    }
+
+    __hostdev__ int64_t
+    stride(int64_t d) const {
+        return strides[d];
+    }
+
+    __hostdev__ int64_t
+    numel() const {
+        int64_t n = 1;
+        for (int64_t d = 0; d < Rank; ++d)
+            n *= sizes[d];
+        return n;
     }
 };
 
-/// 1D read-only view with stride: for index arrays
+// -----------------------------------------------------------------------------
+// tensor_out — contiguous specialization
+// -----------------------------------------------------------------------------
+
+template <torch::DeviceType Dev, torch::ScalarType Stype, int64_t Rank>
+struct tensor_out<Dev, Stype, Rank, contiguity::contiguous> {
+    static_assert(Rank > 0, "Rank must be positive");
+
+    using value_type = torch_scalar_cpp_type_t<Stype>;
+
+    value_type *data;
+    int64_t sizes[Rank];
+
+    explicit tensor_out(torch::Tensor &t) : data(t.data_ptr<value_type>()) {
+        assert(t.dim() >= Rank && "Tensor rank must be >= view Rank");
+        assert(t.is_contiguous() && "Contiguous view requires contiguous tensor");
+        for (int64_t d = 0; d < Rank; ++d) {
+            sizes[d] = t.size(d);
+        }
+    }
+
+    template <typename... Idx>
+    __hostdev__ value_type &
+    operator()(Idx... idx) const {
+        static_assert(sizeof...(Idx) == Rank, "Number of indices must equal Rank");
+        int64_t const indices[] = {static_cast<int64_t>(idx)...};
+        int64_t offset          = indices[0];
+        for (int64_t d = 1; d < Rank; ++d)
+            offset = offset * sizes[d] + indices[d];
+        return data[offset];
+    }
+
+    __hostdev__ int64_t
+    size(int64_t d) const {
+        return sizes[d];
+    }
+
+    __hostdev__ int64_t
+    stride(int64_t d) const {
+        int64_t s = 1;
+        for (int64_t i = Rank - 1; i > d; --i)
+            s *= sizes[i];
+        return s;
+    }
+
+    __hostdev__ int64_t
+    numel() const {
+        int64_t n = 1;
+        for (int64_t d = 0; d < Rank; ++d)
+            n *= sizes[d];
+        return n;
+    }
+};
+
+// =============================================================================
+// flat_in — rank-free read-only flat access via operator[]
+// =============================================================================
+//
+// For elementwise ops where for_each iterates [0, numel) and the tensor's shape
+// is irrelevant. The view maps a flat linear index to the correct memory location
+// regardless of the tensor's actual rank.
+//
+//   auto v = flat_in<dev, stype, contig>(tensor);
+//   val = v[flat_idx];
+//
+
+template <torch::DeviceType Dev, torch::ScalarType Stype, contiguity Contig = contiguity::strided>
+struct flat_in;
+
+// -----------------------------------------------------------------------------
+// flat_in — strided specialization
+// -----------------------------------------------------------------------------
+// Stores runtime ndim + sizes/strides. operator[] unravels the flat index into
+// multi-dimensional indices via div/mod, then computes the physical offset via
+// strides. Broadcast dimensions (stride 0) work naturally.
+
 template <torch::DeviceType Dev, torch::ScalarType Stype>
-struct vector_const_view : device_scalar_pair<Dev, Stype> {
-    using typename device_scalar_pair<Dev, Stype>::value_type;
+struct flat_in<Dev, Stype, contiguity::strided> {
+    static constexpr int kMaxRank = 12;
+
+    using value_type = torch_scalar_cpp_type_t<Stype>;
 
     value_type const *data;
-    int64_t count;
-    int64_t stride;
+    int ndim;
+    int64_t sizes[kMaxRank];
+    int64_t strides[kMaxRank];
 
-    __hostdev__
-    vector_const_view(value_type const *d, int64_t c, int64_t s)
-        : data(d), count(c), stride(s) {}
-
-    explicit vector_const_view(torch::Tensor const &t)
-        : data(t.data_ptr<value_type>()), count(t.numel()), stride(t.stride(0)) {}
+    explicit flat_in(torch::Tensor const &t) : data(t.data_ptr<value_type>()), ndim(t.dim()) {
+        assert(ndim > 0 && "Tensor must have at least one dimension");
+        assert(ndim <= kMaxRank && "Tensor rank exceeds flat_in::kMaxRank");
+        for (int d = 0; d < ndim; ++d) {
+            sizes[d]   = t.size(d);
+            strides[d] = t.stride(d);
+        }
+    }
 
     __hostdev__ value_type
-    operator[](int64_t i) const {
-        return data[i * stride];
+    operator[](int64_t flat_idx) const {
+        int64_t offset = 0;
+        for (int d = ndim - 1; d >= 0; --d) {
+            offset += (flat_idx % sizes[d]) * strides[d];
+            flat_idx /= sizes[d];
+        }
+        return data[offset];
     }
 };
 
-/// 1D mutable view with stride
+// -----------------------------------------------------------------------------
+// flat_in — contiguous specialization
+// -----------------------------------------------------------------------------
+// Just a pointer. operator[] is data[flat_idx]. Zero overhead for any rank.
+
 template <torch::DeviceType Dev, torch::ScalarType Stype>
-struct vector_mutable_view : device_scalar_pair<Dev, Stype> {
-    using typename device_scalar_pair<Dev, Stype>::value_type;
-
-    value_type *data;
-    int64_t count;
-    int64_t stride;
-
-    __hostdev__
-    vector_mutable_view(value_type *d, int64_t c, int64_t s)
-        : data(d), count(c), stride(s) {}
-
-    explicit vector_mutable_view(torch::Tensor &t)
-        : data(t.data_ptr<value_type>()), count(t.numel()), stride(t.stride(0)) {}
-
-    __hostdev__ value_type &
-    operator[](int64_t i) const {
-        return data[i * stride];
-    }
-};
-
-//------------------------------------------------------------------------------
-// Fragment views - vectorized access for flat element-wise operations
-//------------------------------------------------------------------------------
-// Fragment views load/store multiple elements at once for improved memory
-// bandwidth and instruction-level parallelism.
-//
-// Template parameters:
-//   - Dev: torch::DeviceType (kCPU, kCUDA, kPrivateUse1)
-//   - Stype: torch::ScalarType (kFloat, kHalf, etc.)
-//   - Contig: contiguity (contiguous or strided)
-//
-// Key concepts:
-//   - optimal_load_width: Target bytes per memory transaction (16 bytes = 128 bits)
-//   - elements_per_fragment: Elements loaded at once (vectorized for contiguous, 1 for strided)
-//   - fragment: Small fixed-size array of elements
-//
-// Contiguity specialization:
-//   - contiguous: Lightweight (data + numel), vectorized fragment loads
-//   - strided: Composes flat_*_view for offset computation, elements_per_frag = 1
-//
-// Usage pattern:
-//   1. Dispatch on contiguity to select specialization
-//   2. Process data in fragment-sized chunks via for_each on num_fragments()
-//   3. For contiguous with elements_per_frag > 1, handle tail with scalar access
-//   4. For strided (elements_per_frag = 1), tail_count() is always 0
-
-/// Fragment configuration - specialized per device
-template <torch::DeviceType Dev> struct fragment_config {
-    /// Optimal memory transaction size in bytes (128-bit loads on GPU)
-    static consteval int64_t
-    optimal_load_width() {
-        return 16;
-    }
-};
-
-/// CPU doesn't benefit from fragment loads - use element-at-a-time
-template <> struct fragment_config<torch::kCPU> {
-    static consteval int64_t
-    optimal_load_width() {
-        return 1;
-    }
-};
-
-/// Compute elements per fragment for contiguous access
-template <torch::DeviceType Dev, torch::ScalarType Stype>
-consteval int64_t
-elements_per_fragment_contiguous() {
-    constexpr int64_t width     = fragment_config<Dev>::optimal_load_width();
-    constexpr int64_t elem_size = sizeof(torch_scalar_cpp_type_t<Stype>);
-    return (width / elem_size) > 0 ? (width / elem_size) : 1;
-}
-
-/// Fragment type: small array of elements for vectorized access
-template <typename T, int64_t N> struct fragment {
-    T data[N];
-
-    __hostdev__ T &
-    operator[](int64_t i) {
-        return data[i];
-    }
-    __hostdev__ T const &
-    operator[](int64_t i) const {
-        return data[i];
-    }
-
-    static consteval int64_t
-    size() {
-        return N;
-    }
-};
-
-//------------------------------------------------------------------------------
-// flat_fragment_const_view - primary template declaration
-//------------------------------------------------------------------------------
-template <torch::DeviceType Dev, torch::ScalarType Stype, contiguity Contig>
-struct flat_fragment_const_view;
-
-//------------------------------------------------------------------------------
-// flat_fragment_const_view - contiguous specialization (lightweight, vectorized)
-//------------------------------------------------------------------------------
-template <torch::DeviceType Dev, torch::ScalarType Stype>
-struct flat_fragment_const_view<Dev, Stype, contiguity::contiguous>
-    : device_scalar_pair<Dev, Stype> {
-    using typename device_scalar_pair<Dev, Stype>::value_type;
-
-    static consteval int64_t
-    elements_per_frag() {
-        return elements_per_fragment_contiguous<Dev, Stype>();
-    }
-    using fragment_type = fragment<value_type, elements_per_frag()>;
+struct flat_in<Dev, Stype, contiguity::contiguous> {
+    using value_type = torch_scalar_cpp_type_t<Stype>;
 
     value_type const *data;
-    int64_t numel;
 
-    __hostdev__
-    flat_fragment_const_view(value_type const *d, int64_t n)
-        : data(d), numel(n) {}
-
-    explicit flat_fragment_const_view(torch::Tensor const &t)
-        : data(t.data_ptr<value_type>()), numel(t.numel()) {}
-
-    __hostdev__ int64_t
-    num_fragments() const {
-        return numel / elements_per_frag();
-    }
-
-    __hostdev__ int64_t
-    tail_count() const {
-        return numel % elements_per_frag();
-    }
-
-    __hostdev__ int64_t
-    tail_offset() const {
-        return num_fragments() * elements_per_frag();
-    }
-
-    __hostdev__ fragment_type
-    load_fragment(int64_t frag_idx) const {
-        fragment_type frag;
-        value_type const *src = data + frag_idx * elements_per_frag();
-        DISPATCH_UNROLL
-        for (int64_t i = 0; i < elements_per_frag(); ++i) {
-            frag[i] = src[i];
-        }
-        return frag;
+    explicit flat_in(torch::Tensor const &t) : data(t.data_ptr<value_type>()) {
+        assert(t.is_contiguous() && "Contiguous flat_in requires contiguous tensor");
     }
 
     __hostdev__ value_type
-    operator[](int64_t i) const {
-        return data[i];
+    operator[](int64_t flat_idx) const {
+        return data[flat_idx];
     }
 };
 
-//------------------------------------------------------------------------------
-// flat_fragment_const_view - strided specialization (composes flat_const_view)
-//------------------------------------------------------------------------------
+// =============================================================================
+// flat_out — rank-free writable flat access via operator[]
+// =============================================================================
+
+template <torch::DeviceType Dev, torch::ScalarType Stype, contiguity Contig = contiguity::strided>
+struct flat_out;
+
+// -----------------------------------------------------------------------------
+// flat_out — strided specialization
+// -----------------------------------------------------------------------------
+
 template <torch::DeviceType Dev, torch::ScalarType Stype>
-struct flat_fragment_const_view<Dev, Stype, contiguity::strided> : device_scalar_pair<Dev, Stype> {
-    using typename device_scalar_pair<Dev, Stype>::value_type;
+struct flat_out<Dev, Stype, contiguity::strided> {
+    static constexpr int kMaxRank = 12;
 
-    static consteval int64_t
-    elements_per_frag() {
-        return 1; // No vectorization for strided
-    }
-    using fragment_type = fragment<value_type, 1>;
-
-    flat_const_view<Dev, Stype> inner;
-
-    __hostdev__
-    flat_fragment_const_view(flat_const_view<Dev, Stype> const &v)
-        : inner(v) {}
-
-    explicit flat_fragment_const_view(torch::Tensor const &t) : inner(t) {}
-
-    __hostdev__ int64_t
-    num_fragments() const {
-        return inner.numel; // Each element is its own "fragment"
-    }
-
-    __hostdev__ int64_t
-    tail_count() const {
-        return 0; // No tail when elements_per_frag = 1
-    }
-
-    __hostdev__ int64_t
-    tail_offset() const {
-        return inner.numel;
-    }
-
-    __hostdev__ fragment_type
-    load_fragment(int64_t frag_idx) const {
-        return {inner[frag_idx]}; // Uses inner.offset() for strided access
-    }
-
-    __hostdev__ value_type
-    operator[](int64_t i) const {
-        return inner[i];
-    }
-};
-
-//------------------------------------------------------------------------------
-// flat_fragment_mutable_view - primary template declaration
-//------------------------------------------------------------------------------
-template <torch::DeviceType Dev, torch::ScalarType Stype, contiguity Contig>
-struct flat_fragment_mutable_view;
-
-//------------------------------------------------------------------------------
-// flat_fragment_mutable_view - contiguous specialization
-//------------------------------------------------------------------------------
-template <torch::DeviceType Dev, torch::ScalarType Stype>
-struct flat_fragment_mutable_view<Dev, Stype, contiguity::contiguous>
-    : device_scalar_pair<Dev, Stype> {
-    using typename device_scalar_pair<Dev, Stype>::value_type;
-
-    static consteval int64_t
-    elements_per_frag() {
-        return elements_per_fragment_contiguous<Dev, Stype>();
-    }
-    using fragment_type = fragment<value_type, elements_per_frag()>;
+    using value_type = torch_scalar_cpp_type_t<Stype>;
 
     value_type *data;
-    int64_t numel;
+    int ndim;
+    int64_t sizes[kMaxRank];
+    int64_t strides[kMaxRank];
 
-    __hostdev__
-    flat_fragment_mutable_view(value_type *d, int64_t n)
-        : data(d), numel(n) {}
-
-    explicit flat_fragment_mutable_view(torch::Tensor &t)
-        : data(t.data_ptr<value_type>()), numel(t.numel()) {}
-
-    __hostdev__ int64_t
-    num_fragments() const {
-        return numel / elements_per_frag();
-    }
-
-    __hostdev__ int64_t
-    tail_count() const {
-        return numel % elements_per_frag();
-    }
-
-    __hostdev__ int64_t
-    tail_offset() const {
-        return num_fragments() * elements_per_frag();
-    }
-
-    __hostdev__ fragment_type
-    load_fragment(int64_t frag_idx) const {
-        fragment_type frag;
-        value_type const *src = data + frag_idx * elements_per_frag();
-        DISPATCH_UNROLL
-        for (int64_t i = 0; i < elements_per_frag(); ++i) {
-            frag[i] = src[i];
-        }
-        return frag;
-    }
-
-    __hostdev__ void
-    store_fragment(int64_t frag_idx, fragment_type const &frag) const {
-        value_type *dst = data + frag_idx * elements_per_frag();
-        DISPATCH_UNROLL
-        for (int64_t i = 0; i < elements_per_frag(); ++i) {
-            dst[i] = frag[i];
+    explicit flat_out(torch::Tensor &t) : data(t.data_ptr<value_type>()), ndim(t.dim()) {
+        assert(ndim > 0 && "Tensor must have at least one dimension");
+        assert(ndim <= kMaxRank && "Tensor rank exceeds flat_out::kMaxRank");
+        for (int d = 0; d < ndim; ++d) {
+            sizes[d]   = t.size(d);
+            strides[d] = t.stride(d);
         }
     }
 
     __hostdev__ value_type &
-    operator[](int64_t i) const {
-        return data[i];
+    operator[](int64_t flat_idx) const {
+        int64_t offset = 0;
+        for (int d = ndim - 1; d >= 0; --d) {
+            offset += (flat_idx % sizes[d]) * strides[d];
+            flat_idx /= sizes[d];
+        }
+        return data[offset];
     }
 };
 
-//------------------------------------------------------------------------------
-// flat_fragment_mutable_view - strided specialization
-//------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// flat_out — contiguous specialization
+// -----------------------------------------------------------------------------
+
 template <torch::DeviceType Dev, torch::ScalarType Stype>
-struct flat_fragment_mutable_view<Dev, Stype, contiguity::strided>
-    : device_scalar_pair<Dev, Stype> {
-    using typename device_scalar_pair<Dev, Stype>::value_type;
+struct flat_out<Dev, Stype, contiguity::contiguous> {
+    using value_type = torch_scalar_cpp_type_t<Stype>;
 
-    static consteval int64_t
-    elements_per_frag() {
-        return 1;
-    }
-    using fragment_type = fragment<value_type, 1>;
+    value_type *data;
 
-    flat_mutable_view<Dev, Stype> inner;
-
-    __hostdev__
-    flat_fragment_mutable_view(flat_mutable_view<Dev, Stype> const &v)
-        : inner(v) {}
-
-    explicit flat_fragment_mutable_view(torch::Tensor &t) : inner(t) {}
-
-    __hostdev__ int64_t
-    num_fragments() const {
-        return inner.numel;
-    }
-
-    __hostdev__ int64_t
-    tail_count() const {
-        return 0;
-    }
-
-    __hostdev__ int64_t
-    tail_offset() const {
-        return inner.numel;
-    }
-
-    __hostdev__ fragment_type
-    load_fragment(int64_t frag_idx) const {
-        return {inner[frag_idx]};
-    }
-
-    __hostdev__ void
-    store_fragment(int64_t frag_idx, fragment_type const &frag) const {
-        inner[frag_idx] = frag[0];
+    explicit flat_out(torch::Tensor &t) : data(t.data_ptr<value_type>()) {
+        assert(t.is_contiguous() && "Contiguous flat_out requires contiguous tensor");
     }
 
     __hostdev__ value_type &
-    operator[](int64_t i) const {
-        return inner[i];
+    operator[](int64_t flat_idx) const {
+        return data[flat_idx];
     }
 };
 
