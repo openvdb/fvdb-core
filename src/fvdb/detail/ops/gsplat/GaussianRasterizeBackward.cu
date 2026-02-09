@@ -1295,10 +1295,23 @@ callRasterizeBackwardPrivateUse1(
                 cudaStreamWaitEvent(stream, events[deviceId - 1]);
             }
 
-            // NOTE: We use storage().nbytes() for prefetch sizes because some tensors (e.g.
-            // opacities) may be non-contiguous expanded views.  This is safe as long as tensors
-            // have zero storage_offset which holds for all tensors passed through this path.
-            // This is unsafe if the tensor came from a non-zero storage_offset slice (e.g. t[4:]).
+            // We use storage().nbytes() for prefetch sizes because some tensors (e.g.
+            // opacities) may be non-contiguous expanded views where numel() exceeds
+            // the actual underlying storage size. storage().nbytes() is only valid when
+            // storage_offset is zero; otherwise data_ptr + storage().nbytes() overshoots.
+            TORCH_CHECK(means2d.storage_offset() == 0, "means2d must have zero storage offset");
+            TORCH_CHECK(conics.storage_offset() == 0, "conics must have zero storage offset");
+            TORCH_CHECK(opacities.storage_offset() == 0, "opacities must have zero storage offset");
+            TORCH_CHECK(features.storage_offset() == 0, "features must have zero storage offset");
+            TORCH_CHECK(outDLossDMeans2d.storage_offset() == 0,
+                        "outDLossDMeans2d must have zero storage offset");
+            TORCH_CHECK(outDLossDConics.storage_offset() == 0,
+                        "outDLossDConics must have zero storage offset");
+            TORCH_CHECK(outDLossDFeatures.storage_offset() == 0,
+                        "outDLossDFeatures must have zero storage offset");
+            TORCH_CHECK(outDLossDOpacities.storage_offset() == 0,
+                        "outDLossDOpacities must have zero storage offset");
+
             nanovdb::util::cuda::memPrefetchAsync(
                 means2d.const_data_ptr<ScalarType>(), means2d.storage().nbytes(), deviceId, stream);
             nanovdb::util::cuda::memPrefetchAsync(
@@ -1329,6 +1342,8 @@ callRasterizeBackwardPrivateUse1(
                                                   deviceId,
                                                   stream);
             if (absGrad) {
+                TORCH_CHECK(outDLossDMeans2dAbs.storage_offset() == 0,
+                            "outDLossDMeans2dAbs must have zero storage offset");
                 nanovdb::util::cuda::memPrefetchAsync(
                     outDLossDMeans2dAbs.const_data_ptr<ScalarType>(),
                     outDLossDMeans2dAbs.storage().nbytes(),
