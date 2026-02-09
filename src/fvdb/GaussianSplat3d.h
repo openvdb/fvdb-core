@@ -57,7 +57,7 @@ class GaussianSplat3d {
         torch::Tensor perGaussianConic;          // [C, N, 3]
         torch::Tensor perGaussianRenderQuantity; // [C, N, 3]
         torch::Tensor perGaussianDepth;          // [C, N, 1]
-        torch::Tensor perGaussianOpacity;        // [N]
+        torch::Tensor perGaussianOpacity;        // [N] or [C, N] if antialias is true
         torch::Tensor perGaussianRadius;         // [C, N]
         torch::Tensor tileOffsets;               // [C, num_tiles_h, num_tiles_w, 2]
         torch::Tensor tileGaussianIds; // [C, num_tiles_h, num_tiles_w, max_gaussians_per_tile]
