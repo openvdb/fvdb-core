@@ -1295,58 +1295,42 @@ callRasterizeBackwardPrivateUse1(
                 cudaStreamWaitEvent(stream, events[deviceId - 1]);
             }
 
-            // We use storage().nbytes() for prefetch sizes because some tensors (e.g.
-            // opacities) may be non-contiguous expanded views where numel() exceeds
-            // the actual underlying storage size. storage().nbytes() is only valid when
-            // storage_offset is zero; otherwise data_ptr + storage().nbytes() overshoots.
-            TORCH_CHECK(means2d.storage_offset() == 0, "means2d must have zero storage offset");
-            TORCH_CHECK(conics.storage_offset() == 0, "conics must have zero storage offset");
-            TORCH_CHECK(opacities.storage_offset() == 0, "opacities must have zero storage offset");
-            TORCH_CHECK(features.storage_offset() == 0, "features must have zero storage offset");
-            TORCH_CHECK(outDLossDMeans2d.storage_offset() == 0,
-                        "outDLossDMeans2d must have zero storage offset");
-            TORCH_CHECK(outDLossDConics.storage_offset() == 0,
-                        "outDLossDConics must have zero storage offset");
-            TORCH_CHECK(outDLossDFeatures.storage_offset() == 0,
-                        "outDLossDFeatures must have zero storage offset");
-            TORCH_CHECK(outDLossDOpacities.storage_offset() == 0,
-                        "outDLossDOpacities must have zero storage offset");
+            // Compute the number of bytes from data_ptr() to the end of the underlying
+            // storage. This safely handles both non-contiguous expanded views (where
+            // numel() exceeds actual storage) and sliced tensors with non-zero storage_offset.
+            auto prefetchBytes = [](const torch::Tensor &t) -> size_t {
+                return t.storage().nbytes() - t.storage_offset() * t.element_size();
+            };
 
             nanovdb::util::cuda::memPrefetchAsync(
-                means2d.const_data_ptr<ScalarType>(), means2d.storage().nbytes(), deviceId, stream);
+                means2d.const_data_ptr<ScalarType>(), prefetchBytes(means2d), deviceId, stream);
             nanovdb::util::cuda::memPrefetchAsync(
-                conics.const_data_ptr<ScalarType>(), conics.storage().nbytes(), deviceId, stream);
-            nanovdb::util::cuda::memPrefetchAsync(opacities.const_data_ptr<ScalarType>(),
-                                                  opacities.storage().nbytes(),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(features.const_data_ptr<ScalarType>(),
-                                                  features.storage().nbytes(),
-                                                  deviceId,
-                                                  stream);
+                conics.const_data_ptr<ScalarType>(), prefetchBytes(conics), deviceId, stream);
+            nanovdb::util::cuda::memPrefetchAsync(
+                opacities.const_data_ptr<ScalarType>(), prefetchBytes(opacities), deviceId, stream);
+            nanovdb::util::cuda::memPrefetchAsync(
+                features.const_data_ptr<ScalarType>(), prefetchBytes(features), deviceId, stream);
 
             nanovdb::util::cuda::memPrefetchAsync(outDLossDMeans2d.const_data_ptr<ScalarType>(),
-                                                  outDLossDMeans2d.storage().nbytes(),
+                                                  prefetchBytes(outDLossDMeans2d),
                                                   deviceId,
                                                   stream);
             nanovdb::util::cuda::memPrefetchAsync(outDLossDConics.const_data_ptr<ScalarType>(),
-                                                  outDLossDConics.storage().nbytes(),
+                                                  prefetchBytes(outDLossDConics),
                                                   deviceId,
                                                   stream);
             nanovdb::util::cuda::memPrefetchAsync(outDLossDFeatures.const_data_ptr<ScalarType>(),
-                                                  outDLossDFeatures.storage().nbytes(),
+                                                  prefetchBytes(outDLossDFeatures),
                                                   deviceId,
                                                   stream);
             nanovdb::util::cuda::memPrefetchAsync(outDLossDOpacities.const_data_ptr<ScalarType>(),
-                                                  outDLossDOpacities.storage().nbytes(),
+                                                  prefetchBytes(outDLossDOpacities),
                                                   deviceId,
                                                   stream);
             if (absGrad) {
-                TORCH_CHECK(outDLossDMeans2dAbs.storage_offset() == 0,
-                            "outDLossDMeans2dAbs must have zero storage offset");
                 nanovdb::util::cuda::memPrefetchAsync(
                     outDLossDMeans2dAbs.const_data_ptr<ScalarType>(),
-                    outDLossDMeans2dAbs.storage().nbytes(),
+                    prefetchBytes(outDLossDMeans2dAbs),
                     deviceId,
                     stream);
             }

@@ -515,27 +515,21 @@ launchRasterizeForwardKernels(
             TORCH_CHECK(conics.is_contiguous());
             TORCH_CHECK(features.is_contiguous());
 
-            // We use storage().nbytes() for prefetch sizes because some tensors (e.g.
-            // opacities) may be non-contiguous expanded views where numel() exceeds
-            // the actual underlying storage size. storage().nbytes() is only valid when
-            // storage_offset is zero; otherwise data_ptr + storage().nbytes() overshoots.
-            TORCH_CHECK(means2d.storage_offset() == 0, "means2d must have zero storage offset");
-            TORCH_CHECK(conics.storage_offset() == 0, "conics must have zero storage offset");
-            TORCH_CHECK(opacities.storage_offset() == 0, "opacities must have zero storage offset");
-            TORCH_CHECK(features.storage_offset() == 0, "features must have zero storage offset");
+            // Compute the number of bytes from data_ptr() to the end of the underlying
+            // storage. This safely handles both non-contiguous expanded views (where
+            // numel() exceeds actual storage) and sliced tensors with non-zero storage_offset.
+            auto prefetchBytes = [](const torch::Tensor &t) -> size_t {
+                return t.storage().nbytes() - t.storage_offset() * t.element_size();
+            };
 
             nanovdb::util::cuda::memPrefetchAsync(
-                means2d.const_data_ptr<ScalarType>(), means2d.storage().nbytes(), deviceId, stream);
+                means2d.const_data_ptr<ScalarType>(), prefetchBytes(means2d), deviceId, stream);
             nanovdb::util::cuda::memPrefetchAsync(
-                conics.const_data_ptr<ScalarType>(), conics.storage().nbytes(), deviceId, stream);
-            nanovdb::util::cuda::memPrefetchAsync(opacities.const_data_ptr<ScalarType>(),
-                                                  opacities.storage().nbytes(),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(features.const_data_ptr<ScalarType>(),
-                                                  features.storage().nbytes(),
-                                                  deviceId,
-                                                  stream);
+                conics.const_data_ptr<ScalarType>(), prefetchBytes(conics), deviceId, stream);
+            nanovdb::util::cuda::memPrefetchAsync(
+                opacities.const_data_ptr<ScalarType>(), prefetchBytes(opacities), deviceId, stream);
+            nanovdb::util::cuda::memPrefetchAsync(
+                features.const_data_ptr<ScalarType>(), prefetchBytes(features), deviceId, stream);
 
             // Thread blocks cooperatively cache a tile of Gaussians in shared memory
             const uint32_t sharedMem = getSharedMemRequirements<ScalarType>(tileSize);
