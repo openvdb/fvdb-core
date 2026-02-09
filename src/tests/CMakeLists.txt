@@ -150,6 +150,8 @@ ConfigureTest(GaussianSphericalHarmonicsForwardTest "GaussianSphericalHarmonicsF
 ConfigureTest(GaussianSphericalHarmonicsBackwardTest "GaussianSphericalHarmonicsBackwardTest.cpp")
 ConfigureTest(GaussianProjectionForwardTest "GaussianProjectionForwardTest.cpp")
 ConfigureTest(GaussianProjectionBackwardTest "GaussianProjectionBackwardTest.cpp")
+ConfigureTest(GaussianProjectionUTTest "GaussianProjectionUTTest.cpp")
+ConfigureTest(GaussianUtilsTest "GaussianUtilsTest.cu")
 ConfigureTest(GaussianRasterizeTopContributorsTest "GaussianRasterizeTopContributorsTest.cpp")
 ConfigureTest(GaussianRasterizeContributingGaussianIdsTest "GaussianRasterizeContributingGaussianIdsTest.cpp")
 ConfigureTest(GaussianMCMCAddNoiseTest "GaussianMCMCAddNoiseTest.cpp")

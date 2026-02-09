@@ -1307,7 +1307,7 @@ GridBatchImpl::deserializeV0(const torch::Tensor &serialized) {
     };
 
     TORCH_CHECK(serialized.scalar_type() == torch::kInt8, "Serialized data must be of type int8");
-    TORCH_CHECK(serialized.numel() >= sizeof(V01Header),
+    TORCH_CHECK(serialized.numel() >= static_cast<int64_t>(sizeof(V01Header)),
                 "Serialized data is too small to be a valid grid handle");
 
     const int8_t *serializedPtr = serialized.data_ptr<int8_t>();
@@ -1316,7 +1316,7 @@ GridBatchImpl::deserializeV0(const torch::Tensor &serialized) {
     TORCH_CHECK(header->magic == 0x0F0F0F0F0F0F0F0F,
                 "Serialized data is not a valid grid handle. Bad magic.");
     TORCH_CHECK(header->version == 0, "Serialized data is not a valid grid handle. Bad version.");
-    TORCH_CHECK(serialized.numel() == header->totalBytes,
+    TORCH_CHECK(static_cast<uint64_t>(serialized.numel()) == header->totalBytes,
                 "Serialized data is not a valid grid handle. Bad total bytes.");
 
     const uint64_t numGrids = header->numGrids;
@@ -1752,7 +1752,7 @@ GridBatchImpl::dilate(const int64_t dilationAmount) {
 c10::intrusive_ptr<GridBatchImpl>
 GridBatchImpl::dilate(const std::vector<int64_t> dilationAmount) {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(dilationAmount.size() == batchSize(),
+    TORCH_CHECK_VALUE(static_cast<int64_t>(dilationAmount.size()) == batchSize(),
                       "dilationAmount should have same size as batch size, got ",
                       dilationAmount.size(),
                       " != ",

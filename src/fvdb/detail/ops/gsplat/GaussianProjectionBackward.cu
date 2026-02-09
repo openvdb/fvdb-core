@@ -254,14 +254,17 @@ projectionBackwardKernel(const int32_t offset,
             atomicAdd_system(outDLossDCovars + 5, dLossDCovar[2][2]);
         }
     } else {
-        // Directly output gradients w.r.t. the quaternion and scale
+        // Directly output gradients w.r.t. the quaternion and log_scale
         const nanovdb::math::Mat3<T> &rotmat = quaternionToRotationMatrix<T>(quat);
 
-        auto [dLossDQuat, dLossDScale] = quaternionAndScaleToCovarianceVectorJacobianProduct<T>(
-            quat, scale, rotmat, dLossDCovar);
+        // ApplyLogScaleChainRule=true because this backward pass receives log_scales as input
+        // and must return dL/d(log_scale) gradients
+        auto [dLossDQuat, dLossDLogScale] =
+            quaternionAndScaleToCovarianceVectorJacobianProduct<T, true>(
+                quat, scale, rotmat, dLossDCovar);
 
         warpSum(dLossDQuat, warp_group_g);
-        warpSum(dLossDScale, warp_group_g);
+        warpSum(dLossDLogScale, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
             outDLossDQuats += gId * 4;
             outDLossDScales += gId * 3;
@@ -269,9 +272,9 @@ projectionBackwardKernel(const int32_t offset,
             atomicAdd_system(outDLossDQuats + 1, dLossDQuat[1]);
             atomicAdd_system(outDLossDQuats + 2, dLossDQuat[2]);
             atomicAdd_system(outDLossDQuats + 3, dLossDQuat[3]);
-            atomicAdd_system(outDLossDScales, dLossDScale[0]);
-            atomicAdd_system(outDLossDScales + 1, dLossDScale[1]);
-            atomicAdd_system(outDLossDScales + 2, dLossDScale[2]);
+            atomicAdd_system(outDLossDScales, dLossDLogScale[0]);
+            atomicAdd_system(outDLossDScales + 1, dLossDLogScale[1]);
+            atomicAdd_system(outDLossDScales + 2, dLossDLogScale[2]);
         }
     }
     if (outDLossDWorldToCamMatrices != nullptr) {

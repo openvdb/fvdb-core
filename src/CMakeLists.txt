@@ -116,6 +116,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/gsplat/GaussianMCMCRelocation.cu
     fvdb/detail/ops/gsplat/GaussianProjectionBackward.cu
     fvdb/detail/ops/gsplat/GaussianProjectionForward.cu
+    fvdb/detail/ops/gsplat/GaussianProjectionUT.cu
     fvdb/detail/ops/gsplat/GaussianProjectionJaggedBackward.cu
     fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeBackward.cu
@@ -208,6 +209,8 @@ target_compile_options(fvdb PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:
     "-Wno-unknown-pragmas"
     "-Wno-class-memaccess"
+    "-Wno-array-bounds"
+    "-Wno-stringop-overflow"
     "-fdiagnostics-color=always"
     "-DNANOVDB_USE_BLOSC"
     "-fvisibility=default"

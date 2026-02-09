@@ -47,7 +47,7 @@ evalShFunctionVJP(const int64_t degree,                     // degree of SH to b
 ) {
     T dLossDRenderQuantitiesLocal = dLossDRenderQuantities[c];
 
-    dLossDSh0Coeffs[gi][0][c] = T(0.2820947917738781) * dLossDRenderQuantitiesLocal;
+    gpuAtomicAdd(&dLossDSh0Coeffs[gi][0][c], T(0.2820947917738781) * dLossDRenderQuantitiesLocal);
 
     if (degree < 1) {
         return;
@@ -58,9 +58,11 @@ evalShFunctionVJP(const int64_t degree,                     // degree of SH to b
     const T z     = dir.z * inorm;
     T vX = 0.f, vY = 0.f, vZ = 0.f;
 
-    dLossDShNCoeffs[gi][0][c] = T(-0.48860251190292) * y * dLossDRenderQuantitiesLocal;
-    dLossDShNCoeffs[gi][1][c] = T(0.48860251190292) * z * dLossDRenderQuantitiesLocal;
-    dLossDShNCoeffs[gi][2][c] = T(-0.48860251190292) * x * dLossDRenderQuantitiesLocal;
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][0][c],
+                 T(-0.48860251190292) * y * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][1][c], T(0.48860251190292) * z * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][2][c],
+                 T(-0.48860251190292) * x * dLossDRenderQuantitiesLocal);
 
     if (dLossDViewDir != nullptr) {
         vX += T(-0.48860251190292) * coeffsN[gi][2][c] * dLossDRenderQuantitiesLocal;
@@ -74,20 +76,20 @@ evalShFunctionVJP(const int64_t degree,                     // degree of SH to b
         return;
     }
 
-    const T z2                = z * z;
-    const T fTmp0B            = T(-1.092548430592079) * z;
-    const T fC1               = x * x - y * y;
-    const T fS1               = 2.f * x * y;
-    const T pSH6              = (T(0.9461746957575601) * z2 - T(0.3153915652525201));
-    const T pSH7              = fTmp0B * x;
-    const T pSH5              = fTmp0B * y;
-    const T pSH8              = T(0.5462742152960395) * fC1;
-    const T pSH4              = T(0.5462742152960395) * fS1;
-    dLossDShNCoeffs[gi][3][c] = pSH4 * dLossDRenderQuantitiesLocal;
-    dLossDShNCoeffs[gi][4][c] = pSH5 * dLossDRenderQuantitiesLocal;
-    dLossDShNCoeffs[gi][5][c] = pSH6 * dLossDRenderQuantitiesLocal;
-    dLossDShNCoeffs[gi][6][c] = pSH7 * dLossDRenderQuantitiesLocal;
-    dLossDShNCoeffs[gi][7][c] = pSH8 * dLossDRenderQuantitiesLocal;
+    const T z2     = z * z;
+    const T fTmp0B = T(-1.092548430592079) * z;
+    const T fC1    = x * x - y * y;
+    const T fS1    = 2.f * x * y;
+    const T pSH6   = (T(0.9461746957575601) * z2 - T(0.3153915652525201));
+    const T pSH7   = fTmp0B * x;
+    const T pSH5   = fTmp0B * y;
+    const T pSH8   = T(0.5462742152960395) * fC1;
+    const T pSH4   = T(0.5462742152960395) * fS1;
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][3][c], pSH4 * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][4][c], pSH5 * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][5][c], pSH6 * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][6][c], pSH7 * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][7][c], pSH8 * dLossDRenderQuantitiesLocal);
 
     T fTmp0B_z, fC1_x, fC1_y, fS1_x, fS1_y, pSH6_z, pSH7_x, pSH7_z, pSH5_y, pSH5_z, pSH8_x, pSH8_y,
         pSH4_x, pSH4_y;
@@ -137,13 +139,13 @@ evalShFunctionVJP(const int64_t degree,                     // degree of SH to b
     const T pSH15  = T(-0.5900435899266435) * fC2;
     const T pSH9   = T(-0.5900435899266435) * fS2;
 
-    dLossDShNCoeffs[gi][8][c]  = pSH9 * dLossDRenderQuantitiesLocal;
-    dLossDShNCoeffs[gi][9][c]  = pSH10 * dLossDRenderQuantitiesLocal;
-    dLossDShNCoeffs[gi][10][c] = pSH11 * dLossDRenderQuantitiesLocal;
-    dLossDShNCoeffs[gi][11][c] = pSH12 * dLossDRenderQuantitiesLocal;
-    dLossDShNCoeffs[gi][12][c] = pSH13 * dLossDRenderQuantitiesLocal;
-    dLossDShNCoeffs[gi][13][c] = pSH14 * dLossDRenderQuantitiesLocal;
-    dLossDShNCoeffs[gi][14][c] = pSH15 * dLossDRenderQuantitiesLocal;
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][8][c], pSH9 * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][9][c], pSH10 * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][10][c], pSH11 * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][11][c], pSH12 * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][12][c], pSH13 * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][13][c], pSH14 * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][14][c], pSH15 * dLossDRenderQuantitiesLocal);
 
     T fTmp0C_z, fTmp1B_z, fC2_x, fC2_y, fS2_x, fS2_y, pSH12_z, pSH13_x, pSH13_z, pSH11_y, pSH11_z,
         pSH14_x, pSH14_y, pSH14_z, pSH10_x, pSH10_y, pSH10_z, pSH15_x, pSH15_y, pSH9_x, pSH9_y;
@@ -210,15 +212,15 @@ evalShFunctionVJP(const int64_t degree,                     // degree of SH to b
     const T pSH24  = T(0.6258357354491763) * fC3;
     const T pSH16  = T(0.6258357354491763) * fS3;
 
-    dLossDShNCoeffs[gi][15][c] = pSH16 * dLossDRenderQuantitiesLocal;
-    dLossDShNCoeffs[gi][16][c] = pSH17 * dLossDRenderQuantitiesLocal;
-    dLossDShNCoeffs[gi][17][c] = pSH18 * dLossDRenderQuantitiesLocal;
-    dLossDShNCoeffs[gi][18][c] = pSH19 * dLossDRenderQuantitiesLocal;
-    dLossDShNCoeffs[gi][19][c] = pSH20 * dLossDRenderQuantitiesLocal;
-    dLossDShNCoeffs[gi][20][c] = pSH21 * dLossDRenderQuantitiesLocal;
-    dLossDShNCoeffs[gi][21][c] = pSH22 * dLossDRenderQuantitiesLocal;
-    dLossDShNCoeffs[gi][22][c] = pSH23 * dLossDRenderQuantitiesLocal;
-    dLossDShNCoeffs[gi][23][c] = pSH24 * dLossDRenderQuantitiesLocal;
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][15][c], pSH16 * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][16][c], pSH17 * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][17][c], pSH18 * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][18][c], pSH19 * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][19][c], pSH20 * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][20][c], pSH21 * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][21][c], pSH22 * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][22][c], pSH23 * dLossDRenderQuantitiesLocal);
+    gpuAtomicAdd(&dLossDShNCoeffs[gi][23][c], pSH24 * dLossDRenderQuantitiesLocal);
 
     T fTmp0D_z, fTmp1C_z, fTmp2B_z, fC3_x, fC3_y, fS3_x, fS3_y, pSH20_z, pSH21_x, pSH21_z, pSH19_y,
         pSH19_z, pSH22_x, pSH22_y, pSH22_z, pSH18_x, pSH18_y, pSH18_z, pSH23_x, pSH23_y, pSH23_z,
@@ -365,7 +367,8 @@ computeShDiffuseOnlyBackward(
         return;
     }
 
-    outDLossDSh0Coeffs[gid][0][c] = T(0.2820947917738781) * dLossDRenderQuantities[cid][gid][c];
+    gpuAtomicAdd(&outDLossDSh0Coeffs[gid][0][c],
+                 T(0.2820947917738781) * dLossDRenderQuantities[cid][gid][c]);
 }
 
 } // namespace
