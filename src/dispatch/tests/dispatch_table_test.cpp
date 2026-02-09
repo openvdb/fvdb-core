@@ -1,284 +1,319 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+// Tests for dispatch_table: sparse subspace instantiation, select/try_select
+// with dispatch_set, functional update, and factory patterns.
+//
+#include "dispatch/detail/core_types.h"
 #include "dispatch/dispatch_table.h"
-#include "dispatch/types.h"
+#include "dispatch/with_value.h"
 
 #include <gtest/gtest.h>
 
 #include <stdexcept>
-#include <tuple>
 #include <type_traits>
 
 namespace dispatch {
 
-// Helper to reduce std::make_tuple boilerplate in tests
-template <typename... Ts>
-auto
-coord(Ts... vs) {
-    return std::make_tuple(vs...);
-}
+// ============================================================================
+// Test enums with unique value types
+// ============================================================================
 
-// =============================================================================
+enum class color { red, green, blue };
+enum class shape { circle, square, triangle };
+
+template <> struct type_label<color> {
+    static consteval auto
+    value() {
+        return fixed_label("test.color");
+    }
+};
+
+template <> struct type_label<shape> {
+    static consteval auto
+    value() {
+        return fixed_label("test.shape");
+    }
+};
+
+using color_axis = axis<color::red, color::green, color::blue>;
+using shape_axis = axis<shape::circle, shape::square, shape::triangle>;
+
+// ============================================================================
 // from_op: struct with static op() method
-// =============================================================================
+// ============================================================================
 
-// Test op struct: returns x*2 for tag<1>, x*3 for tag<2>, 0 otherwise.
-struct TestOp {
+struct test_op {
     template <typename Coord>
     static int
     op(Coord, int x) {
-        if constexpr (std::is_same_v<Coord, tag<1>>) {
+        if constexpr (with_value<Coord, color::red>) {
             return x * 2;
-        } else if constexpr (std::is_same_v<Coord, tag<2>>) {
+        } else if constexpr (with_value<Coord, color::green>) {
             return x * 3;
         }
         return 0;
     }
 };
 
-TEST(DispatchTable, FromOp) {
-    using Axis    = axis<1, 2, 3, 4, 5, 6, 7, 8>;
-    using Axes    = axes<Axis>;
-    using SubAxis = axis<1, 2, 5>;
-    using SubAxes = axes<SubAxis>;
-    using Table   = dispatch_table<Axes, int(int)>;
+TEST(DispatchTable, FromOpSelectInvoke) {
+    using TestAxes = axes<color_axis>;
+    using SubAxis  = axis<color::red, color::green>;
+    using SubAxes  = axes<SubAxis>;
+    using Table    = dispatch_table<TestAxes, int(int)>;
 
-    Table table(Table::from_op<TestOp>(), SubAxes{});
+    Table table("test_from_op", Table::from_op<test_op>(), SubAxes{});
 
-    EXPECT_EQ(table(coord(1), 5), 10); // 5 * 2
-    EXPECT_EQ(table(coord(2), 5), 15); // 5 * 3
-    EXPECT_EQ(table(coord(5), 5), 0);  // default
+    auto fn_red   = table.select(dispatch_set{color::red});
+    auto fn_green = table.select(dispatch_set{color::green});
 
-    // These should throw for all points not in the subspace
-    for (int i: {3, 4, 6, 7, 8}) {
-        EXPECT_THROW(table(coord(i), 5), std::runtime_error);
-    }
+    EXPECT_EQ(fn_red(5), 10);   // 5 * 2
+    EXPECT_EQ(fn_green(5), 15); // 5 * 3
 
-    // Also outside the original space
-    for (int i: {0, 9, 10}) {
-        EXPECT_THROW(table(coord(i), 5), std::runtime_error);
-    }
+    // blue is not in the subspace — should throw
+    EXPECT_THROW(table.select(dispatch_set{color::blue}), dispatch_lookup_error);
 }
 
-// =============================================================================
+TEST(DispatchTable, TrySelectReturnsNullptr) {
+    using TestAxes = axes<color_axis>;
+    using SubAxis  = axis<color::red>;
+    using SubAxes  = axes<SubAxis>;
+    using Table    = dispatch_table<TestAxes, int(int)>;
+
+    Table table("test_try", Table::from_op<test_op>(), SubAxes{});
+
+    auto fn = table.try_select(dispatch_set{color::red});
+    ASSERT_NE(fn, nullptr);
+    EXPECT_EQ(fn(5), 10);
+
+    auto fn_missing = table.try_select(dispatch_set{color::green});
+    EXPECT_EQ(fn_missing, nullptr);
+}
+
+// ============================================================================
 // from_visitor: wrap overloaded free functions
-// =============================================================================
+// ============================================================================
 
 int
-test_free_function(tag<1>, int x) {
+test_free_function(tag<color::red>, int x) {
     return x * 10;
 }
 int
-test_free_function(tag<2>, int x) {
+test_free_function(tag<color::green>, int x) {
     return x * 20;
 }
 
-template <int I>
+template <typename Tag>
+    requires tag_like<Tag>
 int
-test_free_function(tag<I>, int) {
+test_free_function(Tag, int x) {
     return 0;
 }
 
 TEST(DispatchTable, FromVisitor) {
-    using Axis    = axis<1, 2, 3, 4, 5, 6, 7, 8>;
-    using Axes    = axes<Axis>;
-    using SubAxis = axis<1, 2, 5>;
-    using SubAxes = axes<SubAxis>;
-    using Table   = dispatch_table<Axes, int(int)>;
+    using TestAxes = axes<color_axis>;
+    using SubAxis  = axis<color::red, color::green, color::blue>;
+    using SubAxes  = axes<SubAxis>;
+    using Table    = dispatch_table<TestAxes, int(int)>;
 
-    // Table defined over full Axes, but only instantiated for SubAxes
-    Table table(Table::from_visitor([](auto c, int x) { return test_free_function(c, x); }),
+    Table table("test_visitor",
+                Table::from_visitor([](auto c, int x) { return test_free_function(c, x); }),
                 SubAxes{});
 
-    EXPECT_EQ(table(coord(1), 3), 30); // 3 * 10
-    EXPECT_EQ(table(coord(2), 3), 60); // 3 * 20
-    EXPECT_EQ(table(coord(5), 3), 0);  // default
-
-    // These should throw for points not in the subspace
-    for (int i: {3, 4, 6, 7, 8}) {
-        EXPECT_THROW(table(coord(i), 3), std::runtime_error);
-    }
-
-    // Also outside the original space
-    for (int i: {0, 9, 10}) {
-        EXPECT_THROW(table(coord(i), 3), std::runtime_error);
-    }
+    EXPECT_EQ(table.select(dispatch_set{color::red})(3), 30);   // 3 * 10
+    EXPECT_EQ(table.select(dispatch_set{color::green})(3), 60); // 3 * 20
+    EXPECT_EQ(table.select(dispatch_set{color::blue})(3), 0);   // default
 }
 
-TEST(DispatchTable, ThrowsForMissingCoordinates) {
-    using A     = axis<1, 2>;
-    using Axes  = axes<A>;
-    using Table = dispatch_table<Axes, int()>;
+// ============================================================================
+// Multi-axis dispatch
+// ============================================================================
+
+struct multi_axis_op {
+    template <typename Tag>
+    static int
+    op(Tag) {
+        if constexpr (with_value<Tag, color::red> && with_value<Tag, shape::circle>) {
+            return 1;
+        } else if constexpr (with_value<Tag, color::green> && with_value<Tag, shape::square>) {
+            return 2;
+        } else {
+            return 0;
+        }
+    }
+};
+
+TEST(DispatchTable, MultiAxisSelectWithDispatchSet) {
+    using TestAxes = axes<color_axis, shape_axis>;
+    using Table    = dispatch_table<TestAxes, int()>;
+
+    // Only instantiate a subset
+    using SubAxes = axes<axis<color::red, color::green>, axis<shape::circle, shape::square>>;
+    Table table("multi_axis", Table::from_op<multi_axis_op>(), SubAxes{});
+
+    // Order doesn't matter in dispatch_set — matched by type
+    EXPECT_EQ(table.select(dispatch_set{color::red, shape::circle})(), 1);
+    EXPECT_EQ(table.select(dispatch_set{shape::circle, color::red})(), 1); // reversed order
+    EXPECT_EQ(table.select(dispatch_set{color::green, shape::square})(), 2);
+
+    // Not in subspace
+    EXPECT_THROW(table.select(dispatch_set{color::blue, shape::circle}), dispatch_lookup_error);
+    EXPECT_THROW(table.select(dispatch_set{color::red, shape::triangle}), dispatch_lookup_error);
+}
+
+// ============================================================================
+// Functional update (with)
+// ============================================================================
+
+TEST(DispatchTable, WithReturnsNewTable) {
+    using TestAxes = axes<color_axis>;
+    using Table    = dispatch_table<TestAxes, int()>;
+
+    auto factory1 = [](auto) -> int (*)() { return []() { return 10; }; };
+    auto factory2 = [](auto) -> int (*)() { return []() { return 20; }; };
+
+    Table table1("with_test", factory1, axes<axis<color::red>>{});
+    Table table2 = table1.with(factory2, axes<axis<color::green>>{});
+
+    // table1 only has red
+    EXPECT_EQ(table1.select(dispatch_set{color::red})(), 10);
+    EXPECT_THROW(table1.select(dispatch_set{color::green}), dispatch_lookup_error);
+
+    // table2 has both
+    EXPECT_EQ(table2.select(dispatch_set{color::red})(), 10);   // inherited
+    EXPECT_EQ(table2.select(dispatch_set{color::green})(), 20); // added
+}
+
+TEST(DispatchTable, OriginalUnchangedAfterWith) {
+    using TestAxes = axes<color_axis>;
+    using Table    = dispatch_table<TestAxes, int()>;
+
+    auto factory1 = [](auto) -> int (*)() { return []() { return 100; }; };
+    auto factory2 = [](auto) -> int (*)() { return []() { return 200; }; };
+
+    Table table1("unchanged_test", factory1, axes<color_axis>{});
+    Table table2 = table1.with(factory2, axes<color_axis>{});
+
+    EXPECT_EQ(table1.select(dispatch_set{color::red})(), 100);
+    EXPECT_EQ(table2.select(dispatch_set{color::red})(), 200);
+}
+
+// ============================================================================
+// Single tag coordinate
+// ============================================================================
+
+TEST(DispatchTable, SingleTagCoordinate) {
+    using TestAxes = axes<color_axis, shape_axis>;
+    using Table    = dispatch_table<TestAxes, int()>;
 
     auto factory = [](auto) -> int (*)() { return []() { return 42; }; };
 
-    Table table(factory, Axes{});
+    // Instantiate a single point
+    Table table("single_tag", factory, tag<color::red, shape::circle>{});
 
-    EXPECT_EQ(table(coord(1)), 42);
-
-    // Invalid coordinate - should throw
-    EXPECT_THROW(table(coord(99)), std::runtime_error);
+    EXPECT_EQ(table.select(dispatch_set{color::red, shape::circle})(), 42);
+    EXPECT_THROW(table.select(dispatch_set{color::red, shape::square}), dispatch_lookup_error);
+    EXPECT_THROW(table.select(dispatch_set{color::green, shape::circle}), dispatch_lookup_error);
 }
 
-// =============================================================================
-// Functional update
-// =============================================================================
-
-TEST(DispatchTable, WithReturnsNewTable) {
-    using Axis     = axis<1, 2, 3, 4, 5, 6, 7, 8>;
-    using Axes     = axes<Axis>;
-    using SubAxis1 = axis<3, 4>;
-    using SubAxes1 = axes<SubAxis1>;
-    using SubAxis2 = axis<1, 2, 3, 5>;
-    using SubAxes2 = axes<SubAxis2>;
-    using Table    = dispatch_table<Axes, int()>;
-
-    auto factory1 = [](auto) -> int (*)() { return []() { return 10; }; };
-    Table table1(factory1, SubAxes1{});
-
-    auto factory2 = [](auto c) -> int (*)() {
-        if constexpr (std::is_same_v<decltype(c), tag<1>>) {
-            return []() { return 10; };
-        } else if constexpr (std::is_same_v<decltype(c), tag<2>>) {
-            return []() { return 20; };
-        } else {
-            return nullptr;
-        }
-    };
-
-    Table table2 = table1.with(factory2, SubAxes2{});
-
-    // table1: {3,4}->10, table2: inherits 4->10, adds 1->10, 2->20, overwrites 3&5 with nullptr
-    EXPECT_EQ(table1(coord(3)), 10);
-    EXPECT_EQ(table1(coord(4)), 10);
-    for (int i: {1, 2, 5, 6, 7, 8}) {
-        EXPECT_THROW(table1(coord(i)), std::runtime_error);
-    }
-
-    // Table 2: 1->10, 2->20, 4->10 (inherited), 3&5 throw (nullptr), 6-8 throw (missing)
-    EXPECT_EQ(table2(coord(1)), 10);
-    EXPECT_EQ(table2(coord(2)), 20);
-    EXPECT_EQ(table2(coord(4)), 10);
-    for (int i: {3, 5, 6, 7, 8}) {
-        EXPECT_THROW(table2(coord(i)), std::runtime_error);
-    }
-}
-
-TEST(DispatchTable, OriginalTableUnchangedAfterWith) {
-    using A     = axis<1, 2>;
-    using Axes  = axes<A>;
-    using Table = dispatch_table<Axes, int()>;
-
-    auto factory1 = [](auto) -> int (*)() { return []() { return 100; }; };
-    Table table1(factory1, Axes{});
-
-    auto factory2 = [](auto) -> int (*)() { return []() { return 200; }; };
-
-    Table table2 = table1.with(factory2, Axes{});
-
-    // Original should still have original values
-    EXPECT_EQ(table1(coord(1)), 100);
-    EXPECT_EQ(table1(coord(2)), 100);
-
-    // New table should have new values
-    EXPECT_EQ(table2(coord(1)), 200);
-    EXPECT_EQ(table2(coord(2)), 200);
-}
-
-// =============================================================================
-// Subspaces
-// =============================================================================
-
-TEST(DispatchTable, TablesBuiltFromSubspaces) {
-    using A1       = axis<1, 2>;
-    using A2       = axis<3, 4>;
-    using FullAxes = axes<A1, A2>;
-
-    // Subspace: only A1=1
-    using SubA1   = axis<1>;
-    using SubAxes = axes<SubA1, A2>;
-
-    using Table = dispatch_table<FullAxes, int()>;
-
-    int call_count = 0;
-    auto factory   = [&call_count](auto) -> int (*)() {
-        ++call_count;
-        return []() { return 42; };
-    };
-
-    Table table(factory, SubAxes{});
-
-    // Should only have called factory for 2 coordinates (1 * 2 = 2)
-    EXPECT_EQ(call_count, 2);
-
-    // Should be able to dispatch to those coordinates
-    EXPECT_EQ(table(coord(1, 3)), 42);
-    EXPECT_EQ(table(coord(1, 4)), 42);
-
-    // Should not be able to dispatch to coordinates not in subspace
-    EXPECT_THROW(table(coord(2, 3)), std::runtime_error);
-}
-
-TEST(DispatchTable, OnlyValidCombinationsInstantiated) {
-    using A1       = axis<1, 2>;
-    using A2       = axis<3, 4>;
-    using FullAxes = axes<A1, A2>;
-
-    using Table = dispatch_table<FullAxes, int()>;
-
-    int call_count = 0;
-    auto factory   = [&call_count](auto) -> int (*)() {
-        ++call_count;
-        return []() { return 42; };
-    };
-
-    Table table(factory, tag<1, 3>{});
-
-    // Should only have called factory once
-    EXPECT_EQ(call_count, 1);
-
-    // Should be able to dispatch to that coordinate
-    EXPECT_EQ(table(coord(1, 3)), 42);
-
-    // Should not be able to dispatch to other coordinates
-    EXPECT_THROW(table(coord(1, 4)), std::runtime_error);
-    EXPECT_THROW(table(coord(2, 3)), std::runtime_error);
-}
-
-// =============================================================================
+// ============================================================================
 // Multiple arguments
-// =============================================================================
+// ============================================================================
 
 TEST(DispatchTable, MultipleArguments) {
-    using A     = axis<1, 2>;
-    using Axes  = axes<A>;
-    using Table = dispatch_table<Axes, int(int, int)>;
+    using TestAxes = axes<color_axis>;
+    using Table    = dispatch_table<TestAxes, int(int, int)>;
 
     auto factory = [](auto c) -> int (*)(int, int) {
-        if constexpr (std::is_same_v<decltype(c), tag<1>>) {
+        if constexpr (std::is_same_v<decltype(c), tag<color::red>>) {
             return [](int a, int b) { return a + b; };
         } else {
             return [](int a, int b) { return a * b; };
         }
     };
 
-    Table table(factory, Axes{});
+    Table table("multi_args", factory, axes<color_axis>{});
 
-    EXPECT_EQ(table(coord(1), 3, 4), 7);  // 3 + 4
-    EXPECT_EQ(table(coord(2), 3, 4), 12); // 3 * 4
+    EXPECT_EQ(table.select(dispatch_set{color::red})(3, 4), 7);    // 3 + 4
+    EXPECT_EQ(table.select(dispatch_set{color::green})(3, 4), 12); // 3 * 4
 }
 
-TEST(DispatchTable, NoArguments) {
-    using A     = axis<1>;
-    using Axes  = axes<A>;
-    using Table = dispatch_table<Axes, int()>;
+// ============================================================================
+// Table name
+// ============================================================================
 
-    auto factory = [](auto) -> int (*)() { return []() { return 42; }; };
+TEST(DispatchTable, NameAccessor) {
+    using TestAxes = axes<color_axis>;
+    using Table    = dispatch_table<TestAxes, int()>;
 
-    Table table(factory, Axes{});
+    Table table("my_table_name");
+    EXPECT_EQ(table.name(), "my_table_name");
+}
 
-    EXPECT_EQ(table(coord(1)), 42);
+TEST(DispatchTable, ErrorMessageContainsName) {
+    using TestAxes = axes<color_axis>;
+    using Table    = dispatch_table<TestAxes, int()>;
+
+    Table table("test_error_name");
+
+    try {
+        table.select(dispatch_set{color::red});
+        FAIL() << "Expected dispatch_lookup_error";
+    } catch (dispatch_lookup_error const &e) {
+        std::string msg = e.what();
+        EXPECT_TRUE(msg.find("test_error_name") != std::string::npos)
+            << "Error message should contain table name, got: " << msg;
+    }
+}
+
+// ============================================================================
+// dispatch_table_from_op
+// ============================================================================
+
+struct simple_op {
+    template <typename Coord>
+    static int
+    op(Coord, int x) {
+        // Vary behavior based on which coordinate was dispatched
+        if constexpr (with_value<Coord, color::red> && with_value<Coord, shape::circle>) {
+            return x * 10;  // red circle: scale by 10
+        } else if constexpr (with_value<Coord, color::red>) {
+            return x + 100; // red non-circle: offset
+        } else if constexpr (with_value<Coord, shape::triangle>) {
+            return -x;      // any triangle: negate
+        } else {
+            return x;       // identity fallback
+        }
+    }
+
+    using space = axes<color_axis, shape_axis>;
+    using subspaces =
+        coverage<axes<axis<color::red>, shape_axis>,             // red × all shapes
+                 axes<axis<color::green>, axis<shape::triangle>> // green triangle only
+                 >;
+    using dispatcher = dispatch_table<space, int(int)>;
+};
+
+TEST(DispatchTableFromOp, MultiAxisWithSparseCoverage) {
+    auto table = dispatch_table_from_op<simple_op>("simple_op");
+
+    // red + circle: x * 10
+    EXPECT_EQ(table.select(dispatch_set{color::red, shape::circle})(5), 50);
+
+    // red + square: x + 100  (red non-circle path)
+    EXPECT_EQ(table.select(dispatch_set{color::red, shape::square})(5), 105);
+
+    // red + triangle: x + 100  (red takes priority over triangle)
+    EXPECT_EQ(table.select(dispatch_set{color::red, shape::triangle})(5), 105);
+
+    // green + triangle: -x  (triangle path)
+    EXPECT_EQ(table.select(dispatch_set{shape::triangle, color::green})(7), -7);
+
+    // green + circle is NOT in coverage — should throw
+    EXPECT_THROW(table.select(dispatch_set{color::green, shape::circle}), dispatch_lookup_error);
+
+    // blue is entirely absent from coverage
+    EXPECT_THROW(table.select(dispatch_set{color::blue, shape::square}), dispatch_lookup_error);
 }
 
 } // namespace dispatch

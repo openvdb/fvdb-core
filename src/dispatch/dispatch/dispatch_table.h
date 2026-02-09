@@ -5,27 +5,48 @@
 // Supports sparse instantiation via subspaces, with factory patterns
 // (from_op<Op>() / from_visitor()) for populating entries.
 //
+// Dispatch separates "select" from "invoke":
+//   auto fn = table.select(dispatch_set{dev, stype, contig});
+//   fn(input, output);
+//
 #ifndef DISPATCH_DISPATCH_DISPATCH_TABLE_H
 #define DISPATCH_DISPATCH_DISPATCH_TABLE_H
 
-#include "dispatch/axes_map.h"
-#include "dispatch/detail.h"
-#include "dispatch/types.h"
+#include "dispatch/detail/axes_map.h"
+#include "dispatch/detail/index_math.h"
 
-#include <functional>
 #include <memory>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 
 namespace dispatch {
 
 //------------------------------------------------------------------------------
+// dispatch_set: curly-brace constructible runtime dispatch coordinates
+//------------------------------------------------------------------------------
+
+template <typename... Ts> struct dispatch_set {
+    std::tuple<Ts...> values;
+
+    constexpr dispatch_set(Ts... args) : values{args...} {}
+
+    template <typename T>
+    constexpr T const &
+    get() const {
+        return std::get<T>(values);
+    }
+};
+
+// CTAD
+template <typename... Ts> dispatch_set(Ts...) -> dispatch_set<Ts...>;
+
+//------------------------------------------------------------------------------
 // Exception for dispatch lookup failures
 //------------------------------------------------------------------------------
 
-// Exception thrown when dispatch lookup fails (coordinate not in space or no handler).
-// This allows callers to distinguish dispatch failures from other runtime errors.
 class dispatch_lookup_error : public std::runtime_error {
   public:
     using std::runtime_error::runtime_error;
@@ -35,21 +56,20 @@ class dispatch_lookup_error : public std::runtime_error {
 // Sparse dispatch table
 //------------------------------------------------------------------------------
 
-// Sparse dispatch table: only instantiates entries for declared subspaces.
-// Runtime dispatch via operator() throws dispatch_lookup_error if coordinate not found.
 template <typename Axes, typename FunctionSignature> class dispatch_table;
 
 template <typename... Axes, typename ReturnType, typename... Args>
-class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
+class dispatch_table<axes_storage<Axes...>, ReturnType(Args...)> {
   public:
-    using axes_type             = axes<Axes...>;
+    using axes_type             = axes_storage<Axes...>;
     using return_type           = ReturnType;
     using function_pointer_type = ReturnType (*)(Args...);
     using coord_tuple_type      = value_tuple_type_t<axes_type>;
     using map_type              = axes_map<axes_type, function_pointer_type>;
 
     // Default constructor - empty table
-    dispatch_table() : _data(std::make_shared<map_type const>()) {}
+    explicit dispatch_table(std::string_view name)
+        : _name(name), _data(std::make_shared<map_type const>()) {}
 
     // Rule of zero - all default (shared_ptr handles everything)
     dispatch_table(dispatch_table const &)            = default;
@@ -58,16 +78,13 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
     dispatch_table &operator=(dispatch_table &&)      = default;
     ~dispatch_table()                                 = default;
 
-    // Initial construction with factory and coordinates or subspaces
+    // Construction with name, factory, and coordinates or subspaces
     template <typename Factory, typename... Subs>
-    explicit dispatch_table(Factory &&factory, Subs... subs) {
+    explicit dispatch_table(std::string_view name, Factory &&factory, Subs... subs) : _name(name) {
         static_assert((within<Subs, axes_type> && ... && true), "Subs must be within the axes");
 
-        // Can't put it in _data just yet, because _data is const.
         auto mutable_data = std::make_unique<map_type>();
         create_and_store(*mutable_data, factory, subs...);
-
-        // Then we make it shared to const
         _data = std::shared_ptr<map_type const>{std::move(mutable_data)};
     }
 
@@ -77,34 +94,42 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
     with(Factory &&factory, Subs... subs) const {
         static_assert((within<Subs, axes_type> && ... && true), "Subs must be within the axes");
 
-        // We make a mutable copy of the map data first, that we can modify.
         auto mutable_data = std::make_unique<map_type>(*_data);
         create_and_store(*mutable_data, factory, subs...);
 
-        // Then we convert it to shared const
         std::shared_ptr<map_type const> const_data{std::move(mutable_data)};
-
-        // And move it along.
-        return dispatch_table(const_data);
+        return dispatch_table(_name, const_data);
     }
 
-    // Runtime dispatch: looks up coordinate and invokes registered handler.
-    // Throws dispatch_lookup_error if coordinate not found or handler is null.
-    return_type
-    operator()(coord_tuple_type const &coord_tuple, Args... args) const {
-        auto const it = _data->find(coord_tuple);
-        if (it == _data->end()) {
-            throw dispatch_lookup_error("Dispatch failed: coordinate not in space");
-        }
-        if (it->second == nullptr) {
-            throw dispatch_lookup_error("Dispatch failed: no handler registered for coordinate");
-        }
-        function_pointer_type fptr = it->second;
-        return fptr(args...);
+    // ---- select / try_select ----
+    // Takes a dispatch_set, matches values to axes by type, and looks up
+    // the corresponding function pointer.
+
+    // select: returns function pointer, throws on failure.
+    template <typename... Ts>
+    function_pointer_type
+    select(dispatch_set<Ts...> const &ds) const {
+        auto const coord = reorder_dispatch_set(ds);
+        return select_canonical(coord);
     }
 
-    // Factory for struct-based dispatch: Op must have static op(tag<...>, args...)
-    // overloads matching the dispatch space coordinates.
+    // try_select: returns function pointer or nullptr on failure.
+    template <typename... Ts>
+    function_pointer_type
+    try_select(dispatch_set<Ts...> const &ds) const {
+        auto const coord = reorder_dispatch_set(ds);
+        return try_select_canonical(coord);
+    }
+
+    // ---- Name accessor ----
+
+    std::string_view
+    name() const {
+        return _name;
+    }
+
+    // ---- Factories ----
+
     template <typename Op>
     static auto
     from_op() {
@@ -114,35 +139,6 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
         };
     }
 
-    // Factory for visitor-based dispatch: creates dispatch entries from a visitor type.
-    //
-    // IMPORTANT: The visitor instance is used ONLY for type deduction. A fresh
-    // Visitor{} is default-constructed for each dispatch call. This means:
-    //   - Capturing lambdas are NOT supported (they aren't default-constructible)
-    //   - Stateful visitors will lose their state
-    //   - Only stateless, default-constructible visitors work correctly
-    //
-    // This design enables the std::visit "overloaded" idiom (C++20):
-    //
-    //   // Helper type for combining multiple lambdas into one visitor
-    //   template<class... Ts>
-    //   struct overloaded : Ts... { using Ts::operator()...; };
-    //
-    //   // Usage with dispatch_table (analogous to std::visit):
-    //   auto table = dispatch_table<MyAxes, void(int)>(
-    //       dispatch_table<MyAxes, void(int)>::from_visitor(overloaded{
-    //           [](tag<A>, int x) { /* handle A */ },
-    //           [](tag<B>, int x) { /* handle B */ },
-    //           [](auto, int x)   { /* fallback */ }
-    //       }),
-    //       full_space<MyAxes>
-    //   );
-    //
-    // In C++20, non-capturing lambdas are default-constructible, so the
-    // overloaded type inheriting from them is also default-constructible.
-    //
-    // See: https://en.cppreference.com/w/cpp/utility/variant/visit
-    //
     template <typename Visitor>
     static auto
     from_visitor(Visitor) {
@@ -158,10 +154,12 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
     }
 
   private:
+    std::string _name;
     std::shared_ptr<map_type const> _data;
 
     // Private constructor for internal use (from with())
-    explicit dispatch_table(std::shared_ptr<map_type const> data) : _data(data) {}
+    explicit dispatch_table(std::string_view name, std::shared_ptr<map_type const> data)
+        : _name(name), _data(data) {}
 
     template <typename Op, typename Coord>
     static return_type
@@ -174,7 +172,69 @@ class dispatch_table<axes<Axes...>, ReturnType(Args...)> {
     visitor_call(Args... args) {
         return Visitor{}(Coord{}, args...);
     }
+
+    // ---- internal lookup by canonically ordered tuple ----
+
+    function_pointer_type
+    select_canonical(coord_tuple_type const &coord_tuple) const {
+        auto const it = _data->find(coord_tuple);
+        if (it == _data->end()) {
+            throw dispatch_lookup_error(std::string(_name) +
+                                        ": dispatch failed — coordinate not in space");
+        }
+        if (it->second == nullptr) {
+            throw dispatch_lookup_error(std::string(_name) +
+                                        ": dispatch failed — no handler registered");
+        }
+        return it->second;
+    }
+
+    function_pointer_type
+    try_select_canonical(coord_tuple_type const &coord_tuple) const {
+        auto const it = _data->find(coord_tuple);
+        if (it == _data->end()) {
+            return nullptr;
+        }
+        return it->second;
+    }
+
+    // Reorder dispatch_set values to match axes order.
+    template <typename... Ts>
+    static coord_tuple_type
+    reorder_dispatch_set(dispatch_set<Ts...> const &ds) {
+        return std::make_tuple(ds.template get<axis_value_type_t<Axes>>()...);
+    }
 };
+
+//------------------------------------------------------------------------------
+// coverage
+//------------------------------------------------------------------------------
+
+template <typename... Subs> struct coverage {};
+
+//------------------------------------------------------------------------------
+// dispatch_table_from_op
+//------------------------------------------------------------------------------
+
+namespace detail {
+
+template <typename Op, typename Coverage> struct dispatch_table_from_op_helper;
+
+template <typename Op, typename... Subs>
+struct dispatch_table_from_op_helper<Op, coverage<Subs...>> {
+    static typename Op::dispatcher
+    create(std::string_view name) {
+        return typename Op::dispatcher{name, Op::dispatcher::template from_op<Op>(), Subs{}...};
+    }
+};
+
+} // namespace detail
+
+template <typename Op>
+typename Op::dispatcher
+dispatch_table_from_op(std::string_view name) {
+    return detail::dispatch_table_from_op_helper<Op, typename Op::subspaces>::create(name);
+}
 
 } // namespace dispatch
 

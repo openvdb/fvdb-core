@@ -9,17 +9,17 @@
 // (CPU/CUDA) and floating-point scalar types (float16, bfloat16, float, double).
 //
 // THE DISPATCH PATTERN:
-//   1. Define a struct (relu_op_t) containing static `op` member function templates.
+//   1. Define a struct (relu_op) containing static `op` member function templates.
 //   2. Each `op` overload takes a tag<...> as its first argument, which encodes compile-time
 //      information about the dispatch coordinate (device type, scalar type, etc.).
 //   3. Declare a `space` type alias that defines all possible dispatch coordinates as a Cartesian
 //      product of value axes. Here: torch_cpu_cuda_device_axis × torch_full_float_stype_axis = 2 ×
 //      4 = 8 points.
 //   4. Declare a `dispatcher` type alias that combines the space with the function signature.
-//   5. At the call site, create a static dispatch table using `from_op<relu_op_t>()` which
-//      automatically instantiates `relu_op_t::op` for every point in the space.
-//   6. Call `torch_dispatch(name, table, coord, args...)` which looks up the runtime coordinate
-//      in the table and invokes the corresponding compile-time instantiation.
+//   5. At the call site, create a static dispatch table using `from_op<relu_op>()` which
+//      automatically instantiates `relu_op::op` for every point in the space.
+//   6. Call `table.select(dispatch_set{dev, st})(args...)` which looks up the runtime
+//      coordinate in the table and invokes the corresponding compile-time instantiation.
 //
 // HOW TAG DISPATCH WORKS:
 //   The tag<torch::kCPU, stype> and tag<torch::kCUDA, stype> overloads are distinguished by the
@@ -30,7 +30,7 @@
 //   - tag<DeviceType, ScalarType, ...>: A compile-time coordinate in the dispatch space.
 //   - axes<axis1, axis2, ...>: Cartesian product of value sets defining the full space.
 //   - dispatch_table<space, signature>: Maps runtime coordinates to function pointers.
-//   - torch_dispatch(): Validates the coordinate and calls the appropriate instantiation.
+//   - table.select(dispatch_set{...}): Validates the coordinate and returns the function pointer.
 //
 // This example is intentionally minimal. For more complex dispatch with multiple axes, partial
 // coverage, and algorithm selection based on constraints, see functional.cu and op.cu.
@@ -64,9 +64,8 @@
 #include "examples/relu.h"
 
 #include "dispatch/dispatch_table.h"
-#include "dispatch/torch.h"
-#include "dispatch/torch_types.h"
-#include "dispatch/types.h"
+#include "dispatch/torch/dispatch.h"
+#include "dispatch/torch/types.h"
 
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -115,11 +114,12 @@ relu_kernel(torch::PackedTensorAccessor64<T, 1> input, torch::PackedTensorAccess
     }
 }
 
-struct relu_op_t {
-    template <torch::ScalarType stype>
+struct relu_op {
+    template <typename Tag>
+        requires with_value<Tag, torch::kCPU> && with_type<Tag, torch::ScalarType>
     static void
-    op(tag<torch::kCPU, stype>, torch::Tensor input, torch::Tensor output) {
-        using T = torch_scalar_cpp_type_t<stype>;
+    op(Tag, torch::Tensor input, torch::Tensor output) {
+        using T = torch_scalar_cpp_type<Tag>;
 
         auto input_accessor  = input.accessor<T, 1>();
         auto output_accessor = output.accessor<T, 1>();
@@ -131,10 +131,11 @@ struct relu_op_t {
         }
     }
 
-    template <torch::ScalarType stype>
+    template <typename Tag>
+        requires with_value<Tag, torch::kCUDA> && with_type<Tag, torch::ScalarType>
     static void
-    op(tag<torch::kCUDA, stype>, torch::Tensor input, torch::Tensor output) {
-        using T = torch_scalar_cpp_type_t<stype>;
+    op(Tag, torch::Tensor input, torch::Tensor output) {
+        using T = torch_scalar_cpp_type<Tag>;
 
         c10::cuda::CUDAGuard device_guard(input.device());
         cudaStream_t stream = at::cuda::getCurrentCUDAStream().stream();
@@ -150,13 +151,13 @@ struct relu_op_t {
     }
 
     using space      = axes<torch_cpu_cuda_device_axis, torch_full_float_stype_axis>;
+    using subspaces  = coverage<space>;
     using dispatcher = dispatch_table<space, void(torch::Tensor, torch::Tensor)>;
 };
 
 torch::Tensor
 example_relu_impl(torch::Tensor input, placement plc) {
-    static relu_op_t::dispatcher const table{relu_op_t::dispatcher::from_op<relu_op_t>(),
-                                             relu_op_t::space{}};
+    static auto const table = dispatch_table_from_op<relu_op>("example_relu");
 
     // Validate input rank
     TORCH_CHECK_VALUE(input.dim() == 1, "example_relu: expected 1D tensor, got ", input.dim(), "D");
@@ -175,8 +176,8 @@ example_relu_impl(torch::Tensor input, placement plc) {
     auto const dev = input.device().type();
     auto const st  = input.scalar_type();
 
-    auto const dispatch_coord = std::make_tuple(dev, st);
-    torch_dispatch("example_relu", table, dispatch_coord, input, output);
+    auto const fn = table.select(dispatch_set{dev, st});
+    fn(input, output);
 
     return output;
 }

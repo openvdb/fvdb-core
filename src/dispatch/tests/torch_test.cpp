@@ -1,16 +1,18 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+// Tests for torch dispatch utilities: type mappings, axes, stringification,
+// contiguity helpers, and device concepts.
+//
 #include "dispatch/dispatch_table.h"
-#include "dispatch/torch.h"
-#include "dispatch/torch_types.h"
+#include "dispatch/torch/dispatch.h"
+#include "dispatch/torch/types.h"
 
 #include <torch/torch.h>
 
 #include <gtest/gtest.h>
 
 #include <string>
-#include <tuple>
 #include <type_traits>
 
 namespace dispatch {
@@ -63,18 +65,17 @@ TEST(TorchDeviceAxes, FullDeviceAxis) {
 
 TEST(TorchScalarTypeAxes, FullFloatStypeAxis) {
     static_assert(is_axis_v<torch_full_float_stype_axis>());
-    static_assert(extent_v<torch_full_float_stype_axis>() ==
-                  4); // BFloat16, Float16, Float32, Float64
+    static_assert(extent_v<torch_full_float_stype_axis>() == 4);
 }
 
 TEST(TorchScalarTypeAxes, BuiltinFloatStypeAxis) {
     static_assert(is_axis_v<torch_builtin_float_stype_axis>());
-    static_assert(extent_v<torch_builtin_float_stype_axis>() == 2); // Float32, Float64
+    static_assert(extent_v<torch_builtin_float_stype_axis>() == 2);
 }
 
 TEST(TorchScalarTypeAxes, FullSignedIntStypeAxis) {
     static_assert(is_axis_v<torch_full_signed_int_stype_axis>());
-    static_assert(extent_v<torch_full_signed_int_stype_axis>() == 4); // Int8, Int16, Int32, Int64
+    static_assert(extent_v<torch_full_signed_int_stype_axis>() == 4);
 }
 
 TEST(TorchScalarTypeAxes, FullNumericStypeAxis) {
@@ -124,27 +125,7 @@ TEST(TorchRuntimeChecks, IsTorchFloatStype) {
 }
 
 // =============================================================================
-// torch_types.h - torch_concrete_tensor
-// =============================================================================
-
-TEST(TorchConcreteTensor, Construction) {
-    auto tensor =
-        torch::zeros({2, 3}, torch::TensorOptions().dtype(torch::kFloat).device(torch::kCPU));
-    torch_cpu_tensor<torch::kFloat, 2> ct(tensor);
-    EXPECT_EQ(ct.tensor.sizes(), tensor.sizes());
-}
-
-TEST(TorchConcreteTensor, ConvenienceAliases) {
-    static_assert(std::is_same_v<torch_cpu_tensor<torch::kFloat, 2>,
-                                 torch_concrete_tensor<torch::kCPU, torch::kFloat, 2>>);
-    static_assert(std::is_same_v<torch_cuda_tensor<torch::kFloat, 2>,
-                                 torch_concrete_tensor<torch::kCUDA, torch::kFloat, 2>>);
-    static_assert(std::is_same_v<torch_pvt1_tensor<torch::kFloat, 2>,
-                                 torch_concrete_tensor<torch::kPrivateUse1, torch::kFloat, 2>>);
-}
-
-// =============================================================================
-// torch.h - Stringification
+// dispatch.h - Stringification
 // =============================================================================
 
 TEST(TorchCoordToString, DeviceType) {
@@ -182,12 +163,11 @@ TEST(TorchFormatDispatchCoords, MultipleCoordinates) {
     auto coords   = std::make_tuple(torch::kCPU, torch::kFloat, placement::in_place);
     std::string s = torch_format_dispatch_coords(coords);
     EXPECT_FALSE(s.empty());
-    // Should contain commas
     EXPECT_TRUE(s.find(',') != std::string::npos);
 }
 
 // =============================================================================
-// torch.h - Contiguity extraction
+// dispatch.h - Contiguity extraction
 // =============================================================================
 
 TEST(TorchGetContiguity, ContiguousTensor) {
@@ -197,11 +177,7 @@ TEST(TorchGetContiguity, ContiguousTensor) {
 }
 
 TEST(TorchGetContiguity, StridedTensor) {
-    auto tensor  = torch::zeros({2, 3});
-    auto strided = tensor.slice(0, 0, 2, 1); // Should still be contiguous
-    EXPECT_EQ(torch_get_contiguity(strided), contiguity::contiguous);
-
-    // Create a truly strided tensor
+    auto tensor     = torch::zeros({2, 3});
     auto transposed = tensor.t();
     if (!transposed.is_contiguous()) {
         EXPECT_EQ(torch_get_contiguity(transposed), contiguity::strided);
@@ -209,57 +185,57 @@ TEST(TorchGetContiguity, StridedTensor) {
 }
 
 // =============================================================================
-// torch.h - Dispatch wrapper
+// dispatch.h - combined_contiguity
 // =============================================================================
 
-TEST(TorchDispatch, SuccessPath) {
-    using A     = axis<1>;
-    using Axes  = axes<A>;
-    using Table = dispatch_table<Axes, int()>;
+TEST(CombinedContiguity, AllContiguous) {
+    auto t1 = torch::zeros({2, 3});
+    auto t2 = torch::zeros({2, 3});
+    EXPECT_TRUE(t1.is_contiguous());
+    EXPECT_TRUE(t2.is_contiguous());
+    EXPECT_EQ(combined_contiguity(t1, t2), contiguity::contiguous);
+}
+
+TEST(CombinedContiguity, OneStrided) {
+    auto t1       = torch::zeros({2, 3});
+    auto t2       = torch::zeros({3, 2}).t();
+    bool strided2 = !t2.is_contiguous();
+    if (strided2) {
+        EXPECT_EQ(combined_contiguity(t1, t2), contiguity::strided);
+    }
+}
+
+TEST(CombinedContiguity, ThreeTensors) {
+    auto t1 = torch::zeros({2, 3});
+    auto t2 = torch::zeros({2, 3});
+    auto t3 = torch::zeros({2, 3});
+    EXPECT_EQ(combined_contiguity(t1, t2, t3), contiguity::contiguous);
+}
+
+// =============================================================================
+// dispatch.h - select with dispatch_set (replaces torch_dispatch)
+// =============================================================================
+
+TEST(DispatchSelectInvoke, SuccessPath) {
+    using TestAxes = axes<torch_cpu_cuda_device_axis, torch_builtin_float_stype_axis>;
+    using Table    = dispatch_table<TestAxes, int()>;
 
     auto factory = [](auto coord) -> int (*)() { return []() { return 42; }; };
 
-    Table table(factory, Axes{});
+    Table table("torch_select_test", factory, TestAxes{});
 
-    auto result = torch_dispatch("test_func", table, std::make_tuple(1));
-    EXPECT_EQ(result, 42);
+    auto fn = table.select(dispatch_set{torch::kCPU, torch::kFloat});
+    EXPECT_EQ(fn(), 42);
 }
 
-TEST(TorchDispatch, ErrorPath) {
-    using A     = axis<1>;
-    using Axes  = axes<A>;
-    using Table = dispatch_table<Axes, int()>;
+TEST(DispatchSelectInvoke, ErrorPath) {
+    using TestAxes = axes<torch_cpu_cuda_device_axis>;
+    using Table    = dispatch_table<TestAxes, int()>;
 
-    auto factory = [](auto coord) -> int (*)() { return []() { return 42; }; };
+    Table table("torch_error_test");
 
-    Table table(factory, Axes{});
-
-    // Try to dispatch to invalid coordinate - should throw TORCH_CHECK_VALUE
-    EXPECT_THROW(torch_dispatch("test_func", table, std::make_tuple(99)), c10::Error);
-}
-
-// =============================================================================
-// torch.h - CPU accessor
-// =============================================================================
-
-TEST(TorchAccessor, CpuTensor) {
-    auto tensor =
-        torch::zeros({2, 3}, torch::TensorOptions().dtype(torch::kFloat).device(torch::kCPU));
-    torch_cpu_tensor<torch::kFloat, 2> ct(tensor);
-
-    auto accessor = torch_accessor(ct);
-    EXPECT_EQ(accessor.size(0), 2);
-    EXPECT_EQ(accessor.size(1), 3);
-}
-
-TEST(TorchAccessor, CpuTensorInt) {
-    auto tensor =
-        torch::zeros({2, 3}, torch::TensorOptions().dtype(torch::kInt).device(torch::kCPU));
-    torch_cpu_tensor<torch::kInt, 2> ct(tensor);
-
-    auto accessor = torch_accessor(ct);
-    EXPECT_EQ(accessor.size(0), 2);
-    EXPECT_EQ(accessor.size(1), 3);
+    // Empty table — should throw dispatch_lookup_error
+    EXPECT_THROW(table.select(dispatch_set{torch::kCPU}), dispatch_lookup_error);
 }
 
 } // namespace dispatch
