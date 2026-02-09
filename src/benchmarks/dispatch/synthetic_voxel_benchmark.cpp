@@ -8,10 +8,10 @@
 #include <torch/torch.h>
 
 #include <benchmark/benchmark.h>
-#include <dispatch/basic_thread_pool.h>
-#include <dispatch/broadcast_pool.h>
 #include <dispatch/thread_pool.h>
-#include <dispatch/work_stealing_pool.h>
+
+#include "queue_pool.h"
+#include "spin_pool.h"
 
 #include <cmath>
 
@@ -111,17 +111,43 @@ BM_Uniform_OpenMP(benchmark::State &state) {
 }
 
 static void
-BM_Uniform_BasicPool(benchmark::State &state) {
+BM_Uniform_QueuePool(benchmark::State &state) {
     SetupThreads();
-    const int64_t numel = state.range(0);
+    int64_t const numel = state.range(0);
     auto input          = torch::randn({numel});
     auto output         = torch::empty_like(input);
 
-    auto &pool = dispatch::basic_thread_pool::instance();
+    auto &pool = dispatch_bench::queue_pool::instance();
 
     for (auto _: state) {
         pool.parallel_for(int64_t{0}, numel, [&](int64_t begin, int64_t end) {
             const float *ip = input.data_ptr<float>();
+            float *op       = output.data_ptr<float>();
+            for (int64_t i = begin; i < end; ++i) {
+                float val = ip[i];
+                for (int k = 0; k < 50; ++k)
+                    val = val * 0.999f + 0.001f;
+                op[i] = val;
+            }
+        });
+        benchmark::DoNotOptimize(output.data_ptr<float>());
+        benchmark::ClobberMemory();
+    }
+    state.SetItemsProcessed(state.iterations() * numel);
+}
+
+static void
+BM_Uniform_SpinPool(benchmark::State &state) {
+    SetupThreads();
+    int64_t const numel = state.range(0);
+    auto input          = torch::randn({numel});
+    auto output         = torch::empty_like(input);
+
+    auto &pool = dispatch_bench::spin_pool::instance();
+
+    for (auto _: state) {
+        pool.parallel_for(int64_t{0}, numel, [&](int64_t begin, int64_t end) {
+            float const *ip = input.data_ptr<float>();
             float *op       = output.data_ptr<float>();
             for (int64_t i = begin; i < end; ++i) {
                 float val = ip[i];
@@ -212,57 +238,6 @@ BM_Uniform_ATParallel(benchmark::State &state) {
     state.SetItemsProcessed(state.iterations() * numel);
 }
 
-// Adaptive pool selection helper (same thresholds as cpu_pool_comparison)
-namespace {
-constexpr int64_t kSerialThreshold = 4096;
-constexpr int64_t kBasicThreshold  = 1000000;
-
-template <typename Func>
-void
-adaptive_parallel_for(int64_t start, int64_t end, Func &&f) {
-    int64_t numel = end - start;
-    if (numel <= kSerialThreshold) {
-        // Serial for tiny workloads
-        f(start, end);
-    } else if (numel >= kBasicThreshold) {
-        // BasicPool for huge workloads (lower overhead)
-        dispatch::basic_thread_pool::instance().parallel_for(start, end, std::forward<Func>(f));
-    } else {
-        // Broadcast for medium workloads
-        dispatch::broadcast_pool::instance().parallel_for(start, end, std::forward<Func>(f));
-    }
-}
-} // namespace
-
-static void
-BM_Uniform_Adaptive(benchmark::State &state) {
-    SetupThreads();
-    const int64_t numel = state.range(0);
-    auto input          = torch::randn({numel});
-    auto output         = torch::empty_like(input);
-
-    // Warm up all pools
-    (void)dispatch::basic_thread_pool::instance();
-    (void)dispatch::broadcast_pool::instance();
-    (void)dispatch::work_stealing_pool::instance();
-
-    for (auto _: state) {
-        adaptive_parallel_for(int64_t{0}, numel, [&](int64_t begin, int64_t end) {
-            const float *ip = input.data_ptr<float>();
-            float *op       = output.data_ptr<float>();
-            for (int64_t i = begin; i < end; ++i) {
-                float val = ip[i];
-                for (int k = 0; k < 50; ++k)
-                    val = val * 0.999f + 0.001f;
-                op[i] = val;
-            }
-        });
-        benchmark::DoNotOptimize(output.data_ptr<float>());
-        benchmark::ClobberMemory();
-    }
-    state.SetItemsProcessed(state.iterations() * numel);
-}
-
 // ----------------------------------------------------------------------------
 // BENCHMARKS: UNBALANCED (SPARSE) COMPUTE
 // ----------------------------------------------------------------------------
@@ -337,17 +312,45 @@ BM_Unbalanced_OpenMP_Dynamic(benchmark::State &state) {
 }
 
 static void
-BM_Unbalanced_BasicPool(benchmark::State &state) {
+BM_Unbalanced_QueuePool(benchmark::State &state) {
     SetupThreads();
-    const int64_t numel = state.range(0);
+    int64_t const numel = state.range(0);
     auto input          = torch::randn({numel});
     auto output         = torch::empty_like(input);
 
-    auto &pool = dispatch::basic_thread_pool::instance();
+    auto &pool = dispatch_bench::queue_pool::instance();
 
     for (auto _: state) {
         pool.parallel_for(int64_t{0}, numel, [&](int64_t begin, int64_t end) {
             const float *ip = input.data_ptr<float>();
+            float *op       = output.data_ptr<float>();
+            for (int64_t i = begin; i < end; ++i) {
+                bool active = (i % 10) == 0;
+                float val   = ip[i];
+                int iter    = active ? 200 : 1;
+                for (int k = 0; k < iter; ++k)
+                    val = val * 0.999f + 0.001f;
+                op[i] = val;
+            }
+        });
+        benchmark::DoNotOptimize(output.data_ptr<float>());
+        benchmark::ClobberMemory();
+    }
+    state.SetItemsProcessed(state.iterations() * numel);
+}
+
+static void
+BM_Unbalanced_SpinPool(benchmark::State &state) {
+    SetupThreads();
+    int64_t const numel = state.range(0);
+    auto input          = torch::randn({numel});
+    auto output         = torch::empty_like(input);
+
+    auto &pool = dispatch_bench::spin_pool::instance();
+
+    for (auto _: state) {
+        pool.parallel_for(int64_t{0}, numel, [&](int64_t begin, int64_t end) {
+            float const *ip = input.data_ptr<float>();
             float *op       = output.data_ptr<float>();
             for (int64_t i = begin; i < end; ++i) {
                 bool active = (i % 10) == 0;
@@ -421,37 +424,6 @@ BM_Unbalanced_WorkStealing(benchmark::State &state) {
 }
 
 static void
-BM_Unbalanced_Adaptive(benchmark::State &state) {
-    SetupThreads();
-    const int64_t numel = state.range(0);
-    auto input          = torch::randn({numel});
-    auto output         = torch::empty_like(input);
-
-    // Warm up all pools
-    (void)dispatch::basic_thread_pool::instance();
-    (void)dispatch::broadcast_pool::instance();
-    (void)dispatch::work_stealing_pool::instance();
-
-    for (auto _: state) {
-        adaptive_parallel_for(int64_t{0}, numel, [&](int64_t begin, int64_t end) {
-            const float *ip = input.data_ptr<float>();
-            float *op       = output.data_ptr<float>();
-            for (int64_t i = begin; i < end; ++i) {
-                bool active = (i % 10) == 0;
-                float val   = ip[i];
-                int iter    = active ? 200 : 1;
-                for (int k = 0; k < iter; ++k)
-                    val = val * 0.999f + 0.001f;
-                op[i] = val;
-            }
-        });
-        benchmark::DoNotOptimize(output.data_ptr<float>());
-        benchmark::ClobberMemory();
-    }
-    state.SetItemsProcessed(state.iterations() * numel);
-}
-
-static void
 BM_Unbalanced_ATParallel(benchmark::State &state) {
     SetupThreads();
     const int64_t numel = state.range(0);
@@ -491,20 +463,20 @@ BM_Unbalanced_ATParallel(benchmark::State &state) {
 // Uniform workload
 BENCHMARK(BM_Uniform_Serial) BENCH_SIZES;
 BENCHMARK(BM_Uniform_OpenMP) BENCH_SIZES;
-BENCHMARK(BM_Uniform_BasicPool) BENCH_SIZES;
+BENCHMARK(BM_Uniform_QueuePool) BENCH_SIZES;
+BENCHMARK(BM_Uniform_SpinPool) BENCH_SIZES;
 BENCHMARK(BM_Uniform_Broadcast) BENCH_SIZES;
 BENCHMARK(BM_Uniform_WorkStealing) BENCH_SIZES;
-BENCHMARK(BM_Uniform_Adaptive) BENCH_SIZES;
 BENCHMARK(BM_Uniform_ATParallel) BENCH_SIZES;
 
 // Unbalanced workload
 BENCHMARK(BM_Unbalanced_Serial) BENCH_SIZES;
 BENCHMARK(BM_Unbalanced_OpenMP_Static) BENCH_SIZES;
 BENCHMARK(BM_Unbalanced_OpenMP_Dynamic) BENCH_SIZES;
-BENCHMARK(BM_Unbalanced_BasicPool) BENCH_SIZES;
+BENCHMARK(BM_Unbalanced_QueuePool) BENCH_SIZES;
+BENCHMARK(BM_Unbalanced_SpinPool) BENCH_SIZES;
 BENCHMARK(BM_Unbalanced_Broadcast) BENCH_SIZES;
 BENCHMARK(BM_Unbalanced_WorkStealing) BENCH_SIZES;
-BENCHMARK(BM_Unbalanced_Adaptive) BENCH_SIZES;
 BENCHMARK(BM_Unbalanced_ATParallel) BENCH_SIZES;
 
 BENCHMARK_MAIN();

@@ -21,6 +21,29 @@
 #endif
 
 //------------------------------------------------------------------------------
+// DISPATCH_SPIN_PAUSE macro for busy-wait loops
+//------------------------------------------------------------------------------
+// Issues a platform-specific hint to the CPU that we're in a spin loop.
+// Reduces power consumption and avoids starving sibling hyperthreads.
+//   - x86: PAUSE instruction
+//   - ARM: YIELD instruction
+//   - Fallback: std::this_thread::yield()
+
+#ifndef DISPATCH_SPIN_PAUSE
+#if defined(_MSC_VER)
+#include <intrin.h>
+#define DISPATCH_SPIN_PAUSE() _mm_pause()
+#elif defined(__x86_64__) || defined(__i386__)
+#define DISPATCH_SPIN_PAUSE() __builtin_ia32_pause()
+#elif defined(__aarch64__)
+#define DISPATCH_SPIN_PAUSE() __asm__ __volatile__("yield")
+#else
+#include <thread>
+#define DISPATCH_SPIN_PAUSE() std::this_thread::yield()
+#endif
+#endif
+
+//------------------------------------------------------------------------------
 // DISPATCH_UNROLL macro for portable loop unrolling
 //------------------------------------------------------------------------------
 // #pragma unroll is CUDA-specific; gcc warns about unknown pragmas.

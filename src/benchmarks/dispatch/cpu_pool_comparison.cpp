@@ -3,14 +3,13 @@
 //
 // CPU Thread Pool Comparison Benchmark
 //
-// Compares four thread pool implementations with SIMD GELU:
-// 1. basic_thread_pool - Simple queue-based pool (best for large N)
-// 2. thread_pool - Hybrid direct distribution (attempts medium N optimization)
+// Compares thread pool implementations with SIMD GELU:
+// 1. queue_pool (retired) - Simple queue-based pool (benchmark baseline)
+// 2. spin_pool (retired) - Spin-wait static pool (benchmark baseline)
 // 3. broadcast_pool - Static partitioning with broadcast-style dispatch
 // 4. work_stealing_pool - Chase-Lev deque work stealing (for unbalanced workloads)
-// 5. adaptive_pool - Wrapper that chooses based on N
 //
-// Also compares against torch::gelu as baseline.
+// Also compares against torch::gelu, OpenMP, and at::parallel_for as baselines.
 //
 // Build: ./build.sh install benchmarks
 // Run:   ./build/.../gbenchmarks/cpu_pool_comparison
@@ -22,10 +21,10 @@
 #include <torch/torch.h>
 
 #include <benchmark/benchmark.h>
-#include <dispatch/basic_thread_pool.h>
-#include <dispatch/broadcast_pool.h>
 #include <dispatch/thread_pool.h>
-#include <dispatch/work_stealing_pool.h>
+
+#include "queue_pool.h"
+#include "spin_pool.h"
 
 // OpenMP GELU implementation (in separate .cpp for proper pragma support)
 #include "omp_gelu.h"
@@ -116,17 +115,17 @@ gelu_with_pool(Pool &pool, const float *in_ptr, float *out_ptr, int64_t numel) {
 
 // Wrapper functions for each pool
 void
-gelu_basic_pool(torch::Tensor in, torch::Tensor out) {
-    gelu_with_pool(dispatch::basic_thread_pool::instance(),
+gelu_queue_pool(torch::Tensor in, torch::Tensor out) {
+    gelu_with_pool(dispatch_bench::queue_pool::instance(),
                    in.data_ptr<float>(),
                    out.data_ptr<float>(),
                    in.numel());
 }
 
 void
-gelu_thread_pool(torch::Tensor in, torch::Tensor out) {
+gelu_spin_pool(torch::Tensor in, torch::Tensor out) {
     gelu_with_pool(
-        dispatch::thread_pool::instance(), in.data_ptr<float>(), out.data_ptr<float>(), in.numel());
+        dispatch_bench::spin_pool::instance(), in.data_ptr<float>(), out.data_ptr<float>(), in.numel());
 }
 
 void
@@ -146,39 +145,11 @@ gelu_work_stealing_pool(torch::Tensor in, torch::Tensor out) {
 }
 
 // ============================================================================
-// Adaptive Pool Wrapper
+// Serial GELU baseline (no threading)
 // ============================================================================
-// Chooses between pools based on tensor size:
-// - Small N: run serial (no threading overhead)
-// - Medium N: use broadcast_pool or thread_pool (lower latency)
-// - Large N: use basic_thread_pool (best throughput)
-//
-// These thresholds are tuned based on the benchmark results.
-
-enum class PoolChoice { Serial, Broadcast, ThreadPool, Basic };
-
-// Threshold constants - tuned based on benchmark results:
-//   N < 4K:    Serial wins (threading overhead > benefit)
-//   4K - 1M:   Broadcast wins (1.2-1.9 G/s vs BasicPool's 0.15-0.32 G/s)
-//   N >= 1M:   BasicPool wins (2.8-25 G/s vs Broadcast's 1.6-1.8 G/s)
-constexpr int64_t kSerialThreshold = 4096;    // Below this, run serial
-constexpr int64_t kBasicThreshold  = 1000000; // At/above this, use basic_thread_pool
-
-inline PoolChoice
-choose_pool(int64_t numel) {
-    if (numel < kSerialThreshold) {
-        return PoolChoice::Serial;
-    } else if (numel < kBasicThreshold) {
-        // Medium: broadcast_pool has better latency and throughput up to ~1M
-        return PoolChoice::Broadcast;
-    } else {
-        // Large: basic_thread_pool scales better with size
-        return PoolChoice::Basic;
-    }
-}
 
 void
-gelu_serial(const float *in_ptr, float *out_ptr, int64_t numel) {
+gelu_serial(float const *in_ptr, float *out_ptr, int64_t numel) {
     using Vec                 = at::vec::Vectorized<float>;
     constexpr int64_t vec_len = Vec::size();
 
@@ -234,26 +205,6 @@ gelu_at_parallel_for(const float *in_ptr, float *out_ptr, int64_t numel) {
     });
 }
 
-void
-gelu_adaptive(torch::Tensor in, torch::Tensor out) {
-    const int64_t numel = in.numel();
-    const float *in_ptr = in.data_ptr<float>();
-    float *out_ptr      = out.data_ptr<float>();
-
-    switch (choose_pool(numel)) {
-    case PoolChoice::Serial: gelu_serial(in_ptr, out_ptr, numel); break;
-    case PoolChoice::Broadcast:
-        gelu_with_pool(dispatch::broadcast_pool::instance(), in_ptr, out_ptr, numel);
-        break;
-    case PoolChoice::ThreadPool:
-        gelu_with_pool(dispatch::thread_pool::instance(), in_ptr, out_ptr, numel);
-        break;
-    case PoolChoice::Basic:
-        gelu_with_pool(dispatch::basic_thread_pool::instance(), in_ptr, out_ptr, numel);
-        break;
-    }
-}
-
 // ============================================================================
 // Helper: Create test tensors
 // ============================================================================
@@ -293,17 +244,17 @@ BM_Torch_CPU_NoAlloc(benchmark::State &state) {
 // ============================================================================
 
 static void
-BM_BasicPool_CPU_NoAlloc(benchmark::State &state) {
+BM_QueuePool_CPU_NoAlloc(benchmark::State &state) {
     SetupThreads();
-    const int64_t numel = state.range(0);
+    int64_t const numel = state.range(0);
     auto input          = torch::randn({numel}, torch::kFloat32);
     auto output         = torch::empty_like(input);
 
     // Warm up pool
-    (void)dispatch::basic_thread_pool::instance();
+    (void)dispatch_bench::queue_pool::instance();
 
     for (auto _: state) {
-        gelu_basic_pool(input, output);
+        gelu_queue_pool(input, output);
         benchmark::DoNotOptimize(output.data_ptr<float>());
         benchmark::ClobberMemory();
     }
@@ -312,17 +263,17 @@ BM_BasicPool_CPU_NoAlloc(benchmark::State &state) {
 }
 
 static void
-BM_ThreadPool_CPU_NoAlloc(benchmark::State &state) {
+BM_SpinPool_CPU_NoAlloc(benchmark::State &state) {
     SetupThreads();
-    const int64_t numel = state.range(0);
+    int64_t const numel = state.range(0);
     auto input          = torch::randn({numel}, torch::kFloat32);
     auto output         = torch::empty_like(input);
 
     // Warm up pool
-    (void)dispatch::thread_pool::instance();
+    (void)dispatch_bench::spin_pool::instance();
 
     for (auto _: state) {
-        gelu_thread_pool(input, output);
+        gelu_spin_pool(input, output);
         benchmark::DoNotOptimize(output.data_ptr<float>());
         benchmark::ClobberMemory();
     }
@@ -361,32 +312,6 @@ BM_WorkStealingPool_CPU_NoAlloc(benchmark::State &state) {
 
     for (auto _: state) {
         gelu_work_stealing_pool(input, output);
-        benchmark::DoNotOptimize(output.data_ptr<float>());
-        benchmark::ClobberMemory();
-    }
-
-    state.SetItemsProcessed(state.iterations() * numel);
-}
-
-// ============================================================================
-// Benchmark: Adaptive wrapper
-// ============================================================================
-
-static void
-BM_Adaptive_CPU_NoAlloc(benchmark::State &state) {
-    SetupThreads();
-    const int64_t numel = state.range(0);
-    auto input          = torch::randn({numel}, torch::kFloat32);
-    auto output         = torch::empty_like(input);
-
-    // Warm up all pools
-    (void)dispatch::basic_thread_pool::instance();
-    (void)dispatch::thread_pool::instance();
-    (void)dispatch::broadcast_pool::instance();
-    (void)dispatch::work_stealing_pool::instance();
-
-    for (auto _: state) {
-        gelu_adaptive(input, output);
         benchmark::DoNotOptimize(output.data_ptr<float>());
         benchmark::ClobberMemory();
     }
@@ -488,11 +413,10 @@ BM_ATParallelFor_CPU_NoAlloc(benchmark::State &state) {
 // Register all benchmarks
 BENCHMARK(BM_Torch_CPU_NoAlloc) BENCHMARK_SIZES;
 BENCHMARK(BM_Serial_CPU_NoAlloc) BENCHMARK_SIZES;
-BENCHMARK(BM_BasicPool_CPU_NoAlloc) BENCHMARK_SIZES;
-BENCHMARK(BM_ThreadPool_CPU_NoAlloc) BENCHMARK_SIZES;
+BENCHMARK(BM_QueuePool_CPU_NoAlloc) BENCHMARK_SIZES;
+BENCHMARK(BM_SpinPool_CPU_NoAlloc) BENCHMARK_SIZES;
 BENCHMARK(BM_BroadcastPool_CPU_NoAlloc) BENCHMARK_SIZES;
 BENCHMARK(BM_WorkStealingPool_CPU_NoAlloc) BENCHMARK_SIZES;
-BENCHMARK(BM_Adaptive_CPU_NoAlloc) BENCHMARK_SIZES;
 
 // OpenMP benchmark (uses external .cpp implementation for proper pragma support)
 BENCHMARK(BM_OpenMP_CPU_NoAlloc) BENCHMARK_SIZES;

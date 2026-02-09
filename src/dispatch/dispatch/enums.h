@@ -85,6 +85,35 @@ template <> struct type_label<contiguity> {
 
 using full_contiguity_axis = axis<contiguity::strided, contiguity::contiguous>;
 
+//------------------------------------------------------------------------------
+// scheduling
+//------------------------------------------------------------------------------
+// Selects the CPU thread pool scheduling strategy:
+//   uniform  - Static partitioning (broadcast-style). Optimal when work per
+//              element is even. Lowest dispatch overhead.
+//   adaptive - Work-stealing (Chase-Lev deques). Optimal when work per element
+//              is variable or unpredictable.
+
+enum class scheduling { uniform, adaptive };
+
+inline char const *
+to_string(scheduling s) {
+    switch (s) {
+    case scheduling::uniform: return "uniform";
+    case scheduling::adaptive: return "adaptive";
+    }
+    return "unknown";
+}
+
+template <> struct type_label<scheduling> {
+    static consteval auto
+    value() {
+        return fixed_label("dispatch.scheduling");
+    }
+};
+
+using full_scheduling_axis = axis<scheduling::uniform, scheduling::adaptive>;
+
 } // namespace dispatch
 
 #endif // DISPATCH_DISPATCH_ENUMS_H

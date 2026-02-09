@@ -41,7 +41,6 @@ if(FVDB_BUILD_TESTS OR FVDB_BUILD_BENCHMARKS)
         examples/functional.cu
         examples/op.cu
         examples/relu.cu
-        # Phase 3: examples/gelu_for_each.cu (requires for_each)
         examples/scan_lib.cpp
         examples/scan_lib.cu
     )
