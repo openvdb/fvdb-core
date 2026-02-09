@@ -131,6 +131,12 @@ class GaussianSplat3d {
 
         torch::Tensor
         opacities() const {
+            if (perGaussianOpacity.dim() == 1) {
+                // perGaussianOpacity is [N]; expand to [C, N] view
+                const int64_t C = perGaussian2dMean.size(0);
+                return perGaussianOpacity.unsqueeze(0).expand({C, -1});
+            }
+            // Already [C, N] (e.g. antialias case where compensation varies per camera)
             return perGaussianOpacity;
         }
 
