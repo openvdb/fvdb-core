@@ -19,9 +19,10 @@ building on the dispatch framework work completed in Phase 4.
 - `default_thread_pool` = work_stealing_pool (benchmarked as best general-purpose choice)
 
 ### for_each (`torch/for_each.h`)
-- Parallel index generation over `[0, count)` on CPU, CUDA, or PrivateUse1
-- CPU uses `default_thread_pool`
-- CUDA uses grid-stride kernel with ILP grain
+- Scalar index generation over `[0, count)` on CPU, CUDA, or PrivateUse1
+- CPU uses `default_thread_pool`, per-element loop
+- CUDA uses one-element-per-thread grid-stride kernel (optimal coalescing)
+- GPU block size configurable via `tag_add<Tag, block_dim::bN>`, defaults to 256
 - Functor signature: `func(Tag, int64_t idx)`
 
 ### Views (`torch/views.h`)
@@ -126,15 +127,24 @@ void sparse_conv_forward(Tag tag,
 
 ---
 
-## Future: Vectorization Layer
+## Future: Vectorization Layer (`for_each_vectorized`)
 
-A `for_each_vectorized` or vectorization adapter built on top of for_each's contiguous
-specialization. This would:
+A separate `for_each_vectorized` for operations that benefit from vector loads.
+This is intentionally NOT built into `for_each` because vectorization and
+coalescing require fundamentally different thread-to-element layouts:
 
-- Provide chunk-based functor signature: `func(tag, int64_t base_idx, int64_t count)`
-- Handle masked loads for tail elements
+- `for_each` uses **interleaved** layout (one element per thread per stride step),
+  which gives optimal coalescing for scalar loads — adjacent threads access
+  adjacent memory locations.
+- Vectorized loads (`float4`, etc.) require **contiguous-per-thread** layout so
+  each thread can issue a single wide load. With scalar loads this layout causes
+  stride-N coalescing (bad), but with vector loads each thread's wide transaction
+  packs perfectly into cache lines.
+
+`for_each_vectorized` would:
+
+- Use contiguous-per-thread layout with vector-width batches
+- Provide chunk-based functor or automatic vector-type wrapping
+- Handle masked loads for tail elements (count not divisible by vector width)
 - Use vector types (float4/double2 on CUDA, ATen Vec on CPU)
 - Close the ~1.6x gap to torch's native CUDA softplus (measured in benchmarks)
-
-This layers cleanly: for_each handles parallelism and device dispatch; vectorization
-handles data-level parallelism within each thread's work chunk.

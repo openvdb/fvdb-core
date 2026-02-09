@@ -504,6 +504,88 @@ template <auto... V> struct make_tag {
 template <auto... V> using tag = typename detail::make_tag<V...>::type;
 
 // =============================================================================
+// tag_add / tag_subtract: tag composition
+// =============================================================================
+//
+// tag_add<Tag, V>:    produce a new tag with V added. If the tag already
+//                     contains a value of the same type, it is replaced.
+// tag_subtract<Tag, T>: produce a new tag with the value of type T removed.
+
+namespace detail {
+
+// Filter values from a tag_storage, removing any whose type matches FilterType.
+// Accumulates kept values in tag_storage<Kept...>.
+template <typename FilterType, typename Kept, auto... Remaining> struct tag_filter_type;
+
+// Base case: nothing left to filter
+template <typename FilterType, auto... Kept>
+struct tag_filter_type<FilterType, tag_storage<Kept...>> {
+    using type = tag_storage<Kept...>;
+};
+
+// Recursive: skip values whose type matches FilterType, keep the rest
+template <typename FilterType, auto... Kept, auto Head, auto... Tail>
+struct tag_filter_type<FilterType, tag_storage<Kept...>, Head, Tail...> {
+    using type = std::conditional_t<
+        std::is_same_v<FilterType, decltype(Head)>,
+        typename tag_filter_type<FilterType, tag_storage<Kept...>, Tail...>::type,
+        typename tag_filter_type<FilterType, tag_storage<Kept..., Head>, Tail...>::type>;
+};
+
+// tag_add_impl: filter out any existing value of the same type, append V, re-sort
+template <typename Tag, auto V> struct tag_add_impl;
+
+template <auto... Existing, auto V> struct tag_add_impl<tag_storage<Existing...>, V> {
+    using filtered = typename tag_filter_type<decltype(V), tag_storage<>, Existing...>::type;
+
+    template <typename Filtered> struct append;
+
+    template <auto... Kept> struct append<tag_storage<Kept...>> {
+        using type = tag<Kept..., V>;
+    };
+
+    using type = typename append<filtered>::type;
+};
+
+// tag_subtract_impl: filter out any value of the given type, re-sort
+template <typename Tag, typename SubtractType> struct tag_subtract_impl;
+
+template <auto... Existing, typename SubtractType>
+struct tag_subtract_impl<tag_storage<Existing...>, SubtractType> {
+    using filtered = typename tag_filter_type<SubtractType, tag_storage<>, Existing...>::type;
+
+    template <typename Filtered> struct rewrap;
+
+    template <auto... Kept> struct rewrap<tag_storage<Kept...>> {
+        using type = tag<Kept...>;
+    };
+
+    using type = typename rewrap<filtered>::type;
+};
+
+} // namespace detail
+
+/// tag_add<Tag, V>: produce a new tag with V added. If the tag already contains
+/// a value of the same type, it is replaced. The result is a well-formed tag
+/// (sorted, unique types).
+///
+///   using T = tag<torch::kCUDA, torch::kFloat32>;
+///   using U = tag_add<T, block_dim::b128>;
+///   // U = tag<torch::kCUDA, torch::kFloat32, block_dim::b128>
+///
+template <typename Tag, auto V> using tag_add = typename detail::tag_add_impl<Tag, V>::type;
+
+/// tag_subtract<Tag, Type>: produce a new tag with the value of the given
+/// type removed.
+///
+///   using T = tag<torch::kCUDA, torch::kFloat32, block_dim::b128>;
+///   using U = tag_subtract<T, block_dim>;
+///   // U = tag<torch::kCUDA, torch::kFloat32>
+///
+template <typename Tag, typename Type>
+using tag_subtract = typename detail::tag_subtract_impl<Tag, Type>::type;
+
+// =============================================================================
 // axes: self-normalizing axes — an unordered set of uniquely-typed axis dims
 // =============================================================================
 //
@@ -700,6 +782,40 @@ template <> struct type_label<scheduling> {
 };
 
 using full_scheduling_axis = axis<scheduling::uniform, scheduling::adaptive>;
+
+//------------------------------------------------------------------------------
+// block_dim — CUDA thread block size for kernel launches
+//------------------------------------------------------------------------------
+// Values are the practical CUDA block sizes: must be a multiple of the warp
+// size (32), at least 64 for reasonable occupancy, and at most 1024 (hardware
+// limit). Smaller blocks waste occupancy; larger blocks are unsupported.
+// The default used by for_each when no block_dim is in the tag is 256,
+// which is optimal for most elementwise workloads.
+//
+// block_dim is not a dispatch axis — it is an operational parameter injected
+// by the op author via tag_add at the call site, not a coordinate in the
+// dispatch table.
+
+enum class block_dim : int { b64 = 64, b128 = 128, b256 = 256, b512 = 512, b1024 = 1024 };
+
+inline char const *
+to_string(block_dim b) {
+    switch (b) {
+    case block_dim::b64: return "64";
+    case block_dim::b128: return "128";
+    case block_dim::b256: return "256";
+    case block_dim::b512: return "512";
+    case block_dim::b1024: return "1024";
+    }
+    return "unknown";
+}
+
+template <> struct type_label<block_dim> {
+    static consteval auto
+    value() {
+        return fixed_label("dispatch.block_dim");
+    }
+};
 
 } // namespace dispatch
 

@@ -824,5 +824,95 @@ TEST_F(ForEachCUDATest, ChannelScale_Broadcast_Structured) {
     }
 }
 
+// =============================================================================
+// tag_add / tag_subtract tests (compile-time, CPU only)
+// =============================================================================
+
+class TagAlgebraTest : public ::testing::Test {};
+
+TEST_F(TagAlgebraTest, Add_NewType) {
+    // Adding a value of a type not already in the tag
+    using Base   = tag<torch::kCUDA, torch::kFloat32>;
+    using Result = tag_add<Base, block_dim::b128>;
+
+    static_assert(with_value<Result, torch::kCUDA>);
+    static_assert(with_value<Result, torch::kFloat32>);
+    static_assert(with_type<Result, block_dim>);
+    EXPECT_EQ(static_cast<int>(tag_get<block_dim>(Result{})), 128);
+}
+
+TEST_F(TagAlgebraTest, Add_ReplaceExisting) {
+    // Adding a value whose type already exists replaces the old value
+    using Base   = tag<torch::kCUDA, block_dim::b256>;
+    using Result = tag_add<Base, block_dim::b128>;
+
+    static_assert(with_value<Result, torch::kCUDA>);
+    static_assert(with_type<Result, block_dim>);
+    EXPECT_EQ(static_cast<int>(tag_get<block_dim>(Result{})), 128);
+}
+
+TEST_F(TagAlgebraTest, Add_CanonicalOrdering) {
+    // Result type is the same regardless of construction order
+    using A = tag_add<tag<torch::kCUDA>, block_dim::b128>;
+    using B = tag<torch::kCUDA, block_dim::b128>;
+
+    static_assert(std::is_same_v<A, B>);
+}
+
+TEST_F(TagAlgebraTest, Subtract_RemovesType) {
+    // Subtracting removes the value of the given type
+    using Base   = tag<torch::kCUDA, torch::kFloat32, block_dim::b128>;
+    using Result = tag_subtract<Base, block_dim>;
+
+    static_assert(with_value<Result, torch::kCUDA>);
+    static_assert(with_value<Result, torch::kFloat32>);
+    static_assert(!with_type<Result, block_dim>);
+}
+
+TEST_F(TagAlgebraTest, Subtract_NoOp_WhenAbsent) {
+    // Subtracting a type that isn't present is a no-op
+    using Base   = tag<torch::kCUDA, torch::kFloat32>;
+    using Result = tag_subtract<Base, block_dim>;
+
+    static_assert(std::is_same_v<Base, Result>);
+}
+
+// =============================================================================
+// CUDA for_each with custom block_dim via tag_add
+// =============================================================================
+
+void
+cuda_for_each_custom_block_dim(float *ptr, int64_t n) {
+    using Tag = tag<torch::kCUDA, torch::kFloat32, contiguity::contiguous>;
+
+    constexpr auto dev    = tag_get<torch::DeviceType>(Tag{});
+    constexpr auto stype  = tag_get<torch::ScalarType>(Tag{});
+    constexpr auto contig = tag_get<contiguity>(Tag{});
+
+    auto t = torch::from_blob(
+        ptr, {n}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    auto out = flat_out<dev, stype, contig>(t);
+
+    // Op author injects block_dim inline at the call site
+    for_each(tag_add<Tag, block_dim::b128>{}, n, [=] __device__(auto, int64_t i) {
+        out[i] = static_cast<float>(i + 1);
+    });
+}
+
+TEST_F(ForEachCUDATest, CustomBlockDim) {
+    skip_if_no_cuda();
+
+    int64_t const n = 10000;
+    auto tensor =
+        torch::zeros({n}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+
+    cuda_for_each_custom_block_dim(tensor.data_ptr<float>(), n);
+
+    auto cpu = tensor.cpu();
+    for (int64_t i = 0; i < n; ++i) {
+        EXPECT_FLOAT_EQ(cpu[i].item<float>(), static_cast<float>(i + 1)) << "at " << i;
+    }
+}
+
 } // namespace
 } // namespace dispatch

@@ -12,7 +12,7 @@ The framework is built in layers. Read bottom to top.
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  for_each (torch/for_each.h)                                    │
-│    Parallel index generation: CPU thread pool, CUDA grid-stride │
+│    Scalar index generation: CPU thread pool, CUDA grid-stride   │
 ├─────────────────────────────────────────────────────────────────┤
 │  views (torch/views.h)                                          │
 │    flat_in/flat_out (rank-free) + tensor_in/tensor_out (ranked) │
@@ -66,6 +66,23 @@ void my_impl(Tag tag, ...) {
 
 `with_value` subsumes `with_type` — the compiler selects the most specific overload.
 
+### Tag Composition
+
+`tag_add` and `tag_subtract` produce new tags by adding or removing values:
+
+```cpp
+using T = tag<torch::kCUDA, torch::kFloat32>;
+using U = tag_add<T, block_dim::b128>;       // add block_dim
+// U = tag<torch::kCUDA, torch::kFloat32, block_dim::b128>
+
+using V = tag_subtract<U, block_dim>;        // remove block_dim
+// V = tag<torch::kCUDA, torch::kFloat32>  (same as T)
+```
+
+`tag_add` replaces the existing value if the type is already present. This is
+how op authors inject operational parameters (like GPU block size) into a tag
+that came from a dispatch table — without polluting the dispatch space.
+
 ### Dispatch Tables
 
 A **dispatch table** maps runtime values to compile-time tag instantiations:
@@ -114,7 +131,7 @@ Interface: `pool.parallel_for(start, end, grain, func)` where func receives
 
 ## for_each (`torch/for_each.h`)
 
-Parallel index generation over `[0, count)`, dispatched by device tag:
+Scalar index generation over `[0, count)`, dispatched by device tag:
 
 ```cpp
 for_each(tag, count, [=] __hostdev__ (Tag, int64_t idx) {
@@ -122,12 +139,34 @@ for_each(tag, count, [=] __hostdev__ (Tag, int64_t idx) {
 });
 ```
 
-- **CPU:** Uses `default_thread_pool` (work-stealing)
-- **CUDA:** Grid-stride kernel with ILP grain (configurable)
-- **PrivateUse1:** Multi-GPU work distribution
+- **CPU:** Uses `default_thread_pool` (work-stealing), per-element loop
+- **CUDA:** One-element-per-thread grid-stride kernel, optimal coalescing
+- **PrivateUse1:** Multi-GPU distribution, grid-stride per device
 
 The functor receives `(Tag, int64_t idx)`. The tag is passed through so the functor
 can be concept-constrained.
+
+### GPU block size
+
+Defaults to 256 (optimal for most elementwise workloads). Op authors who need
+a different block size inject it inline via `tag_add`:
+
+```cpp
+for_each(tag_add<Tag, block_dim::b128>{}, count, func);
+```
+
+### Why no vectorization
+
+`for_each` is a scalar index generator — one element per functor call, one
+thread per element (interleaved), optimal coalescing for scalar loads. It does
+not provide vectorization infrastructure.
+
+Vectorized loads (`float4`, etc.) require contiguous-per-thread layout, which
+conflicts with the coalescing-optimal interleaved layout that `for_each` uses.
+They also require masked load/store for tail handling, vector type selection,
+and alignment management. This infrastructure belongs in a future
+`for_each_vectorized`. `for_each` does not prevent manual vectorization, but it
+does not facilitate it.
 
 ## Views (`torch/views.h`)
 
@@ -235,10 +274,10 @@ functions; `op.cu` uses a struct with static methods.
 
 | File | Purpose |
 |------|---------|
-| `tag.h` | Self-normalizing compile-time value tags |
+| `tag.h` | Self-normalizing compile-time value tags, `tag_add`, `tag_subtract` |
 | `with_value.h` | `with_value`, `with_type` concepts, `tag_get` extraction |
 | `axis.h`, `axes.h` | Value sets and Cartesian products |
-| `enums.h` | `placement`, `determinism`, `contiguity`, `scheduling` |
+| `enums.h` | `placement`, `determinism`, `contiguity`, `scheduling`, `block_dim` |
 | `label.h`, `label_sorted.h` | Compile-time label infrastructure for tag ordering |
 | `consteval_types.h` | Compile-time type traits |
 | `dispatch_set.h` | Runtime dispatch coordinates |
@@ -252,7 +291,7 @@ functions; `op.cu` uses a struct with static methods.
 | `thread_pool.h` | `broadcast_pool`, `work_stealing_pool`, `default_thread_pool` |
 | `torch/types.h` | PyTorch type labels, axes, scalar type mappings, `torch_compute_type_t` |
 | `torch/dispatch.h` | Device guards, contiguity helpers, device concepts |
-| `torch/for_each.h` | Parallel index generation (CPU, CUDA, PrivateUse1) |
+| `torch/for_each.h` | Scalar index generation (CPU, CUDA, PrivateUse1) |
 | `torch/views.h` | `flat_in`/`flat_out` (rank-free), `tensor_in`/`tensor_out` (ranked) |
 | `examples/` | `relu.cu`, `softplus.cu`, `functional.cu`, `op.cu` |
 
