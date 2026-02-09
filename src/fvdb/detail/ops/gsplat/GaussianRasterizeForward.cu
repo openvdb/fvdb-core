@@ -513,23 +513,18 @@ launchRasterizeForwardKernels(
 
             TORCH_CHECK(means2d.is_contiguous());
             TORCH_CHECK(conics.is_contiguous());
-            TORCH_CHECK(opacities.is_contiguous());
             TORCH_CHECK(features.is_contiguous());
 
-            nanovdb::util::cuda::memPrefetchAsync(means2d.const_data_ptr<ScalarType>(),
-                                                  means2d.numel() * sizeof(ScalarType),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(conics.const_data_ptr<ScalarType>(),
-                                                  conics.numel() * sizeof(ScalarType),
-                                                  deviceId,
-                                                  stream);
+            nanovdb::util::cuda::memPrefetchAsync(
+                means2d.const_data_ptr<ScalarType>(), tensorMemorySpan(means2d), deviceId, stream);
+            nanovdb::util::cuda::memPrefetchAsync(
+                conics.const_data_ptr<ScalarType>(), tensorMemorySpan(conics), deviceId, stream);
             nanovdb::util::cuda::memPrefetchAsync(opacities.const_data_ptr<ScalarType>(),
-                                                  opacities.numel() * sizeof(ScalarType),
+                                                  tensorMemorySpan(opacities),
                                                   deviceId,
                                                   stream);
             nanovdb::util::cuda::memPrefetchAsync(features.const_data_ptr<ScalarType>(),
-                                                  features.numel() * sizeof(ScalarType),
+                                                  tensorMemorySpan(features),
                                                   deviceId,
                                                   stream);
 

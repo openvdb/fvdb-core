@@ -17,6 +17,21 @@
 
 namespace fvdb::detail::ops {
 
+/// @brief Compute the actual memory span (in bytes) of a tensor for prefetching.
+/// For contiguous tensors this equals numel() * element_size().
+/// For non-contiguous tensors (e.g. expanded views with stride-0 dimensions),
+/// this returns the true memory footprint rather than the logical element count.
+inline size_t
+tensorMemorySpan(const torch::Tensor &t) {
+    if (t.numel() == 0)
+        return 0;
+    int64_t maxOffset = 0;
+    for (int64_t d = 0; d < t.dim(); d++) {
+        maxOffset += (t.size(d) - 1) * std::abs(t.stride(d));
+    }
+    return static_cast<size_t>(maxOffset + 1) * t.element_size();
+}
+
 // Initialize an accessor for a tensor. The tensor must be a CUDA tensor.
 template <typename T, int N>
 inline auto
