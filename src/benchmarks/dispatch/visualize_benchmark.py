@@ -20,7 +20,7 @@ def detect_benchmark_type(benchmarks):
     names = [b["name"] for b in benchmarks]
 
     # for_each benchmark detection
-    if any("ForEach_" in n or "SoL_" in n for n in names):
+    if any("ForEach_" in n or "SoL_" in n or "Diag_" in n for n in names):
         return "for_each"
     # Synthetic voxel benchmark detection
     if any("Uniform_" in n or "Unbalanced_" in n for n in names):
@@ -49,8 +49,9 @@ def parse_for_each_benchmark_name(full_name):
 
     tokens = base_name.split("_")
 
-    # Detect if this is a SoL baseline or a ForEach benchmark
+    # Classify benchmark category
     is_sol = tokens[0] == "SoL"
+    is_diag = tokens[0] == "Diag"
 
     device = "Unknown"
     if "CUDA" in tokens:
@@ -69,12 +70,18 @@ def parse_for_each_benchmark_name(full_name):
     if is_sol:
         # SoL_<Type>_<Device>_<Dtype>
         impl = "SoL_" + tokens[1]
+    elif is_diag:
+        # Diag_<Type>_<Device>_<Dtype>
+        impl = "Diag_" + tokens[1]
     else:
         # ForEach_Softplus_<Contiguity>_<Device>_<Dtype>
         impl = "ForEach"
 
     # Create a combined label for plotting
-    label = f"{impl}_{contiguity}" if not is_sol else impl
+    if is_sol or is_diag:
+        label = impl
+    else:
+        label = f"{impl}_{contiguity}"
 
     return {
         "Implementation": impl,
@@ -82,7 +89,7 @@ def parse_for_each_benchmark_name(full_name):
         "Device": device,
         "Dtype": dtype,
         "Label": label,
-        "IsSoL": is_sol,
+        "IsSoL": is_sol or is_diag,
         "Size": size,
         "Name": base_name,
     }
@@ -728,8 +735,13 @@ if __name__ == "__main__":
                             if row["Throughput"] >= 1e9
                             else f"{row['Throughput'] / 1e6:.0f} M/s"
                         )
-                        is_sol = row.get("IsSoL", False)
-                        prefix = "[SoL] " if is_sol else "      "
+                        impl = row.get("Implementation", "")
+                        if impl.startswith("SoL_"):
+                            prefix = "[SoL]  "
+                        elif impl.startswith("Diag_"):
+                            prefix = "[Diag] "
+                        else:
+                            prefix = "       "
                         label = row.get("Label", row["Name"])
                         print(f"  {prefix}{label:35s} {tp_str:>12s}")
 
