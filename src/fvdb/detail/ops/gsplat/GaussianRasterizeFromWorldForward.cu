@@ -440,13 +440,23 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
     TORCH_CHECK_VALUE(logScales.dim() == 2 && logScales.size(1) == 3,
                       "logScales must have shape [N,3]");
     TORCH_CHECK_VALUE(features.dim() == 3, "features must have shape [C,N,D]");
-    TORCH_CHECK_VALUE(opacities.dim() == 2, "opacities must have shape [C,N]");
 
     const int64_t C = features.size(0);
     const int64_t N = means.size(0);
     TORCH_CHECK_VALUE(features.size(1) == N, "features must have shape [C,N,D] matching N");
-    TORCH_CHECK_VALUE(opacities.size(0) == C && opacities.size(1) == N,
+    TORCH_CHECK_VALUE(opacities.is_cuda(), "opacities must be CUDA");
+
+    // Opacities may be provided either per-camera ([C,N]) or shared across cameras ([N]).
+    torch::Tensor opacitiesBatched = opacities;
+    if (opacitiesBatched.dim() == 1) {
+        TORCH_CHECK_VALUE(opacitiesBatched.size(0) == N,
+                          "opacities must have shape [N] or [C,N] matching N");
+        opacitiesBatched = opacitiesBatched.unsqueeze(0).repeat({C, 1});
+    }
+    TORCH_CHECK_VALUE(opacitiesBatched.dim() == 2, "opacities must have shape [C,N]");
+    TORCH_CHECK_VALUE(opacitiesBatched.size(0) == C && opacitiesBatched.size(1) == N,
                       "opacities must have shape [C,N] matching features and N");
+    opacitiesBatched = opacitiesBatched.contiguous();
 
     TORCH_CHECK_VALUE(worldToCamMatricesStart.sizes() == torch::IntArrayRef({C, 4, 4}),
                       "worldToCamMatricesStart must have shape [C,4,4]");
@@ -474,7 +484,7 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
                                   quats,                   \
                                   logScales,               \
                                   features,                \
-                                  opacities,               \
+                                  opacitiesBatched,        \
                                   worldToCamMatricesStart, \
                                   worldToCamMatricesEnd,   \
                                   projectionMatrices,      \

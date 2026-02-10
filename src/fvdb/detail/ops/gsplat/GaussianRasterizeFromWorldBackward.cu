@@ -599,8 +599,21 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
 
     TORCH_CHECK_VALUE(means.is_cuda(), "means must be CUDA");
     TORCH_CHECK_VALUE(features.is_cuda(), "features must be CUDA");
+    TORCH_CHECK_VALUE(opacities.is_cuda(), "opacities must be CUDA");
     TORCH_CHECK_VALUE(renderedAlphas.is_cuda(), "renderedAlphas must be CUDA");
     TORCH_CHECK_VALUE(lastIds.is_cuda(), "lastIds must be CUDA");
+
+    const int64_t C = features.size(0);
+    const int64_t N = means.size(0);
+
+    // Opacities may be provided either per-camera ([C,N]) or shared across cameras ([N]).
+    torch::Tensor opacitiesBatched = opacities;
+    if (opacitiesBatched.dim() == 1) {
+        TORCH_CHECK_VALUE(opacitiesBatched.size(0) == N,
+                          "opacities must have shape [N] or [C,N] matching N");
+        opacitiesBatched = opacitiesBatched.unsqueeze(0).repeat({C, 1});
+    }
+    opacitiesBatched = opacitiesBatched.contiguous();
 
     const uint32_t channels = (uint32_t)features.size(2);
 
@@ -610,7 +623,7 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
                                    quats,                   \
                                    logScales,               \
                                    features,                \
-                                   opacities,               \
+                                   opacitiesBatched,        \
                                    worldToCamMatricesStart, \
                                    worldToCamMatricesEnd,   \
                                    projectionMatrices,      \

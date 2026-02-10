@@ -198,7 +198,7 @@ RasterizeGaussiansToPixelsFromWorld3DGS::backward(
     // Return gradients in the same order as forward inputs.
     return {dMeans,     dQuats,     dLogScales, dFeatures,  dOpacities, Variable(), Variable(),
             Variable(), Variable(), Variable(), Variable(), Variable(), Variable(), Variable(),
-            Variable(), Variable(), Variable(), Variable(), Variable(), Variable(), Variable()};
+            Variable(), Variable(), Variable(), Variable(), Variable(), Variable()};
 }
 
 } // namespace fvdb::detail::autograd
