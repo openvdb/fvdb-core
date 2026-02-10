@@ -88,11 +88,11 @@ The [high-level `fvdb.nn.SparseConv3d` class](#high-level-convolution-with-fvdbn
 
 Using the `GridBatch` convolution functions directly requires a little more knowledge about the implementation under-the-hood.  Due to the nature of a sparse grid, in order to make convolution performant, it is useful to pre-compute a mapping of which features in the input grid will contribute to the values of the output grid when convolved by a kernel of a particular dimension and stride.  This mapping structure is called a 'kernel map'.
 
-The kernel map, as well as the functionality for using it to compute the convolution, is contained within a `fvdb.SparseConvPackInfo` class which can be constructed by `GridBatch.sparse_conv_kernel_map`.  A `fvdb.SparseConvPackInfo` must perform a pre-computation of the kernel map based on the style expected by the backend implementation of the convolution utilized by `fvdb.SparseConvPackInfo.sparse_conv_3d`.  Here is an example of how to construct a `fvdb.SparseConvPackInfo` and use it to perform a convolution:
+The `fvdb.ConvolutionPlan` class encapsulates this kernel map and uses it to perform the convolution.  Here is an example of how to construct a `ConvolutionPlan` and use it to perform a convolution:
 
 ```python
 import fvdb
-import fvdb.nn as fvdbnn
+from fvdb import ConvolutionPlan
 from fvdb.utils.examples import load_car_1_mesh
 import torch
 import numpy as np
@@ -121,21 +121,18 @@ normals = fvdb.JaggedTensor(normals)
 grid = fvdb.GridBatch.from_points(points, voxel_sizes=vox_size)
 
 # Splat the normals into the grid with trilinear interpolation
-vox_normals = grid.splat_trilinear(points, normals)\
+vox_normals = grid.splat_trilinear(points, normals)
 
-# Create the kernel map (housed in a SparseConvPackInfo) and the output grid's topology based on the kernel parameters
-sparse_conv_packinfo, out_grid = grid.sparse_conv_kernel_map(kernel_size=3, stride=1)
-
-# The kernel map must be pre-computed based on the backend implementation we plan on using, here we use gather/scatter, the default implementation
-sparse_conv_packinfo.build_gather_scatter()
+# Create a convolution plan — this precomputes the kernel map between source and target grids
+plan = ConvolutionPlan.from_grid_batch(kernel_size=3, stride=1, source_grid=grid)
 
 # Create random weights for our convolution kernel of size 3x3x3 that takes 3 input channels and produces 3 output channels
 kernel_weights = torch.randn(3, 3, 3, 3, 3, device=grid.device)
 
-# Perform convolution on the normals colours.  Gather/scatter is used as the backend, it is the default
-conv_vox_normals = sparse_conv_packinfo.sparse_conv_3d(vox_normals, weights=kernel_weights, backend=fvdb.ConvPackBackend.GATHER_SCATTER)
+# Execute the convolution
+conv_vox_normals = plan.execute(vox_normals, kernel_weights)
 ```
 Here we visualize the output of our convolution alongside the original grid with normals visualized as colours:
 ![](../imgs/fig/gridbatch_conv.png)
 
-The kernel map can potentially be expensive to compute, so it is often useful to re-use the `SparseConvPackInfo` in the same network to perform a convolution on other features or with different weights.  This optimization is something `fvdb.nn.SparseConv3d` attempts to do where appropriate and is one reason we recommend using `fvdb.nn.SparseConv3d` over this low-level approach.
+The kernel map can potentially be expensive to compute, so it is often useful to re-use the `ConvolutionPlan` in the same network to perform a convolution on other features or with different weights.  This optimization is something `fvdb.nn.SparseConv3d` attempts to do where appropriate and is one reason we recommend using `fvdb.nn.SparseConv3d` over this low-level approach.
