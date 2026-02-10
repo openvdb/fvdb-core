@@ -343,13 +343,12 @@ GaussianSplat3d::projectGaussiansImpl(const torch::Tensor &worldToCameraMatrices
     ret.perGaussian2dMean = projectionResults[1];
     ret.perGaussianDepth  = projectionResults[2];
     ret.perGaussianConic  = projectionResults[3];
-    // FIXME: Use accessors in the kernel and use exapand
-    ret.perGaussianOpacity = opacities().repeat({C, 1});
     if (settings.antialias) {
-        ret.perGaussianOpacity *= projectionResults[4];
-        // FIXME (Francis): The contiguity requirement is dumb and should be
-        // removed by using accessors in the kernel
-        ret.perGaussianOpacity = ret.perGaussianOpacity.contiguous();
+        // Antialias compensation is per-camera [C, N], so we must materialize [C, N]
+        ret.perGaussianOpacity = opacities().unsqueeze(0).expand({C, -1}) * projectionResults[4];
+    } else {
+        // Store as [N]; the opacities() accessor will lazily expand to [C, N] when accessed
+        ret.perGaussianOpacity = opacities();
     }
 
     ret.perGaussianRenderQuantity = [&]() {
@@ -477,13 +476,12 @@ GaussianSplat3d::sparseProjectGaussiansImpl(const JaggedTensor &pixelsToRender,
     ret.perGaussian2dMean = projectionResults[1];
     ret.perGaussianDepth  = projectionResults[2];
     ret.perGaussianConic  = projectionResults[3];
-    // FIXME: Use accessors in the kernel and use expand
-    ret.perGaussianOpacity = opacities().repeat({C, 1});
     if (settings.antialias) {
-        ret.perGaussianOpacity *= projectionResults[4];
-        // FIXME (Francis): The contiguity requirement is dumb and should be
-        // removed by using accessors in the kernel
-        ret.perGaussianOpacity = ret.perGaussianOpacity.contiguous();
+        // Antialias compensation is per-camera [C, N], so we must materialize [C, N]
+        ret.perGaussianOpacity = opacities().unsqueeze(0).expand({C, -1}) * projectionResults[4];
+    } else {
+        // Store as [N]; the opacities() accessor will lazily expand to [C, N] when accessed
+        ret.perGaussianOpacity = opacities();
     }
 
     ret.perGaussianRenderQuantity = [&]() {
@@ -557,7 +555,7 @@ GaussianSplat3d::renderCropFromProjectedGaussiansImpl(
         projectedGaussians.perGaussian2dMean,
         projectedGaussians.perGaussianConic,
         projectedGaussians.perGaussianRenderQuantity,
-        projectedGaussians.perGaussianOpacity,
+        projectedGaussians.opacities(),
         cropWidth_,
         cropHeight_,
         cropOriginW_,
@@ -599,7 +597,7 @@ GaussianSplat3d::sparseRenderImpl(const JaggedTensor &pixelsToRender,
                                                                   state.perGaussian2dMean,
                                                                   state.perGaussianConic,
                                                                   state.perGaussianRenderQuantity,
-                                                                  state.perGaussianOpacity,
+                                                                  state.opacities(),
                                                                   settings.imageWidth,
                                                                   settings.imageHeight,
                                                                   0,
@@ -631,7 +629,7 @@ GaussianSplat3d::renderNumContributingGaussiansImpl(
         return fvdb::detail::ops::dispatchGaussianRasterizeNumContributingGaussians<DeviceTag>(
             state.perGaussian2dMean,
             state.perGaussianConic,
-            state.perGaussianOpacity,
+            state.opacities(),
             state.tileOffsets,
             state.tileGaussianIds,
             settings);
@@ -653,7 +651,7 @@ GaussianSplat3d::sparseRenderNumContributingGaussiansImpl(
         return fvdb::detail::ops::dispatchGaussianSparseRasterizeNumContributingGaussians<
             DeviceTag>(state.perGaussian2dMean,
                        state.perGaussianConic,
-                       state.perGaussianOpacity,
+                       state.opacities(),
                        state.tileOffsets,
                        state.tileGaussianIds,
                        pixelsToRender,
@@ -695,7 +693,7 @@ GaussianSplat3d::renderContributingGaussianIdsImpl(
         return fvdb::detail::ops::dispatchGaussianRasterizeContributingGaussianIds<DeviceTag>(
             state.perGaussian2dMean,
             state.perGaussianConic,
-            state.perGaussianOpacity,
+            state.opacities(),
             state.tileOffsets,
             state.tileGaussianIds,
             settings,
@@ -719,7 +717,7 @@ GaussianSplat3d::sparseRenderContributingGaussianIdsImpl(
         return fvdb::detail::ops::dispatchGaussianSparseRasterizeContributingGaussianIds<DeviceTag>(
             state.perGaussian2dMean,
             state.perGaussianConic,
-            state.perGaussianOpacity,
+            state.opacities(),
             state.tileOffsets,
             state.tileGaussianIds,
             pixelsToRender,
