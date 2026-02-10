@@ -10,6 +10,11 @@ Codex, etc.) working on this codebase. Human contributors should also refer to
 - All commits **must** be SSH-signed (`git commit --gpg-sign` / `-S`).
 - **Never** skip hooks or signing: do not use `--no-verify` or `--no-gpg-sign`.
 
+## General Style
+
+- Avoid excessive use of emoji and non-ascii characters in code and documentation except
+  where it is helpful to user experience or user interfaces.
+
 ## Python Code Style
 
 - Format Python code with **black** using the exact flags from CI:
@@ -81,3 +86,8 @@ C++ files:
 - Include a test plan with specific commands to verify the change.
 - Ensure all CI checks pass before requesting review (DCO, codestyle, tests).
 - Keep PRs focused on a single concern.
+
+**Do not commit unless directed:**
+- `.vscode/settings.json` - local IDE settings
+- `.cursor/` - local Cursor config
+- Test-specific matrices or configs with hardcoded paths
