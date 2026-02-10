@@ -18,13 +18,6 @@ from fvdb import Grid, GridBatch, JaggedTensor
 
 from . import _fvdb_cpp
 
-_DEFAULT_DTYPES: tuple[torch.dtype, ...] = (
-    torch.float16,
-    torch.bfloat16,
-    torch.float32,
-    torch.float64,
-)
-
 _DEFAULT_CONFIG: dict[str, Any] = {
     "backend": "default",
 }
@@ -40,6 +33,36 @@ def _channel_pair_supported(in_channels: int, out_channels: int, channel_pairs: 
     if len(channel_pairs) == 0:
         return True
     return (in_channels, out_channels) in channel_pairs
+
+
+# ============================================================
+#  Backend data classes — cached precomputed data per method
+# ============================================================
+
+
+@dataclass(frozen=True)
+class _MatmulBackend:
+    """1x1x1 convolution with stride 1 — pure matmul, no precomputed data."""
+
+    pass
+
+
+@dataclass(frozen=True)
+class _DenseBackend:
+    """Dense convolution via torch.nn.functional — no precomputed data."""
+
+    pass
+
+
+@dataclass(frozen=True)
+class _GatherScatterBackend:
+    """Gather-scatter convolution with a precomputed kernel map."""
+
+    neighbor_map: torch.Tensor  # [#IO, 2] int32
+    neighbor_sizes: torch.Tensor  # [K] int32
+
+
+_Backend = _MatmulBackend | _DenseBackend | _GatherScatterBackend
 
 
 @dataclass(frozen=True)
@@ -103,9 +126,7 @@ class ConvolutionPlan:
     _stride: torch.Tensor
     _channel_pairs: tuple[tuple[int, int], ...]
     _transposed: bool
-    _method: str  # "gather_scatter" | "dense" | "matmul"
-    _neighbor_map: torch.Tensor | None  # [#IO, 2] int32 — None for matmul/dense
-    _neighbor_sizes: torch.Tensor | None  # [K] int32 — None for matmul/dense
+    _backend: _Backend
 
     # ============================================================
     #                 Factory methods
@@ -176,27 +197,17 @@ class ConvolutionPlan:
         if not _vec_is_all(stride, stride[0].item()):
             raise NotImplementedError("Non-uniform strides are not currently supported")
 
-        backend = expert_config.get("backend", "default")
+        backend_name = expert_config.get("backend", "default")
 
-        if backend == "dense":
+        if backend_name == "dense":
             if target_grid is not None:
                 raise ValueError("Target grid must be None for dense backend.")
             target_grid = source_grid
         elif target_grid is None:
             target_grid = source_grid.conv_grid(kernel_size, stride)
 
-        method, neighbor_map, neighbor_sizes = cls._configure_backend(
-            source_grid,
-            target_grid,
-            kernel_size,
-            stride,
-            channel_pairs,
-            False,
-            expert_config,
-        )
-        return cls(
-            source_grid, target_grid, kernel_size, stride, channel_pairs, False, method, neighbor_map, neighbor_sizes
-        )
+        backend = cls._build_backend(source_grid, target_grid, kernel_size, stride, channel_pairs, expert_config)
+        return cls(source_grid, target_grid, kernel_size, stride, channel_pairs, False, backend)
 
     @classmethod
     def from_grid_batch_transposed(
@@ -251,27 +262,17 @@ class ConvolutionPlan:
         if not _vec_is_all(stride, stride[0].item()):
             raise NotImplementedError("Non-uniform strides are not currently supported")
 
-        backend = expert_config.get("backend", "default")
+        backend_name = expert_config.get("backend", "default")
 
-        if backend == "dense":
+        if backend_name == "dense":
             if target_grid is not None:
                 raise ValueError("Target grid must be None for dense backend, transposed.")
             target_grid = source_grid
         elif target_grid is None:
             raise ValueError("Target grid must be provided for transposed convolution, except for dense backend.")
 
-        method, neighbor_map, neighbor_sizes = cls._configure_backend(
-            source_grid,
-            target_grid,
-            kernel_size,
-            stride,
-            channel_pairs,
-            True,
-            expert_config,
-        )
-        return cls(
-            source_grid, target_grid, kernel_size, stride, channel_pairs, True, method, neighbor_map, neighbor_sizes
-        )
+        backend = cls._build_backend(source_grid, target_grid, kernel_size, stride, channel_pairs, expert_config)
+        return cls(source_grid, target_grid, kernel_size, stride, channel_pairs, True, backend)
 
     @classmethod
     def from_grid(
@@ -336,10 +337,10 @@ class ConvolutionPlan:
         if not _vec_is_all(stride, stride[0].item()):
             raise NotImplementedError("Non-uniform strides are not currently supported")
 
-        backend = expert_config.get("backend", "default")
+        backend_name = expert_config.get("backend", "default")
 
         source_grid_batch = GridBatch(impl=source_grid._impl)
-        if backend == "dense":
+        if backend_name == "dense":
             if target_grid is not None:
                 raise ValueError("Target grid must be None for dense backend.")
             target_grid_batch = source_grid_batch
@@ -348,26 +349,10 @@ class ConvolutionPlan:
         else:
             target_grid_batch = GridBatch(impl=target_grid._impl)
 
-        method, neighbor_map, neighbor_sizes = cls._configure_backend(
-            source_grid_batch,
-            target_grid_batch,
-            kernel_size,
-            stride,
-            channel_pairs,
-            False,
-            expert_config,
+        backend = cls._build_backend(
+            source_grid_batch, target_grid_batch, kernel_size, stride, channel_pairs, expert_config
         )
-        return cls(
-            source_grid_batch,
-            target_grid_batch,
-            kernel_size,
-            stride,
-            channel_pairs,
-            False,
-            method,
-            neighbor_map,
-            neighbor_sizes,
-        )
+        return cls(source_grid_batch, target_grid_batch, kernel_size, stride, channel_pairs, False, backend)
 
     @classmethod
     def from_grid_transposed(
@@ -408,10 +393,10 @@ class ConvolutionPlan:
         if not _vec_is_all(stride, stride[0].item()):
             raise NotImplementedError("Non-uniform strides are not currently supported")
 
-        backend = expert_config.get("backend", "default")
+        backend_name = expert_config.get("backend", "default")
 
         source_grid_batch = GridBatch(impl=source_grid._impl)
-        if backend == "dense":
+        if backend_name == "dense":
             if target_grid is not None:
                 raise ValueError("Target grid must be None for dense backend, transposed.")
             target_grid_batch = source_grid_batch
@@ -420,26 +405,10 @@ class ConvolutionPlan:
         else:
             target_grid_batch = GridBatch(impl=target_grid._impl)
 
-        method, neighbor_map, neighbor_sizes = cls._configure_backend(
-            source_grid_batch,
-            target_grid_batch,
-            kernel_size,
-            stride,
-            channel_pairs,
-            True,
-            expert_config,
+        backend = cls._build_backend(
+            source_grid_batch, target_grid_batch, kernel_size, stride, channel_pairs, expert_config
         )
-        return cls(
-            source_grid_batch,
-            target_grid_batch,
-            kernel_size,
-            stride,
-            channel_pairs,
-            True,
-            method,
-            neighbor_map,
-            neighbor_sizes,
-        )
+        return cls(source_grid_batch, target_grid_batch, kernel_size, stride, channel_pairs, True, backend)
 
     @classmethod
     def from_plan_transposed(cls, plan: "ConvolutionPlan") -> "ConvolutionPlan":
@@ -481,26 +450,10 @@ class ConvolutionPlan:
         transposed = not plan._transposed
         channel_pairs = tuple((dst, src) for src, dst in plan._channel_pairs)
 
-        method, neighbor_map, neighbor_sizes = cls._configure_backend(
-            source_grid,
-            target_grid,
-            plan._kernel_size,
-            plan._stride,
-            channel_pairs,
-            transposed,
-            _DEFAULT_CONFIG,
+        backend = cls._build_backend(
+            source_grid, target_grid, plan._kernel_size, plan._stride, channel_pairs, _DEFAULT_CONFIG
         )
-        return cls(
-            source_grid,
-            target_grid,
-            plan._kernel_size,
-            plan._stride,
-            channel_pairs,
-            transposed,
-            method,
-            neighbor_map,
-            neighbor_sizes,
-        )
+        return cls(source_grid, target_grid, plan._kernel_size, plan._stride, channel_pairs, transposed, backend)
 
     # ============================================================
     #                 Validation
@@ -612,8 +565,10 @@ class ConvolutionPlan:
             if self._source_grid.grid_count != 1:
                 raise ValueError("Source grid must have batch size of 1 for flat data")
 
-        # Handle the simple matmul case (1x1x1 kernel, stride 1)
-        if self._method == "matmul":
+        backend = self._backend
+
+        # Matmul: 1x1x1 kernel, stride 1 — no kernel map needed
+        if isinstance(backend, _MatmulBackend):
             if is_flat:
                 return data.matmul(weights.transpose(0, 1))
             else:
@@ -623,25 +578,29 @@ class ConvolutionPlan:
         if is_flat:
             data = JaggedTensor(data)
 
-        if self._method == "dense":
+        # Dense: pure-Python path via torch.nn.functional
+        if isinstance(backend, _DenseBackend):
             result = self._execute_dense(data, weights)
-        else:
-            # gather_scatter
-            assert self._neighbor_map is not None and self._neighbor_sizes is not None
+
+        # Gather-scatter: precomputed kernel map
+        elif isinstance(backend, _GatherScatterBackend):
             src_voxels = int(self._source_grid.total_voxels)
             dst_voxels = int(self._target_grid.total_voxels)
             middle_accel = _vec_is_all(self._stride, 1)
             out_tensor = _fvdb_cpp.sparse_conv_kernel_map(
                 data.jdata,
                 weights,
-                self._neighbor_map,
-                self._neighbor_sizes,
+                backend.neighbor_map,
+                backend.neighbor_sizes,
                 src_voxels,
                 dst_voxels,
                 middle_accel,
                 self._transposed,
             )
             result = self._target_grid.jagged_like(out_tensor)
+
+        else:
+            raise TypeError(f"Unknown backend type: {type(backend)}")
 
         if is_flat:
             return result.jdata
@@ -722,39 +681,34 @@ class ConvolutionPlan:
     # ============================================================
 
     @staticmethod
-    def _configure_backend(
+    def _build_backend(
         source_grid: GridBatch,
         target_grid: GridBatch,
         kernel_size: torch.Tensor,
         stride: torch.Tensor,
         channel_pairs: tuple[tuple[int, int], ...],
-        transposed: bool,
         expert_config: dict[str, Any],
-    ) -> tuple[str, torch.Tensor | None, torch.Tensor | None]:
+    ) -> _Backend:
         """
-        Determine the convolution method and build the kernel map if needed.
-
-        Returns:
-            (method, neighbor_map, neighbor_sizes) where method is one of
-            "matmul", "dense", or "gather_scatter".
+        Determine the convolution method and build the appropriate backend.
         """
         for channel_pair in channel_pairs:
             if len(channel_pair) != 2 or channel_pair[0] <= 0 or channel_pair[1] <= 0:
                 raise ValueError("channel_pair must be a tuple of two positive integers")
 
-        backend = expert_config.get("backend", "default")
+        backend_name = expert_config.get("backend", "default")
 
         # 1x1x1 conv with stride 1 is just a matmul — no kernel map needed
         if _vec_is_all(stride, 1) and _vec_is_all(kernel_size, 1):
-            return ("matmul", None, None)
+            return _MatmulBackend()
 
         # Dense backend — pure Python, no kernel map
-        if backend == "dense":
+        if backend_name == "dense":
             if not _vec_is_all(stride, 1):
                 raise ValueError("Dense backend requires stride 1.")
             if not source_grid._impl.is_same(target_grid._impl):
                 raise ValueError("Dense backend requires source_grid and target_grid to be the same.")
-            return ("dense", None, None)
+            return _DenseBackend()
 
         # Default / gather_scatter — build the kernel map
         neighbor_map, neighbor_sizes = _fvdb_cpp.build_kernel_map(
@@ -763,7 +717,7 @@ class ConvolutionPlan:
             kernel_size,
             stride,
         )
-        return ("gather_scatter", neighbor_map, neighbor_sizes)
+        return _GatherScatterBackend(neighbor_map=neighbor_map, neighbor_sizes=neighbor_sizes)
 
     def _execute_dense(self, data: JaggedTensor, weights: torch.Tensor) -> JaggedTensor:
         source_grid = self._source_grid
@@ -771,14 +725,14 @@ class ConvolutionPlan:
 
         min_coord = source_grid.ijk.jdata.min(dim=0).values
         # BXYZC -> BCXYZ
-        dense_feature = source_grid.write_to_dense_cmajor(data._impl, min_coord=min_coord)
+        dense_feature = source_grid.inject_to_dense_cmajor(data, min_coord=min_coord)
         if self._transposed:
             dense_feature = torch.nn.functional.conv_transpose3d(dense_feature, weights, padding=1, stride=1)
         else:
             dense_feature = torch.nn.functional.conv3d(dense_feature, weights, padding=1, stride=1)
         # BCXYZ -> BXYZC
         dense_feature = dense_feature.contiguous()
-        return JaggedTensor(impl=source_grid.read_from_dense_cmajor(dense_feature, dense_origins=min_coord))
+        return source_grid.inject_from_dense_cmajor(dense_feature, dense_origins=min_coord)
 
 
 # These tests are to validate that the type-checking is happy. They won't actually run because
