@@ -4,6 +4,8 @@
 """
 Test the default sparse convolution.
 
+This will eventually be run across all supported backends. The default backend is gather_scatter.
+
 """
 
 import math
