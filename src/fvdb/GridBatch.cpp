@@ -34,9 +34,7 @@
 #include <fvdb/detail/ops/SerializeEncode.h>
 #include <fvdb/detail/ops/VoxelNeighborhood.h>
 #include <fvdb/detail/ops/VoxelsAlongRays.h>
-#include <fvdb/detail/ops/convolution/pack_info/BrickHaloBuffer.h>
 #include <fvdb/detail/ops/convolution/pack_info/ConvolutionKernelMap.h>
-#include <fvdb/detail/ops/convolution/pack_info/IGEMMBitOperations.h>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
 
@@ -1228,14 +1226,6 @@ GridBatch::computeConvolutionKernelMap(const GridBatch &source,
     FVDB_DISPATCH_KERNEL_DEVICE(source.device(), [&]() {
         detail::ops::dispatchConvolutionKernelMap<DeviceTag>(
             *source.mImpl, *target.mImpl, kernelMap, kernelSize, stride);
-    });
-}
-
-std::vector<torch::Tensor>
-GridBatch::computeBrickHaloBuffer(bool benchmark) const {
-    c10::DeviceGuard guard(device());
-    return FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
-        return detail::ops::dispatchBrickHaloBuffer<DeviceTag>(*mImpl, benchmark);
     });
 }
 

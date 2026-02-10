@@ -148,3 +148,60 @@ coalescing require fundamentally different thread-to-element layouts:
 - Handle masked loads for tail elements (count not divisible by vector width)
 - Use vector types (float4/double2 on CUDA, ATen Vec on CPU)
 - Close the ~1.6x gap to torch's native CUDA softplus (measured in benchmarks)
+
+---
+
+## Done: Backend Cleanup (pre-requisite for gather_scatter rewrite)
+
+Removed all unused sparse convolution backends, leaving only gather-scatter
+(without ME). This is a deletion-only change — no algorithm modifications.
+
+### What was removed
+
+**C++ backend ops (20 files deleted, ~1.1 MB):**
+- ImplicitGEMM: 4 variants (standard, sorted, grad, grad-sorted) — ops + autograd
+- Cutlass: ops
+- LGGS: ops
+- ME (memory-efficient gather-scatter variant): ops
+- IGEMMBitOperations, BrickHaloBuffer: pack_info utilities
+
+**SparseConvPackInfo class — deleted entirely:**
+- Was a monolithic variant holding ~20 `std::optional<Tensor>` fields for all backends
+- Replaced by two standalone C++ functions exposed to Python:
+  - `build_kernel_map(src_grid, dst_grid, kernel_size, stride) → (neighbor_map, neighbor_sizes)`
+  - `sparse_conv_kernel_map(features, kernels, nbmap, nbsizes, ..., transposed) → Tensor`
+- `ConvPackBackend` enum removed
+
+**SparseConvolutionKernelMap autograd:**
+- Refactored to take raw tensors instead of `SparseConvPackInfo`
+- ME backward branch removed — only the standard dispatch path remains
+
+**Python ConvolutionPlan rewrite:**
+- No longer wraps `SparseConvPackInfo`; stores `_neighbor_map` / `_neighbor_sizes` tensors directly
+- `_method` field: `"gather_scatter"` | `"dense"` | `"matmul"`
+- `_configure_backend` reduced from ~130 lines to ~20
+- Halo removed as a backend (still available via `GridBatch.sparse_conv_halo()` public API)
+- Dense backend preserved for testing/verification
+
+**GridBatch cleanup:**
+- Removed `computeBrickHaloBuffer()` (Cutlass-only)
+- Removed `sparse_conv_kernel_map()` method from bindings (was SparseConvPackInfo factory)
+
+**Build:**
+- 9 `.cu` + 1 `.cpp` removed from CMakeLists.txt
+- CUTLASS dependency and cmake helper kept (needed for future backend)
+
+### What stays
+
+- Halo autograd + ops (exposed via `GridBatch.sparse_conv_halo()`)
+- KernelMap backend ops (`SparseConvolutionKernelMap.{h,cu}`) — algorithm unchanged
+- ConvolutionKernelMap pack_info — computes grid topology correspondence
+- Dense backend (pure Python)
+- Matmul 1x1 fast path (pure Python)
+
+### Future: gather_scatter rewrite
+
+The gather-scatter implementation will eventually be separated into 4 distinct
+functions (forward, forward-transpose, backward, backward-transpose) rather than
+dispatch variations. The autograd combination may be lifted to Python. This
+cleanup makes that refactor tractable by removing the multi-backend complexity.

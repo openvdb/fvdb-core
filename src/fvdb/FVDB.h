@@ -6,7 +6,6 @@
 
 #include <fvdb/GridBatch.h>
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/SparseConvPackInfo.h>
 #include <fvdb/Types.h>
 
 namespace fvdb {

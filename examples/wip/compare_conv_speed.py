@@ -8,7 +8,7 @@ import torch
 import tqdm
 from fvdb.utils.examples import load_dragon_mesh
 
-from fvdb import GridBatch, JaggedTensor
+from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
 
 
 def benchmark_inplace_conv(grid: GridBatch, in_feature, in_kernel):
@@ -18,17 +18,16 @@ def benchmark_inplace_conv(grid: GridBatch, in_feature, in_kernel):
     return time.perf_counter() - start_time
 
 
-def benchmark_kmap_conv(grid: GridBatch, in_feature, in_kernel):
+def benchmark_plan_conv(grid: GridBatch, in_feature, in_kernel):
     start_time = time.perf_counter()
-    kmap, _ = grid.sparse_conv_kernel_map(kernel_size=in_kernel.size(-1), stride=1)
-    kmap.build_gather_scatter()
+    plan = ConvolutionPlan.from_grid_batch(kernel_size=in_kernel.size(-1), stride=1, source_grid=grid)
     torch.cuda.synchronize()
 
-    kmap_time = time.perf_counter()
-    out_feature = kmap.sparse_conv_3d(in_feature, in_kernel)
+    plan_time = time.perf_counter()
+    out_feature = plan.execute(in_feature, in_kernel)
     torch.cuda.synchronize()
 
-    return kmap_time - start_time, time.perf_counter() - kmap_time
+    return plan_time - start_time, time.perf_counter() - plan_time
 
 
 def main():
@@ -53,22 +52,22 @@ def main():
     torch.cuda.synchronize()
 
     inplace_time = []
-    kmap_time = []
+    plan_build_time = []
     conv_time = []
 
     for iter in tqdm.trange(100):
         inplace = benchmark_inplace_conv(index0, grid_feats, kernels)
-        kmap, conv = benchmark_kmap_conv(index0, grid_feats, kernels)
+        plan_build, conv = benchmark_plan_conv(index0, grid_feats, kernels)
         inplace_time.append(inplace)
-        kmap_time.append(kmap)
+        plan_build_time.append(plan_build)
         conv_time.append(conv)
 
-    inplace_time, kmap_time, conv_time = inplace_time[5:], kmap_time[5:], conv_time[5:]
+    inplace_time, plan_build_time, conv_time = inplace_time[5:], plan_build_time[5:], conv_time[5:]
 
     print(f"Num voxels = {index0.num_voxels}, channel = {in_channel} -> {out_channel}, device = {device}")
     print(f"Convolution Inplace {np.mean(inplace_time):.4f} +/- {np.std(inplace_time):.4f}")
-    print(f"Kmap {np.mean(kmap_time):.4f} +/- {np.std(kmap_time):.4f}")
-    print(f"Kmap Convolution {np.mean(conv_time):.4f} +/- {np.std(conv_time):.4f}")
+    print(f"Plan Build {np.mean(plan_build_time):.4f} +/- {np.std(plan_build_time):.4f}")
+    print(f"Plan Convolution {np.mean(conv_time):.4f} +/- {np.std(conv_time):.4f}")
 
 
 if __name__ == "__main__":
