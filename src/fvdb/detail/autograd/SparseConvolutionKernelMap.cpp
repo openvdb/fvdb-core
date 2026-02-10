@@ -3,8 +3,8 @@
 //
 
 #include <fvdb/detail/autograd/SparseConvolutionKernelMap.h>
-#include <fvdb/detail/ops/convolution/backend/MESparseConvolution.h>
 #include <fvdb/detail/ops/convolution/backend/SparseConvolutionKernelMap.h>
+#include <fvdb/detail/utils/Utils.h>
 
 #include <torch/autograd.h>
 
@@ -19,16 +19,14 @@ SparseConvolutionKernelMap::variable_list
 SparseConvolutionKernelMap::forward(AutogradContext *ctx,
                                     Variable inFeatures,
                                     Variable kernels,
-                                    const SparseConvPackInfo &packInfo,
+                                    Variable neighborMap,
+                                    Variable neighborSizes,
+                                    int64_t srcVoxels,
+                                    int64_t dstVoxels,
+                                    bool middleAcceleration,
                                     bool transposed) {
-    TORCH_CHECK(packInfo.neighborMap().has_value() && packInfo.neighborSizes().has_value(),
-                "Neighbor map must be built for sparse convolution");
-
-    torch::Tensor nbmaps          = packInfo.neighborMap().value();
-    torch::Tensor nbsizes         = packInfo.neighborSizes().value();
-    const std::vector<int> sizes  = {(int)packInfo.sourceGrid().total_voxels(),
-                                     (int)packInfo.targetGrid().total_voxels()};
-    const bool middleAcceleration = packInfo.stride().value() == Vec3iOrScalar(1).value();
+    torch::Tensor nbmaps  = neighborMap;
+    torch::Tensor nbsizes = neighborSizes;
 
     // Check features
     TORCH_CHECK_VALUE(inFeatures.is_contiguous(), "features must be contiguous");
@@ -44,11 +42,11 @@ SparseConvolutionKernelMap::forward(AutogradContext *ctx,
         TORCH_CHECK_VALUE(kernels.size(i) != 0,
                           "kernels tensor has zero dimension (dim = " + std::to_string(i) + ")");
     }
-    // Check pack info
+    // Check neighbor map
     TORCH_CHECK(nbmaps.is_contiguous() && nbmaps.scalar_type() == torch::kInt32,
-                "nbmaps must be contiguous");
+                "nbmaps must be contiguous int32");
     TORCH_CHECK(nbsizes.is_contiguous() && nbsizes.scalar_type() == torch::kInt32,
-                "nbsizes must be contiguous");
+                "nbsizes must be contiguous int32");
 
     auto opt             = torch::TensorOptions().dtype(torch::kInt32).device(inFeatures.device());
     torch::Tensor kWidth = torch::empty(
@@ -57,7 +55,7 @@ SparseConvolutionKernelMap::forward(AutogradContext *ctx,
         },
         opt);
     if (!transposed) {
-        TORCH_CHECK_VALUE(inFeatures.size(0) == sizes[0],
+        TORCH_CHECK_VALUE(inFeatures.size(0) == srcVoxels,
                           "The number of input features must match the number of voxels");
         TORCH_CHECK_VALUE(
             kernels.dim() == 5,
@@ -74,7 +72,7 @@ SparseConvolutionKernelMap::forward(AutogradContext *ctx,
         kWidth[2] = kernels.size(4);
         kernels   = kernels.permute({2, 3, 4, 1, 0}).reshape({-1, inC, outC}).contiguous();
     } else {
-        TORCH_CHECK_VALUE(inFeatures.size(0) == sizes[1],
+        TORCH_CHECK_VALUE(inFeatures.size(0) == dstVoxels,
                           "The number of input features must match the number of voxels");
         TORCH_CHECK_VALUE(
             kernels.dim() == 5,
@@ -96,15 +94,14 @@ SparseConvolutionKernelMap::forward(AutogradContext *ctx,
     ctx->save_for_backward({inFeatures, kernels, nbmaps, nbsizes});
     ctx->saved_data["transposed"]   = transposed;
     ctx->saved_data["kernel_width"] = kWidth;
-    ctx->saved_data["use_me"]       = packInfo.useME();
 
     torch::Tensor output;
-    if (packInfo.targetGrid().total_voxels() > 0) {
+    if (dstVoxels > 0) {
         auto opt = torch::TensorOptions().dtype(inFeatures.dtype()).device(inFeatures.device());
         if (!transposed) {
-            output = torch::zeros({sizes[1], kernels.size(-1)}, opt);
+            output = torch::zeros({dstVoxels, kernels.size(-1)}, opt);
         } else {
-            output = torch::zeros({sizes[0], kernels.size(-1)}, opt);
+            output = torch::zeros({srcVoxels, kernels.size(-1)}, opt);
         }
         // NOTE: Francis: We need .cpu().contiguous() here because we copied the convolution
         //       implementation from torch_sparse which runs std::max_element on a pointer
@@ -137,7 +134,6 @@ SparseConvolutionKernelMap::backward(AutogradContext *ctx, variable_list grad_ou
     Variable nbsizes     = saved.at(3);
     bool transposed      = ctx->saved_data["transposed"].toBool();
     torch::Tensor kWidth = ctx->saved_data["kernel_width"].toTensor();
-    bool use_me          = ctx->saved_data["use_me"].toBool();
 
     torch::Tensor gradInput  = torch::zeros_like(inFeatures);
     torch::Tensor gradWeight = torch::zeros_like(kernels);
@@ -145,27 +141,16 @@ SparseConvolutionKernelMap::backward(AutogradContext *ctx, variable_list grad_ou
     Variable gradOut = grad_output.at(0);
 
     if (gradOut.size(0) != 0) {
-        if (use_me && gradOut.is_cuda()) {
-            ops::dispatchMESparseConvolutionKernelMapGrad(inFeatures,
-                                                          gradInput,
-                                                          gradOut.contiguous(),
-                                                          kernels,
-                                                          gradWeight,
-                                                          nbmaps,
-                                                          nbsizes.cpu().contiguous(),
-                                                          transposed);
-        } else {
-            FVDB_DISPATCH_KERNEL_DEVICE(gradOut.device(), [&]() {
-                ops::dispatchSparseConvolutionKernelMapGrad<DeviceTag>(inFeatures,
-                                                                       gradInput,
-                                                                       gradOut.contiguous(),
-                                                                       kernels,
-                                                                       gradWeight,
-                                                                       nbmaps,
-                                                                       nbsizes.cpu().contiguous(),
-                                                                       transposed);
-            });
-        }
+        FVDB_DISPATCH_KERNEL_DEVICE(gradOut.device(), [&]() {
+            ops::dispatchSparseConvolutionKernelMapGrad<DeviceTag>(inFeatures,
+                                                                   gradInput,
+                                                                   gradOut.contiguous(),
+                                                                   kernels,
+                                                                   gradWeight,
+                                                                   nbmaps,
+                                                                   nbsizes.cpu().contiguous(),
+                                                                   transposed);
+        });
     }
 
     const int outC = gradWeight.size(-1), inC = gradWeight.size(-2);
@@ -186,8 +171,16 @@ SparseConvolutionKernelMap::backward(AutogradContext *ctx, variable_list grad_ou
                                    outC})
                          .permute({3, 4, 2, 1, 0});
     }
-    return {
-        gradInput, gradWeight, torch::Tensor(), torch::Tensor(), torch::Tensor(), torch::Tensor()};
+    // Gradients for: inFeatures, kernels, neighborMap, neighborSizes, srcVoxels, dstVoxels,
+    //                middleAcceleration, transposed
+    return {gradInput,
+            gradWeight,
+            torch::Tensor(),
+            torch::Tensor(),
+            torch::Tensor(),
+            torch::Tensor(),
+            torch::Tensor(),
+            torch::Tensor()};
 }
 
 } // namespace autograd

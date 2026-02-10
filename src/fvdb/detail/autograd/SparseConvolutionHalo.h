@@ -4,7 +4,6 @@
 #ifndef FVDB_DETAIL_AUTOGRAD_SPARSECONVOLUTIONHALO_H
 #define FVDB_DETAIL_AUTOGRAD_SPARSECONVOLUTIONHALO_H
 
-#include <fvdb/SparseConvPackInfo.h>
 #include <fvdb/detail/GridBatchImpl.h>
 
 #include <torch/autograd.h>

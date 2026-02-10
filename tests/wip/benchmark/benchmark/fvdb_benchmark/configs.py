@@ -15,7 +15,7 @@ import fvdb
 class BaseConfig(ABC):
     in_channels: int
     dataset_paths: list[str]
-    baselines: list[str] = ["ts", "fvdb::igemm_mode1", "fvdb::cutlass"]
+    baselines: list[str] = ["ts", "fvdb::default"]
 
     def get_aux_inputs(self, vdb_tensor: VDBTensor) -> dict:
         return {}
@@ -111,7 +111,7 @@ class KITTISegmentationConfig(BaseConfig):
 class UpDownConfig(BaseConfig):
     in_channels: int = 64
     dataset_paths: list[str] = [str(Path(__file__).parent.parent / "data" / "kitti")]
-    baselines: list[str] = ["ts", "fvdb::igemm_mode1"]
+    baselines: list[str] = ["ts", "fvdb::default"]
 
     def _make_model(self, baseline: str) -> nn.Module:
         from fvdb_benchmark.model.updown import UpDown

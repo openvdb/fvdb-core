@@ -825,8 +825,6 @@ struct GridBatch : torch::CustomClassHolder {
                                             const Vec3iOrScalar &kernelSize,
                                             const Vec3iOrScalar &stride);
 
-    std::vector<torch::Tensor> computeBrickHaloBuffer(bool benchmark) const;
-
     /// @brief Perform one integration step of the TSDF fusion algorithm on a batch of sparse grids.
     ///        The TSDF fusion algorithm integrates depth and feature images (e.g. colors)
     ///        from multiple views into a single volume containing a truncated signed distance

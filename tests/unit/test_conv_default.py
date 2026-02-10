@@ -253,8 +253,8 @@ class TestConvDefault(unittest.TestCase):
         conv_plan = ConvolutionPlan.from_grid_batch(
             kernel_size=self.KERNEL_SIZE, stride=1, source_grid=grid_batch, target_grid=dst_grid_batch
         )
-        self.assertEqual(str(conv_plan._backend), "ConvPackBackend.GATHER_SCATTER")
-        print(f"Confirmed that the conv plan backend is GATHER_SCATTER.")
+        self.assertEqual(conv_plan._method, "gather_scatter")
+        print(f"Confirmed that the conv plan method is gather_scatter.")
 
         # Execute the convolution plan!
         sparse_convolved_jagged = conv_plan.execute(features, kernel_with_channels)
@@ -411,8 +411,8 @@ class TestConvDefault(unittest.TestCase):
         conv_plan = ConvolutionPlan.from_grid_batch(
             kernel_size=self.KERNEL_SIZE, stride=1, source_grid=grid_batch, target_grid=dst_grid_batch
         )
-        self.assertEqual(str(conv_plan._backend), "ConvPackBackend.GATHER_SCATTER")
-        print(f"Confirmed that the conv plan backend is GATHER_SCATTER.")
+        self.assertEqual(conv_plan._method, "gather_scatter")
+        print(f"Confirmed that the conv plan method is gather_scatter.")
 
         # Execute the convolution plan!
         self.assertEqual(num_impulses, len(impulse_coords))
@@ -501,7 +501,7 @@ class TestConvDefault(unittest.TestCase):
         conv_plan = ConvolutionPlan.from_grid_batch(
             kernel_size=self.KERNEL_SIZE, stride=1, source_grid=grid_batch, target_grid=dst_grid_batch
         )
-        self.assertEqual(str(conv_plan._backend), "ConvPackBackend.GATHER_SCATTER")
+        self.assertEqual(conv_plan._method, "gather_scatter")
         print("Created convolution plan.")
 
         # =====================================================================
