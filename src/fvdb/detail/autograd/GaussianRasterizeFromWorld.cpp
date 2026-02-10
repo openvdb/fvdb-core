@@ -4,6 +4,7 @@
 #include <fvdb/detail/autograd/GaussianRasterizeFromWorld.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldBackward.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
 
@@ -36,6 +37,13 @@ RasterizeGaussiansToPixelsFromWorld3DGS::forward(
     std::optional<RasterizeGaussiansToPixelsFromWorld3DGS::Variable> masks) {
     FVDB_FUNC_RANGE_WITH_NAME("RasterizeGaussiansToPixelsFromWorld3DGS::forward");
 
+    fvdb::detail::ops::RenderSettings settings;
+    settings.imageWidth   = imageWidth;
+    settings.imageHeight  = imageHeight;
+    settings.imageOriginW = imageOriginW;
+    settings.imageOriginH = imageOriginH;
+    settings.tileSize     = tileSize;
+
     auto outputs = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
         return ops::dispatchGaussianRasterizeFromWorld3DGSForward<DeviceTag>(
             means,
@@ -49,11 +57,7 @@ RasterizeGaussiansToPixelsFromWorld3DGS::forward(
             distortionCoeffs,
             rollingShutterType,
             cameraModel,
-            imageWidth,
-            imageHeight,
-            imageOriginW,
-            imageOriginH,
-            tileSize,
+            settings,
             tileOffsets,
             tileGaussianIds,
             backgrounds,
@@ -154,6 +158,13 @@ RasterizeGaussiansToPixelsFromWorld3DGS::backward(
     const auto rollingShutterType = static_cast<fvdb::detail::ops::RollingShutterType>(
         ctx->saved_data["rollingShutterType"].toInt());
 
+    fvdb::detail::ops::RenderSettings settings;
+    settings.imageWidth   = imageWidth;
+    settings.imageHeight  = imageHeight;
+    settings.imageOriginW = imageOriginW;
+    settings.imageOriginH = imageOriginH;
+    settings.tileSize     = tileSize;
+
     auto grads = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
         return ops::dispatchGaussianRasterizeFromWorld3DGSBackward<DeviceTag>(
             means,
@@ -167,11 +178,7 @@ RasterizeGaussiansToPixelsFromWorld3DGS::backward(
             distortionCoeffs,
             rollingShutterType,
             cameraModel,
-            imageWidth,
-            imageHeight,
-            imageOriginW,
-            imageOriginH,
-            tileSize,
+            settings,
             tileOffsets,
             tileGaussianIds,
             renderedAlphas,

@@ -5,6 +5,7 @@
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLDBACKWARD_H
 
 #include <fvdb/detail/ops/gsplat/GaussianCameraModels.h>
+#include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
 
 #include <torch/types.h>
 
@@ -40,11 +41,7 @@ dispatchGaussianRasterizeFromWorld3DGSBackward(
     const RollingShutterType rollingShutterType,
     const CameraModel cameraModel,
     // Render settings
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
-    const uint32_t tileSize,
+    const RenderSettings &settings,
     // Intersections
     const torch::Tensor &tileOffsets,     // [C, tileH, tileW]
     const torch::Tensor &tileGaussianIds, // [n_isects] values in [0, C*N)

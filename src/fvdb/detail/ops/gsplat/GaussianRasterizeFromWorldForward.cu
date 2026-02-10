@@ -417,16 +417,18 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
     const torch::Tensor &distortionCoeffs,
     const RollingShutterType rollingShutterType,
     const CameraModel cameraModel,
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
-    const uint32_t tileSize,
+    const RenderSettings &settings,
     const torch::Tensor &tileOffsets,
     const torch::Tensor &tileGaussianIds,
     const at::optional<torch::Tensor> &backgrounds,
     const at::optional<torch::Tensor> &masks) {
     FVDB_FUNC_RANGE();
+
+    const uint32_t imageWidth   = settings.imageWidth;
+    const uint32_t imageHeight  = settings.imageHeight;
+    const uint32_t imageOriginW = settings.imageOriginW;
+    const uint32_t imageOriginH = settings.imageOriginH;
+    const uint32_t tileSize     = settings.tileSize;
 
     TORCH_CHECK_VALUE(means.is_cuda(), "means must be CUDA");
     TORCH_CHECK_VALUE(features.is_cuda(), "features must be CUDA");
@@ -531,11 +533,7 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCPU>(const torch::Tensor &
                                                            const torch::Tensor &,
                                                            const RollingShutterType,
                                                            const CameraModel,
-                                                           const uint32_t,
-                                                           const uint32_t,
-                                                           const uint32_t,
-                                                           const uint32_t,
-                                                           const uint32_t,
+                                                           const RenderSettings &,
                                                            const torch::Tensor &,
                                                            const torch::Tensor &,
                                                            const at::optional<torch::Tensor> &,
