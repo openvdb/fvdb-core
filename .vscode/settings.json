@@ -20,14 +20,14 @@
     "C_Cpp.clang_format_path": "${env:CONDA_PREFIX}/envs/fvdb/bin/clang-format-18",
     "C_Cpp.autoAddFileAssociations": false,
 
-    // "[cpp]": {
-    //     "editor.defaultFormatter": "seaube.clangformat",
-    //     "editor.formatOnSave": true
-    // },
-    // "[cuda-cpp]": {
-    //     "editor.defaultFormatter": "seaube.clangformat",
-    //     "editor.formatOnSave": true
-    // },
+    "[cpp]": {
+        "editor.defaultFormatter": "seaube.clangformat",
+        "editor.formatOnSave": true
+    },
+    "[cuda-cpp]": {
+        "editor.defaultFormatter": "seaube.clangformat",
+        "editor.formatOnSave": true
+    },
     "[python]": {
         "editor.defaultFormatter": "ms-python.black-formatter",
         "editor.formatOnSave": true,

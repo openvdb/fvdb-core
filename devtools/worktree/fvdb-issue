@@ -71,6 +71,37 @@ RC_BASE="$FVDB_RC_PATH"
 CORE_GH_REPO="$FVDB_CORE_GH_REPO"
 RC_GH_REPO="$FVDB_RC_GH_REPO"
 
+# Check required dependencies
+check_dependencies() {
+    local missing=()
+    command -v gh >/dev/null 2>&1 || missing+=("gh (GitHub CLI: https://cli.github.com/)")
+    command -v jq >/dev/null 2>&1 || missing+=("jq (apt-get install jq / brew install jq)")
+    command -v git >/dev/null 2>&1 || missing+=("git")
+    command -v fvdb-open >/dev/null 2>&1 || missing+=("fvdb-open (run install.sh first)")
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo -e "${RED}Error: Missing required dependencies:${NC}"
+        for dep in "${missing[@]}"; do
+            echo "  - $dep"
+        done
+        exit 1
+    fi
+}
+
+check_dependencies
+
+# Get the default branch ref for a local repo (e.g., origin/main or origin/master)
+get_default_branch_ref() {
+    local base="$1"
+    local default_ref
+    default_ref=$(git -C "$base" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|^refs/remotes/||') || true
+    if [[ -z "$default_ref" ]]; then
+        # Fallback: try to detect from remote
+        default_ref="origin/main"
+    fi
+    echo "$default_ref"
+}
+
 usage() {
     echo "Usage: fvdb-issue <issue-url-or-number> [options]"
     echo ""
@@ -274,8 +305,9 @@ else
         git -C "$LOCAL_BASE" fetch origin "$BRANCH_NAME"
         git -C "$LOCAL_BASE" worktree add "$WORKTREE_PATH" "$BRANCH_NAME"
     else
-        # Create new branch from main
-        git -C "$LOCAL_BASE" worktree add "$WORKTREE_PATH" -b "$BRANCH_NAME" origin/main
+        # Create new branch from default branch
+        DEFAULT_REF=$(get_default_branch_ref "$LOCAL_BASE")
+        git -C "$LOCAL_BASE" worktree add "$WORKTREE_PATH" -b "$BRANCH_NAME" "$DEFAULT_REF"
     fi
 
     echo -e "${GREEN}Created worktree at ${WORKTREE_PATH}${NC}"
@@ -294,10 +326,12 @@ else
     TASK_DESC="implement this issue"
 fi
 
+ITEM_TYPE_LOWER=$(printf '%s' "$ITEM_TYPE" | tr '[:upper:]' '[:lower:]')
+
 cat > "${CURSOR_RULES_DIR}/current-issue.md" << EOF
 # Current Task: ${ITEM_TYPE} #${ISSUE_NUM}
 
-> **ACTION REQUIRED**: When you receive a message referencing this file, immediately start by exploring the codebase to understand the ${ITEM_TYPE,,}, then create a detailed implementation plan.
+> **ACTION REQUIRED**: When you receive a message referencing this file, immediately start by exploring the codebase to understand the ${ITEM_TYPE_LOWER}, then create a detailed implementation plan.
 
 ## ${ISSUE_TITLE}
 

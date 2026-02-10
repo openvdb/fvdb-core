@@ -86,14 +86,41 @@ if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
     echo -e "${YELLOW}~/bin is not in your PATH.${NC}"
     echo ""
 
-    # Detect shell config file
+    # Detect shell config file, preferring the active shell
     SHELL_CONFIG=""
-    if [[ -f "$HOME/.bashrc" ]]; then
-        SHELL_CONFIG="$HOME/.bashrc"
-    elif [[ -f "$HOME/.bash_profile" ]]; then
-        SHELL_CONFIG="$HOME/.bash_profile"
-    elif [[ -f "$HOME/.zshrc" ]]; then
-        SHELL_CONFIG="$HOME/.zshrc"
+
+    # Determine current shell name from $SHELL, falling back to ps if needed
+    SHELL_NAME="${SHELL##*/}"
+    if [[ -z "$SHELL_NAME" ]]; then
+        if command -v ps >/dev/null 2>&1; then
+            SHELL_NAME="$(ps -p $$ -o comm= 2>/dev/null)"
+        fi
+    fi
+
+    case "$SHELL_NAME" in
+        bash)
+            if [[ -f "$HOME/.bashrc" ]]; then
+                SHELL_CONFIG="$HOME/.bashrc"
+            elif [[ -f "$HOME/.bash_profile" ]]; then
+                SHELL_CONFIG="$HOME/.bash_profile"
+            fi
+            ;;
+        zsh)
+            if [[ -f "$HOME/.zshrc" ]]; then
+                SHELL_CONFIG="$HOME/.zshrc"
+            fi
+            ;;
+    esac
+
+    # Fallback: pick a reasonable config file based on existence only
+    if [[ -z "$SHELL_CONFIG" ]]; then
+        if [[ -f "$HOME/.bashrc" ]]; then
+            SHELL_CONFIG="$HOME/.bashrc"
+        elif [[ -f "$HOME/.bash_profile" ]]; then
+            SHELL_CONFIG="$HOME/.bash_profile"
+        elif [[ -f "$HOME/.zshrc" ]]; then
+            SHELL_CONFIG="$HOME/.zshrc"
+        fi
     fi
 
     if [[ -n "$SHELL_CONFIG" ]]; then

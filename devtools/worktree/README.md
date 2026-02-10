@@ -65,9 +65,12 @@ Alternatively, set these as environment variables.
 ## Requirements
 
 - **Git** - with worktree support (Git 2.5+)
+- **Bash 4.0+** - scripts use Bash 4 features; macOS ships Bash 3.2, so install a newer version via `brew install bash`
 - **GitHub CLI** (`gh`) - for `fvdb-issue` to fetch issue details
 - **jq** - for `fvdb-issue` to parse JSON
-- **Cursor IDE** - or modify the scripts to use your preferred editor
+- **Cursor IDE** - or set `FVDB_EDITOR_CMD` to your preferred editor (e.g., `code`)
+- **Optional: `claude` CLI** - required only if you use the `--claude` flag with `fvdb-issue`
+- **Linux recommended** - `fvdb-close` "in use" detection uses `/proc` on Linux; on macOS it falls back to `lsof` (slower, may miss some processes)
 
 Install requirements:
 ```bash
@@ -76,7 +79,7 @@ sudo apt-get install jq
 # GitHub CLI: https://cli.github.com/
 
 # macOS
-brew install jq gh
+brew install bash jq gh
 ```
 
 ## Tools

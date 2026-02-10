@@ -77,18 +77,26 @@ usage() {
 # Check if a directory is in use (processes with cwd there)
 # Returns true (exit 0) if in use, false (exit 1) if not - standard shell convention
 # Note: This detects terminals but may not detect all Cursor windows (remote server architecture)
+# Linux uses /proc; macOS falls back to lsof
 check_in_use() {
     local check_path="$1"
 
-    # Check if any process has cwd in the directory (fast, catches terminals)
-    for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
-        if [[ -r "/proc/$pid/cwd" ]]; then
-            local cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)
-            if [[ "$cwd" == "$check_path"* ]]; then
-                return 0
+    if [[ -d /proc/1 ]]; then
+        # Linux: check /proc for processes with cwd in the directory
+        for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
+            if [[ -r "/proc/$pid/cwd" ]]; then
+                local cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)
+                if [[ "$cwd" == "$check_path"* ]]; then
+                    return 0
+                fi
             fi
+        done
+    elif command -v lsof >/dev/null 2>&1; then
+        # macOS/other: fall back to lsof
+        if lsof +D "$check_path" >/dev/null 2>&1; then
+            return 0
         fi
-    done
+    fi
 
     return 1
 }
@@ -157,13 +165,23 @@ remove_worktree() {
         exit 1
     fi
 
-    wt_info=$(git -C "$base_for_branch" worktree list | grep "$wt_path" || true)
+    wt_info=$(git -C "$base_for_branch" worktree list | grep -F -- "$wt_path" || true)
     # Branch names are in [brackets], detached HEAD shows (parentheses)
     if [[ "$wt_info" == *"["*"]"* ]]; then
         branch_name=$(echo "$wt_info" | sed -n 's/.*\[\(.*\)\].*/\1/p')
     fi
 
-    git -C "$base_for_branch" worktree remove "$wt_path" --force
+    # Try to remove without force first; offer force if it fails
+    if ! git -C "$base_for_branch" worktree remove "$wt_path" 2>/dev/null; then
+        echo -e "${YELLOW}Worktree has uncommitted changes or untracked files.${NC}"
+        read -p "Force remove? (discards uncommitted changes) [y/n]: " force_rm
+        if [[ "$force_rm" == "y" || "$force_rm" == "Y" ]]; then
+            git -C "$base_for_branch" worktree remove "$wt_path" --force
+        else
+            echo "Aborted. Commit or stash your changes first."
+            exit 0
+        fi
+    fi
 
     echo -e "${GREEN}Removed worktree: ${wt_name}${NC}"
     echo ""
