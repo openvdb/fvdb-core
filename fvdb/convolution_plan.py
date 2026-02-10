@@ -186,10 +186,17 @@ class ConvolutionPlan:
             target_grid = source_grid.conv_grid(kernel_size, stride)
 
         method, neighbor_map, neighbor_sizes = cls._configure_backend(
-            source_grid, target_grid, kernel_size, stride, channel_pairs, False, expert_config,
+            source_grid,
+            target_grid,
+            kernel_size,
+            stride,
+            channel_pairs,
+            False,
+            expert_config,
         )
-        return cls(source_grid, target_grid, kernel_size, stride,
-                   channel_pairs, False, method, neighbor_map, neighbor_sizes)
+        return cls(
+            source_grid, target_grid, kernel_size, stride, channel_pairs, False, method, neighbor_map, neighbor_sizes
+        )
 
     @classmethod
     def from_grid_batch_transposed(
@@ -254,10 +261,17 @@ class ConvolutionPlan:
             raise ValueError("Target grid must be provided for transposed convolution, except for dense backend.")
 
         method, neighbor_map, neighbor_sizes = cls._configure_backend(
-            source_grid, target_grid, kernel_size, stride, channel_pairs, True, expert_config,
+            source_grid,
+            target_grid,
+            kernel_size,
+            stride,
+            channel_pairs,
+            True,
+            expert_config,
         )
-        return cls(source_grid, target_grid, kernel_size, stride,
-                   channel_pairs, True, method, neighbor_map, neighbor_sizes)
+        return cls(
+            source_grid, target_grid, kernel_size, stride, channel_pairs, True, method, neighbor_map, neighbor_sizes
+        )
 
     @classmethod
     def from_grid(
@@ -335,11 +349,25 @@ class ConvolutionPlan:
             target_grid_batch = GridBatch(impl=target_grid._impl)
 
         method, neighbor_map, neighbor_sizes = cls._configure_backend(
-            source_grid_batch, target_grid_batch, kernel_size, stride,
-            channel_pairs, False, expert_config,
+            source_grid_batch,
+            target_grid_batch,
+            kernel_size,
+            stride,
+            channel_pairs,
+            False,
+            expert_config,
         )
-        return cls(source_grid_batch, target_grid_batch, kernel_size, stride,
-                   channel_pairs, False, method, neighbor_map, neighbor_sizes)
+        return cls(
+            source_grid_batch,
+            target_grid_batch,
+            kernel_size,
+            stride,
+            channel_pairs,
+            False,
+            method,
+            neighbor_map,
+            neighbor_sizes,
+        )
 
     @classmethod
     def from_grid_transposed(
@@ -393,11 +421,25 @@ class ConvolutionPlan:
             target_grid_batch = GridBatch(impl=target_grid._impl)
 
         method, neighbor_map, neighbor_sizes = cls._configure_backend(
-            source_grid_batch, target_grid_batch, kernel_size, stride,
-            channel_pairs, True, expert_config,
+            source_grid_batch,
+            target_grid_batch,
+            kernel_size,
+            stride,
+            channel_pairs,
+            True,
+            expert_config,
         )
-        return cls(source_grid_batch, target_grid_batch, kernel_size, stride,
-                   channel_pairs, True, method, neighbor_map, neighbor_sizes)
+        return cls(
+            source_grid_batch,
+            target_grid_batch,
+            kernel_size,
+            stride,
+            channel_pairs,
+            True,
+            method,
+            neighbor_map,
+            neighbor_sizes,
+        )
 
     @classmethod
     def from_plan_transposed(cls, plan: "ConvolutionPlan") -> "ConvolutionPlan":
@@ -440,11 +482,25 @@ class ConvolutionPlan:
         channel_pairs = tuple((dst, src) for src, dst in plan._channel_pairs)
 
         method, neighbor_map, neighbor_sizes = cls._configure_backend(
-            source_grid, target_grid, plan._kernel_size, plan._stride,
-            channel_pairs, transposed, _DEFAULT_CONFIG,
+            source_grid,
+            target_grid,
+            plan._kernel_size,
+            plan._stride,
+            channel_pairs,
+            transposed,
+            _DEFAULT_CONFIG,
         )
-        return cls(source_grid, target_grid, plan._kernel_size, plan._stride,
-                   channel_pairs, transposed, method, neighbor_map, neighbor_sizes)
+        return cls(
+            source_grid,
+            target_grid,
+            plan._kernel_size,
+            plan._stride,
+            channel_pairs,
+            transposed,
+            method,
+            neighbor_map,
+            neighbor_sizes,
+        )
 
     # ============================================================
     #                 Validation
@@ -576,10 +632,14 @@ class ConvolutionPlan:
             dst_voxels = int(self._target_grid.total_voxels)
             middle_accel = _vec_is_all(self._stride, 1)
             out_tensor = _fvdb_cpp.sparse_conv_kernel_map(
-                data.jdata, weights,
-                self._neighbor_map, self._neighbor_sizes,
-                src_voxels, dst_voxels,
-                middle_accel, self._transposed,
+                data.jdata,
+                weights,
+                self._neighbor_map,
+                self._neighbor_sizes,
+                src_voxels,
+                dst_voxels,
+                middle_accel,
+                self._transposed,
             )
             result = self._target_grid.jagged_like(out_tensor)
 
@@ -698,7 +758,10 @@ class ConvolutionPlan:
 
         # Default / gather_scatter — build the kernel map
         neighbor_map, neighbor_sizes = _fvdb_cpp.build_kernel_map(
-            source_grid._impl, target_grid._impl, kernel_size, stride,
+            source_grid._impl,
+            target_grid._impl,
+            kernel_size,
+            stride,
         )
         return ("gather_scatter", neighbor_map, neighbor_sizes)
 

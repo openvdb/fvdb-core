@@ -31,7 +31,6 @@ def build_kernel_map(
     kernel_size: Vec3iOrScalar,
     stride: Vec3iOrScalar,
 ) -> tuple[torch.Tensor, torch.Tensor]: ...
-
 def sparse_conv_kernel_map(
     in_features: torch.Tensor,
     kernels: torch.Tensor,
