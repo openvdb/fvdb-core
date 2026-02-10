@@ -254,6 +254,7 @@ class TestConvDefault(unittest.TestCase):
             kernel_size=self.KERNEL_SIZE, stride=1, source_grid=grid_batch, target_grid=dst_grid_batch
         )
         from fvdb.convolution_plan import _GatherScatterBackend
+
         self.assertIsInstance(conv_plan._backend, _GatherScatterBackend)
         print(f"Confirmed that the conv plan backend is gather_scatter.")
 
@@ -413,6 +414,7 @@ class TestConvDefault(unittest.TestCase):
             kernel_size=self.KERNEL_SIZE, stride=1, source_grid=grid_batch, target_grid=dst_grid_batch
         )
         from fvdb.convolution_plan import _GatherScatterBackend
+
         self.assertIsInstance(conv_plan._backend, _GatherScatterBackend)
         print(f"Confirmed that the conv plan backend is gather_scatter.")
 
@@ -504,6 +506,7 @@ class TestConvDefault(unittest.TestCase):
             kernel_size=self.KERNEL_SIZE, stride=1, source_grid=grid_batch, target_grid=dst_grid_batch
         )
         from fvdb.convolution_plan import _GatherScatterBackend
+
         self.assertIsInstance(conv_plan._backend, _GatherScatterBackend)
         print("Created convolution plan.")
 
