@@ -57,7 +57,7 @@ class GaussianSplat3d {
         torch::Tensor perGaussianConic;          // [C, N, 3]
         torch::Tensor perGaussianRenderQuantity; // [C, N, 3]
         torch::Tensor perGaussianDepth;          // [C, N, 1]
-        torch::Tensor perGaussianOpacity;        // [N]
+        torch::Tensor perGaussianOpacity;        // [N] or [C, N] if antialias is true
         torch::Tensor perGaussianRadius;         // [C, N]
         torch::Tensor tileOffsets;               // [C, num_tiles_h, num_tiles_w, 2]
         torch::Tensor tileGaussianIds; // [C, num_tiles_h, num_tiles_w, max_gaussians_per_tile]
@@ -131,6 +131,12 @@ class GaussianSplat3d {
 
         torch::Tensor
         opacities() const {
+            if (perGaussianOpacity.dim() == 1) {
+                // perGaussianOpacity is [N]; expand to [C, N] view
+                const int64_t C = perGaussian2dMean.size(0);
+                return perGaussianOpacity.unsqueeze(0).expand({C, -1});
+            }
+            // Already [C, N] (e.g. antialias case where compensation varies per camera)
             return perGaussianOpacity;
         }
 
