@@ -999,9 +999,7 @@ GridBatch::points_in_grid(const JaggedTensor &points) const {
         "Expected points to have 1 list dimension, i.e. be a single list of coordinate values, but got",
         points.ldim(),
         "list dimensions");
-    return FVDB_DISPATCH_KERNEL(device(), [&]() {
-        return fvdb::detail::ops::dispatchPointsInGrid<DeviceTag>(*mImpl, points);
-    });
+    return fvdb::detail::ops::pointsInGrid(*mImpl, points);
 }
 
 JaggedTensor
@@ -1057,9 +1055,7 @@ GridBatch::ijk_to_index(const JaggedTensor &ijk, bool cumulative) const {
         "Expected ijk to have 1 list dimension, i.e. be a single list of coordinate values, but got",
         ijk.ldim(),
         "list dimensions");
-    return FVDB_DISPATCH_KERNEL(device(), [&]() {
-        return fvdb::detail::ops::dispatchIjkToIndex<DeviceTag>(*mImpl, ijk, cumulative);
-    });
+    return fvdb::detail::ops::ijkToIndex(*mImpl, ijk, cumulative);
 }
 
 JaggedTensor

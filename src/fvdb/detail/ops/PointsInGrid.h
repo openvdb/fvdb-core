@@ -5,16 +5,19 @@
 #define FVDB_DETAIL_OPS_POINTSINGRID_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
-
-#include <torch/types.h>
 
 namespace fvdb {
 namespace detail {
+
+class GridBatchImpl;
+
 namespace ops {
 
-template <torch::DeviceType>
-JaggedTensor dispatchPointsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points);
+/// @brief Check which points fall inside active grid voxels.
+/// @param grid   The grid batch to test against.
+/// @param points JaggedTensor of [N, 3] floating-point coordinates.
+/// @return JaggedTensor of [N] bool mask (true if point is in an active voxel).
+JaggedTensor pointsInGrid(GridBatchImpl const &grid, JaggedTensor const &points);
 
 } // namespace ops
 } // namespace detail
