@@ -1,0 +1,171 @@
+name: PR Workflow Commands
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  rerun-failed-workflows:
+    name: Rerun Failed Workflows
+    if: >
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '/rerun-all') &&
+      (
+        github.event.comment.author_association == 'OWNER' ||
+        github.event.comment.author_association == 'MEMBER' ||
+        github.event.comment.author_association == 'COLLABORATOR'
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      pull-requests: write
+      checks: write
+    steps:
+      - name: Add reaction to comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'rocket'
+            });
+
+      - uses: estroz/rerun-actions@v0.3.0
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          comment_id: ${{ github.event.comment.id }}
+
+  run-workflows:
+    name: Run Workflows
+    if: >
+      github.event.issue.pull_request &&
+      (
+        contains(github.event.comment.body, '/run-all') ||
+        contains(github.event.comment.body, '/run-tests') ||
+        contains(github.event.comment.body, '/run-codestyle') ||
+        contains(github.event.comment.body, '/run-cu128') ||
+        contains(github.event.comment.body, '/run-cu130')
+      ) &&
+      (
+        github.event.comment.author_association == 'OWNER' ||
+        github.event.comment.author_association == 'MEMBER' ||
+        github.event.comment.author_association == 'COLLABORATOR'
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      pull-requests: write
+    steps:
+      - name: Add reaction to comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'rocket'
+            });
+
+      - name: Trigger workflows
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Get PR branch
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            const ref = pr.data.head.ref;
+            console.log(`PR branch: ${ref}`);
+
+            const comment = context.payload.comment.body;
+
+            const workflowMap = {
+              '/run-tests': 'tests.yml',
+              '/run-codestyle': 'codestyle.yml',
+              '/run-cu128': 'cu128.yml',
+              '/run-cu130': 'cu130.yml'
+            };
+
+            // Helper to check if command is present (with word boundary)
+            const hasCommand = (cmd) => new RegExp(`${cmd}(?:\\s|$)`).test(comment);
+
+            // Determine which workflows to run
+            let workflowsToRun = [];
+            if (hasCommand('/run-all')) {
+              workflowsToRun = Object.values(workflowMap);
+            } else {
+              for (const [command, workflow] of Object.entries(workflowMap)) {
+                if (hasCommand(command)) {
+                  workflowsToRun.push(workflow);
+                }
+              }
+            }
+
+            // Helper to find the triggered run with retries
+            async function findWorkflowRun(workflowId, beforeTime) {
+              const maxRetries = 5;
+              const delayMs = 3000;
+
+              for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                await new Promise(resolve => setTimeout(resolve, delayMs));
+                console.log(`Looking for ${workflowId} run (attempt ${attempt}/${maxRetries})...`);
+
+                const runs = await github.rest.actions.listWorkflowRuns({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  workflow_id: workflowId,
+                  branch: ref,
+                  per_page: 10,
+                  event: 'workflow_dispatch'
+                });
+
+                const run = runs.data.workflow_runs.find(r =>
+                  new Date(r.created_at) >= beforeTime
+                );
+
+                if (run) {
+                  console.log(`Found run: ${run.html_url}`);
+                  return run;
+                }
+              }
+              return null;
+            }
+
+            const results = [];
+            for (const workflow of workflowsToRun) {
+              const beforeTime = new Date();
+              try {
+                console.log(`Triggering ${workflow} on ref ${ref}`);
+                await github.rest.actions.createWorkflowDispatch({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  workflow_id: workflow,
+                  ref: ref
+                });
+                console.log(`Successfully triggered ${workflow}`);
+
+                const run = await findWorkflowRun(workflow, beforeTime);
+                if (run) {
+                  results.push(`* [\`${workflow}\`](${run.html_url})`);
+                } else {
+                  results.push(`* \`${workflow}\` (run pending)`);
+                }
+              } catch (error) {
+                console.log(`Failed to trigger ${workflow}: ${error.message}`);
+                results.push(`* \`${workflow}\`: ${error.message}`);
+              }
+            }
+
+            // Post summary comment
+            const body = `### Triggered workflows on branch \`${ref}\`\n\n${results.join('\n')}`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });
