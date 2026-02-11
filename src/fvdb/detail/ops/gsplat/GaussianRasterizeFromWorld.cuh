@@ -257,6 +257,9 @@ isclRotVectorJacobianProduct(const nanovdb::math::Vec4<T> &quat_wxyz,
                              const nanovdb::math::Mat3<T> &dLossDIsclRot,
                              nanovdb::math::Vec4<T> &dLossDQuat,
                              nanovdb::math::Vec3<T> &dLossDLogScale) {
+    // TODO(fvdb): Consider returning {dLossDQuat, dLossDLogScale} to match other VJP helpers in
+    // this module (e.g. `transformCovarianceWorldToCamVectorJacobianProduct`), rather than using
+    // output reference parameters.
     // iscl_rot = S_inv * R^T, with S_inv = diag(1/scale)
     const nanovdb::math::Mat3<T> R = quaternionToRotationMatrix<T>(quat_wxyz);
     const nanovdb::math::Vec3<T> invScale(T(1) / scale[0], T(1) / scale[1], T(1) / scale[2]);

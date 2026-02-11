@@ -18,6 +18,10 @@ namespace cg = cooperative_groups;
 
 namespace {
 
+// TODO(fvdb): Consider refactoring this kernel to reuse a common rasterization args struct
+// (`RasterizeCommonArgs` or a derived struct) for consistency with the other rasterizers.
+// TODO(fvdb): Consider switching to `PackedTensorAccessor64` for consistency with other
+// rasterization kernels, if/when we need to support larger tensors.
 template <uint32_t NUM_CHANNELS> struct SharedGaussian {
     int32_t id;                       // flattened id in [0, C*N)
     nanovdb::math::Vec3<float> mean;  // world mean
@@ -607,6 +611,8 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
     const int64_t N = means.size(0);
 
     // Opacities may be provided either per-camera ([C,N]) or shared across cameras ([N]).
+    // TODO(fvdb): Avoid materializing a repeated [C,N] tensor when opacities are shared across
+    // cameras (similar to PR #451).
     torch::Tensor opacitiesBatched = opacities;
     if (opacitiesBatched.dim() == 1) {
         TORCH_CHECK_VALUE(opacitiesBatched.size(0) == N,

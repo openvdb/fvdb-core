@@ -23,6 +23,10 @@ template <uint32_t NUM_CHANNELS> struct SharedGaussian {
     float opacity;
 };
 
+// TODO(fvdb): Consider refactoring this kernel to reuse a common rasterization args struct
+// (`RasterizeCommonArgs` or a derived struct) for consistency with the other rasterizers.
+// TODO(fvdb): Consider switching to `PackedTensorAccessor64` for consistency with other
+// rasterization kernels, if/when we need to support larger tensors.
 template <uint32_t NUM_CHANNELS>
 __global__ void
 rasterizeFromWorld3DGSForwardKernel(
@@ -107,8 +111,8 @@ rasterizeFromWorld3DGSForwardKernel(
     }
 
     // Build camera pose for this camera (start/end).
-    nanovdb::math::Mat3<float> R_wc_start, R_wc_end;
-    nanovdb::math::Vec3<float> t_wc_start, t_wc_end;
+    nanovdb::math::Mat3<float> worldToCamRotationStart, worldToCamRotationEnd;
+    nanovdb::math::Vec3<float> worldToCamTranslationStart, worldToCamTranslationEnd;
     {
         // Extract 3x3 rotation and translation from [4,4] row-major.
         const float m00s = worldToCamStart[camId][0][0];
@@ -120,11 +124,11 @@ rasterizeFromWorld3DGSForwardKernel(
         const float m20s = worldToCamStart[camId][2][0];
         const float m21s = worldToCamStart[camId][2][1];
         const float m22s = worldToCamStart[camId][2][2];
-        R_wc_start =
+        worldToCamRotationStart =
             nanovdb::math::Mat3<float>(m00s, m01s, m02s, m10s, m11s, m12s, m20s, m21s, m22s);
-        t_wc_start = nanovdb::math::Vec3<float>(worldToCamStart[camId][0][3],
-                                                worldToCamStart[camId][1][3],
-                                                worldToCamStart[camId][2][3]);
+        worldToCamTranslationStart = nanovdb::math::Vec3<float>(worldToCamStart[camId][0][3],
+                                                                worldToCamStart[camId][1][3],
+                                                                worldToCamStart[camId][2][3]);
 
         const float m00e = worldToCamEnd[camId][0][0];
         const float m01e = worldToCamEnd[camId][0][1];
@@ -135,8 +139,9 @@ rasterizeFromWorld3DGSForwardKernel(
         const float m20e = worldToCamEnd[camId][2][0];
         const float m21e = worldToCamEnd[camId][2][1];
         const float m22e = worldToCamEnd[camId][2][2];
-        R_wc_end = nanovdb::math::Mat3<float>(m00e, m01e, m02e, m10e, m11e, m12e, m20e, m21e, m22e);
-        t_wc_end = nanovdb::math::Vec3<float>(
+        worldToCamRotationEnd =
+            nanovdb::math::Mat3<float>(m00e, m01e, m02e, m10e, m11e, m12e, m20e, m21e, m22e);
+        worldToCamTranslationEnd = nanovdb::math::Vec3<float>(
             worldToCamEnd[camId][0][3], worldToCamEnd[camId][1][3], worldToCamEnd[camId][2][3]);
     }
 
@@ -159,10 +164,10 @@ rasterizeFromWorld3DGSForwardKernel(
                                                        imageHeight,
                                                        imageOriginW,
                                                        imageOriginH,
-                                                       R_wc_start,
-                                                       t_wc_start,
-                                                       R_wc_end,
-                                                       t_wc_end,
+                                                       worldToCamRotationStart,
+                                                       worldToCamTranslationStart,
+                                                       worldToCamRotationEnd,
+                                                       worldToCamTranslationEnd,
                                                        K_cam,
                                                        distPtr,
                                                        numDistCoeffs,
@@ -212,8 +217,8 @@ rasterizeFromWorld3DGSForwardKernel(
     auto *gaussBatch =
         reinterpret_cast<SharedGaussian<NUM_CHANNELS> *>(&idBatch[blockSize]); // [blockSize]
 
-    float T        = 1.0f;
-    int32_t curIdx = -1;
+    float transmittance = 1.0f;
+    int32_t curIdx      = -1;
     float pixOut[NUM_CHANNELS];
 #pragma unroll
     for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
@@ -256,7 +261,11 @@ rasterizeFromWorld3DGSForwardKernel(
         const uint32_t batchSize =
             min((uint32_t)blockSize, (uint32_t)max(0, rangeEnd - batchStart));
         for (uint32_t t = 0; (t < batchSize) && !done; ++t) {
-            const SharedGaussian<NUM_CHANNELS> g   = gaussBatch[t];
+            const SharedGaussian<NUM_CHANNELS> g = gaussBatch[t];
+            // 3DGS ray-ellipsoid visibility in "whitened" coordinates (see 3D-GUT paper Fig. 11).
+            // gro   = S^{-1} R^T (o - μ)
+            // grd   = normalize( S^{-1} R^T d )
+            // gcrod = grd × gro  (distance proxy to principal axis in whitened space)
             const nanovdb::math::Vec3<float> gro   = g.isclR * (ray.origin - g.mean);
             const nanovdb::math::Vec3<float> grd   = normalizeSafe<float>(g.isclR * ray.dir);
             const nanovdb::math::Vec3<float> gcrod = grd.cross(gro);
@@ -267,20 +276,20 @@ rasterizeFromWorld3DGSForwardKernel(
             if (power > 0.f || alpha < 1.f / 255.f) {
                 continue;
             }
-            const float nextT = T * (1.0f - alpha);
-            if (nextT <= 1e-4f) {
+            const float nextTransmittance = transmittance * (1.0f - alpha);
+            if (nextTransmittance <= 1e-4f) {
                 done = true;
                 break;
             }
-            const float contrib = alpha * T;
+            const float contrib = alpha * transmittance;
             const int32_t cid   = g.id / (int32_t)means.size(0);
             const int32_t gid   = g.id % (int32_t)means.size(0);
 #pragma unroll
             for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
                 pixOut[k] += features[cid][gid][k] * contrib;
             }
-            curIdx = (uint32_t)(batchStart + (int32_t)t);
-            T      = nextT;
+            curIdx        = (uint32_t)(batchStart + (int32_t)t);
+            transmittance = nextTransmittance;
         }
     }
 
@@ -288,13 +297,14 @@ rasterizeFromWorld3DGSForwardKernel(
         return;
     }
 
-    outAlphas[imgBasePix]  = 1.0f - T;
+    outAlphas[imgBasePix]  = 1.0f - transmittance;
     outLastIds[imgBasePix] = curIdx;
 #pragma unroll
     for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-        outFeatures[imgBaseFeat + k] = (backgrounds != nullptr)
-                                           ? (pixOut[k] + T * backgrounds[camId * NUM_CHANNELS + k])
-                                           : pixOut[k];
+        outFeatures[imgBaseFeat + k] =
+            (backgrounds != nullptr)
+                ? (pixOut[k] + transmittance * backgrounds[camId * NUM_CHANNELS + k])
+                : pixOut[k];
     }
 }
 
@@ -447,6 +457,9 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
     TORCH_CHECK_VALUE(opacities.is_cuda(), "opacities must be CUDA");
 
     // Opacities may be provided either per-camera ([C,N]) or shared across cameras ([N]).
+    // TODO(fvdb): Avoid materializing a repeated [C,N] tensor when opacities are shared across
+    // cameras. We should be able to pass a view (or otherwise avoid the repeat) similar to the
+    // approach used in PR #451 for other rasterization paths.
     torch::Tensor opacitiesBatched = opacities;
     if (opacitiesBatched.dim() == 1) {
         TORCH_CHECK_VALUE(opacitiesBatched.size(0) == N,
