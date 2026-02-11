@@ -402,14 +402,13 @@ else
     STARTER_PROMPT="Please read the issue in .cursor/rules/current-issue.md and create a plan to implement it."
 
     # Try xclip (Linux), then xsel, then pbcopy (macOS)
-    if command -v xclip &> /dev/null; then
-        echo -n "$STARTER_PROMPT" | xclip -selection clipboard
+    # Combine existence check with actual clipboard write so that runtime failures
+    # (e.g., no X display in SSH) fall through gracefully instead of crashing under set -e
+    if command -v xclip &> /dev/null && echo -n "$STARTER_PROMPT" | xclip -selection clipboard 2>/dev/null; then
         echo -e "${GREEN}Starter prompt copied to clipboard - just paste and send!${NC}"
-    elif command -v xsel &> /dev/null; then
-        echo -n "$STARTER_PROMPT" | xsel --clipboard --input
+    elif command -v xsel &> /dev/null && echo -n "$STARTER_PROMPT" | xsel --clipboard --input 2>/dev/null; then
         echo -e "${GREEN}Starter prompt copied to clipboard - just paste and send!${NC}"
-    elif command -v pbcopy &> /dev/null; then
-        echo -n "$STARTER_PROMPT" | pbcopy
+    elif command -v pbcopy &> /dev/null && echo -n "$STARTER_PROMPT" | pbcopy 2>/dev/null; then
         echo -e "${GREEN}Starter prompt copied to clipboard - just paste and send!${NC}"
     else
         echo -e "${YELLOW}Clipboard not available. Start with:${NC}"
