@@ -145,6 +145,7 @@ struct grid_edge_network_op {
 
 std::vector<JaggedTensor>
 gridEdgeNetwork(GridBatchImpl const &grid, bool returnVoxelCoordinates) {
+    c10::DeviceGuard guard(grid.device());
     grid.checkNonEmptyGrid();
 
     static auto const table =

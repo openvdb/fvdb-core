@@ -80,6 +80,8 @@ JaggedTensor
 serializeEncode(GridBatchImpl const &grid,
                 SpaceFillingCurveType order_type,
                 nanovdb::Coord const &offset) {
+    c10::DeviceGuard guard(grid.device());
+
     static auto const table =
         ::dispatch::dispatch_table_from_op<serialize_encode_op>("serializeEncode");
     return table.select(::dispatch::dispatch_set{grid.device().type()})(grid, order_type, offset);

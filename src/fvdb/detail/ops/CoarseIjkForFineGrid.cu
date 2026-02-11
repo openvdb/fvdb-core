@@ -72,6 +72,7 @@ struct coarse_ijk_for_fine_grid_op {
 
 JaggedTensor
 coarseIjkForFineGrid(GridBatchImpl const &fineGrid, nanovdb::Coord coarseningFactor) {
+    c10::DeviceGuard guard(fineGrid.device());
     fineGrid.checkNonEmptyGrid();
 
     static auto const table =

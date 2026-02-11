@@ -993,12 +993,6 @@ GridBatch::neighbor_indexes(const JaggedTensor &ijk, int32_t extent, int32_t bit
 
 JaggedTensor
 GridBatch::points_in_grid(const JaggedTensor &points) const {
-    c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        points.ldim() == 1,
-        "Expected points to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        points.ldim(),
-        "list dimensions");
     return fvdb::detail::ops::pointsInGrid(*mImpl, points);
 }
 
@@ -1036,74 +1030,50 @@ GridBatch::cubes_in_grid(const JaggedTensor &cube_centers,
 
 JaggedTensor
 GridBatch::coords_in_grid(const JaggedTensor &ijk) const {
-    c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        ijk.ldim() == 1,
-        "Expected ijk to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        ijk.ldim(),
-        "list dimensions");
     return fvdb::detail::ops::coordsInGrid(*mImpl, ijk);
 }
 
 JaggedTensor
 GridBatch::ijk_to_index(const JaggedTensor &ijk, bool cumulative) const {
-    c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        ijk.ldim() == 1,
-        "Expected ijk to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        ijk.ldim(),
-        "list dimensions");
     return fvdb::detail::ops::ijkToIndex(*mImpl, ijk, cumulative);
 }
 
 JaggedTensor
 GridBatch::ijk_to_inv_index(const JaggedTensor &ijk, bool cumulative) const {
-    c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        ijk.ldim() == 1,
-        "Expected ijk to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        ijk.ldim(),
-        "list dimensions");
     return fvdb::detail::ops::ijkToInvIndex(*mImpl, ijk, cumulative);
 }
 
 JaggedTensor
 GridBatch::ijk() const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::activeGridCoords(*mImpl);
 }
 
 JaggedTensor
 GridBatch::morton(const torch::Tensor &offset) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::serializeEncode(
         *mImpl, SpaceFillingCurveType::ZOrder, tensorToCoord(offset));
 }
 
 JaggedTensor
 GridBatch::morton_zyx(const torch::Tensor &offset) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::serializeEncode(
         *mImpl, SpaceFillingCurveType::ZOrderTransposed, tensorToCoord(offset));
 }
 
 JaggedTensor
 GridBatch::hilbert(const torch::Tensor &offset) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::serializeEncode(
         *mImpl, SpaceFillingCurveType::Hilbert, tensorToCoord(offset));
 }
 
 JaggedTensor
 GridBatch::hilbert_zyx(const torch::Tensor &offset) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::serializeEncode(
         *mImpl, SpaceFillingCurveType::HilbertTransposed, tensorToCoord(offset));
 }
 
 std::vector<JaggedTensor>
 GridBatch::viz_edge_network(bool returnVoxelCoordinates) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::gridEdgeNetwork(*mImpl, returnVoxelCoordinates);
 }
 

@@ -90,6 +90,7 @@ JaggedTensor
 activeVoxelsInBoundsMask(GridBatchImpl const &grid,
                          std::vector<nanovdb::Coord> const &bboxMins,
                          std::vector<nanovdb::Coord> const &bboxMaxs) {
+    c10::DeviceGuard guard(grid.device());
     grid.checkNonEmptyGrid();
 
     // Pack per-batch bounding boxes into a [B, 2, 3] int32 tensor on device.

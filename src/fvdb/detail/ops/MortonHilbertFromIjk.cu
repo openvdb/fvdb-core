@@ -100,6 +100,7 @@ check_ijk(torch::Tensor const &ijk) {
 
 torch::Tensor
 mortonFromIjk(torch::Tensor ijk) {
+    c10::DeviceGuard guard(ijk.device());
     check_ijk(ijk);
     static auto const table =
         ::dispatch::dispatch_table_from_op<morton_from_ijk_op>("mortonFromIjk");
@@ -109,6 +110,7 @@ mortonFromIjk(torch::Tensor ijk) {
 
 torch::Tensor
 hilbertFromIjk(torch::Tensor ijk) {
+    c10::DeviceGuard guard(ijk.device());
     check_ijk(ijk);
     static auto const table =
         ::dispatch::dispatch_table_from_op<hilbert_from_ijk_op>("hilbertFromIjk");

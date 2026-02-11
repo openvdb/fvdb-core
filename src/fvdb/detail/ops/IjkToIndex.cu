@@ -81,9 +81,12 @@ struct ijk_to_index_op {
 
 JaggedTensor
 ijkToIndex(GridBatchImpl const &grid, JaggedTensor ijk, bool cumulative) {
+    c10::DeviceGuard guard(grid.device());
     grid.checkNonEmptyGrid();
     grid.checkDevice(ijk);
 
+    TORCH_CHECK_VALUE(
+        ijk.ldim() == 1, "Expected ijk to have 1 list dimension, but got ", ijk.ldim());
     namespace dc = ::fvdb::detail::dispatch;
     dc::check_rank(ijk.jdata(), 2, "ijk");
     dc::check_dim_size(ijk.jdata(), 1, 3, "ijk");

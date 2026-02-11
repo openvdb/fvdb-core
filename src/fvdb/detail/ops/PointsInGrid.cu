@@ -83,9 +83,12 @@ struct points_in_grid_op {
 
 JaggedTensor
 pointsInGrid(GridBatchImpl const &grid, JaggedTensor points) {
+    c10::DeviceGuard guard(grid.device());
     grid.checkNonEmptyGrid();
     grid.checkDevice(points);
 
+    TORCH_CHECK_VALUE(
+        points.ldim() == 1, "Expected points to have 1 list dimension, but got ", points.ldim());
     namespace dc = ::fvdb::detail::dispatch;
     dc::check_rank(points.jdata(), 2, "points");
     dc::check_dim_size(points.jdata(), 1, 3, "points");

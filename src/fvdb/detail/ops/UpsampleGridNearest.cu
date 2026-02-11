@@ -200,6 +200,7 @@ upsampleGridNearest(GridBatchImpl const &coarseGrid,
                     GridBatchImpl const &fineGrid,
                     torch::Tensor coarseData,
                     nanovdb::Coord upsamplingFactor) {
+    c10::DeviceGuard guard(coarseGrid.device());
     coarseGrid.checkNonEmptyGrid();
     fineGrid.checkNonEmptyGrid();
     for (int i = 0; i < 3; ++i) {
@@ -227,6 +228,7 @@ upsampleGridNearestBackward(GridBatchImpl const &fineGrid,
                             torch::Tensor gradOut,
                             torch::Tensor coarseData,
                             nanovdb::Coord upsamplingFactor) {
+    c10::DeviceGuard guard(fineGrid.device());
     for (int i = 0; i < 3; ++i) {
         TORCH_CHECK(upsamplingFactor[i] > 0, "upsampling_factor must be greater than 0");
     }

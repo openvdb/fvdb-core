@@ -61,6 +61,8 @@ struct active_grid_coords_op {
 
 JaggedTensor
 activeGridCoords(GridBatchImpl const &gridBatch) {
+    c10::DeviceGuard guard(gridBatch.device());
+
     static auto const table =
         ::dispatch::dispatch_table_from_op<active_grid_coords_op>("activeGridCoords");
     return table.select(::dispatch::dispatch_set{gridBatch.device().type()})(gridBatch);

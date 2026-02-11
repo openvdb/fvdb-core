@@ -242,6 +242,7 @@ downsampleGridAvgPool(GridBatchImpl const &fineGrid,
                       torch::Tensor fineData,
                       nanovdb::Coord poolingFactor,
                       nanovdb::Coord stride) {
+    c10::DeviceGuard guard(fineGrid.device());
     TORCH_CHECK(fineGrid.device() == coarseGrid.device(),
                 "coarse_grid and fine_grid must be on the same device");
     for (int i = 0; i < 3; ++i) {
@@ -277,6 +278,7 @@ downsampleGridAvgPoolBackward(GridBatchImpl const &coarseGrid,
                               torch::Tensor coarseGradOut,
                               nanovdb::Coord poolingFactor,
                               nanovdb::Coord stride) {
+    c10::DeviceGuard guard(coarseGrid.device());
     for (int i = 0; i < 3; ++i) {
         TORCH_CHECK_VALUE(poolingFactor[i] > 0, "pooling_factor must be greater than 0");
         TORCH_CHECK_VALUE(stride[i] >= 0, "stride must be greater than or equal to 0");
