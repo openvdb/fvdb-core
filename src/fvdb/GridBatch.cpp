@@ -1078,9 +1078,7 @@ GridBatch::ijk_to_inv_index(const JaggedTensor &ijk, bool cumulative) const {
 JaggedTensor
 GridBatch::ijk() const {
     c10::DeviceGuard guard(device());
-    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
-        return fvdb::detail::ops::dispatchActiveGridCoords<DeviceTag>(*mImpl);
-    });
+    return fvdb::detail::ops::activeGridCoords(*mImpl);
 }
 
 JaggedTensor
