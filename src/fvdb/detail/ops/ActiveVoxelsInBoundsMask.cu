@@ -1,124 +1,111 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/GridBatchImpl.h>
-#include <fvdb/detail/ops/ActiveVoxelsInBoundsMask.h>
-#include <fvdb/detail/utils/AccessorHelpers.cuh>
-#include <fvdb/detail/utils/ForEachCPU.h>
-#include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
+#include "dispatch/dispatch_table.h"
+#include "dispatch/torch/dispatch.h"
+#include "dispatch/torch/views.h"
 
-#include <c10/cuda/CUDAException.h>
-#include <torch/types.h>
+#include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/dispatch/ForEachActiveVoxel.cuh>
+#include <fvdb/detail/ops/ActiveVoxelsInBoundsMask.h>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-/// @brief Per-voxel callback to compute a mask of the active grid voxels in a bounding box for a
-/// batch of grids
-template <template <typename T, int32_t D> typename TorchAccessor>
-__hostdev__ inline void
-activeGridVoxelInBoundsMaskCallback(int32_t batchIdx,
-                                    int32_t leafIdx,
-                                    int32_t voxelIdx,
-                                    GridBatchImpl::Accessor gridAccessor,
-                                    TorchAccessor<int32_t, 3> bboxes,
-                                    TorchAccessor<bool, 1> outGridBoundsMask) {
-    const nanovdb::CoordBBox maskBbox(
-        nanovdb::Coord(bboxes[batchIdx][0][0], bboxes[batchIdx][0][1], bboxes[batchIdx][0][2]),
-        nanovdb::Coord(bboxes[batchIdx][1][0], bboxes[batchIdx][1][1], bboxes[batchIdx][1][2]));
+namespace {
 
-    const nanovdb::OnIndexGrid *grid = gridAccessor.grid(batchIdx);
-    const typename nanovdb::OnIndexGrid::LeafNodeType &leaf =
-        grid->tree().template getFirstNode<0>()[leafIdx];
-    if (maskBbox.hasOverlap(leaf.bbox())) {
-        const nanovdb::Coord ijk = leaf.offsetToGlobalCoord(voxelIdx);
-        if (leaf.isActive(voxelIdx) && maskBbox.isInside(ijk)) {
-            const int64_t baseOffset = gridAccessor.voxelOffset(batchIdx);
-            const int64_t idx        = baseOffset + (int64_t)leaf.getValue(voxelIdx) - 1;
-            outGridBoundsMask[idx]   = true;
-        }
+// ---------------------------------------------------------------------------
+// Dispatch table wiring
+// ---------------------------------------------------------------------------
+// Only dispatches on device -- no user-supplied tensors whose type or
+// contiguity could vary.  Outputs are freshly allocated (contiguous).
+//
+// Iteration pattern: forEachActiveVoxel (one thread per leaf-voxel slot).
+//
+// This matches the old forEachVoxelCUDA with numChannels=1: the thread
+// decomposition is totalLeaves * VOXELS_PER_LEAF in both cases.
+// forEachActiveVoxel already filters to active voxels before calling the
+// callback, so the callback only needs the cheap isInside(ijk) test.
+//
+// The old code had an additional leaf-level early-out --
+// maskBbox.hasOverlap(leaf.bbox()) -- that let each thread skip the
+// per-voxel work when the entire leaf was outside the bbox.  That check
+// was per-thread (not cooperative), but it did avoid the
+// offsetToGlobalCoord + isInside work for every voxel in out-of-bounds
+// leaves.  The new code omits it because forEachActiveVoxel does not
+// expose the leaf reference to the callback.  If profiling shows this
+// matters (e.g. small bbox relative to grid), a future forEachLeaf-based
+// variant could restore the leaf-level rejection.
+
+struct active_voxels_in_bounds_mask_op {
+    template <typename Tag>
+    static JaggedTensor
+    op(Tag tg, GridBatchImpl const &grid, torch::Tensor batchBboxes) {
+        constexpr auto dev = ::dispatch::tag_get<torch::DeviceType>(tg);
+
+        auto out = torch::zeros({static_cast<int64_t>(grid.totalVoxels())},
+                                torch::TensorOptions().dtype(torch::kBool).device(grid.device()));
+        auto out_v =
+            ::dispatch::tensor_out<dev, torch::kBool, 1, ::dispatch::contiguity::contiguous>(out);
+        auto bboxes_v =
+            ::dispatch::tensor_in<dev, torch::kInt32, 3, ::dispatch::contiguity::contiguous>(
+                batchBboxes);
+
+        ::fvdb::detail::dispatch::forEachActiveVoxel(
+            tg,
+            grid,
+            [=] __hostdev__(Tag /*tg*/,
+                            JIdxType batchIdx,
+                            nanovdb::Coord ijk,
+                            int64_t voxelIndex,
+                            GridBatchImpl::Accessor /*acc*/) {
+                nanovdb::CoordBBox const maskBbox(nanovdb::Coord(bboxes_v(batchIdx, 0, 0),
+                                                                 bboxes_v(batchIdx, 0, 1),
+                                                                 bboxes_v(batchIdx, 0, 2)),
+                                                  nanovdb::Coord(bboxes_v(batchIdx, 1, 0),
+                                                                 bboxes_v(batchIdx, 1, 1),
+                                                                 bboxes_v(batchIdx, 1, 2)));
+                if (maskBbox.isInside(ijk)) {
+                    out_v(voxelIndex) = true;
+                }
+            });
+
+        return grid.jaggedTensor(out);
     }
-}
 
-/// @brief Get a boolean mask of the active grid voxels for a batch of grids  (including disabled
-/// coordinates in mutable grids)
-/// @param gridBatch The batch of grids
-/// @param batchBboxes The batch of bounding boxes
-/// @param outGridCoords Tensor which will contain the output grid coordinates
-template <torch::DeviceType DeviceTag>
-void
-GetActiveVoxelsInBoundsMask(const GridBatchImpl &gridBatch,
-                            torch::Tensor &batchBboxes,
-                            torch::Tensor &outGridBoundsMask) {
-    auto outMaskAcc = tensorAccessor<DeviceTag, bool, 1>(outGridBoundsMask);
-    auto bboxAcc    = tensorAccessor<DeviceTag, int32_t, 3>(batchBboxes);
+    using space     = ::dispatch::axes<::dispatch::torch_full_device_axis>;
+    using subspaces = ::dispatch::coverage<space>;
+    using dispatcher =
+        ::dispatch::dispatch_table<space, JaggedTensor(GridBatchImpl const &, torch::Tensor)>;
+};
 
-    if constexpr (DeviceTag == torch::kCUDA) {
-        auto cb = [=] __device__(int32_t batchIdx,
-                                 int32_t leafIdx,
-                                 int32_t voxelIdx,
-                                 int32_t,
-                                 GridBatchImpl::Accessor gridAccessor) {
-            activeGridVoxelInBoundsMaskCallback<TorchRAcc32>(
-                batchIdx, leafIdx, voxelIdx, gridAccessor, bboxAcc, outMaskAcc);
-        };
-        forEachVoxelCUDA(1024, 1, gridBatch, cb);
-    } else {
-        auto cb = [=](int32_t batchIdx,
-                      int32_t leafIdx,
-                      int32_t voxelIdx,
-                      int32_t,
-                      GridBatchImpl::Accessor gridAccessor) {
-            activeGridVoxelInBoundsMaskCallback<TorchAcc>(
-                batchIdx, leafIdx, voxelIdx, gridAccessor, bboxAcc, outMaskAcc);
-        };
-        forEachVoxelCPU(1, gridBatch, cb);
-    }
-}
+} // anonymous namespace
 
-template <torch::DeviceType DeviceTag>
+// ---------------------------------------------------------------------------
+// Public entry point
+// ---------------------------------------------------------------------------
+
 JaggedTensor
-ActiveVoxelsInBoundsMask(const GridBatchImpl &batchHdl,
-                         const std::vector<nanovdb::Coord> &bboxMins,
-                         const std::vector<nanovdb::Coord> &bboxMaxs) {
-    batchHdl.checkNonEmptyGrid();
+activeVoxelsInBoundsMask(GridBatchImpl const &grid,
+                         std::vector<nanovdb::Coord> const &bboxMins,
+                         std::vector<nanovdb::Coord> const &bboxMaxs) {
+    grid.checkNonEmptyGrid();
 
-    // output storage
-    auto opts = torch::TensorOptions().dtype(torch::kBool).device(batchHdl.device());
-    torch::Tensor outGridBoundsMask = torch::zeros({batchHdl.totalVoxels()}, opts);
-
+    // Pack per-batch bounding boxes into a [B, 2, 3] int32 tensor on device.
     torch::Tensor batchBboxes =
-        torch::empty({batchHdl.batchSize(), 2, 3},
-                     torch::TensorOptions().dtype(torch::kInt32).device(batchHdl.device()));
-
-    for (int64_t batchIdx = 0; batchIdx < batchHdl.batchSize(); batchIdx++) {
-        for (int32_t dimIdx = 0; dimIdx < 3; dimIdx++) {
-            batchBboxes[batchIdx][0][dimIdx] = bboxMins[batchIdx][dimIdx];
-            batchBboxes[batchIdx][1][dimIdx] = bboxMaxs[batchIdx][dimIdx];
+        torch::empty({grid.batchSize(), 2, 3},
+                     torch::TensorOptions().dtype(torch::kInt32).device(grid.device()));
+    for (int64_t b = 0; b < grid.batchSize(); ++b) {
+        for (int32_t d = 0; d < 3; ++d) {
+            batchBboxes[b][0][d] = bboxMins[b][d];
+            batchBboxes[b][1][d] = bboxMaxs[b][d];
         }
     }
 
-    // create boolean mask of active voxels
-    GetActiveVoxelsInBoundsMask<DeviceTag>(batchHdl, batchBboxes, outGridBoundsMask);
-
-    return batchHdl.jaggedTensor(outGridBoundsMask);
-}
-
-template <>
-JaggedTensor
-dispatchActiveVoxelsInBoundsMask<torch::kCUDA>(const GridBatchImpl &batchHdl,
-                                               const std::vector<nanovdb::Coord> &bboxMins,
-                                               const std::vector<nanovdb::Coord> &bboxMaxs) {
-    return ActiveVoxelsInBoundsMask<torch::kCUDA>(batchHdl, bboxMins, bboxMaxs);
-}
-
-template <>
-JaggedTensor
-dispatchActiveVoxelsInBoundsMask<torch::kCPU>(const GridBatchImpl &batchHdl,
-                                              const std::vector<nanovdb::Coord> &bboxMins,
-                                              const std::vector<nanovdb::Coord> &bboxMaxs) {
-    return ActiveVoxelsInBoundsMask<torch::kCPU>(batchHdl, bboxMins, bboxMaxs);
+    static auto const table = ::dispatch::dispatch_table_from_op<active_voxels_in_bounds_mask_op>(
+        "activeVoxelsInBoundsMask");
+    return table.select(::dispatch::dispatch_set{grid.device().type()})(grid, batchBboxes);
 }
 
 } // namespace ops

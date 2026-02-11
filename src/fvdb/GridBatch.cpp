@@ -1042,9 +1042,7 @@ GridBatch::coords_in_grid(const JaggedTensor &ijk) const {
         "Expected ijk to have 1 list dimension, i.e. be a single list of coordinate values, but got",
         ijk.ldim(),
         "list dimensions");
-    return FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
-        return fvdb::detail::ops::dispatchCoordsInGrid<DeviceTag>(*mImpl, ijk);
-    });
+    return fvdb::detail::ops::coordsInGrid(*mImpl, ijk);
 }
 
 JaggedTensor
@@ -1066,9 +1064,7 @@ GridBatch::ijk_to_inv_index(const JaggedTensor &ijk, bool cumulative) const {
         "Expected ijk to have 1 list dimension, i.e. be a single list of coordinate values, but got",
         ijk.ldim(),
         "list dimensions");
-    return FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
-        return fvdb::detail::ops::dispatchIjkToInvIndex<DeviceTag>(*mImpl, ijk, cumulative);
-    });
+    return fvdb::detail::ops::ijkToInvIndex(*mImpl, ijk, cumulative);
 }
 
 JaggedTensor
@@ -1108,10 +1104,7 @@ GridBatch::hilbert_zyx(const torch::Tensor &offset) const {
 std::vector<JaggedTensor>
 GridBatch::viz_edge_network(bool returnVoxelCoordinates) const {
     c10::DeviceGuard guard(device());
-    return FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
-        return fvdb::detail::ops::dispatchGridEdgeNetwork<DeviceTag>(*mImpl,
-                                                                     returnVoxelCoordinates);
-    });
+    return fvdb::detail::ops::gridEdgeNetwork(*mImpl, returnVoxelCoordinates);
 }
 
 GridBatch

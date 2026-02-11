@@ -70,8 +70,7 @@ struct ijk_to_index_op {
                                        ::dispatch::full_contiguity_axis>;
     using subspaces = ::dispatch::coverage<space>;
     using dispatcher =
-        ::dispatch::dispatch_table<space,
-                                   JaggedTensor(GridBatchImpl const &, JaggedTensor, bool)>;
+        ::dispatch::dispatch_table<space, JaggedTensor(GridBatchImpl const &, JaggedTensor, bool)>;
 };
 
 } // anonymous namespace

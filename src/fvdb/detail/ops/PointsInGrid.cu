@@ -72,8 +72,7 @@ struct points_in_grid_op {
         axes<::dispatch::torch_full_device_axis, stype_axis, ::dispatch::full_contiguity_axis>;
     using subspaces = ::dispatch::coverage<space>;
     using dispatcher =
-        ::dispatch::dispatch_table<space,
-                                   JaggedTensor(GridBatchImpl const &, JaggedTensor)>;
+        ::dispatch::dispatch_table<space, JaggedTensor(GridBatchImpl const &, JaggedTensor)>;
 };
 
 } // anonymous namespace

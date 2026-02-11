@@ -131,7 +131,7 @@ convIJKForGrid(const GridBatchImpl &batchHdl,
     TORCH_CHECK(batchHdl.device().has_index(), "GridBatchImpl must have a valid index");
 
     if (kernelSize == nanovdb::Coord(1) || stride == kernelSize) {
-        return dispatchCoarseIJKForFineGrid<torch::kCUDA>(batchHdl, nanovdb::Coord(stride));
+        return coarseIjkForFineGrid(batchHdl, nanovdb::Coord(stride));
     }
 
     const int32_t kernelVolume = kernelSize.x() * kernelSize.y() * kernelSize.z();

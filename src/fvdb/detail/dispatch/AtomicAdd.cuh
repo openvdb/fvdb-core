@@ -28,6 +28,7 @@
 #if defined(__CUDACC__)
 #include <c10/util/BFloat16.h>
 #include <c10/util/Half.h>
+
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #endif
@@ -53,7 +54,7 @@ atomic_add_cpu(T *dst, T src) {
         // CAS loop for half types: load the 16-bit value as uint16_t,
         // promote to float, add, demote, compare-and-swap.
         static_assert(sizeof(T) == 2, "CAS fallback assumes 16-bit type");
-        auto *raw = reinterpret_cast<std::atomic<uint16_t> *>(dst);
+        auto *raw         = reinterpret_cast<std::atomic<uint16_t> *>(dst);
         uint16_t old_bits = raw->load(std::memory_order_relaxed);
         uint16_t new_bits;
         do {
@@ -61,8 +62,7 @@ atomic_add_cpu(T *dst, T src) {
             std::memcpy(&old_val, &old_bits, sizeof(T));
             T new_val = static_cast<T>(static_cast<float>(old_val) + static_cast<float>(src));
             std::memcpy(&new_bits, &new_val, sizeof(T));
-        } while (
-            !raw->compare_exchange_weak(old_bits, new_bits, std::memory_order_relaxed));
+        } while (!raw->compare_exchange_weak(old_bits, new_bits, std::memory_order_relaxed));
     }
 }
 

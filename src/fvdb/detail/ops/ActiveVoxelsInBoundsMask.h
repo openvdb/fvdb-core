@@ -5,22 +5,23 @@
 #define FVDB_DETAIL_OPS_ACTIVEVOXELSINBOUNDSMASK_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
 
 #include <nanovdb/NanoVDB.h>
-
-#include <torch/types.h>
 
 #include <vector>
 
 namespace fvdb {
 namespace detail {
+
+class GridBatchImpl;
+
 namespace ops {
 
-template <torch::DeviceType>
-JaggedTensor dispatchActiveVoxelsInBoundsMask(const GridBatchImpl &batchHdl,
-                                              const std::vector<nanovdb::Coord> &bboxMins,
-                                              const std::vector<nanovdb::Coord> &bboxMaxs);
+/// @brief Return a boolean mask of active voxels that lie inside per-batch bounding boxes.
+/// Device dispatch is handled internally -- no template parameter needed.
+JaggedTensor activeVoxelsInBoundsMask(GridBatchImpl const &grid,
+                                      std::vector<nanovdb::Coord> const &bboxMins,
+                                      std::vector<nanovdb::Coord> const &bboxMaxs);
 
 } // namespace ops
 } // namespace detail
