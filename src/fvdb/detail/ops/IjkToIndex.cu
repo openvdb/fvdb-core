@@ -30,7 +30,7 @@ namespace {
 struct ijk_to_index_op {
     template <typename Tag>
     static JaggedTensor
-    op(Tag tg, GridBatchImpl const &grid, JaggedTensor const &ijk, bool cumulative) {
+    op(Tag tg, GridBatchImpl const &grid, JaggedTensor ijk, bool cumulative) {
         constexpr auto dev    = ::dispatch::tag_get<torch::DeviceType>(tg);
         constexpr auto stype  = ::dispatch::tag_get<torch::ScalarType>(tg);
         constexpr auto contig = ::dispatch::tag_get<::dispatch::contiguity>(tg);
@@ -71,7 +71,7 @@ struct ijk_to_index_op {
     using subspaces = ::dispatch::coverage<space>;
     using dispatcher =
         ::dispatch::dispatch_table<space,
-                                   JaggedTensor(GridBatchImpl const &, JaggedTensor const &, bool)>;
+                                   JaggedTensor(GridBatchImpl const &, JaggedTensor, bool)>;
 };
 
 } // anonymous namespace
@@ -81,7 +81,7 @@ struct ijk_to_index_op {
 // ---------------------------------------------------------------------------
 
 JaggedTensor
-ijkToIndex(GridBatchImpl const &grid, JaggedTensor const &ijk, bool cumulative) {
+ijkToIndex(GridBatchImpl const &grid, JaggedTensor ijk, bool cumulative) {
     grid.checkNonEmptyGrid();
     grid.checkDevice(ijk);
 

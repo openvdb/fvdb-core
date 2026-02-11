@@ -17,7 +17,7 @@ namespace ops {
 /// @param grid   The grid batch to test against.
 /// @param points JaggedTensor of [N, 3] floating-point coordinates.
 /// @return JaggedTensor of [N] bool mask (true if point is in an active voxel).
-JaggedTensor pointsInGrid(GridBatchImpl const &grid, JaggedTensor const &points);
+JaggedTensor pointsInGrid(GridBatchImpl const &grid, JaggedTensor points);
 
 } // namespace ops
 } // namespace detail

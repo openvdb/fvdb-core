@@ -9,8 +9,8 @@
 //
 // Callback signature:
 //
-//     void(Tag tg, nanovdb::Coord ijk, int64_t voxel_index,
-//          GridBatchImpl::Accessor acc)
+//     void(Tag tg, JIdxType batchIdx, nanovdb::Coord ijk,
+//          int64_t voxel_index, GridBatchImpl::Accessor acc)
 //
 // The Tag is forwarded so that callbacks can use concept-constrained
 // overloads for device-specific specialization when needed.
@@ -40,7 +40,7 @@ namespace dispatch {
 ///
 /// @tparam Tag   A dispatch::tag carrying at least a torch::DeviceType.
 /// @tparam Func  Callable with signature
-///               void(Tag, nanovdb::Coord, int64_t, GridBatchImpl::Accessor).
+///               void(Tag, JIdxType batchIdx, nanovdb::Coord, int64_t, GridBatchImpl::Accessor).
 ///
 /// @param tg    Tag instance (forwarded to both dispatch::for_each and the callback).
 /// @param grid  The grid batch to iterate over.
@@ -70,7 +70,7 @@ forEachActiveVoxel(Tag tg, GridBatchImpl const &grid, Func func) {
         if (leaf.isActive(voxelIdx)) {
             auto const ijk           = leaf.offsetToGlobalCoord(voxelIdx);
             int64_t const voxelIndex = acc.voxelOffset(batchIdx) + leaf.getValue(voxelIdx) - 1;
-            func(tg, ijk, voxelIndex, acc);
+            func(tg, batchIdx, ijk, voxelIndex, acc);
         }
     });
 }

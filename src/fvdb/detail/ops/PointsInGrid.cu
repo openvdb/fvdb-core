@@ -30,7 +30,7 @@ namespace {
 struct points_in_grid_op {
     template <typename Tag>
     static JaggedTensor
-    op(Tag tg, GridBatchImpl const &grid, JaggedTensor const &points) {
+    op(Tag tg, GridBatchImpl const &grid, JaggedTensor points) {
         constexpr auto dev    = ::dispatch::tag_get<torch::DeviceType>(tg);
         constexpr auto stype  = ::dispatch::tag_get<torch::ScalarType>(tg);
         constexpr auto contig = ::dispatch::tag_get<::dispatch::contiguity>(tg);
@@ -73,7 +73,7 @@ struct points_in_grid_op {
     using subspaces = ::dispatch::coverage<space>;
     using dispatcher =
         ::dispatch::dispatch_table<space,
-                                   JaggedTensor(GridBatchImpl const &, JaggedTensor const &)>;
+                                   JaggedTensor(GridBatchImpl const &, JaggedTensor)>;
 };
 
 } // anonymous namespace
@@ -83,7 +83,7 @@ struct points_in_grid_op {
 // ---------------------------------------------------------------------------
 
 JaggedTensor
-pointsInGrid(GridBatchImpl const &grid, JaggedTensor const &points) {
+pointsInGrid(GridBatchImpl const &grid, JaggedTensor points) {
     grid.checkNonEmptyGrid();
     grid.checkDevice(points);
 

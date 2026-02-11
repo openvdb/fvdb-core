@@ -38,6 +38,7 @@ struct serialize_encode_op {
             tg,
             grid,
             [=] __hostdev__(Tag /*tg*/,
+                            JIdxType /*batchIdx*/,
                             nanovdb::Coord ijk,
                             int64_t idx,
                             GridBatchImpl::Accessor /*acc*/) {
