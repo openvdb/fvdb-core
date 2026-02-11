@@ -31,18 +31,18 @@ template <uint32_t NUM_CHANNELS>
 __global__ void
 rasterizeFromWorld3DGSForwardKernel(
     // Gaussians
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> means,     // [N,3]
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> quats,     // [N,4]
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> logScales, // [N,3]
+    const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> means,     // [N,3]
+    const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> quats,     // [N,4]
+    const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> logScales, // [N,3]
     // Per-camera
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> features,  // [C,N,D]
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> opacities, // [C,N]
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
+    const torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits> features,  // [C,N,D]
+    const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> opacities, // [C,N]
+    const torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits>
         worldToCamStart, // [C,4,4] (view as 3D accessor for contiguous)
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
+    const torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits>
         worldToCamEnd,   // [C,4,4]
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> K, // [C,3,3]
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits>
+    const torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits> K, // [C,3,3]
+    const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits>
         distortionCoeffs,                                                      // [C,K]
     const int64_t numDistCoeffs,
     const RollingShutterType rollingShutterType,
@@ -56,9 +56,9 @@ rasterizeFromWorld3DGSForwardKernel(
     const uint32_t tileExtentW,
     const uint32_t tileExtentH,
     // Intersections
-    const torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits>
+    const torch::PackedTensorAccessor64<int32_t, 3, torch::RestrictPtrTraits>
         tileOffsets,     // [C, tileExtentH, tileExtentW]
-    const torch::PackedTensorAccessor32<int32_t, 1, torch::RestrictPtrTraits>
+    const torch::PackedTensorAccessor64<int32_t, 1, torch::RestrictPtrTraits>
         tileGaussianIds, // [n_isects]
     const int32_t totalIntersections,
     // Backgrounds
@@ -379,15 +379,15 @@ launchForward(const torch::Tensor &means,
 
     auto stream = at::cuda::getDefaultCUDAStream();
     rasterizeFromWorld3DGSForwardKernel<NUM_CHANNELS><<<gridDim, blockDim, sharedMem, stream>>>(
-        means.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        quats.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        logScales.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        features.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        opacities.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        worldToCamStart.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        worldToCamEnd.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        K.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        distortionCoeffs.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        means.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+        quats.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+        logScales.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+        features.packed_accessor64<float, 3, torch::RestrictPtrTraits>(),
+        opacities.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+        worldToCamStart.packed_accessor64<float, 3, torch::RestrictPtrTraits>(),
+        worldToCamEnd.packed_accessor64<float, 3, torch::RestrictPtrTraits>(),
+        K.packed_accessor64<float, 3, torch::RestrictPtrTraits>(),
+        distortionCoeffs.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
         numDistCoeffs,
         rollingShutterType,
         cameraModel,
@@ -398,8 +398,8 @@ launchForward(const torch::Tensor &means,
         tileSize,
         tileExtentW,
         tileExtentH,
-        tileOffsets.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
-        tileGaussianIds.packed_accessor32<int32_t, 1, torch::RestrictPtrTraits>(),
+        tileOffsets.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
+        tileGaussianIds.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>(),
         totalIntersections,
         bgPtr,
         maskPtr,
