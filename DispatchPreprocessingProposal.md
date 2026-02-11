@@ -67,14 +67,16 @@ Every forEach function is templated on `<ScalarT, NDIMS, Func, Args...>`. This i
 
 ## The New `fvdb/detail/dispatch/` Module
 
-The new module provides **device-unified** iteration tools aligned with the new dispatch framework's design philosophy: write `__hostdev__` working code once, let the framework handle device dispatch.
+The new module provides **device-unified** iteration tools aligned with the new dispatch framework's design philosophy: write device variations only when you need to, and never more.
 
 ### Core design principles
 
 1. **Single call site**: One function call iterates over the grid/tensor. The function handles CPU/CUDA/PrivateUse1 internally based on the input's device. No `if constexpr` in op code.
-2. **`__hostdev__` callbacks**: If the callback is `__hostdev__`, it runs on any device. No per-device lambda variants.
+2. **`__hostdev__` by default**: Most callbacks are `__hostdev__` and run identically on any device. But when an op needs device-specific behavior (vectorized intrinsics, warp-level primitives, etc.), it can still provide per-device specializations — the point is that the *framework* doesn't force you into per-device code when the algorithm doesn't need it.
 3. **No CRTP**: Callbacks are plain callables (lambdas, structs with `operator()`). No base classes to inherit from.
 4. **Separated concerns**: Iteration (what to visit) is separate from parallelism (how many threads/channels). Sensible defaults for thread counts; explicit override when needed.
+
+Not all ops will use the forEach tools. Ops with heavily device-specific internals (e.g., sparse convolution with CUDA-specific memory access patterns, or trilinear sampling with float4 vectorization) may continue to have per-device code paths internally. The forEach tools are for the common case — and that common case covers the majority of ops. For the rest, the type-erased wrapper pattern still applies: internalize the dispatch, expose a non-templated header.
 
 ### `forEachActiveVoxel`
 
