@@ -14,8 +14,8 @@
 //
 //     atomic_add(tg, &out_v(row, col), value);
 //
-#ifndef FVDB_DETAIL_DISPATCH_ATOMIC_ADD_CUH
-#define FVDB_DETAIL_DISPATCH_ATOMIC_ADD_CUH
+#ifndef FVDB_DETAIL_DISPATCH_ATOMICADD_CUH
+#define FVDB_DETAIL_DISPATCH_ATOMICADD_CUH
 
 #include "dispatch/macros.h"
 #include "dispatch/torch/dispatch.h"
@@ -103,4 +103,4 @@ atomic_add(Tag /*tg*/, T *dst, T src) {
 } // namespace detail
 } // namespace fvdb
 
-#endif // FVDB_DETAIL_DISPATCH_ATOMIC_ADD_CUH
+#endif // FVDB_DETAIL_DISPATCH_ATOMICADD_CUH
