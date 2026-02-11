@@ -1,0 +1,426 @@
+#!/bin/bash
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+#
+# Create a worktree for a GitHub issue and open editor with context
+# Usage: fvdb-issue <issue-url-or-number> [options]
+#
+# Examples:
+#   fvdb-issue 187                    # Opens in Cursor (default)
+#   fvdb-issue 187 --claude           # Opens in Claude Code (auto-starts)
+#   fvdb-issue 187 --cursor           # Opens in Cursor (explicit)
+#   fvdb-issue 187 --core=my-feature  # Use specific fvdb-core branch
+#
+# Configuration:
+#   Set environment variables:
+#     FVDB_CORE_PATH=/path/to/fvdb-core
+#     FVDB_RC_PATH=/path/to/fvdb-reality-capture
+#     FVDB_CORE_GH_REPO=openvdb/fvdb  (optional, default: openvdb/fvdb)
+#     FVDB_RC_GH_REPO=openvdb/fvdb-reality-capture  (optional)
+#   Or create ~/.fvdb-devtools.conf with the same variables
+
+set -e
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Load configuration
+load_config() {
+    # Check for config file
+    if [[ -f ~/.fvdb-devtools.conf ]]; then
+        source ~/.fvdb-devtools.conf
+    fi
+
+    # Validate required paths
+    if [[ -z "$FVDB_CORE_PATH" ]]; then
+        echo -e "${RED}Error: FVDB_CORE_PATH is not set${NC}"
+        echo "Set the environment variable or add it to ~/.fvdb-devtools.conf"
+        exit 1
+    fi
+
+    if [[ -z "$FVDB_RC_PATH" ]]; then
+        echo -e "${RED}Error: FVDB_RC_PATH is not set${NC}"
+        echo "Set the environment variable or add it to ~/.fvdb-devtools.conf"
+        exit 1
+    fi
+
+    # Set defaults for GitHub repos if not specified
+    FVDB_CORE_GH_REPO="${FVDB_CORE_GH_REPO:-openvdb/fvdb}"
+    FVDB_RC_GH_REPO="${FVDB_RC_GH_REPO:-openvdb/fvdb-reality-capture}"
+
+    # Verify paths exist
+    if [[ ! -d "$FVDB_CORE_PATH" ]]; then
+        echo -e "${RED}Error: FVDB_CORE_PATH does not exist: $FVDB_CORE_PATH${NC}"
+        exit 1
+    fi
+
+    if [[ ! -d "$FVDB_RC_PATH" ]]; then
+        echo -e "${RED}Error: FVDB_RC_PATH does not exist: $FVDB_RC_PATH${NC}"
+        exit 1
+    fi
+}
+
+load_config
+
+CORE_BASE="$FVDB_CORE_PATH"
+RC_BASE="$FVDB_RC_PATH"
+CORE_GH_REPO="$FVDB_CORE_GH_REPO"
+RC_GH_REPO="$FVDB_RC_GH_REPO"
+
+# Check required dependencies
+check_dependencies() {
+    local missing=()
+    command -v gh >/dev/null 2>&1 || missing+=("gh (GitHub CLI: https://cli.github.com/)")
+    command -v jq >/dev/null 2>&1 || missing+=("jq (apt-get install jq / brew install jq)")
+    command -v git >/dev/null 2>&1 || missing+=("git")
+    command -v fvdb-open >/dev/null 2>&1 || missing+=("fvdb-open (run install.sh first)")
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo -e "${RED}Error: Missing required dependencies:${NC}"
+        for dep in "${missing[@]}"; do
+            echo "  - $dep"
+        done
+        exit 1
+    fi
+}
+
+check_dependencies
+
+# Get the default branch ref for a local repo (e.g., origin/main or origin/master)
+get_default_branch_ref() {
+    local base="$1"
+    local default_ref
+    default_ref=$(git -C "$base" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|^refs/remotes/||') || true
+    if [[ -z "$default_ref" ]]; then
+        # Fallback: try to detect from remote
+        default_ref="origin/main"
+    fi
+    echo "$default_ref"
+}
+
+usage() {
+    echo "Usage: fvdb-issue <issue-url-or-number> [options]"
+    echo ""
+    echo "Options:"
+    echo "  --cursor          Open in Cursor (default)"
+    echo "  --claude          Open in Claude Code (auto-starts planning)"
+    echo "  --core=<branch>   Use specific fvdb-core branch/worktree"
+    echo ""
+    echo "Examples:"
+    echo "  fvdb-issue 187"
+    echo "  fvdb-issue https://github.com/${CORE_GH_REPO}/issues/123"
+    echo "  fvdb-issue https://github.com/${RC_GH_REPO}/issues/187"
+    echo "  fvdb-issue 187 --claude"
+    echo "  fvdb-issue 187 --core=my-feature"
+    exit 1
+}
+
+slugify() {
+    echo "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g' | sed -E 's/^-+|-+$//g' | cut -c1-40
+}
+
+# Parse arguments
+INPUT=""
+CORE_BRANCH="main"
+USE_CLAUDE=false
+
+for arg in "$@"; do
+    case $arg in
+        --core=*)
+            CORE_BRANCH="${arg#*=}"
+            ;;
+        --claude)
+            USE_CLAUDE=true
+            ;;
+        --cursor)
+            USE_CLAUDE=false
+            ;;
+        --help|-h)
+            usage
+            ;;
+        *)
+            if [[ -z "$INPUT" ]]; then
+                INPUT="$arg"
+            fi
+            ;;
+    esac
+done
+
+if [[ -z "$INPUT" ]]; then
+    usage
+fi
+
+# Determine repo and issue number
+GH_REPO=""
+ISSUE_NUM=""
+LOCAL_BASE=""
+
+if [[ "$INPUT" =~ ^https://github.com/([^/]+)/([^/]+)/issues/([0-9]+) ]]; then
+    # Full URL provided
+    OWNER="${BASH_REMATCH[1]}"
+    REPO="${BASH_REMATCH[2]}"
+    ISSUE_NUM="${BASH_REMATCH[3]}"
+    GH_REPO="${OWNER}/${REPO}"
+
+    if [[ "$GH_REPO" == "$CORE_GH_REPO" ]]; then
+        LOCAL_BASE="$CORE_BASE"
+    elif [[ "$GH_REPO" == "$RC_GH_REPO" ]]; then
+        LOCAL_BASE="$RC_BASE"
+    else
+        echo -e "${RED}Error: Unknown repository ${GH_REPO}${NC}"
+        exit 1
+    fi
+elif [[ "$INPUT" =~ ^[0-9]+$ ]]; then
+    # Issue number only - check both repos
+    ISSUE_NUM="$INPUT"
+
+    echo -e "${BLUE}Checking for issue #${ISSUE_NUM}...${NC}"
+
+    CORE_TITLE=$(gh issue view "$ISSUE_NUM" -R "$CORE_GH_REPO" --json title -q '.title' 2>/dev/null || echo "")
+    RC_TITLE=$(gh issue view "$ISSUE_NUM" -R "$RC_GH_REPO" --json title -q '.title' 2>/dev/null || echo "")
+
+    if [[ -n "$CORE_TITLE" && -n "$RC_TITLE" ]]; then
+        # Issue exists in both repos - prompt user
+        echo -e "${YELLOW}Issue #${ISSUE_NUM} exists in multiple repos:${NC}"
+        echo -e "  ${GREEN}1)${NC} fvdb-core: \"${CORE_TITLE}\""
+        echo -e "  ${GREEN}2)${NC} fvdb-reality-capture: \"${RC_TITLE}\""
+        echo ""
+
+        while true; do
+            read -p "Select repo [1-2]: " choice
+            case $choice in
+                1)
+                    GH_REPO="$CORE_GH_REPO"
+                    LOCAL_BASE="$CORE_BASE"
+                    break
+                    ;;
+                2)
+                    GH_REPO="$RC_GH_REPO"
+                    LOCAL_BASE="$RC_BASE"
+                    break
+                    ;;
+                *)
+                    echo "Invalid selection. Please enter 1 or 2."
+                    ;;
+            esac
+        done
+    elif [[ -n "$CORE_TITLE" ]]; then
+        GH_REPO="$CORE_GH_REPO"
+        LOCAL_BASE="$CORE_BASE"
+        echo -e "${GREEN}Found in fvdb-core: \"${CORE_TITLE}\"${NC}"
+    elif [[ -n "$RC_TITLE" ]]; then
+        GH_REPO="$RC_GH_REPO"
+        LOCAL_BASE="$RC_BASE"
+        echo -e "${GREEN}Found in fvdb-reality-capture: \"${RC_TITLE}\"${NC}"
+    else
+        echo -e "${RED}Error: Issue #${ISSUE_NUM} not found in either repository${NC}"
+        exit 1
+    fi
+else
+    echo -e "${RED}Error: Invalid input. Provide an issue URL or number.${NC}"
+    usage
+fi
+
+echo ""
+echo -e "${BLUE}Fetching issue details from ${GH_REPO}...${NC}"
+
+# Fetch full issue details
+ISSUE_JSON=$(gh issue view "$ISSUE_NUM" -R "$GH_REPO" --json number,title,body,labels,assignees,url,state)
+
+ISSUE_TITLE=$(echo "$ISSUE_JSON" | jq -r '.title')
+ISSUE_BODY=$(echo "$ISSUE_JSON" | jq -r '.body // "No description provided."')
+ISSUE_URL=$(echo "$ISSUE_JSON" | jq -r '.url')
+ISSUE_STATE=$(echo "$ISSUE_JSON" | jq -r '.state')
+
+# Check if this is actually a PR (URL contains /pull/ instead of /issues/)
+IS_PR=false
+if [[ "$ISSUE_URL" == */pull/* ]]; then
+    IS_PR=true
+    echo -e "${YELLOW}Note: #${ISSUE_NUM} is a Pull Request, not an Issue.${NC}"
+    read -p "Continue with this PR? [y/n]: " continue_pr
+    if [[ "$continue_pr" != "y" && "$continue_pr" != "Y" ]]; then
+        echo "Aborted."
+        exit 0
+    fi
+    echo ""
+fi
+ISSUE_LABELS=$(echo "$ISSUE_JSON" | jq -r '.labels[].name' 2>/dev/null | tr '\n' ', ' | sed 's/, $//')
+ISSUE_ASSIGNEES=$(echo "$ISSUE_JSON" | jq -r '.assignees[].login' 2>/dev/null | tr '\n' ', ' | sed 's/, $//')
+
+if [[ -z "$ISSUE_LABELS" ]]; then
+    ISSUE_LABELS="none"
+fi
+if [[ -z "$ISSUE_ASSIGNEES" ]]; then
+    ISSUE_ASSIGNEES="unassigned"
+fi
+
+# Warn if issue is closed
+if [[ "$ISSUE_STATE" != "OPEN" ]]; then
+    echo -e "${YELLOW}WARNING: Issue #${ISSUE_NUM} is ${ISSUE_STATE}${NC}"
+    read -p "Continue anyway? [y/n]: " continue_closed
+    if [[ "$continue_closed" != "y" && "$continue_closed" != "Y" ]]; then
+        echo "Aborted."
+        exit 0
+    fi
+    echo ""
+fi
+
+# Generate branch name
+TITLE_SLUG=$(slugify "$ISSUE_TITLE")
+BRANCH_NAME="issue-${ISSUE_NUM}-${TITLE_SLUG}"
+
+echo -e "${GREEN}Issue #${ISSUE_NUM}: ${ISSUE_TITLE}${NC}"
+echo -e "  State: ${ISSUE_STATE}"
+echo -e "  Labels: ${ISSUE_LABELS}"
+echo -e "  Assignees: ${ISSUE_ASSIGNEES}"
+echo -e "  Branch: ${BRANCH_NAME}"
+echo ""
+
+# Determine worktree path
+REPO_NAME=$(basename "$LOCAL_BASE")
+WORKTREE_NAME="issue-${ISSUE_NUM}"
+WORKTREE_PATH="$(dirname "$LOCAL_BASE")/${REPO_NAME}-${WORKTREE_NAME}"
+
+# Check if worktree already exists
+if [[ -d "$WORKTREE_PATH" ]]; then
+    echo -e "${YELLOW}Worktree already exists at ${WORKTREE_PATH}${NC}"
+    read -p "Open existing worktree? [y/n]: " open_existing
+    if [[ "$open_existing" != "y" && "$open_existing" != "Y" ]]; then
+        echo "Aborted."
+        exit 0
+    fi
+else
+    # Check if branch exists
+    echo -e "${BLUE}Creating worktree...${NC}"
+
+    if git -C "$LOCAL_BASE" show-ref --verify --quiet "refs/heads/${BRANCH_NAME}" 2>/dev/null; then
+        # Branch exists locally
+        git -C "$LOCAL_BASE" worktree add "$WORKTREE_PATH" "$BRANCH_NAME"
+    elif git -C "$LOCAL_BASE" ls-remote --exit-code --heads origin "$BRANCH_NAME" &>/dev/null; then
+        # Branch exists on remote
+        git -C "$LOCAL_BASE" fetch origin "$BRANCH_NAME"
+        git -C "$LOCAL_BASE" worktree add "$WORKTREE_PATH" "$BRANCH_NAME"
+    else
+        # Create new branch from default branch
+        DEFAULT_REF=$(get_default_branch_ref "$LOCAL_BASE")
+        git -C "$LOCAL_BASE" worktree add "$WORKTREE_PATH" -b "$BRANCH_NAME" "$DEFAULT_REF"
+    fi
+
+    echo -e "${GREEN}Created worktree at ${WORKTREE_PATH}${NC}"
+fi
+
+# Create .cursor/rules directory and current-issue.md (used by both Cursor and Claude Code)
+CURSOR_RULES_DIR="${WORKTREE_PATH}/.cursor/rules"
+mkdir -p "$CURSOR_RULES_DIR"
+
+# Use appropriate label for issue vs PR
+if [[ "$IS_PR" == true ]]; then
+    ITEM_TYPE="PR"
+    TASK_DESC="review and complete this pull request"
+else
+    ITEM_TYPE="Issue"
+    TASK_DESC="implement this issue"
+fi
+
+ITEM_TYPE_LOWER=$(printf '%s' "$ITEM_TYPE" | tr '[:upper:]' '[:lower:]')
+
+cat > "${CURSOR_RULES_DIR}/current-issue.md" << EOF
+# Current Task: ${ITEM_TYPE} #${ISSUE_NUM}
+
+> **ACTION REQUIRED**: When you receive a message referencing this file, immediately start by exploring the codebase to understand the ${ITEM_TYPE_LOWER}, then create a detailed implementation plan.
+
+## ${ISSUE_TITLE}
+
+**Repository:** ${GH_REPO}
+**${ITEM_TYPE}:** ${ISSUE_URL}
+**Labels:** ${ISSUE_LABELS}
+**Assignees:** ${ISSUE_ASSIGNEES}
+
+## Description
+
+${ISSUE_BODY}
+
+## Your Task
+
+You are assigned to ${TASK_DESC}. Follow these steps:
+
+1. **Explore** - Search the codebase to understand the relevant code and architecture
+2. **Plan** - Create a detailed implementation plan with specific files and changes
+3. **Implement** - Make the necessary code changes
+4. **Test** - If existing tests don't cover new/changed functionality, add or update tests
+5. **Verify** - Ensure all tests pass
+6. **Format** - Run appropriate formatters and style checks
+
+Start by exploring the codebase to understand where changes need to be made.
+EOF
+
+echo -e "${GREEN}Created agent context at ${CURSOR_RULES_DIR}/current-issue.md${NC}"
+echo ""
+
+# Determine the other repo path
+if [[ "$LOCAL_BASE" == "$RC_BASE" ]]; then
+    # Issue is in fvdb-reality-capture
+    if [[ "$CORE_BRANCH" == "main" ]]; then
+        OTHER_REPO_PATH="$CORE_BASE"
+    else
+        OTHER_REPO_PATH="$(dirname "$CORE_BASE")/$(basename "$CORE_BASE")-${CORE_BRANCH}"
+        if [[ ! -d "$OTHER_REPO_PATH" ]]; then
+            echo -e "${YELLOW}Warning: fvdb-core worktree ${OTHER_REPO_PATH} does not exist, using main${NC}"
+            OTHER_REPO_PATH="$CORE_BASE"
+        fi
+    fi
+else
+    # Issue is in fvdb-core
+    OTHER_REPO_PATH="$RC_BASE"
+fi
+
+if [[ "$USE_CLAUDE" == true ]]; then
+    # Launch Claude Code with auto-start prompt
+    echo -e "${BLUE}Launching Claude Code...${NC}"
+
+    CLAUDE_PROMPT="I'm working on GitHub issue #${ISSUE_NUM}: ${ISSUE_TITLE}
+
+Issue URL: ${ISSUE_URL}
+Repository: ${GH_REPO}
+
+Description:
+${ISSUE_BODY}
+
+Please start by exploring the codebase to understand where changes need to be made, then create a detailed implementation plan."
+
+    # Claude Code runs in a single directory, so we use the worktree as the primary
+    # and add the other repo as an additional directory
+    cd "$WORKTREE_PATH"
+    exec claude --add-dir "$OTHER_REPO_PATH" --permission-mode plan "$CLAUDE_PROMPT"
+else
+    # Launch Cursor via fvdb-open
+    # Copy starter prompt to clipboard
+    STARTER_PROMPT="Please read the issue in .cursor/rules/current-issue.md and create a plan to implement it."
+
+    # Try xclip (Linux), then xsel, then pbcopy (macOS)
+    if command -v xclip &> /dev/null; then
+        echo -n "$STARTER_PROMPT" | xclip -selection clipboard
+        echo -e "${GREEN}Starter prompt copied to clipboard - just paste and send!${NC}"
+    elif command -v xsel &> /dev/null; then
+        echo -n "$STARTER_PROMPT" | xsel --clipboard --input
+        echo -e "${GREEN}Starter prompt copied to clipboard - just paste and send!${NC}"
+    elif command -v pbcopy &> /dev/null; then
+        echo -n "$STARTER_PROMPT" | pbcopy
+        echo -e "${GREEN}Starter prompt copied to clipboard - just paste and send!${NC}"
+    else
+        echo -e "${YELLOW}Clipboard not available. Start with:${NC}"
+        echo "  $STARTER_PROMPT"
+    fi
+    echo ""
+
+    # Use fvdb-open to launch Cursor with both repos
+    if [[ "$LOCAL_BASE" == "$RC_BASE" ]]; then
+        exec fvdb-open --core="$CORE_BRANCH" --rc="$WORKTREE_NAME"
+    else
+        exec fvdb-open --core="$WORKTREE_NAME" --rc=main
+    fi
+fi

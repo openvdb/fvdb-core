@@ -1,0 +1,253 @@
+#!/bin/bash
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+#
+# Interactive launcher for fvdb-core + fvdb-reality-capture worktrees
+# Usage: fvdb-open [--core=<branch>] [--rc=<branch>]
+#
+# Interactive mode (no args): shows menu to select worktrees
+# Direct mode: fvdb-open --core=main --rc=mcmc-adaptive
+#
+# Configuration:
+#   Set FVDB_CORE_PATH and FVDB_RC_PATH environment variables, or
+#   create ~/.fvdb-devtools.conf with:
+#     FVDB_CORE_PATH=/path/to/fvdb-core
+#     FVDB_RC_PATH=/path/to/fvdb-reality-capture
+
+set -e
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Convert a branch name to its worktree directory path.
+# Normalizes '/' to '-' to match the interactive worktree creation logic.
+branch_to_worktree_path() {
+    local base_path="$1"
+    local branch_name="$2"
+
+    if [[ "$branch_name" == "main" ]]; then
+        printf '%s\n' "$base_path"
+        return
+    fi
+
+    local normalized_branch="${branch_name//\//-}"
+    printf '%s/%s-%s\n' "$(dirname "$base_path")" "$(basename "$base_path")" "$normalized_branch"
+}
+
+# Load configuration
+load_config() {
+    # Check for config file
+    if [[ -f ~/.fvdb-devtools.conf ]]; then
+        source ~/.fvdb-devtools.conf
+    fi
+
+    # Validate required paths
+    if [[ -z "$FVDB_CORE_PATH" ]]; then
+        echo -e "${RED}Error: FVDB_CORE_PATH is not set${NC}"
+        echo "Set the environment variable or add it to ~/.fvdb-devtools.conf"
+        exit 1
+    fi
+
+    if [[ -z "$FVDB_RC_PATH" ]]; then
+        echo -e "${RED}Error: FVDB_RC_PATH is not set${NC}"
+        echo "Set the environment variable or add it to ~/.fvdb-devtools.conf"
+        exit 1
+    fi
+
+    # Verify paths exist
+    if [[ ! -d "$FVDB_CORE_PATH" ]]; then
+        echo -e "${RED}Error: FVDB_CORE_PATH does not exist: $FVDB_CORE_PATH${NC}"
+        exit 1
+    fi
+
+    if [[ ! -d "$FVDB_RC_PATH" ]]; then
+        echo -e "${RED}Error: FVDB_RC_PATH does not exist: $FVDB_RC_PATH${NC}"
+        exit 1
+    fi
+}
+
+load_config
+
+CORE_BASE="$FVDB_CORE_PATH"
+RC_BASE="$FVDB_RC_PATH"
+
+list_worktrees() {
+    local base="$1"
+    local name="$2"
+
+    echo -e "${BLUE}${name} worktrees:${NC}"
+
+    # Main repo
+    local main_branch=$(git -C "$base" branch --show-current 2>/dev/null || echo "unknown")
+    echo -e "  ${GREEN}1)${NC} main (${main_branch}) - $base"
+
+    # List worktrees
+    local i=2
+    while IFS= read -r line; do
+        local wt_path=$(echo "$line" | awk '{print $1}')
+        local wt_branch=""
+        # Branch names are in [brackets], detached HEAD shows (parentheses)
+        if [[ "$line" == *"["*"]"* ]]; then
+            wt_branch=$(echo "$line" | sed -n 's/.*\[\(.*\)\].*/\1/p')
+        else
+            wt_branch="detached"
+        fi
+        if [[ "$wt_path" != "$base" ]]; then
+            local wt_name=$(basename "$wt_path")
+            echo -e "  ${GREEN}${i})${NC} ${wt_name} (${wt_branch}) - $wt_path"
+            ((i++))
+        fi
+    done < <(git -C "$base" worktree list 2>/dev/null)
+
+    echo -e "  ${YELLOW}n)${NC} Create new worktree"
+    echo ""
+}
+
+get_worktree_paths() {
+    local base="$1"
+    local paths=("$base")
+
+    while IFS= read -r line; do
+        local wt_path=$(echo "$line" | awk '{print $1}')
+        if [[ "$wt_path" != "$base" ]]; then
+            paths+=("$wt_path")
+        fi
+    done < <(git -C "$base" worktree list 2>/dev/null)
+
+    echo "${paths[@]}"
+}
+
+select_worktree() {
+    local base="$1"
+    local name="$2"
+    local varname="$3"
+
+    list_worktrees "$base" "$name"
+
+    local paths=($(get_worktree_paths "$base"))
+    local max=${#paths[@]}
+
+    while true; do
+        read -p "Select $name [1-$max or n for new]: " choice
+
+        if [[ "$choice" == "n" || "$choice" == "N" ]]; then
+            echo ""
+            echo "  1) Create new branch"
+            echo "  2) Use existing branch"
+            read -p "Choice [1-2]: " branch_choice
+
+            local new_branch=false
+            local branch_input=""
+
+            if [[ "$branch_choice" == "1" ]]; then
+                new_branch=true
+                read -p "New branch name: " branch_input
+            elif [[ "$branch_choice" == "2" ]]; then
+                # Show existing branches
+                echo ""
+                echo "Existing branches:"
+                git -C "$base" branch --list | head -20
+                echo ""
+                read -p "Branch name: " branch_input
+                # Verify the branch exists
+                if ! git -C "$base" show-ref --verify --quiet "refs/heads/${branch_input}" 2>/dev/null; then
+                    echo -e "${RED}Error: Branch '${branch_input}' does not exist${NC}"
+                    echo "Use option 1 to create a new branch."
+                    continue
+                fi
+            else
+                echo "Invalid choice."
+                continue
+            fi
+
+            local wt_name=$(echo "$branch_input" | sed 's|/|-|g')
+            local wt_path="$(dirname "$base")/$(basename "$base")-${wt_name}"
+
+            echo "Creating worktree at: $wt_path"
+            if [[ "$new_branch" == true ]]; then
+                git -C "$base" worktree add "$wt_path" -b "$branch_input"
+            else
+                git -C "$base" worktree add "$wt_path" "$branch_input"
+            fi
+
+            eval "$varname='$wt_path'"
+            return
+        elif [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= max )); then
+            eval "$varname='${paths[$((choice-1))]}'"
+            return
+        else
+            echo "Invalid selection. Try again."
+        fi
+    done
+}
+
+# Parse command line args
+CORE_PATH=""
+RC_PATH=""
+
+for arg in "$@"; do
+    case $arg in
+        --core=*)
+            wt_name="${arg#*=}"
+            CORE_PATH="$(branch_to_worktree_path "$CORE_BASE" "$wt_name")"
+            ;;
+        --rc=*)
+            wt_name="${arg#*=}"
+            RC_PATH="$(branch_to_worktree_path "$RC_BASE" "$wt_name")"
+            ;;
+        --help|-h)
+            echo "Usage: fvdb-open [--core=<branch>] [--rc=<branch>]"
+            echo ""
+            echo "Interactive mode (no args): shows menu to select worktrees"
+            echo "Direct mode: fvdb-open --core=main --rc=mcmc-adaptive"
+            exit 0
+            ;;
+    esac
+done
+
+# Interactive mode if paths not set
+if [[ -z "$CORE_PATH" ]]; then
+    echo -e "${BLUE}=== fvdb Project Launcher ===${NC}\n"
+    select_worktree "$CORE_BASE" "fvdb-core" CORE_PATH
+    echo ""
+fi
+
+if [[ -z "$RC_PATH" ]]; then
+    select_worktree "$RC_BASE" "fvdb-reality-capture" RC_PATH
+    echo ""
+fi
+
+# Verify paths exist
+if [[ ! -d "$CORE_PATH" ]]; then
+    echo -e "${RED}Error: $CORE_PATH does not exist${NC}"
+    exit 1
+fi
+
+if [[ ! -d "$RC_PATH" ]]; then
+    echo -e "${RED}Error: $RC_PATH does not exist${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}Opening:${NC}"
+echo "  fvdb-core: $CORE_PATH"
+echo "  fvdb-reality-capture: $RC_PATH"
+echo ""
+
+# Determine editor command (default to Cursor, allow override)
+EDITOR_CMD="${FVDB_EDITOR_CMD:-cursor}"
+
+# Ensure the editor command is available
+if ! command -v "$EDITOR_CMD" >/dev/null 2>&1; then
+    echo -e "${RED}Error: Editor command '$EDITOR_CMD' not found on PATH.${NC}"
+    echo "Install '$EDITOR_CMD' or set FVDB_EDITOR_CMD to a different editor (e.g., 'code', 'vim')."
+    exit 1
+fi
+
+# Open both in the configured editor as a multi-root workspace
+"$EDITOR_CMD" "$CORE_PATH" "$RC_PATH"
+
+echo -e "${GREEN}Done!${NC}"
