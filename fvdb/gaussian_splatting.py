@@ -1903,12 +1903,13 @@ class GaussianSplat3d:
         using per-pixel rays against the Gaussian ellipsoids (instead of rasterizing 2D conics
         produced by a projection step). This enables gradients w.r.t. Gaussian geometry
         (``means``, ``quats``, ``log_scales``) through rasterization, which is useful for
-        UT-based OpenCV camera models.
+        Unscented Transform (UT)-based OpenCV camera models.
 
         Notes:
             - This is **dense-only**: outputs are dense tensors of shape ``(C, H, W, ...)``.
             - Tile intersection data is still computed from a (non-differentiable) projection
-              step, so gradients may be discontinuous when Gaussians move between tiles.
+              step, so gradients can be discontinuous when small parameter changes cause a Gaussian
+              to enter/leave a tile (or switch which tiles it overlaps).
             - Background compositing follows standard "over" alpha compositing. If
               ``backgrounds`` is provided, the output color is:
 

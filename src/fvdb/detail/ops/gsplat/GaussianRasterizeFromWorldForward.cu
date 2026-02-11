@@ -94,9 +94,8 @@ rasterizeFromWorld3DGSForwardKernel(
     // IMPORTANT: this kernel uses block-level barriers later (`__syncthreads_count`, `block.sync`).
     // Any early return must be taken by *all* threads in the block, otherwise edge tiles can
     // deadlock when some threads are `!inside`. So we make the return block-wide.
-    const bool tileMasked =
-        (masks != nullptr) &&
-        (!masks[camId * tileExtentH * tileExtentW + tileRow * tileExtentW + tileCol]);
+    const uint32_t tileId = camId * tileExtentH * tileExtentW + tileRow * tileExtentW + tileCol;
+    const bool tileMasked = (masks != nullptr) && (!masks[tileId]);
     if (tileMasked) {
         if (inside) {
             outAlphas[imgBasePix]  = 0.0f;
@@ -256,7 +255,7 @@ rasterizeFromWorld3DGSForwardKernel(
             gaussBatch[threadRank].opacity = op;
         }
 
-        block.sync();
+        __syncthreads();
 
         const uint32_t batchSize =
             min((uint32_t)blockSize, (uint32_t)max(0, rangeEnd - batchStart));

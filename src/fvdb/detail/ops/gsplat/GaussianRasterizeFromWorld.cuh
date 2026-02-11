@@ -13,14 +13,17 @@
 
 namespace fvdb::detail::ops {
 
+/// Opacity threshold used by 3DGS alpha compositing.
 constexpr __device__ float kAlphaThreshold = 0.999f;
 
+/// Simple world-space ray used by rasterize-from-world kernels.
 template <typename T> struct WorldRay {
     nanovdb::math::Vec3<T> origin;
     nanovdb::math::Vec3<T> dir; // expected normalized for perspective
     bool valid = true;
 };
 
+/// Apply packed OpenCV distortion model to normalized camera-plane coordinates.
 template <typename T>
 inline __device__ nanovdb::math::Vec2<T>
 applyOpenCVDistortionPacked(const CameraModel cameraModel,
@@ -86,6 +89,7 @@ applyOpenCVDistortionPacked(const CameraModel cameraModel,
     return nanovdb::math::Vec2<T>(x_dist, y_dist);
 }
 
+/// Fixed-point undistortion for packed OpenCV distortion coefficients.
 template <typename T>
 inline __device__ nanovdb::math::Vec2<T>
 undistortOpenCVPackedFixedPoint(const CameraModel cameraModel,
@@ -110,6 +114,7 @@ undistortOpenCVPackedFixedPoint(const CameraModel cameraModel,
     return x;
 }
 
+/// Normalize a vector, returning zeros when norm is zero.
 template <typename T>
 inline __device__ nanovdb::math::Vec3<T>
 normalizeSafe(const nanovdb::math::Vec3<T> &v) {
@@ -120,6 +125,7 @@ normalizeSafe(const nanovdb::math::Vec3<T> &v) {
     return nanovdb::math::Vec3<T>(T(0), T(0), T(0));
 }
 
+/// Vector-Jacobian product for y = normalizeSafe(x).
 template <typename T>
 inline __device__ nanovdb::math::Vec3<T>
 normalizeSafeVJP(const nanovdb::math::Vec3<T> &x, const nanovdb::math::Vec3<T> &v_y) {
@@ -135,6 +141,7 @@ normalizeSafeVJP(const nanovdb::math::Vec3<T> &x, const nanovdb::math::Vec3<T> &
     return v_y * invn - x * (xdotv * invn3);
 }
 
+/// Extract rotation from row-major world-to-camera 4x4.
 template <typename T>
 inline __device__ nanovdb::math::Mat3<T>
 mat3FromWorldToCam(const T *m44 /* row-major 4x4 */) {
@@ -142,12 +149,14 @@ mat3FromWorldToCam(const T *m44 /* row-major 4x4 */) {
         m44[0], m44[1], m44[2], m44[4], m44[5], m44[6], m44[8], m44[9], m44[10]);
 }
 
+/// Extract translation from row-major world-to-camera 4x4.
 template <typename T>
 inline __device__ nanovdb::math::Vec3<T>
 vec3FromWorldToCamT(const T *m44 /* row-major 4x4 */) {
     return nanovdb::math::Vec3<T>(m44[3], m44[7], m44[11]);
 }
 
+/// Interpolate world-to-camera pose using linear translation + shortest-path NLERP rotation.
 template <typename T>
 inline __device__ void
 interpolateWorldToCam(const nanovdb::math::Mat3<T> &R0,
@@ -164,6 +173,7 @@ interpolateWorldToCam(const nanovdb::math::Mat3<T> &R0,
     R_out                           = quaternionToRotationMatrix<T>(qi);
 }
 
+/// Compute a world-space ray from a pixel center and camera model parameters.
 template <typename T>
 inline __device__ WorldRay<T>
 pixelToWorldRay(const uint32_t row,
@@ -235,12 +245,14 @@ pixelToWorldRay(const uint32_t row,
     return ray;
 }
 
+/// Load quaternion in [w,x,y,z] order.
 template <typename T>
 inline __device__ nanovdb::math::Vec4<T>
 quatLoadWxyz(const T *q) {
     return nanovdb::math::Vec4<T>(q[0], q[1], q[2], q[3]);
 }
 
+/// Build S^{-1} R^T from quaternion + scale.
 template <typename T>
 inline __device__ nanovdb::math::Mat3<T>
 computeIsclRot(const nanovdb::math::Vec4<T> &quat_wxyz, const nanovdb::math::Vec3<T> &scale) {
@@ -250,6 +262,7 @@ computeIsclRot(const nanovdb::math::Vec4<T> &quat_wxyz, const nanovdb::math::Vec
     return S_inv * R.transpose();
 }
 
+/// Vector-Jacobian product for isclRot = S^{-1} R^T.
 template <typename T>
 inline __device__ void
 isclRotVectorJacobianProduct(const nanovdb::math::Vec4<T> &quat_wxyz,
