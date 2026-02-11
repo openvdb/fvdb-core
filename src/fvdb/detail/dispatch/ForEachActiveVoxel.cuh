@@ -19,8 +19,8 @@
 // invoked for truly active voxels, matching the contract of the former
 // BasePerActiveVoxelProcessor.
 //
-#ifndef FVDB_DETAIL_DISPATCH_FOR_EACH_ACTIVE_VOXEL_CUH
-#define FVDB_DETAIL_DISPATCH_FOR_EACH_ACTIVE_VOXEL_CUH
+#ifndef FVDB_DETAIL_DISPATCH_FOREACHACTIVEVOXEL_CUH
+#define FVDB_DETAIL_DISPATCH_FOREACHACTIVEVOXEL_CUH
 
 #include "dispatch/torch/for_each.h"
 #include "dispatch/with_value.h"
@@ -79,4 +79,4 @@ forEachActiveVoxel(Tag tg, GridBatchImpl const &grid, Func func) {
 } // namespace detail
 } // namespace fvdb
 
-#endif // FVDB_DETAIL_DISPATCH_FOR_EACH_ACTIVE_VOXEL_CUH
+#endif // FVDB_DETAIL_DISPATCH_FOREACHACTIVEVOXEL_CUH

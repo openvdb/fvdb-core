@@ -17,8 +17,8 @@
 // are migrated, we expect to discover additional common precondition patterns
 // and may need to extend or refine the API here.
 //
-#ifndef FVDB_DETAIL_DISPATCH_TENSOR_CHECKS_H
-#define FVDB_DETAIL_DISPATCH_TENSOR_CHECKS_H
+#ifndef FVDB_DETAIL_DISPATCH_TENSORCHECKS_H
+#define FVDB_DETAIL_DISPATCH_TENSORCHECKS_H
 
 #include "dispatch/torch/types.h"
 
@@ -113,4 +113,4 @@ check_for_view(torch::Tensor const &t, std::string_view name) {
 } // namespace detail
 } // namespace fvdb
 
-#endif // FVDB_DETAIL_DISPATCH_TENSOR_CHECKS_H
+#endif // FVDB_DETAIL_DISPATCH_TENSORCHECKS_H

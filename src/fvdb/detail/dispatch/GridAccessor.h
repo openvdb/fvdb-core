@@ -11,8 +11,8 @@
 // GridBatchImpl::Accessor is already a trivially-copyable POD
 // (pointers + scalars), safe for CUDA kernel capture.
 //
-#ifndef FVDB_DETAIL_DISPATCH_GRID_ACCESSOR_H
-#define FVDB_DETAIL_DISPATCH_GRID_ACCESSOR_H
+#ifndef FVDB_DETAIL_DISPATCH_GRIDACCESSOR_H
+#define FVDB_DETAIL_DISPATCH_GRIDACCESSOR_H
 
 #include "dispatch/torch/dispatch.h"
 
@@ -38,4 +38,4 @@ make_grid_accessor(::dispatch::gpu_tag auto, GridBatchImpl const &grid) {
 } // namespace detail
 } // namespace fvdb
 
-#endif // FVDB_DETAIL_DISPATCH_GRID_ACCESSOR_H
+#endif // FVDB_DETAIL_DISPATCH_GRIDACCESSOR_H
