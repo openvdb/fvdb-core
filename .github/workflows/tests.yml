@@ -4,13 +4,6 @@ on:
   pull_request_target:
     branches:
       - '**'
-    paths-ignore:
-        - 'CODEOWNERS'
-        - '**.md'
-        - 'debug/**'
-        - 'examples/**'
-        - 'notebooks/**'
-        - 'scripts/**'
   workflow_dispatch:
     inputs:
       branch:
@@ -33,12 +26,39 @@ permissions:
 
 jobs:
   ##############################################################################
+  # CHECK FOR RELEVANT CHANGES
+  ##############################################################################
+  check-changes:
+    name: Check for relevant changes
+    runs-on: ubuntu-latest
+    outputs:
+      should_test: ${{ github.event_name != 'pull_request_target' || steps.filter.outputs.src == 'true' }}
+    steps:
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'pull_request_target'
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            src:
+              - '**'
+              - '!**/*.md'
+              - '!CODEOWNERS'
+              - '!debug/**'
+              - '!examples/**'
+              - '!notebooks/**'
+              - '!scripts/**'
+
+  ##############################################################################
   # BUILD FVDB
   ##############################################################################
   start-build-runner:
     name: Start CPU-only EC2 runner for build
+    needs: check-changes
     runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false || github.event_name != 'pull_request_target'
+    if: >-
+      needs.check-changes.outputs.should_test == 'true'
+      && (github.event.pull_request.draft == false || github.event_name != 'pull_request_target')
     outputs:
       label: ${{ steps.start-build-runner.outputs.label }}
       ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
