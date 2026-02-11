@@ -17,8 +17,8 @@
 // dispatch pattern (IjkToIndex, PointsInGrid).  May need extension as more
 // ops with jagged inputs are migrated.
 //
-#ifndef FVDB_DETAIL_DISPATCH_JAGGED_VIEW_H
-#define FVDB_DETAIL_DISPATCH_JAGGED_VIEW_H
+#ifndef FVDB_DETAIL_DISPATCH_JAGGEDVIEW_H
+#define FVDB_DETAIL_DISPATCH_JAGGEDVIEW_H
 
 #include "dispatch/macros.h"
 #include "dispatch/torch/types.h"
@@ -183,4 +183,4 @@ struct jagged_in<Dev, Stype, Rank, ::dispatch::contiguity::contiguous> {
 } // namespace detail
 } // namespace fvdb
 
-#endif // FVDB_DETAIL_DISPATCH_JAGGED_VIEW_H
+#endif // FVDB_DETAIL_DISPATCH_JAGGEDVIEW_H
