@@ -11,11 +11,11 @@
 - [What the Thin C++ Functions Look Like](#what-the-thin-c-functions-look-like)
 - [What Python Gains](#what-python-gains)
 - [What GridBatchImpl Becomes](#what-gridbatchimpl-becomes)
+- [Immutability Cleanup in C++](#immutability-cleanup-in-c)
+- [Functional Python API](#functional-python-api)
 - [Design Principle: Strict in C++, Ergonomic in Python](#design-principle-strict-in-c-ergonomic-in-python)
 - [Why This Is Safe](#why-this-is-safe)
 - [Why This Can Be Largely Automated](#why-this-can-be-largely-automated)
-- [Immutability Cleanup in C++](#immutability-cleanup-in-c)
-- [Functional Python API](#functional-python-api)
 - [Phasing](#phasing)
 - [Metrics](#metrics)
 
@@ -85,8 +85,8 @@ The redundancy has concrete costs:
 
 ### Files untouched
 
-- **All ops** ([`src/fvdb/detail/ops/`](src/fvdb/detail/ops/)) — already depend only on `GridBatchImpl`
-- **All autograd functions** ([`src/fvdb/detail/autograd/`](src/fvdb/detail/autograd/)) — already depend only on `GridBatchImpl`
+- **All ops** ([`src/fvdb/detail/ops/`](src/fvdb/detail/ops/)) — already depend only on `GridBatchImpl` (the 2 ops listed above change only their `Vec3*OrScalar` parameter types, not their logic)
+- **All autograd functions** ([`src/fvdb/detail/autograd/`](src/fvdb/detail/autograd/)) — already depend only on `GridBatchImpl` (the 2 autograd files listed above change only their `Vec3iBatch` parameter types)
 - **`GridBatchImpl`** ([`.h`](src/fvdb/detail/GridBatchImpl.h), [`.cu`](src/fvdb/detail/GridBatchImpl.cu)) — the core implementation is unchanged
 - **The viewer** ([`src/fvdb/detail/viewer/`](src/fvdb/detail/viewer/)) — one dead include removed, no API change
 - **Python tests** — the public API is identical; tests should pass as-is
@@ -135,6 +135,8 @@ These are bound as module-level functions:
 m.def("sample_trilinear", &sample_trilinear_autograd, ...);
 m.def("marching_cubes", &marching_cubes_dispatch, ...);
 ```
+
+> **Note:** If the [dispatch preprocessing pass](DispatchPreprocessingProposal.md) is done first, the device dispatch wrappers (type 2 above) are no longer needed — the ops themselves handle dispatch internally. Only the ~12 autograd `::apply()` wrappers remain, and everything else can be bound directly from the type-erased op functions. This reduces the thin wrapper count from ~25 to ~12.
 
 ---
 
