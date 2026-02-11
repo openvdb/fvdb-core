@@ -68,9 +68,8 @@ struct points_in_grid_op {
     // float32, float64, float16 — no bfloat16 (VoxelCoordTransform doesn't support it).
     // Matches the old AT_DISPATCH_V2(AT_FLOATING_TYPES, c10::kHalf) coverage.
     using stype_axis = ::dispatch::axis<torch::kFloat16, torch::kFloat32, torch::kFloat64>;
-    using space      = ::dispatch::axes<::dispatch::torch_full_device_axis,
-                                        stype_axis,
-                                        ::dispatch::full_contiguity_axis>;
+    using space      = ::dispatch::
+        axes<::dispatch::torch_full_device_axis, stype_axis, ::dispatch::full_contiguity_axis>;
     using subspaces = ::dispatch::coverage<space>;
     using dispatcher =
         ::dispatch::dispatch_table<space,

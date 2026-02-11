@@ -56,7 +56,7 @@ struct ijk_to_index_op {
 
             if (acc.isActive(vox)) {
                 int64_t const base = cumulative ? grid_acc.voxelOffset(bidx) : 0;
-                out_v(eidx) = static_cast<int64_t>(acc.getValue(vox)) - 1 + base;
+                out_v(eidx)        = static_cast<int64_t>(acc.getValue(vox)) - 1 + base;
             } else {
                 out_v(eidx) = -1;
             }

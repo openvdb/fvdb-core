@@ -1080,41 +1080,29 @@ GridBatch::ijk() const {
 JaggedTensor
 GridBatch::morton(const torch::Tensor &offset) const {
     c10::DeviceGuard guard(device());
-    const nanovdb::Coord offsetCoord = tensorToCoord(offset);
-    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
-        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
-            *mImpl, SpaceFillingCurveType::ZOrder, offsetCoord);
-    });
+    return fvdb::detail::ops::serializeEncode(
+        *mImpl, SpaceFillingCurveType::ZOrder, tensorToCoord(offset));
 }
 
 JaggedTensor
 GridBatch::morton_zyx(const torch::Tensor &offset) const {
     c10::DeviceGuard guard(device());
-    const nanovdb::Coord offsetCoord = tensorToCoord(offset);
-    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
-        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
-            *mImpl, SpaceFillingCurveType::ZOrderTransposed, offsetCoord);
-    });
+    return fvdb::detail::ops::serializeEncode(
+        *mImpl, SpaceFillingCurveType::ZOrderTransposed, tensorToCoord(offset));
 }
 
 JaggedTensor
 GridBatch::hilbert(const torch::Tensor &offset) const {
     c10::DeviceGuard guard(device());
-    const nanovdb::Coord offsetCoord = tensorToCoord(offset);
-    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
-        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
-            *mImpl, SpaceFillingCurveType::Hilbert, offsetCoord);
-    });
+    return fvdb::detail::ops::serializeEncode(
+        *mImpl, SpaceFillingCurveType::Hilbert, tensorToCoord(offset));
 }
 
 JaggedTensor
 GridBatch::hilbert_zyx(const torch::Tensor &offset) const {
     c10::DeviceGuard guard(device());
-    const nanovdb::Coord offsetCoord = tensorToCoord(offset);
-    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
-        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
-            *mImpl, SpaceFillingCurveType::HilbertTransposed, offsetCoord);
-    });
+    return fvdb::detail::ops::serializeEncode(
+        *mImpl, SpaceFillingCurveType::HilbertTransposed, tensorToCoord(offset));
 }
 
 std::vector<JaggedTensor>
