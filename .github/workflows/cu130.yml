@@ -28,6 +28,8 @@ jobs:
     outputs:
       should_test: ${{ github.event_name != 'pull_request_target' || steps.filter.outputs.src == 'true' }}
     steps:
+      # predicate-quantifier is supported in code but missing from action.yml in v3;
+      # produces a non-blocking "Invalid action input" warning. Upstream fix: PR #226.
       - uses: dorny/paths-filter@v3
         id: filter
         if: github.event_name == 'pull_request_target'
