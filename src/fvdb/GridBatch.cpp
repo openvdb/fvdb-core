@@ -801,6 +801,13 @@ GridBatch::conv_grid(Vec3iOrScalar kernel_size, Vec3iOrScalar stride) const {
 }
 
 GridBatch
+GridBatch::conv_transpose_grid(Vec3iOrScalar kernel_size, Vec3iOrScalar stride) const {
+    GridBatch result;
+    result.mImpl = mImpl->convolutionTransposeOutput(kernel_size.value(), stride.value());
+    return result;
+}
+
+GridBatch
 GridBatch::dilated_grid(const int dilation) const {
     GridBatch result;
     result.mImpl = mImpl->dilate(dilation);
@@ -1254,9 +1261,12 @@ GridBatch::gatherScatterConvFused(torch::Tensor features,
                                   const GridBatch &output_grid,
                                   const Vec3iOrScalar &kernelSize,
                                   const Vec3iOrScalar &stride) {
-    return detail::ops::gatherScatterSparseConvFused(
-        features, weights, *feature_grid.mImpl, *output_grid.mImpl, kernelSize.value(),
-        stride.value());
+    return detail::ops::gatherScatterSparseConvFused(features,
+                                                     weights,
+                                                     *feature_grid.mImpl,
+                                                     *output_grid.mImpl,
+                                                     kernelSize.value(),
+                                                     stride.value());
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
@@ -1267,9 +1277,13 @@ GridBatch::gatherScatterConvFusedBackward(torch::Tensor grad_output,
                                           const GridBatch &output_grid,
                                           const Vec3iOrScalar &kernelSize,
                                           const Vec3iOrScalar &stride) {
-    return detail::ops::gatherScatterSparseConvFusedBackward(
-        grad_output, features, weights, *feature_grid.mImpl, *output_grid.mImpl,
-        kernelSize.value(), stride.value());
+    return detail::ops::gatherScatterSparseConvFusedBackward(grad_output,
+                                                             features,
+                                                             weights,
+                                                             *feature_grid.mImpl,
+                                                             *output_grid.mImpl,
+                                                             kernelSize.value(),
+                                                             stride.value());
 }
 
 torch::Tensor
@@ -1279,9 +1293,12 @@ GridBatch::gatherScatterConvFusedTranspose(torch::Tensor features,
                                            const GridBatch &output_grid,
                                            const Vec3iOrScalar &kernelSize,
                                            const Vec3iOrScalar &stride) {
-    return detail::ops::gatherScatterSparseConvFusedTranspose(
-        features, weights, *feature_grid.mImpl, *output_grid.mImpl, kernelSize.value(),
-        stride.value());
+    return detail::ops::gatherScatterSparseConvFusedTranspose(features,
+                                                              weights,
+                                                              *feature_grid.mImpl,
+                                                              *output_grid.mImpl,
+                                                              kernelSize.value(),
+                                                              stride.value());
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
@@ -1292,9 +1309,13 @@ GridBatch::gatherScatterConvFusedTransposeBackward(torch::Tensor grad_output,
                                                    const GridBatch &output_grid,
                                                    const Vec3iOrScalar &kernelSize,
                                                    const Vec3iOrScalar &stride) {
-    return detail::ops::gatherScatterSparseConvFusedTransposeBackward(
-        grad_output, features, weights, *feature_grid.mImpl, *output_grid.mImpl,
-        kernelSize.value(), stride.value());
+    return detail::ops::gatherScatterSparseConvFusedTransposeBackward(grad_output,
+                                                                      features,
+                                                                      weights,
+                                                                      *feature_grid.mImpl,
+                                                                      *output_grid.mImpl,
+                                                                      kernelSize.value(),
+                                                                      stride.value());
 }
 
 } // namespace fvdb

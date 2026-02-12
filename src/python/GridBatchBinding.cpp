@@ -292,6 +292,10 @@ bind_grid_batch(py::module &m) {
              py::arg("mask") = nullptr)
         .def("clipped_grid", &fvdb::GridBatch::clipped_grid, py::arg("ijk_min"), py::arg("ijk_max"))
         .def("conv_grid", &fvdb::GridBatch::conv_grid, py::arg("kernel_size"), py::arg("stride"))
+        .def("conv_transpose_grid",
+             &fvdb::GridBatch::conv_transpose_grid,
+             py::arg("kernel_size"),
+             py::arg("stride"))
         .def("dilated_grid", &fvdb::GridBatch::dilated_grid, py::arg("dilation"))
         .def("merged_grid", &fvdb::GridBatch::merged_grid, py::arg("other"))
         .def("pruned_grid", &fvdb::GridBatch::pruned_grid, py::arg("mask"))

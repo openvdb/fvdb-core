@@ -12,6 +12,7 @@
 #include <fvdb/detail/ops/BuildDilatedGrid.h>
 #include <fvdb/detail/ops/BuildFineGridFromCoarse.h>
 #include <fvdb/detail/ops/BuildGridForConv.h>
+#include <fvdb/detail/ops/BuildGridForConvTranspose.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/BuildGridFromMesh.h>
 #include <fvdb/detail/ops/BuildGridFromNearestVoxelsToPoints.h>
@@ -1824,6 +1825,26 @@ GridBatchImpl::convolutionOutput(const nanovdb::Coord kernelSize, const nanovdb:
     });
     auto ret = c10::make_intrusive<detail::GridBatchImpl>(std::move(convGridBatchHdl), voxS, voxO);
     // ret->setCoarseTransformFromFineGrid(*baseGrid, stride);
+    return ret;
+}
+
+c10::intrusive_ptr<GridBatchImpl>
+GridBatchImpl::convolutionTransposeOutput(const nanovdb::Coord kernelSize,
+                                          const nanovdb::Coord stride) {
+    c10::DeviceGuard guard(device());
+    TORCH_CHECK_VALUE(nanovdb::Coord(0) < kernelSize, "kernel_size must be strictly positive.");
+    TORCH_CHECK_VALUE(nanovdb::Coord(0) < stride, "stride must be strictly positive.");
+    if (batchSize() == 0) {
+        return c10::make_intrusive<detail::GridBatchImpl>(device());
+    }
+    std::vector<nanovdb::Vec3d> voxS, voxO;
+    gridVoxelSizesAndOrigins(voxS, voxO);
+
+    auto convTransposeGridBatchHdl = FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
+        return detail::ops::dispatchBuildGridForConvTranspose<DeviceTag>(*this, kernelSize, stride);
+    });
+    auto ret                       = c10::make_intrusive<detail::GridBatchImpl>(
+        std::move(convTransposeGridBatchHdl), voxS, voxO);
     return ret;
 }
 

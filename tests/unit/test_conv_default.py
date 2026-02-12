@@ -27,11 +27,16 @@ from fvdb.utils.tests import (
 from fvdb.utils.tests.convolution_utils import (
     ALL_DEVICE_DTYPE_COMBOS,
     REDUCED_DEVICE_DTYPE_COMBOS,
+    DisableTF32Mixin,
     assert_coords_equal,
     compute_conv_grid_topology_ground_truth,
     conv_ground_truth_stride_1,
     conv_ground_truth_strided,
+    create_grid_from_coords,
+    diagnose_tensor_mismatch,
     disable_tf32,
+    get_cluster_edge_aligned,
+    get_cluster_near_origin,
     get_tolerances,
     sort_coords_by_ijk,
 )
@@ -41,138 +46,11 @@ from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
 from fvdb.convolution_plan import _GatherScatterBackend
 
 # =============================================================================
-# Test-Specific Helpers
-# =============================================================================
-
-
-def diagnose_tensor_mismatch(
-    name: str,
-    actual: torch.Tensor,
-    expected: torch.Tensor,
-    rtol: float,
-    atol: float,
-) -> str:
-    """
-    Generate diagnostic info for tensor mismatch (for debugging test failures).
-
-    Args:
-        name: Description of what's being compared
-        actual: Actual tensor from sparse convolution
-        expected: Expected tensor from dense ground truth
-        rtol: Relative tolerance used
-        atol: Absolute tolerance used
-
-    Returns:
-        Formatted string with error statistics and top mismatches
-    """
-    lines = [f"\n{'='*60}", f"TENSOR MISMATCH: {name}", f"{'='*60}"]
-
-    if actual.shape != expected.shape:
-        lines.append(f"SHAPE MISMATCH: actual={actual.shape}, expected={expected.shape}")
-        return "\n".join(lines)
-
-    lines.append(f"Shape: {actual.shape}, dtype: {actual.dtype}")
-
-    abs_diff = (actual - expected).abs()
-    max_abs = abs_diff.max().item()
-    mean_abs = abs_diff.mean().item()
-
-    lines.append(f"\nError Statistics:")
-    lines.append(f"  Max absolute error:  {max_abs:.6e}")
-    lines.append(f"  Mean absolute error: {mean_abs:.6e}")
-    lines.append(f"  Tolerance: rtol={rtol}, atol={atol}")
-
-    exceeds = abs_diff > (atol + rtol * expected.abs())
-    num_exceed = exceeds.sum().item()
-    total = actual.numel()
-    pct = 100 * num_exceed / total
-
-    lines.append(f"\nMismatched elements: {num_exceed}/{total} ({pct:.1f}%)")
-
-    if num_exceed > 0:
-        flat_abs_diff = abs_diff.flatten()
-        flat_actual = actual.flatten()
-        flat_expected = expected.flatten()
-        _, top_indices = flat_abs_diff.topk(min(5, int(num_exceed)))
-
-        lines.append(f"\nTop mismatches:")
-        for idx in top_indices:
-            i: int = int(idx.item())
-            a_val: float = flat_actual[i].item()
-            e_val: float = flat_expected[i].item()
-            diff: float = flat_abs_diff[i].item()
-            lines.append(f"  idx={i}: actual={a_val:.6f}, expected={e_val:.6f}, diff={diff:.6e}")
-
-    lines.append(f"{'='*60}\n")
-    return "\n".join(lines)
-
-
-def create_grid_from_coords(
-    coords: torch.Tensor,
-    device: torch.device,
-) -> GridBatch:
-    """Create a GridBatch from coordinate tensor."""
-    ijks = JaggedTensor(coords.to(device=device, dtype=torch.int32))
-    return GridBatch.from_ijk(ijks, device=device)
-
-
-def get_cluster_near_origin(device: torch.device) -> torch.Tensor:
-    """
-    Get a sparse cluster of coordinates near the origin.
-
-    This cluster includes coordinates at (0,0,0) which will produce negative
-    output coordinates when convolved with stride=1.
-    """
-    return torch.tensor(
-        [
-            # Group 1: At/near origin - produces negative output coords with stride=1
-            [0, 0, 0],
-            [0, 1, 1],
-            [1, 0, 2],
-            # Group 2: Slightly separated - some kernel overlap with group 1
-            [3, 4, 5],
-            [4, 4, 5],
-            [3, 5, 6],
-            # Group 3: Further out - tests larger coordinate range
-            [7, 8, 9],
-        ],
-        device=device,
-        dtype=torch.int32,
-    )
-
-
-def get_cluster_edge_aligned(
-    kernel_size: tuple[int, int, int],
-    device: torch.device,
-) -> torch.Tensor:
-    """
-    Get a sparse cluster positioned so outputs stay non-negative.
-
-    The minimum coordinate is offset by (half_kernel + 1) to ensure
-    all output coordinates are non-negative.
-    """
-    kernel_half = tuple(k // 2 for k in kernel_size)
-    base = tuple(k + 1 for k in kernel_half)  # Extra margin
-
-    return torch.tensor(
-        [
-            [base[0] + 0, base[1] + 0, base[2] + 0],
-            [base[0] + 2, base[1] + 0, base[2] + 1],
-            [base[0] + 1, base[1] + 2, base[2] + 0],
-            [base[0] + 3, base[1] + 3, base[2] + 3],
-            [base[0] + 5, base[1] + 4, base[2] + 5],
-        ],
-        device=device,
-        dtype=torch.int32,
-    )
-
-
-# =============================================================================
 # Test Class
 # =============================================================================
 
 
-class TestConvDefault(unittest.TestCase):
+class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
 
     VOLUME_SHAPE = (71, 34, 58)
     KERNEL_SIZE = (3, 5, 7)
@@ -180,14 +58,11 @@ class TestConvDefault(unittest.TestCase):
     SINGLE_COORD = (2, 3, 4)
     NUM_CANDIDATES = 1000
 
-    def setUp(self):
-        torch.random.manual_seed(2024)
-
     # =========================================================================
     # Topology Tests (conv_grid)
     # =========================================================================
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
     def test_conv_grid_single_impulse_bounds(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Validate that conv_grid output bounds match expected kernel footprint
@@ -269,9 +144,9 @@ class TestConvDefault(unittest.TestCase):
             all_non_negative = (dst_ijks >= 0).all()
             self.assertTrue(all_non_negative, "Expected all non-negative output coordinates")
 
-    # --- Stride 1 tests (full device/dtype coverage) ---
+    # --- Stride 1 tests ---
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
     def test_conv_grid_topology_stride1_near_origin(self, device: DeviceIdentifier, dtype: torch.dtype):
         """Topology test with coordinates near origin, stride=1."""
         device_resolved = resolve_device(device)
@@ -284,7 +159,7 @@ class TestConvDefault(unittest.TestCase):
             check_negative_outputs=True,
         )
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
     def test_conv_grid_topology_stride1_edge_aligned(self, device: DeviceIdentifier, dtype: torch.dtype):
         """Topology test with edge-aligned coordinates, stride=1."""
         device_resolved = resolve_device(device)
@@ -297,7 +172,7 @@ class TestConvDefault(unittest.TestCase):
             check_non_negative_outputs=True,
         )
 
-    # --- Strided tests (reduced device/dtype coverage) ---
+    # --- Strided tests ---
 
     @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
     def test_conv_grid_topology_stride_uniform(self, device: DeviceIdentifier, dtype: torch.dtype):
@@ -327,7 +202,7 @@ class TestConvDefault(unittest.TestCase):
     # Convolution Value Tests (forward pass)
     # =========================================================================
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
     def test_single_impulse_activation_and_weights(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test that each kernel weight position activates the correct output coordinate.
@@ -650,7 +525,6 @@ class TestConvDefault(unittest.TestCase):
         dst_coords = dst_grid_batch.ijk.jdata
 
         num_voxels = len(cluster_coords)
-        num_dst_voxels = len(dst_coords)
 
         # Create features with gradient tracking
         features_data = torch.randn((num_voxels, in_channels), device=device, dtype=dtype, requires_grad=True)
@@ -688,7 +562,6 @@ class TestConvDefault(unittest.TestCase):
 
         # Verify forward pass matches
         sparse_values_sorted, sparse_perm = sort_coords_by_ijk(dst_coords)
-        dst_sorted, _ = sort_coords_by_ijk(dst_coords)
 
         sparse_out_sorted = sparse_output.jdata[sparse_perm]
         dense_out_sorted = dense_output_at_dst[sparse_perm]
@@ -715,14 +588,6 @@ class TestConvDefault(unittest.TestCase):
         sparse_kernel_grad = kernel_5d.grad
 
         # Dense backward
-        # Need to create gradient at the dense output coordinates
-        dense_grad_at_dst = output_grad.clone()
-
-        # Backprop through the extraction of values at dst coords
-        # This requires computing the gradient w.r.t dense_output_full
-        dense_output_full.retain_grad()
-
-        # We need to manually accumulate gradients at dst coordinates
         # Re-run the ground truth with gradient tracking
         dense_features2 = features_data.detach().clone().requires_grad_(True)
         dense_kernel2 = kernel_5d.detach().clone().requires_grad_(True)

@@ -519,6 +519,270 @@ def conv_ground_truth_stride_1(
     return dense_activation, convolved
 
 
+# =============================================================================
+# Shared Test Helpers
+# =============================================================================
+
+
+class DisableTF32Mixin:
+    """Mixin that disables TF32 for the entire test so sparse and dense paths use identical precision."""
+
+    def setUp(self):
+        torch.random.manual_seed(2024)
+        self._saved_cudnn_tf32 = torch.backends.cudnn.allow_tf32
+        self._saved_matmul_tf32 = torch.backends.cuda.matmul.allow_tf32
+        torch.backends.cudnn.allow_tf32 = False
+        torch.backends.cuda.matmul.allow_tf32 = False
+
+    def tearDown(self):
+        torch.backends.cudnn.allow_tf32 = self._saved_cudnn_tf32
+        torch.backends.cuda.matmul.allow_tf32 = self._saved_matmul_tf32
+
+
+def diagnose_tensor_mismatch(
+    name: str,
+    actual: torch.Tensor,
+    expected: torch.Tensor,
+    rtol: float,
+    atol: float,
+) -> str:
+    """
+    Generate diagnostic info for tensor mismatch (for debugging test failures).
+
+    Args:
+        name: Description of what's being compared
+        actual: Actual tensor from sparse convolution
+        expected: Expected tensor from dense ground truth
+        rtol: Relative tolerance used
+        atol: Absolute tolerance used
+
+    Returns:
+        Formatted string with error statistics and top mismatches
+    """
+    lines = [f"\n{'='*60}", f"TENSOR MISMATCH: {name}", f"{'='*60}"]
+
+    if actual.shape != expected.shape:
+        lines.append(f"SHAPE MISMATCH: actual={actual.shape}, expected={expected.shape}")
+        return "\n".join(lines)
+
+    lines.append(f"Shape: {actual.shape}, dtype: {actual.dtype}")
+
+    abs_diff = (actual - expected).abs()
+    max_abs = abs_diff.max().item()
+    mean_abs = abs_diff.mean().item()
+
+    lines.append(f"\nError Statistics:")
+    lines.append(f"  Max absolute error:  {max_abs:.6e}")
+    lines.append(f"  Mean absolute error: {mean_abs:.6e}")
+    lines.append(f"  Tolerance: rtol={rtol}, atol={atol}")
+
+    exceeds = abs_diff > (atol + rtol * expected.abs())
+    num_exceed = exceeds.sum().item()
+    total = actual.numel()
+    pct = 100 * num_exceed / total
+
+    lines.append(f"\nMismatched elements: {num_exceed}/{total} ({pct:.1f}%)")
+
+    if num_exceed > 0:
+        flat_abs_diff = abs_diff.flatten()
+        flat_actual = actual.flatten()
+        flat_expected = expected.flatten()
+        _, top_indices = flat_abs_diff.topk(min(5, int(num_exceed)))
+
+        lines.append(f"\nTop mismatches:")
+        for idx in top_indices:
+            i: int = int(idx.item())
+            a_val: float = flat_actual[i].item()
+            e_val: float = flat_expected[i].item()
+            diff: float = flat_abs_diff[i].item()
+            lines.append(f"  idx={i}: actual={a_val:.6f}, expected={e_val:.6f}, diff={diff:.6e}")
+
+    lines.append(f"{'='*60}\n")
+    return "\n".join(lines)
+
+
+def create_grid_from_coords(
+    coords: torch.Tensor,
+    device: torch.device,
+) -> GridBatch:
+    """Create a GridBatch from coordinate tensor."""
+    ijks = JaggedTensor(coords.to(device=device, dtype=torch.int32))
+    return GridBatch.from_ijk(ijks, device=device)
+
+
+def get_cluster_near_origin(device: torch.device) -> torch.Tensor:
+    """
+    Get a sparse cluster of coordinates near the origin.
+
+    This cluster includes coordinates at (0,0,0) which will produce negative
+    output coordinates when convolved with stride=1.
+    """
+    return torch.tensor(
+        [
+            # Group 1: At/near origin - produces negative output coords with stride=1
+            [0, 0, 0],
+            [0, 1, 1],
+            [1, 0, 2],
+            # Group 2: Slightly separated - some kernel overlap with group 1
+            [3, 4, 5],
+            [4, 4, 5],
+            [3, 5, 6],
+            # Group 3: Further out - tests larger coordinate range
+            [7, 8, 9],
+        ],
+        device=device,
+        dtype=torch.int32,
+    )
+
+
+def get_cluster_edge_aligned(
+    kernel_size: tuple[int, int, int],
+    device: torch.device,
+) -> torch.Tensor:
+    """
+    Get a sparse cluster positioned so outputs stay non-negative.
+
+    The minimum coordinate is offset by (half_kernel + 1) to ensure
+    all output coordinates are non-negative.
+    """
+    kernel_half = tuple(k // 2 for k in kernel_size)
+    base = tuple(k + 1 for k in kernel_half)  # Extra margin
+
+    return torch.tensor(
+        [
+            [base[0] + 0, base[1] + 0, base[2] + 0],
+            [base[0] + 2, base[1] + 0, base[2] + 1],
+            [base[0] + 1, base[1] + 2, base[2] + 0],
+            [base[0] + 3, base[1] + 3, base[2] + 3],
+            [base[0] + 5, base[1] + 4, base[2] + 5],
+        ],
+        device=device,
+        dtype=torch.int32,
+    )
+
+
+# =============================================================================
+# Transpose Convolution Ground Truth
+# =============================================================================
+
+
+def compute_conv_transpose_topology_ground_truth(
+    input_coords: torch.Tensor,
+    kernel_size: tuple[int, int, int],
+    stride: tuple[int, int, int],
+    device: torch.device,
+) -> torch.Tensor:
+    """
+    Compute the expected output coordinates for transposed convolution.
+
+    For transposed convolution, each input at coordinate c contributes to
+    outputs at coordinates: c*S + (k - K//2) for each kernel position k.
+
+    This means the output range for input c is:
+        [c*S - K//2, c*S + K//2]
+
+    Args:
+        input_coords: Tensor of shape (N, 3) with input ijk coordinates
+        kernel_size: Tuple of kernel dimensions (k0, k1, k2)
+        stride: Tuple of stride values (s0, s1, s2)
+        device: Target device
+
+    Returns:
+        Tensor of shape (M, 3) with expected output ijk coordinates
+    """
+    kernel_half = tuple(k // 2 for k in kernel_size)
+
+    output_coords_set: set[tuple[int, int, int]] = set()
+
+    for coord in input_coords:
+        c = coord.tolist()
+
+        # For transposed convolution, input at c produces outputs at
+        # c*S + (k - K//2) for each kernel position k
+        for k0 in range(kernel_size[0]):
+            for k1 in range(kernel_size[1]):
+                for k2 in range(kernel_size[2]):
+                    out_coord = (
+                        c[0] * stride[0] + (k0 - kernel_half[0]),
+                        c[1] * stride[1] + (k1 - kernel_half[1]),
+                        c[2] * stride[2] + (k2 - kernel_half[2]),
+                    )
+                    output_coords_set.add(out_coord)
+
+    return torch.tensor(list(output_coords_set), device=device, dtype=torch.int32)
+
+
+def conv_transpose_ground_truth_stride_1(
+    grid_batch: GridBatch,
+    activation: JaggedTensor,
+    weights: torch.Tensor,
+    dense_dims: tuple[int, int, int],
+    ijk_min: tuple[int, int, int],
+    *,
+    allow_tf32: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Compute ground truth transposed convolution (stride=1) using dense PyTorch.
+
+    This function densifies the sparse input, runs PyTorch's conv_transpose3d,
+    and returns both the dense activation and the convolved result.
+
+    For transposed convolution with stride=1 and padding=K//2, the output
+    has the same shape as the input (same as conv3d with padding="same").
+
+    Args:
+        grid_batch: Input GridBatch containing voxel coordinates
+        activation: Sparse input features as JaggedTensor
+        weights: Convolution kernel, shape (out_channels, in_channels, k0, k1, k2)
+        dense_dims: Shape of the dense volume (d0, d1, d2)
+        ijk_min: Minimum coordinate (origin) of the dense volume
+        allow_tf32: If True, enables TF32 for faster but less precise computation
+
+    Returns:
+        Tuple of:
+        - dense_activation: Densified input in channel-major format
+        - convolved: Dense output from conv_transpose3d
+    """
+    device = activation.jdata.device
+    dtype = activation.jdata.dtype
+    kernel_size = weights.shape[2:]
+    kernel_half = tuple(k // 2 for k in kernel_size)
+    in_channels = weights.shape[1]
+
+    # Create dense input
+    dense_activation = torch.zeros((1, in_channels) + dense_dims, device=device, dtype=dtype)
+
+    src_coords = grid_batch.ijk.jdata
+    for idx, coord in enumerate(src_coords):
+        local_idx = tuple(int(coord[i].item()) - ijk_min[i] for i in range(3))
+        if all(0 <= local_idx[i] < dense_dims[i] for i in range(3)):
+            dense_activation[0, :, local_idx[0], local_idx[1], local_idx[2]] = activation.jdata[idx]
+
+    # Run transposed convolution.
+    # PyTorch conv_transpose3d expects weight [in_channels, out_channels, K],
+    # but our convention is [out_channels, in_channels, K].  Transpose channel dims.
+    weights_torch = weights.transpose(0, 1).contiguous()
+
+    # For stride=1, padding=K//2 gives same output size as input
+    if allow_tf32:
+        convolved = torch.nn.functional.conv_transpose3d(
+            input=dense_activation,
+            weight=weights_torch,
+            padding=kernel_half,
+            stride=1,
+        )
+    else:
+        with disable_tf32():
+            convolved = torch.nn.functional.conv_transpose3d(
+                input=dense_activation,
+                weight=weights_torch,
+                padding=kernel_half,
+                stride=1,
+            )
+
+    return dense_activation, convolved
+
+
 __all__ = [
     # Test configuration
     "ALL_DEVICE_DTYPE_COMBOS",
@@ -526,12 +790,20 @@ __all__ = [
     "get_tolerances",
     # TF32 control
     "disable_tf32",
+    "DisableTF32Mixin",
     # Coordinate utilities
     "sort_coords_by_ijk",
     "assert_coords_equal",
     "normalize_stride",
+    # Shared test helpers
+    "diagnose_tensor_mismatch",
+    "create_grid_from_coords",
+    "get_cluster_near_origin",
+    "get_cluster_edge_aligned",
     # Ground truth computation
     "compute_conv_grid_topology_ground_truth",
+    "compute_conv_transpose_topology_ground_truth",
     "conv_ground_truth_strided",
     "conv_ground_truth_stride_1",
+    "conv_transpose_ground_truth_stride_1",
 ]

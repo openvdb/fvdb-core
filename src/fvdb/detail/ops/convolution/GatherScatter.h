@@ -148,12 +148,12 @@ gatherScatterSparseConvBackward(torch::Tensor grad_output,
 
 /// Gather-scatter transposed sparse convolution.
 ///
-/// @param features  Input features, shape [feature_total_voxels, C_out].
-///                  (Note: for transposed conv, feature channels = C_out.)
+/// @param features  Input features, shape [feature_total_voxels, C_in].
+///                  (Same channel convention as forward.)
 /// @param weights   Kernel weights, shape [C_out, C_in, k0, k1, k2]
-///                  (same layout as forward -- NOT PyTorch conv_transpose3d).
+///                  (same layout as forward).
 /// @param topo      Precomputed topology (direction=Transposed).
-/// @return          Output features, shape [output_total_voxels, C_in],
+/// @return          Output features, shape [output_total_voxels, C_out],
 ///                  same dtype as features.
 torch::Tensor gatherScatterSparseConvTranspose(torch::Tensor features,
                                                torch::Tensor weights,
@@ -162,9 +162,9 @@ torch::Tensor gatherScatterSparseConvTranspose(torch::Tensor features,
 /// Backward pass for gather-scatter transposed sparse convolution.
 ///
 /// @param grad_output  Gradient w.r.t. transposed output,
-///                     shape [output_total_voxels, C_in].
+///                     shape [output_total_voxels, C_out].
 /// @param features     Input features from the forward pass,
-///                     shape [feature_total_voxels, C_out].
+///                     shape [feature_total_voxels, C_in].
 /// @param weights      Kernel weights, shape [C_out, C_in, k0, k1, k2].
 /// @param topo         Precomputed topology (direction=Transposed).
 /// @return             Tuple of (grad_features, grad_weights).

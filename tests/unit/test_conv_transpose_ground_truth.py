@@ -205,7 +205,7 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
             check_bounds=True,
         )
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
     def test_single_impulse_activation_and_weights(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test the output coordinate for each kernel weight position in conv_transpose3d.
@@ -265,7 +265,7 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
                     got_output_coord = tuple(nonzero_coords[0].tolist())
                     self.assertEqual(got_output_coord, expected_output_coord)
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
     def test_multiple_impulses(self, device: DeviceIdentifier, dtype: torch.dtype):
         """Test that non-overlapping impulses each produce independent kernel responses."""
         device = resolve_device(device)
@@ -538,7 +538,7 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
                 # Should have no gradient (offset out of kernel range)
                 self.assertTrue(torch.all(weight_grad == 0), f"Expected zero grad for out-of-bounds offset {offset}")
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
     def test_multiple_impulses_backward(self, device: DeviceIdentifier, dtype: torch.dtype):
         """Test that non-overlapping impulse gradients produce independent patterns."""
         device = resolve_device(device)

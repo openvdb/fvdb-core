@@ -465,10 +465,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
                                    return std::vector<int>{
                                        t.kernel_size[0], t.kernel_size[1], t.kernel_size[2]};
                                })
-        .def_property_readonly("stride",
-                               [](const GSTopo &t) {
-                                   return std::vector<int>{t.stride[0], t.stride[1], t.stride[2]};
-                               })
+        .def_property_readonly(
+            "stride",
+            [](const GSTopo &t) { return std::vector<int>{t.stride[0], t.stride[1], t.stride[2]}; })
         .def_property_readonly("is_transposed", [](const GSTopo &t) {
             return t.direction == fvdb::detail::ops::ConvDirection::Transposed;
         });

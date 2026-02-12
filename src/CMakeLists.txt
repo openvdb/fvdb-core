@@ -84,6 +84,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/BuildDilatedGrid.cu
     fvdb/detail/ops/BuildFineGridFromCoarse.cu
     fvdb/detail/ops/BuildGridForConv.cu
+    fvdb/detail/ops/BuildGridForConvTranspose.cu
     fvdb/detail/ops/BuildGridFromIjk.cu
     fvdb/detail/ops/BuildGridFromMesh.cu
     fvdb/detail/ops/BuildGridFromNearestVoxelsToPoints.cu

@@ -68,14 +68,14 @@ gatherScatterSparseConvFusedBackward(torch::Tensor grad_output,
 /// Probe coordinate: (output_ijk - kernel_offset) / stride, valid only
 /// when (output_ijk - kernel_offset) is divisible by stride.
 ///
-/// @param features      Input features, shape [feature_total_voxels, C_out].
-///                      (For transposed conv, feature channels = C_out.)
+/// @param features      Input features, shape [feature_total_voxels, C_in].
+///                      (Same channel convention as forward.)
 /// @param weights       Kernel weights, shape [C_out, C_in, k0, k1, k2].
 /// @param feature_grid  Grid batch where input features live.
 /// @param output_grid   Grid batch where convolution output lives.
 /// @param kernel_size   Per-axis kernel size (e.g. {3,3,3}).
 /// @param stride        Per-axis stride (e.g. {1,1,1}).
-/// @return              Output features, shape [output_total_voxels, C_in].
+/// @return              Output features, shape [output_total_voxels, C_out].
 torch::Tensor gatherScatterSparseConvFusedTranspose(torch::Tensor features,
                                                     torch::Tensor weights,
                                                     GridBatchImpl const &feature_grid,

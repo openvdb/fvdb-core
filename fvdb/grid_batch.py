@@ -868,6 +868,23 @@ class GridBatch:
 
         return GridBatch(impl=self._impl.conv_grid(kernel_size, stride))
 
+    def conv_transpose_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> "GridBatch":
+        """
+        Return a :class:`GridBatch` representing the active voxels at the output of a transposed convolution
+        applied to this batch with a given kernel.
+
+        Args:
+            kernel_size (NumericMaxRank1): Size of the kernel to convolve with, broadcastable to shape ``(3,)``, integer dtype.
+            stride (NumericMaxRank1): Stride to use when convolving, broadcastable to shape ``(3,)``, integer dtype.
+
+        Returns:
+            conv_transpose_grid (GridBatch): A GridBatch representing the transposed convolution of this grid batch.
+        """
+        kernel_size = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
+        stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE)
+
+        return GridBatch(impl=self._impl.conv_transpose_grid(kernel_size, stride))
+
     def coords_in_grid(self, ijk: JaggedTensor) -> JaggedTensor:
         """
         Check which voxel-space coordinates lie on active voxels for each grid.

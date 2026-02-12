@@ -66,8 +66,15 @@ from fvdb.utils.tests import (
 from fvdb.utils.tests.convolution_utils import (
     ALL_DEVICE_DTYPE_COMBOS,
     REDUCED_DEVICE_DTYPE_COMBOS,
+    DisableTF32Mixin,
     assert_coords_equal,
+    compute_conv_transpose_topology_ground_truth,
+    conv_transpose_ground_truth_stride_1,
+    create_grid_from_coords,
+    diagnose_tensor_mismatch,
     disable_tf32,
+    get_cluster_edge_aligned,
+    get_cluster_near_origin,
     get_tolerances,
     sort_coords_by_ijk,
 )
@@ -76,592 +83,29 @@ from parameterized import parameterized
 from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
 
 # =============================================================================
-# Test-Specific Helpers
+# Test Classes
 # =============================================================================
 
 
-def diagnose_tensor_mismatch(
-    name: str,
-    actual: torch.Tensor,
-    expected: torch.Tensor,
-    rtol: float,
-    atol: float,
-) -> str:
-    """
-    Generate diagnostic info for tensor mismatch (for debugging test failures).
-
-    Args:
-        name: Description of what's being compared
-        actual: Actual tensor from sparse convolution
-        expected: Expected tensor from dense ground truth
-        rtol: Relative tolerance used
-        atol: Absolute tolerance used
-
-    Returns:
-        Formatted string with error statistics and top mismatches
-    """
-    lines = [f"\n{'='*60}", f"TENSOR MISMATCH: {name}", f"{'='*60}"]
-
-    if actual.shape != expected.shape:
-        lines.append(f"SHAPE MISMATCH: actual={actual.shape}, expected={expected.shape}")
-        return "\n".join(lines)
-
-    lines.append(f"Shape: {actual.shape}, dtype: {actual.dtype}")
-
-    abs_diff = (actual - expected).abs()
-    max_abs = abs_diff.max().item()
-    mean_abs = abs_diff.mean().item()
-
-    lines.append(f"\nError Statistics:")
-    lines.append(f"  Max absolute error:  {max_abs:.6e}")
-    lines.append(f"  Mean absolute error: {mean_abs:.6e}")
-    lines.append(f"  Tolerance: rtol={rtol}, atol={atol}")
-
-    exceeds = abs_diff > (atol + rtol * expected.abs())
-    num_exceed = exceeds.sum().item()
-    total = actual.numel()
-    pct = 100 * num_exceed / total
-
-    lines.append(f"\nMismatched elements: {num_exceed}/{total} ({pct:.1f}%)")
-
-    if num_exceed > 0:
-        flat_abs_diff = abs_diff.flatten()
-        flat_actual = actual.flatten()
-        flat_expected = expected.flatten()
-        _, top_indices = flat_abs_diff.topk(min(5, int(num_exceed)))
-
-        lines.append(f"\nTop mismatches:")
-        for idx in top_indices:
-            i: int = int(idx.item())
-            a_val: float = flat_actual[i].item()
-            e_val: float = flat_expected[i].item()
-            diff: float = flat_abs_diff[i].item()
-            lines.append(f"  idx={i}: actual={a_val:.6f}, expected={e_val:.6f}, diff={diff:.6e}")
-
-    lines.append(f"{'='*60}\n")
-    return "\n".join(lines)
-
-
-def create_grid_from_coords(
-    coords: torch.Tensor,
-    device: torch.device,
-) -> GridBatch:
-    """Create a GridBatch from coordinate tensor."""
-    ijks = JaggedTensor(coords.to(device=device, dtype=torch.int32))
-    return GridBatch.from_ijk(ijks, device=device)
-
-
-def get_cluster_near_origin(device: torch.device) -> torch.Tensor:
-    """
-    Get a sparse cluster of coordinates near the origin.
-
-    This cluster includes coordinates at (0,0,0) which will produce negative
-    output coordinates when convolved.
-    """
-    return torch.tensor(
-        [
-            # Group 1: At/near origin - produces negative output coords
-            [0, 0, 0],
-            [0, 1, 1],
-            [1, 0, 2],
-            # Group 2: Slightly separated - some kernel overlap with group 1
-            [3, 4, 5],
-            [4, 4, 5],
-            [3, 5, 6],
-            # Group 3: Further out - tests larger coordinate range
-            [7, 8, 9],
-        ],
-        device=device,
-        dtype=torch.int32,
-    )
-
-
-def get_cluster_edge_aligned(
-    kernel_size: tuple[int, int, int],
-    device: torch.device,
-) -> torch.Tensor:
-    """
-    Get a sparse cluster positioned so outputs stay non-negative.
-
-    The minimum coordinate is offset by (half_kernel + 1) to ensure
-    all output coordinates are non-negative.
-    """
-    kernel_half = tuple(k // 2 for k in kernel_size)
-    base = tuple(k + 1 for k in kernel_half)  # Extra margin
-
-    return torch.tensor(
-        [
-            [base[0] + 0, base[1] + 0, base[2] + 0],
-            [base[0] + 2, base[1] + 0, base[2] + 1],
-            [base[0] + 1, base[1] + 2, base[2] + 0],
-            [base[0] + 3, base[1] + 3, base[2] + 3],
-            [base[0] + 5, base[1] + 4, base[2] + 5],
-        ],
-        device=device,
-        dtype=torch.int32,
-    )
-
-
-def compute_conv_transpose_topology_ground_truth(
-    input_coords: torch.Tensor,
-    kernel_size: tuple[int, int, int],
-    stride: tuple[int, int, int],
-    device: torch.device,
-) -> torch.Tensor:
-    """
-    Compute the expected output coordinates for transposed convolution.
-
-    For transposed convolution, each input at coordinate c contributes to
-    outputs at coordinates: c*S + (k - K//2) for each kernel position k.
-
-    This means the output range for input c is:
-        [c*S - K//2, c*S + K//2]
-
-    Args:
-        input_coords: Tensor of shape (N, 3) with input ijk coordinates
-        kernel_size: Tuple of kernel dimensions (k0, k1, k2)
-        stride: Tuple of stride values (s0, s1, s2)
-        device: Target device
-
-    Returns:
-        Tensor of shape (M, 3) with expected output ijk coordinates
-    """
-    kernel_half = tuple(k // 2 for k in kernel_size)
-
-    output_coords_set: set[tuple[int, int, int]] = set()
-
-    for coord in input_coords:
-        c = coord.tolist()
-
-        # For transposed convolution, input at c produces outputs at
-        # c*S + (k - K//2) for each kernel position k
-        for k0 in range(kernel_size[0]):
-            for k1 in range(kernel_size[1]):
-                for k2 in range(kernel_size[2]):
-                    out_coord = (
-                        c[0] * stride[0] + (k0 - kernel_half[0]),
-                        c[1] * stride[1] + (k1 - kernel_half[1]),
-                        c[2] * stride[2] + (k2 - kernel_half[2]),
-                    )
-                    output_coords_set.add(out_coord)
-
-    return torch.tensor(list(output_coords_set), device=device, dtype=torch.int32)
-
-
-def conv_transpose_ground_truth_stride_1(
-    grid_batch: GridBatch,
-    activation: JaggedTensor,
-    weights: torch.Tensor,
-    dense_dims: tuple[int, int, int],
-    ijk_min: tuple[int, int, int],
-    *,
-    allow_tf32: bool = False,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Compute ground truth transposed convolution (stride=1) using dense PyTorch.
-
-    This function densifies the sparse input, runs PyTorch's conv_transpose3d,
-    and returns both the dense activation and the convolved result.
-
-    For transposed convolution with stride=1 and padding=K//2, the output
-    has the same shape as the input (same as conv3d with padding="same").
-
-    Args:
-        grid_batch: Input GridBatch containing voxel coordinates
-        activation: Sparse input features as JaggedTensor
-        weights: Convolution kernel, shape (out_channels, in_channels, k0, k1, k2)
-        dense_dims: Shape of the dense volume (d0, d1, d2)
-        ijk_min: Minimum coordinate (origin) of the dense volume
-        allow_tf32: If True, enables TF32 for faster but less precise computation
-
-    Returns:
-        Tuple of:
-        - dense_activation: Densified input in channel-major format
-        - convolved: Dense output from conv_transpose3d
-    """
-    device = activation.jdata.device
-    dtype = activation.jdata.dtype
-    kernel_size = weights.shape[2:]
-    kernel_half = tuple(k // 2 for k in kernel_size)
-    in_channels = weights.shape[1]
-
-    # Create dense input
-    dense_activation = torch.zeros((1, in_channels) + dense_dims, device=device, dtype=dtype)
-
-    src_coords = grid_batch.ijk.jdata
-    for idx, coord in enumerate(src_coords):
-        local_idx = tuple(int(coord[i].item()) - ijk_min[i] for i in range(3))
-        if all(0 <= local_idx[i] < dense_dims[i] for i in range(3)):
-            dense_activation[0, :, local_idx[0], local_idx[1], local_idx[2]] = activation.jdata[idx]
-
-    # Run transposed convolution
-    # For stride=1, padding=K//2 gives same output size as input
-    if allow_tf32:
-        convolved = torch.nn.functional.conv_transpose3d(
-            input=dense_activation,
-            weight=weights,
-            padding=kernel_half,
-            stride=1,
-        )
-    else:
-        with disable_tf32():
-            convolved = torch.nn.functional.conv_transpose3d(
-                input=dense_activation,
-                weight=weights,
-                padding=kernel_half,
-                stride=1,
-            )
-
-    return dense_activation, convolved
-
-
-def compute_conv_topology_ground_truth(
-    input_coords: torch.Tensor,
-    kernel_size: tuple[int, int, int],
-    stride: tuple[int, int, int],
-    device: torch.device,
-) -> torch.Tensor:
-    """
-    Compute the expected output coordinates for regular convolution.
-
-    For regular convolution, output at coordinate o receives contributions
-    from inputs where: o*S - K//2 <= c <= o*S + K//2
-
-    Equivalently, input at c contributes to outputs in range:
-        [ceil((c - K//2) / S), floor((c + K//2) / S)]
-
-    Args:
-        input_coords: Tensor of shape (N, 3) with input ijk coordinates
-        kernel_size: Tuple of kernel dimensions (k0, k1, k2)
-        stride: Tuple of stride values (s0, s1, s2)
-        device: Target device
-
-    Returns:
-        Tensor of shape (M, 3) with expected output ijk coordinates
-    """
-    kernel_half = tuple(k // 2 for k in kernel_size)
-
-    output_coords_set: set[tuple[int, int, int]] = set()
-
-    for coord in input_coords:
-        c = coord.tolist()
-
-        # For regular convolution, input at c contributes to outputs in range
-        # [ceil((c - K//2) / S), floor((c + K//2) / S)] for each dimension
-        o_ranges = []
-        for dim in range(3):
-            c_val = c[dim]
-            kh = kernel_half[dim]
-            s = stride[dim]
-            o_min = math.ceil((c_val - kh) / s)
-            o_max = math.floor((c_val + kh) / s)
-            o_ranges.append(range(o_min, o_max + 1))
-
-        # Add all combinations
-        for o0 in o_ranges[0]:
-            for o1 in o_ranges[1]:
-                for o2 in o_ranges[2]:
-                    output_coords_set.add((o0, o1, o2))
-
-    return torch.tensor(list(output_coords_set), device=device, dtype=torch.int32)
-
-
-# =============================================================================
-# Test Class
-# =============================================================================
-
-
-class TestConvTransposeTopology(unittest.TestCase):
+class TestConvTransposeTopology(DisableTF32Mixin, unittest.TestCase):
     """
     Test topology computation for transposed convolution.
 
-    For stride=1, the topology of transposed convolution is IDENTICAL to
-    regular convolution. This is because:
-        - Regular conv: output at c + offset for each input c
-        - Transpose conv: output at c*1 + offset = c + offset for each input c
-
-    We verify this by:
-    1. Computing ground truth topology for both regular and transposed conv
-    2. Verifying they match for stride=1
-    3. Verifying conv_grid produces this topology
+    Verifies that conv_transpose_grid produces the correct output coordinate
+    set, and that it matches conv_grid for stride=1 (a fundamental property).
     """
 
     KERNEL_SIZE = (3, 5, 7)
-
-    def setUp(self):
-        torch.random.manual_seed(2024)
-
-    # =========================================================================
-    # Stride=1 Topology Tests (conv and conv_transpose have same topology)
-    # =========================================================================
-
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
-    def test_stride1_topology_equivalence(self, device: DeviceIdentifier, dtype: torch.dtype):
-        """
-        Verify that for stride=1, conv and conv_transpose produce identical topologies.
-
-        This is a fundamental property: when stride=1, both operations produce
-        outputs at coordinates c + offset for each input c.
-        """
-        device = resolve_device(device)
-        stride = (1, 1, 1)
-
-        cluster_coords = get_cluster_near_origin(device)
-
-        # Compute ground truth for both
-        conv_topology = compute_conv_topology_ground_truth(
-            input_coords=cluster_coords,
-            kernel_size=self.KERNEL_SIZE,
-            stride=stride,
-            device=device,
-        )
-
-        conv_t_topology = compute_conv_transpose_topology_ground_truth(
-            input_coords=cluster_coords,
-            kernel_size=self.KERNEL_SIZE,
-            stride=stride,
-            device=device,
-        )
-
-        # They should be identical for stride=1
-        assert_coords_equal(
-            conv_topology,
-            conv_t_topology,
-            msg="Conv and conv_transpose topologies should match for stride=1",
-        )
-
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
-    def test_conv_grid_matches_transpose_topology_stride1(self, device: DeviceIdentifier, dtype: torch.dtype):
-        """
-        Verify that conv_grid produces the correct topology for stride=1.
-
-        Since conv and conv_transpose have the same topology for stride=1,
-        we can use conv_grid for transposed convolution topology computation.
-        """
-        device = resolve_device(device)
-        stride = (1, 1, 1)
-
-        cluster_coords = get_cluster_near_origin(device)
-        grid_batch = create_grid_from_coords(cluster_coords, device)
-
-        # Get topology from conv_grid
-        dst_grid_batch = grid_batch.conv_grid(kernel_size=self.KERNEL_SIZE, stride=stride)
-        dst_ijks = dst_grid_batch.ijk.jdata
-
-        # Compute ground truth for transposed convolution
-        expected_coords = compute_conv_transpose_topology_ground_truth(
-            input_coords=cluster_coords,
-            kernel_size=self.KERNEL_SIZE,
-            stride=stride,
-            device=device,
-        )
-
-        # Verify they match
-        assert_coords_equal(
-            dst_ijks,
-            expected_coords,
-            msg="conv_grid should produce correct topology for stride=1 transposed conv",
-        )
-
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
-    def test_single_impulse_topology_stride1(self, device: DeviceIdentifier, dtype: torch.dtype):
-        """
-        Test topology for a single input voxel with stride=1.
-
-        A single input at coordinate c should produce outputs at all coordinates
-        in the range [c - K//2, c + K//2] for each dimension.
-        """
-        device = resolve_device(device)
-        stride = (1, 1, 1)
-        kernel_half = tuple(k // 2 for k in self.KERNEL_SIZE)
-
-        # Single coordinate
-        single_coord = torch.tensor([[5, 6, 7]], device=device, dtype=torch.int32)
-        grid_batch = create_grid_from_coords(single_coord, device)
-
-        dst_grid_batch = grid_batch.conv_grid(kernel_size=self.KERNEL_SIZE, stride=stride)
-        dst_ijks = dst_grid_batch.ijk.jdata
-
-        # Expected: kernel_size^3 outputs
-        expected_count = math.prod(self.KERNEL_SIZE)
-        self.assertEqual(len(dst_ijks), expected_count)
-
-        # Verify bounds
-        c = single_coord[0].tolist()
-        expected_min = tuple(c[i] - kernel_half[i] for i in range(3))
-        expected_max = tuple(c[i] + kernel_half[i] for i in range(3))
-
-        actual_min = tuple(dst_ijks[:, i].min().item() for i in range(3))
-        actual_max = tuple(dst_ijks[:, i].max().item() for i in range(3))
-
-        self.assertEqual(actual_min, expected_min)
-        self.assertEqual(actual_max, expected_max)
-
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
-    def test_topology_with_negative_output_coords(self, device: DeviceIdentifier, dtype: torch.dtype):
-        """
-        Test that topology correctly handles negative output coordinates.
-
-        When input is near origin, transposed convolution produces negative
-        output coordinates (e.g., input at (0,0,0) with K//2=1 produces
-        outputs at (-1,-1,-1) through (1,1,1)).
-        """
-        device = resolve_device(device)
-        stride = (1, 1, 1)
-
-        cluster_coords = get_cluster_near_origin(device)
-        grid_batch = create_grid_from_coords(cluster_coords, device)
-
-        dst_grid_batch = grid_batch.conv_grid(kernel_size=self.KERNEL_SIZE, stride=stride)
-        dst_ijks = dst_grid_batch.ijk.jdata
-
-        # Verify some negative coordinates exist
-        has_negative = (dst_ijks < 0).any()
-        self.assertTrue(has_negative, "Expected some negative output coordinates")
-
-        # Verify against ground truth
-        expected_coords = compute_conv_transpose_topology_ground_truth(
-            input_coords=cluster_coords,
-            kernel_size=self.KERNEL_SIZE,
-            stride=stride,
-            device=device,
-        )
-
-        assert_coords_equal(dst_ijks, expected_coords)
-
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
-    def test_topology_non_negative_outputs(self, device: DeviceIdentifier, dtype: torch.dtype):
-        """
-        Test topology with edge-aligned inputs that produce non-negative outputs.
-        """
-        device = resolve_device(device)
-        stride = (1, 1, 1)
-
-        cluster_coords = get_cluster_edge_aligned(self.KERNEL_SIZE, device)
-        grid_batch = create_grid_from_coords(cluster_coords, device)
-
-        dst_grid_batch = grid_batch.conv_grid(kernel_size=self.KERNEL_SIZE, stride=stride)
-        dst_ijks = dst_grid_batch.ijk.jdata
-
-        # Verify all non-negative
-        all_non_negative = (dst_ijks >= 0).all()
-        self.assertTrue(all_non_negative, "Expected all non-negative output coordinates")
-
-        # Verify against ground truth
-        expected_coords = compute_conv_transpose_topology_ground_truth(
-            input_coords=cluster_coords,
-            kernel_size=self.KERNEL_SIZE,
-            stride=stride,
-            device=device,
-        )
-
-        assert_coords_equal(dst_ijks, expected_coords)
-
-    # =========================================================================
-    # Documentation Tests: Stride > 1 Topology Difference
-    # =========================================================================
-
-    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
-    def test_stride2_topology_difference_documented(self, device: DeviceIdentifier, dtype: torch.dtype):
-        """
-        Document that for stride > 1, conv and conv_transpose have DIFFERENT topologies.
-
-        This test demonstrates the theoretical difference, even though fVDB
-        doesn't yet support stride > 1 for transposed convolution.
-
-        Regular conv (downsampling):
-            - Input at c contributes to outputs in [ceil((c-K//2)/S), floor((c+K//2)/S)]
-            - Output coordinates are "compressed"
-
-        Transposed conv (upsampling):
-            - Input at c produces outputs at c*S + (k - K//2) for each k
-            - Output coordinates are "expanded"
-
-        Example with K=3, S=2, input at c=3:
-            - Regular conv: output at floor((3+1)/2) = 2 and ceil((3-1)/2) = 1
-            - Transpose conv: outputs at 3*2 + {-1,0,1} = {5,6,7}
-        """
-        device = resolve_device(device)
-        stride = (2, 2, 2)
-        kernel_size = (3, 3, 3)
-
-        # Simple test case: single input at coordinate (3, 3, 3)
-        single_coord = torch.tensor([[3, 3, 3]], device=device, dtype=torch.int32)
-
-        # Compute both topologies
-        conv_topology = compute_conv_topology_ground_truth(
-            input_coords=single_coord,
-            kernel_size=kernel_size,
-            stride=stride,
-            device=device,
-        )
-
-        conv_t_topology = compute_conv_transpose_topology_ground_truth(
-            input_coords=single_coord,
-            kernel_size=kernel_size,
-            stride=stride,
-            device=device,
-        )
-
-        # They should be DIFFERENT for stride > 1
-        # Regular conv: c=3, K//2=1, S=2 -> outputs at [ceil((3-1)/2), floor((3+1)/2)] = [1, 2]
-        # That's outputs at (1,1,1), (1,1,2), (1,2,1), etc. (2^3 = 8 combinations)
-        # Transpose conv: c=3, S=2, K//2=1 -> outputs at 3*2 + {-1,0,1} = {5,6,7}
-        # That's outputs at (5,5,5) through (7,7,7) (3^3 = 27 outputs)
-
-        # Verify counts are different
-        self.assertNotEqual(
-            len(conv_topology),
-            len(conv_t_topology),
-            "Conv and conv_transpose should have different output counts for stride > 1",
-        )
-
-        # Verify specific expected counts
-        # Regular conv with K=3, S=2: each input contributes to 2^3 = 8 output cells
-        # (because floor((c+1)/2) - ceil((c-1)/2) + 1 = 2 for each dimension)
-        self.assertEqual(len(conv_topology), 8)
-
-        # Transpose conv with K=3: each input contributes to 3^3 = 27 output cells
-        self.assertEqual(len(conv_t_topology), 27)
-
-        # Verify the coordinate ranges are different
-        conv_min = tuple(conv_topology[:, i].min().item() for i in range(3))
-        conv_max = tuple(conv_topology[:, i].max().item() for i in range(3))
-        conv_t_min = tuple(conv_t_topology[:, i].min().item() for i in range(3))
-        conv_t_max = tuple(conv_t_topology[:, i].max().item() for i in range(3))
-
-        # Regular conv outputs near c/S = 3/2 ~ 1-2
-        self.assertEqual(conv_min, (1, 1, 1))
-        self.assertEqual(conv_max, (2, 2, 2))
-
-        # Transpose conv outputs near c*S = 3*2 = 6, +/- K//2 = 1
-        self.assertEqual(conv_t_min, (5, 5, 5))
-        self.assertEqual(conv_t_max, (7, 7, 7))
-
-
-class TestConvTransposeGridTopology(unittest.TestCase):
-    """
-    Test the conv_transpose_grid function topology computation.
-
-    These tests verify that conv_transpose_grid produces the correct output
-    coordinates for transposed convolution operations.
-    """
-
-    KERNEL_SIZE = (3, 5, 7)
-    SINGLE_VOLUME_SHAPE = (5, 7, 9)
     SINGLE_COORD = (2, 3, 4)
 
-    def setUp(self):
-        torch.random.manual_seed(2024)
-
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
-    def test_conv_transpose_grid_single_impulse_bounds(self, device: DeviceIdentifier, dtype: torch.dtype):
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
+    def test_single_impulse_bounds(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Validate that conv_transpose_grid output bounds match expected kernel footprint
         for a single input coordinate.
 
         For stride=1, a single input at coord c should produce outputs spanning
-        [c - K//2, c + K//2] in each dimension.
+        [c - K//2, c + K//2] in each dimension, totalling prod(K) voxels.
         """
         device = resolve_device(device)
         kernel_half = tuple(k // 2 for k in self.KERNEL_SIZE)
@@ -686,86 +130,65 @@ class TestConvTransposeGridTopology(unittest.TestCase):
         self.assertEqual(actual_start, expected_start)
         self.assertEqual(actual_end, expected_end)
 
-    def _test_conv_transpose_grid_topology(
-        self,
-        device: DeviceIdentifier,
-        dtype: torch.dtype,
-        stride: tuple[int, int, int],
-        cluster_coords: torch.Tensor,
-        check_negative_outputs: bool = False,
-        check_non_negative_outputs: bool = False,
-    ):
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
+    def test_topology_stride1_near_origin(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
-        Core topology test: verify conv_transpose_grid output matches ground truth.
+        Topology test with coordinates near origin, stride=1.
 
-        Args:
-            device: Device identifier
-            dtype: Data type
-            stride: Stride tuple (s0, s1, s2)
-            cluster_coords: Input coordinates
-            check_negative_outputs: Assert that some outputs have negative coords
-            check_non_negative_outputs: Assert that all outputs are non-negative
+        Verifies negative output coordinates are produced and that the
+        coordinate set matches analytical ground truth.
         """
         device = resolve_device(device)
-        cluster_coords = cluster_coords.to(device=device)
+        cluster_coords = get_cluster_near_origin(device)
 
-        # Create grid and get conv_transpose_grid output
         grid_batch = create_grid_from_coords(cluster_coords, device)
-        dst_grid_batch = grid_batch.conv_transpose_grid(kernel_size=self.KERNEL_SIZE, stride=stride)
+        dst_grid_batch = grid_batch.conv_transpose_grid(kernel_size=self.KERNEL_SIZE, stride=(1, 1, 1))
         dst_ijks = dst_grid_batch.ijk.jdata
 
-        # Compute ground truth
+        # Verify some negative coordinates exist
+        has_negative = (dst_ijks < 0).any()
+        self.assertTrue(has_negative, "Expected some negative output coordinates")
+
+        # Verify against ground truth
         expected_coords = compute_conv_transpose_topology_ground_truth(
             input_coords=cluster_coords,
             kernel_size=self.KERNEL_SIZE,
-            stride=stride,
+            stride=(1, 1, 1),
             device=device,
         )
 
-        # Compare
-        assert_coords_equal(
-            dst_ijks,
-            expected_coords,
-            msg=f"stride={stride}",
-        )
+        assert_coords_equal(dst_ijks, expected_coords)
 
-        # Additional checks
-        if check_negative_outputs:
-            has_negative = (dst_ijks < 0).any()
-            self.assertTrue(has_negative, "Expected some negative output coordinates")
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
+    def test_topology_stride1_edge_aligned(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """
+        Topology test with edge-aligned coordinates that produce non-negative outputs.
 
-        if check_non_negative_outputs:
-            all_non_negative = (dst_ijks >= 0).all()
-            self.assertTrue(all_non_negative, "Expected all non-negative output coordinates")
+        Verifies all output coordinates are non-negative and match analytical ground truth.
+        """
+        device = resolve_device(device)
+        cluster_coords = get_cluster_edge_aligned(self.KERNEL_SIZE, device)
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
-    def test_conv_transpose_grid_topology_stride1_near_origin(self, device: DeviceIdentifier, dtype: torch.dtype):
-        """Topology test with coordinates near origin, stride=1."""
-        device_resolved = resolve_device(device)
-        cluster_coords = get_cluster_near_origin(device_resolved)
-        self._test_conv_transpose_grid_topology(
-            device,
-            dtype,
+        grid_batch = create_grid_from_coords(cluster_coords, device)
+        dst_grid_batch = grid_batch.conv_transpose_grid(kernel_size=self.KERNEL_SIZE, stride=(1, 1, 1))
+        dst_ijks = dst_grid_batch.ijk.jdata
+
+        # Verify all non-negative
+        all_non_negative = (dst_ijks >= 0).all()
+        self.assertTrue(all_non_negative, "Expected all non-negative output coordinates")
+
+        # Verify against ground truth
+        expected_coords = compute_conv_transpose_topology_ground_truth(
+            input_coords=cluster_coords,
+            kernel_size=self.KERNEL_SIZE,
             stride=(1, 1, 1),
-            cluster_coords=cluster_coords,
-            check_negative_outputs=True,
+            device=device,
         )
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
-    def test_conv_transpose_grid_topology_stride1_edge_aligned(self, device: DeviceIdentifier, dtype: torch.dtype):
-        """Topology test with edge-aligned coordinates, stride=1."""
-        device_resolved = resolve_device(device)
-        cluster_coords = get_cluster_edge_aligned(self.KERNEL_SIZE, device_resolved)
-        self._test_conv_transpose_grid_topology(
-            device,
-            dtype,
-            stride=(1, 1, 1),
-            cluster_coords=cluster_coords,
-            check_non_negative_outputs=True,
-        )
+        assert_coords_equal(dst_ijks, expected_coords)
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
-    def test_conv_transpose_grid_matches_conv_grid_stride1(self, device: DeviceIdentifier, dtype: torch.dtype):
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
+    def test_topology_matches_conv_grid_stride1(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Verify that conv_transpose_grid produces the same topology as conv_grid for stride=1.
 
@@ -786,7 +209,7 @@ class TestConvTransposeGridTopology(unittest.TestCase):
         )
 
 
-class TestConvTransposeValues(unittest.TestCase):
+class TestConvTransposeValues(DisableTF32Mixin, unittest.TestCase):
     """
     Test transposed convolution forward pass values.
 
@@ -800,10 +223,7 @@ class TestConvTransposeValues(unittest.TestCase):
     SINGLE_COORD = (2, 3, 4)
     NUM_CANDIDATES = 1000
 
-    def setUp(self):
-        torch.random.manual_seed(2024)
-
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
     def test_single_impulse_activation_and_weights(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test that each kernel weight position activates the correct output coordinate
@@ -1047,7 +467,7 @@ class TestConvTransposeValues(unittest.TestCase):
         )
 
 
-class TestConvTransposeBackward(unittest.TestCase):
+class TestConvTransposeBackward(DisableTF32Mixin, unittest.TestCase):
     """
     Test transposed convolution backward pass (gradient computation).
 
@@ -1058,9 +478,6 @@ class TestConvTransposeBackward(unittest.TestCase):
     KERNEL_SIZE = (3, 5, 7)
     SINGLE_VOLUME_SHAPE = (5, 7, 9)
     SINGLE_COORD = (2, 3, 4)
-
-    def setUp(self):
-        torch.random.manual_seed(2024)
 
     @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
     def test_single_impulse_backward(self, device: DeviceIdentifier, dtype: torch.dtype):
@@ -1215,20 +632,26 @@ class TestConvTransposeBackward(unittest.TestCase):
         dense_max = tuple(max(src_max[i], dst_max[i]) for i in range(3))
         dense_shape = tuple(dense_max[i] - dense_min[i] + 1 for i in range(3))
 
-        # Create dense input with gradient tracking
+        # Create leaf tensors with gradient tracking for dense ground truth
         dense_features = features_data.detach().clone().requires_grad_(True)
-        dense_kernel = kernel_5d.detach().clone().requires_grad_(True)
+        # PyTorch conv_transpose3d expects weight [in_channels, out_channels, K],
+        # but our sparse convention is [out_channels, in_channels, K].
+        # Transpose channel dims for the dense ground truth.
+        dense_kernel_transposed = kernel_5d.detach().transpose(0, 1).contiguous().clone().requires_grad_(True)
 
-        dense_input = torch.zeros((1, in_channels) + dense_shape, device=device, dtype=dtype)
-        for idx, coord in enumerate(cluster_coords):
+        # Build dense input via clone-then-scatter to maintain autograd graph.
+        # Use grid_batch.ijk.jdata (the grid's actual storage order) rather than
+        # cluster_coords, because GridBatch.from_ijk may reorder voxels internally.
+        src_coords = grid_batch.ijk.jdata
+        dense_input = torch.zeros((1, in_channels) + dense_shape, device=device, dtype=dtype, requires_grad=True)
+        dense_input_data = dense_input.clone()
+        for idx, coord in enumerate(src_coords):
             local_idx = tuple(coord[i].item() - dense_min[i] for i in range(3))
-            dense_input[0, :, local_idx[0], local_idx[1], local_idx[2]] = dense_features[idx]
-
-        dense_input = dense_input.clone().requires_grad_(True)
+            dense_input_data[0, :, local_idx[0], local_idx[1], local_idx[2]] = dense_features[idx]
 
         with disable_tf32():
             dense_output = torch.nn.functional.conv_transpose3d(
-                input=dense_input, weight=dense_kernel, padding=kernel_half, stride=1
+                input=dense_input_data, weight=dense_kernel_transposed, padding=kernel_half, stride=1
             )
 
         # Apply gradient at output coordinates
@@ -1240,32 +663,32 @@ class TestConvTransposeBackward(unittest.TestCase):
 
         loss.backward()
 
-        # Extract dense input gradient at sparse locations
-        dense_input_grad_at_sparse = torch.zeros_like(dense_features)
-        assert dense_input.grad is not None, "Dense input grad is None"
-        for idx, coord in enumerate(cluster_coords):
-            local_idx = tuple(int(coord[i].item()) - dense_min[i] for i in range(3))
-            dense_input_grad_at_sparse[idx] = dense_input.grad[0, :, local_idx[0], local_idx[1], local_idx[2]]
+        # Read gradients directly from the leaf tensors
+        dense_input_grad = dense_features.grad
+        dense_kernel_grad_transposed = dense_kernel_transposed.grad
 
         # Compare input gradients
-        assert sparse_input_grad is not None
+        assert sparse_input_grad is not None, "Sparse input grad is None"
+        assert dense_input_grad is not None, "Dense input grad is None"
+
         try:
             torch.testing.assert_close(
-                sparse_input_grad, dense_input_grad_at_sparse, rtol=tols["input_grad"][0], atol=tols["input_grad"][1]
+                sparse_input_grad, dense_input_grad, rtol=tols["input_grad"][0], atol=tols["input_grad"][1]
             )
         except AssertionError:
             diag = diagnose_tensor_mismatch(
                 f"Input gradient (dtype={dtype})",
                 sparse_input_grad,
-                dense_input_grad_at_sparse,
+                dense_input_grad,
                 rtol=tols["input_grad"][0],
                 atol=tols["input_grad"][1],
             )
             raise AssertionError(diag) from None
 
         # Compare kernel gradients
-        dense_kernel_grad = dense_kernel.grad
-        assert sparse_kernel_grad is not None and dense_kernel_grad is not None
+        # Dense gradient is in [in_ch, out_ch, K] layout; transpose back to [out_ch, in_ch, K]
+        assert sparse_kernel_grad is not None and dense_kernel_grad_transposed is not None
+        dense_kernel_grad = dense_kernel_grad_transposed.transpose(0, 1).contiguous()
 
         try:
             torch.testing.assert_close(

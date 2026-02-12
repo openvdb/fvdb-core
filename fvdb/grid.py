@@ -631,6 +631,22 @@ class Grid:
         stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE)
         return Grid(impl=self._impl.conv_grid(kernel_size, stride))
 
+    def conv_transpose_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> "Grid":
+        """
+        Return a :class:`Grid` representing the active voxels at the output of a transposed convolution applied to this :class:`Grid` with a given kernel.
+
+        Args:
+            kernel_size (NumericMaxRank1): The size of the kernel to convolve with, broadcastable to shape ``(3,)``, integer dtype
+            stride (NumericMaxRank1): The stride to use when convolving,
+                broadcastable to shape ``(3,)``, integer dtype
+
+        Returns:
+            conv_transpose_grid (Grid): A :class:`Grid` representing the set of voxels in the output of the transposed convolution defined by ``kernel_size`` and ``stride``.
+        """
+        kernel_size = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
+        stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE)
+        return Grid(impl=self._impl.conv_transpose_grid(kernel_size, stride))
+
     def coords_in_grid(self, ijk: torch.Tensor) -> torch.Tensor:
         """
         Check if voxel coordinates are in active voxels.
