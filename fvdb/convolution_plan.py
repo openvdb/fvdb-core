@@ -41,50 +41,71 @@ def _channel_pair_supported(in_channels: int, out_channels: int, channel_pairs: 
 
 
 class _GatherScatterConvFn(torch.autograd.Function):
-    """Autograd wrapper for the GEMM-based gather-scatter convolution with precomputed topology."""
+    """Autograd wrapper for the GEMM-based gather-scatter convolution (forward + transposed)."""
 
     @staticmethod
-    def forward(ctx, features: torch.Tensor, weights: torch.Tensor, topo: _fvdb_cpp.GatherScatterTopology) -> torch.Tensor:  # type: ignore[override]
-        output = _fvdb_cpp.gs_conv(features, weights, topo)
+    def forward(ctx, features: torch.Tensor, weights: torch.Tensor, topo: _fvdb_cpp.GatherScatterTopology, transposed: bool) -> torch.Tensor:  # type: ignore[override]
+        if transposed:
+            output = _fvdb_cpp.gs_conv_transpose(features, weights, topo)
+        else:
+            output = _fvdb_cpp.gs_conv(features, weights, topo)
         ctx.save_for_backward(features, weights)
         ctx.topo = topo
+        ctx.transposed = transposed
         return output
 
     @staticmethod
-    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, None]:  # type: ignore[override]
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, None, None]:  # type: ignore[override]
         features, weights = ctx.saved_tensors
-        grad_feat, grad_w = _fvdb_cpp.gs_conv_backward(grad_output, features, weights, ctx.topo)
-        return grad_feat, grad_w, None
+        if ctx.transposed:
+            grad_feat, grad_w = _fvdb_cpp.gs_conv_transpose_backward(
+                grad_output, features, weights, ctx.topo
+            )
+        else:
+            grad_feat, grad_w = _fvdb_cpp.gs_conv_backward(grad_output, features, weights, ctx.topo)
+        return grad_feat, grad_w, None, None
 
 
 class _GatherScatterFusedConvFn(torch.autograd.Function):
-    """Autograd wrapper for the fused gather-scatter convolution (small-C optimized)."""
+    """Autograd wrapper for the fused gather-scatter convolution (forward + transposed)."""
 
     @staticmethod
     def forward(  # type: ignore[override]
         ctx,
         features: torch.Tensor,
         weights: torch.Tensor,
-        src_grid: _fvdb_cpp.GridBatch,
-        dst_grid: _fvdb_cpp.GridBatch,
+        feature_grid: _fvdb_cpp.GridBatch,
+        output_grid: _fvdb_cpp.GridBatch,
         kernel_size: torch.Tensor,
         stride: torch.Tensor,
+        transposed: bool,
     ) -> torch.Tensor:
-        output = _fvdb_cpp.gs_conv_fused(features, weights, src_grid, dst_grid, kernel_size, stride)
+        if transposed:
+            output = _fvdb_cpp.gs_conv_fused_transpose(
+                features, weights, feature_grid, output_grid, kernel_size, stride
+            )
+        else:
+            output = _fvdb_cpp.gs_conv_fused(features, weights, feature_grid, output_grid, kernel_size, stride)
         ctx.save_for_backward(features, weights)
-        ctx.src_grid = src_grid
-        ctx.dst_grid = dst_grid
+        ctx.feature_grid = feature_grid
+        ctx.output_grid = output_grid
         ctx.kernel_size = kernel_size
         ctx.stride = stride
+        ctx.transposed = transposed
         return output
 
     @staticmethod
-    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, None, None, None, None]:  # type: ignore[override]
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, None, None, None, None, None]:  # type: ignore[override]
         features, weights = ctx.saved_tensors
-        grad_feat, grad_w = _fvdb_cpp.gs_conv_fused_backward(
-            grad_output, features, weights, ctx.src_grid, ctx.dst_grid, ctx.kernel_size, ctx.stride
-        )
-        return grad_feat, grad_w, None, None, None, None
+        if ctx.transposed:
+            grad_feat, grad_w = _fvdb_cpp.gs_conv_fused_transpose_backward(
+                grad_output, features, weights, ctx.feature_grid, ctx.output_grid, ctx.kernel_size, ctx.stride
+            )
+        else:
+            grad_feat, grad_w = _fvdb_cpp.gs_conv_fused_backward(
+                grad_output, features, weights, ctx.feature_grid, ctx.output_grid, ctx.kernel_size, ctx.stride
+            )
+        return grad_feat, grad_w, None, None, None, None, None
 
 
 # ============================================================
@@ -636,7 +657,7 @@ class ConvolutionPlan:
 
         # Gather-scatter (new): precomputed topology with Python autograd
         elif isinstance(backend, _GatherScatterBackend):
-            out_tensor = _GatherScatterConvFn.apply(data.jdata, weights, backend.topology)
+            out_tensor = _GatherScatterConvFn.apply(data.jdata, weights, backend.topology, self._transposed)
             if out_tensor is None:
                 raise ValueError("Gather-scatter convolution returned None")
             if not isinstance(out_tensor, torch.Tensor):
@@ -652,6 +673,7 @@ class ConvolutionPlan:
                 self._target_grid._impl,
                 self._kernel_size,
                 self._stride,
+                self._transposed,
             )
             if out_tensor is None:
                 raise ValueError("Gather-scatter fused convolution returned None")
@@ -788,19 +810,21 @@ class ConvolutionPlan:
                 raise ValueError("Dense backend requires source_grid and target_grid to be the same.")
             return _DenseBackend()
 
+        # Gather-scatter (new) — precomputed topology with Python autograd
+        if backend_name == "gather_scatter":
+            if transposed:
+                topo = _fvdb_cpp.gs_build_transpose_topology(
+                    source_grid._impl, target_grid._impl, kernel_size, stride
+                )
+            else:
+                topo = _fvdb_cpp.gs_build_topology(
+                    source_grid._impl, target_grid._impl, kernel_size, stride
+                )
+            return _GatherScatterBackend(topology=topo)
+
         # Gather-scatter fused — no precomputed topology
         if backend_name == "gather_scatter_fused":
             return _GatherScatterFusedBackend()
-
-        # Gather-scatter (new) — precomputed topology with Python autograd
-        if backend_name == "gather_scatter":
-            topo = _fvdb_cpp.gs_build_topology(
-                source_grid._impl,
-                target_grid._impl,
-                kernel_size,
-                stride,
-            )
-            return _GatherScatterBackend(topology=topo)
 
         # Legacy gather-scatter — old C++ autograd path
         if backend_name == "gather_scatter_old":
@@ -812,25 +836,17 @@ class ConvolutionPlan:
             )
             return _GatherScatterOldBackend(neighbor_map=neighbor_map, neighbor_sizes=neighbor_sizes)
 
-        # Default: use old backend for transposed (not yet supported by new path),
-        # new gather-scatter otherwise.
+        # Default: new gather-scatter for both forward and transposed.
         if backend_name == "default":
             if transposed:
-                neighbor_map, neighbor_sizes = _fvdb_cpp.build_kernel_map(
-                    source_grid._impl,
-                    target_grid._impl,
-                    kernel_size,
-                    stride,
+                topo = _fvdb_cpp.gs_build_transpose_topology(
+                    source_grid._impl, target_grid._impl, kernel_size, stride
                 )
-                return _GatherScatterOldBackend(neighbor_map=neighbor_map, neighbor_sizes=neighbor_sizes)
             else:
                 topo = _fvdb_cpp.gs_build_topology(
-                    source_grid._impl,
-                    target_grid._impl,
-                    kernel_size,
-                    stride,
+                    source_grid._impl, target_grid._impl, kernel_size, stride
                 )
-                return _GatherScatterBackend(topology=topo)
+            return _GatherScatterBackend(topology=topo)
 
         raise ValueError(f"Unknown backend: {backend_name!r}")
 

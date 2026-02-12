@@ -1230,35 +1230,71 @@ GridBatch::computeConvolutionKernelMap(const GridBatch &source,
 }
 
 detail::ops::GatherScatterTopology
-GridBatch::buildGatherScatterTopology(const GridBatch &src,
-                                      const GridBatch &dst,
+GridBatch::buildGatherScatterTopology(const GridBatch &feature_grid,
+                                      const GridBatch &output_grid,
                                       const Vec3iOrScalar &kernelSize,
                                       const Vec3iOrScalar &stride) {
     return detail::ops::gatherScatterSparseConvTopology(
-        *src.mImpl, *dst.mImpl, kernelSize.value(), stride.value());
+        *feature_grid.mImpl, *output_grid.mImpl, kernelSize.value(), stride.value());
+}
+
+detail::ops::GatherScatterTopology
+GridBatch::buildGatherScatterTransposeTopology(const GridBatch &feature_grid,
+                                               const GridBatch &output_grid,
+                                               const Vec3iOrScalar &kernelSize,
+                                               const Vec3iOrScalar &stride) {
+    return detail::ops::gatherScatterSparseConvTransposeTopology(
+        *feature_grid.mImpl, *output_grid.mImpl, kernelSize.value(), stride.value());
 }
 
 torch::Tensor
 GridBatch::gatherScatterConvFused(torch::Tensor features,
                                   torch::Tensor weights,
-                                  const GridBatch &src,
-                                  const GridBatch &dst,
+                                  const GridBatch &feature_grid,
+                                  const GridBatch &output_grid,
                                   const Vec3iOrScalar &kernelSize,
                                   const Vec3iOrScalar &stride) {
     return detail::ops::gatherScatterSparseConvFused(
-        features, weights, *src.mImpl, *dst.mImpl, kernelSize.value(), stride.value());
+        features, weights, *feature_grid.mImpl, *output_grid.mImpl, kernelSize.value(),
+        stride.value());
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
 GridBatch::gatherScatterConvFusedBackward(torch::Tensor grad_output,
                                           torch::Tensor features,
                                           torch::Tensor weights,
-                                          const GridBatch &src,
-                                          const GridBatch &dst,
+                                          const GridBatch &feature_grid,
+                                          const GridBatch &output_grid,
                                           const Vec3iOrScalar &kernelSize,
                                           const Vec3iOrScalar &stride) {
     return detail::ops::gatherScatterSparseConvFusedBackward(
-        grad_output, features, weights, *src.mImpl, *dst.mImpl, kernelSize.value(), stride.value());
+        grad_output, features, weights, *feature_grid.mImpl, *output_grid.mImpl,
+        kernelSize.value(), stride.value());
+}
+
+torch::Tensor
+GridBatch::gatherScatterConvFusedTranspose(torch::Tensor features,
+                                           torch::Tensor weights,
+                                           const GridBatch &feature_grid,
+                                           const GridBatch &output_grid,
+                                           const Vec3iOrScalar &kernelSize,
+                                           const Vec3iOrScalar &stride) {
+    return detail::ops::gatherScatterSparseConvFusedTranspose(
+        features, weights, *feature_grid.mImpl, *output_grid.mImpl, kernelSize.value(),
+        stride.value());
+}
+
+std::tuple<torch::Tensor, torch::Tensor>
+GridBatch::gatherScatterConvFusedTransposeBackward(torch::Tensor grad_output,
+                                                   torch::Tensor features,
+                                                   torch::Tensor weights,
+                                                   const GridBatch &feature_grid,
+                                                   const GridBatch &output_grid,
+                                                   const Vec3iOrScalar &kernelSize,
+                                                   const Vec3iOrScalar &stride) {
+    return detail::ops::gatherScatterSparseConvFusedTransposeBackward(
+        grad_output, features, weights, *feature_grid.mImpl, *output_grid.mImpl,
+        kernelSize.value(), stride.value());
 }
 
 } // namespace fvdb

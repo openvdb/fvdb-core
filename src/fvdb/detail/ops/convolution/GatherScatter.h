@@ -4,9 +4,9 @@
 // GatherScatter.h -- Gather-scatter sparse convolution op (GEMM path).
 //
 // Type-erased entry points for:
-//   1. Topology precomputation (kernel map between src and dst grids)
-//   2. Forward sparse convolution using the precomputed topology
-//   3. Backward sparse convolution using the precomputed topology
+//   1. Topology precomputation (kernel map between feature and output grids)
+//   2. Forward / transposed forward sparse convolution using precomputed topology
+//   3. Backward / transposed backward sparse convolution using precomputed topology
 //
 // The fused (small-C) path lives in GatherScatterFused.h/.cu.
 //
@@ -30,30 +30,43 @@ namespace detail {
 namespace ops {
 
 // =============================================================================
+// ConvDirection -- forward vs transposed convolution
+// =============================================================================
+
+enum class ConvDirection { Forward, Transposed };
+
+// =============================================================================
 // GatherScatterTopology -- precomputed neighborhood structure
 // =============================================================================
 //
-// Stores the mapping from each dst voxel to its src neighbors for every
-// kernel offset. This is independent of feature data and can be reused
-// across multiple convolutions with different features/weights on the
-// same grid pair.
+// Stores the mapping from each output voxel to its feature-grid neighbors for
+// every kernel offset.  This is independent of feature data and can be reused
+// across multiple convolutions with different features/weights on the same
+// grid pair.
+//
+// Naming: "feature_grid" is the grid whose voxels carry input features;
+// "output_grid" is the grid whose voxels carry the convolution output.
+// These names are stable across forward and transposed convolution.
 
 struct GatherScatterTopology {
-    // kernel_map[d, k] = flat src voxel index if the k-th kernel offset from
-    // dst voxel d lands on an active src voxel, else -1.
-    // Shape: [dst_total_voxels, kernel_volume], dtype int32, same device as grids.
+    // kernel_map[o, k] = flat feature-grid voxel index if the k-th kernel
+    // offset from output voxel o lands on an active feature voxel, else -1.
+    // Shape: [output_total_voxels, kernel_volume], dtype int32, same device as grids.
     torch::Tensor kernel_map;
 
-    int64_t src_total_voxels;
-    int64_t dst_total_voxels;
+    int64_t feature_total_voxels;
+    int64_t output_total_voxels;
     int64_t kernel_volume; // product of kernel_size components
 
     // Kept for validation against weights shape.
     nanovdb::Coord kernel_size;
     nanovdb::Coord stride;
 
-    // True iff kmap[:, K/2] == arange(dst_total_voxels) when kernel_volume is
-    // odd.  Enables the "middle acceleration" fast-path in the forward pass
+    // Which direction was used to build this topology.
+    ConvDirection direction;
+
+    // True iff kmap[:, K/2] == arange(output_total_voxels) when kernel_volume
+    // is odd.  Enables the "middle acceleration" fast-path in the forward pass
     // (skip gather for the center kernel offset).  Computed once during
     // topology precomputation so the forward op pays no verification cost.
     bool center_is_identity;
@@ -63,20 +76,40 @@ struct GatherScatterTopology {
 // Topology precomputation
 // =============================================================================
 
-/// Build the kernel map between src and dst grids.
+/// Build the forward kernel map between feature and output grids.
 ///
-/// For every active voxel in dst, probes the src grid at each kernel offset
-/// and records the flat src voxel index (or -1 if inactive).
+/// For every active voxel in output_grid, probes the feature_grid at each
+/// kernel offset and records the flat feature voxel index (or -1 if inactive).
 ///
-/// @param src          Source grid batch (features live here).
-/// @param dst          Destination grid batch (output lives here).
-/// @param kernel_size  Per-axis kernel size (e.g. {3,3,3}).
-/// @param stride       Per-axis stride (e.g. {1,1,1}).
-/// @return             Precomputed topology structure.
-GatherScatterTopology gatherScatterSparseConvTopology(GridBatchImpl const &src,
-                                                      GridBatchImpl const &dst,
+/// Probe coordinate: output_ijk * stride + kernel_offset.
+///
+/// @param feature_grid  Grid batch where input features live.
+/// @param output_grid   Grid batch where convolution output lives.
+/// @param kernel_size   Per-axis kernel size (e.g. {3,3,3}).
+/// @param stride        Per-axis stride (e.g. {1,1,1}).
+/// @return              Precomputed topology structure with direction=Forward.
+GatherScatterTopology gatherScatterSparseConvTopology(GridBatchImpl const &feature_grid,
+                                                      GridBatchImpl const &output_grid,
                                                       nanovdb::Coord kernel_size,
                                                       nanovdb::Coord stride);
+
+/// Build the transposed kernel map between feature and output grids.
+///
+/// For every active voxel in output_grid, probes the feature_grid at each
+/// kernel offset with negated (flipped) offsets and stride division.
+///
+/// Probe coordinate: (output_ijk - kernel_offset) / stride, valid only when
+/// (output_ijk - kernel_offset) is divisible by stride in all 3 dimensions.
+///
+/// @param feature_grid  Grid batch where input features live.
+/// @param output_grid   Grid batch where convolution output lives.
+/// @param kernel_size   Per-axis kernel size (e.g. {3,3,3}).
+/// @param stride        Per-axis stride (e.g. {1,1,1}).
+/// @return              Precomputed topology structure with direction=Transposed.
+GatherScatterTopology gatherScatterSparseConvTransposeTopology(GridBatchImpl const &feature_grid,
+                                                               GridBatchImpl const &output_grid,
+                                                               nanovdb::Coord kernel_size,
+                                                               nanovdb::Coord stride);
 
 // =============================================================================
 // Forward sparse convolution
@@ -84,40 +117,62 @@ GatherScatterTopology gatherScatterSparseConvTopology(GridBatchImpl const &src,
 
 /// Gather-scatter forward sparse convolution.
 ///
-/// @param features  Input features, shape [src_total_voxels, C_in].
+/// @param features  Input features, shape [feature_total_voxels, C_in].
 /// @param weights   Kernel weights, shape [C_out, C_in, k0, k1, k2]
 ///                  (PyTorch conv3d layout).
-/// @param topo      Precomputed topology from gatherScatterSparseConvTopology.
-/// @return          Output features, shape [dst_total_voxels, C_out],
+/// @param topo      Precomputed topology (direction=Forward).
+/// @return          Output features, shape [output_total_voxels, C_out],
 ///                  same dtype as features.
 torch::Tensor gatherScatterSparseConv(torch::Tensor features,
                                       torch::Tensor weights,
                                       GatherScatterTopology const &topo);
 
-// =============================================================================
-// Backward sparse convolution (GEMM path)
-// =============================================================================
-
-/// Backward pass for gather-scatter sparse convolution.
+/// Backward pass for gather-scatter forward sparse convolution.
 ///
-/// Computes gradients for both input features and kernel weights given
-/// the incoming gradient from the forward pass output.
-///
-/// @param grad_output  Gradient of the loss w.r.t. forward output,
-///                     shape [dst_total_voxels, C_out].
+/// @param grad_output  Gradient w.r.t. forward output,
+///                     shape [output_total_voxels, C_out].
 /// @param features     Input features from the forward pass,
-///                     shape [src_total_voxels, C_in].
-/// @param weights      Kernel weights from the forward pass,
-///                     shape [C_out, C_in, k0, k1, k2].
-/// @param topo         Precomputed topology from gatherScatterSparseConvTopology.
-/// @return             Tuple of (grad_features [src_total_voxels, C_in],
-///                     grad_weights [C_out, C_in, k0, k1, k2]),
-///                     same dtype as features.
+///                     shape [feature_total_voxels, C_in].
+/// @param weights      Kernel weights, shape [C_out, C_in, k0, k1, k2].
+/// @param topo         Precomputed topology (direction=Forward).
+/// @return             Tuple of (grad_features, grad_weights).
 std::tuple<torch::Tensor, torch::Tensor>
 gatherScatterSparseConvBackward(torch::Tensor grad_output,
                                 torch::Tensor features,
                                 torch::Tensor weights,
                                 GatherScatterTopology const &topo);
+
+// =============================================================================
+// Transposed sparse convolution
+// =============================================================================
+
+/// Gather-scatter transposed sparse convolution.
+///
+/// @param features  Input features, shape [feature_total_voxels, C_out].
+///                  (Note: for transposed conv, feature channels = C_out.)
+/// @param weights   Kernel weights, shape [C_out, C_in, k0, k1, k2]
+///                  (same layout as forward -- NOT PyTorch conv_transpose3d).
+/// @param topo      Precomputed topology (direction=Transposed).
+/// @return          Output features, shape [output_total_voxels, C_in],
+///                  same dtype as features.
+torch::Tensor gatherScatterSparseConvTranspose(torch::Tensor features,
+                                               torch::Tensor weights,
+                                               GatherScatterTopology const &topo);
+
+/// Backward pass for gather-scatter transposed sparse convolution.
+///
+/// @param grad_output  Gradient w.r.t. transposed output,
+///                     shape [output_total_voxels, C_in].
+/// @param features     Input features from the forward pass,
+///                     shape [feature_total_voxels, C_out].
+/// @param weights      Kernel weights, shape [C_out, C_in, k0, k1, k2].
+/// @param topo         Precomputed topology (direction=Transposed).
+/// @return             Tuple of (grad_features, grad_weights).
+std::tuple<torch::Tensor, torch::Tensor>
+gatherScatterSparseConvTransposeBackward(torch::Tensor grad_output,
+                                         torch::Tensor features,
+                                         torch::Tensor weights,
+                                         GatherScatterTopology const &topo);
 
 } // namespace ops
 } // namespace detail

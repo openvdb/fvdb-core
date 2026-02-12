@@ -3,9 +3,11 @@
 //
 // GatherScatterFused.cu -- Fused gather-scatter sparse convolution implementation.
 //
-// Single-kernel path optimized for small channel counts.  Probes the src grid
-// directly for each kernel offset -- no precomputed topology or intermediate
-// gather buffers are needed.
+// Single-kernel path optimized for small channel counts.  Probes the feature
+// grid directly for each kernel offset -- no precomputed topology or
+// intermediate gather buffers are needed.
+//
+// Supports both forward and transposed convolution via ConvDirection.
 //
 #include "dispatch/detail/core_types.h"
 #include "dispatch/dispatch_table.h"
@@ -17,6 +19,7 @@
 #include <fvdb/detail/dispatch/ForEachActiveVoxel.cuh>
 #include <fvdb/detail/dispatch/GridAccessor.h>
 #include <fvdb/detail/dispatch/TensorChecks.h>
+#include <fvdb/detail/ops/convolution/GatherScatter.h>
 #include <fvdb/detail/ops/convolution/GatherScatterFused.h>
 
 #include <torch/types.h>
@@ -31,28 +34,30 @@ namespace ops {
 using namespace ::dispatch;
 
 // =============================================================================
-// Fused forward convolution (small-C optimized)
+// Fused forward convolution (parameterized by ConvDirection)
 // =============================================================================
 //
-// Single-kernel path: for each active dst voxel, probe the src grid at every
-// kernel offset and multiply-accumulate features * weights directly into the
-// output.  No intermediate gather buffer, no cuBLAS, no precomputed topology.
+// For each active output voxel, probe the feature grid at every kernel offset
+// and multiply-accumulate features * weights directly into the output.
 //
-// Optimal when C_in and C_out are small (say <= 32-64) so that the per-voxel
-// dot products fit comfortably in registers and cuBLAS launch overhead would
-// otherwise dominate.
+// Forward:    probe = output_ijk * stride + kernel_offset
+//             W reshaped [K, C_out, C_in]: output[o, co] += sum_ci(feat[f, ci] * W[k, co, ci])
+//
+// Transposed: probe = (output_ijk - kernel_offset) / stride  (when divisible)
+//             W reshaped [K, C_in, C_out]: output[o, ci] += sum_co(feat[f, co] * W[k, ci, co])
 
 struct fused_conv_op {
     template <typename Tag>
         requires with_type<Tag, torch::DeviceType> && with_type<Tag, torch::ScalarType>
     static torch::Tensor
     op(Tag tg,
-       torch::Tensor features, // [S, C_in]
-       torch::Tensor weights,  // [C_out, C_in, k0, k1, k2]
-       GridBatchImpl const &src,
-       GridBatchImpl const &dst,
+       torch::Tensor features,
+       torch::Tensor weights,
+       GridBatchImpl const &feature_grid,
+       GridBatchImpl const &output_grid,
        nanovdb::Coord kernel_size,
-       nanovdb::Coord stride) {
+       nanovdb::Coord stride,
+       ConvDirection direction) {
         constexpr auto dev        = tag_get<torch::DeviceType>(tg);
         constexpr auto feat_stype = tag_get<torch::ScalarType>(tg);
         using scalar_t            = torch_scalar_cpp_type_t<feat_stype>;
@@ -64,64 +69,59 @@ struct fused_conv_op {
         int64_t const ks2 = kernel_size[2];
         int64_t const K   = ks0 * ks1 * ks2;
 
-        int64_t const D     = dst.totalVoxels();
-        int64_t const C_out = weights.size(0);
-        int64_t const C_in  = weights.size(1);
+        int64_t const O = output_grid.totalVoxels();
 
-        // Reshape weights from [C_out, C_in, k0, k1, k2] to [K, C_out, C_in]
-        // so that for a given (k, cout) the C_in weights are contiguous -- the
-        // layout that makes the inner dot-product loop cache-friendly.
-        //
-        // Cost: one contiguous copy of K * C_out * C_in elements.  For a 3x3x3
-        // kernel with C_in = C_out = 32 this is 27K floats (108 KB), which
-        // copies in ~1 us on a modern GPU -- well under a single kernel launch
-        // overhead (~5-10 us) and negligible against the fused kernel itself
-        // (typically 50-500+ us for grids of practical size).  Accepting
-        // pre-reshaped weights would save this microsecond but break the
-        // standard PyTorch conv3d [C_out, C_in, k0, k1, k2] layout contract.
-        auto W = weights.permute({2, 3, 4, 0, 1}).reshape({K, C_out, C_in}).contiguous();
+        bool const is_transposed = (direction == ConvDirection::Transposed);
 
-        // Cast weights to feature dtype if they differ (mixed precision).
+        // C_feat: channels of the feature tensor
+        // C_result: channels of the output tensor
+        // W reshaped to [K, C_result, C_feat] so the inner dot is over C_feat
+        int64_t const C_feat   = features.size(1);
+        int64_t const C_result = is_transposed ? weights.size(1) : weights.size(0);
+
+        // Reshape weights to [K, C_result, C_feat]:
+        //   Forward:    [C_out, C_in, k...] -> permute {2,3,4,0,1} -> [K, C_out, C_in]
+        //               C_result=C_out, C_feat=C_in
+        //   Transposed: [C_out, C_in, k...] -> permute {2,3,4,1,0} -> [K, C_in, C_out]
+        //               C_result=C_in, C_feat=C_out
+        torch::Tensor W;
+        if (is_transposed) {
+            W = weights.permute({2, 3, 4, 1, 0}).reshape({K, C_result, C_feat}).contiguous();
+        } else {
+            W = weights.permute({2, 3, 4, 0, 1}).reshape({K, C_result, C_feat}).contiguous();
+        }
+
         if (W.scalar_type() != feat_stype) {
             W = W.to(feat_stype);
         }
 
-        // Output: [D, C_out], pre-zeroed, same dtype/device as features.
-        auto output = torch::zeros({D, C_out}, features.options());
+        auto output = torch::zeros({O, C_result}, features.options());
 
-        if (D == 0 || K == 0) {
+        if (O == 0 || K == 0) {
             return output;
         }
 
-        // Raw pointers for the fused kernel.
         auto feat_ptr = features.data_ptr<scalar_t>();
         auto W_ptr    = W.data_ptr<scalar_t>();
         auto out_ptr  = output.data_ptr<scalar_t>();
 
-        // Kernel start offsets (centered kernel, matching existing convention).
         nanovdb::Coord const kernel_start(static_cast<int>(std::floor(-ks0 / 2.0 + 1)),
                                           static_cast<int>(std::floor(-ks1 / 2.0 + 1)),
                                           static_cast<int>(std::floor(-ks2 / 2.0 + 1)));
 
-        auto src_acc = dispatch::make_grid_accessor(tg, src);
+        auto feat_acc = dispatch::make_grid_accessor(tg, feature_grid);
 
-        // One invocation per active dst voxel.  Each voxel-thread loops over
-        // all K kernel offsets and all C_out output channels, accumulating
-        // the full convolution result with no intermediate buffers.
         dispatch::forEachActiveVoxel(
             tg,
-            dst,
+            output_grid,
             [=] __hostdev__(Tag,
                             JIdxType batch_idx,
-                            nanovdb::Coord dst_ijk,
-                            int64_t dst_voxel_index,
-                            GridBatchImpl::Accessor /*dst_acc*/) {
-                nanovdb::Coord const src_base(
-                    dst_ijk[0] * stride[0], dst_ijk[1] * stride[1], dst_ijk[2] * stride[2]);
-
-                auto const *src_grid          = src_acc.grid(batch_idx);
-                auto src_tree_acc             = src_grid->getAccessor();
-                int64_t const src_base_offset = src_acc.voxelOffset(batch_idx);
+                            nanovdb::Coord output_ijk,
+                            int64_t output_voxel_index,
+                            GridBatchImpl::Accessor /*output_acc*/) {
+                auto const *fg          = feat_acc.grid(batch_idx);
+                auto feat_tree_acc      = fg->getAccessor();
+                int64_t const f_offset  = feat_acc.voxelOffset(batch_idx);
 
                 int64_t k_idx = 0;
                 for (int k0 = kernel_start[0]; k0 < kernel_start[0] + static_cast<int>(ks0); ++k0) {
@@ -129,26 +129,44 @@ struct fused_conv_op {
                          ++k1) {
                         for (int k2 = kernel_start[2]; k2 < kernel_start[2] + static_cast<int>(ks2);
                              ++k2, ++k_idx) {
-                            nanovdb::Coord const probe = src_base + nanovdb::Coord(k0, k1, k2);
-                            if (!src_tree_acc.isActive(probe)) {
+
+                            nanovdb::Coord probe;
+                            if (is_transposed) {
+                                int const r0 = output_ijk[0] - k0;
+                                int const r1 = output_ijk[1] - k1;
+                                int const r2 = output_ijk[2] - k2;
+                                if (r0 % stride[0] != 0 || r1 % stride[1] != 0 ||
+                                    r2 % stride[2] != 0) {
+                                    continue;
+                                }
+                                probe = nanovdb::Coord(
+                                    r0 / stride[0], r1 / stride[1], r2 / stride[2]);
+                            } else {
+                                nanovdb::Coord const base(output_ijk[0] * stride[0],
+                                                          output_ijk[1] * stride[1],
+                                                          output_ijk[2] * stride[2]);
+                                probe = base + nanovdb::Coord(k0, k1, k2);
+                            }
+
+                            if (!feat_tree_acc.isActive(probe)) {
                                 continue;
                             }
-                            int64_t const src_flat =
-                                src_base_offset + src_tree_acc.getValue(probe) - 1;
+                            int64_t const feat_flat =
+                                f_offset + feat_tree_acc.getValue(probe) - 1;
 
-                            // W is [K, C_out, C_in] contiguous.
-                            // feat is [S, C_in] contiguous.
-                            // out is [D, C_out] contiguous.
-                            scalar_t const *f_row = feat_ptr + src_flat * C_in;
-                            scalar_t const *w_row = W_ptr + k_idx * (C_out * C_in);
+                            // W is [K, C_result, C_feat] contiguous.
+                            // feat is [F, C_feat] contiguous.
+                            // out is [O, C_result] contiguous.
+                            scalar_t const *f_row = feat_ptr + feat_flat * C_feat;
+                            scalar_t const *w_row = W_ptr + k_idx * (C_result * C_feat);
 
-                            for (int64_t co = 0; co < C_out; ++co) {
+                            for (int64_t cr = 0; cr < C_result; ++cr) {
                                 scalar_t acc          = scalar_t(0);
-                                scalar_t const *w_col = w_row + co * C_in;
-                                for (int64_t ci = 0; ci < C_in; ++ci) {
-                                    acc += f_row[ci] * w_col[ci];
+                                scalar_t const *w_col = w_row + cr * C_feat;
+                                for (int64_t cf = 0; cf < C_feat; ++cf) {
+                                    acc += f_row[cf] * w_col[cf];
                                 }
-                                out_ptr[dst_voxel_index * C_out + co] += acc;
+                                out_ptr[output_voxel_index * C_result + cr] += acc;
                             }
                         }
                     }
@@ -158,115 +176,35 @@ struct fused_conv_op {
         return output;
     }
 
-    // Dispatch space: device x feature scalar type (same as gather-scatter path).
     using space = axes<torch_full_device_axis, torch_full_float_stype_axis>;
-
     using subspaces = coverage<space>;
-
     using dispatcher = dispatch_table<space,
                                       torch::Tensor(torch::Tensor,
                                                     torch::Tensor,
                                                     GridBatchImpl const &,
                                                     GridBatchImpl const &,
                                                     nanovdb::Coord,
-                                                    nanovdb::Coord)>;
+                                                    nanovdb::Coord,
+                                                    ConvDirection)>;
 };
 
-// Type-erased entry point for fused convolution
-torch::Tensor
-gatherScatterSparseConvFused(torch::Tensor features,
-                             torch::Tensor weights,
-                             GridBatchImpl const &src,
-                             GridBatchImpl const &dst,
-                             nanovdb::Coord kernel_size,
-                             nanovdb::Coord stride) {
-    // Precondition checks
-    TORCH_CHECK(features.dim() == 2,
-                "features must be 2D [total_src_voxels, C_in], got ",
-                features.dim(),
-                "D");
-    TORCH_CHECK(features.size(0) == static_cast<int64_t>(src.totalVoxels()),
-                "features.size(0)=",
-                features.size(0),
-                " must match src totalVoxels=",
-                src.totalVoxels());
-    TORCH_CHECK(features.is_floating_point(), "features must be floating point");
-
-    TORCH_CHECK(weights.dim() == 5,
-                "weights must be 5D [C_out, C_in, k0, k1, k2], got ",
-                weights.dim(),
-                "D");
-    TORCH_CHECK(weights.size(1) == features.size(1),
-                "weights C_in=",
-                weights.size(1),
-                " must match features C_in=",
-                features.size(1));
-    TORCH_CHECK(weights.size(2) == kernel_size[0] && weights.size(3) == kernel_size[1] &&
-                    weights.size(4) == kernel_size[2],
-                "weights spatial dims [",
-                weights.size(2),
-                ",",
-                weights.size(3),
-                ",",
-                weights.size(4),
-                "] must match kernel_size [",
-                kernel_size[0],
-                ",",
-                kernel_size[1],
-                ",",
-                kernel_size[2],
-                "]");
-    TORCH_CHECK(weights.is_floating_point(), "weights must be floating point");
-
-    TORCH_CHECK(features.device() == weights.device(),
-                "features and weights must be on the same device");
-    TORCH_CHECK(src.device() == dst.device(),
-                "src and dst grids must be on the same device, got ",
-                src.device(),
-                " and ",
-                dst.device());
-    TORCH_CHECK(features.device() == src.device(), "features and grids must be on the same device");
-
-    for (int d = 0; d < 3; ++d) {
-        TORCH_CHECK(
-            kernel_size[d] > 0, "kernel_size[", d, "] must be positive, got ", kernel_size[d]);
-        TORCH_CHECK(stride[d] > 0, "stride[", d, "] must be positive, got ", stride[d]);
-    }
-
-    static auto const table =
-        dispatch_table_from_op<fused_conv_op>("gather_scatter_sparse_conv_fused");
-
-    auto const dev  = features.device().type();
-    auto const f_st = features.scalar_type();
-
-    return table.select(dispatch_set{dev, f_st})(features, weights, src, dst, kernel_size, stride);
-}
-
 // =============================================================================
-// Fused backward convolution (small-C optimized)
+// Fused backward convolution (parameterized by ConvDirection)
 // =============================================================================
-//
-// Single-kernel backward path: for each active dst voxel, probe the src grid
-// at every kernel offset and accumulate gradients for both features and weights
-// using atomic_add.  No intermediate buffers, no cuBLAS.
-//
-// The weight gradient accumulates across all dst voxels into [K, C_out, C_in],
-// so there is contention on atomicAdd for grad_weights.  This is acceptable
-// because this path targets small C where the contention is limited and cuBLAS
-// launch overhead would otherwise dominate.
 
 struct fused_conv_backward_op {
     template <typename Tag>
         requires with_type<Tag, torch::DeviceType> && with_type<Tag, torch::ScalarType>
     static std::tuple<torch::Tensor, torch::Tensor>
     op(Tag tg,
-       torch::Tensor grad_output, // [D, C_out]
-       torch::Tensor features,    // [S, C_in]
-       torch::Tensor weights,     // [C_out, C_in, k0, k1, k2]
-       GridBatchImpl const &src,
-       GridBatchImpl const &dst,
+       torch::Tensor grad_output,
+       torch::Tensor features,
+       torch::Tensor weights,
+       GridBatchImpl const &feature_grid,
+       GridBatchImpl const &output_grid,
        nanovdb::Coord kernel_size,
-       nanovdb::Coord stride) {
+       nanovdb::Coord stride,
+       ConvDirection direction) {
         constexpr auto dev        = tag_get<torch::DeviceType>(tg);
         constexpr auto feat_stype = tag_get<torch::ScalarType>(tg);
         using scalar_t            = torch_scalar_cpp_type_t<feat_stype>;
@@ -278,25 +216,40 @@ struct fused_conv_backward_op {
         int64_t const ks2 = kernel_size[2];
         int64_t const K   = ks0 * ks1 * ks2;
 
-        int64_t const S     = static_cast<int64_t>(src.totalVoxels());
-        int64_t const D     = dst.totalVoxels();
-        int64_t const C_out = weights.size(0);
-        int64_t const C_in  = weights.size(1);
+        bool const is_transposed = (direction == ConvDirection::Transposed);
 
-        // Reshape weights: [C_out, C_in, k0, k1, k2] -> [K, C_out, C_in]
-        // Same layout as fused forward.
-        auto W = weights.permute({2, 3, 4, 0, 1}).reshape({K, C_out, C_in}).contiguous();
+        int64_t const F        = static_cast<int64_t>(feature_grid.totalVoxels());
+        int64_t const O        = output_grid.totalVoxels();
+        int64_t const C_feat   = features.size(1);
+        int64_t const C_result = is_transposed ? weights.size(1) : weights.size(0);
+
+        // Same reshape as forward: W -> [K, C_result, C_feat]
+        torch::Tensor W;
+        if (is_transposed) {
+            W = weights.permute({2, 3, 4, 1, 0}).reshape({K, C_result, C_feat}).contiguous();
+        } else {
+            W = weights.permute({2, 3, 4, 0, 1}).reshape({K, C_result, C_feat}).contiguous();
+        }
         if (W.scalar_type() != feat_stype) {
             W = W.to(feat_stype);
         }
 
-        auto grad_features         = torch::zeros({S, C_in}, features.options());
-        auto grad_weights_reshaped = torch::zeros({K, C_out, C_in}, features.options());
+        auto grad_features         = torch::zeros({F, C_feat}, features.options());
+        auto grad_weights_reshaped = torch::zeros({K, C_result, C_feat}, features.options());
 
-        if (D == 0 || K == 0) {
-            auto grad_weights = grad_weights_reshaped.reshape({ks0, ks1, ks2, C_out, C_in})
-                                    .permute({3, 4, 0, 1, 2})
-                                    .contiguous();
+        if (O == 0 || K == 0) {
+            torch::Tensor grad_weights;
+            if (is_transposed) {
+                grad_weights =
+                    grad_weights_reshaped.reshape({ks0, ks1, ks2, C_result, C_feat})
+                        .permute({4, 3, 0, 1, 2})
+                        .contiguous();
+            } else {
+                grad_weights =
+                    grad_weights_reshaped.reshape({ks0, ks1, ks2, C_result, C_feat})
+                        .permute({3, 4, 0, 1, 2})
+                        .contiguous();
+            }
             return {grad_features, grad_weights};
         }
 
@@ -310,22 +263,19 @@ struct fused_conv_backward_op {
                                           static_cast<int>(std::floor(-ks1 / 2.0 + 1)),
                                           static_cast<int>(std::floor(-ks2 / 2.0 + 1)));
 
-        auto src_acc = dispatch::make_grid_accessor(tg, src);
+        auto feat_acc = dispatch::make_grid_accessor(tg, feature_grid);
 
         dispatch::forEachActiveVoxel(
             tg,
-            dst,
+            output_grid,
             [=] __hostdev__(Tag tg_inner,
                             JIdxType batch_idx,
-                            nanovdb::Coord dst_ijk,
-                            int64_t dst_voxel_index,
-                            GridBatchImpl::Accessor /*dst_acc*/) {
-                nanovdb::Coord const src_base(
-                    dst_ijk[0] * stride[0], dst_ijk[1] * stride[1], dst_ijk[2] * stride[2]);
-
-                auto const *src_grid          = src_acc.grid(batch_idx);
-                auto src_tree_acc             = src_grid->getAccessor();
-                int64_t const src_base_offset = src_acc.voxelOffset(batch_idx);
+                            nanovdb::Coord output_ijk,
+                            int64_t output_voxel_index,
+                            GridBatchImpl::Accessor /*output_acc*/) {
+                auto const *fg          = feat_acc.grid(batch_idx);
+                auto feat_tree_acc      = fg->getAccessor();
+                int64_t const f_offset  = feat_acc.voxelOffset(batch_idx);
 
                 int64_t k_idx = 0;
                 for (int k0 = kernel_start[0]; k0 < kernel_start[0] + static_cast<int>(ks0); ++k0) {
@@ -333,34 +283,52 @@ struct fused_conv_backward_op {
                          ++k1) {
                         for (int k2 = kernel_start[2]; k2 < kernel_start[2] + static_cast<int>(ks2);
                              ++k2, ++k_idx) {
-                            nanovdb::Coord const probe = src_base + nanovdb::Coord(k0, k1, k2);
-                            if (!src_tree_acc.isActive(probe)) {
+
+                            nanovdb::Coord probe;
+                            if (is_transposed) {
+                                int const r0 = output_ijk[0] - k0;
+                                int const r1 = output_ijk[1] - k1;
+                                int const r2 = output_ijk[2] - k2;
+                                if (r0 % stride[0] != 0 || r1 % stride[1] != 0 ||
+                                    r2 % stride[2] != 0) {
+                                    continue;
+                                }
+                                probe = nanovdb::Coord(
+                                    r0 / stride[0], r1 / stride[1], r2 / stride[2]);
+                            } else {
+                                nanovdb::Coord const base(output_ijk[0] * stride[0],
+                                                          output_ijk[1] * stride[1],
+                                                          output_ijk[2] * stride[2]);
+                                probe = base + nanovdb::Coord(k0, k1, k2);
+                            }
+
+                            if (!feat_tree_acc.isActive(probe)) {
                                 continue;
                             }
-                            int64_t const src_flat =
-                                src_base_offset + src_tree_acc.getValue(probe) - 1;
+                            int64_t const feat_flat =
+                                f_offset + feat_tree_acc.getValue(probe) - 1;
 
-                            // Pointers into the current rows.
-                            scalar_t const *go_row = grad_o_ptr + dst_voxel_index * C_out;
-                            scalar_t const *f_row  = feat_ptr + src_flat * C_in;
-                            scalar_t const *w_row  = W_ptr + k_idx * (C_out * C_in);
+                            // W is [K, C_result, C_feat], grad_output is [O, C_result]
+                            scalar_t const *go_row = grad_o_ptr + output_voxel_index * C_result;
+                            scalar_t const *f_row  = feat_ptr + feat_flat * C_feat;
+                            scalar_t const *w_row  = W_ptr + k_idx * (C_result * C_feat);
 
-                            // grad_features[src_flat, ci] += sum_co(grad_out[d,co] * W[k,co,ci])
-                            for (int64_t ci = 0; ci < C_in; ++ci) {
+                            // grad_features[feat_flat, cf] += sum_cr(grad_out[o,cr] * W[k,cr,cf])
+                            for (int64_t cf = 0; cf < C_feat; ++cf) {
                                 scalar_t acc = scalar_t(0);
-                                for (int64_t co = 0; co < C_out; ++co) {
-                                    acc += go_row[co] * w_row[co * C_in + ci];
+                                for (int64_t cr = 0; cr < C_result; ++cr) {
+                                    acc += go_row[cr] * w_row[cr * C_feat + cf];
                                 }
                                 dispatch::atomic_add(
-                                    tg_inner, &grad_f_ptr[src_flat * C_in + ci], acc);
+                                    tg_inner, &grad_f_ptr[feat_flat * C_feat + cf], acc);
                             }
 
-                            // grad_weights[k, co, ci] += features[src, ci] * grad_out[d, co]
-                            scalar_t *gw_row = grad_W_ptr + k_idx * (C_out * C_in);
-                            for (int64_t co = 0; co < C_out; ++co) {
-                                for (int64_t ci = 0; ci < C_in; ++ci) {
+                            // grad_weights[k, cr, cf] += feat[f, cf] * grad_out[o, cr]
+                            scalar_t *gw_row = grad_W_ptr + k_idx * (C_result * C_feat);
+                            for (int64_t cr = 0; cr < C_result; ++cr) {
+                                for (int64_t cf = 0; cf < C_feat; ++cf) {
                                     dispatch::atomic_add(
-                                        tg_inner, &gw_row[co * C_in + ci], f_row[ci] * go_row[co]);
+                                        tg_inner, &gw_row[cr * C_feat + cf], f_row[cf] * go_row[cr]);
                                 }
                             }
                         }
@@ -368,10 +336,19 @@ struct fused_conv_backward_op {
                 }
             });
 
-        // Reshape grad_weights from [K, C_out, C_in] to [C_out, C_in, k0, k1, k2]
-        auto grad_weights = grad_weights_reshaped.reshape({ks0, ks1, ks2, C_out, C_in})
-                                .permute({3, 4, 0, 1, 2})
-                                .contiguous();
+        // Reshape grad_weights from [K, C_result, C_feat] to [C_out, C_in, k0, k1, k2]
+        torch::Tensor grad_weights;
+        if (is_transposed) {
+            // [K, C_result, C_feat] = [K, C_in, C_out] -> [k, C_in, C_out] -> [C_out, C_in, k]
+            grad_weights = grad_weights_reshaped.reshape({ks0, ks1, ks2, C_result, C_feat})
+                               .permute({4, 3, 0, 1, 2})
+                               .contiguous();
+        } else {
+            // [K, C_result, C_feat] = [K, C_out, C_in] -> [k, C_out, C_in] -> [C_out, C_in, k]
+            grad_weights = grad_weights_reshaped.reshape({ks0, ks1, ks2, C_result, C_feat})
+                               .permute({3, 4, 0, 1, 2})
+                               .contiguous();
+        }
 
         return {grad_features, grad_weights};
     }
@@ -386,72 +363,101 @@ struct fused_conv_backward_op {
                                                                 GridBatchImpl const &,
                                                                 GridBatchImpl const &,
                                                                 nanovdb::Coord,
-                                                                nanovdb::Coord)>;
+                                                                nanovdb::Coord,
+                                                                ConvDirection)>;
 };
 
-// Type-erased entry point for fused backward convolution
+// =============================================================================
+// Shared precondition checks for fused ops
+// =============================================================================
+
+static void
+checkFusedPreconditions(torch::Tensor features,
+                        torch::Tensor weights,
+                        GridBatchImpl const &feature_grid,
+                        GridBatchImpl const &output_grid,
+                        nanovdb::Coord kernel_size,
+                        nanovdb::Coord stride,
+                        bool is_transposed,
+                        char const *name) {
+    TORCH_CHECK(features.dim() == 2, name, ": features must be 2D, got ", features.dim(), "D");
+    TORCH_CHECK(features.size(0) == static_cast<int64_t>(feature_grid.totalVoxels()),
+                name,
+                ": features.size(0)=",
+                features.size(0),
+                " must match feature_grid totalVoxels=",
+                feature_grid.totalVoxels());
+    TORCH_CHECK(features.is_floating_point(), name, ": features must be floating point");
+
+    TORCH_CHECK(weights.dim() == 5, name, ": weights must be 5D, got ", weights.dim(), "D");
+
+    int64_t const expected_feat_ch = is_transposed ? weights.size(0) : weights.size(1);
+    TORCH_CHECK(features.size(1) == expected_feat_ch,
+                name,
+                ": features channels=",
+                features.size(1),
+                " must match expected=",
+                expected_feat_ch);
+
+    TORCH_CHECK(weights.size(2) == kernel_size[0] && weights.size(3) == kernel_size[1] &&
+                    weights.size(4) == kernel_size[2],
+                name,
+                ": weights spatial dims must match kernel_size");
+    TORCH_CHECK(weights.is_floating_point(), name, ": weights must be floating point");
+
+    TORCH_CHECK(features.device() == weights.device(), name, ": features and weights must be on the same device");
+    TORCH_CHECK(feature_grid.device() == output_grid.device(), name, ": grids must be on the same device");
+    TORCH_CHECK(features.device() == feature_grid.device(), name, ": features and grids must be on the same device");
+
+    for (int d = 0; d < 3; ++d) {
+        TORCH_CHECK(kernel_size[d] > 0, name, ": kernel_size[", d, "] must be positive");
+        TORCH_CHECK(stride[d] > 0, name, ": stride[", d, "] must be positive");
+    }
+}
+
+// =============================================================================
+// Type-erased entry points
+// =============================================================================
+
+// Forward fused
+torch::Tensor
+gatherScatterSparseConvFused(torch::Tensor features,
+                             torch::Tensor weights,
+                             GridBatchImpl const &feature_grid,
+                             GridBatchImpl const &output_grid,
+                             nanovdb::Coord kernel_size,
+                             nanovdb::Coord stride) {
+    checkFusedPreconditions(
+        features, weights, feature_grid, output_grid, kernel_size, stride, false,
+        "gatherScatterSparseConvFused");
+
+    static auto const table =
+        dispatch_table_from_op<fused_conv_op>("gather_scatter_sparse_conv_fused");
+
+    auto const dev  = features.device().type();
+    auto const f_st = features.scalar_type();
+
+    return table.select(dispatch_set{dev, f_st})(
+        features, weights, feature_grid, output_grid, kernel_size, stride, ConvDirection::Forward);
+}
+
+// Forward fused backward
 std::tuple<torch::Tensor, torch::Tensor>
 gatherScatterSparseConvFusedBackward(torch::Tensor grad_output,
                                      torch::Tensor features,
                                      torch::Tensor weights,
-                                     GridBatchImpl const &src,
-                                     GridBatchImpl const &dst,
+                                     GridBatchImpl const &feature_grid,
+                                     GridBatchImpl const &output_grid,
                                      nanovdb::Coord kernel_size,
                                      nanovdb::Coord stride) {
-    // Precondition checks
-    TORCH_CHECK(grad_output.dim() == 2,
-                "grad_output must be 2D [dst_total_voxels, C_out], got ",
-                grad_output.dim(),
-                "D");
-    TORCH_CHECK(grad_output.size(0) == static_cast<int64_t>(dst.totalVoxels()),
-                "grad_output.size(0)=",
-                grad_output.size(0),
-                " must match dst totalVoxels=",
-                dst.totalVoxels());
+    checkFusedPreconditions(
+        features, weights, feature_grid, output_grid, kernel_size, stride, false,
+        "gatherScatterSparseConvFusedBackward");
+    TORCH_CHECK(grad_output.dim() == 2 &&
+                    grad_output.size(0) == static_cast<int64_t>(output_grid.totalVoxels()),
+                "grad_output shape mismatch");
     TORCH_CHECK(grad_output.is_floating_point(), "grad_output must be floating point");
-
-    TORCH_CHECK(features.dim() == 2,
-                "features must be 2D [total_src_voxels, C_in], got ",
-                features.dim(),
-                "D");
-    TORCH_CHECK(features.size(0) == static_cast<int64_t>(src.totalVoxels()),
-                "features.size(0)=",
-                features.size(0),
-                " must match src totalVoxels=",
-                src.totalVoxels());
-    TORCH_CHECK(features.is_floating_point(), "features must be floating point");
-
-    TORCH_CHECK(weights.dim() == 5,
-                "weights must be 5D [C_out, C_in, k0, k1, k2], got ",
-                weights.dim(),
-                "D");
-    TORCH_CHECK(weights.size(0) == grad_output.size(1),
-                "weights C_out=",
-                weights.size(0),
-                " must match grad_output C_out=",
-                grad_output.size(1));
-    TORCH_CHECK(weights.size(1) == features.size(1),
-                "weights C_in=",
-                weights.size(1),
-                " must match features C_in=",
-                features.size(1));
-    TORCH_CHECK(weights.size(2) == kernel_size[0] && weights.size(3) == kernel_size[1] &&
-                    weights.size(4) == kernel_size[2],
-                "weights spatial dims must match kernel_size");
-    TORCH_CHECK(weights.is_floating_point(), "weights must be floating point");
-
-    TORCH_CHECK(grad_output.device() == features.device(),
-                "grad_output and features must be on the same device");
-    TORCH_CHECK(features.device() == weights.device(),
-                "features and weights must be on the same device");
-    TORCH_CHECK(src.device() == dst.device(), "src and dst grids must be on the same device");
-    TORCH_CHECK(features.device() == src.device(), "features and grids must be on the same device");
-
-    for (int d = 0; d < 3; ++d) {
-        TORCH_CHECK(
-            kernel_size[d] > 0, "kernel_size[", d, "] must be positive, got ", kernel_size[d]);
-        TORCH_CHECK(stride[d] > 0, "stride[", d, "] must be positive, got ", stride[d]);
-    }
+    TORCH_CHECK(grad_output.device() == features.device(), "grad_output and features must be on the same device");
 
     static auto const table =
         dispatch_table_from_op<fused_conv_backward_op>("gather_scatter_sparse_conv_fused_backward");
@@ -460,7 +466,60 @@ gatherScatterSparseConvFusedBackward(torch::Tensor grad_output,
     auto const f_st = features.scalar_type();
 
     return table.select(dispatch_set{dev, f_st})(
-        grad_output, features, weights, src, dst, kernel_size, stride);
+        grad_output, features, weights, feature_grid, output_grid, kernel_size, stride,
+        ConvDirection::Forward);
+}
+
+// Transposed fused
+torch::Tensor
+gatherScatterSparseConvFusedTranspose(torch::Tensor features,
+                                      torch::Tensor weights,
+                                      GridBatchImpl const &feature_grid,
+                                      GridBatchImpl const &output_grid,
+                                      nanovdb::Coord kernel_size,
+                                      nanovdb::Coord stride) {
+    checkFusedPreconditions(
+        features, weights, feature_grid, output_grid, kernel_size, stride, true,
+        "gatherScatterSparseConvFusedTranspose");
+
+    static auto const table =
+        dispatch_table_from_op<fused_conv_op>("gather_scatter_sparse_conv_fused_transpose");
+
+    auto const dev  = features.device().type();
+    auto const f_st = features.scalar_type();
+
+    return table.select(dispatch_set{dev, f_st})(
+        features, weights, feature_grid, output_grid, kernel_size, stride,
+        ConvDirection::Transposed);
+}
+
+// Transposed fused backward
+std::tuple<torch::Tensor, torch::Tensor>
+gatherScatterSparseConvFusedTransposeBackward(torch::Tensor grad_output,
+                                              torch::Tensor features,
+                                              torch::Tensor weights,
+                                              GridBatchImpl const &feature_grid,
+                                              GridBatchImpl const &output_grid,
+                                              nanovdb::Coord kernel_size,
+                                              nanovdb::Coord stride) {
+    checkFusedPreconditions(
+        features, weights, feature_grid, output_grid, kernel_size, stride, true,
+        "gatherScatterSparseConvFusedTransposeBackward");
+    TORCH_CHECK(grad_output.dim() == 2 &&
+                    grad_output.size(0) == static_cast<int64_t>(output_grid.totalVoxels()),
+                "grad_output shape mismatch");
+    TORCH_CHECK(grad_output.is_floating_point(), "grad_output must be floating point");
+    TORCH_CHECK(grad_output.device() == features.device(), "grad_output and features must be on the same device");
+
+    static auto const table = dispatch_table_from_op<fused_conv_backward_op>(
+        "gather_scatter_sparse_conv_fused_transpose_backward");
+
+    auto const dev  = features.device().type();
+    auto const f_st = features.scalar_type();
+
+    return table.select(dispatch_set{dev, f_st})(
+        grad_output, features, weights, feature_grid, output_grid, kernel_size, stride,
+        ConvDirection::Transposed);
 }
 
 } // namespace ops

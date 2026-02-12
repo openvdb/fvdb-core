@@ -93,8 +93,8 @@ TEST_P(GatherScatterTopologyTest, SingleVoxelKernel3x3x3) {
     auto topo = ops::gatherScatterSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
 
     // With a single src voxel and 3x3x3 kernel, dst should have 27 voxels
-    EXPECT_EQ(topo.dst_total_voxels, 27);
-    EXPECT_EQ(topo.src_total_voxels, 1);
+    EXPECT_EQ(topo.output_total_voxels, 27);
+    EXPECT_EQ(topo.feature_total_voxels, 1);
     EXPECT_EQ(topo.kernel_volume, 27);
 
     // kernel_map shape: [27, 27]
@@ -142,8 +142,8 @@ TEST_P(GatherScatterTopologyTest, SameTopologyStride1) {
 
     auto topo = ops::gatherScatterSparseConvTopology(*grid, *grid, kernel_size, stride_1);
 
-    EXPECT_EQ(topo.dst_total_voxels, 8);
-    EXPECT_EQ(topo.src_total_voxels, 8);
+    EXPECT_EQ(topo.output_total_voxels, 8);
+    EXPECT_EQ(topo.feature_total_voxels, 8);
     EXPECT_EQ(topo.kernel_volume, 1);
 
     // kernel_map: [8, 1], each entry should map dst_i -> src_i (identity)
@@ -211,7 +211,7 @@ TEST_P(GatherScatterConvTest, SingleImpulse3x3x3) {
     auto dst_grid = src_grid->convolutionOutput(kernel_size, stride);
     auto topo     = ops::gatherScatterSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
 
-    EXPECT_EQ(topo.dst_total_voxels, 27);
+    EXPECT_EQ(topo.output_total_voxels, 27);
 
     int64_t C_in  = 1;
     int64_t C_out = 1;
@@ -338,7 +338,7 @@ TEST_P(GatherScatterConvTest, NonUniformKernel) {
 
     int64_t expected_volume = 3 * 5 * 7; // 105
     EXPECT_EQ(topo.kernel_volume, expected_volume);
-    EXPECT_EQ(topo.dst_total_voxels, expected_volume);
+    EXPECT_EQ(topo.output_total_voxels, expected_volume);
 
     int64_t C_in  = 1;
     int64_t C_out = 1;
@@ -374,8 +374,8 @@ TEST_P(GatherScatterConvTest, MiddleAccelDifferentGridsSameCount) {
 
     auto topo = ops::gatherScatterSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
 
-    EXPECT_EQ(topo.src_total_voxels, 2);
-    EXPECT_EQ(topo.dst_total_voxels, 2);
+    EXPECT_EQ(topo.feature_total_voxels, 2);
+    EXPECT_EQ(topo.output_total_voxels, 2);
     EXPECT_FALSE(topo.center_is_identity);
 
     int64_t C_in  = 2;
@@ -733,9 +733,9 @@ TEST_P(GatherScatterConvStridedTest, TopologyUniformStride) {
 
     // Verify dimensions
     EXPECT_EQ(topo.kernel_volume, 27);
-    EXPECT_EQ(topo.kernel_map.size(0), topo.dst_total_voxels);
+    EXPECT_EQ(topo.kernel_map.size(0), topo.output_total_voxels);
     EXPECT_EQ(topo.kernel_map.size(1), 27);
-    EXPECT_GT(topo.dst_total_voxels, 0);
+    EXPECT_GT(topo.output_total_voxels, 0);
 
     // With stride > 1, src and dst topologies differ -> center is NOT identity
     EXPECT_FALSE(topo.center_is_identity);
@@ -744,10 +744,10 @@ TEST_P(GatherScatterConvStridedTest, TopologyUniformStride) {
     auto kmap_cpu = topo.kernel_map.cpu();
     auto kmap_acc = kmap_cpu.accessor<int32_t, 2>();
     int hits      = 0;
-    for (int64_t d = 0; d < topo.dst_total_voxels; ++d) {
+    for (int64_t d = 0; d < topo.output_total_voxels; ++d) {
         for (int64_t k = 0; k < 27; ++k) {
             int32_t val = kmap_acc[d][k];
-            EXPECT_TRUE(val == -1 || (val >= 0 && val < topo.src_total_voxels))
+            EXPECT_TRUE(val == -1 || (val >= 0 && val < topo.feature_total_voxels))
                 << "kmap[" << d << "][" << k << "]=" << val << " out of range";
             if (val >= 0)
                 hits++;
@@ -768,8 +768,8 @@ TEST_P(GatherScatterConvStridedTest, TopologyNonUniformStride) {
     auto topo     = ops::gatherScatterSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
 
     EXPECT_EQ(topo.kernel_volume, 27);
-    EXPECT_EQ(topo.kernel_map.size(0), topo.dst_total_voxels);
-    EXPECT_GT(topo.dst_total_voxels, 0);
+    EXPECT_EQ(topo.kernel_map.size(0), topo.output_total_voxels);
+    EXPECT_GT(topo.output_total_voxels, 0);
 
     // Non-uniform stride -> center not identity
     EXPECT_FALSE(topo.center_is_identity);
@@ -778,10 +778,10 @@ TEST_P(GatherScatterConvStridedTest, TopologyNonUniformStride) {
     auto kmap_cpu = topo.kernel_map.cpu();
     auto kmap_acc = kmap_cpu.accessor<int32_t, 2>();
     int hits      = 0;
-    for (int64_t d = 0; d < topo.dst_total_voxels; ++d) {
+    for (int64_t d = 0; d < topo.output_total_voxels; ++d) {
         for (int64_t k = 0; k < 27; ++k) {
             int32_t val = kmap_acc[d][k];
-            EXPECT_TRUE(val == -1 || (val >= 0 && val < topo.src_total_voxels));
+            EXPECT_TRUE(val == -1 || (val >= 0 && val < topo.feature_total_voxels));
             if (val >= 0)
                 hits++;
         }
@@ -803,7 +803,7 @@ TEST_P(GatherScatterConvStridedTest, ForwardStridedFusedVsGemm) {
     auto dst_grid = src_grid->convolutionOutput(kernel_size, stride);
     auto topo     = ops::gatherScatterSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
 
-    int64_t S = topo.src_total_voxels;
+    int64_t S = topo.feature_total_voxels;
 
     torch::manual_seed(55);
     auto features = torch::randn({S, C_in}, torch::dtype(dtype).device(device));
@@ -837,7 +837,7 @@ TEST_P(GatherScatterConvStridedTest, ForwardNonUniformStridedFusedVsGemm) {
     auto dst_grid = src_grid->convolutionOutput(kernel_size, stride);
     auto topo     = ops::gatherScatterSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
 
-    int64_t S = topo.src_total_voxels;
+    int64_t S = topo.feature_total_voxels;
 
     torch::manual_seed(56);
     auto features = torch::randn({S, C_in}, torch::dtype(dtype).device(device));
@@ -872,7 +872,7 @@ TEST_P(GatherScatterConvStridedTest, BackwardStridedFiniteDifference) {
     auto dst_grid = src_grid->convolutionOutput(kernel_size, stride);
     auto topo     = ops::gatherScatterSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
 
-    int64_t S = topo.src_total_voxels;
+    int64_t S = topo.feature_total_voxels;
 
     torch::manual_seed(60);
     auto features = torch::randn({S, C_in}, torch::dtype(dtype).device(device));
@@ -940,8 +940,8 @@ TEST_P(GatherScatterConvStridedTest, BackwardStridedFusedVsGemm) {
     auto dst_grid = src_grid->convolutionOutput(kernel_size, stride);
     auto topo     = ops::gatherScatterSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
 
-    int64_t S = topo.src_total_voxels;
-    int64_t D = topo.dst_total_voxels;
+    int64_t S = topo.feature_total_voxels;
+    int64_t D = topo.output_total_voxels;
 
     torch::manual_seed(61);
     auto features    = torch::randn({S, C_in}, torch::dtype(dtype).device(device));
@@ -981,8 +981,8 @@ TEST_P(GatherScatterConvStridedTest, BackwardNonUniformStridedFusedVsGemm) {
     auto dst_grid = src_grid->convolutionOutput(kernel_size, stride);
     auto topo     = ops::gatherScatterSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
 
-    int64_t S = topo.src_total_voxels;
-    int64_t D = topo.dst_total_voxels;
+    int64_t S = topo.feature_total_voxels;
+    int64_t D = topo.output_total_voxels;
 
     torch::manual_seed(62);
     auto features    = torch::randn({S, C_in}, torch::dtype(dtype).device(device));

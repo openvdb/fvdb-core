@@ -48,9 +48,9 @@ class GatherScatterTopology:
     @property
     def kernel_map(self) -> torch.Tensor: ...
     @property
-    def src_total_voxels(self) -> int: ...
+    def feature_total_voxels(self) -> int: ...
     @property
-    def dst_total_voxels(self) -> int: ...
+    def output_total_voxels(self) -> int: ...
     @property
     def kernel_volume(self) -> int: ...
     @property
@@ -59,10 +59,13 @@ class GatherScatterTopology:
     def kernel_size(self) -> list[int]: ...
     @property
     def stride(self) -> list[int]: ...
+    @property
+    def is_transposed(self) -> bool: ...
 
+# Forward topology + conv
 def gs_build_topology(
-    source_grid: GridBatch,
-    target_grid: GridBatch,
+    feature_grid: GridBatch,
+    output_grid: GridBatch,
     kernel_size: Vec3iOrScalar,
     stride: Vec3iOrScalar,
 ) -> GatherScatterTopology: ...
@@ -80,8 +83,8 @@ def gs_conv_backward(
 def gs_conv_fused(
     features: torch.Tensor,
     weights: torch.Tensor,
-    source_grid: GridBatch,
-    target_grid: GridBatch,
+    feature_grid: GridBatch,
+    output_grid: GridBatch,
     kernel_size: Vec3iOrScalar,
     stride: Vec3iOrScalar,
 ) -> torch.Tensor: ...
@@ -89,8 +92,44 @@ def gs_conv_fused_backward(
     grad_output: torch.Tensor,
     features: torch.Tensor,
     weights: torch.Tensor,
-    source_grid: GridBatch,
-    target_grid: GridBatch,
+    feature_grid: GridBatch,
+    output_grid: GridBatch,
+    kernel_size: Vec3iOrScalar,
+    stride: Vec3iOrScalar,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
+
+# Transposed topology + conv
+def gs_build_transpose_topology(
+    feature_grid: GridBatch,
+    output_grid: GridBatch,
+    kernel_size: Vec3iOrScalar,
+    stride: Vec3iOrScalar,
+) -> GatherScatterTopology: ...
+def gs_conv_transpose(
+    features: torch.Tensor,
+    weights: torch.Tensor,
+    topology: GatherScatterTopology,
+) -> torch.Tensor: ...
+def gs_conv_transpose_backward(
+    grad_output: torch.Tensor,
+    features: torch.Tensor,
+    weights: torch.Tensor,
+    topology: GatherScatterTopology,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
+def gs_conv_fused_transpose(
+    features: torch.Tensor,
+    weights: torch.Tensor,
+    feature_grid: GridBatch,
+    output_grid: GridBatch,
+    kernel_size: Vec3iOrScalar,
+    stride: Vec3iOrScalar,
+) -> torch.Tensor: ...
+def gs_conv_fused_transpose_backward(
+    grad_output: torch.Tensor,
+    features: torch.Tensor,
+    weights: torch.Tensor,
+    feature_grid: GridBatch,
+    output_grid: GridBatch,
     kernel_size: Vec3iOrScalar,
     stride: Vec3iOrScalar,
 ) -> tuple[torch.Tensor, torch.Tensor]: ...

@@ -1,12 +1,12 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-// GatherScatter.cu -- Gather-scatter sparse convolution implementation.
+// GatherScatter.cu -- Gather-scatter sparse convolution implementation (GEMM path).
 //
-// Topology precomputation: forEachActiveVoxel over the dst grid, probing the
-// src grid's nanovdb accessor for each kernel offset.
+// Topology precomputation: forEachActiveVoxel over the output grid, probing the
+// feature grid's nanovdb accessor for each kernel offset.
 //
-// Forward convolution: per-kernel-weight loop of gather -> GEMM -> accumulate.
+// Forward/transposed convolution: per-kernel-weight loop of gather -> GEMM -> accumulate.
 // Uses the dispatch table with device and feature scalar type axes.
 //
 #include "dispatch/detail/core_types.h"
@@ -35,11 +35,6 @@ using namespace ::dispatch;
 // =============================================================================
 // Tensor options helpers
 // =============================================================================
-//
-// Reduce the torch::TensorOptions().dtype(...).device(...) boilerplate.
-//
-//   opts_on<kInt32>(device)  -- compile-time dtype, runtime device
-//   tensor.options()         -- same dtype + device as an existing tensor (builtin)
 
 template <torch::ScalarType Stype>
 inline torch::TensorOptions
@@ -51,18 +46,24 @@ opts_on(torch::Device device) {
 // Topology implementation via dispatch table
 // =============================================================================
 //
-// For each active voxel in the dst grid, probe the src grid at every kernel
-// offset and record the flat src voxel index (or -1).
+// Parameterized by ConvDirection.  For each active voxel in output_grid, probe
+// the feature_grid at every kernel offset and record the flat feature voxel
+// index (or -1).
+//
+// Forward:    probe = output_ijk * stride + kernel_offset
+// Transposed: probe = (output_ijk - kernel_offset) / stride
+//             (only when divisible by stride in all 3 dimensions)
 
 struct topology_op {
     template <typename Tag>
         requires with_type<Tag, torch::DeviceType>
     static GatherScatterTopology
     op(Tag tg,
-       GridBatchImpl const &src,
-       GridBatchImpl const &dst,
+       GridBatchImpl const &feature_grid,
+       GridBatchImpl const &output_grid,
        nanovdb::Coord kernel_size,
-       nanovdb::Coord stride) {
+       nanovdb::Coord stride,
+       ConvDirection direction) {
         constexpr auto dev = tag_get<torch::DeviceType>(Tag{});
 
         int64_t const ks0           = kernel_size[0];
@@ -70,39 +71,36 @@ struct topology_op {
         int64_t const ks2           = kernel_size[2];
         int64_t const kernel_volume = ks0 * ks1 * ks2;
 
-        int64_t const dst_total = dst.totalVoxels();
-        int64_t const src_total = src.totalVoxels();
+        int64_t const output_total  = output_grid.totalVoxels();
+        int64_t const feature_total = feature_grid.totalVoxels();
 
         // Kernel start offsets (centered kernel, matching existing convention)
         nanovdb::Coord const kernel_start(static_cast<int>(std::floor(-ks0 / 2.0 + 1)),
                                           static_cast<int>(std::floor(-ks1 / 2.0 + 1)),
                                           static_cast<int>(std::floor(-ks2 / 2.0 + 1)));
 
-        // Allocate output kernel map: [dst_total, kernel_volume], filled with -1
-        auto kmap =
-            torch::full({dst_total, kernel_volume}, -1, opts_on<torch::kInt32>(dst.device()));
+        // Allocate output kernel map: [output_total, kernel_volume], filled with -1
+        auto kmap = torch::full(
+            {output_total, kernel_volume}, -1, opts_on<torch::kInt32>(output_grid.device()));
         auto kmap_out = tensor_out<dev, torch::kInt32, 2, contiguity::contiguous>(kmap);
 
-        auto guard   = make_device_guard(tg, kmap);
-        auto src_acc = dispatch::make_grid_accessor(tg, src);
+        auto guard       = make_device_guard(tg, kmap);
+        auto feature_acc = dispatch::make_grid_accessor(tg, feature_grid);
 
-        // Iterate over every active dst voxel
+        bool const is_transposed = (direction == ConvDirection::Transposed);
+
+        // Iterate over every active output voxel
         dispatch::forEachActiveVoxel(
             tg,
-            dst,
+            output_grid,
             [=] __hostdev__(Tag,
                             JIdxType batch_idx,
-                            nanovdb::Coord dst_ijk,
-                            int64_t dst_voxel_index,
-                            GridBatchImpl::Accessor dst_acc) {
-                // Compute source coordinate (dst_ijk * stride)
-                nanovdb::Coord const src_base(
-                    dst_ijk[0] * stride[0], dst_ijk[1] * stride[1], dst_ijk[2] * stride[2]);
-
-                // Get the src grid's nanovdb accessor for this batch element
-                auto const *src_grid          = src_acc.grid(batch_idx);
-                auto src_tree_acc             = src_grid->getAccessor();
-                int64_t const src_base_offset = src_acc.voxelOffset(batch_idx);
+                            nanovdb::Coord output_ijk,
+                            int64_t output_voxel_index,
+                            GridBatchImpl::Accessor /*output_acc*/) {
+                auto const *feat_grid          = feature_acc.grid(batch_idx);
+                auto feat_tree_acc             = feat_grid->getAccessor();
+                int64_t const feat_base_offset = feature_acc.voxelOffset(batch_idx);
 
                 int64_t k_idx = 0;
                 for (int k0 = kernel_start[0]; k0 < kernel_start[0] + static_cast<int>(ks0); ++k0) {
@@ -110,11 +108,31 @@ struct topology_op {
                          ++k1) {
                         for (int k2 = kernel_start[2]; k2 < kernel_start[2] + static_cast<int>(ks2);
                              ++k2, ++k_idx) {
-                            nanovdb::Coord const probe = src_base + nanovdb::Coord(k0, k1, k2);
-                            if (src_tree_acc.isActive(probe)) {
-                                int32_t const src_flat = static_cast<int32_t>(
-                                    src_base_offset + src_tree_acc.getValue(probe) - 1);
-                                kmap_out(dst_voxel_index, k_idx) = src_flat;
+                            nanovdb::Coord probe;
+                            if (is_transposed) {
+                                // Transposed: probe = (output_ijk - offset) / stride
+                                int const r0 = output_ijk[0] - k0;
+                                int const r1 = output_ijk[1] - k1;
+                                int const r2 = output_ijk[2] - k2;
+                                // Check divisibility by stride
+                                if (r0 % stride[0] != 0 || r1 % stride[1] != 0 ||
+                                    r2 % stride[2] != 0) {
+                                    continue; // stays -1
+                                }
+                                probe = nanovdb::Coord(
+                                    r0 / stride[0], r1 / stride[1], r2 / stride[2]);
+                            } else {
+                                // Forward: probe = output_ijk * stride + offset
+                                nanovdb::Coord const base(output_ijk[0] * stride[0],
+                                                          output_ijk[1] * stride[1],
+                                                          output_ijk[2] * stride[2]);
+                                probe = base + nanovdb::Coord(k0, k1, k2);
+                            }
+
+                            if (feat_tree_acc.isActive(probe)) {
+                                int32_t const feat_flat = static_cast<int32_t>(
+                                    feat_base_offset + feat_tree_acc.getValue(probe) - 1);
+                                kmap_out(output_voxel_index, k_idx) = feat_flat;
                             }
                             // else: stays -1 from initialization
                         }
@@ -123,78 +141,101 @@ struct topology_op {
             });
 
         // Check if the center kernel offset is an identity mapping
-        // (kmap[:, K/2] == arange(D)).  This enables the "middle acceleration"
-        // in the forward pass -- verified once here so the hot path is free.
         bool center_identity = false;
         if (kernel_volume % 2 == 1) {
             int64_t const mid = kernel_volume / 2;
             auto mid_col      = kmap.select(1, mid);
-            auto expected     = torch::arange(dst_total, opts_on<torch::kInt32>(dst.device()));
-            center_identity   = mid_col.equal(expected);
+            auto expected = torch::arange(output_total, opts_on<torch::kInt32>(output_grid.device()));
+            center_identity = mid_col.equal(expected);
         }
 
         return GatherScatterTopology{
-            /*.kernel_map          =*/kmap,
-            /*.src_total_voxels    =*/src_total,
-            /*.dst_total_voxels    =*/dst_total,
-            /*.kernel_volume       =*/kernel_volume,
-            /*.kernel_size         =*/kernel_size,
-            /*.stride              =*/stride,
-            /*.center_is_identity  =*/center_identity,
+            /*.kernel_map             =*/kmap,
+            /*.feature_total_voxels   =*/feature_total,
+            /*.output_total_voxels    =*/output_total,
+            /*.kernel_volume          =*/kernel_volume,
+            /*.kernel_size            =*/kernel_size,
+            /*.stride                 =*/stride,
+            /*.direction              =*/direction,
+            /*.center_is_identity     =*/center_identity,
         };
     }
 
-    // Single axis: device
+    // Single axis: device.  ConvDirection is a runtime parameter.
     using space      = axes<torch_full_device_axis>;
     using subspaces  = coverage<space>;
-    using dispatcher = dispatch_table<
-        space,
-        GatherScatterTopology(
-            GridBatchImpl const &, GridBatchImpl const &, nanovdb::Coord, nanovdb::Coord)>;
+    using dispatcher = dispatch_table<space,
+                                      GatherScatterTopology(GridBatchImpl const &,
+                                                            GridBatchImpl const &,
+                                                            nanovdb::Coord,
+                                                            nanovdb::Coord,
+                                                            ConvDirection)>;
 };
 
-// Type-erased entry point for topology
-GatherScatterTopology
-gatherScatterSparseConvTopology(GridBatchImpl const &src,
-                                GridBatchImpl const &dst,
-                                nanovdb::Coord kernel_size,
-                                nanovdb::Coord stride) {
-    TORCH_CHECK(src.device() == dst.device(),
-                "src and dst grids must be on the same device, got ",
-                src.device(),
+// Shared precondition checks for topology builders
+static void
+checkTopologyPreconditions(GridBatchImpl const &feature_grid,
+                           GridBatchImpl const &output_grid,
+                           nanovdb::Coord kernel_size,
+                           nanovdb::Coord stride) {
+    TORCH_CHECK(feature_grid.device() == output_grid.device(),
+                "feature_grid and output_grid must be on the same device, got ",
+                feature_grid.device(),
                 " and ",
-                dst.device());
+                output_grid.device());
     for (int d = 0; d < 3; ++d) {
         TORCH_CHECK(
             kernel_size[d] > 0, "kernel_size[", d, "] must be positive, got ", kernel_size[d]);
         TORCH_CHECK(stride[d] > 0, "stride[", d, "] must be positive, got ", stride[d]);
     }
+}
+
+// Type-erased entry point for forward topology
+GatherScatterTopology
+gatherScatterSparseConvTopology(GridBatchImpl const &feature_grid,
+                                GridBatchImpl const &output_grid,
+                                nanovdb::Coord kernel_size,
+                                nanovdb::Coord stride) {
+    checkTopologyPreconditions(feature_grid, output_grid, kernel_size, stride);
 
     static auto const table =
         dispatch_table_from_op<topology_op>("gather_scatter_sparse_conv_topology");
 
-    auto const dev = src.device().type();
-    return table.select(dispatch_set{dev})(src, dst, kernel_size, stride);
+    auto const dev = feature_grid.device().type();
+    return table.select(dispatch_set{dev})(
+        feature_grid, output_grid, kernel_size, stride, ConvDirection::Forward);
+}
+
+// Type-erased entry point for transposed topology
+GatherScatterTopology
+gatherScatterSparseConvTransposeTopology(GridBatchImpl const &feature_grid,
+                                         GridBatchImpl const &output_grid,
+                                         nanovdb::Coord kernel_size,
+                                         nanovdb::Coord stride) {
+    checkTopologyPreconditions(feature_grid, output_grid, kernel_size, stride);
+
+    static auto const table =
+        dispatch_table_from_op<topology_op>("gather_scatter_sparse_conv_transpose_topology");
+
+    auto const dev = feature_grid.device().type();
+    return table.select(dispatch_set{dev})(
+        feature_grid, output_grid, kernel_size, stride, ConvDirection::Transposed);
 }
 
 // =============================================================================
-// Forward convolution implementation
+// Gather / scatter helpers (direction-agnostic)
 // =============================================================================
 
-// Gather: for a given kernel index k, copy src features into a dense buffer.
-//   buf_in[d, c] = features[kmap[d, k], c]   if kmap[d,k] >= 0
-//                  0                           otherwise
-//
-// Inactive entries are explicitly zeroed so callers need not pre-zero buf_in.
+// Gather: for a given kernel index k, copy feature-grid features into a dense buffer.
 template <typename Tag>
     requires with_type<Tag, torch::DeviceType> && with_type<Tag, torch::ScalarType>
 void
 conv_gather(Tag tg,
-            torch::Tensor features, // [S, C_in]
-            torch::Tensor buf_in,   // [D, C_in]
-            torch::Tensor kmap_col, // [D] int32, the k-th column of kernel_map
-            int64_t D,
-            int64_t C_in) {
+            torch::Tensor features, // [F, C]
+            torch::Tensor buf_in,   // [O, C]
+            torch::Tensor kmap_col, // [O] int32
+            int64_t O,
+            int64_t C) {
     constexpr auto dev   = tag_get<torch::DeviceType>(tg);
     constexpr auto stype = tag_get<torch::ScalarType>(tg);
     using scalar_t       = torch_scalar_cpp_type_t<stype>;
@@ -203,28 +244,24 @@ conv_gather(Tag tg,
     auto buf_ptr  = buf_in.data_ptr<scalar_t>();
     auto kmap_ptr = kmap_col.data_ptr<int32_t>();
 
-    for_each(tg, D * C_in, [=] __hostdev__(Tag, int64_t idx) {
-        int64_t const d       = idx / C_in;
-        int64_t const c       = idx % C_in;
-        int32_t const src_idx = kmap_ptr[d];
-        buf_ptr[d * C_in + c] =
-            (src_idx >= 0) ? feat_ptr[static_cast<int64_t>(src_idx) * C_in + c] : scalar_t(0);
+    for_each(tg, O * C, [=] __hostdev__(Tag, int64_t idx) {
+        int64_t const o       = idx / C;
+        int64_t const c       = idx % C;
+        int32_t const feat_idx = kmap_ptr[o];
+        buf_ptr[o * C + c] =
+            (feat_idx >= 0) ? feat_ptr[static_cast<int64_t>(feat_idx) * C + c] : scalar_t(0);
     });
 }
 
-// Scatter-add: for a given kernel index k, atomically accumulate buf values
-// back into the gradient features tensor.
-//   grad_feat[kmap[d, k], c] += buf[d, c]   if kmap[d,k] >= 0
-//
-// Uses dispatch::atomic_add for thread-safe accumulation on both CPU and GPU.
+// Scatter-add: atomically accumulate buf values back into grad_features.
 template <typename Tag>
     requires with_type<Tag, torch::DeviceType> && with_type<Tag, torch::ScalarType>
 void
 conv_scatter_add(Tag tg,
-                 torch::Tensor buf,       // [D, C]
-                 torch::Tensor grad_feat, // [S, C] destination (accumulated into)
-                 torch::Tensor kmap_col,  // [D] int32, the k-th column of kernel_map
-                 int64_t D,
+                 torch::Tensor buf,       // [O, C]
+                 torch::Tensor grad_feat, // [F, C] destination
+                 torch::Tensor kmap_col,  // [O] int32
+                 int64_t O,
                  int64_t C) {
     constexpr auto stype = tag_get<torch::ScalarType>(tg);
     using scalar_t       = torch_scalar_cpp_type_t<stype>;
@@ -233,34 +270,37 @@ conv_scatter_add(Tag tg,
     auto grad_feat_ptr = grad_feat.data_ptr<scalar_t>();
     auto kmap_ptr      = kmap_col.data_ptr<int32_t>();
 
-    for_each(tg, D * C, [=] __hostdev__(Tag tg_inner, int64_t idx) {
-        int64_t const d       = idx / C;
+    for_each(tg, O * C, [=] __hostdev__(Tag tg_inner, int64_t idx) {
+        int64_t const o       = idx / C;
         int64_t const c       = idx % C;
-        int32_t const src_idx = kmap_ptr[d];
-        if (src_idx >= 0) {
+        int32_t const feat_idx = kmap_ptr[o];
+        if (feat_idx >= 0) {
             dispatch::atomic_add(tg_inner,
-                                 &grad_feat_ptr[static_cast<int64_t>(src_idx) * C + c],
-                                 buf_ptr[d * C + c]);
+                                 &grad_feat_ptr[static_cast<int64_t>(feat_idx) * C + c],
+                                 buf_ptr[o * C + c]);
         }
     });
 }
 
-// The dispatch op struct for the forward convolution.
-// Dispatch axes: device x feature_stype.
+// =============================================================================
+// Forward convolution implementation
+// =============================================================================
 //
-// Mixed feature/weight dtypes are supported: weights are cast to the feature
-// dtype after reshape.  Output dtype follows the feature dtype.
+// Works for both forward and transposed convolution.  The topology encodes
+// the direction (probe coordinate math) and the weight reshape changes:
 //
-// The actual per-kernel-weight loop lives in the op method.  Each iteration:
-//   1. Gather src features for this kernel offset (zeros for inactive entries)
-//   2. GEMM: buf_in [D, C_in] x weight_k [C_in, C_out] -> buf_out [D, C_out]
-//   3. output += buf_out
+// Forward:    weights [C_out, C_in, K] -> [K, C_in, C_out]
+//             features [F, C_in] @ W[k] [C_in, C_out] -> output [O, C_out]
+//
+// Transposed: weights [C_out, C_in, K] -> [K, C_out, C_in]
+//             features [F, C_out] @ W[k] [C_out, C_in] -> output [O, C_in]
+
 struct gather_scatter_conv_op {
     template <typename Tag>
         requires with_type<Tag, torch::DeviceType> && with_type<Tag, torch::ScalarType>
     static torch::Tensor
     op(Tag tg,
-       torch::Tensor features, // [S, C_in]
+       torch::Tensor features, // [F, C_feat]
        torch::Tensor weights,  // [C_out, C_in, k0, k1, k2]
        GatherScatterTopology const &topo) {
         constexpr auto dev        = tag_get<torch::DeviceType>(tg);
@@ -268,42 +308,42 @@ struct gather_scatter_conv_op {
 
         auto guard = make_device_guard(tag<dev>{}, features);
 
-        int64_t const D     = topo.dst_total_voxels;
-        int64_t const K     = topo.kernel_volume;
-        int64_t const C_out = weights.size(0);
-        int64_t const C_in  = weights.size(1);
+        int64_t const O = topo.output_total_voxels;
+        int64_t const K = topo.kernel_volume;
 
-        // Reshape weights from [C_out, C_in, k0, k1, k2] to [K, C_in, C_out]
-        // where K = k0*k1*k2, and the per-weight slice is [C_in, C_out] for mm.
-        //
-        // Cost: one contiguous copy of K * C_in * C_out elements.  For a 3x3x3
-        // kernel with C_in = C_out = 128 this is 442K floats (1.7 MB), which
-        // copies in ~10 us on a modern GPU -- well under a single cuBLAS launch
-        // and negligible against the K GEMM calls that follow.  Accepting
-        // pre-reshaped weights would save this but break the standard PyTorch
-        // conv3d [C_out, C_in, k0, k1, k2] layout contract.
-        auto weights_reshaped =
-            weights.permute({2, 3, 4, 1, 0}).reshape({K, C_in, C_out}).contiguous();
+        bool const transposed = (topo.direction == ConvDirection::Transposed);
 
-        // Cast weights to feature dtype if they differ (mixed precision support).
+        // C_feat: channel count of feature tensor (features.size(1))
+        // C_result: channel count of output tensor
+        int64_t const C_feat   = features.size(1);
+        int64_t const C_result = transposed ? weights.size(1) : weights.size(0);
+
+        // Reshape weights:
+        //   Forward:    [C_out, C_in, k0, k1, k2] -> permute {2,3,4,1,0} -> [K, C_in, C_out]
+        //   Transposed: [C_out, C_in, k0, k1, k2] -> permute {2,3,4,0,1} -> [K, C_out, C_in]
+        // In both cases the result is [K, C_feat, C_result].
+        torch::Tensor weights_reshaped;
+        if (transposed) {
+            weights_reshaped =
+                weights.permute({2, 3, 4, 0, 1}).reshape({K, C_feat, C_result}).contiguous();
+        } else {
+            weights_reshaped =
+                weights.permute({2, 3, 4, 1, 0}).reshape({K, C_feat, C_result}).contiguous();
+        }
+
         if (weights_reshaped.scalar_type() != feat_stype) {
             weights_reshaped = weights_reshaped.to(feat_stype);
         }
 
-        // Output: [D, C_out], same dtype and device as features
-        auto output = torch::zeros({D, C_out}, features.options());
+        auto output = torch::zeros({O, C_result}, features.options());
 
-        if (D == 0 || K == 0) {
+        if (O == 0 || K == 0) {
             return output;
         }
 
-        // Reusable buffers for gather and GEMM output
-        auto buf_in  = torch::empty({D, C_in}, features.options());
-        auto buf_out = torch::empty({D, C_out}, features.options());
+        auto buf_in  = torch::empty({O, C_feat}, features.options());
+        auto buf_out = torch::empty({O, C_result}, features.options());
 
-        // Middle acceleration: if the center kernel offset is a verified
-        // identity mapping (precomputed in topology), skip gather and mm
-        // features directly against the center weight.
         int64_t const mid_k     = K / 2;
         bool const middle_accel = topo.center_is_identity;
 
@@ -311,34 +351,23 @@ struct gather_scatter_conv_op {
             torch::mm_out(output, features, weights_reshaped[mid_k]);
         }
 
-        // Tag for dispatching gather (uses feature scalar type only)
         auto feat_tag = tag<dev, feat_stype>{};
-
-        // Transpose kernel_map once: [D, K] -> [K, D] contiguous, so
-        // kmap_t[k] is a contiguous row (avoids per-iteration allocation).
-        auto kmap_t = topo.kernel_map.t().contiguous();
+        auto kmap_t   = topo.kernel_map.t().contiguous();
 
         for (int64_t k = 0; k < K; ++k) {
             if (middle_accel && k == mid_k) {
                 continue;
             }
 
-            auto kmap_col = kmap_t[k]; // [D], contiguous row
-
-            // Gather src features for this kernel offset
-            conv_gather(feat_tag, features, buf_in, kmap_col, D, C_in);
-
-            // GEMM: [D, C_in] x [C_in, C_out] -> [D, C_out]
+            auto kmap_col = kmap_t[k];
+            conv_gather(feat_tag, features, buf_in, kmap_col, O, C_feat);
             torch::mm_out(buf_out, buf_in, weights_reshaped[k]);
-
-            // Accumulate into output
             output.add_(buf_out);
         }
 
         return output;
     }
 
-    // Dispatch space: device x feature scalar type
     using space = axes<torch_full_device_axis, torch_full_float_stype_axis>;
 
     using subspaces = coverage<space>;
@@ -348,83 +377,21 @@ struct gather_scatter_conv_op {
                        torch::Tensor(torch::Tensor, torch::Tensor, GatherScatterTopology const &)>;
 };
 
-// Type-erased entry point for forward convolution
-torch::Tensor
-gatherScatterSparseConv(torch::Tensor features,
-                        torch::Tensor weights,
-                        GatherScatterTopology const &topo) {
-    // Precondition checks
-    TORCH_CHECK(features.dim() == 2,
-                "features must be 2D [total_src_voxels, C_in], got ",
-                features.dim(),
-                "D");
-    TORCH_CHECK(features.size(0) == topo.src_total_voxels,
-                "features.size(0)=",
-                features.size(0),
-                " must match src_total_voxels=",
-                topo.src_total_voxels);
-    TORCH_CHECK(features.is_floating_point(), "features must be floating point");
-
-    TORCH_CHECK(weights.dim() == 5,
-                "weights must be 5D [C_out, C_in, k0, k1, k2], got ",
-                weights.dim(),
-                "D");
-    TORCH_CHECK(weights.size(1) == features.size(1),
-                "weights C_in=",
-                weights.size(1),
-                " must match features C_in=",
-                features.size(1));
-    TORCH_CHECK(weights.size(2) == topo.kernel_size[0] && weights.size(3) == topo.kernel_size[1] &&
-                    weights.size(4) == topo.kernel_size[2],
-                "weights spatial dims [",
-                weights.size(2),
-                ",",
-                weights.size(3),
-                ",",
-                weights.size(4),
-                "] must match topology kernel_size [",
-                topo.kernel_size[0],
-                ",",
-                topo.kernel_size[1],
-                ",",
-                topo.kernel_size[2],
-                "]");
-    TORCH_CHECK(weights.is_floating_point(), "weights must be floating point");
-
-    TORCH_CHECK(features.device() == weights.device(),
-                "features and weights must be on the same device");
-    TORCH_CHECK(features.device() == topo.kernel_map.device(),
-                "features and kernel_map must be on the same device");
-
-    static auto const table =
-        dispatch_table_from_op<gather_scatter_conv_op>("gather_scatter_sparse_conv");
-
-    auto const dev  = features.device().type();
-    auto const f_st = features.scalar_type();
-
-    return table.select(dispatch_set{dev, f_st})(features, weights, topo);
-}
-
 // =============================================================================
 // Backward convolution implementation (GEMM path)
 // =============================================================================
 //
-// Computes gradients for features and weights given grad_output from the
-// forward pass.  Uses the same gather + GEMM + scatter pattern:
-//
-// For each kernel offset k:
-//   1. Gather: buf_feat = gather(features, kmap[:,k])         [D, C_in]
-//   2. GEMM:  buf_grad = grad_output @ weights[k].T           [D, C_in]
-//   3. Scatter-add: grad_features[kmap[:,k]] += buf_grad       atomically
-//   4. GEMM:  grad_weights[k] = buf_feat.T @ grad_output      [C_in, C_out]
+// Works for both forward and transposed backward.  Uses the same
+// gather + GEMM + scatter pattern; the weight reshape matches the
+// forward direction stored in topo.direction.
 
 struct gather_scatter_conv_backward_op {
     template <typename Tag>
         requires with_type<Tag, torch::DeviceType> && with_type<Tag, torch::ScalarType>
     static std::tuple<torch::Tensor, torch::Tensor>
     op(Tag tg,
-       torch::Tensor grad_output, // [D, C_out]
-       torch::Tensor features,    // [S, C_in]
+       torch::Tensor grad_output, // [O, C_result]
+       torch::Tensor features,    // [F, C_feat]
        torch::Tensor weights,     // [C_out, C_in, k0, k1, k2]
        GatherScatterTopology const &topo) {
         constexpr auto dev        = tag_get<torch::DeviceType>(tg);
@@ -432,46 +399,54 @@ struct gather_scatter_conv_backward_op {
 
         auto guard = make_device_guard(tag<dev>{}, features);
 
-        int64_t const S     = topo.src_total_voxels;
-        int64_t const D     = topo.dst_total_voxels;
-        int64_t const K     = topo.kernel_volume;
-        int64_t const C_out = weights.size(0);
-        int64_t const C_in  = weights.size(1);
+        int64_t const F = topo.feature_total_voxels;
+        int64_t const O = topo.output_total_voxels;
+        int64_t const K = topo.kernel_volume;
 
-        // Reshape weights: [C_out, C_in, k0, k1, k2] -> [K, C_in, C_out]
-        // Same layout as forward so weights_reshaped[k] is [C_in, C_out].
-        auto weights_reshaped =
-            weights.permute({2, 3, 4, 1, 0}).reshape({K, C_in, C_out}).contiguous();
+        bool const transposed = (topo.direction == ConvDirection::Transposed);
+
+        int64_t const C_feat   = features.size(1);
+        int64_t const C_result = transposed ? weights.size(1) : weights.size(0);
+
+        // Same reshape as forward
+        torch::Tensor weights_reshaped;
+        if (transposed) {
+            weights_reshaped =
+                weights.permute({2, 3, 4, 0, 1}).reshape({K, C_feat, C_result}).contiguous();
+        } else {
+            weights_reshaped =
+                weights.permute({2, 3, 4, 1, 0}).reshape({K, C_feat, C_result}).contiguous();
+        }
         if (weights_reshaped.scalar_type() != feat_stype) {
             weights_reshaped = weights_reshaped.to(feat_stype);
         }
 
-        // Outputs: grad_features [S, C_in], grad_weights_reshaped [K, C_in, C_out]
-        auto grad_features         = torch::zeros({S, C_in}, features.options());
-        auto grad_weights_reshaped = torch::zeros({K, C_in, C_out}, features.options());
+        auto grad_features         = torch::zeros({F, C_feat}, features.options());
+        auto grad_weights_reshaped = torch::zeros({K, C_feat, C_result}, features.options());
 
-        if (D == 0 || K == 0) {
-            // Reshape grad_weights to [C_out, C_in, k0, k1, k2]
+        if (O == 0 || K == 0) {
             auto ks           = topo.kernel_size;
-            auto grad_weights = grad_weights_reshaped.reshape({ks[0], ks[1], ks[2], C_in, C_out})
-                                    .permute({4, 3, 0, 1, 2})
-                                    .contiguous();
+            torch::Tensor grad_weights;
+            if (transposed) {
+                grad_weights = grad_weights_reshaped.reshape({ks[0], ks[1], ks[2], C_feat, C_result})
+                                   .permute({3, 4, 0, 1, 2})
+                                   .contiguous();
+            } else {
+                grad_weights = grad_weights_reshaped.reshape({ks[0], ks[1], ks[2], C_feat, C_result})
+                                   .permute({4, 3, 0, 1, 2})
+                                   .contiguous();
+            }
             return {grad_features, grad_weights};
         }
 
-        // Reusable buffers
-        auto buf_feat    = torch::empty({D, C_in}, features.options());
-        auto buf_grad_in = torch::empty({D, C_in}, features.options());
+        auto buf_feat    = torch::empty({O, C_feat}, features.options());
+        auto buf_grad_in = torch::empty({O, C_feat}, features.options());
 
-        // Middle acceleration
         int64_t const mid_k     = K / 2;
         bool const middle_accel = topo.center_is_identity;
 
         if (middle_accel) {
-            // grad_features += grad_output @ weights[mid_k].T
-            // Since center is identity, dst voxel d maps to src voxel d directly.
             grad_features.addmm_(grad_output, weights_reshaped[mid_k].t());
-            // grad_weights[mid_k] = features.T @ grad_output
             auto gw_mid = grad_weights_reshaped[mid_k];
             torch::mm_out(gw_mid, features.t(), grad_output);
         }
@@ -484,27 +459,30 @@ struct gather_scatter_conv_backward_op {
                 continue;
             }
 
-            auto kmap_col = kmap_t[k]; // [D], contiguous row
+            auto kmap_col = kmap_t[k];
 
-            // 1. Gather features for this kernel offset
-            conv_gather(feat_tag, features, buf_feat, kmap_col, D, C_in);
-
-            // 2. GEMM for grad_features: [D, C_out] x [C_out, C_in] -> [D, C_in]
+            conv_gather(feat_tag, features, buf_feat, kmap_col, O, C_feat);
             torch::mm_out(buf_grad_in, grad_output, weights_reshaped[k].t());
+            conv_scatter_add(feat_tag, buf_grad_in, grad_features, kmap_col, O, C_feat);
 
-            // 3. Scatter-add into grad_features
-            conv_scatter_add(feat_tag, buf_grad_in, grad_features, kmap_col, D, C_in);
-
-            // 4. GEMM for grad_weights: [C_in, D] x [D, C_out] -> [C_in, C_out]
             auto gw_k = grad_weights_reshaped[k];
             torch::mm_out(gw_k, buf_feat.t(), grad_output);
         }
 
-        // Reshape grad_weights from [K, C_in, C_out] back to [C_out, C_in, k0, k1, k2]
-        auto ks           = topo.kernel_size;
-        auto grad_weights = grad_weights_reshaped.reshape({ks[0], ks[1], ks[2], C_in, C_out})
-                                .permute({4, 3, 0, 1, 2})
-                                .contiguous();
+        // Reshape grad_weights back to [C_out, C_in, k0, k1, k2]
+        auto ks = topo.kernel_size;
+        torch::Tensor grad_weights;
+        if (transposed) {
+            // [K, C_feat, C_result] = [K, C_out, C_in] -> [k0,k1,k2, C_out, C_in] -> [C_out, C_in, k0,k1,k2]
+            grad_weights = grad_weights_reshaped.reshape({ks[0], ks[1], ks[2], C_feat, C_result})
+                               .permute({3, 4, 0, 1, 2})
+                               .contiguous();
+        } else {
+            // [K, C_feat, C_result] = [K, C_in, C_out] -> [k0,k1,k2, C_in, C_out] -> [C_out, C_in, k0,k1,k2]
+            grad_weights = grad_weights_reshaped.reshape({ks[0], ks[1], ks[2], C_feat, C_result})
+                               .permute({4, 3, 0, 1, 2})
+                               .contiguous();
+        }
 
         return {grad_features, grad_weights};
     }
@@ -517,63 +495,128 @@ struct gather_scatter_conv_backward_op {
             torch::Tensor, torch::Tensor, torch::Tensor, GatherScatterTopology const &)>;
 };
 
-// Type-erased entry point for backward convolution (GEMM path)
+// =============================================================================
+// Shared precondition checks
+// =============================================================================
+
+static void
+checkConvPreconditions(torch::Tensor features,
+                       torch::Tensor weights,
+                       GatherScatterTopology const &topo,
+                       char const *name) {
+    bool const transposed = (topo.direction == ConvDirection::Transposed);
+
+    TORCH_CHECK(features.dim() == 2, name, ": features must be 2D, got ", features.dim(), "D");
+    TORCH_CHECK(features.size(0) == topo.feature_total_voxels,
+                name,
+                ": features.size(0)=",
+                features.size(0),
+                " must match feature_total_voxels=",
+                topo.feature_total_voxels);
+    TORCH_CHECK(features.is_floating_point(), name, ": features must be floating point");
+
+    TORCH_CHECK(weights.dim() == 5, name, ": weights must be 5D, got ", weights.dim(), "D");
+
+    // Feature channel consistency: forward uses weights.size(1), transposed uses weights.size(0)
+    int64_t const expected_feat_ch = transposed ? weights.size(0) : weights.size(1);
+    TORCH_CHECK(features.size(1) == expected_feat_ch,
+                name,
+                ": features channels=",
+                features.size(1),
+                " must match expected=",
+                expected_feat_ch);
+
+    TORCH_CHECK(weights.size(2) == topo.kernel_size[0] && weights.size(3) == topo.kernel_size[1] &&
+                    weights.size(4) == topo.kernel_size[2],
+                name,
+                ": weights spatial dims must match topology kernel_size");
+    TORCH_CHECK(weights.is_floating_point(), name, ": weights must be floating point");
+
+    TORCH_CHECK(features.device() == weights.device(), name, ": features and weights must be on the same device");
+    TORCH_CHECK(features.device() == topo.kernel_map.device(),
+                name,
+                ": features and kernel_map must be on the same device");
+}
+
+// =============================================================================
+// Type-erased entry points
+// =============================================================================
+
+// Forward convolution
+torch::Tensor
+gatherScatterSparseConv(torch::Tensor features,
+                        torch::Tensor weights,
+                        GatherScatterTopology const &topo) {
+    checkConvPreconditions(features, weights, topo, "gatherScatterSparseConv");
+    TORCH_CHECK(topo.direction == ConvDirection::Forward,
+                "gatherScatterSparseConv requires topology with direction=Forward");
+
+    static auto const table =
+        dispatch_table_from_op<gather_scatter_conv_op>("gather_scatter_sparse_conv");
+
+    auto const dev  = features.device().type();
+    auto const f_st = features.scalar_type();
+
+    return table.select(dispatch_set{dev, f_st})(features, weights, topo);
+}
+
+// Forward backward
 std::tuple<torch::Tensor, torch::Tensor>
 gatherScatterSparseConvBackward(torch::Tensor grad_output,
                                 torch::Tensor features,
                                 torch::Tensor weights,
                                 GatherScatterTopology const &topo) {
-    // Precondition checks
-    TORCH_CHECK(grad_output.dim() == 2,
-                "grad_output must be 2D [dst_total_voxels, C_out], got ",
-                grad_output.dim(),
-                "D");
-    TORCH_CHECK(grad_output.size(0) == topo.dst_total_voxels,
-                "grad_output.size(0)=",
-                grad_output.size(0),
-                " must match dst_total_voxels=",
-                topo.dst_total_voxels);
+    checkConvPreconditions(features, weights, topo, "gatherScatterSparseConvBackward");
+    TORCH_CHECK(topo.direction == ConvDirection::Forward,
+                "gatherScatterSparseConvBackward requires topology with direction=Forward");
+    TORCH_CHECK(grad_output.dim() == 2 && grad_output.size(0) == topo.output_total_voxels,
+                "grad_output shape mismatch");
     TORCH_CHECK(grad_output.is_floating_point(), "grad_output must be floating point");
-
-    TORCH_CHECK(features.dim() == 2,
-                "features must be 2D [src_total_voxels, C_in], got ",
-                features.dim(),
-                "D");
-    TORCH_CHECK(features.size(0) == topo.src_total_voxels,
-                "features.size(0)=",
-                features.size(0),
-                " must match src_total_voxels=",
-                topo.src_total_voxels);
-    TORCH_CHECK(features.is_floating_point(), "features must be floating point");
-
-    TORCH_CHECK(weights.dim() == 5,
-                "weights must be 5D [C_out, C_in, k0, k1, k2], got ",
-                weights.dim(),
-                "D");
-    TORCH_CHECK(weights.size(0) == grad_output.size(1),
-                "weights C_out=",
-                weights.size(0),
-                " must match grad_output C_out=",
-                grad_output.size(1));
-    TORCH_CHECK(weights.size(1) == features.size(1),
-                "weights C_in=",
-                weights.size(1),
-                " must match features C_in=",
-                features.size(1));
-    TORCH_CHECK(weights.size(2) == topo.kernel_size[0] && weights.size(3) == topo.kernel_size[1] &&
-                    weights.size(4) == topo.kernel_size[2],
-                "weights spatial dims must match topology kernel_size");
-    TORCH_CHECK(weights.is_floating_point(), "weights must be floating point");
-
-    TORCH_CHECK(grad_output.device() == features.device(),
-                "grad_output and features must be on the same device");
-    TORCH_CHECK(features.device() == weights.device(),
-                "features and weights must be on the same device");
-    TORCH_CHECK(features.device() == topo.kernel_map.device(),
-                "features and kernel_map must be on the same device");
+    TORCH_CHECK(grad_output.device() == features.device(), "grad_output and features must be on the same device");
 
     static auto const table = dispatch_table_from_op<gather_scatter_conv_backward_op>(
         "gather_scatter_sparse_conv_backward");
+
+    auto const dev  = features.device().type();
+    auto const f_st = features.scalar_type();
+
+    return table.select(dispatch_set{dev, f_st})(grad_output, features, weights, topo);
+}
+
+// Transposed convolution
+torch::Tensor
+gatherScatterSparseConvTranspose(torch::Tensor features,
+                                 torch::Tensor weights,
+                                 GatherScatterTopology const &topo) {
+    checkConvPreconditions(features, weights, topo, "gatherScatterSparseConvTranspose");
+    TORCH_CHECK(topo.direction == ConvDirection::Transposed,
+                "gatherScatterSparseConvTranspose requires topology with direction=Transposed");
+
+    static auto const table =
+        dispatch_table_from_op<gather_scatter_conv_op>("gather_scatter_sparse_conv_transpose");
+
+    auto const dev  = features.device().type();
+    auto const f_st = features.scalar_type();
+
+    return table.select(dispatch_set{dev, f_st})(features, weights, topo);
+}
+
+// Transposed backward
+std::tuple<torch::Tensor, torch::Tensor>
+gatherScatterSparseConvTransposeBackward(torch::Tensor grad_output,
+                                         torch::Tensor features,
+                                         torch::Tensor weights,
+                                         GatherScatterTopology const &topo) {
+    checkConvPreconditions(features, weights, topo, "gatherScatterSparseConvTransposeBackward");
+    TORCH_CHECK(topo.direction == ConvDirection::Transposed,
+                "gatherScatterSparseConvTransposeBackward requires topology with direction=Transposed");
+    TORCH_CHECK(grad_output.dim() == 2 && grad_output.size(0) == topo.output_total_voxels,
+                "grad_output shape mismatch");
+    TORCH_CHECK(grad_output.is_floating_point(), "grad_output must be floating point");
+    TORCH_CHECK(grad_output.device() == features.device(), "grad_output and features must be on the same device");
+
+    static auto const table = dispatch_table_from_op<gather_scatter_conv_backward_op>(
+        "gather_scatter_sparse_conv_transpose_backward");
 
     auto const dev  = features.device().type();
     auto const f_st = features.scalar_type();
