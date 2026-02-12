@@ -5,19 +5,20 @@
 #define FVDB_DETAIL_OPS_COARSEIJKFORFINEGRID_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
 
 #include <nanovdb/NanoVDB.h>
 
-#include <torch/types.h>
-
 namespace fvdb {
 namespace detail {
+
+class GridBatchImpl;
+
 namespace ops {
 
-template <torch::DeviceType>
-JaggedTensor dispatchCoarseIJKForFineGrid(const GridBatchImpl &batchHdl,
-                                          nanovdb::Coord coarseningFactor);
+/// @brief For each active voxel in the fine grid, compute the coarse ijk coordinate
+///        by dividing and flooring by the coarsening factor.
+/// Device dispatch is handled internally -- no template parameter needed.
+JaggedTensor coarseIjkForFineGrid(GridBatchImpl const &fineGrid, nanovdb::Coord coarseningFactor);
 
 } // namespace ops
 } // namespace detail

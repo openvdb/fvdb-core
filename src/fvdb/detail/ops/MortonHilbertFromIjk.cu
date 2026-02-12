@@ -1,10 +1,15 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include "dispatch/dispatch_table.h"
+#include "dispatch/torch/dispatch.h"
+#include "dispatch/torch/for_each.h"
+#include "dispatch/torch/views.h"
+
+#include <fvdb/detail/dispatch/TensorChecks.h>
 #include <fvdb/detail/ops/MortonHilbertFromIjk.h>
 #include <fvdb/detail/utils/HilbertCode.h>
 #include <fvdb/detail/utils/MortonCode.h>
-#include <fvdb/detail/utils/SimpleOpHelper.h>
 
 namespace fvdb {
 namespace detail {
@@ -12,84 +17,105 @@ namespace ops {
 
 namespace {
 
-template <torch::DeviceType DeviceTag>
-struct MortonProcessor : public BasePerElementProcessor<DeviceTag,
-                                                        MortonProcessor<DeviceTag>,
-                                                        FixedElementType<int32_t, 3>,
-                                                        ScalarElementType<int64_t>> {
-    // Per-element callback which computes the morton code for each ijk element in the tensor
-    __hostdev__ void
-    perElement(int64_t const element_idx, auto in_accessor, auto out_accessor) const {
-        auto &&in = in_accessor[element_idx];
+// ---------------------------------------------------------------------------
+// Dispatch table wiring
+// ---------------------------------------------------------------------------
 
-        // Coordinate from in
-        auto const i = static_cast<uint32_t>(in[0]);
-        auto const j = static_cast<uint32_t>(in[1]);
-        auto const k = static_cast<uint32_t>(in[2]);
+struct morton_from_ijk_op {
+    template <typename Tag>
+    static torch::Tensor
+    op(Tag tg, torch::Tensor ijk) {
+        constexpr auto dev    = ::dispatch::tag_get<torch::DeviceType>(tg);
+        constexpr auto contig = ::dispatch::tag_get<::dispatch::contiguity>(tg);
 
-        out_accessor[element_idx] = static_cast<int64_t>(utils::morton(i, j, k));
+        int64_t const n   = ijk.size(0);
+        auto const device = ijk.device();
+
+        auto out   = torch::empty({n}, torch::TensorOptions().dtype(torch::kInt64).device(device));
+        auto ijk_v = ::dispatch::tensor_in<dev, torch::kInt32, 2, contig>(ijk);
+        auto out_v =
+            ::dispatch::tensor_out<dev, torch::kInt64, 1, ::dispatch::contiguity::contiguous>(out);
+
+        ::dispatch::for_each(tg, n, [=] __hostdev__(Tag, int64_t idx) {
+            auto const i = static_cast<uint32_t>(ijk_v(idx, 0));
+            auto const j = static_cast<uint32_t>(ijk_v(idx, 1));
+            auto const k = static_cast<uint32_t>(ijk_v(idx, 2));
+            out_v(idx)   = static_cast<int64_t>(utils::morton(i, j, k));
+        });
+
+        return out;
     }
+
+    using space =
+        ::dispatch::axes<::dispatch::torch_full_device_axis, ::dispatch::full_contiguity_axis>;
+    using subspaces  = ::dispatch::coverage<space>;
+    using dispatcher = ::dispatch::dispatch_table<space, torch::Tensor(torch::Tensor)>;
 };
 
-template <torch::DeviceType DeviceTag>
-struct HilbertProcessor : public BasePerElementProcessor<DeviceTag,
-                                                         HilbertProcessor<DeviceTag>,
-                                                         FixedElementType<int32_t, 3>,
-                                                         ScalarElementType<int64_t>> {
-    // Per-element callback which computes the hilbert code for each ijk element in the tensor
-    __hostdev__ void
-    perElement(int64_t const element_idx, auto in_accessor, auto out_accessor) const {
-        auto &&in = in_accessor[element_idx];
+struct hilbert_from_ijk_op {
+    template <typename Tag>
+    static torch::Tensor
+    op(Tag tg, torch::Tensor ijk) {
+        constexpr auto dev    = ::dispatch::tag_get<torch::DeviceType>(tg);
+        constexpr auto contig = ::dispatch::tag_get<::dispatch::contiguity>(tg);
 
-        // Coordinate from in
-        auto const i = static_cast<uint32_t>(in[0]);
-        auto const j = static_cast<uint32_t>(in[1]);
-        auto const k = static_cast<uint32_t>(in[2]);
+        int64_t const n   = ijk.size(0);
+        auto const device = ijk.device();
 
-        out_accessor[element_idx] = static_cast<int64_t>(utils::hilbert(i, j, k));
+        auto out   = torch::empty({n}, torch::TensorOptions().dtype(torch::kInt64).device(device));
+        auto ijk_v = ::dispatch::tensor_in<dev, torch::kInt32, 2, contig>(ijk);
+        auto out_v =
+            ::dispatch::tensor_out<dev, torch::kInt64, 1, ::dispatch::contiguity::contiguous>(out);
+
+        ::dispatch::for_each(tg, n, [=] __hostdev__(Tag, int64_t idx) {
+            auto const i = static_cast<uint32_t>(ijk_v(idx, 0));
+            auto const j = static_cast<uint32_t>(ijk_v(idx, 1));
+            auto const k = static_cast<uint32_t>(ijk_v(idx, 2));
+            out_v(idx)   = static_cast<int64_t>(utils::hilbert(i, j, k));
+        });
+
+        return out;
     }
+
+    using space =
+        ::dispatch::axes<::dispatch::torch_full_device_axis, ::dispatch::full_contiguity_axis>;
+    using subspaces  = ::dispatch::coverage<space>;
+    using dispatcher = ::dispatch::dispatch_table<space, torch::Tensor(torch::Tensor)>;
 };
 
-} // End anonymous namespace
+} // anonymous namespace
 
-template <torch::DeviceType DeviceTag>
-torch::Tensor
-dispatchMortonFromIjk(torch::Tensor ijk) {
-    TORCH_CHECK_VALUE(ijk.dim() == 2, "ijk must be a 2D tensor of shape [N, 3]");
-    TORCH_CHECK_VALUE(ijk.size(1) == 3, "ijk must have 3 dimensions");
-    TORCH_CHECK_VALUE(ijk.scalar_type() == torch::kInt32, "ijk must be int32");
-    return MortonProcessor<DeviceTag>{}.execute(ijk);
+// ---------------------------------------------------------------------------
+// Public entry points
+// ---------------------------------------------------------------------------
+
+/// Common precondition check for ijk coordinate tensors: [N, 3] int32.
+static void
+check_ijk(torch::Tensor const &ijk) {
+    namespace dc = ::fvdb::detail::dispatch;
+    dc::check_rank(ijk, 2, "ijk");
+    dc::check_dim_size(ijk, 1, 3, "ijk");
+    dc::check_dtype<torch::kInt32>(ijk, "ijk");
 }
 
 torch::Tensor
 mortonFromIjk(torch::Tensor ijk) {
-    if (ijk.device().is_cuda()) {
-        return dispatchMortonFromIjk<torch::kCUDA>(ijk);
-    } else if (ijk.device().is_privateuseone()) {
-        return dispatchMortonFromIjk<torch::kPrivateUse1>(ijk);
-    } else {
-        return dispatchMortonFromIjk<torch::kCPU>(ijk);
-    }
-}
-
-template <torch::DeviceType DeviceTag>
-torch::Tensor
-dispatchHilbertFromIjk(torch::Tensor ijk) {
-    TORCH_CHECK_VALUE(ijk.dim() == 2, "ijk must be a 2D tensor of shape [N, 3]");
-    TORCH_CHECK_VALUE(ijk.size(1) == 3, "ijk must have 3 dimensions");
-    TORCH_CHECK_VALUE(ijk.scalar_type() == torch::kInt32, "ijk must be int32");
-    return HilbertProcessor<DeviceTag>{}.execute(ijk);
+    c10::DeviceGuard guard(ijk.device());
+    check_ijk(ijk);
+    static auto const table =
+        ::dispatch::dispatch_table_from_op<morton_from_ijk_op>("mortonFromIjk");
+    return table.select(
+        ::dispatch::dispatch_set{ijk.device().type(), ::dispatch::torch_get_contiguity(ijk)})(ijk);
 }
 
 torch::Tensor
 hilbertFromIjk(torch::Tensor ijk) {
-    if (ijk.device().is_cuda()) {
-        return dispatchHilbertFromIjk<torch::kCUDA>(ijk);
-    } else if (ijk.device().is_privateuseone()) {
-        return dispatchHilbertFromIjk<torch::kPrivateUse1>(ijk);
-    } else {
-        return dispatchHilbertFromIjk<torch::kCPU>(ijk);
-    }
+    c10::DeviceGuard guard(ijk.device());
+    check_ijk(ijk);
+    static auto const table =
+        ::dispatch::dispatch_table_from_op<hilbert_from_ijk_op>("hilbertFromIjk");
+    return table.select(
+        ::dispatch::dispatch_set{ijk.device().type(), ::dispatch::torch_get_contiguity(ijk)})(ijk);
 }
 
 } // namespace ops

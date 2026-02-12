@@ -4,27 +4,29 @@
 #ifndef FVDB_DETAIL_OPS_UPSAMPLEGRIDNEAREST_H
 #define FVDB_DETAIL_OPS_UPSAMPLEGRIDNEAREST_H
 
-#include <fvdb/detail/GridBatchImpl.h>
-#include <fvdb/detail/utils/Utils.h>
+#include <nanovdb/NanoVDB.h>
 
 #include <torch/types.h>
 
 namespace fvdb {
 namespace detail {
+
+class GridBatchImpl;
+
 namespace ops {
 
-template <torch::DeviceType>
-torch::Tensor dispatchUpsampleGridNearest(const GridBatchImpl &coarseBatchHdl,
-                                          const GridBatchImpl &fineBatchHdl,
-                                          const torch::Tensor &coarseData,
-                                          nanovdb::Coord upsamplingFactor);
+/// @brief Nearest-neighbor upsample from coarse grid to fine grid.
+torch::Tensor upsampleGridNearest(GridBatchImpl const &coarseGrid,
+                                  GridBatchImpl const &fineGrid,
+                                  torch::Tensor coarseData,
+                                  nanovdb::Coord upsamplingFactor);
 
-template <torch::DeviceType>
-torch::Tensor dispatchUpsampleGridNearestBackward(const GridBatchImpl &fineBatchHdl,
-                                                  const GridBatchImpl &coarseBatchHdl,
-                                                  const torch::Tensor &gradOut,
-                                                  const torch::Tensor &coarseData,
-                                                  nanovdb::Coord upsamplingFactor);
+/// @brief Backward pass for nearest-neighbor upsample.
+torch::Tensor upsampleGridNearestBackward(GridBatchImpl const &fineGrid,
+                                          GridBatchImpl const &coarseGrid,
+                                          torch::Tensor gradOut,
+                                          torch::Tensor coarseData,
+                                          nanovdb::Coord upsamplingFactor);
 
 } // namespace ops
 } // namespace detail
