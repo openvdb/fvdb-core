@@ -19,6 +19,7 @@
 #include <fvdb/detail/GridBatchImpl.h>
 #include <fvdb/detail/ops/convolution/GatherScatter.h>
 #include <fvdb/detail/ops/convolution/GatherScatterFused.h>
+#include <fvdb/detail/ops/convolution/GroupedGemm.h>
 #include <fvdb/detail/ops/convolution/backend/SparseConvolutionKernelMap.h>
 #include <fvdb/detail/ops/convolution/pack_info/ConvolutionKernelMap.h>
 #include <fvdb/detail/utils/Utils.h>
@@ -609,6 +610,188 @@ BM_Topology_Dense_GatherScatter(benchmark::State &state) {
 }
 
 // =============================================================================
+// CUTLASS grouped-GEMM forward convolution benchmarks
+// =============================================================================
+//
+// GroupedGemm requires C_in and C_out to be multiples of 32, so we use a
+// separate size set that starts at 32.
+
+#define GROUPED_GEMM_BENCH_SIZES \
+    ->Args({10, 32, 32})         \
+        ->Args({10, 64, 64})     \
+        ->Args({10, 128, 128})   \
+        ->Args({20, 32, 32})     \
+        ->Args({20, 64, 64})     \
+        ->Args({20, 128, 128})   \
+        ->Args({40, 32, 32})     \
+        ->Args({40, 64, 64})     \
+        ->Args({40, 128, 128})   \
+        ->UseRealTime()          \
+        ->Unit(benchmark::kMillisecond)
+
+#define GROUPED_GEMM_SPHERE_SIZES \
+    ->Args({8, 32, 32})           \
+        ->Args({8, 64, 64})       \
+        ->Args({8, 128, 128})     \
+        ->Args({16, 32, 32})      \
+        ->Args({16, 64, 64})      \
+        ->Args({16, 128, 128})    \
+        ->Args({32, 32, 32})      \
+        ->Args({32, 64, 64})      \
+        ->Args({32, 128, 128})    \
+        ->UseRealTime()           \
+        ->Unit(benchmark::kMillisecond)
+
+static void
+BM_Conv_Dense_GroupedGemm(benchmark::State &state) {
+    if (!cudaIsAvailable()) {
+        state.SkipWithError("CUDA not available");
+        return;
+    }
+    torch::Device device(torch::kCUDA, 0);
+    int const dim       = static_cast<int>(state.range(0));
+    int64_t const C_in  = state.range(1);
+    int64_t const C_out = state.range(2);
+
+    nanovdb::Coord kernel_size(3, 3, 3);
+    nanovdb::Coord stride(1, 1, 1);
+
+    auto src_grid   = makeDenseGrid(dim, device);
+    auto topo       = ops::groupedGemmSparseConvTopology(*src_grid, *src_grid, kernel_size, stride);
+    int64_t const N = topo.feature_total_voxels;
+
+    torch::manual_seed(42);
+    auto features = torch::randn({N, C_in}, torch::dtype(torch::kFloat32).device(device));
+    auto weights =
+        torch::randn({C_out, C_in, 3, 3, 3}, torch::dtype(torch::kFloat32).device(device));
+
+    // Warmup
+    auto out = ops::groupedGemmSparseConv(features, weights, topo);
+    torch::cuda::synchronize();
+
+    // Verify against GatherScatter GEMM reference
+    auto ref = computeGemmReference(*src_grid, features, weights, kernel_size, stride);
+    if (!verifyAgainstReference(state, out, ref, "GroupedGemm"))
+        return;
+
+    for (auto _: state) {
+        auto result = ops::groupedGemmSparseConv(features, weights, topo);
+        torch::cuda::synchronize();
+        benchmark::DoNotOptimize(result.data_ptr<float>());
+    }
+    state.SetItemsProcessed(state.iterations() * N);
+}
+
+static void
+BM_Conv_Sphere_GroupedGemm(benchmark::State &state) {
+    if (!cudaIsAvailable()) {
+        state.SkipWithError("CUDA not available");
+        return;
+    }
+    torch::Device device(torch::kCUDA, 0);
+    int const R         = static_cast<int>(state.range(0));
+    int64_t const C_in  = state.range(1);
+    int64_t const C_out = state.range(2);
+
+    nanovdb::Coord kernel_size(3, 3, 3);
+    nanovdb::Coord stride(1, 1, 1);
+
+    auto src_grid   = makeSphereShellGrid(R, device);
+    auto topo       = ops::groupedGemmSparseConvTopology(*src_grid, *src_grid, kernel_size, stride);
+    int64_t const N = topo.feature_total_voxels;
+
+    torch::manual_seed(42);
+    auto features = torch::randn({N, C_in}, torch::dtype(torch::kFloat32).device(device));
+    auto weights =
+        torch::randn({C_out, C_in, 3, 3, 3}, torch::dtype(torch::kFloat32).device(device));
+
+    // Warmup
+    auto out = ops::groupedGemmSparseConv(features, weights, topo);
+    torch::cuda::synchronize();
+
+    // Verify against GatherScatter GEMM reference
+    auto ref = computeGemmReference(*src_grid, features, weights, kernel_size, stride);
+    if (!verifyAgainstReference(state, out, ref, "GroupedGemm"))
+        return;
+
+    for (auto _: state) {
+        auto result = ops::groupedGemmSparseConv(features, weights, topo);
+        torch::cuda::synchronize();
+        benchmark::DoNotOptimize(result.data_ptr<float>());
+    }
+    state.SetItemsProcessed(state.iterations() * N);
+}
+
+// Also benchmark the existing backends at C=32/64/128 for direct comparison
+static void
+BM_Conv_Dense_GatherScatter_LargeC(benchmark::State &state) {
+    if (!cudaIsAvailable()) {
+        state.SkipWithError("CUDA not available");
+        return;
+    }
+    torch::Device device(torch::kCUDA, 0);
+    int const dim       = static_cast<int>(state.range(0));
+    int64_t const C_in  = state.range(1);
+    int64_t const C_out = state.range(2);
+
+    nanovdb::Coord kernel_size(3, 3, 3);
+    nanovdb::Coord stride(1, 1, 1);
+
+    auto src_grid = makeDenseGrid(dim, device);
+    auto topo     = ops::gatherScatterSparseConvTopology(*src_grid, *src_grid, kernel_size, stride);
+    int64_t const N = topo.feature_total_voxels;
+
+    torch::manual_seed(42);
+    auto features = torch::randn({N, C_in}, torch::dtype(torch::kFloat32).device(device));
+    auto weights =
+        torch::randn({C_out, C_in, 3, 3, 3}, torch::dtype(torch::kFloat32).device(device));
+
+    auto out = ops::gatherScatterSparseConv(features, weights, topo);
+    torch::cuda::synchronize();
+
+    for (auto _: state) {
+        auto result = ops::gatherScatterSparseConv(features, weights, topo);
+        torch::cuda::synchronize();
+        benchmark::DoNotOptimize(result.data_ptr<float>());
+    }
+    state.SetItemsProcessed(state.iterations() * N);
+}
+
+static void
+BM_Conv_Sphere_GatherScatter_LargeC(benchmark::State &state) {
+    if (!cudaIsAvailable()) {
+        state.SkipWithError("CUDA not available");
+        return;
+    }
+    torch::Device device(torch::kCUDA, 0);
+    int const R         = static_cast<int>(state.range(0));
+    int64_t const C_in  = state.range(1);
+    int64_t const C_out = state.range(2);
+
+    nanovdb::Coord kernel_size(3, 3, 3);
+    nanovdb::Coord stride(1, 1, 1);
+
+    auto src_grid = makeSphereShellGrid(R, device);
+    auto topo     = ops::gatherScatterSparseConvTopology(*src_grid, *src_grid, kernel_size, stride);
+    int64_t const N = topo.feature_total_voxels;
+
+    torch::manual_seed(42);
+    auto features = torch::randn({N, C_in}, torch::dtype(torch::kFloat32).device(device));
+    auto weights =
+        torch::randn({C_out, C_in, 3, 3, 3}, torch::dtype(torch::kFloat32).device(device));
+
+    auto out = ops::gatherScatterSparseConv(features, weights, topo);
+    torch::cuda::synchronize();
+
+    for (auto _: state) {
+        auto result = ops::gatherScatterSparseConv(features, weights, topo);
+        torch::cuda::synchronize();
+        benchmark::DoNotOptimize(result.data_ptr<float>());
+    }
+    state.SetItemsProcessed(state.iterations() * N);
+}
+
+// =============================================================================
 // Register benchmarks
 // =============================================================================
 
@@ -621,6 +804,14 @@ BENCHMARK(BM_Conv_Dense_GatherScatterFused) CONV_BENCH_SIZES;
 BENCHMARK(BM_Conv_Sphere_Old) SPHERE_BENCH_SIZES;
 BENCHMARK(BM_Conv_Sphere_GatherScatter) SPHERE_BENCH_SIZES;
 BENCHMARK(BM_Conv_Sphere_GatherScatterFused) SPHERE_BENCH_SIZES;
+
+// CUTLASS grouped-GEMM benchmarks (C must be multiples of 32)
+BENCHMARK(BM_Conv_Dense_GroupedGemm) GROUPED_GEMM_BENCH_SIZES;
+BENCHMARK(BM_Conv_Sphere_GroupedGemm) GROUPED_GEMM_SPHERE_SIZES;
+
+// GatherScatter at matching large-C sizes for direct comparison
+BENCHMARK(BM_Conv_Dense_GatherScatter_LargeC) GROUPED_GEMM_BENCH_SIZES;
+BENCHMARK(BM_Conv_Sphere_GatherScatter_LargeC) GROUPED_GEMM_SPHERE_SIZES;
 
 // Topology construction benchmarks: Args = {cube_side_length}
 // Only need the first arg; C_in/C_out are irrelevant for topology.

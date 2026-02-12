@@ -44,9 +44,17 @@ _BACKEND_LABELS = {
     "Old": "Old (KernelMap)",
     "GatherScatter": "GatherScatter (GEMM)",
     "GatherScatterFused": "GatherScatter (Fused)",
+    "GroupedGemm": "CUTLASS GroupedGemm",
+    "GatherScatter_LargeC": "GatherScatter (GEMM, large C)",
 }
 
-_BACKEND_ORDER = ["Old", "GatherScatter", "GatherScatterFused"]
+_BACKEND_ORDER = [
+    "Old",
+    "GatherScatter",
+    "GatherScatter_LargeC",
+    "GatherScatterFused",
+    "GroupedGemm",
+]
 
 
 def parse_conv_benchmark_name(full_name):
@@ -164,9 +172,11 @@ def run_benchmark(executable, output_file="convolution_results.json", filt=None)
 def _backend_color(backend):
     """Consistent colour per backend."""
     cmap = {
-        "Old": "#d62728",           # red
-        "GatherScatter": "#1f77b4", # blue
-        "GatherScatterFused": "#2ca02c",  # green
+        "Old": "#d62728",                  # red
+        "GatherScatter": "#1f77b4",        # blue
+        "GatherScatterFused": "#2ca02c",   # green
+        "GroupedGemm": "#ff7f0e",          # orange
+        "GatherScatter_LargeC": "#9467bd", # purple
     }
     return cmap.get(backend, "#7f7f7f")
 
