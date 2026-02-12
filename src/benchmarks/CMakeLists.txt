@@ -131,3 +131,8 @@ ConfigureDispatchBench(synthetic_voxel_benchmark
 ConfigureDispatchBench(for_each_benchmark
     dispatch/for_each_benchmark.cu
 )
+
+# Convolution benchmark — old SparseConvolutionKernelMap vs new GatherScatter backends
+ConfigureDispatchBench(convolution_benchmark
+    convolution/convolution_benchmark.cu
+)

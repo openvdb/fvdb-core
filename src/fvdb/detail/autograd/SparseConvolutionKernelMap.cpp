@@ -154,22 +154,25 @@ SparseConvolutionKernelMap::backward(AutogradContext *ctx, variable_list grad_ou
     }
 
     const int outC = gradWeight.size(-1), inC = gradWeight.size(-2);
+    // Reshape from [K, inC, outC] back to [d, h, w, inC, outC] then permute to 5D.
+    // The flat K dimension encodes the triple-loop (k0=d outer, k1=h, k2=w inner),
+    // so the correct reshape order is [kWidth[0], kWidth[1], kWidth[2]] = [d, h, w].
     if (!transposed) {
         gradWeight = gradWeight
-                         .reshape({kWidth[2].item<int32_t>(),
+                         .reshape({kWidth[0].item<int32_t>(),
                                    kWidth[1].item<int32_t>(),
-                                   kWidth[0].item<int32_t>(),
+                                   kWidth[2].item<int32_t>(),
                                    inC,
                                    outC})
-                         .permute({4, 3, 2, 1, 0});
+                         .permute({4, 3, 0, 1, 2});
     } else {
         gradWeight = gradWeight
-                         .reshape({kWidth[2].item<int32_t>(),
+                         .reshape({kWidth[0].item<int32_t>(),
                                    kWidth[1].item<int32_t>(),
-                                   kWidth[0].item<int32_t>(),
+                                   kWidth[2].item<int32_t>(),
                                    inC,
                                    outC})
-                         .permute({3, 4, 2, 1, 0});
+                         .permute({3, 4, 0, 1, 2});
     }
     // Gradients for: inFeatures, kernels, neighborMap, neighborSizes, srcVoxels, dstVoxels,
     //                middleAcceleration, transposed
