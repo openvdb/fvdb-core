@@ -83,7 +83,7 @@ JaggedTensor::JaggedTensor(const std::vector<torch::Tensor> &tensors) {
                                  torch::TensorOptions()
                                      .dtype(JOffsetsScalarType)
                                      .device(mData.device())
-                                     .pinned_memory(true));
+                                     .pinned_memory(mData.device().is_cuda()));
         mListIdx = torch::empty(
             {0, 1}, torch::TensorOptions().dtype(JLIdxScalarType).device(mData.device()));
         mNumOuterLists = 1;
