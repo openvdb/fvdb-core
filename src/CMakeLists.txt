@@ -95,6 +95,8 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/convolution/backend/SparseConvolutionHalo.cu
     fvdb/detail/ops/convolution/backend/SparseConvolutionHaloGrad.cu
     fvdb/detail/ops/convolution/backend/SparseConvolutionKernelMap.cu
+    fvdb/detail/ops/convolution/GatherScatter.cu
+    fvdb/detail/ops/convolution/GatherScatterFused.cu
     fvdb/detail/ops/convolution/pack_info/ConvolutionKernelMap.cu
     fvdb/detail/ops/CoordsInGrid.cu
     fvdb/detail/ops/CubesInGrid.cu

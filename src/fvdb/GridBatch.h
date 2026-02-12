@@ -7,6 +7,8 @@
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/Types.h>
 #include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/ops/convolution/GatherScatter.h>
+#include <fvdb/detail/ops/convolution/GatherScatterFused.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>
@@ -824,6 +826,35 @@ struct GridBatch : torch::CustomClassHolder {
                                             torch::Tensor &kernelMap,
                                             const Vec3iOrScalar &kernelSize,
                                             const Vec3iOrScalar &stride);
+
+    // -----------------------------------------------------------------------
+    // Gather-scatter convolution: static wrappers for pybind access
+    // -----------------------------------------------------------------------
+
+    /// Build the gather-scatter topology between src and dst grids.
+    static detail::ops::GatherScatterTopology
+    buildGatherScatterTopology(const GridBatch &src,
+                               const GridBatch &dst,
+                               const Vec3iOrScalar &kernelSize,
+                               const Vec3iOrScalar &stride);
+
+    /// Fused gather-scatter forward convolution (small-C optimized).
+    static torch::Tensor gatherScatterConvFused(torch::Tensor features,
+                                                torch::Tensor weights,
+                                                const GridBatch &src,
+                                                const GridBatch &dst,
+                                                const Vec3iOrScalar &kernelSize,
+                                                const Vec3iOrScalar &stride);
+
+    /// Fused gather-scatter backward convolution (small-C optimized).
+    static std::tuple<torch::Tensor, torch::Tensor>
+    gatherScatterConvFusedBackward(torch::Tensor grad_output,
+                                   torch::Tensor features,
+                                   torch::Tensor weights,
+                                   const GridBatch &src,
+                                   const GridBatch &dst,
+                                   const Vec3iOrScalar &kernelSize,
+                                   const Vec3iOrScalar &stride);
 
     /// @brief Perform one integration step of the TSDF fusion algorithm on a batch of sparse grids.
     ///        The TSDF fusion algorithm integrates depth and feature images (e.g. colors)

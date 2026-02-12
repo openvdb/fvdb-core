@@ -1229,4 +1229,36 @@ GridBatch::computeConvolutionKernelMap(const GridBatch &source,
     });
 }
 
+detail::ops::GatherScatterTopology
+GridBatch::buildGatherScatterTopology(const GridBatch &src,
+                                      const GridBatch &dst,
+                                      const Vec3iOrScalar &kernelSize,
+                                      const Vec3iOrScalar &stride) {
+    return detail::ops::gatherScatterSparseConvTopology(
+        *src.mImpl, *dst.mImpl, kernelSize.value(), stride.value());
+}
+
+torch::Tensor
+GridBatch::gatherScatterConvFused(torch::Tensor features,
+                                  torch::Tensor weights,
+                                  const GridBatch &src,
+                                  const GridBatch &dst,
+                                  const Vec3iOrScalar &kernelSize,
+                                  const Vec3iOrScalar &stride) {
+    return detail::ops::gatherScatterSparseConvFused(
+        features, weights, *src.mImpl, *dst.mImpl, kernelSize.value(), stride.value());
+}
+
+std::tuple<torch::Tensor, torch::Tensor>
+GridBatch::gatherScatterConvFusedBackward(torch::Tensor grad_output,
+                                          torch::Tensor features,
+                                          torch::Tensor weights,
+                                          const GridBatch &src,
+                                          const GridBatch &dst,
+                                          const Vec3iOrScalar &kernelSize,
+                                          const Vec3iOrScalar &stride) {
+    return detail::ops::gatherScatterSparseConvFusedBackward(
+        grad_output, features, weights, *src.mImpl, *dst.mImpl, kernelSize.value(), stride.value());
+}
+
 } // namespace fvdb

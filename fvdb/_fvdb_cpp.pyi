@@ -42,6 +42,59 @@ def sparse_conv_kernel_map(
     transposed: bool,
 ) -> torch.Tensor: ...
 
+class GatherScatterTopology:
+    """Precomputed neighborhood structure for gather-scatter sparse convolution."""
+
+    @property
+    def kernel_map(self) -> torch.Tensor: ...
+    @property
+    def src_total_voxels(self) -> int: ...
+    @property
+    def dst_total_voxels(self) -> int: ...
+    @property
+    def kernel_volume(self) -> int: ...
+    @property
+    def center_is_identity(self) -> bool: ...
+    @property
+    def kernel_size(self) -> list[int]: ...
+    @property
+    def stride(self) -> list[int]: ...
+
+def gs_build_topology(
+    source_grid: GridBatch,
+    target_grid: GridBatch,
+    kernel_size: Vec3iOrScalar,
+    stride: Vec3iOrScalar,
+) -> GatherScatterTopology: ...
+def gs_conv(
+    features: torch.Tensor,
+    weights: torch.Tensor,
+    topology: GatherScatterTopology,
+) -> torch.Tensor: ...
+def gs_conv_backward(
+    grad_output: torch.Tensor,
+    features: torch.Tensor,
+    weights: torch.Tensor,
+    topology: GatherScatterTopology,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
+def gs_conv_fused(
+    features: torch.Tensor,
+    weights: torch.Tensor,
+    source_grid: GridBatch,
+    target_grid: GridBatch,
+    kernel_size: Vec3iOrScalar,
+    stride: Vec3iOrScalar,
+) -> torch.Tensor: ...
+def gs_conv_fused_backward(
+    grad_output: torch.Tensor,
+    features: torch.Tensor,
+    weights: torch.Tensor,
+    source_grid: GridBatch,
+    target_grid: GridBatch,
+    kernel_size: Vec3iOrScalar,
+    stride: Vec3iOrScalar,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
+
 class GaussianSplat3d:
     class ProjectionType(Enum):
         PERSPECTIVE = ...

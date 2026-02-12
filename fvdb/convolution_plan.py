@@ -36,6 +36,58 @@ def _channel_pair_supported(in_channels: int, out_channels: int, channel_pairs: 
 
 
 # ============================================================
+#  Autograd functions for gather-scatter convolution
+# ============================================================
+
+
+class _GatherScatterConvFn(torch.autograd.Function):
+    """Autograd wrapper for the GEMM-based gather-scatter convolution with precomputed topology."""
+
+    @staticmethod
+    def forward(ctx, features: torch.Tensor, weights: torch.Tensor, topo: _fvdb_cpp.GatherScatterTopology) -> torch.Tensor:  # type: ignore[override]
+        output = _fvdb_cpp.gs_conv(features, weights, topo)
+        ctx.save_for_backward(features, weights)
+        ctx.topo = topo
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, None]:  # type: ignore[override]
+        features, weights = ctx.saved_tensors
+        grad_feat, grad_w = _fvdb_cpp.gs_conv_backward(grad_output, features, weights, ctx.topo)
+        return grad_feat, grad_w, None
+
+
+class _GatherScatterFusedConvFn(torch.autograd.Function):
+    """Autograd wrapper for the fused gather-scatter convolution (small-C optimized)."""
+
+    @staticmethod
+    def forward(  # type: ignore[override]
+        ctx,
+        features: torch.Tensor,
+        weights: torch.Tensor,
+        src_grid: _fvdb_cpp.GridBatch,
+        dst_grid: _fvdb_cpp.GridBatch,
+        kernel_size: torch.Tensor,
+        stride: torch.Tensor,
+    ) -> torch.Tensor:
+        output = _fvdb_cpp.gs_conv_fused(features, weights, src_grid, dst_grid, kernel_size, stride)
+        ctx.save_for_backward(features, weights)
+        ctx.src_grid = src_grid
+        ctx.dst_grid = dst_grid
+        ctx.kernel_size = kernel_size
+        ctx.stride = stride
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, None, None, None, None]:  # type: ignore[override]
+        features, weights = ctx.saved_tensors
+        grad_feat, grad_w = _fvdb_cpp.gs_conv_fused_backward(
+            grad_output, features, weights, ctx.src_grid, ctx.dst_grid, ctx.kernel_size, ctx.stride
+        )
+        return grad_feat, grad_w, None, None, None, None
+
+
+# ============================================================
 #  Backend data classes — cached precomputed data per method
 # ============================================================
 
@@ -56,13 +108,29 @@ class _DenseBackend:
 
 @dataclass(frozen=True)
 class _GatherScatterBackend:
-    """Gather-scatter convolution with a precomputed kernel map."""
+    """Gather-scatter convolution with precomputed GatherScatterTopology (Python autograd)."""
+
+    topology: _fvdb_cpp.GatherScatterTopology
+
+
+@dataclass(frozen=True)
+class _GatherScatterFusedBackend:
+    """Fused gather-scatter convolution -- no precomputed topology (Python autograd)."""
+
+    pass
+
+
+@dataclass(frozen=True)
+class _GatherScatterOldBackend:
+    """Legacy gather-scatter using SparseConvolutionKernelMap C++ autograd."""
 
     neighbor_map: torch.Tensor  # [#IO, 2] int32
     neighbor_sizes: torch.Tensor  # [K] int32
 
 
-_Backend = _MatmulBackend | _DenseBackend | _GatherScatterBackend
+_Backend = (
+    _MatmulBackend | _DenseBackend | _GatherScatterBackend | _GatherScatterFusedBackend | _GatherScatterOldBackend
+)
 
 
 @dataclass(frozen=True)
@@ -191,12 +259,6 @@ class ConvolutionPlan:
         kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
-        if not _vec_is_all(stride, 1):
-            raise NotImplementedError("Strides not equal to 1 are not currently supported")
-
-        if not _vec_is_all(stride, stride[0].item()):
-            raise NotImplementedError("Non-uniform strides are not currently supported")
-
         backend_name = expert_config.get("backend", "default")
 
         if backend_name == "dense":
@@ -256,12 +318,6 @@ class ConvolutionPlan:
         kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
-        if not _vec_is_all(stride, 1):
-            raise NotImplementedError("Strides not equal to 1 are not currently supported")
-
-        if not _vec_is_all(stride, stride[0].item()):
-            raise NotImplementedError("Non-uniform strides are not currently supported")
-
         backend_name = expert_config.get("backend", "default")
 
         if backend_name == "dense":
@@ -271,7 +327,9 @@ class ConvolutionPlan:
         elif target_grid is None:
             raise ValueError("Target grid must be provided for transposed convolution, except for dense backend.")
 
-        backend = cls._build_backend(source_grid, target_grid, kernel_size, stride, channel_pairs, expert_config)
+        backend = cls._build_backend(
+            source_grid, target_grid, kernel_size, stride, channel_pairs, expert_config, transposed=True
+        )
         return cls(source_grid, target_grid, kernel_size, stride, channel_pairs, True, backend)
 
     @classmethod
@@ -331,12 +389,6 @@ class ConvolutionPlan:
         kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
-        if not _vec_is_all(stride, 1):
-            raise NotImplementedError("Strides not equal to 1 are not currently supported")
-
-        if not _vec_is_all(stride, stride[0].item()):
-            raise NotImplementedError("Non-uniform strides are not currently supported")
-
         backend_name = expert_config.get("backend", "default")
 
         source_grid_batch = GridBatch(impl=source_grid._impl)
@@ -387,12 +439,6 @@ class ConvolutionPlan:
         kernel_size = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE)
         stride = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE)
 
-        if not _vec_is_all(stride, 1):
-            raise NotImplementedError("Strides not equal to 1 are not currently supported")
-
-        if not _vec_is_all(stride, stride[0].item()):
-            raise NotImplementedError("Non-uniform strides are not currently supported")
-
         backend_name = expert_config.get("backend", "default")
 
         source_grid_batch = GridBatch(impl=source_grid._impl)
@@ -406,7 +452,7 @@ class ConvolutionPlan:
             target_grid_batch = GridBatch(impl=target_grid._impl)
 
         backend = cls._build_backend(
-            source_grid_batch, target_grid_batch, kernel_size, stride, channel_pairs, expert_config
+            source_grid_batch, target_grid_batch, kernel_size, stride, channel_pairs, expert_config, transposed=True
         )
         return cls(source_grid_batch, target_grid_batch, kernel_size, stride, channel_pairs, True, backend)
 
@@ -451,7 +497,13 @@ class ConvolutionPlan:
         channel_pairs = tuple((dst, src) for src, dst in plan._channel_pairs)
 
         backend = cls._build_backend(
-            source_grid, target_grid, plan._kernel_size, plan._stride, channel_pairs, _DEFAULT_CONFIG
+            source_grid,
+            target_grid,
+            plan._kernel_size,
+            plan._stride,
+            channel_pairs,
+            _DEFAULT_CONFIG,
+            transposed=transposed,
         )
         return cls(source_grid, target_grid, plan._kernel_size, plan._stride, channel_pairs, transposed, backend)
 
@@ -582,8 +634,33 @@ class ConvolutionPlan:
         if isinstance(backend, _DenseBackend):
             result = self._execute_dense(data, weights)
 
-        # Gather-scatter: precomputed kernel map
+        # Gather-scatter (new): precomputed topology with Python autograd
         elif isinstance(backend, _GatherScatterBackend):
+            out_tensor = _GatherScatterConvFn.apply(data.jdata, weights, backend.topology)
+            if out_tensor is None:
+                raise ValueError("Gather-scatter convolution returned None")
+            if not isinstance(out_tensor, torch.Tensor):
+                raise ValueError("Gather-scatter convolution returned non-tensor")
+            result = self._target_grid.jagged_like(out_tensor)
+
+        # Gather-scatter fused: no precomputed topology, Python autograd
+        elif isinstance(backend, _GatherScatterFusedBackend):
+            out_tensor = _GatherScatterFusedConvFn.apply(
+                data.jdata,
+                weights,
+                self._source_grid._impl,
+                self._target_grid._impl,
+                self._kernel_size,
+                self._stride,
+            )
+            if out_tensor is None:
+                raise ValueError("Gather-scatter fused convolution returned None")
+            if not isinstance(out_tensor, torch.Tensor):
+                raise ValueError("Gather-scatter fused convolution returned non-tensor")
+            result = self._target_grid.jagged_like(out_tensor)
+
+        # Legacy gather-scatter: old C++ autograd path
+        elif isinstance(backend, _GatherScatterOldBackend):
             src_voxels = int(self._source_grid.total_voxels)
             dst_voxels = int(self._target_grid.total_voxels)
             middle_accel = _vec_is_all(self._stride, 1)
@@ -688,6 +765,7 @@ class ConvolutionPlan:
         stride: torch.Tensor,
         channel_pairs: tuple[tuple[int, int], ...],
         expert_config: dict[str, Any],
+        transposed: bool = False,
     ) -> _Backend:
         """
         Determine the convolution method and build the appropriate backend.
@@ -710,14 +788,51 @@ class ConvolutionPlan:
                 raise ValueError("Dense backend requires source_grid and target_grid to be the same.")
             return _DenseBackend()
 
-        # Default / gather_scatter — build the kernel map
-        neighbor_map, neighbor_sizes = _fvdb_cpp.build_kernel_map(
-            source_grid._impl,
-            target_grid._impl,
-            kernel_size,
-            stride,
-        )
-        return _GatherScatterBackend(neighbor_map=neighbor_map, neighbor_sizes=neighbor_sizes)
+        # Gather-scatter fused — no precomputed topology
+        if backend_name == "gather_scatter_fused":
+            return _GatherScatterFusedBackend()
+
+        # Gather-scatter (new) — precomputed topology with Python autograd
+        if backend_name == "gather_scatter":
+            topo = _fvdb_cpp.gs_build_topology(
+                source_grid._impl,
+                target_grid._impl,
+                kernel_size,
+                stride,
+            )
+            return _GatherScatterBackend(topology=topo)
+
+        # Legacy gather-scatter — old C++ autograd path
+        if backend_name == "gather_scatter_old":
+            neighbor_map, neighbor_sizes = _fvdb_cpp.build_kernel_map(
+                source_grid._impl,
+                target_grid._impl,
+                kernel_size,
+                stride,
+            )
+            return _GatherScatterOldBackend(neighbor_map=neighbor_map, neighbor_sizes=neighbor_sizes)
+
+        # Default: use old backend for transposed (not yet supported by new path),
+        # new gather-scatter otherwise.
+        if backend_name == "default":
+            if transposed:
+                neighbor_map, neighbor_sizes = _fvdb_cpp.build_kernel_map(
+                    source_grid._impl,
+                    target_grid._impl,
+                    kernel_size,
+                    stride,
+                )
+                return _GatherScatterOldBackend(neighbor_map=neighbor_map, neighbor_sizes=neighbor_sizes)
+            else:
+                topo = _fvdb_cpp.gs_build_topology(
+                    source_grid._impl,
+                    target_grid._impl,
+                    kernel_size,
+                    stride,
+                )
+                return _GatherScatterBackend(topology=topo)
+
+        raise ValueError(f"Unknown backend: {backend_name!r}")
 
     def _execute_dense(self, data: JaggedTensor, weights: torch.Tensor) -> JaggedTensor:
         source_grid = self._source_grid
