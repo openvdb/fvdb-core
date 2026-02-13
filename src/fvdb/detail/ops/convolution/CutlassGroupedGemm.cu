@@ -12,7 +12,7 @@
 //   Phase 1 -- Compute:
 //     a) Gather features into contiguous [total_pairs, Cin] fp16 buffer
 //     b) CUTLASS grouped GEMM (all offsets in one launch, fp16 in, fp32 accum)
-//     c) Per-offset scatter-add GEMM output into fp32 accumulator (no atomics)
+//     c) Atomic scatter-add GEMM output into fp32 accumulator (single launch)
 //     d) Cast fp32 accumulator to fp16 output
 //
 
@@ -112,10 +112,61 @@ using CutlassGradWGemmKernel = typename cutlass::gemm::kernel::DefaultGemmGroupe
     cutlass::gemm::GemmShape<16, 8, 16>,    // MMA instruction
     CutlassEpilogueOp,
     cutlass::gemm::threadblock::GemmBatchedIdentityThreadblockSwizzle,
-    4 // pipeline stages
+    4                                       // pipeline stages
     >::GemmKernel;
 
 using CutlassGradWGemmGrouped = cutlass::gemm::device::GemmGrouped<CutlassGradWGemmKernel>;
+
+// Narrow-N variants: 128x64 threadblock for GEMM N-dimension <= 64.
+// Avoids wasting half or more of the N-tile compute on partial tiles.
+using CutlassGemmKernelNarrow = typename cutlass::gemm::kernel::DefaultGemmGrouped<
+    CutlassElementA,
+    CutlassLayoutA,
+    cutlass::ComplexTransform::kNone,
+    kAlignmentA,
+    CutlassElementB,
+    CutlassLayoutB,
+    cutlass::ComplexTransform::kNone,
+    kAlignmentB,
+    CutlassElementC,
+    CutlassLayoutC,
+    CutlassAccumulator,
+    cutlass::arch::OpClassTensorOp,
+    cutlass::arch::Sm80,
+    cutlass::gemm::GemmShape<128, 64, 32>, // narrower N-tile
+    cutlass::gemm::GemmShape<64, 32, 32>,  // warp tile
+    cutlass::gemm::GemmShape<16, 8, 16>,   // MMA instruction
+    CutlassEpilogueOp,
+    cutlass::gemm::threadblock::GemmBatchedIdentityThreadblockSwizzle,
+    4                                      // pipeline stages
+    >::GemmKernel;
+
+using CutlassGemmGroupedNarrow = cutlass::gemm::device::GemmGrouped<CutlassGemmKernelNarrow>;
+
+using CutlassGradWGemmKernelNarrow = typename cutlass::gemm::kernel::DefaultGemmGrouped<
+    CutlassElementA,
+    cutlass::layout::ColumnMajor,
+    cutlass::ComplexTransform::kNone,
+    kAlignmentA,
+    CutlassElementB,
+    CutlassLayoutB,
+    cutlass::ComplexTransform::kNone,
+    kAlignmentB,
+    CutlassElementC,
+    CutlassLayoutC,
+    CutlassAccumulator,
+    cutlass::arch::OpClassTensorOp,
+    cutlass::arch::Sm80,
+    cutlass::gemm::GemmShape<128, 64, 32>,
+    cutlass::gemm::GemmShape<64, 32, 32>,
+    cutlass::gemm::GemmShape<16, 8, 16>,
+    CutlassEpilogueOp,
+    cutlass::gemm::threadblock::GemmBatchedIdentityThreadblockSwizzle,
+    4 // pipeline stages
+    >::GemmKernel;
+
+using CutlassGradWGemmGroupedNarrow =
+    cutlass::gemm::device::GemmGrouped<CutlassGradWGemmKernelNarrow>;
 
 // ============================================================================
 // CUDA kernel launch helpers
@@ -137,82 +188,150 @@ static constexpr int64_t kVoxelsPerLeaf =
     static_cast<int64_t>(nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES); // 512
 
 // ============================================================================
-// Kernel: gather fp16 features into contiguous buffer
+// Kernel: gather fp16 features into contiguous buffer (vectorised)
 // ============================================================================
 //
-// dst[i, c] = src[gather_indices[i], c]
-// Cin is a multiple of 32 so consecutive threads accessing consecutive c
-// values produce fully coalesced loads and stores.
+// dst[i, :] = src[indices[i], :]
+// C is a multiple of 32 (>= 32), so C/8 >= 4 and all float4 accesses are
+// naturally 16-byte aligned.  Each thread loads/stores one float4 (8 halves),
+// giving 8x fewer memory transactions than the scalar version.
 
 __global__ void
-gatherHalfKernel(at::Half const *__restrict__ src,    // [NA, Cin]
-                 at::Half *__restrict__ dst,          // [TP, Cin]
+gatherHalfKernel(at::Half const *__restrict__ src,    // [NA, C]
+                 at::Half *__restrict__ dst,          // [TP, C]
                  int32_t const *__restrict__ indices, // [TP]
-                 int64_t total_elements,              // TP * Cin
-                 int64_t Cin) {
+                 int64_t total_vecs,                  // TP * (C / 8)
+                 int64_t C_vec) {                     // C / 8
+    auto const *src4 = reinterpret_cast<float4 const *>(src);
+    auto *dst4       = reinterpret_cast<float4 *>(dst);
+
     for (int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-         idx < total_elements;
+         idx < total_vecs;
          idx += static_cast<int64_t>(gridDim.x) * blockDim.x) {
-        int64_t const pos     = idx / Cin;
-        int64_t const c       = idx % Cin;
+        int64_t const pos     = idx / C_vec;
+        int64_t const v       = idx % C_vec;
         int32_t const src_row = indices[pos];
-        dst[pos * Cin + c]    = src[static_cast<int64_t>(src_row) * Cin + c];
+        dst4[idx]             = src4[static_cast<int64_t>(src_row) * C_vec + v];
     }
 }
 
 // ============================================================================
-// Kernel: scatter-add fp32 GEMM output into fp32 accumulator
+// Kernel: atomic scatter-add fp32 GEMM output into fp32 accumulator
 // ============================================================================
 //
-// For a single offset k, each output voxel index appears at most once in
-// scatter_indices (one probe per output per offset), so this is collision-free
-// when invoked per-k sequentially.  No atomics needed.
+// Processes ALL total_pairs at once using atomicAdd.  The same output voxel
+// can appear in multiple kernel-offset segments, so atomics are required.
+// On Ampere+ GPUs, fp32 atomicAdd is hardware-accelerated in L2 cache.
+// This single-launch approach eliminates the K separate kernel launches
+// that the previous per-offset sequential scatter required.
 
 __global__ void
-scatterAddF32Kernel(float const *__restrict__ src,       // [Mk, Cout]
-                    int32_t const *__restrict__ indices, // [Mk]
-                    int64_t Mk,
-                    int64_t Cout,
-                    float *__restrict__ dst)             // [NB, Cout]
+scatterAddF32Kernel(float const *__restrict__ src,       // [TP, C]
+                    int32_t const *__restrict__ indices, // [TP]
+                    int64_t TP,
+                    int64_t C,
+                    float *__restrict__ dst)             // [NB, C]
 {
-    int64_t const total = Mk * Cout;
+    int64_t const total = TP * C;
     for (int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x; idx < total;
          idx += static_cast<int64_t>(gridDim.x) * blockDim.x) {
-        int64_t const pos     = idx / Cout;
-        int64_t const c       = idx % Cout;
+        int64_t const pos     = idx / C;
+        int64_t const c       = idx % C;
         int32_t const dst_row = indices[pos];
-        dst[static_cast<int64_t>(dst_row) * Cout + c] += src[pos * Cout + c];
+        atomicAdd(&dst[static_cast<int64_t>(dst_row) * C + c], src[idx]);
     }
 }
 
 // ============================================================================
-// Topology kernel: count active (feature, output) pairs per kernel offset
+// CUTLASS grouped GEMM runner (shared by forward and backward)
+// ============================================================================
+//
+// Handles workspace allocation, initialize, and run for any GemmGrouped type.
+// d_pack points to a device buffer laid out as [8, num_groups] int64 with rows:
+//   0=ptrA  1=ptrB  2=ptrC  3=ptrD  4=ldA  5=ldB  6=ldC  7=ldD
+
+template <typename GemmGroupedT>
+static void
+runCutlassGroupedGemm(torch::Tensor h_problem_sizes, // [num_groups, 3] int32, host
+                      int num_groups,
+                      torch::Tensor d_problem_sizes, // [num_groups, 3] int32, device
+                      int64_t *d_pack,               // [8 * num_groups] int64, device
+                      torch::Device device,
+                      cudaStream_t stream,
+                      char const *label) {
+    int threadblock_count = GemmGroupedT::sufficient(
+        reinterpret_cast<cutlass::gemm::GemmCoord *>(h_problem_sizes.data_ptr<int32_t>()),
+        num_groups);
+
+    typename GemmGroupedT::EpilogueOutputOp::Params epilogue(1.0f, 0.0f);
+
+    typename GemmGroupedT::Arguments args(
+        reinterpret_cast<cutlass::gemm::GemmCoord *>(d_problem_sizes.data_ptr<int32_t>()),
+        num_groups,
+        threadblock_count,
+        epilogue,
+        reinterpret_cast<CutlassElementA **>(d_pack + 0 * num_groups),
+        reinterpret_cast<CutlassElementB **>(d_pack + 1 * num_groups),
+        reinterpret_cast<CutlassElementC **>(d_pack + 2 * num_groups),
+        reinterpret_cast<CutlassElementC **>(d_pack + 3 * num_groups),
+        d_pack + 4 * num_groups,
+        d_pack + 5 * num_groups,
+        d_pack + 6 * num_groups,
+        d_pack + 7 * num_groups,
+        reinterpret_cast<cutlass::gemm::GemmCoord *>(h_problem_sizes.data_ptr<int32_t>()));
+
+    size_t workspace_bytes = GemmGroupedT::get_workspace_size(args);
+    auto workspace = torch::empty({std::max(static_cast<int64_t>(workspace_bytes), int64_t{1})},
+                                  torch::dtype(torch::kByte).device(device));
+
+    GemmGroupedT gemm_op;
+    cutlass::Status status = gemm_op.initialize(args, workspace.data_ptr(), stream);
+    TORCH_CHECK(status == cutlass::Status::kSuccess,
+                label,
+                ": CUTLASS initialize failed: ",
+                cutlass::cutlassGetStatusString(status));
+
+    status = gemm_op.run(stream);
+    TORCH_CHECK(status == cutlass::Status::kSuccess,
+                label,
+                ": CUTLASS run failed: ",
+                cutlass::cutlassGetStatusString(status));
+}
+
+// ============================================================================
+// Topology sweep 1: per-block pair counts (no global atomics)
 // ============================================================================
 //
 // Grid-stride loop over output grid leaves (NanoVDB OnIndex layout).
-// For each active output voxel and each kernel offset k, probes the feature
-// grid via its NanoVDB tree accessor.  On hit, atomicAdd(&counts[k], 1).
+// Per-offset hit counts are accumulated in shared-memory local_counts[K]
+// using fast shared-memory atomicAdd (single-cycle, no cache coherence
+// traffic).  At the end of the block, local counts are stored to
+// block_counts[blockIdx.x * K + k].
 //
-// Probe formula depends on direction:
-//   Forward:    probe = output_ijk * stride + kernel_offset
-//   Transposed: probe = (output_ijk - kernel_offset) / stride  (divisibility check)
+// This eliminates the global atomicAdd contention of the previous design
+// where all blocks hammered K global counters.
 //
-// Kernel offsets are computed inline from the flat index k:
-//   k2 = kernel_start[2] + k % ks2
-//   k1 = kernel_start[1] + (k / ks2) % ks1
-//   k0 = kernel_start[0] + k / (ks1 * ks2)
-// This matches the nested-loop ordering in GatherScatter.cu (k0 outermost).
+// Dynamic shared memory: K * sizeof(int32_t).
 
 __global__ void
-countPairsKernel(GridBatchImpl::Accessor output_acc,
-                 GridBatchImpl::Accessor feature_acc,
-                 nanovdb::Coord kernel_start,
-                 nanovdb::Coord kernel_size,
-                 nanovdb::Coord stride,
-                 bool transposed,
-                 int32_t *__restrict__ counts, // [K], zeroed
-                 int64_t K,
-                 int64_t total) {              // output_grid.totalLeaves() * kVoxelsPerLeaf
+countPairsPerBlockKernel(GridBatchImpl::Accessor output_acc,
+                         GridBatchImpl::Accessor feature_acc,
+                         nanovdb::Coord kernel_start,
+                         nanovdb::Coord kernel_size,
+                         nanovdb::Coord stride,
+                         bool transposed,
+                         int32_t *__restrict__ block_counts, // [num_blocks * K]
+                         int64_t K,
+                         int64_t total) {
+    extern __shared__ char smem_count[];
+    int32_t *local_counts = reinterpret_cast<int32_t *>(smem_count);
+
+    // Zero-initialize shared memory
+    for (int64_t k = threadIdx.x; k < K; k += blockDim.x) {
+        local_counts[k] = 0;
+    }
+    __syncthreads();
+
     int64_t const ks1 = kernel_size[1];
     int64_t const ks2 = kernel_size[2];
 
@@ -232,7 +351,6 @@ countPairsKernel(GridBatchImpl::Accessor output_acc,
 
         auto const ijk = leaf.offsetToGlobalCoord(voxelIdx);
 
-        // Probe feature grid for each kernel offset
         auto const *feat_grid = feature_acc.grid(batchIdx);
         auto feat_tree_acc    = feat_grid->getAccessor();
 
@@ -255,33 +373,56 @@ countPairsKernel(GridBatchImpl::Accessor output_acc,
             }
 
             if (feat_tree_acc.isActive(probe)) {
-                atomicAdd(&counts[k], 1);
+                atomicAdd(&local_counts[k], 1); // shared memory -- fast, block-local
             }
         }
+    }
+
+    // Store block-local counts to global memory
+    __syncthreads();
+    for (int64_t k = threadIdx.x; k < K; k += blockDim.x) {
+        block_counts[static_cast<int64_t>(blockIdx.x) * K + k] = local_counts[k];
     }
 }
 
 // ============================================================================
-// Topology kernel: fill gather/scatter index arrays
+// Topology sweep 2: fill gather/scatter indices (no global atomics)
 // ============================================================================
 //
-// Same traversal as countPairsKernel.  On each hit, atomicAdd on a per-k
-// write head gives the position within the segment; the global position is
-// offsets_dev[k] + local_pos.
+// Same traversal as sweep 1.  Each block loads its precomputed write offsets
+// from block_write_offsets[blockIdx.x * K + k] and uses a shared-memory
+// running counter to assign unique positions.  No global atomics at all.
+//
+// Dynamic shared memory layout:
+//   [0 .. K * 4)   -> local_count[K]  (int32, running write-position counter)
+//   [aligned .. +K*8) -> my_offsets[K] (int64, this block's starting positions)
 
 __global__ void
-fillPairsKernel(GridBatchImpl::Accessor output_acc,
-                GridBatchImpl::Accessor feature_acc,
-                nanovdb::Coord kernel_start,
-                nanovdb::Coord kernel_size,
-                nanovdb::Coord stride,
-                bool transposed,
-                const int64_t *__restrict__ offsets_dev, // [K+1]
-                int32_t *__restrict__ write_head,        // [K], zeroed
-                int32_t *__restrict__ gather_indices,    // [total_pairs]
-                int32_t *__restrict__ scatter_indices,   // [total_pairs]
-                int64_t K,
-                int64_t total) { // output_grid.totalLeaves() * kVoxelsPerLeaf
+fillPairsPerBlockKernel(GridBatchImpl::Accessor output_acc,
+                        GridBatchImpl::Accessor feature_acc,
+                        nanovdb::Coord kernel_start,
+                        nanovdb::Coord kernel_size,
+                        nanovdb::Coord stride,
+                        bool transposed,
+                        int64_t const *__restrict__ block_write_offsets, // [num_blocks * K]
+                        int32_t *__restrict__ gather_indices,            // [total_pairs]
+                        int32_t *__restrict__ scatter_indices,           // [total_pairs]
+                        int64_t K,
+                        int64_t total) {
+    extern __shared__ char smem_fill[];
+    int32_t *local_count = reinterpret_cast<int32_t *>(smem_fill);
+    // Align to 8 bytes for int64_t
+    size_t const count_bytes_aligned =
+        (static_cast<size_t>(K) * sizeof(int32_t) + 7u) & ~size_t(7u);
+    int64_t *my_offsets = reinterpret_cast<int64_t *>(smem_fill + count_bytes_aligned);
+
+    // Initialize: zero local counts, load this block's precomputed write offsets
+    for (int64_t k = threadIdx.x; k < K; k += blockDim.x) {
+        local_count[k] = 0;
+        my_offsets[k]  = block_write_offsets[static_cast<int64_t>(blockIdx.x) * K + k];
+    }
+    __syncthreads();
+
     int64_t const ks1 = kernel_size[1];
     int64_t const ks2 = kernel_size[2];
 
@@ -302,7 +443,6 @@ fillPairsKernel(GridBatchImpl::Accessor output_acc,
         auto const ijk         = leaf.offsetToGlobalCoord(voxelIdx);
         int64_t const out_flat = output_acc.voxelOffset(batchIdx) + leaf.getValue(voxelIdx) - 1;
 
-        // Probe feature grid for each kernel offset
         auto const *feat_grid   = feature_acc.grid(batchIdx);
         auto feat_tree_acc      = feat_grid->getAccessor();
         int64_t const feat_base = feature_acc.voxelOffset(batchIdx);
@@ -329,7 +469,8 @@ fillPairsKernel(GridBatchImpl::Accessor output_acc,
                 int32_t const feat_flat =
                     static_cast<int32_t>(feat_base + feat_tree_acc.getValue(probe) - 1);
 
-                int64_t const pos    = offsets_dev[k] + atomicAdd(&write_head[k], 1);
+                int32_t const lc     = atomicAdd(&local_count[k], 1); // shared memory
+                int64_t const pos    = my_offsets[k] + lc;
                 gather_indices[pos]  = feat_flat;
                 scatter_indices[pos] = static_cast<int32_t>(out_flat);
             }
@@ -338,11 +479,19 @@ fillPairsKernel(GridBatchImpl::Accessor output_acc,
 }
 
 // ============================================================================
-// GPU topology builder -- two-pass: count + fill
+// GPU topology builder -- two-sweep, no global atomics
 // ============================================================================
 //
-// Produces the same CSR output as groupedGemmSparseConvTopology without the
-// dense O(output_voxels * kernel_volume) intermediate.
+// Sweep 1: Each block counts hits per offset into shared memory, writes
+//          per-block counts to block_counts[num_blocks, K].
+// Prefix sums (torch ops): Compute block_write_offsets[num_blocks, K] giving
+//          the exact global write position where each block starts per offset.
+// Sweep 2: Each block re-traverses, uses shared-memory running counters +
+//          precomputed offsets to write gather/scatter indices directly.
+//
+// Zero global atomics.  Both sweeps use the same grid-stride loop with
+// identical grid dimensions, guaranteeing each block processes the same
+// elements in both sweeps.
 
 static CutlassConvTopology
 buildTopologyGpu(GridBatchImpl const &feature_grid,
@@ -391,23 +540,39 @@ buildTopologyGpu(GridBatchImpl const &feature_grid,
     auto output_acc  = output_grid.deviceAccessor();
     auto feature_acc = feature_grid.deviceAccessor();
 
-    // ---- Pass 1: Count pairs per kernel offset ----
-    auto counts = torch::zeros({K}, torch::dtype(torch::kInt32).device(device));
+    // Grid dimensions must be identical for both sweeps (grid-stride determinism)
+    int const num_blocks = gridSizeFor(total);
 
-    countPairsKernel<<<gridSizeFor(total), kBlockSize, 0, stream>>>(output_acc,
-                                                                    feature_acc,
-                                                                    kernel_start,
-                                                                    kernel_size,
-                                                                    stride,
-                                                                    transposed,
-                                                                    counts.data_ptr<int32_t>(),
-                                                                    K,
-                                                                    total);
+    // ---- Sweep 1: Per-block pair counts ----
+    auto block_counts = torch::zeros({static_cast<int64_t>(num_blocks), K},
+                                     torch::dtype(torch::kInt32).device(device));
 
-    // ---- Prefix sum on device via torch::cumsum ----
-    auto counts_i64  = counts.to(torch::kInt64);
+    size_t const smem_count = static_cast<size_t>(K) * sizeof(int32_t);
+
+    countPairsPerBlockKernel<<<num_blocks, kBlockSize, smem_count, stream>>>(
+        output_acc,
+        feature_acc,
+        kernel_start,
+        kernel_size,
+        stride,
+        transposed,
+        block_counts.data_ptr<int32_t>(),
+        K,
+        total);
+
+    // ---- Prefix sums (all via torch ops, no custom kernels) ----
+    // block_counts is [num_blocks, K] int32.
+    auto bc_i64 = block_counts.to(torch::kInt64); // [num_blocks, K]
+
+    // Inclusive cumsum along blocks (dim=0) for each offset k
+    auto block_incl = torch::cumsum(bc_i64, /*dim=*/0); // [num_blocks, K]
+
+    // Per-k totals = last row of inclusive cumsum
+    auto per_k_total = block_incl[-1]; // [K]
+
+    // Global CSR offsets (exclusive cumsum of per-k totals)
     auto offsets_dev = torch::zeros({K + 1}, torch::dtype(torch::kInt64).device(device));
-    offsets_dev.slice(0, 1, K + 1).copy_(torch::cumsum(counts_i64, 0));
+    offsets_dev.slice(0, 1, K + 1).copy_(torch::cumsum(per_k_total, 0));
 
     // Single scalar sync to learn total_pairs (needed for output buffer sizing)
     int64_t total_pairs = offsets_dev[K].item<int64_t>();
@@ -415,24 +580,36 @@ buildTopologyGpu(GridBatchImpl const &feature_grid,
     // Host copy of offsets (needed by cutlassConv for GEMM problem setup)
     auto offsets_host = offsets_dev.cpu();
 
-    // ---- Pass 2: Fill gather/scatter indices ----
+    // Exclusive cumsum along blocks: shift inclusive down by 1, prepend zeros
+    auto block_excl = torch::zeros_like(block_incl); // [num_blocks, K]
+    if (num_blocks > 1) {
+        block_excl.slice(0, 1, num_blocks).copy_(block_incl.slice(0, 0, num_blocks - 1));
+    }
+
+    // Combined write offsets: global_offsets[k] + block-level exclusive offset
+    // offsets_dev[:K] has shape [K]; unsqueeze(0) broadcasts across num_blocks rows.
+    auto block_write_offsets =
+        (block_excl + offsets_dev.slice(0, 0, K).unsqueeze(0)).contiguous(); // [num_blocks, K]
+
+    // ---- Sweep 2: Fill gather/scatter indices ----
     auto gather_indices  = torch::empty({std::max(total_pairs, int64_t{1})},
                                        torch::dtype(torch::kInt32).device(device));
     auto scatter_indices = torch::empty({std::max(total_pairs, int64_t{1})},
                                         torch::dtype(torch::kInt32).device(device));
 
     if (total_pairs > 0) {
-        auto write_head = torch::zeros({K}, torch::dtype(torch::kInt32).device(device));
+        size_t const count_bytes_aligned =
+            (static_cast<size_t>(K) * sizeof(int32_t) + 7u) & ~size_t(7u);
+        size_t const smem_fill = count_bytes_aligned + static_cast<size_t>(K) * sizeof(int64_t);
 
-        fillPairsKernel<<<gridSizeFor(total), kBlockSize, 0, stream>>>(
+        fillPairsPerBlockKernel<<<num_blocks, kBlockSize, smem_fill, stream>>>(
             output_acc,
             feature_acc,
             kernel_start,
             kernel_size,
             stride,
             transposed,
-            offsets_dev.data_ptr<int64_t>(),
-            write_head.data_ptr<int32_t>(),
+            block_write_offsets.data_ptr<int64_t>(),
             gather_indices.data_ptr<int32_t>(),
             scatter_indices.data_ptr<int32_t>(),
             K,
@@ -527,54 +704,39 @@ cutlassConv(torch::Tensor features, torch::Tensor weights, CutlassConvTopology c
     // ---- Reshape weights: [Cout, Cin, k0, k1, k2] -> [K, Cin, Cout] row-major ----
     auto W = weights.permute({2, 3, 4, 1, 0}).reshape({K, Cin, Cout}).contiguous();
 
-    // ---- Phase 1: Gather features into [TP, Cin] fp16 buffer ----
+    // ---- Phase 1: Gather features into [TP, Cin] fp16 buffer (vectorised) ----
     auto buf_A = torch::empty({TP, Cin}, torch::dtype(torch::kFloat16).device(device));
     {
-        int64_t const total = TP * Cin;
-        gatherHalfKernel<<<gridSizeFor(total), kBlockSize, 0, stream>>>(
+        int64_t const C_vec      = Cin / 8;
+        int64_t const total_vecs = TP * C_vec;
+        gatherHalfKernel<<<gridSizeFor(total_vecs), kBlockSize, 0, stream>>>(
             features.data_ptr<at::Half>(),
             buf_A.data_ptr<at::Half>(),
             topo.gather_indices.data_ptr<int32_t>(),
-            total,
-            Cin);
+            total_vecs,
+            C_vec);
     }
 
     // ---- Phase 2: CUTLASS grouped GEMM ----
-    // Build per-group arrays on host, copy to device as torch tensors.
+    // Pack all per-group arrays into 2 host tensors, copy in 2 H2D transfers.
     auto off_acc = topo.offsets.accessor<int64_t, 1>();
 
-    // Count non-empty groups
     int num_groups = 0;
     for (int64_t k = 0; k < K; ++k) {
         if (off_acc[k + 1] > off_acc[k])
             ++num_groups;
     }
 
-    // Allocate fp32 GEMM output buffer
     auto buf_C = torch::empty({TP, Cout}, torch::dtype(torch::kFloat32).device(device));
 
     if (num_groups > 0) {
-        // Host-side per-group problem description
-        // GemmCoord is layout-compatible with int[3]  (Coord<3, int> with int idx[3])
+        // Host-side descriptors: problem_sizes [num_groups, 3] int32
+        //                        packed [8, num_groups] int64  (ptrA..ptrD, ldA..ldD)
         auto h_problem_sizes = torch::empty({num_groups, 3}, torch::kInt32);
-        auto h_ptr_A         = torch::empty({num_groups}, torch::kInt64);
-        auto h_ptr_B         = torch::empty({num_groups}, torch::kInt64);
-        auto h_ptr_C         = torch::empty({num_groups}, torch::kInt64);
-        auto h_ptr_D         = torch::empty({num_groups}, torch::kInt64);
-        auto h_lda           = torch::empty({num_groups}, torch::kInt64);
-        auto h_ldb           = torch::empty({num_groups}, torch::kInt64);
-        auto h_ldc           = torch::empty({num_groups}, torch::kInt64);
-        auto h_ldd           = torch::empty({num_groups}, torch::kInt64);
+        auto h_packed        = torch::empty({8, num_groups}, torch::kInt64);
 
         auto ps = h_problem_sizes.accessor<int32_t, 2>();
-        auto pA = h_ptr_A.accessor<int64_t, 1>();
-        auto pB = h_ptr_B.accessor<int64_t, 1>();
-        auto pC = h_ptr_C.accessor<int64_t, 1>();
-        auto pD = h_ptr_D.accessor<int64_t, 1>();
-        auto la = h_lda.accessor<int64_t, 1>();
-        auto lb = h_ldb.accessor<int64_t, 1>();
-        auto lc = h_ldc.accessor<int64_t, 1>();
-        auto ld = h_ldd.accessor<int64_t, 1>();
+        auto pk = h_packed.accessor<int64_t, 2>();
 
         uintptr_t const base_A = reinterpret_cast<uintptr_t>(buf_A.data_ptr<at::Half>());
         uintptr_t const base_B = reinterpret_cast<uintptr_t>(W.data_ptr<at::Half>());
@@ -587,94 +749,56 @@ cutlassConv(torch::Tensor features, torch::Tensor weights, CutlassConvTopology c
             if (Mk == 0)
                 continue;
 
-            // GemmCoord(M, N, K) = (Mk, Cout, Cin)
             ps[g][0] = static_cast<int32_t>(Mk);
             ps[g][1] = static_cast<int32_t>(Cout);
             ps[g][2] = static_cast<int32_t>(Cin);
 
-            // Pointers into contiguous buffers (stored as uintptr_t -> int64_t)
-            pA[g] = static_cast<int64_t>(base_A +
-                                         static_cast<uintptr_t>(start * Cin * sizeof(at::Half)));
-            pB[g] = static_cast<int64_t>(base_B +
-                                         static_cast<uintptr_t>(k * Cin * Cout * sizeof(at::Half)));
-            pC[g] =
+            pk[0][g] = static_cast<int64_t>(base_A +
+                                            static_cast<uintptr_t>(start * Cin * sizeof(at::Half)));
+            pk[1][g] = static_cast<int64_t>(
+                base_B + static_cast<uintptr_t>(k * Cin * Cout * sizeof(at::Half)));
+            pk[2][g] =
                 static_cast<int64_t>(base_C + static_cast<uintptr_t>(start * Cout * sizeof(float)));
-            pD[g] = pC[g]; // D = C (beta=0, in-place)
+            pk[3][g] = pk[2][g]; // D = C (beta=0, in-place)
 
-            // Leading dimensions (row-major)
-            la[g] = Cin;  // A [Mk, Cin]
-            lb[g] = Cout; // B [Cin, Cout]
-            lc[g] = Cout; // C [Mk, Cout]
-            ld[g] = Cout; // D [Mk, Cout]
+            pk[4][g] = Cin;      // ldA: A [Mk, Cin]
+            pk[5][g] = Cout;     // ldB: B [Cin, Cout]
+            pk[6][g] = Cout;     // ldC: C [Mk, Cout]
+            pk[7][g] = Cout;     // ldD: D [Mk, Cout]
             ++g;
         }
 
-        // Copy to device
+        // 2 H2D copies instead of 9
         auto d_problem_sizes = h_problem_sizes.to(device).contiguous();
-        auto d_ptr_A         = h_ptr_A.to(device).contiguous();
-        auto d_ptr_B         = h_ptr_B.to(device).contiguous();
-        auto d_ptr_C         = h_ptr_C.to(device).contiguous();
-        auto d_ptr_D         = h_ptr_D.to(device).contiguous();
-        auto d_lda           = h_lda.to(device).contiguous();
-        auto d_ldb           = h_ldb.to(device).contiguous();
-        auto d_ldc           = h_ldc.to(device).contiguous();
-        auto d_ldd           = h_ldd.to(device).contiguous();
+        auto d_packed        = h_packed.to(device).contiguous();
 
-        // CUTLASS grouped GEMM
-        int threadblock_count = CutlassGemmGrouped::sufficient(
-            reinterpret_cast<cutlass::gemm::GemmCoord *>(h_problem_sizes.data_ptr<int32_t>()),
-            num_groups);
-
-        typename CutlassGemmGrouped::EpilogueOutputOp::Params epilogue_params(
-            /*alpha=*/1.0f, /*beta=*/0.0f);
-
-        typename CutlassGemmGrouped::Arguments args(
-            reinterpret_cast<cutlass::gemm::GemmCoord *>(d_problem_sizes.data_ptr<int32_t>()),
-            num_groups,
-            threadblock_count,
-            epilogue_params,
-            reinterpret_cast<CutlassElementA **>(d_ptr_A.data_ptr<int64_t>()),
-            reinterpret_cast<CutlassElementB **>(d_ptr_B.data_ptr<int64_t>()),
-            reinterpret_cast<CutlassElementC **>(d_ptr_C.data_ptr<int64_t>()),
-            reinterpret_cast<CutlassElementC **>(d_ptr_D.data_ptr<int64_t>()),
-            d_lda.data_ptr<int64_t>(),
-            d_ldb.data_ptr<int64_t>(),
-            d_ldc.data_ptr<int64_t>(),
-            d_ldd.data_ptr<int64_t>(),
-            // host_problem_sizes for precompute scheduling
-            reinterpret_cast<cutlass::gemm::GemmCoord *>(h_problem_sizes.data_ptr<int32_t>()));
-
-        // Workspace (allocated as torch tensor for RAII)
-        size_t workspace_bytes = CutlassGemmGrouped::get_workspace_size(args);
-        auto workspace = torch::empty({std::max(static_cast<int64_t>(workspace_bytes), int64_t{1})},
-                                      torch::dtype(torch::kByte).device(device));
-
-        CutlassGemmGrouped gemm_op;
-        cutlass::Status status = gemm_op.initialize(args, workspace.data_ptr(), stream);
-        TORCH_CHECK(status == cutlass::Status::kSuccess,
-                    "cutlassConv: CUTLASS initialize failed: ",
-                    cutlass::cutlassGetStatusString(status));
-
-        status = gemm_op.run(stream);
-        TORCH_CHECK(status == cutlass::Status::kSuccess,
-                    "cutlassConv: CUTLASS run failed: ",
-                    cutlass::cutlassGetStatusString(status));
+        // Dispatch narrow tile for small N (= Cout) to avoid wasting partial tiles
+        if (Cout <= 64) {
+            runCutlassGroupedGemm<CutlassGemmGroupedNarrow>(h_problem_sizes,
+                                                            num_groups,
+                                                            d_problem_sizes,
+                                                            d_packed.data_ptr<int64_t>(),
+                                                            device,
+                                                            stream,
+                                                            "cutlassConv");
+        } else {
+            runCutlassGroupedGemm<CutlassGemmGrouped>(h_problem_sizes,
+                                                      num_groups,
+                                                      d_problem_sizes,
+                                                      d_packed.data_ptr<int64_t>(),
+                                                      device,
+                                                      stream,
+                                                      "cutlassConv");
+        }
     }
 
-    // ---- Phase 3: Per-offset scatter-add (no atomics) ----
-    // Each output voxel appears at most once per offset, so per-k sequential
-    // scatter into the fp32 accumulator is collision-free.
-    for (int64_t k = 0; k < K; ++k) {
-        int64_t const start = off_acc[k];
-        int64_t const Mk    = off_acc[k + 1] - start;
-        if (Mk == 0)
-            continue;
-
-        int64_t const total = Mk * Cout;
+    // ---- Phase 3: Scatter-add GEMM output into accumulator (single launch) ----
+    {
+        int64_t const total = TP * Cout;
         scatterAddF32Kernel<<<gridSizeFor(total), kBlockSize, 0, stream>>>(
-            buf_C.data_ptr<float>() + start * Cout,
-            topo.scatter_indices.data_ptr<int32_t>() + start,
-            Mk,
+            buf_C.data_ptr<float>(),
+            topo.scatter_indices.data_ptr<int32_t>(),
+            TP,
             Cout,
             output_f32.data_ptr<float>());
     }
@@ -693,6 +817,7 @@ cutlassConv(torch::Tensor features, torch::Tensor weights, CutlassConvTopology c
 //
 // Uses the same topology as the forward pass (no transposed topology needed).
 // Reuses gatherHalfKernel and scatterAddF32Kernel from the forward path.
+// Scatter-add uses a single atomicAdd launch (same as forward).
 //
 // grad_features uses CUTLASS grouped GEMM (same kernel config as forward,
 // dimensions are M=Mk, N=Cin, K=Cout instead of M=Mk, N=Cout, K=Cin).
@@ -732,9 +857,11 @@ cutlassConvBackward(torch::Tensor grad_output,
     TORCH_CHECK(features.size(1) == Cin, "cutlassConvBackward: Cin mismatch");
     TORCH_CHECK(grad_output.size(1) == Cout, "cutlassConvBackward: Cout mismatch");
     TORCH_CHECK(Cin > 0 && Cin % 32 == 0,
-                "cutlassConvBackward: Cin must be a positive multiple of 32, got ", Cin);
+                "cutlassConvBackward: Cin must be a positive multiple of 32, got ",
+                Cin);
     TORCH_CHECK(Cout > 0 && Cout % 32 == 0,
-                "cutlassConvBackward: Cout must be a positive multiple of 32, got ", Cout);
+                "cutlassConvBackward: Cout must be a positive multiple of 32, got ",
+                Cout);
 
     // ---- Device / stream setup ----
     auto const device = features.device();
@@ -747,7 +874,7 @@ cutlassConvBackward(torch::Tensor grad_output,
 
     // ---- Allocate grad outputs ----
     auto grad_features_f32 = torch::zeros({F, Cin}, torch::dtype(torch::kFloat32).device(device));
-    auto grad_W_f32        = torch::zeros({K, Cin, Cout}, torch::dtype(torch::kFloat32).device(device));
+    auto grad_W_f32 = torch::zeros({K, Cin, Cout}, torch::dtype(torch::kFloat32).device(device));
 
     if (F == 0 || K == 0 || TP == 0) {
         auto ks           = topo.kernel_size;
@@ -760,67 +887,53 @@ cutlassConvBackward(torch::Tensor grad_output,
 
     // ---- Reshape weights ----
     // Forward uses W [K, Cin, Cout].  Backward needs W_T [K, Cout, Cin].
-    auto W = weights.permute({2, 3, 4, 1, 0}).reshape({K, Cin, Cout}).contiguous();
+    auto W   = weights.permute({2, 3, 4, 1, 0}).reshape({K, Cin, Cout}).contiguous();
     auto W_T = W.permute({0, 2, 1}).contiguous(); // [K, Cout, Cin]
 
     auto off_acc = topo.offsets.accessor<int64_t, 1>();
 
-    // ---- Phase 1: Gather features and grad_output into contiguous fp16 buffers ----
+    // ---- Phase 1: Gather features and grad_output (vectorised) ----
     auto feat_buf = torch::empty({TP, Cin}, torch::dtype(torch::kFloat16).device(device));
     auto grad_buf = torch::empty({TP, Cout}, torch::dtype(torch::kFloat16).device(device));
 
     {
-        int64_t const total_feat = TP * Cin;
-        gatherHalfKernel<<<gridSizeFor(total_feat), kBlockSize, 0, stream>>>(
+        int64_t const C_vec      = Cin / 8;
+        int64_t const total_vecs = TP * C_vec;
+        gatherHalfKernel<<<gridSizeFor(total_vecs), kBlockSize, 0, stream>>>(
             features.data_ptr<at::Half>(),
             feat_buf.data_ptr<at::Half>(),
             topo.gather_indices.data_ptr<int32_t>(),
-            total_feat,
-            Cin);
+            total_vecs,
+            C_vec);
     }
     {
-        int64_t const total_grad = TP * Cout;
-        gatherHalfKernel<<<gridSizeFor(total_grad), kBlockSize, 0, stream>>>(
+        int64_t const C_vec      = Cout / 8;
+        int64_t const total_vecs = TP * C_vec;
+        gatherHalfKernel<<<gridSizeFor(total_vecs), kBlockSize, 0, stream>>>(
             grad_output.data_ptr<at::Half>(),
             grad_buf.data_ptr<at::Half>(),
             topo.scatter_indices.data_ptr<int32_t>(),
-            total_grad,
-            Cout);
+            total_vecs,
+            C_vec);
     }
 
-    // ---- Phase 2: CUTLASS grouped GEMM for grad_features ----
-    // grad_buf[k] @ W_T[k] -> grad_feat_buf[k]
-    // A = [Mk, Cout], B = [Cout, Cin] -> C = [Mk, Cin] (fp32)
-    // GemmCoord(M=Mk, N=Cin, K=Cout)
-
+    // ---- Count non-empty offset groups (shared by all GEMMs) ----
     int num_groups = 0;
     for (int64_t k = 0; k < K; ++k) {
         if (off_acc[k + 1] > off_acc[k])
             ++num_groups;
     }
 
+    // ---- Phase 2: CUTLASS grouped GEMM for grad_features ----
+    // grad_buf[k] @ W_T[k] -> grad_feat_buf[k]
+    // GemmCoord(M=Mk, N=Cin, K=Cout)
     auto grad_feat_buf = torch::empty({TP, Cin}, torch::dtype(torch::kFloat32).device(device));
 
     if (num_groups > 0) {
-        auto h_problem_sizes = torch::empty({num_groups, 3}, torch::kInt32);
-        auto h_ptr_A         = torch::empty({num_groups}, torch::kInt64);
-        auto h_ptr_B         = torch::empty({num_groups}, torch::kInt64);
-        auto h_ptr_C         = torch::empty({num_groups}, torch::kInt64);
-        auto h_ptr_D         = torch::empty({num_groups}, torch::kInt64);
-        auto h_lda           = torch::empty({num_groups}, torch::kInt64);
-        auto h_ldb           = torch::empty({num_groups}, torch::kInt64);
-        auto h_ldc           = torch::empty({num_groups}, torch::kInt64);
-        auto h_ldd           = torch::empty({num_groups}, torch::kInt64);
-
-        auto ps = h_problem_sizes.accessor<int32_t, 2>();
-        auto pA = h_ptr_A.accessor<int64_t, 1>();
-        auto pB = h_ptr_B.accessor<int64_t, 1>();
-        auto pC = h_ptr_C.accessor<int64_t, 1>();
-        auto pD = h_ptr_D.accessor<int64_t, 1>();
-        auto la = h_lda.accessor<int64_t, 1>();
-        auto lb = h_ldb.accessor<int64_t, 1>();
-        auto lc = h_ldc.accessor<int64_t, 1>();
-        auto ld = h_ldd.accessor<int64_t, 1>();
+        auto h_ps = torch::empty({num_groups, 3}, torch::kInt32);
+        auto h_pk = torch::empty({8, num_groups}, torch::kInt64);
+        auto ps   = h_ps.accessor<int32_t, 2>();
+        auto pk   = h_pk.accessor<int64_t, 2>();
 
         uintptr_t const base_A = reinterpret_cast<uintptr_t>(grad_buf.data_ptr<at::Half>());
         uintptr_t const base_B = reinterpret_cast<uintptr_t>(W_T.data_ptr<at::Half>());
@@ -833,129 +946,69 @@ cutlassConvBackward(torch::Tensor grad_output,
             if (Mk == 0)
                 continue;
 
-            // GemmCoord(M, N, K_dim) = (Mk, Cin, Cout)
             ps[g][0] = static_cast<int32_t>(Mk);
             ps[g][1] = static_cast<int32_t>(Cin);
             ps[g][2] = static_cast<int32_t>(Cout);
 
-            // A = grad_buf segment [Mk, Cout]
-            pA[g] = static_cast<int64_t>(
+            pk[0][g] = static_cast<int64_t>(
                 base_A + static_cast<uintptr_t>(start * Cout * sizeof(at::Half)));
-            // B = W_T[k] [Cout, Cin]
-            pB[g] = static_cast<int64_t>(
+            pk[1][g] = static_cast<int64_t>(
                 base_B + static_cast<uintptr_t>(k * Cout * Cin * sizeof(at::Half)));
-            // C = grad_feat_buf segment [Mk, Cin]
-            pC[g] = static_cast<int64_t>(
-                base_C + static_cast<uintptr_t>(start * Cin * sizeof(float)));
-            pD[g] = pC[g];
+            pk[2][g] =
+                static_cast<int64_t>(base_C + static_cast<uintptr_t>(start * Cin * sizeof(float)));
+            pk[3][g] = pk[2][g];
 
-            la[g] = Cout; // A [Mk, Cout]
-            lb[g] = Cin;  // B [Cout, Cin]
-            lc[g] = Cin;  // C [Mk, Cin]
-            ld[g] = Cin;  // D [Mk, Cin]
+            pk[4][g] = Cout; // ldA: A [Mk, Cout]
+            pk[5][g] = Cin;  // ldB: B [Cout, Cin]
+            pk[6][g] = Cin;  // ldC: C [Mk, Cin]
+            pk[7][g] = Cin;  // ldD
             ++g;
         }
 
-        auto d_problem_sizes = h_problem_sizes.to(device).contiguous();
-        auto d_ptr_A         = h_ptr_A.to(device).contiguous();
-        auto d_ptr_B         = h_ptr_B.to(device).contiguous();
-        auto d_ptr_C         = h_ptr_C.to(device).contiguous();
-        auto d_ptr_D         = h_ptr_D.to(device).contiguous();
-        auto d_lda           = h_lda.to(device).contiguous();
-        auto d_ldb           = h_ldb.to(device).contiguous();
-        auto d_ldc           = h_ldc.to(device).contiguous();
-        auto d_ldd           = h_ldd.to(device).contiguous();
+        auto d_ps = h_ps.to(device).contiguous();
+        auto d_pk = h_pk.to(device).contiguous();
 
-        int threadblock_count = CutlassGemmGrouped::sufficient(
-            reinterpret_cast<cutlass::gemm::GemmCoord *>(h_problem_sizes.data_ptr<int32_t>()),
-            num_groups);
-
-        typename CutlassGemmGrouped::EpilogueOutputOp::Params epilogue_params(
-            /*alpha=*/1.0f, /*beta=*/0.0f);
-
-        typename CutlassGemmGrouped::Arguments args(
-            reinterpret_cast<cutlass::gemm::GemmCoord *>(d_problem_sizes.data_ptr<int32_t>()),
-            num_groups,
-            threadblock_count,
-            epilogue_params,
-            reinterpret_cast<CutlassElementA **>(d_ptr_A.data_ptr<int64_t>()),
-            reinterpret_cast<CutlassElementB **>(d_ptr_B.data_ptr<int64_t>()),
-            reinterpret_cast<CutlassElementC **>(d_ptr_C.data_ptr<int64_t>()),
-            reinterpret_cast<CutlassElementC **>(d_ptr_D.data_ptr<int64_t>()),
-            d_lda.data_ptr<int64_t>(),
-            d_ldb.data_ptr<int64_t>(),
-            d_ldc.data_ptr<int64_t>(),
-            d_ldd.data_ptr<int64_t>(),
-            reinterpret_cast<cutlass::gemm::GemmCoord *>(h_problem_sizes.data_ptr<int32_t>()));
-
-        size_t workspace_bytes = CutlassGemmGrouped::get_workspace_size(args);
-        auto workspace = torch::empty({std::max(static_cast<int64_t>(workspace_bytes), int64_t{1})},
-                                      torch::dtype(torch::kByte).device(device));
-
-        CutlassGemmGrouped gemm_op;
-        cutlass::Status status = gemm_op.initialize(args, workspace.data_ptr(), stream);
-        TORCH_CHECK(status == cutlass::Status::kSuccess,
-                    "cutlassConvBackward: CUTLASS initialize failed: ",
-                    cutlass::cutlassGetStatusString(status));
-
-        status = gemm_op.run(stream);
-        TORCH_CHECK(status == cutlass::Status::kSuccess,
-                    "cutlassConvBackward: CUTLASS run failed: ",
-                    cutlass::cutlassGetStatusString(status));
+        if (Cin <= 64) {
+            runCutlassGroupedGemm<CutlassGemmGroupedNarrow>(h_ps,
+                                                            num_groups,
+                                                            d_ps,
+                                                            d_pk.data_ptr<int64_t>(),
+                                                            device,
+                                                            stream,
+                                                            "cutlassConvBackward(grad_feat)");
+        } else {
+            runCutlassGroupedGemm<CutlassGemmGrouped>(h_ps,
+                                                      num_groups,
+                                                      d_ps,
+                                                      d_pk.data_ptr<int64_t>(),
+                                                      device,
+                                                      stream,
+                                                      "cutlassConvBackward(grad_feat)");
+        }
     }
 
-    // ---- Phase 3: Scatter-add grad_feat_buf into grad_features (fp32) ----
-    // Each feature voxel appears at most once per offset in gather_indices
-    // (injective probe), so per-k sequential scatter is collision-free.
-    for (int64_t k = 0; k < K; ++k) {
-        int64_t const start = off_acc[k];
-        int64_t const Mk    = off_acc[k + 1] - start;
-        if (Mk == 0)
-            continue;
-
-        int64_t const total = Mk * Cin;
+    // ---- Phase 3: Scatter-add grad_feat_buf into grad_features (single launch) ----
+    {
+        int64_t const total = TP * Cin;
         scatterAddF32Kernel<<<gridSizeFor(total), kBlockSize, 0, stream>>>(
-            grad_feat_buf.data_ptr<float>() + start * Cin,
-            topo.gather_indices.data_ptr<int32_t>() + start,
-            Mk,
+            grad_feat_buf.data_ptr<float>(),
+            topo.gather_indices.data_ptr<int32_t>(),
+            TP,
             Cin,
             grad_features_f32.data_ptr<float>());
     }
 
     // ---- Phase 4: CUTLASS grouped GEMM for grad_weights ----
     // grad_W[k] = feat_buf[k].T @ grad_buf[k]
-    // A = feat_buf[k] [Mk, Cin] RowMajor = [Cin, Mk] ColumnMajor (zero-copy transpose)
-    // B = grad_buf[k] [Mk, Cout] RowMajor
-    // C = grad_W_f32[k] [Cin, Cout] RowMajor (fp32)
+    // A = [Mk, Cin] RowMajor = [Cin, Mk] ColMajor (zero-copy transpose)
+    // B = [Mk, Cout] RowMajor, C = [Cin, Cout] RowMajor (fp32)
     // GemmCoord(M=Cin, N=Cout, K=Mk)
 
-    // Count non-empty groups for grad_weights
-    int num_gw_groups = 0;
-    for (int64_t k = 0; k < K; ++k) {
-        if (off_acc[k + 1] > off_acc[k])
-            ++num_gw_groups;
-    }
-
-    if (num_gw_groups > 0) {
-        auto h_gw_problem_sizes = torch::empty({num_gw_groups, 3}, torch::kInt32);
-        auto h_gw_ptr_A         = torch::empty({num_gw_groups}, torch::kInt64);
-        auto h_gw_ptr_B         = torch::empty({num_gw_groups}, torch::kInt64);
-        auto h_gw_ptr_C         = torch::empty({num_gw_groups}, torch::kInt64);
-        auto h_gw_ptr_D         = torch::empty({num_gw_groups}, torch::kInt64);
-        auto h_gw_lda           = torch::empty({num_gw_groups}, torch::kInt64);
-        auto h_gw_ldb           = torch::empty({num_gw_groups}, torch::kInt64);
-        auto h_gw_ldc           = torch::empty({num_gw_groups}, torch::kInt64);
-        auto h_gw_ldd           = torch::empty({num_gw_groups}, torch::kInt64);
-
-        auto gw_ps = h_gw_problem_sizes.accessor<int32_t, 2>();
-        auto gw_pA = h_gw_ptr_A.accessor<int64_t, 1>();
-        auto gw_pB = h_gw_ptr_B.accessor<int64_t, 1>();
-        auto gw_pC = h_gw_ptr_C.accessor<int64_t, 1>();
-        auto gw_pD = h_gw_ptr_D.accessor<int64_t, 1>();
-        auto gw_la = h_gw_lda.accessor<int64_t, 1>();
-        auto gw_lb = h_gw_ldb.accessor<int64_t, 1>();
-        auto gw_lc = h_gw_ldc.accessor<int64_t, 1>();
-        auto gw_ld = h_gw_ldd.accessor<int64_t, 1>();
+    if (num_groups > 0) {
+        auto h_gw_ps = torch::empty({num_groups, 3}, torch::kInt32);
+        auto h_gw_pk = torch::empty({8, num_groups}, torch::kInt64);
+        auto gw_ps   = h_gw_ps.accessor<int32_t, 2>();
+        auto gw_pk   = h_gw_pk.accessor<int64_t, 2>();
 
         uintptr_t const gw_base_A = reinterpret_cast<uintptr_t>(feat_buf.data_ptr<at::Half>());
         uintptr_t const gw_base_B = reinterpret_cast<uintptr_t>(grad_buf.data_ptr<at::Half>());
@@ -968,81 +1021,46 @@ cutlassConvBackward(torch::Tensor grad_output,
             if (Mk == 0)
                 continue;
 
-            // GemmCoord(M, N, K_dim) = (Cin, Cout, Mk)
             gw_ps[gw_g][0] = static_cast<int32_t>(Cin);
             gw_ps[gw_g][1] = static_cast<int32_t>(Cout);
             gw_ps[gw_g][2] = static_cast<int32_t>(Mk);
 
-            // A = feat_buf segment [Mk, Cin] RowMajor = [Cin, Mk] ColumnMajor
-            gw_pA[gw_g] = static_cast<int64_t>(
+            gw_pk[0][gw_g] = static_cast<int64_t>(
                 gw_base_A + static_cast<uintptr_t>(start * Cin * sizeof(at::Half)));
-            // B = grad_buf segment [Mk, Cout] RowMajor
-            gw_pB[gw_g] = static_cast<int64_t>(
+            gw_pk[1][gw_g] = static_cast<int64_t>(
                 gw_base_B + static_cast<uintptr_t>(start * Cout * sizeof(at::Half)));
-            // C = grad_W_f32[k] [Cin, Cout] RowMajor
-            gw_pC[gw_g] = static_cast<int64_t>(
+            gw_pk[2][gw_g] = static_cast<int64_t>(
                 gw_base_C + static_cast<uintptr_t>(k * Cin * Cout * sizeof(float)));
-            gw_pD[gw_g] = gw_pC[gw_g];
+            gw_pk[3][gw_g] = gw_pk[2][gw_g];
 
-            // Leading dimensions:
             // A ColumnMajor [Cin, Mk]: lda = Cin (stride between columns)
-            // B RowMajor [Mk, Cout]: ldb = Cout
-            // C RowMajor [Cin, Cout]: ldc = Cout
-            gw_la[gw_g] = Cin;
-            gw_lb[gw_g] = Cout;
-            gw_lc[gw_g] = Cout;
-            gw_ld[gw_g] = Cout;
+            gw_pk[4][gw_g] = Cin;
+            gw_pk[5][gw_g] = Cout;
+            gw_pk[6][gw_g] = Cout;
+            gw_pk[7][gw_g] = Cout;
             ++gw_g;
         }
 
-        auto d_gw_problem_sizes = h_gw_problem_sizes.to(device).contiguous();
-        auto d_gw_ptr_A         = h_gw_ptr_A.to(device).contiguous();
-        auto d_gw_ptr_B         = h_gw_ptr_B.to(device).contiguous();
-        auto d_gw_ptr_C         = h_gw_ptr_C.to(device).contiguous();
-        auto d_gw_ptr_D         = h_gw_ptr_D.to(device).contiguous();
-        auto d_gw_lda           = h_gw_lda.to(device).contiguous();
-        auto d_gw_ldb           = h_gw_ldb.to(device).contiguous();
-        auto d_gw_ldc           = h_gw_ldc.to(device).contiguous();
-        auto d_gw_ldd           = h_gw_ldd.to(device).contiguous();
+        auto d_gw_ps = h_gw_ps.to(device).contiguous();
+        auto d_gw_pk = h_gw_pk.to(device).contiguous();
 
-        int gw_threadblock_count = CutlassGradWGemmGrouped::sufficient(
-            reinterpret_cast<cutlass::gemm::GemmCoord *>(h_gw_problem_sizes.data_ptr<int32_t>()),
-            num_gw_groups);
-
-        typename CutlassGradWGemmGrouped::EpilogueOutputOp::Params gw_epilogue(
-            /*alpha=*/1.0f, /*beta=*/0.0f);
-
-        typename CutlassGradWGemmGrouped::Arguments gw_args(
-            reinterpret_cast<cutlass::gemm::GemmCoord *>(d_gw_problem_sizes.data_ptr<int32_t>()),
-            num_gw_groups,
-            gw_threadblock_count,
-            gw_epilogue,
-            reinterpret_cast<CutlassElementA **>(d_gw_ptr_A.data_ptr<int64_t>()),
-            reinterpret_cast<CutlassElementB **>(d_gw_ptr_B.data_ptr<int64_t>()),
-            reinterpret_cast<CutlassElementC **>(d_gw_ptr_C.data_ptr<int64_t>()),
-            reinterpret_cast<CutlassElementC **>(d_gw_ptr_D.data_ptr<int64_t>()),
-            d_gw_lda.data_ptr<int64_t>(),
-            d_gw_ldb.data_ptr<int64_t>(),
-            d_gw_ldc.data_ptr<int64_t>(),
-            d_gw_ldd.data_ptr<int64_t>(),
-            reinterpret_cast<cutlass::gemm::GemmCoord *>(
-                h_gw_problem_sizes.data_ptr<int32_t>()));
-
-        size_t gw_workspace_bytes = CutlassGradWGemmGrouped::get_workspace_size(gw_args);
-        auto gw_workspace =
-            torch::empty({std::max(static_cast<int64_t>(gw_workspace_bytes), int64_t{1})},
-                         torch::dtype(torch::kByte).device(device));
-
-        CutlassGradWGemmGrouped gw_gemm_op;
-        cutlass::Status gw_status = gw_gemm_op.initialize(gw_args, gw_workspace.data_ptr(), stream);
-        TORCH_CHECK(gw_status == cutlass::Status::kSuccess,
-                    "cutlassConvBackward: CUTLASS grad_weights initialize failed: ",
-                    cutlass::cutlassGetStatusString(gw_status));
-
-        gw_status = gw_gemm_op.run(stream);
-        TORCH_CHECK(gw_status == cutlass::Status::kSuccess,
-                    "cutlassConvBackward: CUTLASS grad_weights run failed: ",
-                    cutlass::cutlassGetStatusString(gw_status));
+        if (Cout <= 64) {
+            runCutlassGroupedGemm<CutlassGradWGemmGroupedNarrow>(h_gw_ps,
+                                                                 num_groups,
+                                                                 d_gw_ps,
+                                                                 d_gw_pk.data_ptr<int64_t>(),
+                                                                 device,
+                                                                 stream,
+                                                                 "cutlassConvBackward(grad_w)");
+        } else {
+            runCutlassGroupedGemm<CutlassGradWGemmGrouped>(h_gw_ps,
+                                                           num_groups,
+                                                           d_gw_ps,
+                                                           d_gw_pk.data_ptr<int64_t>(),
+                                                           device,
+                                                           stream,
+                                                           "cutlassConvBackward(grad_w)");
+        }
     }
 
     // ---- Reshape and cast to fp16 ----
