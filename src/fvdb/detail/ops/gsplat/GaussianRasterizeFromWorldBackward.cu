@@ -1,8 +1,10 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/gsplat/GaussianCameraMatrixUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorld.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldBackward.h>
+#include <fvdb/detail/ops/gsplat/GaussianRasterizeOptionalInputs.h>
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
 
@@ -20,8 +22,6 @@ namespace {
 
 // TODO(fvdb): Consider refactoring this kernel to reuse a common rasterization args struct
 // (`RasterizeCommonArgs` or a derived struct) for consistency with the other rasterizers.
-// TODO(fvdb): Consider switching to `PackedTensorAccessor64` for consistency with other
-// rasterization kernels, if/when we need to support larger tensors.
 template <uint32_t NUM_CHANNELS> struct SharedGaussian {
     int32_t id;                       // flattened id in [0, C*N)
     nanovdb::math::Vec3<float> mean;  // world mean
@@ -114,63 +114,34 @@ rasterizeFromWorld3DGSBackwardKernel(
     nanovdb::math::Mat3<float> R_wc_start, R_wc_end;
     nanovdb::math::Vec3<float> t_wc_start, t_wc_end;
     {
-        R_wc_start = nanovdb::math::Mat3<float>(worldToCamStart[camId][0][0],
-                                                worldToCamStart[camId][0][1],
-                                                worldToCamStart[camId][0][2],
-                                                worldToCamStart[camId][1][0],
-                                                worldToCamStart[camId][1][1],
-                                                worldToCamStart[camId][1][2],
-                                                worldToCamStart[camId][2][0],
-                                                worldToCamStart[camId][2][1],
-                                                worldToCamStart[camId][2][2]);
-        t_wc_start = nanovdb::math::Vec3<float>(worldToCamStart[camId][0][3],
-                                                worldToCamStart[camId][1][3],
-                                                worldToCamStart[camId][2][3]);
-
-        R_wc_end = nanovdb::math::Mat3<float>(worldToCamEnd[camId][0][0],
-                                              worldToCamEnd[camId][0][1],
-                                              worldToCamEnd[camId][0][2],
-                                              worldToCamEnd[camId][1][0],
-                                              worldToCamEnd[camId][1][1],
-                                              worldToCamEnd[camId][1][2],
-                                              worldToCamEnd[camId][2][0],
-                                              worldToCamEnd[camId][2][1],
-                                              worldToCamEnd[camId][2][2]);
-        t_wc_end = nanovdb::math::Vec3<float>(
-            worldToCamEnd[camId][0][3], worldToCamEnd[camId][1][3], worldToCamEnd[camId][2][3]);
+        loadWorldToCamRtFromAccessor44<float>(worldToCamStart, camId, R_wc_start, t_wc_start);
+        loadWorldToCamRtFromAccessor44<float>(worldToCamEnd, camId, R_wc_end, t_wc_end);
     }
 
-    nanovdb::math::Mat3<float> K_cam(K[camId][0][0],
-                                     K[camId][0][1],
-                                     K[camId][0][2],
-                                     K[camId][1][0],
-                                     K[camId][1][1],
-                                     K[camId][1][2],
-                                     K[camId][2][0],
-                                     K[camId][2][1],
-                                     K[camId][2][2]);
+    const nanovdb::math::Mat3<float> K_cam = loadMat3FromAccessor33<float>(K, camId);
     const float *distPtr = (numDistCoeffs > 0) ? &distortionCoeffs[camId][0] : nullptr;
 
-    const WorldRay<float> ray = pixelToWorldRay<float>(row,
-                                                       col,
-                                                       imageWidth,
-                                                       imageHeight,
-                                                       imageOriginW,
-                                                       imageOriginH,
-                                                       R_wc_start,
-                                                       t_wc_start,
-                                                       R_wc_end,
-                                                       t_wc_end,
-                                                       K_cam,
-                                                       distPtr,
-                                                       numDistCoeffs,
-                                                       rollingShutterType,
-                                                       cameraModel);
+    const nanovdb::math::Ray<float> ray = pixelToWorldRay<float>(row,
+                                                                 col,
+                                                                 imageWidth,
+                                                                 imageHeight,
+                                                                 imageOriginW,
+                                                                 imageOriginH,
+                                                                 R_wc_start,
+                                                                 t_wc_start,
+                                                                 R_wc_end,
+                                                                 t_wc_end,
+                                                                 K_cam,
+                                                                 distPtr,
+                                                                 numDistCoeffs,
+                                                                 rollingShutterType,
+                                                                 cameraModel);
 
     // Whether this pixel participates in the backward pass.
     //
     // NOTE: We must *not* early-return for `!inside` because the kernel uses `block.sync` later.
-    const bool done = inside && ray.valid;
+    const bool rayValid = ray.dir().dot(ray.dir()) > 0.0f;
+    const bool done     = inside && rayValid;
 
     // Gaussian range for this tile.
     const int32_t rangeStart = tileOffsets[camId][tileRow][tileCol];
@@ -298,9 +269,9 @@ rasterizeFromWorld3DGSBackwardKernel(
                 Mt                                   = g.isclR;
                 opac                                 = g.opacity;
 
-                o_minus_mu        = ray.origin - mean_w;
+                o_minus_mu        = ray.eye() - mean_w;
                 gro               = Mt * o_minus_mu;
-                grd               = Mt * ray.dir;
+                grd               = Mt * ray.dir();
                 grd_n             = normalizeSafe<float>(grd);
                 gcrod             = grd_n.cross(gro);
                 grayDist          = gcrod.dot(gcrod);
@@ -369,17 +340,18 @@ rasterizeFromWorld3DGSBackwardKernel(
 
                     const nanovdb::math::Vec3<float> v_grd = normalizeSafeVJP<float>(grd, v_grd_n);
 
-                    // v_Mt = outer(v_grd, ray.dir) + outer(v_gro, (ray.origin - mean))
+                    // v_Mt = outer(v_grd, ray.dir) + outer(v_gro, (ray.eye() - mean))
+                    const nanovdb::math::Vec3<float> rayDir = ray.dir();
                     nanovdb::math::Mat3<float> v_Mt =
-                        nanovdb::math::Mat3<float>(v_grd[0] * ray.dir[0],
-                                                   v_grd[0] * ray.dir[1],
-                                                   v_grd[0] * ray.dir[2],
-                                                   v_grd[1] * ray.dir[0],
-                                                   v_grd[1] * ray.dir[1],
-                                                   v_grd[1] * ray.dir[2],
-                                                   v_grd[2] * ray.dir[0],
-                                                   v_grd[2] * ray.dir[1],
-                                                   v_grd[2] * ray.dir[2]);
+                        nanovdb::math::Mat3<float>(v_grd[0] * rayDir[0],
+                                                   v_grd[0] * rayDir[1],
+                                                   v_grd[0] * rayDir[2],
+                                                   v_grd[1] * rayDir[0],
+                                                   v_grd[1] * rayDir[1],
+                                                   v_grd[1] * rayDir[2],
+                                                   v_grd[2] * rayDir[0],
+                                                   v_grd[2] * rayDir[1],
+                                                   v_grd[2] * rayDir[2]);
                     v_Mt += nanovdb::math::Mat3<float>(v_gro[0] * o_minus_mu[0],
                                                        v_gro[0] * o_minus_mu[1],
                                                        v_gro[0] * o_minus_mu[2],
@@ -500,31 +472,8 @@ launchBackward(const torch::Tensor &means,
     const int32_t totalIntersections = (int32_t)tileGaussianIds.size(0);
     const int64_t numDistCoeffs      = distortionCoeffs.size(1);
 
-    const float *bgPtr = nullptr;
-    torch::Tensor backgroundsContig;
-    if (backgrounds.has_value()) {
-        TORCH_CHECK_VALUE(backgrounds.value().is_cuda(), "backgrounds must be CUDA");
-        TORCH_CHECK_VALUE(backgrounds.value().device() == features.device(),
-                          "backgrounds must be on the same device as features");
-        TORCH_CHECK_VALUE(backgrounds.value().scalar_type() == torch::kFloat32,
-                          "backgrounds must have dtype=float32");
-        TORCH_CHECK_VALUE(backgrounds.value().sizes() ==
-                              torch::IntArrayRef({C, (int64_t)NUM_CHANNELS}),
-                          "backgrounds must have shape [C, NUM_CHANNELS]");
-        backgroundsContig = backgrounds.value().contiguous();
-        bgPtr             = backgroundsContig.data_ptr<float>();
-    }
-    const bool *maskPtr = nullptr;
-    torch::Tensor masksContig;
-    if (masks.has_value()) {
-        TORCH_CHECK_VALUE(masks.value().scalar_type() == torch::kBool,
-                          "masks must have dtype=bool");
-        TORCH_CHECK_VALUE(masks.value().sizes() ==
-                              torch::IntArrayRef({C, (int64_t)tileExtentH, (int64_t)tileExtentW}),
-                          "masks must have shape [C, tileExtentH, tileExtentW]");
-        masksContig = masks.value().contiguous();
-        maskPtr     = masksContig.data_ptr<bool>();
-    }
+    const PreparedRasterOptionalInputs opt = prepareRasterOptionalInputs(
+        features, C, tileExtentH, tileExtentW, (int64_t)NUM_CHANNELS, backgrounds, masks);
 
     const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
     const size_t sharedMem = blockSize * (sizeof(int32_t) + sizeof(SharedGaussian<NUM_CHANNELS>));
@@ -557,8 +506,8 @@ launchBackward(const torch::Tensor &means,
         lastIds.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
         dLossDRenderedFeatures.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
         dLossDRenderedAlphas.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
-        bgPtr,
-        maskPtr,
+        opt.backgrounds,
+        opt.masks,
         dMeans.data_ptr<float>(),
         dQuats.data_ptr<float>(),
         dLogScales.data_ptr<float>(),

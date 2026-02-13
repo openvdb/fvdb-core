@@ -1,7 +1,9 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/gsplat/GaussianCameraSharedMemory.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
@@ -136,15 +138,26 @@ template <typename T, bool Ortho> struct ProjectionForward {
         const Mat3 covarCamSpace = transformCovarianceWorldToCam(worldToCamRotMatrix, covar);
 
         // camera projection
-        const T fx = projectionMatrix[0][0], cx = projectionMatrix[0][2],
-                fy = projectionMatrix[1][1], cy = projectionMatrix[1][2];
-        auto [covar2d, mean2d] = [&]() {
+        const CameraIntrinsics<T> intr = loadIntrinsics(projectionMatrix);
+        auto [covar2d, mean2d]         = [&]() {
             if constexpr (Ortho) {
-                return projectGaussianOrthographic<T>(
-                    meansCamSpace, covarCamSpace, fx, fy, cx, cy, mImageWidth, mImageHeight);
+                return projectGaussianOrthographic<T>(meansCamSpace,
+                                                      covarCamSpace,
+                                                      intr.fx,
+                                                      intr.fy,
+                                                      intr.cx,
+                                                      intr.cy,
+                                                      mImageWidth,
+                                                      mImageHeight);
             } else {
-                return projectGaussianPerspective<T>(
-                    meansCamSpace, covarCamSpace, fx, fy, cx, cy, mImageWidth, mImageHeight);
+                return projectGaussianPerspective<T>(meansCamSpace,
+                                                     covarCamSpace,
+                                                     intr.fx,
+                                                     intr.fy,
+                                                     intr.cx,
+                                                     intr.cy,
+                                                     mImageWidth,
+                                                     mImageHeight);
             }
         }();
 
@@ -157,10 +170,8 @@ template <typename T, bool Ortho> struct ProjectionForward {
 
         const Mat2 covar2dInverse = covar2d.inverse();
 
-        // take 3 sigma as the radius
-        const T b      = 0.5f * (covar2d[0][0] + covar2d[1][1]);
-        const T v1     = b + sqrt(max(0.01f, b * b - det));
-        const T radius = ceil(3.f * sqrt(v1));
+        // take 3 sigma as the radius (non-differentiable)
+        const T radius = radiusFromCovariance2dDet(covar2d, det, T(3));
 
         if (radius <= mRadiusClip) {
             mOutRadiiAcc[cid][gid] = 0;
@@ -168,20 +179,20 @@ template <typename T, bool Ortho> struct ProjectionForward {
         }
 
         // Mask out gaussians outside the image region
-        if (mean2d[0] + radius <= 0 || mean2d[0] - radius >= mImageWidth ||
-            mean2d[1] + radius <= 0 || mean2d[1] - radius >= mImageHeight) {
+        if (isOutsideImageWithRadius(mean2d, radius, radius, mImageWidth, mImageHeight)) {
             mOutRadiiAcc[cid][gid] = 0;
             return;
         }
 
         // Write outputs
-        mOutRadiiAcc[cid][gid]      = int32_t(radius);
-        mOutMeans2dAcc[cid][gid][0] = mean2d[0];
-        mOutMeans2dAcc[cid][gid][1] = mean2d[1];
-        mOutDepthsAcc[cid][gid]     = meansCamSpace[2];
-        mOutConicsAcc[cid][gid][0]  = covar2dInverse[0][0];
-        mOutConicsAcc[cid][gid][1]  = covar2dInverse[0][1];
-        mOutConicsAcc[cid][gid][2]  = covar2dInverse[1][1];
+        mOutRadiiAcc[cid][gid]                   = int32_t(radius);
+        mOutMeans2dAcc[cid][gid][0]              = mean2d[0];
+        mOutMeans2dAcc[cid][gid][1]              = mean2d[1];
+        mOutDepthsAcc[cid][gid]                  = meansCamSpace[2];
+        const nanovdb::math::Vec3<T> conicPacked = packConicRowMajor3(covar2dInverse);
+        mOutConicsAcc[cid][gid][0]               = conicPacked[0];
+        mOutConicsAcc[cid][gid][1]               = conicPacked[1];
+        mOutConicsAcc[cid][gid][2]               = conicPacked[2];
         if (mOutCompensationsAcc != nullptr) {
             mOutCompensationsAcc[idx] = compensation;
         }
@@ -189,37 +200,19 @@ template <typename T, bool Ortho> struct ProjectionForward {
 
     inline __device__ void
     loadCamerasIntoSharedMemory() {
-        // Load projection matrices and world-to-camera matrices into shared memory
+        // Load projection matrices and world-to-camera matrices into shared memory.
         alignas(Mat3) extern __shared__ char sharedMemory[];
 
-        projectionMatsShared    = reinterpret_cast<Mat3 *>(sharedMemory);
-        worldToCamRotMatsShared = reinterpret_cast<Mat3 *>(sharedMemory + C * sizeof(Mat3));
-        worldToCamTranslation   = reinterpret_cast<Vec3 *>(sharedMemory + C * 2 * sizeof(Mat3));
+        uint8_t *ptr         = reinterpret_cast<uint8_t *>(sharedMemory);
+        projectionMatsShared = reinterpret_cast<Mat3 *>(ptr);
+        ptr += C * sizeof(Mat3);
+        worldToCamRotMatsShared = reinterpret_cast<Mat3 *>(ptr);
+        ptr += C * sizeof(Mat3);
+        worldToCamTranslation = reinterpret_cast<Vec3 *>(ptr);
 
-        const int64_t totalElements = C * (9 + 9 + 3);
-        for (int64_t i = threadIdx.x; i < totalElements; i += blockDim.x) {
-            if (i < C * 9) {
-                const auto camId   = i / 9;
-                const auto entryId = i % 9;
-                const auto rowId   = entryId / 3;
-                const auto colId   = entryId % 3;
-                projectionMatsShared[camId][rowId][colId] =
-                    mProjectionMatricesAcc[camId][rowId][colId];
-            } else if (i < 2 * C * 9) {
-                const auto baseIdx = i - C * 9;
-                const auto camId   = baseIdx / 9;
-                const auto entryId = baseIdx % 9;
-                const auto rowId   = entryId / 3;
-                const auto colId   = entryId % 3;
-                worldToCamRotMatsShared[camId][rowId][colId] =
-                    mWorldToCamMatricesAcc[camId][rowId][colId];
-            } else {
-                const auto baseIdx                    = i - 2 * C * 9;
-                const auto camId                      = baseIdx / 3;
-                const auto entryId                    = baseIdx % 3;
-                worldToCamTranslation[camId][entryId] = mWorldToCamMatricesAcc[camId][entryId][3];
-            }
-        }
+        copyMat3AccessorToShared<T>(C, projectionMatsShared, mProjectionMatricesAcc);
+        copyWorldToCamRotationToShared<T>(C, worldToCamRotMatsShared, mWorldToCamMatricesAcc);
+        copyWorldToCamTranslationToShared<T>(C, worldToCamTranslation, mWorldToCamMatricesAcc);
     }
 };
 

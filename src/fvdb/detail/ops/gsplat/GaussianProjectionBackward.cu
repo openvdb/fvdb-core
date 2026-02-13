@@ -3,6 +3,7 @@
 //
 #include <fvdb/detail/ops/gsplat/GaussianMacros.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionBackward.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
@@ -126,9 +127,8 @@ projectionBackwardKernel(const int32_t offset,
     dLossDConics += idx * 3;
 
     // vjp: compute the inverse of the 2d covariance
-    const nanovdb::math::Mat2<T> covar2dInverse(conics[0], conics[1], conics[1], conics[2]);
-    const nanovdb::math::Mat2<T> dLossDCovar2dInverse(
-        dLossDConics[0], dLossDConics[1] * .5f, dLossDConics[1] * .5f, dLossDConics[2]);
+    const nanovdb::math::Mat2<T> covar2dInverse       = loadConicRowMajor3(conics);
+    const nanovdb::math::Mat2<T> dLossDCovar2dInverse = loadConicGradRowMajor3(dLossDConics);
     nanovdb::math::Mat2<T> dLossDCovar2d =
         inverseVectorJacobianProduct(covar2dInverse, dLossDCovar2dInverse);
 
@@ -141,41 +141,20 @@ projectionBackwardKernel(const int32_t offset,
     }
 
     // transform Gaussian to camera space
-    const nanovdb::math::Mat3<T> R(worldToCamMatrices[0],
-                                   worldToCamMatrices[1],
-                                   worldToCamMatrices[2],   // 1st row
-                                   worldToCamMatrices[4],
-                                   worldToCamMatrices[5],
-                                   worldToCamMatrices[6],   // 2nd row
-                                   worldToCamMatrices[8],
-                                   worldToCamMatrices[9],
-                                   worldToCamMatrices[10]); // 3rd row
-    const nanovdb::math::Vec3<T> t(
-        worldToCamMatrices[3], worldToCamMatrices[7], worldToCamMatrices[11]);
+    nanovdb::math::Mat3<T> R;
+    nanovdb::math::Vec3<T> t;
+    loadWorldToCamRtRowMajor4x4(worldToCamMatrices, R, t);
     nanovdb::math::Mat3<T> covar;
     nanovdb::math::Vec4<T> quat;
     nanovdb::math::Vec3<T> scale;
     if (covars != nullptr) {
         covars += gId * 6;
-        covar = nanovdb::math::Mat3<T>(covars[0],
-                                       covars[1],
-                                       covars[2], // 1st row
-                                       covars[1],
-                                       covars[3],
-                                       covars[4], // 2nd row
-                                       covars[2],
-                                       covars[4],
-                                       covars[5]  // 3rd row
-        );
+        covar = loadCovarianceRowMajor6(covars);
     } else {
         // compute from quaternions and logScales
         quats += gId * 4;
         logScales += gId * 3;
-        quat  = nanovdb::math::Vec4<T>(quats[0], quats[1], quats[2], quats[3]);
-        scale = nanovdb::math::Vec3<T>(::cuda::std::exp(logScales[0]),
-                                       ::cuda::std::exp(logScales[1]),
-                                       ::cuda::std::exp(logScales[2]));
-
+        loadQuatScaleFromLogScalesRowMajor(quats, logScales, quat, scale);
         covar = quaternionAndScaleToCovariance<T>(quat, scale);
     }
 
@@ -185,17 +164,16 @@ projectionBackwardKernel(const int32_t offset,
     const nanovdb::math::Mat3<T> &covarCamSpace = transformCovarianceWorldToCam(R, covar);
 
     // vjp: camera projection
-    const T fx = projectionMatrices[0], cx = projectionMatrices[2], fy = projectionMatrices[4],
-            cy                                     = projectionMatrices[5];
+    const CameraIntrinsics<T> intr                 = loadIntrinsicsRowMajor3x3(projectionMatrices);
     auto [dLossDCovarCamSpace, dLossDMeanCamSpace] = [&]() {
         if constexpr (Ortho) {
             return projectGaussianOrthographicVectorJacobianProduct<T>(
                 meansCamSpace,
                 covarCamSpace,
-                fx,
-                fy,
-                cx,
-                cy,
+                intr.fx,
+                intr.fy,
+                intr.cx,
+                intr.cy,
                 imageWidth,
                 imageHeight,
                 dLossDCovar2d,
@@ -204,10 +182,10 @@ projectionBackwardKernel(const int32_t offset,
             return projectGaussianPerspectiveVectorJacobianProduct<T>(
                 meansCamSpace,
                 covarCamSpace,
-                fx,
-                fy,
-                cx,
-                cy,
+                intr.fx,
+                intr.fy,
+                intr.cx,
+                intr.cy,
                 imageWidth,
                 imageHeight,
                 dLossDCovar2d,
