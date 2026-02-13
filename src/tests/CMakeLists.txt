@@ -158,5 +158,5 @@ ConfigureTest(GaussianMCMCAddNoiseTest "GaussianMCMCAddNoiseTest.cpp")
 ConfigureTest(GaussianMCMCRelocationTest "GaussianMCMCRelocationTest.cpp")
 
 if(NOT NANOVDB_EDITOR_SKIP)
-  #ConfigureTest(ViewerTest "ViewerTest.cpp")
+  ConfigureTest(ViewerTest "ViewerTest.cpp")
 endif()
