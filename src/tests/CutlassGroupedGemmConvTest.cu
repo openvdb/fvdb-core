@@ -4,14 +4,17 @@
 // CutlassGroupedGemmConvTest.cu -- Tests for the CUTLASS-accelerated sparse
 // convolution.
 //
-// Phase 1: Topology validation only.  Compare cutlassConvTopology against
-// gatherScatterSparseConvTopology (reference) for total_pairs and per-offset
-// counts across all kernel size and stride combinations.
+// Test sections:
+//   1. Topology validation (cutlassConvTopology vs gatherScatterSparseConvTopology)
+//   2. GPU topology builder comparison (GPU two-pass vs GroupedGemm CSR reference)
+//   3. Forward numerical correctness (CUTLASS vs GatherScatter reference)
+//   4. Sparse grid tests (sphere shells with realistic sparsity patterns)
 //
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchImpl.h>
 #include <fvdb/detail/ops/convolution/CutlassGroupedGemm.h>
 #include <fvdb/detail/ops/convolution/GatherScatter.h>
+#include <fvdb/detail/ops/convolution/GroupedGemm.h>
 
 #include <torch/types.h>
 
@@ -121,19 +124,17 @@ validateTopology(c10::intrusive_ptr<GridBatchImpl> const &feature_grid,
                  std::string const &label) {
     int64_t const NA = feature_grid->totalVoxels();
     int64_t const NB = output_grid->totalVoxels();
-    int32_t const K =
-        static_cast<int32_t>(kernel_size[0]) * kernel_size[1] * kernel_size[2];
+    int32_t const K  = static_cast<int32_t>(kernel_size[0]) * kernel_size[1] * kernel_size[2];
 
     // -- Build both topologies --
-    auto cutlass_topo =
-        ops::cutlassConvTopology(*feature_grid, *output_grid, kernel_size, stride);
+    auto cutlass_topo = ops::cutlassConvTopology(*feature_grid, *output_grid, kernel_size, stride);
     auto ref_topo =
         ops::gatherScatterSparseConvTopology(*feature_grid, *output_grid, kernel_size, stride);
 
     // -- Reference: extract per-offset counts from dense kernel_map[O, K] --
     // kernel_map is [output_total_voxels, kernel_volume], transposed to [K, O] for iteration.
     auto kmap_t = ref_topo.kernel_map.t().contiguous(); // [K, O]
-    auto mask   = kmap_t != -1;                          // [K, O] bool
+    auto mask   = kmap_t != -1;                         // [K, O] bool
 
     // Per-offset reference counts
     auto ref_counts_tensor =
@@ -154,18 +155,16 @@ validateTopology(c10::intrusive_ptr<GridBatchImpl> const &feature_grid,
     auto off = cutlass_topo.offsets.accessor<int64_t, 1>();
     EXPECT_EQ(off[0], 0) << label << ": offsets[0] != 0";
     for (int32_t k = 0; k < K; ++k) {
-        EXPECT_LE(off[k], off[k + 1])
-            << label << ": offsets not non-decreasing at k=" << k;
+        EXPECT_LE(off[k], off[k + 1]) << label << ": offsets not non-decreasing at k=" << k;
     }
-    EXPECT_EQ(off[K], cutlass_topo.total_pairs)
-        << label << ": offsets[K] != total_pairs";
+    EXPECT_EQ(off[K], cutlass_topo.total_pairs) << label << ": offsets[K] != total_pairs";
 
     // -- 3. Per-offset counts match --
     for (int32_t k = 0; k < K; ++k) {
         int64_t cutlass_count = off[k + 1] - off[k];
         EXPECT_EQ(cutlass_count, ref_counts[k])
-            << label << ": count mismatch at offset k=" << k
-            << " (cutlass=" << cutlass_count << " ref=" << ref_counts[k] << ")";
+            << label << ": count mismatch at offset k=" << k << " (cutlass=" << cutlass_count
+            << " ref=" << ref_counts[k] << ")";
     }
 
     if (cutlass_topo.total_pairs == 0)
@@ -210,9 +209,8 @@ validateTopology(c10::intrusive_ptr<GridBatchImpl> const &feature_grid,
         }
 
         EXPECT_EQ(cutlass_pairs, ref_pairs)
-            << label << ": pair set mismatch at offset k=" << k
-            << " (cutlass has " << cutlass_pairs.size()
-            << " pairs, ref has " << ref_pairs.size() << ")";
+            << label << ": pair set mismatch at offset k=" << k << " (cutlass has "
+            << cutlass_pairs.size() << " pairs, ref has " << ref_pairs.size() << ")";
     }
 }
 
@@ -238,9 +236,12 @@ TEST_P(TopoKernelSizeTest, SameGridStride1) {
     auto grid = makeDenseGrid(dim, cudaDevice());
 
     nanovdb::Coord ks(k0, k1, k2);
-    validateTopology(grid, grid, ks, {1, 1, 1},
-                     "topo_k" + std::to_string(k0) + "x" + std::to_string(k1) +
-                         "x" + std::to_string(k2));
+    validateTopology(grid,
+                     grid,
+                     ks,
+                     {1, 1, 1},
+                     "topo_k" + std::to_string(k0) + "x" + std::to_string(k1) + "x" +
+                         std::to_string(k2));
 }
 
 static std::vector<KernelParam>
@@ -282,8 +283,8 @@ using StrideParam = std::tuple<int, int, int, int, int, int>;
 static std::string
 strideParamName(::testing::TestParamInfo<StrideParam> const &info) {
     auto [k0, k1, k2, s0, s1, s2] = info.param;
-    return "k" + std::to_string(k0) + "x" + std::to_string(k1) + "x" + std::to_string(k2) +
-           "_s" + std::to_string(s0) + "x" + std::to_string(s1) + "x" + std::to_string(s2);
+    return "k" + std::to_string(k0) + "x" + std::to_string(k1) + "x" + std::to_string(k2) + "_s" +
+           std::to_string(s0) + "x" + std::to_string(s1) + "x" + std::to_string(s2);
 }
 
 class TopoStrideTest : public ::testing::TestWithParam<StrideParam> {};
@@ -299,10 +300,13 @@ TEST_P(TopoStrideTest, StridedDifferentGrids) {
     nanovdb::Coord stride(s0, s1, s2);
     auto dst_grid = src_grid->convolutionOutput(ks, stride);
 
-    validateTopology(
-        src_grid, dst_grid, ks, stride,
-        "topo_k" + std::to_string(k0) + "x" + std::to_string(k1) + "x" + std::to_string(k2) +
-            "_s" + std::to_string(s0) + "x" + std::to_string(s1) + "x" + std::to_string(s2));
+    validateTopology(src_grid,
+                     dst_grid,
+                     ks,
+                     stride,
+                     "topo_k" + std::to_string(k0) + "x" + std::to_string(k1) + "x" +
+                         std::to_string(k2) + "_s" + std::to_string(s0) + "x" + std::to_string(s1) +
+                         "x" + std::to_string(s2));
 }
 
 static std::vector<StrideParam>
@@ -378,6 +382,212 @@ TEST(TopoEdgeCases, SingleVoxelConvOutput) {
 }
 
 // =============================================================================
+// GPU topology builder vs reference comparison tests
+// =============================================================================
+//
+// Compare the GPU two-pass topology builder (called via cutlassConvTopology)
+// against the GroupedGemm CSR reference (groupedGemmSparseConvTopology).
+// All values are integer -- must match exactly.  Within each offset segment
+// the pair ordering may differ (atomicAdd non-determinism), so we compare
+// sorted pair sets.
+
+static void
+compareGpuVsRefTopology(c10::intrusive_ptr<GridBatchImpl> const &feature_grid,
+                        c10::intrusive_ptr<GridBatchImpl> const &output_grid,
+                        nanovdb::Coord kernel_size,
+                        nanovdb::Coord stride,
+                        std::string const &label) {
+    // GPU two-pass topology (internally also validates against reference via TORCH_CHECK)
+    auto gpu = ops::cutlassConvTopology(*feature_grid, *output_grid, kernel_size, stride);
+
+    // Reference CSR topology (independent call)
+    auto ref = ops::groupedGemmSparseConvTopology(*feature_grid, *output_grid, kernel_size, stride);
+
+    // -- Metadata must match exactly --
+    EXPECT_EQ(gpu.kernel_volume, ref.kernel_volume) << label << ": kernel_volume";
+    EXPECT_EQ(gpu.feature_total_voxels, ref.feature_total_voxels)
+        << label << ": feature_total_voxels";
+    EXPECT_EQ(gpu.output_total_voxels, ref.output_total_voxels) << label << ": output_total_voxels";
+    EXPECT_EQ(gpu.total_pairs, ref.total_pairs)
+        << label << ": total_pairs (gpu=" << gpu.total_pairs << " ref=" << ref.total_pairs << ")";
+
+    // -- Offsets must match exactly --
+    ASSERT_EQ(gpu.offsets.size(0), ref.offsets.size(0)) << label << ": offsets size";
+    EXPECT_TRUE(torch::equal(gpu.offsets, ref.offsets)) << label << ": offsets content";
+
+    if (gpu.total_pairs == 0)
+        return;
+
+    // -- Per-segment pair-set equality --
+    auto gpu_off = gpu.offsets.accessor<int64_t, 1>();
+
+    auto gpu_g_cpu = gpu.gather_indices.cpu();
+    auto gpu_s_cpu = gpu.scatter_indices.cpu();
+    auto ref_g_cpu = ref.gather_indices.cpu();
+    auto ref_s_cpu = ref.scatter_indices.cpu();
+
+    auto ga  = gpu_g_cpu.accessor<int32_t, 1>();
+    auto sa  = gpu_s_cpu.accessor<int32_t, 1>();
+    auto rga = ref_g_cpu.accessor<int32_t, 1>();
+    auto rsa = ref_s_cpu.accessor<int32_t, 1>();
+
+    for (int64_t k = 0; k < gpu.kernel_volume; ++k) {
+        int64_t start = gpu_off[k];
+        int64_t end   = gpu_off[k + 1];
+        if (end == start)
+            continue;
+
+        std::set<std::pair<int32_t, int32_t>> gpu_pairs, ref_pairs;
+        for (int64_t i = start; i < end; ++i) {
+            gpu_pairs.insert({ga[i], sa[i]});
+            ref_pairs.insert({rga[i], rsa[i]});
+        }
+
+        EXPECT_EQ(gpu_pairs, ref_pairs)
+            << label << ": pair set mismatch at offset k=" << k << " (gpu has " << gpu_pairs.size()
+            << " pairs, ref has " << ref_pairs.size() << ")";
+    }
+}
+
+// -- Parameterized by kernel size, same grid, stride 1 --
+
+class GpuTopoKernelSizeTest : public ::testing::TestWithParam<KernelParam> {};
+
+TEST_P(GpuTopoKernelSizeTest, DenseGridStride1) {
+    skipIfCudaUnavailable();
+    auto [k0, k1, k2] = GetParam();
+    int dim           = std::max({k0, k1, k2, 4}) + 2;
+    auto grid         = makeDenseGrid(dim, cudaDevice());
+    nanovdb::Coord ks(k0, k1, k2);
+    compareGpuVsRefTopology(grid,
+                            grid,
+                            ks,
+                            {1, 1, 1},
+                            "gpu_topo_k" + std::to_string(k0) + "x" + std::to_string(k1) + "x" +
+                                std::to_string(k2));
+}
+
+INSTANTIATE_TEST_SUITE_P(GpuTopoKernelSizes,
+                         GpuTopoKernelSizeTest,
+                         ::testing::ValuesIn(kernelSizeConfigs()),
+                         kernelParamName);
+
+// -- Parameterized by stride, different grids --
+
+class GpuTopoStrideTest : public ::testing::TestWithParam<StrideParam> {};
+
+TEST_P(GpuTopoStrideTest, DenseGridStrided) {
+    skipIfCudaUnavailable();
+    auto [k0, k1, k2, s0, s1, s2] = GetParam();
+    auto device                   = cudaDevice();
+    auto src_grid                 = makeDenseGrid(8, device);
+    nanovdb::Coord ks(k0, k1, k2);
+    nanovdb::Coord stride(s0, s1, s2);
+    auto dst_grid = src_grid->convolutionOutput(ks, stride);
+    compareGpuVsRefTopology(src_grid,
+                            dst_grid,
+                            ks,
+                            stride,
+                            "gpu_topo_k" + std::to_string(k0) + "x" + std::to_string(k1) + "x" +
+                                std::to_string(k2) + "_s" + std::to_string(s0) + "x" +
+                                std::to_string(s1) + "x" + std::to_string(s2));
+}
+
+INSTANTIATE_TEST_SUITE_P(GpuTopoStrides,
+                         GpuTopoStrideTest,
+                         ::testing::ValuesIn(strideConfigs()),
+                         strideParamName);
+
+// -- Sphere shells (realistic sparsity) --
+
+TEST(GpuTopoSphere, Sphere_R10_3x3x3) {
+    skipIfCudaUnavailable();
+    auto grid = makeSphereShellGrid(10, cudaDevice());
+    compareGpuVsRefTopology(grid, grid, {3, 3, 3}, {1, 1, 1}, "gpu_topo_sphere_R10_3x3x3");
+}
+
+TEST(GpuTopoSphere, Sphere_R20_3x3x3) {
+    skipIfCudaUnavailable();
+    auto grid = makeSphereShellGrid(20, cudaDevice());
+    compareGpuVsRefTopology(grid, grid, {3, 3, 3}, {1, 1, 1}, "gpu_topo_sphere_R20_3x3x3");
+}
+
+TEST(GpuTopoSphere, Sphere_R50_3x3x3) {
+    skipIfCudaUnavailable();
+    auto grid = makeSphereShellGrid(50, cudaDevice());
+    compareGpuVsRefTopology(grid, grid, {3, 3, 3}, {1, 1, 1}, "gpu_topo_sphere_R50_3x3x3");
+}
+
+TEST(GpuTopoSphere, Sphere_R20_3x5x1) {
+    skipIfCudaUnavailable();
+    auto grid = makeSphereShellGrid(20, cudaDevice());
+    compareGpuVsRefTopology(grid, grid, {3, 5, 1}, {1, 1, 1}, "gpu_topo_sphere_R20_3x5x1");
+}
+
+TEST(GpuTopoSphere, Sphere_R20_2x2x2) {
+    skipIfCudaUnavailable();
+    auto grid = makeSphereShellGrid(20, cudaDevice());
+    compareGpuVsRefTopology(grid, grid, {2, 2, 2}, {1, 1, 1}, "gpu_topo_sphere_R20_2x2x2");
+}
+
+TEST(GpuTopoSphere, Sphere_R20_3x4x5_Stride1x2x3) {
+    skipIfCudaUnavailable();
+    auto device   = cudaDevice();
+    auto src_grid = makeSphereShellGrid(20, device);
+    nanovdb::Coord ks(3, 4, 5);
+    nanovdb::Coord stride(1, 2, 3);
+    auto dst_grid = src_grid->convolutionOutput(ks, stride);
+    compareGpuVsRefTopology(src_grid, dst_grid, ks, stride, "gpu_topo_sphere_R20_3x4x5_s1x2x3");
+}
+
+// -- Edge cases --
+
+TEST(GpuTopoEdgeCases, EmptyTopology) {
+    skipIfCudaUnavailable();
+    auto device   = cudaDevice();
+    auto src_grid = makeGrid(torch::tensor({{0, 0, 0}}, torch::kInt32), device);
+    auto dst_grid = makeGrid(torch::tensor({{100, 100, 100}}, torch::kInt32), device);
+    compareGpuVsRefTopology(src_grid, dst_grid, {3, 3, 3}, {1, 1, 1}, "gpu_topo_empty");
+}
+
+TEST(GpuTopoEdgeCases, SingleVoxelSameGrid) {
+    skipIfCudaUnavailable();
+    auto grid = makeGrid(torch::tensor({{5, 5, 5}}, torch::kInt32), cudaDevice());
+    compareGpuVsRefTopology(grid, grid, {3, 3, 3}, {1, 1, 1}, "gpu_topo_single_same");
+}
+
+TEST(GpuTopoEdgeCases, SingleVoxelConvOutput) {
+    skipIfCudaUnavailable();
+    auto device   = cudaDevice();
+    auto src_grid = makeGrid(torch::tensor({{5, 5, 5}}, torch::kInt32), device);
+    auto dst_grid = src_grid->convolutionOutput({3, 3, 3}, {1, 1, 1});
+    compareGpuVsRefTopology(
+        src_grid, dst_grid, {3, 3, 3}, {1, 1, 1}, "gpu_topo_single_conv_output");
+}
+
+TEST(GpuTopoEdgeCases, SingleVoxel1x1x1) {
+    skipIfCudaUnavailable();
+    auto grid = makeGrid(torch::tensor({{5, 5, 5}}, torch::kInt32), cudaDevice());
+    compareGpuVsRefTopology(grid, grid, {1, 1, 1}, {1, 1, 1}, "gpu_topo_single_1x1x1");
+}
+
+TEST(GpuTopoEdgeCases, LargeEvenKernel4x4x4) {
+    skipIfCudaUnavailable();
+    auto grid = makeDenseGrid(8, cudaDevice());
+    compareGpuVsRefTopology(grid, grid, {4, 4, 4}, {1, 1, 1}, "gpu_topo_even_4x4x4");
+}
+
+TEST(GpuTopoEdgeCases, LargeEvenKernel4x4x4_Stride2) {
+    skipIfCudaUnavailable();
+    auto device   = cudaDevice();
+    auto src_grid = makeDenseGrid(8, device);
+    nanovdb::Coord ks(4, 4, 4);
+    nanovdb::Coord stride(2, 2, 2);
+    auto dst_grid = src_grid->convolutionOutput(ks, stride);
+    compareGpuVsRefTopology(src_grid, dst_grid, ks, stride, "gpu_topo_even_4x4x4_s2");
+}
+
+// =============================================================================
 // Forward: identity 1x1x1 smoke test (exercises CUTLASS GEMM path)
 // =============================================================================
 
@@ -389,8 +599,7 @@ TEST(CutlassForwardSmoke, Identity1x1x1_C64) {
     auto grid   = makeDenseGrid(4, device);
     int64_t NV  = grid->totalVoxels();
 
-    auto features =
-        torch::randn({NV, C}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
+    auto features = torch::randn({NV, C}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
     auto weights =
         torch::eye(C, torch::dtype(torch::kFloat16).device(device)).reshape({C, C, 1, 1, 1});
 
@@ -404,10 +613,8 @@ TEST(CutlassForwardSmoke, Identity1x1x1_C64) {
 
     EXPECT_TRUE(torch::allclose(out_f32, feat_f32, 0.01, 0.01))
         << "Identity 1x1x1 conv mismatch\n"
-        << "  max abs diff = "
-        << (out_f32 - feat_f32).abs().max().item<double>() << "\n"
-        << "  mean abs diff = "
-        << (out_f32 - feat_f32).abs().mean().item<double>();
+        << "  max abs diff = " << (out_f32 - feat_f32).abs().max().item<double>() << "\n"
+        << "  mean abs diff = " << (out_f32 - feat_f32).abs().mean().item<double>();
 }
 
 // 1x1x1 with random weights = pure matmul, including non-square (Cin != Cout)
@@ -420,8 +627,7 @@ TEST(CutlassForwardSmoke, Matmul1x1x1_C64) {
     int64_t NV  = grid->totalVoxels();
 
     torch::manual_seed(123);
-    auto features =
-        torch::randn({NV, C}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
+    auto features = torch::randn({NV, C}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
     auto weights =
         torch::randn({C, C, 1, 1, 1}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
 
@@ -449,8 +655,7 @@ TEST(CutlassForwardSmoke, Matmul1x1x1_Cin32_Cout64) {
     int64_t NV  = grid->totalVoxels();
 
     torch::manual_seed(456);
-    auto features =
-        torch::randn({NV, 32}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
+    auto features = torch::randn({NV, 32}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
     auto weights =
         torch::randn({64, 32, 1, 1, 1}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
 
@@ -483,8 +688,7 @@ TEST(CutlassForwardSmoke, Forward3x3x3_C64) {
     int64_t NV  = grid->totalVoxels();
 
     torch::manual_seed(789);
-    auto features =
-        torch::randn({NV, C}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
+    auto features = torch::randn({NV, C}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
     auto weights =
         torch::randn({C, C, 3, 3, 3}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
 
@@ -519,14 +723,12 @@ TEST(CutlassForwardSmoke, Forward3x3x3_Stride2_C64) {
     int64_t NA = src_grid->totalVoxels();
 
     torch::manual_seed(101);
-    auto features =
-        torch::randn({NA, C}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
+    auto features = torch::randn({NA, C}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
     auto weights =
         torch::randn({C, C, 3, 3, 3}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
 
-    auto ref_topo =
-        ops::gatherScatterSparseConvTopology(*src_grid, *dst_grid, ks, stride);
-    auto ref_out = ops::gatherScatterSparseConv(
+    auto ref_topo = ops::gatherScatterSparseConvTopology(*src_grid, *dst_grid, ks, stride);
+    auto ref_out  = ops::gatherScatterSparseConv(
         features.to(torch::kFloat32), weights.to(torch::kFloat32), ref_topo);
 
     auto topo = ops::cutlassConvTopology(*src_grid, *dst_grid, ks, stride);
@@ -551,8 +753,7 @@ TEST(CutlassForwardSmoke, Forward3x5x1_C64) {
     int64_t NV  = grid->totalVoxels();
 
     torch::manual_seed(202);
-    auto features =
-        torch::randn({NV, C}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
+    auto features = torch::randn({NV, C}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
     auto weights =
         torch::randn({C, C, 3, 5, 1}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
 
@@ -582,8 +783,7 @@ TEST(CutlassForwardSmoke, Forward2x2x2_C64) {
     int64_t NV  = grid->totalVoxels();
 
     torch::manual_seed(303);
-    auto features =
-        torch::randn({NV, C}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
+    auto features = torch::randn({NV, C}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
     auto weights =
         torch::randn({C, C, 2, 2, 2}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
 
@@ -613,8 +813,7 @@ TEST(CutlassForwardSmoke, Forward3x3x3_C128) {
     int64_t NV  = grid->totalVoxels();
 
     torch::manual_seed(404);
-    auto features =
-        torch::randn({NV, C}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
+    auto features = torch::randn({NV, C}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
     auto weights =
         torch::randn({C, C, 3, 3, 3}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
 
@@ -649,14 +848,12 @@ TEST(CutlassForwardSmoke, Forward3x3x3_Stride1x2x1_C64) {
     int64_t NA = src_grid->totalVoxels();
 
     torch::manual_seed(505);
-    auto features =
-        torch::randn({NA, C}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
+    auto features = torch::randn({NA, C}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
     auto weights =
         torch::randn({C, C, 3, 3, 3}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
 
-    auto ref_topo =
-        ops::gatherScatterSparseConvTopology(*src_grid, *dst_grid, ks, stride);
-    auto ref_out = ops::gatherScatterSparseConv(
+    auto ref_topo = ops::gatherScatterSparseConvTopology(*src_grid, *dst_grid, ks, stride);
+    auto ref_out  = ops::gatherScatterSparseConv(
         features.to(torch::kFloat32), weights.to(torch::kFloat32), ref_topo);
 
     auto topo = ops::cutlassConvTopology(*src_grid, *dst_grid, ks, stride);
@@ -692,10 +889,9 @@ compareForward(c10::intrusive_ptr<GridBatchImpl> const &feature_grid,
 
     torch::manual_seed(42);
     auto features_f16 = torch::randn({NA, Cin}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
-    auto weights_f16 =
-        torch::randn({Cout, Cin, kernel_size[0], kernel_size[1], kernel_size[2]},
-                     torch::dtype(torch::kFloat16).device(device)) *
-        0.1;
+    auto weights_f16  = torch::randn({Cout, Cin, kernel_size[0], kernel_size[1], kernel_size[2]},
+                                    torch::dtype(torch::kFloat16).device(device)) *
+                       0.1;
 
     auto ref_topo =
         ops::gatherScatterSparseConvTopology(*feature_grid, *output_grid, kernel_size, stride);
@@ -741,8 +937,10 @@ channelConfigs() {
     return {{32, 32}, {64, 64}, {128, 128}, {32, 64}, {64, 128}};
 }
 
-INSTANTIATE_TEST_SUITE_P(Channels, CutlassChannelTest,
-    ::testing::ValuesIn(channelConfigs()), channelParamName);
+INSTANTIATE_TEST_SUITE_P(Channels,
+                         CutlassChannelTest,
+                         ::testing::ValuesIn(channelConfigs()),
+                         channelParamName);
 
 // -- Full kernel-size sweep --
 
@@ -751,15 +949,25 @@ class CutlassKernelSizeTest : public ::testing::TestWithParam<KernelParam> {};
 TEST_P(CutlassKernelSizeTest, ForwardSameGrid) {
     skipIfCudaUnavailable();
     auto [k0, k1, k2] = GetParam();
-    int dim   = std::max({k0, k1, k2, 4}) + 2;
-    auto grid = makeDenseGrid(dim, cudaDevice());
+    int dim           = std::max({k0, k1, k2, 4}) + 2;
+    auto grid         = makeDenseGrid(dim, cudaDevice());
     nanovdb::Coord ks(k0, k1, k2);
-    compareForward(grid, grid, ks, {1, 1, 1}, 64, 64, 0.05, 0.05,
-                   "kernel_" + std::to_string(k0) + "x" + std::to_string(k1) + "x" + std::to_string(k2));
+    compareForward(grid,
+                   grid,
+                   ks,
+                   {1, 1, 1},
+                   64,
+                   64,
+                   0.05,
+                   0.05,
+                   "kernel_" + std::to_string(k0) + "x" + std::to_string(k1) + "x" +
+                       std::to_string(k2));
 }
 
-INSTANTIATE_TEST_SUITE_P(FwdKernelSizes, CutlassKernelSizeTest,
-    ::testing::ValuesIn(kernelSizeConfigs()), kernelParamName);
+INSTANTIATE_TEST_SUITE_P(FwdKernelSizes,
+                         CutlassKernelSizeTest,
+                         ::testing::ValuesIn(kernelSizeConfigs()),
+                         kernelParamName);
 
 // -- Full stride sweep --
 
@@ -768,42 +976,52 @@ class CutlassStrideTest : public ::testing::TestWithParam<StrideParam> {};
 TEST_P(CutlassStrideTest, ForwardStrided) {
     skipIfCudaUnavailable();
     auto [k0, k1, k2, s0, s1, s2] = GetParam();
-    auto device   = cudaDevice();
-    auto src_grid = makeDenseGrid(8, device);
+    auto device                   = cudaDevice();
+    auto src_grid                 = makeDenseGrid(8, device);
     nanovdb::Coord ks(k0, k1, k2);
     nanovdb::Coord stride(s0, s1, s2);
     auto dst_grid = src_grid->convolutionOutput(ks, stride);
-    compareForward(src_grid, dst_grid, ks, stride, 64, 64, 0.05, 0.05,
-                   "stride_k" + std::to_string(k0) + "x" + std::to_string(k1) + "x" + std::to_string(k2) +
-                   "_s" + std::to_string(s0) + "x" + std::to_string(s1) + "x" + std::to_string(s2));
+    compareForward(src_grid,
+                   dst_grid,
+                   ks,
+                   stride,
+                   64,
+                   64,
+                   0.05,
+                   0.05,
+                   "stride_k" + std::to_string(k0) + "x" + std::to_string(k1) + "x" +
+                       std::to_string(k2) + "_s" + std::to_string(s0) + "x" + std::to_string(s1) +
+                       "x" + std::to_string(s2));
 }
 
-INSTANTIATE_TEST_SUITE_P(FwdStrides, CutlassStrideTest,
-    ::testing::ValuesIn(strideConfigs()), strideParamName);
+INSTANTIATE_TEST_SUITE_P(FwdStrides,
+                         CutlassStrideTest,
+                         ::testing::ValuesIn(strideConfigs()),
+                         strideParamName);
 
 // -- Edge-case forward tests --
 
 TEST(CutlassEdgeCases, SingleVoxelForward) {
     skipIfCudaUnavailable();
-    auto device = cudaDevice();
-    auto ijk  = torch::tensor({{5, 5, 5}}, torch::kInt32);
-    auto grid = makeGrid(ijk, device);
+    auto device   = cudaDevice();
+    auto ijk      = torch::tensor({{5, 5, 5}}, torch::kInt32);
+    auto grid     = makeGrid(ijk, device);
     auto dst_grid = grid->convolutionOutput({3, 3, 3}, {1, 1, 1});
     compareForward(grid, dst_grid, {3, 3, 3}, {1, 1, 1}, 32, 32, 0.05, 0.05, "single_voxel");
 }
 
 TEST(CutlassEdgeCases, EmptyOutputForward) {
     skipIfCudaUnavailable();
-    auto device = cudaDevice();
+    auto device   = cudaDevice();
     auto ijk      = torch::tensor({{0, 0, 0}}, torch::kInt32);
     auto src_grid = makeGrid(ijk, device);
     auto far_ijk  = torch::tensor({{100, 100, 100}}, torch::kInt32);
     auto dst_grid = makeGrid(far_ijk, device);
-    auto topo = ops::cutlassConvTopology(*src_grid, *dst_grid, {3, 3, 3}, {1, 1, 1});
+    auto topo     = ops::cutlassConvTopology(*src_grid, *dst_grid, {3, 3, 3}, {1, 1, 1});
     EXPECT_EQ(topo.total_pairs, 0);
     auto features = torch::randn({1, 32}, torch::dtype(torch::kFloat16).device(device));
     auto weights  = torch::randn({32, 32, 3, 3, 3}, torch::dtype(torch::kFloat16).device(device));
-    auto out = ops::cutlassConv(features, weights, topo);
+    auto out      = ops::cutlassConv(features, weights, topo);
     EXPECT_EQ(out.size(0), 1);
     EXPECT_EQ(out.size(1), 32);
     EXPECT_TRUE(out.abs().max().item<float>() == 0.0f);
@@ -823,8 +1041,7 @@ TEST(CutlassSphereTests, Sphere_R10_3x3x3_C64) {
     auto device = cudaDevice();
     auto grid   = makeSphereShellGrid(10, device);
 
-    compareForward(grid, grid, {3, 3, 3}, {1, 1, 1}, 64, 64, 0.05, 0.05,
-                   "sphere_R10_3x3x3");
+    compareForward(grid, grid, {3, 3, 3}, {1, 1, 1}, 64, 64, 0.05, 0.05, "sphere_R10_3x3x3");
 }
 
 // Medium sphere: R=20, ~5K voxels, 3x3x3, same grid
@@ -833,8 +1050,7 @@ TEST(CutlassSphereTests, Sphere_R20_3x3x3_C64) {
     auto device = cudaDevice();
     auto grid   = makeSphereShellGrid(20, device);
 
-    compareForward(grid, grid, {3, 3, 3}, {1, 1, 1}, 64, 64, 0.05, 0.05,
-                   "sphere_R20_3x3x3");
+    compareForward(grid, grid, {3, 3, 3}, {1, 1, 1}, 64, 64, 0.05, 0.05, "sphere_R20_3x3x3");
 }
 
 // Larger sphere: R=50, ~30K voxels, 3x3x3, same grid, C=128
@@ -843,8 +1059,7 @@ TEST(CutlassSphereTests, Sphere_R50_3x3x3_C128) {
     auto device = cudaDevice();
     auto grid   = makeSphereShellGrid(50, device);
 
-    compareForward(grid, grid, {3, 3, 3}, {1, 1, 1}, 128, 128, 0.05, 0.05,
-                   "sphere_R50_3x3x3_C128");
+    compareForward(grid, grid, {3, 3, 3}, {1, 1, 1}, 128, 128, 0.05, 0.05, "sphere_R50_3x3x3_C128");
 }
 
 // Sphere with non-uniform kernel: 3x5x1
@@ -853,8 +1068,7 @@ TEST(CutlassSphereTests, Sphere_R20_3x5x1_C64) {
     auto device = cudaDevice();
     auto grid   = makeSphereShellGrid(20, device);
 
-    compareForward(grid, grid, {3, 5, 1}, {1, 1, 1}, 64, 64, 0.05, 0.05,
-                   "sphere_R20_3x5x1");
+    compareForward(grid, grid, {3, 5, 1}, {1, 1, 1}, 64, 64, 0.05, 0.05, "sphere_R20_3x5x1");
 }
 
 // Sphere with even kernel: 2x2x2
@@ -863,8 +1077,7 @@ TEST(CutlassSphereTests, Sphere_R20_2x2x2_C64) {
     auto device = cudaDevice();
     auto grid   = makeSphereShellGrid(20, device);
 
-    compareForward(grid, grid, {2, 2, 2}, {1, 1, 1}, 64, 64, 0.05, 0.05,
-                   "sphere_R20_2x2x2");
+    compareForward(grid, grid, {2, 2, 2}, {1, 1, 1}, 64, 64, 0.05, 0.05, "sphere_R20_2x2x2");
 }
 
 // Sphere with stride: 3x3x3, stride 2, different src/dst grids
@@ -877,8 +1090,7 @@ TEST(CutlassSphereTests, Sphere_R20_3x3x3_Stride2_C64) {
     nanovdb::Coord stride(2, 2, 2);
     auto dst_grid = src_grid->convolutionOutput(ks, stride);
 
-    compareForward(src_grid, dst_grid, ks, stride, 64, 64, 0.05, 0.05,
-                   "sphere_R20_3x3x3_stride2");
+    compareForward(src_grid, dst_grid, ks, stride, 64, 64, 0.05, 0.05, "sphere_R20_3x3x3_stride2");
 }
 
 // Sphere with Cin != Cout: channel expansion
@@ -887,8 +1099,8 @@ TEST(CutlassSphereTests, Sphere_R20_3x3x3_Cin32_Cout128) {
     auto device = cudaDevice();
     auto grid   = makeSphereShellGrid(20, device);
 
-    compareForward(grid, grid, {3, 3, 3}, {1, 1, 1}, 32, 128, 0.05, 0.05,
-                   "sphere_R20_Cin32_Cout128");
+    compareForward(
+        grid, grid, {3, 3, 3}, {1, 1, 1}, 32, 128, 0.05, 0.05, "sphere_R20_Cin32_Cout128");
 }
 
 // Sphere with mixed odd/even kernel and non-uniform stride
@@ -901,6 +1113,5 @@ TEST(CutlassSphereTests, Sphere_R20_3x4x5_Stride1x2x3_C64) {
     nanovdb::Coord stride(1, 2, 3);
     auto dst_grid = src_grid->convolutionOutput(ks, stride);
 
-    compareForward(src_grid, dst_grid, ks, stride, 64, 64, 0.05, 0.05,
-                   "sphere_R20_3x4x5_s1x2x3");
+    compareForward(src_grid, dst_grid, ks, stride, 64, 64, 0.05, 0.05, "sphere_R20_3x4x5_s1x2x3");
 }

@@ -8,7 +8,8 @@
 //
 // Pipeline (forward):
 //   Phase 0 -- Topology (once per grid pair):
-//     Delegates to groupedGemmSparseConvTopology (proven CSR compaction).
+//     Two-pass GPU builder: count kernel -> device prefix sum -> fill kernel.
+//     Validated against GroupedGemm reference (exact integer match).
 //   Phase 1 -- Compute:
 //     a) Gather features into contiguous [total_pairs, Cin] fp16 buffer
 //     b) CUTLASS grouped GEMM (all offsets in one launch, fp16 in, fp32 accum)
@@ -37,6 +38,7 @@
 #include <torch/torch.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -103,7 +105,12 @@ gridSizeFor(int64_t total_elements) {
         std::min((total_elements + kBlockSize - 1) / kBlockSize, static_cast<int64_t>(4096)));
 }
 
-// (Topology kernels removed -- topology is built via GroupedGemm's proven path)
+// ============================================================================
+// NanoVDB leaf constants
+// ============================================================================
+
+static constexpr int64_t kVoxelsPerLeaf =
+    static_cast<int64_t>(nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES); // 512
 
 // ============================================================================
 // Kernel: gather fp16 features into contiguous buffer
@@ -155,22 +162,263 @@ scatterAddF32Kernel(float const *__restrict__ src,       // [Mk, Cout]
 }
 
 // ============================================================================
-// Topology builder -- delegates to GroupedGemm's proven topology construction
+// Topology kernel: count active (feature, output) pairs per kernel offset
 // ============================================================================
 //
-// Builds the CSR topology (per-offset gather/scatter index arrays) by calling
-// groupedGemmSparseConvTopology, which uses the GatherScatter dense kernel_map
-// internally and compacts it.  This is the same battle-tested path used by
-// the GroupedGemm backend.
+// Grid-stride loop over output grid leaves (NanoVDB OnIndex layout).
+// For each active output voxel and each kernel offset k, probes the feature
+// grid via its NanoVDB tree accessor.  On hit, atomicAdd(&counts[k], 1).
+//
+// Kernel offsets are computed inline from the flat index k:
+//   k2 = kernel_start[2] + k % ks2
+//   k1 = kernel_start[1] + (k / ks2) % ks1
+//   k0 = kernel_start[0] + k / (ks1 * ks2)
+// This matches the nested-loop ordering in GatherScatter.cu (k0 outermost).
+
+__global__ void
+countPairsKernel(GridBatchImpl::Accessor output_acc,
+                 GridBatchImpl::Accessor feature_acc,
+                 nanovdb::Coord kernel_start,
+                 nanovdb::Coord kernel_size,
+                 nanovdb::Coord stride,
+                 int32_t *__restrict__ counts, // [K], zeroed
+                 int64_t K,
+                 int64_t total) {              // output_grid.totalLeaves() * kVoxelsPerLeaf
+    int64_t const ks1 = kernel_size[1];
+    int64_t const ks2 = kernel_size[2];
+
+    for (int64_t flat_idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+         flat_idx < total;
+         flat_idx += static_cast<int64_t>(gridDim.x) * blockDim.x) {
+        int64_t const voxelIdx   = flat_idx % kVoxelsPerLeaf;
+        int64_t const cumLeafIdx = flat_idx / kVoxelsPerLeaf;
+        auto const batchIdx      = output_acc.leafBatchIndex(cumLeafIdx);
+        int64_t const leafIdx    = cumLeafIdx - output_acc.leafOffset(batchIdx);
+
+        auto const *out_grid = output_acc.grid(batchIdx);
+        auto const &leaf     = out_grid->tree().getFirstNode<0>()[leafIdx];
+
+        if (!leaf.isActive(voxelIdx))
+            continue;
+
+        auto const ijk = leaf.offsetToGlobalCoord(voxelIdx);
+
+        // Probe feature grid for each kernel offset
+        auto const *feat_grid = feature_acc.grid(batchIdx);
+        auto feat_tree_acc    = feat_grid->getAccessor();
+
+        for (int64_t k = 0; k < K; ++k) {
+            int32_t const k0 = kernel_start[0] + static_cast<int32_t>(k / (ks1 * ks2));
+            int32_t const k1 = kernel_start[1] + static_cast<int32_t>((k / ks2) % ks1);
+            int32_t const k2 = kernel_start[2] + static_cast<int32_t>(k % ks2);
+
+            nanovdb::Coord probe(
+                ijk[0] * stride[0] + k0, ijk[1] * stride[1] + k1, ijk[2] * stride[2] + k2);
+
+            if (feat_tree_acc.isActive(probe)) {
+                atomicAdd(&counts[k], 1);
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Topology kernel: fill gather/scatter index arrays
+// ============================================================================
+//
+// Same traversal as countPairsKernel.  On each hit, atomicAdd on a per-k
+// write head gives the position within the segment; the global position is
+// offsets_dev[k] + local_pos.
+
+__global__ void
+fillPairsKernel(GridBatchImpl::Accessor output_acc,
+                GridBatchImpl::Accessor feature_acc,
+                nanovdb::Coord kernel_start,
+                nanovdb::Coord kernel_size,
+                nanovdb::Coord stride,
+                const int64_t *__restrict__ offsets_dev, // [K+1]
+                int32_t *__restrict__ write_head,        // [K], zeroed
+                int32_t *__restrict__ gather_indices,    // [total_pairs]
+                int32_t *__restrict__ scatter_indices,   // [total_pairs]
+                int64_t K,
+                int64_t total) { // output_grid.totalLeaves() * kVoxelsPerLeaf
+    int64_t const ks1 = kernel_size[1];
+    int64_t const ks2 = kernel_size[2];
+
+    for (int64_t flat_idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+         flat_idx < total;
+         flat_idx += static_cast<int64_t>(gridDim.x) * blockDim.x) {
+        int64_t const voxelIdx   = flat_idx % kVoxelsPerLeaf;
+        int64_t const cumLeafIdx = flat_idx / kVoxelsPerLeaf;
+        auto const batchIdx      = output_acc.leafBatchIndex(cumLeafIdx);
+        int64_t const leafIdx    = cumLeafIdx - output_acc.leafOffset(batchIdx);
+
+        auto const *out_grid = output_acc.grid(batchIdx);
+        auto const &leaf     = out_grid->tree().getFirstNode<0>()[leafIdx];
+
+        if (!leaf.isActive(voxelIdx))
+            continue;
+
+        auto const ijk         = leaf.offsetToGlobalCoord(voxelIdx);
+        int64_t const out_flat = output_acc.voxelOffset(batchIdx) + leaf.getValue(voxelIdx) - 1;
+
+        // Probe feature grid for each kernel offset
+        auto const *feat_grid   = feature_acc.grid(batchIdx);
+        auto feat_tree_acc      = feat_grid->getAccessor();
+        int64_t const feat_base = feature_acc.voxelOffset(batchIdx);
+
+        for (int64_t k = 0; k < K; ++k) {
+            int32_t const k0 = kernel_start[0] + static_cast<int32_t>(k / (ks1 * ks2));
+            int32_t const k1 = kernel_start[1] + static_cast<int32_t>((k / ks2) % ks1);
+            int32_t const k2 = kernel_start[2] + static_cast<int32_t>(k % ks2);
+
+            nanovdb::Coord probe(
+                ijk[0] * stride[0] + k0, ijk[1] * stride[1] + k1, ijk[2] * stride[2] + k2);
+
+            if (feat_tree_acc.isActive(probe)) {
+                int32_t const feat_flat =
+                    static_cast<int32_t>(feat_base + feat_tree_acc.getValue(probe) - 1);
+
+                int64_t const pos    = offsets_dev[k] + atomicAdd(&write_head[k], 1);
+                gather_indices[pos]  = feat_flat;
+                scatter_indices[pos] = static_cast<int32_t>(out_flat);
+            }
+        }
+    }
+}
+
+// ============================================================================
+// GPU topology builder -- two-pass: count + fill
+// ============================================================================
+//
+// Produces the same CSR output as groupedGemmSparseConvTopology without the
+// dense O(output_voxels * kernel_volume) intermediate.
+
+static CutlassConvTopology
+buildTopologyGpu(GridBatchImpl const &feature_grid,
+                 GridBatchImpl const &output_grid,
+                 nanovdb::Coord kernel_size,
+                 nanovdb::Coord stride) {
+    c10::cuda::CUDAGuard device_guard(output_grid.device());
+    cudaStream_t stream = c10::cuda::getCurrentCUDAStream(output_grid.device().index()).stream();
+
+    auto const device = output_grid.device();
+
+    int64_t const ks0 = kernel_size[0];
+    int64_t const ks1 = kernel_size[1];
+    int64_t const ks2 = kernel_size[2];
+    int64_t const K   = ks0 * ks1 * ks2;
+
+    int64_t const feature_total = feature_grid.totalVoxels();
+    int64_t const output_total  = output_grid.totalVoxels();
+
+    // Centered kernel start (matches GatherScatter.cu convention)
+    nanovdb::Coord kernel_start(static_cast<int>(std::floor(-ks0 / 2.0 + 1)),
+                                static_cast<int>(std::floor(-ks1 / 2.0 + 1)),
+                                static_cast<int>(std::floor(-ks2 / 2.0 + 1)));
+
+    int64_t const total = output_grid.totalLeaves() * kVoxelsPerLeaf;
+
+    // Handle empty grids
+    if (total == 0 || K == 0) {
+        auto empty_i32    = torch::empty({0}, torch::dtype(torch::kInt32).device(device));
+        auto offsets_host = torch::zeros({K + 1}, torch::dtype(torch::kInt64));
+        return CutlassConvTopology{
+            empty_i32,
+            empty_i32.clone(),
+            offsets_host,
+            feature_total,
+            output_total,
+            K,
+            0,
+            kernel_size,
+            stride,
+        };
+    }
+
+    // Device accessors (trivially-copyable POD, safe for kernel pass-by-value)
+    auto output_acc  = output_grid.deviceAccessor();
+    auto feature_acc = feature_grid.deviceAccessor();
+
+    // ---- Pass 1: Count pairs per kernel offset ----
+    auto counts = torch::zeros({K}, torch::dtype(torch::kInt32).device(device));
+
+    countPairsKernel<<<gridSizeFor(total), kBlockSize, 0, stream>>>(output_acc,
+                                                                    feature_acc,
+                                                                    kernel_start,
+                                                                    kernel_size,
+                                                                    stride,
+                                                                    counts.data_ptr<int32_t>(),
+                                                                    K,
+                                                                    total);
+
+    // ---- Prefix sum on device via torch::cumsum ----
+    auto counts_i64  = counts.to(torch::kInt64);
+    auto offsets_dev = torch::zeros({K + 1}, torch::dtype(torch::kInt64).device(device));
+    offsets_dev.slice(0, 1, K + 1).copy_(torch::cumsum(counts_i64, 0));
+
+    // Single scalar sync to learn total_pairs (needed for output buffer sizing)
+    int64_t total_pairs = offsets_dev[K].item<int64_t>();
+
+    // Host copy of offsets (needed by cutlassConv for GEMM problem setup)
+    auto offsets_host = offsets_dev.cpu();
+
+    // ---- Pass 2: Fill gather/scatter indices ----
+    auto gather_indices  = torch::empty({std::max(total_pairs, int64_t{1})},
+                                       torch::dtype(torch::kInt32).device(device));
+    auto scatter_indices = torch::empty({std::max(total_pairs, int64_t{1})},
+                                        torch::dtype(torch::kInt32).device(device));
+
+    if (total_pairs > 0) {
+        auto write_head = torch::zeros({K}, torch::dtype(torch::kInt32).device(device));
+
+        fillPairsKernel<<<gridSizeFor(total), kBlockSize, 0, stream>>>(
+            output_acc,
+            feature_acc,
+            kernel_start,
+            kernel_size,
+            stride,
+            offsets_dev.data_ptr<int64_t>(),
+            write_head.data_ptr<int32_t>(),
+            gather_indices.data_ptr<int32_t>(),
+            scatter_indices.data_ptr<int32_t>(),
+            K,
+            total);
+    }
+
+    // Trim to exact size (no-op view if total_pairs > 0, empty if 0)
+    gather_indices  = gather_indices.slice(0, 0, total_pairs);
+    scatter_indices = scatter_indices.slice(0, 0, total_pairs);
+
+    return CutlassConvTopology{
+        gather_indices,
+        scatter_indices,
+        offsets_host,
+        feature_total,
+        output_total,
+        K,
+        total_pairs,
+        kernel_size,
+        stride,
+    };
+}
+
+// ============================================================================
+// Topology builder -- GPU two-pass with reference validation
+// ============================================================================
+//
+// Builds topology via the new GPU two-pass builder, then validates against
+// the proven GroupedGemm reference (exact integer match).  The reference
+// path will be removed once the GPU builder is battle-tested.
 
 CutlassConvTopology
 cutlassConvTopology(GridBatchImpl const &feature_grid,
                     GridBatchImpl const &output_grid,
                     nanovdb::Coord kernel_size,
                     nanovdb::Coord stride) {
+    // ---- Reference: proven GroupedGemm path ----
     auto gg = groupedGemmSparseConvTopology(feature_grid, output_grid, kernel_size, stride);
-
-    return CutlassConvTopology{
+    CutlassConvTopology ref{
         gg.gather_indices,
         gg.scatter_indices,
         gg.offsets,
@@ -181,6 +429,61 @@ cutlassConvTopology(GridBatchImpl const &feature_grid,
         gg.kernel_size,
         gg.stride,
     };
+
+    // ---- New: direct GPU two-pass builder ----
+    auto gpu = buildTopologyGpu(feature_grid, output_grid, kernel_size, stride);
+
+    // ---- Validate exact match (all integer, must be identical) ----
+    TORCH_CHECK(gpu.kernel_volume == ref.kernel_volume,
+                "cutlassConvTopology GPU validation: kernel_volume mismatch: gpu=",
+                gpu.kernel_volume,
+                " ref=",
+                ref.kernel_volume);
+    TORCH_CHECK(gpu.feature_total_voxels == ref.feature_total_voxels,
+                "cutlassConvTopology GPU validation: feature_total_voxels mismatch");
+    TORCH_CHECK(gpu.output_total_voxels == ref.output_total_voxels,
+                "cutlassConvTopology GPU validation: output_total_voxels mismatch");
+    TORCH_CHECK(gpu.total_pairs == ref.total_pairs,
+                "cutlassConvTopology GPU validation: total_pairs mismatch: gpu=",
+                gpu.total_pairs,
+                " ref=",
+                ref.total_pairs);
+
+    // Offsets must match exactly (both int64 host tensors derived from same counts)
+    TORCH_CHECK(torch::equal(gpu.offsets, ref.offsets),
+                "cutlassConvTopology GPU validation: offsets mismatch");
+
+    // Pair-set equality per segment (order within a segment may differ due to
+    // atomicAdd non-determinism, but the SET of pairs must be identical).
+    if (gpu.total_pairs > 0) {
+        auto ref_off = ref.offsets.accessor<int64_t, 1>();
+        // Pack (gather, scatter) into a single int64 key for sorting
+        int64_t const factor = std::max(gpu.output_total_voxels, gpu.feature_total_voxels) + 1;
+
+        for (int64_t k = 0; k < gpu.kernel_volume; ++k) {
+            int64_t const start = ref_off[k];
+            int64_t const end   = ref_off[k + 1];
+            if (end == start)
+                continue;
+
+            auto gpu_g = gpu.gather_indices.slice(0, start, end);
+            auto gpu_s = gpu.scatter_indices.slice(0, start, end);
+            auto ref_g = ref.gather_indices.slice(0, start, end);
+            auto ref_s = ref.scatter_indices.slice(0, start, end);
+
+            auto gpu_keys = gpu_g.to(torch::kInt64) * factor + gpu_s.to(torch::kInt64);
+            auto ref_keys = ref_g.to(torch::kInt64) * factor + ref_s.to(torch::kInt64);
+
+            auto gpu_sorted = std::get<0>(gpu_keys.sort());
+            auto ref_sorted = std::get<0>(ref_keys.sort());
+
+            TORCH_CHECK(torch::equal(gpu_sorted, ref_sorted),
+                        "cutlassConvTopology GPU validation: pair mismatch at offset k=",
+                        k);
+        }
+    }
+
+    return gpu;
 }
 
 // ============================================================================

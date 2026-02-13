@@ -4,7 +4,7 @@
 // CutlassGroupedGemm.h -- CUTLASS-accelerated sparse 3D convolution.
 //
 // GPU-only implementation using:
-//   - MinimalHashMap + Morton keys for GPU-native topology construction
+//   - Two-pass GPU topology builder (count + fill via NanoVDB tree accessors)
 //   - CUTLASS grouped GEMM (fp16 tensor cores, fp32 accumulate)
 //   - Collision-free scatter (each output voxel unique per offset, sequential over k)
 //
@@ -64,7 +64,7 @@ struct CutlassConvTopology {
 };
 
 // =============================================================================
-// Topology builder (GPU-native via MinimalHashMap + Morton keys)
+// Topology builder (GPU-native two-pass: count + fill)
 // =============================================================================
 
 /// Build a forward convolution topology entirely on GPU.
