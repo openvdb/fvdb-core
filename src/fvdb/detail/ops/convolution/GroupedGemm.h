@@ -1,17 +1,18 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-// GroupedGemm.h -- CUTLASS grouped-GEMM sparse convolution op.
+// GroupedGemm.h -- Compacted gather-scatter sparse convolution op.
 //
-// Replaces the per-kernel-offset loop of (gather -> mm_out -> scatter) with a
-// single CUTLASS GemmGrouped call where each "group" is one kernel offset.
-// The total launch count drops from ~81 (27 gather + 27 GEMM + 27 scatter)
-// to 3 (1 gather + 1 grouped GEMM + 1 scatter-add).
+// Compacts the dense kernel_map into per-offset CSR segments and executes:
+//   1. Single gather into a contiguous [total_pairs, C_in] buffer
+//   2. Per-offset torch::mm over sliced buffer segments
+//   3. Single scatter-add from [total_pairs, C_out] into output
 //
-// Requirements:
-//   - C_in and C_out must be multiples of 32
-//   - float32 only (TF32 tensorcores, float32 accumulation)
-//   - CUDA only, Sm80+ (Ampere, Ada, Hopper)
+// Only active (voxel, kernel_offset) pairs are gathered and computed on,
+// eliminating zero-padding waste present in the dense GatherScatter path.
+//
+// Supports CPU and CUDA.  Dispatches via the dispatch table framework
+// for device type and scalar type (float32, float64).
 //
 // Forward, backward, transposed forward, and transposed backward are all
 // supported through separate entry points.  The transposed variants differ
@@ -54,7 +55,7 @@ struct GroupedGemmTopology {
     torch::Tensor scatter_indices; // [total_pairs] int32, on device
 
     // Segment boundaries: offsets[k] to offsets[k+1] are the pairs for offset k.
-    // Shape [kernel_volume + 1], int64, ON HOST (small, needed for CUTLASS arg setup).
+    // Shape [kernel_volume + 1], int64, ON HOST (small, iterated for buffer slicing).
     torch::Tensor offsets;
 
     int64_t feature_total_voxels;
@@ -91,19 +92,17 @@ GroupedGemmTopology groupedGemmSparseConvTransposeTopology(GridBatchImpl const &
 // Forward sparse convolution
 // =============================================================================
 
-/// CUTLASS grouped-GEMM forward sparse convolution.
+/// Compacted gather-scatter forward sparse convolution.
 ///
 /// @param features  Input features, shape [feature_total_voxels, C_in].
-///                  C_in must be a multiple of 32.
 /// @param weights   Kernel weights, shape [C_out, C_in, k0, k1, k2].
-///                  C_out must be a multiple of 32.
 /// @param topo      Precomputed compacted topology (direction=Forward).
 /// @return          Output features, shape [output_total_voxels, C_out].
 torch::Tensor groupedGemmSparseConv(torch::Tensor features,
                                     torch::Tensor weights,
                                     GroupedGemmTopology const &topo);
 
-/// Backward pass for grouped-GEMM forward sparse convolution.
+/// Backward pass for compacted gather-scatter forward sparse convolution.
 ///
 /// @param grad_output  Gradient w.r.t. forward output.
 /// @param features     Input features from the forward pass.
@@ -120,12 +119,12 @@ groupedGemmSparseConvBackward(torch::Tensor grad_output,
 // Transposed sparse convolution
 // =============================================================================
 
-/// CUTLASS grouped-GEMM transposed sparse convolution.
+/// Compacted gather-scatter transposed sparse convolution.
 torch::Tensor groupedGemmSparseConvTranspose(torch::Tensor features,
                                              torch::Tensor weights,
                                              GroupedGemmTopology const &topo);
 
-/// Backward pass for grouped-GEMM transposed sparse convolution.
+/// Backward pass for compacted gather-scatter transposed sparse convolution.
 std::tuple<torch::Tensor, torch::Tensor>
 groupedGemmSparseConvTransposeBackward(torch::Tensor grad_output,
                                        torch::Tensor features,

@@ -158,6 +158,7 @@ ConfigureTest(GaussianMCMCAddNoiseTest "GaussianMCMCAddNoiseTest.cpp")
 ConfigureTest(GaussianMCMCRelocationTest "GaussianMCMCRelocationTest.cpp")
 ConfigureTest(GatherScatterConvTest "GatherScatterConvTest.cu")
 ConfigureTest(GroupedGemmConvTest "GroupedGemmConvTest.cu")
+ConfigureTest(CutlassGroupedGemmConvTest "CutlassGroupedGemmConvTest.cu")
 
 if(NOT NANOVDB_EDITOR_SKIP)
   #ConfigureTest(ViewerTest "ViewerTest.cpp")

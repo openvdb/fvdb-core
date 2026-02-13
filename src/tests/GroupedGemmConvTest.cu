@@ -1,12 +1,14 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-// GroupedGemmConvTest.cu -- Tests for the CUTLASS grouped-GEMM sparse convolution op.
+// GroupedGemmConvTest.cu -- Tests for the compacted gather-scatter sparse convolution op.
 //
 // Every test compares the GroupedGemm backend output against the GatherScatter
 // (GEMM) backend output, which serves as the reference implementation.
-// The GroupedGemm backend is CUDA-only and float32-only, so all tests run
-// exclusively on CUDA with float32 data.
+//
+// Tests are parameterized by (device, scalar type, channel count) and cover
+// CPU and CUDA with float32 and float64.  A separate kernel-size test suite
+// exercises non-cubic and varied kernel dimensions.
 //
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchImpl.h>
@@ -18,6 +20,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <string>
 #include <tuple>
 #include <vector>
 
@@ -25,14 +28,61 @@ using namespace fvdb;
 using namespace fvdb::detail;
 
 // =============================================================================
+// Test parameter: (device_type, scalar_type, channel_count)
+// =============================================================================
+
+using GroupedGemmParam = std::tuple<torch::DeviceType, torch::ScalarType, int64_t>;
+
+// Shorthand constructors -- keep INSTANTIATE_TEST_SUITE_P lines readable
+// without triggering the unused-variable warning that Combine causes in
+// gtest's macro-generated code (which crashes NVCC via -Werror).
+static GroupedGemmParam
+gp(torch::DeviceType d, torch::ScalarType s, int64_t c) {
+    return std::make_tuple(d, s, c);
+}
+
+static std::string
+paramName(::testing::TestParamInfo<GroupedGemmParam> const &info) {
+    auto dev   = std::get<0>(info.param);
+    auto dtype = std::get<1>(info.param);
+    auto C     = std::get<2>(info.param);
+
+    std::string dev_str   = (dev == torch::kCPU) ? "CPU" : "CUDA";
+    std::string dtype_str = (dtype == torch::kFloat32) ? "f32" : "f64";
+    return dev_str + "_" + dtype_str + "_C" + std::to_string(C);
+}
+
+// =============================================================================
 // Helpers
 // =============================================================================
 
-// Tolerances for float32 comparison.  The GroupedGemm path uses TF32
-// tensorcores (reduced mantissa) so we allow slightly more slack than
-// exact float32.
-static constexpr double kRtol = 1e-3;
-static constexpr double kAtol = 1e-3;
+// Tolerances: float64 is much tighter; float32 allows TF32 drift on Ampere+.
+static std::pair<double, double>
+tolerances(torch::ScalarType dtype) {
+    if (dtype == torch::kFloat64) {
+        return {1e-8, 1e-8};
+    }
+    return {1e-3, 1e-3};
+}
+
+static bool
+cudaIsAvailable() {
+    int count = 0;
+    auto err  = cudaGetDeviceCount(&count);
+    return err == cudaSuccess && count > 0;
+}
+
+static void
+skipIfCudaUnavailable(torch::DeviceType dev) {
+    if (dev == torch::kCUDA && !cudaIsAvailable()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+}
+
+static torch::Device
+makeDevice(torch::DeviceType dev) {
+    return (dev == torch::kCUDA) ? torch::Device(torch::kCUDA, 0) : torch::Device(torch::kCPU);
+}
 
 static c10::intrusive_ptr<GridBatchImpl>
 makeGrid(torch::Tensor ijk_2d, torch::Device device) {
@@ -41,6 +91,23 @@ makeGrid(torch::Tensor ijk_2d, torch::Device device) {
     std::vector<nanovdb::Vec3d> voxel_sizes = {{1.0, 1.0, 1.0}};
     std::vector<nanovdb::Vec3d> origins     = {{0.0, 0.0, 0.0}};
     return GridBatchImpl::createFromIjk(jt, voxel_sizes, origins);
+}
+
+// Dense cube grid of side length `dim` from explicit ijk coordinates.
+static c10::intrusive_ptr<GridBatchImpl>
+makeDenseTestGrid(int dim, torch::Device device) {
+    std::vector<int32_t> flat;
+    flat.reserve(dim * dim * dim * 3);
+    for (int i = 0; i < dim; ++i)
+        for (int j = 0; j < dim; ++j)
+            for (int k = 0; k < dim; ++k) {
+                flat.push_back(i);
+                flat.push_back(j);
+                flat.push_back(k);
+            }
+    int64_t N = static_cast<int64_t>(dim) * dim * dim;
+    auto ijk  = torch::from_blob(flat.data(), {N, 3}, torch::kInt32).clone();
+    return makeGrid(ijk, device);
 }
 
 static c10::intrusive_ptr<GridBatchImpl>
@@ -61,25 +128,22 @@ makeStridedTestGrid(torch::Device device) {
     return makeGrid(ijk, device);
 }
 
-static bool
-cudaIsAvailable() {
-    int count = 0;
-    auto err  = cudaGetDeviceCount(&count);
-    return err == cudaSuccess && count > 0;
+static torch::TensorOptions
+opts(torch::Device device, torch::ScalarType dtype) {
+    return torch::dtype(dtype).device(device);
 }
 
 // =============================================================================
 // Forward tests -- GroupedGemm vs GatherScatter (GEMM) reference
 // =============================================================================
 
-class GroupedGemmForwardTest : public ::testing::TestWithParam<int64_t> {};
+class GroupedGemmForwardTest : public ::testing::TestWithParam<GroupedGemmParam> {};
 
 TEST_P(GroupedGemmForwardTest, SameGridStride1) {
-    if (!cudaIsAvailable()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
-    torch::Device device(torch::kCUDA, 0);
-    int64_t const C = GetParam(); // C_in = C_out = C
+    auto [dev_type, dtype, C] = GetParam();
+    skipIfCudaUnavailable(dev_type);
+    auto device       = makeDevice(dev_type);
+    auto [rtol, atol] = tolerances(dtype);
 
     // 2x2x2 block
     auto ijk = torch::tensor(
@@ -91,28 +155,25 @@ TEST_P(GroupedGemmForwardTest, SameGridStride1) {
     nanovdb::Coord kernel_size(3, 3, 3);
     nanovdb::Coord stride(1, 1, 1);
 
-    // Build both topologies
     auto topo_gemm    = ops::gatherScatterSparseConvTopology(*grid, *grid, kernel_size, stride);
     auto topo_grouped = ops::groupedGemmSparseConvTopology(*grid, *grid, kernel_size, stride);
 
     torch::manual_seed(42);
-    auto features = torch::randn({N, C}, torch::dtype(torch::kFloat32).device(device));
-    auto weights  = torch::randn({C, C, 3, 3, 3}, torch::dtype(torch::kFloat32).device(device));
+    auto features = torch::randn({N, C}, opts(device, dtype));
+    auto weights  = torch::randn({C, C, 3, 3, 3}, opts(device, dtype));
 
     auto ref = ops::gatherScatterSparseConv(features, weights, topo_gemm);
     auto out = ops::groupedGemmSparseConv(features, weights, topo_grouped);
 
     EXPECT_EQ(out.sizes(), ref.sizes());
-    EXPECT_TRUE(torch::allclose(out.cpu(), ref.cpu(), kRtol, kAtol))
-        << "Forward mismatch at C=" << C;
+    EXPECT_TRUE(torch::allclose(out.cpu(), ref.cpu(), rtol, atol)) << "Forward mismatch at C=" << C;
 }
 
 TEST_P(GroupedGemmForwardTest, IdentityConv1x1x1) {
-    if (!cudaIsAvailable()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
-    torch::Device device(torch::kCUDA, 0);
-    int64_t const C = GetParam();
+    auto [dev_type, dtype, C] = GetParam();
+    skipIfCudaUnavailable(dev_type);
+    auto device       = makeDevice(dev_type);
+    auto [rtol, atol] = tolerances(dtype);
 
     auto ijk = torch::tensor(
         {{0, 0, 0}, {0, 0, 1}, {0, 1, 0}, {0, 1, 1}, {1, 0, 0}, {1, 0, 1}, {1, 1, 0}, {1, 1, 1}},
@@ -125,23 +186,21 @@ TEST_P(GroupedGemmForwardTest, IdentityConv1x1x1) {
 
     auto topo = ops::groupedGemmSparseConvTopology(*grid, *grid, kernel_size, stride);
 
-    auto features = torch::randn({N, C}, torch::dtype(torch::kFloat32).device(device));
-    auto weights =
-        torch::eye(C, torch::dtype(torch::kFloat32).device(device)).reshape({C, C, 1, 1, 1});
+    auto features = torch::randn({N, C}, opts(device, dtype));
+    auto weights  = torch::eye(C, opts(device, dtype)).reshape({C, C, 1, 1, 1});
 
     auto out = ops::groupedGemmSparseConv(features, weights, topo);
 
-    // With identity weights, output should equal input (within TF32 tolerance)
-    EXPECT_TRUE(torch::allclose(out.cpu(), features.cpu(), kRtol, kAtol))
+    // With identity weights, output should equal input
+    EXPECT_TRUE(torch::allclose(out.cpu(), features.cpu(), rtol, atol))
         << "Identity conv mismatch at C=" << C;
 }
 
 TEST_P(GroupedGemmForwardTest, DifferentGrids) {
-    if (!cudaIsAvailable()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
-    torch::Device device(torch::kCUDA, 0);
-    int64_t const C = GetParam();
+    auto [dev_type, dtype, C] = GetParam();
+    skipIfCudaUnavailable(dev_type);
+    auto device       = makeDevice(dev_type);
+    auto [rtol, atol] = tolerances(dtype);
 
     // Single voxel at (5,5,5) -- convOutput will produce 27 output voxels
     auto ijk      = torch::tensor({{5, 5, 5}}, torch::dtype(torch::kInt32));
@@ -157,14 +216,14 @@ TEST_P(GroupedGemmForwardTest, DifferentGrids) {
         ops::groupedGemmSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
 
     torch::manual_seed(99);
-    auto features = torch::randn({1, C}, torch::dtype(torch::kFloat32).device(device));
-    auto weights  = torch::randn({C, C, 3, 3, 3}, torch::dtype(torch::kFloat32).device(device));
+    auto features = torch::randn({1, C}, opts(device, dtype));
+    auto weights  = torch::randn({C, C, 3, 3, 3}, opts(device, dtype));
 
     auto ref = ops::gatherScatterSparseConv(features, weights, topo_gemm);
     auto out = ops::groupedGemmSparseConv(features, weights, topo_grouped);
 
     EXPECT_EQ(out.sizes(), ref.sizes());
-    EXPECT_TRUE(torch::allclose(out.cpu(), ref.cpu(), kRtol, kAtol))
+    EXPECT_TRUE(torch::allclose(out.cpu(), ref.cpu(), rtol, atol))
         << "Different-grid forward mismatch at C=" << C;
 }
 
@@ -172,14 +231,13 @@ TEST_P(GroupedGemmForwardTest, DifferentGrids) {
 // Backward tests -- grad_features and grad_weights vs GatherScatter reference
 // =============================================================================
 
-class GroupedGemmBackwardTest : public ::testing::TestWithParam<int64_t> {};
+class GroupedGemmBackwardTest : public ::testing::TestWithParam<GroupedGemmParam> {};
 
 TEST_P(GroupedGemmBackwardTest, SameGridStride1) {
-    if (!cudaIsAvailable()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
-    torch::Device device(torch::kCUDA, 0);
-    int64_t const C = GetParam();
+    auto [dev_type, dtype, C] = GetParam();
+    skipIfCudaUnavailable(dev_type);
+    auto device       = makeDevice(dev_type);
+    auto [rtol, atol] = tolerances(dtype);
 
     auto ijk = torch::tensor(
         {{0, 0, 0}, {0, 0, 1}, {0, 1, 0}, {0, 1, 1}, {1, 0, 0}, {1, 0, 1}, {1, 1, 0}, {1, 1, 1}},
@@ -194,9 +252,9 @@ TEST_P(GroupedGemmBackwardTest, SameGridStride1) {
     auto topo_grouped = ops::groupedGemmSparseConvTopology(*grid, *grid, kernel_size, stride);
 
     torch::manual_seed(77);
-    auto features    = torch::randn({N, C}, torch::dtype(torch::kFloat32).device(device));
-    auto weights     = torch::randn({C, C, 3, 3, 3}, torch::dtype(torch::kFloat32).device(device));
-    auto grad_output = torch::randn({N, C}, torch::dtype(torch::kFloat32).device(device));
+    auto features    = torch::randn({N, C}, opts(device, dtype));
+    auto weights     = torch::randn({C, C, 3, 3, 3}, opts(device, dtype));
+    auto grad_output = torch::randn({N, C}, opts(device, dtype));
 
     auto [gf_ref, gw_ref] =
         ops::gatherScatterSparseConvBackward(grad_output, features, weights, topo_gemm);
@@ -206,9 +264,9 @@ TEST_P(GroupedGemmBackwardTest, SameGridStride1) {
     EXPECT_EQ(gf_out.sizes(), gf_ref.sizes());
     EXPECT_EQ(gw_out.sizes(), gw_ref.sizes());
 
-    EXPECT_TRUE(torch::allclose(gf_out.cpu(), gf_ref.cpu(), kRtol, kAtol))
+    EXPECT_TRUE(torch::allclose(gf_out.cpu(), gf_ref.cpu(), rtol, atol))
         << "Backward grad_features mismatch at C=" << C;
-    EXPECT_TRUE(torch::allclose(gw_out.cpu(), gw_ref.cpu(), kRtol, kAtol))
+    EXPECT_TRUE(torch::allclose(gw_out.cpu(), gw_ref.cpu(), rtol, atol))
         << "Backward grad_weights mismatch at C=" << C;
 }
 
@@ -216,14 +274,13 @@ TEST_P(GroupedGemmBackwardTest, SameGridStride1) {
 // Transposed forward tests
 // =============================================================================
 
-class GroupedGemmTransposeTest : public ::testing::TestWithParam<int64_t> {};
+class GroupedGemmTransposeTest : public ::testing::TestWithParam<GroupedGemmParam> {};
 
 TEST_P(GroupedGemmTransposeTest, TransposeForwardSameGrid) {
-    if (!cudaIsAvailable()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
-    torch::Device device(torch::kCUDA, 0);
-    int64_t const C = GetParam();
+    auto [dev_type, dtype, C] = GetParam();
+    skipIfCudaUnavailable(dev_type);
+    auto device       = makeDevice(dev_type);
+    auto [rtol, atol] = tolerances(dtype);
 
     auto ijk = torch::tensor(
         {{0, 0, 0}, {0, 0, 1}, {0, 1, 0}, {0, 1, 1}, {1, 0, 0}, {1, 0, 1}, {1, 1, 0}, {1, 1, 1}},
@@ -240,14 +297,14 @@ TEST_P(GroupedGemmTransposeTest, TransposeForwardSameGrid) {
         ops::groupedGemmSparseConvTransposeTopology(*grid, *grid, kernel_size, stride);
 
     torch::manual_seed(55);
-    auto features = torch::randn({N, C}, torch::dtype(torch::kFloat32).device(device));
-    auto weights  = torch::randn({C, C, 3, 3, 3}, torch::dtype(torch::kFloat32).device(device));
+    auto features = torch::randn({N, C}, opts(device, dtype));
+    auto weights  = torch::randn({C, C, 3, 3, 3}, opts(device, dtype));
 
     auto ref = ops::gatherScatterSparseConvTranspose(features, weights, topo_gemm);
     auto out = ops::groupedGemmSparseConvTranspose(features, weights, topo_grouped);
 
     EXPECT_EQ(out.sizes(), ref.sizes());
-    EXPECT_TRUE(torch::allclose(out.cpu(), ref.cpu(), kRtol, kAtol))
+    EXPECT_TRUE(torch::allclose(out.cpu(), ref.cpu(), rtol, atol))
         << "Transpose forward mismatch at C=" << C;
 }
 
@@ -256,11 +313,10 @@ TEST_P(GroupedGemmTransposeTest, TransposeForwardSameGrid) {
 // =============================================================================
 
 TEST_P(GroupedGemmTransposeTest, TransposeBackwardSameGrid) {
-    if (!cudaIsAvailable()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
-    torch::Device device(torch::kCUDA, 0);
-    int64_t const C = GetParam();
+    auto [dev_type, dtype, C] = GetParam();
+    skipIfCudaUnavailable(dev_type);
+    auto device       = makeDevice(dev_type);
+    auto [rtol, atol] = tolerances(dtype);
 
     auto ijk = torch::tensor(
         {{0, 0, 0}, {0, 0, 1}, {0, 1, 0}, {0, 1, 1}, {1, 0, 0}, {1, 0, 1}, {1, 1, 0}, {1, 1, 1}},
@@ -277,9 +333,9 @@ TEST_P(GroupedGemmTransposeTest, TransposeBackwardSameGrid) {
         ops::groupedGemmSparseConvTransposeTopology(*grid, *grid, kernel_size, stride);
 
     torch::manual_seed(66);
-    auto features    = torch::randn({N, C}, torch::dtype(torch::kFloat32).device(device));
-    auto weights     = torch::randn({C, C, 3, 3, 3}, torch::dtype(torch::kFloat32).device(device));
-    auto grad_output = torch::randn({N, C}, torch::dtype(torch::kFloat32).device(device));
+    auto features    = torch::randn({N, C}, opts(device, dtype));
+    auto weights     = torch::randn({C, C, 3, 3, 3}, opts(device, dtype));
+    auto grad_output = torch::randn({N, C}, opts(device, dtype));
 
     auto [gf_ref, gw_ref] =
         ops::gatherScatterSparseConvTransposeBackward(grad_output, features, weights, topo_gemm);
@@ -289,24 +345,23 @@ TEST_P(GroupedGemmTransposeTest, TransposeBackwardSameGrid) {
     EXPECT_EQ(gf_out.sizes(), gf_ref.sizes());
     EXPECT_EQ(gw_out.sizes(), gw_ref.sizes());
 
-    EXPECT_TRUE(torch::allclose(gf_out.cpu(), gf_ref.cpu(), kRtol, kAtol))
+    EXPECT_TRUE(torch::allclose(gf_out.cpu(), gf_ref.cpu(), rtol, atol))
         << "Transpose backward grad_features mismatch at C=" << C;
-    EXPECT_TRUE(torch::allclose(gw_out.cpu(), gw_ref.cpu(), kRtol, kAtol))
+    EXPECT_TRUE(torch::allclose(gw_out.cpu(), gw_ref.cpu(), rtol, atol))
         << "Transpose backward grad_weights mismatch at C=" << C;
 }
 
 // =============================================================================
-// Strided forward test
+// Strided tests
 // =============================================================================
 
-class GroupedGemmStridedTest : public ::testing::TestWithParam<int64_t> {};
+class GroupedGemmStridedTest : public ::testing::TestWithParam<GroupedGemmParam> {};
 
 TEST_P(GroupedGemmStridedTest, StridedForward) {
-    if (!cudaIsAvailable()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
-    torch::Device device(torch::kCUDA, 0);
-    int64_t const C = GetParam();
+    auto [dev_type, dtype, C] = GetParam();
+    skipIfCudaUnavailable(dev_type);
+    auto device       = makeDevice(dev_type);
+    auto [rtol, atol] = tolerances(dtype);
 
     auto src_grid = makeStridedTestGrid(device);
 
@@ -323,23 +378,22 @@ TEST_P(GroupedGemmStridedTest, StridedForward) {
     int64_t S = topo_gemm.feature_total_voxels;
 
     torch::manual_seed(88);
-    auto features = torch::randn({S, C}, torch::dtype(torch::kFloat32).device(device));
-    auto weights  = torch::randn({C, C, 3, 3, 3}, torch::dtype(torch::kFloat32).device(device));
+    auto features = torch::randn({S, C}, opts(device, dtype));
+    auto weights  = torch::randn({C, C, 3, 3, 3}, opts(device, dtype));
 
     auto ref = ops::gatherScatterSparseConv(features, weights, topo_gemm);
     auto out = ops::groupedGemmSparseConv(features, weights, topo_grouped);
 
     EXPECT_EQ(out.sizes(), ref.sizes());
-    EXPECT_TRUE(torch::allclose(out.cpu(), ref.cpu(), kRtol, kAtol))
+    EXPECT_TRUE(torch::allclose(out.cpu(), ref.cpu(), rtol, atol))
         << "Strided forward mismatch at C=" << C;
 }
 
 TEST_P(GroupedGemmStridedTest, StridedBackward) {
-    if (!cudaIsAvailable()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
-    torch::Device device(torch::kCUDA, 0);
-    int64_t const C = GetParam();
+    auto [dev_type, dtype, C] = GetParam();
+    skipIfCudaUnavailable(dev_type);
+    auto device       = makeDevice(dev_type);
+    auto [rtol, atol] = tolerances(dtype);
 
     auto src_grid = makeStridedTestGrid(device);
 
@@ -357,9 +411,9 @@ TEST_P(GroupedGemmStridedTest, StridedBackward) {
     int64_t D = topo_gemm.output_total_voxels;
 
     torch::manual_seed(89);
-    auto features    = torch::randn({S, C}, torch::dtype(torch::kFloat32).device(device));
-    auto weights     = torch::randn({C, C, 3, 3, 3}, torch::dtype(torch::kFloat32).device(device));
-    auto grad_output = torch::randn({D, C}, torch::dtype(torch::kFloat32).device(device));
+    auto features    = torch::randn({S, C}, opts(device, dtype));
+    auto weights     = torch::randn({C, C, 3, 3, 3}, opts(device, dtype));
+    auto grad_output = torch::randn({D, C}, opts(device, dtype));
 
     auto [gf_ref, gw_ref] =
         ops::gatherScatterSparseConvBackward(grad_output, features, weights, topo_gemm);
@@ -369,38 +423,146 @@ TEST_P(GroupedGemmStridedTest, StridedBackward) {
     EXPECT_EQ(gf_out.sizes(), gf_ref.sizes());
     EXPECT_EQ(gw_out.sizes(), gw_ref.sizes());
 
-    EXPECT_TRUE(torch::allclose(gf_out.cpu(), gf_ref.cpu(), kRtol, kAtol))
+    EXPECT_TRUE(torch::allclose(gf_out.cpu(), gf_ref.cpu(), rtol, atol))
         << "Strided backward grad_features mismatch at C=" << C;
-    EXPECT_TRUE(torch::allclose(gw_out.cpu(), gw_ref.cpu(), kRtol, kAtol))
+    EXPECT_TRUE(torch::allclose(gw_out.cpu(), gw_ref.cpu(), rtol, atol))
         << "Strided backward grad_weights mismatch at C=" << C;
 }
 
 // =============================================================================
-// Test instantiation -- parameterized by channel count (multiples of 32)
+// Kernel-size tests -- varied and asymmetric kernel dimensions
+// =============================================================================
+//
+// Exercises kernel sizes beyond 3x3x3: larger cubes, asymmetric shapes, and
+// even-sized kernels.  Uses a 4x4x4 dense grid and fixed C=16 to keep the
+// combinatorial space manageable while covering a wide range of shapes.
+
+using KernelSizeParam = std::tuple<torch::DeviceType, torch::ScalarType, int, int, int>;
+
+static KernelSizeParam
+kp(torch::DeviceType d, torch::ScalarType s, int k0, int k1, int k2) {
+    return std::make_tuple(d, s, k0, k1, k2);
+}
+
+static std::string
+kernelSizeParamName(::testing::TestParamInfo<KernelSizeParam> const &info) {
+    auto dev = std::get<0>(info.param);
+    auto dt  = std::get<1>(info.param);
+    auto k0  = std::get<2>(info.param);
+    auto k1  = std::get<3>(info.param);
+    auto k2  = std::get<4>(info.param);
+
+    std::string dev_str   = (dev == torch::kCPU) ? "CPU" : "CUDA";
+    std::string dtype_str = (dt == torch::kFloat32) ? "f32" : "f64";
+    return dev_str + "_" + dtype_str + "_k" + std::to_string(k0) + "x" + std::to_string(k1) + "x" +
+           std::to_string(k2);
+}
+
+class GroupedGemmKernelSizeTest : public ::testing::TestWithParam<KernelSizeParam> {};
+
+TEST_P(GroupedGemmKernelSizeTest, ForwardAndBackward) {
+    auto [dev_type, dtype, k0, k1, k2] = GetParam();
+    skipIfCudaUnavailable(dev_type);
+    auto device       = makeDevice(dev_type);
+    auto [rtol, atol] = tolerances(dtype);
+
+    int64_t const C = 16;
+
+    // 4x4x4 grid: large enough for kernels up to 5x5x5
+    auto grid       = makeDenseTestGrid(4, device);
+    int64_t const N = 64;
+
+    nanovdb::Coord kernel_size(k0, k1, k2);
+    nanovdb::Coord stride(1, 1, 1);
+
+    auto topo_gemm    = ops::gatherScatterSparseConvTopology(*grid, *grid, kernel_size, stride);
+    auto topo_grouped = ops::groupedGemmSparseConvTopology(*grid, *grid, kernel_size, stride);
+
+    torch::manual_seed(42);
+    auto features = torch::randn({N, C}, opts(device, dtype));
+    auto weights  = torch::randn({C, C, k0, k1, k2}, opts(device, dtype));
+
+    // Forward
+    auto ref = ops::gatherScatterSparseConv(features, weights, topo_gemm);
+    auto out = ops::groupedGemmSparseConv(features, weights, topo_grouped);
+
+    EXPECT_EQ(out.sizes(), ref.sizes());
+    EXPECT_TRUE(torch::allclose(out.cpu(), ref.cpu(), rtol, atol))
+        << "Forward mismatch for kernel " << k0 << "x" << k1 << "x" << k2;
+
+    // Backward
+    auto grad_output = torch::randn_like(ref);
+
+    auto [gf_ref, gw_ref] =
+        ops::gatherScatterSparseConvBackward(grad_output, features, weights, topo_gemm);
+    auto [gf_out, gw_out] =
+        ops::groupedGemmSparseConvBackward(grad_output, features, weights, topo_grouped);
+
+    EXPECT_EQ(gf_out.sizes(), gf_ref.sizes());
+    EXPECT_EQ(gw_out.sizes(), gw_ref.sizes());
+
+    EXPECT_TRUE(torch::allclose(gf_out.cpu(), gf_ref.cpu(), rtol, atol))
+        << "Backward grad_features mismatch for kernel " << k0 << "x" << k1 << "x" << k2;
+    EXPECT_TRUE(torch::allclose(gw_out.cpu(), gw_ref.cpu(), rtol, atol))
+        << "Backward grad_weights mismatch for kernel " << k0 << "x" << k1 << "x" << k2;
+}
+
+// =============================================================================
+// Test instantiation -- parameterized by (device, dtype, channel count)
 // =============================================================================
 
 // clang-format off
-INSTANTIATE_TEST_SUITE_P(
-    ChannelSizes,
-    GroupedGemmForwardTest,
-    ::testing::Values(32, 64, 128),
-    [](const auto &info) { return "C" + std::to_string(info.param); });
+//
+// Uses ValuesIn() with runtime vectors instead of Values() to avoid an
+// unused-variable warning in gtest's INSTANTIATE_TEST_SUITE_P macro
+// that triggers -Werror under NVCC's host compiler (GCC).
 
-INSTANTIATE_TEST_SUITE_P(
-    ChannelSizes,
-    GroupedGemmBackwardTest,
-    ::testing::Values(32, 64, 128),
-    [](const auto &info) { return "C" + std::to_string(info.param); });
+static std::vector<GroupedGemmParam>
+channelConfigs() {
+    std::vector<GroupedGemmParam> v;
+    for (auto dev : {torch::kCPU, torch::kCUDA}) {
+        for (auto dt : {torch::kFloat32, torch::kFloat64}) {
+            for (int64_t C : {4, 16, 32, 64}) {
+                v.push_back(gp(dev, dt, C));
+            }
+        }
+        // Extra large channel count for CUDA float32
+        v.push_back(gp(dev, torch::kFloat32, 128));
+    }
+    return v;
+}
 
-INSTANTIATE_TEST_SUITE_P(
-    ChannelSizes,
-    GroupedGemmTransposeTest,
-    ::testing::Values(32, 64, 128),
-    [](const auto &info) { return "C" + std::to_string(info.param); });
+static std::vector<KernelSizeParam>
+kernelSizeConfigs() {
+    std::vector<KernelSizeParam> v;
+    for (auto dev : {torch::kCPU, torch::kCUDA}) {
+        // float32: full matrix of kernel shapes
+        for (auto [k0, k1, k2] : std::vector<std::tuple<int,int,int>>{
+                 {1,1,1}, {3,3,3}, {5,5,5}, {3,5,1}, {1,3,5}, {3,1,3}, {2,2,2}, {4,4,4}}) {
+            v.push_back(kp(dev, torch::kFloat32, k0, k1, k2));
+        }
+        // float64: representative subset
+        for (auto [k0, k1, k2] : std::vector<std::tuple<int,int,int>>{
+                 {3,3,3}, {5,5,5}, {3,5,1}}) {
+            v.push_back(kp(dev, torch::kFloat64, k0, k1, k2));
+        }
+    }
+    return v;
+}
 
-INSTANTIATE_TEST_SUITE_P(
-    ChannelSizes,
-    GroupedGemmStridedTest,
-    ::testing::Values(32, 64, 128),
-    [](const auto &info) { return "C" + std::to_string(info.param); });
+INSTANTIATE_TEST_SUITE_P(Configs, GroupedGemmForwardTest,
+    ::testing::ValuesIn(channelConfigs()), paramName);
+
+INSTANTIATE_TEST_SUITE_P(Configs, GroupedGemmBackwardTest,
+    ::testing::ValuesIn(channelConfigs()), paramName);
+
+INSTANTIATE_TEST_SUITE_P(Configs, GroupedGemmTransposeTest,
+    ::testing::ValuesIn(channelConfigs()), paramName);
+
+INSTANTIATE_TEST_SUITE_P(Configs, GroupedGemmStridedTest,
+    ::testing::ValuesIn(channelConfigs()), paramName);
+
+INSTANTIATE_TEST_SUITE_P(KernelSizes, GroupedGemmKernelSizeTest,
+    ::testing::ValuesIn(kernelSizeConfigs()), kernelSizeParamName);
+
 // clang-format on
