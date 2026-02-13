@@ -155,8 +155,9 @@ verifyOutput(benchmark::State &state,
 // Convolution args: {grid_dim_or_radius, C_in, C_out}
 // Topology args:    {grid_dim_or_radius}
 
-// Dense: dim in {10, 20, 40}, channels (mul of 32) in {32, 64, 128}
+// Dense: dim in {10, 20, 40, 60, 80}, channels (mul of 32) in {32, 64, 128}
 // Also include non-square: {32,64} and {64,128}
+// dim=60 -> 216K voxels, dim=80 -> 512K voxels (realistic point cloud scale)
 #define CUTLASS_CONV_DENSE_SIZES \
     ->Args({10, 32, 32})         \
     ->Args({10, 64, 64})         \
@@ -173,10 +174,21 @@ verifyOutput(benchmark::State &state,
     ->Args({40, 128, 128})       \
     ->Args({40, 32, 64})         \
     ->Args({40, 64, 128})        \
+    ->Args({60, 32, 32})         \
+    ->Args({60, 64, 64})         \
+    ->Args({60, 128, 128})       \
+    ->Args({60, 32, 64})         \
+    ->Args({60, 64, 128})        \
+    ->Args({80, 32, 32})         \
+    ->Args({80, 64, 64})         \
+    ->Args({80, 128, 128})       \
+    ->Args({80, 32, 64})         \
+    ->Args({80, 64, 128})        \
     ->UseRealTime()              \
     ->Unit(benchmark::kMillisecond)
 
-// Sphere: R in {8, 16, 32}
+// Sphere: R in {8, 16, 32, 50}
+// R=50 -> ~30K voxels (realistic SDF surface)
 #define CUTLASS_CONV_SPHERE_SIZES \
     ->Args({8, 32, 32})           \
     ->Args({8, 64, 64})           \
@@ -193,15 +205,22 @@ verifyOutput(benchmark::State &state,
     ->Args({32, 128, 128})        \
     ->Args({32, 32, 64})          \
     ->Args({32, 64, 128})         \
+    ->Args({50, 32, 32})          \
+    ->Args({50, 64, 64})          \
+    ->Args({50, 128, 128})        \
+    ->Args({50, 32, 64})          \
+    ->Args({50, 64, 128})         \
     ->UseRealTime()               \
     ->Unit(benchmark::kMillisecond)
 
 // Topology: single arg {dim_or_radius}
 #define CUTLASS_TOPO_DENSE_SIZES \
-    ->Args({10})->Args({20})->Args({40})->UseRealTime()->Unit(benchmark::kMillisecond)
+    ->Args({10})->Args({20})->Args({40})->Args({60})->Args({80}) \
+    ->UseRealTime()->Unit(benchmark::kMillisecond)
 
 #define CUTLASS_TOPO_SPHERE_SIZES \
-    ->Args({8})->Args({16})->Args({32})->UseRealTime()->Unit(benchmark::kMillisecond)
+    ->Args({8})->Args({16})->Args({32})->Args({50}) \
+    ->UseRealTime()->Unit(benchmark::kMillisecond)
 
 // =============================================================================
 // Topology benchmark

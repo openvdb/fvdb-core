@@ -9,7 +9,6 @@
 // Pipeline (forward):
 //   Phase 0 -- Topology (once per grid pair):
 //     Two-pass GPU builder: count kernel -> device prefix sum -> fill kernel.
-//     Validated against GroupedGemm reference (exact integer match).
 //   Phase 1 -- Compute:
 //     a) Gather features into contiguous [total_pairs, Cin] fp16 buffer
 //     b) CUTLASS grouped GEMM (all offsets in one launch, fp16 in, fp32 accum)
@@ -22,7 +21,6 @@
 // ============================================================================
 
 #include <fvdb/detail/ops/convolution/CutlassGroupedGemm.h>
-#include <fvdb/detail/ops/convolution/GroupedGemm.h>
 
 // CUTLASS -- grouped GEMM
 #include "cutlass/cutlass.h"
@@ -91,6 +89,33 @@ using CutlassGemmKernel = typename cutlass::gemm::kernel::DefaultGemmGrouped<
     >::GemmKernel;
 
 using CutlassGemmGrouped = cutlass::gemm::device::GemmGrouped<CutlassGemmKernel>;
+
+// Grad-weights variant: A = ColumnMajor (transposed feat_buf), B = RowMajor.
+// [Mk, Cin] RowMajor IS [Cin, Mk] ColumnMajor in memory -- zero-copy transpose.
+// GemmCoord(M=Cin, N=Cout, K=Mk), A=[Cin, Mk] ColMajor, B=[Mk, Cout] RowMajor.
+using CutlassGradWGemmKernel = typename cutlass::gemm::kernel::DefaultGemmGrouped<
+    CutlassElementA,
+    cutlass::layout::ColumnMajor, // A is transposed: [Mk, Cin] RowMajor = [Cin, Mk] ColMajor
+    cutlass::ComplexTransform::kNone,
+    kAlignmentA,
+    CutlassElementB,
+    CutlassLayoutB, // RowMajor
+    cutlass::ComplexTransform::kNone,
+    kAlignmentB,
+    CutlassElementC,
+    CutlassLayoutC, // RowMajor
+    CutlassAccumulator,
+    cutlass::arch::OpClassTensorOp,
+    cutlass::arch::Sm80,
+    cutlass::gemm::GemmShape<128, 128, 32>, // threadblock tile
+    cutlass::gemm::GemmShape<64, 64, 32>,   // warp tile
+    cutlass::gemm::GemmShape<16, 8, 16>,    // MMA instruction
+    CutlassEpilogueOp,
+    cutlass::gemm::threadblock::GemmBatchedIdentityThreadblockSwizzle,
+    4 // pipeline stages
+    >::GemmKernel;
+
+using CutlassGradWGemmGrouped = cutlass::gemm::device::GemmGrouped<CutlassGradWGemmKernel>;
 
 // ============================================================================
 // CUDA kernel launch helpers
@@ -432,163 +457,23 @@ buildTopologyGpu(GridBatchImpl const &feature_grid,
 }
 
 // ============================================================================
-// Topology builder -- GPU two-pass with reference validation
+// Topology builders -- direct GPU two-pass
 // ============================================================================
-//
-// Builds topology via the new GPU two-pass builder, then validates against
-// the proven GroupedGemm reference (exact integer match).  The reference
-// path will be removed once the GPU builder is battle-tested.
 
 CutlassConvTopology
 cutlassConvTopology(GridBatchImpl const &feature_grid,
                     GridBatchImpl const &output_grid,
                     nanovdb::Coord kernel_size,
                     nanovdb::Coord stride) {
-    // ---- Reference: proven GroupedGemm path ----
-    auto gg = groupedGemmSparseConvTopology(feature_grid, output_grid, kernel_size, stride);
-    CutlassConvTopology ref{
-        gg.gather_indices,
-        gg.scatter_indices,
-        gg.offsets,
-        gg.feature_total_voxels,
-        gg.output_total_voxels,
-        gg.kernel_volume,
-        gg.total_pairs,
-        gg.kernel_size,
-        gg.stride,
-    };
-
-    // ---- New: direct GPU two-pass builder (forward) ----
-    auto gpu = buildTopologyGpu(feature_grid, output_grid, kernel_size, stride, /*transposed=*/false);
-
-    // ---- Validate exact match (all integer, must be identical) ----
-    TORCH_CHECK(gpu.kernel_volume == ref.kernel_volume,
-                "cutlassConvTopology GPU validation: kernel_volume mismatch: gpu=",
-                gpu.kernel_volume,
-                " ref=",
-                ref.kernel_volume);
-    TORCH_CHECK(gpu.feature_total_voxels == ref.feature_total_voxels,
-                "cutlassConvTopology GPU validation: feature_total_voxels mismatch");
-    TORCH_CHECK(gpu.output_total_voxels == ref.output_total_voxels,
-                "cutlassConvTopology GPU validation: output_total_voxels mismatch");
-    TORCH_CHECK(gpu.total_pairs == ref.total_pairs,
-                "cutlassConvTopology GPU validation: total_pairs mismatch: gpu=",
-                gpu.total_pairs,
-                " ref=",
-                ref.total_pairs);
-
-    // Offsets must match exactly (both int64 host tensors derived from same counts)
-    TORCH_CHECK(torch::equal(gpu.offsets, ref.offsets),
-                "cutlassConvTopology GPU validation: offsets mismatch");
-
-    // Pair-set equality per segment (order within a segment may differ due to
-    // atomicAdd non-determinism, but the SET of pairs must be identical).
-    if (gpu.total_pairs > 0) {
-        auto ref_off = ref.offsets.accessor<int64_t, 1>();
-        // Pack (gather, scatter) into a single int64 key for sorting
-        int64_t const factor = std::max(gpu.output_total_voxels, gpu.feature_total_voxels) + 1;
-
-        for (int64_t k = 0; k < gpu.kernel_volume; ++k) {
-            int64_t const start = ref_off[k];
-            int64_t const end   = ref_off[k + 1];
-            if (end == start)
-                continue;
-
-            auto gpu_g = gpu.gather_indices.slice(0, start, end);
-            auto gpu_s = gpu.scatter_indices.slice(0, start, end);
-            auto ref_g = ref.gather_indices.slice(0, start, end);
-            auto ref_s = ref.scatter_indices.slice(0, start, end);
-
-            auto gpu_keys = gpu_g.to(torch::kInt64) * factor + gpu_s.to(torch::kInt64);
-            auto ref_keys = ref_g.to(torch::kInt64) * factor + ref_s.to(torch::kInt64);
-
-            auto gpu_sorted = std::get<0>(gpu_keys.sort());
-            auto ref_sorted = std::get<0>(ref_keys.sort());
-
-            TORCH_CHECK(torch::equal(gpu_sorted, ref_sorted),
-                        "cutlassConvTopology GPU validation: pair mismatch at offset k=",
-                        k);
-        }
-    }
-
-    return gpu;
+    return buildTopologyGpu(feature_grid, output_grid, kernel_size, stride, /*transposed=*/false);
 }
-
-// ============================================================================
-// Transposed topology builder -- GPU two-pass with reference validation
-// ============================================================================
-//
-// Same structure as cutlassConvTopology but uses the transposed probe formula:
-//   probe = (output_ijk - kernel_offset) / stride  (with divisibility check)
-// Validated against groupedGemmSparseConvTransposeTopology.
 
 CutlassConvTopology
 cutlassConvTransposeTopology(GridBatchImpl const &feature_grid,
                              GridBatchImpl const &output_grid,
                              nanovdb::Coord kernel_size,
                              nanovdb::Coord stride) {
-    // ---- Reference: proven GroupedGemm transposed path ----
-    auto gg =
-        groupedGemmSparseConvTransposeTopology(feature_grid, output_grid, kernel_size, stride);
-    CutlassConvTopology ref{
-        gg.gather_indices,
-        gg.scatter_indices,
-        gg.offsets,
-        gg.feature_total_voxels,
-        gg.output_total_voxels,
-        gg.kernel_volume,
-        gg.total_pairs,
-        gg.kernel_size,
-        gg.stride,
-    };
-
-    // ---- New: direct GPU two-pass builder (transposed) ----
-    auto gpu =
-        buildTopologyGpu(feature_grid, output_grid, kernel_size, stride, /*transposed=*/true);
-
-    // ---- Validate exact match ----
-    TORCH_CHECK(gpu.kernel_volume == ref.kernel_volume,
-                "cutlassConvTransposeTopology GPU validation: kernel_volume mismatch: gpu=",
-                gpu.kernel_volume, " ref=", ref.kernel_volume);
-    TORCH_CHECK(gpu.feature_total_voxels == ref.feature_total_voxels,
-                "cutlassConvTransposeTopology GPU validation: feature_total_voxels mismatch");
-    TORCH_CHECK(gpu.output_total_voxels == ref.output_total_voxels,
-                "cutlassConvTransposeTopology GPU validation: output_total_voxels mismatch");
-    TORCH_CHECK(gpu.total_pairs == ref.total_pairs,
-                "cutlassConvTransposeTopology GPU validation: total_pairs mismatch: gpu=",
-                gpu.total_pairs, " ref=", ref.total_pairs);
-
-    TORCH_CHECK(torch::equal(gpu.offsets, ref.offsets),
-                "cutlassConvTransposeTopology GPU validation: offsets mismatch");
-
-    if (gpu.total_pairs > 0) {
-        auto ref_off = ref.offsets.accessor<int64_t, 1>();
-        int64_t const factor = std::max(gpu.output_total_voxels, gpu.feature_total_voxels) + 1;
-
-        for (int64_t k = 0; k < gpu.kernel_volume; ++k) {
-            int64_t const start = ref_off[k];
-            int64_t const end   = ref_off[k + 1];
-            if (end == start)
-                continue;
-
-            auto gpu_g = gpu.gather_indices.slice(0, start, end);
-            auto gpu_s = gpu.scatter_indices.slice(0, start, end);
-            auto ref_g = ref.gather_indices.slice(0, start, end);
-            auto ref_s = ref.scatter_indices.slice(0, start, end);
-
-            auto gpu_keys = gpu_g.to(torch::kInt64) * factor + gpu_s.to(torch::kInt64);
-            auto ref_keys = ref_g.to(torch::kInt64) * factor + ref_s.to(torch::kInt64);
-
-            auto gpu_sorted = std::get<0>(gpu_keys.sort());
-            auto ref_sorted = std::get<0>(ref_keys.sort());
-
-            TORCH_CHECK(torch::equal(gpu_sorted, ref_sorted),
-                        "cutlassConvTransposeTopology GPU validation: pair mismatch at offset k=",
-                        k);
-        }
-    }
-
-    return gpu;
+    return buildTopologyGpu(feature_grid, output_grid, kernel_size, stride, /*transposed=*/true);
 }
 
 // ============================================================================
@@ -1037,21 +922,127 @@ cutlassConvBackward(torch::Tensor grad_output,
             grad_features_f32.data_ptr<float>());
     }
 
-    // ---- Phase 4: Per-offset grad_weights via torch::mm_out (fp32) ----
-    // grad_W[k] = feat_buf[k].T @ grad_buf[k]  ->  [Cin, Mk] @ [Mk, Cout] = [Cin, Cout]
-    auto feat_f32 = feat_buf.to(torch::kFloat32);
-    auto grad_f32 = grad_buf.to(torch::kFloat32);
+    // ---- Phase 4: CUTLASS grouped GEMM for grad_weights ----
+    // grad_W[k] = feat_buf[k].T @ grad_buf[k]
+    // A = feat_buf[k] [Mk, Cin] RowMajor = [Cin, Mk] ColumnMajor (zero-copy transpose)
+    // B = grad_buf[k] [Mk, Cout] RowMajor
+    // C = grad_W_f32[k] [Cin, Cout] RowMajor (fp32)
+    // GemmCoord(M=Cin, N=Cout, K=Mk)
 
+    // Count non-empty groups for grad_weights
+    int num_gw_groups = 0;
     for (int64_t k = 0; k < K; ++k) {
-        int64_t const start = off_acc[k];
-        int64_t const end   = off_acc[k + 1];
-        if (start == end)
-            continue;
+        if (off_acc[k + 1] > off_acc[k])
+            ++num_gw_groups;
+    }
 
-        auto feat_slice = feat_f32.slice(0, start, end);  // [Mk, Cin]
-        auto grad_slice = grad_f32.slice(0, start, end);  // [Mk, Cout]
-        auto gw_slice   = grad_W_f32[k];                  // [Cin, Cout]
-        torch::mm_out(gw_slice, feat_slice.t(), grad_slice);
+    if (num_gw_groups > 0) {
+        auto h_gw_problem_sizes = torch::empty({num_gw_groups, 3}, torch::kInt32);
+        auto h_gw_ptr_A         = torch::empty({num_gw_groups}, torch::kInt64);
+        auto h_gw_ptr_B         = torch::empty({num_gw_groups}, torch::kInt64);
+        auto h_gw_ptr_C         = torch::empty({num_gw_groups}, torch::kInt64);
+        auto h_gw_ptr_D         = torch::empty({num_gw_groups}, torch::kInt64);
+        auto h_gw_lda           = torch::empty({num_gw_groups}, torch::kInt64);
+        auto h_gw_ldb           = torch::empty({num_gw_groups}, torch::kInt64);
+        auto h_gw_ldc           = torch::empty({num_gw_groups}, torch::kInt64);
+        auto h_gw_ldd           = torch::empty({num_gw_groups}, torch::kInt64);
+
+        auto gw_ps = h_gw_problem_sizes.accessor<int32_t, 2>();
+        auto gw_pA = h_gw_ptr_A.accessor<int64_t, 1>();
+        auto gw_pB = h_gw_ptr_B.accessor<int64_t, 1>();
+        auto gw_pC = h_gw_ptr_C.accessor<int64_t, 1>();
+        auto gw_pD = h_gw_ptr_D.accessor<int64_t, 1>();
+        auto gw_la = h_gw_lda.accessor<int64_t, 1>();
+        auto gw_lb = h_gw_ldb.accessor<int64_t, 1>();
+        auto gw_lc = h_gw_ldc.accessor<int64_t, 1>();
+        auto gw_ld = h_gw_ldd.accessor<int64_t, 1>();
+
+        uintptr_t const gw_base_A = reinterpret_cast<uintptr_t>(feat_buf.data_ptr<at::Half>());
+        uintptr_t const gw_base_B = reinterpret_cast<uintptr_t>(grad_buf.data_ptr<at::Half>());
+        uintptr_t const gw_base_C = reinterpret_cast<uintptr_t>(grad_W_f32.data_ptr<float>());
+
+        int gw_g = 0;
+        for (int64_t k = 0; k < K; ++k) {
+            int64_t const start = off_acc[k];
+            int64_t const Mk    = off_acc[k + 1] - start;
+            if (Mk == 0)
+                continue;
+
+            // GemmCoord(M, N, K_dim) = (Cin, Cout, Mk)
+            gw_ps[gw_g][0] = static_cast<int32_t>(Cin);
+            gw_ps[gw_g][1] = static_cast<int32_t>(Cout);
+            gw_ps[gw_g][2] = static_cast<int32_t>(Mk);
+
+            // A = feat_buf segment [Mk, Cin] RowMajor = [Cin, Mk] ColumnMajor
+            gw_pA[gw_g] = static_cast<int64_t>(
+                gw_base_A + static_cast<uintptr_t>(start * Cin * sizeof(at::Half)));
+            // B = grad_buf segment [Mk, Cout] RowMajor
+            gw_pB[gw_g] = static_cast<int64_t>(
+                gw_base_B + static_cast<uintptr_t>(start * Cout * sizeof(at::Half)));
+            // C = grad_W_f32[k] [Cin, Cout] RowMajor
+            gw_pC[gw_g] = static_cast<int64_t>(
+                gw_base_C + static_cast<uintptr_t>(k * Cin * Cout * sizeof(float)));
+            gw_pD[gw_g] = gw_pC[gw_g];
+
+            // Leading dimensions:
+            // A ColumnMajor [Cin, Mk]: lda = Cin (stride between columns)
+            // B RowMajor [Mk, Cout]: ldb = Cout
+            // C RowMajor [Cin, Cout]: ldc = Cout
+            gw_la[gw_g] = Cin;
+            gw_lb[gw_g] = Cout;
+            gw_lc[gw_g] = Cout;
+            gw_ld[gw_g] = Cout;
+            ++gw_g;
+        }
+
+        auto d_gw_problem_sizes = h_gw_problem_sizes.to(device).contiguous();
+        auto d_gw_ptr_A         = h_gw_ptr_A.to(device).contiguous();
+        auto d_gw_ptr_B         = h_gw_ptr_B.to(device).contiguous();
+        auto d_gw_ptr_C         = h_gw_ptr_C.to(device).contiguous();
+        auto d_gw_ptr_D         = h_gw_ptr_D.to(device).contiguous();
+        auto d_gw_lda           = h_gw_lda.to(device).contiguous();
+        auto d_gw_ldb           = h_gw_ldb.to(device).contiguous();
+        auto d_gw_ldc           = h_gw_ldc.to(device).contiguous();
+        auto d_gw_ldd           = h_gw_ldd.to(device).contiguous();
+
+        int gw_threadblock_count = CutlassGradWGemmGrouped::sufficient(
+            reinterpret_cast<cutlass::gemm::GemmCoord *>(h_gw_problem_sizes.data_ptr<int32_t>()),
+            num_gw_groups);
+
+        typename CutlassGradWGemmGrouped::EpilogueOutputOp::Params gw_epilogue(
+            /*alpha=*/1.0f, /*beta=*/0.0f);
+
+        typename CutlassGradWGemmGrouped::Arguments gw_args(
+            reinterpret_cast<cutlass::gemm::GemmCoord *>(d_gw_problem_sizes.data_ptr<int32_t>()),
+            num_gw_groups,
+            gw_threadblock_count,
+            gw_epilogue,
+            reinterpret_cast<CutlassElementA **>(d_gw_ptr_A.data_ptr<int64_t>()),
+            reinterpret_cast<CutlassElementB **>(d_gw_ptr_B.data_ptr<int64_t>()),
+            reinterpret_cast<CutlassElementC **>(d_gw_ptr_C.data_ptr<int64_t>()),
+            reinterpret_cast<CutlassElementC **>(d_gw_ptr_D.data_ptr<int64_t>()),
+            d_gw_lda.data_ptr<int64_t>(),
+            d_gw_ldb.data_ptr<int64_t>(),
+            d_gw_ldc.data_ptr<int64_t>(),
+            d_gw_ldd.data_ptr<int64_t>(),
+            reinterpret_cast<cutlass::gemm::GemmCoord *>(
+                h_gw_problem_sizes.data_ptr<int32_t>()));
+
+        size_t gw_workspace_bytes = CutlassGradWGemmGrouped::get_workspace_size(gw_args);
+        auto gw_workspace =
+            torch::empty({std::max(static_cast<int64_t>(gw_workspace_bytes), int64_t{1})},
+                         torch::dtype(torch::kByte).device(device));
+
+        CutlassGradWGemmGrouped gw_gemm_op;
+        cutlass::Status gw_status = gw_gemm_op.initialize(gw_args, gw_workspace.data_ptr(), stream);
+        TORCH_CHECK(gw_status == cutlass::Status::kSuccess,
+                    "cutlassConvBackward: CUTLASS grad_weights initialize failed: ",
+                    cutlass::cutlassGetStatusString(gw_status));
+
+        gw_status = gw_gemm_op.run(stream);
+        TORCH_CHECK(gw_status == cutlass::Status::kSuccess,
+                    "cutlassConvBackward: CUTLASS grad_weights run failed: ",
+                    cutlass::cutlassGetStatusString(gw_status));
     }
 
     // ---- Reshape and cast to fp16 ----
