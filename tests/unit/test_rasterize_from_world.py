@@ -6,6 +6,83 @@ import pytest
 import torch
 
 
+def _build_gaussian_splat(
+    fvdb,
+    *,
+    means: torch.Tensor,
+    quats: torch.Tensor,
+    log_scales: torch.Tensor,
+    logit_opacities: torch.Tensor,
+    sh0: torch.Tensor,
+    shN: torch.Tensor,
+):
+    return fvdb.GaussianSplat3d.from_tensors(
+        means=means,
+        quats=quats,
+        log_scales=log_scales,
+        logit_opacities=logit_opacities,
+        sh0=sh0,
+        shN=shN,
+        accumulate_mean_2d_gradients=False,
+        accumulate_max_2d_radii=False,
+        detach=False,
+    )
+
+
+def _default_camera(
+    device: torch.device,
+    dtype: torch.dtype,
+    *,
+    cx: float,
+    cy: float,
+):
+    world_to_cam = torch.eye(4, device=device, dtype=dtype).unsqueeze(0)
+    K = torch.tensor(
+        [[[18.0, 0.0, cx], [0.0, 18.0, cy], [0.0, 0.0, 1.0]]],
+        device=device,
+        dtype=dtype,
+    )
+    return world_to_cam, K
+
+
+def _render_from_world(
+    fvdb,
+    gs,
+    *,
+    world_to_cam: torch.Tensor,
+    K: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    sh_degree_to_use: int,
+    tile_size: int = 16,
+    backgrounds: torch.Tensor | None = None,
+    masks: torch.Tensor | None = None,
+):
+    return gs.render_images_from_world(
+        world_to_camera_matrices=world_to_cam,
+        projection_matrices=K,
+        image_width=image_width,
+        image_height=image_height,
+        near=0.01,
+        far=1e10,
+        camera_model=fvdb.CameraModel.PINHOLE,
+        distortion_coeffs=None,
+        sh_degree_to_use=sh_degree_to_use,
+        tile_size=tile_size,
+        min_radius_2d=0.0,
+        eps_2d=0.3,
+        antialias=False,
+        backgrounds=backgrounds,
+        masks=masks,
+    )
+
+
+def _assert_nonzero_finite_grad(tensor: torch.Tensor) -> None:
+    assert tensor.grad is not None
+    assert torch.isfinite(tensor.grad).all()
+    assert tensor.grad.abs().sum().item() > 0.0
+
+
 def _render_images_from_world_masked_edge_tile_worker(queue) -> None:
     """
     Subprocess worker for the masked edge-tile deadlock regression test.
@@ -31,43 +108,31 @@ def _render_images_from_world_masked_edge_tile_worker(queue) -> None:
         sh0 = torch.tensor([[[0.8, -0.2, 0.3]]], device=device, dtype=dtype, requires_grad=True)
         shN = torch.empty((N, 0, D), device=device, dtype=dtype, requires_grad=True)
 
-        gs = fvdb.GaussianSplat3d.from_tensors(
+        gs = _build_gaussian_splat(
+            fvdb,
             means=means,
             quats=quats,
             log_scales=log_scales,
             logit_opacities=logit_opacities,
             sh0=sh0,
             shN=shN,
-            accumulate_mean_2d_gradients=False,
-            accumulate_max_2d_radii=False,
-            detach=False,
         )
 
-        world_to_cam = torch.eye(4, device=device, dtype=dtype).unsqueeze(0)
-        K = torch.tensor(
-            [[[18.0, 0.0, 8.0], [0.0, 18.0, 8.0], [0.0, 0.0, 1.0]]],
-            device=device,
-            dtype=dtype,
-        )
+        world_to_cam, K = _default_camera(device, dtype, cx=8.0, cy=8.0)
 
         backgrounds = torch.tensor([[0.10, -0.20, 0.30]], device=device, dtype=dtype)  # [C,D]
         masks = torch.ones((C, 2, 2), device=device, dtype=torch.bool)
         masks[0, 1, 1] = False  # mask out the bottom-right edge tile
 
-        rendered, alphas = gs.render_images_from_world(
-            world_to_camera_matrices=world_to_cam,
-            projection_matrices=K,
+        rendered, alphas = _render_from_world(
+            fvdb,
+            gs,
+            world_to_cam=world_to_cam,
+            K=K,
             image_width=image_width,
             image_height=image_height,
-            near=0.01,
-            far=1e10,
-            camera_model=fvdb.CameraModel.PINHOLE,
-            distortion_coeffs=None,
             sh_degree_to_use=0,
             tile_size=tile_size,
-            min_radius_2d=0.0,
-            eps_2d=0.3,
-            antialias=False,
             backgrounds=backgrounds,
             masks=masks,
         )
@@ -105,60 +170,38 @@ def test_gaussiansplat3d_render_images_from_world_grads_nonzero():
     sh0 = torch.randn((N, 1, D), device=device, dtype=torch.float32, requires_grad=True)
     shN = torch.empty((N, 0, D), device=device, dtype=torch.float32, requires_grad=True)
 
-    gs = fvdb.GaussianSplat3d.from_tensors(
+    gs = _build_gaussian_splat(
+        fvdb,
         means=means,
         quats=quats,
         log_scales=log_scales,
         logit_opacities=logit_opacities,
         sh0=sh0,
         shN=shN,
-        accumulate_mean_2d_gradients=False,
-        accumulate_max_2d_radii=False,
-        detach=False,
     )
 
     image_width = 16
     image_height = 16
-    world_to_cam = torch.eye(4, device=device, dtype=torch.float32).unsqueeze(0)
-    K = torch.tensor(
-        [[[18.0, 0.0, 7.5], [0.0, 18.0, 7.5], [0.0, 0.0, 1.0]]],
-        device=device,
-        dtype=torch.float32,
-    )
+    world_to_cam, K = _default_camera(device, torch.float32, cx=7.5, cy=7.5)
 
-    rendered, alphas = gs.render_images_from_world(
-        world_to_camera_matrices=world_to_cam,
-        projection_matrices=K,
+    rendered, alphas = _render_from_world(
+        fvdb,
+        gs,
+        world_to_cam=world_to_cam,
+        K=K,
         image_width=image_width,
         image_height=image_height,
-        near=0.01,
-        far=1e10,
-        camera_model=fvdb.CameraModel.PINHOLE,
-        distortion_coeffs=None,
         sh_degree_to_use=0,
-        tile_size=16,
-        min_radius_2d=0.0,
-        eps_2d=0.3,
-        antialias=False,
-        backgrounds=None,
     )
 
     loss = (rendered * rendered).sum() + alphas.sum()
     loss.backward()
 
-    assert means.grad is not None and torch.isfinite(means.grad).all() and means.grad.abs().sum().item() > 0.0
-    assert quats.grad is not None and torch.isfinite(quats.grad).all() and quats.grad.abs().sum().item() > 0.0
-    assert (
-        log_scales.grad is not None
-        and torch.isfinite(log_scales.grad).all()
-        and log_scales.grad.abs().sum().item() > 0.0
-    )
-    assert (
-        logit_opacities.grad is not None
-        and torch.isfinite(logit_opacities.grad).all()
-        and logit_opacities.grad.abs().sum().item() > 0.0
-    )
-    assert sh0.grad is not None and torch.isfinite(sh0.grad).all() and sh0.grad.abs().sum().item() > 0.0
+    _assert_nonzero_finite_grad(means)
+    _assert_nonzero_finite_grad(quats)
+    _assert_nonzero_finite_grad(log_scales)
+    _assert_nonzero_finite_grad(logit_opacities)
+    _assert_nonzero_finite_grad(sh0)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
@@ -178,12 +221,7 @@ def test_gaussiansplat3d_render_images_from_world_grads_match_finite_differences
     image_width = 16
     image_height = 16
 
-    world_to_cam = torch.eye(4, device=device, dtype=dtype).unsqueeze(0)  # [1,4,4]
-    K = torch.tensor(
-        [[[18.0, 0.0, 7.5], [0.0, 18.0, 7.5], [0.0, 0.0, 1.0]]],
-        device=device,
-        dtype=dtype,
-    )
+    world_to_cam, K = _default_camera(device, dtype, cx=7.5, cy=7.5)
 
     shN = torch.empty((N, 0, D), device=device, dtype=dtype)
 
@@ -194,33 +232,25 @@ def test_gaussiansplat3d_render_images_from_world_grads_match_finite_differences
         logit_opacities_t: torch.Tensor,
         sh0_t: torch.Tensor,
     ) -> torch.Tensor:
-        gs = fvdb.GaussianSplat3d.from_tensors(
+        gs = _build_gaussian_splat(
+            fvdb,
             means=means_t,
             quats=quats_t,
             log_scales=log_scales_t,
             logit_opacities=logit_opacities_t,
             sh0=sh0_t,
             shN=shN,
-            accumulate_mean_2d_gradients=False,
-            accumulate_max_2d_radii=False,
-            detach=False,
         )
 
-        rendered, alphas = gs.render_images_from_world(
-            world_to_camera_matrices=world_to_cam,
-            projection_matrices=K,
+        rendered, alphas = _render_from_world(
+            fvdb,
+            gs,
+            world_to_cam=world_to_cam,
+            K=K,
             image_width=image_width,
             image_height=image_height,
-            near=0.01,
-            far=1e10,
-            camera_model=fvdb.CameraModel.PINHOLE,
-            distortion_coeffs=None,
             sh_degree_to_use=0,
             tile_size=16,  # single tile
-            min_radius_2d=0.0,
-            eps_2d=0.3,
-            antialias=False,
-            backgrounds=None,
         )
 
         # Smooth scalar objective; includes both color/features and opacity terms.
@@ -382,61 +412,39 @@ def test_gaussiansplat3d_render_images_from_world_grads_nonzero_with_shN():
     sh0 = torch.randn((N, 1, D), device=device, dtype=torch.float32, requires_grad=True)
     shN = torch.randn((N, 3, D), device=device, dtype=torch.float32, requires_grad=True)
 
-    gs = fvdb.GaussianSplat3d.from_tensors(
+    gs = _build_gaussian_splat(
+        fvdb,
         means=means,
         quats=quats,
         log_scales=log_scales,
         logit_opacities=logit_opacities,
         sh0=sh0,
         shN=shN,
-        accumulate_mean_2d_gradients=False,
-        accumulate_max_2d_radii=False,
-        detach=False,
     )
 
     image_width = 16
     image_height = 16
-    world_to_cam = torch.eye(4, device=device, dtype=torch.float32).unsqueeze(0)
-    K = torch.tensor(
-        [[[18.0, 0.0, 7.5], [0.0, 18.0, 7.5], [0.0, 0.0, 1.0]]],
-        device=device,
-        dtype=torch.float32,
-    )
+    world_to_cam, K = _default_camera(device, torch.float32, cx=7.5, cy=7.5)
 
-    rendered, alphas = gs.render_images_from_world(
-        world_to_camera_matrices=world_to_cam,
-        projection_matrices=K,
+    rendered, alphas = _render_from_world(
+        fvdb,
+        gs,
+        world_to_cam=world_to_cam,
+        K=K,
         image_width=image_width,
         image_height=image_height,
-        near=0.01,
-        far=1e10,
-        camera_model=fvdb.CameraModel.PINHOLE,
-        distortion_coeffs=None,
         sh_degree_to_use=1,
-        tile_size=16,
-        min_radius_2d=0.0,
-        eps_2d=0.3,
-        antialias=False,
-        backgrounds=None,
     )
 
     loss = (rendered * rendered).sum() + alphas.sum()
     loss.backward()
 
-    assert means.grad is not None and torch.isfinite(means.grad).all() and means.grad.abs().sum().item() > 0.0
-    assert quats.grad is not None and torch.isfinite(quats.grad).all() and quats.grad.abs().sum().item() > 0.0
-    assert (
-        log_scales.grad is not None
-        and torch.isfinite(log_scales.grad).all()
-        and log_scales.grad.abs().sum().item() > 0.0
-    )
-    assert (
-        logit_opacities.grad is not None
-        and torch.isfinite(logit_opacities.grad).all()
-        and logit_opacities.grad.abs().sum().item() > 0.0
-    )
-    assert sh0.grad is not None and torch.isfinite(sh0.grad).all() and sh0.grad.abs().sum().item() > 0.0
-    assert shN.grad is not None and torch.isfinite(shN.grad).all() and shN.grad.abs().sum().item() > 0.0
+    _assert_nonzero_finite_grad(means)
+    _assert_nonzero_finite_grad(quats)
+    _assert_nonzero_finite_grad(log_scales)
+    _assert_nonzero_finite_grad(logit_opacities)
+    _assert_nonzero_finite_grad(sh0)
+    _assert_nonzero_finite_grad(shN)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
@@ -454,12 +462,7 @@ def test_gaussiansplat3d_render_images_from_world_shN_grads_match_finite_differe
     image_width = 16
     image_height = 16
 
-    world_to_cam = torch.eye(4, device=device, dtype=dtype).unsqueeze(0)  # [1,4,4]
-    K = torch.tensor(
-        [[[18.0, 0.0, 7.5], [0.0, 18.0, 7.5], [0.0, 0.0, 1.0]]],
-        device=device,
-        dtype=dtype,
-    )
+    world_to_cam, K = _default_camera(device, dtype, cx=7.5, cy=7.5)
 
     means = torch.tensor([[0.05, 0.05, 2.5]], device=device, dtype=dtype)
     quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=dtype)
@@ -478,33 +481,24 @@ def test_gaussiansplat3d_render_images_from_world_shN_grads_match_finite_differe
     )
 
     def loss_from_shN(shN_t: torch.Tensor) -> torch.Tensor:
-        gs = fvdb.GaussianSplat3d.from_tensors(
+        gs = _build_gaussian_splat(
+            fvdb,
             means=means,
             quats=quats,
             log_scales=log_scales,
             logit_opacities=logit_opacities,
             sh0=sh0,
             shN=shN_t,
-            accumulate_mean_2d_gradients=False,
-            accumulate_max_2d_radii=False,
-            detach=False,
         )
 
-        rendered, alphas = gs.render_images_from_world(
-            world_to_camera_matrices=world_to_cam,
-            projection_matrices=K,
+        rendered, alphas = _render_from_world(
+            fvdb,
+            gs,
+            world_to_cam=world_to_cam,
+            K=K,
             image_width=image_width,
             image_height=image_height,
-            near=0.01,
-            far=1e10,
-            camera_model=fvdb.CameraModel.PINHOLE,
-            distortion_coeffs=None,
             sh_degree_to_use=1,
-            tile_size=16,
-            min_radius_2d=0.0,
-            eps_2d=0.3,
-            antialias=False,
-            backgrounds=None,
         )
 
         return (rendered * rendered).sum() + 0.5 * alphas.sum()
@@ -572,42 +566,30 @@ def test_gaussiansplat3d_render_images_from_world_backward_with_backgrounds_and_
     sh0 = torch.randn((N, 1, D), device=device, dtype=dtype, requires_grad=True)
     shN = torch.empty((N, 0, D), device=device, dtype=dtype, requires_grad=True)
 
-    gs = fvdb.GaussianSplat3d.from_tensors(
+    gs = _build_gaussian_splat(
+        fvdb,
         means=means,
         quats=quats,
         log_scales=log_scales,
         logit_opacities=logit_opacities,
         sh0=sh0,
         shN=shN,
-        accumulate_mean_2d_gradients=False,
-        accumulate_max_2d_radii=False,
-        detach=False,
     )
 
-    world_to_cam = torch.eye(4, device=device, dtype=dtype).unsqueeze(0)
-    K = torch.tensor(
-        [[[18.0, 0.0, 7.5], [0.0, 18.0, 7.5], [0.0, 0.0, 1.0]]],
-        device=device,
-        dtype=dtype,
-    )
+    world_to_cam, K = _default_camera(device, dtype, cx=7.5, cy=7.5)
 
     backgrounds = torch.tensor([[0.1, -0.2, 0.3]], device=device, dtype=dtype)  # [C,D]
     masks = torch.ones((C, 1, 1), device=device, dtype=torch.bool)  # enable the only tile
 
-    rendered, alphas = gs.render_images_from_world(
-        world_to_camera_matrices=world_to_cam,
-        projection_matrices=K,
+    rendered, alphas = _render_from_world(
+        fvdb,
+        gs,
+        world_to_cam=world_to_cam,
+        K=K,
         image_width=image_width,
         image_height=image_height,
-        near=0.01,
-        far=1e10,
-        camera_model=fvdb.CameraModel.PINHOLE,
-        distortion_coeffs=None,
         sh_degree_to_use=0,
         tile_size=tile_size,
-        min_radius_2d=0.0,
-        eps_2d=0.3,
-        antialias=False,
         backgrounds=backgrounds,
         masks=masks,
     )
@@ -615,19 +597,11 @@ def test_gaussiansplat3d_render_images_from_world_backward_with_backgrounds_and_
     loss = (rendered * rendered).sum() + 0.5 * alphas.sum()
     loss.backward()
 
-    assert means.grad is not None and torch.isfinite(means.grad).all() and means.grad.abs().sum().item() > 0.0
-    assert quats.grad is not None and torch.isfinite(quats.grad).all() and quats.grad.abs().sum().item() > 0.0
-    assert (
-        log_scales.grad is not None
-        and torch.isfinite(log_scales.grad).all()
-        and log_scales.grad.abs().sum().item() > 0.0
-    )
-    assert (
-        logit_opacities.grad is not None
-        and torch.isfinite(logit_opacities.grad).all()
-        and logit_opacities.grad.abs().sum().item() > 0.0
-    )
-    assert sh0.grad is not None and torch.isfinite(sh0.grad).all() and sh0.grad.abs().sum().item() > 0.0
+    _assert_nonzero_finite_grad(means)
+    _assert_nonzero_finite_grad(quats)
+    _assert_nonzero_finite_grad(log_scales)
+    _assert_nonzero_finite_grad(logit_opacities)
+    _assert_nonzero_finite_grad(sh0)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
@@ -649,42 +623,30 @@ def test_gaussiansplat3d_render_images_from_world_masks_write_background_and_zer
     sh0 = torch.randn((N, 1, D), device=device, dtype=dtype, requires_grad=True)
     shN = torch.empty((N, 0, D), device=device, dtype=dtype, requires_grad=True)
 
-    gs = fvdb.GaussianSplat3d.from_tensors(
+    gs = _build_gaussian_splat(
+        fvdb,
         means=means,
         quats=quats,
         log_scales=log_scales,
         logit_opacities=logit_opacities,
         sh0=sh0,
         shN=shN,
-        accumulate_mean_2d_gradients=False,
-        accumulate_max_2d_radii=False,
-        detach=False,
     )
 
-    world_to_cam = torch.eye(4, device=device, dtype=dtype).unsqueeze(0)
-    K = torch.tensor(
-        [[[18.0, 0.0, 7.5], [0.0, 18.0, 7.5], [0.0, 0.0, 1.0]]],
-        device=device,
-        dtype=dtype,
-    )
+    world_to_cam, K = _default_camera(device, dtype, cx=7.5, cy=7.5)
 
     backgrounds = torch.tensor([[0.10, -0.20, 0.30]], device=device, dtype=dtype)  # [C,D]
     masks = torch.zeros((C, 1, 1), device=device, dtype=torch.bool)  # mask out the only tile
 
-    rendered, alphas = gs.render_images_from_world(
-        world_to_camera_matrices=world_to_cam,
-        projection_matrices=K,
+    rendered, alphas = _render_from_world(
+        fvdb,
+        gs,
+        world_to_cam=world_to_cam,
+        K=K,
         image_width=image_width,
         image_height=image_height,
-        near=0.01,
-        far=1e10,
-        camera_model=fvdb.CameraModel.PINHOLE,
-        distortion_coeffs=None,
         sh_degree_to_use=0,
         tile_size=tile_size,
-        min_radius_2d=0.0,
-        eps_2d=0.3,
-        antialias=False,
         backgrounds=backgrounds,
         masks=masks,
     )
@@ -760,40 +722,27 @@ def test_gaussiansplat3d_render_images_from_world_backgrounds_used_when_no_inter
     sh0 = torch.randn((N, 1, D), device=device, dtype=dtype)
     shN = torch.empty((N, 0, D), device=device, dtype=dtype)
 
-    gs = fvdb.GaussianSplat3d.from_tensors(
+    gs = _build_gaussian_splat(
+        fvdb,
         means=means,
         quats=quats,
         log_scales=log_scales,
         logit_opacities=logit_opacities,
         sh0=sh0,
         shN=shN,
-        accumulate_mean_2d_gradients=False,
-        accumulate_max_2d_radii=False,
-        detach=False,
     )
 
-    world_to_cam = torch.eye(4, device=device, dtype=dtype).unsqueeze(0)
-    K = torch.tensor(
-        [[[18.0, 0.0, 7.5], [0.0, 18.0, 7.5], [0.0, 0.0, 1.0]]],
-        device=device,
-        dtype=dtype,
-    )
+    world_to_cam, K = _default_camera(device, dtype, cx=7.5, cy=7.5)
 
     backgrounds = torch.tensor([[0.25, 0.50, -0.75]], device=device, dtype=dtype)
-    rendered, alphas = gs.render_images_from_world(
-        world_to_camera_matrices=world_to_cam,
-        projection_matrices=K,
+    rendered, alphas = _render_from_world(
+        fvdb,
+        gs,
+        world_to_cam=world_to_cam,
+        K=K,
         image_width=image_width,
         image_height=image_height,
-        near=0.01,
-        far=1e10,
-        camera_model=fvdb.CameraModel.PINHOLE,
-        distortion_coeffs=None,
         sh_degree_to_use=0,
-        tile_size=16,
-        min_radius_2d=0.0,
-        eps_2d=0.3,
-        antialias=False,
         backgrounds=backgrounds,
         masks=None,
     )
