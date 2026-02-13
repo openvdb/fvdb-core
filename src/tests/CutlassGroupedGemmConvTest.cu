@@ -1115,3 +1115,599 @@ TEST(CutlassSphereTests, Sphere_R20_3x4x5_Stride1x2x3_C64) {
 
     compareForward(src_grid, dst_grid, ks, stride, 64, 64, 0.05, 0.05, "sphere_R20_3x4x5_s1x2x3");
 }
+
+// =============================================================================
+// Backward tests -- compare cutlassConvBackward against GatherScatter reference
+// =============================================================================
+//
+// The GatherScatter backward runs in fp32 (reference). The CUTLASS backward
+// runs in fp16 with fp32 accumulate.  We compare with tolerances matching
+// the forward tests.
+
+static void
+compareBackward(c10::intrusive_ptr<GridBatchImpl> const &feature_grid,
+                c10::intrusive_ptr<GridBatchImpl> const &output_grid,
+                nanovdb::Coord kernel_size,
+                nanovdb::Coord stride,
+                int64_t Cin,
+                int64_t Cout,
+                double rtol,
+                double atol,
+                std::string const &label) {
+    auto device = cudaDevice();
+
+    int64_t NA = feature_grid->totalVoxels();
+    int64_t NB = output_grid->totalVoxels();
+
+    torch::manual_seed(42);
+    auto features_f16 = torch::randn({NA, Cin}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
+    auto weights_f16 =
+        torch::randn({Cout, Cin, kernel_size[0], kernel_size[1], kernel_size[2]},
+                     torch::dtype(torch::kFloat16).device(device)) *
+        0.1;
+    auto grad_output_f16 =
+        torch::randn({NB, Cout}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
+
+    // Reference backward (fp32)
+    auto ref_topo =
+        ops::gatherScatterSparseConvTopology(*feature_grid, *output_grid, kernel_size, stride);
+    auto [ref_grad_feat, ref_grad_w] = ops::gatherScatterSparseConvBackward(
+        grad_output_f16.to(torch::kFloat32), features_f16.to(torch::kFloat32),
+        weights_f16.to(torch::kFloat32), ref_topo);
+
+    // CUTLASS backward (fp16 with fp32 accumulate)
+    auto cutlass_topo = ops::cutlassConvTopology(*feature_grid, *output_grid, kernel_size, stride);
+    auto [cutlass_grad_feat, cutlass_grad_w] =
+        ops::cutlassConvBackward(grad_output_f16, features_f16, weights_f16, cutlass_topo);
+
+    // -- grad_features --
+    EXPECT_EQ(cutlass_grad_feat.sizes(), ref_grad_feat.sizes())
+        << label << ": grad_features shape mismatch";
+
+    auto cutlass_gf_f32 = cutlass_grad_feat.to(torch::kFloat32).cpu();
+    auto ref_gf_f32     = ref_grad_feat.cpu();
+
+    EXPECT_TRUE(torch::allclose(cutlass_gf_f32, ref_gf_f32, rtol, atol))
+        << label << ": grad_features mismatch\n"
+        << "  max abs diff = " << (cutlass_gf_f32 - ref_gf_f32).abs().max().item<double>() << "\n"
+        << "  mean abs diff = " << (cutlass_gf_f32 - ref_gf_f32).abs().mean().item<double>();
+
+    // -- grad_weights --
+    EXPECT_EQ(cutlass_grad_w.sizes(), ref_grad_w.sizes())
+        << label << ": grad_weights shape mismatch";
+
+    auto cutlass_gw_f32 = cutlass_grad_w.to(torch::kFloat32).cpu();
+    auto ref_gw_f32     = ref_grad_w.cpu();
+
+    EXPECT_TRUE(torch::allclose(cutlass_gw_f32, ref_gw_f32, rtol, atol))
+        << label << ": grad_weights mismatch\n"
+        << "  max abs diff = " << (cutlass_gw_f32 - ref_gw_f32).abs().max().item<double>() << "\n"
+        << "  mean abs diff = " << (cutlass_gw_f32 - ref_gw_f32).abs().mean().item<double>();
+}
+
+// -- Backward smoke tests --
+
+TEST(CutlassBackwardSmoke, Backward1x1x1_C64) {
+    skipIfCudaUnavailable();
+    auto grid = makeDenseGrid(4, cudaDevice());
+    compareBackward(grid, grid, {1, 1, 1}, {1, 1, 1}, 64, 64, 0.05, 0.05, "bwd_1x1x1");
+}
+
+TEST(CutlassBackwardSmoke, Backward3x3x3_C64) {
+    skipIfCudaUnavailable();
+    auto grid = makeDenseGrid(6, cudaDevice());
+    compareBackward(grid, grid, {3, 3, 3}, {1, 1, 1}, 64, 64, 0.05, 0.05, "bwd_3x3x3");
+}
+
+TEST(CutlassBackwardSmoke, Backward3x3x3_Stride2_C64) {
+    skipIfCudaUnavailable();
+    auto device   = cudaDevice();
+    auto src_grid = makeDenseGrid(8, device);
+    nanovdb::Coord ks(3, 3, 3);
+    nanovdb::Coord stride(2, 2, 2);
+    auto dst_grid = src_grid->convolutionOutput(ks, stride);
+    compareBackward(src_grid, dst_grid, ks, stride, 64, 64, 0.05, 0.05, "bwd_3x3x3_stride2");
+}
+
+TEST(CutlassBackwardSmoke, Backward2x2x2_C64) {
+    skipIfCudaUnavailable();
+    auto grid = makeDenseGrid(6, cudaDevice());
+    compareBackward(grid, grid, {2, 2, 2}, {1, 1, 1}, 64, 64, 0.05, 0.05, "bwd_2x2x2");
+}
+
+TEST(CutlassBackwardSmoke, Backward3x5x1_C64) {
+    skipIfCudaUnavailable();
+    auto grid = makeDenseGrid(7, cudaDevice());
+    compareBackward(grid, grid, {3, 5, 1}, {1, 1, 1}, 64, 64, 0.05, 0.05, "bwd_3x5x1");
+}
+
+TEST(CutlassBackwardSmoke, Backward_Cin32_Cout64) {
+    skipIfCudaUnavailable();
+    auto grid = makeDenseGrid(6, cudaDevice());
+    compareBackward(grid, grid, {3, 3, 3}, {1, 1, 1}, 32, 64, 0.05, 0.05, "bwd_Cin32_Cout64");
+}
+
+TEST(CutlassBackwardSmoke, Backward3x3x3_C128) {
+    skipIfCudaUnavailable();
+    auto grid = makeDenseGrid(6, cudaDevice());
+    compareBackward(grid, grid, {3, 3, 3}, {1, 1, 1}, 128, 128, 0.05, 0.05, "bwd_3x3x3_C128");
+}
+
+// -- Backward parameterized by channel --
+
+class CutlassBackwardChannelTest : public ::testing::TestWithParam<ChannelParam> {};
+
+TEST_P(CutlassBackwardChannelTest, Backward3x3x3) {
+    skipIfCudaUnavailable();
+    auto [Cin, Cout] = GetParam();
+    auto grid        = makeDenseGrid(6, cudaDevice());
+    compareBackward(grid, grid, {3, 3, 3}, {1, 1, 1}, Cin, Cout, 0.05, 0.05, "bwd_3x3x3_channel");
+}
+
+INSTANTIATE_TEST_SUITE_P(BwdChannels, CutlassBackwardChannelTest,
+                         ::testing::ValuesIn(channelConfigs()), channelParamName);
+
+// -- Backward parameterized by kernel size --
+
+class CutlassBackwardKernelSizeTest : public ::testing::TestWithParam<KernelParam> {};
+
+TEST_P(CutlassBackwardKernelSizeTest, BackwardSameGrid) {
+    skipIfCudaUnavailable();
+    auto [k0, k1, k2] = GetParam();
+    int dim   = std::max({k0, k1, k2, 4}) + 2;
+    auto grid = makeDenseGrid(dim, cudaDevice());
+    nanovdb::Coord ks(k0, k1, k2);
+    compareBackward(grid, grid, ks, {1, 1, 1}, 64, 64, 0.05, 0.05,
+                    "bwd_k" + std::to_string(k0) + "x" + std::to_string(k1) + "x" +
+                        std::to_string(k2));
+}
+
+INSTANTIATE_TEST_SUITE_P(BwdKernelSizes, CutlassBackwardKernelSizeTest,
+                         ::testing::ValuesIn(kernelSizeConfigs()), kernelParamName);
+
+// -- Backward parameterized by stride --
+
+class CutlassBackwardStrideTest : public ::testing::TestWithParam<StrideParam> {};
+
+TEST_P(CutlassBackwardStrideTest, BackwardStrided) {
+    skipIfCudaUnavailable();
+    auto [k0, k1, k2, s0, s1, s2] = GetParam();
+    auto device   = cudaDevice();
+    auto src_grid = makeDenseGrid(8, device);
+    nanovdb::Coord ks(k0, k1, k2);
+    nanovdb::Coord stride(s0, s1, s2);
+    auto dst_grid = src_grid->convolutionOutput(ks, stride);
+    compareBackward(src_grid, dst_grid, ks, stride, 64, 64, 0.05, 0.05,
+                    "bwd_k" + std::to_string(k0) + "x" + std::to_string(k1) + "x" +
+                        std::to_string(k2) + "_s" + std::to_string(s0) + "x" +
+                        std::to_string(s1) + "x" + std::to_string(s2));
+}
+
+INSTANTIATE_TEST_SUITE_P(BwdStrides, CutlassBackwardStrideTest,
+                         ::testing::ValuesIn(strideConfigs()), strideParamName);
+
+// -- Backward sphere shell tests --
+
+TEST(CutlassBackwardSphere, Sphere_R10_3x3x3_C64) {
+    skipIfCudaUnavailable();
+    auto grid = makeSphereShellGrid(10, cudaDevice());
+    compareBackward(grid, grid, {3, 3, 3}, {1, 1, 1}, 64, 64, 0.05, 0.05, "bwd_sphere_R10_3x3x3");
+}
+
+TEST(CutlassBackwardSphere, Sphere_R20_3x3x3_C64) {
+    skipIfCudaUnavailable();
+    auto grid = makeSphereShellGrid(20, cudaDevice());
+    compareBackward(grid, grid, {3, 3, 3}, {1, 1, 1}, 64, 64, 0.05, 0.05, "bwd_sphere_R20_3x3x3");
+}
+
+TEST(CutlassBackwardSphere, Sphere_R20_2x2x2_C64) {
+    skipIfCudaUnavailable();
+    auto grid = makeSphereShellGrid(20, cudaDevice());
+    compareBackward(grid, grid, {2, 2, 2}, {1, 1, 1}, 64, 64, 0.05, 0.05, "bwd_sphere_R20_2x2x2");
+}
+
+TEST(CutlassBackwardSphere, Sphere_R20_3x3x3_Stride2_C64) {
+    skipIfCudaUnavailable();
+    auto device   = cudaDevice();
+    auto src_grid = makeSphereShellGrid(20, device);
+    nanovdb::Coord ks(3, 3, 3);
+    nanovdb::Coord stride(2, 2, 2);
+    auto dst_grid = src_grid->convolutionOutput(ks, stride);
+    compareBackward(src_grid, dst_grid, ks, stride, 64, 64, 0.05, 0.05,
+                    "bwd_sphere_R20_3x3x3_stride2");
+}
+
+TEST(CutlassBackwardSphere, Sphere_R20_Cin32_Cout128) {
+    skipIfCudaUnavailable();
+    auto grid = makeSphereShellGrid(20, cudaDevice());
+    compareBackward(grid, grid, {3, 3, 3}, {1, 1, 1}, 32, 128, 0.05, 0.05,
+                    "bwd_sphere_R20_Cin32_Cout128");
+}
+
+TEST(CutlassBackwardSphere, Sphere_R20_3x5x1_C64) {
+    skipIfCudaUnavailable();
+    auto grid = makeSphereShellGrid(20, cudaDevice());
+    compareBackward(grid, grid, {3, 5, 1}, {1, 1, 1}, 64, 64, 0.05, 0.05,
+                    "bwd_sphere_R20_3x5x1");
+}
+
+TEST(CutlassBackwardSphere, Sphere_R20_3x4x5_Stride1x2x3_C64) {
+    skipIfCudaUnavailable();
+    auto device   = cudaDevice();
+    auto src_grid = makeSphereShellGrid(20, device);
+    nanovdb::Coord ks(3, 4, 5);
+    nanovdb::Coord stride(1, 2, 3);
+    auto dst_grid = src_grid->convolutionOutput(ks, stride);
+    compareBackward(src_grid, dst_grid, ks, stride, 64, 64, 0.05, 0.05,
+                    "bwd_sphere_R20_3x4x5_s1x2x3");
+}
+
+// -- Backward edge cases --
+
+TEST(CutlassBackwardEdgeCases, SingleVoxelBackward) {
+    skipIfCudaUnavailable();
+    auto device   = cudaDevice();
+    auto grid     = makeGrid(torch::tensor({{5, 5, 5}}, torch::kInt32), device);
+    auto dst_grid = grid->convolutionOutput({3, 3, 3}, {1, 1, 1});
+    compareBackward(grid, dst_grid, {3, 3, 3}, {1, 1, 1}, 32, 32, 0.05, 0.05,
+                    "bwd_single_voxel");
+}
+
+TEST(CutlassBackwardEdgeCases, EmptyOutputBackward) {
+    skipIfCudaUnavailable();
+    auto device   = cudaDevice();
+    auto src_grid = makeGrid(torch::tensor({{0, 0, 0}}, torch::kInt32), device);
+    auto dst_grid = makeGrid(torch::tensor({{100, 100, 100}}, torch::kInt32), device);
+
+    auto topo = ops::cutlassConvTopology(*src_grid, *dst_grid, {3, 3, 3}, {1, 1, 1});
+    EXPECT_EQ(topo.total_pairs, 0);
+
+    auto features    = torch::randn({1, 32}, torch::dtype(torch::kFloat16).device(device));
+    auto weights     = torch::randn({32, 32, 3, 3, 3}, torch::dtype(torch::kFloat16).device(device));
+    auto grad_output = torch::randn({1, 32}, torch::dtype(torch::kFloat16).device(device));
+
+    auto [grad_feat, grad_w] = ops::cutlassConvBackward(grad_output, features, weights, topo);
+
+    EXPECT_EQ(grad_feat.size(0), 1);
+    EXPECT_EQ(grad_feat.size(1), 32);
+    EXPECT_TRUE(grad_feat.abs().max().item<float>() == 0.0f);
+
+    EXPECT_EQ(grad_w.sizes(), weights.sizes());
+    EXPECT_TRUE(grad_w.abs().max().item<float>() == 0.0f);
+}
+
+// =============================================================================
+// Transposed convolution tests
+// =============================================================================
+//
+// Transposed conv uses a different topology (probe = (ijk - offset) / stride)
+// but identical GEMM operations.  Grid relationship: the transposed output
+// grid is built via convolutionTransposeOutput (upsampling).
+
+// -- Transposed topology comparison --
+
+static void
+compareTransposeTopology(c10::intrusive_ptr<GridBatchImpl> const &feature_grid,
+                         c10::intrusive_ptr<GridBatchImpl> const &output_grid,
+                         nanovdb::Coord kernel_size,
+                         nanovdb::Coord stride,
+                         std::string const &label) {
+    auto gpu = ops::cutlassConvTransposeTopology(*feature_grid, *output_grid, kernel_size, stride);
+    auto ref =
+        ops::groupedGemmSparseConvTransposeTopology(*feature_grid, *output_grid, kernel_size, stride);
+
+    EXPECT_EQ(gpu.kernel_volume, ref.kernel_volume) << label << ": kernel_volume";
+    EXPECT_EQ(gpu.feature_total_voxels, ref.feature_total_voxels) << label << ": feature_total_voxels";
+    EXPECT_EQ(gpu.output_total_voxels, ref.output_total_voxels) << label << ": output_total_voxels";
+    EXPECT_EQ(gpu.total_pairs, ref.total_pairs)
+        << label << ": total_pairs (gpu=" << gpu.total_pairs << " ref=" << ref.total_pairs << ")";
+    ASSERT_EQ(gpu.offsets.size(0), ref.offsets.size(0)) << label << ": offsets size";
+    EXPECT_TRUE(torch::equal(gpu.offsets, ref.offsets)) << label << ": offsets content";
+
+    if (gpu.total_pairs == 0)
+        return;
+
+    auto gpu_off = gpu.offsets.accessor<int64_t, 1>();
+    auto gpu_g_cpu = gpu.gather_indices.cpu();
+    auto gpu_s_cpu = gpu.scatter_indices.cpu();
+    auto ref_g_cpu = ref.gather_indices.cpu();
+    auto ref_s_cpu = ref.scatter_indices.cpu();
+    auto ga  = gpu_g_cpu.accessor<int32_t, 1>();
+    auto sa  = gpu_s_cpu.accessor<int32_t, 1>();
+    auto rga = ref_g_cpu.accessor<int32_t, 1>();
+    auto rsa = ref_s_cpu.accessor<int32_t, 1>();
+
+    for (int64_t k = 0; k < gpu.kernel_volume; ++k) {
+        int64_t start = gpu_off[k];
+        int64_t end   = gpu_off[k + 1];
+        if (end == start)
+            continue;
+        std::set<std::pair<int32_t, int32_t>> gpu_pairs, ref_pairs;
+        for (int64_t i = start; i < end; ++i) {
+            gpu_pairs.insert({ga[i], sa[i]});
+            ref_pairs.insert({rga[i], rsa[i]});
+        }
+        EXPECT_EQ(gpu_pairs, ref_pairs)
+            << label << ": pair set mismatch at offset k=" << k;
+    }
+}
+
+class TransposeTopoStrideTest : public ::testing::TestWithParam<StrideParam> {};
+
+TEST_P(TransposeTopoStrideTest, TransposeTopology) {
+    skipIfCudaUnavailable();
+    auto [k0, k1, k2, s0, s1, s2] = GetParam();
+    auto device   = cudaDevice();
+    auto src_grid = makeDenseGrid(6, device);
+    nanovdb::Coord ks(k0, k1, k2);
+    nanovdb::Coord stride(s0, s1, s2);
+    auto dst_grid = src_grid->convolutionTransposeOutput(ks, stride);
+    compareTransposeTopology(
+        src_grid, dst_grid, ks, stride,
+        "tr_topo_k" + std::to_string(k0) + "x" + std::to_string(k1) + "x" + std::to_string(k2) +
+            "_s" + std::to_string(s0) + "x" + std::to_string(s1) + "x" + std::to_string(s2));
+}
+
+INSTANTIATE_TEST_SUITE_P(TransposeTopoStrides, TransposeTopoStrideTest,
+                         ::testing::ValuesIn(strideConfigs()), strideParamName);
+
+class TransposeTopoKernelSizeTest : public ::testing::TestWithParam<KernelParam> {};
+
+TEST_P(TransposeTopoKernelSizeTest, TransposeTopologySameGrid) {
+    skipIfCudaUnavailable();
+    auto [k0, k1, k2] = GetParam();
+    int dim   = std::max({k0, k1, k2, 4}) + 2;
+    auto grid = makeDenseGrid(dim, cudaDevice());
+    nanovdb::Coord ks(k0, k1, k2);
+    // stride=1: transpose output == input grid for dense grids
+    compareTransposeTopology(grid, grid, ks, {1, 1, 1},
+                             "tr_topo_k" + std::to_string(k0) + "x" + std::to_string(k1) + "x" +
+                                 std::to_string(k2));
+}
+
+INSTANTIATE_TEST_SUITE_P(TransposeTopoKernelSizes, TransposeTopoKernelSizeTest,
+                         ::testing::ValuesIn(kernelSizeConfigs()), kernelParamName);
+
+// -- Transposed forward tests --
+
+static void
+compareTransposeForward(c10::intrusive_ptr<GridBatchImpl> const &feature_grid,
+                        c10::intrusive_ptr<GridBatchImpl> const &output_grid,
+                        nanovdb::Coord kernel_size,
+                        nanovdb::Coord stride,
+                        int64_t Cin,
+                        int64_t Cout,
+                        double rtol,
+                        double atol,
+                        std::string const &label) {
+    auto device = cudaDevice();
+    int64_t NA  = feature_grid->totalVoxels();
+
+    torch::manual_seed(42);
+    auto features_f16 = torch::randn({NA, Cin}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
+    auto weights_f16 =
+        torch::randn({Cout, Cin, kernel_size[0], kernel_size[1], kernel_size[2]},
+                     torch::dtype(torch::kFloat16).device(device)) *
+        0.1;
+
+    auto ref_topo =
+        ops::gatherScatterSparseConvTransposeTopology(*feature_grid, *output_grid, kernel_size, stride);
+    auto ref_out = ops::gatherScatterSparseConvTranspose(
+        features_f16.to(torch::kFloat32), weights_f16.to(torch::kFloat32), ref_topo);
+
+    auto cutlass_topo =
+        ops::cutlassConvTransposeTopology(*feature_grid, *output_grid, kernel_size, stride);
+    auto cutlass_out = ops::cutlassConvTranspose(features_f16, weights_f16, cutlass_topo);
+
+    EXPECT_EQ(cutlass_out.sizes(), ref_out.sizes()) << label << ": shape mismatch";
+
+    auto cutlass_f32 = cutlass_out.to(torch::kFloat32).cpu();
+    auto ref_f32     = ref_out.cpu();
+
+    EXPECT_TRUE(torch::allclose(cutlass_f32, ref_f32, rtol, atol))
+        << label << ": numerical mismatch\n"
+        << "  max abs diff = " << (cutlass_f32 - ref_f32).abs().max().item<double>() << "\n"
+        << "  mean abs diff = " << (cutlass_f32 - ref_f32).abs().mean().item<double>();
+}
+
+TEST(CutlassTransposeForward, Transpose3x3x3_Stride2_C64) {
+    skipIfCudaUnavailable();
+    auto device   = cudaDevice();
+    auto src_grid = makeDenseGrid(4, device);
+    nanovdb::Coord ks(3, 3, 3);
+    nanovdb::Coord stride(2, 2, 2);
+    auto dst_grid = src_grid->convolutionTransposeOutput(ks, stride);
+    compareTransposeForward(src_grid, dst_grid, ks, stride, 64, 64, 0.05, 0.05,
+                            "tr_fwd_3x3x3_s2");
+}
+
+TEST(CutlassTransposeForward, Transpose3x3x3_SameGrid_C64) {
+    skipIfCudaUnavailable();
+    auto grid = makeDenseGrid(6, cudaDevice());
+    compareTransposeForward(grid, grid, {3, 3, 3}, {1, 1, 1}, 64, 64, 0.05, 0.05,
+                            "tr_fwd_3x3x3_same");
+}
+
+TEST(CutlassTransposeForward, Transpose2x2x2_Stride2_C64) {
+    skipIfCudaUnavailable();
+    auto device   = cudaDevice();
+    auto src_grid = makeDenseGrid(4, device);
+    nanovdb::Coord ks(2, 2, 2);
+    nanovdb::Coord stride(2, 2, 2);
+    auto dst_grid = src_grid->convolutionTransposeOutput(ks, stride);
+    compareTransposeForward(src_grid, dst_grid, ks, stride, 64, 64, 0.05, 0.05,
+                            "tr_fwd_2x2x2_s2");
+}
+
+TEST(CutlassTransposeForward, Transpose3x4x5_Stride1x2x3_C64) {
+    skipIfCudaUnavailable();
+    auto device   = cudaDevice();
+    auto src_grid = makeDenseGrid(4, device);
+    nanovdb::Coord ks(3, 4, 5);
+    nanovdb::Coord stride(1, 2, 3);
+    auto dst_grid = src_grid->convolutionTransposeOutput(ks, stride);
+    compareTransposeForward(src_grid, dst_grid, ks, stride, 64, 64, 0.05, 0.05,
+                            "tr_fwd_3x4x5_s1x2x3");
+}
+
+TEST(CutlassTransposeForward, Transpose_Cin32_Cout128) {
+    skipIfCudaUnavailable();
+    auto device   = cudaDevice();
+    auto src_grid = makeDenseGrid(4, device);
+    nanovdb::Coord ks(3, 3, 3);
+    nanovdb::Coord stride(2, 2, 2);
+    auto dst_grid = src_grid->convolutionTransposeOutput(ks, stride);
+    compareTransposeForward(src_grid, dst_grid, ks, stride, 32, 128, 0.05, 0.05,
+                            "tr_fwd_Cin32_Cout128");
+}
+
+TEST(CutlassTransposeForward, Transpose_Sphere_R10_3x3x3_Stride2_C64) {
+    skipIfCudaUnavailable();
+    auto device   = cudaDevice();
+    auto src_grid = makeSphereShellGrid(10, device);
+    nanovdb::Coord ks(3, 3, 3);
+    nanovdb::Coord stride(2, 2, 2);
+    auto dst_grid = src_grid->convolutionTransposeOutput(ks, stride);
+    compareTransposeForward(src_grid, dst_grid, ks, stride, 64, 64, 0.05, 0.05,
+                            "tr_fwd_sphere_R10_3x3x3_s2");
+}
+
+// -- Transposed backward tests --
+
+static void
+compareTransposeBackward(c10::intrusive_ptr<GridBatchImpl> const &feature_grid,
+                         c10::intrusive_ptr<GridBatchImpl> const &output_grid,
+                         nanovdb::Coord kernel_size,
+                         nanovdb::Coord stride,
+                         int64_t Cin,
+                         int64_t Cout,
+                         double rtol,
+                         double atol,
+                         std::string const &label) {
+    auto device = cudaDevice();
+    int64_t NA  = feature_grid->totalVoxels();
+    int64_t NB  = output_grid->totalVoxels();
+
+    torch::manual_seed(42);
+    auto features_f16 = torch::randn({NA, Cin}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
+    auto weights_f16 =
+        torch::randn({Cout, Cin, kernel_size[0], kernel_size[1], kernel_size[2]},
+                     torch::dtype(torch::kFloat16).device(device)) *
+        0.1;
+    auto grad_output_f16 =
+        torch::randn({NB, Cout}, torch::dtype(torch::kFloat16).device(device)) * 0.1;
+
+    auto ref_topo =
+        ops::gatherScatterSparseConvTransposeTopology(*feature_grid, *output_grid, kernel_size, stride);
+    auto [ref_grad_feat, ref_grad_w] = ops::gatherScatterSparseConvTransposeBackward(
+        grad_output_f16.to(torch::kFloat32), features_f16.to(torch::kFloat32),
+        weights_f16.to(torch::kFloat32), ref_topo);
+
+    auto cutlass_topo =
+        ops::cutlassConvTransposeTopology(*feature_grid, *output_grid, kernel_size, stride);
+    auto [cutlass_grad_feat, cutlass_grad_w] =
+        ops::cutlassConvTransposeBackward(grad_output_f16, features_f16, weights_f16, cutlass_topo);
+
+    EXPECT_EQ(cutlass_grad_feat.sizes(), ref_grad_feat.sizes())
+        << label << ": grad_features shape mismatch";
+    auto cutlass_gf_f32 = cutlass_grad_feat.to(torch::kFloat32).cpu();
+    auto ref_gf_f32     = ref_grad_feat.cpu();
+    EXPECT_TRUE(torch::allclose(cutlass_gf_f32, ref_gf_f32, rtol, atol))
+        << label << ": grad_features mismatch\n"
+        << "  max abs diff = " << (cutlass_gf_f32 - ref_gf_f32).abs().max().item<double>() << "\n"
+        << "  mean abs diff = " << (cutlass_gf_f32 - ref_gf_f32).abs().mean().item<double>();
+
+    EXPECT_EQ(cutlass_grad_w.sizes(), ref_grad_w.sizes())
+        << label << ": grad_weights shape mismatch";
+    auto cutlass_gw_f32 = cutlass_grad_w.to(torch::kFloat32).cpu();
+    auto ref_gw_f32     = ref_grad_w.cpu();
+    EXPECT_TRUE(torch::allclose(cutlass_gw_f32, ref_gw_f32, rtol, atol))
+        << label << ": grad_weights mismatch\n"
+        << "  max abs diff = " << (cutlass_gw_f32 - ref_gw_f32).abs().max().item<double>() << "\n"
+        << "  mean abs diff = " << (cutlass_gw_f32 - ref_gw_f32).abs().mean().item<double>();
+}
+
+TEST(CutlassTransposeBackward, Transpose3x3x3_Stride2_C64) {
+    skipIfCudaUnavailable();
+    auto device   = cudaDevice();
+    auto src_grid = makeDenseGrid(4, device);
+    nanovdb::Coord ks(3, 3, 3);
+    nanovdb::Coord stride(2, 2, 2);
+    auto dst_grid = src_grid->convolutionTransposeOutput(ks, stride);
+    compareTransposeBackward(src_grid, dst_grid, ks, stride, 64, 64, 0.05, 0.05,
+                             "tr_bwd_3x3x3_s2");
+}
+
+TEST(CutlassTransposeBackward, Transpose3x3x3_SameGrid_C64) {
+    skipIfCudaUnavailable();
+    auto grid = makeDenseGrid(6, cudaDevice());
+    compareTransposeBackward(grid, grid, {3, 3, 3}, {1, 1, 1}, 64, 64, 0.05, 0.05,
+                             "tr_bwd_3x3x3_same");
+}
+
+TEST(CutlassTransposeBackward, Transpose2x2x2_Stride2_C64) {
+    skipIfCudaUnavailable();
+    auto device   = cudaDevice();
+    auto src_grid = makeDenseGrid(4, device);
+    nanovdb::Coord ks(2, 2, 2);
+    nanovdb::Coord stride(2, 2, 2);
+    auto dst_grid = src_grid->convolutionTransposeOutput(ks, stride);
+    compareTransposeBackward(src_grid, dst_grid, ks, stride, 64, 64, 0.05, 0.05,
+                             "tr_bwd_2x2x2_s2");
+}
+
+TEST(CutlassTransposeBackward, Transpose3x4x5_Stride1x2x3_C64) {
+    skipIfCudaUnavailable();
+    auto device   = cudaDevice();
+    auto src_grid = makeDenseGrid(4, device);
+    nanovdb::Coord ks(3, 4, 5);
+    nanovdb::Coord stride(1, 2, 3);
+    auto dst_grid = src_grid->convolutionTransposeOutput(ks, stride);
+    compareTransposeBackward(src_grid, dst_grid, ks, stride, 64, 64, 0.05, 0.05,
+                             "tr_bwd_3x4x5_s1x2x3");
+}
+
+TEST(CutlassTransposeBackward, Transpose_Cin32_Cout128) {
+    skipIfCudaUnavailable();
+    auto device   = cudaDevice();
+    auto src_grid = makeDenseGrid(4, device);
+    nanovdb::Coord ks(3, 3, 3);
+    nanovdb::Coord stride(2, 2, 2);
+    auto dst_grid = src_grid->convolutionTransposeOutput(ks, stride);
+    compareTransposeBackward(src_grid, dst_grid, ks, stride, 32, 128, 0.05, 0.05,
+                             "tr_bwd_Cin32_Cout128");
+}
+
+TEST(CutlassTransposeBackward, Transpose_Sphere_R10_3x3x3_Stride2_C64) {
+    skipIfCudaUnavailable();
+    auto device   = cudaDevice();
+    auto src_grid = makeSphereShellGrid(10, device);
+    nanovdb::Coord ks(3, 3, 3);
+    nanovdb::Coord stride(2, 2, 2);
+    auto dst_grid = src_grid->convolutionTransposeOutput(ks, stride);
+    compareTransposeBackward(src_grid, dst_grid, ks, stride, 64, 64, 0.05, 0.05,
+                             "tr_bwd_sphere_R10_3x3x3_s2");
+}
+
+// -- Transposed edge cases --
+
+TEST(CutlassTransposeEdgeCases, SingleVoxelTranspose) {
+    skipIfCudaUnavailable();
+    auto device   = cudaDevice();
+    auto grid     = makeGrid(torch::tensor({{5, 5, 5}}, torch::kInt32), device);
+    auto dst_grid = grid->convolutionTransposeOutput({3, 3, 3}, {2, 2, 2});
+    compareTransposeForward(grid, dst_grid, {3, 3, 3}, {2, 2, 2}, 32, 32, 0.05, 0.05,
+                            "tr_fwd_single_voxel");
+    compareTransposeBackward(grid, dst_grid, {3, 3, 3}, {2, 2, 2}, 32, 32, 0.05, 0.05,
+                             "tr_bwd_single_voxel");
+}
+
+TEST(CutlassTransposeEdgeCases, EmptyTranspose) {
+    skipIfCudaUnavailable();
+    auto device   = cudaDevice();
+    auto src_grid = makeGrid(torch::tensor({{0, 0, 0}}, torch::kInt32), device);
+    auto dst_grid = makeGrid(torch::tensor({{100, 100, 100}}, torch::kInt32), device);
+
+    auto topo = ops::cutlassConvTransposeTopology(*src_grid, *dst_grid, {3, 3, 3}, {1, 1, 1});
+    EXPECT_EQ(topo.total_pairs, 0);
+}
