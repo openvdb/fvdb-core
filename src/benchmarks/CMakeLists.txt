@@ -136,3 +136,8 @@ ConfigureDispatchBench(for_each_benchmark
 ConfigureDispatchBench(convolution_benchmark
     convolution/convolution_benchmark.cu
 )
+
+# CUTLASS vs GroupedGemm benchmark — fp16 TensorCore vs fp32 cuBLAS comparison
+ConfigureDispatchBench(cutlass_benchmark
+    convolution/cutlass_benchmark.cu
+)
