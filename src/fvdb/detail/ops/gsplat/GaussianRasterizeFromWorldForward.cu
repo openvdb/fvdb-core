@@ -18,13 +18,6 @@ namespace cg = cooperative_groups;
 
 namespace {
 
-template <uint32_t NUM_CHANNELS> struct SharedGaussian {
-    int32_t id;                       // flattened id in [0, C*N)
-    nanovdb::math::Vec3<float> mean;  // world mean
-    nanovdb::math::Mat3<float> isclR; // S^{-1} R^T
-    float opacity;
-};
-
 template <uint32_t NUM_CHANNELS>
 __global__ void
 rasterizeFromWorld3DGSForwardKernel(
@@ -135,9 +128,9 @@ rasterizeFromWorld3DGSForwardKernel(
 
     // Shared memory for batched gaussians.
     extern __shared__ char smem[];
-    int32_t *idBatch = reinterpret_cast<int32_t *>(smem);                      // [blockSize]
-    auto *gaussBatch =
-        reinterpret_cast<SharedGaussian<NUM_CHANNELS> *>(&idBatch[blockSize]); // [blockSize]
+    int32_t *idBatch = reinterpret_cast<int32_t *>(smem); // [blockSize]
+    auto *gaussBatch = reinterpret_cast<RasterizeFromWorldGaussianState<float> *>(
+        &idBatch[blockSize]);                             // [blockSize]
 
     float transmittance = 1.0f;
     int32_t curIdx      = -1;
@@ -161,21 +154,8 @@ rasterizeFromWorld3DGSForwardKernel(
         if (idx < rangeEnd) {
             const int32_t flatId = commonArgs.tileGaussianIds[idx];
             idBatch[threadRank]  = flatId;
-            const int32_t gid    = flatId % (int32_t)means.size(0);
-
-            const nanovdb::math::Vec3<float> mean_w(means[gid][0], means[gid][1], means[gid][2]);
-            const nanovdb::math::Vec4<float> quat_wxyz(
-                quats[gid][0], quats[gid][1], quats[gid][2], quats[gid][3]);
-            const nanovdb::math::Vec3<float> scale(
-                __expf(logScales[gid][0]), __expf(logScales[gid][1]), __expf(logScales[gid][2]));
-            const nanovdb::math::Mat3<float> isclR = computeIsclRot<float>(quat_wxyz, scale);
-            const int32_t cid                      = flatId / (int32_t)means.size(0);
-            const float op                         = opacities[cid][gid];
-
-            gaussBatch[threadRank].id      = flatId;
-            gaussBatch[threadRank].mean    = mean_w;
-            gaussBatch[threadRank].isclR   = isclR;
-            gaussBatch[threadRank].opacity = op;
+            gaussBatch[threadRank] =
+                loadRasterizeFromWorldGaussian<float>(flatId, means, quats, logScales, opacities);
         }
 
         __syncthreads();
@@ -183,27 +163,22 @@ rasterizeFromWorld3DGSForwardKernel(
         const uint32_t batchSize =
             min((uint32_t)blockSize, (uint32_t)max(0, rangeEnd - batchStart));
         for (uint32_t t = 0; (t < batchSize) && !done; ++t) {
-            const SharedGaussian<NUM_CHANNELS> g = gaussBatch[t];
+            const RasterizeFromWorldGaussianState<float> g = gaussBatch[t];
             // 3DGS ray-ellipsoid visibility in "whitened" coordinates (see 3D-GUT paper Fig. 11).
             // gro   = S^{-1} R^T (o - μ)
             // grd   = normalize( S^{-1} R^T d )
             // gcrod = grd × gro  (distance proxy to principal axis in whitened space)
-            const nanovdb::math::Vec3<float> gro   = g.isclR * (ray.eye() - g.mean);
-            const nanovdb::math::Vec3<float> grd   = normalizeSafe<float>(g.isclR * ray.dir());
-            const nanovdb::math::Vec3<float> gcrod = grd.cross(gro);
-            const float grayDist                   = gcrod.dot(gcrod);
-            const float power                      = -0.5f * grayDist;
-            const float vis                        = __expf(power);
-            float alpha                            = min(kAlphaThreshold, g.opacity * vis);
-            if (power > 0.f || alpha < 1.f / 255.f) {
+            const RasterizeFromWorldVisibility<float> visibility =
+                computeRasterizeFromWorldVisibility<float>(ray, g.mean, g.isclR, g.opacity);
+            if (!visibility.valid) {
                 continue;
             }
-            const float nextTransmittance = transmittance * (1.0f - alpha);
+            const float nextTransmittance = transmittance * (1.0f - visibility.alpha);
             if (nextTransmittance <= 1e-4f) {
                 done = true;
                 break;
             }
-            const float contrib = alpha * transmittance;
+            const float contrib = visibility.alpha * transmittance;
             const int32_t cid   = g.id / (int32_t)means.size(0);
             const int32_t gid   = g.id % (int32_t)means.size(0);
 #pragma unroll
@@ -268,21 +243,17 @@ launchForward(const torch::Tensor &means,
     const int32_t totalIntersections = (int32_t)tileGaussianIds.size(0);
     const int64_t numDistCoeffs      = distortionCoeffs.size(1);
 
-    RasterizeFromWorldCommonArgs commonArgs{
-        static_cast<uint32_t>(C),
-        imageWidth,
-        imageHeight,
-        imageOriginW,
-        imageOriginH,
-        tileSize,
-        tileExtentW,
-        tileExtentH,
-        NUM_CHANNELS,
-        totalIntersections,
-        tileOffsets.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
-        tileGaussianIds.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>(),
-        nullptr,
-        nullptr};
+    RasterizeFromWorldCommonArgs commonArgs = buildRasterizeFromWorldCommonArgs(C,
+                                                                                imageWidth,
+                                                                                imageHeight,
+                                                                                imageOriginW,
+                                                                                imageOriginH,
+                                                                                tileSize,
+                                                                                tileExtentW,
+                                                                                tileExtentH,
+                                                                                NUM_CHANNELS,
+                                                                                tileOffsets,
+                                                                                tileGaussianIds);
 
     const PreparedRasterOptionalInputs opt = prepareRasterOptionalInputs(
         features, C, tileExtentH, tileExtentW, (int64_t)NUM_CHANNELS, backgrounds, masks);
@@ -290,7 +261,8 @@ launchForward(const torch::Tensor &means,
     commonArgs.masks       = opt.masks;
 
     const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
-    const size_t sharedMem = blockSize * (sizeof(int32_t) + sizeof(SharedGaussian<NUM_CHANNELS>));
+    const size_t sharedMem =
+        blockSize * (sizeof(int32_t) + sizeof(RasterizeFromWorldGaussianState<float>));
 
     auto stream = at::cuda::getDefaultCUDAStream();
     rasterizeFromWorld3DGSForwardKernel<NUM_CHANNELS><<<gridDim, blockDim, sharedMem, stream>>>(

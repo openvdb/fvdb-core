@@ -108,6 +108,59 @@ struct RasterizeFromWorldCommonArgs {
     }
 };
 
+/// Per-Gaussian state cached in shared memory for from-world rasterization.
+template <typename ScalarType> struct RasterizeFromWorldGaussianState {
+    int32_t id;                            // flattened id in [0, C*N)
+    nanovdb::math::Vec3<ScalarType> mean;  // world mean
+    nanovdb::math::Vec4<ScalarType> quat;  // [w,x,y,z]
+    nanovdb::math::Vec3<ScalarType> scale;
+    nanovdb::math::Mat3<ScalarType> isclR; // S^{-1} R^T
+    ScalarType opacity;
+};
+
+/// Visibility intermediate values for 3DGS ray-ellipsoid compositing.
+template <typename ScalarType> struct RasterizeFromWorldVisibility {
+    nanovdb::math::Vec3<ScalarType> gro;
+    nanovdb::math::Vec3<ScalarType> grd;
+    nanovdb::math::Vec3<ScalarType> gcrod;
+    ScalarType grayDist;
+    ScalarType power;
+    ScalarType vis;
+    ScalarType opacityTimesVisibility;
+    ScalarType alpha;
+    bool valid;
+};
+
+/// Build common dense-tile args used by from-world forward/backward launchers.
+inline RasterizeFromWorldCommonArgs
+buildRasterizeFromWorldCommonArgs(const int64_t numCameras,
+                                  const uint32_t imageWidth,
+                                  const uint32_t imageHeight,
+                                  const uint32_t imageOriginW,
+                                  const uint32_t imageOriginH,
+                                  const uint32_t tileSize,
+                                  const uint32_t tileExtentW,
+                                  const uint32_t tileExtentH,
+                                  const uint32_t numChannels,
+                                  const torch::Tensor &tileOffsets,
+                                  const torch::Tensor &tileGaussianIds) {
+    return RasterizeFromWorldCommonArgs{
+        static_cast<uint32_t>(numCameras),
+        imageWidth,
+        imageHeight,
+        imageOriginW,
+        imageOriginH,
+        tileSize,
+        tileExtentW,
+        tileExtentH,
+        numChannels,
+        static_cast<int32_t>(tileGaussianIds.size(0)),
+        tileOffsets.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
+        tileGaussianIds.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>(),
+        nullptr,
+        nullptr};
+}
+
 template <typename T>
 inline __device__ nanovdb::math::Vec3<T>
 normalizeSafe(const nanovdb::math::Vec3<T> &v) {
@@ -247,6 +300,55 @@ isclRotVectorJacobianProduct(const nanovdb::math::Vec4<T> &quat_wxyz,
     // invScale = 1/scale => dlogScale = dscale * scale = -dInvScale / scale
     dLossDLogScale = nanovdb::math::Vec3<T>(
         -dInvScale[0] * invScale[0], -dInvScale[1] * invScale[1], -dInvScale[2] * invScale[2]);
+}
+
+/// Load a flattened gaussian id into a typed world-space state struct.
+template <typename ScalarType,
+          typename MeansAccessor,
+          typename QuatsAccessor,
+          typename LogScalesAccessor,
+          typename OpacitiesAccessor>
+inline __device__ RasterizeFromWorldGaussianState<ScalarType>
+loadRasterizeFromWorldGaussian(const int32_t flatId,
+                               const MeansAccessor &means,
+                               const QuatsAccessor &quats,
+                               const LogScalesAccessor &logScales,
+                               const OpacitiesAccessor &opacities) {
+    const int32_t numGaussians = static_cast<int32_t>(means.size(0));
+    const int32_t gid          = flatId % numGaussians;
+    const int32_t cid          = flatId / numGaussians;
+
+    RasterizeFromWorldGaussianState<ScalarType> state{};
+    state.id   = flatId;
+    state.mean = nanovdb::math::Vec3<ScalarType>(means[gid][0], means[gid][1], means[gid][2]);
+    state.quat =
+        nanovdb::math::Vec4<ScalarType>(quats[gid][0], quats[gid][1], quats[gid][2], quats[gid][3]);
+    state.scale = nanovdb::math::Vec3<ScalarType>(
+        __expf(logScales[gid][0]), __expf(logScales[gid][1]), __expf(logScales[gid][2]));
+    state.isclR   = computeIsclRot<ScalarType>(state.quat, state.scale);
+    state.opacity = opacities[cid][gid];
+    return state;
+}
+
+/// Evaluate 3DGS visibility terms for a world ray and gaussian state.
+template <typename ScalarType>
+inline __device__ RasterizeFromWorldVisibility<ScalarType>
+computeRasterizeFromWorldVisibility(const nanovdb::math::Ray<ScalarType> &ray,
+                                    const nanovdb::math::Vec3<ScalarType> &mean,
+                                    const nanovdb::math::Mat3<ScalarType> &isclR,
+                                    const ScalarType opacity) {
+    RasterizeFromWorldVisibility<ScalarType> visibility{};
+    visibility.gro                    = isclR * (ray.eye() - mean);
+    visibility.grd                    = normalizeSafe<ScalarType>(isclR * ray.dir());
+    visibility.gcrod                  = visibility.grd.cross(visibility.gro);
+    visibility.grayDist               = visibility.gcrod.dot(visibility.gcrod);
+    visibility.power                  = ScalarType(-0.5f) * visibility.grayDist;
+    visibility.vis                    = __expf(visibility.power);
+    visibility.opacityTimesVisibility = opacity * visibility.vis;
+    visibility.alpha                  = min(kAlphaThreshold, visibility.opacityTimesVisibility);
+    visibility.valid =
+        !(visibility.power > ScalarType(0) || visibility.alpha < ScalarType(1.f / 255.f));
+    return visibility;
 }
 
 } // namespace fvdb::detail::ops

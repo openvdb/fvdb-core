@@ -20,15 +20,6 @@ namespace cg = cooperative_groups;
 
 namespace {
 
-template <uint32_t NUM_CHANNELS> struct SharedGaussian {
-    int32_t id;                       // flattened id in [0, C*N)
-    nanovdb::math::Vec3<float> mean;  // world mean
-    nanovdb::math::Vec4<float> quat;  // wxyz
-    nanovdb::math::Vec3<float> scale; // exp(log_scales)
-    nanovdb::math::Mat3<float> isclR; // S^{-1} R^T
-    float opacity;
-};
-
 template <uint32_t NUM_CHANNELS>
 __global__ void
 rasterizeFromWorld3DGSBackwardKernel(
@@ -158,9 +149,9 @@ rasterizeFromWorld3DGSBackwardKernel(
 
     // Shared memory for gaussian batches.
     extern __shared__ char smem[];
-    int32_t *idBatch = reinterpret_cast<int32_t *>(smem);                      // [blockSize]
-    auto *gBatch =
-        reinterpret_cast<SharedGaussian<NUM_CHANNELS> *>(&idBatch[blockSize]); // [blockSize]
+    int32_t *idBatch = reinterpret_cast<int32_t *>(smem); // [blockSize]
+    auto *gBatch     = reinterpret_cast<RasterizeFromWorldGaussianState<float> *>(
+        &idBatch[blockSize]);                         // [blockSize]
 
     const uint32_t threadRank      = block.thread_rank();
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
@@ -180,23 +171,8 @@ rasterizeFromWorld3DGSBackwardKernel(
         if (idx >= rangeStart) {
             const int32_t flatId = commonArgs.tileGaussianIds[idx];
             idBatch[threadRank]  = flatId;
-            const int32_t gid    = flatId % (int32_t)means.size(0);
-            const int32_t cid    = flatId / (int32_t)means.size(0);
-
-            const nanovdb::math::Vec3<float> mean_w(means[gid][0], means[gid][1], means[gid][2]);
-            const nanovdb::math::Vec4<float> quat_wxyz(
-                quats[gid][0], quats[gid][1], quats[gid][2], quats[gid][3]);
-            const nanovdb::math::Vec3<float> scale(
-                __expf(logScales[gid][0]), __expf(logScales[gid][1]), __expf(logScales[gid][2]));
-            const nanovdb::math::Mat3<float> isclR = computeIsclRot<float>(quat_wxyz, scale);
-            const float op                         = opacities[cid][gid];
-
-            gBatch[threadRank].id      = flatId;
-            gBatch[threadRank].mean    = mean_w;
-            gBatch[threadRank].quat    = quat_wxyz;
-            gBatch[threadRank].scale   = scale;
-            gBatch[threadRank].isclR   = isclR;
-            gBatch[threadRank].opacity = op;
+            gBatch[threadRank] =
+                loadRasterizeFromWorldGaussian<float>(flatId, means, quats, logScales, opacities);
         }
 
         block.sync();
@@ -220,25 +196,25 @@ rasterizeFromWorld3DGSBackwardKernel(
             nanovdb::math::Vec3<float> o_minus_mu(0.f);
             nanovdb::math::Vec3<float> gro(0.f), grd(0.f), grd_n(0.f), gcrod(0.f);
             float grayDist = 0.f;
+            RasterizeFromWorldVisibility<float> visibility{};
 
             if (valid) {
-                const SharedGaussian<NUM_CHANNELS> g = gBatch[t];
-                mean_w                               = g.mean;
-                quat_wxyz                            = g.quat;
-                scale                                = g.scale;
-                Mt                                   = g.isclR;
-                opac                                 = g.opacity;
+                const RasterizeFromWorldGaussianState<float> g = gBatch[t];
+                mean_w                                         = g.mean;
+                quat_wxyz                                      = g.quat;
+                scale                                          = g.scale;
+                Mt                                             = g.isclR;
+                opac                                           = g.opacity;
 
-                o_minus_mu        = ray.eye() - mean_w;
-                gro               = Mt * o_minus_mu;
-                grd               = Mt * ray.dir();
-                grd_n             = normalizeSafe<float>(grd);
-                gcrod             = grd_n.cross(gro);
-                grayDist          = gcrod.dot(gcrod);
-                const float power = -0.5f * grayDist;
-                vis               = __expf(power);
-                alpha             = min(kAlphaThreshold, opac * vis);
-                if (power > 0.f || alpha < 1.f / 255.f) {
+                o_minus_mu = ray.eye() - mean_w;
+                visibility = computeRasterizeFromWorldVisibility<float>(ray, mean_w, Mt, opac);
+                gro        = visibility.gro;
+                grd_n      = visibility.grd;
+                gcrod      = visibility.gcrod;
+                grayDist   = visibility.grayDist;
+                vis        = visibility.vis;
+                alpha      = visibility.alpha;
+                if (!visibility.valid) {
                     valid = false;
                 }
             }
@@ -291,13 +267,14 @@ rasterizeFromWorld3DGSBackwardKernel(
                     v_alpha += -T_final * ra * accum;
                 }
 
-                if (opac * vis <= kAlphaThreshold) {
+                if (visibility.opacityTimesVisibility <= kAlphaThreshold) {
                     const float v_vis                        = opac * v_alpha;
                     const float v_gradDist                   = -0.5f * vis * v_vis;
                     const nanovdb::math::Vec3<float> v_gcrod = 2.0f * v_gradDist * gcrod;
                     const nanovdb::math::Vec3<float> v_grd_n = -(v_gcrod.cross(gro));
                     const nanovdb::math::Vec3<float> v_gro   = v_gcrod.cross(grd_n);
 
+                    grd                                    = Mt * ray.dir();
                     const nanovdb::math::Vec3<float> v_grd = normalizeSafeVJP<float>(grd, v_grd_n);
 
                     // v_Mt = outer(v_grd, ray.dir) + outer(v_gro, (ray.eye() - mean))
@@ -432,21 +409,17 @@ launchBackward(const torch::Tensor &means,
     const int32_t totalIntersections = static_cast<int32_t>(tileGaussianIds.size(0));
     const int64_t numDistCoeffs      = distortionCoeffs.size(1);
 
-    RasterizeFromWorldCommonArgs commonArgs{
-        static_cast<uint32_t>(C),
-        imageWidth,
-        imageHeight,
-        imageOriginW,
-        imageOriginH,
-        tileSize,
-        tileExtentW,
-        tileExtentH,
-        NUM_CHANNELS,
-        totalIntersections,
-        tileOffsets.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
-        tileGaussianIds.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>(),
-        nullptr,
-        nullptr};
+    RasterizeFromWorldCommonArgs commonArgs = buildRasterizeFromWorldCommonArgs(C,
+                                                                                imageWidth,
+                                                                                imageHeight,
+                                                                                imageOriginW,
+                                                                                imageOriginH,
+                                                                                tileSize,
+                                                                                tileExtentW,
+                                                                                tileExtentH,
+                                                                                NUM_CHANNELS,
+                                                                                tileOffsets,
+                                                                                tileGaussianIds);
 
     const PreparedRasterOptionalInputs opt = prepareRasterOptionalInputs(
         features, C, tileExtentH, tileExtentW, (int64_t)NUM_CHANNELS, backgrounds, masks);
@@ -454,7 +427,8 @@ launchBackward(const torch::Tensor &means,
     commonArgs.masks       = opt.masks;
 
     const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
-    const size_t sharedMem = blockSize * (sizeof(int32_t) + sizeof(SharedGaussian<NUM_CHANNELS>));
+    const size_t sharedMem =
+        blockSize * (sizeof(int32_t) + sizeof(RasterizeFromWorldGaussianState<float>));
 
     auto stream = at::cuda::getDefaultCUDAStream();
     rasterizeFromWorld3DGSBackwardKernel<NUM_CHANNELS><<<gridDim, blockDim, sharedMem, stream>>>(

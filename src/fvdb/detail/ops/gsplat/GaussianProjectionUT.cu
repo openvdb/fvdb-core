@@ -600,17 +600,17 @@ template <typename ScalarType> struct ProjectionForwardUT {
             mNumDistortionCoeffs > 0 ? reinterpret_cast<ScalarType *>(pointer) : nullptr;
         pointer += C * mNumDistortionCoeffs * sizeof(ScalarType);
 
-        copyMat3AccessorToShared<ScalarType>(C, projectionMatsShared, mProjectionMatricesAcc);
-        copyWorldToCamRotationToShared<ScalarType>(
+        copyBatchAccessorToMat3<ScalarType>(C, projectionMatsShared, mProjectionMatricesAcc);
+        copyBatchPoseAccessorRotationToMat3<ScalarType>(
             C, worldToCamRotMatsStartShared, mWorldToCamMatricesStartAcc);
-        copyWorldToCamRotationToShared<ScalarType>(
+        copyBatchPoseAccessorRotationToMat3<ScalarType>(
             C, worldToCamRotMatsEndShared, mWorldToCamMatricesEndAcc);
-        copyWorldToCamTranslationToShared<ScalarType>(
+        copyBatchPoseAccessorTranslationToVec3<ScalarType>(
             C, worldToCamTranslationStartShared, mWorldToCamMatricesStartAcc);
-        copyWorldToCamTranslationToShared<ScalarType>(
+        copyBatchPoseAccessorTranslationToVec3<ScalarType>(
             C, worldToCamTranslationEndShared, mWorldToCamMatricesEndAcc);
         if (mNumDistortionCoeffs > 0) {
-            copyDistortionCoeffsToShared<ScalarType>(
+            copyBatchAccessorToFlatRowMajor<ScalarType>(
                 C, mNumDistortionCoeffs, distortionCoeffsShared, mDistortionCoeffsAcc);
         }
     }
