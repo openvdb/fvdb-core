@@ -20,8 +20,6 @@ namespace cg = cooperative_groups;
 
 namespace {
 
-// TODO(fvdb): Consider refactoring this kernel to reuse a common rasterization args struct
-// (`RasterizeCommonArgs` or a derived struct) for consistency with the other rasterizers.
 template <uint32_t NUM_CHANNELS> struct SharedGaussian {
     int32_t id;                       // flattened id in [0, C*N)
     nanovdb::math::Vec3<float> mean;  // world mean
@@ -34,6 +32,7 @@ template <uint32_t NUM_CHANNELS> struct SharedGaussian {
 template <uint32_t NUM_CHANNELS>
 __global__ void
 rasterizeFromWorld3DGSBackwardKernel(
+    const RasterizeFromWorldCommonArgs commonArgs,
     // Gaussians
     const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> means,     // [N,3]
     const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> quats,     // [N,4]
@@ -51,20 +50,6 @@ rasterizeFromWorld3DGSBackwardKernel(
     const int64_t numDistCoeffs,
     const RollingShutterType rollingShutterType,
     const CameraModel cameraModel,
-    // Settings
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
-    const uint32_t tileSize,
-    const uint32_t tileExtentW,
-    const uint32_t tileExtentH,
-    // Intersections
-    const torch::PackedTensorAccessor64<int32_t, 3, torch::RestrictPtrTraits>
-        tileOffsets,     // [C, tileExtentH, tileExtentW]
-    const torch::PackedTensorAccessor64<int32_t, 1, torch::RestrictPtrTraits>
-        tileGaussianIds, // [n_isects]
-    const int32_t totalIntersections,
     // Forward outputs
     const torch::PackedTensorAccessor64<float, 4, torch::RestrictPtrTraits>
         renderedAlphas,                                                                // [C,H,W,1]
@@ -74,10 +59,6 @@ rasterizeFromWorld3DGSBackwardKernel(
         dLossDRenderedFeatures, // [C,H,W,D]
     const torch::PackedTensorAccessor64<float, 4, torch::RestrictPtrTraits>
         dLossDRenderedAlphas,   // [C,H,W,1]
-    // Backgrounds
-    const float *__restrict__ backgrounds, // [C,D] or nullptr
-    // Optional tile masks
-    const bool *__restrict__ masks, // [C, tileExtentH, tileExtentW] or nullptr
     // Outputs (grads)
     float *__restrict__ dMeans,     // [N,3]
     float *__restrict__ dQuats,     // [N,4]
@@ -88,24 +69,16 @@ rasterizeFromWorld3DGSBackwardKernel(
     auto block               = cg::this_thread_block();
     const uint32_t blockSize = blockDim.x * blockDim.y;
 
-    const uint32_t globalLinearBlock = blockIdx.x;
-    const uint32_t camId             = globalLinearBlock / (tileExtentH * tileExtentW);
-    const uint32_t tileLinear        = globalLinearBlock - camId * (tileExtentH * tileExtentW);
-    const uint32_t tileRow           = tileLinear / tileExtentW;
-    const uint32_t tileCol           = tileLinear - tileRow * tileExtentW;
-
-    const uint32_t row = tileRow * tileSize + threadIdx.y;
-    const uint32_t col = tileCol * tileSize + threadIdx.x;
-    const bool inside  = (row < imageHeight && col < imageWidth);
+    uint32_t camId, tileRow, tileCol, row, col;
+    commonArgs.denseCoordinates(camId, tileRow, tileCol, row, col);
+    const bool inside = (row < commonArgs.imageHeight && col < commonArgs.imageWidth);
 
     // Parity with classic rasterizer: masked tiles contribute nothing.
     //
     // IMPORTANT: this kernel uses block-level barriers later (`block.sync`). Any early return must
     // be taken by *all* threads in the block, otherwise edge tiles can deadlock when some threads
     // are `!inside`. So we make the return block-wide.
-    const bool tileMasked =
-        (masks != nullptr) &&
-        (!masks[camId * tileExtentH * tileExtentW + tileRow * tileExtentW + tileCol]);
+    const bool tileMasked = commonArgs.tileMasked(camId, tileRow, tileCol);
     if (tileMasked) {
         return;
     }
@@ -123,10 +96,10 @@ rasterizeFromWorld3DGSBackwardKernel(
 
     const nanovdb::math::Ray<float> ray = pixelToWorldRay<float>(row,
                                                                  col,
-                                                                 imageWidth,
-                                                                 imageHeight,
-                                                                 imageOriginW,
-                                                                 imageOriginH,
+                                                                 commonArgs.imageWidth,
+                                                                 commonArgs.imageHeight,
+                                                                 commonArgs.imageOriginW,
+                                                                 commonArgs.imageOriginH,
                                                                  R_wc_start,
                                                                  t_wc_start,
                                                                  R_wc_end,
@@ -144,20 +117,7 @@ rasterizeFromWorld3DGSBackwardKernel(
     const bool done     = inside && rayValid;
 
     // Gaussian range for this tile.
-    const int32_t rangeStart = tileOffsets[camId][tileRow][tileCol];
-    int32_t rangeEnd         = 0;
-    if ((camId == (uint32_t)(features.size(0) - 1)) && (tileRow == tileExtentH - 1) &&
-        (tileCol == tileExtentW - 1)) {
-        rangeEnd = totalIntersections;
-    } else if (tileCol + 1 < tileExtentW) {
-        rangeEnd = tileOffsets[camId][tileRow][tileCol + 1];
-    } else {
-        if (tileRow + 1 < tileExtentH) {
-            rangeEnd = tileOffsets[camId][tileRow + 1][0];
-        } else {
-            rangeEnd = tileOffsets[camId + 1][0][0];
-        }
-    }
+    const auto [rangeStart, rangeEnd] = commonArgs.tileGaussianRange(camId, tileRow, tileCol);
 
     // If the tile has no intersections, there is nothing to do. This must be a block-wide return.
     if (rangeEnd <= rangeStart) {
@@ -218,7 +178,7 @@ rasterizeFromWorld3DGSBackwardKernel(
         const int32_t idx       = batchEnd - (int32_t)threadRank;
 
         if (idx >= rangeStart) {
-            const int32_t flatId = tileGaussianIds[idx];
+            const int32_t flatId = commonArgs.tileGaussianIds[idx];
             idBatch[threadRank]  = flatId;
             const int32_t gid    = flatId % (int32_t)means.size(0);
             const int32_t cid    = flatId / (int32_t)means.size(0);
@@ -322,11 +282,11 @@ rasterizeFromWorld3DGSBackwardKernel(
 
                 v_alpha += T_final * ra * v_render_a;
 
-                if (backgrounds != nullptr) {
+                if (commonArgs.backgrounds != nullptr) {
                     float accum = 0.f;
 #pragma unroll
                     for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                        accum += backgrounds[camId * NUM_CHANNELS + k] * v_render_c[k];
+                        accum += commonArgs.backgroundValue(camId, k) * v_render_c[k];
                     }
                     v_alpha += -T_final * ra * accum;
                 }
@@ -469,17 +429,36 @@ launchBackward(const torch::Tensor &means,
     const uint32_t tileExtentH = (imageHeight + tileSize - 1) / tileSize;
     const dim3 blockDim(tileSize, tileSize, 1);
     const dim3 gridDim(C * tileExtentH * tileExtentW, 1, 1);
-    const int32_t totalIntersections = (int32_t)tileGaussianIds.size(0);
+    const int32_t totalIntersections = static_cast<int32_t>(tileGaussianIds.size(0));
     const int64_t numDistCoeffs      = distortionCoeffs.size(1);
+
+    RasterizeFromWorldCommonArgs commonArgs{
+        static_cast<uint32_t>(C),
+        imageWidth,
+        imageHeight,
+        imageOriginW,
+        imageOriginH,
+        tileSize,
+        tileExtentW,
+        tileExtentH,
+        NUM_CHANNELS,
+        totalIntersections,
+        tileOffsets.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
+        tileGaussianIds.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>(),
+        nullptr,
+        nullptr};
 
     const PreparedRasterOptionalInputs opt = prepareRasterOptionalInputs(
         features, C, tileExtentH, tileExtentW, (int64_t)NUM_CHANNELS, backgrounds, masks);
+    commonArgs.backgrounds = opt.backgrounds;
+    commonArgs.masks       = opt.masks;
 
     const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
     const size_t sharedMem = blockSize * (sizeof(int32_t) + sizeof(SharedGaussian<NUM_CHANNELS>));
 
     auto stream = at::cuda::getDefaultCUDAStream();
     rasterizeFromWorld3DGSBackwardKernel<NUM_CHANNELS><<<gridDim, blockDim, sharedMem, stream>>>(
+        commonArgs,
         means.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
         quats.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
         logScales.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
@@ -492,22 +471,10 @@ launchBackward(const torch::Tensor &means,
         numDistCoeffs,
         rollingShutterType,
         cameraModel,
-        imageWidth,
-        imageHeight,
-        imageOriginW,
-        imageOriginH,
-        tileSize,
-        tileExtentW,
-        tileExtentH,
-        tileOffsets.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
-        tileGaussianIds.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>(),
-        totalIntersections,
         renderedAlphas.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
         lastIds.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
         dLossDRenderedFeatures.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
         dLossDRenderedAlphas.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
-        opt.backgrounds,
-        opt.masks,
         dMeans.data_ptr<float>(),
         dQuats.data_ptr<float>(),
         dLogScales.data_ptr<float>(),

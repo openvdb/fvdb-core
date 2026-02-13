@@ -10,9 +10,12 @@
 #include <fvdb/detail/ops/gsplat/GaussianRigidTransform.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRollingShutter.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
+#include <fvdb/detail/utils/AccessorHelpers.cuh>
 
 #include <nanovdb/math/Math.h>
 #include <nanovdb/math/Ray.h>
+
+#include <cuda/std/tuple>
 
 #include <cstdint>
 
@@ -20,6 +23,90 @@ namespace fvdb::detail::ops {
 
 /// Opacity threshold used by 3DGS alpha compositing.
 constexpr __device__ float kAlphaThreshold = 0.999f;
+
+/// Common dense-tile rasterization arguments shared by from-world forward/backward kernels.
+struct RasterizeFromWorldCommonArgs {
+    using TileOffsetsAccessor     = fvdb::TorchRAcc64<int32_t, 3>;
+    using TileGaussianIdsAccessor = fvdb::TorchRAcc64<int32_t, 1>;
+
+    uint32_t numCameras;
+    uint32_t imageWidth;
+    uint32_t imageHeight;
+    uint32_t imageOriginW;
+    uint32_t imageOriginH;
+    uint32_t tileSize;
+    uint32_t numTilesW;
+    uint32_t numTilesH;
+    uint32_t numChannels;
+    int32_t totalIntersections;
+
+    TileOffsetsAccessor tileOffsets;         // [C, TH, TW]
+    TileGaussianIdsAccessor tileGaussianIds; // [n_isects]
+    const float *backgrounds;                // [C, D] or nullptr
+    const bool *masks;                       // [C, TH, TW] or nullptr
+
+    inline __device__ void
+    denseCoordinates(uint32_t &cameraId,
+                     uint32_t &tileRow,
+                     uint32_t &tileCol,
+                     uint32_t &row,
+                     uint32_t &col) const {
+        const uint32_t linearBlock = blockIdx.x;
+        cameraId                   = linearBlock / (numTilesH * numTilesW);
+        const uint32_t tileLinear  = linearBlock - cameraId * (numTilesH * numTilesW);
+        tileRow                    = tileLinear / numTilesW;
+        tileCol                    = tileLinear - tileRow * numTilesW;
+        row                        = tileRow * tileSize + threadIdx.y;
+        col                        = tileCol * tileSize + threadIdx.x;
+    }
+
+    inline __device__ uint32_t
+    tileId(const uint32_t cameraId, const uint32_t tileRow, const uint32_t tileCol) const {
+        return cameraId * numTilesH * numTilesW + tileRow * numTilesW + tileCol;
+    }
+
+    inline __device__ bool
+    tileMasked(const uint32_t cameraId, const uint32_t tileRow, const uint32_t tileCol) const {
+        return (masks != nullptr) && (!masks[tileId(cameraId, tileRow, tileCol)]);
+    }
+
+    inline __device__ cuda::std::tuple<int32_t, int32_t>
+    tileGaussianRange(const uint32_t cameraId,
+                      const uint32_t tileRow,
+                      const uint32_t tileCol) const {
+        const int32_t rangeStart = tileOffsets[cameraId][tileRow][tileCol];
+
+        const int32_t rangeEnd =
+            ((cameraId == numCameras - 1) && (tileRow == numTilesH - 1) &&
+             (tileCol == numTilesW - 1))
+                ? totalIntersections
+                : ((tileCol + 1 < numTilesW)
+                       ? tileOffsets[cameraId][tileRow][tileCol + 1]
+                       : ((tileRow + 1 < numTilesH) ? tileOffsets[cameraId][tileRow + 1][0]
+                                                    : tileOffsets[cameraId + 1][0][0]));
+        return {rangeStart, rangeEnd};
+    }
+
+    inline __device__ uint32_t
+    pixelId(const uint32_t row, const uint32_t col) const {
+        return row * imageWidth + col;
+    }
+
+    inline __device__ uint32_t
+    outputPixelBase(const uint32_t cameraId, const uint32_t pixId) const {
+        return cameraId * imageHeight * imageWidth + pixId;
+    }
+
+    inline __device__ uint32_t
+    outputFeatureBase(const uint32_t cameraId, const uint32_t pixId) const {
+        return outputPixelBase(cameraId, pixId) * numChannels;
+    }
+
+    inline __device__ float
+    backgroundValue(const uint32_t cameraId, const uint32_t channelId) const {
+        return (backgrounds != nullptr) ? backgrounds[cameraId * numChannels + channelId] : 0.0f;
+    }
+};
 
 template <typename T>
 inline __device__ nanovdb::math::Vec3<T>
