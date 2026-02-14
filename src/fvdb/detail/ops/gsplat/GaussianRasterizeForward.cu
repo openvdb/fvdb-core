@@ -259,11 +259,21 @@ rasterizeGaussiansForward(RasterizeForwardArgs<ScalarType, NUM_CHANNELS, IS_PACK
     uint32_t activePixelIndex{0};
     cuda::std::tie(pixelInImage, activePixelIndex) = commonArgs.activePixelIndex(row, col);
 
-    if (commonArgs.mHasMasks && pixelInImage && !commonArgs.mMasks[cameraId][tileRow][tileCol]) {
-        auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
-        args.writeFeatures(pixIdx, [&](uint32_t k) {
-            return commonArgs.mHasBackgrounds ? commonArgs.mBackgrounds[cameraId][k] : 0.0f;
-        });
+    // Parity with classic semantics: masked tiles write background and contribute nothing.
+    //
+    // IMPORTANT: this kernel uses block-level barriers later (`__syncthreads_count`,
+    // `__syncthreads`). Any early return must be taken by *all* threads in the block, otherwise
+    // edge tiles can deadlock when some threads are outside the image bounds.
+    const bool tileMasked = commonArgs.mHasMasks && !commonArgs.mMasks[cameraId][tileRow][tileCol];
+    if (tileMasked) {
+        if (pixelInImage) {
+            auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
+            args.writeAlpha(pixIdx, 0.0f);
+            args.writeLastId(pixIdx, -1);
+            args.writeFeatures(pixIdx, [&](uint32_t k) {
+                return commonArgs.mHasBackgrounds ? commonArgs.mBackgrounds[cameraId][k] : 0.0f;
+            });
+        }
         return;
     }
 
@@ -584,15 +594,14 @@ dispatchGaussianRasterizeForward<torch::kCUDA>(
     const uint32_t imageOriginW,
     const uint32_t imageOriginH,
     const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,              // [C, tile_height, tile_width]
-    const torch::Tensor &tileGaussianIds,          // [n_isects]
-    const at::optional<torch::Tensor> &backgrounds // [C, D]
+    const torch::Tensor &tileOffsets,               // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds,           // [n_isects]
+    const at::optional<torch::Tensor> &backgrounds, // [C, D]
+    const at::optional<torch::Tensor> &masks        // [C, tile_height, tile_width] bool
 ) {
     FVDB_FUNC_RANGE();
     const uint32_t channels = features.size(-1);
     const bool isPacked     = means2d.dim() == 2;
-
-    const std::optional<torch::Tensor> masks = std::nullopt;
 
 #define CALL_FWD_CUDA(N)                                                                        \
     case N: {                                                                                   \
@@ -676,15 +685,14 @@ dispatchGaussianRasterizeForward<torch::kPrivateUse1>(
     const uint32_t imageOriginH,
     const uint32_t tileSize,
     // intersections
-    const torch::Tensor &tileOffsets,              // [C, tile_height, tile_width]
-    const torch::Tensor &tileGaussianIds,          // [n_isects]
-    const at::optional<torch::Tensor> &backgrounds // [C, D]
+    const torch::Tensor &tileOffsets,               // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds,           // [n_isects]
+    const at::optional<torch::Tensor> &backgrounds, // [C, D]
+    const at::optional<torch::Tensor> &masks        // [C, tile_height, tile_width] bool
 ) {
     FVDB_FUNC_RANGE();
     const uint32_t channels = features.size(-1);
     const bool isPacked     = means2d.dim() == 2;
-
-    const std::optional<torch::Tensor> masks = std::nullopt;
 
 #define CALL_FWD_PRIVATEUSE1(N)                                                                 \
     case N: {                                                                                   \
@@ -768,9 +776,10 @@ dispatchGaussianRasterizeForward<torch::kCPU>(
     const uint32_t imageOriginH,
     const uint32_t tileSize,
     // intersections
-    const torch::Tensor &tileOffsets,              // [C, tile_height, tile_width]
-    const torch::Tensor &tileGaussianIds,          // [n_isects]
-    const at::optional<torch::Tensor> &backgrounds // [C, D]
+    const torch::Tensor &tileOffsets,               // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds,           // [n_isects]
+    const at::optional<torch::Tensor> &backgrounds, // [C, D]
+    const at::optional<torch::Tensor> &masks        // [C, tile_height, tile_width] bool
 ) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
 }

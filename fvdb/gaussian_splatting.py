@@ -5,8 +5,9 @@ import pathlib
 from typing import Any, Mapping, Sequence, TypeVar, overload
 
 import torch
-from fvdb.enums import ProjectionType
+from fvdb.enums import CameraModel, ProjectionType
 
+from . import _fvdb_cpp as _C
 from ._fvdb_cpp import GaussianSplat3d as GaussianSplat3dCpp
 from ._fvdb_cpp import JaggedTensor as JaggedTensorCpp
 from ._fvdb_cpp import ProjectedGaussianSplats as ProjectedGaussianSplatsCpp
@@ -1875,6 +1876,117 @@ class GaussianSplat3d:
             eps_2d=eps_2d,
             antialias=antialias,
             backgrounds=backgrounds,
+        )
+
+    def render_images_from_world(
+        self,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        image_width: int,
+        image_height: int,
+        near: float,
+        far: float,
+        camera_model: CameraModel = CameraModel.PINHOLE,
+        distortion_coeffs: torch.Tensor | None = None,
+        sh_degree_to_use: int = -1,
+        tile_size: int = 16,
+        min_radius_2d: float = 0.0,
+        eps_2d: float = 0.3,
+        antialias: bool = False,
+        backgrounds: torch.Tensor | None = None,
+        masks: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Render dense images by rasterizing directly from world-space 3D Gaussians.
+
+        This is similar to :meth:`render_images`, but the rasterization step is performed in 3D
+        using per-pixel rays against the Gaussian ellipsoids (instead of rasterizing 2D conics
+        produced by a projection step). This enables gradients w.r.t. Gaussian geometry
+        (``means``, ``quats``, ``log_scales``) through rasterization, which is useful for
+        Unscented Transform (UT)-based OpenCV camera models.
+
+        Notes:
+            - This is **dense-only**: outputs are dense tensors of shape ``(C, H, W, ...)``.
+            - Tile intersection data is still computed from a (non-differentiable) projection
+              step, so gradients can be discontinuous when small parameter changes cause a Gaussian
+              to enter/leave a tile (or switch which tiles it overlaps).
+            - Background compositing follows standard "over" alpha compositing. If
+              ``backgrounds`` is provided, the output color is:
+
+              ``color = sum_i (feat_i * alpha_i * T_i) + T_final * background``
+
+              where ``T_final`` is the remaining transmittance at the end of rasterization, and
+              ``alpha = 1 - T_final``.
+            - ``masks`` is a **per-tile** boolean mask (parity with the classic rasterizer).
+              Tiles where ``masks[c, th, tw] == False`` are skipped entirely: the output is
+              background with ``alpha=0`` and the tile contributes **zero gradients**.
+
+        Example:
+
+        .. code-block:: python
+
+            images, alphas = gaussian_splat_3d.render_images_from_world(
+                world_to_camera_matrices,  # [C,4,4]
+                projection_matrices,       # [C,3,3]
+                image_width=640,
+                image_height=480,
+                near=0.01,
+                far=1e10,
+                camera_model=fvdb.CameraModel.OPENCV_RATIONAL_8,
+                distortion_coeffs=dist_coeffs,  # [C,12]
+                backgrounds=bg,                 # [C,D]
+                masks=tile_mask,                # [C,tileH,tileW] (optional)
+            )
+
+        Args:
+            world_to_camera_matrices (torch.Tensor): Tensor of shape ``(C, 4, 4)``.
+            projection_matrices (torch.Tensor): Tensor of shape ``(C, 3, 3)``.
+            image_width (int): Output image width ``W``.
+            image_height (int): Output image height ``H``.
+            near (float): Near clipping plane.
+            far (float): Far clipping plane.
+            camera_model (CameraModel): Camera model used for ray generation and distortion.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients for OpenCV camera
+                models. Use ``None`` for no distortion. Expected shape is ``(C, 12)`` with packed
+                layout ``[k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]``. For camera models that use fewer
+                coefficients, unused entries should be set to 0.
+            sh_degree_to_use (int): SH degree to use. ``-1`` means use all available SH bases.
+            tile_size (int): Tile size (in pixels). ``tileH = ceil(H / tile_size)``,
+                ``tileW = ceil(W / tile_size)``.
+            min_radius_2d (float): Minimum projected radius (in pixels) used for tiling/culling.
+            eps_2d (float): Padding used during tiling/projection to avoid numerical issues.
+            antialias (bool): If ``True``, applies opacity correction (when available) when using
+                ``eps_2d > 0.0``.
+            backgrounds (torch.Tensor | None): Optional background colors of shape ``(C, D)``,
+                where ``D`` is :attr:`num_channels`. If ``None``, background is treated as 0.
+            masks (torch.Tensor | None): Optional per-tile boolean mask of shape
+                ``(C, tileH, tileW)``. Masked tiles are skipped and filled with background.
+
+        Returns:
+            images (torch.Tensor): Rendered images of shape ``(C, H, W, D)``.
+            alpha_images (torch.Tensor): Alpha images of shape ``(C, H, W, 1)``.
+        """
+        if isinstance(camera_model, CameraModel):
+            camera_model_cpp = getattr(_C.CameraModel, camera_model.name)
+        else:
+            camera_model_cpp = camera_model
+
+        return self._impl.render_images_from_world(
+            world_to_camera_matrices=world_to_camera_matrices,
+            projection_matrices=projection_matrices,
+            image_width=image_width,
+            image_height=image_height,
+            near=near,
+            far=far,
+            camera_model=camera_model_cpp,
+            distortion_coeffs=distortion_coeffs,
+            sh_degree_to_use=sh_degree_to_use,
+            tile_size=tile_size,
+            min_radius_2d=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+            backgrounds=backgrounds,
+            masks=masks,
         )
 
     def sparse_render_images(

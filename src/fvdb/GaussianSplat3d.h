@@ -5,11 +5,14 @@
 #define FVDB_GAUSSIANSPLAT3D_H
 
 #include <fvdb/JaggedTensor.h>
+#include <fvdb/detail/ops/gsplat/GaussianCameraModels.h>
 #include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
 
 #include <ATen/core/TensorBody.h>
 #include <c10/core/Device.h>
 #include <torch/types.h>
+
+#include <optional>
 
 namespace fvdb {
 
@@ -904,6 +907,34 @@ class GaussianSplat3d {
                  const float eps2d                               = 0.3,
                  const bool antialias                            = false,
                  const std::optional<torch::Tensor> &backgrounds = std::nullopt);
+
+    /// @brief Render images by rasterizing directly from world-space 3D Gaussians.
+    ///
+    /// This is similar to @ref renderImages but performs rasterization directly from world-space
+    /// Gaussians (means/quats/log-scales) rather than from their 2D projections. This enables
+    /// geometry gradients through the rasterization step.
+    ///
+    /// Tile intersections are still computed using a (non-differentiable) projection step:
+    /// - For `cameraModel == CameraModel::PINHOLE` or `CameraModel::ORTHOGRAPHIC`, we reuse the
+    ///   classic projection path.
+    /// - For OpenCV camera models, we use the Unscented Transform (UT) projection kernel to
+    ///   compute per-Gaussian radii and depths for sorting / tiling, then rasterize with 3DGS.
+    std::tuple<torch::Tensor, torch::Tensor> renderImagesFromWorld(
+        const torch::Tensor &worldToCameraMatrices,
+        const torch::Tensor &projectionMatrices,
+        const size_t imageWidth,
+        const size_t imageHeight,
+        const float near,
+        const float far,
+        const fvdb::detail::ops::CameraModel cameraModel = fvdb::detail::ops::CameraModel::PINHOLE,
+        const std::optional<torch::Tensor> &distortionCoeffs = std::nullopt,
+        const int64_t shDegreeToUse                          = -1,
+        const size_t tileSize                                = 16,
+        const float minRadius2d                              = 0.0,
+        const float eps2d                                    = 0.3,
+        const bool antialias                                 = false,
+        const std::optional<torch::Tensor> &backgrounds      = std::nullopt,
+        const std::optional<torch::Tensor> &masks            = std::nullopt);
 
     /// @brief Render depths of this Gaussian splat scene from the given camera matrices and
     /// projection matrices.
