@@ -5,19 +5,20 @@
 #define FVDB_DETAIL_OPS_GRIDEDGENETWORK_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
-
-#include <torch/types.h>
 
 #include <vector>
 
 namespace fvdb {
 namespace detail {
+
+class GridBatchImpl;
+
 namespace ops {
 
-template <torch::DeviceType>
-std::vector<JaggedTensor> dispatchGridEdgeNetwork(const GridBatchImpl &gridHdl,
-                                                  bool returnVoxelCoordinates);
+/// @brief Build a wireframe cube mesh for every active voxel:
+///        8 vertices and 12 edges per voxel.
+/// @return {vertices_jagged, edges_jagged}
+std::vector<JaggedTensor> gridEdgeNetwork(GridBatchImpl const &grid, bool returnVoxelCoordinates);
 
 } // namespace ops
 } // namespace detail

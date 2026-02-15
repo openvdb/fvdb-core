@@ -23,17 +23,15 @@ template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildCoarseGridFromFine<torch::kCUDA>(const GridBatchImpl &fineGridBatch,
                                               const nanovdb::Coord branchingFactor) {
-    JaggedTensor coords =
-        ops::dispatchCoarseIJKForFineGrid<torch::kCUDA>(fineGridBatch, branchingFactor);
-    return ops::dispatchCreateNanoGridFromIJK<torch::kCUDA>(coords);
+    JaggedTensor coords = coarseIjkForFineGrid(fineGridBatch, branchingFactor);
+    return dispatchCreateNanoGridFromIJK<torch::kCUDA>(coords);
 }
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildCoarseGridFromFine<torch::kPrivateUse1>(const GridBatchImpl &fineGridBatch,
                                                      const nanovdb::Coord branchingFactor) {
-    JaggedTensor coords =
-        ops::dispatchCoarseIJKForFineGrid<torch::kPrivateUse1>(fineGridBatch, branchingFactor);
+    JaggedTensor coords = coarseIjkForFineGrid(fineGridBatch, branchingFactor);
     return ops::dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(coords);
 }
 

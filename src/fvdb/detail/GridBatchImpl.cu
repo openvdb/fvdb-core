@@ -1712,13 +1712,10 @@ GridBatchImpl::clipWithMask(const std::vector<nanovdb::Coord> &bboxMins,
                             const std::vector<nanovdb::Coord> &bboxMaxs) {
     c10::DeviceGuard guard(device());
 
-    JaggedTensor activeVoxelMask = FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
-        return fvdb::detail::ops::dispatchActiveVoxelsInBoundsMask<DeviceTag>(
-            *this, bboxMins, bboxMaxs);
-    });
+    JaggedTensor activeVoxelMask =
+        fvdb::detail::ops::activeVoxelsInBoundsMask(*this, bboxMins, bboxMaxs);
 
-    JaggedTensor activeVoxelCoords = FVDB_DISPATCH_KERNEL_DEVICE(
-        device(), [&]() { return fvdb::detail::ops::dispatchActiveGridCoords<DeviceTag>(*this); });
+    JaggedTensor activeVoxelCoords = fvdb::detail::ops::activeGridCoords(*this);
 
     // active voxel coords masked by the voxels in bounds
     JaggedTensor activeVoxelMaskCoords = activeVoxelCoords.rmask(activeVoxelMask.jdata());
