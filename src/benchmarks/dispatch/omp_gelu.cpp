@@ -9,7 +9,9 @@
 
 #include <ATen/cpu/vec/vec.h>
 
+#ifdef _OPENMP
 #include <omp.h>
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -80,7 +82,11 @@ gelu_openmp(const float *in_ptr, float *out_ptr, int64_t numel) {
 
 int
 get_num_threads() {
+#ifdef _OPENMP
     return omp_get_max_threads();
+#else
+    return 1;
+#endif
 }
 
 } // namespace omp_gelu
