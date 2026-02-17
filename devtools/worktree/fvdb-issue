@@ -114,18 +114,21 @@ get_issue_worktrees() {
     local base_name
     base_name=$(basename "$base")
 
+    # Use porcelain output to reliably parse worktree paths, even if they contain spaces.
     while IFS= read -r line; do
-        local wt_path
-        wt_path=$(echo "$line" | awk '{print $1}')
-        if [[ "$wt_path" != "$base" ]]; then
-            local wt_name
-            wt_name=$(basename "$wt_path")
-            if [[ "$wt_name" =~ ^${base_name}-issue-([0-9]+)$ ]]; then
-                local issue_num="${BASH_REMATCH[1]}"
-                echo "${gh_repo}|${wt_name}|${issue_num}|${wt_path}"
+        if [[ "$line" == worktree\ * ]]; then
+            local wt_path
+            wt_path=${line#worktree }
+            if [[ "$wt_path" != "$base" ]]; then
+                local wt_name
+                wt_name=$(basename "$wt_path")
+                if [[ "$wt_name" =~ ^${base_name}-issue-([0-9]+)$ ]]; then
+                    local issue_num="${BASH_REMATCH[1]}"
+                    echo "${gh_repo}|${wt_name}|${issue_num}|${wt_path}"
+                fi
             fi
         fi
-    done < <(git -C "$base" worktree list 2>/dev/null)
+    done < <(git -C "$base" worktree list --porcelain 2>/dev/null)
 }
 
 # Interactive mode: list existing issue worktrees and offer open/close actions
@@ -157,9 +160,10 @@ list_and_manage_worktrees() {
     local ENTRIES=()
     local TITLES=()
     local STATES=()
-    # Cache issue metadata per repo/issue for this run to avoid redundant gh calls
-    local -A ISSUE_TITLES=()
-    local -A ISSUE_STATES=()
+    # Cache issue metadata per repo/issue for this run (Bash 3-compatible parallel arrays)
+    local CACHE_KEYS=()
+    local CACHE_TITLES=()
+    local CACHE_STATES=()
 
     for entry in "${ALL_ISSUE_WORKTREES[@]}"; do
         IFS='|' read -r gh_repo wt_name issue_num wt_path <<< "$entry"
@@ -169,10 +173,18 @@ list_and_manage_worktrees() {
         local issue_state="UNKNOWN"
 
         # Use cached metadata if available to reduce gh API calls
-        if [[ -n "${ISSUE_TITLES[$cache_key]+set}" ]]; then
-            issue_title="${ISSUE_TITLES[$cache_key]}"
-            issue_state="${ISSUE_STATES[$cache_key]}"
-        else
+        local found=0
+        local c=0
+        while (( c < ${#CACHE_KEYS[@]} )); do
+            if [[ "${CACHE_KEYS[$c]}" == "$cache_key" ]]; then
+                issue_title="${CACHE_TITLES[$c]}"
+                issue_state="${CACHE_STATES[$c]}"
+                found=1
+                break
+            fi
+            c=$((c + 1))
+        done
+        if [[ $found -eq 0 ]]; then
             local issue_json
             issue_json=$(gh issue view "$issue_num" -R "$gh_repo" --json title,state 2>/dev/null || echo "")
             if [[ -n "$issue_json" ]]; then
@@ -181,8 +193,9 @@ list_and_manage_worktrees() {
             else
                 echo -e "${YELLOW}Warning: Failed to fetch details for issue #${issue_num} from ${gh_repo}${NC}" >&2
             fi
-            ISSUE_TITLES["$cache_key"]="$issue_title"
-            ISSUE_STATES["$cache_key"]="$issue_state"
+            CACHE_KEYS+=("$cache_key")
+            CACHE_TITLES+=("$issue_title")
+            CACHE_STATES+=("$issue_state")
         fi
 
         ENTRIES+=("$entry")
