@@ -276,6 +276,7 @@ usage() {
     echo "Usage: fvdb-issue [<issue-url-or-number>] [options]"
     echo ""
     echo "With no arguments: list and manage existing issue worktrees"
+    echo "Options --core, --claude, and --cursor require an issue number or URL."
     echo ""
     echo "Options:"
     echo "  --cursor          Open in Cursor (default)"
@@ -300,17 +301,21 @@ slugify() {
 INPUT=""
 CORE_BRANCH="main"
 USE_CLAUDE=false
+SAW_OPEN_OPTION=false
 
 for arg in "$@"; do
     case $arg in
         --core=*)
             CORE_BRANCH="${arg#*=}"
+            SAW_OPEN_OPTION=true
             ;;
         --claude)
             USE_CLAUDE=true
+            SAW_OPEN_OPTION=true
             ;;
         --cursor)
             USE_CLAUDE=false
+            SAW_OPEN_OPTION=true
             ;;
         --help|-h)
             usage
@@ -323,6 +328,14 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+if [[ -z "$INPUT" && "$SAW_OPEN_OPTION" == true ]]; then
+    echo -e "${RED}Error: Options --core, --claude, and --cursor require an issue.${NC}"
+    echo "Example: fvdb-issue 123 --claude"
+    echo ""
+    usage
+    exit 1
+fi
 
 if [[ -z "$INPUT" ]]; then
     list_and_manage_worktrees
