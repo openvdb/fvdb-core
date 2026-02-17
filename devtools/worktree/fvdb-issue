@@ -81,6 +81,7 @@ check_dependencies() {
     command -v jq >/dev/null 2>&1 || missing+=("jq (apt-get install jq / brew install jq)")
     command -v git >/dev/null 2>&1 || missing+=("git")
     command -v fvdb-open >/dev/null 2>&1 || missing+=("fvdb-open (run install.sh first)")
+    command -v fvdb-close >/dev/null 2>&1 || missing+=("fvdb-close (run install.sh first)")
 
     if [[ ${#missing[@]} -gt 0 ]]; then
         echo -e "${RED}Error: Missing required dependencies:${NC}"
@@ -154,17 +155,30 @@ list_and_manage_worktrees() {
     local ENTRIES=()
     local TITLES=()
     local STATES=()
+    # Cache issue metadata per repo/issue for this run to avoid redundant gh calls
+    local -A ISSUE_TITLES=()
+    local -A ISSUE_STATES=()
 
     for entry in "${ALL_ISSUE_WORKTREES[@]}"; do
         IFS='|' read -r gh_repo wt_name issue_num wt_path <<< "$entry"
 
+        local cache_key="${gh_repo}|${issue_num}"
         local issue_title="Unknown"
         local issue_state="UNKNOWN"
-        local issue_json
-        issue_json=$(gh issue view "$issue_num" -R "$gh_repo" --json title,state 2>/dev/null || echo "")
-        if [[ -n "$issue_json" ]]; then
-            issue_title=$(echo "$issue_json" | jq -r '.title // "Unknown"')
-            issue_state=$(echo "$issue_json" | jq -r '.state // "UNKNOWN"')
+
+        # Use cached metadata if available to reduce gh API calls
+        if [[ -n "${ISSUE_TITLES[$cache_key]+set}" ]]; then
+            issue_title="${ISSUE_TITLES[$cache_key]}"
+            issue_state="${ISSUE_STATES[$cache_key]}"
+        else
+            local issue_json
+            issue_json=$(gh issue view "$issue_num" -R "$gh_repo" --json title,state 2>/dev/null || echo "")
+            if [[ -n "$issue_json" ]]; then
+                issue_title=$(echo "$issue_json" | jq -r '.title // "Unknown"')
+                issue_state=$(echo "$issue_json" | jq -r '.state // "UNKNOWN"')
+            fi
+            ISSUE_TITLES["$cache_key"]="$issue_title"
+            ISSUE_STATES["$cache_key"]="$issue_state"
         fi
 
         ENTRIES+=("$entry")
@@ -276,7 +290,6 @@ usage() {
     echo "  fvdb-issue https://github.com/${RC_GH_REPO}/issues/187"
     echo "  fvdb-issue 187 --claude"
     echo "  fvdb-issue 187 --core=my-feature"
-    exit 1
 }
 
 slugify() {
@@ -301,6 +314,7 @@ for arg in "$@"; do
             ;;
         --help|-h)
             usage
+            exit 0
             ;;
         *)
             if [[ -z "$INPUT" ]]; then
@@ -383,6 +397,7 @@ elif [[ "$INPUT" =~ ^[0-9]+$ ]]; then
 else
     echo -e "${RED}Error: Invalid input. Provide an issue URL or number.${NC}"
     usage
+    exit 1
 fi
 
 echo ""
