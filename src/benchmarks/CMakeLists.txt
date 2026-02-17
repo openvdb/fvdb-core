@@ -47,6 +47,7 @@ function(ConfigureDispatchBench CMAKE_BENCH_NAME)
         $<$<COMPILE_LANGUAGE:CXX>:
             "-Wall"
             "-Werror"
+            "-Wno-unknown-pragmas"
             "-fdiagnostics-color=always"
         >
         $<$<COMPILE_LANGUAGE:CUDA>:
