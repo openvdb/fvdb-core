@@ -111,6 +111,8 @@ get_default_branch_ref() {
 get_issue_worktrees() {
     local base="$1"
     local gh_repo="$2"
+    local base_name
+    base_name=$(basename "$base")
 
     while IFS= read -r line; do
         local wt_path
@@ -118,7 +120,7 @@ get_issue_worktrees() {
         if [[ "$wt_path" != "$base" ]]; then
             local wt_name
             wt_name=$(basename "$wt_path")
-            if [[ "$wt_name" =~ -issue-([0-9]+)$ ]]; then
+            if [[ "$wt_name" =~ ^${base_name}-issue-([0-9]+)$ ]]; then
                 local issue_num="${BASH_REMATCH[1]}"
                 echo "${gh_repo}|${wt_name}|${issue_num}|${wt_path}"
             fi
@@ -176,6 +178,8 @@ list_and_manage_worktrees() {
             if [[ -n "$issue_json" ]]; then
                 issue_title=$(echo "$issue_json" | jq -r '.title // "Unknown"')
                 issue_state=$(echo "$issue_json" | jq -r '.state // "UNKNOWN"')
+            else
+                echo -e "${YELLOW}Warning: Failed to fetch details for issue #${issue_num} from ${gh_repo}${NC}" >&2
             fi
             ISSUE_TITLES["$cache_key"]="$issue_title"
             ISSUE_STATES["$cache_key"]="$issue_state"
