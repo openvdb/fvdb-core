@@ -77,14 +77,14 @@ struct GatherScatterDefaultTopology {
 // Topology builders
 // =============================================================================
 
-/// Build a compacted forward topology from source and output grids.
+/// Build a compacted forward topology via two-pass atomic counting.
 GatherScatterDefaultTopology
 gatherScatterDefaultSparseConvTopology(GridBatchImpl const &feature_grid,
                                        GridBatchImpl const &output_grid,
                                        nanovdb::Coord kernel_size,
                                        nanovdb::Coord stride);
 
-/// Build a compacted transposed topology from source and output grids.
+/// Build a compacted transposed topology via two-pass atomic counting.
 GatherScatterDefaultTopology
 gatherScatterDefaultSparseConvTransposeTopology(GridBatchImpl const &feature_grid,
                                                 GridBatchImpl const &output_grid,

@@ -13,7 +13,6 @@
 #include "dispatch/dispatch_table.h"
 #include "dispatch/torch/dispatch.h"
 #include "dispatch/torch/for_each.h"
-#include "dispatch/torch/views.h"
 
 #include <fvdb/detail/dispatch/AtomicAdd.cuh>
 #include <fvdb/detail/dispatch/ForEachActiveVoxel.cuh>
@@ -23,6 +22,7 @@
 
 #include <torch/torch.h>
 
+#include <cmath>
 #include <cstdint>
 #include <tuple>
 
@@ -33,20 +33,6 @@ namespace ops {
 using namespace ::dispatch;
 
 // =============================================================================
-// Internal dense topology (intermediate representation for compaction)
-// =============================================================================
-
-struct DenseTopology {
-    torch::Tensor kernel_map; // [output_total_voxels, kernel_volume] int32
-    int64_t feature_total_voxels;
-    int64_t output_total_voxels;
-    int64_t kernel_volume;
-    nanovdb::Coord kernel_size;
-    nanovdb::Coord stride;
-    ConvDirection direction;
-};
-
-// =============================================================================
 // Tensor options helpers
 // =============================================================================
 
@@ -55,117 +41,6 @@ inline torch::TensorOptions
 opts_on(torch::Device device) {
     return torch::dtype(Stype).device(device);
 }
-
-// =============================================================================
-// Dense topology builder via dispatch table
-// =============================================================================
-//
-// For each active voxel in output_grid, probe the feature_grid at every kernel
-// offset and record the flat feature voxel index (or -1).
-//
-// Forward:    probe = output_ijk * stride + kernel_offset
-// Transposed: probe = (output_ijk - kernel_offset) / stride
-//             (only when divisible by stride in all 3 dimensions)
-
-struct dense_topology_op {
-    template <typename Tag>
-        requires with_type<Tag, torch::DeviceType>
-    static DenseTopology
-    op(Tag tg,
-       GridBatchImpl const &feature_grid,
-       GridBatchImpl const &output_grid,
-       nanovdb::Coord kernel_size,
-       nanovdb::Coord stride,
-       ConvDirection direction) {
-        constexpr auto dev = tag_get<torch::DeviceType>(Tag{});
-
-        int64_t const ks0           = kernel_size[0];
-        int64_t const ks1           = kernel_size[1];
-        int64_t const ks2           = kernel_size[2];
-        int64_t const kernel_volume = ks0 * ks1 * ks2;
-
-        int64_t const output_total  = output_grid.totalVoxels();
-        int64_t const feature_total = feature_grid.totalVoxels();
-
-        nanovdb::Coord const kernel_start(static_cast<int>(std::floor(-ks0 / 2.0 + 1)),
-                                          static_cast<int>(std::floor(-ks1 / 2.0 + 1)),
-                                          static_cast<int>(std::floor(-ks2 / 2.0 + 1)));
-
-        auto kmap = torch::full(
-            {output_total, kernel_volume}, -1, opts_on<torch::kInt32>(output_grid.device()));
-        auto kmap_out = tensor_out<dev, torch::kInt32, 2, contiguity::contiguous>(kmap);
-
-        auto guard       = make_device_guard(tg, kmap);
-        auto feature_acc = dispatch::make_grid_accessor(tg, feature_grid);
-
-        bool const is_transposed = (direction == ConvDirection::Transposed);
-
-        dispatch::forEachActiveVoxel(
-            tg,
-            output_grid,
-            [=] __hostdev__(Tag,
-                            JIdxType batch_idx,
-                            nanovdb::Coord output_ijk,
-                            int64_t output_voxel_index,
-                            GridBatchImpl::Accessor /*output_acc*/) {
-                auto const *feat_grid          = feature_acc.grid(batch_idx);
-                auto feat_tree_acc             = feat_grid->getAccessor();
-                int64_t const feat_base_offset = feature_acc.voxelOffset(batch_idx);
-
-                int64_t k_idx = 0;
-                for (int k0 = kernel_start[0]; k0 < kernel_start[0] + static_cast<int>(ks0); ++k0) {
-                    for (int k1 = kernel_start[1]; k1 < kernel_start[1] + static_cast<int>(ks1);
-                         ++k1) {
-                        for (int k2 = kernel_start[2]; k2 < kernel_start[2] + static_cast<int>(ks2);
-                             ++k2, ++k_idx) {
-                            nanovdb::Coord probe;
-                            if (is_transposed) {
-                                int const r0 = output_ijk[0] - k0;
-                                int const r1 = output_ijk[1] - k1;
-                                int const r2 = output_ijk[2] - k2;
-                                if (r0 % stride[0] != 0 || r1 % stride[1] != 0 ||
-                                    r2 % stride[2] != 0) {
-                                    continue;
-                                }
-                                probe =
-                                    nanovdb::Coord(r0 / stride[0], r1 / stride[1], r2 / stride[2]);
-                            } else {
-                                nanovdb::Coord const base(output_ijk[0] * stride[0],
-                                                          output_ijk[1] * stride[1],
-                                                          output_ijk[2] * stride[2]);
-                                probe = base + nanovdb::Coord(k0, k1, k2);
-                            }
-
-                            if (feat_tree_acc.isActive(probe)) {
-                                int32_t const feat_flat = static_cast<int32_t>(
-                                    feat_base_offset + feat_tree_acc.getValue(probe) - 1);
-                                kmap_out(output_voxel_index, k_idx) = feat_flat;
-                            }
-                        }
-                    }
-                }
-            });
-
-        return DenseTopology{
-            /*.kernel_map             =*/kmap,
-            /*.feature_total_voxels   =*/feature_total,
-            /*.output_total_voxels    =*/output_total,
-            /*.kernel_volume          =*/kernel_volume,
-            /*.kernel_size            =*/kernel_size,
-            /*.stride                 =*/stride,
-            /*.direction              =*/direction,
-        };
-    }
-
-    using space      = axes<torch_full_device_axis>;
-    using subspaces  = coverage<space>;
-    using dispatcher = dispatch_table<space,
-                                      DenseTopology(GridBatchImpl const &,
-                                                    GridBatchImpl const &,
-                                                    nanovdb::Coord,
-                                                    nanovdb::Coord,
-                                                    ConvDirection)>;
-};
 
 static void
 checkTopologyPreconditions(GridBatchImpl const &feature_grid,
@@ -184,16 +59,193 @@ checkTopologyPreconditions(GridBatchImpl const &feature_grid,
     }
 }
 
-static DenseTopology
-buildDenseTopology(GridBatchImpl const &feature_grid,
-                   GridBatchImpl const &output_grid,
-                   nanovdb::Coord kernel_size,
-                   nanovdb::Coord stride,
-                   ConvDirection direction) {
+// =============================================================================
+// Two-pass topology builder via dispatch framework (CPU + CUDA)
+// =============================================================================
+//
+// Two sweeps over active output voxels via forEachActiveVoxel:
+//   Sweep 1: Count active pairs per kernel offset k using atomic counters.
+//   Prefix sums: Compute CSR offsets via torch::cumsum.
+//   Sweep 2: Fill gather/scatter indices using atomic position assignment.
+
+struct twopass_topology_op {
+    template <typename Tag>
+        requires with_type<Tag, torch::DeviceType>
+    static GatherScatterDefaultTopology
+    op(Tag tg,
+       GridBatchImpl const &feature_grid,
+       GridBatchImpl const &output_grid,
+       nanovdb::Coord kernel_size,
+       nanovdb::Coord stride,
+       ConvDirection direction) {
+        int64_t const ks0 = kernel_size[0];
+        int64_t const ks1 = kernel_size[1];
+        int64_t const ks2 = kernel_size[2];
+        int64_t const K   = ks0 * ks1 * ks2;
+
+        int64_t const feature_total = feature_grid.totalVoxels();
+        int64_t const output_total  = output_grid.totalVoxels();
+
+        nanovdb::Coord const kernel_start(static_cast<int>(std::floor(-ks0 / 2.0 + 1)),
+                                          static_cast<int>(std::floor(-ks1 / 2.0 + 1)),
+                                          static_cast<int>(std::floor(-ks2 / 2.0 + 1)));
+
+        bool const is_transposed = (direction == ConvDirection::Transposed);
+        auto const device        = output_grid.device();
+
+        // ---- Sweep 1: count pairs per offset k ----
+        auto counts = torch::zeros({K}, opts_on<torch::kInt32>(device));
+        auto guard  = make_device_guard(tg, counts);
+
+        auto feature_acc = dispatch::make_grid_accessor(tg, feature_grid);
+        auto *counts_ptr = counts.data_ptr<int32_t>();
+
+        dispatch::forEachActiveVoxel(
+            tg,
+            output_grid,
+            [=] __hostdev__(Tag tg_inner,
+                            JIdxType batch_idx,
+                            nanovdb::Coord ijk,
+                            int64_t /*voxel_idx*/,
+                            GridBatchImpl::Accessor /*output_acc*/) {
+                auto const *feat_grid = feature_acc.grid(batch_idx);
+                auto feat_tree_acc    = feat_grid->getAccessor();
+
+                for (int64_t k = 0; k < K; ++k) {
+                    int32_t const k0 = kernel_start[0] + static_cast<int32_t>(k / (ks1 * ks2));
+                    int32_t const k1 = kernel_start[1] + static_cast<int32_t>((k / ks2) % ks1);
+                    int32_t const k2 = kernel_start[2] + static_cast<int32_t>(k % ks2);
+
+                    nanovdb::Coord probe;
+                    if (is_transposed) {
+                        int32_t const r0 = ijk[0] - k0;
+                        int32_t const r1 = ijk[1] - k1;
+                        int32_t const r2 = ijk[2] - k2;
+                        if (r0 % stride[0] != 0 || r1 % stride[1] != 0 || r2 % stride[2] != 0)
+                            continue;
+                        probe = nanovdb::Coord(r0 / stride[0], r1 / stride[1], r2 / stride[2]);
+                    } else {
+                        probe = nanovdb::Coord(ijk[0] * stride[0] + k0,
+                                               ijk[1] * stride[1] + k1,
+                                               ijk[2] * stride[2] + k2);
+                    }
+
+                    if (feat_tree_acc.isActive(probe)) {
+                        dispatch::atomic_fetch_add_i32(tg_inner, &counts_ptr[k], 1);
+                    }
+                }
+            });
+
+        // ---- Prefix sums (device-generic torch ops) ----
+        auto offsets_dev = torch::zeros({K + 1}, opts_on<torch::kInt64>(device));
+        if (K > 0) {
+            offsets_dev.slice(0, 1, K + 1).copy_(torch::cumsum(counts.to(torch::kInt64), 0));
+        }
+        int64_t total_pairs = (K > 0) ? offsets_dev[K].item<int64_t>() : 0;
+        auto offsets_host   = offsets_dev.cpu();
+
+        if (total_pairs == 0) {
+            return GatherScatterDefaultTopology{
+                torch::empty({0}, opts_on<torch::kInt32>(device)),
+                torch::empty({0}, opts_on<torch::kInt32>(device)),
+                offsets_host,
+                feature_total,
+                output_total,
+                K,
+                0,
+                kernel_size,
+                stride,
+                direction,
+            };
+        }
+
+        // ---- Sweep 2: fill gather/scatter indices ----
+        auto gather_indices  = torch::empty({total_pairs}, opts_on<torch::kInt32>(device));
+        auto scatter_indices = torch::empty({total_pairs}, opts_on<torch::kInt32>(device));
+        auto counters        = torch::zeros({K}, opts_on<torch::kInt32>(device));
+
+        auto *counters_ptr = counters.data_ptr<int32_t>();
+        auto *offsets_ptr  = offsets_dev.data_ptr<int64_t>();
+        auto *gather_ptr   = gather_indices.data_ptr<int32_t>();
+        auto *scatter_ptr  = scatter_indices.data_ptr<int32_t>();
+
+        dispatch::forEachActiveVoxel(
+            tg,
+            output_grid,
+            [=] __hostdev__(Tag tg_inner,
+                            JIdxType batch_idx,
+                            nanovdb::Coord ijk,
+                            int64_t voxel_idx,
+                            GridBatchImpl::Accessor /*output_acc*/) {
+                auto const *feat_grid   = feature_acc.grid(batch_idx);
+                auto feat_tree_acc      = feat_grid->getAccessor();
+                int64_t const feat_base = feature_acc.voxelOffset(batch_idx);
+
+                for (int64_t k = 0; k < K; ++k) {
+                    int32_t const k0 = kernel_start[0] + static_cast<int32_t>(k / (ks1 * ks2));
+                    int32_t const k1 = kernel_start[1] + static_cast<int32_t>((k / ks2) % ks1);
+                    int32_t const k2 = kernel_start[2] + static_cast<int32_t>(k % ks2);
+
+                    nanovdb::Coord probe;
+                    if (is_transposed) {
+                        int32_t const r0 = ijk[0] - k0;
+                        int32_t const r1 = ijk[1] - k1;
+                        int32_t const r2 = ijk[2] - k2;
+                        if (r0 % stride[0] != 0 || r1 % stride[1] != 0 || r2 % stride[2] != 0)
+                            continue;
+                        probe = nanovdb::Coord(r0 / stride[0], r1 / stride[1], r2 / stride[2]);
+                    } else {
+                        probe = nanovdb::Coord(ijk[0] * stride[0] + k0,
+                                               ijk[1] * stride[1] + k1,
+                                               ijk[2] * stride[2] + k2);
+                    }
+
+                    if (feat_tree_acc.isActive(probe)) {
+                        int32_t const feat_flat =
+                            static_cast<int32_t>(feat_base + feat_tree_acc.getValue(probe) - 1);
+                        int32_t const pos =
+                            dispatch::atomic_fetch_add_i32(tg_inner, &counters_ptr[k], 1);
+                        int64_t const write_pos = offsets_ptr[k] + pos;
+                        gather_ptr[write_pos]   = feat_flat;
+                        scatter_ptr[write_pos]  = static_cast<int32_t>(voxel_idx);
+                    }
+                }
+            });
+
+        return GatherScatterDefaultTopology{
+            gather_indices,
+            scatter_indices,
+            offsets_host,
+            feature_total,
+            output_total,
+            K,
+            total_pairs,
+            kernel_size,
+            stride,
+            direction,
+        };
+    }
+
+    using space      = axes<torch_full_device_axis>;
+    using subspaces  = coverage<space>;
+    using dispatcher = dispatch_table<space,
+                                      GatherScatterDefaultTopology(GridBatchImpl const &,
+                                                                   GridBatchImpl const &,
+                                                                   nanovdb::Coord,
+                                                                   nanovdb::Coord,
+                                                                   ConvDirection)>;
+};
+
+static GatherScatterDefaultTopology
+buildTopologyTwoPass(GridBatchImpl const &feature_grid,
+                     GridBatchImpl const &output_grid,
+                     nanovdb::Coord kernel_size,
+                     nanovdb::Coord stride,
+                     ConvDirection direction) {
     checkTopologyPreconditions(feature_grid, output_grid, kernel_size, stride);
 
     static auto const table =
-        dispatch_table_from_op<dense_topology_op>("gather_scatter_default_dense_topology");
+        dispatch_table_from_op<twopass_topology_op>("gather_scatter_default_twopass_topology");
 
     auto const dev = feature_grid.device().type();
     return table.select(dispatch_set{dev})(
@@ -201,72 +253,7 @@ buildDenseTopology(GridBatchImpl const &feature_grid,
 }
 
 // =============================================================================
-// Topology compaction (DenseTopology -> GatherScatterDefaultTopology)
-// =============================================================================
-
-static GatherScatterDefaultTopology
-compactTopology(DenseTopology const &dense_topo) {
-    auto const &kmap = dense_topo.kernel_map; // [O, K] int32 on device
-    int64_t const O  = dense_topo.output_total_voxels;
-    int64_t const K  = dense_topo.kernel_volume;
-
-    // Transpose to [K, O] so nonzero() iterates k-major (groups are contiguous)
-    auto kmap_t = kmap.t().contiguous(); // [K, O]
-    auto mask   = kmap_t != -1;          // [K, O] bool
-
-    // Per-offset pair counts and cumulative offsets
-    auto sizes = torch::sum(mask, /*dim=*/-1, /*keepdim=*/false, torch::kInt64); // [K] on device
-    auto sizes_cpu = sizes.cpu().contiguous();                         // [K] int64 on host
-
-    auto offsets = torch::zeros({K + 1}, torch::dtype(torch::kInt64)); // host
-    auto off_acc = offsets.accessor<int64_t, 1>();
-    auto sz_acc  = sizes_cpu.accessor<int64_t, 1>();
-    for (int64_t k = 0; k < K; ++k) {
-        off_acc[k + 1] = off_acc[k] + sz_acc[k];
-    }
-    int64_t total_pairs = off_acc[K];
-
-    if (total_pairs == 0) {
-        return GatherScatterDefaultTopology{
-            torch::empty({0}, torch::dtype(torch::kInt32).device(kmap.device())),
-            torch::empty({0}, torch::dtype(torch::kInt32).device(kmap.device())),
-            offsets,
-            dense_topo.feature_total_voxels,
-            dense_topo.output_total_voxels,
-            K,
-            0,
-            dense_topo.kernel_size,
-            dense_topo.stride,
-            dense_topo.direction,
-        };
-    }
-
-    // Find all active (k, o) pairs -- sorted by k because nonzero iterates row-major on [K, O]
-    auto pairs = torch::nonzero(mask).contiguous(); // [total_pairs, 2] int64
-    auto k_col = pairs.select(1, 0);                // [total_pairs] -- kernel offset indices
-    auto o_col = pairs.select(1, 1);                // [total_pairs] -- output voxel indices
-
-    // Look up the feature voxel index for each pair from kmap_t[k, o]
-    auto flat_idx        = k_col * O + o_col;
-    auto gather_indices  = kmap_t.reshape({-1}).index({flat_idx}).to(torch::kInt32).contiguous();
-    auto scatter_indices = o_col.to(torch::kInt32).contiguous();
-
-    return GatherScatterDefaultTopology{
-        gather_indices,
-        scatter_indices,
-        offsets,
-        dense_topo.feature_total_voxels,
-        dense_topo.output_total_voxels,
-        K,
-        total_pairs,
-        dense_topo.kernel_size,
-        dense_topo.stride,
-        dense_topo.direction,
-    };
-}
-
-// =============================================================================
-// Topology builder entry points
+// Topology builder entry points (two-pass for all devices)
 // =============================================================================
 
 GatherScatterDefaultTopology
@@ -274,9 +261,8 @@ gatherScatterDefaultSparseConvTopology(GridBatchImpl const &feature_grid,
                                        GridBatchImpl const &output_grid,
                                        nanovdb::Coord kernel_size,
                                        nanovdb::Coord stride) {
-    auto dense =
-        buildDenseTopology(feature_grid, output_grid, kernel_size, stride, ConvDirection::Forward);
-    return compactTopology(dense);
+    return buildTopologyTwoPass(
+        feature_grid, output_grid, kernel_size, stride, ConvDirection::Forward);
 }
 
 GatherScatterDefaultTopology
@@ -284,9 +270,8 @@ gatherScatterDefaultSparseConvTransposeTopology(GridBatchImpl const &feature_gri
                                                 GridBatchImpl const &output_grid,
                                                 nanovdb::Coord kernel_size,
                                                 nanovdb::Coord stride) {
-    auto dense = buildDenseTopology(
+    return buildTopologyTwoPass(
         feature_grid, output_grid, kernel_size, stride, ConvDirection::Transposed);
-    return compactTopology(dense);
 }
 
 // =============================================================================

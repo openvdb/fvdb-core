@@ -99,6 +99,30 @@ atomic_add(Tag /*tg*/, T *dst, T src) {
 #endif
 }
 
+/// @brief Device-dispatched atomic fetch-and-add for int32_t.
+///
+/// Returns the old value at @p dst before the addition -- needed for
+/// assigning unique write positions in parallel fill passes.
+///
+/// @tparam Tag  A dispatch tag carrying at least a torch::DeviceType.
+/// @param tg    Tag instance (selects CPU vs GPU path).
+/// @param dst   Pointer to the destination value.
+/// @param val   Value to add atomically.
+/// @return      The value at @p dst immediately before the addition.
+template <typename Tag>
+    requires ::dispatch::with_type<Tag, torch::DeviceType>
+__hostdev__ int32_t
+atomic_fetch_add_i32(Tag /*tg*/, int32_t *dst, int32_t val) {
+#if defined(__CUDA_ARCH__)
+    return atomicAdd(dst, val);
+#else
+    if constexpr (::dispatch::cpu_tag<Tag>) {
+        return std::atomic_ref<int32_t>(*dst).fetch_add(val, std::memory_order_relaxed);
+    }
+    return 0;
+#endif
+}
+
 } // namespace dispatch
 } // namespace detail
 } // namespace fvdb
