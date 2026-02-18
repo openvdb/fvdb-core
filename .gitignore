@@ -70,3 +70,5 @@ scratch/
 
 # benchmark json files
 *_benchmark.json
+*_results.json
+comparison_*.png
