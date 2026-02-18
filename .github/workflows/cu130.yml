@@ -4,13 +4,6 @@ on:
   pull_request_target:
     branches:
       - '**'
-    paths-ignore:
-        - 'CODEOWNERS'
-        - '**.md'
-        - 'debug/**'
-        - 'examples/**'
-        - 'notebooks/**'
-        - 'scripts/**'
 
 # Allow subsequent pushes to the same PR or REF to cancel any previous jobs.
 concurrency:
@@ -27,12 +20,21 @@ permissions:
 
 jobs:
   ##############################################################################
+  # CHECK FOR RELEVANT CHANGES
+  ##############################################################################
+  check-changes:
+    uses: ./.github/workflows/check-changes.yml
+
+  ##############################################################################
   # START FVDB BUILD RUNNER
   ##############################################################################
   start-build-runner:
     name: Start CPU-only EC2 runner for build
+    needs: check-changes
     runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false || github.event_name != 'pull_request_target'
+    if: >-
+      needs.check-changes.outputs.should_test == 'true'
+      && (github.event.pull_request.draft == false || github.event_name != 'pull_request_target')
     outputs:
       label: ${{ steps.start-build-runner.outputs.label }}
       ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
@@ -179,7 +181,9 @@ jobs:
       - start-build-runner # required to get output from the start-build-runner job
       - fvdb-build # required to wait when the main job is done
     runs-on: ubuntu-latest
-    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
+    # required to stop the runner even if the error happened in the previous jobs
+    # but only if the start-build-runner job was not skipped
+    if: ${{ always() && needs.start-build-runner.result != 'skipped' }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -507,7 +511,9 @@ jobs:
       - fvdb-unit-test # required to wait when the main job is done
       - fvdb-docs-test # required to wait when the main job is done
     runs-on: ubuntu-latest
-    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
+    # required to stop the runner even if the error happened in the previous jobs
+    # but only if the start-tests-gpu-runner job was not skipped
+    if: ${{ always() && needs.start-tests-gpu-runner.result != 'skipped' }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
