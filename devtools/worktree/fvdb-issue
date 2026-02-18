@@ -3,9 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Create a worktree for a GitHub issue and open editor with context
-# Usage: fvdb-issue <issue-url-or-number> [options]
+# Usage: fvdb-issue [<issue-url-or-number>] [options]
+#
+# With no arguments: list and manage existing issue worktrees
 #
 # Examples:
+#   fvdb-issue                        # List/manage existing issue worktrees
 #   fvdb-issue 187                    # Opens in Cursor (default)
 #   fvdb-issue 187 --claude           # Opens in Claude Code (auto-starts)
 #   fvdb-issue 187 --cursor           # Opens in Cursor (explicit)
@@ -78,6 +81,7 @@ check_dependencies() {
     command -v jq >/dev/null 2>&1 || missing+=("jq (apt-get install jq / brew install jq)")
     command -v git >/dev/null 2>&1 || missing+=("git")
     command -v fvdb-open >/dev/null 2>&1 || missing+=("fvdb-open (run install.sh first)")
+    command -v fvdb-close >/dev/null 2>&1 || missing+=("fvdb-close (run install.sh first)")
 
     if [[ ${#missing[@]} -gt 0 ]]; then
         echo -e "${RED}Error: Missing required dependencies:${NC}"
@@ -102,21 +106,208 @@ get_default_branch_ref() {
     echo "$default_ref"
 }
 
+# Get issue worktrees from a repo (filtered for *-issue-<number> naming pattern)
+# Output: one line per worktree, pipe-delimited: gh_repo|wt_name|issue_num|wt_path
+get_issue_worktrees() {
+    local base="$1"
+    local gh_repo="$2"
+    local base_name
+    base_name=$(basename "$base")
+
+    # Use porcelain output to reliably parse worktree paths, even if they contain spaces.
+    while IFS= read -r line; do
+        if [[ "$line" == worktree\ * ]]; then
+            local wt_path
+            wt_path=${line#worktree }
+            if [[ "$wt_path" != "$base" ]]; then
+                local wt_name
+                wt_name=$(basename "$wt_path")
+                if [[ "$wt_name" =~ ^${base_name}-issue-([0-9]+)$ ]]; then
+                    local issue_num="${BASH_REMATCH[1]}"
+                    echo "${gh_repo}|${wt_name}|${issue_num}|${wt_path}"
+                fi
+            fi
+        fi
+    done < <(git -C "$base" worktree list --porcelain 2>/dev/null)
+}
+
+# Interactive mode: list existing issue worktrees and offer open/close actions
+list_and_manage_worktrees() {
+    # Collect issue worktrees from both repos
+    local ALL_ISSUE_WORKTREES=()
+
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && ALL_ISSUE_WORKTREES+=("$line")
+    done < <(get_issue_worktrees "$CORE_BASE" "$CORE_GH_REPO")
+
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && ALL_ISSUE_WORKTREES+=("$line")
+    done < <(get_issue_worktrees "$RC_BASE" "$RC_GH_REPO")
+
+    if [[ ${#ALL_ISSUE_WORKTREES[@]} -eq 0 ]]; then
+        echo -e "${YELLOW}No issue worktrees found.${NC}"
+        echo ""
+        echo "Create one with: fvdb-issue <issue-number-or-url>"
+        exit 0
+    fi
+
+    echo -e "${BLUE}Fetching issue details from GitHub...${NC}"
+    echo ""
+
+    # Fetch issue info and build display data
+    # We store titles and states in parallel arrays to avoid delimiter issues
+    # (issue titles may contain pipe characters)
+    local ENTRIES=()
+    local TITLES=()
+    local STATES=()
+    # Cache issue metadata per repo/issue for this run (Bash 3-compatible parallel arrays)
+    local CACHE_KEYS=()
+    local CACHE_TITLES=()
+    local CACHE_STATES=()
+
+    for entry in "${ALL_ISSUE_WORKTREES[@]}"; do
+        IFS='|' read -r gh_repo wt_name issue_num wt_path <<< "$entry"
+
+        local cache_key="${gh_repo}|${issue_num}"
+        local issue_title="Unknown"
+        local issue_state="UNKNOWN"
+
+        # Use cached metadata if available to reduce gh API calls
+        local found=0
+        local c=0
+        while (( c < ${#CACHE_KEYS[@]} )); do
+            if [[ "${CACHE_KEYS[$c]}" == "$cache_key" ]]; then
+                issue_title="${CACHE_TITLES[$c]}"
+                issue_state="${CACHE_STATES[$c]}"
+                found=1
+                break
+            fi
+            c=$((c + 1))
+        done
+        if [[ $found -eq 0 ]]; then
+            local issue_json
+            issue_json=$(gh issue view "$issue_num" -R "$gh_repo" --json title,state 2>/dev/null || echo "")
+            if [[ -n "$issue_json" ]]; then
+                issue_title=$(echo "$issue_json" | jq -r '.title // "Unknown"')
+                issue_state=$(echo "$issue_json" | jq -r '.state // "UNKNOWN"')
+            else
+                echo -e "${YELLOW}Warning: Failed to fetch details for issue #${issue_num} from ${gh_repo}${NC}" >&2
+            fi
+            CACHE_KEYS+=("$cache_key")
+            CACHE_TITLES+=("$issue_title")
+            CACHE_STATES+=("$issue_state")
+        fi
+
+        ENTRIES+=("$entry")
+        TITLES+=("$issue_title")
+        STATES+=("$issue_state")
+    done
+
+    # Display list
+    echo -e "  ${BLUE}Issue worktrees:${NC}"
+    echo ""
+
+    local i=0
+    while (( i < ${#ENTRIES[@]} )); do
+        IFS='|' read -r gh_repo wt_name issue_num wt_path <<< "${ENTRIES[$i]}"
+        local title="${TITLES[$i]}"
+        local state="${STATES[$i]}"
+
+        # Color the state label
+        local state_display
+        if [[ "$state" == "OPEN" ]]; then
+            state_display="${GREEN}[OPEN]${NC}"
+        elif [[ "$state" == "CLOSED" ]]; then
+            state_display="${RED}[CLOSED]${NC}"
+        else
+            state_display="${YELLOW}[${state}]${NC}"
+        fi
+
+        # Truncate title if too long
+        if [[ ${#title} -gt 40 ]]; then
+            title="${title:0:37}..."
+        fi
+
+        printf "    ${GREEN}%d)${NC} %-30s  #%-4s \"%s\"  %b\n" \
+            "$((i + 1))" "$wt_name" "$issue_num" "$title" "$state_display"
+        i=$((i + 1))
+    done
+    echo ""
+
+    # Worktree selection prompt
+    local max=${#ENTRIES[@]}
+    local choice
+    while true; do
+        read -p "  Select [1-${max}, or q to quit]: " choice
+
+        if [[ "$choice" == "q" || "$choice" == "Q" ]]; then
+            echo "Cancelled."
+            exit 0
+        fi
+
+        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= max )); then
+            break
+        fi
+        echo "  Invalid selection. Try again."
+    done
+
+    local idx=$((choice - 1))
+    IFS='|' read -r gh_repo wt_name issue_num wt_path <<< "${ENTRIES[$idx]}"
+
+    echo ""
+    echo -e "  ${BLUE}Action for #${issue_num}:${NC}"
+    echo "    o) Open in Cursor"
+    echo "    c) Close/remove worktree"
+    echo "    q) Cancel"
+
+    while true; do
+        read -p "  Select: " action
+
+        case "$action" in
+            o|O)
+                echo ""
+                echo -e "${BLUE}Opening ${wt_name} in Cursor...${NC}"
+
+                if [[ "$gh_repo" == "$RC_GH_REPO" ]]; then
+                    exec fvdb-open --core=main --rc="issue-${issue_num}"
+                else
+                    exec fvdb-open --core="issue-${issue_num}" --rc=main
+                fi
+                ;;
+            c|C)
+                echo ""
+                exec fvdb-close "$wt_path"
+                ;;
+            q|Q)
+                echo "Cancelled."
+                exit 0
+                ;;
+            *)
+                echo "  Invalid selection. Try again."
+                ;;
+        esac
+    done
+}
+
 usage() {
-    echo "Usage: fvdb-issue <issue-url-or-number> [options]"
+    echo "Usage: fvdb-issue [<issue-url-or-number>] [options]"
+    echo ""
+    echo "With no arguments: list and manage existing issue worktrees"
+    echo "Options --core, --claude, and --cursor require an issue number or URL."
     echo ""
     echo "Options:"
     echo "  --cursor          Open in Cursor (default)"
     echo "  --claude          Open in Claude Code (auto-starts planning)"
     echo "  --core=<branch>   Use specific fvdb-core branch/worktree"
+    echo "  --help, -h        Show this help message"
     echo ""
     echo "Examples:"
+    echo "  fvdb-issue                   # List/manage existing issue worktrees"
     echo "  fvdb-issue 187"
     echo "  fvdb-issue https://github.com/${CORE_GH_REPO}/issues/123"
     echo "  fvdb-issue https://github.com/${RC_GH_REPO}/issues/187"
     echo "  fvdb-issue 187 --claude"
     echo "  fvdb-issue 187 --core=my-feature"
-    exit 1
 }
 
 slugify() {
@@ -127,20 +318,25 @@ slugify() {
 INPUT=""
 CORE_BRANCH="main"
 USE_CLAUDE=false
+SAW_OPEN_OPTION=false
 
 for arg in "$@"; do
     case $arg in
         --core=*)
             CORE_BRANCH="${arg#*=}"
+            SAW_OPEN_OPTION=true
             ;;
         --claude)
             USE_CLAUDE=true
+            SAW_OPEN_OPTION=true
             ;;
         --cursor)
             USE_CLAUDE=false
+            SAW_OPEN_OPTION=true
             ;;
         --help|-h)
             usage
+            exit 0
             ;;
         *)
             if [[ -z "$INPUT" ]]; then
@@ -150,8 +346,16 @@ for arg in "$@"; do
     esac
 done
 
-if [[ -z "$INPUT" ]]; then
+if [[ -z "$INPUT" && "$SAW_OPEN_OPTION" == true ]]; then
+    echo -e "${RED}Error: Options --core, --claude, and --cursor require an issue.${NC}"
+    echo "Example: fvdb-issue 123 --claude"
+    echo ""
     usage
+    exit 1
+fi
+
+if [[ -z "$INPUT" ]]; then
+    list_and_manage_worktrees
 fi
 
 # Determine repo and issue number
@@ -223,6 +427,7 @@ elif [[ "$INPUT" =~ ^[0-9]+$ ]]; then
 else
     echo -e "${RED}Error: Invalid input. Provide an issue URL or number.${NC}"
     usage
+    exit 1
 fi
 
 echo ""
@@ -332,6 +537,12 @@ cat > "${CURSOR_RULES_DIR}/current-issue.md" << EOF
 # Current Task: ${ITEM_TYPE} #${ISSUE_NUM}
 
 > **ACTION REQUIRED**: When you receive a message referencing this file, immediately start by exploring the codebase to understand the ${ITEM_TYPE_LOWER}, then create a detailed implementation plan.
+
+## Workspace
+
+You are working in a **git worktree**. All code changes MUST be made within the
+workspace directories shown in your IDE — do NOT edit files in the main repository
+checkout or any other worktree.
 
 ## ${ISSUE_TITLE}
 
