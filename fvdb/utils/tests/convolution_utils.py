@@ -113,22 +113,25 @@ def get_tolerances(
         }
     else:  # float32
         # Base tolerances for small kernels
+        input_grad_tol = (1e-5, 1e-6)
         kernel_grad_tol = (5e-4, 5e-4)
 
-        # Scale kernel gradient tolerance for large kernels
-        # Larger kernels have more accumulation, leading to more FP error
+        # Scale gradient tolerances for large kernels.
+        # Both input and kernel gradients accumulate over the kernel volume
+        # (input grad via atomic scatter-add, kernel grad over all outputs),
+        # and CUDA atomic ordering is non-deterministic, so FP error grows
+        # with kernel size.
         if kernel_size is not None:
             kernel_volume = kernel_size[0] * kernel_size[1] * kernel_size[2]
             base_volume = 27  # 3x3x3 baseline
             if kernel_volume > base_volume:
-                # Scale tolerance by sqrt of volume ratio (error grows sub-linearly)
                 scale = math.sqrt(kernel_volume / base_volume)
+                input_grad_tol = (1e-5 * scale, 1e-6 * scale)
                 kernel_grad_tol = (5e-4 * scale, 5e-4 * scale)
 
         return {
             "forward": (1e-5, 1e-6),
-            "input_grad": (1e-5, 1e-6),
-            # Kernel gradients accumulate over all outputs, allowing more error
+            "input_grad": input_grad_tol,
             "kernel_grad": kernel_grad_tol,
         }
 
