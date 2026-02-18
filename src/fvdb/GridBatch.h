@@ -7,8 +7,7 @@
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/Types.h>
 #include <fvdb/detail/GridBatchImpl.h>
-#include <fvdb/detail/ops/convolution/GatherScatter.h>
-#include <fvdb/detail/ops/convolution/GatherScatterFused.h>
+#include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>
@@ -682,15 +681,6 @@ struct GridBatch : torch::CustomClassHolder {
     /// @return vertices and faces arrays of the extracted isosurface
     std::vector<JaggedTensor> marching_cubes(const JaggedTensor &field, double level = 0.0) const;
 
-    /// @brief Perform in-grid convolution using fast halo buffer method. Currently only supports
-    /// kernel_size = 3.
-    /// @param features A JaggedTensor of shape [B, -1, *] containing features associated with this
-    /// batch of grids.
-    /// @param kernel A tensor of shape [Out, In, 3, 3, 3] containing the kernel to convolve with.
-    /// @return A JaggedTensor of shape [B, -1, *] containing the convolved features.
-    JaggedTensor
-    sparse_conv_halo(const JaggedTensor &features, const torch::Tensor &kernel, int variant) const;
-
     /// @brief Return a grid batch on the specified device. If the passed in device is the same as
     /// this grid batch's
     ///        device, then this grid batch is returned. Otherwise, a copy of this grid batch is
@@ -827,65 +817,23 @@ struct GridBatch : torch::CustomClassHolder {
 
     static GridBatch concatenate(const std::vector<GridBatch> &vec);
 
-    static void computeConvolutionKernelMap(const GridBatch &source,
-                                            const GridBatch &target,
-                                            torch::Tensor &kernelMap,
-                                            const Vec3iOrScalar &kernelSize,
-                                            const Vec3iOrScalar &stride);
-
     // -----------------------------------------------------------------------
-    // Gather-scatter convolution: static wrappers for pybind access
+    // GatherScatterDefault convolution: static wrappers for pybind access
     // -----------------------------------------------------------------------
 
-    /// Build the forward gather-scatter topology.
-    static detail::ops::GatherScatterTopology
-    buildGatherScatterTopology(const GridBatch &feature_grid,
-                               const GridBatch &output_grid,
-                               const Vec3iOrScalar &kernelSize,
-                               const Vec3iOrScalar &stride);
+    /// Build the forward compacted topology.
+    static detail::ops::GatherScatterDefaultTopology
+    buildGatherScatterDefaultTopology(const GridBatch &feature_grid,
+                                      const GridBatch &output_grid,
+                                      const Vec3iOrScalar &kernelSize,
+                                      const Vec3iOrScalar &stride);
 
-    /// Build the transposed gather-scatter topology.
-    static detail::ops::GatherScatterTopology
-    buildGatherScatterTransposeTopology(const GridBatch &feature_grid,
-                                        const GridBatch &output_grid,
-                                        const Vec3iOrScalar &kernelSize,
-                                        const Vec3iOrScalar &stride);
-
-    /// Fused gather-scatter forward convolution (small-C optimized).
-    static torch::Tensor gatherScatterConvFused(torch::Tensor features,
-                                                torch::Tensor weights,
-                                                const GridBatch &feature_grid,
-                                                const GridBatch &output_grid,
-                                                const Vec3iOrScalar &kernelSize,
-                                                const Vec3iOrScalar &stride);
-
-    /// Fused gather-scatter backward convolution (small-C optimized).
-    static std::tuple<torch::Tensor, torch::Tensor>
-    gatherScatterConvFusedBackward(torch::Tensor grad_output,
-                                   torch::Tensor features,
-                                   torch::Tensor weights,
-                                   const GridBatch &feature_grid,
-                                   const GridBatch &output_grid,
-                                   const Vec3iOrScalar &kernelSize,
-                                   const Vec3iOrScalar &stride);
-
-    /// Fused gather-scatter transposed convolution (small-C optimized).
-    static torch::Tensor gatherScatterConvFusedTranspose(torch::Tensor features,
-                                                         torch::Tensor weights,
-                                                         const GridBatch &feature_grid,
-                                                         const GridBatch &output_grid,
-                                                         const Vec3iOrScalar &kernelSize,
-                                                         const Vec3iOrScalar &stride);
-
-    /// Fused gather-scatter transposed backward convolution (small-C optimized).
-    static std::tuple<torch::Tensor, torch::Tensor>
-    gatherScatterConvFusedTransposeBackward(torch::Tensor grad_output,
-                                            torch::Tensor features,
-                                            torch::Tensor weights,
-                                            const GridBatch &feature_grid,
-                                            const GridBatch &output_grid,
-                                            const Vec3iOrScalar &kernelSize,
-                                            const Vec3iOrScalar &stride);
+    /// Build the transposed compacted topology.
+    static detail::ops::GatherScatterDefaultTopology
+    buildGatherScatterDefaultTransposeTopology(const GridBatch &feature_grid,
+                                               const GridBatch &output_grid,
+                                               const Vec3iOrScalar &kernelSize,
+                                               const Vec3iOrScalar &stride);
 
     /// @brief Perform one integration step of the TSDF fusion algorithm on a batch of sparse grids.
     ///        The TSDF fusion algorithm integrates depth and feature images (e.g. colors)

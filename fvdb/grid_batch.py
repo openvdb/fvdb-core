@@ -1839,28 +1839,6 @@ class GridBatch:
             impl=self._impl.segments_along_rays(ray_origins._impl, ray_directions._impl, max_segments, eps)
         )
 
-    def sparse_conv_halo(self, input: JaggedTensor, weight: torch.Tensor, variant: int = 8) -> JaggedTensor:
-        """
-        Perform sparse convolution with halo exchange optimization.
-
-        Applies sparse convolution using halo exchange to efficiently handle boundary
-        conditions in distributed or multi-block sparse grids.
-
-        Args:
-            input (JaggedTensor): Input features for each voxel.
-                Shape: ``(batch_size, total_voxels, in_channels)``.
-            weight (torch.Tensor): Convolution weights.
-            variant (int): Variant of the halo implementation to use. Currently ``8`` and ``64``
-                are supported. Default is ``8``.
-
-        Returns:
-            output (JaggedTensor): Output features after convolution.
-
-        .. note::
-            Currently only 3x3x3 kernels are supported.
-        """
-        return JaggedTensor(impl=self._impl.sparse_conv_halo(input._impl, weight, variant))
-
     def splat_bezier(self, points: JaggedTensor, points_data: JaggedTensor) -> JaggedTensor:
         """
         Splat data at a set of input points into a :class:`fvdb.JaggedTensor` associated with

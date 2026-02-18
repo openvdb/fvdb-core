@@ -428,13 +428,6 @@ bind_grid_batch(py::module &m) {
              py::arg("field"),
              py::arg("level") = 0.0)
 
-        // Convolution
-        .def("sparse_conv_halo",
-             &fvdb::GridBatch::sparse_conv_halo,
-             py::arg("input"),
-             py::arg("weight"),
-             py::arg("variant") = 8)
-
         // Coordinate transform
         .def("grid_to_world", &fvdb::GridBatch::grid_to_world, py::arg("ijk"))
         .def("world_to_grid", &fvdb::GridBatch::world_to_grid, py::arg("points"))

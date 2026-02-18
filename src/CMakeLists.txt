@@ -57,8 +57,6 @@ set(FVDB_CPP_FILES
     fvdb/detail/autograd/ReadFromDense.cpp
     fvdb/detail/autograd/ReadIntoDense.cpp
     fvdb/detail/autograd/SampleGrid.cpp
-    fvdb/detail/autograd/SparseConvolutionHalo.cpp
-    fvdb/detail/autograd/SparseConvolutionKernelMap.cpp
     fvdb/detail/autograd/SplatIntoGrid.cpp
     fvdb/detail/autograd/TransformPoints.cpp
     fvdb/detail/autograd/UpsampleGrid.cpp
@@ -93,14 +91,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/BuildPaddedGrid.cu
     fvdb/detail/ops/BuildPrunedGrid.cu
     fvdb/detail/ops/CoarseIjkForFineGrid.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionHalo.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionHaloGrad.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionKernelMap.cu
-    fvdb/detail/ops/convolution/GatherScatter.cu
-    fvdb/detail/ops/convolution/GatherScatterFused.cu
-    fvdb/detail/ops/convolution/CutlassGroupedGemm.cu
-    fvdb/detail/ops/convolution/GroupedGemm.cu
-    fvdb/detail/ops/convolution/pack_info/ConvolutionKernelMap.cu
+    fvdb/detail/ops/convolution/GatherScatterDefault.cu
     fvdb/detail/ops/CoordsInGrid.cu
     fvdb/detail/ops/CubesInGrid.cu
     fvdb/detail/ops/DownsampleGridAvgPool.cu
