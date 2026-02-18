@@ -334,6 +334,35 @@ gs_default_scatter_add(Tag tg,
 }
 
 // =============================================================================
+// Type promotion
+// =============================================================================
+
+static torch::ScalarType
+promoteFloatTypes(torch::ScalarType a, torch::ScalarType b) {
+    return at::result_type(torch::empty({0}, torch::dtype(a)), torch::empty({0}, torch::dtype(b)));
+}
+
+// =============================================================================
+// CPU-safe matrix multiply
+// =============================================================================
+//
+// torch::mm on CPU does not support float16 or bfloat16.  On those types we
+// promote to float32, multiply, and demote.  On CUDA the fast path is always
+// taken (cuBLAS supports half types natively via tensor cores).
+
+static void
+mm_out_safe(torch::Tensor &out, torch::Tensor const &a, torch::Tensor const &b) {
+    if (a.is_cpu() && (a.scalar_type() == torch::kFloat16 || a.scalar_type() == torch::kBFloat16)) {
+        auto a_f = a.to(torch::kFloat32);
+        auto b_f = b.to(torch::kFloat32);
+        auto o_f = torch::mm(a_f, b_f);
+        out.copy_(o_f.to(out.scalar_type()));
+    } else {
+        torch::mm_out(out, a, b);
+    }
+}
+
+// =============================================================================
 // Precondition checks
 // =============================================================================
 
@@ -419,7 +448,7 @@ struct gs_default_conv_op {
             auto A_slice = buf_A.slice(0, start, end);
             auto D_slice = buf_D.slice(0, start, end);
 
-            torch::mm_out(D_slice, A_slice, W[k]);
+            mm_out_safe(D_slice, A_slice, W[k]);
         }
 
         gs_default_scatter_add(tg, buf_D, output, topo.scatter_indices, TP, C_out);
@@ -427,7 +456,7 @@ struct gs_default_conv_op {
         return output;
     }
 
-    using space     = axes<torch_full_device_axis, torch_builtin_float_stype_axis>;
+    using space     = axes<torch_full_device_axis, torch_full_float_stype_axis>;
     using subspaces = coverage<space>;
     using dispatcher =
         dispatch_table<space,
@@ -492,7 +521,7 @@ struct gs_default_conv_backward_op {
 
             auto grad_slice = grad_buf.slice(0, start, end);
             auto gf_slice   = grad_feat_buf.slice(0, start, end);
-            torch::mm_out(gf_slice, grad_slice, W[k].t());
+            mm_out_safe(gf_slice, grad_slice, W[k].t());
         }
 
         gs_default_scatter_add(tg, grad_feat_buf, grad_features, topo.gather_indices, TP, C_in);
@@ -506,7 +535,7 @@ struct gs_default_conv_backward_op {
             auto feat_slice = feat_buf.slice(0, start, end);
             auto grad_slice = grad_buf.slice(0, start, end);
             auto gw_slice   = grad_W_flat[k];
-            torch::mm_out(gw_slice, feat_slice.t(), grad_slice);
+            mm_out_safe(gw_slice, feat_slice.t(), grad_slice);
         }
 
         auto ks           = topo.kernel_size;
@@ -517,7 +546,7 @@ struct gs_default_conv_backward_op {
         return {grad_features, grad_weights};
     }
 
-    using space      = axes<torch_full_device_axis, torch_builtin_float_stype_axis>;
+    using space      = axes<torch_full_device_axis, torch_full_float_stype_axis>;
     using subspaces  = coverage<space>;
     using dispatcher = dispatch_table<
         space,
@@ -582,11 +611,11 @@ struct gs_default_conv_transpose_backward_op {
 
             auto gd_slice = grad_buf.slice(0, start, end);
             auto gf_slice = grad_feat_buf.slice(0, start, end);
-            torch::mm_out(gf_slice, gd_slice, W[k].t());
+            mm_out_safe(gf_slice, gd_slice, W[k].t());
 
             auto fb_slice = feat_buf.slice(0, start, end);
             auto gw_slice = grad_W_flat[k];
-            torch::mm_out(gw_slice, fb_slice.t(), gd_slice);
+            mm_out_safe(gw_slice, fb_slice.t(), gd_slice);
         }
 
         gs_default_scatter_add(tg, grad_feat_buf, grad_features, topo.gather_indices, TP, C_in);
@@ -599,7 +628,7 @@ struct gs_default_conv_transpose_backward_op {
         return {grad_features, grad_weights};
     }
 
-    using space      = axes<torch_full_device_axis, torch_builtin_float_stype_axis>;
+    using space      = axes<torch_full_device_axis, torch_full_float_stype_axis>;
     using subspaces  = coverage<space>;
     using dispatcher = dispatch_table<
         space,
@@ -619,13 +648,15 @@ gatherScatterDefaultSparseConv(torch::Tensor features,
     TORCH_CHECK(topo.direction == ConvDirection::Forward,
                 "gatherScatterDefaultSparseConv requires topology with direction=Forward");
 
+    auto working_st = promoteFloatTypes(features.scalar_type(), weights.scalar_type());
+    if (features.scalar_type() != working_st)
+        features = features.to(working_st);
+
     static auto const table =
         dispatch_table_from_op<gs_default_conv_op>("gather_scatter_default_sparse_conv");
 
-    auto const dev  = features.device().type();
-    auto const f_st = features.scalar_type();
-
-    return table.select(dispatch_set{dev, f_st})(features, weights, topo);
+    auto const dev = features.device().type();
+    return table.select(dispatch_set{dev, working_st})(features, weights, topo);
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
@@ -641,13 +672,17 @@ gatherScatterDefaultSparseConvBackward(torch::Tensor grad_output,
     TORCH_CHECK(grad_output.is_contiguous(), "grad_output must be contiguous");
     TORCH_CHECK(grad_output.is_floating_point(), "grad_output must be floating point");
 
+    auto working_st = promoteFloatTypes(features.scalar_type(), weights.scalar_type());
+    if (features.scalar_type() != working_st)
+        features = features.to(working_st);
+    if (grad_output.scalar_type() != working_st)
+        grad_output = grad_output.to(working_st);
+
     static auto const table = dispatch_table_from_op<gs_default_conv_backward_op>(
         "gather_scatter_default_sparse_conv_backward");
 
-    auto const dev  = features.device().type();
-    auto const f_st = features.scalar_type();
-
-    return table.select(dispatch_set{dev, f_st})(grad_output, features, weights, topo);
+    auto const dev = features.device().type();
+    return table.select(dispatch_set{dev, working_st})(grad_output, features, weights, topo);
 }
 
 torch::Tensor
@@ -659,13 +694,15 @@ gatherScatterDefaultSparseConvTranspose(torch::Tensor features,
         topo.direction == ConvDirection::Transposed,
         "gatherScatterDefaultSparseConvTranspose requires topology with direction=Transposed");
 
+    auto working_st = promoteFloatTypes(features.scalar_type(), weights.scalar_type());
+    if (features.scalar_type() != working_st)
+        features = features.to(working_st);
+
     static auto const table =
         dispatch_table_from_op<gs_default_conv_op>("gather_scatter_default_sparse_conv_transpose");
 
-    auto const dev  = features.device().type();
-    auto const f_st = features.scalar_type();
-
-    return table.select(dispatch_set{dev, f_st})(features, weights, topo);
+    auto const dev = features.device().type();
+    return table.select(dispatch_set{dev, working_st})(features, weights, topo);
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
@@ -682,13 +719,17 @@ gatherScatterDefaultSparseConvTransposeBackward(torch::Tensor grad_output,
     TORCH_CHECK(grad_output.is_contiguous(), "grad_output must be contiguous");
     TORCH_CHECK(grad_output.is_floating_point(), "grad_output must be floating point");
 
+    auto working_st = promoteFloatTypes(features.scalar_type(), weights.scalar_type());
+    if (features.scalar_type() != working_st)
+        features = features.to(working_st);
+    if (grad_output.scalar_type() != working_st)
+        grad_output = grad_output.to(working_st);
+
     static auto const table = dispatch_table_from_op<gs_default_conv_transpose_backward_op>(
         "gather_scatter_default_sparse_conv_transpose_backward");
 
-    auto const dev  = features.device().type();
-    auto const f_st = features.scalar_type();
-
-    return table.select(dispatch_set{dev, f_st})(grad_output, features, weights, topo);
+    auto const dev = features.device().type();
+    return table.select(dispatch_set{dev, working_st})(grad_output, features, weights, topo);
 }
 
 } // namespace ops

@@ -79,14 +79,26 @@ cp(torch::DeviceType d, torch::ScalarType s, int64_t c) {
 }
 
 static std::string
+dtypeStr(torch::ScalarType dtype) {
+    if (dtype == torch::kFloat64)
+        return "f64";
+    if (dtype == torch::kFloat32)
+        return "f32";
+    if (dtype == torch::kFloat16)
+        return "f16";
+    if (dtype == torch::kBFloat16)
+        return "bf16";
+    return "unknown";
+}
+
+static std::string
 paramName(::testing::TestParamInfo<ConvParam> const &info) {
     auto dev   = std::get<0>(info.param);
     auto dtype = std::get<1>(info.param);
     auto C     = std::get<2>(info.param);
 
-    std::string dev_str   = (dev == torch::kCPU) ? "CPU" : "CUDA";
-    std::string dtype_str = (dtype == torch::kFloat32) ? "f32" : "f64";
-    return dev_str + "_" + dtype_str + "_C" + std::to_string(C);
+    std::string dev_str = (dev == torch::kCPU) ? "CPU" : "CUDA";
+    return dev_str + "_" + dtypeStr(dtype) + "_C" + std::to_string(C);
 }
 
 // =============================================================================
@@ -95,10 +107,12 @@ paramName(::testing::TestParamInfo<ConvParam> const &info) {
 
 static std::pair<double, double>
 tolerances(torch::ScalarType dtype) {
-    if (dtype == torch::kFloat64) {
+    if (dtype == torch::kFloat64)
         return {1e-8, 1e-8};
-    }
-    return {1e-3, 1e-3};
+    if (dtype == torch::kFloat32)
+        return {1e-3, 1e-3};
+    // float16 and bfloat16 have ~3 decimal digits of precision
+    return {1e-1, 1e-1};
 }
 
 static bool
@@ -558,10 +572,9 @@ kernelSizeParamName(::testing::TestParamInfo<KernelSizeParam> const &info) {
     auto k1  = std::get<3>(info.param);
     auto k2  = std::get<4>(info.param);
 
-    std::string dev_str   = (dev == torch::kCPU) ? "CPU" : "CUDA";
-    std::string dtype_str = (dt == torch::kFloat32) ? "f32" : "f64";
-    return dev_str + "_" + dtype_str + "_k" + std::to_string(k0) + "x" + std::to_string(k1) + "x" +
-           std::to_string(k2);
+    std::string dev_str = (dev == torch::kCPU) ? "CPU" : "CUDA";
+    return dev_str + "_" + dtypeStr(dt) + "_k" + std::to_string(k0) + "x" + std::to_string(k1) +
+           "x" + std::to_string(k2);
 }
 
 class GatherScatterDefaultKernelSizeTest : public ::testing::TestWithParam<KernelSizeParam> {};
@@ -1454,6 +1467,80 @@ TEST(GatherScatterDefaultError, DeviceMismatch) {
 }
 
 // =============================================================================
+// Mixed scalar-type promotion tests
+// =============================================================================
+
+TEST(GatherScatterDefaultMixedType, PromotionPolicy) {
+    for (auto dev_type: {torch::kCPU, torch::kCUDA}) {
+        skipIfCudaUnavailable(dev_type);
+        auto device = makeDevice(dev_type);
+
+        auto grid       = makeDenseTestGrid(4, device);
+        int64_t const N = 64;
+        int64_t const C = 4;
+
+        nanovdb::Coord kernel_size(3, 3, 3);
+        nanovdb::Coord stride(1, 1, 1);
+        auto topo = ops::gatherScatterDefaultSparseConvTopology(*grid, *grid, kernel_size, stride);
+
+        struct Case {
+            torch::ScalarType feat_type;
+            torch::ScalarType weight_type;
+            torch::ScalarType expected_out;
+        };
+        std::vector<Case> cases = {
+            {torch::kFloat16, torch::kFloat32, torch::kFloat32},
+            {torch::kBFloat16, torch::kFloat64, torch::kFloat64},
+            {torch::kFloat32, torch::kFloat16, torch::kFloat32},
+            {torch::kFloat16, torch::kFloat64, torch::kFloat64},
+            {torch::kBFloat16, torch::kFloat32, torch::kFloat32},
+            {torch::kFloat32, torch::kBFloat16, torch::kFloat32},
+        };
+
+        for (auto const &[ft, wt, expected]: cases) {
+            auto features = torch::randn({N, C}, opts(device, ft));
+            auto weights  = torch::randn({C, C, 3, 3, 3}, opts(device, wt));
+
+            auto out = ops::gatherScatterDefaultSparseConv(features, weights, topo);
+
+            EXPECT_EQ(out.scalar_type(), expected)
+                << "features=" << dtypeStr(ft) << " weights=" << dtypeStr(wt)
+                << " expected=" << dtypeStr(expected) << " got=" << dtypeStr(out.scalar_type())
+                << " on " << (dev_type == torch::kCPU ? "CPU" : "CUDA");
+
+            assertNoNanInf(out, "MixedType forward output");
+        }
+    }
+}
+
+TEST(GatherScatterDefaultMixedType, BackwardPromotionPolicy) {
+    for (auto dev_type: {torch::kCPU, torch::kCUDA}) {
+        skipIfCudaUnavailable(dev_type);
+        auto device = makeDevice(dev_type);
+
+        auto grid       = makeDenseTestGrid(4, device);
+        int64_t const N = 64;
+        int64_t const C = 4;
+
+        nanovdb::Coord kernel_size(3, 3, 3);
+        nanovdb::Coord stride(1, 1, 1);
+        auto topo = ops::gatherScatterDefaultSparseConvTopology(*grid, *grid, kernel_size, stride);
+
+        auto features    = torch::randn({N, C}, opts(device, torch::kFloat16));
+        auto weights     = torch::randn({C, C, 3, 3, 3}, opts(device, torch::kFloat32));
+        auto grad_output = torch::randn({N, C}, opts(device, torch::kFloat32));
+
+        auto [gf, gw] =
+            ops::gatherScatterDefaultSparseConvBackward(grad_output, features, weights, topo);
+
+        EXPECT_EQ(gf.scalar_type(), torch::kFloat32);
+        EXPECT_EQ(gw.scalar_type(), torch::kFloat32);
+        assertNoNanInf(gf, "MixedType backward grad_features");
+        assertNoNanInf(gw, "MixedType backward grad_weights");
+    }
+}
+
+// =============================================================================
 // Test instantiation
 // =============================================================================
 
@@ -1469,6 +1556,11 @@ channelConfigs() {
             }
         }
         v.push_back(cp(dev, torch::kFloat32, 128));
+        for (auto dt : {torch::kFloat16, torch::kBFloat16}) {
+            for (int64_t C : {4, 16, 32}) {
+                v.push_back(cp(dev, dt, C));
+            }
+        }
     }
     return v;
 }
@@ -1484,6 +1576,11 @@ kernelSizeConfigs() {
         for (auto [k0, k1, k2] : std::vector<std::tuple<int,int,int>>{
                  {3,3,3}, {5,5,5}, {3,5,1}}) {
             v.push_back(kp(dev, torch::kFloat64, k0, k1, k2));
+        }
+        for (auto [k0, k1, k2] : std::vector<std::tuple<int,int,int>>{
+                 {3,3,3}, {3,5,1}}) {
+            v.push_back(kp(dev, torch::kFloat16, k0, k1, k2));
+            v.push_back(kp(dev, torch::kBFloat16, k0, k1, k2));
         }
     }
     return v;
