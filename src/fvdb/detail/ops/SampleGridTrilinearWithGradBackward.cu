@@ -22,8 +22,10 @@ namespace ops {
 // gradient contributions across all channels using cached indices and weights.
 template <torch::DeviceType DeviceTag,
           typename ScalarType,
-          template <typename T, int32_t D> typename JaggedAccessor,
-          template <typename T, int32_t D> typename TensorAccessor>
+          template <typename T, int32_t D>
+          typename JaggedAccessor,
+          template <typename T, int32_t D>
+          typename TensorAccessor>
 __hostdev__ void
 sampleTrilinearWithGradBackwardStencilCallback(int32_t bidx,
                                                int32_t eidx,
@@ -82,8 +84,10 @@ sampleTrilinearWithGradBackwardStencilCallback(int32_t bidx,
 // One-thread-per-point Vec4 callback. GPU only. Corner-outer / channel-group-inner
 // ordering keeps atomic writes to the same voxel row contiguous.
 template <torch::DeviceType DeviceTag,
-          template <typename T, int32_t D> typename JaggedAccessor,
-          template <typename T, int32_t D> typename TensorAccessor>
+          template <typename T, int32_t D>
+          typename JaggedAccessor,
+          template <typename T, int32_t D>
+          typename TensorAccessor>
 __device__ void
 sampleTrilinearWithGradBackwardStencilCallbackVec4(int32_t bidx,
                                                    int32_t eidx,
