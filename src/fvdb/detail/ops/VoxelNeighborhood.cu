@@ -4,7 +4,6 @@
 #include <fvdb/detail/ops/VoxelNeighborhood.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
-#include <fvdb/detail/utils/TrilinearInterpolationIterator.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <c10/cuda/CUDAException.h>

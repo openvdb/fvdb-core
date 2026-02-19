@@ -4,7 +4,7 @@
 #include <fvdb/detail/ops/SampleGridTrilinear.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
-#include <fvdb/detail/utils/TrilinearInterpolationIterator.h>
+#include <fvdb/detail/utils/TrilinearStencil.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
@@ -17,92 +17,97 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
+// One-thread-per-point callback: resolve the 8-corner stencil once, then iterate
+// all channels with scalar loads. Works on both CPU and GPU, all scalar types.
 template <typename ScalarType,
           template <typename T, int32_t D>
           typename JaggedAccessor,
           template <typename T, int32_t D>
           typename TensorAccessor>
 __hostdev__ void
-sampleTrilinearCallback(int32_t bidx,
-                        int32_t eidx,
-                        int32_t cidx,
-                        JaggedAccessor<ScalarType, 2> points,
-                        TensorAccessor<ScalarType, 2> gridData,
-                        BatchGridAccessor batchAccessor,
-                        TensorAccessor<ScalarType, 2> outFeatures) {
+sampleTrilinearStencilCallback(int32_t bidx,
+                               int32_t eidx,
+                               int32_t /*cidx*/,
+                               JaggedAccessor<ScalarType, 2> points,
+                               TensorAccessor<ScalarType, 2> gridData,
+                               BatchGridAccessor batchAccessor,
+                               TensorAccessor<ScalarType, 2> outFeatures,
+                               int64_t numChannels) {
     using MathType = at::opmath_type<ScalarType>;
 
     const auto &pointsData               = points.data();
-    const nanovdb::OnIndexGrid *gpuGrid  = batchAccessor.grid(bidx);
+    const nanovdb::OnIndexGrid *grid     = batchAccessor.grid(bidx);
     const VoxelCoordTransform &transform = batchAccessor.primalTransform(bidx);
     const int64_t baseOffset             = batchAccessor.voxelOffset(bidx);
-
-    auto gridAcc = gpuGrid->tree().getAccessor();
+    auto gridAcc                         = grid->tree().getAccessor();
 
     const nanovdb::math::Vec3<MathType> xyz =
         transform.apply(static_cast<MathType>(pointsData[eidx][0]),
                         static_cast<MathType>(pointsData[eidx][1]),
                         static_cast<MathType>(pointsData[eidx][2]));
 
+    int64_t indices[8] = {};
+    MathType weights[8];
+    const uint8_t activeMask = resolveTrilinearStencil(xyz, gridAcc, baseOffset, indices, weights);
+
+    if (activeMask == 0)
+        return;
+
+    for (int64_t c = 0; c < numChannels; ++c) {
+        MathType accum = MathType(0);
 #pragma unroll
-    for (auto it = TrilinearInterpolationIterator<MathType>(xyz); it.isValid(); ++it) {
-        const MathType wTrilinear = it->second;
-        const nanovdb::Coord ijk  = it->first;
-        if (gridAcc.isActive(ijk)) {
-            const int64_t indexIjk = gridAcc.getValue(ijk) - 1 + baseOffset;
-            outFeatures[eidx][cidx] += wTrilinear * gridData[indexIjk][cidx];
+        for (int corner = 0; corner < 8; ++corner) {
+            accum += weights[corner] * static_cast<MathType>(gridData[indices[corner]][c]);
         }
+        outFeatures[eidx][c] = static_cast<ScalarType>(accum);
     }
 }
 
-// Vectorized callback for float32 - processes 4 channels per thread using float4
-// cidx here represents the channel GROUP index (0, 1, 2, ...), each group has 4 channels
+// One-thread-per-point callback: resolve the 8-corner stencil once, then iterate
+// channels in float4 groups with explicit 128-bit loads/stores. GPU only.
 template <template <typename T, int32_t D> typename JaggedAccessor,
           template <typename T, int32_t D>
           typename TensorAccessor>
 __device__ void
-sampleTrilinearCallbackVec4(int32_t bidx,
-                            int32_t eidx,
-                            int32_t cidx, // channel group index (each group = 4 channels)
-                            JaggedAccessor<float, 2> points,
-                            TensorAccessor<float, 2> gridData,
-                            BatchGridAccessor batchAccessor,
-                            TensorAccessor<float, 2> outFeatures) {
-    const int32_t cBase = cidx * 4; // starting channel for this group
-
+sampleTrilinearStencilCallbackVec4(int32_t bidx,
+                                   int32_t eidx,
+                                   int32_t /*cidx*/,
+                                   JaggedAccessor<float, 2> points,
+                                   TensorAccessor<float, 2> gridData,
+                                   BatchGridAccessor batchAccessor,
+                                   TensorAccessor<float, 2> outFeatures,
+                                   int64_t numChannels) {
     const auto &pointsData               = points.data();
-    const nanovdb::OnIndexGrid *gpuGrid  = batchAccessor.grid(bidx);
+    const nanovdb::OnIndexGrid *grid     = batchAccessor.grid(bidx);
     const VoxelCoordTransform &transform = batchAccessor.primalTransform(bidx);
     const int64_t baseOffset             = batchAccessor.voxelOffset(bidx);
-
-    auto gridAcc = gpuGrid->tree().getAccessor();
+    auto gridAcc                         = grid->tree().getAccessor();
 
     const nanovdb::math::Vec3<float> xyz =
         transform.apply(pointsData[eidx][0], pointsData[eidx][1], pointsData[eidx][2]);
 
-    // Accumulate in float array
-    alignas(16) float accum[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    int64_t indices[8] = {};
+    float weights[8];
+    const uint8_t activeMask = resolveTrilinearStencil(xyz, gridAcc, baseOffset, indices, weights);
 
+    if (activeMask == 0)
+        return;
+
+    const int64_t numGroups = numChannels / 4;
+    for (int64_t g = 0; g < numGroups; ++g) {
+        const int64_t cBase = g * 4;
+        float4 accum        = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 #pragma unroll
-    for (auto it = TrilinearInterpolationIterator<float>(xyz); it.isValid(); ++it) {
-        const float wTrilinear   = it->second;
-        const nanovdb::Coord ijk = it->first;
-        if (gridAcc.isActive(ijk)) {
-            const int64_t indexIjk = gridAcc.getValue(ijk) - 1 + baseOffset;
-            // Vectorized load: load 4 consecutive floats
-            auto gridVal = static_cast<const float *>(
-                __builtin_assume_aligned(&gridData[indexIjk][cBase], 16));
-#pragma unroll
-            for (int i = 0; i < 4; ++i)
-                accum[i] += wTrilinear * gridVal[i];
+        for (int corner = 0; corner < 8; ++corner) {
+            const float wt   = weights[corner];
+            const float4 val = *reinterpret_cast<const float4 *>(&gridData[indices[corner]][cBase]);
+            accum.x += wt * val.x;
+            accum.y += wt * val.y;
+            accum.z += wt * val.z;
+            accum.w += wt * val.w;
         }
+        *reinterpret_cast<float4 *>(&outFeatures[eidx][cBase]) = accum;
     }
-
-    // Vectorized store: write 4 consecutive floats
-    auto outPtr = static_cast<float *>(__builtin_assume_aligned(&outFeatures[eidx][cBase], 16));
-#pragma unroll
-    for (int i = 0; i < 4; ++i)
-        outPtr[i] = accum[i];
 }
 
 template <torch::DeviceType DeviceTag, typename scalar_t>
@@ -125,56 +130,53 @@ SampleGridTrilinear(const GridBatchImpl &batchHdl,
     const int64_t numChannels = gridDataReshape.size(1);
 
     if constexpr (DeviceTag == torch::kCUDA || DeviceTag == torch::kPrivateUse1) {
-        // Helper to dispatch to correct forEach based on device
-        auto dispatchForEach = [&](auto numCh, const auto &cb) {
+        auto dispatchForEach = [&](const auto &cb) {
             if constexpr (DeviceTag == torch::kCUDA) {
-                forEachJaggedElementChannelCUDA<scalar_t, 2>(DEFAULT_BLOCK_DIM, numCh, points, cb);
+                forEachJaggedElementChannelCUDA<scalar_t, 2>(
+                    DEFAULT_BLOCK_DIM, int64_t(1), points, cb);
             } else {
-                forEachJaggedElementChannelPrivateUse1<scalar_t, 2>(numCh, points, cb);
+                forEachJaggedElementChannelPrivateUse1<scalar_t, 2>(int64_t(1), points, cb);
             }
         };
 
-        // Use vectorized float4 loads for float32 when channels is a multiple of 4
-        // and base pointers are 16-byte aligned
         if constexpr (std::is_same_v<scalar_t, float>) {
             if (numChannels >= 4 && numChannels % 4 == 0 &&
                 reinterpret_cast<uintptr_t>(gridDataReshape.data_ptr<float>()) % 16 == 0 &&
                 reinterpret_cast<uintptr_t>(outFeatures.data_ptr<float>()) % 16 == 0) {
-                const auto numChannelGroups = (numChannels + 3) / 4;
-                auto cb                     = [=] __device__(int32_t bidx,
+                auto cb = [=] __device__(int32_t bidx,
                                          int32_t eidx,
                                          int32_t cidx,
                                          JaggedRAcc32<float, 2> pts) {
-                    sampleTrilinearCallbackVec4<JaggedRAcc32, TorchRAcc32>(
-                        bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc);
+                    sampleTrilinearStencilCallbackVec4<JaggedRAcc32, TorchRAcc32>(
+                        bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc, numChannels);
                 };
-                dispatchForEach(numChannelGroups, cb);
+                dispatchForEach(cb);
             } else {
                 auto cb = [=] __device__(int32_t bidx,
                                          int32_t eidx,
                                          int32_t cidx,
                                          JaggedRAcc32<float, 2> pts) {
-                    sampleTrilinearCallback<float, JaggedRAcc32, TorchRAcc32>(
-                        bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc);
+                    sampleTrilinearStencilCallback<float, JaggedRAcc32, TorchRAcc32>(
+                        bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc, numChannels);
                 };
-                dispatchForEach(numChannels, cb);
+                dispatchForEach(cb);
             }
         } else {
             auto cb = [=] __device__(int32_t bidx,
                                      int32_t eidx,
                                      int32_t cidx,
                                      JaggedRAcc32<scalar_t, 2> pts) {
-                sampleTrilinearCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
-                    bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc);
+                sampleTrilinearStencilCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+                    bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc, numChannels);
             };
-            dispatchForEach(numChannels, cb);
+            dispatchForEach(cb);
         }
     } else {
         auto cb = [=](int32_t bidx, int32_t eidx, int32_t cidx, JaggedAcc<scalar_t, 2> pts) {
-            sampleTrilinearCallback<scalar_t, JaggedAcc, TorchAcc>(
-                bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc);
+            sampleTrilinearStencilCallback<scalar_t, JaggedAcc, TorchAcc>(
+                bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc, numChannels);
         };
-        forEachJaggedElementChannelCPU<scalar_t, 2>(numChannels, points, cb);
+        forEachJaggedElementChannelCPU<scalar_t, 2>(int64_t(1), points, cb);
     }
 
     return {outFeatures.reshape(outShape)};
