@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/SampleGridTrilinear.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/TrilinearStencil.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
@@ -15,55 +16,6 @@
 namespace fvdb {
 namespace detail {
 namespace ops {
-
-// Resolve the 8 trilinear corner indices and weights in a single pass.
-// Uses NanoVDB-style coordinate traversal (increment one component at a time)
-// to maximize ReadAccessor node-cache hits across successive lookups.
-// Returns a bitmask indicating which corners are active in the grid.
-template <typename MathType, typename GridAccessorType>
-__hostdev__ inline uint8_t
-resolveTrilinearStencil(const nanovdb::math::Vec3<MathType> &xyz,
-                        GridAccessorType &gridAcc,
-                        int64_t baseOffset,
-                        int64_t (&indices)[8],
-                        MathType (&weights)[8]) {
-    nanovdb::Coord ijk = xyz.floor();
-    const MathType u   = xyz[0] - MathType(ijk[0]);
-    const MathType v   = xyz[1] - MathType(ijk[1]);
-    const MathType w   = xyz[2] - MathType(ijk[2]);
-    const MathType ONE = MathType(1);
-    const MathType U = ONE - u, V = ONE - v, W = ONE - w;
-
-    uint8_t activeMask = 0;
-
-#define FVDB_RESOLVE_CORNER(CORNER, WEIGHT)                       \
-    weights[CORNER] = (WEIGHT);                                   \
-    if (gridAcc.isActive(ijk)) {                                  \
-        activeMask |= (1 << (CORNER));                            \
-        indices[CORNER] = gridAcc.getValue(ijk) - 1 + baseOffset; \
-    }
-
-    FVDB_RESOLVE_CORNER(0, U * V * W) // (i,   j,   k  )
-    ijk[2] += 1;
-    FVDB_RESOLVE_CORNER(1, U * V * w) // (i,   j,   k+1)
-    ijk[1] += 1;
-    FVDB_RESOLVE_CORNER(2, U * v * w) // (i,   j+1, k+1)
-    ijk[2] -= 1;
-    FVDB_RESOLVE_CORNER(3, U * v * W) // (i,   j+1, k  )
-    ijk[0] += 1;
-    ijk[1] -= 1;
-    FVDB_RESOLVE_CORNER(4, u * V * W) // (i+1, j,   k  )
-    ijk[2] += 1;
-    FVDB_RESOLVE_CORNER(5, u * V * w) // (i+1, j,   k+1)
-    ijk[1] += 1;
-    FVDB_RESOLVE_CORNER(6, u * v * w) // (i+1, j+1, k+1)
-    ijk[2] -= 1;
-    FVDB_RESOLVE_CORNER(7, u * v * W) // (i+1, j+1, k  )
-
-#undef FVDB_RESOLVE_CORNER
-
-    return activeMask;
-}
 
 // One-thread-per-point callback: resolve the 8-corner stencil once, then iterate
 // all channels with scalar loads. Works on both CPU and GPU, all scalar types.
@@ -103,9 +55,7 @@ sampleTrilinearStencilCallback(int32_t bidx,
         MathType accum = MathType(0);
 #pragma unroll
         for (int corner = 0; corner < 8; ++corner) {
-            if (activeMask & (1 << corner)) {
-                accum += weights[corner] * static_cast<MathType>(gridData[indices[corner]][c]);
-            }
+            accum += weights[corner] * static_cast<MathType>(gridData[indices[corner]][c]);
         }
         outFeatures[eidx][c] = static_cast<ScalarType>(accum);
     }
@@ -146,15 +96,12 @@ sampleTrilinearStencilCallbackVec4(int32_t bidx,
         float4 accum        = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 #pragma unroll
         for (int corner = 0; corner < 8; ++corner) {
-            if (activeMask & (1 << corner)) {
-                const float wt = weights[corner];
-                const float4 val =
-                    *reinterpret_cast<const float4 *>(&gridData[indices[corner]][cBase]);
-                accum.x += wt * val.x;
-                accum.y += wt * val.y;
-                accum.z += wt * val.z;
-                accum.w += wt * val.w;
-            }
+            const float wt   = weights[corner];
+            const float4 val = *reinterpret_cast<const float4 *>(&gridData[indices[corner]][cBase]);
+            accum.x += wt * val.x;
+            accum.y += wt * val.y;
+            accum.z += wt * val.z;
+            accum.w += wt * val.w;
         }
         *reinterpret_cast<float4 *>(&outFeatures[eidx][cBase]) = accum;
     }

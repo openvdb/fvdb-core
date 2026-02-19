@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/SampleGridTrilinearWithGradBackward.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/TrilinearStencil.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
@@ -16,55 +17,6 @@
 namespace fvdb {
 namespace detail {
 namespace ops {
-
-template <typename MathType, typename GridAccessorType>
-__hostdev__ inline uint8_t
-resolveTrilinearStencilWithGrad(const nanovdb::math::Vec3<MathType> &xyz,
-                                GridAccessorType &gridAcc,
-                                int64_t baseOffset,
-                                int64_t (&indices)[8],
-                                MathType (&weights)[8],
-                                MathType (&gradWeights)[8][3]) {
-    nanovdb::Coord ijk = xyz.floor();
-    const MathType u   = xyz[0] - MathType(ijk[0]);
-    const MathType v   = xyz[1] - MathType(ijk[1]);
-    const MathType w   = xyz[2] - MathType(ijk[2]);
-    const MathType ONE = MathType(1);
-    const MathType U = ONE - u, V = ONE - v, W = ONE - w;
-
-    uint8_t activeMask = 0;
-
-#define FVDB_RESOLVE_CORNER_GRAD(CORNER, WT, GU, GV, GW)          \
-    weights[CORNER]        = (WT);                                \
-    gradWeights[CORNER][0] = (GU);                                \
-    gradWeights[CORNER][1] = (GV);                                \
-    gradWeights[CORNER][2] = (GW);                                \
-    if (gridAcc.isActive(ijk)) {                                  \
-        activeMask |= (1 << (CORNER));                            \
-        indices[CORNER] = gridAcc.getValue(ijk) - 1 + baseOffset; \
-    }
-
-    FVDB_RESOLVE_CORNER_GRAD(0, U * V * W, -V * W, -U * W, -U * V) // (i,   j,   k  )
-    ijk[2] += 1;
-    FVDB_RESOLVE_CORNER_GRAD(1, U * V * w, -V * w, -U * w, U * V)  // (i,   j,   k+1)
-    ijk[1] += 1;
-    FVDB_RESOLVE_CORNER_GRAD(2, U * v * w, -v * w, U * w, U * v)   // (i,   j+1, k+1)
-    ijk[2] -= 1;
-    FVDB_RESOLVE_CORNER_GRAD(3, U * v * W, -v * W, U * W, -U * v)  // (i,   j+1, k  )
-    ijk[0] += 1;
-    ijk[1] -= 1;
-    FVDB_RESOLVE_CORNER_GRAD(4, u * V * W, V * W, -u * W, -u * V)  // (i+1, j,   k  )
-    ijk[2] += 1;
-    FVDB_RESOLVE_CORNER_GRAD(5, u * V * w, V * w, -u * w, u * V)   // (i+1, j,   k+1)
-    ijk[1] += 1;
-    FVDB_RESOLVE_CORNER_GRAD(6, u * v * w, v * w, u * w, u * v)    // (i+1, j+1, k+1)
-    ijk[2] -= 1;
-    FVDB_RESOLVE_CORNER_GRAD(7, u * v * W, v * W, u * W, -u * v)   // (i+1, j+1, k  )
-
-#undef FVDB_RESOLVE_CORNER_GRAD
-
-    return activeMask;
-}
 
 // One-thread-per-point scalar callback. Resolves stencil once, then scatters
 // gradient contributions across all channels using cached indices and weights.

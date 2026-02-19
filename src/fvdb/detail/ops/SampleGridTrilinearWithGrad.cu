@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/SampleGridTrilinearWithGrad.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/TrilinearStencil.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
@@ -15,60 +16,6 @@
 namespace fvdb {
 namespace detail {
 namespace ops {
-
-// Resolve the 8 trilinear corner indices, interpolation weights, and spatial-gradient
-// weights in a single pass. Uses NanoVDB-style coordinate traversal (increment one
-// component at a time) for ReadAccessor cache efficiency.
-// gradWeights[corner][dim] stores dWeight/d{u,v,w} in index space; the caller applies
-// the voxel-to-world gradTransform afterward.
-template <typename MathType, typename GridAccessorType>
-__hostdev__ inline uint8_t
-resolveTrilinearStencilWithGrad(const nanovdb::math::Vec3<MathType> &xyz,
-                                GridAccessorType &gridAcc,
-                                int64_t baseOffset,
-                                int64_t (&indices)[8],
-                                MathType (&weights)[8],
-                                MathType (&gradWeights)[8][3]) {
-    nanovdb::Coord ijk = xyz.floor();
-    const MathType u   = xyz[0] - MathType(ijk[0]);
-    const MathType v   = xyz[1] - MathType(ijk[1]);
-    const MathType w   = xyz[2] - MathType(ijk[2]);
-    const MathType ONE = MathType(1);
-    const MathType U = ONE - u, V = ONE - v, W = ONE - w;
-
-    uint8_t activeMask = 0;
-
-#define FVDB_RESOLVE_CORNER_GRAD(CORNER, WT, GU, GV, GW)          \
-    weights[CORNER]        = (WT);                                \
-    gradWeights[CORNER][0] = (GU);                                \
-    gradWeights[CORNER][1] = (GV);                                \
-    gradWeights[CORNER][2] = (GW);                                \
-    if (gridAcc.isActive(ijk)) {                                  \
-        activeMask |= (1 << (CORNER));                            \
-        indices[CORNER] = gridAcc.getValue(ijk) - 1 + baseOffset; \
-    }
-
-    FVDB_RESOLVE_CORNER_GRAD(0, U * V * W, -V * W, -U * W, -U * V) // (i,   j,   k  )
-    ijk[2] += 1;
-    FVDB_RESOLVE_CORNER_GRAD(1, U * V * w, -V * w, -U * w, U * V)  // (i,   j,   k+1)
-    ijk[1] += 1;
-    FVDB_RESOLVE_CORNER_GRAD(2, U * v * w, -v * w, U * w, U * v)   // (i,   j+1, k+1)
-    ijk[2] -= 1;
-    FVDB_RESOLVE_CORNER_GRAD(3, U * v * W, -v * W, U * W, -U * v)  // (i,   j+1, k  )
-    ijk[0] += 1;
-    ijk[1] -= 1;
-    FVDB_RESOLVE_CORNER_GRAD(4, u * V * W, V * W, -u * W, -u * V)  // (i+1, j,   k  )
-    ijk[2] += 1;
-    FVDB_RESOLVE_CORNER_GRAD(5, u * V * w, V * w, -u * w, u * V)   // (i+1, j,   k+1)
-    ijk[1] += 1;
-    FVDB_RESOLVE_CORNER_GRAD(6, u * v * w, v * w, u * w, u * v)    // (i+1, j+1, k+1)
-    ijk[2] -= 1;
-    FVDB_RESOLVE_CORNER_GRAD(7, u * v * W, v * W, u * W, -u * v)   // (i+1, j+1, k  )
-
-#undef FVDB_RESOLVE_CORNER_GRAD
-
-    return activeMask;
-}
 
 // One-thread-per-point scalar callback for sample_trilinear_with_grad.
 // Computes both interpolated features and spatial gradients.
@@ -114,13 +61,11 @@ sampleTrilinearWithGradStencilCallback(int32_t bidx,
         MathType accumGrad[3] = {MathType(0), MathType(0), MathType(0)};
 #pragma unroll
         for (int corner = 0; corner < 8; ++corner) {
-            if (activeMask & (1 << corner)) {
-                const MathType val = static_cast<MathType>(gridData[indices[corner]][c]);
-                accumFeat += weights[corner] * val;
-                accumGrad[0] += gradWeights[corner][0] * val;
-                accumGrad[1] += gradWeights[corner][1] * val;
-                accumGrad[2] += gradWeights[corner][2] * val;
-            }
+            const MathType val = static_cast<MathType>(gridData[indices[corner]][c]);
+            accumFeat += weights[corner] * val;
+            accumGrad[0] += gradWeights[corner][0] * val;
+            accumGrad[1] += gradWeights[corner][1] * val;
+            accumGrad[2] += gradWeights[corner][2] * val;
         }
         outFeatures[eidx][c]        = static_cast<ScalarType>(accumFeat);
         outGradFeatures[eidx][c][0] = static_cast<ScalarType>(accumGrad[0] * gradTransform[0]);
@@ -173,23 +118,20 @@ sampleTrilinearWithGradStencilCallbackVec4(int32_t bidx,
         float accumGrad[3][4] = {};
 #pragma unroll
         for (int corner = 0; corner < 8; ++corner) {
-            if (activeMask & (1 << corner)) {
-                const float wt    = weights[corner];
-                const float gw[3] = {
-                    gradWeights[corner][0], gradWeights[corner][1], gradWeights[corner][2]};
-                const float4 val =
-                    *reinterpret_cast<const float4 *>(&gridData[indices[corner]][cBase]);
-                accumFeat.x += wt * val.x;
-                accumFeat.y += wt * val.y;
-                accumFeat.z += wt * val.z;
-                accumFeat.w += wt * val.w;
+            const float wt    = weights[corner];
+            const float gw[3] = {
+                gradWeights[corner][0], gradWeights[corner][1], gradWeights[corner][2]};
+            const float4 val = *reinterpret_cast<const float4 *>(&gridData[indices[corner]][cBase]);
+            accumFeat.x += wt * val.x;
+            accumFeat.y += wt * val.y;
+            accumFeat.z += wt * val.z;
+            accumFeat.w += wt * val.w;
 #pragma unroll
-                for (int d = 0; d < 3; ++d) {
-                    accumGrad[d][0] += gw[d] * val.x;
-                    accumGrad[d][1] += gw[d] * val.y;
-                    accumGrad[d][2] += gw[d] * val.z;
-                    accumGrad[d][3] += gw[d] * val.w;
-                }
+            for (int d = 0; d < 3; ++d) {
+                accumGrad[d][0] += gw[d] * val.x;
+                accumGrad[d][1] += gw[d] * val.y;
+                accumGrad[d][2] += gw[d] * val.z;
+                accumGrad[d][3] += gw[d] * val.w;
             }
         }
         *reinterpret_cast<float4 *>(&outFeatures[eidx][cBase]) = accumFeat;

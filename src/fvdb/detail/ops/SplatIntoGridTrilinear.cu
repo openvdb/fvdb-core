@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/SplatIntoGridTrilinear.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/TrilinearStencil.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
@@ -15,51 +16,6 @@
 namespace fvdb {
 namespace detail {
 namespace ops {
-
-template <typename MathType, typename GridAccessorType>
-__hostdev__ inline uint8_t
-resolveTrilinearStencil(const nanovdb::math::Vec3<MathType> &xyz,
-                        GridAccessorType &gridAcc,
-                        int64_t baseOffset,
-                        int64_t (&indices)[8],
-                        MathType (&weights)[8]) {
-    nanovdb::Coord ijk = xyz.floor();
-    const MathType u   = xyz[0] - MathType(ijk[0]);
-    const MathType v   = xyz[1] - MathType(ijk[1]);
-    const MathType w   = xyz[2] - MathType(ijk[2]);
-    const MathType ONE = MathType(1);
-    const MathType U = ONE - u, V = ONE - v, W = ONE - w;
-
-    uint8_t activeMask = 0;
-
-#define FVDB_RESOLVE_CORNER(CORNER, WEIGHT)                       \
-    weights[CORNER] = (WEIGHT);                                   \
-    if (gridAcc.isActive(ijk)) {                                  \
-        activeMask |= (1 << (CORNER));                            \
-        indices[CORNER] = gridAcc.getValue(ijk) - 1 + baseOffset; \
-    }
-
-    FVDB_RESOLVE_CORNER(0, U * V * W) // (i,   j,   k  )
-    ijk[2] += 1;
-    FVDB_RESOLVE_CORNER(1, U * V * w) // (i,   j,   k+1)
-    ijk[1] += 1;
-    FVDB_RESOLVE_CORNER(2, U * v * w) // (i,   j+1, k+1)
-    ijk[2] -= 1;
-    FVDB_RESOLVE_CORNER(3, U * v * W) // (i,   j+1, k  )
-    ijk[0] += 1;
-    ijk[1] -= 1;
-    FVDB_RESOLVE_CORNER(4, u * V * W) // (i+1, j,   k  )
-    ijk[2] += 1;
-    FVDB_RESOLVE_CORNER(5, u * V * w) // (i+1, j,   k+1)
-    ijk[1] += 1;
-    FVDB_RESOLVE_CORNER(6, u * v * w) // (i+1, j+1, k+1)
-    ijk[2] -= 1;
-    FVDB_RESOLVE_CORNER(7, u * v * W) // (i+1, j+1, k  )
-
-#undef FVDB_RESOLVE_CORNER
-
-    return activeMask;
-}
 
 // One-thread-per-point scalar callback. Resolves stencil once, then scatters
 // weighted point data across all channels using cached indices.

@@ -4,7 +4,6 @@
 #include <fvdb/detail/ops/VoxelNeighborhood.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
-#include <fvdb/detail/utils/TrilinearInterpolationIterator.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <c10/cuda/CUDAException.h>
@@ -14,10 +13,8 @@ namespace detail {
 namespace ops {
 
 template <typename ScalarType,
-          template <typename T, int32_t D>
-          typename JaggedAccessor,
-          template <typename T, int32_t D>
-          typename TensorAccessor>
+          template <typename T, int32_t D> typename JaggedAccessor,
+          template <typename T, int32_t D> typename TensorAccessor>
 __hostdev__ inline void
 voxelNeighborhoodCallback(int32_t bidx,
                           int32_t eidx,
