@@ -21,8 +21,10 @@ namespace ops {
 // weighted point data across all channels using cached indices.
 template <torch::DeviceType DeviceTag,
           typename ScalarType,
-          template <typename T, int32_t D> typename JaggedAccessor,
-          template <typename T, int32_t D> typename TensorAccessor>
+          template <typename T, int32_t D>
+          typename JaggedAccessor,
+          template <typename T, int32_t D>
+          typename TensorAccessor>
 __hostdev__ void
 splatIntoGridTrilinearStencilCallback(int32_t bidx,
                                       int32_t eidx,
@@ -73,8 +75,10 @@ splatIntoGridTrilinearStencilCallback(int32_t bidx,
 // One-thread-per-point Vec4 callback. GPU only. Uses float4 reads for point data
 // and scalar atomic writes per channel.
 template <torch::DeviceType DeviceTag,
-          template <typename T, int32_t D> typename JaggedAccessor,
-          template <typename T, int32_t D> typename TensorAccessor>
+          template <typename T, int32_t D>
+          typename JaggedAccessor,
+          template <typename T, int32_t D>
+          typename TensorAccessor>
 __device__ void
 splatIntoGridTrilinearStencilCallbackVec4(int32_t bidx,
                                           int32_t eidx,

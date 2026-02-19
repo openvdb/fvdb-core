@@ -20,8 +20,10 @@ namespace ops {
 // One-thread-per-point scalar callback for sample_trilinear_with_grad.
 // Computes both interpolated features and spatial gradients.
 template <typename ScalarType,
-          template <typename T, int32_t D> typename JaggedAccessor,
-          template <typename T, int32_t D> typename TensorAccessor>
+          template <typename T, int32_t D>
+          typename JaggedAccessor,
+          template <typename T, int32_t D>
+          typename TensorAccessor>
 __hostdev__ void
 sampleTrilinearWithGradStencilCallback(int32_t bidx,
                                        int32_t eidx,
@@ -78,7 +80,8 @@ sampleTrilinearWithGradStencilCallback(int32_t bidx,
 // Processes channels in float4 groups for features; gradient stores are per-channel
 // since outGradFeatures has shape [M, C, 3].
 template <template <typename T, int32_t D> typename JaggedAccessor,
-          template <typename T, int32_t D> typename TensorAccessor>
+          template <typename T, int32_t D>
+          typename TensorAccessor>
 __device__ void
 sampleTrilinearWithGradStencilCallbackVec4(int32_t bidx,
                                            int32_t eidx,

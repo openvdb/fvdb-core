@@ -20,8 +20,10 @@ namespace ops {
 // One-thread-per-point callback: resolve the 8-corner stencil once, then iterate
 // all channels with scalar loads. Works on both CPU and GPU, all scalar types.
 template <typename ScalarType,
-          template <typename T, int32_t D> typename JaggedAccessor,
-          template <typename T, int32_t D> typename TensorAccessor>
+          template <typename T, int32_t D>
+          typename JaggedAccessor,
+          template <typename T, int32_t D>
+          typename TensorAccessor>
 __hostdev__ void
 sampleTrilinearStencilCallback(int32_t bidx,
                                int32_t eidx,
@@ -64,7 +66,8 @@ sampleTrilinearStencilCallback(int32_t bidx,
 // One-thread-per-point callback: resolve the 8-corner stencil once, then iterate
 // channels in float4 groups with explicit 128-bit loads/stores. GPU only.
 template <template <typename T, int32_t D> typename JaggedAccessor,
-          template <typename T, int32_t D> typename TensorAccessor>
+          template <typename T, int32_t D>
+          typename TensorAccessor>
 __device__ void
 sampleTrilinearStencilCallbackVec4(int32_t bidx,
                                    int32_t eidx,
