@@ -3,10 +3,13 @@
 //
 // GatherScatterDefault.cu -- Default gather-scatter sparse convolution.
 //
-// Three phases per convolution:
-//   1. Gather:       features[gather_indices[i]] -> contiguous buffer       (1 launch)
-//   2. Compact GEMM: Loop over K, slice buffer, torch::mm                   (K launches)
-//   3. Scatter-add:  result buffer -> output[scatter_indices[i]] (atomic)   (1 launch)
+// Per kernel offset k, three phases are streamed:
+//   1. Gather:       features[gather_indices[start:end]] -> small buffer   (1 launch per k)
+//   2. GEMM:         torch::mm on the gathered slice                       (1 launch per k)
+//   3. Scatter-add:  result -> output[scatter_indices[start:end]] (atomic) (1 launch per k)
+//
+// Buffers are sized to max_pairs_per_k (the largest per-offset segment),
+// reducing peak memory from O(total_pairs * C) to O(max_pairs_per_k * C).
 //
 
 #include "dispatch/detail/core_types.h"
@@ -22,6 +25,7 @@
 
 #include <torch/torch.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <tuple>
@@ -363,6 +367,20 @@ mm_out_safe(torch::Tensor &out, torch::Tensor const &a, torch::Tensor const &b) 
 }
 
 // =============================================================================
+// Max pairs-per-offset helper
+// =============================================================================
+
+static int64_t
+maxPairsPerOffset(torch::Tensor const &offsets, int64_t K) {
+    auto acc      = offsets.accessor<int64_t, 1>();
+    int64_t max_n = 0;
+    for (int64_t k = 0; k < K; ++k) {
+        max_n = std::max(max_n, acc[k + 1] - acc[k]);
+    }
+    return max_n;
+}
+
+// =============================================================================
 // Precondition checks
 // =============================================================================
 
@@ -432,26 +450,28 @@ struct gs_default_conv_op {
         if (O == 0 || K == 0 || TP == 0)
             return output;
 
-        auto buf_A = torch::empty({TP, C_in}, features.options());
-        gs_default_gather(tg, features, buf_A, topo.gather_indices, TP, C_in);
-
-        auto buf_D   = torch::empty({TP, C_out}, features.options());
-        auto off_acc = topo.offsets.accessor<int64_t, 1>();
+        int64_t const max_n = maxPairsPerOffset(topo.offsets, K);
+        auto buf_A          = torch::empty({max_n, C_in}, features.options());
+        auto buf_D          = torch::empty({max_n, C_out}, features.options());
+        auto off_acc        = topo.offsets.accessor<int64_t, 1>();
 
         for (int64_t k = 0; k < K; ++k) {
-            int64_t start = off_acc[k];
-            int64_t end   = off_acc[k + 1];
+            int64_t const start = off_acc[k];
+            int64_t const end   = off_acc[k + 1];
+            int64_t const n_k   = end - start;
 
-            if (start == end)
+            if (n_k == 0)
                 continue;
 
-            auto A_slice = buf_A.slice(0, start, end);
-            auto D_slice = buf_D.slice(0, start, end);
+            auto A_k = buf_A.slice(0, 0, n_k);
+            auto D_k = buf_D.slice(0, 0, n_k);
 
-            mm_out_safe(D_slice, A_slice, W[k]);
+            gs_default_gather(
+                tg, features, A_k, topo.gather_indices.slice(0, start, end), n_k, C_in);
+            mm_out_safe(D_k, A_k, W[k]);
+            gs_default_scatter_add(
+                tg, D_k, output, topo.scatter_indices.slice(0, start, end), n_k, C_out);
         }
-
-        gs_default_scatter_add(tg, buf_D, output, topo.scatter_indices, TP, C_out);
 
         return output;
     }
@@ -507,35 +527,33 @@ struct gs_default_conv_backward_op {
 
         auto off_acc = topo.offsets.accessor<int64_t, 1>();
 
-        auto feat_buf = torch::empty({TP, C_in}, features.options());
-        auto grad_buf = torch::empty({TP, C_out}, features.options());
-        gs_default_gather(tg, features, feat_buf, topo.gather_indices, TP, C_in);
-        gs_default_gather(tg, grad_output, grad_buf, topo.scatter_indices, TP, C_out);
-
-        auto grad_feat_buf = torch::empty({TP, C_in}, features.options());
-        for (int64_t k = 0; k < K; ++k) {
-            int64_t start = off_acc[k];
-            int64_t end   = off_acc[k + 1];
-            if (start == end)
-                continue;
-
-            auto grad_slice = grad_buf.slice(0, start, end);
-            auto gf_slice   = grad_feat_buf.slice(0, start, end);
-            mm_out_safe(gf_slice, grad_slice, W[k].t());
-        }
-
-        gs_default_scatter_add(tg, grad_feat_buf, grad_features, topo.gather_indices, TP, C_in);
+        int64_t const max_n = maxPairsPerOffset(topo.offsets, K);
+        auto feat_buf       = torch::empty({max_n, C_in}, features.options());
+        auto grad_buf       = torch::empty({max_n, C_out}, features.options());
+        auto grad_feat_buf  = torch::empty({max_n, C_in}, features.options());
 
         for (int64_t k = 0; k < K; ++k) {
-            int64_t start = off_acc[k];
-            int64_t end   = off_acc[k + 1];
-            if (start == end)
+            int64_t const start = off_acc[k];
+            int64_t const end   = off_acc[k + 1];
+            int64_t const n_k   = end - start;
+
+            if (n_k == 0)
                 continue;
 
-            auto feat_slice = feat_buf.slice(0, start, end);
-            auto grad_slice = grad_buf.slice(0, start, end);
-            auto gw_slice   = grad_W_flat[k];
-            mm_out_safe(gw_slice, feat_slice.t(), grad_slice);
+            auto gi_k = topo.gather_indices.slice(0, start, end);
+            auto si_k = topo.scatter_indices.slice(0, start, end);
+            auto fb_k = feat_buf.slice(0, 0, n_k);
+            auto gb_k = grad_buf.slice(0, 0, n_k);
+            auto gf_k = grad_feat_buf.slice(0, 0, n_k);
+
+            gs_default_gather(tg, features, fb_k, gi_k, n_k, C_in);
+            gs_default_gather(tg, grad_output, gb_k, si_k, n_k, C_out);
+
+            mm_out_safe(gf_k, gb_k, W[k].t());
+            gs_default_scatter_add(tg, gf_k, grad_features, gi_k, n_k, C_in);
+
+            auto gw_k = grad_W_flat[k];
+            mm_out_safe(gw_k, fb_k.t(), gb_k);
         }
 
         auto ks           = topo.kernel_size;
@@ -596,29 +614,34 @@ struct gs_default_conv_transpose_backward_op {
 
         auto off_acc = topo.offsets.accessor<int64_t, 1>();
 
-        auto feat_buf = torch::empty({TP, C_in}, features.options());
-        auto grad_buf = torch::empty({TP, C_out}, features.options());
-        gs_default_gather(tg, features, feat_buf, topo.gather_indices, TP, C_in);
-        gs_default_gather(tg, grad_output, grad_buf, topo.scatter_indices, TP, C_out);
-
-        auto grad_feat_buf = torch::empty({TP, C_in}, features.options());
+        int64_t const max_n = maxPairsPerOffset(topo.offsets, K);
+        auto feat_buf       = torch::empty({max_n, C_in}, features.options());
+        auto grad_buf       = torch::empty({max_n, C_out}, features.options());
+        auto grad_feat_buf  = torch::empty({max_n, C_in}, features.options());
 
         for (int64_t k = 0; k < K; ++k) {
-            int64_t start = off_acc[k];
-            int64_t end   = off_acc[k + 1];
-            if (start == end)
+            int64_t const start = off_acc[k];
+            int64_t const end   = off_acc[k + 1];
+            int64_t const n_k   = end - start;
+
+            if (n_k == 0)
                 continue;
 
-            auto gd_slice = grad_buf.slice(0, start, end);
-            auto gf_slice = grad_feat_buf.slice(0, start, end);
-            mm_out_safe(gf_slice, gd_slice, W[k].t());
+            auto gi_k = topo.gather_indices.slice(0, start, end);
+            auto si_k = topo.scatter_indices.slice(0, start, end);
+            auto fb_k = feat_buf.slice(0, 0, n_k);
+            auto gb_k = grad_buf.slice(0, 0, n_k);
+            auto gf_k = grad_feat_buf.slice(0, 0, n_k);
 
-            auto fb_slice = feat_buf.slice(0, start, end);
-            auto gw_slice = grad_W_flat[k];
-            mm_out_safe(gw_slice, fb_slice.t(), gd_slice);
+            gs_default_gather(tg, features, fb_k, gi_k, n_k, C_in);
+            gs_default_gather(tg, grad_output, gb_k, si_k, n_k, C_out);
+
+            mm_out_safe(gf_k, gb_k, W[k].t());
+            gs_default_scatter_add(tg, gf_k, grad_features, gi_k, n_k, C_in);
+
+            auto gw_k = grad_W_flat[k];
+            mm_out_safe(gw_k, fb_k.t(), gb_k);
         }
-
-        gs_default_scatter_add(tg, grad_feat_buf, grad_features, topo.gather_indices, TP, C_in);
 
         auto ks           = topo.kernel_size;
         auto grad_weights = grad_W_flat.reshape({ks[0], ks[1], ks[2], C_in, C_out})
