@@ -31,6 +31,8 @@
 
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
+
+#include <cstdint>
 #endif
 
 #include <type_traits>
@@ -69,7 +71,43 @@ atomic_add_cpu(T *dst, T src) {
 } // namespace cpu_atomic_detail
 #endif // !__CUDA_ARCH__
 
+#if defined(__CUDA_ARCH__)
+namespace gpu_atomic_detail {
+
+// CAS fallback for 16-bit floating-point atomicAdd on architectures that
+// lack native support (Half on < sm_70, BFloat16 on < sm_80).  Promotes to
+// float, adds, demotes, and loops via 32-bit atomicCAS on the enclosing word.
+template <typename T>
+__device__ void
+atomic_add_cas_16bit(T *addr, T val) {
+    static_assert(sizeof(T) == 2);
+    unsigned int *base =
+        reinterpret_cast<unsigned int *>(reinterpret_cast<uintptr_t>(addr) & ~uintptr_t(3));
+    unsigned int byte_off = static_cast<unsigned int>(reinterpret_cast<uintptr_t>(addr) & 2);
+    unsigned int old_word = *base;
+    unsigned int assumed;
+    do {
+        assumed        = old_word;
+        uint16_t bits  = static_cast<uint16_t>(byte_off ? (old_word >> 16) : (old_word & 0xffff));
+        T old_val;
+        memcpy(&old_val, &bits, sizeof(T));
+        T new_val = static_cast<T>(static_cast<float>(old_val) + static_cast<float>(val));
+        uint16_t new_bits;
+        memcpy(&new_bits, &new_val, sizeof(T));
+        unsigned int new_word = byte_off ? ((old_word & 0xffff) | (static_cast<unsigned int>(new_bits) << 16))
+                                         : ((old_word & 0xffff0000) | new_bits);
+        old_word              = atomicCAS(base, assumed, new_word);
+    } while (assumed != old_word);
+}
+
+} // namespace gpu_atomic_detail
+#endif // __CUDA_ARCH__
+
 /// @brief Device-dispatched atomic add.
+///
+/// On GPU, uses native @c atomicAdd where available and falls back to a
+/// CAS loop for half types on older architectures (Half requires sm_70+,
+/// BFloat16 requires sm_80+).
 ///
 /// @tparam Tag  A dispatch tag carrying at least a torch::DeviceType.
 /// @tparam T    The scalar type (float, double, c10::Half, c10::BFloat16, etc.).
@@ -81,18 +119,22 @@ template <typename Tag, typename T>
 __hostdev__ void
 atomic_add(Tag /*tg*/, T *dst, T src) {
 #if defined(__CUDA_ARCH__)
-    // Device compilation: CUDA atomicAdd.
-    // c10::Half and c10::BFloat16 are layout-compatible with __half and
-    // __nv_bfloat16 but are distinct types, so we reinterpret_cast.
     if constexpr (std::is_same_v<T, c10::Half>) {
+#if __CUDA_ARCH__ >= 700
         atomicAdd(reinterpret_cast<__half *>(dst), static_cast<__half>(src));
+#else
+        gpu_atomic_detail::atomic_add_cas_16bit(dst, src);
+#endif
     } else if constexpr (std::is_same_v<T, c10::BFloat16>) {
+#if __CUDA_ARCH__ >= 800
         atomicAdd(reinterpret_cast<__nv_bfloat16 *>(dst), static_cast<__nv_bfloat16>(src));
+#else
+        gpu_atomic_detail::atomic_add_cas_16bit(dst, src);
+#endif
     } else {
         atomicAdd(dst, src);
     }
 #else
-    // Host compilation: CPU path.
     if constexpr (::dispatch::cpu_tag<Tag>) {
         cpu_atomic_detail::atomic_add_cpu(dst, src);
     }
