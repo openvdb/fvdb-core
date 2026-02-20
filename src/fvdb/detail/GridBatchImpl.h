@@ -580,6 +580,9 @@ class GridBatchImpl : public torch::CustomClassHolder {
     c10::intrusive_ptr<GridBatchImpl> convolutionOutput(const nanovdb::Coord kernelSize,
                                                         const nanovdb::Coord stride);
 
+    c10::intrusive_ptr<GridBatchImpl> convolutionTransposeOutput(const nanovdb::Coord kernelSize,
+                                                                 const nanovdb::Coord stride);
+
     static c10::intrusive_ptr<GridBatchImpl> createFromEmpty(const torch::Device &device,
                                                              const nanovdb::Vec3d &voxelSize,
                                                              const nanovdb::Vec3d &origin);

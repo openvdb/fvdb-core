@@ -25,22 +25,67 @@ from .types import (
     Vec3iOrScalar,
 )
 
-def build_kernel_map(
-    source_grid: GridBatch,
-    target_grid: GridBatch,
+class GatherScatterDefaultTopology:
+    """Precomputed compacted CSR topology for default gather-scatter sparse convolution."""
+
+    @property
+    def gather_indices(self) -> torch.Tensor: ...
+    @property
+    def scatter_indices(self) -> torch.Tensor: ...
+    @property
+    def offsets(self) -> torch.Tensor: ...
+    @property
+    def feature_total_voxels(self) -> int: ...
+    @property
+    def output_total_voxels(self) -> int: ...
+    @property
+    def kernel_volume(self) -> int: ...
+    @property
+    def total_pairs(self) -> int: ...
+    @property
+    def kernel_size(self) -> list[int]: ...
+    @property
+    def stride(self) -> list[int]: ...
+    @property
+    def is_transposed(self) -> bool: ...
+
+# Forward topology + conv
+def gs_build_topology(
+    feature_grid: GridBatch,
+    output_grid: GridBatch,
     kernel_size: Vec3iOrScalar,
     stride: Vec3iOrScalar,
-) -> tuple[torch.Tensor, torch.Tensor]: ...
-def sparse_conv_kernel_map(
-    in_features: torch.Tensor,
-    kernels: torch.Tensor,
-    neighbor_map: torch.Tensor,
-    neighbor_sizes: torch.Tensor,
-    src_voxels: int,
-    dst_voxels: int,
-    middle_acceleration: bool,
-    transposed: bool,
+) -> GatherScatterDefaultTopology: ...
+def gs_conv(
+    features: torch.Tensor,
+    weights: torch.Tensor,
+    topology: GatherScatterDefaultTopology,
 ) -> torch.Tensor: ...
+def gs_conv_backward(
+    grad_output: torch.Tensor,
+    features: torch.Tensor,
+    weights: torch.Tensor,
+    topology: GatherScatterDefaultTopology,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
+
+# Transposed topology + conv
+def gs_build_transpose_topology(
+    feature_grid: GridBatch,
+    output_grid: GridBatch,
+    kernel_size: Vec3iOrScalar,
+    stride: Vec3iOrScalar,
+) -> GatherScatterDefaultTopology: ...
+def gs_conv_transpose(
+    features: torch.Tensor,
+    weights: torch.Tensor,
+    topology: GatherScatterDefaultTopology,
+) -> torch.Tensor: ...
+def gs_conv_transpose_backward(
+    grad_output: torch.Tensor,
+    features: torch.Tensor,
+    weights: torch.Tensor,
+    topology: GatherScatterDefaultTopology,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
 
 class GaussianSplat3d:
     class ProjectionType(Enum):
@@ -392,6 +437,7 @@ class GridBatch:
         weight_images: torch.Tensor | None = None,
     ) -> tuple[GridBatch, JaggedTensor, JaggedTensor, JaggedTensor]: ...
     def conv_grid(self, kernel_size: Vec3iOrScalar, stride: Vec3iOrScalar) -> GridBatch: ...
+    def conv_transpose_grid(self, kernel_size: Vec3iOrScalar, stride: Vec3iOrScalar) -> GridBatch: ...
     def coords_in_grid(self, ijk: JaggedTensor) -> JaggedTensor: ...
     def cpu(self) -> GridBatch: ...
     def cubes_in_grid(
@@ -479,7 +525,6 @@ class GridBatch:
     ) -> None: ...
     def set_global_origin(self, origin: Vec3d) -> None: ...
     def set_global_voxel_size(self, voxel_size: Vec3dOrScalar) -> None: ...
-    def sparse_conv_halo(self, input: JaggedTensor, weight: torch.Tensor, variant: int = 8) -> JaggedTensor: ...
     def splat_bezier(self, points: JaggedTensor, points_data: JaggedTensor) -> JaggedTensor: ...
     def splat_trilinear(self, points: JaggedTensor, points_data: JaggedTensor) -> JaggedTensor: ...
     def refine(

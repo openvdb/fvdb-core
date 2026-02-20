@@ -9,7 +9,7 @@
 
 #include <fvdb/Config.h>
 #include <fvdb/FVDB.h>
-#include <fvdb/detail/autograd/SparseConvolutionKernelMap.h>
+#include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 
 #include <c10/cuda/CUDAFunctions.h>
 #include <torch/extension.h>
@@ -377,74 +377,116 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
             });
 
     // -----------------------------------------------------------------------
-    // Sparse convolution: standalone functions
+    // GatherScatterDefault convolution: Python-side autograd
     // -----------------------------------------------------------------------
 
+    using GSDTopo = fvdb::detail::ops::GatherScatterDefaultTopology;
+
+    py::class_<GSDTopo>(m, "GatherScatterDefaultTopology")
+        .def_readonly("gather_indices", &GSDTopo::gatherIndices)
+        .def_readonly("scatter_indices", &GSDTopo::scatterIndices)
+        .def_readonly("offsets", &GSDTopo::offsets)
+        .def_readonly("feature_total_voxels", &GSDTopo::featureTotalVoxels)
+        .def_readonly("output_total_voxels", &GSDTopo::outputTotalVoxels)
+        .def_readonly("kernel_volume", &GSDTopo::kernelVolume)
+        .def_readonly("total_pairs", &GSDTopo::totalPairs)
+        .def_property_readonly("kernel_size",
+                               [](const GSDTopo &t) {
+                                   return std::vector<int>{
+                                       t.kernelSize[0], t.kernelSize[1], t.kernelSize[2]};
+                               })
+        .def_property_readonly("stride",
+                               [](const GSDTopo &t) {
+                                   return std::vector<int>{t.stride[0], t.stride[1], t.stride[2]};
+                               })
+        .def_property_readonly("is_transposed", [](const GSDTopo &t) {
+            return t.direction == fvdb::detail::ops::ConvDirection::Transposed;
+        });
+
+    // --- Forward topology + conv ---
+
     m.def(
-        "build_kernel_map",
-        [](const fvdb::GridBatch &sourceGrid,
-           const fvdb::GridBatch &targetGrid,
+        "gs_build_topology",
+        [](const fvdb::GridBatch &feature_grid,
+           const fvdb::GridBatch &output_grid,
            fvdb::Vec3iOrScalar kernelSize,
-           fvdb::Vec3iOrScalar stride) -> std::tuple<torch::Tensor, torch::Tensor> {
-            int kernelVolume =
-                kernelSize.value().x() * kernelSize.value().y() * kernelSize.value().z();
-
-            torch::Tensor kmap = torch::full(
-                {targetGrid.total_voxels(), kernelVolume},
-                -1,
-                torch::TensorOptions().dtype(torch::kInt32).device(targetGrid.device()));
-
-            fvdb::GridBatch::computeConvolutionKernelMap(
-                sourceGrid, targetGrid, kmap, kernelSize, stride);
-
-            kmap                  = kmap.t();
-            torch::Tensor kmask   = kmap != -1;
-            torch::Tensor nbsizes = torch::sum(kmask, -1);
-            torch::Tensor nbmap   = torch::nonzero(kmask).contiguous();
-
-            torch::Tensor indices = nbmap.index({torch::indexing::Slice(), 0}) * kmap.size(1) +
-                                    nbmap.index({torch::indexing::Slice(), 1});
-            nbmap.index_put_({torch::indexing::Slice(), 0}, kmap.reshape({-1}).index({indices}));
-
-            return std::make_tuple(nbmap.to(torch::kInt32), nbsizes.to(torch::kInt32));
+           fvdb::Vec3iOrScalar stride) -> GSDTopo {
+            return fvdb::GridBatch::buildGatherScatterDefaultTopology(
+                feature_grid, output_grid, kernelSize, stride);
         },
-        "Build the gather-scatter kernel map between source and target grids.\n"
-        "Returns (neighbor_map [#IO, 2] int32, neighbor_sizes [K] int32).",
-        py::arg("source_grid"),
-        py::arg("target_grid"),
+        "Build the forward gather-scatter default topology.",
+        py::arg("feature_grid"),
+        py::arg("output_grid"),
         py::arg("kernel_size"),
         py::arg("stride"));
 
     m.def(
-        "sparse_conv_kernel_map",
-        [](torch::Tensor inFeatures,
-           torch::Tensor kernels,
-           torch::Tensor neighborMap,
-           torch::Tensor neighborSizes,
-           int64_t srcVoxels,
-           int64_t dstVoxels,
-           bool middleAcceleration,
-           bool transposed) -> torch::Tensor {
-            auto result =
-                fvdb::detail::autograd::SparseConvolutionKernelMap::apply(inFeatures,
-                                                                          kernels,
-                                                                          neighborMap,
-                                                                          neighborSizes,
-                                                                          srcVoxels,
-                                                                          dstVoxels,
-                                                                          middleAcceleration,
-                                                                          transposed);
-            return result[0];
+        "gs_conv",
+        [](torch::Tensor features, torch::Tensor weights, const GSDTopo &topo) -> torch::Tensor {
+            return fvdb::detail::ops::gatherScatterDefaultSparseConv(features, weights, topo);
         },
-        "Sparse 3d convolution using pre-built gather-scatter kernel map.",
-        py::arg("in_features"),
-        py::arg("kernels"),
-        py::arg("neighbor_map"),
-        py::arg("neighbor_sizes"),
-        py::arg("src_voxels"),
-        py::arg("dst_voxels"),
-        py::arg("middle_acceleration"),
-        py::arg("transposed"));
+        "Gather-scatter default forward sparse convolution using precomputed topology.",
+        py::arg("features"),
+        py::arg("weights"),
+        py::arg("topology"));
+
+    m.def(
+        "gs_conv_backward",
+        [](torch::Tensor grad_output,
+           torch::Tensor features,
+           torch::Tensor weights,
+           const GSDTopo &topo) -> std::tuple<torch::Tensor, torch::Tensor> {
+            return fvdb::detail::ops::gatherScatterDefaultSparseConvBackward(
+                grad_output, features, weights, topo);
+        },
+        "Gather-scatter default backward sparse convolution using precomputed topology.",
+        py::arg("grad_output"),
+        py::arg("features"),
+        py::arg("weights"),
+        py::arg("topology"));
+
+    // --- Transposed topology + conv ---
+
+    m.def(
+        "gs_build_transpose_topology",
+        [](const fvdb::GridBatch &feature_grid,
+           const fvdb::GridBatch &output_grid,
+           fvdb::Vec3iOrScalar kernelSize,
+           fvdb::Vec3iOrScalar stride) -> GSDTopo {
+            return fvdb::GridBatch::buildGatherScatterDefaultTransposeTopology(
+                feature_grid, output_grid, kernelSize, stride);
+        },
+        "Build the transposed gather-scatter default topology.",
+        py::arg("feature_grid"),
+        py::arg("output_grid"),
+        py::arg("kernel_size"),
+        py::arg("stride"));
+
+    m.def(
+        "gs_conv_transpose",
+        [](torch::Tensor features, torch::Tensor weights, const GSDTopo &topo) -> torch::Tensor {
+            return fvdb::detail::ops::gatherScatterDefaultSparseConvTranspose(
+                features, weights, topo);
+        },
+        "Gather-scatter default transposed sparse convolution using precomputed topology.",
+        py::arg("features"),
+        py::arg("weights"),
+        py::arg("topology"));
+
+    m.def(
+        "gs_conv_transpose_backward",
+        [](torch::Tensor grad_output,
+           torch::Tensor features,
+           torch::Tensor weights,
+           const GSDTopo &topo) -> std::tuple<torch::Tensor, torch::Tensor> {
+            return fvdb::detail::ops::gatherScatterDefaultSparseConvTransposeBackward(
+                grad_output, features, weights, topo);
+        },
+        "Gather-scatter default transposed backward sparse convolution.",
+        py::arg("grad_output"),
+        py::arg("features"),
+        py::arg("weights"),
+        py::arg("topology"));
 }
 
 TORCH_LIBRARY(fvdb, m) {
