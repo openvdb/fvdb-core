@@ -18,6 +18,7 @@ import math
 import unittest
 
 import torch
+from fvdb.convolution_plan import _GatherScatterBackend, _GatherScatterConvFn
 from fvdb.types import DeviceIdentifier, resolve_device
 from fvdb.utils.tests import (
     fourier_anti_symmetric_kernel,
@@ -43,7 +44,6 @@ from fvdb.utils.tests.convolution_utils import (
 from parameterized import parameterized
 
 from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
-from fvdb.convolution_plan import _GatherScatterBackend
 
 # =============================================================================
 # Test Class
@@ -723,3 +723,121 @@ class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
             stride=(3, 3, 3),
             cluster_coords=cluster_coords,
         )
+
+    # =========================================================================
+    # Autograd gradcheck tests
+    # =========================================================================
+    #
+    # torch.autograd.gradcheck verifies that the analytical backward produced by
+    # _GatherScatterConvFn matches numerical finite differences.  This covers
+    # the full Python autograd path (topology caching, JaggedTensor wrapping,
+    # save_for_backward) that the C++ adjoint identity tests cannot reach.
+
+    GRADCHECK_KERNEL_SIZE = (3, 3, 3)
+    GRADCHECK_IN_CH = 2
+    GRADCHECK_OUT_CH = 3
+    GRADCHECK_DEVICE_COMBOS = [
+        ["cpu"],
+        ["cuda"],
+    ]
+
+    def _make_gradcheck_inputs(self, device: torch.device, in_ch: int, out_ch: int, kernel_size: tuple[int, int, int]):
+        """Build a small sparse grid and random float64 features/weights for gradcheck."""
+        cluster_coords = torch.tensor(
+            [
+                [3, 3, 4],
+                [4, 3, 4],
+                [3, 4, 4],
+                [3, 3, 5],
+                [4, 4, 5],
+                [5, 4, 5],
+                [4, 5, 4],
+                [5, 5, 5],
+            ],
+            device=device,
+            dtype=torch.int32,
+        )
+        grid = create_grid_from_coords(cluster_coords, device)
+        num_voxels = len(cluster_coords)
+
+        features = torch.randn(num_voxels, in_ch, device=device, dtype=torch.float64, requires_grad=True)
+        weights = torch.randn(out_ch, in_ch, *kernel_size, device=device, dtype=torch.float64, requires_grad=True)
+        return grid, features, weights
+
+    @parameterized.expand(GRADCHECK_DEVICE_COMBOS)
+    def test_gradcheck_forward_stride1(self, device: DeviceIdentifier):
+        """gradcheck: forward convolution, stride 1."""
+        device = resolve_device(device)
+        grid, features, weights = self._make_gradcheck_inputs(
+            device, self.GRADCHECK_IN_CH, self.GRADCHECK_OUT_CH, self.GRADCHECK_KERNEL_SIZE
+        )
+
+        dst_grid = grid.conv_grid(kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=1)
+        plan = ConvolutionPlan.from_grid_batch(
+            kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=1, source_grid=grid, target_grid=dst_grid
+        )
+        topo = plan._backend.topology
+
+        def conv_fn(f, w):
+            return _GatherScatterConvFn.apply(f, w, topo, False)
+
+        torch.autograd.gradcheck(conv_fn, (features, weights), eps=1e-6, atol=1e-4, rtol=1e-3)
+
+    @parameterized.expand(GRADCHECK_DEVICE_COMBOS)
+    def test_gradcheck_forward_strided(self, device: DeviceIdentifier):
+        """gradcheck: forward convolution, stride (2,2,2)."""
+        device = resolve_device(device)
+        grid, features, weights = self._make_gradcheck_inputs(
+            device, self.GRADCHECK_IN_CH, self.GRADCHECK_OUT_CH, self.GRADCHECK_KERNEL_SIZE
+        )
+
+        stride = (2, 2, 2)
+        dst_grid = grid.conv_grid(kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=stride)
+        plan = ConvolutionPlan.from_grid_batch(
+            kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=stride, source_grid=grid, target_grid=dst_grid
+        )
+        topo = plan._backend.topology
+
+        def conv_fn(f, w):
+            return _GatherScatterConvFn.apply(f, w, topo, False)
+
+        torch.autograd.gradcheck(conv_fn, (features, weights), eps=1e-6, atol=1e-4, rtol=1e-3)
+
+    @parameterized.expand(GRADCHECK_DEVICE_COMBOS)
+    def test_gradcheck_transpose_stride1(self, device: DeviceIdentifier):
+        """gradcheck: transposed convolution, stride 1."""
+        device = resolve_device(device)
+        grid, features, weights = self._make_gradcheck_inputs(
+            device, self.GRADCHECK_IN_CH, self.GRADCHECK_OUT_CH, self.GRADCHECK_KERNEL_SIZE
+        )
+
+        dst_grid = grid.conv_transpose_grid(kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=1)
+        plan = ConvolutionPlan.from_grid_batch_transposed(
+            kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=1, source_grid=grid, target_grid=dst_grid
+        )
+        topo = plan._backend.topology
+
+        def conv_fn(f, w):
+            return _GatherScatterConvFn.apply(f, w, topo, True)
+
+        torch.autograd.gradcheck(conv_fn, (features, weights), eps=1e-6, atol=1e-4, rtol=1e-3)
+
+    @parameterized.expand(GRADCHECK_DEVICE_COMBOS)
+    def test_gradcheck_transpose_strided(self, device: DeviceIdentifier):
+        """gradcheck: transposed convolution, stride (2,2,2)."""
+        device = resolve_device(device)
+        grid, features, weights = self._make_gradcheck_inputs(
+            device, self.GRADCHECK_IN_CH, self.GRADCHECK_OUT_CH, self.GRADCHECK_KERNEL_SIZE
+        )
+
+        stride = (2, 2, 2)
+        dst_grid = grid.conv_transpose_grid(kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=stride)
+        plan = ConvolutionPlan.from_grid_batch_transposed(
+            kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=stride, source_grid=grid, target_grid=dst_grid
+        )
+        topo = plan._backend.topology
+
+        def conv_fn(f, w):
+            return _GatherScatterConvFn.apply(f, w, topo, True)
+
+        torch.autograd.gradcheck(conv_fn, (features, weights), eps=1e-6, atol=1e-4, rtol=1e-3)

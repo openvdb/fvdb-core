@@ -87,16 +87,17 @@ atomic_add_cas_16bit(T *addr, T val) {
     unsigned int old_word = *base;
     unsigned int assumed;
     do {
-        assumed        = old_word;
-        uint16_t bits  = static_cast<uint16_t>(byte_off ? (old_word >> 16) : (old_word & 0xffff));
+        assumed       = old_word;
+        uint16_t bits = static_cast<uint16_t>(byte_off ? (old_word >> 16) : (old_word & 0xffff));
         T old_val;
         memcpy(&old_val, &bits, sizeof(T));
         T new_val = static_cast<T>(static_cast<float>(old_val) + static_cast<float>(val));
         uint16_t new_bits;
         memcpy(&new_bits, &new_val, sizeof(T));
-        unsigned int new_word = byte_off ? ((old_word & 0xffff) | (static_cast<unsigned int>(new_bits) << 16))
-                                         : ((old_word & 0xffff0000) | new_bits);
-        old_word              = atomicCAS(base, assumed, new_word);
+        unsigned int new_word =
+            byte_off ? ((old_word & 0xffff) | (static_cast<unsigned int>(new_bits) << 16))
+                     : ((old_word & 0xffff0000) | new_bits);
+        old_word = atomicCAS(base, assumed, new_word);
     } while (assumed != old_word);
 }
 

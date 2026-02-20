@@ -70,6 +70,7 @@ from fvdb.utils.tests.convolution_utils import (
     assert_coords_equal,
     compute_conv_transpose_topology_ground_truth,
     conv_transpose_ground_truth_stride_1,
+    conv_transpose_ground_truth_strided,
     create_grid_from_coords,
     diagnose_tensor_mismatch,
     disable_tf32,
@@ -207,6 +208,46 @@ class TestConvTransposeTopology(DisableTF32Mixin, unittest.TestCase):
             conv_transpose_grid.ijk.jdata,
             msg="conv_grid and conv_transpose_grid should match for stride=1",
         )
+
+    # --- Strided topology tests ---
+
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
+    def test_topology_stride_uniform(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """Transposed topology test with uniform stride (2,2,2)."""
+        device = resolve_device(device)
+        cluster_coords = get_cluster_edge_aligned(self.KERNEL_SIZE, device)
+        grid_batch = create_grid_from_coords(cluster_coords, device)
+
+        stride = (2, 2, 2)
+        dst_grid_batch = grid_batch.conv_transpose_grid(kernel_size=self.KERNEL_SIZE, stride=stride)
+        dst_ijks = dst_grid_batch.ijk.jdata
+
+        expected_coords = compute_conv_transpose_topology_ground_truth(
+            input_coords=cluster_coords,
+            kernel_size=self.KERNEL_SIZE,
+            stride=stride,
+            device=device,
+        )
+        assert_coords_equal(dst_ijks, expected_coords, msg=f"stride={stride}")
+
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
+    def test_topology_stride_nonuniform(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """Transposed topology test with non-uniform stride (1,2,3)."""
+        device = resolve_device(device)
+        cluster_coords = get_cluster_edge_aligned(self.KERNEL_SIZE, device)
+        grid_batch = create_grid_from_coords(cluster_coords, device)
+
+        stride = (1, 2, 3)
+        dst_grid_batch = grid_batch.conv_transpose_grid(kernel_size=self.KERNEL_SIZE, stride=stride)
+        dst_ijks = dst_grid_batch.ijk.jdata
+
+        expected_coords = compute_conv_transpose_topology_ground_truth(
+            input_coords=cluster_coords,
+            kernel_size=self.KERNEL_SIZE,
+            stride=stride,
+            device=device,
+        )
+        assert_coords_equal(dst_ijks, expected_coords, msg=f"stride={stride}")
 
 
 class TestConvTransposeValues(DisableTF32Mixin, unittest.TestCase):
@@ -464,6 +505,190 @@ class TestConvTransposeValues(DisableTF32Mixin, unittest.TestCase):
         tols = get_tolerances(dtype)
         torch.testing.assert_close(
             conv_t_output.jdata, conv_output.jdata, rtol=tols["forward"][0], atol=tols["forward"][1]
+        )
+
+    # =========================================================================
+    # Strided Transposed Convolution Tests (Forward + Backward)
+    # =========================================================================
+
+    def _test_strided_conv_transpose_forward_backward(
+        self,
+        device: DeviceIdentifier,
+        dtype: torch.dtype,
+        stride: tuple[int, int, int],
+        cluster_coords: torch.Tensor,
+        in_channels: int = 2,
+        out_channels: int = 3,
+    ):
+        """
+        Core test for strided transposed convolution forward and backward passes.
+
+        Tests that:
+        1. Forward pass matches dense PyTorch conv_transpose3d ground truth
+        2. Backward pass produces correct input gradients
+        3. Backward pass produces correct kernel gradients
+        """
+        tols = get_tolerances(dtype, kernel_size=self.KERNEL_SIZE)
+        fwd_rtol, fwd_atol = tols["forward"]
+        input_grad_rtol, input_grad_atol = tols["input_grad"]
+        kernel_grad_rtol, kernel_grad_atol = tols["kernel_grad"]
+
+        device = resolve_device(device)
+        cluster_coords = cluster_coords.to(device=device)
+
+        grid_batch = create_grid_from_coords(cluster_coords, device)
+        dst_grid_batch = grid_batch.conv_transpose_grid(kernel_size=self.KERNEL_SIZE, stride=stride)
+        dst_coords = dst_grid_batch.ijk.jdata
+
+        num_voxels = len(cluster_coords)
+
+        features_data = torch.randn((num_voxels, in_channels), device=device, dtype=dtype, requires_grad=True)
+        features = JaggedTensor(features_data)
+
+        kernel_3d = fourier_anti_symmetric_kernel(self.KERNEL_SIZE, dtype=dtype, device=device)
+        self.assertFalse(has_any_symmetry(kernel_3d))
+        kernel_5d = kernel_3d.unsqueeze(0).unsqueeze(0).expand(out_channels, in_channels, -1, -1, -1)
+        kernel_5d = kernel_5d.clone().requires_grad_(True)
+
+        # === Sparse forward ===
+        conv_plan = ConvolutionPlan.from_grid_batch_transposed(
+            kernel_size=self.KERNEL_SIZE,
+            stride=stride,
+            source_grid=grid_batch,
+            target_grid=dst_grid_batch,
+        )
+        sparse_output = conv_plan.execute(features, kernel_5d)
+
+        # === Dense ground truth forward ===
+        dense_features = features_data.detach().clone().requires_grad_(True)
+        dense_kernel = kernel_5d.detach().clone().requires_grad_(True)
+
+        dense_output_full, dense_output_at_dst = conv_transpose_ground_truth_strided(
+            src_grid=grid_batch,
+            dst_grid=dst_grid_batch,
+            activation=JaggedTensor(dense_features),
+            weights=dense_kernel,
+            stride=stride,
+            allow_tf32=False,
+        )
+
+        # Compare forward values (sort by coordinate for stable comparison)
+        sparse_values_sorted, sparse_perm = sort_coords_by_ijk(dst_coords)
+        sparse_out_sorted = sparse_output.jdata[sparse_perm]
+        dense_out_sorted = dense_output_at_dst[sparse_perm]
+
+        try:
+            torch.testing.assert_close(sparse_out_sorted, dense_out_sorted, rtol=fwd_rtol, atol=fwd_atol)
+        except AssertionError:
+            diag = diagnose_tensor_mismatch(
+                f"Transpose forward (stride={stride}, dtype={dtype})",
+                sparse_out_sorted,
+                dense_out_sorted,
+                rtol=fwd_rtol,
+                atol=fwd_atol,
+            )
+            raise AssertionError(diag) from None
+
+        # === Backward pass ===
+        output_grad = torch.randn_like(sparse_output.jdata)
+
+        sparse_output.jdata.backward(output_grad)
+        sparse_input_grad = features_data.grad
+        sparse_kernel_grad = kernel_5d.grad
+
+        # Dense backward: re-run ground truth with grad tracking, apply same output grad
+        dense_features2 = features_data.detach().clone().requires_grad_(True)
+        dense_kernel2 = kernel_5d.detach().clone().requires_grad_(True)
+
+        dense_output_full2, dense_output_at_dst2 = conv_transpose_ground_truth_strided(
+            src_grid=grid_batch,
+            dst_grid=dst_grid_batch,
+            activation=JaggedTensor(dense_features2),
+            weights=dense_kernel2,
+            stride=stride,
+            allow_tf32=False,
+        )
+
+        loss = (dense_output_at_dst2 * output_grad).sum()
+        loss.backward()
+
+        dense_input_grad = dense_features2.grad
+        dense_kernel_grad = dense_kernel2.grad
+
+        # Compare input gradients
+        assert sparse_input_grad is not None, "Sparse input grad is None"
+        assert dense_input_grad is not None, "Dense input grad is None"
+
+        try:
+            torch.testing.assert_close(
+                sparse_input_grad, dense_input_grad, rtol=input_grad_rtol, atol=input_grad_atol
+            )
+        except AssertionError:
+            diag = diagnose_tensor_mismatch(
+                f"Transpose input gradient (stride={stride}, dtype={dtype})",
+                sparse_input_grad,
+                dense_input_grad,
+                rtol=input_grad_rtol,
+                atol=input_grad_atol,
+            )
+            raise AssertionError(diag) from None
+
+        # Compare kernel gradients
+        assert sparse_kernel_grad is not None, "Sparse kernel grad is None"
+        assert dense_kernel_grad is not None, "Dense kernel grad is None"
+
+        try:
+            torch.testing.assert_close(
+                sparse_kernel_grad, dense_kernel_grad, rtol=kernel_grad_rtol, atol=kernel_grad_atol
+            )
+        except AssertionError:
+            diag = diagnose_tensor_mismatch(
+                f"Transpose kernel gradient (stride={stride}, dtype={dtype})",
+                sparse_kernel_grad,
+                dense_kernel_grad,
+                rtol=kernel_grad_rtol,
+                atol=kernel_grad_atol,
+            )
+            raise AssertionError(diag) from None
+
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
+    def test_strided_conv_transpose_uniform(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """Strided transposed convolution forward+backward, stride (2,2,2)."""
+        device_resolved = resolve_device(device)
+        cluster_coords = get_cluster_edge_aligned(self.KERNEL_SIZE, device_resolved)
+        self._test_strided_conv_transpose_forward_backward(
+            device, dtype, stride=(2, 2, 2), cluster_coords=cluster_coords
+        )
+
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
+    def test_strided_conv_transpose_nonuniform(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """Strided transposed convolution forward+backward, stride (1,2,3)."""
+        device_resolved = resolve_device(device)
+        cluster_coords = get_cluster_edge_aligned(self.KERNEL_SIZE, device_resolved)
+        self._test_strided_conv_transpose_forward_backward(
+            device, dtype, stride=(1, 2, 3), cluster_coords=cluster_coords
+        )
+
+    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    def test_strided_conv_transpose_large_stride(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """Strided transposed convolution forward+backward, stride (3,3,3), full device/dtype coverage."""
+        device_resolved = resolve_device(device)
+        cluster_coords = torch.tensor(
+            [
+                [3, 3, 4],
+                [6, 3, 4],
+                [3, 6, 4],
+                [3, 3, 7],
+                [6, 6, 7],
+                [9, 6, 10],
+                [6, 9, 7],
+                [9, 9, 10],
+            ],
+            device=device_resolved,
+            dtype=torch.int32,
+        )
+        self._test_strided_conv_transpose_forward_backward(
+            device, dtype, stride=(3, 3, 3), cluster_coords=cluster_coords
         )
 
 

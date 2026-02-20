@@ -786,6 +786,87 @@ def conv_transpose_ground_truth_stride_1(
     return dense_activation, convolved
 
 
+def conv_transpose_ground_truth_strided(
+    src_grid: GridBatch,
+    dst_grid: GridBatch,
+    activation: JaggedTensor,
+    weights: torch.Tensor,
+    stride: tuple[int, int, int],
+    *,
+    allow_tf32: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Compute ground truth transposed 3D convolution with arbitrary stride using dense PyTorch.
+
+    This function:
+    1. Densifies the sparse input activation based on the source grid coordinates
+    2. Runs PyTorch's strided conv_transpose3d
+    3. Returns the dense output and the values at the destination grid coordinates
+
+    PyTorch's ``conv_transpose3d`` expects weight shape ``[in_channels, out_channels, K]``,
+    but our sparse convention is ``[out_channels, in_channels, K]``, so the weight is
+    transposed internally before calling into PyTorch.
+
+    Args:
+        src_grid: Source GridBatch containing input voxel coordinates
+        dst_grid: Destination GridBatch containing expected output voxel coordinates
+        activation: Sparse input features as JaggedTensor
+        weights: Convolution kernel weights, shape (out_channels, in_channels, k0, k1, k2)
+        stride: Stride tuple (s0, s1, s2)
+        allow_tf32: If True, enables TF32 for faster but less precise computation
+
+    Returns:
+        Tuple of:
+        - dense_output: Full dense output tensor from conv_transpose3d
+        - sparse_output_values: Values at the destination grid coordinates,
+          shape (num_dst_voxels, out_channels)
+    """
+    src_coords = src_grid.ijk.jdata
+    dst_coords = dst_grid.ijk.jdata
+
+    kernel_size = weights.shape[2:]
+    kernel_half = tuple(k // 2 for k in kernel_size)
+
+    device = activation.jdata.device
+    dtype = activation.jdata.dtype
+    in_channels = weights.shape[1]
+    out_channels = weights.shape[0]
+
+    src_min = src_coords.min(dim=0).values.tolist()
+    src_max = src_coords.max(dim=0).values.tolist()
+    dense_shape = tuple(src_max[i] - src_min[i] + 1 for i in range(3))
+
+    dense_input = torch.zeros((1, in_channels) + dense_shape, device=device, dtype=dtype)
+    for idx, coord in enumerate(src_coords):
+        local_idx = tuple(coord[i].item() - src_min[i] for i in range(3))
+        dense_input[0, :, local_idx[0], local_idx[1], local_idx[2]] = activation.jdata[idx]
+
+    weights_torch = weights.transpose(0, 1).contiguous()
+
+    if allow_tf32:
+        dense_output = torch.nn.functional.conv_transpose3d(
+            input=dense_input, weight=weights_torch, padding=0, stride=stride
+        )
+    else:
+        with disable_tf32():
+            dense_output = torch.nn.functional.conv_transpose3d(
+                input=dense_input, weight=weights_torch, padding=0, stride=stride
+            )
+
+    # With padding=0 the full unpadded output is produced.  Local output o
+    # for input c and kernel position k is o = c*S + k.  In global coords
+    # (k centered): global = (src_min + c)*S + (k - K//2) = src_min*S - K//2 + o.
+    output_origin = tuple(src_min[i] * stride[i] - kernel_half[i] for i in range(3))
+
+    sparse_output_values = torch.zeros((len(dst_coords), out_channels), device=device, dtype=dtype)
+    for idx, coord in enumerate(dst_coords):
+        out_idx = tuple(coord[i].item() - output_origin[i] for i in range(3))
+        if all(0 <= out_idx[i] < dense_output.shape[i + 2] for i in range(3)):
+            sparse_output_values[idx] = dense_output[0, :, out_idx[0], out_idx[1], out_idx[2]]
+
+    return dense_output, sparse_output_values
+
+
 __all__ = [
     # Test configuration
     "ALL_DEVICE_DTYPE_COMBOS",
@@ -809,4 +890,5 @@ __all__ = [
     "conv_ground_truth_strided",
     "conv_ground_truth_stride_1",
     "conv_transpose_ground_truth_stride_1",
+    "conv_transpose_ground_truth_strided",
 ]
