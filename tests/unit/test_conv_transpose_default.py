@@ -620,9 +620,7 @@ class TestConvTransposeValues(DisableTF32Mixin, unittest.TestCase):
         assert dense_input_grad is not None, "Dense input grad is None"
 
         try:
-            torch.testing.assert_close(
-                sparse_input_grad, dense_input_grad, rtol=input_grad_rtol, atol=input_grad_atol
-            )
+            torch.testing.assert_close(sparse_input_grad, dense_input_grad, rtol=input_grad_rtol, atol=input_grad_atol)
         except AssertionError:
             diag = diagnose_tensor_mismatch(
                 f"Transpose input gradient (stride={stride}, dtype={dtype})",
