@@ -383,17 +383,17 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     using GSDTopo = fvdb::detail::ops::GatherScatterDefaultTopology;
 
     py::class_<GSDTopo>(m, "GatherScatterDefaultTopology")
-        .def_readonly("gather_indices", &GSDTopo::gather_indices)
-        .def_readonly("scatter_indices", &GSDTopo::scatter_indices)
+        .def_readonly("gather_indices", &GSDTopo::gatherIndices)
+        .def_readonly("scatter_indices", &GSDTopo::scatterIndices)
         .def_readonly("offsets", &GSDTopo::offsets)
-        .def_readonly("feature_total_voxels", &GSDTopo::feature_total_voxels)
-        .def_readonly("output_total_voxels", &GSDTopo::output_total_voxels)
-        .def_readonly("kernel_volume", &GSDTopo::kernel_volume)
-        .def_readonly("total_pairs", &GSDTopo::total_pairs)
+        .def_readonly("feature_total_voxels", &GSDTopo::featureTotalVoxels)
+        .def_readonly("output_total_voxels", &GSDTopo::outputTotalVoxels)
+        .def_readonly("kernel_volume", &GSDTopo::kernelVolume)
+        .def_readonly("total_pairs", &GSDTopo::totalPairs)
         .def_property_readonly("kernel_size",
                                [](const GSDTopo &t) {
                                    return std::vector<int>{
-                                       t.kernel_size[0], t.kernel_size[1], t.kernel_size[2]};
+                                       t.kernelSize[0], t.kernelSize[1], t.kernelSize[2]};
                                })
         .def_property_readonly("stride",
                                [](const GSDTopo &t) {

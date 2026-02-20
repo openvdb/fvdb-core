@@ -4,9 +4,9 @@
 // GatherScatterDefault.cu -- Default gather-scatter sparse convolution.
 //
 // Per kernel offset k, three phases are streamed:
-//   1. Gather:       features[gather_indices[start:end]] -> small buffer   (1 launch per k)
+//   1. Gather:       features[gatherIndices[start:end]] -> small buffer   (1 launch per k)
 //   2. GEMM:         torch::mm on the gathered slice                       (1 launch per k)
-//   3. Scatter-add:  result -> output[scatter_indices[start:end]] (atomic) (1 launch per k)
+//   3. Scatter-add:  result -> output[scatterIndices[start:end]] (atomic) (1 launch per k)
 //
 // Buffers are sized to max_pairs_per_k (the largest per-offset segment),
 // reducing peak memory from O(total_pairs * C) to O(max_pairs_per_k * C).
@@ -43,7 +43,7 @@ using namespace ::dispatch;
 
 template <torch::ScalarType Stype>
 inline torch::TensorOptions
-opts_on(torch::Device device) {
+optsOn(torch::Device device) {
     return torch::dtype(Stype).device(device);
 }
 
@@ -101,8 +101,8 @@ struct twopass_topology_op {
         int64_t const ks2 = kernel_size[2];
         int64_t const K   = ks0 * ks1 * ks2;
 
-        int64_t const feature_total = feature_grid.totalVoxels();
-        int64_t const output_total  = output_grid.totalVoxels();
+        int64_t const featureTotal = feature_grid.totalVoxels();
+        int64_t const output_total = output_grid.totalVoxels();
 
         nanovdb::Coord const kernel_start(static_cast<int>(std::floor(-ks0 / 2.0 + 1)),
                                           static_cast<int>(std::floor(-ks1 / 2.0 + 1)),
@@ -112,7 +112,7 @@ struct twopass_topology_op {
         auto const device        = output_grid.device();
 
         // ---- Sweep 1: count pairs per offset k ----
-        auto counts = torch::zeros({K}, opts_on<torch::kInt32>(device));
+        auto counts = torch::zeros({K}, optsOn<torch::kInt32>(device));
         auto guard  = make_device_guard(tg, counts);
 
         auto feature_acc = dispatch::make_grid_accessor(tg, feature_grid);
@@ -155,7 +155,7 @@ struct twopass_topology_op {
             });
 
         // ---- Prefix sums (device-generic torch ops) ----
-        auto offsets_dev = torch::zeros({K + 1}, opts_on<torch::kInt64>(device));
+        auto offsets_dev = torch::zeros({K + 1}, optsOn<torch::kInt64>(device));
         if (K > 0) {
             offsets_dev.slice(0, 1, K + 1).copy_(torch::cumsum(counts.to(torch::kInt64), 0));
         }
@@ -164,10 +164,10 @@ struct twopass_topology_op {
 
         if (total_pairs == 0) {
             return GatherScatterDefaultTopology{
-                torch::empty({0}, opts_on<torch::kInt32>(device)),
-                torch::empty({0}, opts_on<torch::kInt32>(device)),
+                torch::empty({0}, optsOn<torch::kInt32>(device)),
+                torch::empty({0}, optsOn<torch::kInt32>(device)),
                 offsets_host,
-                feature_total,
+                featureTotal,
                 output_total,
                 K,
                 0,
@@ -178,14 +178,14 @@ struct twopass_topology_op {
         }
 
         // ---- Sweep 2: fill gather/scatter indices ----
-        auto gather_indices  = torch::empty({total_pairs}, opts_on<torch::kInt32>(device));
-        auto scatter_indices = torch::empty({total_pairs}, opts_on<torch::kInt32>(device));
-        auto counters        = torch::zeros({K}, opts_on<torch::kInt32>(device));
+        auto gatherIndices  = torch::empty({total_pairs}, optsOn<torch::kInt32>(device));
+        auto scatterIndices = torch::empty({total_pairs}, optsOn<torch::kInt32>(device));
+        auto counters       = torch::zeros({K}, optsOn<torch::kInt32>(device));
 
         auto *counters_ptr = counters.data_ptr<int32_t>();
         auto *offsets_ptr  = offsets_dev.data_ptr<int64_t>();
-        auto *gather_ptr   = gather_indices.data_ptr<int32_t>();
-        auto *scatter_ptr  = scatter_indices.data_ptr<int32_t>();
+        auto *gather_ptr   = gatherIndices.data_ptr<int32_t>();
+        auto *scatter_ptr  = scatterIndices.data_ptr<int32_t>();
 
         dispatch::forEachActiveVoxel(
             tg,
@@ -231,10 +231,10 @@ struct twopass_topology_op {
             });
 
         return GatherScatterDefaultTopology{
-            gather_indices,
-            scatter_indices,
+            gatherIndices,
+            scatterIndices,
             offsets_host,
-            feature_total,
+            featureTotal,
             output_total,
             K,
             total_pairs,
@@ -299,12 +299,12 @@ gatherScatterDefaultSparseConvTransposeTopology(GridBatchImpl const &feature_gri
 template <typename Tag>
     requires with_type<Tag, torch::DeviceType> && with_type<Tag, torch::ScalarType>
 void
-gs_default_gather(Tag tg,
-                  torch::Tensor src,
-                  torch::Tensor dst,
-                  torch::Tensor indices,
-                  int64_t total_pairs,
-                  int64_t C) {
+gsDefaultGather(Tag tg,
+                torch::Tensor src,
+                torch::Tensor dst,
+                torch::Tensor indices,
+                int64_t total_pairs,
+                int64_t C) {
     if (total_pairs == 0)
         return;
 
@@ -326,12 +326,12 @@ gs_default_gather(Tag tg,
 template <typename Tag>
     requires with_type<Tag, torch::DeviceType> && with_type<Tag, torch::ScalarType>
 void
-gs_default_scatter_add(Tag tg,
-                       torch::Tensor src,
-                       torch::Tensor dst,
-                       torch::Tensor indices,
-                       int64_t total_pairs,
-                       int64_t C) {
+gsDefaultScatterAdd(Tag tg,
+                    torch::Tensor src,
+                    torch::Tensor dst,
+                    torch::Tensor indices,
+                    int64_t total_pairs,
+                    int64_t C) {
     if (total_pairs == 0)
         return;
 
@@ -369,7 +369,7 @@ promoteFloatTypes(torch::ScalarType a, torch::ScalarType b) {
 // taken (cuBLAS supports half types natively via tensor cores).
 
 static void
-mm_out_safe(torch::Tensor &out, torch::Tensor const &a, torch::Tensor const &b) {
+mmOutSafe(torch::Tensor &out, torch::Tensor const &a, torch::Tensor const &b) {
     if (a.is_cpu() && (a.scalar_type() == torch::kFloat16 || a.scalar_type() == torch::kBFloat16)) {
         auto a_f = a.to(torch::kFloat32);
         auto b_f = b.to(torch::kFloat32);
@@ -404,12 +404,12 @@ checkConvPreconditions(torch::Tensor features,
                        GatherScatterDefaultTopology const &topo,
                        char const *name) {
     TORCH_CHECK(features.dim() == 2, name, ": features must be 2D");
-    TORCH_CHECK(features.size(0) == topo.feature_total_voxels,
+    TORCH_CHECK(features.size(0) == topo.featureTotalVoxels,
                 name,
                 ": features.size(0)=",
                 features.size(0),
-                " must match feature_total_voxels=",
-                topo.feature_total_voxels);
+                " must match featureTotalVoxels=",
+                topo.featureTotalVoxels);
     TORCH_CHECK(features.is_floating_point(), name, ": features must be floating point");
     TORCH_CHECK(features.is_contiguous(), name, ": features must be contiguous");
 
@@ -422,8 +422,8 @@ checkConvPreconditions(torch::Tensor features,
                 " must match weights C_in=",
                 weights.size(1));
 
-    TORCH_CHECK(weights.size(2) == topo.kernel_size[0] && weights.size(3) == topo.kernel_size[1] &&
-                    weights.size(4) == topo.kernel_size[2],
+    TORCH_CHECK(weights.size(2) == topo.kernelSize[0] && weights.size(3) == topo.kernelSize[1] &&
+                    weights.size(4) == topo.kernelSize[2],
                 name,
                 ": weights spatial dims must match topology kernel_size");
 
@@ -448,11 +448,11 @@ struct gs_default_conv_op {
 
         auto guard = make_device_guard(tag<dev>{}, features);
 
-        int64_t const O     = topo.output_total_voxels;
-        int64_t const K     = topo.kernel_volume;
+        int64_t const O     = topo.outputTotalVoxels;
+        int64_t const K     = topo.kernelVolume;
         int64_t const C_in  = weights.size(1);
         int64_t const C_out = weights.size(0);
-        int64_t const TP    = topo.total_pairs;
+        int64_t const TP    = topo.totalPairs;
 
         auto W = weights.permute({2, 3, 4, 1, 0}).reshape({K, C_in, C_out}).contiguous();
         if (W.scalar_type() != features.scalar_type()) {
@@ -480,11 +480,10 @@ struct gs_default_conv_op {
             auto A_k = buf_A.slice(0, 0, n_k);
             auto D_k = buf_D.slice(0, 0, n_k);
 
-            gs_default_gather(
-                tg, features, A_k, topo.gather_indices.slice(0, start, end), n_k, C_in);
-            mm_out_safe(D_k, A_k, W[k]);
-            gs_default_scatter_add(
-                tg, D_k, output, topo.scatter_indices.slice(0, start, end), n_k, C_out);
+            gsDefaultGather(tg, features, A_k, topo.gatherIndices.slice(0, start, end), n_k, C_in);
+            mmOutSafe(D_k, A_k, W[k]);
+            gsDefaultScatterAdd(
+                tg, D_k, output, topo.scatterIndices.slice(0, start, end), n_k, C_out);
         }
 
         return output;
@@ -515,12 +514,12 @@ struct gs_default_conv_backward_op {
 
         auto guard = make_device_guard(tag<dev>{}, features);
 
-        int64_t const F     = topo.feature_total_voxels;
-        int64_t const O     = topo.output_total_voxels;
-        int64_t const K     = topo.kernel_volume;
+        int64_t const F     = topo.featureTotalVoxels;
+        int64_t const O     = topo.outputTotalVoxels;
+        int64_t const K     = topo.kernelVolume;
         int64_t const C_in  = weights.size(1);
         int64_t const C_out = weights.size(0);
-        int64_t const TP    = topo.total_pairs;
+        int64_t const TP    = topo.totalPairs;
 
         auto W = weights.permute({2, 3, 4, 1, 0}).reshape({K, C_in, C_out}).contiguous();
         if (W.scalar_type() != features.scalar_type()) {
@@ -532,7 +531,7 @@ struct gs_default_conv_backward_op {
         auto grad_W_flat = torch::zeros({K, C_in, C_out}, features.options());
 
         if (O == 0 || K == 0 || TP == 0) {
-            auto ks           = topo.kernel_size;
+            auto ks           = topo.kernelSize;
             auto grad_weights = grad_W_flat.reshape({ks[0], ks[1], ks[2], C_in, C_out})
                                     .permute({4, 3, 0, 1, 2})
                                     .contiguous();
@@ -554,23 +553,23 @@ struct gs_default_conv_backward_op {
             if (n_k == 0)
                 continue;
 
-            auto gi_k = topo.gather_indices.slice(0, start, end);
-            auto si_k = topo.scatter_indices.slice(0, start, end);
+            auto gi_k = topo.gatherIndices.slice(0, start, end);
+            auto si_k = topo.scatterIndices.slice(0, start, end);
             auto fb_k = feat_buf.slice(0, 0, n_k);
             auto gb_k = grad_buf.slice(0, 0, n_k);
             auto gf_k = grad_feat_buf.slice(0, 0, n_k);
 
-            gs_default_gather(tg, features, fb_k, gi_k, n_k, C_in);
-            gs_default_gather(tg, grad_output, gb_k, si_k, n_k, C_out);
+            gsDefaultGather(tg, features, fb_k, gi_k, n_k, C_in);
+            gsDefaultGather(tg, grad_output, gb_k, si_k, n_k, C_out);
 
-            mm_out_safe(gf_k, gb_k, W[k].t());
-            gs_default_scatter_add(tg, gf_k, grad_features, gi_k, n_k, C_in);
+            mmOutSafe(gf_k, gb_k, W[k].t());
+            gsDefaultScatterAdd(tg, gf_k, grad_features, gi_k, n_k, C_in);
 
             auto gw_k = grad_W_flat[k];
-            mm_out_safe(gw_k, fb_k.t(), gb_k);
+            mmOutSafe(gw_k, fb_k.t(), gb_k);
         }
 
-        auto ks           = topo.kernel_size;
+        auto ks           = topo.kernelSize;
         auto grad_weights = grad_W_flat.reshape({ks[0], ks[1], ks[2], C_in, C_out})
                                 .permute({4, 3, 0, 1, 2})
                                 .contiguous();
@@ -603,12 +602,12 @@ struct gs_default_conv_transpose_backward_op {
 
         auto guard = make_device_guard(tag<dev>{}, features);
 
-        int64_t const F     = topo.feature_total_voxels;
-        int64_t const O     = topo.output_total_voxels;
-        int64_t const K     = topo.kernel_volume;
+        int64_t const F     = topo.featureTotalVoxels;
+        int64_t const O     = topo.outputTotalVoxels;
+        int64_t const K     = topo.kernelVolume;
         int64_t const C_in  = weights.size(1);
         int64_t const C_out = weights.size(0);
-        int64_t const TP    = topo.total_pairs;
+        int64_t const TP    = topo.totalPairs;
 
         auto W = weights.permute({2, 3, 4, 1, 0}).reshape({K, C_in, C_out}).contiguous();
         if (W.scalar_type() != features.scalar_type()) {
@@ -619,7 +618,7 @@ struct gs_default_conv_transpose_backward_op {
         auto grad_W_flat   = torch::zeros({K, C_in, C_out}, features.options());
 
         if (O == 0 || K == 0 || TP == 0) {
-            auto ks           = topo.kernel_size;
+            auto ks           = topo.kernelSize;
             auto grad_weights = grad_W_flat.reshape({ks[0], ks[1], ks[2], C_in, C_out})
                                     .permute({4, 3, 0, 1, 2})
                                     .contiguous();
@@ -641,23 +640,23 @@ struct gs_default_conv_transpose_backward_op {
             if (n_k == 0)
                 continue;
 
-            auto gi_k = topo.gather_indices.slice(0, start, end);
-            auto si_k = topo.scatter_indices.slice(0, start, end);
+            auto gi_k = topo.gatherIndices.slice(0, start, end);
+            auto si_k = topo.scatterIndices.slice(0, start, end);
             auto fb_k = feat_buf.slice(0, 0, n_k);
             auto gb_k = grad_buf.slice(0, 0, n_k);
             auto gf_k = grad_feat_buf.slice(0, 0, n_k);
 
-            gs_default_gather(tg, features, fb_k, gi_k, n_k, C_in);
-            gs_default_gather(tg, grad_output, gb_k, si_k, n_k, C_out);
+            gsDefaultGather(tg, features, fb_k, gi_k, n_k, C_in);
+            gsDefaultGather(tg, grad_output, gb_k, si_k, n_k, C_out);
 
-            mm_out_safe(gf_k, gb_k, W[k].t());
-            gs_default_scatter_add(tg, gf_k, grad_features, gi_k, n_k, C_in);
+            mmOutSafe(gf_k, gb_k, W[k].t());
+            gsDefaultScatterAdd(tg, gf_k, grad_features, gi_k, n_k, C_in);
 
             auto gw_k = grad_W_flat[k];
-            mm_out_safe(gw_k, fb_k.t(), gb_k);
+            mmOutSafe(gw_k, fb_k.t(), gb_k);
         }
 
-        auto ks           = topo.kernel_size;
+        auto ks           = topo.kernelSize;
         auto grad_weights = grad_W_flat.reshape({ks[0], ks[1], ks[2], C_in, C_out})
                                 .permute({4, 3, 0, 1, 2})
                                 .contiguous();
@@ -704,7 +703,7 @@ gatherScatterDefaultSparseConvBackward(torch::Tensor grad_output,
     checkConvPreconditions(features, weights, topo, "gatherScatterDefaultSparseConvBackward");
     TORCH_CHECK(topo.direction == ConvDirection::Forward,
                 "gatherScatterDefaultSparseConvBackward requires topology with direction=Forward");
-    TORCH_CHECK(grad_output.dim() == 2 && grad_output.size(0) == topo.output_total_voxels,
+    TORCH_CHECK(grad_output.dim() == 2 && grad_output.size(0) == topo.outputTotalVoxels,
                 "grad_output shape mismatch");
     TORCH_CHECK(grad_output.is_contiguous(), "grad_output must be contiguous");
     TORCH_CHECK(grad_output.is_floating_point(), "grad_output must be floating point");
@@ -751,7 +750,7 @@ gatherScatterDefaultSparseConvTransposeBackward(torch::Tensor grad_output,
         features, weights, topo, "gatherScatterDefaultSparseConvTransposeBackward");
     TORCH_CHECK(topo.direction == ConvDirection::Transposed,
                 "gatherScatterDefaultSparseConvTransposeBackward requires direction=Transposed");
-    TORCH_CHECK(grad_output.dim() == 2 && grad_output.size(0) == topo.output_total_voxels,
+    TORCH_CHECK(grad_output.dim() == 2 && grad_output.size(0) == topo.outputTotalVoxels,
                 "grad_output shape mismatch");
     TORCH_CHECK(grad_output.is_contiguous(), "grad_output must be contiguous");
     TORCH_CHECK(grad_output.is_floating_point(), "grad_output must be floating point");

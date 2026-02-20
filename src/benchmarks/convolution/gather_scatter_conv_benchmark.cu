@@ -120,7 +120,7 @@ BM_Conv_TopologyBuild_CUDA(benchmark::State &state) {
     for (auto _: state) {
         auto t = ops::gatherScatterDefaultSparseConvTopology(*grid, *grid, ks, stride);
         torch::cuda::synchronize();
-        benchmark::DoNotOptimize(t.total_pairs);
+        benchmark::DoNotOptimize(t.totalPairs);
     }
     state.SetItemsProcessed(state.iterations() * grid->totalVoxels());
     state.counters["voxels"] = static_cast<double>(grid->totalVoxels());
@@ -139,7 +139,7 @@ BM_Conv_TopologyBuild_CPU(benchmark::State &state) {
 
     for (auto _: state) {
         auto t = ops::gatherScatterDefaultSparseConvTopology(*grid, *grid, ks, stride);
-        benchmark::DoNotOptimize(t.total_pairs);
+        benchmark::DoNotOptimize(t.totalPairs);
         benchmark::ClobberMemory();
     }
     state.SetItemsProcessed(state.iterations() * grid->totalVoxels());
@@ -179,7 +179,7 @@ BM_Conv_Forward_CUDA_C32(benchmark::State &state) {
     }
     state.SetItemsProcessed(state.iterations() * N);
     state.counters["voxels"] = static_cast<double>(N);
-    state.counters["pairs"]  = static_cast<double>(topo.total_pairs);
+    state.counters["pairs"]  = static_cast<double>(topo.totalPairs);
 }
 
 static void
@@ -206,7 +206,7 @@ BM_Conv_Forward_CPU_C32(benchmark::State &state) {
     }
     state.SetItemsProcessed(state.iterations() * N);
     state.counters["voxels"] = static_cast<double>(N);
-    state.counters["pairs"]  = static_cast<double>(topo.total_pairs);
+    state.counters["pairs"]  = static_cast<double>(topo.totalPairs);
 }
 
 // ============================================================================
@@ -245,7 +245,7 @@ BM_Conv_Backward_CUDA_C32(benchmark::State &state) {
     }
     state.SetItemsProcessed(state.iterations() * N);
     state.counters["voxels"] = static_cast<double>(N);
-    state.counters["pairs"]  = static_cast<double>(topo.total_pairs);
+    state.counters["pairs"]  = static_cast<double>(topo.totalPairs);
 }
 
 static void
@@ -275,7 +275,7 @@ BM_Conv_Backward_CPU_C32(benchmark::State &state) {
     }
     state.SetItemsProcessed(state.iterations() * N);
     state.counters["voxels"] = static_cast<double>(N);
-    state.counters["pairs"]  = static_cast<double>(topo.total_pairs);
+    state.counters["pairs"]  = static_cast<double>(topo.totalPairs);
 }
 
 // ============================================================================
@@ -366,7 +366,7 @@ BM_Conv_Sparsity_CUDA_C32(benchmark::State &state) {
     state.SetItemsProcessed(state.iterations() * N);
     state.counters["occupancy"] = static_cast<double>(occupancy_pct);
     state.counters["voxels"]    = static_cast<double>(N);
-    state.counters["pairs"]     = static_cast<double>(topo.total_pairs);
+    state.counters["pairs"]     = static_cast<double>(topo.totalPairs);
 }
 
 static void
@@ -441,7 +441,7 @@ BM_Conv_SparsityLarge_CUDA_C32(benchmark::State &state) {
     state.counters["bbox"]      = static_cast<double>(bbox_dim);
     state.counters["occupancy"] = static_cast<double>(occupancy_pct);
     state.counters["voxels"]    = static_cast<double>(N);
-    state.counters["pairs"]     = static_cast<double>(topo.total_pairs);
+    state.counters["pairs"]     = static_cast<double>(topo.totalPairs);
 }
 
 static void
@@ -505,7 +505,7 @@ BM_Conv_ChannelScale_CUDA(benchmark::State &state) {
     state.SetItemsProcessed(state.iterations() * N);
     state.counters["channels"] = static_cast<double>(C);
     state.counters["voxels"]   = static_cast<double>(N);
-    state.counters["pairs"]    = static_cast<double>(topo.total_pairs);
+    state.counters["pairs"]    = static_cast<double>(topo.totalPairs);
 }
 
 static void
@@ -533,7 +533,7 @@ BM_Conv_ChannelScale_CPU(benchmark::State &state) {
     state.SetItemsProcessed(state.iterations() * N);
     state.counters["channels"] = static_cast<double>(C);
     state.counters["voxels"]   = static_cast<double>(N);
-    state.counters["pairs"]    = static_cast<double>(topo.total_pairs);
+    state.counters["pairs"]    = static_cast<double>(topo.totalPairs);
 }
 
 // ============================================================================

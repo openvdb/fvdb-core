@@ -5,9 +5,9 @@
 /// @brief Default gather-scatter sparse convolution op.
 ///
 /// Compacts a dense kernel_map into per-offset CSR segments and executes:
-///   1. Single gather into a contiguous [total_pairs, C_in] buffer
+///   1. Single gather into a contiguous [totalPairs, C_in] buffer
 ///   2. Per-offset torch::mm over sliced buffer segments
-///   3. Single scatter-add from [total_pairs, C_out] into output
+///   3. Single scatter-add from [totalPairs, C_out] into output
 ///
 /// Only active (voxel, kernel_offset) pairs are gathered and computed on,
 /// eliminating zero-padding waste present in the dense kernel map.
@@ -39,12 +39,12 @@ enum class ConvDirection { Forward, Transposed };
 
 /// @brief Compacted CSR topology for gather-scatter sparse convolution.
 ///
-/// For each kernel offset k (0 .. kernel_volume-1), stores the list of active
+/// For each kernel offset k (0 .. kernelVolume-1), stores the list of active
 /// (feature_voxel, output_voxel) pairs as contiguous segments in flat arrays.
 ///
 /// Layout:
-///   - @c gather_indices[offsets[k] .. offsets[k+1])  = feature voxel flat indices
-///   - @c scatter_indices[offsets[k] .. offsets[k+1]) = output voxel flat indices
+///   - @c gatherIndices[offsets[k] .. offsets[k+1])  = feature voxel flat indices
+///   - @c scatterIndices[offsets[k] .. offsets[k+1]) = output voxel flat indices
 ///
 /// Built once and reused across multiple convolutions on the same grid pair.
 ///
@@ -53,24 +53,24 @@ enum class ConvDirection { Forward, Transposed };
 /// fewer than 2^31 total voxels; the topology builders enforce this at
 /// construction time.
 struct GatherScatterDefaultTopology {
-    /// @brief Feature-side flat voxel indices, shape [total_pairs], int32, on device.
-    torch::Tensor gather_indices;
-    /// @brief Output-side flat voxel indices, shape [total_pairs], int32, on device.
-    torch::Tensor scatter_indices;
+    /// @brief Feature-side flat voxel indices, shape [totalPairs], int32, on device.
+    torch::Tensor gatherIndices;
+    /// @brief Output-side flat voxel indices, shape [totalPairs], int32, on device.
+    torch::Tensor scatterIndices;
 
     /// @brief Segment boundaries per kernel offset.
     ///
     /// @c offsets[k] to @c offsets[k+1] delimit the pairs for offset k.
-    /// Shape [kernel_volume + 1], int64, stored on host (small, iterated for
+    /// Shape [kernelVolume + 1], int64, stored on host (small, iterated for
     /// buffer slicing).
     torch::Tensor offsets;
 
-    int64_t feature_total_voxels; ///< Total voxels in the feature grid.
-    int64_t output_total_voxels;  ///< Total voxels in the output grid.
-    int64_t kernel_volume;        ///< Product of kernel spatial dimensions (k0 * k1 * k2).
-    int64_t total_pairs;        ///< Total active (feature, output) voxel pairs across all offsets.
+    int64_t featureTotalVoxels; ///< Total voxels in the feature grid.
+    int64_t outputTotalVoxels;  ///< Total voxels in the output grid.
+    int64_t kernelVolume;       ///< Product of kernel spatial dimensions (k0 * k1 * k2).
+    int64_t totalPairs;         ///< Total active (feature, output) voxel pairs across all offsets.
 
-    nanovdb::Coord kernel_size; ///< Spatial kernel dimensions [k0, k1, k2].
+    nanovdb::Coord kernelSize;  ///< Spatial kernel dimensions [k0, k1, k2].
     nanovdb::Coord stride;      ///< Convolution stride [s0, s1, s2].
 
     ConvDirection direction;    ///< Whether this topology is for forward or transposed convolution.
@@ -101,10 +101,10 @@ gatherScatterDefaultSparseConvTransposeTopology(GridBatchImpl const &feature_gri
                                                 nanovdb::Coord stride);
 
 /// @brief Forward pass of sparse convolution.
-/// @param features  Input features, shape [feature_total_voxels, C_in].
+/// @param features  Input features, shape [featureTotalVoxels, C_in].
 /// @param weights   Kernel weights, shape [C_out, C_in, k0, k1, k2].
 /// @param topo      Precomputed compacted topology (direction=Forward).
-/// @return          Output features, shape [output_total_voxels, C_out].
+/// @return          Output features, shape [outputTotalVoxels, C_out].
 torch::Tensor gatherScatterDefaultSparseConv(torch::Tensor features,
                                              torch::Tensor weights,
                                              GatherScatterDefaultTopology const &topo);
@@ -122,10 +122,10 @@ gatherScatterDefaultSparseConvBackward(torch::Tensor grad_output,
                                        GatherScatterDefaultTopology const &topo);
 
 /// @brief Forward pass of transposed sparse convolution.
-/// @param features  Input features, shape [feature_total_voxels, C_in].
+/// @param features  Input features, shape [featureTotalVoxels, C_in].
 /// @param weights   Kernel weights, shape [C_out, C_in, k0, k1, k2].
 /// @param topo      Precomputed compacted topology (direction=Transposed).
-/// @return          Output features, shape [output_total_voxels, C_out].
+/// @return          Output features, shape [outputTotalVoxels, C_out].
 torch::Tensor gatherScatterDefaultSparseConvTranspose(torch::Tensor features,
                                                       torch::Tensor weights,
                                                       GatherScatterDefaultTopology const &topo);

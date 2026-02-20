@@ -205,8 +205,8 @@ static torch::Tensor
 naiveConvForward(torch::Tensor features,
                  torch::Tensor weights,
                  ops::GatherScatterDefaultTopology const &topo) {
-    int64_t const O     = topo.output_total_voxels;
-    int64_t const K     = topo.kernel_volume;
+    int64_t const O     = topo.outputTotalVoxels;
+    int64_t const K     = topo.kernelVolume;
     int64_t const C_in  = weights.size(1);
     int64_t const C_out = weights.size(0);
 
@@ -220,8 +220,8 @@ naiveConvForward(torch::Tensor features,
     auto output = torch::zeros({O, C_out}, torch::kFloat64);
 
     auto off_acc = topo.offsets.accessor<int64_t, 1>();
-    auto gi      = topo.gather_indices.cpu();
-    auto si      = topo.scatter_indices.cpu();
+    auto gi      = topo.gatherIndices.cpu();
+    auto si      = topo.scatterIndices.cpu();
     auto gi_acc  = gi.accessor<int32_t, 1>();
     auto si_acc  = si.accessor<int32_t, 1>();
     auto feat_a  = feat.accessor<double, 2>();
@@ -247,8 +247,8 @@ naiveConvBackward(torch::Tensor grad_output,
                   torch::Tensor features,
                   torch::Tensor weights,
                   ops::GatherScatterDefaultTopology const &topo) {
-    int64_t const F     = topo.feature_total_voxels;
-    int64_t const K     = topo.kernel_volume;
+    int64_t const F     = topo.featureTotalVoxels;
+    int64_t const K     = topo.kernelVolume;
     int64_t const C_in  = weights.size(1);
     int64_t const C_out = weights.size(0);
 
@@ -264,8 +264,8 @@ naiveConvBackward(torch::Tensor grad_output,
     auto grad_W_flat = torch::zeros({K, C_in, C_out}, torch::kFloat64);
 
     auto off_acc = topo.offsets.accessor<int64_t, 1>();
-    auto gi      = topo.gather_indices.cpu();
-    auto si      = topo.scatter_indices.cpu();
+    auto gi      = topo.gatherIndices.cpu();
+    auto si      = topo.scatterIndices.cpu();
     auto gi_acc  = gi.accessor<int32_t, 1>();
     auto si_acc  = si.accessor<int32_t, 1>();
     auto go_a    = go.accessor<double, 2>();
@@ -287,7 +287,7 @@ naiveConvBackward(torch::Tensor grad_output,
         }
     }
 
-    auto ks           = topo.kernel_size;
+    auto ks           = topo.kernelSize;
     auto grad_weights = grad_W_flat.reshape({ks[0], ks[1], ks[2], C_in, C_out})
                             .permute({4, 3, 0, 1, 2})
                             .contiguous();
@@ -508,7 +508,7 @@ TEST_P(GatherScatterDefaultStridedTest, StridedForward) {
     auto topo =
         ops::gatherScatterDefaultSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
 
-    int64_t S = topo.feature_total_voxels;
+    int64_t S = topo.featureTotalVoxels;
 
     torch::manual_seed(88);
     auto features = torch::randn({S, C}, opts(device, dtype));
@@ -516,7 +516,7 @@ TEST_P(GatherScatterDefaultStridedTest, StridedForward) {
 
     auto out = ops::gatherScatterDefaultSparseConv(features, weights, topo);
 
-    EXPECT_EQ(out.size(0), topo.output_total_voxels);
+    EXPECT_EQ(out.size(0), topo.outputTotalVoxels);
     EXPECT_EQ(out.size(1), C);
     assertNoNanInf(out, "StridedForward output");
 }
@@ -536,8 +536,8 @@ TEST_P(GatherScatterDefaultStridedTest, StridedBackward) {
     auto topo =
         ops::gatherScatterDefaultSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
 
-    int64_t S = topo.feature_total_voxels;
-    int64_t D = topo.output_total_voxels;
+    int64_t S = topo.featureTotalVoxels;
+    int64_t D = topo.outputTotalVoxels;
 
     torch::manual_seed(89);
     auto features    = torch::randn({S, C}, opts(device, dtype));
@@ -665,28 +665,28 @@ TEST(GatherScatterDefaultTopology, SanityChecks) {
                                    : ops::gatherScatterDefaultSparseConvTopology(
                                          *grid, *grid, kernel_size, stride);
 
-            EXPECT_GT(topo.total_pairs, 0);
-            EXPECT_EQ(topo.kernel_volume, K);
-            EXPECT_EQ(topo.feature_total_voxels, 4096);
-            EXPECT_EQ(topo.output_total_voxels, 4096);
+            EXPECT_GT(topo.totalPairs, 0);
+            EXPECT_EQ(topo.kernelVolume, K);
+            EXPECT_EQ(topo.featureTotalVoxels, 4096);
+            EXPECT_EQ(topo.outputTotalVoxels, 4096);
 
             auto off = topo.offsets.accessor<int64_t, 1>();
             EXPECT_EQ(topo.offsets.size(0), K + 1);
             EXPECT_EQ(off[0], 0);
-            EXPECT_EQ(off[K], topo.total_pairs);
+            EXPECT_EQ(off[K], topo.totalPairs);
             for (int64_t k = 0; k < K; ++k) {
                 EXPECT_LE(off[k], off[k + 1]) << "offsets not monotonic at k=" << k;
             }
 
-            EXPECT_EQ(topo.gather_indices.size(0), topo.total_pairs);
-            EXPECT_EQ(topo.scatter_indices.size(0), topo.total_pairs);
+            EXPECT_EQ(topo.gatherIndices.size(0), topo.totalPairs);
+            EXPECT_EQ(topo.scatterIndices.size(0), topo.totalPairs);
 
-            auto gi = topo.gather_indices.cpu();
-            auto si = topo.scatter_indices.cpu();
+            auto gi = topo.gatherIndices.cpu();
+            auto si = topo.scatterIndices.cpu();
             EXPECT_GE(gi.min().item<int32_t>(), 0);
-            EXPECT_LT(gi.max().item<int32_t>(), topo.feature_total_voxels);
+            EXPECT_LT(gi.max().item<int32_t>(), topo.featureTotalVoxels);
             EXPECT_GE(si.min().item<int32_t>(), 0);
-            EXPECT_LT(si.max().item<int32_t>(), topo.output_total_voxels);
+            EXPECT_LT(si.max().item<int32_t>(), topo.outputTotalVoxels);
         }
     }
 }
@@ -771,9 +771,9 @@ TEST(GatherScatterDefaultForward, MultiBatchGrid) {
 
         // Forward topology
         auto topo = ops::gatherScatterDefaultSparseConvTopology(*grid, *grid, kernel_size, stride);
-        EXPECT_EQ(topo.feature_total_voxels, N);
-        EXPECT_EQ(topo.output_total_voxels, N);
-        EXPECT_GT(topo.total_pairs, 0);
+        EXPECT_EQ(topo.featureTotalVoxels, N);
+        EXPECT_EQ(topo.outputTotalVoxels, N);
+        EXPECT_GT(topo.totalPairs, 0);
 
         torch::manual_seed(77);
         auto features = torch::randn({N, C}, opts(device, torch::kFloat32));
@@ -821,11 +821,11 @@ TEST(GatherScatterDefaultTopology, EmptyGrid) {
         nanovdb::Coord stride(1, 1, 1);
 
         auto topo = ops::gatherScatterDefaultSparseConvTopology(*grid, *grid, kernel_size, stride);
-        EXPECT_EQ(topo.total_pairs, 0);
-        EXPECT_EQ(topo.gather_indices.size(0), 0);
-        EXPECT_EQ(topo.scatter_indices.size(0), 0);
-        EXPECT_EQ(topo.feature_total_voxels, 0);
-        EXPECT_EQ(topo.output_total_voxels, 0);
+        EXPECT_EQ(topo.totalPairs, 0);
+        EXPECT_EQ(topo.gatherIndices.size(0), 0);
+        EXPECT_EQ(topo.scatterIndices.size(0), 0);
+        EXPECT_EQ(topo.featureTotalVoxels, 0);
+        EXPECT_EQ(topo.outputTotalVoxels, 0);
 
         int64_t const C = 4;
         auto features   = torch::zeros({0, C}, opts(device, torch::kFloat32));
@@ -910,7 +910,7 @@ TEST(GatherScatterDefaultValue, StridedConv) {
         auto topo =
             ops::gatherScatterDefaultSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
 
-        int64_t const S     = topo.feature_total_voxels;
+        int64_t const S     = topo.featureTotalVoxels;
         int64_t const C_in  = 4;
         int64_t const C_out = 8;
 
@@ -1033,8 +1033,8 @@ TEST(GatherScatterDefaultAdjoint, ForwardAdjointStrided) {
         auto topo =
             ops::gatherScatterDefaultSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
 
-        int64_t const S     = topo.feature_total_voxels;
-        int64_t const D     = topo.output_total_voxels;
+        int64_t const S     = topo.featureTotalVoxels;
+        int64_t const D     = topo.outputTotalVoxels;
         int64_t const C_in  = 4;
         int64_t const C_out = 8;
 
@@ -1090,8 +1090,8 @@ TEST(GatherScatterDefaultAdjoint, StridedTransposeAdjoint) {
         auto topo = ops::gatherScatterDefaultSparseConvTransposeTopology(
             *fwd_dst, *src_grid, kernel_size, stride);
 
-        int64_t const S     = topo.feature_total_voxels;
-        int64_t const D     = topo.output_total_voxels;
+        int64_t const S     = topo.featureTotalVoxels;
+        int64_t const D     = topo.outputTotalVoxels;
         int64_t const C_in  = 4;
         int64_t const C_out = 8;
 
@@ -1266,8 +1266,8 @@ TEST_P(GatherScatterDefaultStridedTransposeTest, StridedTransposeForward) {
     auto topo = ops::gatherScatterDefaultSparseConvTransposeTopology(
         *fwd_dst, *src_grid, kernel_size, stride);
 
-    int64_t S = topo.feature_total_voxels;
-    int64_t D = topo.output_total_voxels;
+    int64_t S = topo.featureTotalVoxels;
+    int64_t D = topo.outputTotalVoxels;
 
     torch::manual_seed(80);
     auto features = torch::randn({S, C}, opts(device, dtype));
@@ -1293,8 +1293,8 @@ TEST_P(GatherScatterDefaultStridedTransposeTest, StridedTransposeBackward) {
     auto topo = ops::gatherScatterDefaultSparseConvTransposeTopology(
         *fwd_dst, *src_grid, kernel_size, stride);
 
-    int64_t S = topo.feature_total_voxels;
-    int64_t D = topo.output_total_voxels;
+    int64_t S = topo.featureTotalVoxels;
+    int64_t D = topo.outputTotalVoxels;
 
     torch::manual_seed(81);
     auto features    = torch::randn({S, C}, opts(device, dtype));
@@ -1327,8 +1327,8 @@ TEST(GatherScatterDefaultAsymmetricStride, ForwardBackwardAdjoint) {
         auto topo =
             ops::gatherScatterDefaultSparseConvTopology(*src_grid, *dst_grid, kernel_size, stride);
 
-        int64_t const S     = topo.feature_total_voxels;
-        int64_t const D     = topo.output_total_voxels;
+        int64_t const S     = topo.featureTotalVoxels;
+        int64_t const D     = topo.outputTotalVoxels;
         int64_t const C_in  = 4;
         int64_t const C_out = 8;
 
