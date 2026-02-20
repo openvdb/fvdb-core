@@ -47,6 +47,11 @@ enum class ConvDirection { Forward, Transposed };
 ///   - @c scatter_indices[offsets[k] .. offsets[k+1]) = output voxel flat indices
 ///
 /// Built once and reused across multiple convolutions on the same grid pair.
+///
+/// @note Voxel indices and per-offset pair counts are stored as int32 for
+/// memory efficiency and fast GPU atomics.  Each grid in the batch must have
+/// fewer than 2^31 total voxels; the topology builders enforce this at
+/// construction time.
 struct GatherScatterDefaultTopology {
     /// @brief Feature-side flat voxel indices, shape [total_pairs], int32, on device.
     torch::Tensor gather_indices;

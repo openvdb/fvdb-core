@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <tuple>
 
 namespace fvdb {
@@ -61,6 +62,19 @@ checkTopologyPreconditions(GridBatchImpl const &feature_grid,
             kernel_size[d] > 0, "kernel_size[", d, "] must be positive, got ", kernel_size[d]);
         TORCH_CHECK(stride[d] > 0, "stride[", d, "] must be positive, got ", stride[d]);
     }
+    constexpr int64_t kInt32Max = std::numeric_limits<int32_t>::max();
+    TORCH_CHECK(feature_grid.totalVoxels() <= kInt32Max,
+                "feature_grid has ",
+                feature_grid.totalVoxels(),
+                " voxels, exceeding the int32 index limit (",
+                kInt32Max,
+                ")");
+    TORCH_CHECK(output_grid.totalVoxels() <= kInt32Max,
+                "output_grid has ",
+                output_grid.totalVoxels(),
+                " voxels, exceeding the int32 index limit (",
+                kInt32Max,
+                ")");
 }
 
 // =============================================================================
