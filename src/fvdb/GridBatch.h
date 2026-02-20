@@ -817,18 +817,24 @@ struct GridBatch : torch::CustomClassHolder {
 
     static GridBatch concatenate(const std::vector<GridBatch> &vec);
 
-    // -----------------------------------------------------------------------
-    // GatherScatterDefault convolution: static wrappers for pybind access
-    // -----------------------------------------------------------------------
-
-    /// Build the forward compacted topology.
+    /// @brief Build the forward compacted CSR topology for gather-scatter convolution.
+    /// @param feature_grid Grid batch containing the input feature voxels.
+    /// @param output_grid  Grid batch containing the output voxels.
+    /// @param kernelSize   Spatial kernel dimensions (scalar or 3-vector).
+    /// @param stride       Convolution stride (scalar or 3-vector).
+    /// @return A GatherScatterDefaultTopology with direction=Forward.
     static detail::ops::GatherScatterDefaultTopology
     buildGatherScatterDefaultTopology(const GridBatch &feature_grid,
                                       const GridBatch &output_grid,
                                       const Vec3iOrScalar &kernelSize,
                                       const Vec3iOrScalar &stride);
 
-    /// Build the transposed compacted topology.
+    /// @brief Build the transposed compacted CSR topology for gather-scatter convolution.
+    /// @param feature_grid Grid batch containing the input feature voxels.
+    /// @param output_grid  Grid batch containing the output voxels.
+    /// @param kernelSize   Spatial kernel dimensions (scalar or 3-vector).
+    /// @param stride       Convolution stride (scalar or 3-vector).
+    /// @return A GatherScatterDefaultTopology with direction=Transposed.
     static detail::ops::GatherScatterDefaultTopology
     buildGatherScatterDefaultTransposeTopology(const GridBatch &feature_grid,
                                                const GridBatch &output_grid,

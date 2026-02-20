@@ -1,22 +1,22 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
-//
-// JaggedView.h — Trivially-copyable jagged tensor views for dispatch.
-//
-// jagged_in provides read-only access to a JaggedTensor's data and batch
-// structure.  It mirrors dispatch::tensor_in (same template parameters,
-// same contiguity specializations, same __hostdev__ access methods) but
-// additionally carries the per-element batch index array that maps each
-// flat element index to its batch.
-//
-// Constructors are host-only (they pull raw pointers from JaggedTensor).
-// Access methods are __hostdev__.  The struct is a trivially-copyable POD
-// after construction, safe for CUDA kernel capture.
-//
-// NOTE: Generalized from the first jagged-iterating ops ported to the new
-// dispatch pattern (IjkToIndex, PointsInGrid).  May need extension as more
-// ops with jagged inputs are migrated.
-//
+
+/// @file JaggedView.h
+/// @brief Trivially-copyable jagged tensor views for the dispatch framework.
+///
+/// jagged_in provides read-only access to a JaggedTensor's data and batch
+/// structure.  It mirrors dispatch::tensor_in (same template parameters,
+/// same contiguity specializations, same @c __hostdev__ access methods) but
+/// additionally carries the per-element batch index array that maps each
+/// flat element index to its batch.
+///
+/// Constructors are host-only (they pull raw pointers from JaggedTensor).
+/// Access methods are @c __hostdev__.  The struct is a trivially-copyable POD
+/// after construction, safe for CUDA kernel capture.
+///
+/// @note Generalized from the first jagged-iterating ops ported to the new
+/// dispatch pattern (IjkToIndex, PointsInGrid).  May need extension as more
+/// ops with jagged inputs are migrated.
 #ifndef FVDB_DETAIL_DISPATCH_JAGGEDVIEW_H
 #define FVDB_DETAIL_DISPATCH_JAGGEDVIEW_H
 
@@ -34,20 +34,22 @@ namespace fvdb {
 namespace detail {
 namespace dispatch {
 
-// =============================================================================
-// jagged_in — read-only jagged tensor access
-// =============================================================================
-
+/// @brief Read-only view into a JaggedTensor for use inside dispatch kernels.
+///
+/// @tparam Dev     Target device (torch::kCPU or torch::kCUDA).
+/// @tparam Stype   Scalar type of the underlying data tensor.
+/// @tparam Rank    Number of dimensions exposed by the view.
+/// @tparam Contig  Memory layout: strided (default) or contiguous.
 template <torch::DeviceType Dev,
           torch::ScalarType Stype,
           int64_t Rank,
           ::dispatch::contiguity Contig = ::dispatch::contiguity::strided>
 struct jagged_in;
 
-// -----------------------------------------------------------------------------
-// jagged_in — strided specialization
-// -----------------------------------------------------------------------------
-
+/// @brief Strided specialization of jagged_in.
+///
+/// Stores per-dimension strides alongside sizes, supporting non-contiguous
+/// data tensors (e.g. slices or permuted views).
 template <torch::DeviceType Dev, torch::ScalarType Stype, int64_t Rank>
 struct jagged_in<Dev, Stype, Rank, ::dispatch::contiguity::strided> {
     static_assert(Rank > 0, "Rank must be positive");
@@ -113,10 +115,10 @@ struct jagged_in<Dev, Stype, Rank, ::dispatch::contiguity::strided> {
     }
 };
 
-// -----------------------------------------------------------------------------
-// jagged_in — contiguous specialization
-// -----------------------------------------------------------------------------
-
+/// @brief Contiguous specialization of jagged_in.
+///
+/// Omits per-dimension strides (computes them from sizes on the fly),
+/// enabling slightly more compact storage and potential compiler optimizations.
 template <torch::DeviceType Dev, torch::ScalarType Stype, int64_t Rank>
 struct jagged_in<Dev, Stype, Rank, ::dispatch::contiguity::contiguous> {
     static_assert(Rank > 0, "Rank must be positive");
