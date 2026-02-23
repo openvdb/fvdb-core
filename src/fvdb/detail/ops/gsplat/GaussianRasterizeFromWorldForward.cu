@@ -27,8 +27,8 @@ template <uint32_t NUM_CHANNELS> struct SharedGaussian {
 
 template <uint32_t NUM_CHANNELS>
 __global__ void
-rasterizeFromWorld3DGSForwardKernel(
-    const RasterizeFromWorldCommonArgs commonArgs,
+rasterizeGaussiansFromWorld(
+    const RasterizeFromWorldCommonArgs args,
     // Gaussians
     const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> means,     // [N,3]
     const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> quats,     // [N,4]
@@ -55,27 +55,27 @@ rasterizeFromWorld3DGSForwardKernel(
     auto block               = cg::this_thread_block();
 
     uint32_t camId, tileRow, tileCol, row, col;
-    commonArgs.denseCoordinates(camId, tileRow, tileCol, row, col);
-    const bool inside = (row < commonArgs.imageHeight && col < commonArgs.imageWidth);
+    args.denseCoordinates(camId, tileRow, tileCol, row, col);
+    const bool inside = (row < args.imageHeight && col < args.imageWidth);
 
     // Pixel index within this camera.
-    const uint32_t pixId       = commonArgs.pixelId(row, col);
-    const uint32_t imgBaseFeat = commonArgs.outputFeatureBase(camId, pixId);
-    const uint32_t imgBasePix  = commonArgs.outputPixelBase(camId, pixId);
+    const uint32_t pixId       = args.pixelId(row, col);
+    const uint32_t imgBaseFeat = args.outputFeatureBase(camId, pixId);
+    const uint32_t imgBasePix  = args.outputPixelBase(camId, pixId);
 
     // Parity with classic rasterizer: masked tiles write background and exit.
     //
     // IMPORTANT: this kernel uses block-level barriers later (`__syncthreads_count`, `block.sync`).
     // Any early return must be taken by *all* threads in the block, otherwise edge tiles can
     // deadlock when some threads are `!inside`. So we make the return block-wide.
-    const bool tileMasked = commonArgs.tileMasked(camId, tileRow, tileCol);
+    const bool tileMasked = args.tileMasked(camId, tileRow, tileCol);
     if (tileMasked) {
         if (inside) {
             outAlphas[imgBasePix]  = 0.0f;
             outLastIds[imgBasePix] = -1;
 #pragma unroll
             for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                outFeatures[imgBaseFeat + k] = commonArgs.backgroundValue(camId, k);
+                outFeatures[imgBaseFeat + k] = args.backgroundValue(camId, k);
             }
         }
         return;
@@ -97,10 +97,10 @@ rasterizeFromWorld3DGSForwardKernel(
 
     const nanovdb::math::Ray<float> ray = pixelToWorldRay<float>(row,
                                                                  col,
-                                                                 commonArgs.imageWidth,
-                                                                 commonArgs.imageHeight,
-                                                                 commonArgs.imageOriginW,
-                                                                 commonArgs.imageOriginH,
+                                                                 args.imageWidth,
+                                                                 args.imageHeight,
+                                                                 args.imageOriginW,
+                                                                 args.imageOriginH,
                                                                  worldToCamRotationStart,
                                                                  worldToCamTranslationStart,
                                                                  worldToCamRotationEnd,
@@ -115,7 +115,7 @@ rasterizeFromWorld3DGSForwardKernel(
     bool done           = (!inside) || (!rayValid);
 
     // Determine gaussian range for this tile.
-    const auto [rangeStart, rangeEnd] = commonArgs.tileGaussianRange(camId, tileRow, tileCol);
+    const auto [rangeStart, rangeEnd] = args.tileGaussianRange(camId, tileRow, tileCol);
 
     // If no intersections, just write background.
     //
@@ -127,7 +127,7 @@ rasterizeFromWorld3DGSForwardKernel(
             outLastIds[imgBasePix] = -1;
 #pragma unroll
             for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                outFeatures[imgBaseFeat + k] = commonArgs.backgroundValue(camId, k);
+                outFeatures[imgBaseFeat + k] = args.backgroundValue(camId, k);
             }
         }
         return;
@@ -159,7 +159,7 @@ rasterizeFromWorld3DGSForwardKernel(
         const int32_t batchStart = rangeStart + (int32_t)(blockSize * b);
         const int32_t idx        = batchStart + (int32_t)threadRank;
         if (idx < rangeEnd) {
-            const int32_t flatId = commonArgs.tileGaussianIds[idx];
+            const int32_t flatId = args.tileGaussianIds[idx];
             idBatch[threadRank]  = flatId;
             const int32_t gid    = flatId % (int32_t)means.size(0);
 
@@ -223,8 +223,7 @@ rasterizeFromWorld3DGSForwardKernel(
     outLastIds[imgBasePix] = curIdx;
 #pragma unroll
     for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-        outFeatures[imgBaseFeat + k] =
-            pixOut[k] + transmittance * commonArgs.backgroundValue(camId, k);
+        outFeatures[imgBaseFeat + k] = pixOut[k] + transmittance * args.backgroundValue(camId, k);
     }
 }
 
@@ -268,7 +267,7 @@ launchForward(const torch::Tensor &means,
     const int32_t totalIntersections = (int32_t)tileGaussianIds.size(0);
     const int64_t numDistCoeffs      = distortionCoeffs.size(1);
 
-    RasterizeFromWorldCommonArgs commonArgs{
+    RasterizeFromWorldCommonArgs args{
         static_cast<uint32_t>(C),
         imageWidth,
         imageHeight,
@@ -286,15 +285,15 @@ launchForward(const torch::Tensor &means,
 
     const PreparedRasterOptionalInputs opt = prepareRasterOptionalInputs(
         features, C, tileExtentH, tileExtentW, (int64_t)NUM_CHANNELS, backgrounds, masks);
-    commonArgs.backgrounds = opt.backgrounds;
-    commonArgs.masks       = opt.masks;
+    args.backgrounds = opt.backgrounds;
+    args.masks       = opt.masks;
 
     const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
     const size_t sharedMem = blockSize * (sizeof(int32_t) + sizeof(SharedGaussian<NUM_CHANNELS>));
 
     auto stream = at::cuda::getDefaultCUDAStream();
-    rasterizeFromWorld3DGSForwardKernel<NUM_CHANNELS><<<gridDim, blockDim, sharedMem, stream>>>(
-        commonArgs,
+    rasterizeGaussiansFromWorld<NUM_CHANNELS><<<gridDim, blockDim, sharedMem, stream>>>(
+        args,
         means.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
         quats.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
         logScales.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
