@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-#include <fvdb/detail/ops/gsplat/GaussianCameraSharedMemory.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianCameraAccessorCopy.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianOpenCVDistortion.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionUT.h>
 #include <fvdb/detail/ops/gsplat/GaussianRigidTransform.cuh>

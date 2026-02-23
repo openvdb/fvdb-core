@@ -1,7 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/ops/gsplat/GaussianCameraSharedMemory.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianCameraAccessorCopy.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
