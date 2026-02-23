@@ -117,16 +117,16 @@ jaggedProjectionBackwardKernel(
     const nanovdb::math::Mat3<T> &covarCamSpace = transformCovarianceWorldToCam(R, covar);
 
     // vjp: camera projection
-    const CameraIntrinsics<T> intr                 = loadIntrinsicsRowMajor3x3(projectionMatrices);
+    const CameraIntrinsics<T> intrinsics           = loadIntrinsicsRowMajor3x3(projectionMatrices);
     auto [dLossDCovarCamSpace, dLossDMeanCamSpace] = [&]() {
         if constexpr (Ortho) {
             return projectGaussianOrthographicVectorJacobianProduct<T>(
                 meansCamSpace,
                 covarCamSpace,
-                intr.fx,
-                intr.fy,
-                intr.cx,
-                intr.cy,
+                intrinsics.fx,
+                intrinsics.fy,
+                intrinsics.cx,
+                intrinsics.cy,
                 imageWidth,
                 imageHeight,
                 dLossDCovar2d,
@@ -135,10 +135,10 @@ jaggedProjectionBackwardKernel(
             return projectGaussianPerspectiveVectorJacobianProduct<T>(
                 meansCamSpace,
                 covarCamSpace,
-                intr.fx,
-                intr.fy,
-                intr.cx,
-                intr.cy,
+                intrinsics.fx,
+                intrinsics.fy,
+                intrinsics.cx,
+                intrinsics.cy,
                 imageWidth,
                 imageHeight,
                 dLossDCovar2d,

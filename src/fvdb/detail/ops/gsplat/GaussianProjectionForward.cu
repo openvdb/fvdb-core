@@ -138,24 +138,24 @@ template <typename T, bool Ortho> struct ProjectionForward {
         const Mat3 covarCamSpace = transformCovarianceWorldToCam(worldToCamRotMatrix, covar);
 
         // camera projection
-        const CameraIntrinsics<T> intr = loadIntrinsics(projectionMatrix);
-        auto [covar2d, mean2d]         = [&]() {
+        const CameraIntrinsics<T> intrinsics = loadIntrinsics(projectionMatrix);
+        auto [covar2d, mean2d]               = [&]() {
             if constexpr (Ortho) {
                 return projectGaussianOrthographic<T>(meansCamSpace,
                                                       covarCamSpace,
-                                                      intr.fx,
-                                                      intr.fy,
-                                                      intr.cx,
-                                                      intr.cy,
+                                                      intrinsics.fx,
+                                                      intrinsics.fy,
+                                                      intrinsics.cx,
+                                                      intrinsics.cy,
                                                       mImageWidth,
                                                       mImageHeight);
             } else {
                 return projectGaussianPerspective<T>(meansCamSpace,
                                                      covarCamSpace,
-                                                     intr.fx,
-                                                     intr.fy,
-                                                     intr.cx,
-                                                     intr.cy,
+                                                     intrinsics.fx,
+                                                     intrinsics.fy,
+                                                     intrinsics.cx,
+                                                     intrinsics.cy,
                                                      mImageWidth,
                                                      mImageHeight);
             }
