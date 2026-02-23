@@ -64,9 +64,7 @@ jaggedProjectionForwardKernel(const uint32_t B,
     projectionMatrices += cId * 9;
 
     // input is row-major
-    const auto worldToCamRt        = loadWorldToCamRtRowMajor4x4(worldToCamMatrices);
-    const nanovdb::math::Mat3<T> R = cuda::std::get<0>(worldToCamRt);
-    const nanovdb::math::Vec3<T> t = cuda::std::get<1>(worldToCamRt);
+    const auto [R, t] = loadWorldToCamRtRowMajor4x4(worldToCamMatrices);
     // transform Gaussian center to camera space
     const nanovdb::math::Vec3<T> meansCamSpace =
         transformPointWorldToCam(R, t, nanovdb::math::Vec3<T>(means[0], means[1], means[2]));
