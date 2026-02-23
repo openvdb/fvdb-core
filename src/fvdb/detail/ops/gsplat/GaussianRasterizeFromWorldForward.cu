@@ -25,203 +25,206 @@ template <uint32_t NUM_CHANNELS> struct SharedGaussian {
     float opacity;
 };
 
-template <uint32_t NUM_CHANNELS>
-__global__ void
-rasterizeGaussiansFromWorld(
-    const RasterizeFromWorldCommonArgs args,
-    // Gaussians
-    const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> means,     // [N,3]
-    const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> quats,     // [N,4]
-    const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> logScales, // [N,3]
-    // Per-camera
-    const torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits> features,  // [C,N,D]
-    const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> opacities, // [C,N]
-    const torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits>
-        worldToCamStart, // [C,4,4] (view as 3D accessor for contiguous)
-    const torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits>
-        worldToCamEnd,   // [C,4,4]
-    const torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits> K, // [C,3,3]
-    const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits>
-        distortionCoeffs,                                                      // [C,K]
-    const int64_t numDistCoeffs,
-    const RollingShutterType rollingShutterType,
-    const CameraModel cameraModel,
-    // Outputs
-    float *__restrict__ outFeatures, // [C,H,W,D]
-    float *__restrict__ outAlphas,   // [C,H,W,1] packed as [C*H*W]
-    int32_t *__restrict__ outLastIds // [C,H,W]
-) {
-    const uint32_t blockSize = blockDim.x * blockDim.y;
-    auto block               = cg::this_thread_block();
-    const auto &common       = args;
+template <uint32_t NUM_CHANNELS> struct RasterizeFromWorldForwardArgs {
+    RasterizeFromWorldCommonArgs commonArgs;
+    torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> means;            // [N,3]
+    torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> quats;            // [N,4]
+    torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> logScales;        // [N,3]
+    torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits> features;         // [C,N,D]
+    torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> opacities;        // [C,N]
+    torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits> worldToCamStart;  // [C,4,4]
+    torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits> worldToCamEnd;    // [C,4,4]
+    torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits> K;                // [C,3,3]
+    torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> distortionCoeffs; // [C,K]
+    int64_t numDistCoeffs;
+    RollingShutterType rollingShutterType;
+    CameraModel cameraModel;
+    float *__restrict__ outFeatures;  // [C,H,W,D]
+    float *__restrict__ outAlphas;    // [C,H,W,1] packed as [C*H*W]
+    int32_t *__restrict__ outLastIds; // [C,H,W]
 
-    uint32_t camId, tileRow, tileCol, row, col;
-    common.denseCoordinates(camId, tileRow, tileCol, row, col);
-    const bool inside = (row < common.imageHeight && col < common.imageWidth);
+    inline __device__ void
+    volumeRenderTileForward() const {
+        const uint32_t blockSize = blockDim.x * blockDim.y;
+        auto block               = cg::this_thread_block();
+        const auto &common       = commonArgs;
 
-    // Pixel index within this camera.
-    const uint32_t pixId       = common.pixelId(row, col);
-    const uint32_t imgBaseFeat = common.outputFeatureBase(camId, pixId);
-    const uint32_t imgBasePix  = common.outputPixelBase(camId, pixId);
+        uint32_t camId, tileRow, tileCol, row, col;
+        common.denseCoordinates(camId, tileRow, tileCol, row, col);
+        const bool inside = (row < common.imageHeight && col < common.imageWidth);
 
-    // Parity with classic rasterizer: masked tiles write background and exit.
-    //
-    // IMPORTANT: this kernel uses block-level barriers later (`__syncthreads_count`, `block.sync`).
-    // Any early return must be taken by *all* threads in the block, otherwise edge tiles can
-    // deadlock when some threads are `!inside`. So we make the return block-wide.
-    const bool tileMasked = common.tileMasked(camId, tileRow, tileCol);
-    if (tileMasked) {
-        if (inside) {
-            outAlphas[imgBasePix]  = 0.0f;
-            outLastIds[imgBasePix] = -1;
+        // Pixel index within this camera.
+        const uint32_t pixId       = common.pixelId(row, col);
+        const uint32_t imgBaseFeat = common.outputFeatureBase(camId, pixId);
+        const uint32_t imgBasePix  = common.outputPixelBase(camId, pixId);
+
+        // Parity with classic rasterizer: masked tiles write background and exit.
+        //
+        // IMPORTANT: this kernel uses block-level barriers later (`__syncthreads_count`,
+        // `block.sync`). Any early return must be taken by *all* threads in the block, otherwise
+        // edge tiles can deadlock when some threads are `!inside`. So we make the return
+        // block-wide.
+        const bool tileMasked = common.tileMasked(camId, tileRow, tileCol);
+        if (tileMasked) {
+            if (inside) {
+                outAlphas[imgBasePix]  = 0.0f;
+                outLastIds[imgBasePix] = -1;
 #pragma unroll
-            for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                outFeatures[imgBaseFeat + k] = common.backgroundValue(camId, k);
+                for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
+                    outFeatures[imgBaseFeat + k] = common.backgroundValue(camId, k);
+                }
             }
+            return;
         }
-        return;
-    }
 
-    // Build camera pose for this camera (start/end).
-    const auto [worldToCamRotationStart, worldToCamTranslationStart] =
-        loadWorldToCamRtFromAccessor44<float>(worldToCamStart, camId);
-    const auto [worldToCamRotationEnd, worldToCamTranslationEnd] =
-        loadWorldToCamRtFromAccessor44<float>(worldToCamEnd, camId);
+        // Build camera pose for this camera (start/end).
+        const auto [worldToCamRotationStart, worldToCamTranslationStart] =
+            loadWorldToCamRtFromAccessor44<float>(worldToCamStart, camId);
+        const auto [worldToCamRotationEnd, worldToCamTranslationEnd] =
+            loadWorldToCamRtFromAccessor44<float>(worldToCamEnd, camId);
 
-    const nanovdb::math::Mat3<float> K_cam = loadMat3FromAccessor33<float>(K, camId);
+        const nanovdb::math::Mat3<float> K_cam = loadMat3FromAccessor33<float>(K, camId);
+        const float *distPtr = (numDistCoeffs > 0) ? &distortionCoeffs[camId][0] : nullptr;
 
-    const float *distPtr = (numDistCoeffs > 0) ? &distortionCoeffs[camId][0] : nullptr;
+        const nanovdb::math::Ray<float> ray = pixelToWorldRay<float>(row,
+                                                                     col,
+                                                                     common.imageWidth,
+                                                                     common.imageHeight,
+                                                                     common.imageOriginW,
+                                                                     common.imageOriginH,
+                                                                     worldToCamRotationStart,
+                                                                     worldToCamTranslationStart,
+                                                                     worldToCamRotationEnd,
+                                                                     worldToCamTranslationEnd,
+                                                                     K_cam,
+                                                                     distPtr,
+                                                                     numDistCoeffs,
+                                                                     rollingShutterType,
+                                                                     cameraModel);
 
-    const nanovdb::math::Ray<float> ray = pixelToWorldRay<float>(row,
-                                                                 col,
-                                                                 common.imageWidth,
-                                                                 common.imageHeight,
-                                                                 common.imageOriginW,
-                                                                 common.imageOriginH,
-                                                                 worldToCamRotationStart,
-                                                                 worldToCamTranslationStart,
-                                                                 worldToCamRotationEnd,
-                                                                 worldToCamTranslationEnd,
-                                                                 K_cam,
-                                                                 distPtr,
-                                                                 numDistCoeffs,
-                                                                 rollingShutterType,
-                                                                 cameraModel);
+        const bool rayValid = ray.dir().dot(ray.dir()) > 0.0f;
+        bool done           = (!inside) || (!rayValid);
 
-    const bool rayValid = ray.dir().dot(ray.dir()) > 0.0f;
-    bool done           = (!inside) || (!rayValid);
+        // Determine gaussian range for this tile.
+        const auto [rangeStart, rangeEnd] = common.tileGaussianRange(camId, tileRow, tileCol);
 
-    // Determine gaussian range for this tile.
-    const auto [rangeStart, rangeEnd] = common.tileGaussianRange(camId, tileRow, tileCol);
-
-    // If no intersections, just write background.
-    //
-    // As above, this must be a block-wide return to avoid deadlocks on edge tiles.
-    if (rangeEnd <= rangeStart) {
-        if (inside) {
-            // alpha=0, output background if provided else 0.
-            outAlphas[imgBasePix]  = 0.0f;
-            outLastIds[imgBasePix] = -1;
+        // If no intersections, just write background.
+        //
+        // As above, this must be a block-wide return to avoid deadlocks on edge tiles.
+        if (rangeEnd <= rangeStart) {
+            if (inside) {
+                // alpha=0, output background if provided else 0.
+                outAlphas[imgBasePix]  = 0.0f;
+                outLastIds[imgBasePix] = -1;
 #pragma unroll
-            for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                outFeatures[imgBaseFeat + k] = common.backgroundValue(camId, k);
+                for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
+                    outFeatures[imgBaseFeat + k] = common.backgroundValue(camId, k);
+                }
             }
+            return;
         }
-        return;
-    }
 
-    // Shared memory for batched gaussians.
-    extern __shared__ char smem[];
-    int32_t *idBatch = reinterpret_cast<int32_t *>(smem);                      // [blockSize]
-    auto *gaussBatch =
-        reinterpret_cast<SharedGaussian<NUM_CHANNELS> *>(&idBatch[blockSize]); // [blockSize]
+        // Shared memory for batched gaussians.
+        extern __shared__ char smem[];
+        int32_t *idBatch = reinterpret_cast<int32_t *>(smem);                      // [blockSize]
+        auto *gaussBatch =
+            reinterpret_cast<SharedGaussian<NUM_CHANNELS> *>(&idBatch[blockSize]); // [blockSize]
 
-    float transmittance = 1.0f;
-    int32_t curIdx      = -1;
-    float pixOut[NUM_CHANNELS];
+        float transmittance = 1.0f;
+        int32_t curIdx      = -1;
+        float pixOut[NUM_CHANNELS];
 #pragma unroll
-    for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-        pixOut[k] = 0.f;
-    }
-
-    const int32_t nIsects     = rangeEnd - rangeStart;
-    const uint32_t nBatches   = (nIsects + blockSize - 1) / blockSize;
-    const uint32_t threadRank = block.thread_rank();
-
-    for (uint32_t b = 0; b < nBatches; ++b) {
-        if (__syncthreads_count(done) >= (int)blockSize) {
-            break;
+        for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
+            pixOut[k] = 0.f;
         }
 
-        const int32_t batchStart = rangeStart + (int32_t)(blockSize * b);
-        const int32_t idx        = batchStart + (int32_t)threadRank;
-        if (idx < rangeEnd) {
-            const int32_t flatId = common.tileGaussianIds[idx];
-            idBatch[threadRank]  = flatId;
-            const int32_t gid    = flatId % (int32_t)means.size(0);
+        const int32_t nIsects     = rangeEnd - rangeStart;
+        const uint32_t nBatches   = (nIsects + blockSize - 1) / blockSize;
+        const uint32_t threadRank = block.thread_rank();
 
-            const nanovdb::math::Vec3<float> mean_w(means[gid][0], means[gid][1], means[gid][2]);
-            const nanovdb::math::Vec4<float> quat_wxyz(
-                quats[gid][0], quats[gid][1], quats[gid][2], quats[gid][3]);
-            const nanovdb::math::Vec3<float> scale(
-                __expf(logScales[gid][0]), __expf(logScales[gid][1]), __expf(logScales[gid][2]));
-            const nanovdb::math::Mat3<float> isclR = computeIsclRot<float>(quat_wxyz, scale);
-            const int32_t cid                      = flatId / (int32_t)means.size(0);
-            const float op                         = opacities[cid][gid];
-
-            gaussBatch[threadRank].id      = flatId;
-            gaussBatch[threadRank].mean    = mean_w;
-            gaussBatch[threadRank].isclR   = isclR;
-            gaussBatch[threadRank].opacity = op;
-        }
-
-        __syncthreads();
-
-        const uint32_t batchSize =
-            min((uint32_t)blockSize, (uint32_t)max(0, rangeEnd - batchStart));
-        for (uint32_t t = 0; (t < batchSize) && !done; ++t) {
-            const SharedGaussian<NUM_CHANNELS> g = gaussBatch[t];
-            // 3DGS ray-ellipsoid visibility in "whitened" coordinates (see 3D-GUT paper Fig. 11).
-            // gro   = S^{-1} R^T (o - μ)
-            // grd   = normalize( S^{-1} R^T d )
-            // gcrod = grd × gro  (distance proxy to principal axis in whitened space)
-            const nanovdb::math::Vec3<float> gro   = g.isclR * (ray.eye() - g.mean);
-            const nanovdb::math::Vec3<float> grd   = normalizeSafe<float>(g.isclR * ray.dir());
-            const nanovdb::math::Vec3<float> gcrod = grd.cross(gro);
-            const float grayDist                   = gcrod.dot(gcrod);
-            const float power                      = -0.5f * grayDist;
-            const float vis                        = __expf(power);
-            float alpha                            = min(kAlphaThreshold, g.opacity * vis);
-            if (power > 0.f || alpha < 1.f / 255.f) {
-                continue;
-            }
-            const float nextTransmittance = transmittance * (1.0f - alpha);
-            if (nextTransmittance <= 1e-4f) {
-                done = true;
+        for (uint32_t b = 0; b < nBatches; ++b) {
+            if (__syncthreads_count(done) >= (int)blockSize) {
                 break;
             }
-            const float contrib = alpha * transmittance;
-            const int32_t cid   = g.id / (int32_t)means.size(0);
-            const int32_t gid   = g.id % (int32_t)means.size(0);
-#pragma unroll
-            for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                pixOut[k] += features[cid][gid][k] * contrib;
+
+            const int32_t batchStart = rangeStart + (int32_t)(blockSize * b);
+            const int32_t idx        = batchStart + (int32_t)threadRank;
+            if (idx < rangeEnd) {
+                const int32_t flatId = common.tileGaussianIds[idx];
+                idBatch[threadRank]  = flatId;
+                const int32_t gid    = flatId % (int32_t)means.size(0);
+
+                const nanovdb::math::Vec3<float> mean_w(
+                    means[gid][0], means[gid][1], means[gid][2]);
+                const nanovdb::math::Vec4<float> quat_wxyz(
+                    quats[gid][0], quats[gid][1], quats[gid][2], quats[gid][3]);
+                const nanovdb::math::Vec3<float> scale(__expf(logScales[gid][0]),
+                                                       __expf(logScales[gid][1]),
+                                                       __expf(logScales[gid][2]));
+                const nanovdb::math::Mat3<float> isclR = computeIsclRot<float>(quat_wxyz, scale);
+                const int32_t cid                      = flatId / (int32_t)means.size(0);
+                const float op                         = opacities[cid][gid];
+
+                gaussBatch[threadRank].id      = flatId;
+                gaussBatch[threadRank].mean    = mean_w;
+                gaussBatch[threadRank].isclR   = isclR;
+                gaussBatch[threadRank].opacity = op;
             }
-            curIdx        = (uint32_t)(batchStart + (int32_t)t);
-            transmittance = nextTransmittance;
+
+            __syncthreads();
+
+            const uint32_t batchSize =
+                min((uint32_t)blockSize, (uint32_t)max(0, rangeEnd - batchStart));
+            for (uint32_t t = 0; (t < batchSize) && !done; ++t) {
+                const SharedGaussian<NUM_CHANNELS> g = gaussBatch[t];
+                // 3DGS ray-ellipsoid visibility in "whitened" coordinates (see 3D-GUT paper
+                // Fig. 11). gro   = S^{-1} R^T (o - μ) grd   = normalize( S^{-1} R^T d ) gcrod =
+                // grd × gro  (distance proxy to principal axis in whitened space)
+                const nanovdb::math::Vec3<float> gro   = g.isclR * (ray.eye() - g.mean);
+                const nanovdb::math::Vec3<float> grd   = normalizeSafe<float>(g.isclR * ray.dir());
+                const nanovdb::math::Vec3<float> gcrod = grd.cross(gro);
+                const float grayDist                   = gcrod.dot(gcrod);
+                const float power                      = -0.5f * grayDist;
+                const float vis                        = __expf(power);
+                float alpha                            = min(kAlphaThreshold, g.opacity * vis);
+                if (power > 0.f || alpha < 1.f / 255.f) {
+                    continue;
+                }
+                const float nextTransmittance = transmittance * (1.0f - alpha);
+                if (nextTransmittance <= 1e-4f) {
+                    done = true;
+                    break;
+                }
+                const float contrib = alpha * transmittance;
+                const int32_t cid   = g.id / (int32_t)means.size(0);
+                const int32_t gid   = g.id % (int32_t)means.size(0);
+#pragma unroll
+                for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
+                    pixOut[k] += features[cid][gid][k] * contrib;
+                }
+                curIdx        = (uint32_t)(batchStart + (int32_t)t);
+                transmittance = nextTransmittance;
+            }
+        }
+
+        if (!inside) {
+            return;
+        }
+
+        outAlphas[imgBasePix]  = 1.0f - transmittance;
+        outLastIds[imgBasePix] = curIdx;
+#pragma unroll
+        for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
+            outFeatures[imgBaseFeat + k] =
+                pixOut[k] + transmittance * common.backgroundValue(camId, k);
         }
     }
+};
 
-    if (!inside) {
-        return;
-    }
-
-    outAlphas[imgBasePix]  = 1.0f - transmittance;
-    outLastIds[imgBasePix] = curIdx;
-#pragma unroll
-    for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-        outFeatures[imgBaseFeat + k] = pixOut[k] + transmittance * common.backgroundValue(camId, k);
-    }
+template <uint32_t NUM_CHANNELS>
+__global__ void
+rasterizeGaussiansFromWorld(const RasterizeFromWorldForwardArgs<NUM_CHANNELS> args) {
+    args.volumeRenderTileForward();
 }
 
 template <uint32_t NUM_CHANNELS>
@@ -264,7 +267,7 @@ launchForward(const torch::Tensor &means,
     const int32_t totalIntersections = (int32_t)tileGaussianIds.size(0);
     const int64_t numDistCoeffs      = distortionCoeffs.size(1);
 
-    RasterizeFromWorldCommonArgs args{
+    RasterizeFromWorldCommonArgs commonArgs{
         static_cast<uint32_t>(C),
         imageWidth,
         imageHeight,
@@ -282,15 +285,11 @@ launchForward(const torch::Tensor &means,
 
     const PreparedRasterOptionalInputs opt = prepareRasterOptionalInputs(
         features, C, tileExtentH, tileExtentW, (int64_t)NUM_CHANNELS, backgrounds, masks);
-    args.backgrounds = opt.backgrounds;
-    args.masks       = opt.masks;
+    commonArgs.backgrounds = opt.backgrounds;
+    commonArgs.masks       = opt.masks;
 
-    const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
-    const size_t sharedMem = blockSize * (sizeof(int32_t) + sizeof(SharedGaussian<NUM_CHANNELS>));
-
-    auto stream = at::cuda::getDefaultCUDAStream();
-    rasterizeGaussiansFromWorld<NUM_CHANNELS><<<gridDim, blockDim, sharedMem, stream>>>(
-        args,
+    RasterizeFromWorldForwardArgs<NUM_CHANNELS> args{
+        commonArgs,
         means.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
         quats.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
         logScales.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
@@ -305,7 +304,13 @@ launchForward(const torch::Tensor &means,
         cameraModel,
         outFeatures.data_ptr<float>(),
         outAlphas.data_ptr<float>(),
-        outLastIds.data_ptr<int32_t>());
+        outLastIds.data_ptr<int32_t>()};
+
+    const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
+    const size_t sharedMem = blockSize * (sizeof(int32_t) + sizeof(SharedGaussian<NUM_CHANNELS>));
+
+    auto stream = at::cuda::getDefaultCUDAStream();
+    rasterizeGaussiansFromWorld<NUM_CHANNELS><<<gridDim, blockDim, sharedMem, stream>>>(args);
 
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return {outFeatures, outAlphas, outLastIds};
