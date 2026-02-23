@@ -210,9 +210,9 @@ template <typename T, bool Ortho> struct ProjectionForward {
         ptr += C * sizeof(Mat3);
         worldToCamTranslation = reinterpret_cast<Vec3 *>(ptr);
 
-        copyMat3AccessorToShared<T>(C, projectionMatsShared, mProjectionMatricesAcc);
-        copyWorldToCamRotationToShared<T>(C, worldToCamRotMatsShared, mWorldToCamMatricesAcc);
-        copyWorldToCamTranslationToShared<T>(C, worldToCamTranslation, mWorldToCamMatricesAcc);
+        copyMat3Accessor<T>(C, projectionMatsShared, mProjectionMatricesAcc);
+        copyWorldToCamRotation<T>(C, worldToCamRotMatsShared, mWorldToCamMatricesAcc);
+        copyWorldToCamTranslation<T>(C, worldToCamTranslation, mWorldToCamMatricesAcc);
     }
 };
 

@@ -12,9 +12,9 @@ namespace fvdb::detail::ops {
 
 template <typename ScalarType, typename Acc33>
 inline __device__ void
-copyMat3AccessorToShared(const int64_t C,
-                         nanovdb::math::Mat3<ScalarType> *__restrict__ out,
-                         const Acc33 &acc /* [C,3,3] */) {
+copyMat3Accessor(const int64_t C,
+                 nanovdb::math::Mat3<ScalarType> *__restrict__ out,
+                 const Acc33 &acc /* [C,3,3] */) {
     constexpr int64_t kElementsPerMat3 = 9;
     for (int64_t i = threadIdx.x; i < C * kElementsPerMat3; i += blockDim.x) {
         const int64_t camId      = i / kElementsPerMat3;
@@ -27,9 +27,9 @@ copyMat3AccessorToShared(const int64_t C,
 
 template <typename ScalarType, typename Acc44>
 inline __device__ void
-copyWorldToCamRotationToShared(const int64_t C,
-                               nanovdb::math::Mat3<ScalarType> *__restrict__ out,
-                               const Acc44 &acc /* [C,4,4] */) {
+copyWorldToCamRotation(const int64_t C,
+                       nanovdb::math::Mat3<ScalarType> *__restrict__ out,
+                       const Acc44 &acc /* [C,4,4] */) {
     constexpr int64_t kElementsPerMat3 = 9;
     for (int64_t i = threadIdx.x; i < C * kElementsPerMat3; i += blockDim.x) {
         const int64_t camId      = i / kElementsPerMat3;
@@ -42,9 +42,9 @@ copyWorldToCamRotationToShared(const int64_t C,
 
 template <typename ScalarType, typename Acc44>
 inline __device__ void
-copyWorldToCamTranslationToShared(const int64_t C,
-                                  nanovdb::math::Vec3<ScalarType> *__restrict__ out,
-                                  const Acc44 &acc /* [C,4,4] */) {
+copyWorldToCamTranslation(const int64_t C,
+                          nanovdb::math::Vec3<ScalarType> *__restrict__ out,
+                          const Acc44 &acc /* [C,4,4] */) {
     constexpr int64_t kElementsPerVec3 = 3;
     for (int64_t i = threadIdx.x; i < C * kElementsPerVec3; i += blockDim.x) {
         const int64_t camId   = i / kElementsPerVec3;
@@ -55,10 +55,10 @@ copyWorldToCamTranslationToShared(const int64_t C,
 
 template <typename ScalarType, typename AccCk>
 inline __device__ void
-copyDistortionCoeffsToShared(const int64_t C,
-                             const int64_t K,
-                             ScalarType *__restrict__ out /* [C*K] */,
-                             const AccCk &acc /* [C,K] */) {
+copyDistortionCoeffs(const int64_t C,
+                     const int64_t K,
+                     ScalarType *__restrict__ out /* [C*K] */,
+                     const AccCk &acc /* [C,K] */) {
     const int64_t total = C * K;
     for (int64_t i = threadIdx.x; i < total; i += blockDim.x) {
         const int64_t camId      = i / K;
