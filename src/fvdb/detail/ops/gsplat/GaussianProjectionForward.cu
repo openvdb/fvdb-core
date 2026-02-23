@@ -112,7 +112,7 @@ template <typename T, bool Ortho> struct ProjectionForward {
                  ::cuda::std::exp(logScaleAcc[2])));
     }
 
-    // Project one (camera, gaussian) pair into image space and write packed outputs.
+    /// @brief Project one (camera, gaussian) pair and write packed 2D outputs.
     inline __device__ void
     projectionForward(int idx) {
         if (idx >= C * N) {
@@ -199,7 +199,7 @@ template <typename T, bool Ortho> struct ProjectionForward {
         }
     }
 
-    // Stage per-camera projection and pose data in shared memory for this block.
+    /// @brief Stage per-camera projection and pose matrices into shared memory.
     inline __device__ void
     loadCamerasIntoSharedMemory() {
         alignas(Mat3) extern __shared__ char sharedMemory[];
