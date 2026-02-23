@@ -53,29 +53,30 @@ rasterizeGaussiansFromWorld(
 ) {
     const uint32_t blockSize = blockDim.x * blockDim.y;
     auto block               = cg::this_thread_block();
+    const auto &common       = args;
 
     uint32_t camId, tileRow, tileCol, row, col;
-    args.denseCoordinates(camId, tileRow, tileCol, row, col);
-    const bool inside = (row < args.imageHeight && col < args.imageWidth);
+    common.denseCoordinates(camId, tileRow, tileCol, row, col);
+    const bool inside = (row < common.imageHeight && col < common.imageWidth);
 
     // Pixel index within this camera.
-    const uint32_t pixId       = args.pixelId(row, col);
-    const uint32_t imgBaseFeat = args.outputFeatureBase(camId, pixId);
-    const uint32_t imgBasePix  = args.outputPixelBase(camId, pixId);
+    const uint32_t pixId       = common.pixelId(row, col);
+    const uint32_t imgBaseFeat = common.outputFeatureBase(camId, pixId);
+    const uint32_t imgBasePix  = common.outputPixelBase(camId, pixId);
 
     // Parity with classic rasterizer: masked tiles write background and exit.
     //
     // IMPORTANT: this kernel uses block-level barriers later (`__syncthreads_count`, `block.sync`).
     // Any early return must be taken by *all* threads in the block, otherwise edge tiles can
     // deadlock when some threads are `!inside`. So we make the return block-wide.
-    const bool tileMasked = args.tileMasked(camId, tileRow, tileCol);
+    const bool tileMasked = common.tileMasked(camId, tileRow, tileCol);
     if (tileMasked) {
         if (inside) {
             outAlphas[imgBasePix]  = 0.0f;
             outLastIds[imgBasePix] = -1;
 #pragma unroll
             for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                outFeatures[imgBaseFeat + k] = args.backgroundValue(camId, k);
+                outFeatures[imgBaseFeat + k] = common.backgroundValue(camId, k);
             }
         }
         return;
@@ -97,10 +98,10 @@ rasterizeGaussiansFromWorld(
 
     const nanovdb::math::Ray<float> ray = pixelToWorldRay<float>(row,
                                                                  col,
-                                                                 args.imageWidth,
-                                                                 args.imageHeight,
-                                                                 args.imageOriginW,
-                                                                 args.imageOriginH,
+                                                                 common.imageWidth,
+                                                                 common.imageHeight,
+                                                                 common.imageOriginW,
+                                                                 common.imageOriginH,
                                                                  worldToCamRotationStart,
                                                                  worldToCamTranslationStart,
                                                                  worldToCamRotationEnd,
@@ -115,7 +116,7 @@ rasterizeGaussiansFromWorld(
     bool done           = (!inside) || (!rayValid);
 
     // Determine gaussian range for this tile.
-    const auto [rangeStart, rangeEnd] = args.tileGaussianRange(camId, tileRow, tileCol);
+    const auto [rangeStart, rangeEnd] = common.tileGaussianRange(camId, tileRow, tileCol);
 
     // If no intersections, just write background.
     //
@@ -127,7 +128,7 @@ rasterizeGaussiansFromWorld(
             outLastIds[imgBasePix] = -1;
 #pragma unroll
             for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                outFeatures[imgBaseFeat + k] = args.backgroundValue(camId, k);
+                outFeatures[imgBaseFeat + k] = common.backgroundValue(camId, k);
             }
         }
         return;
@@ -159,7 +160,7 @@ rasterizeGaussiansFromWorld(
         const int32_t batchStart = rangeStart + (int32_t)(blockSize * b);
         const int32_t idx        = batchStart + (int32_t)threadRank;
         if (idx < rangeEnd) {
-            const int32_t flatId = args.tileGaussianIds[idx];
+            const int32_t flatId = common.tileGaussianIds[idx];
             idBatch[threadRank]  = flatId;
             const int32_t gid    = flatId % (int32_t)means.size(0);
 
@@ -223,7 +224,8 @@ rasterizeGaussiansFromWorld(
     outLastIds[imgBasePix] = curIdx;
 #pragma unroll
     for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-        outFeatures[imgBaseFeat + k] = pixOut[k] + transmittance * args.backgroundValue(camId, k);
+        outFeatures[imgBaseFeat + k] =
+            pixOut[k] + transmittance * common.backgroundValue(camId, k);
     }
 }
 
