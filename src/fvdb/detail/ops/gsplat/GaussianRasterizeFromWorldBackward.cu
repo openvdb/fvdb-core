@@ -29,46 +29,28 @@ template <uint32_t NUM_CHANNELS> struct SharedGaussian {
     float opacity;
 };
 
+template <uint32_t NUM_CHANNELS> struct RasterizeFromWorldBackwardArgs {
+    RasterizeFromWorldCommonArgs commonArgs;
+    // Forward outputs
+    fvdb::TorchRAcc64<float, 4> renderedAlphas; // [C,H,W,1]
+    fvdb::TorchRAcc64<int32_t, 3> lastIds;      // [C,H,W]
+    // Grad outputs
+    fvdb::TorchRAcc64<float, 4> dLossDRenderedFeatures; // [C,H,W,D]
+    fvdb::TorchRAcc64<float, 4> dLossDRenderedAlphas;   // [C,H,W,1]
+    // Outputs (grads)
+    float *__restrict__ dMeans;     // [N,3]
+    float *__restrict__ dQuats;     // [N,4]
+    float *__restrict__ dLogScales; // [N,3]
+    float *__restrict__ dFeatures;  // [C,N,D]
+    float *__restrict__ dOpacities; // [C,N]
+};
+
 template <uint32_t NUM_CHANNELS>
 __global__ void
-rasterizeFromWorld3DGSBackwardKernel(
-    const RasterizeFromWorldCommonArgs args,
-    // Gaussians
-    const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> means,     // [N,3]
-    const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> quats,     // [N,4]
-    const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> logScales, // [N,3]
-    // Per-camera
-    const torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits> features,  // [C,N,D]
-    const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> opacities, // [C,N]
-    const torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits>
-        worldToCamStart,                                                               // [C,4,4]
-    const torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits>
-        worldToCamEnd,                                                                 // [C,4,4]
-    const torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits> K,         // [C,3,3]
-    const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits>
-        distortionCoeffs,                                                              // [C,K]
-    const int64_t numDistCoeffs,
-    const RollingShutterType rollingShutterType,
-    const CameraModel cameraModel,
-    // Forward outputs
-    const torch::PackedTensorAccessor64<float, 4, torch::RestrictPtrTraits>
-        renderedAlphas,                                                                // [C,H,W,1]
-    const torch::PackedTensorAccessor64<int32_t, 3, torch::RestrictPtrTraits> lastIds, // [C,H,W]
-    // Grad outputs
-    const torch::PackedTensorAccessor64<float, 4, torch::RestrictPtrTraits>
-        dLossDRenderedFeatures, // [C,H,W,D]
-    const torch::PackedTensorAccessor64<float, 4, torch::RestrictPtrTraits>
-        dLossDRenderedAlphas,   // [C,H,W,1]
-    // Outputs (grads)
-    float *__restrict__ dMeans,     // [N,3]
-    float *__restrict__ dQuats,     // [N,4]
-    float *__restrict__ dLogScales, // [N,3]
-    float *__restrict__ dFeatures,  // [C,N,D]
-    float *__restrict__ dOpacities  // [C,N]
-) {
+rasterizeFromWorld3DGSBackwardKernel(const RasterizeFromWorldBackwardArgs<NUM_CHANNELS> args) {
     auto block               = cg::this_thread_block();
     const uint32_t blockSize = blockDim.x * blockDim.y;
-    const auto &common       = args;
+    const auto &common       = args.commonArgs;
 
     uint32_t camId, tileRow, tileCol, row, col;
     common.denseCoordinates(camId, tileRow, tileCol, row, col);
@@ -86,11 +68,13 @@ rasterizeFromWorld3DGSBackwardKernel(
 
     // Camera pose for this camera.
     const auto [R_wc_start, t_wc_start] =
-        loadWorldToCamRtFromAccessor44<float>(worldToCamStart, camId);
-    const auto [R_wc_end, t_wc_end] = loadWorldToCamRtFromAccessor44<float>(worldToCamEnd, camId);
+        loadWorldToCamRtFromAccessor44<float>(common.worldToCamStart, camId);
+    const auto [R_wc_end, t_wc_end] =
+        loadWorldToCamRtFromAccessor44<float>(common.worldToCamEnd, camId);
 
-    const nanovdb::math::Mat3<float> K_cam = loadMat3FromAccessor33<float>(K, camId);
-    const float *distPtr = (numDistCoeffs > 0) ? &distortionCoeffs[camId][0] : nullptr;
+    const nanovdb::math::Mat3<float> K_cam = loadMat3FromAccessor33<float>(common.K, camId);
+    const float *distPtr =
+        (common.numDistCoeffs > 0) ? &common.distortionCoeffs[camId][0] : nullptr;
 
     const nanovdb::math::Ray<float> ray = pixelToWorldRay<float>(row,
                                                                  col,
@@ -104,9 +88,9 @@ rasterizeFromWorld3DGSBackwardKernel(
                                                                  t_wc_end,
                                                                  K_cam,
                                                                  distPtr,
-                                                                 numDistCoeffs,
-                                                                 rollingShutterType,
-                                                                 cameraModel);
+                                                                 common.numDistCoeffs,
+                                                                 common.rollingShutterType,
+                                                                 common.cameraModel);
 
     // Whether this pixel participates in the backward pass.
     //
@@ -135,17 +119,17 @@ rasterizeFromWorld3DGSBackwardKernel(
     float v_render_a = 0.f;
 
     if (done) {
-        binFinal = lastIds[camId][row][col];
+        binFinal = args.lastIds[camId][row][col];
 
-        const float alphaFinal = renderedAlphas[camId][row][col][0];
+        const float alphaFinal = args.renderedAlphas[camId][row][col][0];
         T_final                = 1.0f - alphaFinal;
         T                      = T_final;
 
 #pragma unroll
         for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-            v_render_c[k] = dLossDRenderedFeatures[camId][row][col][k];
+            v_render_c[k] = args.dLossDRenderedFeatures[camId][row][col][k];
         }
-        v_render_a = dLossDRenderedAlphas[camId][row][col][0];
+        v_render_a = args.dLossDRenderedAlphas[camId][row][col][0];
     }
 
     float buffer[NUM_CHANNELS];
@@ -178,16 +162,20 @@ rasterizeFromWorld3DGSBackwardKernel(
         if (idx >= rangeStart) {
             const int32_t flatId = common.tileGaussianIds[idx];
             idBatch[threadRank]  = flatId;
-            const int32_t gid    = flatId % (int32_t)means.size(0);
-            const int32_t cid    = flatId / (int32_t)means.size(0);
+            const int32_t gid    = flatId % (int32_t)common.means.size(0);
+            const int32_t cid    = flatId / (int32_t)common.means.size(0);
 
-            const nanovdb::math::Vec3<float> mean_w(means[gid][0], means[gid][1], means[gid][2]);
-            const nanovdb::math::Vec4<float> quat_wxyz(
-                quats[gid][0], quats[gid][1], quats[gid][2], quats[gid][3]);
-            const nanovdb::math::Vec3<float> scale(
-                __expf(logScales[gid][0]), __expf(logScales[gid][1]), __expf(logScales[gid][2]));
+            const nanovdb::math::Vec3<float> mean_w(
+                common.means[gid][0], common.means[gid][1], common.means[gid][2]);
+            const nanovdb::math::Vec4<float> quat_wxyz(common.quats[gid][0],
+                                                       common.quats[gid][1],
+                                                       common.quats[gid][2],
+                                                       common.quats[gid][3]);
+            const nanovdb::math::Vec3<float> scale(__expf(common.logScales[gid][0]),
+                                                   __expf(common.logScales[gid][1]),
+                                                   __expf(common.logScales[gid][2]));
             const nanovdb::math::Mat3<float> isclR = computeIsclRot<float>(quat_wxyz, scale);
-            const float op                         = opacities[cid][gid];
+            const float op                         = common.opacities[cid][gid];
 
             gBatch[threadRank].id      = flatId;
             gBatch[threadRank].mean    = mean_w;
@@ -269,12 +257,12 @@ rasterizeFromWorld3DGSBackwardKernel(
                 // v_alpha accumulation
                 float v_alpha        = 0.f;
                 const int32_t flatId = idBatch[t];
-                const int32_t cid    = flatId / (int32_t)means.size(0);
-                const int32_t gid    = flatId % (int32_t)means.size(0);
+                const int32_t cid    = flatId / (int32_t)common.means.size(0);
+                const int32_t gid    = flatId % (int32_t)common.means.size(0);
 
 #pragma unroll
                 for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                    const float c = features[cid][gid][k];
+                    const float c = common.features[cid][gid][k];
                     v_alpha += (c * T - buffer[k] * ra) * v_render_c[k];
                 }
 
@@ -339,9 +327,9 @@ rasterizeFromWorld3DGSBackwardKernel(
 #pragma unroll
                 for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
                     const int32_t flatId = idBatch[t];
-                    const int32_t cid    = flatId / (int32_t)means.size(0);
-                    const int32_t gid    = flatId % (int32_t)means.size(0);
-                    buffer[k] += features[cid][gid][k] * fac;
+                    const int32_t cid    = flatId / (int32_t)common.means.size(0);
+                    const int32_t gid    = flatId % (int32_t)common.means.size(0);
+                    buffer[k] += common.features[cid][gid][k] * fac;
                 }
             }
 
@@ -354,32 +342,32 @@ rasterizeFromWorld3DGSBackwardKernel(
 
             if (warp.thread_rank() == 0) {
                 const int32_t flatId = idBatch[t];
-                const int32_t cid    = flatId / (int32_t)means.size(0);
-                const int32_t gid    = flatId % (int32_t)means.size(0);
+                const int32_t cid    = flatId / (int32_t)common.means.size(0);
+                const int32_t gid    = flatId % (int32_t)common.means.size(0);
 
                 // Per-camera grads
-                float *dFeatPtr =
-                    dFeatures + ((cid * (int32_t)means.size(0) + gid) * (int32_t)NUM_CHANNELS);
+                float *dFeatPtr = args.dFeatures + ((cid * (int32_t)common.means.size(0) + gid) *
+                                                    (int32_t)NUM_CHANNELS);
 #pragma unroll
                 for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
                     atomicAdd_system(dFeatPtr + k, v_feat_local[k]);
                 }
-                atomicAdd_system(dOpacities + (cid * (int32_t)means.size(0) + gid),
+                atomicAdd_system(args.dOpacities + (cid * (int32_t)common.means.size(0) + gid),
                                  v_opacity_local);
 
                 // Geometry grads (shared across cameras)
-                float *dMeanPtr = dMeans + gid * 3;
+                float *dMeanPtr = args.dMeans + gid * 3;
                 atomicAdd_system(dMeanPtr + 0, v_mean_local[0]);
                 atomicAdd_system(dMeanPtr + 1, v_mean_local[1]);
                 atomicAdd_system(dMeanPtr + 2, v_mean_local[2]);
 
-                float *dQuatPtr = dQuats + gid * 4;
+                float *dQuatPtr = args.dQuats + gid * 4;
                 atomicAdd_system(dQuatPtr + 0, v_quat_local[0]);
                 atomicAdd_system(dQuatPtr + 1, v_quat_local[1]);
                 atomicAdd_system(dQuatPtr + 2, v_quat_local[2]);
                 atomicAdd_system(dQuatPtr + 3, v_quat_local[3]);
 
-                float *dLsPtr = dLogScales + gid * 3;
+                float *dLsPtr = args.dLogScales + gid * 3;
                 atomicAdd_system(dLsPtr + 0, v_logscale_local[0]);
                 atomicAdd_system(dLsPtr + 1, v_logscale_local[1]);
                 atomicAdd_system(dLsPtr + 2, v_logscale_local[2]);
@@ -444,19 +432,7 @@ launchBackward(const torch::Tensor &means,
         tileOffsets.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
         tileGaussianIds.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>(),
         nullptr,
-        nullptr};
-
-    const PreparedRasterOptionalInputs opt = prepareRasterOptionalInputs(
-        features, C, tileExtentH, tileExtentW, (int64_t)NUM_CHANNELS, backgrounds, masks);
-    args.backgrounds = opt.backgrounds;
-    args.masks       = opt.masks;
-
-    const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
-    const size_t sharedMem = blockSize * (sizeof(int32_t) + sizeof(SharedGaussian<NUM_CHANNELS>));
-
-    auto stream = at::cuda::getDefaultCUDAStream();
-    rasterizeFromWorld3DGSBackwardKernel<NUM_CHANNELS><<<gridDim, blockDim, sharedMem, stream>>>(
-        args,
+        nullptr,
         means.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
         quats.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
         logScales.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
@@ -468,7 +444,18 @@ launchBackward(const torch::Tensor &means,
         distortionCoeffs.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
         numDistCoeffs,
         rollingShutterType,
-        cameraModel,
+        cameraModel};
+
+    const PreparedRasterOptionalInputs opt = prepareRasterOptionalInputs(
+        features, C, tileExtentH, tileExtentW, (int64_t)NUM_CHANNELS, backgrounds, masks);
+    args.backgrounds = opt.backgrounds;
+    args.masks       = opt.masks;
+
+    const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
+    const size_t sharedMem = blockSize * (sizeof(int32_t) + sizeof(SharedGaussian<NUM_CHANNELS>));
+
+    RasterizeFromWorldBackwardArgs<NUM_CHANNELS> kernelArgs{
+        args,
         renderedAlphas.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
         lastIds.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
         dLossDRenderedFeatures.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
@@ -477,7 +464,11 @@ launchBackward(const torch::Tensor &means,
         dQuats.data_ptr<float>(),
         dLogScales.data_ptr<float>(),
         dFeatures.data_ptr<float>(),
-        dOpacities.data_ptr<float>());
+        dOpacities.data_ptr<float>()};
+
+    auto stream = at::cuda::getDefaultCUDAStream();
+    rasterizeFromWorld3DGSBackwardKernel<NUM_CHANNELS>
+        <<<gridDim, blockDim, sharedMem, stream>>>(kernelArgs);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return {dMeans, dQuats, dLogScales, dFeatures, dOpacities};
 }

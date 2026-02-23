@@ -27,18 +27,6 @@ template <uint32_t NUM_CHANNELS> struct SharedGaussian {
 
 template <uint32_t NUM_CHANNELS> struct RasterizeFromWorldForwardArgs {
     RasterizeFromWorldCommonArgs commonArgs;
-    torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> means;            // [N,3]
-    torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> quats;            // [N,4]
-    torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> logScales;        // [N,3]
-    torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits> features;         // [C,N,D]
-    torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> opacities;        // [C,N]
-    torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits> worldToCamStart;  // [C,4,4]
-    torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits> worldToCamEnd;    // [C,4,4]
-    torch::PackedTensorAccessor64<float, 3, torch::RestrictPtrTraits> K;                // [C,3,3]
-    torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> distortionCoeffs; // [C,K]
-    int64_t numDistCoeffs;
-    RollingShutterType rollingShutterType;
-    CameraModel cameraModel;
     float *__restrict__ outFeatures;  // [C,H,W,D]
     float *__restrict__ outAlphas;    // [C,H,W,1] packed as [C*H*W]
     int32_t *__restrict__ outLastIds; // [C,H,W]
@@ -79,12 +67,13 @@ template <uint32_t NUM_CHANNELS> struct RasterizeFromWorldForwardArgs {
 
         // Build camera pose for this camera (start/end).
         const auto [worldToCamRotationStart, worldToCamTranslationStart] =
-            loadWorldToCamRtFromAccessor44<float>(worldToCamStart, camId);
+            loadWorldToCamRtFromAccessor44<float>(common.worldToCamStart, camId);
         const auto [worldToCamRotationEnd, worldToCamTranslationEnd] =
-            loadWorldToCamRtFromAccessor44<float>(worldToCamEnd, camId);
+            loadWorldToCamRtFromAccessor44<float>(common.worldToCamEnd, camId);
 
-        const nanovdb::math::Mat3<float> K_cam = loadMat3FromAccessor33<float>(K, camId);
-        const float *distPtr = (numDistCoeffs > 0) ? &distortionCoeffs[camId][0] : nullptr;
+        const nanovdb::math::Mat3<float> K_cam = loadMat3FromAccessor33<float>(common.K, camId);
+        const float *distPtr =
+            (common.numDistCoeffs > 0) ? &common.distortionCoeffs[camId][0] : nullptr;
 
         const nanovdb::math::Ray<float> ray = pixelToWorldRay<float>(row,
                                                                      col,
@@ -98,9 +87,9 @@ template <uint32_t NUM_CHANNELS> struct RasterizeFromWorldForwardArgs {
                                                                      worldToCamTranslationEnd,
                                                                      K_cam,
                                                                      distPtr,
-                                                                     numDistCoeffs,
-                                                                     rollingShutterType,
-                                                                     cameraModel);
+                                                                     common.numDistCoeffs,
+                                                                     common.rollingShutterType,
+                                                                     common.cameraModel);
 
         const bool rayValid = ray.dir().dot(ray.dir()) > 0.0f;
         bool done           = (!inside) || (!rayValid);
@@ -152,18 +141,20 @@ template <uint32_t NUM_CHANNELS> struct RasterizeFromWorldForwardArgs {
             if (idx < rangeEnd) {
                 const int32_t flatId = common.tileGaussianIds[idx];
                 idBatch[threadRank]  = flatId;
-                const int32_t gid    = flatId % (int32_t)means.size(0);
+                const int32_t gid    = flatId % (int32_t)common.means.size(0);
 
                 const nanovdb::math::Vec3<float> mean_w(
-                    means[gid][0], means[gid][1], means[gid][2]);
-                const nanovdb::math::Vec4<float> quat_wxyz(
-                    quats[gid][0], quats[gid][1], quats[gid][2], quats[gid][3]);
-                const nanovdb::math::Vec3<float> scale(__expf(logScales[gid][0]),
-                                                       __expf(logScales[gid][1]),
-                                                       __expf(logScales[gid][2]));
+                    common.means[gid][0], common.means[gid][1], common.means[gid][2]);
+                const nanovdb::math::Vec4<float> quat_wxyz(common.quats[gid][0],
+                                                           common.quats[gid][1],
+                                                           common.quats[gid][2],
+                                                           common.quats[gid][3]);
+                const nanovdb::math::Vec3<float> scale(__expf(common.logScales[gid][0]),
+                                                       __expf(common.logScales[gid][1]),
+                                                       __expf(common.logScales[gid][2]));
                 const nanovdb::math::Mat3<float> isclR = computeIsclRot<float>(quat_wxyz, scale);
-                const int32_t cid                      = flatId / (int32_t)means.size(0);
-                const float op                         = opacities[cid][gid];
+                const int32_t cid                      = flatId / (int32_t)common.means.size(0);
+                const float op                         = common.opacities[cid][gid];
 
                 gaussBatch[threadRank].id      = flatId;
                 gaussBatch[threadRank].mean    = mean_w;
@@ -196,11 +187,11 @@ template <uint32_t NUM_CHANNELS> struct RasterizeFromWorldForwardArgs {
                     break;
                 }
                 const float contrib = alpha * transmittance;
-                const int32_t cid   = g.id / (int32_t)means.size(0);
-                const int32_t gid   = g.id % (int32_t)means.size(0);
+                const int32_t cid   = g.id / (int32_t)common.means.size(0);
+                const int32_t gid   = g.id % (int32_t)common.means.size(0);
 #pragma unroll
                 for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                    pixOut[k] += features[cid][gid][k] * contrib;
+                    pixOut[k] += common.features[cid][gid][k] * contrib;
                 }
                 curIdx        = (uint32_t)(batchStart + (int32_t)t);
                 transmittance = nextTransmittance;
@@ -281,15 +272,7 @@ launchForward(const torch::Tensor &means,
         tileOffsets.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
         tileGaussianIds.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>(),
         nullptr,
-        nullptr};
-
-    const PreparedRasterOptionalInputs opt = prepareRasterOptionalInputs(
-        features, C, tileExtentH, tileExtentW, (int64_t)NUM_CHANNELS, backgrounds, masks);
-    commonArgs.backgrounds = opt.backgrounds;
-    commonArgs.masks       = opt.masks;
-
-    RasterizeFromWorldForwardArgs<NUM_CHANNELS> args{
-        commonArgs,
+        nullptr,
         means.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
         quats.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
         logScales.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
@@ -301,10 +284,17 @@ launchForward(const torch::Tensor &means,
         distortionCoeffs.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
         numDistCoeffs,
         rollingShutterType,
-        cameraModel,
-        outFeatures.data_ptr<float>(),
-        outAlphas.data_ptr<float>(),
-        outLastIds.data_ptr<int32_t>()};
+        cameraModel};
+
+    const PreparedRasterOptionalInputs opt = prepareRasterOptionalInputs(
+        features, C, tileExtentH, tileExtentW, (int64_t)NUM_CHANNELS, backgrounds, masks);
+    commonArgs.backgrounds = opt.backgrounds;
+    commonArgs.masks       = opt.masks;
+
+    RasterizeFromWorldForwardArgs<NUM_CHANNELS> args{commonArgs,
+                                                     outFeatures.data_ptr<float>(),
+                                                     outAlphas.data_ptr<float>(),
+                                                     outLastIds.data_ptr<int32_t>()};
 
     const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
     const size_t sharedMem = blockSize * (sizeof(int32_t) + sizeof(SharedGaussian<NUM_CHANNELS>));

@@ -28,6 +28,8 @@ constexpr __device__ float kAlphaThreshold = 0.999f;
 struct RasterizeFromWorldCommonArgs {
     using TileOffsetsAccessor     = fvdb::TorchRAcc64<int32_t, 3>;
     using TileGaussianIdsAccessor = fvdb::TorchRAcc64<int32_t, 1>;
+    using Acc2f                   = fvdb::TorchRAcc64<float, 2>;
+    using Acc3f                   = fvdb::TorchRAcc64<float, 3>;
 
     uint32_t numCameras;
     uint32_t imageWidth;
@@ -44,6 +46,20 @@ struct RasterizeFromWorldCommonArgs {
     TileGaussianIdsAccessor tileGaussianIds; // [n_isects]
     const float *backgrounds;                // [C, D] or nullptr
     const bool *masks;                       // [C, TH, TW] or nullptr
+
+    // Common from-world inputs shared by forward/backward kernels.
+    Acc2f means;            // [N,3]
+    Acc2f quats;            // [N,4]
+    Acc2f logScales;        // [N,3]
+    Acc3f features;         // [C,N,D]
+    Acc2f opacities;        // [C,N]
+    Acc3f worldToCamStart;  // [C,4,4]
+    Acc3f worldToCamEnd;    // [C,4,4]
+    Acc3f K;                // [C,3,3]
+    Acc2f distortionCoeffs; // [C,K]
+    int64_t numDistCoeffs;
+    RollingShutterType rollingShutterType;
+    CameraModel cameraModel;
 
     inline __device__ void
     denseCoordinates(uint32_t &cameraId,
