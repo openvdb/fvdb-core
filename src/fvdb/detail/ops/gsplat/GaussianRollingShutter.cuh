@@ -11,7 +11,7 @@
 namespace fvdb::detail::ops {
 
 template <typename T>
-inline __host__ __device__ T
+inline __device__ T
 clamp01(const T x) {
     return (x < T(0)) ? T(0) : ((x > T(1)) ? T(1) : x);
 }
@@ -26,7 +26,7 @@ clamp01(const T x) {
 /// Pixel coordinates are in image space (not normalized), and we use `floor` (matching existing
 /// kernels) before normalizing by (dim-1).
 template <typename T>
-inline __host__ __device__ T
+inline __device__ T
 rollingShutterTimeFromPixel(const RollingShutterType rollingShutterType,
                             const T px,
                             const T py,

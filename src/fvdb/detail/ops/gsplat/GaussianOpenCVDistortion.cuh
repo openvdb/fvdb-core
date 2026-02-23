@@ -28,7 +28,7 @@ namespace fvdb::detail::ops {
 /// @param distortionCoeffs Pointer to packed coefficients (may be null for non-OpenCV models).
 /// @param numCoeffs Number of coefficients per camera (0 for PINHOLE/ORTHOGRAPHIC, 12 for OPENCV).
 template <typename T>
-inline __host__ __device__ nanovdb::math::Vec2<T>
+inline __device__ nanovdb::math::Vec2<T>
 applyOpenCVDistortionPacked(const CameraModel cameraModel,
                             const nanovdb::math::Vec2<T> &p_normalized,
                             const T *distortionCoeffs,
@@ -98,7 +98,7 @@ applyOpenCVDistortionPacked(const CameraModel cameraModel,
 /// It uses a small fixed iteration count (matching the UT kernel style) and is intended for use in
 /// ray generation.
 template <typename T>
-inline __host__ __device__ nanovdb::math::Vec2<T>
+inline __device__ nanovdb::math::Vec2<T>
 undistortOpenCVPackedFixedPoint(const CameraModel cameraModel,
                                 const nanovdb::math::Vec2<T> &p_distorted,
                                 const T *distortionCoeffs,
