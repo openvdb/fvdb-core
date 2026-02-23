@@ -175,7 +175,7 @@ pixelToWorldRay(const uint32_t row,
     // Invert rigid transform to get camera->world.
     const nanovdb::math::Mat3<T> R_cw = R_wc.transpose();
 
-    const CameraIntrinsics<T> intrinsics = loadIntrinsics(K);
+    const CameraIntrinsics<T> intrinsics(K);
     const nanovdb::math::Vec2<T> p_distorted((px - intrinsics.cx) / intrinsics.fx,
                                              (py - intrinsics.cy) / intrinsics.fy);
     const nanovdb::math::Vec2<T> p =

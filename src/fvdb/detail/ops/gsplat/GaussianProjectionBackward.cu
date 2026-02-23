@@ -164,7 +164,7 @@ projectionBackwardKernel(const int32_t offset,
     const nanovdb::math::Mat3<T> &covarCamSpace = transformCovarianceWorldToCam(R, covar);
 
     // vjp: camera projection
-    const CameraIntrinsics<T> intrinsics           = loadIntrinsicsRowMajor3x3(projectionMatrices);
+    const CameraIntrinsics<T> intrinsics(projectionMatrices);
     auto [dLossDCovarCamSpace, dLossDMeanCamSpace] = [&]() {
         if constexpr (Ortho) {
             return projectGaussianOrthographicVectorJacobianProduct<T>(

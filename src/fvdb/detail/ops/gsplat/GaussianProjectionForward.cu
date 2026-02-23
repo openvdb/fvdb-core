@@ -138,7 +138,7 @@ template <typename T, bool Ortho> struct ProjectionForward {
         const Mat3 covarCamSpace = transformCovarianceWorldToCam(worldToCamRotMatrix, covar);
 
         // camera projection
-        const CameraIntrinsics<T> intrinsics = loadIntrinsics(projectionMatrix);
+        const CameraIntrinsics<T> intrinsics(projectionMatrix);
         auto [covar2d, mean2d]               = [&]() {
             if constexpr (Ortho) {
                 return projectGaussianOrthographic<T>(meansCamSpace,

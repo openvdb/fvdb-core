@@ -93,7 +93,7 @@ jaggedProjectionForwardKernel(const uint32_t B,
     const nanovdb::math::Mat3<T> covarCamSpace = transformCovarianceWorldToCam(R, covar);
 
     // camera projection
-    const CameraIntrinsics<T> intrinsics = loadIntrinsicsRowMajor3x3(projectionMatrices);
+    const CameraIntrinsics<T> intrinsics(projectionMatrices);
     auto [covar2d, mean2d]               = [&]() {
         if constexpr (Ortho) {
             return projectGaussianOrthographic<T>(meansCamSpace,
