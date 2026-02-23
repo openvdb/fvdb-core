@@ -112,6 +112,7 @@ template <typename T, bool Ortho> struct ProjectionForward {
                  ::cuda::std::exp(logScaleAcc[2])));
     }
 
+    // Project one (camera, gaussian) pair into image space and write packed outputs.
     inline __device__ void
     projectionForward(int idx) {
         if (idx >= C * N) {
@@ -198,17 +199,13 @@ template <typename T, bool Ortho> struct ProjectionForward {
         }
     }
 
+    // Stage per-camera projection and pose data in shared memory for this block.
     inline __device__ void
     loadCamerasIntoSharedMemory() {
-        // Load projection matrices and world-to-camera matrices into shared memory.
         alignas(Mat3) extern __shared__ char sharedMemory[];
-
-        uint8_t *ptr         = reinterpret_cast<uint8_t *>(sharedMemory);
-        projectionMatsShared = reinterpret_cast<Mat3 *>(ptr);
-        ptr += C * sizeof(Mat3);
-        worldToCamRotMatsShared = reinterpret_cast<Mat3 *>(ptr);
-        ptr += C * sizeof(Mat3);
-        worldToCamTranslation = reinterpret_cast<Vec3 *>(ptr);
+        projectionMatsShared    = reinterpret_cast<Mat3 *>(sharedMemory);
+        worldToCamRotMatsShared = projectionMatsShared + C;
+        worldToCamTranslation   = reinterpret_cast<Vec3 *>(worldToCamRotMatsShared + C);
 
         copyMat3Accessor<T>(C, projectionMatsShared, mProjectionMatricesAcc);
         copyMat3Accessor<T>(C, worldToCamRotMatsShared, mWorldToCamMatricesAcc);
