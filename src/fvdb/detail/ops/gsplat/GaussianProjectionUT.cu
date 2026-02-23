@@ -601,10 +601,8 @@ template <typename ScalarType> struct ProjectionForwardUT {
         pointer += C * mNumDistortionCoeffs * sizeof(ScalarType);
 
         copyMat3Accessor<ScalarType>(C, projectionMatsShared, mProjectionMatricesAcc);
-        copyWorldToCamRotation<ScalarType>(
-            C, worldToCamRotMatsStartShared, mWorldToCamMatricesStartAcc);
-        copyWorldToCamRotation<ScalarType>(
-            C, worldToCamRotMatsEndShared, mWorldToCamMatricesEndAcc);
+        copyMat3Accessor<ScalarType>(C, worldToCamRotMatsStartShared, mWorldToCamMatricesStartAcc);
+        copyMat3Accessor<ScalarType>(C, worldToCamRotMatsEndShared, mWorldToCamMatricesEndAcc);
         copyWorldToCamTranslation<ScalarType>(
             C, worldToCamTranslationStartShared, mWorldToCamMatricesStartAcc);
         copyWorldToCamTranslation<ScalarType>(

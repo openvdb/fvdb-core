@@ -27,21 +27,6 @@ copyMat3Accessor(const int64_t C,
 
 template <typename ScalarType, typename Acc44>
 inline __device__ void
-copyWorldToCamRotation(const int64_t C,
-                       nanovdb::math::Mat3<ScalarType> *__restrict__ out,
-                       const Acc44 &acc /* [C,4,4] */) {
-    constexpr int64_t kElementsPerMat3 = 9;
-    for (int64_t i = threadIdx.x; i < C * kElementsPerMat3; i += blockDim.x) {
-        const int64_t camId      = i / kElementsPerMat3;
-        const int64_t entryId    = i % kElementsPerMat3;
-        const int64_t rowId      = entryId / 3;
-        const int64_t colId      = entryId % 3;
-        out[camId][rowId][colId] = acc[camId][rowId][colId];
-    }
-}
-
-template <typename ScalarType, typename Acc44>
-inline __device__ void
 copyWorldToCamTranslation(const int64_t C,
                           nanovdb::math::Vec3<ScalarType> *__restrict__ out,
                           const Acc44 &acc /* [C,4,4] */) {
