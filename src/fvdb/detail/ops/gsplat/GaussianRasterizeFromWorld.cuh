@@ -51,13 +51,16 @@ struct RasterizeFromWorldCommonArgs {
                      uint32_t &tileCol,
                      uint32_t &row,
                      uint32_t &col) const {
-        const uint32_t linearBlock = blockIdx.x;
-        cameraId                   = linearBlock / (numTilesH * numTilesW);
-        const uint32_t tileLinear  = linearBlock - cameraId * (numTilesH * numTilesW);
-        tileRow                    = tileLinear / numTilesW;
-        tileCol                    = tileLinear - tileRow * numTilesW;
-        row                        = tileRow * tileSize + threadIdx.y;
-        col                        = tileCol * tileSize + threadIdx.x;
+        const uint32_t globalLinearBlockIdx = blockIdx.x;
+        const uint32_t tileExtentW          = numTilesW;
+        const uint32_t tileExtentH          = numTilesH;
+
+        cameraId = globalLinearBlockIdx / (tileExtentH * tileExtentW);
+        tileRow  = (globalLinearBlockIdx / tileExtentW) % tileExtentH;
+        tileCol  = globalLinearBlockIdx % tileExtentW;
+
+        row = tileRow * tileSize + threadIdx.y;
+        col = tileCol * tileSize + threadIdx.x;
     }
 
     inline __device__ uint32_t
@@ -74,17 +77,15 @@ struct RasterizeFromWorldCommonArgs {
     tileGaussianRange(const uint32_t cameraId,
                       const uint32_t tileRow,
                       const uint32_t tileCol) const {
-        const int32_t rangeStart = tileOffsets[cameraId][tileRow][tileCol];
-
-        const int32_t rangeEnd =
-            ((cameraId == numCameras - 1) && (tileRow == numTilesH - 1) &&
-             (tileCol == numTilesW - 1))
+        const int32_t firstGaussianIdInBlock = tileOffsets[cameraId][tileRow][tileCol];
+        auto [nextTileRow, nextTileCol]      = (tileCol < numTilesW - 1)
+                                                   ? cuda::std::make_tuple(tileRow, tileCol + 1)
+                                                   : cuda::std::make_tuple(tileRow + 1, 0u);
+        const int32_t lastGaussianIdInBlock =
+            ((cameraId == numCameras - 1) && (nextTileRow == numTilesH))
                 ? totalIntersections
-                : ((tileCol + 1 < numTilesW)
-                       ? tileOffsets[cameraId][tileRow][tileCol + 1]
-                       : ((tileRow + 1 < numTilesH) ? tileOffsets[cameraId][tileRow + 1][0]
-                                                    : tileOffsets[cameraId + 1][0][0]));
-        return {rangeStart, rangeEnd};
+                : tileOffsets[cameraId][nextTileRow][nextTileCol];
+        return {firstGaussianIdInBlock, lastGaussianIdInBlock};
     }
 
     inline __device__ uint32_t
