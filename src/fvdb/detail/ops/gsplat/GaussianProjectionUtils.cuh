@@ -39,14 +39,6 @@ radiusFromCovariance2dDet(const nanovdb::math::Mat2<T> &covar2d,
 }
 
 template <typename T>
-inline __device__ void
-storeConicRowMajor3(const nanovdb::math::Mat2<T> &covar2dInverse, T *outConic3) {
-    outConic3[0] = covar2dInverse[0][0];
-    outConic3[1] = covar2dInverse[0][1];
-    outConic3[2] = covar2dInverse[1][1];
-}
-
-template <typename T>
 inline __device__ nanovdb::math::Vec3<T>
 packConicRowMajor3(const nanovdb::math::Mat2<T> &covar2dInverse) {
     return nanovdb::math::Vec3<T>(covar2dInverse[0][0], covar2dInverse[0][1], covar2dInverse[1][1]);

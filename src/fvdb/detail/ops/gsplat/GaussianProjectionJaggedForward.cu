@@ -143,11 +143,14 @@ jaggedProjectionForwardKernel(const uint32_t B,
     }
 
     // write to outputs
-    radii[idx]           = (int32_t)radius;
-    means2d[idx * 2]     = mean2d[0];
-    means2d[idx * 2 + 1] = mean2d[1];
-    depths[idx]          = meansCamSpace[2];
-    storeConicRowMajor3(covar2dInverse, conics + idx * 3);
+    radii[idx]                               = (int32_t)radius;
+    means2d[idx * 2]                         = mean2d[0];
+    means2d[idx * 2 + 1]                     = mean2d[1];
+    depths[idx]                              = meansCamSpace[2];
+    const nanovdb::math::Vec3<T> conicPacked = packConicRowMajor3(covar2dInverse);
+    conics[idx * 3]                          = conicPacked[0];
+    conics[idx * 3 + 1]                      = conicPacked[1];
+    conics[idx * 3 + 2]                      = conicPacked[2];
     if (compensations != nullptr) {
         compensations[idx] = compensation;
     }
