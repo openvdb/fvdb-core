@@ -8,6 +8,11 @@
 
 namespace fvdb::detail::ops {
 
+/// @brief Camera intrinsics tuple (fx, fy, cx, cy) with convenience loaders.
+///
+/// Stores focal lengths and principal point in pixel units. Constructors support
+/// explicit scalar initialization, loading from a 3x3 intrinsic matrix, and
+/// loading from a row-major 3x3 pointer.
 template <typename T> struct CameraIntrinsics {
     T fx, fy, cx, cy;
     inline __host__ __device__ CameraIntrinsics() = default;

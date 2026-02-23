@@ -10,6 +10,10 @@
 
 namespace fvdb::detail::ops {
 
+/// @brief Copy per-camera 3x3 matrices from accessor storage into contiguous Mat3 output.
+///
+/// The accessor is expected to be shaped [C,3,3]. Copies are striped across threads in
+/// the current block.
 template <typename ScalarType, typename Acc33>
 inline __device__ void
 copyMat3Accessor(const int64_t C,
@@ -25,6 +29,9 @@ copyMat3Accessor(const int64_t C,
     }
 }
 
+/// @brief Copy per-camera translation vectors (4x4 last-column xyz) into contiguous Vec3 output.
+///
+/// The accessor is expected to be shaped [C,4,4]. For each camera this loads acc[c][0..2][3].
 template <typename ScalarType, typename Acc44>
 inline __device__ void
 copyWorldToCamTranslation(const int64_t C,
@@ -38,6 +45,7 @@ copyWorldToCamTranslation(const int64_t C,
     }
 }
 
+/// @brief Copy packed per-camera distortion coefficients [C,K] into a flat [C*K] buffer.
 template <typename ScalarType, typename AccCk>
 inline __device__ void
 copyDistortionCoeffs(const int64_t C,

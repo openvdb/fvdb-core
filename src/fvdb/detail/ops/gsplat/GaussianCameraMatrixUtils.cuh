@@ -10,6 +10,10 @@
 
 namespace fvdb::detail::ops {
 
+/// @brief Load world-to-camera rotation+translation from a row-major 4x4 matrix pointer.
+///
+/// Input layout is row-major [4,4], where the translation is in the last column.
+/// Returns a tuple (R, t) with R as Mat3 and t as Vec3.
 template <typename T>
 inline __host__ __device__ cuda::std::tuple<nanovdb::math::Mat3<T>, nanovdb::math::Vec3<T>>
 loadWorldToCamRtRowMajor4x4(const T *m44) {
@@ -26,6 +30,10 @@ loadWorldToCamRtRowMajor4x4(const T *m44) {
             nanovdb::math::Vec3<T>(m44[3], m44[7], m44[11])};
 }
 
+/// @brief Load world-to-camera rotation+translation from a [C,4,4] accessor for camera `camId`.
+///
+/// Returns a tuple (R, t) with R as Mat3 and t as Vec3, matching
+/// `loadWorldToCamRtRowMajor4x4`.
 template <typename T, typename Acc44>
 inline __device__ cuda::std::tuple<nanovdb::math::Mat3<T>, nanovdb::math::Vec3<T>>
 loadWorldToCamRtFromAccessor44(const Acc44 &m44 /* [C,4,4] */, const int64_t camId) {
@@ -41,6 +49,7 @@ loadWorldToCamRtFromAccessor44(const Acc44 &m44 /* [C,4,4] */, const int64_t cam
             nanovdb::math::Vec3<T>(m44[camId][0][3], m44[camId][1][3], m44[camId][2][3])};
 }
 
+/// @brief Load a 3x3 matrix from a [C,3,3] accessor for camera `camId`.
 template <typename T, typename Acc33>
 inline __device__ nanovdb::math::Mat3<T>
 loadMat3FromAccessor33(const Acc33 &m33 /* [C,3,3] */, const int64_t camId) {
