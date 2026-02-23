@@ -13,7 +13,6 @@
 #include <fvdb/detail/autograd/ReadFromDense.h>
 #include <fvdb/detail/autograd/ReadIntoDense.h>
 #include <fvdb/detail/autograd/SampleGrid.h>
-#include <fvdb/detail/autograd/SparseConvolutionHalo.h>
 #include <fvdb/detail/autograd/SplatIntoGrid.h>
 #include <fvdb/detail/autograd/TransformPoints.h>
 #include <fvdb/detail/autograd/UpsampleGrid.h>
@@ -34,7 +33,6 @@
 #include <fvdb/detail/ops/SerializeEncode.h>
 #include <fvdb/detail/ops/VoxelNeighborhood.h>
 #include <fvdb/detail/ops/VoxelsAlongRays.h>
-#include <fvdb/detail/ops/convolution/pack_info/ConvolutionKernelMap.h>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
 
@@ -774,29 +772,17 @@ GridBatch::integrate_tsdf(const double truncationMargin,
     return {ret, outTSDF, outWeights};
 }
 
-JaggedTensor
-GridBatch::sparse_conv_halo(const JaggedTensor &input,
-                            const torch::Tensor &weight,
-                            int variant) const {
-    c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        input.ldim() == 1,
-        "Expected input to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        input.ldim(),
-        "list dimensions");
-    TORCH_CHECK_TYPE(input.is_floating_point(), "input must have a floating point type");
-    TORCH_CHECK_VALUE(input.rsize(0) == total_voxels(), "Value count not match!");
-    TORCH_CHECK_VALUE(input.num_outer_lists() == grid_count(), "Batch size not match!");
-    mImpl->checkDevice(input);
-    torch::Tensor ret =
-        detail::autograd::SparseConvolutionHalo::apply(mImpl, input.jdata(), weight, variant)[0];
-    return input.jagged_like(ret);
-}
-
 GridBatch
 GridBatch::conv_grid(Vec3iOrScalar kernel_size, Vec3iOrScalar stride) const {
     GridBatch result;
     result.mImpl = mImpl->convolutionOutput(kernel_size.value(), stride.value());
+    return result;
+}
+
+GridBatch
+GridBatch::conv_transpose_grid(Vec3iOrScalar kernel_size, Vec3iOrScalar stride) const {
+    GridBatch result;
+    result.mImpl = mImpl->convolutionTransposeOutput(kernel_size.value(), stride.value());
     return result;
 }
 
@@ -1216,17 +1202,22 @@ GridBatch::concatenate(const std::vector<GridBatch> &vec) {
     return result;
 }
 
-void
-GridBatch::computeConvolutionKernelMap(const GridBatch &source,
-                                       const GridBatch &target,
-                                       torch::Tensor &kernelMap,
-                                       const Vec3iOrScalar &kernelSize,
-                                       const Vec3iOrScalar &stride) {
-    c10::DeviceGuard guard(source.device());
-    FVDB_DISPATCH_KERNEL_DEVICE(source.device(), [&]() {
-        detail::ops::dispatchConvolutionKernelMap<DeviceTag>(
-            *source.mImpl, *target.mImpl, kernelMap, kernelSize, stride);
-    });
+detail::ops::GatherScatterDefaultTopology
+GridBatch::buildGatherScatterDefaultTopology(const GridBatch &feature_grid,
+                                             const GridBatch &output_grid,
+                                             const Vec3iOrScalar &kernelSize,
+                                             const Vec3iOrScalar &stride) {
+    return detail::ops::gatherScatterDefaultSparseConvTopology(
+        *feature_grid.mImpl, *output_grid.mImpl, kernelSize.value(), stride.value());
+}
+
+detail::ops::GatherScatterDefaultTopology
+GridBatch::buildGatherScatterDefaultTransposeTopology(const GridBatch &feature_grid,
+                                                      const GridBatch &output_grid,
+                                                      const Vec3iOrScalar &kernelSize,
+                                                      const Vec3iOrScalar &stride) {
+    return detail::ops::gatherScatterDefaultSparseConvTransposeTopology(
+        *feature_grid.mImpl, *output_grid.mImpl, kernelSize.value(), stride.value());
 }
 
 } // namespace fvdb

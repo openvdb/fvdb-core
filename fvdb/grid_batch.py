@@ -868,6 +868,23 @@ class GridBatch:
 
         return GridBatch(impl=self._impl.conv_grid(kernel_size, stride))
 
+    def conv_transpose_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> "GridBatch":
+        """
+        Return a :class:`GridBatch` representing the active voxels at the output of a transposed convolution
+        applied to this batch with a given kernel.
+
+        Args:
+            kernel_size (NumericMaxRank1): Size of the kernel to convolve with, broadcastable to shape ``(3,)``, integer dtype.
+            stride (NumericMaxRank1): Stride to use when convolving, broadcastable to shape ``(3,)``, integer dtype.
+
+        Returns:
+            conv_transpose_grid (GridBatch): A GridBatch representing the transposed convolution of this grid batch.
+        """
+        kernel_size = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
+        stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE)
+
+        return GridBatch(impl=self._impl.conv_transpose_grid(kernel_size, stride))
+
     def coords_in_grid(self, ijk: JaggedTensor) -> JaggedTensor:
         """
         Check which voxel-space coordinates lie on active voxels for each grid.
@@ -1821,28 +1838,6 @@ class GridBatch:
         return JaggedTensor(
             impl=self._impl.segments_along_rays(ray_origins._impl, ray_directions._impl, max_segments, eps)
         )
-
-    def sparse_conv_halo(self, input: JaggedTensor, weight: torch.Tensor, variant: int = 8) -> JaggedTensor:
-        """
-        Perform sparse convolution with halo exchange optimization.
-
-        Applies sparse convolution using halo exchange to efficiently handle boundary
-        conditions in distributed or multi-block sparse grids.
-
-        Args:
-            input (JaggedTensor): Input features for each voxel.
-                Shape: ``(batch_size, total_voxels, in_channels)``.
-            weight (torch.Tensor): Convolution weights.
-            variant (int): Variant of the halo implementation to use. Currently ``8`` and ``64``
-                are supported. Default is ``8``.
-
-        Returns:
-            output (JaggedTensor): Output features after convolution.
-
-        .. note::
-            Currently only 3x3x3 kernels are supported.
-        """
-        return JaggedTensor(impl=self._impl.sparse_conv_halo(input._impl, weight, variant))
 
     def splat_bezier(self, points: JaggedTensor, points_data: JaggedTensor) -> JaggedTensor:
         """

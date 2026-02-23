@@ -131,3 +131,9 @@ ConfigureDispatchBench(synthetic_voxel_benchmark
 ConfigureDispatchBench(for_each_benchmark
     dispatch/for_each_benchmark.cu
 )
+
+# GatherScatterDefault sparse convolution benchmark
+ConfigureDispatchBench(gather_scatter_conv_benchmark
+    convolution/gather_scatter_conv_benchmark.cu
+)
+

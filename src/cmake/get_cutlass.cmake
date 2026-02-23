@@ -14,5 +14,7 @@ CPMAddPackage(
 # Instead, we just add the headers to the include path and create an interface target.
 if(cutlass_ADDED)
     add_library(cutlass INTERFACE)
-    target_include_directories(cutlass INTERFACE ${cutlass_SOURCE_DIR}/include)
+    target_include_directories(cutlass INTERFACE
+        ${cutlass_SOURCE_DIR}/include
+        ${cutlass_SOURCE_DIR}/tools/util/include)
 endif()

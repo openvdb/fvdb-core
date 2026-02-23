@@ -631,6 +631,22 @@ class Grid:
         stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE)
         return Grid(impl=self._impl.conv_grid(kernel_size, stride))
 
+    def conv_transpose_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> "Grid":
+        """
+        Return a :class:`Grid` representing the active voxels at the output of a transposed convolution applied to this :class:`Grid` with a given kernel.
+
+        Args:
+            kernel_size (NumericMaxRank1): The size of the kernel to convolve with, broadcastable to shape ``(3,)``, integer dtype
+            stride (NumericMaxRank1): The stride to use when convolving,
+                broadcastable to shape ``(3,)``, integer dtype
+
+        Returns:
+            conv_transpose_grid (Grid): A :class:`Grid` representing the set of voxels in the output of the transposed convolution defined by ``kernel_size`` and ``stride``.
+        """
+        kernel_size = to_Vec3iBroadcastable(kernel_size, value_constraint=ValueConstraint.POSITIVE)
+        stride = to_Vec3iBroadcastable(stride, value_constraint=ValueConstraint.POSITIVE)
+        return Grid(impl=self._impl.conv_transpose_grid(kernel_size, stride))
+
     def coords_in_grid(self, ijk: torch.Tensor) -> torch.Tensor:
         """
         Check if voxel coordinates are in active voxels.
@@ -1695,31 +1711,6 @@ class Grid:
                 jagged_ray_origins._impl, jagged_ray_directions._impl, max_segments, eps
             )[0]
         )
-
-    def sparse_conv_halo(self, input: torch.Tensor, weight: torch.Tensor, variant: int = 8) -> torch.Tensor:
-        """
-        Perform sparse convolution on an input :class:`torch.Tensor` associated with
-        this :class:`Grid` using halo exchange optimization to efficiently handle boundary
-        conditions in distributed or multi-block sparse grids.
-
-        .. note::
-
-            Halo convolution only supports convolving when the input and output grid topology match, thus
-            this method does not accept an output grid. *i.e.* the output features will be associated with
-            this :class:`Grid`.
-
-        Args:
-            input (torch.Tensor): Input features for each voxel in this :class:`Grid`.
-                Shape: ``(self.num_voxels, in_channels)``.
-            weight (torch.Tensor): Convolution weights. Shape ``(out_channels, in_channels, kernel_size_x, kernel_size_y, kernel_size_z)``.
-            variant (int): Variant of the halo implementation to use. Default is 8.
-                *Note:* This is cryptic on purpose and you should change it only if you know what you're doing.
-
-        Returns:
-            out_features (torch.Tensor): Output features with shape ``(self.num_voxels, out_channels)`` after convolution.
-        """
-        jagged_input = JaggedTensor(input)
-        return self._impl.sparse_conv_halo(jagged_input._impl, weight, variant).jdata
 
     def splat_bezier(self, points: torch.Tensor, points_data: torch.Tensor) -> torch.Tensor:
         """

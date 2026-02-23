@@ -2,37 +2,55 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 """
-Test the default sparse convolution.
+Test the fVDB sparse convolution implementation.
 
-This will eventually be run across all supported backends. The default backend is gather_scatter.
+These tests compare sparse convolution results against dense PyTorch ground truth
+to verify correctness of:
+  - Topology computation (conv_grid output coordinates)
+  - Forward pass values
+  - Backward pass gradients (input and kernel)
+  - Strided convolution behavior
 
+Ground truth computation uses utilities from convolution_utils.py.
 """
 
 import math
 import unittest
 
 import torch
+from fvdb.convolution_plan import _GatherScatterBackend, _GatherScatterConvFn
 from fvdb.types import DeviceIdentifier, resolve_device
 from fvdb.utils.tests import (
     fourier_anti_symmetric_kernel,
     generate_hermit_impulses_dense,
     has_any_symmetry,
 )
-from fvdb.utils.tests.convolution_utils import conv_ground_truth_stride_1
+from fvdb.utils.tests.convolution_utils import (
+    ALL_DEVICE_DTYPE_COMBOS,
+    REDUCED_DEVICE_DTYPE_COMBOS,
+    DisableTF32Mixin,
+    assert_coords_equal,
+    compute_conv_grid_topology_ground_truth,
+    conv_ground_truth_stride_1,
+    conv_ground_truth_strided,
+    create_grid_from_coords,
+    diagnose_tensor_mismatch,
+    disable_tf32,
+    get_cluster_edge_aligned,
+    get_cluster_near_origin,
+    get_tolerances,
+    sort_coords_by_ijk,
+)
 from parameterized import parameterized
 
 from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
 
-all_device_dtype_combos = [
-    # ["cuda", torch.float16],
-    ["cpu", torch.float32],
-    ["cuda", torch.float32],
-    ["cpu", torch.float64],
-    ["cuda", torch.float64],
-]
+# =============================================================================
+# Test Class
+# =============================================================================
 
 
-class TestConvDefault(unittest.TestCase):
+class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
 
     VOLUME_SHAPE = (71, 34, 58)
     KERNEL_SIZE = (3, 5, 7)
@@ -40,295 +58,280 @@ class TestConvDefault(unittest.TestCase):
     SINGLE_COORD = (2, 3, 4)
     NUM_CANDIDATES = 1000
 
-    def setUp(self):
-        torch.random.manual_seed(2024)
+    # =========================================================================
+    # Topology Tests (conv_grid)
+    # =========================================================================
 
-    @parameterized.expand(all_device_dtype_combos)
-    def test_single_impulse_conv_grid(self, device: DeviceIdentifier, dtype: torch.dtype):
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
+    def test_conv_grid_single_impulse_bounds(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
-        This test validates that the topology of the output grid correctly
-        matches the shape of the kernel centered at the single impulse coordinate,
-        and is not transposed across spatial dimensions. This was broken before!
+        Validate that conv_grid output bounds match expected kernel footprint
+        for a single input coordinate.
         """
         device = resolve_device(device)
-
-        coord = torch.tensor(self.SINGLE_COORD, device=device, dtype=torch.int32)
-        ijks = JaggedTensor(coord.unsqueeze(0))
-        grid_batch = GridBatch.from_ijk(ijks, device=device)
-
-        dst_grid_batch = grid_batch.conv_grid(kernel_size=self.KERNEL_SIZE, stride=1)
-        dst_ijks = dst_grid_batch.ijk.jdata
-
-        kernel_volume = math.prod(self.KERNEL_SIZE)
-        self.assertEqual(len(dst_ijks), kernel_volume)
-
-        # Extract the region around the impulse coordinate where the kernel should appear
-        # The kernel is centered at the impulse coordinate
         kernel_half = tuple(k // 2 for k in self.KERNEL_SIZE)
 
-        # Define the slice boundaries for extracting the kernel region
-        start_coords = tuple(self.SINGLE_COORD[i] - kernel_half[i] for i in range(3))
-        end_coords = tuple(self.SINGLE_COORD[i] + kernel_half[i] + 1 for i in range(3))
-
-        # Find the actual bounds of the non-zero region
-        actual_start_coords = tuple(dst_ijks[:, dim].min().item() for dim in range(3))
-        actual_end_coords = tuple(dst_ijks[:, dim].max().item() + 1 for dim in range(3))
-
-        # The actual bounds should exactly match the expected bounds
-        self.assertEqual(actual_start_coords, start_coords)
-        self.assertEqual(actual_end_coords, end_coords)
-
-    @parameterized.expand(all_device_dtype_combos)
-    def test_single_impulse_activation_and_weights(self, device: DeviceIdentifier, dtype: torch.dtype):
-        """
-        This test iterates over each single weight location in the kernel space,
-        creates a kernel that has just an impulse at that location, and convolves a single impulse
-        conv grid with it. For each location within the kernel, we should expect the output to have
-        a single impulse at the activation impulse coord minus the centered kernel impulse coord
-        """
-        device = resolve_device(device)
-
         coord = torch.tensor(self.SINGLE_COORD, device=device, dtype=torch.int32)
-        ijks = JaggedTensor(coord.unsqueeze(0))
-        features = JaggedTensor(torch.ones((1, 1), device=device, dtype=dtype))
-        grid_batch = GridBatch.from_ijk(ijks, device=device)
+        grid_batch = create_grid_from_coords(coord.unsqueeze(0), device)
+
         dst_grid_batch = grid_batch.conv_grid(kernel_size=self.KERNEL_SIZE, stride=1)
         dst_ijks = dst_grid_batch.ijk.jdata
 
-        kernel_half_width = tuple(k // 2 for k in self.KERNEL_SIZE)
-
-        conv_plan = ConvolutionPlan.from_grid_batch(
-            kernel_size=self.KERNEL_SIZE, stride=1, source_grid=grid_batch, target_grid=dst_grid_batch
-        )
-
+        # Check count
         kernel_volume = math.prod(self.KERNEL_SIZE)
         self.assertEqual(len(dst_ijks), kernel_volume)
+
+        # Check bounds
+        expected_start = tuple(self.SINGLE_COORD[i] - kernel_half[i] for i in range(3))
+        expected_end = tuple(self.SINGLE_COORD[i] + kernel_half[i] + 1 for i in range(3))
+
+        actual_start = tuple(dst_ijks[:, dim].min().item() for dim in range(3))
+        actual_end = tuple(dst_ijks[:, dim].max().item() + 1 for dim in range(3))
+
+        self.assertEqual(actual_start, expected_start)
+        self.assertEqual(actual_end, expected_end)
+
+    def _test_conv_grid_topology(
+        self,
+        device: DeviceIdentifier,
+        dtype: torch.dtype,
+        stride: tuple[int, int, int],
+        cluster_coords: torch.Tensor,
+        check_negative_outputs: bool = False,
+        check_non_negative_outputs: bool = False,
+    ):
+        """
+        Core topology test: verify conv_grid output matches dense ground truth.
+
+        Args:
+            device: Device identifier
+            dtype: Data type
+            stride: Stride tuple (s0, s1, s2)
+            cluster_coords: Input coordinates
+            check_negative_outputs: Assert that some outputs have negative coords
+            check_non_negative_outputs: Assert that all outputs are non-negative
+        """
+        device = resolve_device(device)
+        cluster_coords = cluster_coords.to(device=device)
+
+        # Create grid and get conv_grid output
+        grid_batch = create_grid_from_coords(cluster_coords, device)
+        dst_grid_batch = grid_batch.conv_grid(kernel_size=self.KERNEL_SIZE, stride=stride)
+        dst_ijks = dst_grid_batch.ijk.jdata
+
+        # Compute ground truth
+        expected_coords = compute_conv_grid_topology_ground_truth(
+            input_coords=cluster_coords,
+            kernel_size=self.KERNEL_SIZE,
+            stride=stride,
+            device=device,
+            dtype=dtype,
+        )
+
+        # Compare
+        assert_coords_equal(
+            dst_ijks,
+            expected_coords,
+            msg=f"stride={stride}",
+        )
+
+        # Additional checks
+        if check_negative_outputs:
+            has_negative = (dst_ijks < 0).any()
+            self.assertTrue(has_negative, "Expected some negative output coordinates")
+
+        if check_non_negative_outputs:
+            all_non_negative = (dst_ijks >= 0).all()
+            self.assertTrue(all_non_negative, "Expected all non-negative output coordinates")
+
+    # --- Stride 1 tests ---
+
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
+    def test_conv_grid_topology_stride1_near_origin(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """Topology test with coordinates near origin, stride=1."""
+        device_resolved = resolve_device(device)
+        cluster_coords = get_cluster_near_origin(device_resolved)
+        self._test_conv_grid_topology(
+            device,
+            dtype,
+            stride=(1, 1, 1),
+            cluster_coords=cluster_coords,
+            check_negative_outputs=True,
+        )
+
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
+    def test_conv_grid_topology_stride1_edge_aligned(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """Topology test with edge-aligned coordinates, stride=1."""
+        device_resolved = resolve_device(device)
+        cluster_coords = get_cluster_edge_aligned(self.KERNEL_SIZE, device_resolved)
+        self._test_conv_grid_topology(
+            device,
+            dtype,
+            stride=(1, 1, 1),
+            cluster_coords=cluster_coords,
+            check_non_negative_outputs=True,
+        )
+
+    # --- Strided tests ---
+
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
+    def test_conv_grid_topology_stride_uniform(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """Topology test with uniform stride (2,2,2)."""
+        device_resolved = resolve_device(device)
+        cluster_coords = get_cluster_edge_aligned(self.KERNEL_SIZE, device_resolved)
+        self._test_conv_grid_topology(
+            device,
+            dtype,
+            stride=(2, 2, 2),
+            cluster_coords=cluster_coords,
+        )
+
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
+    def test_conv_grid_topology_stride_nonuniform(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """Topology test with non-uniform stride (1,2,3)."""
+        device_resolved = resolve_device(device)
+        cluster_coords = get_cluster_edge_aligned(self.KERNEL_SIZE, device_resolved)
+        self._test_conv_grid_topology(
+            device,
+            dtype,
+            stride=(1, 2, 3),
+            cluster_coords=cluster_coords,
+        )
+
+    # =========================================================================
+    # Convolution Value Tests (forward pass)
+    # =========================================================================
+
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
+    def test_single_impulse_activation_and_weights(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """
+        Test that each kernel weight position activates the correct output coordinate.
+
+        For a single input impulse, iterates over each kernel position and verifies
+        that the output impulse appears at the expected coordinate.
+        """
+        device = resolve_device(device)
+        kernel_half = tuple(k // 2 for k in self.KERNEL_SIZE)
+
+        coord = torch.tensor(self.SINGLE_COORD, device=device, dtype=torch.int32)
+        grid_batch = create_grid_from_coords(coord.unsqueeze(0), device)
+        features = JaggedTensor(torch.ones((1, 1), device=device, dtype=dtype))
+
+        dst_grid_batch = grid_batch.conv_grid(kernel_size=self.KERNEL_SIZE, stride=1)
+        dst_ijks = dst_grid_batch.ijk.jdata
+
+        conv_plan = ConvolutionPlan.from_grid_batch(
+            kernel_size=self.KERNEL_SIZE,
+            stride=1,
+            source_grid=grid_batch,
+            target_grid=dst_grid_batch,
+        )
 
         for k0 in range(self.KERNEL_SIZE[0]):
             for k1 in range(self.KERNEL_SIZE[1]):
                 for k2 in range(self.KERNEL_SIZE[2]):
-                    # Create a kernel that has just an impulse at the current location
+                    # Kernel with single impulse at (k0, k1, k2)
                     weights = torch.zeros((1, 1, *self.KERNEL_SIZE), device=device, dtype=dtype)
                     weights[0, 0, k0, k1, k2] = 1
-                    self.assertEqual(weights.sum().item(), 1)
 
-                    convolved_features_jagged = conv_plan.execute(features, weights)
-                    convolved_features_flat = convolved_features_jagged.jdata.flatten()
-                    self.assertEqual(convolved_features_flat.sum().item(), 1)
+                    output = conv_plan.execute(features, weights)
+                    output_flat = output.jdata.flatten()
 
-                    nonzero_mask = convolved_features_flat != 0
-                    ijks_of_nonzero = dst_ijks[nonzero_mask].contiguous()
-                    self.assertEqual(len(ijks_of_nonzero), 1)
-                    got_output_coord = tuple(ijks_of_nonzero.flatten().tolist())
-                    print(f"{k0, k1, k2} -> ijks_of_nonzero: {got_output_coord}")
+                    # Find the non-zero output location
+                    nonzero_mask = output_flat != 0
+                    self.assertEqual(nonzero_mask.sum().item(), 1)
+                    got_coord = tuple(dst_ijks[nonzero_mask].flatten().tolist())
 
-                    # Expected output coordinate
-                    centered_kernel_coord = (
-                        k0 - kernel_half_width[0],
-                        k1 - kernel_half_width[1],
-                        k2 - kernel_half_width[2],
+                    # Expected: input_coord - (kernel_idx - kernel_half)
+                    expected_coord = (
+                        self.SINGLE_COORD[0] - (k0 - kernel_half[0]),
+                        self.SINGLE_COORD[1] - (k1 - kernel_half[1]),
+                        self.SINGLE_COORD[2] - (k2 - kernel_half[2]),
                     )
-                    expected_output_coord = (
-                        self.SINGLE_COORD[0] - centered_kernel_coord[0],
-                        self.SINGLE_COORD[1] - centered_kernel_coord[1],
-                        self.SINGLE_COORD[2] - centered_kernel_coord[2],
-                    )
-                    self.assertEqual(got_output_coord, expected_output_coord)
+                    self.assertEqual(got_coord, expected_coord)
 
-    @parameterized.expand(all_device_dtype_combos)
-    def test_single_impulse(self, device: DeviceIdentifier, dtype: torch.dtype):
+    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    def test_single_impulse_forward(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
-        This test creates a src grid with a single nonzero voxel as an impulse.
-        The weights kernel that is created is anti-symmetric. The dst grid topology
-        is already tested elsewhere. Here we validate that the resulting convolution
-        is correct.
+        Test forward convolution of a single impulse against dense ground truth.
+
+        Creates a single-voxel input, convolves with an anti-symmetric kernel,
+        and verifies the sparse output matches the dense convolution result.
         """
         device = resolve_device(device)
+        half_kernel = tuple(k // 2 for k in self.KERNEL_SIZE)
 
-        # For single impulse, we just need to make sure it's far enough away from
-        # the boundary of the volume.
-        # This is just validating that our test parameters are set up correctly.
-        expected_volume_shape = tuple(a + 2 for a in self.KERNEL_SIZE)
-        half_kernel_size = tuple(a // 2 for a in self.KERNEL_SIZE)
-        expected_impulse_coord = tuple(1 + a for a in half_kernel_size)
-        self.assertEqual(expected_volume_shape, self.SINGLE_VOLUME_SHAPE)
-        self.assertEqual(expected_impulse_coord, self.SINGLE_COORD)
-        print("Confirmed that the expected volume/coord matches the config.")
+        # Validate test configuration
+        expected_volume = tuple(k + 2 for k in self.KERNEL_SIZE)
+        expected_coord = tuple(1 + k for k in half_kernel)
+        self.assertEqual(expected_volume, self.SINGLE_VOLUME_SHAPE)
+        self.assertEqual(expected_coord, self.SINGLE_COORD)
 
-        # Create a src grid with batch size 1 and a single nonzero voxel as an impulse.
+        # Create input
         coord = torch.tensor(self.SINGLE_COORD, device=device, dtype=torch.int32)
-        ijks = JaggedTensor(coord.unsqueeze(0))
+        grid_batch = create_grid_from_coords(coord.unsqueeze(0), device)
         features = JaggedTensor(torch.ones((1, 1), device=device, dtype=dtype))
-        grid_batch = GridBatch.from_ijk(ijks)
-        dense_field_from_grid_batch = grid_batch.inject_to_dense_cmajor(
-            features, min_coord=(0, 0, 0), grid_size=self.SINGLE_VOLUME_SHAPE
-        )
 
-        # Anti-symmetric kernel
+        # Anti-symmetric kernel (no symmetry that could hide bugs)
         kernel = fourier_anti_symmetric_kernel(self.KERNEL_SIZE, dtype=dtype, device=device)
         self.assertFalse(has_any_symmetry(kernel))
-        print("Confirmed that the kernel is anti-symmetric.")
-        kernel_with_channels = kernel.reshape(1, 1, *self.KERNEL_SIZE)
-        kernel_sum = kernel_with_channels.sum().item()
+        kernel_5d = kernel.reshape(1, 1, *self.KERNEL_SIZE)
+        kernel_sum = kernel_5d.sum().item()
 
-        # Dense impulse field.
-        dense_impulse_field = torch.zeros((1, 1) + self.SINGLE_VOLUME_SHAPE, device=device, dtype=dtype)
-        dense_impulse_field[0, 0, coord[0], coord[1], coord[2]] = 1
-        self.assertEqual(dense_impulse_field.sum().item(), 1)
-        print("Confirmed that the dense impulse field has a single nonzero voxel.")
+        # Dense ground truth
+        dense_input = torch.zeros((1, 1) + self.SINGLE_VOLUME_SHAPE, device=device, dtype=dtype)
+        dense_input[0, 0, coord[0], coord[1], coord[2]] = 1
 
-        # Test that our manually constructed impulse field matches what we get from the grid batch
-        torch.testing.assert_close(dense_impulse_field, dense_field_from_grid_batch, atol=1e-5, rtol=1e-6)
-        print("Confirmed that the dense impulse field matches the grid batch impulse field.")
+        with disable_tf32():
+            dense_output = torch.nn.functional.conv3d(input=dense_input, weight=kernel_5d, padding="same")
 
-        # Test the dense convolution ourselves.
-        _backend_setting = torch.backends.cudnn.allow_tf32
-        # Disable TF32 for consistent precision across CPU and CUDA
-        torch.backends.cudnn.allow_tf32 = False
-        dense_convolved = torch.nn.functional.conv3d(
-            input=dense_impulse_field, weight=kernel_with_channels, padding="same"
-        )
-        torch.backends.cudnn.allow_tf32 = _backend_setting
-        self.assertEqual(dense_impulse_field.shape, dense_convolved.shape)
-        dense_convolved_flat = dense_convolved.flatten()
-        print("Confirmed that the dense convolved has the same shape as the dense impulse field.")
+        self.assertAlmostEqual(dense_output.sum().item(), kernel_sum, places=5)
 
-        # This dense convolution is our ground truth. Since the input is just an impulse, the
-        # convolution should have the same sum as the kernel, and in fact should be the kernel
-        # flipped. We've tested this heavily elsewhere, so we'll just assert that the sums are
-        # the same.
-        self.assertAlmostEqual(dense_convolved.sum().item(), kernel_sum, places=5)
-        print("Confirmed that the dense convolved has the same sum as the kernel.")
-
-        # Get a convolution plan
+        # Sparse convolution
         dst_grid_batch = grid_batch.conv_grid(kernel_size=self.KERNEL_SIZE, stride=1)
         dst_ijks = dst_grid_batch.ijk.jdata
 
-        # The dst_ijks should correspond to all voxel locations in the footprint of the
-        # kernel over the impulse. Since the kernel is centered at SINGLE_COORD in a volume of
-        # SINGLE_VOLUME_SHAPE, with stride=1, the output ijks should cover all coordinates
-        # reachable by the kernel centered at SINGLE_COORD, which is exactly all coordinates
-        # in a (3,5,7) block centered at (2,3,4), i.e. ijk in (2+a, 3+b, 4+c)
-        # for a in [-1,0,1], b in [-2,-1,0,1,2], c in [-3,-2,-1,0,1,2,3]
-        #
-        # Let's build the set of expected ijks and compare to dst_ijks.
-        expected_ijks = []
-        for di in range(self.KERNEL_SIZE[0]):
-            for dj in range(self.KERNEL_SIZE[1]):
-                for dk in range(self.KERNEL_SIZE[2]):
-                    i = self.SINGLE_COORD[0] + di - half_kernel_size[0]
-                    j = self.SINGLE_COORD[1] + dj - half_kernel_size[1]
-                    k = self.SINGLE_COORD[2] + dk - half_kernel_size[2]
-                    expected_ijks.append([i, j, k])
-        expected_ijks = torch.tensor(expected_ijks, device=device, dtype=torch.int32)
-        # dst_ijks is shape (N, 3), expected_ijks is (N, 3)
-        self.assertEqual(dst_ijks.shape, expected_ijks.shape)
-        self.assertEqual(3, dst_ijks.shape[1])
-        self.assertEqual(3, expected_ijks.shape[1])
-        print("Confirmed that the dst ijks matches the expected ijks.")
-
-        # Test the expected kernel volume against the dst ijks. This is technically
-        # just testing the dst grid, which we've done elsewhere.
-        expected_kernel_volume = math.prod(self.KERNEL_SIZE)
-        dst_ijks_volume = len(dst_ijks)
-        print(f"Expected kernel volume: {expected_kernel_volume}")
-        print(f"Number of output ijks: {dst_ijks_volume}")
-        self.assertEqual(dst_ijks_volume, expected_kernel_volume)
-        print("Confirmed that the dst ijks volume matches the expected kernel volume.")
-
-        # Test the expected bounds.
-        expected_bounds_min = expected_ijks.min(dim=0)[0].tolist()
-        expected_bounds_max = expected_ijks.max(dim=0)[0].tolist()
-        dst_bounds_min = dst_ijks.min(dim=0)[0].tolist()
-        dst_bounds_max = dst_ijks.max(dim=0)[0].tolist()
-        print(f"Expected ijks bounds: {expected_bounds_min} to {expected_bounds_max}")
-        print(f"Output ijks bounds: {dst_bounds_min} to {dst_bounds_max}")
-        self.assertEqual(dst_bounds_min, expected_bounds_min)
-        self.assertEqual(dst_bounds_max, expected_bounds_max)
-        print("Confirmed that the dst ijks bounds matches the expected ijks bounds.")
-
-        # The expected ijks should be the same as the dst ijks.
-        self.assertTrue(torch.equal(expected_ijks, dst_ijks))
-        print("Confirmed that the expected ijks matches the dst ijks.")
-
-        # Create a convolution plan!
         conv_plan = ConvolutionPlan.from_grid_batch(
-            kernel_size=self.KERNEL_SIZE, stride=1, source_grid=grid_batch, target_grid=dst_grid_batch
+            kernel_size=self.KERNEL_SIZE,
+            stride=1,
+            source_grid=grid_batch,
+            target_grid=dst_grid_batch,
         )
-        from fvdb.convolution_plan import _GatherScatterBackend
-
         self.assertIsInstance(conv_plan._backend, _GatherScatterBackend)
-        print(f"Confirmed that the conv plan backend is gather_scatter.")
 
-        # Execute the convolution plan!
-        sparse_convolved_jagged = conv_plan.execute(features, kernel_with_channels)
-        sparse_convolved_flat = sparse_convolved_jagged.jdata.flatten()
+        sparse_output = conv_plan.execute(features, kernel_5d)
+        sparse_output_flat = sparse_output.jdata.flatten()
 
-        # The sum of the convolved sparse plan should be the same as the kernel sum.
-        conv_plan_sum = sparse_convolved_flat.sum().item()
-        self.assertAlmostEqual(conv_plan_sum, kernel_sum, places=5)
-        print("Confirmed that the sparse convolved has the same sum as the kernel.")
+        # Verify sparse matches dense at output locations
+        tols = get_tolerances(dtype)
+        dense_at_dst = dense_output[0, 0, dst_ijks[:, 0], dst_ijks[:, 1], dst_ijks[:, 2]]
+        torch.testing.assert_close(sparse_output_flat, dense_at_dst, rtol=tols["forward"][0], atol=tols["forward"][1])
 
-        # Extract the convolved region around the impulse
-        print(f"expected_bounds_min: {expected_bounds_min}")
-        print(f"expected_bounds_max: {expected_bounds_max}")
-        expected_size = tuple(mx - mn + 1 for mn, mx in zip(expected_bounds_min, expected_bounds_max))
-        print(f"expected_size: {expected_size}")
-        dense_convolved_region = dense_convolved[
-            0,
-            0,
-            expected_bounds_min[0] : expected_bounds_max[0] + 1,
-            expected_bounds_min[1] : expected_bounds_max[1] + 1,
-            expected_bounds_min[2] : expected_bounds_max[2] + 1,
-        ]
-        dense_convolved_region_flat = dense_convolved_region.flatten()
-        print(f"dense_convolved_region.shape: {dense_convolved_region.shape}")
-        print(f"dense_convolved.shape: {dense_convolved.shape}")
+        # Verify sum matches kernel sum
+        self.assertAlmostEqual(sparse_output_flat.sum().item(), kernel_sum, places=5)
 
-        self.assertEqual(dense_convolved_region.shape, kernel.shape)
-        print("Confirmed that the dense convolved region matches the kernel shape.")
-
-        # Since PyTorch conv3d performs cross-correlation, we need to flip to get the result to
-        # match the kernel.
-        kernel_flipped = torch.flip(kernel, dims=[0, 1, 2])
-
-        # The flipped convolved region should match the kernel
-        torch.testing.assert_close(dense_convolved_region, kernel_flipped, rtol=1e-5, atol=1e-6)
-        print("Confirmed that the dense convolved region matches the flipped kernel.")
-
-        # The sparse convolved values should match the dense values, because we've
-        # already tested that the ijks are the same.
-        torch.testing.assert_close(sparse_convolved_flat, dense_convolved_region_flat, rtol=1e-5, atol=1e-6)
-        print("Confirmed that the sparse convolved values match the dense convolved region.")
-
-        # Even though this is transitive, we'll assert it explicitly.
-        torch.testing.assert_close(sparse_convolved_flat, kernel_flipped.flatten(), rtol=1e-5, atol=1e-6)
-        print("Confirmed that the sparse convolved values match the flipped kernel.")
-
-        # Lastly, we'll get dense convolved from the sparse convolved
-        dense_convolved_from_sparse = dst_grid_batch.inject_to_dense_cmajor(
-            sparse_convolved_jagged, min_coord=(0, 0, 0), grid_size=self.SINGLE_VOLUME_SHAPE
-        )
-        torch.testing.assert_close(dense_convolved_from_sparse, dense_convolved, rtol=1e-5, atol=1e-6)
-        print("Confirmed that the dense convolved from the sparse convolved matches the dense convolved.")
-
-        # Let's also test the output of the convolution_utils ground truth.
-        gt_dense_activation, gt_dense_convolved = conv_ground_truth_stride_1(
+        # Verify utility function also produces correct ground truth
+        gt_activation, gt_convolved = conv_ground_truth_stride_1(
             grid_batch=grid_batch,
             activation=features,
-            weights=kernel_with_channels,
+            weights=kernel_5d,
             dense_dims=self.SINGLE_VOLUME_SHAPE,
             ijk_min=(0, 0, 0),
             allow_tf32=False,
         )
-        torch.testing.assert_close(gt_dense_activation, dense_impulse_field, rtol=1e-5, atol=1e-6)
-        torch.testing.assert_close(gt_dense_convolved, dense_convolved, rtol=1e-5, atol=1e-6)
-        print("Confirmed that the utils ground truth dense convolved matches the dense convolved.")
+        torch.testing.assert_close(gt_convolved, dense_output, rtol=tols["forward"][0], atol=tols["forward"][1])
 
-    @parameterized.expand(all_device_dtype_combos)
-    def test_multiple_impulses(self, device: DeviceIdentifier, dtype: torch.dtype):
+    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    def test_multiple_impulses_forward(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """
+        Test forward convolution of multiple isolated impulses.
+
+        Uses hermit impulses (no kernel overlap) to ensure each impulse
+        contributes independently to the output.
+        """
         device = resolve_device(device)
 
+        # Generate hermit impulses (no overlap)
         impulse_coords, impulse_field = generate_hermit_impulses_dense(
             num_candidates=self.NUM_CANDIDATES,
             volume_shape=self.VOLUME_SHAPE,
@@ -337,272 +340,504 @@ class TestConvDefault(unittest.TestCase):
             dtype=dtype,
             device=device,
         )
-
         num_impulses = len(impulse_coords)
-        print(f"impulse_coords.shape: {impulse_coords.shape}")
-        print(f"Number of generated impulses: {num_impulses}")
 
-        total_value = torch.sum(impulse_field).item()
-        print(f"Total sum of impulse_field: {total_value}")
-        self.assertAlmostEqual(total_value, num_impulses, places=5)
-        self.assertEqual(round(total_value), num_impulses)
-        print("Confirmed that the total sum of impulse_field matches the total number of impulses.")
-
-        # Test that the impulse field's shape matches the volume shape
-        self.assertEqual(impulse_field.shape, self.VOLUME_SHAPE)
-        print("Confirmed that the impulse field shape matches the volume shape.")
-
-        # Get a kernel and convolve the impulse field with it
+        # Anti-symmetric kernel
         kernel = fourier_anti_symmetric_kernel(self.KERNEL_SIZE, dtype=dtype, device=device)
         self.assertFalse(has_any_symmetry(kernel))
-        print("Confirmed that the kernel is anti-symmetric.")
+        self.assertTrue(torch.all(kernel != 0))
+        kernel_5d = kernel.reshape(1, 1, *self.KERNEL_SIZE)
 
-        self.assertTrue(torch.all(kernel != 0), "Kernel has zero entries!")
-        print("Confirmed that the kernel has no zeros.")
+        # Dense ground truth
+        dense_input = impulse_field.reshape(1, 1, *self.VOLUME_SHAPE)
+        with disable_tf32():
+            dense_output = torch.nn.functional.conv3d(input=dense_input, weight=kernel_5d, padding="same")
 
-        impulse_field_with_channel_and_batch = impulse_field.reshape(1, 1, *self.VOLUME_SHAPE)
-        kernel_with_channels = kernel.reshape(1, 1, *self.KERNEL_SIZE)
-        kernel_volume = math.prod(self.KERNEL_SIZE)
-
-        _backend_setting = torch.backends.cudnn.allow_tf32
-        # Disable TF32 for consistent precision across CPU and CUDA
-        torch.backends.cudnn.allow_tf32 = False
-        dense_convolved = torch.nn.functional.conv3d(
-            input=impulse_field_with_channel_and_batch, weight=kernel_with_channels, padding="same"
-        )
-        torch.backends.cudnn.allow_tf32 = _backend_setting
-        self.assertEqual(impulse_field_with_channel_and_batch.shape, dense_convolved.shape)
-        print("Confirmed that the convolved shape matches the impulse field shape.")
-
-        # Let's build a grid batch from the impulse coords
-        jagged_impulse_coords = JaggedTensor(impulse_coords)
-        grid_batch = GridBatch.from_ijk(jagged_impulse_coords)
-        self.assertEqual(grid_batch.grid_count, 1)
-        print("Confirmed that the grid batch has a single grid.")
-
-        # Create a dst grid batch from the kernel size
+        # Sparse convolution
+        grid_batch = create_grid_from_coords(impulse_coords, device)
         dst_grid_batch = grid_batch.conv_grid(kernel_size=self.KERNEL_SIZE, stride=1)
         dst_ijks = dst_grid_batch.ijk.jdata
-        print(f"dst_ijks.shape: {dst_ijks.shape}")
-        dst_ijks_count = len(dst_ijks)
 
-        # The ijks should be the same as the coords of the nonzero entries of the
-        # dense convolved field.
-        dense_convolved_rect_only = dense_convolved[0, 0, :, :, :]
-        self.assertEqual(dense_convolved_rect_only.shape, self.VOLUME_SHAPE)
-        print("Confirmed that the dense convolved rect only shape matches the volume shape.")
+        # Verify topology matches dense non-zeros
+        dense_nonzero = torch.nonzero(dense_output[0, 0]).to(torch.int32)
+        assert_coords_equal(dst_ijks, dense_nonzero)
 
-        nonzero_coords = torch.nonzero(dense_convolved_rect_only).to(torch.int32)
-        print(f"nonzero_coords.shape: {nonzero_coords.shape}")
-        nonzero_coords_count = len(nonzero_coords)
-        self.assertEqual(nonzero_coords_count, dst_ijks_count)
-        print("Confirmed that the number of nonzero coords matches the number of dst ijks.")
-
-        # Because of the way sparse volumes work, the dst ijks will be in tile clumps, so won't
-        # necessarily match the nonzero coords in ordering. We'll reorder them both using a little
-        # encoding
-        def sort_coords(coords):
-            encoding = coords[:, 0] * 10000 + coords[:, 1] * 1000 + coords[:, 2]
-            perm = torch.argsort(encoding)
-            return coords[perm], perm
-
-        nonzero_coords_sorted, nonzero_coords_perm = sort_coords(nonzero_coords)
-        dst_ijks_sorted, dst_ijks_perm = sort_coords(dst_ijks)
-        self.assertTrue(torch.equal(nonzero_coords_sorted, dst_ijks_sorted))
-        print("Confirmed that the nonzero coords sorted matches the dst ijks sorted.")
-
-        # Create a convolution plan!
-        conv_plan = ConvolutionPlan.from_grid_batch(
-            kernel_size=self.KERNEL_SIZE, stride=1, source_grid=grid_batch, target_grid=dst_grid_batch
-        )
-        from fvdb.convolution_plan import _GatherScatterBackend
-
-        self.assertIsInstance(conv_plan._backend, _GatherScatterBackend)
-        print(f"Confirmed that the conv plan backend is gather_scatter.")
-
-        # Execute the convolution plan!
-        self.assertEqual(num_impulses, len(impulse_coords))
-        print(f"Confirmed that the number of impulses matches the number of impulse coords.")
+        # Execute convolution
         features = JaggedTensor(torch.ones((num_impulses, 1), device=device, dtype=dtype))
-        sparse_convolved_jagged = conv_plan.execute(features, kernel_with_channels)
-        sparse_convolved_flat = sparse_convolved_jagged.jdata.flatten()
-
-        self.assertEqual(len(sparse_convolved_flat), dst_ijks_count)
-        print("Confirmed that the sparse convolution output has the same number of voxels as the dst ijks.")
-
-        # Get the dense convolved at the location of the nonzero coords
-        dense_convolved_at_nonzero_coords_sorted = dense_convolved[
-            0, 0, nonzero_coords_sorted[:, 0], nonzero_coords_sorted[:, 1], nonzero_coords_sorted[:, 2]
-        ]
-        dense_convolved_at_nonzero_coords_sorted_flat = dense_convolved_at_nonzero_coords_sorted.flatten()
-        self.assertEqual(len(dense_convolved_at_nonzero_coords_sorted_flat), dst_ijks_count)
-        print(
-            "Confirmed that the dense convolved at the nonzero coords has the same number of voxels as the dst ijks sorted."
+        conv_plan = ConvolutionPlan.from_grid_batch(
+            kernel_size=self.KERNEL_SIZE,
+            stride=1,
+            source_grid=grid_batch,
+            target_grid=dst_grid_batch,
         )
 
-        # Reorder the sparse convolved to match the nonzero coords sorted
-        sparse_convolved_sorted = sparse_convolved_flat[dst_ijks_perm].flatten()
-        self.assertEqual(len(sparse_convolved_sorted), dst_ijks_count)
-        print("Confirmed that the sparse convolved sorted has the same number of voxels as the dst ijks sorted.")
+        sparse_output = conv_plan.execute(features, kernel_5d)
+        sparse_flat = sparse_output.jdata.flatten()
 
-        # The dense convolved at the nonzero coords should match the sparse convolved
+        # Compare values (need to align ordering)
+        dst_sorted, dst_perm = sort_coords_by_ijk(dst_ijks)
+        dense_sorted, _ = sort_coords_by_ijk(dense_nonzero)
+
+        dense_values_sorted = dense_output[0, 0, dense_sorted[:, 0], dense_sorted[:, 1], dense_sorted[:, 2]]
+        sparse_values_sorted = sparse_flat[dst_perm]
+
+        tols = get_tolerances(dtype)
         torch.testing.assert_close(
-            dense_convolved_at_nonzero_coords_sorted_flat, sparse_convolved_sorted, rtol=1e-5, atol=1e-6
+            sparse_values_sorted, dense_values_sorted, rtol=tols["forward"][0], atol=tols["forward"][1]
         )
-        print("Confirmed that the dense convolved at the nonzero coords matches the sparse convolved.")
 
-    # ==================================================================================
-    # Backward convolution tests
-    # ==================================================================================
+    # =========================================================================
+    # Backward Pass Tests
+    # =========================================================================
 
-    @parameterized.expand(all_device_dtype_combos)
+    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
     def test_single_impulse_backward(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test backward pass of sparse convolution against dense ground truth.
 
-        This test creates the same single impulse setup as test_single_impulse,
-        but with requires_grad=True on both features and weights. We then:
-        1. Run forward pass on both sparse (ConvolutionPlan) and dense (conv3d)
-        2. Create an impulse output gradient at the center of the dst grid
-        3. Run backward pass on both
-        4. Compare the resulting gradients
-
-        The sparse convolution backward should produce identical gradients to
-        the dense convolution backward for the same mathematical operation.
+        Creates a single impulse, runs forward and backward passes on both
+        sparse and dense implementations, and verifies gradients match.
         """
         device = resolve_device(device)
+        half_kernel = tuple(k // 2 for k in self.KERNEL_SIZE)
 
-        # Validate test parameters (same as forward test)
-        expected_volume_shape = tuple(a + 2 for a in self.KERNEL_SIZE)
-        half_kernel_size = tuple(a // 2 for a in self.KERNEL_SIZE)
-        expected_impulse_coord = tuple(1 + a for a in half_kernel_size)
-        self.assertEqual(expected_volume_shape, self.SINGLE_VOLUME_SHAPE)
-        self.assertEqual(expected_impulse_coord, self.SINGLE_COORD)
-        print("Confirmed that the expected volume/coord matches the config.")
+        # Validate config
+        expected_coord = tuple(1 + k for k in half_kernel)
+        self.assertEqual(expected_coord, self.SINGLE_COORD)
 
-        # Create src grid with single impulse
+        # Create input with gradient tracking
         coord = torch.tensor(self.SINGLE_COORD, device=device, dtype=torch.int32)
-        ijks = JaggedTensor(coord.unsqueeze(0))
-        grid_batch = GridBatch.from_ijk(ijks)
+        grid_batch = create_grid_from_coords(coord.unsqueeze(0), device)
 
-        # Create features with requires_grad
         features_data = torch.ones((1, 1), device=device, dtype=dtype, requires_grad=True)
         features = JaggedTensor(features_data)
 
-        # Create dst grid (the convolution output topology)
         dst_grid_batch = grid_batch.conv_grid(kernel_size=self.KERNEL_SIZE, stride=1)
         dst_ijks = dst_grid_batch.ijk.jdata
-        kernel_volume = math.prod(self.KERNEL_SIZE)
-        self.assertEqual(len(dst_ijks), kernel_volume)
-        print(f"Confirmed dst grid has {kernel_volume} voxels.")
 
-        # Anti-symmetric kernel with requires_grad
+        # Kernel with gradient tracking
         kernel = fourier_anti_symmetric_kernel(self.KERNEL_SIZE, dtype=dtype, device=device)
-        self.assertFalse(has_any_symmetry(kernel))
-        kernel_with_channels = kernel.reshape(1, 1, *self.KERNEL_SIZE).clone()
-        kernel_with_channels.requires_grad_(True)
-        print("Created anti-symmetric kernel with requires_grad=True.")
+        kernel_5d = kernel.reshape(1, 1, *self.KERNEL_SIZE).clone().requires_grad_(True)
 
-        # Create convolution plan
+        # === Dense path ===
+        dense_input = torch.zeros((1, 1) + self.SINGLE_VOLUME_SHAPE, device=device, dtype=dtype)
+        dense_input[0, 0, coord[0], coord[1], coord[2]] = 1
+        dense_input = dense_input.clone().requires_grad_(True)
+        dense_kernel = kernel_5d.detach().clone().requires_grad_(True)
+
+        with disable_tf32():
+            dense_output = torch.nn.functional.conv3d(input=dense_input, weight=dense_kernel, padding="same")
+
+        # === Sparse path ===
         conv_plan = ConvolutionPlan.from_grid_batch(
-            kernel_size=self.KERNEL_SIZE, stride=1, source_grid=grid_batch, target_grid=dst_grid_batch
+            kernel_size=self.KERNEL_SIZE,
+            stride=1,
+            source_grid=grid_batch,
+            target_grid=dst_grid_batch,
         )
-        from fvdb.convolution_plan import _GatherScatterBackend
+        sparse_output = conv_plan.execute(features, kernel_5d)
 
-        self.assertIsInstance(conv_plan._backend, _GatherScatterBackend)
-        print("Created convolution plan.")
+        # Verify forward match
+        tols = get_tolerances(dtype)
+        dense_at_dst = dense_output[0, 0, dst_ijks[:, 0], dst_ijks[:, 1], dst_ijks[:, 2]]
+        torch.testing.assert_close(
+            sparse_output.jdata.flatten(), dense_at_dst, rtol=tols["forward"][0], atol=tols["forward"][1]
+        )
 
-        # =====================================================================
-        # DENSE GROUND TRUTH PATH (with gradients)
-        # =====================================================================
-        # Create dense impulse field with requires_grad
-        dense_impulse_field = torch.zeros((1, 1) + self.SINGLE_VOLUME_SHAPE, device=device, dtype=dtype)
-        dense_impulse_field[0, 0, coord[0], coord[1], coord[2]] = 1
-        dense_impulse_field = dense_impulse_field.clone().requires_grad_(True)
+        # === Backward ===
+        # Create output gradient at center coordinate
+        grad_coord = self.SINGLE_COORD
 
-        # Dense kernel (separate copy for dense path to isolate gradients)
-        dense_kernel = kernel_with_channels.detach().clone().requires_grad_(True)
+        # Dense gradient
+        dense_grad = torch.zeros_like(dense_output)
+        dense_grad[0, 0, grad_coord[0], grad_coord[1], grad_coord[2]] = 1
+        dense_output.backward(dense_grad)
 
-        # Dense forward
-        _backend_setting = torch.backends.cudnn.allow_tf32
-        torch.backends.cudnn.allow_tf32 = False
-        dense_output = torch.nn.functional.conv3d(input=dense_impulse_field, weight=dense_kernel, padding="same")
-        torch.backends.cudnn.allow_tf32 = _backend_setting
-        print("Dense forward pass complete.")
-
-        # =====================================================================
-        # SPARSE PATH (with gradients)
-        # =====================================================================
-        sparse_output_jagged = conv_plan.execute(features, kernel_with_channels)
-        sparse_output_flat = sparse_output_jagged.jdata.flatten()
-        print("Sparse forward pass complete.")
-
-        # Verify forward passes match (sanity check before testing backward)
-        # Extract dense output at dst_ijks locations
-        dense_output_at_dst = dense_output[0, 0, dst_ijks[:, 0], dst_ijks[:, 1], dst_ijks[:, 2]]
-        torch.testing.assert_close(sparse_output_flat, dense_output_at_dst, rtol=1e-5, atol=1e-6)
-        print("Forward pass sanity check: sparse output matches dense output at dst locations.")
-
-        # =====================================================================
-        # BACKWARD PASS
-        # =====================================================================
-        # Create output gradient with impulse at center of dst grid (which is SINGLE_COORD)
-        # This is the simplest case: gradient flows back through the single center voxel
-        output_grad_coord = self.SINGLE_COORD
-
-        # Dense output gradient
-        dense_output_grad = torch.zeros_like(dense_output)
-        dense_output_grad[0, 0, output_grad_coord[0], output_grad_coord[1], output_grad_coord[2]] = 1
-
-        # Sparse output gradient - need to find the index in dst_ijks that matches output_grad_coord
-        output_grad_coord_tensor = torch.tensor(output_grad_coord, device=device, dtype=torch.int32)
-        matches = (dst_ijks == output_grad_coord_tensor).all(dim=1)
-        output_grad_idx = int(torch.nonzero(matches).squeeze().item())
-        print(f"Output gradient at coord {output_grad_coord}, sparse index {output_grad_idx}")
-
-        sparse_output_grad_data = torch.zeros_like(sparse_output_jagged.jdata)
-        sparse_output_grad_data[output_grad_idx, 0] = 1
-        sparse_output_grad = JaggedTensor(sparse_output_grad_data)
-
-        # Run backward on dense
-        dense_output.backward(dense_output_grad)
-        dense_input_grad = dense_impulse_field.grad
-        dense_kernel_grad = dense_kernel.grad
-        assert dense_input_grad is not None
-        assert dense_kernel_grad is not None
-        print("Dense backward pass complete.")
-
-        # Run backward on sparse
-        # The sparse backward is done by calling backward on the jagged tensor's jdata
-        sparse_output_jagged.jdata.backward(sparse_output_grad_data)
-        sparse_input_grad = features_data.grad
-        sparse_kernel_grad = kernel_with_channels.grad
-        assert sparse_input_grad is not None
-        assert sparse_kernel_grad is not None
-        print("Sparse backward pass complete.")
-
-        # =====================================================================
-        # COMPARE GRADIENTS
-        # =====================================================================
+        # Sparse gradient
+        grad_coord_tensor = torch.tensor(grad_coord, device=device, dtype=torch.int32)
+        grad_idx = int(torch.nonzero((dst_ijks == grad_coord_tensor).all(dim=1)).squeeze().item())
+        sparse_grad = torch.zeros_like(sparse_output.jdata)
+        sparse_grad[grad_idx, 0] = 1
+        sparse_output.jdata.backward(sparse_grad)
 
         # Compare input gradients
-        # The sparse input gradient is for the single voxel at SINGLE_COORD
-        # The dense input gradient at that location should match
-        dense_input_grad_at_coord = dense_input_grad[0, 0, coord[0], coord[1], coord[2]]
-        print(f"Dense input grad at impulse coord: {dense_input_grad_at_coord.item()}")
-        print(f"Sparse input grad: {sparse_input_grad.flatten().item()}")
+        dense_input_grad = dense_input.grad
+        sparse_input_grad = features_data.grad
+        assert dense_input_grad is not None and sparse_input_grad is not None
+
+        dense_grad_at_coord = dense_input_grad[0, 0, coord[0], coord[1], coord[2]]
         torch.testing.assert_close(
             sparse_input_grad.flatten(),
-            dense_input_grad_at_coord.unsqueeze(0),
-            rtol=1e-5,
-            atol=1e-6,
+            dense_grad_at_coord.unsqueeze(0),
+            rtol=tols["input_grad"][0],
+            atol=tols["input_grad"][1],
         )
-        print("INPUT GRADIENT TEST PASSED: Sparse input grad matches dense input grad at impulse coord.")
 
         # Compare kernel gradients
-        print(f"Dense kernel grad shape: {dense_kernel_grad.shape}")
-        print(f"Sparse kernel grad shape: {sparse_kernel_grad.shape}")
-        print(f"Dense kernel grad sum: {dense_kernel_grad.sum().item()}")
-        print(f"Sparse kernel grad sum: {sparse_kernel_grad.sum().item()}")
-        torch.testing.assert_close(sparse_kernel_grad, dense_kernel_grad, rtol=1e-5, atol=1e-6)
-        print("KERNEL GRADIENT TEST PASSED: Sparse kernel grad matches dense kernel grad.")
+        dense_kernel_grad = dense_kernel.grad
+        sparse_kernel_grad = kernel_5d.grad
+        assert dense_kernel_grad is not None and sparse_kernel_grad is not None
+
+        torch.testing.assert_close(
+            sparse_kernel_grad, dense_kernel_grad, rtol=tols["kernel_grad"][0], atol=tols["kernel_grad"][1]
+        )
+
+    # =========================================================================
+    # Strided Convolution Tests (Forward + Backward)
+    # =========================================================================
+
+    def _test_strided_conv_forward_backward(
+        self,
+        device: DeviceIdentifier,
+        dtype: torch.dtype,
+        stride: tuple[int, int, int],
+        cluster_coords: torch.Tensor,
+        in_channels: int = 2,
+        out_channels: int = 3,
+    ):
+        """
+        Core test for strided convolution forward and backward passes.
+
+        Tests that:
+        1. Forward pass matches dense PyTorch ground truth
+        2. Backward pass produces correct input gradients
+        3. Backward pass produces correct kernel gradients
+
+        Args:
+            device: Device identifier
+            dtype: Data type
+            stride: Stride tuple (s0, s1, s2)
+            cluster_coords: Input coordinates
+            in_channels: Number of input channels
+            out_channels: Number of output channels
+        """
+        tols = get_tolerances(dtype, kernel_size=self.KERNEL_SIZE)
+        fwd_rtol, fwd_atol = tols["forward"]
+        input_grad_rtol, input_grad_atol = tols["input_grad"]
+        kernel_grad_rtol, kernel_grad_atol = tols["kernel_grad"]
+
+        device = resolve_device(device)
+        cluster_coords = cluster_coords.to(device=device)
+
+        # Create grid and destination grid
+        grid_batch = create_grid_from_coords(cluster_coords, device)
+        dst_grid_batch = grid_batch.conv_grid(kernel_size=self.KERNEL_SIZE, stride=stride)
+        dst_coords = dst_grid_batch.ijk.jdata
+
+        num_voxels = len(cluster_coords)
+
+        # Create features with gradient tracking
+        features_data = torch.randn((num_voxels, in_channels), device=device, dtype=dtype, requires_grad=True)
+        features = JaggedTensor(features_data)
+
+        # Create anti-symmetric kernel with gradient tracking
+        kernel_3d = fourier_anti_symmetric_kernel(self.KERNEL_SIZE, dtype=dtype, device=device)
+        self.assertFalse(has_any_symmetry(kernel_3d))
+
+        # Expand to multi-channel
+        kernel_5d = kernel_3d.unsqueeze(0).unsqueeze(0).expand(out_channels, in_channels, -1, -1, -1)
+        kernel_5d = kernel_5d.clone().requires_grad_(True)
+
+        # === Sparse Forward ===
+        conv_plan = ConvolutionPlan.from_grid_batch(
+            kernel_size=self.KERNEL_SIZE,
+            stride=stride,
+            source_grid=grid_batch,
+            target_grid=dst_grid_batch,
+        )
+        sparse_output = conv_plan.execute(features, kernel_5d)
+
+        # === Dense Ground Truth Forward ===
+        dense_features = features_data.detach().clone().requires_grad_(True)
+        dense_kernel = kernel_5d.detach().clone().requires_grad_(True)
+
+        dense_output_full, dense_output_at_dst = conv_ground_truth_strided(
+            src_grid=grid_batch,
+            dst_grid=dst_grid_batch,
+            activation=JaggedTensor(dense_features),
+            weights=dense_kernel,
+            stride=stride,
+            allow_tf32=False,
+        )
+
+        # Verify forward pass matches
+        sparse_values_sorted, sparse_perm = sort_coords_by_ijk(dst_coords)
+
+        sparse_out_sorted = sparse_output.jdata[sparse_perm]
+        dense_out_sorted = dense_output_at_dst[sparse_perm]
+
+        try:
+            torch.testing.assert_close(sparse_out_sorted, dense_out_sorted, rtol=fwd_rtol, atol=fwd_atol)
+        except AssertionError:
+            diag = diagnose_tensor_mismatch(
+                f"Forward output (stride={stride}, dtype={dtype})",
+                sparse_out_sorted,
+                dense_out_sorted,
+                rtol=fwd_rtol,
+                atol=fwd_atol,
+            )
+            raise AssertionError(diag) from None
+
+        # === Backward Pass ===
+        # Create output gradient (random for thorough gradient testing)
+        output_grad = torch.randn_like(sparse_output.jdata)
+
+        # Sparse backward
+        sparse_output.jdata.backward(output_grad)
+        sparse_input_grad = features_data.grad
+        sparse_kernel_grad = kernel_5d.grad
+
+        # Dense backward
+        # Re-run the ground truth with gradient tracking
+        dense_features2 = features_data.detach().clone().requires_grad_(True)
+        dense_kernel2 = kernel_5d.detach().clone().requires_grad_(True)
+
+        # Manually build dense input and run conv
+        src_coords = grid_batch.ijk.jdata
+        kernel_size = dense_kernel2.shape[2:]
+        kernel_half = tuple(k // 2 for k in kernel_size)
+
+        dst_min = dst_coords.min(dim=0).values.tolist()
+        dst_max = dst_coords.max(dim=0).values.tolist()
+        src_min = src_coords.min(dim=0).values.tolist()
+        src_max = src_coords.max(dim=0).values.tolist()
+
+        input_min_needed = tuple(dst_min[i] * stride[i] - kernel_half[i] for i in range(3))
+        input_max_needed = tuple(dst_max[i] * stride[i] + kernel_half[i] for i in range(3))
+
+        dense_min_raw = tuple(min(input_min_needed[i], src_min[i]) for i in range(3))
+        dense_max = tuple(max(input_max_needed[i], src_max[i]) for i in range(3))
+
+        # Align dense_min to stride grid for correct coordinate mapping
+        dense_min = tuple((dense_min_raw[i] // stride[i]) * stride[i] for i in range(3))
+        dense_shape = tuple(dense_max[i] - dense_min[i] + 1 for i in range(3))
+
+        dense_input = torch.zeros((1, in_channels) + dense_shape, device=device, dtype=dtype, requires_grad=True)
+
+        # Scatter features into dense (need differentiable path)
+        dense_input_data = dense_input.clone()
+        for idx, coord in enumerate(src_coords):
+            local_idx = tuple(coord[i].item() - dense_min[i] for i in range(3))
+            dense_input_data[0, :, local_idx[0], local_idx[1], local_idx[2]] = dense_features2[idx]
+
+        with disable_tf32():
+            dense_output2 = torch.nn.functional.conv3d(
+                input=dense_input_data, weight=dense_kernel2, padding=kernel_half, stride=stride
+            )
+
+        # Compute output offset (dense_min is now aligned to stride)
+        output_offset = tuple(dense_min[i] // stride[i] for i in range(3))
+
+        # Apply gradient at dst coordinates
+        loss = torch.tensor(0.0, device=device, dtype=dtype)
+        for idx, coord in enumerate(dst_coords):
+            out_idx = tuple(coord[i].item() - output_offset[i] for i in range(3))
+            if all(0 <= out_idx[i] < dense_output2.shape[i + 2] for i in range(3)):
+                loss = loss + (dense_output2[0, :, out_idx[0], out_idx[1], out_idx[2]] * output_grad[idx]).sum()
+
+        loss.backward()
+
+        dense_input_grad = dense_features2.grad
+        dense_kernel_grad = dense_kernel2.grad
+
+        # Compare input gradients
+        assert sparse_input_grad is not None, "Sparse input grad is None"
+        assert dense_input_grad is not None, "Dense input grad is None"
+
+        try:
+            torch.testing.assert_close(sparse_input_grad, dense_input_grad, rtol=input_grad_rtol, atol=input_grad_atol)
+        except AssertionError:
+            diag = diagnose_tensor_mismatch(
+                f"Input gradient (stride={stride}, dtype={dtype})",
+                sparse_input_grad,
+                dense_input_grad,
+                rtol=input_grad_rtol,
+                atol=input_grad_atol,
+            )
+            raise AssertionError(diag) from None
+
+        # Compare kernel gradients
+        assert sparse_kernel_grad is not None, "Sparse kernel grad is None"
+        assert dense_kernel_grad is not None, "Dense kernel grad is None"
+
+        try:
+            torch.testing.assert_close(
+                sparse_kernel_grad, dense_kernel_grad, rtol=kernel_grad_rtol, atol=kernel_grad_atol
+            )
+        except AssertionError:
+            diag = diagnose_tensor_mismatch(
+                f"Kernel gradient (stride={stride}, dtype={dtype})",
+                sparse_kernel_grad,
+                dense_kernel_grad,
+                rtol=kernel_grad_rtol,
+                atol=kernel_grad_atol,
+            )
+            raise AssertionError(diag) from None
+
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
+    def test_strided_conv_uniform_forward_backward(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """Test forward and backward for uniform stride (2,2,2)."""
+        device_resolved = resolve_device(device)
+        cluster_coords = get_cluster_edge_aligned(self.KERNEL_SIZE, device_resolved)
+        self._test_strided_conv_forward_backward(
+            device,
+            dtype,
+            stride=(2, 2, 2),
+            cluster_coords=cluster_coords,
+        )
+
+    @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
+    def test_strided_conv_nonuniform_forward_backward(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """Test forward and backward for non-uniform stride (1,2,3)."""
+        device_resolved = resolve_device(device)
+        cluster_coords = get_cluster_edge_aligned(self.KERNEL_SIZE, device_resolved)
+        self._test_strided_conv_forward_backward(
+            device,
+            dtype,
+            stride=(1, 2, 3),
+            cluster_coords=cluster_coords,
+        )
+
+    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    def test_strided_conv_large_stride_forward_backward(self, device: DeviceIdentifier, dtype: torch.dtype):
+        """Test forward and backward for larger stride (3,3,3) with full device/dtype coverage."""
+        device_resolved = resolve_device(device)
+        # Use a larger cluster to have meaningful output
+        cluster_coords = torch.tensor(
+            [
+                [3, 3, 4],  # Base position (offset to ensure positive outputs)
+                [6, 3, 4],
+                [3, 6, 4],
+                [3, 3, 7],
+                [6, 6, 7],
+                [9, 6, 10],
+                [6, 9, 7],
+                [9, 9, 10],
+            ],
+            device=device_resolved,
+            dtype=torch.int32,
+        )
+        self._test_strided_conv_forward_backward(
+            device,
+            dtype,
+            stride=(3, 3, 3),
+            cluster_coords=cluster_coords,
+        )
+
+    # =========================================================================
+    # Autograd gradcheck tests
+    # =========================================================================
+    #
+    # torch.autograd.gradcheck verifies that the analytical backward produced by
+    # _GatherScatterConvFn matches numerical finite differences.  This covers
+    # the full Python autograd path (topology caching, JaggedTensor wrapping,
+    # save_for_backward) that the C++ adjoint identity tests cannot reach.
+
+    GRADCHECK_KERNEL_SIZE = (3, 3, 3)
+    GRADCHECK_IN_CH = 2
+    GRADCHECK_OUT_CH = 3
+    GRADCHECK_DEVICE_COMBOS = [
+        ["cpu"],
+        ["cuda"],
+    ]
+
+    def _make_gradcheck_inputs(self, device: torch.device, in_ch: int, out_ch: int, kernel_size: tuple[int, int, int]):
+        """Build a small sparse grid and random float64 features/weights for gradcheck."""
+        cluster_coords = torch.tensor(
+            [
+                [3, 3, 4],
+                [4, 3, 4],
+                [3, 4, 4],
+                [3, 3, 5],
+                [4, 4, 5],
+                [5, 4, 5],
+                [4, 5, 4],
+                [5, 5, 5],
+            ],
+            device=device,
+            dtype=torch.int32,
+        )
+        grid = create_grid_from_coords(cluster_coords, device)
+        num_voxels = len(cluster_coords)
+
+        features = torch.randn(num_voxels, in_ch, device=device, dtype=torch.float64, requires_grad=True)
+        weights = torch.randn(out_ch, in_ch, *kernel_size, device=device, dtype=torch.float64, requires_grad=True)
+        return grid, features, weights
+
+    @parameterized.expand(GRADCHECK_DEVICE_COMBOS)
+    def test_gradcheck_forward_stride1(self, device: DeviceIdentifier):
+        """gradcheck: forward convolution, stride 1."""
+        device = resolve_device(device)
+        grid, features, weights = self._make_gradcheck_inputs(
+            device, self.GRADCHECK_IN_CH, self.GRADCHECK_OUT_CH, self.GRADCHECK_KERNEL_SIZE
+        )
+
+        dst_grid = grid.conv_grid(kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=1)
+        plan = ConvolutionPlan.from_grid_batch(
+            kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=1, source_grid=grid, target_grid=dst_grid
+        )
+        topo = plan._backend.topology
+
+        def conv_fn(f, w):
+            return _GatherScatterConvFn.apply(f, w, topo, False)
+
+        torch.autograd.gradcheck(conv_fn, (features, weights), eps=1e-6, atol=1e-4, rtol=1e-3)
+
+    @parameterized.expand(GRADCHECK_DEVICE_COMBOS)
+    def test_gradcheck_forward_strided(self, device: DeviceIdentifier):
+        """gradcheck: forward convolution, stride (2,2,2)."""
+        device = resolve_device(device)
+        grid, features, weights = self._make_gradcheck_inputs(
+            device, self.GRADCHECK_IN_CH, self.GRADCHECK_OUT_CH, self.GRADCHECK_KERNEL_SIZE
+        )
+
+        stride = (2, 2, 2)
+        dst_grid = grid.conv_grid(kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=stride)
+        plan = ConvolutionPlan.from_grid_batch(
+            kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=stride, source_grid=grid, target_grid=dst_grid
+        )
+        topo = plan._backend.topology
+
+        def conv_fn(f, w):
+            return _GatherScatterConvFn.apply(f, w, topo, False)
+
+        torch.autograd.gradcheck(conv_fn, (features, weights), eps=1e-6, atol=1e-4, rtol=1e-3)
+
+    @parameterized.expand(GRADCHECK_DEVICE_COMBOS)
+    def test_gradcheck_transpose_stride1(self, device: DeviceIdentifier):
+        """gradcheck: transposed convolution, stride 1."""
+        device = resolve_device(device)
+        grid, features, weights = self._make_gradcheck_inputs(
+            device, self.GRADCHECK_IN_CH, self.GRADCHECK_OUT_CH, self.GRADCHECK_KERNEL_SIZE
+        )
+
+        dst_grid = grid.conv_transpose_grid(kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=1)
+        plan = ConvolutionPlan.from_grid_batch_transposed(
+            kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=1, source_grid=grid, target_grid=dst_grid
+        )
+        topo = plan._backend.topology
+
+        def conv_fn(f, w):
+            return _GatherScatterConvFn.apply(f, w, topo, True)
+
+        torch.autograd.gradcheck(conv_fn, (features, weights), eps=1e-6, atol=1e-4, rtol=1e-3)
+
+    @parameterized.expand(GRADCHECK_DEVICE_COMBOS)
+    def test_gradcheck_transpose_strided(self, device: DeviceIdentifier):
+        """gradcheck: transposed convolution, stride (2,2,2)."""
+        device = resolve_device(device)
+        grid, features, weights = self._make_gradcheck_inputs(
+            device, self.GRADCHECK_IN_CH, self.GRADCHECK_OUT_CH, self.GRADCHECK_KERNEL_SIZE
+        )
+
+        stride = (2, 2, 2)
+        dst_grid = grid.conv_transpose_grid(kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=stride)
+        plan = ConvolutionPlan.from_grid_batch_transposed(
+            kernel_size=self.GRADCHECK_KERNEL_SIZE, stride=stride, source_grid=grid, target_grid=dst_grid
+        )
+        topo = plan._backend.topology
+
+        def conv_fn(f, w):
+            return _GatherScatterConvFn.apply(f, w, topo, True)
+
+        torch.autograd.gradcheck(conv_fn, (features, weights), eps=1e-6, atol=1e-4, rtol=1e-3)
