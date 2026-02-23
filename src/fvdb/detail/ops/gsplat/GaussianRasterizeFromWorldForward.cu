@@ -224,8 +224,7 @@ rasterizeGaussiansFromWorld(
     outLastIds[imgBasePix] = curIdx;
 #pragma unroll
     for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-        outFeatures[imgBaseFeat + k] =
-            pixOut[k] + transmittance * common.backgroundValue(camId, k);
+        outFeatures[imgBaseFeat + k] = pixOut[k] + transmittance * common.backgroundValue(camId, k);
     }
 }
 
