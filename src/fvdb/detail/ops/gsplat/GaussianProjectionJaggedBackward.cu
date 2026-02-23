@@ -95,9 +95,9 @@ jaggedProjectionBackwardKernel(
     }
 
     // transform Gaussian to camera space
-    nanovdb::math::Mat3<T> R;
-    nanovdb::math::Vec3<T> t;
-    loadWorldToCamRtRowMajor4x4(worldToCamMatrices, R, t);
+    const auto worldToCamRt        = loadWorldToCamRtRowMajor4x4(worldToCamMatrices);
+    const nanovdb::math::Mat3<T> R = cuda::std::get<0>(worldToCamRt);
+    const nanovdb::math::Vec3<T> t = cuda::std::get<1>(worldToCamRt);
     nanovdb::math::Mat3<T> covar;
     nanovdb::math::Vec4<T> quat;
     nanovdb::math::Vec3<T> scale;

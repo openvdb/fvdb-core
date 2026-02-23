@@ -85,12 +85,12 @@ rasterizeFromWorld3DGSBackwardKernel(
     }
 
     // Camera pose for this camera.
-    nanovdb::math::Mat3<float> R_wc_start, R_wc_end;
-    nanovdb::math::Vec3<float> t_wc_start, t_wc_end;
-    {
-        loadWorldToCamRtFromAccessor44<float>(worldToCamStart, camId, R_wc_start, t_wc_start);
-        loadWorldToCamRtFromAccessor44<float>(worldToCamEnd, camId, R_wc_end, t_wc_end);
-    }
+    const auto worldToCamStartRt = loadWorldToCamRtFromAccessor44<float>(worldToCamStart, camId);
+    const auto worldToCamEndRt   = loadWorldToCamRtFromAccessor44<float>(worldToCamEnd, camId);
+    const nanovdb::math::Mat3<float> R_wc_start = cuda::std::get<0>(worldToCamStartRt);
+    const nanovdb::math::Vec3<float> t_wc_start = cuda::std::get<1>(worldToCamStartRt);
+    const nanovdb::math::Mat3<float> R_wc_end   = cuda::std::get<0>(worldToCamEndRt);
+    const nanovdb::math::Vec3<float> t_wc_end   = cuda::std::get<1>(worldToCamEndRt);
 
     const nanovdb::math::Mat3<float> K_cam = loadMat3FromAccessor33<float>(K, camId);
     const float *distPtr = (numDistCoeffs > 0) ? &distortionCoeffs[camId][0] : nullptr;

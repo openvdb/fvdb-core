@@ -83,14 +83,13 @@ rasterizeGaussiansFromWorld(
     }
 
     // Build camera pose for this camera (start/end).
-    nanovdb::math::Mat3<float> worldToCamRotationStart, worldToCamRotationEnd;
-    nanovdb::math::Vec3<float> worldToCamTranslationStart, worldToCamTranslationEnd;
-    {
-        loadWorldToCamRtFromAccessor44<float>(
-            worldToCamStart, camId, worldToCamRotationStart, worldToCamTranslationStart);
-        loadWorldToCamRtFromAccessor44<float>(
-            worldToCamEnd, camId, worldToCamRotationEnd, worldToCamTranslationEnd);
-    }
+    const auto worldToCamStartRt = loadWorldToCamRtFromAccessor44<float>(worldToCamStart, camId);
+    const auto worldToCamEndRt   = loadWorldToCamRtFromAccessor44<float>(worldToCamEnd, camId);
+    const nanovdb::math::Mat3<float> worldToCamRotationStart = cuda::std::get<0>(worldToCamStartRt);
+    const nanovdb::math::Vec3<float> worldToCamTranslationStart =
+        cuda::std::get<1>(worldToCamStartRt);
+    const nanovdb::math::Mat3<float> worldToCamRotationEnd    = cuda::std::get<0>(worldToCamEndRt);
+    const nanovdb::math::Vec3<float> worldToCamTranslationEnd = cuda::std::get<1>(worldToCamEndRt);
 
     const nanovdb::math::Mat3<float> K_cam = loadMat3FromAccessor33<float>(K, camId);
 
