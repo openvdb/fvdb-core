@@ -5,7 +5,7 @@
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONUTILS_CUH
 
 #include <fvdb/detail/ops/gsplat/GaussianCameraMatrixUtils.cuh>
-#include <fvdb/detail/ops/gsplat/GaussianIntrinsics.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianCameraIntrinsics.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 
 #include <nanovdb/math/Math.h>

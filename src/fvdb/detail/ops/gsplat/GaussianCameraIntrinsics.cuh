@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANINTRINSICS_CUH
-#define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANINTRINSICS_CUH
+#ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANCAMERAINTRINSICS_CUH
+#define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANCAMERAINTRINSICS_CUH
 
 #include <nanovdb/math/Math.h>
 
@@ -30,4 +30,4 @@ template <typename T> struct CameraIntrinsics {
 
 } // namespace fvdb::detail::ops
 
-#endif // FVDB_DETAIL_OPS_GSPLAT_GAUSSIANINTRINSICS_CUH
+#endif // FVDB_DETAIL_OPS_GSPLAT_GAUSSIANCAMERAINTRINSICS_CUH
