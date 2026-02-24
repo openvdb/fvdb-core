@@ -9,12 +9,6 @@ import numpy as np
 import OpenImageIO as oiio
 import point_cloud_utils as pcu
 import torch
-from fvdb.utils.tests import (
-    create_uniform_grid_points_at_depth,
-    generate_center_frame_point_at_depth,
-    generate_random_4x4_xform,
-    get_fvdb_test_data_path,
-)
 from parameterized import parameterized, parameterized_class
 
 from fvdb import (
@@ -23,6 +17,12 @@ from fvdb import (
     JaggedTensor,
     evaluate_spherical_harmonics,
     gaussian_render_jagged,
+)
+from fvdb.utils.tests import (
+    create_uniform_grid_points_at_depth,
+    generate_center_frame_point_at_depth,
+    generate_random_4x4_xform,
+    get_fvdb_test_data_path,
 )
 
 
@@ -3421,6 +3421,406 @@ class TestEvaluateSphericalHarmonics(unittest.TestCase):
         self.assertEqual(result.shape, (C, N, D))
         self.assertFalse(torch.isnan(result).any())
         self.assertFalse(torch.isinf(result).any())
+
+
+@unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+class TestGaussianRenderMasks(BaseGaussianTestCase):
+    """Test mask support across dense, sparse, and jagged render paths."""
+
+    tile_size = 16
+
+    def setUp(self):
+        super().setUp()
+        import math
+
+        self.num_tiles_w = math.ceil(self.width / self.tile_size)
+        self.num_tiles_h = math.ceil(self.height / self.tile_size)
+
+    def _all_ones_mask(self, C):
+        return torch.ones((C, self.num_tiles_h, self.num_tiles_w), device=self.device, dtype=torch.bool)
+
+    def _all_zeros_mask(self, C):
+        return torch.zeros((C, self.num_tiles_h, self.num_tiles_w), device=self.device, dtype=torch.bool)
+
+    # -- Dense: render_images ------------------------------------------------
+
+    def test_render_images_all_ones_mask_matches_no_mask(self):
+        C = 1
+        cam = self.cam_to_world_mats[:C]
+        proj = self.projection_mats[:C]
+
+        ref, ref_a = self.gs3d.render_images(
+            cam, proj, self.width, self.height, self.near_plane, self.far_plane, tile_size=self.tile_size
+        )
+        out, out_a = self.gs3d.render_images(
+            cam,
+            proj,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            tile_size=self.tile_size,
+            masks=self._all_ones_mask(C),
+        )
+        self.assertTrue(torch.allclose(ref, out, atol=1e-5))
+        self.assertTrue(torch.allclose(ref_a, out_a, atol=1e-5))
+
+    def test_render_images_all_zeros_mask_produces_background(self):
+        C = 1
+        cam = self.cam_to_world_mats[:C]
+        proj = self.projection_mats[:C]
+        D = 3
+        bg = torch.tensor([[0.1, -0.2, 0.3]], device=self.device, dtype=torch.float32)
+
+        out, out_a = self.gs3d.render_images(
+            cam,
+            proj,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            tile_size=self.tile_size,
+            backgrounds=bg,
+            masks=self._all_zeros_mask(C),
+        )
+        expected = bg.view(C, 1, 1, D).expand(C, self.height, self.width, D)
+        self.assertTrue(torch.equal(out_a, torch.zeros_like(out_a)))
+        self.assertTrue(torch.equal(out, expected))
+
+    def test_render_images_backward_with_masks(self):
+        C = 1
+        cam = self.cam_to_world_mats[:C]
+        proj = self.projection_mats[:C]
+        bg = torch.tensor([[0.5, 0.5, 0.5]], device=self.device, dtype=torch.float32)
+
+        out, out_a = self.gs3d.render_images(
+            cam,
+            proj,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            tile_size=self.tile_size,
+            backgrounds=bg,
+            masks=self._all_ones_mask(C),
+        )
+        loss = out.sum() + out_a.sum()
+        loss.backward()
+        self.assertIsNotNone(self.gs3d.means.grad)
+        self.assertGreater(torch.abs(self.gs3d.means.grad).sum().item(), 0)
+
+    def test_render_images_all_zeros_mask_zero_grads(self):
+        C = 1
+        cam = self.cam_to_world_mats[:C]
+        proj = self.projection_mats[:C]
+        bg = torch.tensor([[0.1, -0.2, 0.3]], device=self.device, dtype=torch.float32)
+
+        out, out_a = self.gs3d.render_images(
+            cam,
+            proj,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            tile_size=self.tile_size,
+            backgrounds=bg,
+            masks=self._all_zeros_mask(C),
+        )
+        loss = out.sum() + out_a.sum()
+        loss.backward()
+        self.assertIsNotNone(self.gs3d.means.grad)
+        self.assertTrue(torch.equal(self.gs3d.means.grad, torch.zeros_like(self.gs3d.means.grad)))
+
+    # -- Dense: render_depths ------------------------------------------------
+
+    def test_render_depths_all_zeros_mask_produces_background(self):
+        C = 1
+        cam = self.cam_to_world_mats[:C]
+        proj = self.projection_mats[:C]
+        bg = torch.tensor([[100.0]], device=self.device, dtype=torch.float32)
+
+        out, out_a = self.gs3d.render_depths(
+            cam,
+            proj,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            tile_size=self.tile_size,
+            backgrounds=bg,
+            masks=self._all_zeros_mask(C),
+        )
+        expected = bg.view(C, 1, 1, 1).expand(C, self.height, self.width, 1)
+        self.assertTrue(torch.equal(out_a, torch.zeros_like(out_a)))
+        self.assertTrue(torch.equal(out, expected))
+
+    # -- Dense: render_images_and_depths -------------------------------------
+
+    def test_render_images_and_depths_all_zeros_mask_produces_background(self):
+        C = 1
+        cam = self.cam_to_world_mats[:C]
+        proj = self.projection_mats[:C]
+        bg = torch.tensor([[0.3, 0.3, 0.3, 50.0]], device=self.device, dtype=torch.float32)
+
+        out, out_a = self.gs3d.render_images_and_depths(
+            cam,
+            proj,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            tile_size=self.tile_size,
+            backgrounds=bg,
+            masks=self._all_zeros_mask(C),
+        )
+        expected = bg.view(C, 1, 1, 4).expand(C, self.height, self.width, 4)
+        self.assertTrue(torch.equal(out_a, torch.zeros_like(out_a)))
+        self.assertTrue(torch.equal(out, expected))
+
+    # -- Dense: render_from_projected_gaussians ------------------------------
+
+    def test_render_from_projected_gaussians_with_masks(self):
+        C = 1
+        cam = self.cam_to_world_mats[:C]
+        proj = self.projection_mats[:C]
+        D = 3
+        bg = torch.tensor([[0.7, 0.7, 0.7]], device=self.device, dtype=torch.float32)
+
+        projected = self.gs3d.project_gaussians_for_images(
+            cam, proj, self.width, self.height, self.near_plane, self.far_plane
+        )
+        ref, ref_a = self.gs3d.render_from_projected_gaussians(projected, backgrounds=bg)
+        out, out_a = self.gs3d.render_from_projected_gaussians(projected, backgrounds=bg, masks=self._all_ones_mask(C))
+        self.assertTrue(torch.allclose(ref, out, atol=1e-5))
+        self.assertTrue(torch.allclose(ref_a, out_a, atol=1e-5))
+
+        out_z, out_z_a = self.gs3d.render_from_projected_gaussians(
+            projected, backgrounds=bg, masks=self._all_zeros_mask(C)
+        )
+        expected = bg.view(C, 1, 1, D).expand(C, self.height, self.width, D)
+        self.assertTrue(torch.equal(out_z_a, torch.zeros_like(out_z_a)))
+        self.assertTrue(torch.equal(out_z, expected))
+
+    # -- Sparse: sparse_render_images ----------------------------------------
+
+    def _make_sparse_pixels(self, C, n_pixels=5000):
+        idx = torch.randperm(self.width * self.height)[:n_pixels]
+        x = idx % self.width
+        y = idx // self.width
+        return JaggedTensor([torch.stack([y, x], 1)] * C).to(self.device)
+
+    def test_sparse_render_images_with_backgrounds_and_masks(self):
+        C = 1
+        cam = self.cam_to_world_mats[:C]
+        proj = self.projection_mats[:C]
+        pixels = self._make_sparse_pixels(C)
+        bg = torch.tensor([[0.1, -0.2, 0.3]], device=self.device, dtype=torch.float32)
+
+        ref, ref_a = self.gs3d.sparse_render_images(
+            pixels,
+            cam,
+            proj,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            tile_size=self.tile_size,
+            backgrounds=bg,
+        )
+        out, out_a = self.gs3d.sparse_render_images(
+            pixels,
+            cam,
+            proj,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            tile_size=self.tile_size,
+            backgrounds=bg,
+            masks=self._all_ones_mask(C),
+        )
+        self.assertTrue(torch.allclose(ref.jdata, out.jdata, atol=1e-5))
+        self.assertTrue(torch.allclose(ref_a.jdata, out_a.jdata, atol=1e-5))
+
+    def test_sparse_render_images_backward_with_backgrounds_and_masks(self):
+        C = 1
+        cam = self.cam_to_world_mats[:C]
+        proj = self.projection_mats[:C]
+        pixels = self._make_sparse_pixels(C)
+        bg = torch.tensor([[0.5, 0.5, 0.5]], device=self.device, dtype=torch.float32)
+
+        out, out_a = self.gs3d.sparse_render_images(
+            pixels,
+            cam,
+            proj,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            tile_size=self.tile_size,
+            backgrounds=bg,
+            masks=self._all_ones_mask(C),
+        )
+        loss = out.jdata.sum() + out_a.jdata.sum()
+        loss.backward()
+        self.assertIsNotNone(self.gs3d.means.grad)
+        self.assertGreater(torch.abs(self.gs3d.means.grad).sum().item(), 0)
+
+    # -- Sparse: sparse_render_depths ----------------------------------------
+
+    def test_sparse_render_depths_with_backgrounds_and_masks(self):
+        C = 1
+        cam = self.cam_to_world_mats[:C]
+        proj = self.projection_mats[:C]
+        pixels = self._make_sparse_pixels(C)
+        bg = torch.tensor([[100.0]], device=self.device, dtype=torch.float32)
+
+        ref, ref_a = self.gs3d.sparse_render_depths(
+            pixels,
+            cam,
+            proj,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            tile_size=self.tile_size,
+            backgrounds=bg,
+        )
+        out, out_a = self.gs3d.sparse_render_depths(
+            pixels,
+            cam,
+            proj,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            tile_size=self.tile_size,
+            backgrounds=bg,
+            masks=self._all_ones_mask(C),
+        )
+        self.assertTrue(torch.allclose(ref.jdata, out.jdata, atol=1e-5))
+        self.assertTrue(torch.allclose(ref_a.jdata, out_a.jdata, atol=1e-5))
+
+    # -- Sparse: sparse_render_images_and_depths -----------------------------
+
+    def test_sparse_render_images_and_depths_with_backgrounds_and_masks(self):
+        C = 1
+        cam = self.cam_to_world_mats[:C]
+        proj = self.projection_mats[:C]
+        pixels = self._make_sparse_pixels(C)
+        bg = torch.tensor([[0.3, 0.3, 0.3, 50.0]], device=self.device, dtype=torch.float32)
+
+        ref, ref_a = self.gs3d.sparse_render_images_and_depths(
+            pixels,
+            cam,
+            proj,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            tile_size=self.tile_size,
+            backgrounds=bg,
+        )
+        out, out_a = self.gs3d.sparse_render_images_and_depths(
+            pixels,
+            cam,
+            proj,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            tile_size=self.tile_size,
+            backgrounds=bg,
+            masks=self._all_ones_mask(C),
+        )
+        self.assertTrue(torch.allclose(ref.jdata, out.jdata, atol=1e-5))
+        self.assertTrue(torch.allclose(ref_a.jdata, out_a.jdata, atol=1e-5))
+
+    # -- Jagged: gaussian_render_jagged --------------------------------------
+
+    def test_jagged_render_with_masks(self):
+        jt_means = JaggedTensor([self.gs3d.means]).to(self.device)
+        jt_quats = JaggedTensor([self.gs3d.quats]).to(self.device)
+        jt_scales = JaggedTensor([self.gs3d.scales]).to(self.device)
+        jt_opacities = JaggedTensor([self.gs3d.opacities]).to(self.device)
+        sh_coeffs = torch.cat([self.gs3d.sh0, self.gs3d.shN], dim=1)
+        jt_sh_coeffs = JaggedTensor([sh_coeffs]).to(self.device)
+        jt_viewmats = JaggedTensor([self.cam_to_world_mats[0:1]]).to(self.device)
+        jt_Ks = JaggedTensor([self.projection_mats[0:1]]).to(self.device)
+
+        C = 1
+        bg = torch.tensor([[0.1, -0.2, 0.3]], device=self.device, dtype=torch.float32)
+
+        ref, ref_a, _ = gaussian_render_jagged(
+            jt_means,
+            jt_quats,
+            jt_scales,
+            jt_opacities,
+            jt_sh_coeffs,
+            jt_viewmats,
+            jt_Ks,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            self.sh_degree,
+            tile_size=self.tile_size,
+            backgrounds=bg,
+        )
+        out, out_a, _ = gaussian_render_jagged(
+            jt_means,
+            jt_quats,
+            jt_scales,
+            jt_opacities,
+            jt_sh_coeffs,
+            jt_viewmats,
+            jt_Ks,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            self.sh_degree,
+            tile_size=self.tile_size,
+            backgrounds=bg,
+            masks=self._all_ones_mask(C),
+        )
+        self.assertTrue(torch.allclose(ref, out, atol=1e-5))
+        self.assertTrue(torch.allclose(ref_a, out_a, atol=1e-5))
+
+    def test_jagged_render_all_zeros_mask_produces_background(self):
+        jt_means = JaggedTensor([self.gs3d.means]).to(self.device)
+        jt_quats = JaggedTensor([self.gs3d.quats]).to(self.device)
+        jt_scales = JaggedTensor([self.gs3d.scales]).to(self.device)
+        jt_opacities = JaggedTensor([self.gs3d.opacities]).to(self.device)
+        sh_coeffs = torch.cat([self.gs3d.sh0, self.gs3d.shN], dim=1)
+        jt_sh_coeffs = JaggedTensor([sh_coeffs]).to(self.device)
+        jt_viewmats = JaggedTensor([self.cam_to_world_mats[0:1]]).to(self.device)
+        jt_Ks = JaggedTensor([self.projection_mats[0:1]]).to(self.device)
+
+        C = 1
+        D = 3
+        bg = torch.tensor([[0.1, -0.2, 0.3]], device=self.device, dtype=torch.float32)
+
+        out, out_a, _ = gaussian_render_jagged(
+            jt_means,
+            jt_quats,
+            jt_scales,
+            jt_opacities,
+            jt_sh_coeffs,
+            jt_viewmats,
+            jt_Ks,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            self.sh_degree,
+            tile_size=self.tile_size,
+            backgrounds=bg,
+            masks=self._all_zeros_mask(C),
+        )
+        expected = bg.view(C, 1, 1, D).expand(C, self.height, self.width, D)
+        self.assertTrue(torch.equal(out_a, torch.zeros_like(out_a)))
+        self.assertTrue(torch.equal(out, expected))
 
 
 if __name__ == "__main__":
