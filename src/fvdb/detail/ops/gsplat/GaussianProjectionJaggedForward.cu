@@ -3,6 +3,7 @@
 //
 #include <fvdb/detail/ops/gsplat/GaussianMacros.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
@@ -63,17 +64,7 @@ jaggedProjectionForwardKernel(const uint32_t B,
     projectionMatrices += cId * 9;
 
     // input is row-major
-    const nanovdb::math::Mat3<T> R(worldToCamMatrices[0],
-                                   worldToCamMatrices[1],
-                                   worldToCamMatrices[2],   // 1st row
-                                   worldToCamMatrices[4],
-                                   worldToCamMatrices[5],
-                                   worldToCamMatrices[6],   // 2nd row
-                                   worldToCamMatrices[8],
-                                   worldToCamMatrices[9],
-                                   worldToCamMatrices[10]); // 3rd row
-    const nanovdb::math::Vec3<T> t(
-        worldToCamMatrices[3], worldToCamMatrices[7], worldToCamMatrices[11]);
+    const auto [R, t] = loadWorldToCamRtRowMajor4x4(worldToCamMatrices);
     // transform Gaussian center to camera space
     const nanovdb::math::Vec3<T> meansCamSpace =
         transformPointWorldToCam(R, t, nanovdb::math::Vec3<T>(means[0], means[1], means[2]));
@@ -87,36 +78,39 @@ jaggedProjectionForwardKernel(const uint32_t B,
     nanovdb::math::Mat3<T> covar;
     if (covars != nullptr) {
         covars += gId * 6;
-        covar = nanovdb::math::Mat3<T>(covars[0],
-                                       covars[1],
-                                       covars[2], // 1st row
-                                       covars[1],
-                                       covars[3],
-                                       covars[4], // 2nd row
-                                       covars[2],
-                                       covars[4],
-                                       covars[5]  // 3rd row
-        );
+        covar = loadCovarianceRowMajor6(covars);
     } else {
         // compute from quaternions and scales
         quats += gId * 4;
         scales += gId * 3;
-        covar = quaternionAndScaleToCovariance<T>(
-            nanovdb::math::Vec4<T>(quats[0], quats[1], quats[2], quats[3]),
-            nanovdb::math::Vec3<T>(scales[0], scales[1], scales[2]));
+        nanovdb::math::Vec4<T> quat;
+        nanovdb::math::Vec3<T> scale;
+        loadQuatScaleFromScalesRowMajor(quats, scales, quat, scale);
+        covar = quaternionAndScaleToCovariance<T>(quat, scale);
     }
     const nanovdb::math::Mat3<T> covarCamSpace = transformCovarianceWorldToCam(R, covar);
 
     // camera projection
-    const T fx = projectionMatrices[0], cx = projectionMatrices[2], fy = projectionMatrices[4],
-            cy             = projectionMatrices[5];
+    const CameraIntrinsics<T> intrinsics(projectionMatrices);
     auto [covar2d, mean2d] = [&]() {
         if constexpr (Ortho) {
-            return projectGaussianOrthographic<T>(
-                meansCamSpace, covarCamSpace, fx, fy, cx, cy, imageWidth, imageHeight);
+            return projectGaussianOrthographic<T>(meansCamSpace,
+                                                  covarCamSpace,
+                                                  intrinsics.fx,
+                                                  intrinsics.fy,
+                                                  intrinsics.cx,
+                                                  intrinsics.cy,
+                                                  imageWidth,
+                                                  imageHeight);
         } else {
-            return projectGaussianPerspective<T>(
-                meansCamSpace, covarCamSpace, fx, fy, cx, cy, imageWidth, imageHeight);
+            return projectGaussianPerspective<T>(meansCamSpace,
+                                                 covarCamSpace,
+                                                 intrinsics.fx,
+                                                 intrinsics.fy,
+                                                 intrinsics.cx,
+                                                 intrinsics.cy,
+                                                 imageWidth,
+                                                 imageHeight);
         }
     }();
 
@@ -130,10 +124,8 @@ jaggedProjectionForwardKernel(const uint32_t B,
     // compute the inverse of the 2d covariance
     const nanovdb::math::Mat2<T> covar2dInverse = covar2d.inverse();
 
-    // take 3 sigma as the radius (non differentiable)
-    const T b      = 0.5f * (covar2d[0][0] + covar2d[1][1]);
-    const T v1     = b + sqrt(max(0.01f, b * b - det));
-    const T radius = ceil(3.f * sqrt(v1));
+    // take 3 sigma as the radius (non-differentiable)
+    const T radius = radiusFromCovariance2dDet(covar2d, det, T(3));
     // T v2 = b - sqrt(max(0.1f, b * b - det));
     // T radius = ceil(3.f * sqrt(max(v1, v2)));
 
@@ -143,20 +135,20 @@ jaggedProjectionForwardKernel(const uint32_t B,
     }
 
     // mask out gaussians outside the image region
-    if (mean2d[0] + radius <= 0 || mean2d[0] - radius >= imageWidth || mean2d[1] + radius <= 0 ||
-        mean2d[1] - radius >= imageHeight) {
+    if (isOutsideImageWithRadius(mean2d, radius, radius, imageWidth, imageHeight)) {
         radii[idx] = 0;
         return;
     }
 
     // write to outputs
-    radii[idx]           = (int32_t)radius;
-    means2d[idx * 2]     = mean2d[0];
-    means2d[idx * 2 + 1] = mean2d[1];
-    depths[idx]          = meansCamSpace[2];
-    conics[idx * 3]      = covar2dInverse[0][0];
-    conics[idx * 3 + 1]  = covar2dInverse[0][1];
-    conics[idx * 3 + 2]  = covar2dInverse[1][1];
+    radii[idx]                               = (int32_t)radius;
+    means2d[idx * 2]                         = mean2d[0];
+    means2d[idx * 2 + 1]                     = mean2d[1];
+    depths[idx]                              = meansCamSpace[2];
+    const nanovdb::math::Vec3<T> conicPacked = packConicRowMajor3(covar2dInverse);
+    conics[idx * 3]                          = conicPacked[0];
+    conics[idx * 3 + 1]                      = conicPacked[1];
+    conics[idx * 3 + 2]                      = conicPacked[2];
     if (compensations != nullptr) {
         compensations[idx] = compensation;
     }

@@ -10,12 +10,10 @@ option(FVDB_BUILD_TESTS "Configure CMake to build tests" ON)
 option(FVDB_BUILD_BENCHMARKS "Configure CMake to build (google & nvbench) benchmarks" OFF)
 option(FVDB_STRIP_SYMBOLS "Strip symbols from the build" OFF)
 option(FVDB_LINEINFO "Enable lineinfo in the build" OFF)
-option(FVDB_USE_OPENMP "Enable OpenMP for CPU parallelization" ON)
 
 message(STATUS "FVDB: Configure CMake to build tests: ${FVDB_BUILD_TESTS}")
 message(STATUS "FVDB: Configure CMake to build (google & nvbench) benchmarks: ${FVDB_BUILD_BENCHMARKS}")
 message(STATUS "FVDB_STRIP_SYMBOLS: ${FVDB_STRIP_SYMBOLS}")
-message(STATUS "FVDB_USE_OPENMP: ${FVDB_USE_OPENMP}")
 
 # Get dependencies
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_cpm.cmake)
@@ -51,6 +49,7 @@ set(FVDB_CPP_FILES
     fvdb/detail/autograd/Inject.cpp
     fvdb/detail/autograd/GaussianProjection.cpp
     fvdb/detail/autograd/GaussianRasterize.cpp
+    fvdb/detail/autograd/GaussianRasterizeFromWorld.cpp
     fvdb/detail/autograd/GaussianRasterizeSparse.cpp
     fvdb/detail/autograd/JaggedReduce.cpp
     fvdb/detail/autograd/MaxPoolGrid.cpp
@@ -108,6 +107,8 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeBackward.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeForward.cu
+    fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldBackward.cu
+    fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldForward.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeNumContributingGaussians.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeTopContributingGaussianIds.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeContributingGaussianIds.cu

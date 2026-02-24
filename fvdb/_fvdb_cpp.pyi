@@ -241,6 +241,24 @@ class GaussianSplat3d:
         antialias: bool = ...,
         backgrounds: Optional[torch.Tensor] = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
+    def render_images_from_world(
+        self,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        image_width: int,
+        image_height: int,
+        near: float,
+        far: float,
+        camera_model: "CameraModel" = ...,
+        distortion_coeffs: Optional[torch.Tensor] = ...,
+        sh_degree_to_use: int = ...,
+        tile_size: int = ...,
+        min_radius_2d: float = ...,
+        eps_2d: float = ...,
+        antialias: bool = ...,
+        backgrounds: Optional[torch.Tensor] = ...,
+        masks: Optional[torch.Tensor] = ...,
+    ) -> tuple[torch.Tensor, torch.Tensor]: ...
     def sparse_render_images(
         self,
         pixels_to_render: JaggedTensor,
@@ -1223,3 +1241,16 @@ def volume_render(
     packInfo: torch.Tensor,
     transmittanceThresh: float,
 ) -> list[torch.Tensor]: ...
+
+class RollingShutterType(Enum):
+    NONE = ...
+    VERTICAL = ...
+    HORIZONTAL = ...
+
+class CameraModel(Enum):
+    PINHOLE = ...
+    OPENCV_RADTAN_5 = ...
+    OPENCV_RATIONAL_8 = ...
+    OPENCV_RADTAN_THIN_PRISM_9 = ...
+    OPENCV_THIN_PRISM_12 = ...
+    ORTHOGRAPHIC = ...

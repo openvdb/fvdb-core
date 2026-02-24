@@ -12,6 +12,8 @@ add_custom_command(
 
 set(BENCHMARKS_BINARY_DIRECTORY "$<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/gbenchmarks>")
 
+find_package(OpenMP QUIET)
+
 # ============================================================================
 # Common benchmark configuration
 # ============================================================================
@@ -43,11 +45,16 @@ function(ConfigureDispatchBench CMAKE_BENCH_NAME)
         $<TARGET_NAME_IF_EXISTS:conda_env>
     )
 
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(${CMAKE_BENCH_NAME} OpenMP::OpenMP_CXX)
+    endif()
+
     target_compile_options(${CMAKE_BENCH_NAME} PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:
             "-Wall"
             "-Werror"
             "-fdiagnostics-color=always"
+            $<$<NOT:$<BOOL:${OpenMP_CXX_FOUND}>>:-Wno-unknown-pragmas>
         >
         $<$<COMPILE_LANGUAGE:CUDA>:
             "--extended-lambda"

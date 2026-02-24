@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+#include <fvdb/detail/ops/gsplat/GaussianCameraAccessorCopy.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianOpenCVDistortion.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionUT.h>
+#include <fvdb/detail/ops/gsplat/GaussianRigidTransform.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianRollingShutter.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
@@ -42,19 +46,6 @@ template <typename T> class OpenCVCameraModel {
     using Vec3 = nanovdb::math::Vec3<T>;
     using Mat3 = nanovdb::math::Mat3<T>;
 
-    /// @brief Internal distortion evaluation mode.
-    ///
-    /// This is intentionally separate from the public API `CameraModel` to keep the math paths
-    /// explicit and avoid implying that `CameraModel` is “just distortion” (since it also includes
-    /// projection as well).
-    enum class Model : uint8_t {
-        NONE          = 0,  // no distortion
-        RADTAN_5      = 5,  // k1,k2,p1,p2,k3 (polynomial radial up to r^6)
-        RATIONAL_8    = 8,  // k1,k2,p1,p2,k3,k4,k5,k6 (rational radial)
-        RADTAN_THIN_9 = 9,  // RADTAN_5 + thin prism s1..s4 (polynomial radial + thin-prism)
-        THIN_PRISM_12 = 12, // RATIONAL_8 + s1,s2,s3,s4
-    };
-
     /// @brief Construct a camera model for projection.
     ///
     /// For OpenCV models, coefficients are read from a per-camera packed layout:
@@ -70,70 +61,22 @@ template <typename T> class OpenCVCameraModel {
     ///            cameraModel).
     __device__ __forceinline__
     OpenCVCameraModel(const CameraModel cameraModel, const Mat3 &K_in, const T *distortionCoeffs)
-        : K(K_in) {
+        : K(K_in), mCameraModel(cameraModel), mDistortionCoeffs(distortionCoeffs) {
         // ORTHOGRAPHIC is implemented as pinhole intrinsics without the perspective divide.
         // Distortion is intentionally not supported for orthographic projection.
         orthographic = (cameraModel == CameraModel::ORTHOGRAPHIC);
 
-        if (cameraModel == CameraModel::ORTHOGRAPHIC) {
-            radial = tangential = thinPrism = nullptr;
-            numRadial = numTangential = numThinPrism = 0;
-            model                                    = Model::NONE;
+        if (cameraModel == CameraModel::ORTHOGRAPHIC || cameraModel == CameraModel::PINHOLE) {
+            mNumDistortionCoeffs = 0;
             return;
         }
 
-        if (cameraModel == CameraModel::PINHOLE) {
-            radial = tangential = thinPrism = nullptr;
-            numRadial = numTangential = numThinPrism = 0;
-            model                                    = Model::NONE;
-            return;
-        }
-
-        // OpenCV models require the packed coefficient layout.
-        deviceAssertOrTrap(distortionCoeffs != nullptr);
-        const T *radial_in = distortionCoeffs + kRadialOffset;     // k1..k6
-        const T *tang_in   = distortionCoeffs + kTangentialOffset; // p1,p2
-        const T *thin_in   = distortionCoeffs + kThinPrismOffset;  // s1..s4
-
-        if (cameraModel == CameraModel::OPENCV_RADTAN_5) {
-            radial        = radial_in;
-            numRadial     = 3; // k1,k2,k3 (polynomial)
-            tangential    = tang_in;
-            numTangential = 2;
-            thinPrism     = nullptr;
-            numThinPrism  = 0;
-            model         = Model::RADTAN_5;
-            return;
-        }
-        if (cameraModel == CameraModel::OPENCV_RATIONAL_8) {
-            radial        = radial_in;
-            numRadial     = 6; // k1..k6 (rational)
-            tangential    = tang_in;
-            numTangential = 2;
-            thinPrism     = nullptr;
-            numThinPrism  = 0;
-            model         = Model::RATIONAL_8;
-            return;
-        }
-        if (cameraModel == CameraModel::OPENCV_THIN_PRISM_12) {
-            radial        = radial_in;
-            numRadial     = 6; // k1..k6 (rational)
-            tangential    = tang_in;
-            numTangential = 2;
-            thinPrism     = thin_in;
-            numThinPrism  = 4; // s1..s4
-            model         = Model::THIN_PRISM_12;
-            return;
-        }
-        if (cameraModel == CameraModel::OPENCV_RADTAN_THIN_PRISM_9) {
-            // Polynomial radial + thin-prism; ignore k4..k6 by construction.
-            radial        = radial_in;
-            numRadial     = 3; // k1,k2,k3 (polynomial)
-            tangential    = tang_in;
-            numTangential = 2;
-            thinPrism     = thin_in;
-            numThinPrism  = 4; // s1..s4
-            model         = Model::RADTAN_THIN_9;
+        if (cameraModel == CameraModel::OPENCV_RADTAN_5 ||
+            cameraModel == CameraModel::OPENCV_RATIONAL_8 ||
+            cameraModel == CameraModel::OPENCV_RADTAN_THIN_PRISM_9 ||
+            cameraModel == CameraModel::OPENCV_THIN_PRISM_12) {
+            deviceAssertOrTrap(mDistortionCoeffs != nullptr);
+            mNumDistortionCoeffs = 12;
             return;
         }
 
@@ -162,7 +105,8 @@ template <typename T> class OpenCVCameraModel {
             p_normalized  = Vec2(p_cam[0] * z_inv, p_cam[1] * z_inv);
         }
 
-        const Vec2 p_distorted = applyDistortion(p_normalized);
+        const Vec2 p_distorted = applyOpenCVDistortionPacked(
+            mCameraModel, p_normalized, mDistortionCoeffs, mNumDistortionCoeffs);
 
         // Project to pixel coordinates.
         const T fx = K[0][0];
@@ -194,154 +138,10 @@ template <typename T> class OpenCVCameraModel {
 
     // Camera intrinsics (typically backed by shared memory).
     const Mat3 &K;
-    bool orthographic = false;
-
-    // Packed OpenCV coefficient layout offsets:
-    // [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]
-    static constexpr int kRadialOffset     = 0; // k1..k6
-    static constexpr int kTangentialOffset = 6; // p1,p2
-    static constexpr int kThinPrismOffset  = 8; // s1..s4
-
-    // Coefficients for the distortion model.
-    const T *radial     = nullptr;     // k1..k6 (but k4..k6 only used in rational model)
-    int numRadial       = 0;           // Number of radial coefficients
-    const T *tangential = nullptr;     // p1,p2
-    int numTangential   = 0;           // Number of tangential coefficients
-    const T *thinPrism  = nullptr;     // s1..s4
-    int numThinPrism    = 0;           // Number of thin prism coefficients
-    Model model         = Model::NONE; // Distortion model
-
-    /// @brief Read a coefficient if present, otherwise return 0.
-    ///
-    /// @param[in] ptr Coefficient array (may be null).
-    /// @param[in] n Number of coefficients in ptr.
-    /// @param[in] i Index to read.
-    /// @return Coefficient value or 0 if out-of-range / null.
-    __host__ __device__ inline T
-    coeffOrZero(const T *ptr, const int n, const int i) const {
-        return (ptr != nullptr && i >= 0 && i < n) ? ptr[i] : T(0);
-    }
-
-    /// @brief Apply OpenCV distortion to a normalized camera-plane point.
-    ///
-    /// Input coordinates are assumed to already be normalized to the camera plane:
-    /// - perspective: \((x/z, y/z)\)
-    /// - orthographic: \((x, y)\)
-    ///
-    /// @param[in] p_normalized Normalized camera-plane coordinates.
-    /// @return Distorted normalized coordinates.
-    __device__ Vec2
-    applyDistortion(const Vec2 &p_normalized) const {
-        const T x  = p_normalized[0];
-        const T y  = p_normalized[1];
-        const T x2 = x * x;
-        const T y2 = y * y;
-        const T xy = x * y;
-
-        const T r2 = x2 + y2;
-        const T r4 = r2 * r2;
-        const T r6 = r4 * r2;
-
-        // Radial distortion.
-        T radial_dist = T(1);
-        if (model == Model::RATIONAL_8 || model == Model::THIN_PRISM_12) {
-            const T k1  = coeffOrZero(radial, numRadial, 0);
-            const T k2  = coeffOrZero(radial, numRadial, 1);
-            const T k3  = coeffOrZero(radial, numRadial, 2);
-            const T k4  = coeffOrZero(radial, numRadial, 3);
-            const T k5  = coeffOrZero(radial, numRadial, 4);
-            const T k6  = coeffOrZero(radial, numRadial, 5);
-            const T num = T(1) + r2 * (k1 + r2 * (k2 + r2 * k3));
-            const T den = T(1) + r2 * (k4 + r2 * (k5 + r2 * k6));
-            radial_dist = (den != T(0)) ? (num / den) : T(0);
-        } else if (model == Model::RADTAN_5 || model == Model::RADTAN_THIN_9) {
-            // Polynomial radial (up to k3 / r^6). Thin-prism terms are applied below if enabled.
-            const T k1  = coeffOrZero(radial, numRadial, 0);
-            const T k2  = coeffOrZero(radial, numRadial, 1);
-            const T k3  = coeffOrZero(radial, numRadial, 2);
-            radial_dist = T(1) + k1 * r2 + k2 * r4 + k3 * r6;
-        }
-
-        T x_dist = x * radial_dist;
-        T y_dist = y * radial_dist;
-
-        // Tangential distortion.
-        const T p1 = coeffOrZero(tangential, numTangential, 0);
-        const T p2 = coeffOrZero(tangential, numTangential, 1);
-        x_dist += T(2) * p1 * xy + p2 * (r2 + T(2) * x2);
-        y_dist += p1 * (r2 + T(2) * y2) + T(2) * p2 * xy;
-
-        // Thin-prism distortion.
-        if (model == Model::THIN_PRISM_12 || model == Model::RADTAN_THIN_9) {
-            const T s1 = coeffOrZero(thinPrism, numThinPrism, 0);
-            const T s2 = coeffOrZero(thinPrism, numThinPrism, 1);
-            const T s3 = coeffOrZero(thinPrism, numThinPrism, 2);
-            const T s4 = coeffOrZero(thinPrism, numThinPrism, 3);
-            x_dist += s1 * r2 + s2 * r4;
-            y_dist += s3 * r2 + s4 * r4;
-        }
-
-        return Vec2(x_dist, y_dist);
-    }
-};
-
-/// @brief UT-local rigid transform (cached rotation + translation).
-///
-/// Quaternion is stored as \([w,x,y,z]\) and is assumed to represent a rotation.
-/// The corresponding rotation matrix \(R(q)\) is cached to avoid recomputing it for every point
-/// transform (UT sigma points, rolling-shutter iterations, depth culls, etc.).
-template <typename T> struct RigidTransform {
-    nanovdb::math::Mat3<T> R;
-    nanovdb::math::Vec4<T> q;
-    nanovdb::math::Vec3<T> t;
-
-    /// @brief Default constructor (identity transform).
-    ///
-    /// Initializes to unit quaternion \([1,0,0,0]\) and zero translation.
-    __device__
-    RigidTransform()
-        : R(nanovdb::math::Mat3<T>(nanovdb::math::Vec3<T>(T(1), T(0), T(0)),
-                                   nanovdb::math::Vec3<T>(T(0), T(1), T(0)),
-                                   nanovdb::math::Vec3<T>(T(0), T(0), T(1)))),
-          q(T(1), T(0), T(0), T(0)), t(T(0), T(0), T(0)) {}
-
-    /// @brief Construct from quaternion and translation.
-    /// @param[in] q_in Rotation quaternion \([w,x,y,z]\).
-    /// @param[in] t_in Translation vector.
-    __device__
-    RigidTransform(const nanovdb::math::Vec4<T> &q_in, const nanovdb::math::Vec3<T> &t_in)
-        : R(quaternionToRotationMatrix(q_in)), q(q_in), t(t_in) {}
-
-    /// @brief Construct from rotation matrix and translation.
-    /// @param[in] R_in Rotation matrix.
-    /// @param[in] t_in Translation vector.
-    __device__
-    RigidTransform(const nanovdb::math::Mat3<T> &R_in, const nanovdb::math::Vec3<T> &t_in)
-        : R(R_in), q(rotationMatrixToQuaternion<T>(R_in)), t(t_in) {}
-
-    /// @brief Apply the transform to a 3D point: \(R(q)\,p + t\).
-    /// @param[in] p_world Point to transform.
-    /// @return Transformed point.
-    __device__ __forceinline__ nanovdb::math::Vec3<T>
-    apply(const nanovdb::math::Vec3<T> &p_world) const {
-        // p_cam = R * p_world + t
-        return R * p_world + t;
-    }
-
-    /// @brief Interpolate between two rigid transforms.
-    ///
-    /// Translation is linearly interpolated; rotation uses NLERP along the shortest arc.
-    ///
-    /// @param[in] u Interpolation parameter in \([0,1]\).
-    /// @param[in] start Start transform.
-    /// @param[in] end End transform.
-    /// @return Interpolated transform.
-    static inline __device__ RigidTransform<T>
-    interpolate(const T u, const RigidTransform<T> &start, const RigidTransform<T> &end) {
-        const nanovdb::math::Vec3<T> t_interp = start.t + u * (end.t - start.t);
-        const nanovdb::math::Vec4<T> q_interp = nlerpQuaternionShortestPath<T>(start.q, end.q, u);
-        return RigidTransform<T>(q_interp, t_interp);
-    }
+    bool orthographic            = false;
+    CameraModel mCameraModel     = CameraModel::PINHOLE;
+    const T *mDistortionCoeffs   = nullptr; // packed [12] for OPENCV_* models
+    int64_t mNumDistortionCoeffs = 0;       // 0 for PINHOLE/ORTHOGRAPHIC, 12 for OPENCV_*
 };
 
 /// @brief Projection status for a single world point.
@@ -465,13 +265,8 @@ template <typename ScalarType> struct WorldToPixelTransform {
         // Fixed small iteration count (good enough for convergence in practice).
         constexpr int kIters = 6;
         for (int it = 0; it < kIters; ++it) {
-            ScalarType t_rs = ScalarType(0);
-            if (rollingShutterType == RollingShutterType::VERTICAL) {
-                t_rs = floor(pix_prev[1]) / max(ScalarType(1), ScalarType(imageHeight - 1));
-            } else if (rollingShutterType == RollingShutterType::HORIZONTAL) {
-                t_rs = floor(pix_prev[0]) / max(ScalarType(1), ScalarType(imageWidth - 1));
-            }
-            t_rs = min(ScalarType(1), max(ScalarType(0), t_rs));
+            const ScalarType t_rs = rollingShutterTimeFromPixel<ScalarType>(
+                rollingShutterType, pix_prev[0], pix_prev[1], imageWidth, imageHeight);
             const RigidTransform<ScalarType> pose_rs =
                 RigidTransform<ScalarType>::interpolate(t_rs, worldToCamStart, worldToCamEnd);
             Vec2 pix_rs(ScalarType(0), ScalarType(0));
@@ -774,7 +569,7 @@ template <typename ScalarType> struct ProjectionForwardUT {
     /// Layout is `[K, R_start, R_end, t_start, t_end, distortionCoeffs]` per camera.
     inline __device__ void
     loadCameraInfoIntoSharedMemory() {
-        // Load projection matrices and world-to-camera matrices into shared memory
+        // Load per-camera matrices/coeffs into shared memory.
         alignas(Mat3) extern __shared__ char sharedMemory[];
 
         // Alignment sanity checks for the shared-memory layout below. If any of these fail, the
@@ -782,9 +577,6 @@ template <typename ScalarType> struct ProjectionForwardUT {
         static_assert(alignof(Mat3) >= alignof(Vec3), "Mat3 alignment must cover Vec3 alignment");
         static_assert(alignof(Mat3) >= alignof(ScalarType),
                       "Mat3 alignment must cover ScalarType alignment");
-
-        constexpr int64_t kMat3Elements = 9; // 3x3
-        constexpr int64_t kVec3Elements = 3; // 3
 
         // Keep a running pointer which we increment to assign shared memory blocks
         uint8_t *pointer = reinterpret_cast<uint8_t *>(sharedMemory);
@@ -808,54 +600,16 @@ template <typename ScalarType> struct ProjectionForwardUT {
             mNumDistortionCoeffs > 0 ? reinterpret_cast<ScalarType *>(pointer) : nullptr;
         pointer += C * mNumDistortionCoeffs * sizeof(ScalarType);
 
-        // Layout in element units:
-        const int64_t projectionOffset = 0;
-        const int64_t rotStartOffset   = projectionOffset + C * kMat3Elements;
-        const int64_t rotEndOffset     = rotStartOffset + C * kMat3Elements;
-        const int64_t transStartOffset = rotEndOffset + C * kMat3Elements;
-        const int64_t transEndOffset   = transStartOffset + C * kVec3Elements;
-        const int64_t distortionOffset = transEndOffset + C * kVec3Elements;
-        const int64_t totalElements    = distortionOffset + C * mNumDistortionCoeffs;
-
-        for (int64_t i = threadIdx.x; i < totalElements; i += blockDim.x) {
-            if (i < rotStartOffset) {
-                const auto camId   = (i - projectionOffset) / kMat3Elements;
-                const auto entryId = (i - projectionOffset) % kMat3Elements;
-                const auto rowId   = entryId / kVec3Elements;
-                const auto colId   = entryId % kVec3Elements;
-                projectionMatsShared[camId][rowId][colId] =
-                    mProjectionMatricesAcc[camId][rowId][colId];
-            } else if (i < rotEndOffset) {
-                const auto camId   = (i - rotStartOffset) / kMat3Elements;
-                const auto entryId = (i - rotStartOffset) % kMat3Elements;
-                const auto rowId   = entryId / kVec3Elements;
-                const auto colId   = entryId % kVec3Elements;
-                worldToCamRotMatsStartShared[camId][rowId][colId] =
-                    mWorldToCamMatricesStartAcc[camId][rowId][colId];
-            } else if (i < transStartOffset) {
-                const auto camId   = (i - rotEndOffset) / kMat3Elements;
-                const auto entryId = (i - rotEndOffset) % kMat3Elements;
-                const auto rowId   = entryId / kVec3Elements;
-                const auto colId   = entryId % kVec3Elements;
-                worldToCamRotMatsEndShared[camId][rowId][colId] =
-                    mWorldToCamMatricesEndAcc[camId][rowId][colId];
-            } else if (i < transEndOffset) {
-                const auto camId   = (i - transStartOffset) / kVec3Elements;
-                const auto entryId = (i - transStartOffset) % kVec3Elements;
-                worldToCamTranslationStartShared[camId][entryId] =
-                    mWorldToCamMatricesStartAcc[camId][entryId][3];
-            } else if (i < distortionOffset) {
-                const auto camId   = (i - transEndOffset) / kVec3Elements;
-                const auto entryId = (i - transEndOffset) % kVec3Elements;
-                worldToCamTranslationEndShared[camId][entryId] =
-                    mWorldToCamMatricesEndAcc[camId][entryId][3];
-            } else if (mNumDistortionCoeffs > 0) {
-                const auto baseIdx = i - distortionOffset;
-                const auto camId   = baseIdx / mNumDistortionCoeffs;
-                const auto entryId = baseIdx % mNumDistortionCoeffs;
-                distortionCoeffsShared[camId * mNumDistortionCoeffs + entryId] =
-                    mDistortionCoeffsAcc[camId][entryId];
-            }
+        copyMat3Accessor<ScalarType>(C, projectionMatsShared, mProjectionMatricesAcc);
+        copyMat3Accessor<ScalarType>(C, worldToCamRotMatsStartShared, mWorldToCamMatricesStartAcc);
+        copyMat3Accessor<ScalarType>(C, worldToCamRotMatsEndShared, mWorldToCamMatricesEndAcc);
+        copyWorldToCamTranslation<ScalarType>(
+            C, worldToCamTranslationStartShared, mWorldToCamMatricesStartAcc);
+        copyWorldToCamTranslation<ScalarType>(
+            C, worldToCamTranslationEndShared, mWorldToCamMatricesEndAcc);
+        if (mNumDistortionCoeffs > 0) {
+            copyDistortionCoeffs<ScalarType>(
+                C, mNumDistortionCoeffs, distortionCoeffsShared, mDistortionCoeffsAcc);
         }
     }
 
