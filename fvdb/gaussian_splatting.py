@@ -5,6 +5,7 @@ import pathlib
 from typing import Any, Mapping, Sequence, TypeVar, overload
 
 import torch
+import torch.nn.functional as F
 
 from fvdb.enums import CameraModel, ProjectionType
 
@@ -18,6 +19,47 @@ from .jagged_tensor import JaggedTensor
 from .types import DeviceIdentifier, cast_check, resolve_device
 
 JaggedTensorOrTensorT = TypeVar("JaggedTensorOrTensorT", JaggedTensor, torch.Tensor)
+
+
+def _pixel_mask_to_tile_mask(pixel_mask: torch.Tensor, tile_size: int) -> torch.Tensor:
+    """Convert a per-pixel boolean mask ``[C, H, W]`` to a per-tile boolean mask ``[C, tileH, tileW]``.
+
+    A tile is ``True`` (render) if **any** pixel in that tile is ``True``.
+    Uses ``max_pool2d`` with ``ceil_mode=True`` so that partial edge tiles are
+    handled correctly when ``H`` or ``W`` is not divisible by ``tile_size``.
+    """
+    return (
+        F.max_pool2d(
+            pixel_mask.unsqueeze(1).float(),
+            kernel_size=tile_size,
+            stride=tile_size,
+            ceil_mode=True,
+        )
+        .bool()
+        .squeeze(1)
+    )
+
+
+def _apply_pixel_mask(
+    features: torch.Tensor,
+    alphas: torch.Tensor,
+    pixel_mask: torch.Tensor,
+    backgrounds: torch.Tensor | None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Apply a per-pixel boolean mask ``[C, H, W]`` to rendered features and alphas.
+
+    Masked-out pixels (``False``) are filled with the background colour (or zero)
+    and their alpha is set to zero. The operation is differentiable: gradients
+    flow through unmasked pixels and are zero for masked pixels.
+    """
+    mask_float = pixel_mask.unsqueeze(-1).float()  # [C, H, W, 1]
+    if backgrounds is not None:
+        bg = backgrounds[:, None, None, :]  # [C, 1, 1, D]
+    else:
+        bg = torch.zeros(1, 1, 1, features.shape[-1], device=features.device, dtype=features.dtype)
+    features = features * mask_float + bg * (1.0 - mask_float)
+    alphas = alphas * mask_float
+    return features, alphas
 
 
 class ProjectedGaussianSplats:
@@ -1601,6 +1643,12 @@ class GaussianSplat3d:
             tile_size (int): The size of the tiles to use for rendering. Default is 16.
                 This parameter controls the size of the tiles used for rendering the images.
                 You shouldn't set this parameter unless you really know what you are doing.
+            backgrounds (torch.Tensor | None): Optional background colors of shape ``(C, D)``.
+                If ``None``, background is treated as 0.
+            masks (torch.Tensor | None): Optional per-pixel boolean mask of shape ``(C, cropH, cropW)``
+                (in crop coordinate space, matching the output dimensions).
+                ``True`` means render, ``False`` means skip (filled with background).
+
 
         Returns:
             rendered_images (torch.Tensor): A tensor of shape ``(C, H, W, D)`` where ``C`` is the number of image planes,
@@ -1611,7 +1659,9 @@ class GaussianSplat3d:
                 Each element represents the alpha value (opacity) at a pixel such that 0 <= alpha < 1,
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
-        return self._impl.render_from_projected_gaussians(
+        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
+
+        features, alphas = self._impl.render_from_projected_gaussians(
             projected_gaussians=projected_gaussians._impl,
             crop_width=crop_width,
             crop_height=crop_height,
@@ -1619,8 +1669,13 @@ class GaussianSplat3d:
             crop_origin_h=crop_origin_h,
             tile_size=tile_size,
             backgrounds=backgrounds,
-            masks=masks,
+            masks=tile_masks,
         )
+
+        if masks is not None:
+            features, alphas = _apply_pixel_mask(features, alphas, masks, backgrounds)
+
+        return features, alphas
 
     def render_depths(
         self,
@@ -1680,6 +1735,10 @@ class GaussianSplat3d:
             eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
                 numerical issues.
             antialias (bool): If ``True``, applies opacity correction to the projected Gaussians when using ``eps_2d > 0.0``.
+            backgrounds (torch.Tensor | None): Optional background colors of shape ``(C, 1)``.
+                If ``None``, background is treated as 0.
+            masks (torch.Tensor | None): Optional per-pixel boolean mask of shape ``(C, H, W)``.
+                ``True`` means render, ``False`` means skip (filled with background).
 
         Returns:
             depth_images (torch.Tensor): A tensor of shape ``(C, H, W, 1)`` where ``C`` is the number of camera views,
@@ -1690,7 +1749,9 @@ class GaussianSplat3d:
                 Each element represents the alpha value (opacity) at a pixel such that ``0 <= alpha < 1``,
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
-        return self._impl.render_depths(
+        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
+
+        features, alphas = self._impl.render_depths(
             world_to_camera_matrices=world_to_camera_matrices,
             projection_matrices=projection_matrices,
             image_width=image_width,
@@ -1703,8 +1764,13 @@ class GaussianSplat3d:
             eps_2d=eps_2d,
             antialias=antialias,
             backgrounds=backgrounds,
-            masks=masks,
+            masks=tile_masks,
         )
+
+        if masks is not None:
+            features, alphas = _apply_pixel_mask(features, alphas, masks, backgrounds)
+
+        return features, alphas
 
     def sparse_render_depths(
         self,
@@ -1863,6 +1929,11 @@ class GaussianSplat3d:
             eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
                 numerical issues.
             antialias (bool): If ``True``, applies opacity correction to the projected Gaussians when using ``eps_2d > 0.0``.
+            backgrounds (torch.Tensor | None): Optional background colors of shape ``(C, D)``.
+                If ``None``, background is treated as 0.
+            masks (torch.Tensor | None): Optional per-pixel boolean mask of shape ``(C, H, W)``.
+                ``True`` means render, ``False`` means skip (filled with background).
+
 
         Returns:
             images (torch.Tensor): A tensor of shape ``(C, H, W, D)`` where ``C`` is the number of camera views,
@@ -1872,7 +1943,9 @@ class GaussianSplat3d:
                 Each element represents the alpha value (opacity) at a pixel such that ``0 <= alpha < 1``,
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
-        return self._impl.render_images(
+        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
+
+        features, alphas = self._impl.render_images(
             world_to_camera_matrices=world_to_camera_matrices,
             projection_matrices=projection_matrices,
             image_width=image_width,
@@ -1886,8 +1959,13 @@ class GaussianSplat3d:
             eps_2d=eps_2d,
             antialias=antialias,
             backgrounds=backgrounds,
-            masks=masks,
+            masks=tile_masks,
         )
+
+        if masks is not None:
+            features, alphas = _apply_pixel_mask(features, alphas, masks, backgrounds)
+
+        return features, alphas
 
     def render_images_from_world(
         self,
@@ -1928,9 +2006,9 @@ class GaussianSplat3d:
 
               where ``T_final`` is the remaining transmittance at the end of rasterization, and
               ``alpha = 1 - T_final``.
-            - ``masks`` is a **per-tile** boolean mask (parity with the classic rasterizer).
-              Tiles where ``masks[c, th, tw] == False`` are skipped entirely: the output is
-              background with ``alpha=0`` and the tile contributes **zero gradients**.
+            - ``masks`` is a **per-pixel** boolean mask of shape ``(C, H, W)``.
+              ``True`` means render, ``False`` means skip (filled with background).
+
 
         Example:
 
@@ -1946,7 +2024,7 @@ class GaussianSplat3d:
                 camera_model=fvdb.CameraModel.OPENCV_RATIONAL_8,
                 distortion_coeffs=dist_coeffs,  # [C,12]
                 backgrounds=bg,                 # [C,D]
-                masks=tile_mask,                # [C,tileH,tileW] (optional)
+                masks=pixel_mask,              # [C,H,W] (optional)
             )
 
         Args:
@@ -1970,8 +2048,9 @@ class GaussianSplat3d:
                 ``eps_2d > 0.0``.
             backgrounds (torch.Tensor | None): Optional background colors of shape ``(C, D)``,
                 where ``D`` is :attr:`num_channels`. If ``None``, background is treated as 0.
-            masks (torch.Tensor | None): Optional per-tile boolean mask of shape
-                ``(C, tileH, tileW)``. Masked tiles are skipped and filled with background.
+            masks (torch.Tensor | None): Optional per-pixel boolean mask of shape ``(C, H, W)``.
+                ``True`` means render, ``False`` means skip (filled with background).
+
 
         Returns:
             images (torch.Tensor): Rendered images of shape ``(C, H, W, D)``.
@@ -1982,7 +2061,9 @@ class GaussianSplat3d:
         else:
             camera_model_cpp = camera_model
 
-        return self._impl.render_images_from_world(
+        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
+
+        features, alphas = self._impl.render_images_from_world(
             world_to_camera_matrices=world_to_camera_matrices,
             projection_matrices=projection_matrices,
             image_width=image_width,
@@ -1997,8 +2078,13 @@ class GaussianSplat3d:
             eps_2d=eps_2d,
             antialias=antialias,
             backgrounds=backgrounds,
-            masks=masks,
+            masks=tile_masks,
         )
+
+        if masks is not None:
+            features, alphas = _apply_pixel_mask(features, alphas, masks, backgrounds)
+
+        return features, alphas
 
     def sparse_render_images(
         self,
@@ -2266,6 +2352,10 @@ class GaussianSplat3d:
             eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
                 numerical issues.
             antialias (bool): If ``True``, applies opacity correction to the projected Gaussians when using ``eps_2d > 0.0``.
+            backgrounds (torch.Tensor | None): Optional background colors of shape ``(C, D+1)``.
+                If ``None``, background is treated as 0.
+            masks (torch.Tensor | None): Optional per-pixel boolean mask of shape ``(C, H, W)``.
+                ``True`` means render, ``False`` means skip (filled with background).
 
         Returns:
             images (torch.Tensor): A tensor of shape ``(C, H, W, D + 1)`` where ``C`` is the number of camera views,
@@ -2275,7 +2365,9 @@ class GaussianSplat3d:
                 Each element represents the alpha value (opacity) at a pixel such that ``0 <= alpha < 1``,
                 and 0 means the pixel is fully transparent, and 1 means the pixel is fully opaque.
         """
-        return self._impl.render_images_and_depths(
+        tile_masks = _pixel_mask_to_tile_mask(masks, tile_size) if masks is not None else None
+
+        features, alphas = self._impl.render_images_and_depths(
             world_to_camera_matrices=world_to_camera_matrices,
             projection_matrices=projection_matrices,
             image_width=image_width,
@@ -2289,8 +2381,13 @@ class GaussianSplat3d:
             eps_2d=eps_2d,
             antialias=antialias,
             backgrounds=backgrounds,
-            masks=masks,
+            masks=tile_masks,
         )
+
+        if masks is not None:
+            features, alphas = _apply_pixel_mask(features, alphas, masks, backgrounds)
+
+        return features, alphas
 
     def render_num_contributing_gaussians(
         self,

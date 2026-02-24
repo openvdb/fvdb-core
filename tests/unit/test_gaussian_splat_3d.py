@@ -3436,10 +3436,16 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
         self.num_tiles_w = math.ceil(self.width / self.tile_size)
         self.num_tiles_h = math.ceil(self.height / self.tile_size)
 
-    def _all_ones_mask(self, C):
+    def _all_ones_pixel_mask(self, C):
+        return torch.ones((C, self.height, self.width), device=self.device, dtype=torch.bool)
+
+    def _all_zeros_pixel_mask(self, C):
+        return torch.zeros((C, self.height, self.width), device=self.device, dtype=torch.bool)
+
+    def _all_ones_tile_mask(self, C):
         return torch.ones((C, self.num_tiles_h, self.num_tiles_w), device=self.device, dtype=torch.bool)
 
-    def _all_zeros_mask(self, C):
+    def _all_zeros_tile_mask(self, C):
         return torch.zeros((C, self.num_tiles_h, self.num_tiles_w), device=self.device, dtype=torch.bool)
 
     # -- Dense: render_images ------------------------------------------------
@@ -3460,7 +3466,7 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
             self.near_plane,
             self.far_plane,
             tile_size=self.tile_size,
-            masks=self._all_ones_mask(C),
+            masks=self._all_ones_pixel_mask(C),
         )
         self.assertTrue(torch.allclose(ref, out, atol=1e-5))
         self.assertTrue(torch.allclose(ref_a, out_a, atol=1e-5))
@@ -3481,7 +3487,7 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
             self.far_plane,
             tile_size=self.tile_size,
             backgrounds=bg,
-            masks=self._all_zeros_mask(C),
+            masks=self._all_zeros_pixel_mask(C),
         )
         expected = bg.view(C, 1, 1, D).expand(C, self.height, self.width, D)
         self.assertTrue(torch.equal(out_a, torch.zeros_like(out_a)))
@@ -3502,7 +3508,7 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
             self.far_plane,
             tile_size=self.tile_size,
             backgrounds=bg,
-            masks=self._all_ones_mask(C),
+            masks=self._all_ones_pixel_mask(C),
         )
         loss = out.sum() + out_a.sum()
         loss.backward()
@@ -3524,7 +3530,7 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
             self.far_plane,
             tile_size=self.tile_size,
             backgrounds=bg,
-            masks=self._all_zeros_mask(C),
+            masks=self._all_zeros_pixel_mask(C),
         )
         loss = out.sum() + out_a.sum()
         loss.backward()
@@ -3548,7 +3554,7 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
             self.far_plane,
             tile_size=self.tile_size,
             backgrounds=bg,
-            masks=self._all_zeros_mask(C),
+            masks=self._all_zeros_pixel_mask(C),
         )
         expected = bg.view(C, 1, 1, 1).expand(C, self.height, self.width, 1)
         self.assertTrue(torch.equal(out_a, torch.zeros_like(out_a)))
@@ -3571,7 +3577,7 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
             self.far_plane,
             tile_size=self.tile_size,
             backgrounds=bg,
-            masks=self._all_zeros_mask(C),
+            masks=self._all_zeros_pixel_mask(C),
         )
         expected = bg.view(C, 1, 1, 4).expand(C, self.height, self.width, 4)
         self.assertTrue(torch.equal(out_a, torch.zeros_like(out_a)))
@@ -3590,12 +3596,14 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
             cam, proj, self.width, self.height, self.near_plane, self.far_plane
         )
         ref, ref_a = self.gs3d.render_from_projected_gaussians(projected, backgrounds=bg)
-        out, out_a = self.gs3d.render_from_projected_gaussians(projected, backgrounds=bg, masks=self._all_ones_mask(C))
+        out, out_a = self.gs3d.render_from_projected_gaussians(
+            projected, backgrounds=bg, masks=self._all_ones_pixel_mask(C)
+        )
         self.assertTrue(torch.allclose(ref, out, atol=1e-5))
         self.assertTrue(torch.allclose(ref_a, out_a, atol=1e-5))
 
         out_z, out_z_a = self.gs3d.render_from_projected_gaussians(
-            projected, backgrounds=bg, masks=self._all_zeros_mask(C)
+            projected, backgrounds=bg, masks=self._all_zeros_pixel_mask(C)
         )
         expected = bg.view(C, 1, 1, D).expand(C, self.height, self.width, D)
         self.assertTrue(torch.equal(out_z_a, torch.zeros_like(out_z_a)))
@@ -3637,7 +3645,7 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
             self.far_plane,
             tile_size=self.tile_size,
             backgrounds=bg,
-            masks=self._all_ones_mask(C),
+            masks=self._all_ones_tile_mask(C),
         )
         self.assertTrue(torch.allclose(ref.jdata, out.jdata, atol=1e-5))
         self.assertTrue(torch.allclose(ref_a.jdata, out_a.jdata, atol=1e-5))
@@ -3659,7 +3667,7 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
             self.far_plane,
             tile_size=self.tile_size,
             backgrounds=bg,
-            masks=self._all_ones_mask(C),
+            masks=self._all_ones_tile_mask(C),
         )
         loss = out.jdata.sum() + out_a.jdata.sum()
         loss.backward()
@@ -3696,7 +3704,7 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
             self.far_plane,
             tile_size=self.tile_size,
             backgrounds=bg,
-            masks=self._all_ones_mask(C),
+            masks=self._all_ones_tile_mask(C),
         )
         self.assertTrue(torch.allclose(ref.jdata, out.jdata, atol=1e-5))
         self.assertTrue(torch.allclose(ref_a.jdata, out_a.jdata, atol=1e-5))
@@ -3731,7 +3739,7 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
             self.far_plane,
             tile_size=self.tile_size,
             backgrounds=bg,
-            masks=self._all_ones_mask(C),
+            masks=self._all_ones_tile_mask(C),
         )
         self.assertTrue(torch.allclose(ref.jdata, out.jdata, atol=1e-5))
         self.assertTrue(torch.allclose(ref_a.jdata, out_a.jdata, atol=1e-5))
@@ -3782,7 +3790,7 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
             self.sh_degree,
             tile_size=self.tile_size,
             backgrounds=bg,
-            masks=self._all_ones_mask(C),
+            masks=self._all_ones_tile_mask(C),
         )
         self.assertTrue(torch.allclose(ref, out, atol=1e-5))
         self.assertTrue(torch.allclose(ref_a, out_a, atol=1e-5))
@@ -3816,7 +3824,7 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
             self.sh_degree,
             tile_size=self.tile_size,
             backgrounds=bg,
-            masks=self._all_zeros_mask(C),
+            masks=self._all_zeros_tile_mask(C),
         )
         expected = bg.view(C, 1, 1, D).expand(C, self.height, self.width, D)
         self.assertTrue(torch.equal(out_a, torch.zeros_like(out_a)))
