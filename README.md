@@ -35,6 +35,18 @@ from source.
 For the most up-to-date information on installing *f*VDB's pip packages, please see the
 [installation documentation](https://fvdb.ai/installation.html).
 
+### Nightly Builds
+
+Nightly wheels built from the latest `main` branch are published to a custom pip index.
+To install the latest nightly build:
+
+```shell
+pip install --pre fvdb-core --extra-index-url https://fvdb-packages.s3.us-east-2.amazonaws.com/simple-nightly/
+```
+
+Nightly builds use a synthetic version (`0.0.0.devYYYYMMDD`) and require `--pre`.
+Upgrading to a stable release later works naturally with `pip install --upgrade fvdb-core`.
+
 ## Building *f*VDB from Source
 
 If the [pre-built packages](https://fvdb.ai/installation.html) do not meet your needs, you can build *f*VDB from source in this repository.
