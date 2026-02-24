@@ -38,11 +38,11 @@ template <uint32_t NUM_CHANNELS> struct RasterizeFromWorldBackwardArgs {
     fvdb::TorchRAcc64<float, 4> dLossDRenderedFeatures; // [C,H,W,D]
     fvdb::TorchRAcc64<float, 4> dLossDRenderedAlphas;   // [C,H,W,1]
     // Outputs (grads)
-    float *__restrict__ dMeans;     // [N,3]
-    float *__restrict__ dQuats;     // [N,4]
-    float *__restrict__ dLogScales; // [N,3]
-    float *__restrict__ dFeatures;  // [C,N,D]
-    float *__restrict__ dOpacities; // [C,N]
+    fvdb::TorchRAcc64<float, 2> dMeans;     // [N,3]
+    fvdb::TorchRAcc64<float, 2> dQuats;     // [N,4]
+    fvdb::TorchRAcc64<float, 2> dLogScales; // [N,3]
+    fvdb::TorchRAcc64<float, 3> dFeatures;  // [C,N,D]
+    fvdb::TorchRAcc64<float, 2> dOpacities; // [C,N]
 };
 
 template <uint32_t NUM_CHANNELS>
@@ -346,31 +346,38 @@ rasterizeFromWorld3DGSBackwardKernel(const RasterizeFromWorldBackwardArgs<NUM_CH
                 const int32_t gid    = flatId % (int32_t)common.means.size(0);
 
                 // Per-camera grads
-                float *dFeatPtr = args.dFeatures + ((cid * (int32_t)common.means.size(0) + gid) *
-                                                    (int32_t)NUM_CHANNELS);
+                float *dFeaturesGaussianPtr = args.dFeatures.data() +
+                                              cid * args.dFeatures.stride(0) +
+                                              gid * args.dFeatures.stride(1);
 #pragma unroll
                 for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                    atomicAdd_system(dFeatPtr + k, v_feat_local[k]);
+                    atomicAdd_system(dFeaturesGaussianPtr + k * args.dFeatures.stride(2),
+                                     v_feat_local[k]);
                 }
-                atomicAdd_system(args.dOpacities + (cid * (int32_t)common.means.size(0) + gid),
-                                 v_opacity_local);
+                float *dOpacityGaussianPtr = args.dOpacities.data() +
+                                             cid * args.dOpacities.stride(0) +
+                                             gid * args.dOpacities.stride(1);
+                atomicAdd_system(dOpacityGaussianPtr, v_opacity_local);
 
                 // Geometry grads (shared across cameras)
-                float *dMeanPtr = args.dMeans + gid * 3;
-                atomicAdd_system(dMeanPtr + 0, v_mean_local[0]);
-                atomicAdd_system(dMeanPtr + 1, v_mean_local[1]);
-                atomicAdd_system(dMeanPtr + 2, v_mean_local[2]);
+                float *dMeansPtr = args.dMeans.data() + gid * args.dMeans.stride(0);
+                atomicAdd_system(dMeansPtr + 0 * args.dMeans.stride(1), v_mean_local[0]);
+                atomicAdd_system(dMeansPtr + 1 * args.dMeans.stride(1), v_mean_local[1]);
+                atomicAdd_system(dMeansPtr + 2 * args.dMeans.stride(1), v_mean_local[2]);
 
-                float *dQuatPtr = args.dQuats + gid * 4;
-                atomicAdd_system(dQuatPtr + 0, v_quat_local[0]);
-                atomicAdd_system(dQuatPtr + 1, v_quat_local[1]);
-                atomicAdd_system(dQuatPtr + 2, v_quat_local[2]);
-                atomicAdd_system(dQuatPtr + 3, v_quat_local[3]);
+                float *dQuatsPtr = args.dQuats.data() + gid * args.dQuats.stride(0);
+                atomicAdd_system(dQuatsPtr + 0 * args.dQuats.stride(1), v_quat_local[0]);
+                atomicAdd_system(dQuatsPtr + 1 * args.dQuats.stride(1), v_quat_local[1]);
+                atomicAdd_system(dQuatsPtr + 2 * args.dQuats.stride(1), v_quat_local[2]);
+                atomicAdd_system(dQuatsPtr + 3 * args.dQuats.stride(1), v_quat_local[3]);
 
-                float *dLsPtr = args.dLogScales + gid * 3;
-                atomicAdd_system(dLsPtr + 0, v_logscale_local[0]);
-                atomicAdd_system(dLsPtr + 1, v_logscale_local[1]);
-                atomicAdd_system(dLsPtr + 2, v_logscale_local[2]);
+                float *dLogScalesPtr = args.dLogScales.data() + gid * args.dLogScales.stride(0);
+                atomicAdd_system(dLogScalesPtr + 0 * args.dLogScales.stride(1),
+                                 v_logscale_local[0]);
+                atomicAdd_system(dLogScalesPtr + 1 * args.dLogScales.stride(1),
+                                 v_logscale_local[1]);
+                atomicAdd_system(dLogScalesPtr + 2 * args.dLogScales.stride(1),
+                                 v_logscale_local[2]);
             }
         }
     }
@@ -460,11 +467,11 @@ launchBackward(const torch::Tensor &means,
         lastIds.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
         dLossDRenderedFeatures.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
         dLossDRenderedAlphas.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
-        dMeans.data_ptr<float>(),
-        dQuats.data_ptr<float>(),
-        dLogScales.data_ptr<float>(),
-        dFeatures.data_ptr<float>(),
-        dOpacities.data_ptr<float>()};
+        dMeans.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+        dQuats.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+        dLogScales.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+        dFeatures.packed_accessor64<float, 3, torch::RestrictPtrTraits>(),
+        dOpacities.packed_accessor64<float, 2, torch::RestrictPtrTraits>()};
 
     auto stream = at::cuda::getDefaultCUDAStream();
     rasterizeFromWorld3DGSBackwardKernel<NUM_CHANNELS>
