@@ -127,12 +127,10 @@ isFvdbBlindData(const nanovdb::GridBlindMetaData &blindMetadata) {
     return std::make_tuple(true, std::optional<torch::Dtype>(blindDtype));
 }
 
-/// @brief Copy a source index grid (ValueIndex(Mask) or ValueOnIndex(Mask)) to a
+/// @brief Copy a source index grid (ValueIndex or ValueOnIndex) to a
 /// nanovdb::GridHandle<TorchDeviceBuffer>.
-///        If the source type is ValueIndex or ValueIndex mask it will be set to ValueOnIndex or
-///        ValueOnIndexMask respectively.
-/// @tparam SourceGridT The type of the source grid (must be a nanovdb::ValueIndex or
-/// nanovdb::ValueIndexMask)
+///        If the source type is ValueIndex it will be set to ValueOnIndex.
+/// @tparam SourceGridT The type of the source grid (must be a nanovdb::ValueIndex)
 /// @tparam TargetGridT The type of the target grid (must be a form of index grid)
 /// @param sourceGrid A host pointer to the source grid to copy
 /// @return A handle to the copied grid
@@ -141,27 +139,15 @@ nanovdb::GridHandle<TorchDeviceBuffer>
 copyIndexGridToHandle(const nanovdb::NanoGrid<SourceGridT> *sourceGrid) {
     constexpr bool isSrcValueOnIndex =
         nanovdb::util::is_same<SourceGridT, nanovdb::ValueOnIndex>::value;
-    constexpr bool isSrcValueOnIndexMask =
-        nanovdb::util::is_same<SourceGridT, nanovdb::ValueOnIndexMask>::value;
     constexpr bool isSrcValueIndex =
         nanovdb::util::is_same<SourceGridT, nanovdb::ValueIndex>::value;
-    constexpr bool isSrcValueIndexMask =
-        nanovdb::util::is_same<SourceGridT, nanovdb::ValueIndexMask>::value;
     constexpr bool isTgtValueOnIndex =
         nanovdb::util::is_same<TargetGridT, nanovdb::ValueOnIndex>::value;
-    constexpr bool isTgtValueOnIndexMask =
-        nanovdb::util::is_same<TargetGridT, nanovdb::ValueOnIndexMask>::value;
 
-    static_assert(isSrcValueOnIndex || isSrcValueOnIndexMask || isSrcValueIndex ||
-                      isSrcValueIndexMask,
+    static_assert(isSrcValueOnIndex || isSrcValueIndex,
                   "Bad source type in copyIndexGridToHandle must be an Index grid type.");
-    static_assert(
-        isTgtValueOnIndex || isTgtValueOnIndexMask,
-        "Bad target type in copyIndexGridToHandle must be ValueOnIndex or ValueOnIndexMask.");
-    static_assert(
-        (isTgtValueOnIndex && (isSrcValueIndex || isSrcValueOnIndex)) ||
-            (isTgtValueOnIndexMask && (isSrcValueIndexMask || isSrcValueOnIndexMask)),
-        "Bad target grid type for given source grid type in copyIndexGridToHandle. If source is a masked grid, then target must also be a masked grid.");
+    static_assert(isTgtValueOnIndex,
+                  "Bad target type in copyIndexGridToHandle must be ValueOnIndex.");
 
     const ptrdiff_t gridSize =
         sourceGrid->blindDataCount() > 0
@@ -177,12 +163,10 @@ copyIndexGridToHandle(const nanovdb::NanoGrid<SourceGridT> *sourceGrid) {
     return nanovdb::GridHandle<TorchDeviceBuffer>(std::move(buf));
 }
 
-/// @brief Load a nanovdb ValueOnIndex or ValueOnIndexMask grid with tensor blind metatada
-/// (GridClass = TensorGrid) into
+/// @brief Load a nanovdb ValueOnIndex grid with tensor blind metatada (GridClass = TensorGrid) into
 ///        an index grid of the same type stored in a TorchDeviceBuffer) and a torch tensor of data
 ///        (i.e. the standard grid format for FVDB).
-/// @tparam SourceGridT The type of the source grid (must be a nanovdb::ValueOnIndex or
-/// nanovdb::ValueOnIndexMask)
+/// @tparam SourceGridT The type of the source grid (must be a nanovdb::ValueOnIndex)
 /// @tparam TargetGridT The type of the target grid (must be a form of index grid)
 /// @param sourceGrid A host pointer to the source grid to load
 /// @return A tuple containing the index grid, the name of the grid, the tensor of data, the voxel
@@ -194,14 +178,10 @@ std::tuple<nanovdb::GridHandle<TorchDeviceBuffer>,
            nanovdb::Vec3d,
            nanovdb::Vec3d>
 nanovdbTensorGridToFVDBGrid(const nanovdb::NanoGrid<SourceGridT> *sourceGrid) {
-    static_assert(
-        nanovdb::util::is_same<SourceGridT, nanovdb::ValueOnIndex>::value ||
-            nanovdb::util::is_same<SourceGridT, nanovdb::ValueOnIndexMask>::value,
-        "Bad source grid type in nanovdbTensorGridToFVDBGrid. Must be ValueOnIndex or ValueOnIndexMask.");
-    static_assert(
-        nanovdb::util::is_same<TargetGridT, nanovdb::ValueOnIndex>::value ||
-            nanovdb::util::is_same<TargetGridT, nanovdb::ValueOnIndexMask>::value,
-        "Bad target grid type in nanovdbTensorGridToFVDBGrid. Must be ValueOnIndex or ValueOnIndexMask.");
+    static_assert(nanovdb::util::is_same<SourceGridT, nanovdb::ValueOnIndex>::value,
+                  "Bad source grid type in nanovdbTensorGridToFVDBGrid. Must be ValueOnIndex.");
+    static_assert(nanovdb::util::is_same<TargetGridT, nanovdb::ValueOnIndex>::value,
+                  "Bad target grid type in nanovdbTensorGridToFVDBGrid. Must be ValueOnIndex.");
     static_assert(
         nanovdb::util::is_same<SourceGridT, TargetGridT>::value,
         "Mismatched source and target grid types in nanovdbTensorGridToFVDBGrid. They must be identical.");
@@ -273,13 +253,11 @@ nanovdbTensorGridToFVDBGrid(const nanovdb::NanoGrid<SourceGridT> *sourceGrid) {
     return std::make_tuple(std::move(retHandle), name, retData, voxSize, voxOrigin);
 }
 
-/// @brief Load a nanovdb index grid (ValueOnIndex(Mask) or ValueIndex(Mask)) into an ValueOnIndex
-/// or ValueIndex grid
-///        (stored in a TorchDeviceBuffer) and an empty tensor of data (i.e. the standard grid
-///        format for FVDB).
+/// @brief Load a nanovdb index grid (ValueOnIndex or ValueIndex) into an ValueOnIndex or
+///        ValueIndex grid (stored in a TorchDeviceBuffer) and an empty tensor of data (i.e. the
+///        standard grid format for FVDB).
 /// @tparam SourceGridT The type of the source grid (must not be an index grid)
-/// @tparam TargetGridT The type of the target grid (must be a nanovdb::ValueOnIndex or
-/// nanovdb::ValueOnIndexMask)
+/// @tparam TargetGridT The type of the target grid (must be a nanovdb::ValueOnIndex)
 /// @param sourceGrid A host pointer to the source grid to load
 /// @return A tuple containing the index grid, the name of the grid, the empty tensor of data, the
 /// voxel size, and the voxel origin
@@ -303,8 +281,7 @@ nanovdbIndexGridToFVDBGrid(const nanovdb::NanoGrid<SourceGridT> *sourceGrid) {
 ///        (stored in a TorchDeviceBuffer) and a tensor of data (i.e. the standard grid format for
 ///        FVDB).
 /// @tparam SourceGridT The type of the source grid (must not be an index grid)
-/// @tparam TargetGridT The type of the target grid (must be a nanovdb::ValueOnIndex or
-/// nanovdb::ValueOnIndexMask)
+/// @tparam TargetGridT The type of the target grid (must be a nanovdb::ValueOnIndex)
 /// @tparam ScalarType The scalar type of data stored in the source grid
 /// @tparam DataDim The dimension of the data stored in the source grid
 /// @param sourceGrid A host pointer to the source grid to load
@@ -322,9 +299,7 @@ nanovdbGridToFvdbGrid(const nanovdb::NanoGrid<SourceGridT> *sourceGrid) {
 
     static_assert(
         !nanovdb::util::is_same<SourceGridT, nanovdb::ValueOnIndex>::value &&
-            !nanovdb::util::is_same<SourceGridT, nanovdb::ValueOnIndexMask>::value &&
-            !nanovdb::util::is_same<SourceGridT, nanovdb::ValueIndex>::value &&
-            !nanovdb::util::is_same<SourceGridT, nanovdb::ValueIndexMask>::value,
+            !nanovdb::util::is_same<SourceGridT, nanovdb::ValueIndex>::value,
         "Bad source type in nanovdbGridToIndexGridAndData must NOT be an Index grid type.");
 
     // Create the index grid for the loaded grid
@@ -343,8 +318,7 @@ nanovdbGridToFvdbGrid(const nanovdb::NanoGrid<SourceGridT> *sourceGrid) {
     TORCH_CHECK(outGrid != nullptr, "Internal error: failed to get outGrid.");
     TORCH_CHECK(outGrid->gridClass() == nanovdb::GridClass::IndexGrid,
                 "Internal error: outGrid is not an index grid.");
-    TORCH_CHECK(outGrid->gridType() == nanovdb::GridType::OnIndex ||
-                    outGrid->gridType() == nanovdb::GridType::OnIndexMask,
+    TORCH_CHECK(outGrid->gridType() == nanovdb::GridType::OnIndex,
                 "Internal error: outGrid is not an index grid.");
 
     // Load data at the voxels into a tensor
@@ -414,20 +388,21 @@ nanovdbGridToFvdbGrid(const nanovdb::NanoGrid<SourceGridT> *sourceGrid) {
 }
 
 /// @brief Load a single nanovdb grid in a nanovdb::GridHandle<nanovdb::HostBuffer> into an
-/// ValueOnIndex or ValueOnIndexMask grid
+/// ValueOnIndex grid
 ///        stored in a nanovdb::GridHandle<TorchDeviceBuffer> as well as torch::Tensor encoding the
 ///        data at the voxels (i.e. the standard format for FVDB). There are 3 cases:
 ///          1. The input grid has scalar or vector values at the leaves:
 ///            - Load a ValueOnIndex grid and torch::Tensor of values
-///          2. The input grid is a ValueOnIndex or ValueOnIndexMask and has its grid class set to
+///          2. The input grid is a ValueOnIndex and has its grid class set to
 ///          TensorGrid:
-///            - Load a matching ValueOnIndex or ValueOnIndexMask grid and torch::Tensor of values
+///            - Load a matching ValueOnIndex grid and torch::Tensor of values
 ///            corresponding to
 ///              the blind data (if it is present)
-///          3. The input grid is an index grid (ValueIndex(Mask) or ValueOnIndex(Mask)) but doesn't
+///          3. The input grid is an index grid (ValueIndex or ValueOnIndex) but doesn't
 ///          have a TensorGrid class set:
-///            - Load a ValueOnIndex or ValueOnIndexMask grid (depending if the input type has a
-///            mask or not) and an empty torch::Tensor of values
+///            - Load a ValueOnIndex grid and an empty torch::Tensor of values and an empty
+///               torch::Tensor of values
+///
 ///
 /// @param handle The grid handle to read from
 /// @param gridId The index of the grid in the handle to read
@@ -442,20 +417,12 @@ std::tuple<nanovdb::GridHandle<TorchDeviceBuffer>,
 loadOneGrid(const nanovdb::GridHandle<nanovdb::HostBuffer> &handle, uint32_t gridId, uint32_t bi) {
     if (handle.gridMetaData()->gridClass() == nanovdb::GridClass::TensorGrid) {
         TORCH_CHECK(
-            handle.gridType() == nanovdb::GridType::OnIndex ||
-                handle.gridType() == nanovdb::GridType::OnIndexMask,
+            handle.gridType() == nanovdb::GridType::OnIndex,
             "Invalid grid type: Tensor grids which are not saved with fVDB are not yet supported.");
-        if (handle.gridType() == nanovdb::GridType::OnIndex) {
-            const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *sourceGrid =
-                getGrid<nanovdb::ValueOnIndex>(handle, gridId, bi);
-            return nanovdbTensorGridToFVDBGrid<nanovdb::ValueOnIndex, nanovdb::ValueOnIndex>(
-                sourceGrid);
-        } else if (handle.gridType() == nanovdb::GridType::OnIndexMask) {
-            const nanovdb::NanoGrid<nanovdb::ValueOnIndexMask> *sourceGrid =
-                getGrid<nanovdb::ValueOnIndexMask>(handle, gridId, bi);
-            return nanovdbTensorGridToFVDBGrid<nanovdb::ValueOnIndexMask,
-                                               nanovdb::ValueOnIndexMask>(sourceGrid);
-        }
+        const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *sourceGrid =
+            getGrid<nanovdb::ValueOnIndex>(handle, gridId, bi);
+        return nanovdbTensorGridToFVDBGrid<nanovdb::ValueOnIndex, nanovdb::ValueOnIndex>(
+            sourceGrid);
     }
 
     switch (handle.gridType()) {
@@ -519,22 +486,10 @@ loadOneGrid(const nanovdb::GridHandle<nanovdb::HostBuffer> &handle, uint32_t gri
             getGrid<nanovdb::ValueIndex>(handle, gridId, bi);
         return nanovdbIndexGridToFVDBGrid<nanovdb::ValueIndex, nanovdb::ValueOnIndex>(sourceGrid);
     }
-    case nanovdb::GridType::IndexMask: {
-        const nanovdb::NanoGrid<nanovdb::ValueIndexMask> *sourceGrid =
-            getGrid<nanovdb::ValueIndexMask>(handle, gridId, bi);
-        return nanovdbIndexGridToFVDBGrid<nanovdb::ValueIndexMask, nanovdb::ValueOnIndexMask>(
-            sourceGrid);
-    }
     case nanovdb::GridType::OnIndex: {
         const nanovdb::NanoGrid<nanovdb::ValueOnIndex> *sourceGrid =
             getGrid<nanovdb::ValueOnIndex>(handle, gridId, bi);
         return nanovdbIndexGridToFVDBGrid<nanovdb::ValueOnIndex, nanovdb::ValueOnIndex>(sourceGrid);
-    }
-    case nanovdb::GridType::OnIndexMask: {
-        const nanovdb::NanoGrid<nanovdb::ValueOnIndexMask> *sourceGrid =
-            getGrid<nanovdb::ValueOnIndexMask>(handle, gridId, bi);
-        return nanovdbIndexGridToFVDBGrid<nanovdb::ValueOnIndexMask, nanovdb::ValueOnIndexMask>(
-            sourceGrid);
     }
     default:
         // Unhandled cases include: Int16, UInt32, Fp4, Fp8, FpN
@@ -552,8 +507,7 @@ fromNVDB(nanovdb::GridHandle<nanovdb::HostBuffer> &handle,
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> grids;
     std::vector<nanovdb::Vec3d> voxSizes, voxOrigins;
     std::vector<std::string> names;
-    uint32_t bi                    = 0;
-    nanovdb::GridType lastGridType = nanovdb::GridType::Unknown;
+    uint32_t bi = 0;
     for (size_t gridId = 0; gridId < handle.gridCount(); gridId += 1) {
         auto gridData = loadOneGrid(handle, gridId, bi);
         grids.push_back(std::move(std::get<0>(gridData)));
@@ -561,20 +515,6 @@ fromNVDB(nanovdb::GridHandle<nanovdb::HostBuffer> &handle,
         data.push_back(std::move(std::get<2>(gridData)));
         voxSizes.push_back(std::move(std::get<3>(gridData)));
         voxOrigins.push_back(std::move(std::get<4>(gridData)));
-
-        // FVDB grid batches all share the same mutability. i.e. a grid batch consists of all
-        // ValueOnIndex (immutable) grids or all ValueOnIndexMask (mutable) grids.
-        // In all but two cases, we load a ValueOnIndex grid and a tensor of data:
-        //   1. When the user saved a mutable Tensor grid with save
-        //   2. When the user loaded a batch with a ValueOnIndexMask grid
-        // If the file the list of grids the user loaded contains a mix of ValueOnIndex and
-        // ValueOnIndexMask grids, then it's unclear what to do, so throw an exception.
-        if (bi > 0) {
-            TORCH_CHECK(
-                lastGridType == grids.back().gridData()->mGridType,
-                "All grids in a batch must have the same mutability (i.e. all ValueOnIndex or all ValueOnIndexMask).");
-        }
-        lastGridType = grids.back().gridData()->mGridType;
 
         bi += 1;
     }
@@ -610,8 +550,7 @@ fromNVDB(const std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> &handles,
     std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> grids;
     std::vector<nanovdb::Vec3d> voxSizes, voxOrigins;
     std::vector<std::string> names;
-    uint32_t bi                    = 0;
-    nanovdb::GridType lastGridType = nanovdb::GridType::Unknown;
+    uint32_t bi = 0;
     for (const auto &handle: handles) {
         for (size_t gridId = 0; gridId < handle.gridCount(); gridId += 1) {
             auto gridData = loadOneGrid(handle, gridId, bi);
@@ -620,20 +559,6 @@ fromNVDB(const std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> &handles,
             data.push_back(std::move(std::get<2>(gridData)));
             voxSizes.push_back(std::move(std::get<3>(gridData)));
             voxOrigins.push_back(std::move(std::get<4>(gridData)));
-
-            // FVDB grid batches all share the same mutability. i.e. a grid batch consists of all
-            // ValueOnIndex (immutable) grids or all ValueOnIndexMask (mutable) grids.
-            // In all but two cases, we load a ValueOnIndex grid and a tensor of data:
-            //   1. When the user saved a mutable Tensor grid with save
-            //   2. When the user loaded a batch with a ValueOnIndexMask grid
-            // If the file the list of grids the user loaded contains a mix of ValueOnIndex and
-            // ValueOnIndexMask grids, then it's unclear what to do, so throw an exception.
-            if (bi > 0) {
-                TORCH_CHECK(
-                    lastGridType == grids.back().gridData()->mGridType,
-                    "All grids in a batch must have the same mutability (i.e. all ValueOnIndex or all ValueOnIndexMask).");
-            }
-            lastGridType = grids.back().gridData()->mGridType;
 
             bi += 1;
         }
