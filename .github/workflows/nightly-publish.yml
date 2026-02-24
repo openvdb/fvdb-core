@@ -253,8 +253,13 @@ jobs:
           set -euo pipefail
           CUTOFF=$(date -u -d '30 days ago' '+%Y-%m-%d')
           echo "Pruning nightly wheels uploaded before $CUTOFF"
+          LISTING=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/" 2>/dev/null || true)
+          if [ -z "$LISTING" ]; then
+            echo "No existing wheels found (first run or empty prefix) -- nothing to prune"
+            exit 0
+          fi
           DELETED=0
-          aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/" 2>/dev/null | while read -r line; do
+          while read -r line; do
             DATE_PART=$(echo "$line" | awk '{print $1}')
             FILE_PART=$(echo "$line" | awk '{print $4}')
             if [[ "$FILE_PART" == *.whl ]] && [[ "$DATE_PART" < "$CUTOFF" ]]; then
@@ -262,7 +267,7 @@ jobs:
               aws s3 rm "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/$FILE_PART" --only-show-errors
               DELETED=$((DELETED + 1))
             fi
-          done
+          done <<< "$LISTING"
           echo "Pruned $DELETED old nightly wheel(s)"
 
       - name: Upload wheels to S3 project directory
