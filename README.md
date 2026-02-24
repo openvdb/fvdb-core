@@ -35,18 +35,6 @@ from source.
 For the most up-to-date information on installing *f*VDB's pip packages, please see the
 [installation documentation](https://fvdb.ai/installation.html).
 
-### Nightly Builds
-
-Nightly wheels built from the latest `main` branch are published to a custom pip index.
-To install the latest nightly build:
-
-```shell
-pip install --pre fvdb-core --extra-index-url https://fvdb-packages.s3.us-east-2.amazonaws.com/simple-nightly/
-```
-
-Nightly builds use a synthetic version (e.g. `0.0.0.dev20260224+pt28.cu128`) and require `--pre`.
-The `+pt28.cu128` suffix identifies the PyTorch and CUDA versions the wheel was built against.
-Upgrading to a stable release later works naturally with `pip install --upgrade fvdb-core`.
 
 ## Building *f*VDB from Source
 
