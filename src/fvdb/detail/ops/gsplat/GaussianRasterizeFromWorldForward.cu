@@ -27,9 +27,9 @@ template <uint32_t NUM_CHANNELS> struct SharedGaussian {
 
 template <uint32_t NUM_CHANNELS> struct RasterizeFromWorldForwardArgs {
     RasterizeFromWorldCommonArgs commonArgs;
-    float *__restrict__ outFeatures;  // [C,H,W,D]
-    float *__restrict__ outAlphas;    // [C,H,W,1] packed as [C*H*W]
-    int32_t *__restrict__ outLastIds; // [C,H,W]
+    fvdb::TorchRAcc64<float, 4> outFeatures;  // [C,H,W,D]
+    fvdb::TorchRAcc64<float, 4> outAlphas;    // [C,H,W,1]
+    fvdb::TorchRAcc64<int32_t, 3> outLastIds; // [C,H,W]
 
     inline __device__ void
     volumeRenderTileForward() const {
@@ -39,12 +39,13 @@ template <uint32_t NUM_CHANNELS> struct RasterizeFromWorldForwardArgs {
 
         uint32_t camId, tileRow, tileCol, row, col;
         common.denseCoordinates(camId, tileRow, tileCol, row, col);
-        const bool inside = (row < common.imageHeight && col < common.imageWidth);
-
-        // Pixel index within this camera.
-        const uint32_t pixId       = common.pixelId(row, col);
-        const uint32_t imgBaseFeat = common.outputFeatureBase(camId, pixId);
-        const uint32_t imgBasePix  = common.outputPixelBase(camId, pixId);
+        const bool inside     = (row < common.imageHeight && col < common.imageWidth);
+        float *outFeaturesPtr = outFeatures.data() + camId * outFeatures.stride(0) +
+                                row * outFeatures.stride(1) + col * outFeatures.stride(2);
+        float *outAlphaPtr = outAlphas.data() + camId * outAlphas.stride(0) +
+                             row * outAlphas.stride(1) + col * outAlphas.stride(2);
+        int32_t *outLastIdPtr = outLastIds.data() + camId * outLastIds.stride(0) +
+                                row * outLastIds.stride(1) + col * outLastIds.stride(2);
 
         // Parity with classic rasterizer: masked tiles write background and exit.
         //
@@ -55,11 +56,11 @@ template <uint32_t NUM_CHANNELS> struct RasterizeFromWorldForwardArgs {
         const bool tileMasked = common.tileMasked(camId, tileRow, tileCol);
         if (tileMasked) {
             if (inside) {
-                outAlphas[imgBasePix]  = 0.0f;
-                outLastIds[imgBasePix] = -1;
+                outAlphaPtr[0]  = 0.0f;
+                outLastIdPtr[0] = -1;
 #pragma unroll
                 for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                    outFeatures[imgBaseFeat + k] = common.backgroundValue(camId, k);
+                    outFeaturesPtr[k * outFeatures.stride(3)] = common.backgroundValue(camId, k);
                 }
             }
             return;
@@ -103,11 +104,11 @@ template <uint32_t NUM_CHANNELS> struct RasterizeFromWorldForwardArgs {
         if (rangeEnd <= rangeStart) {
             if (inside) {
                 // alpha=0, output background if provided else 0.
-                outAlphas[imgBasePix]  = 0.0f;
-                outLastIds[imgBasePix] = -1;
+                outAlphaPtr[0]  = 0.0f;
+                outLastIdPtr[0] = -1;
 #pragma unroll
                 for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                    outFeatures[imgBaseFeat + k] = common.backgroundValue(camId, k);
+                    outFeaturesPtr[k * outFeatures.stride(3)] = common.backgroundValue(camId, k);
                 }
             }
             return;
@@ -202,11 +203,11 @@ template <uint32_t NUM_CHANNELS> struct RasterizeFromWorldForwardArgs {
             return;
         }
 
-        outAlphas[imgBasePix]  = 1.0f - transmittance;
-        outLastIds[imgBasePix] = curIdx;
+        outAlphaPtr[0]  = 1.0f - transmittance;
+        outLastIdPtr[0] = curIdx;
 #pragma unroll
         for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-            outFeatures[imgBaseFeat + k] =
+            outFeaturesPtr[k * outFeatures.stride(3)] =
                 pixOut[k] + transmittance * common.backgroundValue(camId, k);
         }
     }
@@ -291,10 +292,11 @@ launchForward(const torch::Tensor &means,
     commonArgs.backgrounds = opt.backgrounds;
     commonArgs.masks       = opt.masks;
 
-    RasterizeFromWorldForwardArgs<NUM_CHANNELS> args{commonArgs,
-                                                     outFeatures.data_ptr<float>(),
-                                                     outAlphas.data_ptr<float>(),
-                                                     outLastIds.data_ptr<int32_t>()};
+    RasterizeFromWorldForwardArgs<NUM_CHANNELS> args{
+        commonArgs,
+        outFeatures.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
+        outAlphas.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
+        outLastIds.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>()};
 
     const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
     const size_t sharedMem = blockSize * (sizeof(int32_t) + sizeof(SharedGaussian<NUM_CHANNELS>));
