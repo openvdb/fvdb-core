@@ -127,10 +127,9 @@ isFvdbBlindData(const nanovdb::GridBlindMetaData &blindMetadata) {
     return std::make_tuple(true, std::optional<torch::Dtype>(blindDtype));
 }
 
-/// @brief Copy a source index grid (ValueIndex(Mask) or ValueOnIndex(Mask)) to a
+/// @brief Copy a source index grid (ValueIndex or ValueOnIndex) to a
 /// nanovdb::GridHandle<TorchDeviceBuffer>.
-///        If the source type is ValueIndex or ValueIndex mask it will be set to ValueOnIndex
-///        respectively.
+///        If the source type is ValueIndex it will be set to ValueOnIndex.
 /// @tparam SourceGridT The type of the source grid (must be a nanovdb::ValueIndex)
 /// @tparam TargetGridT The type of the target grid (must be a form of index grid)
 /// @param sourceGrid A host pointer to the source grid to copy
@@ -254,10 +253,9 @@ nanovdbTensorGridToFVDBGrid(const nanovdb::NanoGrid<SourceGridT> *sourceGrid) {
     return std::make_tuple(std::move(retHandle), name, retData, voxSize, voxOrigin);
 }
 
-/// @brief Load a nanovdb index grid (ValueOnIndex(Mask) or ValueIndex(Mask)) into an ValueOnIndex
-/// or ValueIndex grid
-///        (stored in a TorchDeviceBuffer) and an empty tensor of data (i.e. the standard grid
-///        format for FVDB).
+/// @brief Load a nanovdb index grid (ValueOnIndex or ValueIndex) into an ValueOnIndex or
+///        ValueIndex grid (stored in a TorchDeviceBuffer) and an empty tensor of data (i.e. the
+///        standard grid format for FVDB).
 /// @tparam SourceGridT The type of the source grid (must not be an index grid)
 /// @tparam TargetGridT The type of the target grid (must be a nanovdb::ValueOnIndex)
 /// @param sourceGrid A host pointer to the source grid to load
@@ -400,10 +398,11 @@ nanovdbGridToFvdbGrid(const nanovdb::NanoGrid<SourceGridT> *sourceGrid) {
 ///            - Load a matching ValueOnIndex grid and torch::Tensor of values
 ///            corresponding to
 ///              the blind data (if it is present)
-///          3. The input grid is an index grid (ValueIndex(Mask) or ValueOnIndex(Mask)) but doesn't
+///          3. The input grid is an index grid (ValueIndex or ValueOnIndex) but doesn't
 ///          have a TensorGrid class set:
-///            - Load a ValueOnIndex grid and an empty torch::Tensor of values
-///            mask or not) and an empty torch::Tensor of values
+///            - Load a ValueOnIndex grid and an empty torch::Tensor of values and an empty
+///               torch::Tensor of values
+///
 ///
 /// @param handle The grid handle to read from
 /// @param gridId The index of the grid in the handle to read
