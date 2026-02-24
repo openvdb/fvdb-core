@@ -869,9 +869,8 @@ GridBatchImpl::setGrid(nanovdb::GridHandle<TorchDeviceBuffer> &&gridHdl,
                 gridHdl.gridCount());
     TORCH_CHECK(voxelOrigins.size() == gridHdl.gridCount(),
                 "Voxel origins must be the same size as the number of grids");
-    TORCH_CHECK((gridHdl.gridType(0) == nanovdb::GridType::OnIndex) ||
-                    (gridHdl.gridType(0) == nanovdb::GridType::OnIndexMask),
-                "GridBatchImpl only supports ValueOnIndex and ValueOnIndexMask grids");
+    TORCH_CHECK(gridHdl.gridType(0) == nanovdb::GridType::OnIndex,
+                "GridBatchImpl only supports ValueOnIndex grids");
 
     // Reallocate GridMetadata
     mBatchSize = gridHdl.gridCount();
