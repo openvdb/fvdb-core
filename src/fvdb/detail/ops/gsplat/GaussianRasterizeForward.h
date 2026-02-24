@@ -90,24 +90,24 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> dispatchGaussianRasteriz
 ///         - Output last Gaussian IDs JaggedTensor for the specified pixels.
 template <torch::DeviceType Device>
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor, fvdb::JaggedTensor>
-dispatchGaussianSparseRasterizeForward(
-    const fvdb::JaggedTensor &pixelsToRender,
-    const torch::Tensor &means2d,
-    const torch::Tensor &conics,
-    const torch::Tensor &features,
-    const torch::Tensor &opacities,
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
-    const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,
-    const torch::Tensor &tileGaussianIds,
-    const torch::Tensor &activeTiles,
-    const torch::Tensor &tilePixelMask,
-    const torch::Tensor &tilePixelCumsum,
-    const torch::Tensor &pixelMap,
-    const at::optional<torch::Tensor> &backgrounds = at::nullopt);
+dispatchGaussianSparseRasterizeForward(const fvdb::JaggedTensor &pixelsToRender,
+                                       const torch::Tensor &means2d,
+                                       const torch::Tensor &conics,
+                                       const torch::Tensor &features,
+                                       const torch::Tensor &opacities,
+                                       const uint32_t imageWidth,
+                                       const uint32_t imageHeight,
+                                       const uint32_t imageOriginW,
+                                       const uint32_t imageOriginH,
+                                       const uint32_t tileSize,
+                                       const torch::Tensor &tileOffsets,
+                                       const torch::Tensor &tileGaussianIds,
+                                       const torch::Tensor &activeTiles,
+                                       const torch::Tensor &tilePixelMask,
+                                       const torch::Tensor &tilePixelCumsum,
+                                       const torch::Tensor &pixelMap,
+                                       const at::optional<torch::Tensor> &backgrounds = at::nullopt,
+                                       const at::optional<torch::Tensor> &masks = at::nullopt);
 
 } // namespace ops
 } // namespace detail

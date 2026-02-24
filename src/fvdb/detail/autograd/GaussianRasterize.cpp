@@ -7,6 +7,8 @@
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
 
+#include <vector>
+
 namespace fvdb::detail::autograd {
 
 RasterizeGaussiansToPixels::VariableList
@@ -24,10 +26,9 @@ RasterizeGaussiansToPixels::forward(
     const RasterizeGaussiansToPixels::Variable &tileOffsets,     // [C, tile_height, tile_width]
     const RasterizeGaussiansToPixels::Variable &tileGaussianIds, // [n_isects]
     const bool absgrad,
-    std::optional<RasterizeGaussiansToPixels::Variable> backgrounds) {
+    std::optional<RasterizeGaussiansToPixels::Variable> backgrounds,
+    std::optional<RasterizeGaussiansToPixels::Variable> masks) {
     FVDB_FUNC_RANGE_WITH_NAME("RasterizeGaussiansToPixels::forward");
-    // const int C = means2d.size(0);
-    // const int N = means2d.size(1);
 
     auto variables          = FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
         return ops::dispatchGaussianRasterizeForward<DeviceTag>(means2d,
@@ -41,34 +42,29 @@ RasterizeGaussiansToPixels::forward(
                                                                 tileSize,
                                                                 tileOffsets,
                                                                 tileGaussianIds,
-                                                                backgrounds);
+                                                                backgrounds,
+                                                                masks);
     });
     Variable renderedColors = std::get<0>(variables);
     Variable renderedAlphas = std::get<1>(variables);
     Variable lastIds        = std::get<2>(variables);
 
+    std::vector<Variable> toSave = {
+        means2d, conics, colors, opacities, tileOffsets, tileGaussianIds, renderedAlphas, lastIds};
     if (backgrounds.has_value()) {
-        ctx->save_for_backward({means2d,
-                                conics,
-                                colors,
-                                opacities,
-                                tileOffsets,
-                                tileGaussianIds,
-                                renderedAlphas,
-                                lastIds,
-                                backgrounds.value()});
+        toSave.push_back(backgrounds.value());
         ctx->saved_data["has_backgrounds"] = true;
     } else {
-        ctx->save_for_backward({means2d,
-                                conics,
-                                colors,
-                                opacities,
-                                tileOffsets,
-                                tileGaussianIds,
-                                renderedAlphas,
-                                lastIds});
         ctx->saved_data["has_backgrounds"] = false;
     }
+    if (masks.has_value()) {
+        toSave.push_back(masks.value());
+        ctx->saved_data["has_masks"] = true;
+    } else {
+        ctx->saved_data["has_masks"] = false;
+    }
+    ctx->save_for_backward(toSave);
+
     ctx->saved_data["imageWidth"]   = (int64_t)imageWidth;
     ctx->saved_data["imageHeight"]  = (int64_t)imageHeight;
     ctx->saved_data["tileSize"]     = (int64_t)tileSize;
@@ -105,9 +101,15 @@ RasterizeGaussiansToPixels::backward(RasterizeGaussiansToPixels::AutogradContext
     Variable lastIds         = saved.at(7);
 
     const bool hasBackgrounds                = ctx->saved_data["has_backgrounds"].toBool();
+    const bool hasMasks                      = ctx->saved_data["has_masks"].toBool();
     std::optional<torch::Tensor> backgrounds = std::nullopt;
+    std::optional<torch::Tensor> masks       = std::nullopt;
+    int64_t optIdx                           = 8;
     if (hasBackgrounds) {
-        backgrounds = saved.at(8);
+        backgrounds = saved.at(optIdx++);
+    }
+    if (hasMasks) {
+        masks = saved.at(optIdx++);
     }
 
     const int imageWidth   = (int)ctx->saved_data["imageWidth"].toInt();
@@ -135,12 +137,12 @@ RasterizeGaussiansToPixels::backward(RasterizeGaussiansToPixels::AutogradContext
                                                                  dLossDRenderedAlphas,
                                                                  absgrad,
                                                                  -1,
-                                                                 backgrounds);
+                                                                 backgrounds,
+                                                                 masks);
     });
     Variable dLossDMean2dAbs;
     if (absgrad) {
         dLossDMean2dAbs = std::get<0>(variables);
-        // means2d.absgrad = dLossDMean2dAbs;
     } else {
         dLossDMean2dAbs = Variable();
     }
@@ -162,7 +164,8 @@ RasterizeGaussiansToPixels::backward(RasterizeGaussiansToPixels::AutogradContext
         Variable(),
         Variable(),
         Variable(),
-        Variable(), // backgrounds gradient (not needed, so return empty)
+        Variable(), // backgrounds
+        Variable(), // masks
     };
 }
 

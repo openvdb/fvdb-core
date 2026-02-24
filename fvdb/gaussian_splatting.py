@@ -5,6 +5,7 @@ import pathlib
 from typing import Any, Mapping, Sequence, TypeVar, overload
 
 import torch
+
 from fvdb.enums import CameraModel, ProjectionType
 
 from . import _fvdb_cpp as _C
@@ -1532,6 +1533,7 @@ class GaussianSplat3d:
         crop_origin_h: int = -1,
         tile_size: int = 16,
         backgrounds: torch.Tensor | None = None,
+        masks: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Render a set of images from Gaussian splats that have already been projected onto image planes
@@ -1617,6 +1619,7 @@ class GaussianSplat3d:
             crop_origin_h=crop_origin_h,
             tile_size=tile_size,
             backgrounds=backgrounds,
+            masks=masks,
         )
 
     def render_depths(
@@ -1633,6 +1636,7 @@ class GaussianSplat3d:
         eps_2d: float = 0.3,
         antialias: bool = False,
         backgrounds: torch.Tensor | None = None,
+        masks: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Render ``C`` depth maps from this :class:`GaussianSplat3d` from ``C`` camera views.
@@ -1699,6 +1703,7 @@ class GaussianSplat3d:
             eps_2d=eps_2d,
             antialias=antialias,
             backgrounds=backgrounds,
+            masks=masks,
         )
 
     def sparse_render_depths(
@@ -1715,6 +1720,8 @@ class GaussianSplat3d:
         min_radius_2d: float = 0.3,
         eps_2d: float = 0.3,
         antialias: bool = False,
+        backgrounds: torch.Tensor | None = None,
+        masks: torch.Tensor | None = None,
     ) -> tuple[JaggedTensorOrTensorT, JaggedTensorOrTensorT]:
         """
         Render ``C`` collections of sparse depth values from this :class:`GaussianSplat3d` from ``C`` camera views
@@ -1787,6 +1794,8 @@ class GaussianSplat3d:
             min_radius_2d=min_radius_2d,
             eps_2d=eps_2d,
             antialias=antialias,
+            backgrounds=backgrounds,
+            masks=masks,
         )
 
         if isinstance(pixels_to_render, torch.Tensor):
@@ -1809,6 +1818,7 @@ class GaussianSplat3d:
         eps_2d: float = 0.3,
         antialias: bool = False,
         backgrounds: torch.Tensor | None = None,
+        masks: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Render ``C`` multi-channel images (see :attr:`num_channels`) from this :class:`GaussianSplat3d` from ``C`` camera views.
@@ -1876,6 +1886,7 @@ class GaussianSplat3d:
             eps_2d=eps_2d,
             antialias=antialias,
             backgrounds=backgrounds,
+            masks=masks,
         )
 
     def render_images_from_world(
@@ -2004,6 +2015,8 @@ class GaussianSplat3d:
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
         antialias: bool = False,
+        backgrounds: torch.Tensor | None = None,
+        masks: torch.Tensor | None = None,
     ) -> tuple[JaggedTensorOrTensorT, JaggedTensorOrTensorT]:
         """
         Render ``C`` collections of multi-channel features (see :attr:`num_channels`) from this :class:`GaussianSplat3d` from ``C`` camera views
@@ -2079,6 +2092,8 @@ class GaussianSplat3d:
             min_radius_2d=min_radius_2d,
             eps_2d=eps_2d,
             antialias=antialias,
+            backgrounds=backgrounds,
+            masks=masks,
         )
 
         if isinstance(pixels_to_render, torch.Tensor):
@@ -2101,6 +2116,8 @@ class GaussianSplat3d:
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
         antialias: bool = False,
+        backgrounds: torch.Tensor | None = None,
+        masks: torch.Tensor | None = None,
     ) -> tuple[JaggedTensorOrTensorT, JaggedTensorOrTensorT]:
         """
         Render ``C`` collections of sparse multi-channel features (see :attr:`num_channels`) with depth as
@@ -2176,6 +2193,8 @@ class GaussianSplat3d:
             min_radius_2d=min_radius_2d,
             eps_2d=eps_2d,
             antialias=antialias,
+            backgrounds=backgrounds,
+            masks=masks,
         )
 
         if isinstance(pixels_to_render, torch.Tensor):
@@ -2198,6 +2217,7 @@ class GaussianSplat3d:
         eps_2d: float = 0.3,
         antialias: bool = False,
         backgrounds: torch.Tensor | None = None,
+        masks: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Render ``C`` multi-channel images (see :attr:`num_channels`) with depth as the last channel from this :class:`GaussianSplat3d` from ``C`` camera views.
@@ -2269,6 +2289,7 @@ class GaussianSplat3d:
             eps_2d=eps_2d,
             antialias=antialias,
             backgrounds=backgrounds,
+            masks=masks,
         )
 
     def render_num_contributing_gaussians(

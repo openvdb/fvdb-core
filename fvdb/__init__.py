@@ -99,6 +99,7 @@ def gaussian_render_jagged(
     return_debug_info: bool = False,
     ortho: bool = False,
     backgrounds: torch.Tensor | None = None,
+    masks: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
     return _gaussian_render_jagged_cpp(
         means=means._impl,
@@ -121,6 +122,7 @@ def gaussian_render_jagged(
         return_debug_info=return_debug_info,
         ortho=ortho,
         backgrounds=backgrounds,
+        masks=masks,
     )
 
 
