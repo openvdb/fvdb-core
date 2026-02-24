@@ -1831,7 +1831,13 @@ class GaussianSplat3d:
             eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
                 numerical issues.
             antialias (bool): If ``True``, applies opacity correction to the projected Gaussians when using ``eps_2d > 0.0``.
-
+            backgrounds (torch.Tensor | None): Optional background depths of shape ``(C, 1)``.
+                If ``None``, background is treated as 0.
+            masks (torch.Tensor | None): Optional per-tile boolean mask of shape
+                ``(C, tileH, tileW)`` where ``tileH = ceil(image_height / tile_size)`` and
+                ``tileW = ceil(image_width / tile_size)``. ``True`` means the tile is rendered,
+                ``False`` means the tile is skipped and its pixels receive the background value
+                with zero alpha.
 
         Returns:
             depth_values (torch.Tensor | JaggedTensor): A tensor of shape ``(C, P, 1)`` or a JaggedTensor where ``C`` is the number of camera views,
@@ -2147,6 +2153,13 @@ class GaussianSplat3d:
             eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
                 numerical issues.
             antialias (bool): If ``True``, applies opacity correction to the projected Gaussians when using ``eps_2d > 0.0``.
+            backgrounds (torch.Tensor | None): Optional background colors of shape ``(C, D)``
+                where ``D`` is :attr:`num_channels`. If ``None``, background is treated as 0.
+            masks (torch.Tensor | None): Optional per-tile boolean mask of shape
+                ``(C, tileH, tileW)`` where ``tileH = ceil(image_height / tile_size)`` and
+                ``tileW = ceil(image_width / tile_size)``. ``True`` means the tile is rendered,
+                ``False`` means the tile is skipped and its pixels receive the background value
+                with zero alpha.
 
         Returns:
             features (torch.Tensor | JaggedTensor): A tensor of shape ``(C, P, D)`` or a
@@ -2247,6 +2260,14 @@ class GaussianSplat3d:
             eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
                 numerical issues.
             antialias (bool): If ``True``, applies opacity correction to the projected Gaussians when using ``eps_2d > 0.0``.
+            backgrounds (torch.Tensor | None): Optional background values of shape ``(C, D+1)``
+                where ``D`` is :attr:`num_channels` (the last element is the background depth).
+                If ``None``, background is treated as 0.
+            masks (torch.Tensor | None): Optional per-tile boolean mask of shape
+                ``(C, tileH, tileW)`` where ``tileH = ceil(image_height / tile_size)`` and
+                ``tileW = ceil(image_width / tile_size)``. ``True`` means the tile is rendered,
+                ``False`` means the tile is skipped and its pixels receive the background value
+                with zero alpha.
 
         Returns:
             features_with_depths (torch.Tensor | JaggedTensor): A tensor of shape ``(C, P, D + 1)`` or a
