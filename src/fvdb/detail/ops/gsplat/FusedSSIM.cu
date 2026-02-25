@@ -580,6 +580,40 @@ fusedSSIMBackwardCUDA(double C1,
     return dL_dimg1;
 }
 
+namespace {
+
+void
+imagePrefetchBatchAsync(const torch::TensorList &tensors,
+                        int localElementOffset,
+                        int localElementCount,
+                        int deviceId,
+                        cudaStream_t stream) {
+    TORCH_CHECK(stream, "cudaMemPrefetchBatchAsync does not support the default stream");
+
+    std::vector<void *> prefetchPointers;
+    std::vector<size_t> prefetchSizes;
+    cudaMemLocation location                       = {cudaMemLocationTypeDevice, deviceId};
+    std::vector<cudaMemLocation> prefetchLocations = {location};
+    std::vector<size_t> prefetchLocationIndices    = {0};
+
+    for (size_t i = 0; i < tensors.size(); ++i) {
+        const auto &tensor = tensors[i];
+        TORCH_CHECK(tensor.is_contiguous(), "Tensor to prefetch is not contiguous");
+        prefetchPointers.emplace_back(tensor.data_ptr<float>() + localElementOffset);
+        prefetchSizes.emplace_back(localElementCount * sizeof(float));
+    }
+    C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(prefetchPointers.data(),
+                                             prefetchSizes.data(),
+                                             prefetchPointers.size(),
+                                             prefetchLocations.data(),
+                                             prefetchLocationIndices.data(),
+                                             prefetchLocations.size(),
+                                             0,
+                                             stream));
+}
+
+}
+
 // ------------------------------------------
 // PyTorch Interface (Forward)
 //   Returns (ssim_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12).
@@ -612,7 +646,7 @@ fusedSSIMPrivateUse1(
     const auto globalBlockCount = ((W + BLOCK_X - 1) / BLOCK_X) * ((H + BLOCK_Y - 1) / BLOCK_Y) * B;
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        auto stream = c10::cuda::getStreamFromPool(false, deviceId);
 
         constexpr size_t kAlignment = kPageSize / (sizeof(float) * BLOCK_X * BLOCK_Y);
         int localBlockOffset, localBlockCount;
@@ -627,38 +661,34 @@ fusedSSIMPrivateUse1(
                 localElementCount  = std::min(localElementCount,
                                              static_cast<int>(img1_.numel()) - localElementOffset);
             }
-            nanovdb::util::cuda::memPrefetchAsync(img1_.const_data_ptr<float>() +
-                                                      localElementOffset,
-                                                  localElementCount * sizeof(float),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(img2_.const_data_ptr<float>() +
-                                                      localElementOffset,
-                                                  localElementCount * sizeof(float),
-                                                  deviceId,
-                                                  stream);
 
-            nanovdb::util::cuda::memPrefetchAsync(ssim_map.const_data_ptr<float>() +
-                                                      localElementOffset,
-                                                  localElementCount * sizeof(float),
-                                                  deviceId,
-                                                  stream);
+            std::vector<torch::Tensor> tensors = {img1_, img2_, ssim_map};
             if (train) {
-                nanovdb::util::cuda::memPrefetchAsync(dm_dmu1.const_data_ptr<float>() +
-                                                          localElementOffset,
-                                                      localElementCount * sizeof(float),
-                                                      deviceId,
-                                                      stream);
-                nanovdb::util::cuda::memPrefetchAsync(dm_dsigma1_sq.const_data_ptr<float>() +
-                                                          localElementOffset,
-                                                      localElementCount * sizeof(float),
-                                                      deviceId,
-                                                      stream);
-                nanovdb::util::cuda::memPrefetchAsync(dm_dsigma12.const_data_ptr<float>() +
-                                                          localElementOffset,
-                                                      localElementCount * sizeof(float),
-                                                      deviceId,
-                                                      stream);
+                tensors.emplace_back(dm_dmu1);
+                tensors.emplace_back(dm_dsigma1_sq);
+                tensors.emplace_back(dm_dsigma12);
+            }
+            imagePrefetchBatchAsync(tensors, localElementOffset, localElementCount, deviceId, stream);
+        }
+    }
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        TORCH_CHECK(!stream);
+
+        constexpr size_t kAlignment = kPageSize / (sizeof(float) * BLOCK_X * BLOCK_Y);
+        int localBlockOffset, localBlockCount;
+        std::tie(localBlockOffset, localBlockCount) =
+            deviceAlignedChunk(kAlignment, globalBlockCount, deviceId);
+
+        if (localBlockCount) {
+            auto localElementOffset = localBlockOffset * BLOCK_X * BLOCK_Y * CH;
+            auto localElementCount  = localBlockCount * BLOCK_X * BLOCK_Y * CH;
+            if (localElementOffset + localElementCount > img1_.numel()) {
+                localElementOffset = std::min(localElementOffset, static_cast<int>(img1_.numel()));
+                localElementCount  = std::min(localElementCount,
+                                             static_cast<int>(img1_.numel()) - localElementOffset);
             }
 
             // Launch config
@@ -726,7 +756,7 @@ fusedSSIMBackwardPrivateUse1(double C1,
     const auto globalBlockCount = ((W + BLOCK_X - 1) / BLOCK_X) * ((H + BLOCK_Y - 1) / BLOCK_Y) * B;
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        auto stream = c10::cuda::getStreamFromPool(false, deviceId);
 
         constexpr size_t kAlignment = kPageSize / (sizeof(float) * BLOCK_X * BLOCK_Y);
         int localBlockOffset, localBlockCount;
@@ -741,41 +771,30 @@ fusedSSIMBackwardPrivateUse1(double C1,
                 localElementCount  = std::min(localElementCount,
                                              static_cast<int>(img1_.numel()) - localElementOffset);
             }
-            nanovdb::util::cuda::memPrefetchAsync(img1_.const_data_ptr<float>() +
-                                                      localElementOffset,
-                                                  localElementCount * sizeof(float),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(img2_.const_data_ptr<float>() +
-                                                      localElementOffset,
-                                                  localElementCount * sizeof(float),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(dL_dmap_.const_data_ptr<float>() +
-                                                      localElementOffset,
-                                                  localElementCount * sizeof(float),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(dL_dimg1.const_data_ptr<float>() +
-                                                      localElementOffset,
-                                                  localElementCount * sizeof(float),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(dm_dmu1_.const_data_ptr<float>() +
-                                                      localElementOffset,
-                                                  localElementCount * sizeof(float),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(dm_dsigma1_sq_.const_data_ptr<float>() +
-                                                      localElementOffset,
-                                                  localElementCount * sizeof(float),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(dm_dsigma12_.const_data_ptr<float>() +
-                                                      localElementOffset,
-                                                  localElementCount * sizeof(float),
-                                                  deviceId,
-                                                  stream);
+
+            std::vector<torch::Tensor> tensors = { img1_, img2_, dL_dmap_, dL_dimg1, dm_dmu1_, dm_dsigma1_sq_, dm_dsigma12_ };
+            imagePrefetchBatchAsync(tensors, localElementOffset, localElementCount, deviceId, stream);
+        }
+    }
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        TORCH_CHECK(!stream);
+
+        constexpr size_t kAlignment = kPageSize / (sizeof(float) * BLOCK_X * BLOCK_Y);
+        int localBlockOffset, localBlockCount;
+        std::tie(localBlockOffset, localBlockCount) =
+            deviceAlignedChunk(kAlignment, globalBlockCount, deviceId);
+
+        if (localBlockCount) {
+            auto localElementOffset = localBlockOffset * BLOCK_X * BLOCK_Y * CH;
+            auto localElementCount  = localBlockCount * BLOCK_X * BLOCK_Y * CH;
+            if (localElementOffset + localElementCount > img1_.numel()) {
+                localElementOffset = std::min(localElementOffset, static_cast<int>(img1_.numel()));
+                localElementCount  = std::min(localElementCount,
+                                             static_cast<int>(img1_.numel()) - localElementOffset);
+            }
 
             // Launch config
             dim3 grid(localBlockCount);

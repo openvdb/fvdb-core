@@ -554,6 +554,37 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
             float *outNormalizeddLossdMeans2dNormAccumPtr =
                 outNormalizeddLossdMeans2dNormAccum.value().data_ptr<float>();
             int32_t *outGradientStepCountsPtr = outGradientStepCounts.value().data_ptr<int32_t>();
+
+            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+                C10_CUDA_CHECK(cudaSetDevice(deviceId));
+                auto stream = c10::cuda::getStreamFromPool(false, deviceId);
+
+                int64_t deviceProblemOffset, deviceProblemSize;
+                std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
+
+                std::vector<void *> prefetchPointers;
+                std::vector<size_t> prefetchSizes;
+                cudaMemLocation location = {cudaMemLocationTypeDevice, deviceId};
+                std::vector<cudaMemLocation> prefetchLocations = {location};
+                std::vector<size_t> prefetchLocationIndices    = {0};
+                for (uint32_t i = 0; i < C; ++i) {
+                    prefetchPointers.emplace_back(radii.data_ptr<int32_t>() + deviceProblemOffset +
+                                                  i * N);
+                    prefetchSizes.emplace_back(deviceProblemSize * sizeof(int32_t));
+                    prefetchPointers.emplace_back(dLossDMeans2d.data_ptr<float>() +
+                                                  deviceProblemOffset + i * N);
+                    prefetchSizes.emplace_back(deviceProblemSize * sizeof(float));
+                }
+                C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(prefetchPointers.data(),
+                                                         prefetchSizes.data(),
+                                                         prefetchPointers.size(),
+                                                         prefetchLocations.data(),
+                                                         prefetchLocationIndices.data(),
+                                                         prefetchLocations.size(),
+                                                         0,
+                                                         stream));
+            }
+
             if (outNormalizedMaxRadiiAccum.has_value()) {
                 int32_t *outNormalizedMaxRadiiAccumPtr =
                     outNormalizedMaxRadiiAccum.value().data_ptr<int32_t>();

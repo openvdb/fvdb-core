@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/gsplat/Gaussian2D.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRasterize.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeBackward.h>
+#include <fvdb/detail/ops/gsplat/GaussianUtils.h>
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
@@ -1216,15 +1217,43 @@ callRasterizeBackwardPrivateUse1(
         tileCount                  = C * tileExtentH * tileExtentW;
     }
 
-    std::vector<cudaEvent_t> events(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
+        auto stream = c10::cuda::getStreamFromPool(false, deviceId);
 
         uint32_t deviceTileOffset, deviceTileCount;
         std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
+        uint32_t cameraOffset                       = deviceTileOffset / (tileCount / C);
+        uint32_t cameraCount =
+            cuda::ceil_div(deviceTileOffset + deviceTileCount, tileCount / C) - cameraOffset;
+        if (deviceTileCount) {
+            std::vector<torch::Tensor> tensors = {means2d,
+                                                  conics,
+                                                  features,
+                                                  opacities,
+                                                  tileOffsets,
+                                                  renderedAlphas.jdata(),
+                                                  lastGaussianIds.jdata(),
+                                                  dLossDRenderedFeatures.jdata(),
+                                                  dLossDRenderedAlphas.jdata(),
+                                                  outDLossDMeans2d,
+                                                  outDLossDConics,
+                                                  outDLossDFeatures,
+                                                  outDLossDOpacities};
+            if (absGrad) {
+                tensors.emplace_back(outDLossDMeans2dAbs);
+            }
+            perCameraPrefetchBatchAsync(tensors, cameraOffset, cameraCount, deviceId, stream);
+        }
+    }
 
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        TORCH_CHECK(!stream);
+
+        uint32_t deviceTileOffset, deviceTileCount;
+        std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
         if (deviceTileCount) {
             RasterizeBackwardArgs<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED> args(
                 means2d,
@@ -1252,54 +1281,6 @@ callRasterizeBackwardPrivateUse1(
                 tilePixelCumsum,
                 pixelMap);
 
-            TORCH_CHECK(means2d.is_contiguous());
-            TORCH_CHECK(conics.is_contiguous());
-            TORCH_CHECK(features.is_contiguous());
-
-            if (deviceId > 0) {
-                cudaStreamWaitEvent(stream, events[deviceId - 1]);
-            }
-
-            // Compute the number of bytes from data_ptr() to the end of the underlying
-            // storage. This safely handles both non-contiguous expanded views (where
-            // numel() exceeds actual storage) and sliced tensors with non-zero storage_offset.
-            auto prefetchBytes = [](const torch::Tensor &t) -> size_t {
-                return t.storage().nbytes() - t.storage_offset() * t.element_size();
-            };
-
-            nanovdb::util::cuda::memPrefetchAsync(
-                means2d.const_data_ptr<ScalarType>(), prefetchBytes(means2d), deviceId, stream);
-            nanovdb::util::cuda::memPrefetchAsync(
-                conics.const_data_ptr<ScalarType>(), prefetchBytes(conics), deviceId, stream);
-            nanovdb::util::cuda::memPrefetchAsync(
-                opacities.const_data_ptr<ScalarType>(), prefetchBytes(opacities), deviceId, stream);
-            nanovdb::util::cuda::memPrefetchAsync(
-                features.const_data_ptr<ScalarType>(), prefetchBytes(features), deviceId, stream);
-
-            nanovdb::util::cuda::memPrefetchAsync(outDLossDMeans2d.const_data_ptr<ScalarType>(),
-                                                  prefetchBytes(outDLossDMeans2d),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(outDLossDConics.const_data_ptr<ScalarType>(),
-                                                  prefetchBytes(outDLossDConics),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(outDLossDFeatures.const_data_ptr<ScalarType>(),
-                                                  prefetchBytes(outDLossDFeatures),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(outDLossDOpacities.const_data_ptr<ScalarType>(),
-                                                  prefetchBytes(outDLossDOpacities),
-                                                  deviceId,
-                                                  stream);
-            if (absGrad) {
-                nanovdb::util::cuda::memPrefetchAsync(
-                    outDLossDMeans2dAbs.const_data_ptr<ScalarType>(),
-                    prefetchBytes(outDLossDMeans2dAbs),
-                    deviceId,
-                    stream);
-            }
-
             const size_t numChannels =
                 (NUM_SHARED_CHANNELS == NUM_CHANNELS) ? NUM_CHANNELS : NUM_SHARED_CHANNELS + 1;
             const size_t sharedMemSize =
@@ -1323,19 +1304,9 @@ callRasterizeBackwardPrivateUse1(
                 <<<gridDim, blockDim, sharedMemSize, stream>>>(args);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
-
-        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
     }
 
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[c10::cuda::device_count() - 1]));
-    }
-
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
-    }
+    mergeStreams();
 
     return std::make_tuple(outDLossDMeans2dAbs,
                            outDLossDMeans2d,
