@@ -82,7 +82,7 @@ jaggedProjectionForwardKernel(const uint32_t B,
     const nanovdb::math::Mat3<T> covarCamSpace = transformCovarianceWorldToCam(R, covar);
 
     // camera projection
-    auto [covar2d, mean2d] = cameraOp.project(cId, meansCamSpace, covarCamSpace);
+    auto [covar2d, mean2d] = cameraOp.projectTo2DGaussian(cId, meansCamSpace, covarCamSpace);
 
     T compensation;
     const T det = addBlur(eps2d, covar2d, compensation);
@@ -105,7 +105,8 @@ jaggedProjectionForwardKernel(const uint32_t B,
     }
 
     // mask out gaussians outside the image region
-    if (isOutsideImageWithRadius(mean2d, radius, radius, cameraOp.imageWidth, cameraOp.imageHeight)) {
+    if (isOutsideImageWithRadius(
+            mean2d, radius, radius, cameraOp.imageWidthPx(), cameraOp.imageHeightPx())) {
         radii[idx] = 0;
         return;
     }
@@ -163,6 +164,7 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
 
     // TODO: use inclusive sum
     const uint32_t B     = gSizes.size(0);
+    const int64_t C      = worldToCamMatrices.size(0);
     torch::Tensor cIndex = torch::cumsum(cSizes, 0, torch::kInt64) - cSizes;
     torch::Tensor gIndex = torch::cumsum(gSizes, 0, torch::kInt64) - gSizes;
     torch::Tensor nSize  = cSizes * gSizes;            // element size = Ci * Ni
@@ -186,6 +188,7 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
             const auto cameraOp = OrthographicCameraOp<float>{
                     projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
                     worldToCamMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+                    static_cast<int32_t>(C),
                     static_cast<int32_t>(imageWidth),
                     static_cast<int32_t>(imageHeight),
                     nearPlane,
@@ -215,6 +218,7 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
             const auto cameraOp = PerspectiveCameraOp<float>{
                 projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
                 worldToCamMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+                static_cast<int32_t>(C),
                 static_cast<int32_t>(imageWidth),
                 static_cast<int32_t>(imageHeight),
                 nearPlane,

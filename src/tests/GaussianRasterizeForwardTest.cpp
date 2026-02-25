@@ -455,10 +455,7 @@ TEST_F(GaussianRasterizeForwardTestFixture, DISABLED_GenerateOutputData) {
                                                                               conics,
                                                                               colors_64,
                                                                               opacities,
-                                                                              imageWidth / 2,
-                                                                              imageHeight / 2,
-                                                                              imageOriginW,
-                                                                              imageOriginH,
+                                                                              nanovdb::math::Vec4<uint32_t>(imageWidth / 2, imageHeight / 2, imageOriginW, imageOriginH),
                                                                               tileSize,
                                                                               tileOffsets,
                                                                               tileGaussianIds);

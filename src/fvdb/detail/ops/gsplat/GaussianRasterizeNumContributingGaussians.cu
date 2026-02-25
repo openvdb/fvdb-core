@@ -54,10 +54,8 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeNumContributingGa
                      std::nullopt,
                      backgrounds,
                      masks,
-                     imageWidth,
-                     imageHeight,
-                     imageOriginW,
-                     imageOriginH,
+                     nanovdb::math::Vec4<uint32_t>(
+                         imageWidth, imageHeight, imageOriginW, imageOriginH),
                      tileSize,
                      0,
                      tileOffsets,

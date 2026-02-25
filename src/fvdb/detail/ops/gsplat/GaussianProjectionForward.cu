@@ -64,7 +64,7 @@ template <typename T, typename CameraOp> struct ProjectionForward {
                       torch::Tensor outDepths,                 // [C, N]
                       torch::Tensor outConics,                 // [C, N, 3]
                       torch::Tensor outCompensations)          // [C, N] optional
-        : C(cameraOp.worldToCamMatricesAcc.size(0)), N(means.size(0)), mEps2d(eps2d), mRadiusClip(radiusClip),
+        : C(outRadii.size(0)), N(means.size(0)), mEps2d(eps2d), mRadiusClip(radiusClip),
           mMeansAcc(means.packed_accessor64<T, 2, torch::RestrictPtrTraits>()),
           mQuatsAcc(quats.packed_accessor64<T, 2, torch::RestrictPtrTraits>()),
           mLogScalesAcc(logScales.packed_accessor64<T, 2, torch::RestrictPtrTraits>()),
@@ -118,7 +118,7 @@ template <typename T, typename CameraOp> struct ProjectionForward {
         const Mat3 covarCamSpace = transformCovarianceWorldToCam(worldToCamRotMatrix, covar);
 
         // camera projection
-        auto [covar2d, mean2d] = mCameraOp.project(cid, meansCamSpace, covarCamSpace);
+        auto [covar2d, mean2d] = mCameraOp.projectTo2DGaussian(cid, meansCamSpace, covarCamSpace);
 
         T compensation;
         const T det = addBlur(mEps2d, covar2d, compensation);
@@ -139,7 +139,7 @@ template <typename T, typename CameraOp> struct ProjectionForward {
 
         // Mask out gaussians outside the image region
         if (isOutsideImageWithRadius(
-                mean2d, radius, radius, mCameraOp.imageWidth, mCameraOp.imageHeight)) {
+                mean2d, radius, radius, mCameraOp.imageWidthPx(), mCameraOp.imageHeightPx())) {
             mOutRadiiAcc[cid][gid] = 0;
             return;
         }
@@ -162,8 +162,7 @@ template <typename T, typename CameraOp> struct ProjectionForward {
     inline __device__ void
     loadCamerasIntoSharedMemory() {
         alignas(Mat3) extern __shared__ char sharedMemory[];
-        mCameraOp.bindSharedMemory(sharedMemory, C);
-        mCameraOp.loadCameraStateToShared(C);
+        mCameraOp.loadSharedMemory(sharedMemory);
     }
 };
 
@@ -241,6 +240,7 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
         const auto cameraOp = OrthographicCameraOp<scalar_t>{
             projectionMatrices.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
             worldToCamMatrices.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            static_cast<int32_t>(C),
             static_cast<int32_t>(imageWidth),
             static_cast<int32_t>(imageHeight),
             nearPlane,
@@ -267,6 +267,7 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
         const auto cameraOp = PerspectiveCameraOp<scalar_t>{
             projectionMatrices.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
             worldToCamMatrices.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            static_cast<int32_t>(C),
             static_cast<int32_t>(imageWidth),
             static_cast<int32_t>(imageHeight),
             nearPlane,
@@ -354,6 +355,7 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
             const auto cameraOp = OrthographicCameraOp<scalar_t>{
                 projectionMatrices.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
                 worldToCamMatrices.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+                static_cast<int32_t>(C),
                 static_cast<int32_t>(imageWidth),
                 static_cast<int32_t>(imageHeight),
                 nearPlane,
@@ -380,6 +382,7 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
             const auto cameraOp = PerspectiveCameraOp<scalar_t>{
                 projectionMatrices.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
                 worldToCamMatrices.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+                static_cast<int32_t>(C),
                 static_cast<int32_t>(imageWidth),
                 static_cast<int32_t>(imageHeight),
                 nearPlane,

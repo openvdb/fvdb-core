@@ -109,7 +109,7 @@ jaggedProjectionBackwardKernel(
     const nanovdb::math::Mat3<T> &covarCamSpace = transformCovarianceWorldToCam(R, covar);
 
     // vjp: camera projection
-    auto [dLossDCovarCamSpace, dLossDMeanCamSpace] = cameraOp.vjp(
+    auto [dLossDCovarCamSpace, dLossDMeanCamSpace] = cameraOp.projectTo2DGaussianVJP(
         cId, meansCamSpace, covarCamSpace, dLossDCovar2d, nanovdb::math::Vec2<T>(dLossDMeans2d[0], dLossDMeans2d[1]));
 
     // add contribution from dLossDDepths
@@ -248,6 +248,7 @@ dispatchGaussianProjectionJaggedBackward<torch::kCUDA>(
 
     // TODO: use inclusive sum
     const uint32_t B        = gSizes.size(0);
+    const int64_t C         = worldToCamMatrices.size(0);
     const int64_t N         = dLossDMeans2d.size(0);
     torch::Tensor cIndexPtr = torch::cumsum(cSizes, 0, torch::kInt64) - cSizes;
     torch::Tensor gIndexPtr = torch::cumsum(gSizes, 0, torch::kInt64) - gSizes;
@@ -273,6 +274,7 @@ dispatchGaussianProjectionJaggedBackward<torch::kCUDA>(
             const auto cameraOp = OrthographicCameraOp<float>{
                 projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
                 worldToCamMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+                static_cast<int32_t>(C),
                 static_cast<int32_t>(imageWidth),
                 static_cast<int32_t>(imageHeight),
                 -1e10f,
@@ -310,6 +312,7 @@ dispatchGaussianProjectionJaggedBackward<torch::kCUDA>(
             const auto cameraOp = PerspectiveCameraOp<float>{
                 projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
                 worldToCamMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+                static_cast<int32_t>(C),
                 static_cast<int32_t>(imageWidth),
                 static_cast<int32_t>(imageHeight),
                 -1e10f,

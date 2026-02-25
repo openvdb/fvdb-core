@@ -299,10 +299,7 @@ class GaussianTestHelper {
                 gaussians.conics,
                 gaussians.colors,
                 gaussians.opacities,
-                imageWidth,
-                imageHeight,
-                0, // imageOriginW
-                0, // imageOriginH
+                nanovdb::math::Vec4<uint32_t>(imageWidth, imageHeight, 0, 0),
                 tileSize,
                 tiles.tileOffsets,
                 tiles.tileGaussianIds,
@@ -333,10 +330,7 @@ class GaussianTestHelper {
                 gaussians.conics,
                 gaussians.colors,
                 gaussians.opacities,
-                imageWidth,
-                imageHeight,
-                0, // imageOriginW
-                0, // imageOriginH
+                nanovdb::math::Vec4<uint32_t>(imageWidth, imageHeight, 0, 0),
                 tileSize,
                 tiles.tileOffsets,
                 tiles.tileGaussianIds,
@@ -1367,10 +1361,7 @@ TEST_F(GaussianRasterizeTestFixture, TestPackedModeBackwardMultipleCameras) {
             gaussians.conics,
             gaussians.colors,
             gaussians.opacities,
-            testImageWidth,
-            testImageHeight,
-            0, // imageOriginW
-            0, // imageOriginH
+            nanovdb::math::Vec4<uint32_t>(testImageWidth, testImageHeight, 0, 0),
             testTileSize,
             tiles.tileOffsets,
             tiles.tileGaussianIds,
@@ -1401,10 +1392,7 @@ TEST_F(GaussianRasterizeTestFixture, TestPackedModeBackwardMultipleCameras) {
             conicsPacked,
             colorsPacked,
             opacitiesPacked,
-            testImageWidth,
-            testImageHeight,
-            0,
-            0,
+            nanovdb::math::Vec4<uint32_t>(testImageWidth, testImageHeight, 0, 0),
             testTileSize,
             tiles.tileOffsets, // Still use [C, H, W] tile offsets
             tiles.tileGaussianIds,

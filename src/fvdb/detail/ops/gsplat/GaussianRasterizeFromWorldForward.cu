@@ -68,18 +68,16 @@ template <uint32_t NUM_CHANNELS, typename CameraOp> struct RasterizeFromWorldFor
 
         extern __shared__ char smem[];
         CameraOp cameraOpLocal = cameraOp;
-        cameraOpLocal.bindSharedMemory(smem);
-        cameraOpLocal.loadCameraStateToShared();
+        cameraOpLocal.loadSharedMemory(smem);
         __syncthreads();
 
-        const nanovdb::math::Ray<float> ray = cameraOpLocal.pixelToWorldRay(camId, row, col);
+        const nanovdb::math::Ray<float> ray = cameraOpLocal.projectToRay(camId, row, col);
 
         const bool rayValid = ray.dir().dot(ray.dir()) > 0.0f;
         bool done           = (!inside) || (!rayValid);
 
         // Determine gaussian range for this tile.
-        const auto [rangeStart, rangeEnd] =
-            common.tileGaussianRange(camId, tileRow, tileCol, cameraOpLocal.numCameras);
+        const auto [rangeStart, rangeEnd] = common.tileGaussianRange(camId, tileRow, tileCol);
 
         // If no intersections, just write background.
         //
@@ -98,7 +96,7 @@ template <uint32_t NUM_CHANNELS, typename CameraOp> struct RasterizeFromWorldFor
         }
 
         // Shared memory for batched gaussians (after camera-op shared state).
-        char *gaussSmem  = smem + cameraOpLocal.sharedMemoryBytes();
+        char *gaussSmem  = smem + cameraOpLocal.numSharedMemBytes();
         int32_t *idBatch = reinterpret_cast<int32_t *>(gaussSmem);                 // [blockSize]
         auto *gaussBatch =
             reinterpret_cast<SharedGaussian<NUM_CHANNELS> *>(&idBatch[blockSize]); // [blockSize]
@@ -270,7 +268,7 @@ launchForward(const torch::Tensor &means,
         outLastIds.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>()};
 
     const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
-    const size_t sharedMem = cameraOp.sharedMemoryBytes() +
+    const size_t sharedMem = cameraOp.numSharedMemBytes() +
                              blockSize * (sizeof(int32_t) + sizeof(SharedGaussian<NUM_CHANNELS>));
 
     auto stream = at::cuda::getDefaultCUDAStream();

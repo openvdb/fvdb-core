@@ -69,11 +69,10 @@ rasterizeFromWorld3DGSBackwardKernel(
 
     extern __shared__ char smem[];
     CameraOp cameraOpLocal = args.cameraOp;
-    cameraOpLocal.bindSharedMemory(smem);
-    cameraOpLocal.loadCameraStateToShared();
+    cameraOpLocal.loadSharedMemory(smem);
     block.sync();
 
-    const nanovdb::math::Ray<float> ray = cameraOpLocal.pixelToWorldRay(camId, row, col);
+    const nanovdb::math::Ray<float> ray = cameraOpLocal.projectToRay(camId, row, col);
 
     // Whether this pixel participates in the backward pass.
     //
@@ -82,8 +81,7 @@ rasterizeFromWorld3DGSBackwardKernel(
     const bool done     = inside && rayValid;
 
     // Gaussian range for this tile.
-    const auto [rangeStart, rangeEnd] =
-        common.tileGaussianRange(camId, tileRow, tileCol, cameraOpLocal.numCameras);
+    const auto [rangeStart, rangeEnd] = common.tileGaussianRange(camId, tileRow, tileCol);
 
     // If the tile has no intersections, there is nothing to do. This must be a block-wide return.
     if (rangeEnd <= rangeStart) {
@@ -123,7 +121,7 @@ rasterizeFromWorld3DGSBackwardKernel(
     }
 
     // Shared memory for gaussian batches (after camera-op shared state).
-    char *gaussSmem  = smem + cameraOpLocal.sharedMemoryBytes();
+    char *gaussSmem  = smem + cameraOpLocal.numSharedMemBytes();
     int32_t *idBatch = reinterpret_cast<int32_t *>(gaussSmem);                 // [blockSize]
     auto *gBatch =
         reinterpret_cast<SharedGaussian<NUM_CHANNELS> *>(&idBatch[blockSize]); // [blockSize]
@@ -429,7 +427,7 @@ launchBackward(const torch::Tensor &means,
     args.masks       = opt.masks;
 
     const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
-    const size_t sharedMem = cameraOp.sharedMemoryBytes() +
+    const size_t sharedMem = cameraOp.numSharedMemBytes() +
                              blockSize * (sizeof(int32_t) + sizeof(SharedGaussian<NUM_CHANNELS>));
 
     RasterizeFromWorldBackwardArgs<NUM_CHANNELS, CameraOp> kernelArgs{

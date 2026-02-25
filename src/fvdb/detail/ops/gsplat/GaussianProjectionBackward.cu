@@ -156,7 +156,7 @@ projectionBackwardKernel(const int32_t offset,
     const nanovdb::math::Mat3<T> &covarCamSpace = transformCovarianceWorldToCam(R, covar);
 
     // vjp: camera projection
-    auto [dLossDCovarCamSpace, dLossDMeanCamSpace] = cameraOp.vjp(
+    auto [dLossDCovarCamSpace, dLossDMeanCamSpace] = cameraOp.projectTo2DGaussianVJP(
         cId, meansCamSpace, covarCamSpace, dLossDCovar2d, nanovdb::math::Vec2<T>(dLossDMeans2d[0], dLossDMeans2d[1]));
 
     // add contribution from dLossDDepths
@@ -320,6 +320,7 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
             const auto cameraOp = OrthographicCameraOp<float>{
                 projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
                 worldToCamMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+                static_cast<int32_t>(C),
                 static_cast<int32_t>(imageWidth),
                 static_cast<int32_t>(imageHeight),
                 -1e10f,
@@ -355,6 +356,7 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
             const auto cameraOp = PerspectiveCameraOp<float>{
                 projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
                 worldToCamMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+                static_cast<int32_t>(C),
                 static_cast<int32_t>(imageWidth),
                 static_cast<int32_t>(imageHeight),
                 -1e10f,
@@ -494,6 +496,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                 const auto cameraOp = OrthographicCameraOp<float>{
                     projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
                     worldToCamMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+                    static_cast<int32_t>(C),
                     static_cast<int32_t>(imageWidth),
                     static_cast<int32_t>(imageHeight),
                     -1e10f,
@@ -528,6 +531,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                 const auto cameraOp = PerspectiveCameraOp<float>{
                     projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
                     worldToCamMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+                    static_cast<int32_t>(C),
                     static_cast<int32_t>(imageWidth),
                     static_cast<int32_t>(imageHeight),
                     -1e10f,

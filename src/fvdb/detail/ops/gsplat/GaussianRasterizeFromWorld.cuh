@@ -83,8 +83,8 @@ struct RasterizeFromWorldCommonArgs {
     inline __device__ cuda::std::tuple<int32_t, int32_t>
     tileGaussianRange(const uint32_t cameraId,
                       const uint32_t tileRow,
-                      const uint32_t tileCol,
-                      const uint32_t numCameras) const {
+                      const uint32_t tileCol) const {
+        const uint32_t numCameras = tileOffsets.size(0);
         const int32_t firstGaussianIdInBlock = tileOffsets[cameraId][tileRow][tileCol];
         auto [nextTileRow, nextTileCol]      = (tileCol < numTilesW - 1)
                                                    ? cuda::std::make_tuple(tileRow, tileCol + 1)
