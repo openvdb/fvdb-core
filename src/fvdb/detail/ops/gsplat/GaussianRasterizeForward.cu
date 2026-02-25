@@ -317,17 +317,13 @@ launchRasterizeForwardKernel(
     const std::optional<torch::Tensor> &tilePixelCumsum     = std::nullopt,
     const std::optional<torch::Tensor> &pixelMap            = std::nullopt) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means2d));
-    const uint32_t renderWidth   = renderWindow[0];
-    const uint32_t renderHeight  = renderWindow[1];
-    const uint32_t renderOriginX = renderWindow[2];
-    const uint32_t renderOriginY = renderWindow[3];
 
     // tileOffsets can be 3D (dense) or 1D (sparse)
     const bool tileOffsetsAreSparse = tileOffsets.dim() == 1;
     if (!tileOffsetsAreSparse) {
-        TORCH_CHECK_VALUE(tileOffsets.size(2) == (renderWidth + tileSize - 1) / tileSize,
+        TORCH_CHECK_VALUE(tileOffsets.size(2) == (renderWindow[0] + tileSize - 1) / tileSize,
                           "tileOffsets width must match the number of tiles in image size");
-        TORCH_CHECK_VALUE(tileOffsets.size(1) == (renderHeight + tileSize - 1) / tileSize,
+        TORCH_CHECK_VALUE(tileOffsets.size(1) == (renderWindow[1] + tileSize - 1) / tileSize,
                           "tileOffsets height must match the number of tiles in image size");
     }
 
@@ -348,7 +344,7 @@ launchRasterizeForwardKernel(
 
     const auto sizes = pixelsToRender.has_value()
                            ? pixelsToRender.value().lsizes1()
-                           : std::vector<int64_t>{C * renderHeight * renderWidth};
+                           : std::vector<int64_t>{C * renderWindow[1] * renderWindow[0]};
     std::vector<torch::Tensor> featuresToRenderVec;
     std::vector<torch::Tensor> alphasToRenderVec;
     std::vector<torch::Tensor> lastIdsToRenderVec;
@@ -409,10 +405,12 @@ launchRasterizeForwardKernel(
     // because they are packed into a single JaggedTensor so that the output code is the same
     // for dense and sparse modes.
     if (!args.commonArgs.mIsSparse) {
-        outFeatures =
-            fvdb::JaggedTensor(outFeatures.jdata().view({C, renderHeight, renderWidth, channels}));
-        outAlphas  = fvdb::JaggedTensor(outAlphas.jdata().view({C, renderHeight, renderWidth, 1}));
-        outLastIds = fvdb::JaggedTensor(outLastIds.jdata().view({C, renderHeight, renderWidth}));
+        outFeatures = fvdb::JaggedTensor(
+            outFeatures.jdata().view({C, args.commonArgs.renderHeight(), args.commonArgs.renderWidth(), channels}));
+        outAlphas = fvdb::JaggedTensor(
+            outAlphas.jdata().view({C, args.commonArgs.renderHeight(), args.commonArgs.renderWidth(), 1}));
+        outLastIds = fvdb::JaggedTensor(
+            outLastIds.jdata().view({C, args.commonArgs.renderHeight(), args.commonArgs.renderWidth()}));
     }
 
     return std::make_tuple(outFeatures, outAlphas, outLastIds);
@@ -439,14 +437,10 @@ launchRasterizeForwardKernels(
     const std::optional<torch::Tensor> &tilePixelMask       = std::nullopt,
     const std::optional<torch::Tensor> &tilePixelCumsum     = std::nullopt,
     const std::optional<torch::Tensor> &pixelMap            = std::nullopt) {
-    const uint32_t renderWidth   = renderWindow[0];
-    const uint32_t renderHeight  = renderWindow[1];
-    const uint32_t renderOriginX = renderWindow[2];
-    const uint32_t renderOriginY = renderWindow[3];
     TORCH_CHECK_VALUE(tileOffsets.dim() == 3, "tileOffsets must be 3D [C, TH, TW]");
-    TORCH_CHECK_VALUE(tileOffsets.size(2) == (renderWidth + tileSize - 1) / tileSize,
+    TORCH_CHECK_VALUE(tileOffsets.size(2) == (renderWindow[0] + tileSize - 1) / tileSize,
                       "tileOffsets width must match the number of tiles in image size");
-    TORCH_CHECK_VALUE(tileOffsets.size(1) == (renderHeight + tileSize - 1) / tileSize,
+    TORCH_CHECK_VALUE(tileOffsets.size(1) == (renderWindow[1] + tileSize - 1) / tileSize,
                       "tileOffsets height must match the number of tiles in image size");
 
     const bool packed = means2d.dim() == 2;
@@ -455,8 +449,8 @@ launchRasterizeForwardKernels(
     const uint32_t N        = packed ? 0 : means2d.size(1); // number of gaussians
     const uint32_t channels = features.size(-1);
 
-    const uint32_t tileExtentH = (renderHeight + tileSize - 1) / tileSize;
-    const uint32_t tileExtentW = (renderWidth + tileSize - 1) / tileSize;
+    const uint32_t tileExtentH = (renderWindow[1] + tileSize - 1) / tileSize;
+    const uint32_t tileExtentW = (renderWindow[0] + tileSize - 1) / tileSize;
 
     TORCH_CHECK_VALUE(pixelMap.has_value() == pixelsToRender.has_value(),
                       "pixelMap and pixelsToRender must be provided together");
@@ -467,7 +461,7 @@ launchRasterizeForwardKernels(
 
     const auto sizes = pixelsToRender.has_value()
                            ? pixelsToRender.value().lsizes1()
-                           : std::vector<int64_t>{C * renderHeight * renderWidth};
+                           : std::vector<int64_t>{C * renderWindow[1] * renderWindow[0]};
     std::vector<torch::Tensor> featuresToRenderVec;
     std::vector<torch::Tensor> alphasToRenderVec;
     std::vector<torch::Tensor> lastIdsToRenderVec;
@@ -561,9 +555,10 @@ launchRasterizeForwardKernels(
     // for dense and sparse modes.
     if (!isSparse) {
         outFeatures =
-            fvdb::JaggedTensor(outFeatures.jdata().view({C, renderHeight, renderWidth, channels}));
-        outAlphas  = fvdb::JaggedTensor(outAlphas.jdata().view({C, renderHeight, renderWidth, 1}));
-        outLastIds = fvdb::JaggedTensor(outLastIds.jdata().view({C, renderHeight, renderWidth}));
+            fvdb::JaggedTensor(outFeatures.jdata().view({C, renderWindow[1], renderWindow[0], channels}));
+        outAlphas =
+            fvdb::JaggedTensor(outAlphas.jdata().view({C, renderWindow[1], renderWindow[0], 1}));
+        outLastIds = fvdb::JaggedTensor(outLastIds.jdata().view({C, renderWindow[1], renderWindow[0]}));
     }
 
     return std::make_tuple(outFeatures, outAlphas, outLastIds);
