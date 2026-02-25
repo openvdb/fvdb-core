@@ -15,7 +15,7 @@
 #include <fvdb/detail/autograd/GaussianRasterizeFromWorld.h>
 
 // Ops headers
-#include <fvdb/detail/ops/gsplat/GaussianProjectionModel.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjection.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionUT.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeContributingGaussianIds.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeNumContributingGaussians.h>

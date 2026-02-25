@@ -6,7 +6,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedBackward.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.h>
-#include <fvdb/detail/ops/gsplat/GaussianProjectionModel.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjection.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeBackward.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeForward.h>
 #include <fvdb/detail/utils/Nvtx.h>

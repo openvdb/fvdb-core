@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANROLLINGSHUTTER_CUH
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANROLLINGSHUTTER_CUH
 
-#include <fvdb/detail/ops/gsplat/GaussianProjectionTypes.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjection.h>
 
 #include <cuda/std/cmath>
 

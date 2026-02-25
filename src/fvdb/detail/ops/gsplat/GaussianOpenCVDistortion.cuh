@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANOPENCVDISTORTION_CUH
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANOPENCVDISTORTION_CUH
 
-#include <fvdb/detail/ops/gsplat/GaussianProjectionTypes.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjection.h>
 
 #include <nanovdb/math/Math.h>
 

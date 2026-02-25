@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONJAGGEDFORWARD_H
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONJAGGEDFORWARD_H
 
-#include <fvdb/detail/ops/gsplat/GaussianProjectionModel.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjection.h>
 
 #include <torch/types.h>
 

@@ -8,7 +8,7 @@
 #include <fvdb/FVDB.h>
 #include <fvdb/GaussianSplat3d.h>
 #include <fvdb/detail/autograd/EvaluateSphericalHarmonics.h>
-#include <fvdb/detail/ops/gsplat/GaussianProjectionTypes.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjection.h>
 
 #include <torch/extension.h>
 
