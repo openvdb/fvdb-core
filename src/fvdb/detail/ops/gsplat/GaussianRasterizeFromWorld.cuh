@@ -4,7 +4,6 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLD_CUH
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLD_CUH
 
-#include <fvdb/detail/ops/gsplat/GaussianCameraIntrinsics.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjection.h>
 #include <fvdb/detail/ops/gsplat/GaussianOpenCVDistortion.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRigidTransform.cuh>
@@ -192,9 +191,11 @@ pixelToWorldRay(const uint32_t row,
     // Invert rigid transform to get camera->world.
     const nanovdb::math::Mat3<T> R_cw = R_wc.transpose();
 
-    const CameraIntrinsics<T> intrinsics(K);
-    const nanovdb::math::Vec2<T> p_distorted((px - intrinsics.cx) / intrinsics.fx,
-                                             (py - intrinsics.cy) / intrinsics.fy);
+    const T fx = K[0][0];
+    const T fy = K[1][1];
+    const T cx = K[0][2];
+    const T cy = K[1][2];
+    const nanovdb::math::Vec2<T> p_distorted((px - cx) / fx, (py - cy) / fy);
     const nanovdb::math::Vec2<T> p =
         undistortOpenCVPackedFixedPoint(cameraModel, p_distorted, distCoeffs, numDistCoeffs);
 

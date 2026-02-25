@@ -4,9 +4,10 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONUTILS_CUH
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONUTILS_CUH
 
-#include <fvdb/detail/ops/gsplat/GaussianCameraIntrinsics.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianCameraAccessorCopy.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianCameraMatrixUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
+#include <fvdb/detail/utils/AccessorHelpers.cuh>
 
 #include <nanovdb/math/Math.h>
 
@@ -104,68 +105,219 @@ loadQuatScaleFromScalesRowMajor(const T *quats4,
     outScale    = nanovdb::math::Vec3<T>(scales3[0], scales3[1], scales3[2]);
 }
 
-template <typename T, bool Ortho>
-inline __device__ std::tuple<nanovdb::math::Mat2<T>, nanovdb::math::Vec2<T>>
-projectGaussianWithIntrinsics(const nanovdb::math::Vec3<T> &meansCamSpace,
-                              const nanovdb::math::Mat3<T> &covarCamSpace,
-                              const CameraIntrinsics<T> &intrinsics,
-                              const int32_t imageWidth,
-                              const int32_t imageHeight) {
-    if constexpr (Ortho) {
-        return projectGaussianOrthographic<T>(meansCamSpace,
-                                              covarCamSpace,
-                                              intrinsics.fx,
-                                              intrinsics.fy,
-                                              intrinsics.cx,
-                                              intrinsics.cy,
-                                              imageWidth,
-                                              imageHeight);
-    } else {
+template <typename T> struct PerspectiveCameraOp {
+    using Mat3 = nanovdb::math::Mat3<T>;
+    using Vec3 = nanovdb::math::Vec3<T>;
+
+    fvdb::TorchRAcc32<T, 3> projectionMatricesAcc; // [C,3,3]
+    fvdb::TorchRAcc32<T, 3> worldToCamMatricesAcc; // [C,4,4]
+    int32_t imageWidth = 0;
+    int32_t imageHeight = 0;
+    T nearPlane = T(-1e10);
+    T farPlane = T(1e10);
+
+    Mat3 *__restrict__ projectionMatsShared = nullptr;    // [C,3,3], optional
+    Mat3 *__restrict__ worldToCamRotMatsShared = nullptr; // [C,3,3], optional
+    Vec3 *__restrict__ worldToCamTranslationShared = nullptr; // [C,3], optional
+
+    inline __device__ void
+    bindSharedMemory(void *sharedMemory, const int64_t C) {
+        projectionMatsShared = reinterpret_cast<Mat3 *>(sharedMemory);
+        worldToCamRotMatsShared = projectionMatsShared + C;
+        worldToCamTranslationShared = reinterpret_cast<Vec3 *>(worldToCamRotMatsShared + C);
+    }
+
+    inline __device__ void
+    loadCameraStateToShared(const int64_t C) const {
+        if (projectionMatsShared != nullptr) {
+            copyMat3Accessor<T>(C, projectionMatsShared, projectionMatricesAcc);
+            copyMat3Accessor<T>(C, worldToCamRotMatsShared, worldToCamMatricesAcc);
+            copyWorldToCamTranslation<T>(C, worldToCamTranslationShared, worldToCamMatricesAcc);
+        }
+    }
+
+    inline __device__ bool
+    isDepthVisible(const T depth) const {
+        return depth >= nearPlane && depth <= farPlane;
+    }
+
+    inline __device__ std::tuple<Mat3, Vec3>
+    worldToCamRt(const int64_t cid) const {
+        if (worldToCamRotMatsShared != nullptr) {
+            return std::make_tuple(worldToCamRotMatsShared[cid], worldToCamTranslationShared[cid]);
+        }
+        const auto W = worldToCamMatricesAcc[cid];
+        return std::make_tuple(Mat3(W[0][0], W[0][1], W[0][2], W[1][0], W[1][1], W[1][2], W[2][0], W[2][1], W[2][2]),
+                               Vec3(W[0][3], W[1][3], W[2][3]));
+    }
+
+    inline __device__ std::tuple<nanovdb::math::Mat2<T>, nanovdb::math::Vec2<T>>
+    project(const int64_t cid,
+            const nanovdb::math::Vec3<T> &meansCamSpace,
+            const nanovdb::math::Mat3<T> &covarCamSpace) const {
+        T fx, fy, cx, cy;
+        if (projectionMatsShared != nullptr) {
+            const Mat3 &K = projectionMatsShared[cid];
+            fx            = K[0][0];
+            fy            = K[1][1];
+            cx            = K[0][2];
+            cy            = K[1][2];
+        } else {
+            const auto K = projectionMatricesAcc[cid];
+            fx           = K[0][0];
+            fy           = K[1][1];
+            cx           = K[0][2];
+            cy           = K[1][2];
+        }
         return projectGaussianPerspective<T>(meansCamSpace,
                                              covarCamSpace,
-                                             intrinsics.fx,
-                                             intrinsics.fy,
-                                             intrinsics.cx,
-                                             intrinsics.cy,
+                                             fx,
+                                             fy,
+                                             cx,
+                                             cy,
                                              imageWidth,
                                              imageHeight);
     }
-}
 
-template <typename T, bool Ortho>
-inline __device__ std::tuple<nanovdb::math::Mat3<T>, nanovdb::math::Vec3<T>>
-projectGaussianWithIntrinsicsVectorJacobianProduct(
-    const nanovdb::math::Vec3<T> &meansCamSpace,
-    const nanovdb::math::Mat3<T> &covarCamSpace,
-    const CameraIntrinsics<T> &intrinsics,
-    const int32_t imageWidth,
-    const int32_t imageHeight,
-    const nanovdb::math::Mat2<T> &dLossDCovar2d,
-    const nanovdb::math::Vec2<T> &dLossDMeans2d) {
-    if constexpr (Ortho) {
-        return projectGaussianOrthographicVectorJacobianProduct<T>(meansCamSpace,
-                                                                    covarCamSpace,
-                                                                    intrinsics.fx,
-                                                                    intrinsics.fy,
-                                                                    intrinsics.cx,
-                                                                    intrinsics.cy,
-                                                                    imageWidth,
-                                                                    imageHeight,
-                                                                    dLossDCovar2d,
-                                                                    dLossDMeans2d);
-    } else {
+    inline __device__ std::tuple<nanovdb::math::Mat3<T>, nanovdb::math::Vec3<T>>
+    vjp(const int64_t cid,
+        const nanovdb::math::Vec3<T> &meansCamSpace,
+        const nanovdb::math::Mat3<T> &covarCamSpace,
+        const nanovdb::math::Mat2<T> &dLossDCovar2d,
+        const nanovdb::math::Vec2<T> &dLossDMeans2d) const {
+        T fx, fy, cx, cy;
+        if (projectionMatsShared != nullptr) {
+            const Mat3 &K = projectionMatsShared[cid];
+            fx            = K[0][0];
+            fy            = K[1][1];
+            cx            = K[0][2];
+            cy            = K[1][2];
+        } else {
+            const auto K = projectionMatricesAcc[cid];
+            fx           = K[0][0];
+            fy           = K[1][1];
+            cx           = K[0][2];
+            cy           = K[1][2];
+        }
         return projectGaussianPerspectiveVectorJacobianProduct<T>(meansCamSpace,
                                                                    covarCamSpace,
-                                                                   intrinsics.fx,
-                                                                   intrinsics.fy,
-                                                                   intrinsics.cx,
-                                                                   intrinsics.cy,
+                                                                   fx,
+                                                                   fy,
+                                                                   cx,
+                                                                   cy,
                                                                    imageWidth,
                                                                    imageHeight,
                                                                    dLossDCovar2d,
                                                                    dLossDMeans2d);
     }
-}
+};
+
+template <typename T> struct OrthographicCameraOp {
+    using Mat3 = nanovdb::math::Mat3<T>;
+    using Vec3 = nanovdb::math::Vec3<T>;
+
+    fvdb::TorchRAcc32<T, 3> projectionMatricesAcc; // [C,3,3]
+    fvdb::TorchRAcc32<T, 3> worldToCamMatricesAcc; // [C,4,4]
+    int32_t imageWidth = 0;
+    int32_t imageHeight = 0;
+    T nearPlane = T(-1e10);
+    T farPlane = T(1e10);
+
+    Mat3 *__restrict__ projectionMatsShared = nullptr;    // [C,3,3], optional
+    Mat3 *__restrict__ worldToCamRotMatsShared = nullptr; // [C,3,3], optional
+    Vec3 *__restrict__ worldToCamTranslationShared = nullptr; // [C,3], optional
+
+    inline __device__ void
+    bindSharedMemory(void *sharedMemory, const int64_t C) {
+        projectionMatsShared = reinterpret_cast<Mat3 *>(sharedMemory);
+        worldToCamRotMatsShared = projectionMatsShared + C;
+        worldToCamTranslationShared = reinterpret_cast<Vec3 *>(worldToCamRotMatsShared + C);
+    }
+
+    inline __device__ void
+    loadCameraStateToShared(const int64_t C) const {
+        if (projectionMatsShared != nullptr) {
+            copyMat3Accessor<T>(C, projectionMatsShared, projectionMatricesAcc);
+            copyMat3Accessor<T>(C, worldToCamRotMatsShared, worldToCamMatricesAcc);
+            copyWorldToCamTranslation<T>(C, worldToCamTranslationShared, worldToCamMatricesAcc);
+        }
+    }
+
+    inline __device__ bool
+    isDepthVisible(const T depth) const {
+        return depth >= nearPlane && depth <= farPlane;
+    }
+
+    inline __device__ std::tuple<Mat3, Vec3>
+    worldToCamRt(const int64_t cid) const {
+        if (worldToCamRotMatsShared != nullptr) {
+            return std::make_tuple(worldToCamRotMatsShared[cid], worldToCamTranslationShared[cid]);
+        }
+        const auto W = worldToCamMatricesAcc[cid];
+        return std::make_tuple(Mat3(W[0][0], W[0][1], W[0][2], W[1][0], W[1][1], W[1][2], W[2][0], W[2][1], W[2][2]),
+                               Vec3(W[0][3], W[1][3], W[2][3]));
+    }
+
+    inline __device__ std::tuple<nanovdb::math::Mat2<T>, nanovdb::math::Vec2<T>>
+    project(const int64_t cid,
+            const nanovdb::math::Vec3<T> &meansCamSpace,
+            const nanovdb::math::Mat3<T> &covarCamSpace) const {
+        T fx, fy, cx, cy;
+        if (projectionMatsShared != nullptr) {
+            const Mat3 &K = projectionMatsShared[cid];
+            fx            = K[0][0];
+            fy            = K[1][1];
+            cx            = K[0][2];
+            cy            = K[1][2];
+        } else {
+            const auto K = projectionMatricesAcc[cid];
+            fx           = K[0][0];
+            fy           = K[1][1];
+            cx           = K[0][2];
+            cy           = K[1][2];
+        }
+        return projectGaussianOrthographic<T>(meansCamSpace,
+                                              covarCamSpace,
+                                              fx,
+                                              fy,
+                                              cx,
+                                              cy,
+                                              imageWidth,
+                                              imageHeight);
+    }
+
+    inline __device__ std::tuple<nanovdb::math::Mat3<T>, nanovdb::math::Vec3<T>>
+    vjp(const int64_t cid,
+        const nanovdb::math::Vec3<T> &meansCamSpace,
+        const nanovdb::math::Mat3<T> &covarCamSpace,
+        const nanovdb::math::Mat2<T> &dLossDCovar2d,
+        const nanovdb::math::Vec2<T> &dLossDMeans2d) const {
+        T fx, fy, cx, cy;
+        if (projectionMatsShared != nullptr) {
+            const Mat3 &K = projectionMatsShared[cid];
+            fx            = K[0][0];
+            fy            = K[1][1];
+            cx            = K[0][2];
+            cy            = K[1][2];
+        } else {
+            const auto K = projectionMatricesAcc[cid];
+            fx           = K[0][0];
+            fy           = K[1][1];
+            cx           = K[0][2];
+            cy           = K[1][2];
+        }
+        return projectGaussianOrthographicVectorJacobianProduct<T>(meansCamSpace,
+                                                                    covarCamSpace,
+                                                                    fx,
+                                                                    fy,
+                                                                    cx,
+                                                                    cy,
+                                                                    imageWidth,
+                                                                    imageHeight,
+                                                                    dLossDCovar2d,
+                                                                    dLossDMeans2d);
+    }
+};
 
 } // namespace fvdb::detail::ops
 
