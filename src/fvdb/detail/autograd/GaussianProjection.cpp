@@ -6,6 +6,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedBackward.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionModel.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeBackward.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeForward.h>
 #include <fvdb/detail/utils/Nvtx.h>
@@ -35,21 +36,21 @@ ProjectGaussians::forward(ProjectGaussians::AutogradContext *ctx,
     TORCH_CHECK(means.dim() == 2, "means must have shape (N, 3)");
     TORCH_CHECK(worldToCamMatrices.dim() == 3, "worldToCamMatrices must have shape (C, 4, 4)");
     TORCH_CHECK(projectionMatrices.dim() == 3, "projectionMatrices must have shape (C, 3, 3)");
+    const auto projectionModel =
+        ops::makeClassicProjectionModel(worldToCamMatrices, projectionMatrices, ortho);
 
     auto variables   = FVDB_DISPATCH_KERNEL(means.device(), [&]() {
         return ops::dispatchGaussianProjectionForward<DeviceTag>(means,
                                                                  quats,
                                                                  logScales,
-                                                                 worldToCamMatrices,
-                                                                 projectionMatrices,
+                                                                 *projectionModel,
                                                                  imageWidth,
                                                                  imageHeight,
                                                                  eps2d,
                                                                  nearPlane,
                                                                  farPlane,
                                                                  minRadius2D,
-                                                                 calcCompensations,
-                                                                 ortho);
+                                                                 calcCompensations);
     });
     Variable radii   = std::get<0>(variables);
     Variable means2d = std::get<1>(variables);
@@ -143,6 +144,8 @@ ProjectGaussians::backward(ProjectGaussians::AutogradContext *ctx,
     const bool ortho          = ctx->saved_data["ortho"].toBool();
     const bool saveAccumState = ctx->saved_data["saveAccumState"].toBool();
     const bool trackMaxRadii  = ctx->saved_data["trackMaxRadii"].toBool();
+    const auto projectionModel =
+        ops::makeClassicProjectionModel(worldToCamMatrices, projectionMatrices, ortho);
 
     auto [normalizeddLossdMeans2dNormAccum, normalizedMaxRadiiAccum, gradientStepCount] = [&]() {
         return std::make_tuple(
@@ -160,8 +163,7 @@ ProjectGaussians::backward(ProjectGaussians::AutogradContext *ctx,
         return ops::dispatchGaussianProjectionBackward<DeviceTag>(means,
                                                                   quats,
                                                                   logScales,
-                                                                  worldToCamMatrices,
-                                                                  projectionMatrices,
+                                                                  *projectionModel,
                                                                   compensations,
                                                                   imageWidth,
                                                                   imageHeight,
@@ -173,7 +175,6 @@ ProjectGaussians::backward(ProjectGaussians::AutogradContext *ctx,
                                                                   dLossDConics,
                                                                   dLossDCompensations,
                                                                   ctx->needs_input_grad(4),
-                                                                  ortho,
                                                                   normalizeddLossdMeans2dNormAccum,
                                                                   normalizedMaxRadiiAccum,
                                                                   gradientStepCount);
@@ -221,21 +222,21 @@ ProjectGaussiansJagged::forward(
     const float minRadius2D,
     const bool ortho) {
     FVDB_FUNC_RANGE_WITH_NAME("ProjectGaussiansJagged::forward");
+    const auto projectionModel =
+        ops::makeClassicProjectionModel(worldToCamMatrices, projectionMatrices, ortho);
     auto variables   = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
         return ops::dispatchGaussianProjectionJaggedForward<DeviceTag>(gSizes,
                                                                        means,
                                                                        quats,
                                                                        scales,
                                                                        cSizes,
-                                                                       worldToCamMatrices,
-                                                                       projectionMatrices,
+                                                                       *projectionModel,
                                                                        imageWidth,
                                                                        imageHeight,
                                                                        eps2d,
                                                                        nearPlane,
                                                                        farPlane,
-                                                                       minRadius2D,
-                                                                       ortho);
+                                                                       minRadius2D);
     });
     Variable radii   = std::get<0>(variables);
     Variable means2d = std::get<1>(variables);
@@ -293,6 +294,8 @@ ProjectGaussiansJagged::backward(ProjectGaussiansJagged::AutogradContext *ctx,
     const int imageHeight = (int)ctx->saved_data["imageHeight"].toInt();
     const float eps2d     = (float)ctx->saved_data["eps2d"].toDouble();
     const bool ortho      = (bool)ctx->saved_data["ortho"].toBool();
+    const auto projectionModel =
+        ops::makeClassicProjectionModel(worldToCamMatrices, projectionMatrices, ortho);
 
     auto variables       = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
         return ops::dispatchGaussianProjectionJaggedBackward<DeviceTag>(gSizes,
@@ -300,8 +303,7 @@ ProjectGaussiansJagged::backward(ProjectGaussiansJagged::AutogradContext *ctx,
                                                                         quats,
                                                                         scales,
                                                                         cSizes,
-                                                                        worldToCamMatrices,
-                                                                        projectionMatrices,
+                                                                        *projectionModel,
                                                                         imageWidth,
                                                                         imageHeight,
                                                                         eps2d,
@@ -310,8 +312,7 @@ ProjectGaussiansJagged::backward(ProjectGaussiansJagged::AutogradContext *ctx,
                                                                         dLossDMeans2d,
                                                                         dLossDDepths,
                                                                         dLossDConics,
-                                                                        ctx->needs_input_grad(6),
-                                                                        ortho);
+                                                                        ctx->needs_input_grad(6));
     });
     Variable dLossDMeans = std::get<0>(variables);
     // Variable dLossDCovars = std::get<1>(variables);

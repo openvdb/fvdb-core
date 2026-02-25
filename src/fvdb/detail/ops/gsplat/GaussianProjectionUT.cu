@@ -841,6 +841,7 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
     TORCH_CHECK_VALUE(means.is_cuda(), "means must be a CUDA tensor");
     TORCH_CHECK_VALUE(quats.is_cuda(), "quats must be a CUDA tensor");
     TORCH_CHECK_VALUE(logScales.is_cuda(), "logScales must be a CUDA tensor");
+
     TORCH_CHECK_VALUE(worldToCamMatricesStart.is_cuda(),
                       "worldToCamMatricesStart must be a CUDA tensor");
     TORCH_CHECK_VALUE(worldToCamMatricesEnd.is_cuda(),

@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONUT_H
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONUT_H
 
-#include <fvdb/detail/ops/gsplat/GaussianCameraModels.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionTypes.h>
 
 #include <ATen/core/TensorBody.h>
 #include <torch/types.h>
@@ -14,19 +14,6 @@
 namespace fvdb {
 namespace detail {
 namespace ops {
-
-/// @brief Unscented Transform hyperparameters.
-///
-/// This kernel implements the canonical 3D UT with a fixed \(2D+1\) sigma point set (7 points).
-/// The parameters here control the standard UT scaling / weighting.
-struct UTParams {
-    float alpha         = 0.1f; // Blending parameter for UT
-    float beta          = 2.0f; // Scaling parameter for UT
-    float kappa         = 0.0f; // Additional scaling parameter for UT
-    float inImageMargin = 0.1f; // Margin for in-image check
-    bool requireAllSigmaPointsInImage =
-        true; // Require all sigma points to be in image to consider a Gaussian valid
-};
 
 /// @brief Project 3D Gaussians to 2D screen space pixel coordinates for rendering using the
 /// Unscented Transform (UT) algorithm.

@@ -4,6 +4,8 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONFORWARD_H
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONFORWARD_H
 
+#include <fvdb/detail/ops/gsplat/GaussianProjectionModel.h>
+
 #include <torch/types.h>
 
 #include <tuple>
@@ -52,16 +54,14 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 dispatchGaussianProjectionForward(const torch::Tensor &means,              // [N, 3]
                                   const torch::Tensor &quats,              // [N, 4]
                                   const torch::Tensor &scales,             // [N, 3]
-                                  const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
-                                  const torch::Tensor &projectionMatrices, // [C, 3, 3]
+                                  const GaussianProjectionModel &projectionModel,
                                   const int64_t imageWidth,
                                   const int64_t imageHeight,
                                   const float eps2d,
                                   const float nearPlane,
                                   const float farPlane,
                                   const float minRadius2d,
-                                  const bool calcCompensations,
-                                  const bool ortho);
+                                  const bool calcCompensations);
 
 } // namespace ops
 } // namespace detail

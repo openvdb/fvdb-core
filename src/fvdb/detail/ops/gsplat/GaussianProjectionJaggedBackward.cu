@@ -116,33 +116,15 @@ jaggedProjectionBackwardKernel(
 
     // vjp: camera projection
     const CameraIntrinsics<T> intrinsics(projectionMatrices);
-    auto [dLossDCovarCamSpace, dLossDMeanCamSpace] = [&]() {
-        if constexpr (Ortho) {
-            return projectGaussianOrthographicVectorJacobianProduct<T>(
-                meansCamSpace,
-                covarCamSpace,
-                intrinsics.fx,
-                intrinsics.fy,
-                intrinsics.cx,
-                intrinsics.cy,
-                imageWidth,
-                imageHeight,
-                dLossDCovar2d,
-                nanovdb::math::Vec2<T>(dLossDMeans2d[0], dLossDMeans2d[1]));
-        } else {
-            return projectGaussianPerspectiveVectorJacobianProduct<T>(
-                meansCamSpace,
-                covarCamSpace,
-                intrinsics.fx,
-                intrinsics.fy,
-                intrinsics.cx,
-                intrinsics.cy,
-                imageWidth,
-                imageHeight,
-                dLossDCovar2d,
-                nanovdb::math::Vec2<T>(dLossDMeans2d[0], dLossDMeans2d[1]));
-        }
-    }();
+    auto [dLossDCovarCamSpace, dLossDMeanCamSpace] =
+        projectGaussianWithIntrinsicsVectorJacobianProduct<T, Ortho>(
+            meansCamSpace,
+            covarCamSpace,
+            intrinsics,
+            imageWidth,
+            imageHeight,
+            dLossDCovar2d,
+            nanovdb::math::Vec2<T>(dLossDMeans2d[0], dLossDMeans2d[1]));
 
     // add contribution from dLossDDepths
     dLossDMeanCamSpace[2] += dLossDDepths[0];
@@ -231,8 +213,7 @@ dispatchGaussianProjectionJaggedBackward<torch::kCUDA>(
     const torch::Tensor &quats,              // [N, 4] optional
     const torch::Tensor &scales,             // [N, 3] optional
     const torch::Tensor &cSizes,             // [B] camera sizes
-    const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
-    const torch::Tensor &projectionMatrices, // [C, 3, 3]
+    const GaussianProjectionModel &projectionModel,
     const uint32_t imageWidth,
     const uint32_t imageHeight,
     const float eps2d,
@@ -243,9 +224,12 @@ dispatchGaussianProjectionJaggedBackward<torch::kCUDA>(
     const torch::Tensor &dLossDMeans2d, // [N, 2]
     const torch::Tensor &dLossDDepths,  // [N]
     const torch::Tensor &dLossDConics,  // [N, 3]
-    const bool worldToCamMatricesRequiresGrad,
-    const bool ortho) {
+    const bool worldToCamMatricesRequiresGrad) {
     FVDB_FUNC_RANGE();
+    const auto &projectionConfig = projectionModel.config();
+    const torch::Tensor &worldToCamMatrices = projectionConfig.worldToCamMatricesStart;
+    const torch::Tensor &projectionMatrices = projectionConfig.projectionMatrices;
+    const bool ortho = projectionModel.isOrthographic();
     // These are supported by the underlying kernel, but they are not exposed
     const at::optional<torch::Tensor> &covars              = std::nullopt;
     const at::optional<torch::Tensor> &compensations       = std::nullopt;
@@ -384,8 +368,7 @@ dispatchGaussianProjectionJaggedBackward<torch::kCPU>(
     const torch::Tensor &quats,              // [N, 4] optional
     const torch::Tensor &scales,             // [N, 3] optional
     const torch::Tensor &cSizes,             // [B] camera sizes
-    const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
-    const torch::Tensor &projectionMatrices, // [C, 3, 3]
+    const GaussianProjectionModel &projectionModel,
     const uint32_t imageWidth,
     const uint32_t imageHeight,
     const float eps2d,
@@ -394,8 +377,7 @@ dispatchGaussianProjectionJaggedBackward<torch::kCPU>(
     const torch::Tensor &dLossDMeans2d, // [N, 2]
     const torch::Tensor &dLossDDepths,  // [N]
     const torch::Tensor &dLossDConics,  // [N, 3]
-    const bool worldToCamMatricesRequiresGrad,
-    const bool ortho) {
+    const bool worldToCamMatricesRequiresGrad) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
 }
 

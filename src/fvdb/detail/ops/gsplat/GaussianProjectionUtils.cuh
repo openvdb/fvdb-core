@@ -104,6 +104,69 @@ loadQuatScaleFromScalesRowMajor(const T *quats4,
     outScale    = nanovdb::math::Vec3<T>(scales3[0], scales3[1], scales3[2]);
 }
 
+template <typename T, bool Ortho>
+inline __device__ std::tuple<nanovdb::math::Mat2<T>, nanovdb::math::Vec2<T>>
+projectGaussianWithIntrinsics(const nanovdb::math::Vec3<T> &meansCamSpace,
+                              const nanovdb::math::Mat3<T> &covarCamSpace,
+                              const CameraIntrinsics<T> &intrinsics,
+                              const int32_t imageWidth,
+                              const int32_t imageHeight) {
+    if constexpr (Ortho) {
+        return projectGaussianOrthographic<T>(meansCamSpace,
+                                              covarCamSpace,
+                                              intrinsics.fx,
+                                              intrinsics.fy,
+                                              intrinsics.cx,
+                                              intrinsics.cy,
+                                              imageWidth,
+                                              imageHeight);
+    } else {
+        return projectGaussianPerspective<T>(meansCamSpace,
+                                             covarCamSpace,
+                                             intrinsics.fx,
+                                             intrinsics.fy,
+                                             intrinsics.cx,
+                                             intrinsics.cy,
+                                             imageWidth,
+                                             imageHeight);
+    }
+}
+
+template <typename T, bool Ortho>
+inline __device__ std::tuple<nanovdb::math::Mat3<T>, nanovdb::math::Vec3<T>>
+projectGaussianWithIntrinsicsVectorJacobianProduct(
+    const nanovdb::math::Vec3<T> &meansCamSpace,
+    const nanovdb::math::Mat3<T> &covarCamSpace,
+    const CameraIntrinsics<T> &intrinsics,
+    const int32_t imageWidth,
+    const int32_t imageHeight,
+    const nanovdb::math::Mat2<T> &dLossDCovar2d,
+    const nanovdb::math::Vec2<T> &dLossDMeans2d) {
+    if constexpr (Ortho) {
+        return projectGaussianOrthographicVectorJacobianProduct<T>(meansCamSpace,
+                                                                    covarCamSpace,
+                                                                    intrinsics.fx,
+                                                                    intrinsics.fy,
+                                                                    intrinsics.cx,
+                                                                    intrinsics.cy,
+                                                                    imageWidth,
+                                                                    imageHeight,
+                                                                    dLossDCovar2d,
+                                                                    dLossDMeans2d);
+    } else {
+        return projectGaussianPerspectiveVectorJacobianProduct<T>(meansCamSpace,
+                                                                   covarCamSpace,
+                                                                   intrinsics.fx,
+                                                                   intrinsics.fy,
+                                                                   intrinsics.cx,
+                                                                   intrinsics.cy,
+                                                                   imageWidth,
+                                                                   imageHeight,
+                                                                   dLossDCovar2d,
+                                                                   dLossDMeans2d);
+    }
+}
+
 } // namespace fvdb::detail::ops
 
 #endif // FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONUTILS_CUH

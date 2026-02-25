@@ -1,14 +1,12 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANCAMERAMODELS_H
-#define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANCAMERAMODELS_H
+#ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONTYPES_H
+#define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONTYPES_H
 
 #include <cstdint>
 
-namespace fvdb {
-namespace detail {
-namespace ops {
+namespace fvdb::detail::ops {
 
 /// @brief Rolling shutter policy for camera projection / ray generation.
 enum class RollingShutterType : int32_t { NONE = 0, VERTICAL = 1, HORIZONTAL = 2 };
@@ -33,8 +31,19 @@ enum class CameraModel : int32_t {
     ORTHOGRAPHIC = 5,
 };
 
-} // namespace ops
-} // namespace detail
-} // namespace fvdb
+/// @brief Unscented Transform hyperparameters.
+///
+/// This kernel implements the canonical 3D UT with a fixed \(2D+1\) sigma point set (7 points).
+/// The parameters here control the standard UT scaling / weighting.
+struct UTParams {
+    float alpha         = 0.1f; // Blending parameter for UT
+    float beta          = 2.0f; // Scaling parameter for UT
+    float kappa         = 0.0f; // Additional scaling parameter for UT
+    float inImageMargin = 0.1f; // Margin for in-image check
+    bool requireAllSigmaPointsInImage =
+        true; // Require all sigma points to be in image to consider a Gaussian valid
+};
 
-#endif // FVDB_DETAIL_OPS_GSPLAT_GAUSSIANCAMERAMODELS_H
+} // namespace fvdb::detail::ops
+
+#endif // FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONTYPES_H

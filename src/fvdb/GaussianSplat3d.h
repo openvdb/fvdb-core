@@ -5,7 +5,7 @@
 #define FVDB_GAUSSIANSPLAT3D_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/ops/gsplat/GaussianCameraModels.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionTypes.h>
 #include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
 
 #include <ATen/core/TensorBody.h>

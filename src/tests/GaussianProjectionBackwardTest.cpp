@@ -5,6 +5,7 @@
 
 #include <fvdb/detail/ops/gsplat/GaussianProjectionBackward.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionModel.h>
 
 #include <torch/script.h>
 #include <torch/types.h>
@@ -171,20 +172,20 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
 
     {
         // Perspective projection
+        const auto projectionModel =
+            fvdb::detail::ops::makeClassicProjectionModel(viewmats, Ks, false);
         const auto [radii_proj, means2d_proj, depths_proj, conics_proj, compensations_proj] =
             fvdb::detail::ops::dispatchGaussianProjectionForward<torch::kCUDA>(means,
                                                                                quats,
                                                                                scales,
-                                                                               viewmats,
-                                                                               Ks,
+                                                                               *projectionModel,
                                                                                imageWidth,
                                                                                imageHeight,
                                                                                0.3,
                                                                                1e-2,
                                                                                1e10,
                                                                                0,
-                                                                               true,
-                                                                               false);
+                                                                               true);
 
         const auto C = radii_proj.size(0);
         const auto N = radii_proj.size(1);
@@ -207,13 +208,14 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
         auto outNormalizedMaxRadiiAccum = torch::zeros({N}, options.dtype(torch::kInt32));
         auto outGradientStepCounts      = torch::zeros({N}, options.dtype(torch::kInt32));
 
+        const auto backwardProjectionModel =
+            fvdb::detail::ops::makeClassicProjectionModel(viewmats, Ks, false);
         const auto [dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDCamToWorlds] =
             fvdb::detail::ops::dispatchGaussianProjectionBackward<torch::kCUDA>(
                 means,
                 quats,
                 torch::log(scales),
-                viewmats,
-                Ks,
+                *backwardProjectionModel,
                 compensations_proj,
                 imageWidth,
                 imageHeight,
@@ -225,7 +227,6 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
                 dLossDConics,
                 dLossDCompensations,
                 true,
-                false,
                 outNormalizeddLossdMeans2dNormAccum,
                 outNormalizedMaxRadiiAccum,
                 outGradientStepCounts);
@@ -247,19 +248,19 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
 
     {
         // Orthographic projection
+        const auto projectionModel =
+            fvdb::detail::ops::makeClassicProjectionModel(viewmats, Ks, true);
         const auto [radii_proj, means2d_proj, depths_proj, conics_proj, compensations_proj] =
             fvdb::detail::ops::dispatchGaussianProjectionForward<torch::kCUDA>(means,
                                                                                quats,
                                                                                scales,
-                                                                               viewmats,
-                                                                               Ks,
+                                                                               *projectionModel,
                                                                                imageWidth,
                                                                                imageHeight,
                                                                                0.3,
                                                                                1e-2,
                                                                                1e10,
                                                                                0,
-                                                                               true,
                                                                                true);
 
         const auto C = radii_proj.size(0);
@@ -283,13 +284,14 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
         auto outNormalizedMaxRadiiAccum = torch::zeros({N}, options.dtype(torch::kInt32));
         auto outGradientStepCounts      = torch::zeros({N}, options.dtype(torch::kInt32));
 
+        const auto backwardProjectionModel =
+            fvdb::detail::ops::makeClassicProjectionModel(viewmats, Ks, true);
         const auto [dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDCamToWorlds] =
             fvdb::detail::ops::dispatchGaussianProjectionBackward<torch::kCUDA>(
                 means,
                 quats,
                 torch::log(scales),
-                viewmats,
-                Ks,
+                *backwardProjectionModel,
                 compensations_proj,
                 imageWidth,
                 imageHeight,
@@ -300,7 +302,6 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
                 dLossDDepths,
                 dLossDConics,
                 dLossDCompensations,
-                true,
                 true,
                 outNormalizeddLossdMeans2dNormAccum,
                 outNormalizedMaxRadiiAccum,
@@ -340,13 +341,13 @@ TEST_F(GaussianProjectionBackwardTestFixture, TestPerspectiveProjection) {
     auto outNormalizedMaxRadiiAccum          = torch::zeros({N}, options.dtype(torch::kInt32));
     auto outGradientStepCounts               = torch::zeros({N}, options.dtype(torch::kInt32));
 
+    const auto projectionModel = fvdb::detail::ops::makeClassicProjectionModel(viewmats, Ks, false);
     const auto [dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDCamToWorlds] =
         fvdb::detail::ops::dispatchGaussianProjectionBackward<torch::kCUDA>(
             means,
             quats,
             torch::log(scales),
-            viewmats,
-            Ks,
+            *projectionModel,
             compensations,
             imageWidth,
             imageHeight,
@@ -358,7 +359,6 @@ TEST_F(GaussianProjectionBackwardTestFixture, TestPerspectiveProjection) {
             dLossDConics,
             dLossDCompensations,
             true,
-            false,
             outNormalizeddLossdMeans2dNormAccum,
             outNormalizedMaxRadiiAccum,
             outGradientStepCounts);
@@ -418,13 +418,13 @@ TEST_F(GaussianProjectionBackwardTestFixture, TestOrthographicProjection) {
     auto outNormalizedMaxRadiiAccum          = torch::zeros({N}, options.dtype(torch::kInt32));
     auto outGradientStepCounts               = torch::zeros({N}, options.dtype(torch::kInt32));
 
+    const auto projectionModel = fvdb::detail::ops::makeClassicProjectionModel(viewmats, Ks, true);
     const auto [dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDCamToWorlds] =
         fvdb::detail::ops::dispatchGaussianProjectionBackward<torch::kCUDA>(
             means,
             quats,
             torch::log(scales),
-            viewmats,
-            Ks,
+            *projectionModel,
             compensations,
             imageWidth,
             imageHeight,
@@ -435,7 +435,6 @@ TEST_F(GaussianProjectionBackwardTestFixture, TestOrthographicProjection) {
             dLossDDepths,
             dLossDConics,
             dLossDCompensations,
-            true,
             true,
             outNormalizeddLossdMeans2dNormAccum,
             outNormalizedMaxRadiiAccum,

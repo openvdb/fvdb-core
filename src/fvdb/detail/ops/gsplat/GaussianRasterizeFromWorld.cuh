@@ -5,7 +5,7 @@
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLD_CUH
 
 #include <fvdb/detail/ops/gsplat/GaussianCameraIntrinsics.cuh>
-#include <fvdb/detail/ops/gsplat/GaussianCameraModels.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionTypes.h>
 #include <fvdb/detail/ops/gsplat/GaussianOpenCVDistortion.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRigidTransform.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRollingShutter.cuh>

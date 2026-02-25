@@ -4,6 +4,8 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONBACKWARD_H
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONBACKWARD_H
 
+#include <fvdb/detail/ops/gsplat/GaussianProjectionModel.h>
+
 #include <torch/types.h>
 
 #include <tuple>
@@ -58,8 +60,7 @@ dispatchGaussianProjectionBackward(
     const torch::Tensor &means,                       // [N, 3]
     const torch::Tensor &quats,                       // [N, 4]
     const torch::Tensor &scales,                      // [N, 3]
-    const torch::Tensor &worldToCamMatrices,          // [C, 4, 4]
-    const torch::Tensor &projectionMatrices,          // [C, 3, 3]
+    const GaussianProjectionModel &projectionModel,
     const at::optional<torch::Tensor> &compensations, // [N, 6] optional
     const uint32_t imageWidth,
     const uint32_t imageHeight,
@@ -71,7 +72,6 @@ dispatchGaussianProjectionBackward(
     const torch::Tensor &dLossDConics,                      // [C, N, 3]
     const at::optional<torch::Tensor> &dLossDCompensations, // [C, N] optional
     const bool worldToCamMatricesRequiresGrad,
-    const bool ortho,
     at::optional<torch::Tensor> outNormalizeddLossdMeans2dNormAccum = std::nullopt,
     at::optional<torch::Tensor> outNormalizedMaxRadiiAccum          = std::nullopt,
     at::optional<torch::Tensor> outGradientStepCounts               = std::nullopt);

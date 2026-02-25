@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLDBACKWARD_H
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLDBACKWARD_H
 
-#include <fvdb/detail/ops/gsplat/GaussianCameraModels.h>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionTypes.h>
 #include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
 
 #include <torch/types.h>

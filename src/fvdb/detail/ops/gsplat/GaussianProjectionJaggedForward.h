@@ -4,6 +4,8 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONJAGGEDFORWARD_H
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONJAGGEDFORWARD_H
 
+#include <fvdb/detail/ops/gsplat/GaussianProjectionModel.h>
+
 #include <torch/types.h>
 
 #include <tuple>
@@ -52,15 +54,13 @@ dispatchGaussianProjectionJaggedForward(const torch::Tensor &gSizes, // [B] gaus
                                         const torch::Tensor &quats,  // [N, 4] optional
                                         const torch::Tensor &scales, // [N, 3] optional
                                         const torch::Tensor &cSizes, // [B] camera sizes
-                                        const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
-                                        const torch::Tensor &projectionMatrices, // [C, 3, 3]
+                                        const GaussianProjectionModel &projectionModel,
                                         const uint32_t imageWidth,
                                         const uint32_t imageHeight,
                                         const float eps2d,
                                         const float nearPlane,
                                         const float farPlane,
-                                        const float minRadius2d,
-                                        const bool ortho);
+                                        const float minRadius2d);
 
 } // namespace ops
 } // namespace detail

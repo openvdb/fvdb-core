@@ -92,27 +92,8 @@ jaggedProjectionForwardKernel(const uint32_t B,
 
     // camera projection
     const CameraIntrinsics<T> intrinsics(projectionMatrices);
-    auto [covar2d, mean2d] = [&]() {
-        if constexpr (Ortho) {
-            return projectGaussianOrthographic<T>(meansCamSpace,
-                                                  covarCamSpace,
-                                                  intrinsics.fx,
-                                                  intrinsics.fy,
-                                                  intrinsics.cx,
-                                                  intrinsics.cy,
-                                                  imageWidth,
-                                                  imageHeight);
-        } else {
-            return projectGaussianPerspective<T>(meansCamSpace,
-                                                 covarCamSpace,
-                                                 intrinsics.fx,
-                                                 intrinsics.fy,
-                                                 intrinsics.cx,
-                                                 intrinsics.cy,
-                                                 imageWidth,
-                                                 imageHeight);
-        }
-    }();
+    auto [covar2d, mean2d] = projectGaussianWithIntrinsics<T, Ortho>(
+        meansCamSpace, covarCamSpace, intrinsics, imageWidth, imageHeight);
 
     T compensation;
     const T det = addBlur(eps2d, covar2d, compensation);
@@ -162,16 +143,18 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
     const torch::Tensor &quats,              // [N, 4] optional
     const torch::Tensor &scales,             // [N, 3] optional
     const torch::Tensor &cSizes,             // [B] camera sizes
-    const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
-    const torch::Tensor &projectionMatrices, // [C, 3, 3]
+    const GaussianProjectionModel &projectionModel,
     const uint32_t imageWidth,
     const uint32_t imageHeight,
     const float eps2d,
     const float nearPlane,
     const float farPlane,
-    const float minRadius2d,
-    const bool ortho) {
+    const float minRadius2d) {
     FVDB_FUNC_RANGE();
+    const auto &projectionConfig            = projectionModel.config();
+    const torch::Tensor &worldToCamMatrices = projectionConfig.worldToCamMatricesStart;
+    const torch::Tensor &projectionMatrices = projectionConfig.projectionMatrices;
+    const bool ortho                        = projectionModel.isOrthographic();
     // These are supported by the underlying kernel, but they are not exposed
     const at::optional<torch::Tensor> &covars = std::nullopt;
     constexpr bool calc_compensations         = false;
@@ -279,15 +262,13 @@ dispatchGaussianProjectionJaggedForward<torch::kCPU>(
     const torch::Tensor &quats,              // [N, 4] optional
     const torch::Tensor &scales,             // [N, 3] optional
     const torch::Tensor &cSizes,             // [B] camera sizes
-    const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
-    const torch::Tensor &projectionMatrices, // [C, 3, 3]
+    const GaussianProjectionModel &projectionModel,
     const uint32_t imageWidth,
     const uint32_t imageHeight,
     const float eps2d,
     const float nearPlane,
     const float farPlane,
-    const float minRadius2d,
-    const bool ortho) {
+    const float minRadius2d) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
 }
 
