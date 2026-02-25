@@ -155,6 +155,10 @@ template <typename T> struct PerspectiveCameraOp {
     project(const int64_t cid,
             const nanovdb::math::Vec3<T> &meansCamSpace,
             const nanovdb::math::Mat3<T> &covarCamSpace) const {
+        using Mat2x3 = nanovdb::math::Mat2x3<T>;
+        using Mat2   = nanovdb::math::Mat2<T>;
+        using Vec2   = nanovdb::math::Vec2<T>;
+
         T fx, fy, cx, cy;
         if (projectionMatsShared != nullptr) {
             const Mat3 &K = projectionMatsShared[cid];
@@ -169,14 +173,32 @@ template <typename T> struct PerspectiveCameraOp {
             cx           = K[0][2];
             cy           = K[1][2];
         }
-        return projectGaussianPerspective<T>(meansCamSpace,
-                                             covarCamSpace,
-                                             fx,
-                                             fy,
-                                             cx,
-                                             cy,
-                                             imageWidth,
-                                             imageHeight);
+        const T x = meansCamSpace[0];
+        const T y = meansCamSpace[1];
+        const T z = meansCamSpace[2];
+
+        const T tanFovX = T(0.5) * T(imageWidth) / fx;
+        const T tanFovY = T(0.5) * T(imageHeight) / fy;
+        const T limXPos = (T(imageWidth) - cx) / fx + T(0.3) * tanFovX;
+        const T limXNeg = cx / fx + T(0.3) * tanFovX;
+        const T limYPos = (T(imageHeight) - cy) / fy + T(0.3) * tanFovY;
+        const T limYNeg = cy / fy + T(0.3) * tanFovY;
+
+        const T rz  = T(1) / z;
+        const T rz2 = rz * rz;
+        const T tx  = z * nanovdb::math::Min(limXPos, nanovdb::math::Max(-limXNeg, x * rz));
+        const T ty  = z * nanovdb::math::Min(limYPos, nanovdb::math::Max(-limYNeg, y * rz));
+
+        const Mat2x3 J(fx * rz,
+                       T(0),
+                       -fx * tx * rz2, // 1st row
+                       T(0),
+                       fy * rz,
+                       -fy * ty * rz2  // 2nd row
+        );
+        const Mat2 cov2d = J * covarCamSpace * J.transpose();
+        const Vec2 mean2d({fx * x * rz + cx, fy * y * rz + cy});
+        return {cov2d, mean2d};
     }
 
     inline __device__ std::tuple<nanovdb::math::Mat3<T>, nanovdb::math::Vec3<T>>
@@ -185,6 +207,10 @@ template <typename T> struct PerspectiveCameraOp {
         const nanovdb::math::Mat3<T> &covarCamSpace,
         const nanovdb::math::Mat2<T> &dLossDCovar2d,
         const nanovdb::math::Vec2<T> &dLossDMeans2d) const {
+        using Mat2x3 = nanovdb::math::Mat2x3<T>;
+        using Mat3   = nanovdb::math::Mat3<T>;
+        using Vec3   = nanovdb::math::Vec3<T>;
+
         T fx, fy, cx, cy;
         if (projectionMatsShared != nullptr) {
             const Mat3 &K = projectionMatsShared[cid];
@@ -199,16 +225,52 @@ template <typename T> struct PerspectiveCameraOp {
             cx           = K[0][2];
             cy           = K[1][2];
         }
-        return projectGaussianPerspectiveVectorJacobianProduct<T>(meansCamSpace,
-                                                                   covarCamSpace,
-                                                                   fx,
-                                                                   fy,
-                                                                   cx,
-                                                                   cy,
-                                                                   imageWidth,
-                                                                   imageHeight,
-                                                                   dLossDCovar2d,
-                                                                   dLossDMeans2d);
+        const T x = meansCamSpace[0];
+        const T y = meansCamSpace[1];
+        const T z = meansCamSpace[2];
+
+        const T tanFovX = T(0.5) * T(imageWidth) / fx;
+        const T tanFovY = T(0.5) * T(imageHeight) / fy;
+        const T limXPos = (T(imageWidth) - cx) / fx + T(0.3) * tanFovX;
+        const T limXNeg = cx / fx + T(0.3) * tanFovX;
+        const T limYPos = (T(imageHeight) - cy) / fy + T(0.3) * tanFovY;
+        const T limYNeg = cy / fy + T(0.3) * tanFovY;
+
+        const T rz  = T(1) / z;
+        const T rz2 = rz * rz;
+        const T tx  = z * nanovdb::math::Min(limXPos, nanovdb::math::Max(-limXNeg, x * rz));
+        const T ty  = z * nanovdb::math::Min(limYPos, nanovdb::math::Max(-limYNeg, y * rz));
+
+        const Mat2x3 J(fx * rz,
+                       T(0),
+                       -fx * tx * rz2, // 1st row
+                       T(0),
+                       fy * rz,
+                       -fy * ty * rz2  // 2nd row
+        );
+
+        const Mat3 dLossDCovar3d(J.transpose() * dLossDCovar2d * J);
+        Vec3 dLossDMean3d(fx * rz * dLossDMeans2d[0],
+                          fy * rz * dLossDMeans2d[1],
+                          -(fx * x * dLossDMeans2d[0] + fy * y * dLossDMeans2d[1]) * rz2);
+
+        const T rz3       = rz2 * rz;
+        const Mat2x3 dJ = dLossDCovar2d * J * covarCamSpace.transpose() +
+                          dLossDCovar2d.transpose() * J * covarCamSpace;
+
+        if (x * rz <= limXPos && x * rz >= -limXNeg) {
+            dLossDMean3d[0] += -fx * rz2 * dJ[0][2];
+        } else {
+            dLossDMean3d[2] += -fx * rz3 * dJ[0][2] * tx;
+        }
+        if (y * rz <= limYPos && y * rz >= -limYNeg) {
+            dLossDMean3d[1] += -fy * rz2 * dJ[1][2];
+        } else {
+            dLossDMean3d[2] += -fy * rz3 * dJ[1][2] * ty;
+        }
+        dLossDMean3d[2] += -fx * rz2 * dJ[0][0] - fy * rz2 * dJ[1][1] +
+                           T(2) * fx * tx * rz3 * dJ[0][2] + T(2) * fy * ty * rz3 * dJ[1][2];
+        return {dLossDCovar3d, dLossDMean3d};
     }
 };
 
@@ -262,6 +324,10 @@ template <typename T> struct OrthographicCameraOp {
     project(const int64_t cid,
             const nanovdb::math::Vec3<T> &meansCamSpace,
             const nanovdb::math::Mat3<T> &covarCamSpace) const {
+        using Mat2x3 = nanovdb::math::Mat2x3<T>;
+        using Mat2   = nanovdb::math::Mat2<T>;
+        using Vec2   = nanovdb::math::Vec2<T>;
+
         T fx, fy, cx, cy;
         if (projectionMatsShared != nullptr) {
             const Mat3 &K = projectionMatsShared[cid];
@@ -276,14 +342,18 @@ template <typename T> struct OrthographicCameraOp {
             cx           = K[0][2];
             cy           = K[1][2];
         }
-        return projectGaussianOrthographic<T>(meansCamSpace,
-                                              covarCamSpace,
-                                              fx,
-                                              fy,
-                                              cx,
-                                              cy,
-                                              imageWidth,
-                                              imageHeight);
+        const T x = meansCamSpace[0];
+        const T y = meansCamSpace[1];
+        const Mat2x3 J(fx,
+                       T(0),
+                       T(0), // 1st row
+                       T(0),
+                       fy,
+                       T(0)  // 2nd row
+        );
+        const Mat2 cov2d = J * covarCamSpace * J.transpose();
+        const Vec2 mean2d({fx * x + cx, fy * y + cy});
+        return {cov2d, mean2d};
     }
 
     inline __device__ std::tuple<nanovdb::math::Mat3<T>, nanovdb::math::Vec3<T>>
@@ -292,6 +362,10 @@ template <typename T> struct OrthographicCameraOp {
         const nanovdb::math::Mat3<T> &covarCamSpace,
         const nanovdb::math::Mat2<T> &dLossDCovar2d,
         const nanovdb::math::Vec2<T> &dLossDMeans2d) const {
+        using Mat2x3 = nanovdb::math::Mat2x3<T>;
+        using Mat3   = nanovdb::math::Mat3<T>;
+        using Vec3   = nanovdb::math::Vec3<T>;
+
         T fx, fy, cx, cy;
         if (projectionMatsShared != nullptr) {
             const Mat3 &K = projectionMatsShared[cid];
@@ -306,16 +380,16 @@ template <typename T> struct OrthographicCameraOp {
             cx           = K[0][2];
             cy           = K[1][2];
         }
-        return projectGaussianOrthographicVectorJacobianProduct<T>(meansCamSpace,
-                                                                    covarCamSpace,
-                                                                    fx,
-                                                                    fy,
-                                                                    cx,
-                                                                    cy,
-                                                                    imageWidth,
-                                                                    imageHeight,
-                                                                    dLossDCovar2d,
-                                                                    dLossDMeans2d);
+        const Mat2x3 J(fx,
+                       T(0),
+                       T(0), // 1st row
+                       T(0),
+                       fy,
+                       T(0)  // 2nd row
+        );
+        const Mat3 dLossDCovar3d(J.transpose() * dLossDCovar2d * J);
+        const Vec3 dLossDMean3d(fx * dLossDMeans2d[0], fy * dLossDMeans2d[1], T(0));
+        return {dLossDCovar3d, dLossDMean3d};
     }
 };
 
