@@ -1,7 +1,6 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/ops/gsplat/GaussianCameraMatrixUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorld.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldBackward.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeOptionalInputs.h>
@@ -29,8 +28,9 @@ template <uint32_t NUM_CHANNELS> struct SharedGaussian {
     float opacity;
 };
 
-template <uint32_t NUM_CHANNELS> struct RasterizeFromWorldBackwardArgs {
+template <uint32_t NUM_CHANNELS, typename CameraOp> struct RasterizeFromWorldBackwardArgs {
     RasterizeFromWorldCommonArgs commonArgs;
+    CameraOp cameraOp;
     // Forward outputs
     fvdb::TorchRAcc64<float, 4> renderedAlphas; // [C,H,W,1]
     fvdb::TorchRAcc64<int32_t, 3> lastIds;      // [C,H,W]
@@ -45,9 +45,10 @@ template <uint32_t NUM_CHANNELS> struct RasterizeFromWorldBackwardArgs {
     fvdb::TorchRAcc64<float, 2> dOpacities; // [C,N]
 };
 
-template <uint32_t NUM_CHANNELS>
+template <uint32_t NUM_CHANNELS, typename CameraOp>
 __global__ void
-rasterizeFromWorld3DGSBackwardKernel(const RasterizeFromWorldBackwardArgs<NUM_CHANNELS> args) {
+rasterizeFromWorld3DGSBackwardKernel(
+    const RasterizeFromWorldBackwardArgs<NUM_CHANNELS, CameraOp> args) {
     auto block               = cg::this_thread_block();
     const uint32_t blockSize = blockDim.x * blockDim.y;
     const auto &common       = args.commonArgs;
@@ -66,31 +67,13 @@ rasterizeFromWorld3DGSBackwardKernel(const RasterizeFromWorldBackwardArgs<NUM_CH
         return;
     }
 
-    // Camera pose for this camera.
-    const auto [R_wc_start, t_wc_start] =
-        loadWorldToCamRtFromAccessor44<float>(common.worldToCamStart, camId);
-    const auto [R_wc_end, t_wc_end] =
-        loadWorldToCamRtFromAccessor44<float>(common.worldToCamEnd, camId);
+    extern __shared__ char smem[];
+    CameraOp cameraOpLocal = args.cameraOp;
+    cameraOpLocal.bindSharedMemory(smem);
+    cameraOpLocal.loadCameraStateToShared();
+    block.sync();
 
-    const nanovdb::math::Mat3<float> K_cam = loadMat3FromAccessor33<float>(common.K, camId);
-    const float *distPtr =
-        (common.numDistCoeffs > 0) ? &common.distortionCoeffs[camId][0] : nullptr;
-
-    const nanovdb::math::Ray<float> ray = pixelToWorldRay<float>(row,
-                                                                 col,
-                                                                 common.imageWidth,
-                                                                 common.imageHeight,
-                                                                 common.imageOriginW,
-                                                                 common.imageOriginH,
-                                                                 R_wc_start,
-                                                                 t_wc_start,
-                                                                 R_wc_end,
-                                                                 t_wc_end,
-                                                                 K_cam,
-                                                                 distPtr,
-                                                                 common.numDistCoeffs,
-                                                                 common.rollingShutterType,
-                                                                 common.cameraModel);
+    const nanovdb::math::Ray<float> ray = cameraOpLocal.pixelToWorldRay(camId, row, col);
 
     // Whether this pixel participates in the backward pass.
     //
@@ -99,7 +82,8 @@ rasterizeFromWorld3DGSBackwardKernel(const RasterizeFromWorldBackwardArgs<NUM_CH
     const bool done     = inside && rayValid;
 
     // Gaussian range for this tile.
-    const auto [rangeStart, rangeEnd] = common.tileGaussianRange(camId, tileRow, tileCol);
+    const auto [rangeStart, rangeEnd] =
+        common.tileGaussianRange(camId, tileRow, tileCol, cameraOpLocal.numCameras);
 
     // If the tile has no intersections, there is nothing to do. This must be a block-wide return.
     if (rangeEnd <= rangeStart) {
@@ -138,9 +122,9 @@ rasterizeFromWorld3DGSBackwardKernel(const RasterizeFromWorldBackwardArgs<NUM_CH
         buffer[k] = 0.f;
     }
 
-    // Shared memory for gaussian batches.
-    extern __shared__ char smem[];
-    int32_t *idBatch = reinterpret_cast<int32_t *>(smem);                      // [blockSize]
+    // Shared memory for gaussian batches (after camera-op shared state).
+    char *gaussSmem  = smem + cameraOpLocal.sharedMemoryBytes();
+    int32_t *idBatch = reinterpret_cast<int32_t *>(gaussSmem);                 // [blockSize]
     auto *gBatch =
         reinterpret_cast<SharedGaussian<NUM_CHANNELS> *>(&idBatch[blockSize]); // [blockSize]
 
@@ -218,7 +202,7 @@ rasterizeFromWorld3DGSBackwardKernel(const RasterizeFromWorldBackwardArgs<NUM_CH
                 o_minus_mu        = ray.eye() - mean_w;
                 gro               = Mt * o_minus_mu;
                 grd               = Mt * ray.dir();
-                grd_n             = normalizeSafe<float>(grd);
+                grd_n             = fvdb::detail::ops::normalizeSafe<float>(grd);
                 gcrod             = grd_n.cross(gro);
                 grayDist          = gcrod.dot(gcrod);
                 const float power = -0.5f * grayDist;
@@ -383,19 +367,14 @@ rasterizeFromWorld3DGSBackwardKernel(const RasterizeFromWorldBackwardArgs<NUM_CH
     }
 }
 
-template <uint32_t NUM_CHANNELS>
+template <uint32_t NUM_CHANNELS, typename CameraOp>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 launchBackward(const torch::Tensor &means,
                const torch::Tensor &quats,
                const torch::Tensor &logScales,
                const torch::Tensor &features,
                const torch::Tensor &opacities,
-               const torch::Tensor &worldToCamStart,
-               const torch::Tensor &worldToCamEnd,
-               const torch::Tensor &K,
-               const torch::Tensor &distortionCoeffs,
-               const RollingShutterType rollingShutterType,
-               const CameraModel cameraModel,
+               const CameraOp &cameraOp,
                const uint32_t imageWidth,
                const uint32_t imageHeight,
                const uint32_t imageOriginW,
@@ -423,10 +402,8 @@ launchBackward(const torch::Tensor &means,
     const dim3 blockDim(tileSize, tileSize, 1);
     const dim3 gridDim(C * tileExtentH * tileExtentW, 1, 1);
     const int32_t totalIntersections = static_cast<int32_t>(tileGaussianIds.size(0));
-    const int64_t numDistCoeffs      = distortionCoeffs.size(1);
 
     RasterizeFromWorldCommonArgs args{
-        static_cast<uint32_t>(C),
         imageWidth,
         imageHeight,
         imageOriginW,
@@ -444,14 +421,7 @@ launchBackward(const torch::Tensor &means,
         quats.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
         logScales.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
         features.packed_accessor64<float, 3, torch::RestrictPtrTraits>(),
-        opacities.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
-        worldToCamStart.packed_accessor64<float, 3, torch::RestrictPtrTraits>(),
-        worldToCamEnd.packed_accessor64<float, 3, torch::RestrictPtrTraits>(),
-        K.packed_accessor64<float, 3, torch::RestrictPtrTraits>(),
-        distortionCoeffs.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
-        numDistCoeffs,
-        rollingShutterType,
-        cameraModel};
+        opacities.packed_accessor64<float, 2, torch::RestrictPtrTraits>()};
 
     const PreparedRasterOptionalInputs opt = prepareRasterOptionalInputs(
         features, C, tileExtentH, tileExtentW, (int64_t)NUM_CHANNELS, backgrounds, masks);
@@ -459,10 +429,12 @@ launchBackward(const torch::Tensor &means,
     args.masks       = opt.masks;
 
     const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
-    const size_t sharedMem = blockSize * (sizeof(int32_t) + sizeof(SharedGaussian<NUM_CHANNELS>));
+    const size_t sharedMem = cameraOp.sharedMemoryBytes() +
+                             blockSize * (sizeof(int32_t) + sizeof(SharedGaussian<NUM_CHANNELS>));
 
-    RasterizeFromWorldBackwardArgs<NUM_CHANNELS> kernelArgs{
+    RasterizeFromWorldBackwardArgs<NUM_CHANNELS, CameraOp> kernelArgs{
         args,
+        cameraOp,
         renderedAlphas.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
         lastIds.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
         dLossDRenderedFeatures.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
@@ -474,7 +446,7 @@ launchBackward(const torch::Tensor &means,
         dOpacities.packed_accessor64<float, 2, torch::RestrictPtrTraits>()};
 
     auto stream = at::cuda::getDefaultCUDAStream();
-    rasterizeFromWorld3DGSBackwardKernel<NUM_CHANNELS>
+    rasterizeFromWorld3DGSBackwardKernel<NUM_CHANNELS, CameraOp>
         <<<gridDim, blockDim, sharedMem, stream>>>(kernelArgs);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return {dMeans, dQuats, dLogScales, dFeatures, dOpacities};
@@ -535,61 +507,110 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
 
     const uint32_t channels = (uint32_t)features.size(2);
 
-#define CALL_BWD(NCH)                                       \
-    case NCH:                                               \
-        return launchBackward<NCH>(means,                   \
-                                   quats,                   \
-                                   logScales,               \
-                                   features,                \
-                                   opacitiesBatched,        \
-                                   worldToCamMatricesStart, \
-                                   worldToCamMatricesEnd,   \
-                                   projectionMatrices,      \
-                                   distortionCoeffs,        \
-                                   rollingShutterType,      \
-                                   cameraModel,             \
-                                   imageWidth,              \
-                                   imageHeight,             \
-                                   imageOriginW,            \
-                                   imageOriginH,            \
-                                   tileSize,                \
-                                   tileOffsets,             \
-                                   tileGaussianIds,         \
-                                   renderedAlphas,          \
-                                   lastIds,                 \
-                                   dLossDRenderedFeatures,  \
-                                   dLossDRenderedAlphas,    \
-                                   backgrounds,             \
-                                   masks);
+#define CALL_BWD_WITH_OP(NCH, OP_TYPE, OP_VAL)            \
+    case NCH:                                              \
+        return launchBackward<NCH, OP_TYPE>(means,         \
+                                            quats,         \
+                                            logScales,     \
+                                            features,      \
+                                            opacitiesBatched, \
+                                            OP_VAL,                  \
+                                            imageWidth,              \
+                                            imageHeight,             \
+                                            imageOriginW,            \
+                                            imageOriginH,            \
+                                            tileSize,                \
+                                            tileOffsets,             \
+                                            tileGaussianIds,         \
+                                            renderedAlphas,          \
+                                            lastIds,                 \
+                                            dLossDRenderedFeatures,  \
+                                            dLossDRenderedAlphas,    \
+                                            backgrounds,             \
+                                            masks);
 
-    switch (channels) {
-        CALL_BWD(1)
-        CALL_BWD(2)
-        CALL_BWD(3)
-        CALL_BWD(4)
-        CALL_BWD(5)
-        CALL_BWD(8)
-        CALL_BWD(9)
-        CALL_BWD(16)
-        CALL_BWD(17)
-        CALL_BWD(32)
-        CALL_BWD(33)
-        CALL_BWD(64)
-        CALL_BWD(65)
-        CALL_BWD(128)
-        CALL_BWD(129)
-        CALL_BWD(192)
-        CALL_BWD(193)
-        CALL_BWD(256)
-        CALL_BWD(257)
-        CALL_BWD(512)
-        CALL_BWD(513)
-    default:
-        TORCH_CHECK_VALUE(
-            false, "Unsupported channels for rasterize-from-world-3dgs backward: ", channels);
+    if (cameraModel == CameraModel::ORTHOGRAPHIC) {
+        const OrthographicWithDistortionCameraOp<float> cameraOp{
+            worldToCamMatricesStart.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            worldToCamMatricesEnd.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            static_cast<uint32_t>(C),
+            (int32_t)imageWidth,
+            (int32_t)imageHeight,
+            (int32_t)imageOriginW,
+            (int32_t)imageOriginH,
+            rollingShutterType};
+        switch (channels) {
+            CALL_BWD_WITH_OP(1, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(2, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(3, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(4, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(5, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(8, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(9, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(16, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(17, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(32, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(33, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(64, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(65, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(128, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(129, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(192, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(193, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(256, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(257, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(512, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(513, OrthographicWithDistortionCameraOp<float>, cameraOp)
+        default:
+            TORCH_CHECK_VALUE(false,
+                              "Unsupported channels for rasterize-from-world-3dgs backward: ",
+                              channels);
+        }
+    } else {
+        const PerspectiveWithDistortionCameraOp<float> cameraOp{
+            worldToCamMatricesStart.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            worldToCamMatricesEnd.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            distortionCoeffs.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+            static_cast<uint32_t>(C),
+            distortionCoeffs.size(1),
+            (int32_t)imageWidth,
+            (int32_t)imageHeight,
+            (int32_t)imageOriginW,
+            (int32_t)imageOriginH,
+            rollingShutterType,
+            cameraModel};
+        switch (channels) {
+            CALL_BWD_WITH_OP(1, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(2, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(3, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(4, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(5, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(8, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(9, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(16, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(17, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(32, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(33, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(64, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(65, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(128, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(129, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(192, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(193, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(256, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(257, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(512, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(513, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+        default:
+            TORCH_CHECK_VALUE(false,
+                              "Unsupported channels for rasterize-from-world-3dgs backward: ",
+                              channels);
+        }
     }
 
-#undef CALL_BWD
+#undef CALL_BWD_WITH_OP
 }
 
 template <>
