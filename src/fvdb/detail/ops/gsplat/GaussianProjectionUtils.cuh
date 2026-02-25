@@ -32,6 +32,8 @@ isOutsideImageWithRadius(const nanovdb::math::Vec2<T> &mean2d,
             mean2d[1] + radiusY <= T(0) || mean2d[1] - radiusY >= T(imageHeight));
 }
 
+enum class ProjectWorldToPixelStatus : uint8_t { BehindCamera, OutOfBounds, InImage };
+
 /// @brief Estimate projected radius from a 2x2 covariance using the largest eigenvalue heuristic.
 template <typename T>
 inline __device__ T
@@ -540,6 +542,100 @@ template <typename T> struct PerspectiveWithDistortionCameraOp {
         }
     }
 
+    inline __device__ T
+    cameraDepthAtTime(const int64_t cid, const nanovdb::math::Vec3<T> &pointWorld, const T shutterTime) const {
+        const auto [R_wc_start, t_wc_start, R_wc_end, t_wc_end] = worldToCamRtStartEnd(cid);
+        nanovdb::math::Mat3<T> R_wc;
+        nanovdb::math::Vec3<T> t_wc;
+        if (rollingShutterType == RollingShutterType::NONE) {
+            R_wc = R_wc_start;
+            t_wc = t_wc_start;
+        } else {
+            const RigidTransform<T> worldToCamStart(R_wc_start, t_wc_start);
+            const RigidTransform<T> worldToCamEnd(R_wc_end, t_wc_end);
+            const RigidTransform<T> worldToCam =
+                RigidTransform<T>::interpolate(shutterTime, worldToCamStart, worldToCamEnd);
+            R_wc = worldToCam.R;
+            t_wc = worldToCam.t;
+        }
+        const nanovdb::math::Vec3<T> pointCam = R_wc * pointWorld + t_wc;
+        return pointCam[2];
+    }
+
+    inline __device__ ProjectWorldToPixelStatus
+    projectWorldPointToPixel(const int64_t cid,
+                             const nanovdb::math::Vec3<T> &pointWorld,
+                             const T inImageMargin,
+                             nanovdb::math::Vec2<T> &outPixel) const {
+        const auto [R_wc_start, t_wc_start, R_wc_end, t_wc_end] = worldToCamRtStartEnd(cid);
+        const Mat3 K                                             = projectionMatrix(cid);
+        const T *distCoeffs                                      = distortionPtr(cid);
+
+        const auto projectWithTransform =
+            [&](const RigidTransform<T> &worldToCam, nanovdb::math::Vec2<T> &pix) -> ProjectWorldToPixelStatus {
+            const nanovdb::math::Vec3<T> pointCam = worldToCam.apply(pointWorld);
+            if (pointCam[2] <= T(1e-6)) {
+                pix = nanovdb::math::Vec2<T>(T(0), T(0));
+                return ProjectWorldToPixelStatus::BehindCamera;
+            }
+            const nanovdb::math::Vec2<T> pNormalized(pointCam[0] / pointCam[2], pointCam[1] / pointCam[2]);
+            const nanovdb::math::Vec2<T> pDistorted =
+                applyOpenCVDistortionPacked(cameraModel, pNormalized, distCoeffs, numDistCoeffs);
+            const T fx = K[0][0];
+            const T fy = K[1][1];
+            const T cx = K[0][2];
+            const T cy = K[1][2];
+            pix        = nanovdb::math::Vec2<T>(fx * pDistorted[0] + cx, fy * pDistorted[1] + cy);
+            const T marginX = T(imageWidth) * inImageMargin;
+            const T marginY = T(imageHeight) * inImageMargin;
+            const bool inImg =
+                (pix[0] >= -marginX) && (pix[0] < T(imageWidth) + marginX) && (pix[1] >= -marginY) &&
+                (pix[1] < T(imageHeight) + marginY);
+            return inImg ? ProjectWorldToPixelStatus::InImage : ProjectWorldToPixelStatus::OutOfBounds;
+        };
+
+        const RigidTransform<T> worldToCamStart(R_wc_start, t_wc_start);
+        const RigidTransform<T> worldToCamEnd(R_wc_end, t_wc_end);
+        nanovdb::math::Vec2<T> pixStart(T(0), T(0));
+        nanovdb::math::Vec2<T> pixEnd(T(0), T(0));
+        const ProjectWorldToPixelStatus statusStart = projectWithTransform(worldToCamStart, pixStart);
+        const ProjectWorldToPixelStatus statusEnd   = projectWithTransform(worldToCamEnd, pixEnd);
+
+        if (rollingShutterType == RollingShutterType::NONE) {
+            outPixel = pixStart;
+            return statusStart;
+        }
+        if (statusStart == ProjectWorldToPixelStatus::BehindCamera &&
+            statusEnd == ProjectWorldToPixelStatus::BehindCamera) {
+            outPixel = pixEnd;
+            return ProjectWorldToPixelStatus::BehindCamera;
+        }
+        if (statusStart != ProjectWorldToPixelStatus::InImage &&
+            statusEnd != ProjectWorldToPixelStatus::InImage) {
+            outPixel = (statusEnd != ProjectWorldToPixelStatus::BehindCamera) ? pixEnd : pixStart;
+            return ProjectWorldToPixelStatus::OutOfBounds;
+        }
+
+        nanovdb::math::Vec2<T> pixPrev =
+            (statusStart == ProjectWorldToPixelStatus::InImage) ? pixStart : pixEnd;
+        constexpr int kIters = 6;
+        for (int it = 0; it < kIters; ++it) {
+            const T tRs = rollingShutterTimeFromPixel<T>(
+                rollingShutterType, pixPrev[0], pixPrev[1], imageWidth, imageHeight);
+            const RigidTransform<T> worldToCam =
+                RigidTransform<T>::interpolate(tRs, worldToCamStart, worldToCamEnd);
+            nanovdb::math::Vec2<T> pixRs(T(0), T(0));
+            const ProjectWorldToPixelStatus statusRs = projectWithTransform(worldToCam, pixRs);
+            pixPrev                                  = pixRs;
+            if (statusRs != ProjectWorldToPixelStatus::InImage) {
+                outPixel = pixRs;
+                return statusRs;
+            }
+        }
+        outPixel = pixPrev;
+        return ProjectWorldToPixelStatus::InImage;
+    }
+
   private:
     inline __device__ std::tuple<Mat3, Vec3, Mat3, Vec3>
     worldToCamRtStartEnd(const int64_t cid) const {
@@ -692,6 +788,96 @@ template <typename T> struct OrthographicWithDistortionCameraOp {
         copyMat3Accessor<T>(numCameras, worldToCamEndRotShared, worldToCamEndAcc);
         copyWorldToCamTranslation<T>(numCameras, worldToCamEndTransShared, worldToCamEndAcc);
         copyMat3Accessor<T>(numCameras, projectionMatsShared, projectionMatricesAcc);
+    }
+
+    inline __device__ T
+    cameraDepthAtTime(const int64_t cid, const nanovdb::math::Vec3<T> &pointWorld, const T shutterTime) const {
+        const auto [R_wc_start, t_wc_start, R_wc_end, t_wc_end] = worldToCamRtStartEnd(cid);
+        nanovdb::math::Mat3<T> R_wc;
+        nanovdb::math::Vec3<T> t_wc;
+        if (rollingShutterType == RollingShutterType::NONE) {
+            R_wc = R_wc_start;
+            t_wc = t_wc_start;
+        } else {
+            const RigidTransform<T> worldToCamStart(R_wc_start, t_wc_start);
+            const RigidTransform<T> worldToCamEnd(R_wc_end, t_wc_end);
+            const RigidTransform<T> worldToCam =
+                RigidTransform<T>::interpolate(shutterTime, worldToCamStart, worldToCamEnd);
+            R_wc = worldToCam.R;
+            t_wc = worldToCam.t;
+        }
+        const nanovdb::math::Vec3<T> pointCam = R_wc * pointWorld + t_wc;
+        return pointCam[2];
+    }
+
+    inline __device__ ProjectWorldToPixelStatus
+    projectWorldPointToPixel(const int64_t cid,
+                             const nanovdb::math::Vec3<T> &pointWorld,
+                             const T inImageMargin,
+                             nanovdb::math::Vec2<T> &outPixel) const {
+        const auto [R_wc_start, t_wc_start, R_wc_end, t_wc_end] = worldToCamRtStartEnd(cid);
+        const Mat3 K                                             = projectionMatrix(cid);
+        const T fx                                               = K[0][0];
+        const T fy                                               = K[1][1];
+        const T cx                                               = K[0][2];
+        const T cy                                               = K[1][2];
+
+        const auto projectWithTransform =
+            [&](const RigidTransform<T> &worldToCam, nanovdb::math::Vec2<T> &pix) -> ProjectWorldToPixelStatus {
+            const nanovdb::math::Vec3<T> pointCam = worldToCam.apply(pointWorld);
+            if (pointCam[2] <= T(0)) {
+                pix = nanovdb::math::Vec2<T>(T(0), T(0));
+                return ProjectWorldToPixelStatus::BehindCamera;
+            }
+            pix = nanovdb::math::Vec2<T>(fx * pointCam[0] + cx, fy * pointCam[1] + cy);
+            const T marginX = T(imageWidth) * inImageMargin;
+            const T marginY = T(imageHeight) * inImageMargin;
+            const bool inImg =
+                (pix[0] >= -marginX) && (pix[0] < T(imageWidth) + marginX) && (pix[1] >= -marginY) &&
+                (pix[1] < T(imageHeight) + marginY);
+            return inImg ? ProjectWorldToPixelStatus::InImage : ProjectWorldToPixelStatus::OutOfBounds;
+        };
+
+        const RigidTransform<T> worldToCamStart(R_wc_start, t_wc_start);
+        const RigidTransform<T> worldToCamEnd(R_wc_end, t_wc_end);
+        nanovdb::math::Vec2<T> pixStart(T(0), T(0));
+        nanovdb::math::Vec2<T> pixEnd(T(0), T(0));
+        const ProjectWorldToPixelStatus statusStart = projectWithTransform(worldToCamStart, pixStart);
+        const ProjectWorldToPixelStatus statusEnd   = projectWithTransform(worldToCamEnd, pixEnd);
+
+        if (rollingShutterType == RollingShutterType::NONE) {
+            outPixel = pixStart;
+            return statusStart;
+        }
+        if (statusStart == ProjectWorldToPixelStatus::BehindCamera &&
+            statusEnd == ProjectWorldToPixelStatus::BehindCamera) {
+            outPixel = pixEnd;
+            return ProjectWorldToPixelStatus::BehindCamera;
+        }
+        if (statusStart != ProjectWorldToPixelStatus::InImage &&
+            statusEnd != ProjectWorldToPixelStatus::InImage) {
+            outPixel = (statusEnd != ProjectWorldToPixelStatus::BehindCamera) ? pixEnd : pixStart;
+            return ProjectWorldToPixelStatus::OutOfBounds;
+        }
+
+        nanovdb::math::Vec2<T> pixPrev =
+            (statusStart == ProjectWorldToPixelStatus::InImage) ? pixStart : pixEnd;
+        constexpr int kIters = 6;
+        for (int it = 0; it < kIters; ++it) {
+            const T tRs = rollingShutterTimeFromPixel<T>(
+                rollingShutterType, pixPrev[0], pixPrev[1], imageWidth, imageHeight);
+            const RigidTransform<T> worldToCam =
+                RigidTransform<T>::interpolate(tRs, worldToCamStart, worldToCamEnd);
+            nanovdb::math::Vec2<T> pixRs(T(0), T(0));
+            const ProjectWorldToPixelStatus statusRs = projectWithTransform(worldToCam, pixRs);
+            pixPrev                                  = pixRs;
+            if (statusRs != ProjectWorldToPixelStatus::InImage) {
+                outPixel = pixRs;
+                return statusRs;
+            }
+        }
+        outPixel = pixPrev;
+        return ProjectWorldToPixelStatus::InImage;
     }
 
   private:

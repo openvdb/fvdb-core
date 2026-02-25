@@ -4,6 +4,7 @@
 
 #include <fvdb/detail/ops/gsplat/GaussianCameraAccessorCopy.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianOpenCVDistortion.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionUT.h>
 #include <fvdb/detail/ops/gsplat/GaussianRigidTransform.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRollingShutter.cuh>
@@ -24,268 +25,6 @@
 namespace fvdb::detail::ops {
 
 namespace {
-
-// OpenCV camera distortion conventions:
-// https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html
-// Distortion coefficients are interpreted as:
-// - Radial (rational): k1..k6
-// - Tangential: p1, p2
-// - Thin prism: s1..s4
-//
-/// @brief OpenCV camera model (pinhole intrinsics + distortion).
-///
-/// This is an internal helper used by the UT projection kernel.
-/// It owns the camera intrinsics pointer `K` and the distortion coefficient pointers and can
-/// project `p_cam -> pixel`.
-/// @see https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html
-///
-/// @tparam T Scalar type
-template <typename T> class OpenCVCameraModel {
-  public:
-    using Vec2 = nanovdb::math::Vec2<T>;
-    using Vec3 = nanovdb::math::Vec3<T>;
-    using Mat3 = nanovdb::math::Mat3<T>;
-
-    /// @brief Construct a camera model for projection.
-    ///
-    /// For OpenCV models, coefficients are read from a per-camera packed layout:
-    /// `[k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]`.
-    ///
-    /// For `CameraModel::PINHOLE` / `CameraModel::ORTHOGRAPHIC`, `distortionCoeffs` is ignored.
-    ///
-    /// Preconditions are asserted on-device (trap) rather than returning status codes.
-    ///
-    /// @param[in] cameraModel Public camera model selector.
-    /// @param[in] K_in 3x3 intrinsics matrix (typically backed by shared memory).
-    /// @param[in] distortionCoeffs Pointer to per-camera distortion coefficients (layout depends on
-    ///            cameraModel).
-    __device__ __forceinline__
-    OpenCVCameraModel(const CameraModel cameraModel, const Mat3 &K_in, const T *distortionCoeffs)
-        : K(K_in), mCameraModel(cameraModel), mDistortionCoeffs(distortionCoeffs) {
-        // ORTHOGRAPHIC is implemented as pinhole intrinsics without the perspective divide.
-        // Distortion is intentionally not supported for orthographic projection.
-        orthographic = (cameraModel == CameraModel::ORTHOGRAPHIC);
-
-        if (cameraModel == CameraModel::ORTHOGRAPHIC || cameraModel == CameraModel::PINHOLE) {
-            mNumDistortionCoeffs = 0;
-            return;
-        }
-
-        if (cameraModel == CameraModel::OPENCV_RADTAN_5 ||
-            cameraModel == CameraModel::OPENCV_RATIONAL_8 ||
-            cameraModel == CameraModel::OPENCV_RADTAN_THIN_PRISM_9 ||
-            cameraModel == CameraModel::OPENCV_THIN_PRISM_12) {
-            deviceAssertOrTrap(mDistortionCoeffs != nullptr);
-            mNumDistortionCoeffs = 12;
-            return;
-        }
-
-        // Unknown camera model: should be unreachable if host validation is correct.
-        deviceAssertOrTrap(false);
-    }
-
-    /// @brief Project a 3D point in camera coordinates to pixel coordinates.
-    ///
-    /// - Perspective (`PINHOLE`/`OPENCV_*`): normalize by depth \(x/z, y/z\).
-    /// - Orthographic (`ORTHOGRAPHIC`): no divide; uses \(x,y\) directly.
-    ///
-    /// @param[in] p_cam Point in camera coordinates.
-    /// @return Pixel coordinates (u,v).
-    __device__ Vec2
-    project(const Vec3 &p_cam) const {
-        // Normalize to camera plane.
-        Vec2 p_normalized;
-        if (orthographic) {
-            p_normalized = Vec2(p_cam[0], p_cam[1]);
-        } else {
-            // For perspective models, callers are expected to reject points with small/invalid
-            // depth before calling `project()`. Avoid clamping z here so the pinhole math remains
-            // consistent near the camera plane.
-            const T z_inv = T(1) / p_cam[2];
-            p_normalized  = Vec2(p_cam[0] * z_inv, p_cam[1] * z_inv);
-        }
-
-        const Vec2 p_distorted = applyOpenCVDistortionPacked(
-            mCameraModel, p_normalized, mDistortionCoeffs, mNumDistortionCoeffs);
-
-        // Project to pixel coordinates.
-        const T fx = K[0][0];
-        const T fy = K[1][1];
-        const T cx = K[0][2];
-        const T cy = K[1][2];
-        return Vec2(fx * p_distorted[0] + cx, fy * p_distorted[1] + cy);
-    }
-
-    /// @brief Whether this camera model is orthographic.
-    /// @return True for `CameraModel::ORTHOGRAPHIC`.
-    __device__ __forceinline__ bool
-    isOrthographic() const {
-        return orthographic;
-    }
-
-  private:
-    /// @brief Device-side assert that always traps on failure.
-    ///
-    /// @param[in] cond Condition that must hold.
-    __device__ __forceinline__ static void
-    deviceAssertOrTrap(const bool cond) {
-        if (!cond) {
-            // `assert()` is typically compiled out in release builds; use a trap to guarantee a
-            // loud failure when invariants are violated.
-            asm volatile("trap;");
-        }
-    }
-
-    // Camera intrinsics (typically backed by shared memory).
-    const Mat3 &K;
-    bool orthographic            = false;
-    CameraModel mCameraModel     = CameraModel::PINHOLE;
-    const T *mDistortionCoeffs   = nullptr; // packed [12] for OPENCV_* models
-    int64_t mNumDistortionCoeffs = 0;       // 0 for PINHOLE/ORTHOGRAPHIC, 12 for OPENCV_*
-};
-
-/// @brief Projection status for a single world point.
-///
-/// The kernel treats `BehindCamera` as a hard failure (discontinuous projection), while
-/// `OutOfBounds` may still be usable depending on UTParams.
-enum class ProjStatus : uint8_t { BehindCamera, OutOfBounds, InImage };
-
-/// @brief World-space point -> pixel transform with rolling shutter.
-///
-/// This wraps the camera model, rolling shutter policy, and in-image bounds checks used when
-/// projecting UT sigma points.
-///
-/// @tparam ScalarType Scalar type (float).
-template <typename ScalarType> struct WorldToPixelTransform {
-    using Vec2 = nanovdb::math::Vec2<ScalarType>;
-    using Vec3 = nanovdb::math::Vec3<ScalarType>;
-    using Mat3 = nanovdb::math::Mat3<ScalarType>;
-
-    const OpenCVCameraModel<ScalarType> &camera;
-    RollingShutterType rollingShutterType;
-    int64_t imageWidth;
-    int64_t imageHeight;
-    ScalarType inImageMargin;
-    RigidTransform<ScalarType> worldToCamStart;
-    RigidTransform<ScalarType> worldToCamEnd;
-
-    __device__ __forceinline__
-    WorldToPixelTransform(const OpenCVCameraModel<ScalarType> &camera_in,
-                          const RollingShutterType rollingShutterType_in,
-                          const int64_t imageWidth_in,
-                          const int64_t imageHeight_in,
-                          const ScalarType inImageMargin_in,
-                          const RigidTransform<ScalarType> &worldToCamStart_in,
-                          const RigidTransform<ScalarType> &worldToCamEnd_in)
-        : camera(camera_in), rollingShutterType(rollingShutterType_in), imageWidth(imageWidth_in),
-          imageHeight(imageHeight_in), inImageMargin(inImageMargin_in),
-          worldToCamStart(worldToCamStart_in), worldToCamEnd(worldToCamEnd_in) {}
-
-    /// @brief Helper: whether a projection status is in-image.
-    /// @param[in] s Projection status.
-    /// @return True if s is InImage.
-    __device__ __forceinline__ static bool
-    isInImage(const ProjStatus s) {
-        return s == ProjStatus::InImage;
-    }
-
-    /// @brief Transform a world-space point with a given world->cam transform and project to pixel.
-    ///
-    /// @param[in] p_world World-space point.
-    /// @param[in] xf World->camera transform.
-    /// @param[out] out_pix Pixel coordinate output (always written).
-    /// @return Projection status.
-    __device__ __forceinline__ ProjStatus
-    projectWithTransform(const Vec3 &p_world,
-                         const RigidTransform<ScalarType> &xf,
-                         Vec2 &out_pix) const {
-        const Vec3 p_cam = xf.apply(p_world);
-        // Reject points close to/behind the camera plane.
-        //
-        // For perspective cameras, we reject z <= z_eps to avoid numerical instability and to avoid
-        // clamping z in the projection math (which would change the pinhole model near z=0).
-        // For ORTHOGRAPHIC this is a policy choice (not a mathematical necessity); we keep the
-        // original z<=0 behavior.
-        const ScalarType z_eps = camera.isOrthographic() ? ScalarType(0) : ScalarType(1e-6);
-        if (p_cam[2] <= z_eps) {
-            // Ensure deterministic output to avoid UB on callers that assign/read even on invalid
-            // projections. This value is ignored when we treat BehindCamera as a hard reject.
-            out_pix = Vec2(ScalarType(0), ScalarType(0));
-            return ProjStatus::BehindCamera;
-        }
-
-        out_pix                   = camera.project(p_cam);
-        const ScalarType margin_x = ScalarType(imageWidth) * inImageMargin;
-        const ScalarType margin_y = ScalarType(imageHeight) * inImageMargin;
-        const bool in_img =
-            (out_pix[0] >= -margin_x) && (out_pix[0] < ScalarType(imageWidth) + margin_x) &&
-            (out_pix[1] >= -margin_y) && (out_pix[1] < ScalarType(imageHeight) + margin_y);
-        return in_img ? ProjStatus::InImage : ProjStatus::OutOfBounds;
-    }
-
-    /// @brief Project a world-space point to pixel coordinates.
-    ///
-    /// For rolling shutter modes, this uses a small fixed-point iteration that estimates shutter
-    /// time from the current pixel coordinate (row/col -> time).
-    ///
-    /// @param[in] p_world World-space point.
-    /// @param[out] out_pixel Pixel coordinate output (always written).
-    /// @return Projection status.
-    __device__ __forceinline__ ProjStatus
-    projectWorldPoint(const Vec3 &p_world, Vec2 &out_pixel) const {
-        // Rolling shutter: iterate pose based on the current pixel estimate (row/col -> time).
-
-        // Start/end projections for initialization.
-        const RigidTransform<ScalarType> &pose_start = worldToCamStart;
-        const RigidTransform<ScalarType> &pose_end   = worldToCamEnd;
-        Vec2 pix_start(ScalarType(0), ScalarType(0));
-        Vec2 pix_end(ScalarType(0), ScalarType(0));
-        const ProjStatus status_start = projectWithTransform(p_world, pose_start, pix_start);
-        const ProjStatus status_end   = projectWithTransform(p_world, pose_end, pix_end);
-
-        if (rollingShutterType == RollingShutterType::NONE) {
-            out_pixel = pix_start;
-            return status_start;
-        }
-
-        // If both endpoints are behind the camera, treat as a hard invalid (discontinuous).
-        if (status_start == ProjStatus::BehindCamera && status_end == ProjStatus::BehindCamera) {
-            out_pixel = pix_end;
-            return ProjStatus::BehindCamera;
-        }
-
-        // If neither endpoint is in-image (but at least one is in front), treat as invalid.
-        // (We require an in-image seed for the fixed-point iteration.)
-        if (!isInImage(status_start) && !isInImage(status_end)) {
-            out_pixel = (status_end != ProjStatus::BehindCamera) ? pix_end : pix_start;
-            return ProjStatus::OutOfBounds;
-        }
-
-        Vec2 pix_prev = isInImage(status_start) ? pix_start : pix_end;
-        // Fixed small iteration count (good enough for convergence in practice).
-        constexpr int kIters = 6;
-        for (int it = 0; it < kIters; ++it) {
-            const ScalarType t_rs = rollingShutterTimeFromPixel<ScalarType>(
-                rollingShutterType, pix_prev[0], pix_prev[1], imageWidth, imageHeight);
-            const RigidTransform<ScalarType> pose_rs =
-                RigidTransform<ScalarType>::interpolate(t_rs, worldToCamStart, worldToCamEnd);
-            Vec2 pix_rs(ScalarType(0), ScalarType(0));
-            const ProjStatus status_rs = projectWithTransform(p_world, pose_rs, pix_rs);
-            pix_prev                   = pix_rs;
-            if (status_rs == ProjStatus::BehindCamera) {
-                out_pixel = pix_rs;
-                return ProjStatus::BehindCamera;
-            }
-            if (!isInImage(status_rs)) {
-                out_pixel = pix_rs;
-                return ProjStatus::OutOfBounds;
-            }
-        }
-
-        out_pixel = pix_prev;
-        return ProjStatus::InImage;
-    }
-};
 
 /// @brief Generate 3D UT sigma points and weights (fixed 7-point UT in 3D).
 ///
@@ -442,7 +181,7 @@ enforcePSD2x2(const T minEigen, nanovdb::math::Mat2<T> &covar2d) {
 ///
 /// This struct owns tensor accessors, shared memory pointers, and scalar configuration for
 /// projecting N gaussians into C camera views.
-template <typename ScalarType> struct ProjectionForwardUT {
+template <typename ScalarType, typename CameraOp> struct ProjectionForwardUT {
     using Mat3 = nanovdb::math::Mat3<ScalarType>;
     using Vec3 = nanovdb::math::Vec3<ScalarType>;
     using Vec4 = nanovdb::math::Vec4<ScalarType>;
@@ -458,11 +197,8 @@ template <typename ScalarType> struct ProjectionForwardUT {
     const ScalarType mNearPlane;
     const ScalarType mFarPlane;
     const ScalarType mRadiusClip;
-    const RollingShutterType mRollingShutterType;
     const UTParams mUTParams;
-    const CameraModel mCameraModel;
-    const int64_t
-        mNumDistortionCoeffs; // Number of distortion coeffs per camera (e.g. 12 for OPENCV)
+    CameraOp mCameraOp;
 
     // Tensor Inputs
     const fvdb::TorchRAcc64<ScalarType, 2> mMeansAcc;                   // [N, 3]
@@ -484,14 +220,6 @@ template <typename ScalarType> struct ProjectionForwardUT {
     // NOTE: This is intentionally a raw pointer to represent optional (nullable) outputs.
     // Required inputs are passed/stored as references where possible to avoid null-deref hazards.
     ScalarType *__restrict__ mOutCompensationsAcc; // [C, N] optional
-
-    // Shared memory pointers
-    Mat3 *__restrict__ projectionMatsShared             = nullptr;
-    Mat3 *__restrict__ worldToCamRotMatsStartShared     = nullptr;
-    Mat3 *__restrict__ worldToCamRotMatsEndShared       = nullptr;
-    Vec3 *__restrict__ worldToCamTranslationStartShared = nullptr;
-    Vec3 *__restrict__ worldToCamTranslationEndShared   = nullptr;
-    ScalarType *__restrict__ distortionCoeffsShared     = nullptr;
 
     /// @brief Construct the functor with configuration and tensor references.
     ///
@@ -523,9 +251,8 @@ template <typename ScalarType> struct ProjectionForwardUT {
                         const ScalarType nearPlane,
                         const ScalarType farPlane,
                         const ScalarType minRadius2d,
-                        const RollingShutterType rollingShutterType,
                         const UTParams &utParams,
-                        const CameraModel cameraModel,
+                        const CameraOp &cameraOp,
                         const bool calcCompensations,
                         const torch::Tensor &means,                   // [N, 3]
                         const torch::Tensor &quats,                   // [N, 4]
@@ -543,9 +270,7 @@ template <typename ScalarType> struct ProjectionForwardUT {
         : C(projectionMatrices.size(0)), N(means.size(0)),
           mImageWidth(static_cast<int32_t>(imageWidth)),
           mImageHeight(static_cast<int32_t>(imageHeight)), mEps2d(eps2d), mNearPlane(nearPlane),
-          mFarPlane(farPlane), mRadiusClip(minRadius2d), mRollingShutterType(rollingShutterType),
-          mUTParams(utParams), mCameraModel(cameraModel),
-          mNumDistortionCoeffs(distortionCoeffs.size(1)),
+          mFarPlane(farPlane), mRadiusClip(minRadius2d), mUTParams(utParams), mCameraOp(cameraOp),
           mMeansAcc(means.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
           mQuatsAcc(quats.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
           mLogScalesAcc(logScales.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
@@ -564,55 +289,6 @@ template <typename ScalarType> struct ProjectionForwardUT {
           mOutCompensationsAcc(outCompensations.defined() ? outCompensations.data_ptr<ScalarType>()
                                                           : nullptr) {}
 
-    /// @brief Load per-camera matrices/coeffs into shared memory for faster access.
-    ///
-    /// Layout is `[K, R_start, R_end, t_start, t_end, distortionCoeffs]` per camera.
-    inline __device__ void
-    loadCameraInfoIntoSharedMemory() {
-        // Load per-camera matrices/coeffs into shared memory.
-        alignas(Mat3) extern __shared__ char sharedMemory[];
-
-        // Alignment sanity checks for the shared-memory layout below. If any of these fail, the
-        // pointer-bump scheme could produce misaligned pointers and UB.
-        static_assert(alignof(Mat3) >= alignof(Vec3), "Mat3 alignment must cover Vec3 alignment");
-        static_assert(alignof(Mat3) >= alignof(ScalarType),
-                      "Mat3 alignment must cover ScalarType alignment");
-
-        // Keep a running pointer which we increment to assign shared memory blocks
-        uint8_t *pointer = reinterpret_cast<uint8_t *>(sharedMemory);
-
-        projectionMatsShared = reinterpret_cast<Mat3 *>(pointer);
-        pointer += C * sizeof(Mat3);
-
-        worldToCamRotMatsStartShared = reinterpret_cast<Mat3 *>(pointer);
-        pointer += C * sizeof(Mat3);
-
-        worldToCamRotMatsEndShared = reinterpret_cast<Mat3 *>(pointer);
-        pointer += C * sizeof(Mat3);
-
-        worldToCamTranslationStartShared = reinterpret_cast<Vec3 *>(pointer);
-        pointer += C * sizeof(Vec3);
-
-        worldToCamTranslationEndShared = reinterpret_cast<Vec3 *>(pointer);
-        pointer += C * sizeof(Vec3);
-
-        distortionCoeffsShared =
-            mNumDistortionCoeffs > 0 ? reinterpret_cast<ScalarType *>(pointer) : nullptr;
-        pointer += C * mNumDistortionCoeffs * sizeof(ScalarType);
-
-        copyMat3Accessor<ScalarType>(C, projectionMatsShared, mProjectionMatricesAcc);
-        copyMat3Accessor<ScalarType>(C, worldToCamRotMatsStartShared, mWorldToCamMatricesStartAcc);
-        copyMat3Accessor<ScalarType>(C, worldToCamRotMatsEndShared, mWorldToCamMatricesEndAcc);
-        copyWorldToCamTranslation<ScalarType>(
-            C, worldToCamTranslationStartShared, mWorldToCamMatricesStartAcc);
-        copyWorldToCamTranslation<ScalarType>(
-            C, worldToCamTranslationEndShared, mWorldToCamMatricesEndAcc);
-        if (mNumDistortionCoeffs > 0) {
-            copyDistortionCoeffs<ScalarType>(
-                C, mNumDistortionCoeffs, distortionCoeffsShared, mDistortionCoeffsAcc);
-        }
-    }
-
     /// @brief Project one gaussian for one camera.
     ///
     /// @param[in] idx Flattened index in \([0, C*N)\) mapping to (camId, gaussianId).
@@ -625,26 +301,6 @@ template <typename ScalarType> struct ProjectionForwardUT {
 
         const int64_t camId      = idx / N;
         const int64_t gaussianId = idx % N;
-
-        // Get camera parameters
-        const Mat3 &projectionMatrix     = projectionMatsShared[camId];
-        const Mat3 &worldToCamRotStart   = worldToCamRotMatsStartShared[camId];
-        const Mat3 &worldToCamRotEnd     = worldToCamRotMatsEndShared[camId];
-        const Vec3 &worldToCamTransStart = worldToCamTranslationStartShared[camId];
-        const Vec3 &worldToCamTransEnd   = worldToCamTranslationEndShared[camId];
-        const ScalarType *distortionCoeffs =
-            (mNumDistortionCoeffs > 0) ? &distortionCoeffsShared[camId * mNumDistortionCoeffs]
-                                       : nullptr;
-
-        // Define the camera model (projection and distortion) using the shared memory pointers
-        OpenCVCameraModel<ScalarType> camera(mCameraModel, projectionMatrix, distortionCoeffs);
-
-        // Define the world-to-camera transforms using the shared memory pointers at the start and
-        // end of the shutter period
-        const RigidTransform<ScalarType> worldToCamStart(worldToCamRotStart,
-                                                         worldToCamTransStart); // t=0.0
-        const RigidTransform<ScalarType> worldToCamEnd(worldToCamRotEnd,
-                                                       worldToCamTransEnd);     // t=1.0
 
         // Get Gaussian parameters
         const Vec3 meanWorldSpace(
@@ -662,13 +318,9 @@ template <typename ScalarType> struct ProjectionForwardUT {
         //   `WorldToPixelTransform::projectWorldPoint` which uses the start transform when NONE.
         // - Rolling shutter modes: use center pose (t=0.5) as a conservative/stable cull.
         {
-            const RigidTransform<ScalarType> shutter_pose =
-                (mRollingShutterType == RollingShutterType::NONE)
-                    ? worldToCamStart
-                    : RigidTransform<ScalarType>::interpolate(
-                          ScalarType(0.5), worldToCamStart, worldToCamEnd);
-            const Vec3 meanCam = shutter_pose.apply(meanWorldSpace);
-            if (meanCam[2] < mNearPlane || meanCam[2] > mFarPlane) {
+            const ScalarType tDepth = ScalarType(0.5);
+            const ScalarType depth  = mCameraOp.cameraDepthAtTime(camId, meanWorldSpace, tDepth);
+            if (depth < mNearPlane || depth > mFarPlane) {
                 mOutRadiiAcc[camId][gaussianId] = 0;
                 return;
             }
@@ -686,28 +338,21 @@ template <typename ScalarType> struct ProjectionForwardUT {
                                  weights_mean,
                                  weights_cov);
 
-        const WorldToPixelTransform<ScalarType> worldToPixel(camera,
-                                                             mRollingShutterType,
-                                                             mImageWidth,
-                                                             mImageHeight,
-                                                             ScalarType(mUTParams.inImageMargin),
-                                                             worldToCamStart,
-                                                             worldToCamEnd);
-
         // Project sigma points through camera model
         nanovdb::math::Vec2<ScalarType> projected_points[7];
         bool valid_any                = false;
         constexpr int kNumSigmaPoints = 7;
         for (int i = 0; i < kNumSigmaPoints; ++i) {
             Vec2 pix;
-            const ProjStatus status = worldToPixel.projectWorldPoint(sigma_points_world[i], pix);
+            const ProjectWorldToPixelStatus status = mCameraOp.projectWorldPointToPixel(
+                camId, sigma_points_world[i], ScalarType(mUTParams.inImageMargin), pix);
             // Hard reject if any sigma point is behind the camera since the projection will be
             // discontinuous.
-            if (status == ProjStatus::BehindCamera) {
+            if (status == ProjectWorldToPixelStatus::BehindCamera) {
                 mOutRadiiAcc[camId][gaussianId] = 0;
                 return;
             }
-            const bool valid_i  = (status == ProjStatus::InImage);
+            const bool valid_i  = (status == ProjectWorldToPixelStatus::InImage);
             projected_points[i] = pix;
             valid_any |= valid_i;
             if (mUTParams.requireAllSigmaPointsInImage && !valid_i) {
@@ -776,16 +421,7 @@ template <typename ScalarType> struct ProjectionForwardUT {
         mOutRadiiAcc[camId][gaussianId]      = int32_t(max(radius_x, radius_y));
         mOutMeans2dAcc[camId][gaussianId][0] = mean2d[0];
         mOutMeans2dAcc[camId][gaussianId][1] = mean2d[1];
-        // For depth we use the same shutter pose as the cull check above.
-        {
-            const ScalarType t_depth = (mRollingShutterType == RollingShutterType::NONE)
-                                           ? ScalarType(0.0)
-                                           : ScalarType(0.5);
-            const RigidTransform<ScalarType> shutter_pose =
-                RigidTransform<ScalarType>::interpolate(t_depth, worldToCamStart, worldToCamEnd);
-            const Vec3 meanCam               = shutter_pose.apply(meanWorldSpace);
-            mOutDepthsAcc[camId][gaussianId] = meanCam[2];
-        }
+        mOutDepthsAcc[camId][gaussianId] = mCameraOp.cameraDepthAtTime(camId, meanWorldSpace, ScalarType(0.5));
         mOutConicsAcc[camId][gaussianId][0] = covar2dInverse[0][0];
         mOutConicsAcc[camId][gaussianId][1] = covar2dInverse[0][1];
         mOutConicsAcc[camId][gaussianId][2] = covar2dInverse[1][1];
@@ -798,12 +434,13 @@ template <typename ScalarType> struct ProjectionForwardUT {
 /// @brief CUDA kernel wrapper for `ProjectionForwardUT`.
 ///
 /// Each thread processes multiple (camera, gaussian) pairs in a grid-stride loop.
-template <typename ScalarType>
+template <typename ScalarType, typename CameraOp>
 __global__ __launch_bounds__(256) void
 projectionForwardUTKernel(int64_t offset,
                           int64_t count,
-                          ProjectionForwardUT<ScalarType> projectionForward) {
-    projectionForward.loadCameraInfoIntoSharedMemory();
+                          ProjectionForwardUT<ScalarType, CameraOp> projectionForward) {
+    alignas(nanovdb::math::Mat3<ScalarType>) extern __shared__ char sharedMemory[];
+    projectionForward.mCameraOp.loadSharedMemory(sharedMemory);
     __syncthreads();
 
     // parallelize over C * N
@@ -907,37 +544,82 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
     using scalar_t = float;
 
     const size_t NUM_BLOCKS = GET_BLOCKS(C * N, 256);
-    // Orthographic is supported only for CameraModel::ORTHOGRAPHIC (undistorted).
-
-    const size_t SHARED_MEM_SIZE = C * (3 * sizeof(nanovdb::math::Mat3<scalar_t>) +
-                                        2 * sizeof(nanovdb::math::Vec3<scalar_t>)) +
-                                   C * distortionCoeffs.size(1) * sizeof(scalar_t);
-
-    ProjectionForwardUT<scalar_t> projectionForward(imageWidth,
-                                                    imageHeight,
-                                                    eps2d,
-                                                    nearPlane,
-                                                    farPlane,
-                                                    minRadius2d,
-                                                    rollingShutterType,
-                                                    utParams,
-                                                    cameraModel,
-                                                    calcCompensations,
-                                                    means,
-                                                    quats,
-                                                    logScales,
-                                                    worldToCamMatricesStart,
-                                                    worldToCamMatricesEnd,
-                                                    projectionMatrices,
-                                                    distortionCoeffs,
-                                                    outRadii,
-                                                    outMeans2d,
-                                                    outDepths,
-                                                    outConics,
-                                                    outCompensations);
-
-    projectionForwardUTKernel<scalar_t>
-        <<<NUM_BLOCKS, 256, SHARED_MEM_SIZE, stream>>>(0, C * N, projectionForward);
+    if (cameraModel == CameraModel::ORTHOGRAPHIC) {
+        OrthographicWithDistortionCameraOp<scalar_t> cameraOp(
+            worldToCamMatricesStart.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            worldToCamMatricesEnd.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            projectionMatrices.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            static_cast<uint32_t>(C),
+            static_cast<int32_t>(imageWidth),
+            static_cast<int32_t>(imageHeight),
+            0,
+            0,
+            rollingShutterType);
+        const size_t SHARED_MEM_SIZE = cameraOp.numSharedMemBytes();
+        ProjectionForwardUT<scalar_t, OrthographicWithDistortionCameraOp<scalar_t>> projectionForward(
+            imageWidth,
+            imageHeight,
+            eps2d,
+            nearPlane,
+            farPlane,
+            minRadius2d,
+            utParams,
+            cameraOp,
+            calcCompensations,
+            means,
+            quats,
+            logScales,
+            worldToCamMatricesStart,
+            worldToCamMatricesEnd,
+            projectionMatrices,
+            distortionCoeffs,
+            outRadii,
+            outMeans2d,
+            outDepths,
+            outConics,
+            outCompensations);
+        projectionForwardUTKernel<scalar_t, OrthographicWithDistortionCameraOp<scalar_t>>
+            <<<NUM_BLOCKS, 256, SHARED_MEM_SIZE, stream>>>(0, C * N, projectionForward);
+    } else {
+        PerspectiveWithDistortionCameraOp<scalar_t> cameraOp(
+            worldToCamMatricesStart.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            worldToCamMatricesEnd.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            projectionMatrices.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            distortionCoeffs.packed_accessor32<scalar_t, 2, torch::RestrictPtrTraits>(),
+            static_cast<uint32_t>(C),
+            distortionCoeffs.size(1),
+            static_cast<int32_t>(imageWidth),
+            static_cast<int32_t>(imageHeight),
+            0,
+            0,
+            rollingShutterType,
+            cameraModel);
+        const size_t SHARED_MEM_SIZE = cameraOp.numSharedMemBytes();
+        ProjectionForwardUT<scalar_t, PerspectiveWithDistortionCameraOp<scalar_t>> projectionForward(
+            imageWidth,
+            imageHeight,
+            eps2d,
+            nearPlane,
+            farPlane,
+            minRadius2d,
+            utParams,
+            cameraOp,
+            calcCompensations,
+            means,
+            quats,
+            logScales,
+            worldToCamMatricesStart,
+            worldToCamMatricesEnd,
+            projectionMatrices,
+            distortionCoeffs,
+            outRadii,
+            outMeans2d,
+            outDepths,
+            outConics,
+            outCompensations);
+        projectionForwardUTKernel<scalar_t, PerspectiveWithDistortionCameraOp<scalar_t>>
+            <<<NUM_BLOCKS, 256, SHARED_MEM_SIZE, stream>>>(0, C * N, projectionForward);
+    }
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
     return std::make_tuple(outRadii, outMeans2d, outDepths, outConics, outCompensations);
