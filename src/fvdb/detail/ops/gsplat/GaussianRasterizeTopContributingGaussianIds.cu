@@ -201,8 +201,8 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeTopContributingGa
 
         // (row, col) coordinates are relative to the specified image origin which may
         // be a crop so we need to add the origin to get the absolute pixel coordinates
-        const ScalarType px = col + commonArgs.mImageOriginW + ScalarType{0.5f};
-        const ScalarType py = row + commonArgs.mImageOriginH + ScalarType{0.5f};
+        const ScalarType px = col + commonArgs.mRenderOriginX + ScalarType{0.5f};
+        const ScalarType py = row + commonArgs.mRenderOriginY + ScalarType{0.5f};
 
         // collect and process batches of gaussians
         // each thread loads one gaussian at a time before rasterizing its

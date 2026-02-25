@@ -56,10 +56,7 @@ struct RasterizeBackwardArgs {
         const torch::Tensor &features,   // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
         const at::optional<torch::Tensor> &backgrounds, // [C, NUM_CHANNELS]
         const at::optional<torch::Tensor> &masks,       // [C, numTilesH, numTilesW]
-        const uint32_t imageWidth,
-        const uint32_t imageHeight,
-        const uint32_t imageOriginW,
-        const uint32_t imageOriginH,
+        const nanovdb::math::Vec4<uint32_t> &renderWindow,
         const uint32_t tileSize,
         const uint32_t blockOffset,
         const torch::Tensor &tileOffsets,          // [C, numTilesH, numTilesW]
@@ -85,10 +82,7 @@ struct RasterizeBackwardArgs {
                      features,
                      backgrounds,
                      masks,
-                     imageWidth,
-                     imageHeight,
-                     imageOriginW,
-                     imageOriginH,
+                     renderWindow,
                      tileSize,
                      blockOffset,
                      tileOffsets,
@@ -191,7 +185,7 @@ struct RasterizeBackwardArgs {
                               "Bad size for dLossDRenderedAlphas");
         } else {
             auto const tensorSize =
-                commonArgs.mNumCameras * commonArgs.mImageHeight * commonArgs.mImageWidth;
+                commonArgs.mNumCameras * commonArgs.mRenderHeight * commonArgs.mRenderWidth;
             TORCH_CHECK_VALUE(tensorSize == mRenderedAlphas.data().size(0),
                               "Bad size for renderedAlphas");
             TORCH_CHECK_VALUE(1 == mRenderedAlphas.data().size(1), "Bad size for renderedAlphas");
@@ -628,8 +622,8 @@ struct RasterizeBackwardArgs {
             reinterpret_cast<ScalarType *>(&sharedGaussians[blockSize]); // [blockSize]
 
         // To protect against out of bounds access, we clamp the coordinates to the image bounds
-        const auto rowClamped = min(row, commonArgs.mImageHeight - 1);
-        const auto colClamped = min(col, commonArgs.mImageWidth - 1);
+        const auto rowClamped = min(row, commonArgs.mRenderHeight - 1);
+        const auto colClamped = min(col, commonArgs.mRenderWidth - 1);
 
         const auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
 
@@ -722,9 +716,9 @@ struct RasterizeBackwardArgs {
                     // (row, col) coordinates are relative to the specified image origin which may
                     // be a crop so we need to add the origin to get the absolute pixel coordinates
                     const ScalarType px =
-                        col + ScalarType(commonArgs.mImageOriginW) + ScalarType{0.5};
+                        col + ScalarType(commonArgs.mRenderOriginX) + ScalarType{0.5};
                     const ScalarType py =
-                        row + ScalarType(commonArgs.mImageOriginH) + ScalarType{0.5};
+                        row + ScalarType(commonArgs.mRenderOriginY) + ScalarType{0.5};
 
                     bool valid = pixelIsActive && (batchEnd - t <= lastGaussianId);
 
@@ -886,10 +880,7 @@ callRasterizeBackwardWithTemplatedSharedChannels(
     const torch::Tensor &opacities,                 // [C, N] or [nnz]
     const at::optional<torch::Tensor> &backgrounds, // [C, 3]
     const at::optional<torch::Tensor> &masks,       // [C, numTilesH, numTilesW]
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
+    const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,          // [C, numTilesH, numTilesW]
     const torch::Tensor &tileGaussianIds,      // [totalIntersections]
@@ -929,8 +920,8 @@ callRasterizeBackwardWithTemplatedSharedChannels(
     // Get C from tileOffsets for dense mode
     // For sparse mode, C is unused, only used for output sizing for dense mode
     const uint32_t C = tileOffsetsAreSparse ? 0 : tileOffsets.size(0);
-    const uint32_t H = imageHeight;
-    const uint32_t W = imageWidth;
+    const uint32_t H = renderWindow[1];
+    const uint32_t W = renderWindow[0];
 
     auto [reshapedRenderedAlphas,
           reshapedLastGaussianIds,
@@ -955,10 +946,7 @@ callRasterizeBackwardWithTemplatedSharedChannels(
         features,
         backgrounds,
         masks,
-        imageWidth,
-        imageHeight,
-        imageOriginW,
-        imageOriginH,
+        renderWindow,
         tileSize,
         0,
         tileOffsets,
@@ -1009,10 +997,7 @@ callRasterizeBackwardWithCorrectSharedChannels(
     const torch::Tensor &opacities,                 // [C, N] or [nnz]
     const at::optional<torch::Tensor> &backgrounds, // [C, 3]
     const at::optional<torch::Tensor> &masks,       // [C, numTilesH, numTilesW]
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
+    const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,          // [C, numTilesH, numTilesW]
     const torch::Tensor &tileGaussianIds,      // [totalIntersections]
@@ -1041,10 +1026,7 @@ callRasterizeBackwardWithCorrectSharedChannels(
                 opacities,
                 backgrounds,
                 masks,
-                imageWidth,
-                imageHeight,
-                imageOriginW,
-                imageOriginH,
+                renderWindow,
                 tileSize,
                 tileOffsets,
                 tileGaussianIds,
@@ -1069,10 +1051,7 @@ callRasterizeBackwardWithCorrectSharedChannels(
                 opacities,
                 backgrounds,
                 masks,
-                imageWidth,
-                imageHeight,
-                imageOriginW,
-                imageOriginH,
+                renderWindow,
                 tileSize,
                 tileOffsets,
                 tileGaussianIds,
@@ -1097,10 +1076,7 @@ callRasterizeBackwardWithCorrectSharedChannels(
                 opacities,
                 backgrounds,
                 masks,
-                imageWidth,
-                imageHeight,
-                imageOriginW,
-                imageOriginH,
+                renderWindow,
                 tileSize,
                 tileOffsets,
                 tileGaussianIds,
@@ -1125,10 +1101,7 @@ callRasterizeBackwardWithCorrectSharedChannels(
                 opacities,
                 backgrounds,
                 masks,
-                imageWidth,
-                imageHeight,
-                imageOriginW,
-                imageOriginH,
+                renderWindow,
                 tileSize,
                 tileOffsets,
                 tileGaussianIds,
@@ -1177,10 +1150,7 @@ callRasterizeBackwardPrivateUse1(
     const torch::Tensor &opacities,                 // [C, N] or [nnz]
     const at::optional<torch::Tensor> &backgrounds, // [C, 3]
     const at::optional<torch::Tensor> &masks,       // [C, numTilesH, numTilesW]
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
+    const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,          // [C, numTilesH, numTilesW]
     const torch::Tensor &tileGaussianIds,      // [totalIntersections]
@@ -1219,8 +1189,8 @@ callRasterizeBackwardPrivateUse1(
     // Get C from tileOffsets for dense mode
     // For sparse mode, C is unused, only used for output sizing for dense mode
     const uint32_t C = tileOffsetsAreSparse ? 0 : tileOffsets.size(0);
-    const uint32_t H = imageHeight;
-    const uint32_t W = imageWidth;
+    const uint32_t H = renderWindow[1];
+    const uint32_t W = renderWindow[0];
 
     auto [reshapedRenderedAlphas,
           reshapedLastGaussianIds,
@@ -1243,8 +1213,8 @@ callRasterizeBackwardPrivateUse1(
     if (activeTiles.has_value()) {
         tileCount = activeTiles.value().size(0);
     } else {
-        const uint32_t tileExtentH = (imageHeight + tileSize - 1) / tileSize;
-        const uint32_t tileExtentW = (imageWidth + tileSize - 1) / tileSize;
+        const uint32_t tileExtentH = (renderWindow[1] + tileSize - 1) / tileSize;
+        const uint32_t tileExtentW = (renderWindow[0] + tileSize - 1) / tileSize;
         tileCount                  = C * tileExtentH * tileExtentW;
     }
 
@@ -1265,10 +1235,7 @@ callRasterizeBackwardPrivateUse1(
                 features,
                 backgrounds,
                 masks,
-                imageWidth,
-                imageHeight,
-                imageOriginW,
-                imageOriginH,
+                renderWindow,
                 tileSize,
                 deviceTileOffset,
                 tileOffsets,
@@ -1388,22 +1355,18 @@ dispatchGaussianRasterizeBackward<torch::kCUDA>(
     const torch::Tensor &conics,    // [C, N, 3]
     const torch::Tensor &features,  // [C, N, 3]
     const torch::Tensor &opacities, // [N]
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
+    const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,            // [C, numTilesH, numTilesW]
     const torch::Tensor &tileGaussianIds,        // [totalIntersections]
-    const torch::Tensor &renderedAlphas,         // [C, imageHeight, imageWidth, 1]
-    const torch::Tensor &lastGaussianIds,        // [C, imageHeight, imageWidth]
-    const torch::Tensor &dLossDRenderedFeatures, // [C, imageHeight, imageWidth, 3]
-    const torch::Tensor &dLossDRenderedAlphas,   // [C, imageHeight, imageWidth, 1]
+    const torch::Tensor &renderedAlphas,         // [C, renderHeight, renderWidth, 1]
+    const torch::Tensor &lastGaussianIds,        // [C, renderHeight, renderWidth]
+    const torch::Tensor &dLossDRenderedFeatures, // [C, renderHeight, renderWidth, 3]
+    const torch::Tensor &dLossDRenderedAlphas,   // [C, renderHeight, renderWidth, 1]
     const bool absGrad,
     const int64_t numSharedChannelsOverride,
     const at::optional<torch::Tensor> &backgrounds) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means2d));
-
     uint32_t colorDim   = features.size(-1);
     const bool isPacked = means2d.dim() == 2;
 
@@ -1419,10 +1382,7 @@ dispatchGaussianRasterizeBackward<torch::kCUDA>(
                 opacities,                                                          \
                 backgrounds,                                                        \
                 masks,                                                              \
-                imageWidth,                                                         \
-                imageHeight,                                                        \
-                imageOriginW,                                                       \
-                imageOriginH,                                                       \
+                renderWindow,                                                       \
                 tileSize,                                                           \
                 tileOffsets,                                                        \
                 tileGaussianIds,                                                    \
@@ -1440,10 +1400,7 @@ dispatchGaussianRasterizeBackward<torch::kCUDA>(
                 opacities,                                                          \
                 backgrounds,                                                        \
                 masks,                                                              \
-                imageWidth,                                                         \
-                imageHeight,                                                        \
-                imageOriginW,                                                       \
-                imageOriginH,                                                       \
+                renderWindow,                                                       \
                 tileSize,                                                           \
                 tileOffsets,                                                        \
                 tileGaussianIds,                                                    \
@@ -1490,23 +1447,19 @@ dispatchGaussianRasterizeBackward<torch::kPrivateUse1>(
     const torch::Tensor &conics,    // [C, N, 3]
     const torch::Tensor &features,  // [C, N, 3]
     const torch::Tensor &opacities, // [N]
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
+    const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,            // [C, numTilesH, numTilesW]
     const torch::Tensor &tileGaussianIds,        // [totalIntersections]
-    const torch::Tensor &renderedAlphas,         // [C, imageHeight, imageWidth, 1]
-    const torch::Tensor &lastGaussianIds,        // [C, imageHeight, imageWidth]
-    const torch::Tensor &dLossDRenderedFeatures, // [C, imageHeight, imageWidth, 3]
-    const torch::Tensor &dLossDRenderedAlphas,   // [C, imageHeight, imageWidth, 1]
+    const torch::Tensor &renderedAlphas,         // [C, renderHeight, renderWidth, 1]
+    const torch::Tensor &lastGaussianIds,        // [C, renderHeight, renderWidth]
+    const torch::Tensor &dLossDRenderedFeatures, // [C, renderHeight, renderWidth, 3]
+    const torch::Tensor &dLossDRenderedAlphas,   // [C, renderHeight, renderWidth, 1]
     const bool absGrad,
     const int64_t numSharedChannelsOverride,
     const at::optional<torch::Tensor> &backgrounds) {
     TORCH_CHECK(numSharedChannelsOverride == -1,
                 "PrivateUse1 implementation does not support shared channels override");
-
     uint32_t colorDim   = features.size(-1);
     const bool isPacked = means2d.dim() == 2;
 
@@ -1521,10 +1474,7 @@ dispatchGaussianRasterizeBackward<torch::kPrivateUse1>(
                                                                        opacities,               \
                                                                        backgrounds,             \
                                                                        masks,                   \
-                                                                       imageWidth,              \
-                                                                       imageHeight,             \
-                                                                       imageOriginW,            \
-                                                                       imageOriginH,            \
+                                                                       renderWindow,            \
                                                                        tileSize,                \
                                                                        tileOffsets,             \
                                                                        tileGaussianIds,         \
@@ -1540,10 +1490,7 @@ dispatchGaussianRasterizeBackward<torch::kPrivateUse1>(
                                                                         opacities,              \
                                                                         backgrounds,            \
                                                                         masks,                  \
-                                                                        imageWidth,             \
-                                                                        imageHeight,            \
-                                                                        imageOriginW,           \
-                                                                        imageOriginH,           \
+                                                                        renderWindow,           \
                                                                         tileSize,               \
                                                                         tileOffsets,            \
                                                                         tileGaussianIds,        \
@@ -1589,17 +1536,14 @@ dispatchGaussianRasterizeBackward<torch::kCPU>(
     const torch::Tensor &conics,    // [C, N, 3]
     const torch::Tensor &features,  // [C, N, 3]
     const torch::Tensor &opacities, // [N]
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
+    const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,            // [C, numTilesH, numTilesW]
     const torch::Tensor &tileGaussianIds,        // [totalIntersections]
-    const torch::Tensor &renderedAlphas,         // [C, imageHeight, imageWidth, 1]
-    const torch::Tensor &lastGaussianIds,        // [C, imageHeight, imageWidth]
-    const torch::Tensor &dLossDRenderedFeatures, // [C, imageHeight, imageWidth, 3]
-    const torch::Tensor &dLossDRenderedAlphas,   // [C, imageHeight, imageWidth, 1]
+    const torch::Tensor &renderedAlphas,         // [C, renderHeight, renderWidth, 1]
+    const torch::Tensor &lastGaussianIds,        // [C, renderHeight, renderWidth]
+    const torch::Tensor &dLossDRenderedFeatures, // [C, renderHeight, renderWidth, 3]
+    const torch::Tensor &dLossDRenderedAlphas,   // [C, renderHeight, renderWidth, 1]
     const bool absGrad,
     const int64_t numSharedChannelsOverride,
     const at::optional<torch::Tensor> &backgrounds) {
@@ -1614,10 +1558,7 @@ dispatchGaussianSparseRasterizeBackward<torch::kCUDA>(
     const torch::Tensor &conics,              // [C, N, 3]
     const torch::Tensor &features,            // [C, N, D]
     const torch::Tensor &opacities,           // [N]
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
+    const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
     const torch::Tensor &tileGaussianIds,             // [n_isects]
@@ -1647,10 +1588,7 @@ dispatchGaussianSparseRasterizeBackward<torch::kCUDA>(
                 opacities,                                                          \
                 backgrounds,                                                        \
                 masks,                                                              \
-                imageWidth,                                                         \
-                imageHeight,                                                        \
-                imageOriginW,                                                       \
-                imageOriginH,                                                       \
+                renderWindow,                                                       \
                 tileSize,                                                           \
                 tileOffsets,                                                        \
                 tileGaussianIds,                                                    \
@@ -1672,10 +1610,7 @@ dispatchGaussianSparseRasterizeBackward<torch::kCUDA>(
                 opacities,                                                          \
                 backgrounds,                                                        \
                 masks,                                                              \
-                imageWidth,                                                         \
-                imageHeight,                                                        \
-                imageOriginW,                                                       \
-                imageOriginH,                                                       \
+                renderWindow,                                                       \
                 tileSize,                                                           \
                 tileOffsets,                                                        \
                 tileGaussianIds,                                                    \
@@ -1727,10 +1662,7 @@ dispatchGaussianSparseRasterizeBackward<torch::kPrivateUse1>(
     const torch::Tensor &conics,              // [C, N, 3]
     const torch::Tensor &features,            // [C, N, D]
     const torch::Tensor &opacities,           // [N]
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
+    const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
     const torch::Tensor &tileGaussianIds,             // [n_isects]
@@ -1756,10 +1688,7 @@ dispatchGaussianSparseRasterizeBackward<torch::kCPU>(
     const torch::Tensor &conics,              // [C, N, 3]
     const torch::Tensor &features,            // [C, N, D]
     const torch::Tensor &opacities,           // [N]
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
+    const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
     const torch::Tensor &tileGaussianIds,             // [n_isects]
