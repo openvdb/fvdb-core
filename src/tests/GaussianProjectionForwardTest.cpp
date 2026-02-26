@@ -117,13 +117,13 @@ TEST_F(GaussianProjectionForwardTestFixture, DISABLED_GenerateOutputData) {
 
     {
         // Perspective projection
-        const auto projectionModel =
-            fvdb::detail::ops::makeClassicProjectionModel(viewmats, Ks, false);
         const auto [radii, means2d, depths, conics, compensations] =
             fvdb::detail::ops::dispatchGaussianProjectionForward<torch::kCUDA>(means,
                                                                                quats,
                                                                                torch::log(scales),
-                                                                               *projectionModel,
+                                                                               viewmats,
+                                                                               Ks,
+                                                                               false,
                                                                                imageWidth,
                                                                                imageHeight,
                                                                                0.3,
@@ -141,13 +141,13 @@ TEST_F(GaussianProjectionForwardTestFixture, DISABLED_GenerateOutputData) {
 
     {
         // Orthographic projection
-        const auto projectionModel =
-            fvdb::detail::ops::makeClassicProjectionModel(viewmats, Ks, true);
         const auto [radii, means2d, depths, conics, compensations] =
             fvdb::detail::ops::dispatchGaussianProjectionForward<torch::kCUDA>(means,
                                                                                quats,
                                                                                torch::log(scales),
-                                                                               *projectionModel,
+                                                                               viewmats,
+                                                                               Ks,
+                                                                               true,
                                                                                imageWidth,
                                                                                imageHeight,
                                                                                0.3,
@@ -167,13 +167,13 @@ TEST_F(GaussianProjectionForwardTestFixture, DISABLED_GenerateOutputData) {
 TEST_F(GaussianProjectionForwardTestFixture, TestPerspectiveProjection) {
     loadTestData("projection_forward_inputs.pt", "projection_persp_forward_outputs.pt");
 
-    const auto projectionModel =
-        fvdb::detail::ops::makeClassicProjectionModel(viewmats, Ks, false);
     const auto [radii, means2d, depths, conics, compensations] =
         fvdb::detail::ops::dispatchGaussianProjectionForward<torch::kCUDA>(means,
                                                                            quats,
                                                                            torch::log(scales),
-                                                                           *projectionModel,
+                                                                           viewmats,
+                                                                           Ks,
+                                                                           false,
                                                                            imageWidth,
                                                                            imageHeight,
                                                                            0.3,
@@ -204,13 +204,13 @@ TEST_F(GaussianProjectionForwardTestFixture, TestPerspectiveProjection) {
 TEST_F(GaussianProjectionForwardTestFixture, TestOrthographicProjection) {
     loadTestData("projection_forward_inputs.pt", "projection_ortho_forward_outputs.pt");
 
-    const auto projectionModel =
-        fvdb::detail::ops::makeClassicProjectionModel(viewmats, Ks, true);
     const auto [radii, means2d, depths, conics, compensations] =
         fvdb::detail::ops::dispatchGaussianProjectionForward<torch::kCUDA>(means,
                                                                            quats,
                                                                            torch::log(scales),
-                                                                           *projectionModel,
+                                                                           viewmats,
+                                                                           Ks,
+                                                                           true,
                                                                            imageWidth,
                                                                            imageHeight,
                                                                            0.3,

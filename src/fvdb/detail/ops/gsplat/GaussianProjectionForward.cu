@@ -3,6 +3,7 @@
 //
 #include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionUtils.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianProjection.h>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
@@ -189,7 +190,9 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
     const torch::Tensor &means,              // [N, 3]
     const torch::Tensor &quats,              // [N, 4]
     const torch::Tensor &logScales,          // [N, 3]
-    const GaussianProjectionModel &projectionModel,
+    const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
+    const torch::Tensor &projectionMatrices, // [C, 3, 3]
+    const bool ortho,
     const int64_t imageWidth,
     const int64_t imageHeight,
     const float eps2d,
@@ -198,10 +201,6 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
     const float radiusClip,
     const bool calcCompensations) {
     FVDB_FUNC_RANGE();
-    const auto &projectionConfig     = projectionModel.config();
-    const torch::Tensor &worldToCamMatrices = projectionConfig.worldToCamMatricesStart;
-    const torch::Tensor &projectionMatrices = projectionConfig.projectionMatrices;
-    const bool ortho                 = projectionModel.isOrthographic();
 
     TORCH_CHECK_VALUE(means.is_cuda(), "means must be a CUDA tensor");
     TORCH_CHECK_VALUE(quats.is_cuda(), "quats must be a CUDA tensor");
@@ -300,7 +299,9 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
     const torch::Tensor &means,              // [N, 3]
     const torch::Tensor &quats,              // [N, 4]
     const torch::Tensor &logScales,          // [N, 3]
-    const GaussianProjectionModel &projectionModel,
+    const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
+    const torch::Tensor &projectionMatrices, // [C, 3, 3]
+    const bool ortho,
     const int64_t imageWidth,
     const int64_t imageHeight,
     const float eps2d,
@@ -308,10 +309,6 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
     const float farPlane,
     const float radiusClip,
     const bool calcCompensations) {
-    const auto &projectionConfig     = projectionModel.config();
-    const torch::Tensor &worldToCamMatrices = projectionConfig.worldToCamMatricesStart;
-    const torch::Tensor &projectionMatrices = projectionConfig.projectionMatrices;
-    const bool ortho                 = projectionModel.isOrthographic();
     TORCH_CHECK_VALUE(means.is_privateuseone(), "means must be a PrivateUse1 tensor");
     TORCH_CHECK_VALUE(quats.is_privateuseone(), "quats must be a PrivateUse1 tensor");
     TORCH_CHECK_VALUE(logScales.is_privateuseone(), "logScales must be a PrivateUse1 tensor");
@@ -417,7 +414,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 dispatchGaussianProjectionForward<torch::kCPU>(const torch::Tensor &means,              // [N, 3]
                                                const torch::Tensor &quats,              // [N, 4]
                                                const torch::Tensor &logScales,          // [N, 3]
-                                               const GaussianProjectionModel &projectionModel,
+                                               const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
+                                               const torch::Tensor &projectionMatrices, // [C, 3, 3]
+                                               const bool ortho,
                                                const int64_t imageWidth,
                                                const int64_t imageHeight,
                                                const float eps2d,

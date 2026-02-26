@@ -39,7 +39,7 @@ dispatchGaussianRasterizeFromWorld3DGSBackward(
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]
     const torch::Tensor &distortionCoeffs,        // [C, K] (K=0 or 12)
     const RollingShutterType rollingShutterType,
-    const CameraModel cameraModel,
+    const DistortionModel cameraModel,
     // Render settings
     const RenderSettings &settings,
     // Intersections

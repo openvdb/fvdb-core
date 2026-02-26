@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianMacros.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionBackward.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionUtils.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianProjection.h>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
@@ -247,7 +248,9 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
     const torch::Tensor &means,                       // [N, 3]
     const torch::Tensor &quats,                       // [N, 4]
     const torch::Tensor &logScales,                   // [N, 3]
-    const GaussianProjectionModel &projectionModel,
+    const torch::Tensor &worldToCamMatrices,          // [C, 4, 4]
+    const torch::Tensor &projectionMatrices,          // [C, 3, 3]
+    const bool ortho,
     const at::optional<torch::Tensor> &compensations, // [N, 6] optional
     const uint32_t imageWidth,
     const uint32_t imageHeight,
@@ -266,10 +269,6 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
     at::optional<torch::Tensor> outGradientStepCounts                // [N]
 ) {
     FVDB_FUNC_RANGE();
-    const auto &projectionConfig = projectionModel.config();
-    const torch::Tensor &worldToCamMatrices = projectionConfig.worldToCamMatricesStart;
-    const torch::Tensor &projectionMatrices = projectionConfig.projectionMatrices;
-    const bool ortho = projectionModel.isOrthographic();
     // These are supported by the underlying kernel, but they are not exposed
     const at::optional<torch::Tensor> &covars = std::nullopt;
     // const at::optional<torch::Tensor> &compensations = std::nullopt;
@@ -441,7 +440,9 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
     const torch::Tensor &means,                       // [N, 3]
     const torch::Tensor &quats,                       // [N, 4]
     const torch::Tensor &logScales,                   // [N, 3]
-    const GaussianProjectionModel &projectionModel,
+    const torch::Tensor &worldToCamMatrices,          // [C, 4, 4]
+    const torch::Tensor &projectionMatrices,          // [C, 3, 3]
+    const bool ortho,
     const at::optional<torch::Tensor> &compensations, // [N, 6] optional
     const uint32_t imageWidth,
     const uint32_t imageHeight,
@@ -459,10 +460,6 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
     at::optional<torch::Tensor> outNormalizedMaxRadiiAccum,
     at::optional<torch::Tensor> outGradientStepCounts) {
     FVDB_FUNC_RANGE();
-    const auto &projectionConfig = projectionModel.config();
-    const torch::Tensor &worldToCamMatrices = projectionConfig.worldToCamMatricesStart;
-    const torch::Tensor &projectionMatrices = projectionConfig.projectionMatrices;
-    const bool ortho = projectionModel.isOrthographic();
     // These are supported by the underlying kernel, but they are not exposed
     const at::optional<torch::Tensor> &covars = std::nullopt;
     // const at::optional<torch::Tensor> &compensations = std::nullopt;
@@ -643,7 +640,9 @@ dispatchGaussianProjectionBackward<torch::kCPU>(
     const torch::Tensor &means,                       // [N, 3]
     const torch::Tensor &quats,                       // [N, 4]
     const torch::Tensor &logScales,                   // [N, 3]
-    const GaussianProjectionModel &projectionModel,
+    const torch::Tensor &worldToCamMatrices,          // [C, 4, 4]
+    const torch::Tensor &projectionMatrices,          // [C, 3, 3]
+    const bool ortho,
     const at::optional<torch::Tensor> &compensations, // [N, 6] optional
     const uint32_t imageWidth,
     const uint32_t imageHeight,

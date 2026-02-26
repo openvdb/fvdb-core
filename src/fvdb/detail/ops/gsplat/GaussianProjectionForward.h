@@ -54,7 +54,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 dispatchGaussianProjectionForward(const torch::Tensor &means,              // [N, 3]
                                   const torch::Tensor &quats,              // [N, 4]
                                   const torch::Tensor &scales,             // [N, 3]
-                                  const GaussianProjectionModel &projectionModel,
+                                  const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
+                                  const torch::Tensor &projectionMatrices, // [C, 3, 3]
+                                  const bool ortho,
                                   const int64_t imageWidth,
                                   const int64_t imageHeight,
                                   const float eps2d,

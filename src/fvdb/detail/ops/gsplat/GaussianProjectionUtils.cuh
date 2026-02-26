@@ -6,10 +6,8 @@
 
 #include <fvdb/detail/ops/gsplat/GaussianCameraAccessorCopy.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianCameraMatrixUtils.cuh>
-#include <fvdb/detail/ops/gsplat/GaussianOpenCVDistortion.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjection.h>
 #include <fvdb/detail/ops/gsplat/GaussianRigidTransform.cuh>
-#include <fvdb/detail/ops/gsplat/GaussianRollingShutter.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 
@@ -476,7 +474,7 @@ template <typename T> struct PerspectiveWithDistortionCameraOp {
                                       int32_t imageOriginW,
                                       int32_t imageOriginH,
                                       RollingShutterType rollingShutterType,
-                                      CameraModel cameraModel)
+                                      DistortionModel cameraModel)
         : worldToCamStartAcc(worldToCamStartAcc),
           worldToCamEndAcc(worldToCamEndAcc),
           projectionMatricesAcc(projectionMatricesAcc),
@@ -502,7 +500,7 @@ template <typename T> struct PerspectiveWithDistortionCameraOp {
     int32_t imageOriginW = 0;
     int32_t imageOriginH = 0;
     RollingShutterType rollingShutterType = RollingShutterType::NONE;
-    CameraModel cameraModel = CameraModel::PINHOLE;
+    DistortionModel cameraModel = DistortionModel::PINHOLE;
 
     Mat3 *__restrict__ worldToCamStartRotShared = nullptr; // [C,3,3], optional
     Vec3 *__restrict__ worldToCamStartTransShared = nullptr; // [C,3], optional
@@ -580,7 +578,7 @@ template <typename T> struct PerspectiveWithDistortionCameraOp {
             }
             const nanovdb::math::Vec2<T> pNormalized(pointCam[0] / pointCam[2], pointCam[1] / pointCam[2]);
             const nanovdb::math::Vec2<T> pDistorted =
-                applyOpenCVDistortionPacked(cameraModel, pNormalized, distCoeffs, numDistCoeffs);
+                applyOpenCVDistortion(cameraModel, pNormalized, distCoeffs, numDistCoeffs);
             const T fx = K[0][0];
             const T fy = K[1][1];
             const T cx = K[0][2];
@@ -620,7 +618,7 @@ template <typename T> struct PerspectiveWithDistortionCameraOp {
             (statusStart == ProjectWorldToPixelStatus::InImage) ? pixStart : pixEnd;
         constexpr int kIters = 6;
         for (int it = 0; it < kIters; ++it) {
-            const T tRs = rollingShutterTimeFromPixel<T>(
+            const T tRs = rollingShutterTimeFromPixel(
                 rollingShutterType, pixPrev[0], pixPrev[1], imageWidth, imageHeight);
             const RigidTransform<T> worldToCam =
                 RigidTransform<T>::interpolate(tRs, worldToCamStart, worldToCamEnd);
@@ -682,6 +680,103 @@ template <typename T> struct PerspectiveWithDistortionCameraOp {
         return nanovdb::math::Vec3<T>(T(0), T(0), T(0));
     }
 
+    inline static __device__ T
+    clamp01(const T x) {
+        return (x < T(0)) ? T(0) : ((x > T(1)) ? T(1) : x);
+    }
+
+    inline static __device__ T
+    rollingShutterTimeFromPixel(const RollingShutterType rollingShutterType,
+                                const T px,
+                                const T py,
+                                const int64_t imageWidth,
+                                const int64_t imageHeight) {
+        if (rollingShutterType == RollingShutterType::NONE) {
+            return T(0);
+        }
+        T u = T(0);
+        if (rollingShutterType == RollingShutterType::VERTICAL) {
+            const T denom = (imageHeight > 1) ? T(imageHeight - 1) : T(1);
+            u             = ::cuda::std::floor(py) / denom;
+        } else if (rollingShutterType == RollingShutterType::HORIZONTAL) {
+            const T denom = (imageWidth > 1) ? T(imageWidth - 1) : T(1);
+            u             = ::cuda::std::floor(px) / denom;
+        }
+        return clamp01(u);
+    }
+
+    inline static __device__ nanovdb::math::Vec2<T>
+    applyOpenCVDistortion(const DistortionModel model,
+                          const nanovdb::math::Vec2<T> &pNormalized,
+                          const T *distCoeffs,
+                          const int64_t numCoeffs) {
+        if (model == DistortionModel::PINHOLE || model == DistortionModel::ORTHOGRAPHIC ||
+            numCoeffs == 0 || distCoeffs == nullptr) {
+            return pNormalized;
+        }
+        const T x  = pNormalized[0];
+        const T y  = pNormalized[1];
+        const T x2 = x * x;
+        const T y2 = y * y;
+        const T xy = x * y;
+        const T r2 = x2 + y2;
+        const T r4 = r2 * r2;
+        const T r6 = r4 * r2;
+        const T k1 = distCoeffs[0];
+        const T k2 = distCoeffs[1];
+        const T k3 = distCoeffs[2];
+        const T k4 = distCoeffs[3];
+        const T k5 = distCoeffs[4];
+        const T k6 = distCoeffs[5];
+        const T p1 = distCoeffs[6];
+        const T p2 = distCoeffs[7];
+        const T s1 = distCoeffs[8];
+        const T s2 = distCoeffs[9];
+        const T s3 = distCoeffs[10];
+        const T s4 = distCoeffs[11];
+        T radial   = T(1);
+        if (model == DistortionModel::OPENCV_RATIONAL_8 ||
+            model == DistortionModel::OPENCV_THIN_PRISM_12) {
+            const T num = T(1) + r2 * (k1 + r2 * (k2 + r2 * k3));
+            const T den = T(1) + r2 * (k4 + r2 * (k5 + r2 * k6));
+            radial      = (den != T(0)) ? (num / den) : T(0);
+        } else if (model == DistortionModel::OPENCV_RADTAN_5 ||
+                   model == DistortionModel::OPENCV_RADTAN_THIN_PRISM_9) {
+            radial = T(1) + k1 * r2 + k2 * r4 + k3 * r6;
+        }
+        T xDist = x * radial;
+        T yDist = y * radial;
+        xDist += T(2) * p1 * xy + p2 * (r2 + T(2) * x2);
+        yDist += p1 * (r2 + T(2) * y2) + T(2) * p2 * xy;
+        if (model == DistortionModel::OPENCV_THIN_PRISM_12 ||
+            model == DistortionModel::OPENCV_RADTAN_THIN_PRISM_9) {
+            xDist += s1 * r2 + s2 * r4;
+            yDist += s3 * r2 + s4 * r4;
+        }
+        return nanovdb::math::Vec2<T>(xDist, yDist);
+    }
+
+    inline static __device__ nanovdb::math::Vec2<T>
+    undistortOpenCV(const DistortionModel model,
+                    const nanovdb::math::Vec2<T> &pDistorted,
+                    const T *distCoeffs,
+                    const int64_t numCoeffs,
+                    const int iters = 8) {
+        if (model == DistortionModel::PINHOLE || model == DistortionModel::ORTHOGRAPHIC ||
+            numCoeffs == 0 || distCoeffs == nullptr) {
+            return pDistorted;
+        }
+        nanovdb::math::Vec2<T> x = pDistorted;
+        for (int it = 0; it < iters; ++it) {
+            const nanovdb::math::Vec2<T> xDist =
+                applyOpenCVDistortion(model, x, distCoeffs, numCoeffs);
+            const nanovdb::math::Vec2<T> err = xDist - pDistorted;
+            x[0] -= err[0];
+            x[1] -= err[1];
+        }
+        return x;
+    }
+
   public:
     inline __device__ nanovdb::math::Ray<T>
     projectToRay(const int64_t cid, const uint32_t row, const uint32_t col) const {
@@ -691,7 +786,7 @@ template <typename T> struct PerspectiveWithDistortionCameraOp {
         const T px = T(col) + T(imageOriginW) + T(0.5);
         const T py = T(row) + T(imageOriginH) + T(0.5);
 
-        const T u = rollingShutterTimeFromPixel<T>(rollingShutterType, px, py, imageWidth, imageHeight);
+        const T u = rollingShutterTimeFromPixel(rollingShutterType, px, py, imageWidth, imageHeight);
 
         nanovdb::math::Mat3<T> R_wc;
         nanovdb::math::Vec3<T> t_wc;
@@ -714,7 +809,7 @@ template <typename T> struct PerspectiveWithDistortionCameraOp {
         const T cy = K[1][2];
         const nanovdb::math::Vec2<T> p_distorted((px - cx) / fx, (py - cy) / fy);
         const nanovdb::math::Vec2<T> p =
-            undistortOpenCVPackedFixedPoint(cameraModel, p_distorted, distCoeffs, numDistCoeffs);
+            undistortOpenCV(cameraModel, p_distorted, distCoeffs, numDistCoeffs);
 
         const nanovdb::math::Vec3<T> d_cam = normalizeSafe(nanovdb::math::Vec3<T>(p[0], p[1], T(1)));
         const nanovdb::math::Vec3<T> origin_w =
@@ -864,7 +959,7 @@ template <typename T> struct OrthographicWithDistortionCameraOp {
             (statusStart == ProjectWorldToPixelStatus::InImage) ? pixStart : pixEnd;
         constexpr int kIters = 6;
         for (int it = 0; it < kIters; ++it) {
-            const T tRs = rollingShutterTimeFromPixel<T>(
+            const T tRs = rollingShutterTimeFromPixel(
                 rollingShutterType, pixPrev[0], pixPrev[1], imageWidth, imageHeight);
             const RigidTransform<T> worldToCam =
                 RigidTransform<T>::interpolate(tRs, worldToCamStart, worldToCamEnd);
@@ -915,6 +1010,31 @@ template <typename T> struct OrthographicWithDistortionCameraOp {
         return nanovdb::math::Vec3<T>(T(0), T(0), T(0));
     }
 
+    inline static __device__ T
+    clamp01(const T x) {
+        return (x < T(0)) ? T(0) : ((x > T(1)) ? T(1) : x);
+    }
+
+    inline static __device__ T
+    rollingShutterTimeFromPixel(const RollingShutterType rollingShutterType,
+                                const T px,
+                                const T py,
+                                const int64_t imageWidth,
+                                const int64_t imageHeight) {
+        if (rollingShutterType == RollingShutterType::NONE) {
+            return T(0);
+        }
+        T u = T(0);
+        if (rollingShutterType == RollingShutterType::VERTICAL) {
+            const T denom = (imageHeight > 1) ? T(imageHeight - 1) : T(1);
+            u             = ::cuda::std::floor(py) / denom;
+        } else if (rollingShutterType == RollingShutterType::HORIZONTAL) {
+            const T denom = (imageWidth > 1) ? T(imageWidth - 1) : T(1);
+            u             = ::cuda::std::floor(px) / denom;
+        }
+        return clamp01(u);
+    }
+
   public:
     inline __device__ nanovdb::math::Ray<T>
     projectToRay(const int64_t cid, const uint32_t row, const uint32_t col) const {
@@ -923,7 +1043,7 @@ template <typename T> struct OrthographicWithDistortionCameraOp {
         const T px = T(col) + T(imageOriginW) + T(0.5);
         const T py = T(row) + T(imageOriginH) + T(0.5);
 
-        const T u = rollingShutterTimeFromPixel<T>(rollingShutterType, px, py, imageWidth, imageHeight);
+        const T u = rollingShutterTimeFromPixel(rollingShutterType, px, py, imageWidth, imageHeight);
 
         nanovdb::math::Mat3<T> R_wc;
         nanovdb::math::Vec3<T> t_wc;

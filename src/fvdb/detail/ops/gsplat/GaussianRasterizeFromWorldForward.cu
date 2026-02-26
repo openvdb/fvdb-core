@@ -294,7 +294,7 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
     const torch::Tensor &projectionMatrices,
     const torch::Tensor &distortionCoeffs,
     const RollingShutterType rollingShutterType,
-    const CameraModel cameraModel,
+    const DistortionModel cameraModel,
     const RenderSettings &settings,
     const torch::Tensor &tileOffsets,
     const torch::Tensor &tileGaussianIds,
@@ -349,12 +349,12 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
     const int64_t numDistCoeffs = distortionCoeffs.size(1);
     TORCH_CHECK_VALUE(distortionCoeffs.dim() == 2 && distortionCoeffs.size(0) == C,
                       "distortionCoeffs must have shape [C,K]");
-    if (cameraModel == CameraModel::OPENCV_RADTAN_5 ||
-        cameraModel == CameraModel::OPENCV_RATIONAL_8 ||
-        cameraModel == CameraModel::OPENCV_RADTAN_THIN_PRISM_9 ||
-        cameraModel == CameraModel::OPENCV_THIN_PRISM_12) {
+    if (cameraModel == DistortionModel::OPENCV_RADTAN_5 ||
+        cameraModel == DistortionModel::OPENCV_RATIONAL_8 ||
+        cameraModel == DistortionModel::OPENCV_RADTAN_THIN_PRISM_9 ||
+        cameraModel == DistortionModel::OPENCV_THIN_PRISM_12) {
         TORCH_CHECK_VALUE(numDistCoeffs == 12,
-                          "For CameraModel::OPENCV_* distortionCoeffs must be [C,12]");
+                          "For DistortionModel::OPENCV_* distortionCoeffs must be [C,12]");
     }
 
     const uint32_t channels = (uint32_t)features.size(2);
@@ -377,7 +377,7 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
                                            backgrounds,             \
                                            masks);
 
-    if (cameraModel == CameraModel::ORTHOGRAPHIC) {
+    if (cameraModel == DistortionModel::ORTHOGRAPHIC) {
         const OrthographicWithDistortionCameraOp<float> cameraOp{
             worldToCamMatricesStart.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             worldToCamMatricesEnd.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -473,7 +473,7 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCPU>(const torch::Tensor &
                                                            const torch::Tensor &,
                                                            const torch::Tensor &,
                                                            const RollingShutterType,
-                                                           const CameraModel,
+                                                           const DistortionModel,
                                                            const RenderSettings &,
                                                            const torch::Tensor &,
                                                            const torch::Tensor &,

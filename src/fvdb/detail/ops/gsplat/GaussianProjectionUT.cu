@@ -3,11 +3,9 @@
 //
 
 #include <fvdb/detail/ops/gsplat/GaussianCameraAccessorCopy.cuh>
-#include <fvdb/detail/ops/gsplat/GaussianOpenCVDistortion.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionUT.h>
 #include <fvdb/detail/ops/gsplat/GaussianRigidTransform.cuh>
-#include <fvdb/detail/ops/gsplat/GaussianRollingShutter.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
@@ -464,7 +462,7 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]
     const RollingShutterType rollingShutterType,
     const UTParams &utParams,
-    const CameraModel cameraModel,
+    const DistortionModel cameraModel,
     const torch::Tensor &distortionCoeffs, // [C,12] for OPENCV, [C,0] for NONE
     const int64_t imageWidth,
     const int64_t imageHeight,
@@ -503,18 +501,18 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
     TORCH_CHECK_VALUE(std::isfinite(denom) && denom > 0.0f,
                       "Invalid UTParams: expected denom = alpha^2*(D+kappa) to be finite and > 0");
 
-    if (cameraModel == CameraModel::PINHOLE || cameraModel == CameraModel::ORTHOGRAPHIC) {
+    if (cameraModel == DistortionModel::PINHOLE || cameraModel == DistortionModel::ORTHOGRAPHIC) {
         // Distortion coefficients are ignored for these camera models.
         // (Intrinsics `projectionMatrices` are always used.)
-    } else if (cameraModel == CameraModel::OPENCV_RADTAN_5 ||
-               cameraModel == CameraModel::OPENCV_RATIONAL_8 ||
-               cameraModel == CameraModel::OPENCV_RADTAN_THIN_PRISM_9 ||
-               cameraModel == CameraModel::OPENCV_THIN_PRISM_12) {
+    } else if (cameraModel == DistortionModel::OPENCV_RADTAN_5 ||
+               cameraModel == DistortionModel::OPENCV_RATIONAL_8 ||
+               cameraModel == DistortionModel::OPENCV_RADTAN_THIN_PRISM_9 ||
+               cameraModel == DistortionModel::OPENCV_THIN_PRISM_12) {
         TORCH_CHECK_VALUE(distortionCoeffs.size(1) == 12,
-                          "For CameraModel::OPENCV_* , distortionCoeffs must have shape [C,12] "
+                          "For DistortionModel::OPENCV_* , distortionCoeffs must have shape [C,12] "
                           "as [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]");
     } else {
-        TORCH_CHECK_VALUE(false, "Unknown CameraModel for GaussianProjectionForwardUT");
+        TORCH_CHECK_VALUE(false, "Unknown DistortionModel for GaussianProjectionForwardUT");
     }
 
     // This kernel implements only the canonical 3D UT with 2D+1 sigma points (7).
@@ -544,7 +542,7 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
     using scalar_t = float;
 
     const size_t NUM_BLOCKS = GET_BLOCKS(C * N, 256);
-    if (cameraModel == CameraModel::ORTHOGRAPHIC) {
+    if (cameraModel == DistortionModel::ORTHOGRAPHIC) {
         OrthographicWithDistortionCameraOp<scalar_t> cameraOp(
             worldToCamMatricesStart.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
             worldToCamMatricesEnd.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
@@ -637,7 +635,7 @@ dispatchGaussianProjectionForwardUT<torch::kCPU>(
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]
     const RollingShutterType rollingShutterType,
     const UTParams &utParams,
-    const CameraModel cameraModel,
+    const DistortionModel cameraModel,
     const torch::Tensor &distortionCoeffs, // [C,12] for OPENCV, [C,0] for NONE
     const int64_t imageWidth,
     const int64_t imageHeight,
@@ -661,7 +659,7 @@ dispatchGaussianProjectionForwardUT<torch::kPrivateUse1>(
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]
     const RollingShutterType rollingShutterType,
     const UTParams &utParams,
-    const CameraModel cameraModel,
+    const DistortionModel cameraModel,
     const torch::Tensor &distortionCoeffs, // [C,12] for OPENCV, [C,0] for NONE
     const int64_t imageWidth,
     const int64_t imageHeight,

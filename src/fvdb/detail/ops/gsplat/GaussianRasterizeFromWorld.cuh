@@ -4,12 +4,10 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLD_CUH
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLD_CUH
 
-#include <fvdb/detail/ops/gsplat/GaussianProjection.h>
-#include <fvdb/detail/ops/gsplat/GaussianProjectionUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRigidTransform.cuh>
-#include <fvdb/detail/ops/gsplat/GaussianRollingShutter.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionUtils.cuh>
 
 #include <nanovdb/math/Math.h>
 #include <nanovdb/math/Ray.h>

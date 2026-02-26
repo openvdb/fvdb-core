@@ -465,7 +465,7 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
     const torch::Tensor &projectionMatrices,
     const torch::Tensor &distortionCoeffs,
     const RollingShutterType rollingShutterType,
-    const CameraModel cameraModel,
+    const DistortionModel cameraModel,
     const RenderSettings &settings,
     const torch::Tensor &tileOffsets,
     const torch::Tensor &tileGaussianIds,
@@ -527,7 +527,7 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
                                             backgrounds,             \
                                             masks);
 
-    if (cameraModel == CameraModel::ORTHOGRAPHIC) {
+    if (cameraModel == DistortionModel::ORTHOGRAPHIC) {
         const OrthographicWithDistortionCameraOp<float> cameraOp{
             worldToCamMatricesStart.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             worldToCamMatricesEnd.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -623,7 +623,7 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCPU>(const torch::Tensor 
                                                             const torch::Tensor &,
                                                             const torch::Tensor &,
                                                             const RollingShutterType,
-                                                            const CameraModel,
+                                                            const DistortionModel,
                                                             const RenderSettings &,
                                                             const torch::Tensor &,
                                                             const torch::Tensor &,

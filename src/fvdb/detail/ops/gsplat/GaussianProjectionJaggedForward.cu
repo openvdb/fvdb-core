@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianMacros.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionUtils.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianProjection.h>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
@@ -133,7 +134,9 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
     const torch::Tensor &quats,              // [N, 4] optional
     const torch::Tensor &scales,             // [N, 3] optional
     const torch::Tensor &cSizes,             // [B] camera sizes
-    const GaussianProjectionModel &projectionModel,
+    const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
+    const torch::Tensor &projectionMatrices, // [C, 3, 3]
+    const bool ortho,
     const uint32_t imageWidth,
     const uint32_t imageHeight,
     const float eps2d,
@@ -141,10 +144,6 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
     const float farPlane,
     const float minRadius2d) {
     FVDB_FUNC_RANGE();
-    const auto &projectionConfig            = projectionModel.config();
-    const torch::Tensor &worldToCamMatrices = projectionConfig.worldToCamMatricesStart;
-    const torch::Tensor &projectionMatrices = projectionConfig.projectionMatrices;
-    const bool ortho                        = projectionModel.isOrthographic();
     // These are supported by the underlying kernel, but they are not exposed
     const at::optional<torch::Tensor> &covars = std::nullopt;
     constexpr bool calc_compensations         = false;
@@ -259,7 +258,9 @@ dispatchGaussianProjectionJaggedForward<torch::kCPU>(
     const torch::Tensor &quats,              // [N, 4] optional
     const torch::Tensor &scales,             // [N, 3] optional
     const torch::Tensor &cSizes,             // [B] camera sizes
-    const GaussianProjectionModel &projectionModel,
+    const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
+    const torch::Tensor &projectionMatrices, // [C, 3, 3]
+    const bool ortho,
     const uint32_t imageWidth,
     const uint32_t imageHeight,
     const float eps2d,

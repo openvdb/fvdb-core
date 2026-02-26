@@ -25,7 +25,7 @@ RasterizeGaussiansToPixelsFromWorld3DGS::forward(
     const RasterizeGaussiansToPixelsFromWorld3DGS::Variable &projectionMatrices,
     const RasterizeGaussiansToPixelsFromWorld3DGS::Variable &distortionCoeffs,
     const fvdb::detail::ops::RollingShutterType rollingShutterType,
-    const fvdb::detail::ops::CameraModel cameraModel,
+    const fvdb::detail::ops::DistortionModel cameraModel,
     const uint32_t imageWidth,
     const uint32_t imageHeight,
     const uint32_t imageOriginW,
@@ -154,7 +154,7 @@ RasterizeGaussiansToPixelsFromWorld3DGS::backward(
     const uint32_t imageOriginH = (uint32_t)ctx->saved_data["imageOriginH"].toInt();
     const uint32_t tileSize     = (uint32_t)ctx->saved_data["tileSize"].toInt();
     const auto cameraModel =
-        static_cast<fvdb::detail::ops::CameraModel>(ctx->saved_data["cameraModel"].toInt());
+        static_cast<fvdb::detail::ops::DistortionModel>(ctx->saved_data["cameraModel"].toInt());
     const auto rollingShutterType = static_cast<fvdb::detail::ops::RollingShutterType>(
         ctx->saved_data["rollingShutterType"].toInt());
 

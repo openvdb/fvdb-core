@@ -31,7 +31,7 @@ struct RasterizeGaussiansToPixelsFromWorld3DGS
             const Variable &projectionMatrices,      // [C,3,3]
             const Variable &distortionCoeffs,        // [C,K]
             const fvdb::detail::ops::RollingShutterType rollingShutterType,
-            const fvdb::detail::ops::CameraModel cameraModel,
+            const fvdb::detail::ops::DistortionModel cameraModel,
             const uint32_t imageWidth,
             const uint32_t imageHeight,
             const uint32_t imageOriginW,

@@ -60,7 +60,9 @@ dispatchGaussianProjectionBackward(
     const torch::Tensor &means,                       // [N, 3]
     const torch::Tensor &quats,                       // [N, 4]
     const torch::Tensor &scales,                      // [N, 3]
-    const GaussianProjectionModel &projectionModel,
+    const torch::Tensor &worldToCamMatrices,          // [C, 4, 4]
+    const torch::Tensor &projectionMatrices,          // [C, 3, 3]
+    const bool ortho,
     const at::optional<torch::Tensor> &compensations, // [N, 6] optional
     const uint32_t imageWidth,
     const uint32_t imageHeight,

@@ -56,7 +56,9 @@ dispatchGaussianProjectionJaggedBackward(const torch::Tensor &gSizes, // [B] gau
                                          const torch::Tensor &quats,  // [N, 4] optional
                                          const torch::Tensor &scales, // [N, 3] optional
                                          const torch::Tensor &cSizes, // [B] camera sizes
-                                         const GaussianProjectionModel &projectionModel,
+                                         const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
+                                         const torch::Tensor &projectionMatrices, // [C, 3, 3]
+                                         const bool ortho,
                                          const uint32_t imageWidth,
                                          const uint32_t imageHeight,
                                          const float eps2d,

@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianMacros.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedBackward.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionUtils.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianProjection.h>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
@@ -199,7 +200,9 @@ dispatchGaussianProjectionJaggedBackward<torch::kCUDA>(
     const torch::Tensor &quats,              // [N, 4] optional
     const torch::Tensor &scales,             // [N, 3] optional
     const torch::Tensor &cSizes,             // [B] camera sizes
-    const GaussianProjectionModel &projectionModel,
+    const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
+    const torch::Tensor &projectionMatrices, // [C, 3, 3]
+    const bool ortho,
     const uint32_t imageWidth,
     const uint32_t imageHeight,
     const float eps2d,
@@ -212,10 +215,6 @@ dispatchGaussianProjectionJaggedBackward<torch::kCUDA>(
     const torch::Tensor &dLossDConics,  // [N, 3]
     const bool worldToCamMatricesRequiresGrad) {
     FVDB_FUNC_RANGE();
-    const auto &projectionConfig = projectionModel.config();
-    const torch::Tensor &worldToCamMatrices = projectionConfig.worldToCamMatricesStart;
-    const torch::Tensor &projectionMatrices = projectionConfig.projectionMatrices;
-    const bool ortho = projectionModel.isOrthographic();
     // These are supported by the underlying kernel, but they are not exposed
     const at::optional<torch::Tensor> &covars              = std::nullopt;
     const at::optional<torch::Tensor> &compensations       = std::nullopt;
@@ -365,7 +364,9 @@ dispatchGaussianProjectionJaggedBackward<torch::kCPU>(
     const torch::Tensor &quats,              // [N, 4] optional
     const torch::Tensor &scales,             // [N, 3] optional
     const torch::Tensor &cSizes,             // [B] camera sizes
-    const GaussianProjectionModel &projectionModel,
+    const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
+    const torch::Tensor &projectionMatrices, // [C, 3, 3]
+    const bool ortho,
     const uint32_t imageWidth,
     const uint32_t imageHeight,
     const float eps2d,

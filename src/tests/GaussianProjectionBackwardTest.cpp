@@ -172,13 +172,13 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
 
     {
         // Perspective projection
-        const auto projectionModel =
-            fvdb::detail::ops::makeClassicProjectionModel(viewmats, Ks, false);
-        const auto [radii_proj, means2d_proj, depths_proj, conics_proj, compensations_proj] =
+                const auto [radii_proj, means2d_proj, depths_proj, conics_proj, compensations_proj] =
             fvdb::detail::ops::dispatchGaussianProjectionForward<torch::kCUDA>(means,
                                                                                quats,
                                                                                scales,
-                                                                               *projectionModel,
+                                                                               viewmats,
+                                                                               Ks,
+                                                                               false,
                                                                                imageWidth,
                                                                                imageHeight,
                                                                                0.3,
@@ -208,14 +208,14 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
         auto outNormalizedMaxRadiiAccum = torch::zeros({N}, options.dtype(torch::kInt32));
         auto outGradientStepCounts      = torch::zeros({N}, options.dtype(torch::kInt32));
 
-        const auto backwardProjectionModel =
-            fvdb::detail::ops::makeClassicProjectionModel(viewmats, Ks, false);
-        const auto [dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDCamToWorlds] =
+                const auto [dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDCamToWorlds] =
             fvdb::detail::ops::dispatchGaussianProjectionBackward<torch::kCUDA>(
                 means,
                 quats,
                 torch::log(scales),
-                *backwardProjectionModel,
+                viewmats,
+                Ks,
+                false,
                 compensations_proj,
                 imageWidth,
                 imageHeight,
@@ -248,13 +248,13 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
 
     {
         // Orthographic projection
-        const auto projectionModel =
-            fvdb::detail::ops::makeClassicProjectionModel(viewmats, Ks, true);
-        const auto [radii_proj, means2d_proj, depths_proj, conics_proj, compensations_proj] =
+                const auto [radii_proj, means2d_proj, depths_proj, conics_proj, compensations_proj] =
             fvdb::detail::ops::dispatchGaussianProjectionForward<torch::kCUDA>(means,
                                                                                quats,
                                                                                scales,
-                                                                               *projectionModel,
+                                                                               viewmats,
+                                                                               Ks,
+                                                                               false,
                                                                                imageWidth,
                                                                                imageHeight,
                                                                                0.3,
@@ -284,14 +284,14 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
         auto outNormalizedMaxRadiiAccum = torch::zeros({N}, options.dtype(torch::kInt32));
         auto outGradientStepCounts      = torch::zeros({N}, options.dtype(torch::kInt32));
 
-        const auto backwardProjectionModel =
-            fvdb::detail::ops::makeClassicProjectionModel(viewmats, Ks, true);
-        const auto [dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDCamToWorlds] =
+                const auto [dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDCamToWorlds] =
             fvdb::detail::ops::dispatchGaussianProjectionBackward<torch::kCUDA>(
                 means,
                 quats,
                 torch::log(scales),
-                *backwardProjectionModel,
+                viewmats,
+                Ks,
+                true,
                 compensations_proj,
                 imageWidth,
                 imageHeight,
@@ -341,13 +341,14 @@ TEST_F(GaussianProjectionBackwardTestFixture, TestPerspectiveProjection) {
     auto outNormalizedMaxRadiiAccum          = torch::zeros({N}, options.dtype(torch::kInt32));
     auto outGradientStepCounts               = torch::zeros({N}, options.dtype(torch::kInt32));
 
-    const auto projectionModel = fvdb::detail::ops::makeClassicProjectionModel(viewmats, Ks, false);
     const auto [dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDCamToWorlds] =
         fvdb::detail::ops::dispatchGaussianProjectionBackward<torch::kCUDA>(
             means,
             quats,
             torch::log(scales),
-            *projectionModel,
+            viewmats,
+            Ks,
+            false,
             compensations,
             imageWidth,
             imageHeight,
@@ -418,13 +419,14 @@ TEST_F(GaussianProjectionBackwardTestFixture, TestOrthographicProjection) {
     auto outNormalizedMaxRadiiAccum          = torch::zeros({N}, options.dtype(torch::kInt32));
     auto outGradientStepCounts               = torch::zeros({N}, options.dtype(torch::kInt32));
 
-    const auto projectionModel = fvdb::detail::ops::makeClassicProjectionModel(viewmats, Ks, true);
     const auto [dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDCamToWorlds] =
         fvdb::detail::ops::dispatchGaussianProjectionBackward<torch::kCUDA>(
             means,
             quats,
             torch::log(scales),
-            *projectionModel,
+            viewmats,
+            Ks,
+            true,
             compensations,
             imageWidth,
             imageHeight,

@@ -20,14 +20,14 @@ bind_gaussian_splat3d(py::module &m) {
         .value("HORIZONTAL", fvdb::detail::ops::RollingShutterType::HORIZONTAL)
         .export_values();
 
-    py::enum_<fvdb::detail::ops::CameraModel>(m, "CameraModel")
-        .value("PINHOLE", fvdb::detail::ops::CameraModel::PINHOLE)
-        .value("OPENCV_RADTAN_5", fvdb::detail::ops::CameraModel::OPENCV_RADTAN_5)
-        .value("OPENCV_RATIONAL_8", fvdb::detail::ops::CameraModel::OPENCV_RATIONAL_8)
+    py::enum_<fvdb::detail::ops::DistortionModel>(m, "DistortionModel")
+        .value("PINHOLE", fvdb::detail::ops::DistortionModel::PINHOLE)
+        .value("OPENCV_RADTAN_5", fvdb::detail::ops::DistortionModel::OPENCV_RADTAN_5)
+        .value("OPENCV_RATIONAL_8", fvdb::detail::ops::DistortionModel::OPENCV_RATIONAL_8)
         .value("OPENCV_RADTAN_THIN_PRISM_9",
-               fvdb::detail::ops::CameraModel::OPENCV_RADTAN_THIN_PRISM_9)
-        .value("OPENCV_THIN_PRISM_12", fvdb::detail::ops::CameraModel::OPENCV_THIN_PRISM_12)
-        .value("ORTHOGRAPHIC", fvdb::detail::ops::CameraModel::ORTHOGRAPHIC)
+               fvdb::detail::ops::DistortionModel::OPENCV_RADTAN_THIN_PRISM_9)
+        .value("OPENCV_THIN_PRISM_12", fvdb::detail::ops::DistortionModel::OPENCV_THIN_PRISM_12)
+        .value("ORTHOGRAPHIC", fvdb::detail::ops::DistortionModel::ORTHOGRAPHIC)
         .export_values();
 
     py::class_<fvdb::GaussianSplat3d::ProjectedGaussianSplats>(m, "ProjectedGaussianSplats")
@@ -226,7 +226,7 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("image_height"),
              py::arg("near"),
              py::arg("far"),
-             py::arg("camera_model")      = fvdb::detail::ops::CameraModel::PINHOLE,
+             py::arg("camera_model")      = fvdb::detail::ops::DistortionModel::PINHOLE,
              py::arg("distortion_coeffs") = std::nullopt,
              py::arg("sh_degree_to_use")  = -1,
              py::arg("tile_size")         = 16,
