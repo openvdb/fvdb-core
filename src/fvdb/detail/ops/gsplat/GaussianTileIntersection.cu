@@ -541,8 +541,8 @@ gaussianTileIntersectionCUDAImpl(
                 totalIntersections,
                 totalTiles,
                 numTileIdBits,
-                intersectionKeys.data_ptr<int64_t>(),
-                activeTiles.value().data_ptr<int32_t>(),
+                intersectionKeys.const_data_ptr<int64_t>(),
+                activeTiles.value().const_data_ptr<int32_t>(),
                 numActiveTiles,
                 tileJOffsets.data_ptr<int32_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
@@ -561,7 +561,7 @@ gaussianTileIntersectionCUDAImpl(
                 numCameras,
                 totalTiles,
                 numTileIdBits,
-                intersectionKeys.data_ptr<int64_t>(),
+                intersectionKeys.const_data_ptr<int64_t>(),
                 tileJOffsets.data_ptr<int32_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
 
@@ -1130,7 +1130,7 @@ gaussianTileIntersectionPrivateUse1Impl(
                 numCameras,
                 totalTiles,
                 numTileIdBits,
-                keysSorted.data_ptr<int64_t>(),
+                keysSorted.const_data_ptr<int64_t>(),
                 tileJOffsets.data_ptr<int32_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
