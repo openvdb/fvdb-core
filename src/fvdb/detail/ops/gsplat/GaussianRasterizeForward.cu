@@ -405,12 +405,12 @@ launchRasterizeForwardKernel(
     // because they are packed into a single JaggedTensor so that the output code is the same
     // for dense and sparse modes.
     if (!args.commonArgs.mIsSparse) {
-        outFeatures = fvdb::JaggedTensor(
-            outFeatures.jdata().view({C, args.commonArgs.renderHeight(), args.commonArgs.renderWidth(), channels}));
-        outAlphas = fvdb::JaggedTensor(
-            outAlphas.jdata().view({C, args.commonArgs.renderHeight(), args.commonArgs.renderWidth(), 1}));
-        outLastIds = fvdb::JaggedTensor(
-            outLastIds.jdata().view({C, args.commonArgs.renderHeight(), args.commonArgs.renderWidth()}));
+        outFeatures = fvdb::JaggedTensor(outFeatures.jdata().view(
+            {C, args.commonArgs.renderHeight(), args.commonArgs.renderWidth(), channels}));
+        outAlphas   = fvdb::JaggedTensor(outAlphas.jdata().view(
+            {C, args.commonArgs.renderHeight(), args.commonArgs.renderWidth(), 1}));
+        outLastIds  = fvdb::JaggedTensor(outLastIds.jdata().view(
+            {C, args.commonArgs.renderHeight(), args.commonArgs.renderWidth()}));
     }
 
     return std::make_tuple(outFeatures, outAlphas, outLastIds);
@@ -554,11 +554,12 @@ launchRasterizeForwardKernels(
     // because they are packed into a single JaggedTensor so that the output code is the same
     // for dense and sparse modes.
     if (!isSparse) {
-        outFeatures =
-            fvdb::JaggedTensor(outFeatures.jdata().view({C, renderWindow[1], renderWindow[0], channels}));
+        outFeatures = fvdb::JaggedTensor(
+            outFeatures.jdata().view({C, renderWindow[1], renderWindow[0], channels}));
         outAlphas =
             fvdb::JaggedTensor(outAlphas.jdata().view({C, renderWindow[1], renderWindow[0], 1}));
-        outLastIds = fvdb::JaggedTensor(outLastIds.jdata().view({C, renderWindow[1], renderWindow[0]}));
+        outLastIds =
+            fvdb::JaggedTensor(outLastIds.jdata().view({C, renderWindow[1], renderWindow[0]}));
     }
 
     return std::make_tuple(outFeatures, outAlphas, outLastIds);
@@ -570,10 +571,10 @@ template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchGaussianRasterizeForward<torch::kCUDA>(
     // Gaussian parameters
-    const torch::Tensor &means2d,   // [C, N, 2]
-    const torch::Tensor &conics,    // [C, N, 3]
-    const torch::Tensor &features,  // [C, N, D]
-    const torch::Tensor &opacities, // [N]
+    const torch::Tensor &means2d,                   // [C, N, 2]
+    const torch::Tensor &conics,                    // [C, N, 3]
+    const torch::Tensor &features,                  // [C, N, D]
+    const torch::Tensor &opacities,                 // [N]
     const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,               // [C, tile_height, tile_width]
@@ -754,10 +755,10 @@ dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
     // sparse pixel coordinates
     const fvdb::JaggedTensor &pixelsToRender, // [C, maxPixelsPerCamera, 2]
     // Gaussian parameters
-    const torch::Tensor &means2d,   // [C, N, 2]
-    const torch::Tensor &conics,    // [C, N, 3]
-    const torch::Tensor &features,  // [C, N, D]
-    const torch::Tensor &opacities, // [N]
+    const torch::Tensor &means2d,     // [C, N, 2]
+    const torch::Tensor &conics,      // [C, N, 3]
+    const torch::Tensor &features,    // [C, N, D]
+    const torch::Tensor &opacities,   // [N]
     const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
@@ -846,10 +847,10 @@ dispatchGaussianSparseRasterizeForward<torch::kPrivateUse1>(
     // sparse pixel coordinates
     const fvdb::JaggedTensor &pixelsToRender, // [C, maxPixelsPerCamera, 2]
     // Gaussian parameters
-    const torch::Tensor &means2d,   // [C, N, 2]
-    const torch::Tensor &conics,    // [C, N, 3]
-    const torch::Tensor &features,  // [C, N, D]
-    const torch::Tensor &opacities, // [N]
+    const torch::Tensor &means2d,     // [C, N, 2]
+    const torch::Tensor &conics,      // [C, N, 3]
+    const torch::Tensor &features,    // [C, N, D]
+    const torch::Tensor &opacities,   // [N]
     const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
@@ -868,10 +869,10 @@ dispatchGaussianSparseRasterizeForward<torch::kCPU>(
     // sparse pixel coordinates
     const fvdb::JaggedTensor &pixelsToRender, // [C, maxPixelsPerCamera, 2]
     // Gaussian parameters
-    const torch::Tensor &means2d,   // [C, N, 2]
-    const torch::Tensor &conics,    // [C, N, 3]
-    const torch::Tensor &features,  // [C, N, D]
-    const torch::Tensor &opacities, // [N]
+    const torch::Tensor &means2d,     // [C, N, 2]
+    const torch::Tensor &conics,      // [C, N, 3]
+    const torch::Tensor &features,    // [C, N, D]
+    const torch::Tensor &opacities,   // [N]
     const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)

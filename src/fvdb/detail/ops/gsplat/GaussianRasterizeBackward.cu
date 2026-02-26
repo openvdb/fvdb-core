@@ -882,10 +882,10 @@ callRasterizeBackwardWithTemplatedSharedChannels(
     const at::optional<torch::Tensor> &masks,       // [C, numTilesH, numTilesW]
     const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,          // [C, numTilesH, numTilesW]
-    const torch::Tensor &tileGaussianIds,      // [totalIntersections]
-    const fvdb::JaggedTensor &renderedAlphas,  // {C, [AP, 1]} or {1, [C, H, W, 1]}
-    const fvdb::JaggedTensor &lastGaussianIds, // {C, [AP]} or {1, [C, H, W]}
+    const torch::Tensor &tileOffsets,               // [C, numTilesH, numTilesW]
+    const torch::Tensor &tileGaussianIds,           // [totalIntersections]
+    const fvdb::JaggedTensor &renderedAlphas,       // {C, [AP, 1]} or {1, [C, H, W, 1]}
+    const fvdb::JaggedTensor &lastGaussianIds,      // {C, [AP]} or {1, [C, H, W]}
     const fvdb::JaggedTensor
         &dLossDRenderedFeatures, // {C, [AP, NUM_CHANNELS]} or {1, [C, H, W, NUM_CHANNELS]}
     const fvdb::JaggedTensor &dLossDRenderedAlphas, // {C, [AP, 1]} or {1, [C, H, W, 1]}
@@ -999,10 +999,10 @@ callRasterizeBackwardWithCorrectSharedChannels(
     const at::optional<torch::Tensor> &masks,       // [C, numTilesH, numTilesW]
     const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,          // [C, numTilesH, numTilesW]
-    const torch::Tensor &tileGaussianIds,      // [totalIntersections]
-    const fvdb::JaggedTensor &renderedAlphas,  // {C, [AP, 1]} or {1, [C, H, W, 1]}
-    const fvdb::JaggedTensor &lastGaussianIds, // {C, [AP]} or {1, [C, H, W]}
+    const torch::Tensor &tileOffsets,               // [C, numTilesH, numTilesW]
+    const torch::Tensor &tileGaussianIds,           // [totalIntersections]
+    const fvdb::JaggedTensor &renderedAlphas,       // {C, [AP, 1]} or {1, [C, H, W, 1]}
+    const fvdb::JaggedTensor &lastGaussianIds,      // {C, [AP]} or {1, [C, H, W]}
     const fvdb::JaggedTensor
         &dLossDRenderedFeatures, // {C, [AP, NUM_CHANNELS]} or {1, [C, H, W, NUM_CHANNELS]}
     const fvdb::JaggedTensor &dLossDRenderedAlphas, // {C, [AP, 1]} or {1, [C, H, W, 1]}
@@ -1152,10 +1152,10 @@ callRasterizeBackwardPrivateUse1(
     const at::optional<torch::Tensor> &masks,       // [C, numTilesH, numTilesW]
     const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,          // [C, numTilesH, numTilesW]
-    const torch::Tensor &tileGaussianIds,      // [totalIntersections]
-    const fvdb::JaggedTensor &renderedAlphas,  // {C, [AP, 1]} or {1, [C, H, W, 1]}
-    const fvdb::JaggedTensor &lastGaussianIds, // {C, [AP]} or {1, [C, H, W]}
+    const torch::Tensor &tileOffsets,               // [C, numTilesH, numTilesW]
+    const torch::Tensor &tileGaussianIds,           // [totalIntersections]
+    const fvdb::JaggedTensor &renderedAlphas,       // {C, [AP, 1]} or {1, [C, H, W, 1]}
+    const fvdb::JaggedTensor &lastGaussianIds,      // {C, [AP]} or {1, [C, H, W]}
     const fvdb::JaggedTensor
         &dLossDRenderedFeatures, // {C, [AP, NUM_CHANNELS]} or {1, [C, H, W, NUM_CHANNELS]}
     const fvdb::JaggedTensor &dLossDRenderedAlphas, // {C, [AP, 1]} or {1, [C, H, W, 1]}
@@ -1351,10 +1351,10 @@ callRasterizeBackwardPrivateUse1(
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchGaussianRasterizeBackward<torch::kCUDA>(
-    const torch::Tensor &means2d,   // [C, N, 2]
-    const torch::Tensor &conics,    // [C, N, 3]
-    const torch::Tensor &features,  // [C, N, 3]
-    const torch::Tensor &opacities, // [N]
+    const torch::Tensor &means2d,                // [C, N, 2]
+    const torch::Tensor &conics,                 // [C, N, 3]
+    const torch::Tensor &features,               // [C, N, 3]
+    const torch::Tensor &opacities,              // [N]
     const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,            // [C, numTilesH, numTilesW]
@@ -1443,10 +1443,10 @@ dispatchGaussianRasterizeBackward<torch::kCUDA>(
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchGaussianRasterizeBackward<torch::kPrivateUse1>(
-    const torch::Tensor &means2d,   // [C, N, 2]
-    const torch::Tensor &conics,    // [C, N, 3]
-    const torch::Tensor &features,  // [C, N, 3]
-    const torch::Tensor &opacities, // [N]
+    const torch::Tensor &means2d,                // [C, N, 2]
+    const torch::Tensor &conics,                 // [C, N, 3]
+    const torch::Tensor &features,               // [C, N, 3]
+    const torch::Tensor &opacities,              // [N]
     const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,            // [C, numTilesH, numTilesW]
@@ -1532,10 +1532,10 @@ dispatchGaussianRasterizeBackward<torch::kPrivateUse1>(
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchGaussianRasterizeBackward<torch::kCPU>(
-    const torch::Tensor &means2d,   // [C, N, 2]
-    const torch::Tensor &conics,    // [C, N, 3]
-    const torch::Tensor &features,  // [C, N, 3]
-    const torch::Tensor &opacities, // [N]
+    const torch::Tensor &means2d,                // [C, N, 2]
+    const torch::Tensor &conics,                 // [C, N, 3]
+    const torch::Tensor &features,               // [C, N, 3]
+    const torch::Tensor &opacities,              // [N]
     const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,            // [C, numTilesH, numTilesW]

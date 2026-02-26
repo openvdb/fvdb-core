@@ -3,9 +3,9 @@
 
 #include "utils/Tensor.h"
 
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionBackward.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
-#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 
 #include <torch/script.h>
 #include <torch/types.h>
@@ -172,7 +172,7 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
 
     {
         // Perspective projection
-                const auto [radii_proj, means2d_proj, depths_proj, conics_proj, compensations_proj] =
+        const auto [radii_proj, means2d_proj, depths_proj, conics_proj, compensations_proj] =
             fvdb::detail::ops::dispatchGaussianProjectionForward<torch::kCUDA>(means,
                                                                                quats,
                                                                                scales,
@@ -208,7 +208,7 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
         auto outNormalizedMaxRadiiAccum = torch::zeros({N}, options.dtype(torch::kInt32));
         auto outGradientStepCounts      = torch::zeros({N}, options.dtype(torch::kInt32));
 
-                const auto [dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDCamToWorlds] =
+        const auto [dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDCamToWorlds] =
             fvdb::detail::ops::dispatchGaussianProjectionBackward<torch::kCUDA>(
                 means,
                 quats,
@@ -248,7 +248,7 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
 
     {
         // Orthographic projection
-                const auto [radii_proj, means2d_proj, depths_proj, conics_proj, compensations_proj] =
+        const auto [radii_proj, means2d_proj, depths_proj, conics_proj, compensations_proj] =
             fvdb::detail::ops::dispatchGaussianProjectionForward<torch::kCUDA>(means,
                                                                                quats,
                                                                                scales,
@@ -284,7 +284,7 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
         auto outNormalizedMaxRadiiAccum = torch::zeros({N}, options.dtype(torch::kInt32));
         auto outGradientStepCounts      = torch::zeros({N}, options.dtype(torch::kInt32));
 
-                const auto [dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDCamToWorlds] =
+        const auto [dLossDMeans, dLossDCovars, dLossDQuats, dLossDScales, dLossDCamToWorlds] =
             fvdb::detail::ops::dispatchGaussianProjectionBackward<torch::kCUDA>(
                 means,
                 quats,

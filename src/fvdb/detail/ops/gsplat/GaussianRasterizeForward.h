@@ -7,6 +7,7 @@
 #include <fvdb/JaggedTensor.h>
 
 #include <nanovdb/math/Math.h>
+
 #include <torch/types.h>
 
 #include <tuple>
@@ -46,10 +47,10 @@ namespace ops {
 ///         - Last Gaussian ID rendered at each pixel [C, render_height, render_width]
 template <torch::DeviceType>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> dispatchGaussianRasterizeForward(
-    const torch::Tensor &means2d,   // [C, N, 2]
-    const torch::Tensor &conics,    // [C, N, 3]
-    const torch::Tensor &features,  // [C, N, D]
-    const torch::Tensor &opacities, // [N]
+    const torch::Tensor &means2d,                                 // [C, N, 2]
+    const torch::Tensor &conics,                                  // [C, N, 3]
+    const torch::Tensor &features,                                // [C, N, D]
+    const torch::Tensor &opacities,                               // [N]
     const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,                             // [C, tile_height, tile_width]
@@ -57,7 +58,6 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> dispatchGaussianRasteriz
     const at::optional<torch::Tensor> &backgrounds = at::nullopt, // [C, D]
     const at::optional<torch::Tensor> &masks = at::nullopt // [C, tile_height, tile_width] bool
 );
-
 
 /// @brief Dispatches the sparse Gaussian rasterization forward pass to the specified device.
 /// Renders only specified pixels.
@@ -100,7 +100,6 @@ dispatchGaussianSparseRasterizeForward(
     const torch::Tensor &tilePixelCumsum,
     const torch::Tensor &pixelMap,
     const at::optional<torch::Tensor> &backgrounds = at::nullopt);
-
 
 } // namespace ops
 } // namespace detail

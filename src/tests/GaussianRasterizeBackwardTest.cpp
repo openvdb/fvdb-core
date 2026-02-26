@@ -8,9 +8,10 @@
 #include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
 #include <fvdb/detail/ops/gsplat/GaussianTileIntersection.h>
 
+#include <nanovdb/math/Math.h>
+
 #include <torch/types.h>
 
-#include <nanovdb/math/Math.h>
 #include <gtest/gtest.h>
 
 #include <cstdlib>
@@ -621,19 +622,20 @@ TEST_F(GaussianRasterizeTestFixture, CPUThrows) {
     loadTestData("rasterize_backward_inputs.pt", "rasterize_backward_outputs.pt");
     moveToDevice(torch::kCPU);
     EXPECT_THROW(
-        fvdb::detail::ops::dispatchGaussianRasterizeBackward<torch::kCPU>(means2d,
-                                                                          conics,
-                                                                          colors,
-                                                                          opacities,
-                                                                          nanovdb::math::Vec4<uint32_t>(imageWidth, imageHeight, imageOriginW, imageOriginH),
-                                                                          tileSize,
-                                                                          tileOffsets,
-                                                                          tileGaussianIds,
-                                                                          renderedAlphas,
-                                                                          lastGaussianIdsPerPixel,
-                                                                          dLossDRenderedColors,
-                                                                          dLossDRenderedAlphas,
-                                                                          false),
+        fvdb::detail::ops::dispatchGaussianRasterizeBackward<torch::kCPU>(
+            means2d,
+            conics,
+            colors,
+            opacities,
+            nanovdb::math::Vec4<uint32_t>(imageWidth, imageHeight, imageOriginW, imageOriginH),
+            tileSize,
+            tileOffsets,
+            tileGaussianIds,
+            renderedAlphas,
+            lastGaussianIdsPerPixel,
+            dLossDRenderedColors,
+            dLossDRenderedAlphas,
+            false),
         c10::NotImplementedError);
 }
 
@@ -1081,26 +1083,28 @@ TEST_F(GaussianRasterizeTestFixture, TestDenseBackwardWithBackgrounds) {
 
     // Run forward pass WITH backgrounds
     auto [colorsWithBg, alphasWithBg, lastIdsWithBg] =
-        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(gaussians.means2d,
-                                                                          gaussians.conics,
-                                                                          gaussians.colors,
-                                                                          gaussians.opacities,
-                                                                          nanovdb::math::Vec4<uint32_t>(imageWidth, imageHeight, 0, 0),
-                                                                          tileSize,
-                                                                          tiles.tileOffsets,
-                                                                          tiles.tileGaussianIds,
-                                                                          backgrounds);
+        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(
+            gaussians.means2d,
+            gaussians.conics,
+            gaussians.colors,
+            gaussians.opacities,
+            nanovdb::math::Vec4<uint32_t>(imageWidth, imageHeight, 0, 0),
+            tileSize,
+            tiles.tileOffsets,
+            tiles.tileGaussianIds,
+            backgrounds);
 
     // Run forward pass WITHOUT backgrounds
     auto [colorsNoBg, alphasNoBg, lastIdsNoBg] =
-        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(gaussians.means2d,
-                                                                          gaussians.conics,
-                                                                          gaussians.colors,
-                                                                          gaussians.opacities,
-                                                                          nanovdb::math::Vec4<uint32_t>(imageWidth, imageHeight, 0, 0),
-                                                                          tileSize,
-                                                                          tiles.tileOffsets,
-                                                                          tiles.tileGaussianIds);
+        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(
+            gaussians.means2d,
+            gaussians.conics,
+            gaussians.colors,
+            gaussians.opacities,
+            nanovdb::math::Vec4<uint32_t>(imageWidth, imageHeight, 0, 0),
+            tileSize,
+            tiles.tileOffsets,
+            tiles.tileGaussianIds);
 
     // Alphas and last IDs should be identical
     EXPECT_TRUE(torch::allclose(alphasWithBg, alphasNoBg));
@@ -1116,21 +1120,22 @@ TEST_F(GaussianRasterizeTestFixture, TestDenseBackwardWithBackgrounds) {
           dLossDConicsWithBg,
           dLossDColorsWithBg,
           dLossDOpacitiesWithBg] =
-        fvdb::detail::ops::dispatchGaussianRasterizeBackward<torch::kCUDA>(gaussians.means2d,
-                                                                           gaussians.conics,
-                                                                           gaussians.colors,
-                                                                           gaussians.opacities,
-                                                                           nanovdb::math::Vec4<uint32_t>(imageWidth, imageHeight, 0, 0),
-                                                                           tileSize,
-                                                                           tiles.tileOffsets,
-                                                                           tiles.tileGaussianIds,
-                                                                           alphasWithBg,
-                                                                           lastIdsWithBg,
-                                                                           gradColors,
-                                                                           gradAlphas,
-                                                                           false,
-                                                                           -1,
-                                                                           backgrounds);
+        fvdb::detail::ops::dispatchGaussianRasterizeBackward<torch::kCUDA>(
+            gaussians.means2d,
+            gaussians.conics,
+            gaussians.colors,
+            gaussians.opacities,
+            nanovdb::math::Vec4<uint32_t>(imageWidth, imageHeight, 0, 0),
+            tileSize,
+            tiles.tileOffsets,
+            tiles.tileGaussianIds,
+            alphasWithBg,
+            lastIdsWithBg,
+            gradColors,
+            gradAlphas,
+            false,
+            -1,
+            backgrounds);
 
     // Run backward pass WITHOUT backgrounds
     auto [dLossDMeans2dAbsNoBg,
@@ -1138,19 +1143,20 @@ TEST_F(GaussianRasterizeTestFixture, TestDenseBackwardWithBackgrounds) {
           dLossDConicsNoBg,
           dLossDColorsNoBg,
           dLossDOpacitiesNoBg] =
-        fvdb::detail::ops::dispatchGaussianRasterizeBackward<torch::kCUDA>(gaussians.means2d,
-                                                                           gaussians.conics,
-                                                                           gaussians.colors,
-                                                                           gaussians.opacities,
-                                                                           nanovdb::math::Vec4<uint32_t>(imageWidth, imageHeight, 0, 0),
-                                                                           tileSize,
-                                                                           tiles.tileOffsets,
-                                                                           tiles.tileGaussianIds,
-                                                                           alphasNoBg,
-                                                                           lastIdsNoBg,
-                                                                           gradColors,
-                                                                           gradAlphas,
-                                                                           false);
+        fvdb::detail::ops::dispatchGaussianRasterizeBackward<torch::kCUDA>(
+            gaussians.means2d,
+            gaussians.conics,
+            gaussians.colors,
+            gaussians.opacities,
+            nanovdb::math::Vec4<uint32_t>(imageWidth, imageHeight, 0, 0),
+            tileSize,
+            tiles.tileOffsets,
+            tiles.tileGaussianIds,
+            alphasNoBg,
+            lastIdsNoBg,
+            gradColors,
+            gradAlphas,
+            false);
 
     // Gradients should be DIFFERENT when backgrounds are used
     // (because transparent pixels now have background contribution)

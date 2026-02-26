@@ -181,10 +181,22 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
         checkInputShapes();
     }
 
-    inline __host__ __device__ uint32_t renderWidth() const { return mRenderWidth; }
-    inline __host__ __device__ uint32_t renderHeight() const { return mRenderHeight; }
-    inline __host__ __device__ uint32_t renderOriginX() const { return mRenderOriginX; }
-    inline __host__ __device__ uint32_t renderOriginY() const { return mRenderOriginY; }
+    inline __host__ __device__ uint32_t
+    renderWidth() const {
+        return mRenderWidth;
+    }
+    inline __host__ __device__ uint32_t
+    renderHeight() const {
+        return mRenderHeight;
+    }
+    inline __host__ __device__ uint32_t
+    renderOriginX() const {
+        return mRenderOriginX;
+    }
+    inline __host__ __device__ uint32_t
+    renderOriginY() const {
+        return mRenderOriginY;
+    }
 
     // Check that the input tensor shapes are valid
     void

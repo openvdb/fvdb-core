@@ -48,22 +48,22 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeNumContributingGa
         const std::optional<torch::Tensor> &tilePixelCumsum = std::nullopt, // [AT]
         const std::optional<torch::Tensor> &pixelMap        = std::nullopt)        // [AP]
 
-        : commonArgs(means2d,
-                     conics,
-                     opacities,
-                     std::nullopt,
-                     backgrounds,
-                     masks,
-                     nanovdb::math::Vec4<uint32_t>(
-                         imageWidth, imageHeight, imageOriginW, imageOriginH),
-                     tileSize,
-                     0,
-                     tileOffsets,
-                     tileGaussianIds,
-                     activeTiles,
-                     tilePixelMask,
-                     tilePixelCumsum,
-                     pixelMap),
+        : commonArgs(
+              means2d,
+              conics,
+              opacities,
+              std::nullopt,
+              backgrounds,
+              masks,
+              nanovdb::math::Vec4<uint32_t>(imageWidth, imageHeight, imageOriginW, imageOriginH),
+              tileSize,
+              0,
+              tileOffsets,
+              tileGaussianIds,
+              activeTiles,
+              tilePixelMask,
+              tilePixelCumsum,
+              pixelMap),
           mOutNumContributingGaussians(initJaggedAccessor<int32_t, 1>(
               outNumContributingGaussians, "outNumContributingGaussians")),
           mOutAlphas(initJaggedAccessor<ScalarType, 1>(outAlphas, "outAlphas")) {}

@@ -35,7 +35,8 @@ namespace ops {
 ///
 /// High-level algorithm:
 /// 1. **Generate sigma points** in world space for each 3D Gaussian (fixed 7-point UT in 3D).
-/// 2. **Project** each sigma point to pixels using the selected `DistortionModel` and rolling-shutter
+/// 2. **Project** each sigma point to pixels using the selected `DistortionModel` and
+/// rolling-shutter
 ///    policy.
 /// 3. **Reconstruct** the 2D mean and covariance from the projected sigma points + UT weights.
 /// 4. **Stabilize** covariance by adding a small blur term (`eps2d`) and compute the conic form.

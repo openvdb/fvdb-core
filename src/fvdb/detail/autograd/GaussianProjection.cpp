@@ -291,7 +291,7 @@ ProjectGaussiansJagged::backward(ProjectGaussiansJagged::AutogradContext *ctx,
     const int imageHeight = (int)ctx->saved_data["imageHeight"].toInt();
     const float eps2d     = (float)ctx->saved_data["eps2d"].toDouble();
     const bool ortho      = (bool)ctx->saved_data["ortho"].toBool();
-    auto variables       = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
+    auto variables        = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
         return ops::dispatchGaussianProjectionJaggedBackward<DeviceTag>(gSizes,
                                                                         means,
                                                                         quats,
@@ -310,7 +310,7 @@ ProjectGaussiansJagged::backward(ProjectGaussiansJagged::AutogradContext *ctx,
                                                                         dLossDConics,
                                                                         ctx->needs_input_grad(6));
     });
-    Variable dLossDMeans = std::get<0>(variables);
+    Variable dLossDMeans  = std::get<0>(variables);
     // Variable dLossDCovars = std::get<1>(variables);
     Variable dLossDQuats       = std::get<2>(variables);
     Variable dLossDScales      = std::get<3>(variables);

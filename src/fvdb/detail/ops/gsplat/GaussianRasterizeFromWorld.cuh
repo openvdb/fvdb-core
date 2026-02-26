@@ -4,10 +4,10 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLD_CUH
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLD_CUH
 
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRigidTransform.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
-#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 
 #include <nanovdb/math/Math.h>
 #include <nanovdb/math/Ray.h>
@@ -44,11 +44,11 @@ struct RasterizeFromWorldCommonArgs {
     const bool *masks;                       // [C, TH, TW] or nullptr
 
     // Common from-world inputs shared by forward/backward kernels.
-    Acc2f means;            // [N,3]
-    Acc2f quats;            // [N,4]
-    Acc2f logScales;        // [N,3]
-    Acc3f features;         // [C,N,D]
-    Acc2f opacities;        // [C,N]
+    Acc2f means;     // [N,3]
+    Acc2f quats;     // [N,4]
+    Acc2f logScales; // [N,3]
+    Acc3f features;  // [C,N,D]
+    Acc2f opacities; // [C,N]
 
     inline __device__ void
     denseCoordinates(uint32_t &cameraId,
@@ -82,7 +82,7 @@ struct RasterizeFromWorldCommonArgs {
     tileGaussianRange(const uint32_t cameraId,
                       const uint32_t tileRow,
                       const uint32_t tileCol) const {
-        const uint32_t numCameras = tileOffsets.size(0);
+        const uint32_t numCameras            = tileOffsets.size(0);
         const int32_t firstGaussianIdInBlock = tileOffsets[cameraId][tileRow][tileCol];
         auto [nextTileRow, nextTileCol]      = (tileCol < numTilesW - 1)
                                                    ? cuda::std::make_tuple(tileRow, tileCol + 1)

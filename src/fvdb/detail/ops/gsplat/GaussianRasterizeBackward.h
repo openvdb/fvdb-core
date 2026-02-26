@@ -7,6 +7,7 @@
 #include <fvdb/JaggedTensor.h>
 
 #include <nanovdb/math/Math.h>
+
 #include <torch/types.h>
 
 #include <tuple>
@@ -34,7 +35,8 @@ namespace ops {
 /// @param[in] tileOffsets Offsets for tiles [C, tile_height, tile_width]
 /// @param[in] tileGaussianIds Flattened Gaussian IDs for tile intersection [n_isects]
 /// @param[in] renderedAlphas Alpha values from forward pass [C, render_height, render_width, 1]
-/// @param[in] lastIds Last Gaussian IDs per pixel from forward pass [C, render_height, render_width]
+/// @param[in] lastIds Last Gaussian IDs per pixel from forward pass [C, render_height,
+/// render_width]
 /// @param[out] dLossDRenderedFeatures Gradients of loss with respect to rendered features [C,
 /// render_height, render_width, D]
 /// @param[out] dLossDRenderedAlphas Gradients of loss with respect to rendered alphas [C,
@@ -58,10 +60,10 @@ template <torch::DeviceType>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchGaussianRasterizeBackward(
     // Gaussian parameters
-    const torch::Tensor &means2d,   // [C, N, 2]
-    const torch::Tensor &conics,    // [C, N, 3]
-    const torch::Tensor &features,  // [C, N, D]
-    const torch::Tensor &opacities, // [N]
+    const torch::Tensor &means2d,                                // [C, N, 2]
+    const torch::Tensor &conics,                                 // [C, N, 3]
+    const torch::Tensor &features,                               // [C, N, D]
+    const torch::Tensor &opacities,                              // [N]
     const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,                            // [C, tile_height, tile_width]
@@ -74,7 +76,6 @@ dispatchGaussianRasterizeBackward(
     const int64_t numSharedChannelsOverride        = -1,
     const at::optional<torch::Tensor> &backgrounds = at::nullopt // [C, D]
 );
-
 
 /// @brief Calculate gradients for the sparse Gaussian rasterization process (backward pass)
 ///
@@ -153,7 +154,6 @@ dispatchGaussianSparseRasterizeBackward(
     const int64_t numSharedChannelsOverride        = -1,
     const at::optional<torch::Tensor> &backgrounds = at::nullopt // [C, D]
 );
-
 
 } // namespace ops
 } // namespace detail
