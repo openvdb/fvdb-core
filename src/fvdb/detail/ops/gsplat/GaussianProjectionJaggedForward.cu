@@ -1,9 +1,9 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianMacros.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.h>
-#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
@@ -20,15 +20,15 @@ template <typename T, typename CameraOp>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 jaggedProjectionForwardKernel(const uint32_t B,
                               const int64_t N,
-                              const int64_t *__restrict__ gSizes,       // [B]
-                              const int64_t *__restrict__ cSizes,       // [B]
-                              const int64_t *__restrict__ gIndex,       // [B] start indices
-                              const int64_t *__restrict__ cIndex,       // [B] start indices
-                              const int64_t *__restrict__ nIndex,       // [B] start indices
-                              const T *__restrict__ means,              // [N, 3]
-                              const T *__restrict__ covars,             // [N, 6] optional
-                              const T *__restrict__ quats,              // [N, 4] optional
-                              const T *__restrict__ scales,             // [N, 3] optional
+                              const int64_t *__restrict__ gSizes, // [B]
+                              const int64_t *__restrict__ cSizes, // [B]
+                              const int64_t *__restrict__ gIndex, // [B] start indices
+                              const int64_t *__restrict__ cIndex, // [B] start indices
+                              const int64_t *__restrict__ nIndex, // [B] start indices
+                              const T *__restrict__ means,        // [N, 3]
+                              const T *__restrict__ covars,       // [N, 6] optional
+                              const T *__restrict__ quats,        // [N, 4] optional
+                              const T *__restrict__ scales,       // [N, 3] optional
                               CameraOp cameraOp,
                               const T eps2d,
                               const T radiusClip,
@@ -183,14 +183,13 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
     }
     if (N) {
         if (ortho) {
-            const auto cameraOp = OrthographicCameraOp<float>{
-                    projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                    worldToCamMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                    static_cast<int32_t>(C),
-                    static_cast<int32_t>(imageWidth),
-                    static_cast<int32_t>(imageHeight),
-                    nearPlane,
-                    farPlane};
+            const auto cameraOp = OrthographicCameraOp<float>{projectionMatrices,
+                                                              worldToCamMatrices,
+                                                              static_cast<int32_t>(C),
+                                                              static_cast<int32_t>(imageWidth),
+                                                              static_cast<int32_t>(imageHeight),
+                                                              nearPlane,
+                                                              farPlane};
             jaggedProjectionForwardKernel<float, OrthographicCameraOp<float>>
                 <<<GET_BLOCKS(N, DEFAULT_BLOCK_DIM), DEFAULT_BLOCK_DIM, 0, stream>>>(
                     B,
@@ -213,14 +212,13 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
                     conics.data_ptr<float>(),
                     calc_compensations ? compensations.data_ptr<float>() : nullptr);
         } else {
-            const auto cameraOp = PerspectiveCameraOp<float>{
-                projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                worldToCamMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                static_cast<int32_t>(C),
-                static_cast<int32_t>(imageWidth),
-                static_cast<int32_t>(imageHeight),
-                nearPlane,
-                farPlane};
+            const auto cameraOp = PerspectiveCameraOp<float>{projectionMatrices,
+                                                             worldToCamMatrices,
+                                                             static_cast<int32_t>(C),
+                                                             static_cast<int32_t>(imageWidth),
+                                                             static_cast<int32_t>(imageHeight),
+                                                             nearPlane,
+                                                             farPlane};
             jaggedProjectionForwardKernel<float, PerspectiveCameraOp<float>>
                 <<<GET_BLOCKS(N, DEFAULT_BLOCK_DIM), DEFAULT_BLOCK_DIM, 0, stream>>>(
                     B,

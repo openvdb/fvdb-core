@@ -1,9 +1,9 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianMacros.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionBackward.h>
-#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
@@ -78,10 +78,10 @@ projectionBackwardKernel(const int32_t offset,
                          // fwd inputs
                          const uint32_t C,
                          const uint32_t N,
-                         const T *__restrict__ means,              // [N, 3]
-                         const T *__restrict__ covars,             // [N, 6] optional
-                         const T *__restrict__ quats,              // [N, 4] optional
-                         const T *__restrict__ logScales,          // [N, 3] optional
+                         const T *__restrict__ means,     // [N, 3]
+                         const T *__restrict__ covars,    // [N, 6] optional
+                         const T *__restrict__ quats,     // [N, 4] optional
+                         const T *__restrict__ logScales, // [N, 3] optional
                          CameraOp cameraOp,
                          const T eps2d,
                          // fwd outputs
@@ -156,8 +156,12 @@ projectionBackwardKernel(const int32_t offset,
     const nanovdb::math::Mat3<T> &covarCamSpace = transformCovarianceWorldToCam(R, covar);
 
     // vjp: camera projection
-    auto [dLossDCovarCamSpace, dLossDMeanCamSpace] = cameraOp.projectTo2DGaussianVJP(
-        cId, meansCamSpace, covarCamSpace, dLossDCovar2d, nanovdb::math::Vec2<T>(dLossDMeans2d[0], dLossDMeans2d[1]));
+    auto [dLossDCovarCamSpace, dLossDMeanCamSpace] =
+        cameraOp.projectTo2DGaussianVJP(cId,
+                                        meansCamSpace,
+                                        covarCamSpace,
+                                        dLossDCovar2d,
+                                        nanovdb::math::Vec2<T>(dLossDMeans2d[0], dLossDMeans2d[1]));
 
     // add contribution from dLossDDepths
     dLossDMeanCamSpace[2] += dLossDDepths[0];
@@ -315,76 +319,74 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
     if (C && N) {
         if (ortho) {
             const size_t NUM_BLOCKS = GET_BLOCKS(C * N, DEFAULT_BLOCK_DIM);
-            const auto cameraOp = OrthographicCameraOp<float>{
-                projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                worldToCamMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                static_cast<int32_t>(C),
-                static_cast<int32_t>(imageWidth),
-                static_cast<int32_t>(imageHeight),
-                -1e10f,
-                1e10f};
+            const auto cameraOp     = OrthographicCameraOp<float>{projectionMatrices,
+                                                                  worldToCamMatrices,
+                                                                  static_cast<int32_t>(C),
+                                                                  static_cast<int32_t>(imageWidth),
+                                                                  static_cast<int32_t>(imageHeight),
+                                                                  -1e10f,
+                                                                  1e10f};
             projectionBackwardKernel<float, OrthographicCameraOp<float>>
                 <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
-                0,
-                C * N,
-                C,
-                N,
-                means.data_ptr<float>(),
-                covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
-                covars.has_value() ? nullptr : quats.data_ptr<float>(),
-                covars.has_value() ? nullptr : logScales.data_ptr<float>(),
-                cameraOp,
-                eps2d,
-                radii.data_ptr<int32_t>(),
-                conics.data_ptr<float>(),
-                compensations.has_value() ? compensations.value().data_ptr<float>() : nullptr,
-                dLossDMeans2d.data_ptr<float>(),
-                dLossDDepths.data_ptr<float>(),
-                dLossDConics.data_ptr<float>(),
-                dLossDCompensations.has_value() ? dLossDCompensations.value().data_ptr<float>()
-                                                : nullptr,
-                dLossDMeans.data_ptr<float>(),
-                covars.has_value() ? dLossDCovars.data_ptr<float>() : nullptr,
-                covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
-                covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
-                worldToCamMatricesRequiresGrad ? dLossDWorldToCamMatrices.data_ptr<float>()
-                                               : nullptr);
+                    0,
+                    C * N,
+                    C,
+                    N,
+                    means.data_ptr<float>(),
+                    covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
+                    covars.has_value() ? nullptr : quats.data_ptr<float>(),
+                    covars.has_value() ? nullptr : logScales.data_ptr<float>(),
+                    cameraOp,
+                    eps2d,
+                    radii.data_ptr<int32_t>(),
+                    conics.data_ptr<float>(),
+                    compensations.has_value() ? compensations.value().data_ptr<float>() : nullptr,
+                    dLossDMeans2d.data_ptr<float>(),
+                    dLossDDepths.data_ptr<float>(),
+                    dLossDConics.data_ptr<float>(),
+                    dLossDCompensations.has_value() ? dLossDCompensations.value().data_ptr<float>()
+                                                    : nullptr,
+                    dLossDMeans.data_ptr<float>(),
+                    covars.has_value() ? dLossDCovars.data_ptr<float>() : nullptr,
+                    covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
+                    covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
+                    worldToCamMatricesRequiresGrad ? dLossDWorldToCamMatrices.data_ptr<float>()
+                                                   : nullptr);
         } else {
             const size_t NUM_BLOCKS = GET_BLOCKS(C * N, DEFAULT_BLOCK_DIM);
-            const auto cameraOp = PerspectiveCameraOp<float>{
-                projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                worldToCamMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                static_cast<int32_t>(C),
-                static_cast<int32_t>(imageWidth),
-                static_cast<int32_t>(imageHeight),
-                -1e10f,
-                1e10f};
+            const auto cameraOp     = PerspectiveCameraOp<float>{projectionMatrices,
+                                                                 worldToCamMatrices,
+                                                                 static_cast<int32_t>(C),
+                                                                 static_cast<int32_t>(imageWidth),
+                                                                 static_cast<int32_t>(imageHeight),
+                                                                 -1e10f,
+                                                                 1e10f};
             projectionBackwardKernel<float, PerspectiveCameraOp<float>>
                 <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
-                0,
-                C * N,
-                C,
-                N,
-                means.data_ptr<float>(),
-                covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
-                covars.has_value() ? nullptr : quats.data_ptr<float>(),
-                covars.has_value() ? nullptr : logScales.data_ptr<float>(),
-                cameraOp,
-                eps2d,
-                radii.data_ptr<int32_t>(),
-                conics.data_ptr<float>(),
-                compensations.has_value() ? compensations.value().data_ptr<float>() : nullptr,
-                dLossDMeans2d.data_ptr<float>(),
-                dLossDDepths.data_ptr<float>(),
-                dLossDConics.data_ptr<float>(),
-                dLossDCompensations.has_value() ? dLossDCompensations.value().data_ptr<float>()
-                                                : nullptr,
-                dLossDMeans.data_ptr<float>(),
-                covars.has_value() ? dLossDCovars.data_ptr<float>() : nullptr,
-                covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
-                covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
-                worldToCamMatricesRequiresGrad ? dLossDWorldToCamMatrices.data_ptr<float>()
-                                               : nullptr);
+                    0,
+                    C * N,
+                    C,
+                    N,
+                    means.data_ptr<float>(),
+                    covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
+                    covars.has_value() ? nullptr : quats.data_ptr<float>(),
+                    covars.has_value() ? nullptr : logScales.data_ptr<float>(),
+                    cameraOp,
+                    eps2d,
+                    radii.data_ptr<int32_t>(),
+                    conics.data_ptr<float>(),
+                    compensations.has_value() ? compensations.value().data_ptr<float>() : nullptr,
+                    dLossDMeans2d.data_ptr<float>(),
+                    dLossDDepths.data_ptr<float>(),
+                    dLossDConics.data_ptr<float>(),
+                    dLossDCompensations.has_value() ? dLossDCompensations.value().data_ptr<float>()
+                                                    : nullptr,
+                    dLossDMeans.data_ptr<float>(),
+                    covars.has_value() ? dLossDCovars.data_ptr<float>() : nullptr,
+                    covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
+                    covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
+                    worldToCamMatricesRequiresGrad ? dLossDWorldToCamMatrices.data_ptr<float>()
+                                                   : nullptr);
         }
         C10_CUDA_KERNEL_LAUNCH_CHECK();
 
@@ -489,49 +491,49 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
             const size_t NUM_BLOCKS = GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM);
 
             if (ortho) {
-                const auto cameraOp = OrthographicCameraOp<float>{
-                    projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                    worldToCamMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                    static_cast<int32_t>(C),
-                    static_cast<int32_t>(imageWidth),
-                    static_cast<int32_t>(imageHeight),
-                    -1e10f,
-                    1e10f};
+                const auto cameraOp = OrthographicCameraOp<float>{projectionMatrices,
+                                                                  worldToCamMatrices,
+                                                                  static_cast<int32_t>(C),
+                                                                  static_cast<int32_t>(imageWidth),
+                                                                  static_cast<int32_t>(imageHeight),
+                                                                  -1e10f,
+                                                                  1e10f};
                 projectionBackwardKernel<float, OrthographicCameraOp<float>>
                     <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
-                    deviceProblemOffset,
-                    deviceProblemSize,
-                    C,
-                    N,
-                    means.data_ptr<float>(),
-                    covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
-                    covars.has_value() ? nullptr : quats.data_ptr<float>(),
-                    covars.has_value() ? nullptr : logScales.data_ptr<float>(),
-                    cameraOp,
-                    eps2d,
-                    radii.data_ptr<int32_t>(),
-                    conics.data_ptr<float>(),
-                    compensations.has_value() ? compensations.value().data_ptr<float>() : nullptr,
-                    dLossDMeans2d.data_ptr<float>(),
-                    dLossDDepths.data_ptr<float>(),
-                    dLossDConics.data_ptr<float>(),
-                    dLossDCompensations.has_value() ? dLossDCompensations.value().data_ptr<float>()
-                                                    : nullptr,
-                    dLossDMeans.data_ptr<float>(),
-                    covars.has_value() ? dLossDCovars.data_ptr<float>() : nullptr,
-                    covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
-                    covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
-                    worldToCamMatricesRequiresGrad ? dLossDWorldToCamMatrices.data_ptr<float>()
-                                                   : nullptr);
+                        deviceProblemOffset,
+                        deviceProblemSize,
+                        C,
+                        N,
+                        means.data_ptr<float>(),
+                        covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
+                        covars.has_value() ? nullptr : quats.data_ptr<float>(),
+                        covars.has_value() ? nullptr : logScales.data_ptr<float>(),
+                        cameraOp,
+                        eps2d,
+                        radii.data_ptr<int32_t>(),
+                        conics.data_ptr<float>(),
+                        compensations.has_value() ? compensations.value().data_ptr<float>()
+                                                  : nullptr,
+                        dLossDMeans2d.data_ptr<float>(),
+                        dLossDDepths.data_ptr<float>(),
+                        dLossDConics.data_ptr<float>(),
+                        dLossDCompensations.has_value()
+                            ? dLossDCompensations.value().data_ptr<float>()
+                            : nullptr,
+                        dLossDMeans.data_ptr<float>(),
+                        covars.has_value() ? dLossDCovars.data_ptr<float>() : nullptr,
+                        covars.has_value() ? nullptr : dLossDQuats.data_ptr<float>(),
+                        covars.has_value() ? nullptr : dLossDScales.data_ptr<float>(),
+                        worldToCamMatricesRequiresGrad ? dLossDWorldToCamMatrices.data_ptr<float>()
+                                                       : nullptr);
             } else {
-                const auto cameraOp = PerspectiveCameraOp<float>{
-                    projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                    worldToCamMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                    static_cast<int32_t>(C),
-                    static_cast<int32_t>(imageWidth),
-                    static_cast<int32_t>(imageHeight),
-                    -1e10f,
-                    1e10f};
+                const auto cameraOp = PerspectiveCameraOp<float>{projectionMatrices,
+                                                                 worldToCamMatrices,
+                                                                 static_cast<int32_t>(C),
+                                                                 static_cast<int32_t>(imageWidth),
+                                                                 static_cast<int32_t>(imageHeight),
+                                                                 -1e10f,
+                                                                 1e10f};
                 projectionBackwardKernel<float, PerspectiveCameraOp<float>>
                     <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
                         deviceProblemOffset,

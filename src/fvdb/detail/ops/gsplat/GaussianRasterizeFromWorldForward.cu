@@ -153,7 +153,7 @@ template <uint32_t NUM_CHANNELS, typename CameraOp> struct RasterizeFromWorldFor
                 // 3DGS ray-ellipsoid visibility in "whitened" coordinates (see 3D-GUT paper
                 // Fig. 11). gro   = S^{-1} R^T (o - μ) grd   = normalize( S^{-1} R^T d ) gcrod =
                 // grd × gro  (distance proxy to principal axis in whitened space)
-                const nanovdb::math::Vec3<float> gro   = g.isclR * (ray.eye() - g.mean);
+                const nanovdb::math::Vec3<float> gro = g.isclR * (ray.eye() - g.mean);
                 const nanovdb::math::Vec3<float> grd =
                     fvdb::detail::ops::normalizeSafe<float>(g.isclR * ray.dir());
                 const nanovdb::math::Vec3<float> gcrod = grd.cross(gro);
@@ -272,8 +272,8 @@ launchForward(const torch::Tensor &means,
                              blockSize * (sizeof(int32_t) + sizeof(SharedGaussian<NUM_CHANNELS>));
 
     auto stream = at::cuda::getDefaultCUDAStream();
-    rasterizeGaussiansFromWorld<NUM_CHANNELS, CameraOp><<<gridDim, blockDim, sharedMem, stream>>>(
-        args);
+    rasterizeGaussiansFromWorld<NUM_CHANNELS, CameraOp>
+        <<<gridDim, blockDim, sharedMem, stream>>>(args);
 
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return {outFeatures, outAlphas, outLastIds};
@@ -359,35 +359,34 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
 
     const uint32_t channels = (uint32_t)features.size(2);
 
-#define CALL_FWD_WITH_OP(NCH, OP_TYPE, OP_VAL)            \
-    case NCH:                                              \
-        return launchForward<NCH, OP_TYPE>(means,          \
-                                           quats,          \
-                                           logScales,      \
-                                           features,       \
+#define CALL_FWD_WITH_OP(NCH, OP_TYPE, OP_VAL)               \
+    case NCH:                                                \
+        return launchForward<NCH, OP_TYPE>(means,            \
+                                           quats,            \
+                                           logScales,        \
+                                           features,         \
                                            opacitiesBatched, \
-                                           OP_VAL,                  \
-                                           imageWidth,              \
-                                           imageHeight,             \
-                                           imageOriginW,            \
-                                           imageOriginH,            \
-                                           tileSize,                \
-                                           tileOffsets,             \
-                                           tileGaussianIds,         \
-                                           backgrounds,             \
+                                           OP_VAL,           \
+                                           imageWidth,       \
+                                           imageHeight,      \
+                                           imageOriginW,     \
+                                           imageOriginH,     \
+                                           tileSize,         \
+                                           tileOffsets,      \
+                                           tileGaussianIds,  \
+                                           backgrounds,      \
                                            masks);
 
     if (cameraModel == DistortionModel::ORTHOGRAPHIC) {
-        const OrthographicWithDistortionCameraOp<float> cameraOp{
-            worldToCamMatricesStart.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            worldToCamMatricesEnd.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            static_cast<uint32_t>(C),
-            (int32_t)imageWidth,
-            (int32_t)imageHeight,
-            (int32_t)imageOriginW,
-            (int32_t)imageOriginH,
-            rollingShutterType};
+        const OrthographicWithDistortionCameraOp<float> cameraOp{worldToCamMatricesStart,
+                                                                 worldToCamMatricesEnd,
+                                                                 projectionMatrices,
+                                                                 static_cast<uint32_t>(C),
+                                                                 (int32_t)imageWidth,
+                                                                 (int32_t)imageHeight,
+                                                                 (int32_t)imageOriginW,
+                                                                 (int32_t)imageOriginH,
+                                                                 rollingShutterType};
         switch (channels) {
             CALL_FWD_WITH_OP(1, OrthographicWithDistortionCameraOp<float>, cameraOp)
             CALL_FWD_WITH_OP(2, OrthographicWithDistortionCameraOp<float>, cameraOp)
@@ -411,24 +410,22 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
             CALL_FWD_WITH_OP(512, OrthographicWithDistortionCameraOp<float>, cameraOp)
             CALL_FWD_WITH_OP(513, OrthographicWithDistortionCameraOp<float>, cameraOp)
         default:
-            TORCH_CHECK_VALUE(false,
-                              "Unsupported channels for rasterize-from-world-3dgs: ",
-                              channels);
+            TORCH_CHECK_VALUE(
+                false, "Unsupported channels for rasterize-from-world-3dgs: ", channels);
         }
     } else {
-        const PerspectiveWithDistortionCameraOp<float> cameraOp{
-            worldToCamMatricesStart.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            worldToCamMatricesEnd.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            distortionCoeffs.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-            static_cast<uint32_t>(C),
-            distortionCoeffs.size(1),
-            (int32_t)imageWidth,
-            (int32_t)imageHeight,
-            (int32_t)imageOriginW,
-            (int32_t)imageOriginH,
-            rollingShutterType,
-            cameraModel};
+        const PerspectiveWithDistortionCameraOp<float> cameraOp{worldToCamMatricesStart,
+                                                                worldToCamMatricesEnd,
+                                                                projectionMatrices,
+                                                                distortionCoeffs,
+                                                                static_cast<uint32_t>(C),
+                                                                distortionCoeffs.size(1),
+                                                                (int32_t)imageWidth,
+                                                                (int32_t)imageHeight,
+                                                                (int32_t)imageOriginW,
+                                                                (int32_t)imageOriginH,
+                                                                rollingShutterType,
+                                                                cameraModel};
         switch (channels) {
             CALL_FWD_WITH_OP(1, PerspectiveWithDistortionCameraOp<float>, cameraOp)
             CALL_FWD_WITH_OP(2, PerspectiveWithDistortionCameraOp<float>, cameraOp)
@@ -452,9 +449,8 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
             CALL_FWD_WITH_OP(512, PerspectiveWithDistortionCameraOp<float>, cameraOp)
             CALL_FWD_WITH_OP(513, PerspectiveWithDistortionCameraOp<float>, cameraOp)
         default:
-            TORCH_CHECK_VALUE(false,
-                              "Unsupported channels for rasterize-from-world-3dgs: ",
-                              channels);
+            TORCH_CHECK_VALUE(
+                false, "Unsupported channels for rasterize-from-world-3dgs: ", channels);
         }
     }
 

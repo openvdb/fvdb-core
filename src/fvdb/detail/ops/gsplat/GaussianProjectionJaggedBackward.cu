@@ -1,9 +1,9 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianMacros.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedBackward.h>
-#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
@@ -26,15 +26,15 @@ jaggedProjectionBackwardKernel(
     // fwd inputs
     const uint32_t B,
     const int64_t N,
-    const int64_t *__restrict__ gSizes,       // [B]
-    const int64_t *__restrict__ cSizes,       // [B]
-    const int64_t *__restrict__ gIndexPtr,    // [B] start indices
-    const int64_t *__restrict__ cIndexPtr,    // [B] start indices
-    const int64_t *__restrict__ nIndexPtr,    // [B] start indices
-    const T *__restrict__ means,              // [N, 3]
-    const T *__restrict__ covars,             // [N, 6] optional
-    const T *__restrict__ quats,              // [N, 4] optional
-    const T *__restrict__ scales,             // [N, 3] optional
+    const int64_t *__restrict__ gSizes,    // [B]
+    const int64_t *__restrict__ cSizes,    // [B]
+    const int64_t *__restrict__ gIndexPtr, // [B] start indices
+    const int64_t *__restrict__ cIndexPtr, // [B] start indices
+    const int64_t *__restrict__ nIndexPtr, // [B] start indices
+    const T *__restrict__ means,           // [N, 3]
+    const T *__restrict__ covars,          // [N, 6] optional
+    const T *__restrict__ quats,           // [N, 4] optional
+    const T *__restrict__ scales,          // [N, 3] optional
     CameraOp cameraOp,
     const T eps2d,
     // fwd outputs
@@ -109,8 +109,12 @@ jaggedProjectionBackwardKernel(
     const nanovdb::math::Mat3<T> &covarCamSpace = transformCovarianceWorldToCam(R, covar);
 
     // vjp: camera projection
-    auto [dLossDCovarCamSpace, dLossDMeanCamSpace] = cameraOp.projectTo2DGaussianVJP(
-        cId, meansCamSpace, covarCamSpace, dLossDCovar2d, nanovdb::math::Vec2<T>(dLossDMeans2d[0], dLossDMeans2d[1]));
+    auto [dLossDCovarCamSpace, dLossDMeanCamSpace] =
+        cameraOp.projectTo2DGaussianVJP(cId,
+                                        meansCamSpace,
+                                        covarCamSpace,
+                                        dLossDCovar2d,
+                                        nanovdb::math::Vec2<T>(dLossDMeans2d[0], dLossDMeans2d[1]));
 
     // add contribution from dLossDDepths
     dLossDMeanCamSpace[2] += dLossDDepths[0];
@@ -269,14 +273,13 @@ dispatchGaussianProjectionJaggedBackward<torch::kCUDA>(
     }
     if (N) {
         if (ortho) {
-            const auto cameraOp = OrthographicCameraOp<float>{
-                projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                worldToCamMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                static_cast<int32_t>(C),
-                static_cast<int32_t>(imageWidth),
-                static_cast<int32_t>(imageHeight),
-                -1e10f,
-                1e10f};
+            const auto cameraOp = OrthographicCameraOp<float>{projectionMatrices,
+                                                              worldToCamMatrices,
+                                                              static_cast<int32_t>(C),
+                                                              static_cast<int32_t>(imageWidth),
+                                                              static_cast<int32_t>(imageHeight),
+                                                              -1e10f,
+                                                              1e10f};
             jaggedProjectionBackwardKernel<float, OrthographicCameraOp<float>>
                 <<<GET_BLOCKS(N, DEFAULT_BLOCK_DIM), DEFAULT_BLOCK_DIM, 0, stream>>>(
                     B,
@@ -307,14 +310,13 @@ dispatchGaussianProjectionJaggedBackward<torch::kCUDA>(
                     worldToCamMatricesRequiresGrad ? outDLossDWorldToCamMatrices.data_ptr<float>()
                                                    : nullptr);
         } else {
-            const auto cameraOp = PerspectiveCameraOp<float>{
-                projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                worldToCamMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                static_cast<int32_t>(C),
-                static_cast<int32_t>(imageWidth),
-                static_cast<int32_t>(imageHeight),
-                -1e10f,
-                1e10f};
+            const auto cameraOp = PerspectiveCameraOp<float>{projectionMatrices,
+                                                             worldToCamMatrices,
+                                                             static_cast<int32_t>(C),
+                                                             static_cast<int32_t>(imageWidth),
+                                                             static_cast<int32_t>(imageHeight),
+                                                             -1e10f,
+                                                             1e10f};
             jaggedProjectionBackwardKernel<float, PerspectiveCameraOp<float>>
                 <<<GET_BLOCKS(N, DEFAULT_BLOCK_DIM), DEFAULT_BLOCK_DIM, 0, stream>>>(
                     B,

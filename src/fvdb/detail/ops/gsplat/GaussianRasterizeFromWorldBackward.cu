@@ -505,39 +505,38 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
 
     const uint32_t channels = (uint32_t)features.size(2);
 
-#define CALL_BWD_WITH_OP(NCH, OP_TYPE, OP_VAL)            \
-    case NCH:                                              \
-        return launchBackward<NCH, OP_TYPE>(means,         \
-                                            quats,         \
-                                            logScales,     \
-                                            features,      \
-                                            opacitiesBatched, \
-                                            OP_VAL,                  \
-                                            imageWidth,              \
-                                            imageHeight,             \
-                                            imageOriginW,            \
-                                            imageOriginH,            \
-                                            tileSize,                \
-                                            tileOffsets,             \
-                                            tileGaussianIds,         \
-                                            renderedAlphas,          \
-                                            lastIds,                 \
-                                            dLossDRenderedFeatures,  \
-                                            dLossDRenderedAlphas,    \
-                                            backgrounds,             \
+#define CALL_BWD_WITH_OP(NCH, OP_TYPE, OP_VAL)                      \
+    case NCH:                                                       \
+        return launchBackward<NCH, OP_TYPE>(means,                  \
+                                            quats,                  \
+                                            logScales,              \
+                                            features,               \
+                                            opacitiesBatched,       \
+                                            OP_VAL,                 \
+                                            imageWidth,             \
+                                            imageHeight,            \
+                                            imageOriginW,           \
+                                            imageOriginH,           \
+                                            tileSize,               \
+                                            tileOffsets,            \
+                                            tileGaussianIds,        \
+                                            renderedAlphas,         \
+                                            lastIds,                \
+                                            dLossDRenderedFeatures, \
+                                            dLossDRenderedAlphas,   \
+                                            backgrounds,            \
                                             masks);
 
     if (cameraModel == DistortionModel::ORTHOGRAPHIC) {
-        const OrthographicWithDistortionCameraOp<float> cameraOp{
-            worldToCamMatricesStart.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            worldToCamMatricesEnd.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            static_cast<uint32_t>(C),
-            (int32_t)imageWidth,
-            (int32_t)imageHeight,
-            (int32_t)imageOriginW,
-            (int32_t)imageOriginH,
-            rollingShutterType};
+        const OrthographicWithDistortionCameraOp<float> cameraOp{worldToCamMatricesStart,
+                                                                 worldToCamMatricesEnd,
+                                                                 projectionMatrices,
+                                                                 static_cast<uint32_t>(C),
+                                                                 (int32_t)imageWidth,
+                                                                 (int32_t)imageHeight,
+                                                                 (int32_t)imageOriginW,
+                                                                 (int32_t)imageOriginH,
+                                                                 rollingShutterType};
         switch (channels) {
             CALL_BWD_WITH_OP(1, OrthographicWithDistortionCameraOp<float>, cameraOp)
             CALL_BWD_WITH_OP(2, OrthographicWithDistortionCameraOp<float>, cameraOp)
@@ -561,24 +560,22 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
             CALL_BWD_WITH_OP(512, OrthographicWithDistortionCameraOp<float>, cameraOp)
             CALL_BWD_WITH_OP(513, OrthographicWithDistortionCameraOp<float>, cameraOp)
         default:
-            TORCH_CHECK_VALUE(false,
-                              "Unsupported channels for rasterize-from-world-3dgs backward: ",
-                              channels);
+            TORCH_CHECK_VALUE(
+                false, "Unsupported channels for rasterize-from-world-3dgs backward: ", channels);
         }
     } else {
-        const PerspectiveWithDistortionCameraOp<float> cameraOp{
-            worldToCamMatricesStart.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            worldToCamMatricesEnd.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            projectionMatrices.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            distortionCoeffs.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-            static_cast<uint32_t>(C),
-            distortionCoeffs.size(1),
-            (int32_t)imageWidth,
-            (int32_t)imageHeight,
-            (int32_t)imageOriginW,
-            (int32_t)imageOriginH,
-            rollingShutterType,
-            cameraModel};
+        const PerspectiveWithDistortionCameraOp<float> cameraOp{worldToCamMatricesStart,
+                                                                worldToCamMatricesEnd,
+                                                                projectionMatrices,
+                                                                distortionCoeffs,
+                                                                static_cast<uint32_t>(C),
+                                                                distortionCoeffs.size(1),
+                                                                (int32_t)imageWidth,
+                                                                (int32_t)imageHeight,
+                                                                (int32_t)imageOriginW,
+                                                                (int32_t)imageOriginH,
+                                                                rollingShutterType,
+                                                                cameraModel};
         switch (channels) {
             CALL_BWD_WITH_OP(1, PerspectiveWithDistortionCameraOp<float>, cameraOp)
             CALL_BWD_WITH_OP(2, PerspectiveWithDistortionCameraOp<float>, cameraOp)
@@ -602,9 +599,8 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
             CALL_BWD_WITH_OP(512, PerspectiveWithDistortionCameraOp<float>, cameraOp)
             CALL_BWD_WITH_OP(513, PerspectiveWithDistortionCameraOp<float>, cameraOp)
         default:
-            TORCH_CHECK_VALUE(false,
-                              "Unsupported channels for rasterize-from-world-3dgs backward: ",
-                              channels);
+            TORCH_CHECK_VALUE(
+                false, "Unsupported channels for rasterize-from-world-3dgs backward: ", channels);
         }
     }
 
