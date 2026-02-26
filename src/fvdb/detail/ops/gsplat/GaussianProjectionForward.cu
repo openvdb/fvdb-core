@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
-#include <fvdb/detail/ops/gsplat/GaussianProjectionUtils.cuh>
-#include <fvdb/detail/ops/gsplat/GaussianProjection.h>
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>

@@ -3,8 +3,7 @@
 //
 #include <fvdb/detail/ops/gsplat/GaussianMacros.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.h>
-#include <fvdb/detail/ops/gsplat/GaussianProjectionUtils.cuh>
-#include <fvdb/detail/ops/gsplat/GaussianProjection.h>
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
 #include <fvdb/detail/utils/Nvtx.h>

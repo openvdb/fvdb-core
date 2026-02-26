@@ -7,7 +7,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianRigidTransform.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
-#include <fvdb/detail/ops/gsplat/GaussianProjectionUtils.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 
 #include <nanovdb/math/Math.h>
 #include <nanovdb/math/Ray.h>

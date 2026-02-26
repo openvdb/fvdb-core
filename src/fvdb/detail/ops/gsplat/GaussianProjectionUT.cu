@@ -3,7 +3,7 @@
 //
 
 #include <fvdb/detail/ops/gsplat/GaussianCameraAccessorCopy.cuh>
-#include <fvdb/detail/ops/gsplat/GaussianProjectionUtils.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionUT.h>
 #include <fvdb/detail/ops/gsplat/GaussianRigidTransform.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>

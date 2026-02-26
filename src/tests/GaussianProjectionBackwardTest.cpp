@@ -5,7 +5,7 @@
 
 #include <fvdb/detail/ops/gsplat/GaussianProjectionBackward.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
-#include <fvdb/detail/ops/gsplat/GaussianProjection.h>
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 
 #include <torch/script.h>
 #include <torch/types.h>

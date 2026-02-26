@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_AUTOGRAD_GAUSSIANRASTERIZEFROMWORLD_H
 #define FVDB_DETAIL_AUTOGRAD_GAUSSIANRASTERIZEFROMWORLD_H
 
-#include <fvdb/detail/ops/gsplat/GaussianProjection.h>
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 
 #include <torch/autograd.h>
 
