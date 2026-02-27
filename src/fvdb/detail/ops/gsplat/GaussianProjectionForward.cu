@@ -138,8 +138,7 @@ template <typename T, typename CameraOp> struct ProjectionForward {
         }
 
         // Mask out gaussians outside the image region
-        if (isOutsideImageWithRadius(
-                mean2d, radius, radius, mCameraOp.imageWidthPx(), mCameraOp.imageHeightPx())) {
+        if (mCameraOp.projectedFootprintOutsideImage(mean2d, radius, radius)) {
             mOutRadiiAcc[cid][gid] = 0;
             return;
         }

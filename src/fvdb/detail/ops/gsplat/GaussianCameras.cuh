@@ -205,14 +205,12 @@ template <typename T> struct PerspectiveCameraOp {
         return depth >= nearPlane && depth <= farPlane;
     }
 
-    inline __host__ __device__ int32_t
-    imageWidthPx() const {
-        return imageWidth;
-    }
-
-    inline __host__ __device__ int32_t
-    imageHeightPx() const {
-        return imageHeight;
+    /// @brief Return whether a projected Gaussian footprint is outside image bounds.
+    inline __device__ bool
+    projectedFootprintOutsideImage(const nanovdb::math::Vec2<T> &mean2d,
+                                   const T radiusX,
+                                   const T radiusY) const {
+        return isOutsideImageWithRadius(mean2d, radiusX, radiusY, imageWidth, imageHeight);
     }
 
     inline __device__ std::tuple<Mat3, Vec3>
@@ -408,14 +406,12 @@ template <typename T> struct OrthographicCameraOp {
         return depth >= nearPlane && depth <= farPlane;
     }
 
-    inline __host__ __device__ int32_t
-    imageWidthPx() const {
-        return imageWidth;
-    }
-
-    inline __host__ __device__ int32_t
-    imageHeightPx() const {
-        return imageHeight;
+    /// @brief Return whether a projected Gaussian footprint is outside image bounds.
+    inline __device__ bool
+    projectedFootprintOutsideImage(const nanovdb::math::Vec2<T> &mean2d,
+                                   const T radiusX,
+                                   const T radiusY) const {
+        return isOutsideImageWithRadius(mean2d, radiusX, radiusY, imageWidth, imageHeight);
     }
 
     inline __device__ std::tuple<Mat3, Vec3>
