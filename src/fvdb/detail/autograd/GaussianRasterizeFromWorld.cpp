@@ -153,8 +153,8 @@ RasterizeGaussiansToPixelsFromWorld3DGS::backward(
     const uint32_t imageOriginW = (uint32_t)ctx->saved_data["imageOriginW"].toInt();
     const uint32_t imageOriginH = (uint32_t)ctx->saved_data["imageOriginH"].toInt();
     const uint32_t tileSize     = (uint32_t)ctx->saved_data["tileSize"].toInt();
-    const auto distortionModel = static_cast<fvdb::detail::ops::DistortionModel>(
-        ctx->saved_data["distortionModel"].toInt());
+    const auto distortionModel =
+        static_cast<fvdb::detail::ops::DistortionModel>(ctx->saved_data["distortionModel"].toInt());
     const auto rollingShutterType = static_cast<fvdb::detail::ops::RollingShutterType>(
         ctx->saved_data["rollingShutterType"].toInt());
 
