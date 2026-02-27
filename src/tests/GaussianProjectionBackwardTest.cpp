@@ -178,14 +178,14 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
                                                                                scales,
                                                                                viewmats,
                                                                                Ks,
-                                                                               false,
                                                                                imageWidth,
                                                                                imageHeight,
                                                                                0.3,
                                                                                1e-2,
                                                                                1e10,
                                                                                0,
-                                                                               true);
+                                                                               false,
+                                                                               false);
 
         const auto C = radii_proj.size(0);
         const auto N = radii_proj.size(1);
@@ -254,13 +254,13 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
                                                                                scales,
                                                                                viewmats,
                                                                                Ks,
-                                                                               false,
                                                                                imageWidth,
                                                                                imageHeight,
                                                                                0.3,
                                                                                1e-2,
                                                                                1e10,
                                                                                0,
+                                                                               false,
                                                                                true);
 
         const auto C = radii_proj.size(0);
