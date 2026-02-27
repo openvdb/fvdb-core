@@ -55,17 +55,7 @@ jaggedProjectionForwardKernel(const uint32_t B,
 
     // shift pointers to the current camera and gaussian
     means += gId * 3;
-    const auto [R, t] = cameraOp.worldToCamRt(cId);
-    // transform Gaussian center to camera space
-    const nanovdb::math::Vec3<T> meansCamSpace =
-        transformPointWorldToCam(R, t, nanovdb::math::Vec3<T>(means[0], means[1], means[2]));
-
-    if (!cameraOp.isDepthVisible(meansCamSpace[2])) {
-        radii[idx] = 0;
-        return;
-    }
-
-    // transform Gaussian covariance to camera space
+    const nanovdb::math::Vec3<T> meanWorldSpace(means[0], means[1], means[2]);
     nanovdb::math::Mat3<T> covar;
     if (covars != nullptr) {
         covars += gId * 6;
@@ -79,10 +69,11 @@ jaggedProjectionForwardKernel(const uint32_t B,
         loadQuatScaleFromScalesRowMajor(quats, scales, quat, scale);
         covar = quaternionAndScaleToCovariance<T>(quat, scale);
     }
-    const nanovdb::math::Mat3<T> covarCamSpace = transformCovarianceWorldToCam(R, covar);
-
-    // camera projection
-    auto [covar2d, mean2d] = cameraOp.projectTo2DGaussian(cId, meansCamSpace, covarCamSpace);
+    auto [covar2d, mean2d, depthCam] = cameraOp.projectWorldGaussianTo2D(cId, meanWorldSpace, covar);
+    if (!cameraOp.isDepthVisible(depthCam)) {
+        radii[idx] = 0;
+        return;
+    }
 
     T compensation;
     const T det = addBlur(eps2d, covar2d, compensation);
@@ -114,7 +105,7 @@ jaggedProjectionForwardKernel(const uint32_t B,
     radii[idx]                               = (int32_t)radius;
     means2d[idx * 2]                         = mean2d[0];
     means2d[idx * 2 + 1]                     = mean2d[1];
-    depths[idx]                              = meansCamSpace[2];
+    depths[idx]                              = depthCam;
     const nanovdb::math::Vec3<T> conicPacked = packConicRowMajor3(covar2dInverse);
     conics[idx * 3]                          = conicPacked[0];
     conics[idx * 3 + 1]                      = conicPacked[1];

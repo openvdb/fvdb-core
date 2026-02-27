@@ -364,6 +364,48 @@ template <typename T> struct PerspectiveCameraOp {
                            T(2) * fx * tx * rz3 * dJ[0][2] + T(2) * fy * ty * rz3 * dJ[1][2];
         return {dLossDCovar3d, dLossDMean3d};
     }
+
+    /// @brief Projects a world-space Gaussian directly to 2D outputs.
+    ///
+    /// Internally applies world-to-camera transform and covariance transform before projection.
+    /// Returns `(cov2d, mean2d, depthCam)`.
+    inline __device__ std::tuple<nanovdb::math::Mat2<T>, nanovdb::math::Vec2<T>, T>
+    projectWorldGaussianTo2D(const int64_t cid,
+                             const nanovdb::math::Vec3<T> &meansWorldSpace,
+                             const nanovdb::math::Mat3<T> &covarWorldSpace) const {
+        const auto [R, t] = worldToCamRt(cid);
+        const nanovdb::math::Vec3<T> meansCamSpace = transformPointWorldToCam(R, t, meansWorldSpace);
+        const nanovdb::math::Mat3<T> covarCamSpace = transformCovarianceWorldToCam(R, covarWorldSpace);
+        auto [covar2d, mean2d]                      = projectTo2DGaussian(cid, meansCamSpace, covarCamSpace);
+        return {covar2d, mean2d, meansCamSpace[2]};
+    }
+
+    /// @brief Backpropagates projection gradients from 2D outputs to world/camera-space inputs.
+    ///
+    /// Returns `(dLossDCovarWorld, dLossDMeanWorld, dLossDRotation, dLossDTranslation)`.
+    inline __device__
+        std::tuple<nanovdb::math::Mat3<T>, nanovdb::math::Vec3<T>, nanovdb::math::Mat3<T>, nanovdb::math::Vec3<T>>
+        projectWorldGaussianTo2DVJP(const int64_t cid,
+                                    const nanovdb::math::Vec3<T> &meansWorldSpace,
+                                    const nanovdb::math::Mat3<T> &covarWorldSpace,
+                                    const nanovdb::math::Mat2<T> &dLossDCovar2d,
+                                    const nanovdb::math::Vec2<T> &dLossDMeans2d,
+                                    const T dLossDDepth) const {
+        const auto [R, t]                           = worldToCamRt(cid);
+        const nanovdb::math::Vec3<T> meansCamSpace = transformPointWorldToCam(R, t, meansWorldSpace);
+        const nanovdb::math::Mat3<T> covarCamSpace = transformCovarianceWorldToCam(R, covarWorldSpace);
+
+        auto [dLossDCovarCamSpace, dLossDMeanCamSpace] =
+            projectTo2DGaussianVJP(cid, meansCamSpace, covarCamSpace, dLossDCovar2d, dLossDMeans2d);
+        dLossDMeanCamSpace[2] += dLossDDepth;
+
+        auto [dLossDRotation, dLossDTranslation, dLossDMeanWorld] =
+            transformPointWorldToCamVectorJacobianProduct(R, t, meansWorldSpace, dLossDMeanCamSpace);
+        auto [dLossDRotationCov, dLossDCovarWorld] =
+            transformCovarianceWorldToCamVectorJacobianProduct(R, covarWorldSpace, dLossDCovarCamSpace);
+        dLossDRotation += dLossDRotationCov;
+        return {dLossDCovarWorld, dLossDMeanWorld, dLossDRotation, dLossDTranslation};
+    }
 };
 
 /// @brief Orthographic camera model without distortion for projection/rasterization kernels.
@@ -530,6 +572,48 @@ template <typename T> struct OrthographicCameraOp {
         const Mat3 dLossDCovar3d(J.transpose() * dLossDCovar2d * J);
         const Vec3 dLossDMean3d(fx * dLossDMeans2d[0], fy * dLossDMeans2d[1], T(0));
         return {dLossDCovar3d, dLossDMean3d};
+    }
+
+    /// @brief Projects a world-space Gaussian directly to 2D outputs.
+    ///
+    /// Internally applies world-to-camera transform and covariance transform before projection.
+    /// Returns `(cov2d, mean2d, depthCam)`.
+    inline __device__ std::tuple<nanovdb::math::Mat2<T>, nanovdb::math::Vec2<T>, T>
+    projectWorldGaussianTo2D(const int64_t cid,
+                             const nanovdb::math::Vec3<T> &meansWorldSpace,
+                             const nanovdb::math::Mat3<T> &covarWorldSpace) const {
+        const auto [R, t] = worldToCamRt(cid);
+        const nanovdb::math::Vec3<T> meansCamSpace = transformPointWorldToCam(R, t, meansWorldSpace);
+        const nanovdb::math::Mat3<T> covarCamSpace = transformCovarianceWorldToCam(R, covarWorldSpace);
+        auto [covar2d, mean2d]                      = projectTo2DGaussian(cid, meansCamSpace, covarCamSpace);
+        return {covar2d, mean2d, meansCamSpace[2]};
+    }
+
+    /// @brief Backpropagates projection gradients from 2D outputs to world/camera-space inputs.
+    ///
+    /// Returns `(dLossDCovarWorld, dLossDMeanWorld, dLossDRotation, dLossDTranslation)`.
+    inline __device__
+        std::tuple<nanovdb::math::Mat3<T>, nanovdb::math::Vec3<T>, nanovdb::math::Mat3<T>, nanovdb::math::Vec3<T>>
+        projectWorldGaussianTo2DVJP(const int64_t cid,
+                                    const nanovdb::math::Vec3<T> &meansWorldSpace,
+                                    const nanovdb::math::Mat3<T> &covarWorldSpace,
+                                    const nanovdb::math::Mat2<T> &dLossDCovar2d,
+                                    const nanovdb::math::Vec2<T> &dLossDMeans2d,
+                                    const T dLossDDepth) const {
+        const auto [R, t]                           = worldToCamRt(cid);
+        const nanovdb::math::Vec3<T> meansCamSpace = transformPointWorldToCam(R, t, meansWorldSpace);
+        const nanovdb::math::Mat3<T> covarCamSpace = transformCovarianceWorldToCam(R, covarWorldSpace);
+
+        auto [dLossDCovarCamSpace, dLossDMeanCamSpace] =
+            projectTo2DGaussianVJP(cid, meansCamSpace, covarCamSpace, dLossDCovar2d, dLossDMeans2d);
+        dLossDMeanCamSpace[2] += dLossDDepth;
+
+        auto [dLossDRotation, dLossDTranslation, dLossDMeanWorld] =
+            transformPointWorldToCamVectorJacobianProduct(R, t, meansWorldSpace, dLossDMeanCamSpace);
+        auto [dLossDRotationCov, dLossDCovarWorld] =
+            transformCovarianceWorldToCamVectorJacobianProduct(R, covarWorldSpace, dLossDCovarCamSpace);
+        dLossDRotation += dLossDRotationCov;
+        return {dLossDCovarWorld, dLossDMeanWorld, dLossDRotation, dLossDTranslation};
     }
 };
 

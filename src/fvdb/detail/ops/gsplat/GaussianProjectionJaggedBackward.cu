@@ -88,8 +88,7 @@ jaggedProjectionBackwardKernel(
             eps2d, covar2dInverse, compensation, dLossDCompensation);
     }
 
-    // transform Gaussian to camera space
-    const auto [R, t] = cameraOp.worldToCamRt(cId);
+    // Build world-space Gaussian parameters
     nanovdb::math::Mat3<T> covar;
     nanovdb::math::Vec4<T> quat;
     nanovdb::math::Vec3<T> scale;
@@ -103,31 +102,14 @@ jaggedProjectionBackwardKernel(
         loadQuatScaleFromScalesRowMajor(quats, scales, quat, scale);
         covar = quaternionAndScaleToCovariance<T>(quat, scale);
     }
-    const nanovdb::math::Vec3<T> &meansCamSpace =
-        transformPointWorldToCam(R, t, nanovdb::math::Vec3<T>(means[0], means[1], means[2]));
-
-    const nanovdb::math::Mat3<T> &covarCamSpace = transformCovarianceWorldToCam(R, covar);
-
-    // vjp: camera projection
-    auto [dLossDCovarCamSpace, dLossDMeanCamSpace] =
-        cameraOp.projectTo2DGaussianVJP(cId,
-                                        meansCamSpace,
-                                        covarCamSpace,
-                                        dLossDCovar2d,
-                                        nanovdb::math::Vec2<T>(dLossDMeans2d[0], dLossDMeans2d[1]));
-
-    // add contribution from dLossDDepths
-    dLossDMeanCamSpace[2] += dLossDDepths[0];
-
-    // vjp: transform Gaussian covariance to camera space
-    auto [dLossDRotation, dLossDTranslation, dLossDPoint] =
-        transformPointWorldToCamVectorJacobianProduct(
-            R, t, nanovdb::math::Vec3<T>(means[0], means[1], means[2]), dLossDMeanCamSpace);
-
-    auto [dLossDRotationCov, dLossDCovar] =
-        transformCovarianceWorldToCamVectorJacobianProduct(R, covar, dLossDCovarCamSpace);
-
-    dLossDRotation += dLossDRotationCov;
+    const nanovdb::math::Vec3<T> meanWorldSpace(means[0], means[1], means[2]);
+    auto [dLossDCovar, dLossDPoint, dLossDRotation, dLossDTranslation] =
+        cameraOp.projectWorldGaussianTo2DVJP(cId,
+                                             meanWorldSpace,
+                                             covar,
+                                             dLossDCovar2d,
+                                             nanovdb::math::Vec2<T>(dLossDMeans2d[0], dLossDMeans2d[1]),
+                                             dLossDDepths[0]);
 
     // write out results with warp-level reduction
     auto warp         = cg::tiled_partition<32>(cg::this_thread_block());

@@ -102,23 +102,13 @@ template <typename T, typename CameraOp> struct ProjectionForward {
         const auto cid = idx / N; // camera id
         const auto gid = idx % N; // gaussian id
 
-        const auto [worldToCamRotMatrix, worldToCamTrans] = mCameraOp.worldToCamRt(cid);
-
-        // transform Gaussian center to camera space
         const Vec3 meanWorldSpace(mMeansAcc[gid][0], mMeansAcc[gid][1], mMeansAcc[gid][2]);
-        const nanovdb::math::Vec3<T> meansCamSpace =
-            transformPointWorldToCam(worldToCamRotMatrix, worldToCamTrans, meanWorldSpace);
-        if (!mCameraOp.isDepthVisible(meansCamSpace[2])) {
+        const Mat3 covar = computeCovarianceMatrix(gid);
+        auto [covar2d, mean2d, depthCam] = mCameraOp.projectWorldGaussianTo2D(cid, meanWorldSpace, covar);
+        if (!mCameraOp.isDepthVisible(depthCam)) {
             mOutRadiiAcc[cid][gid] = 0;
             return;
         }
-
-        // transform Gaussian covariance to camera space
-        const Mat3 covar         = computeCovarianceMatrix(gid);
-        const Mat3 covarCamSpace = transformCovarianceWorldToCam(worldToCamRotMatrix, covar);
-
-        // camera projection
-        auto [covar2d, mean2d] = mCameraOp.projectTo2DGaussian(cid, meansCamSpace, covarCamSpace);
 
         T compensation;
         const T det = addBlur(mEps2d, covar2d, compensation);
@@ -147,7 +137,7 @@ template <typename T, typename CameraOp> struct ProjectionForward {
         mOutRadiiAcc[cid][gid]                   = int32_t(radius);
         mOutMeans2dAcc[cid][gid][0]              = mean2d[0];
         mOutMeans2dAcc[cid][gid][1]              = mean2d[1];
-        mOutDepthsAcc[cid][gid]                  = meansCamSpace[2];
+        mOutDepthsAcc[cid][gid]                  = depthCam;
         const nanovdb::math::Vec3<T> conicPacked = packConicRowMajor3(covar2dInverse);
         mOutConicsAcc[cid][gid][0]               = conicPacked[0];
         mOutConicsAcc[cid][gid][1]               = conicPacked[1];
