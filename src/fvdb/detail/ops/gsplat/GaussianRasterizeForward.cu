@@ -41,16 +41,13 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Ras
         const torch::Tensor &features,        // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
         const std::optional<torch::Tensor> &backgrounds, // [C, NUM_CHANNELS]
         const std::optional<torch::Tensor> &masks,       // [C, numTilesH, numTilesW]
-        const uint32_t imageWidth,
-        const uint32_t imageHeight,
-        const uint32_t imageOriginW,
-        const uint32_t imageOriginH,
+        const nanovdb::math::Vec4<uint32_t> &renderWindow,
         const uint32_t tileSize,
         const uint32_t blockOffset,
         const torch::Tensor &tileOffsets,     // [C, numTilesH, numTilesW]
         const torch::Tensor &tileGaussianIds, // [totalIntersections]
         // output JaggedTensors:
-        // In Dense mode, first dimension X = C * imageHeight * imageWidth
+        // In Dense mode, first dimension X = C * renderHeight * renderWidth
         // In Sparse mode, first dimension X = C * nPixels_i (i from 0 to C-1)
         const fvdb::JaggedTensor &outFeatures,                          // [X, NUM_CHANNELS]
         const fvdb::JaggedTensor &outAlphas,                            // [X, 1]
@@ -66,10 +63,7 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Ras
                      features,
                      backgrounds,
                      masks,
-                     imageWidth,
-                     imageHeight,
-                     imageOriginW,
-                     imageOriginH,
+                     renderWindow,
                      tileSize,
                      blockOffset,
                      tileOffsets,
@@ -152,8 +146,8 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Ras
 
         // (row, col) coordinates are relative to the specified image origin which may
         // be a crop so we need to add the origin to get the absolute pixel coordinates
-        const ScalarType px = col + commonArgs.mImageOriginW + ScalarType{0.5f};
-        const ScalarType py = row + commonArgs.mImageOriginH + ScalarType{0.5f};
+        const ScalarType px = col + commonArgs.mRenderOriginX + ScalarType{0.5f};
+        const ScalarType py = row + commonArgs.mRenderOriginY + ScalarType{0.5f};
 
         // collect and process batches of gaussians
         // each thread loads one gaussian at a time before rasterizing its
@@ -312,10 +306,7 @@ launchRasterizeForwardKernel(
     const at::optional<torch::Tensor> &backgrounds, // [C, channels]
     const at::optional<torch::Tensor> &masks,       // [C, tile_height, tile_width]
     // image size
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
+    const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     // intersections
     const torch::Tensor &tileOffsets,     // [C, tile_height, tile_width]
@@ -330,9 +321,9 @@ launchRasterizeForwardKernel(
     // tileOffsets can be 3D (dense) or 1D (sparse)
     const bool tileOffsetsAreSparse = tileOffsets.dim() == 1;
     if (!tileOffsetsAreSparse) {
-        TORCH_CHECK_VALUE(tileOffsets.size(2) == (imageWidth + tileSize - 1) / tileSize,
+        TORCH_CHECK_VALUE(tileOffsets.size(2) == (renderWindow[0] + tileSize - 1) / tileSize,
                           "tileOffsets width must match the number of tiles in image size");
-        TORCH_CHECK_VALUE(tileOffsets.size(1) == (imageHeight + tileSize - 1) / tileSize,
+        TORCH_CHECK_VALUE(tileOffsets.size(1) == (renderWindow[1] + tileSize - 1) / tileSize,
                           "tileOffsets height must match the number of tiles in image size");
     }
 
@@ -353,7 +344,7 @@ launchRasterizeForwardKernel(
 
     const auto sizes = pixelsToRender.has_value()
                            ? pixelsToRender.value().lsizes1()
-                           : std::vector<int64_t>{C * imageHeight * imageWidth};
+                           : std::vector<int64_t>{C * renderWindow[1] * renderWindow[0]};
     std::vector<torch::Tensor> featuresToRenderVec;
     std::vector<torch::Tensor> alphasToRenderVec;
     std::vector<torch::Tensor> lastIdsToRenderVec;
@@ -374,10 +365,7 @@ launchRasterizeForwardKernel(
                                                                           features,
                                                                           backgrounds,
                                                                           masks,
-                                                                          imageWidth,
-                                                                          imageHeight,
-                                                                          imageOriginW,
-                                                                          imageOriginH,
+                                                                          renderWindow,
                                                                           tileSize,
                                                                           0,
                                                                           tileOffsets,
@@ -417,10 +405,12 @@ launchRasterizeForwardKernel(
     // because they are packed into a single JaggedTensor so that the output code is the same
     // for dense and sparse modes.
     if (!args.commonArgs.mIsSparse) {
-        outFeatures =
-            fvdb::JaggedTensor(outFeatures.jdata().view({C, imageHeight, imageWidth, channels}));
-        outAlphas  = fvdb::JaggedTensor(outAlphas.jdata().view({C, imageHeight, imageWidth, 1}));
-        outLastIds = fvdb::JaggedTensor(outLastIds.jdata().view({C, imageHeight, imageWidth}));
+        outFeatures = fvdb::JaggedTensor(outFeatures.jdata().view(
+            {C, args.commonArgs.renderHeight(), args.commonArgs.renderWidth(), channels}));
+        outAlphas   = fvdb::JaggedTensor(outAlphas.jdata().view(
+            {C, args.commonArgs.renderHeight(), args.commonArgs.renderWidth(), 1}));
+        outLastIds  = fvdb::JaggedTensor(outLastIds.jdata().view(
+            {C, args.commonArgs.renderHeight(), args.commonArgs.renderWidth()}));
     }
 
     return std::make_tuple(outFeatures, outAlphas, outLastIds);
@@ -437,10 +427,7 @@ launchRasterizeForwardKernels(
     const at::optional<torch::Tensor> &backgrounds, // [C, channels]
     const at::optional<torch::Tensor> &masks,       // [C, tile_height, tile_width]
     // image size
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
+    const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     // intersections
     const torch::Tensor &tileOffsets,     // [C, tile_height, tile_width]
@@ -451,9 +438,9 @@ launchRasterizeForwardKernels(
     const std::optional<torch::Tensor> &tilePixelCumsum     = std::nullopt,
     const std::optional<torch::Tensor> &pixelMap            = std::nullopt) {
     TORCH_CHECK_VALUE(tileOffsets.dim() == 3, "tileOffsets must be 3D [C, TH, TW]");
-    TORCH_CHECK_VALUE(tileOffsets.size(2) == (imageWidth + tileSize - 1) / tileSize,
+    TORCH_CHECK_VALUE(tileOffsets.size(2) == (renderWindow[0] + tileSize - 1) / tileSize,
                       "tileOffsets width must match the number of tiles in image size");
-    TORCH_CHECK_VALUE(tileOffsets.size(1) == (imageHeight + tileSize - 1) / tileSize,
+    TORCH_CHECK_VALUE(tileOffsets.size(1) == (renderWindow[1] + tileSize - 1) / tileSize,
                       "tileOffsets height must match the number of tiles in image size");
 
     const bool packed = means2d.dim() == 2;
@@ -462,8 +449,8 @@ launchRasterizeForwardKernels(
     const uint32_t N        = packed ? 0 : means2d.size(1); // number of gaussians
     const uint32_t channels = features.size(-1);
 
-    const uint32_t tileExtentH = (imageHeight + tileSize - 1) / tileSize;
-    const uint32_t tileExtentW = (imageWidth + tileSize - 1) / tileSize;
+    const uint32_t tileExtentH = (renderWindow[1] + tileSize - 1) / tileSize;
+    const uint32_t tileExtentW = (renderWindow[0] + tileSize - 1) / tileSize;
 
     TORCH_CHECK_VALUE(pixelMap.has_value() == pixelsToRender.has_value(),
                       "pixelMap and pixelsToRender must be provided together");
@@ -474,7 +461,7 @@ launchRasterizeForwardKernels(
 
     const auto sizes = pixelsToRender.has_value()
                            ? pixelsToRender.value().lsizes1()
-                           : std::vector<int64_t>{C * imageHeight * imageWidth};
+                           : std::vector<int64_t>{C * renderWindow[1] * renderWindow[0]};
     std::vector<torch::Tensor> featuresToRenderVec;
     std::vector<torch::Tensor> alphasToRenderVec;
     std::vector<torch::Tensor> lastIdsToRenderVec;
@@ -505,10 +492,7 @@ launchRasterizeForwardKernels(
                                                                                   features,
                                                                                   backgrounds,
                                                                                   masks,
-                                                                                  imageWidth,
-                                                                                  imageHeight,
-                                                                                  imageOriginW,
-                                                                                  imageOriginH,
+                                                                                  renderWindow,
                                                                                   tileSize,
                                                                                   deviceTileOffset,
                                                                                   tileOffsets,
@@ -570,10 +554,12 @@ launchRasterizeForwardKernels(
     // because they are packed into a single JaggedTensor so that the output code is the same
     // for dense and sparse modes.
     if (!isSparse) {
-        outFeatures =
-            fvdb::JaggedTensor(outFeatures.jdata().view({C, imageHeight, imageWidth, channels}));
-        outAlphas  = fvdb::JaggedTensor(outAlphas.jdata().view({C, imageHeight, imageWidth, 1}));
-        outLastIds = fvdb::JaggedTensor(outLastIds.jdata().view({C, imageHeight, imageWidth}));
+        outFeatures = fvdb::JaggedTensor(
+            outFeatures.jdata().view({C, renderWindow[1], renderWindow[0], channels}));
+        outAlphas =
+            fvdb::JaggedTensor(outAlphas.jdata().view({C, renderWindow[1], renderWindow[0], 1}));
+        outLastIds =
+            fvdb::JaggedTensor(outLastIds.jdata().view({C, renderWindow[1], renderWindow[0]}));
     }
 
     return std::make_tuple(outFeatures, outAlphas, outLastIds);
@@ -585,14 +571,11 @@ template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchGaussianRasterizeForward<torch::kCUDA>(
     // Gaussian parameters
-    const torch::Tensor &means2d,   // [C, N, 2]
-    const torch::Tensor &conics,    // [C, N, 3]
-    const torch::Tensor &features,  // [C, N, D]
-    const torch::Tensor &opacities, // [N]
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
+    const torch::Tensor &means2d,                   // [C, N, 2]
+    const torch::Tensor &conics,                    // [C, N, 3]
+    const torch::Tensor &features,                  // [C, N, D]
+    const torch::Tensor &opacities,                 // [N]
+    const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,               // [C, tile_height, tile_width]
     const torch::Tensor &tileGaussianIds,           // [n_isects]
@@ -613,10 +596,7 @@ dispatchGaussianRasterizeForward<torch::kCUDA>(
                                                              opacities,                         \
                                                              backgrounds,                       \
                                                              masks,                             \
-                                                             imageWidth,                        \
-                                                             imageHeight,                       \
-                                                             imageOriginW,                      \
-                                                             imageOriginH,                      \
+                                                             renderWindow,                      \
                                                              tileSize,                          \
                                                              tileOffsets,                       \
                                                              tileGaussianIds);                  \
@@ -629,10 +609,7 @@ dispatchGaussianRasterizeForward<torch::kCUDA>(
                                                               opacities,                        \
                                                               backgrounds,                      \
                                                               masks,                            \
-                                                              imageWidth,                       \
-                                                              imageHeight,                      \
-                                                              imageOriginW,                     \
-                                                              imageOriginH,                     \
+                                                              renderWindow,                     \
                                                               tileSize,                         \
                                                               tileOffsets,                      \
                                                               tileGaussianIds);                 \
@@ -679,10 +656,7 @@ dispatchGaussianRasterizeForward<torch::kPrivateUse1>(
     const torch::Tensor &features,  // [C, N, D]
     const torch::Tensor &opacities, // [N]
     // image size
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
+    const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     // intersections
     const torch::Tensor &tileOffsets,               // [C, tile_height, tile_width]
@@ -704,10 +678,7 @@ dispatchGaussianRasterizeForward<torch::kPrivateUse1>(
                                                               opacities,                        \
                                                               backgrounds,                      \
                                                               masks,                            \
-                                                              imageWidth,                       \
-                                                              imageHeight,                      \
-                                                              imageOriginW,                     \
-                                                              imageOriginH,                     \
+                                                              renderWindow,                     \
                                                               tileSize,                         \
                                                               tileOffsets,                      \
                                                               tileGaussianIds);                 \
@@ -720,10 +691,7 @@ dispatchGaussianRasterizeForward<torch::kPrivateUse1>(
                                                                opacities,                       \
                                                                backgrounds,                     \
                                                                masks,                           \
-                                                               imageWidth,                      \
-                                                               imageHeight,                     \
-                                                               imageOriginW,                    \
-                                                               imageOriginH,                    \
+                                                               renderWindow,                    \
                                                                tileSize,                        \
                                                                tileOffsets,                     \
                                                                tileGaussianIds);                \
@@ -770,10 +738,7 @@ dispatchGaussianRasterizeForward<torch::kCPU>(
     const torch::Tensor &features,  // [C, N, D]
     const torch::Tensor &opacities, // [N]
     // image size
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
+    const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     // intersections
     const torch::Tensor &tileOffsets,               // [C, tile_height, tile_width]
@@ -790,14 +755,11 @@ dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
     // sparse pixel coordinates
     const fvdb::JaggedTensor &pixelsToRender, // [C, maxPixelsPerCamera, 2]
     // Gaussian parameters
-    const torch::Tensor &means2d,   // [C, N, 2]
-    const torch::Tensor &conics,    // [C, N, 3]
-    const torch::Tensor &features,  // [C, N, D]
-    const torch::Tensor &opacities, // [N]
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
+    const torch::Tensor &means2d,     // [C, N, 2]
+    const torch::Tensor &conics,      // [C, N, 3]
+    const torch::Tensor &features,    // [C, N, D]
+    const torch::Tensor &opacities,   // [N]
+    const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
     const torch::Tensor &tileGaussianIds, // [n_isects]
@@ -821,10 +783,7 @@ dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
                                                                 opacities,        \
                                                                 backgrounds,      \
                                                                 masks,            \
-                                                                imageWidth,       \
-                                                                imageHeight,      \
-                                                                imageOriginW,     \
-                                                                imageOriginH,     \
+                                                                renderWindow,     \
                                                                 tileSize,         \
                                                                 tileOffsets,      \
                                                                 tileGaussianIds,  \
@@ -840,10 +799,7 @@ dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
                                                                  opacities,       \
                                                                  backgrounds,     \
                                                                  masks,           \
-                                                                 imageWidth,      \
-                                                                 imageHeight,     \
-                                                                 imageOriginW,    \
-                                                                 imageOriginH,    \
+                                                                 renderWindow,    \
                                                                  tileSize,        \
                                                                  tileOffsets,     \
                                                                  tileGaussianIds, \
@@ -891,14 +847,11 @@ dispatchGaussianSparseRasterizeForward<torch::kPrivateUse1>(
     // sparse pixel coordinates
     const fvdb::JaggedTensor &pixelsToRender, // [C, maxPixelsPerCamera, 2]
     // Gaussian parameters
-    const torch::Tensor &means2d,   // [C, N, 2]
-    const torch::Tensor &conics,    // [C, N, 3]
-    const torch::Tensor &features,  // [C, N, D]
-    const torch::Tensor &opacities, // [N]
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
+    const torch::Tensor &means2d,     // [C, N, 2]
+    const torch::Tensor &conics,      // [C, N, 3]
+    const torch::Tensor &features,    // [C, N, D]
+    const torch::Tensor &opacities,   // [N]
+    const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
     const torch::Tensor &tileGaussianIds, // [n_isects]
@@ -916,14 +869,11 @@ dispatchGaussianSparseRasterizeForward<torch::kCPU>(
     // sparse pixel coordinates
     const fvdb::JaggedTensor &pixelsToRender, // [C, maxPixelsPerCamera, 2]
     // Gaussian parameters
-    const torch::Tensor &means2d,   // [C, N, 2]
-    const torch::Tensor &conics,    // [C, N, 3]
-    const torch::Tensor &features,  // [C, N, D]
-    const torch::Tensor &opacities, // [N]
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
+    const torch::Tensor &means2d,     // [C, N, 2]
+    const torch::Tensor &conics,      // [C, N, 3]
+    const torch::Tensor &features,    // [C, N, D]
+    const torch::Tensor &opacities,   // [N]
+    const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
     const torch::Tensor &tileGaussianIds, // [n_isects]

@@ -65,7 +65,7 @@ def _render_from_world(
         image_height=image_height,
         near=0.01,
         far=1e10,
-        camera_model=fvdb.CameraModel.PINHOLE,
+        camera_model=fvdb.DistortionModel.PINHOLE,
         distortion_coeffs=None,
         sh_degree_to_use=sh_degree_to_use,
         tile_size=tile_size,

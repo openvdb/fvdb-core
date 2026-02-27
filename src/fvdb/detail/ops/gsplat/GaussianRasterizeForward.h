@@ -6,6 +6,8 @@
 
 #include <fvdb/JaggedTensor.h>
 
+#include <nanovdb/math/Math.h>
+
 #include <torch/types.h>
 
 #include <tuple>
@@ -28,10 +30,8 @@ namespace ops {
 /// ax² + 2bxy + cy²
 /// @param[in] features Feature / color values of Gaussians [C, N, D]
 /// @param[in] opacities Opacity values for each Gaussian [N]
-/// @param[in] imageWidth Width of the output image in pixels
-/// @param[in] imageHeight Height of the output image in pixels
-/// @param[in] imageOriginW X-coordinate of the image origin (left)
-/// @param[in] imageOriginH Y-coordinate of the image origin (top)
+/// @param[in] renderWindow Packed render window as `[renderWidth, renderHeight, renderOriginX,
+/// renderOriginY]`
 /// @param[in] tileSize Size of tiles used for rasterization optimization
 /// @param[in] tileOffsets Offsets for tiles [C, tile_height, tile_width] indicating for each tile
 /// where its Gaussians start
@@ -42,19 +42,16 @@ namespace ops {
 /// black.
 ///
 /// @return std::tuple containing:
-///         - Rendered image features/colors [C, image_height, image_width, D]
-///         - Alpha values [C, image_height, image_width, 1]
-///         - Last Gaussian ID rendered at each pixel [C, image_height, image_width]
+///         - Rendered image features/colors [C, render_height, render_width, D]
+///         - Alpha values [C, render_height, render_width, 1]
+///         - Last Gaussian ID rendered at each pixel [C, render_height, render_width]
 template <torch::DeviceType>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> dispatchGaussianRasterizeForward(
-    const torch::Tensor &means2d,   // [C, N, 2]
-    const torch::Tensor &conics,    // [C, N, 3]
-    const torch::Tensor &features,  // [C, N, D]
-    const torch::Tensor &opacities, // [N]
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
+    const torch::Tensor &means2d,                                 // [C, N, 2]
+    const torch::Tensor &conics,                                  // [C, N, 3]
+    const torch::Tensor &features,                                // [C, N, D]
+    const torch::Tensor &opacities,                               // [N]
+    const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,                             // [C, tile_height, tile_width]
     const torch::Tensor &tileGaussianIds,                         // [n_isects]
@@ -70,10 +67,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> dispatchGaussianRasteriz
 /// @param conics Tensor of conic parameters.
 /// @param features Tensor of features (colors, etc).
 /// @param opacities Tensor of opacities.
-/// @param imageWidth Width of the full image (for coordinate calculations).
-/// @param imageHeight Height of the full image (for coordinate calculations).
-/// @param imageOriginW Horizontal origin of the image grid.
-/// @param imageOriginH Vertical origin of the image grid.
+/// @param renderWindow Packed render window as `[renderWidth, renderHeight, renderOriginX,
+/// renderOriginY]`.
 /// @param tileSize Size of the tiles used for processing.
 /// @param tileOffsets Tensor containing offsets for each tile.
 /// @param tileGaussianIds Tensor mapping tiles to Gaussian IDs.
@@ -96,10 +91,7 @@ dispatchGaussianSparseRasterizeForward(
     const torch::Tensor &conics,
     const torch::Tensor &features,
     const torch::Tensor &opacities,
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
+    const nanovdb::math::Vec4<uint32_t> &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,
     const torch::Tensor &tileGaussianIds,

@@ -35,7 +35,6 @@ ProjectGaussians::forward(ProjectGaussians::AutogradContext *ctx,
     TORCH_CHECK(means.dim() == 2, "means must have shape (N, 3)");
     TORCH_CHECK(worldToCamMatrices.dim() == 3, "worldToCamMatrices must have shape (C, 4, 4)");
     TORCH_CHECK(projectionMatrices.dim() == 3, "projectionMatrices must have shape (C, 3, 3)");
-
     auto variables   = FVDB_DISPATCH_KERNEL(means.device(), [&]() {
         return ops::dispatchGaussianProjectionForward<DeviceTag>(means,
                                                                  quats,
@@ -143,7 +142,6 @@ ProjectGaussians::backward(ProjectGaussians::AutogradContext *ctx,
     const bool ortho          = ctx->saved_data["ortho"].toBool();
     const bool saveAccumState = ctx->saved_data["saveAccumState"].toBool();
     const bool trackMaxRadii  = ctx->saved_data["trackMaxRadii"].toBool();
-
     auto [normalizeddLossdMeans2dNormAccum, normalizedMaxRadiiAccum, gradientStepCount] = [&]() {
         return std::make_tuple(
             saveAccumState ? std::optional<at::Tensor>(
@@ -293,8 +291,7 @@ ProjectGaussiansJagged::backward(ProjectGaussiansJagged::AutogradContext *ctx,
     const int imageHeight = (int)ctx->saved_data["imageHeight"].toInt();
     const float eps2d     = (float)ctx->saved_data["eps2d"].toDouble();
     const bool ortho      = (bool)ctx->saved_data["ortho"].toBool();
-
-    auto variables       = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
+    auto variables        = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
         return ops::dispatchGaussianProjectionJaggedBackward<DeviceTag>(gSizes,
                                                                         means,
                                                                         quats,
@@ -313,7 +310,7 @@ ProjectGaussiansJagged::backward(ProjectGaussiansJagged::AutogradContext *ctx,
                                                                         ctx->needs_input_grad(6),
                                                                         ortho);
     });
-    Variable dLossDMeans = std::get<0>(variables);
+    Variable dLossDMeans  = std::get<0>(variables);
     // Variable dLossDCovars = std::get<1>(variables);
     Variable dLossDQuats       = std::get<2>(variables);
     Variable dLossDScales      = std::get<3>(variables);

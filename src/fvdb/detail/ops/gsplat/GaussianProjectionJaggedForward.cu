@@ -1,9 +1,9 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianMacros.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.h>
-#include <fvdb/detail/ops/gsplat/GaussianProjectionUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianWarpUtils.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
@@ -16,26 +16,21 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <typename T, bool Ortho>
+template <typename T, typename CameraOp>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 jaggedProjectionForwardKernel(const uint32_t B,
                               const int64_t N,
-                              const int64_t *__restrict__ gSizes,       // [B]
-                              const int64_t *__restrict__ cSizes,       // [B]
-                              const int64_t *__restrict__ gIndex,       // [B] start indices
-                              const int64_t *__restrict__ cIndex,       // [B] start indices
-                              const int64_t *__restrict__ nIndex,       // [B] start indices
-                              const T *__restrict__ means,              // [N, 3]
-                              const T *__restrict__ covars,             // [N, 6] optional
-                              const T *__restrict__ quats,              // [N, 4] optional
-                              const T *__restrict__ scales,             // [N, 3] optional
-                              const T *__restrict__ worldToCamMatrices, // [C, 4, 4]
-                              const T *__restrict__ projectionMatrices, // [C, 3, 3]
-                              const int32_t imageWidth,
-                              const int32_t imageHeight,
+                              const int64_t *__restrict__ gSizes, // [B]
+                              const int64_t *__restrict__ cSizes, // [B]
+                              const int64_t *__restrict__ gIndex, // [B] start indices
+                              const int64_t *__restrict__ cIndex, // [B] start indices
+                              const int64_t *__restrict__ nIndex, // [B] start indices
+                              const T *__restrict__ means,        // [N, 3]
+                              const T *__restrict__ covars,       // [N, 6] optional
+                              const T *__restrict__ quats,        // [N, 4] optional
+                              const T *__restrict__ scales,       // [N, 3] optional
+                              CameraOp cameraOp,
                               const T eps2d,
-                              const T nearPlane,
-                              const T farPlane,
                               const T radiusClip,
                               // outputs
                               int32_t *__restrict__ radii,  // [N]
@@ -60,21 +55,7 @@ jaggedProjectionForwardKernel(const uint32_t B,
 
     // shift pointers to the current camera and gaussian
     means += gId * 3;
-    worldToCamMatrices += cId * 16;
-    projectionMatrices += cId * 9;
-
-    // input is row-major
-    const auto [R, t] = loadWorldToCamRtRowMajor4x4(worldToCamMatrices);
-    // transform Gaussian center to camera space
-    const nanovdb::math::Vec3<T> meansCamSpace =
-        transformPointWorldToCam(R, t, nanovdb::math::Vec3<T>(means[0], means[1], means[2]));
-
-    if (meansCamSpace[2] < nearPlane || meansCamSpace[2] > farPlane) {
-        radii[idx] = 0;
-        return;
-    }
-
-    // transform Gaussian covariance to camera space
+    const nanovdb::math::Vec3<T> meanWorldSpace(means[0], means[1], means[2]);
     nanovdb::math::Mat3<T> covar;
     if (covars != nullptr) {
         covars += gId * 6;
@@ -88,31 +69,12 @@ jaggedProjectionForwardKernel(const uint32_t B,
         loadQuatScaleFromScalesRowMajor(quats, scales, quat, scale);
         covar = quaternionAndScaleToCovariance<T>(quat, scale);
     }
-    const nanovdb::math::Mat3<T> covarCamSpace = transformCovarianceWorldToCam(R, covar);
-
-    // camera projection
-    const CameraIntrinsics<T> intrinsics(projectionMatrices);
-    auto [covar2d, mean2d] = [&]() {
-        if constexpr (Ortho) {
-            return projectGaussianOrthographic<T>(meansCamSpace,
-                                                  covarCamSpace,
-                                                  intrinsics.fx,
-                                                  intrinsics.fy,
-                                                  intrinsics.cx,
-                                                  intrinsics.cy,
-                                                  imageWidth,
-                                                  imageHeight);
-        } else {
-            return projectGaussianPerspective<T>(meansCamSpace,
-                                                 covarCamSpace,
-                                                 intrinsics.fx,
-                                                 intrinsics.fy,
-                                                 intrinsics.cx,
-                                                 intrinsics.cy,
-                                                 imageWidth,
-                                                 imageHeight);
-        }
-    }();
+    auto [covar2d, mean2d, depthCam] =
+        cameraOp.projectWorldGaussianTo2D(cId, meanWorldSpace, covar);
+    if (!cameraOp.isDepthVisible(depthCam)) {
+        radii[idx] = 0;
+        return;
+    }
 
     T compensation;
     const T det = addBlur(eps2d, covar2d, compensation);
@@ -135,7 +97,7 @@ jaggedProjectionForwardKernel(const uint32_t B,
     }
 
     // mask out gaussians outside the image region
-    if (isOutsideImageWithRadius(mean2d, radius, radius, imageWidth, imageHeight)) {
+    if (cameraOp.projectedFootprintOutsideImage(mean2d, radius, radius)) {
         radii[idx] = 0;
         return;
     }
@@ -144,7 +106,7 @@ jaggedProjectionForwardKernel(const uint32_t B,
     radii[idx]                               = (int32_t)radius;
     means2d[idx * 2]                         = mean2d[0];
     means2d[idx * 2 + 1]                     = mean2d[1];
-    depths[idx]                              = meansCamSpace[2];
+    depths[idx]                              = depthCam;
     const nanovdb::math::Vec3<T> conicPacked = packConicRowMajor3(covar2dInverse);
     conics[idx * 3]                          = conicPacked[0];
     conics[idx * 3 + 1]                      = conicPacked[1];
@@ -191,6 +153,7 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
 
     // TODO: use inclusive sum
     const uint32_t B     = gSizes.size(0);
+    const int64_t C      = worldToCamMatrices.size(0);
     torch::Tensor cIndex = torch::cumsum(cSizes, 0, torch::kInt64) - cSizes;
     torch::Tensor gIndex = torch::cumsum(gSizes, 0, torch::kInt64) - gSizes;
     torch::Tensor nSize  = cSizes * gSizes;            // element size = Ci * Ni
@@ -211,7 +174,14 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
     }
     if (N) {
         if (ortho) {
-            jaggedProjectionForwardKernel<float, true>
+            const auto cameraOp = OrthographicCameraOp<float>{projectionMatrices,
+                                                              worldToCamMatrices,
+                                                              static_cast<int32_t>(C),
+                                                              static_cast<int32_t>(imageWidth),
+                                                              static_cast<int32_t>(imageHeight),
+                                                              nearPlane,
+                                                              farPlane};
+            jaggedProjectionForwardKernel<float, OrthographicCameraOp<float>>
                 <<<GET_BLOCKS(N, DEFAULT_BLOCK_DIM), DEFAULT_BLOCK_DIM, 0, stream>>>(
                     B,
                     N,
@@ -224,13 +194,8 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
                     covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
                     covars.has_value() ? nullptr : quats.data_ptr<float>(),
                     covars.has_value() ? nullptr : scales.data_ptr<float>(),
-                    worldToCamMatrices.data_ptr<float>(),
-                    projectionMatrices.data_ptr<float>(),
-                    imageWidth,
-                    imageHeight,
+                    cameraOp,
                     eps2d,
-                    nearPlane,
-                    farPlane,
                     minRadius2d,
                     radii.data_ptr<int32_t>(),
                     means2d.data_ptr<float>(),
@@ -238,7 +203,14 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
                     conics.data_ptr<float>(),
                     calc_compensations ? compensations.data_ptr<float>() : nullptr);
         } else {
-            jaggedProjectionForwardKernel<float, false>
+            const auto cameraOp = PerspectiveCameraOp<float>{projectionMatrices,
+                                                             worldToCamMatrices,
+                                                             static_cast<int32_t>(C),
+                                                             static_cast<int32_t>(imageWidth),
+                                                             static_cast<int32_t>(imageHeight),
+                                                             nearPlane,
+                                                             farPlane};
+            jaggedProjectionForwardKernel<float, PerspectiveCameraOp<float>>
                 <<<GET_BLOCKS(N, DEFAULT_BLOCK_DIM), DEFAULT_BLOCK_DIM, 0, stream>>>(
                     B,
                     N,
@@ -251,13 +223,8 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
                     covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
                     covars.has_value() ? nullptr : quats.data_ptr<float>(),
                     covars.has_value() ? nullptr : scales.data_ptr<float>(),
-                    worldToCamMatrices.data_ptr<float>(),
-                    projectionMatrices.data_ptr<float>(),
-                    imageWidth,
-                    imageHeight,
+                    cameraOp,
                     eps2d,
-                    nearPlane,
-                    farPlane,
                     minRadius2d,
                     radii.data_ptr<int32_t>(),
                     means2d.data_ptr<float>(),

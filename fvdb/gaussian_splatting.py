@@ -5,7 +5,7 @@ import pathlib
 from typing import Any, Mapping, Sequence, TypeVar, overload
 
 import torch
-from fvdb.enums import CameraModel, ProjectionType
+from fvdb.enums import DistortionModel, ProjectionType
 
 from . import _fvdb_cpp as _C
 from ._fvdb_cpp import GaussianSplat3d as GaussianSplat3dCpp
@@ -1886,7 +1886,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        camera_model: CameraModel = CameraModel.PINHOLE,
+        camera_model: DistortionModel = DistortionModel.PINHOLE,
         distortion_coeffs: torch.Tensor | None = None,
         sh_degree_to_use: int = -1,
         tile_size: int = 16,
@@ -1932,7 +1932,7 @@ class GaussianSplat3d:
                 image_height=480,
                 near=0.01,
                 far=1e10,
-                camera_model=fvdb.CameraModel.OPENCV_RATIONAL_8,
+                camera_model=fvdb.DistortionModel.OPENCV_RATIONAL_8,
                 distortion_coeffs=dist_coeffs,  # [C,12]
                 backgrounds=bg,                 # [C,D]
                 masks=tile_mask,                # [C,tileH,tileW] (optional)
@@ -1945,7 +1945,7 @@ class GaussianSplat3d:
             image_height (int): Output image height ``H``.
             near (float): Near clipping plane.
             far (float): Far clipping plane.
-            camera_model (CameraModel): Camera model used for ray generation and distortion.
+            camera_model (DistortionModel): Distortion model used for ray generation and distortion.
             distortion_coeffs (torch.Tensor | None): Distortion coefficients for OpenCV camera
                 models. Use ``None`` for no distortion. Expected shape is ``(C, 12)`` with packed
                 layout ``[k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]``. For camera models that use fewer
@@ -1966,8 +1966,8 @@ class GaussianSplat3d:
             images (torch.Tensor): Rendered images of shape ``(C, H, W, D)``.
             alpha_images (torch.Tensor): Alpha images of shape ``(C, H, W, 1)``.
         """
-        if isinstance(camera_model, CameraModel):
-            camera_model_cpp = getattr(_C.CameraModel, camera_model.name)
+        if isinstance(camera_model, DistortionModel):
+            camera_model_cpp = getattr(_C.DistortionModel, camera_model.name)
         else:
             camera_model_cpp = camera_model
 

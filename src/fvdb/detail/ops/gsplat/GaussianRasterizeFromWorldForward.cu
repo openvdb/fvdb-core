@@ -1,7 +1,6 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/ops/gsplat/GaussianCameraMatrixUtils.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorld.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeFromWorldForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeOptionalInputs.h>
@@ -25,8 +24,9 @@ template <uint32_t NUM_CHANNELS> struct SharedGaussian {
     float opacity;
 };
 
-template <uint32_t NUM_CHANNELS> struct RasterizeFromWorldForwardArgs {
+template <uint32_t NUM_CHANNELS, typename CameraOp> struct RasterizeFromWorldForwardArgs {
     RasterizeFromWorldCommonArgs commonArgs;
+    CameraOp cameraOp;
     fvdb::TorchRAcc64<float, 4> outFeatures;  // [C,H,W,D]
     fvdb::TorchRAcc64<float, 4> outAlphas;    // [C,H,W,1]
     fvdb::TorchRAcc64<int32_t, 3> outLastIds; // [C,H,W]
@@ -66,31 +66,14 @@ template <uint32_t NUM_CHANNELS> struct RasterizeFromWorldForwardArgs {
             return;
         }
 
-        // Build camera pose for this camera (start/end).
-        const auto [worldToCamRotationStart, worldToCamTranslationStart] =
-            loadWorldToCamRtFromAccessor44<float>(common.worldToCamStart, camId);
-        const auto [worldToCamRotationEnd, worldToCamTranslationEnd] =
-            loadWorldToCamRtFromAccessor44<float>(common.worldToCamEnd, camId);
+        extern __shared__ char smem[];
+        CameraOp cameraOpLocal = cameraOp;
+        uintptr_t smemAddr     = reinterpret_cast<uintptr_t>(smem);
+        smemAddr               = alignUpAddress(smemAddr, alignof(nanovdb::math::Mat3<float>));
+        cameraOpLocal.loadSharedMemory(reinterpret_cast<void *>(smemAddr));
+        __syncthreads();
 
-        const nanovdb::math::Mat3<float> K_cam = loadMat3FromAccessor33<float>(common.K, camId);
-        const float *distPtr =
-            (common.numDistCoeffs > 0) ? &common.distortionCoeffs[camId][0] : nullptr;
-
-        const nanovdb::math::Ray<float> ray = pixelToWorldRay<float>(row,
-                                                                     col,
-                                                                     common.imageWidth,
-                                                                     common.imageHeight,
-                                                                     common.imageOriginW,
-                                                                     common.imageOriginH,
-                                                                     worldToCamRotationStart,
-                                                                     worldToCamTranslationStart,
-                                                                     worldToCamRotationEnd,
-                                                                     worldToCamTranslationEnd,
-                                                                     K_cam,
-                                                                     distPtr,
-                                                                     common.numDistCoeffs,
-                                                                     common.rollingShutterType,
-                                                                     common.cameraModel);
+        const nanovdb::math::Ray<float> ray = cameraOpLocal.projectToRay(camId, row, col);
 
         const bool rayValid = ray.dir().dot(ray.dir()) > 0.0f;
         bool done           = (!inside) || (!rayValid);
@@ -114,11 +97,14 @@ template <uint32_t NUM_CHANNELS> struct RasterizeFromWorldForwardArgs {
             return;
         }
 
-        // Shared memory for batched gaussians.
-        extern __shared__ char smem[];
-        int32_t *idBatch = reinterpret_cast<int32_t *>(smem);                      // [blockSize]
+        // Shared memory for batched gaussians (after camera-op shared state).
+        uintptr_t gaussAddr = smemAddr + cameraOpLocal.numSharedMemBytes();
+        gaussAddr           = alignUpAddress(gaussAddr, alignof(int32_t));
+        int32_t *idBatch    = reinterpret_cast<int32_t *>(gaussAddr); // [blockSize]
+        gaussAddr += static_cast<size_t>(blockSize) * sizeof(int32_t);
+        gaussAddr = alignUpAddress(gaussAddr, alignof(SharedGaussian<NUM_CHANNELS>));
         auto *gaussBatch =
-            reinterpret_cast<SharedGaussian<NUM_CHANNELS> *>(&idBatch[blockSize]); // [blockSize]
+            reinterpret_cast<SharedGaussian<NUM_CHANNELS> *>(gaussAddr); // [blockSize]
 
         float transmittance = 1.0f;
         int32_t curIdx      = -1;
@@ -172,8 +158,9 @@ template <uint32_t NUM_CHANNELS> struct RasterizeFromWorldForwardArgs {
                 // 3DGS ray-ellipsoid visibility in "whitened" coordinates (see 3D-GUT paper
                 // Fig. 11). gro   = S^{-1} R^T (o - μ) grd   = normalize( S^{-1} R^T d ) gcrod =
                 // grd × gro  (distance proxy to principal axis in whitened space)
-                const nanovdb::math::Vec3<float> gro   = g.isclR * (ray.eye() - g.mean);
-                const nanovdb::math::Vec3<float> grd   = normalizeSafe<float>(g.isclR * ray.dir());
+                const nanovdb::math::Vec3<float> gro = g.isclR * (ray.eye() - g.mean);
+                const nanovdb::math::Vec3<float> grd =
+                    fvdb::detail::ops::normalizeSafe<float>(g.isclR * ray.dir());
                 const nanovdb::math::Vec3<float> gcrod = grd.cross(gro);
                 const float grayDist                   = gcrod.dot(gcrod);
                 const float power                      = -0.5f * grayDist;
@@ -213,25 +200,20 @@ template <uint32_t NUM_CHANNELS> struct RasterizeFromWorldForwardArgs {
     }
 };
 
-template <uint32_t NUM_CHANNELS>
+template <uint32_t NUM_CHANNELS, typename CameraOp>
 __global__ void
-rasterizeGaussiansFromWorld(const RasterizeFromWorldForwardArgs<NUM_CHANNELS> args) {
+rasterizeGaussiansFromWorld(const RasterizeFromWorldForwardArgs<NUM_CHANNELS, CameraOp> args) {
     args.volumeRenderTileForward();
 }
 
-template <uint32_t NUM_CHANNELS>
+template <uint32_t NUM_CHANNELS, typename CameraOp>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 launchForward(const torch::Tensor &means,
               const torch::Tensor &quats,
               const torch::Tensor &logScales,
               const torch::Tensor &features,
               const torch::Tensor &opacities,
-              const torch::Tensor &worldToCamStart,
-              const torch::Tensor &worldToCamEnd,
-              const torch::Tensor &K,
-              const torch::Tensor &distortionCoeffs,
-              const RollingShutterType rollingShutterType,
-              const CameraModel cameraModel,
+              const CameraOp &cameraOp,
               const uint32_t imageWidth,
               const uint32_t imageHeight,
               const uint32_t imageOriginW,
@@ -257,10 +239,8 @@ launchForward(const torch::Tensor &means,
     const dim3 gridDim(C * tileExtentH * tileExtentW, 1, 1);
 
     const int32_t totalIntersections = (int32_t)tileGaussianIds.size(0);
-    const int64_t numDistCoeffs      = distortionCoeffs.size(1);
 
     RasterizeFromWorldCommonArgs commonArgs{
-        static_cast<uint32_t>(C),
         imageWidth,
         imageHeight,
         imageOriginW,
@@ -278,31 +258,29 @@ launchForward(const torch::Tensor &means,
         quats.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
         logScales.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
         features.packed_accessor64<float, 3, torch::RestrictPtrTraits>(),
-        opacities.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
-        worldToCamStart.packed_accessor64<float, 3, torch::RestrictPtrTraits>(),
-        worldToCamEnd.packed_accessor64<float, 3, torch::RestrictPtrTraits>(),
-        K.packed_accessor64<float, 3, torch::RestrictPtrTraits>(),
-        distortionCoeffs.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
-        numDistCoeffs,
-        rollingShutterType,
-        cameraModel};
+        opacities.packed_accessor64<float, 2, torch::RestrictPtrTraits>()};
 
     const PreparedRasterOptionalInputs opt = prepareRasterOptionalInputs(
         features, C, tileExtentH, tileExtentW, (int64_t)NUM_CHANNELS, backgrounds, masks);
     commonArgs.backgrounds = opt.backgrounds;
     commonArgs.masks       = opt.masks;
 
-    RasterizeFromWorldForwardArgs<NUM_CHANNELS> args{
+    RasterizeFromWorldForwardArgs<NUM_CHANNELS, CameraOp> args{
         commonArgs,
+        cameraOp,
         outFeatures.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
         outAlphas.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
         outLastIds.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>()};
 
     const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
-    const size_t sharedMem = blockSize * (sizeof(int32_t) + sizeof(SharedGaussian<NUM_CHANNELS>));
+    size_t sharedMem = (alignof(nanovdb::math::Mat3<float>) - 1) + cameraOp.numSharedMemBytes();
+    sharedMem += (alignof(int32_t) - 1) + blockSize * sizeof(int32_t);
+    sharedMem += (alignof(SharedGaussian<NUM_CHANNELS>) - 1) +
+                 blockSize * sizeof(SharedGaussian<NUM_CHANNELS>);
 
     auto stream = at::cuda::getDefaultCUDAStream();
-    rasterizeGaussiansFromWorld<NUM_CHANNELS><<<gridDim, blockDim, sharedMem, stream>>>(args);
+    rasterizeGaussiansFromWorld<NUM_CHANNELS, CameraOp>
+        <<<gridDim, blockDim, sharedMem, stream>>>(args);
 
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return {outFeatures, outAlphas, outLastIds};
@@ -323,7 +301,7 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
     const torch::Tensor &projectionMatrices,
     const torch::Tensor &distortionCoeffs,
     const RollingShutterType rollingShutterType,
-    const CameraModel cameraModel,
+    const DistortionModel cameraModel,
     const RenderSettings &settings,
     const torch::Tensor &tileOffsets,
     const torch::Tensor &tileGaussianIds,
@@ -378,66 +356,112 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCUDA>(
     const int64_t numDistCoeffs = distortionCoeffs.size(1);
     TORCH_CHECK_VALUE(distortionCoeffs.dim() == 2 && distortionCoeffs.size(0) == C,
                       "distortionCoeffs must have shape [C,K]");
-    if (cameraModel == CameraModel::OPENCV_RADTAN_5 ||
-        cameraModel == CameraModel::OPENCV_RATIONAL_8 ||
-        cameraModel == CameraModel::OPENCV_RADTAN_THIN_PRISM_9 ||
-        cameraModel == CameraModel::OPENCV_THIN_PRISM_12) {
+    if (cameraModel == DistortionModel::OPENCV_RADTAN_5 ||
+        cameraModel == DistortionModel::OPENCV_RATIONAL_8 ||
+        cameraModel == DistortionModel::OPENCV_RADTAN_THIN_PRISM_9 ||
+        cameraModel == DistortionModel::OPENCV_THIN_PRISM_12) {
         TORCH_CHECK_VALUE(numDistCoeffs == 12,
-                          "For CameraModel::OPENCV_* distortionCoeffs must be [C,12]");
+                          "For DistortionModel::OPENCV_* distortionCoeffs must be [C,12]");
     }
 
     const uint32_t channels = (uint32_t)features.size(2);
 
-#define CALL_FWD(NCH)                                      \
-    case NCH:                                              \
-        return launchForward<NCH>(means,                   \
-                                  quats,                   \
-                                  logScales,               \
-                                  features,                \
-                                  opacitiesBatched,        \
-                                  worldToCamMatricesStart, \
-                                  worldToCamMatricesEnd,   \
-                                  projectionMatrices,      \
-                                  distortionCoeffs,        \
-                                  rollingShutterType,      \
-                                  cameraModel,             \
-                                  imageWidth,              \
-                                  imageHeight,             \
-                                  imageOriginW,            \
-                                  imageOriginH,            \
-                                  tileSize,                \
-                                  tileOffsets,             \
-                                  tileGaussianIds,         \
-                                  backgrounds,             \
-                                  masks);
+#define CALL_FWD_WITH_OP(NCH, OP_TYPE, OP_VAL)               \
+    case NCH:                                                \
+        return launchForward<NCH, OP_TYPE>(means,            \
+                                           quats,            \
+                                           logScales,        \
+                                           features,         \
+                                           opacitiesBatched, \
+                                           OP_VAL,           \
+                                           imageWidth,       \
+                                           imageHeight,      \
+                                           imageOriginW,     \
+                                           imageOriginH,     \
+                                           tileSize,         \
+                                           tileOffsets,      \
+                                           tileGaussianIds,  \
+                                           backgrounds,      \
+                                           masks);
 
-    switch (channels) {
-        CALL_FWD(1)
-        CALL_FWD(2)
-        CALL_FWD(3)
-        CALL_FWD(4)
-        CALL_FWD(5)
-        CALL_FWD(8)
-        CALL_FWD(9)
-        CALL_FWD(16)
-        CALL_FWD(17)
-        CALL_FWD(32)
-        CALL_FWD(33)
-        CALL_FWD(64)
-        CALL_FWD(65)
-        CALL_FWD(128)
-        CALL_FWD(129)
-        CALL_FWD(192)
-        CALL_FWD(193)
-        CALL_FWD(256)
-        CALL_FWD(257)
-        CALL_FWD(512)
-        CALL_FWD(513)
-    default:
-        TORCH_CHECK_VALUE(false, "Unsupported channels for rasterize-from-world-3dgs: ", channels);
+    if (cameraModel == DistortionModel::ORTHOGRAPHIC) {
+        const OrthographicWithDistortionCameraOp<float> cameraOp{worldToCamMatricesStart,
+                                                                 worldToCamMatricesEnd,
+                                                                 projectionMatrices,
+                                                                 static_cast<uint32_t>(C),
+                                                                 (int32_t)imageWidth,
+                                                                 (int32_t)imageHeight,
+                                                                 (int32_t)imageOriginW,
+                                                                 (int32_t)imageOriginH,
+                                                                 rollingShutterType};
+        switch (channels) {
+            CALL_FWD_WITH_OP(1, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(2, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(3, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(4, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(5, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(8, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(9, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(16, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(17, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(32, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(33, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(64, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(65, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(128, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(129, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(192, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(193, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(256, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(257, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(512, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(513, OrthographicWithDistortionCameraOp<float>, cameraOp)
+        default:
+            TORCH_CHECK_VALUE(
+                false, "Unsupported channels for rasterize-from-world-3dgs: ", channels);
+        }
+    } else {
+        const PerspectiveWithDistortionCameraOp<float> cameraOp{worldToCamMatricesStart,
+                                                                worldToCamMatricesEnd,
+                                                                projectionMatrices,
+                                                                distortionCoeffs,
+                                                                static_cast<uint32_t>(C),
+                                                                distortionCoeffs.size(1),
+                                                                (int32_t)imageWidth,
+                                                                (int32_t)imageHeight,
+                                                                (int32_t)imageOriginW,
+                                                                (int32_t)imageOriginH,
+                                                                rollingShutterType,
+                                                                cameraModel};
+        switch (channels) {
+            CALL_FWD_WITH_OP(1, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(2, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(3, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(4, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(5, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(8, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(9, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(16, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(17, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(32, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(33, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(64, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(65, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(128, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(129, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(192, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(193, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(256, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(257, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(512, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_FWD_WITH_OP(513, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+        default:
+            TORCH_CHECK_VALUE(
+                false, "Unsupported channels for rasterize-from-world-3dgs: ", channels);
+        }
     }
 
-#undef CALL_FWD
+#undef CALL_FWD_WITH_OP
 }
 
 template <>
@@ -452,7 +476,7 @@ dispatchGaussianRasterizeFromWorld3DGSForward<torch::kCPU>(const torch::Tensor &
                                                            const torch::Tensor &,
                                                            const torch::Tensor &,
                                                            const RollingShutterType,
-                                                           const CameraModel,
+                                                           const DistortionModel,
                                                            const RenderSettings &,
                                                            const torch::Tensor &,
                                                            const torch::Tensor &,

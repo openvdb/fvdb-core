@@ -249,7 +249,7 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        camera_model: "CameraModel" = ...,
+        camera_model: "DistortionModel" = ...,
         distortion_coeffs: Optional[torch.Tensor] = ...,
         sh_degree_to_use: int = ...,
         tile_size: int = ...,
@@ -1247,7 +1247,7 @@ class RollingShutterType(Enum):
     VERTICAL = ...
     HORIZONTAL = ...
 
-class CameraModel(Enum):
+class DistortionModel(Enum):
     PINHOLE = ...
     OPENCV_RADTAN_5 = ...
     OPENCV_RATIONAL_8 = ...
