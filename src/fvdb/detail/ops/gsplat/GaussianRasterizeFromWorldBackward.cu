@@ -69,7 +69,9 @@ rasterizeFromWorld3DGSBackwardKernel(
 
     extern __shared__ char smem[];
     CameraOp cameraOpLocal = args.cameraOp;
-    cameraOpLocal.loadSharedMemory(smem);
+    uintptr_t smemAddr     = reinterpret_cast<uintptr_t>(smem);
+    smemAddr               = alignUpAddress(smemAddr, alignof(nanovdb::math::Mat3<float>));
+    cameraOpLocal.loadSharedMemory(reinterpret_cast<void *>(smemAddr));
     block.sync();
 
     const nanovdb::math::Ray<float> ray = cameraOpLocal.projectToRay(camId, row, col);
@@ -121,10 +123,12 @@ rasterizeFromWorld3DGSBackwardKernel(
     }
 
     // Shared memory for gaussian batches (after camera-op shared state).
-    char *gaussSmem  = smem + cameraOpLocal.numSharedMemBytes();
-    int32_t *idBatch = reinterpret_cast<int32_t *>(gaussSmem);                 // [blockSize]
-    auto *gBatch =
-        reinterpret_cast<SharedGaussian<NUM_CHANNELS> *>(&idBatch[blockSize]); // [blockSize]
+    uintptr_t gaussAddr = smemAddr + cameraOpLocal.numSharedMemBytes();
+    gaussAddr           = alignUpAddress(gaussAddr, alignof(int32_t));
+    int32_t *idBatch    = reinterpret_cast<int32_t *>(gaussAddr);               // [blockSize]
+    gaussAddr += static_cast<size_t>(blockSize) * sizeof(int32_t);
+    gaussAddr    = alignUpAddress(gaussAddr, alignof(SharedGaussian<NUM_CHANNELS>));
+    auto *gBatch = reinterpret_cast<SharedGaussian<NUM_CHANNELS> *>(gaussAddr); // [blockSize]
 
     const uint32_t threadRank      = block.thread_rank();
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
@@ -427,8 +431,10 @@ launchBackward(const torch::Tensor &means,
     args.masks       = opt.masks;
 
     const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
-    const size_t sharedMem = cameraOp.numSharedMemBytes() +
-                             blockSize * (sizeof(int32_t) + sizeof(SharedGaussian<NUM_CHANNELS>));
+    size_t sharedMem = (alignof(nanovdb::math::Mat3<float>) - 1) + cameraOp.numSharedMemBytes();
+    sharedMem += (alignof(int32_t) - 1) + blockSize * sizeof(int32_t);
+    sharedMem += (alignof(SharedGaussian<NUM_CHANNELS>) - 1) +
+                 blockSize * sizeof(SharedGaussian<NUM_CHANNELS>);
 
     RasterizeFromWorldBackwardArgs<NUM_CHANNELS, CameraOp> kernelArgs{
         args,

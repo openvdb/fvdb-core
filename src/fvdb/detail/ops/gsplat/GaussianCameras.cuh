@@ -4,9 +4,22 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANCAMERAS_CUH
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANCAMERAS_CUH
 
+#include <cstddef>
 #include <cstdint>
 
 namespace fvdb::detail::ops {
+
+/// @brief Align a byte count up to the next multiple of `alignment`.
+inline constexpr size_t
+alignUpBytes(const size_t value, const size_t alignment) {
+    return (value + alignment - 1) & ~(alignment - 1);
+}
+
+/// @brief Align an address up to the next multiple of `alignment`.
+inline constexpr uintptr_t
+alignUpAddress(const uintptr_t value, const size_t alignment) {
+    return (value + alignment - 1) & ~(alignment - 1);
+}
 
 /// @brief Rolling shutter policy for camera projection / ray generation.
 enum class RollingShutterType : int32_t { NONE = 0, VERTICAL = 1, HORIZONTAL = 2 };
@@ -688,25 +701,43 @@ template <typename T> struct PerspectiveWithDistortionCameraOp {
     /// @brief Returns dynamic shared-memory bytes required to cache camera state.
     inline __host__ __device__ size_t
     numSharedMemBytes() const {
-        return static_cast<size_t>(numCameras) * (3 * sizeof(Mat3) + 2 * sizeof(Vec3)) +
-               static_cast<size_t>(numCameras * numDistCoeffs) * sizeof(T);
+        size_t bytes = 0;
+        bytes        = alignUpBytes(bytes, alignof(Mat3));
+        bytes += static_cast<size_t>(numCameras) * sizeof(Mat3); // worldToCamStartRotShared
+        bytes = alignUpBytes(bytes, alignof(Vec3));
+        bytes += static_cast<size_t>(numCameras) * sizeof(Vec3); // worldToCamStartTransShared
+        bytes = alignUpBytes(bytes, alignof(Mat3));
+        bytes += static_cast<size_t>(numCameras) * sizeof(Mat3); // worldToCamEndRotShared
+        bytes = alignUpBytes(bytes, alignof(Vec3));
+        bytes += static_cast<size_t>(numCameras) * sizeof(Vec3); // worldToCamEndTransShared
+        bytes = alignUpBytes(bytes, alignof(Mat3));
+        bytes += static_cast<size_t>(numCameras) * sizeof(Mat3); // projectionMatsShared
+        bytes = alignUpBytes(bytes, alignof(T));
+        bytes += static_cast<size_t>(numCameras * numDistCoeffs) * sizeof(T); // distortionShared
+        return bytes;
     }
 
     /// @brief Loads per-camera state (poses, intrinsics, distortion) into shared memory.
     inline __device__ void
     loadSharedMemory(void *sharedMemory) {
-        char *ptr                = reinterpret_cast<char *>(sharedMemory);
-        worldToCamStartRotShared = reinterpret_cast<Mat3 *>(ptr);
-        ptr += numCameras * sizeof(Mat3);
-        worldToCamStartTransShared = reinterpret_cast<Vec3 *>(ptr);
-        ptr += numCameras * sizeof(Vec3);
-        worldToCamEndRotShared = reinterpret_cast<Mat3 *>(ptr);
-        ptr += numCameras * sizeof(Mat3);
-        worldToCamEndTransShared = reinterpret_cast<Vec3 *>(ptr);
-        ptr += numCameras * sizeof(Vec3);
-        projectionMatsShared = reinterpret_cast<Mat3 *>(ptr);
-        ptr += numCameras * sizeof(Mat3);
-        distortionShared = reinterpret_cast<T *>(ptr);
+        uintptr_t addr           = reinterpret_cast<uintptr_t>(sharedMemory);
+        addr                     = alignUpAddress(addr, alignof(Mat3));
+        worldToCamStartRotShared = reinterpret_cast<Mat3 *>(addr);
+        addr += static_cast<size_t>(numCameras) * sizeof(Mat3);
+        addr                       = alignUpAddress(addr, alignof(Vec3));
+        worldToCamStartTransShared = reinterpret_cast<Vec3 *>(addr);
+        addr += static_cast<size_t>(numCameras) * sizeof(Vec3);
+        addr                   = alignUpAddress(addr, alignof(Mat3));
+        worldToCamEndRotShared = reinterpret_cast<Mat3 *>(addr);
+        addr += static_cast<size_t>(numCameras) * sizeof(Mat3);
+        addr                     = alignUpAddress(addr, alignof(Vec3));
+        worldToCamEndTransShared = reinterpret_cast<Vec3 *>(addr);
+        addr += static_cast<size_t>(numCameras) * sizeof(Vec3);
+        addr                 = alignUpAddress(addr, alignof(Mat3));
+        projectionMatsShared = reinterpret_cast<Mat3 *>(addr);
+        addr += static_cast<size_t>(numCameras) * sizeof(Mat3);
+        addr             = alignUpAddress(addr, alignof(T));
+        distortionShared = reinterpret_cast<T *>(addr);
         copyMat3Accessor<T>(numCameras, worldToCamStartRotShared, worldToCamStartAcc);
         copyWorldToCamTranslation<T>(numCameras, worldToCamStartTransShared, worldToCamStartAcc);
         copyMat3Accessor<T>(numCameras, worldToCamEndRotShared, worldToCamEndAcc);
@@ -1083,22 +1114,38 @@ template <typename T> struct OrthographicWithDistortionCameraOp {
     /// @brief Returns dynamic shared-memory bytes required to cache camera state.
     inline __host__ __device__ size_t
     numSharedMemBytes() const {
-        return static_cast<size_t>(numCameras) * (3 * sizeof(Mat3) + 2 * sizeof(Vec3));
+        size_t bytes = 0;
+        bytes        = alignUpBytes(bytes, alignof(Mat3));
+        bytes += static_cast<size_t>(numCameras) * sizeof(Mat3); // worldToCamStartRotShared
+        bytes = alignUpBytes(bytes, alignof(Vec3));
+        bytes += static_cast<size_t>(numCameras) * sizeof(Vec3); // worldToCamStartTransShared
+        bytes = alignUpBytes(bytes, alignof(Mat3));
+        bytes += static_cast<size_t>(numCameras) * sizeof(Mat3); // worldToCamEndRotShared
+        bytes = alignUpBytes(bytes, alignof(Vec3));
+        bytes += static_cast<size_t>(numCameras) * sizeof(Vec3); // worldToCamEndTransShared
+        bytes = alignUpBytes(bytes, alignof(Mat3));
+        bytes += static_cast<size_t>(numCameras) * sizeof(Mat3); // projectionMatsShared
+        return bytes;
     }
 
     /// @brief Loads per-camera state (poses and intrinsics) into shared memory.
     inline __device__ void
     loadSharedMemory(void *sharedMemory) {
-        char *ptr                = reinterpret_cast<char *>(sharedMemory);
-        worldToCamStartRotShared = reinterpret_cast<Mat3 *>(ptr);
-        ptr += numCameras * sizeof(Mat3);
-        worldToCamStartTransShared = reinterpret_cast<Vec3 *>(ptr);
-        ptr += numCameras * sizeof(Vec3);
-        worldToCamEndRotShared = reinterpret_cast<Mat3 *>(ptr);
-        ptr += numCameras * sizeof(Mat3);
-        worldToCamEndTransShared = reinterpret_cast<Vec3 *>(ptr);
-        ptr += numCameras * sizeof(Vec3);
-        projectionMatsShared = reinterpret_cast<Mat3 *>(ptr);
+        uintptr_t addr           = reinterpret_cast<uintptr_t>(sharedMemory);
+        addr                     = alignUpAddress(addr, alignof(Mat3));
+        worldToCamStartRotShared = reinterpret_cast<Mat3 *>(addr);
+        addr += static_cast<size_t>(numCameras) * sizeof(Mat3);
+        addr                       = alignUpAddress(addr, alignof(Vec3));
+        worldToCamStartTransShared = reinterpret_cast<Vec3 *>(addr);
+        addr += static_cast<size_t>(numCameras) * sizeof(Vec3);
+        addr                   = alignUpAddress(addr, alignof(Mat3));
+        worldToCamEndRotShared = reinterpret_cast<Mat3 *>(addr);
+        addr += static_cast<size_t>(numCameras) * sizeof(Mat3);
+        addr                     = alignUpAddress(addr, alignof(Vec3));
+        worldToCamEndTransShared = reinterpret_cast<Vec3 *>(addr);
+        addr += static_cast<size_t>(numCameras) * sizeof(Vec3);
+        addr                 = alignUpAddress(addr, alignof(Mat3));
+        projectionMatsShared = reinterpret_cast<Mat3 *>(addr);
         copyMat3Accessor<T>(numCameras, worldToCamStartRotShared, worldToCamStartAcc);
         copyWorldToCamTranslation<T>(numCameras, worldToCamStartTransShared, worldToCamStartAcc);
         copyMat3Accessor<T>(numCameras, worldToCamEndRotShared, worldToCamEndAcc);

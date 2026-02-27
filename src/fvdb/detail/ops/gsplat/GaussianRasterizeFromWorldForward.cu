@@ -68,7 +68,9 @@ template <uint32_t NUM_CHANNELS, typename CameraOp> struct RasterizeFromWorldFor
 
         extern __shared__ char smem[];
         CameraOp cameraOpLocal = cameraOp;
-        cameraOpLocal.loadSharedMemory(smem);
+        uintptr_t smemAddr     = reinterpret_cast<uintptr_t>(smem);
+        smemAddr               = alignUpAddress(smemAddr, alignof(nanovdb::math::Mat3<float>));
+        cameraOpLocal.loadSharedMemory(reinterpret_cast<void *>(smemAddr));
         __syncthreads();
 
         const nanovdb::math::Ray<float> ray = cameraOpLocal.projectToRay(camId, row, col);
@@ -96,10 +98,13 @@ template <uint32_t NUM_CHANNELS, typename CameraOp> struct RasterizeFromWorldFor
         }
 
         // Shared memory for batched gaussians (after camera-op shared state).
-        char *gaussSmem  = smem + cameraOpLocal.numSharedMemBytes();
-        int32_t *idBatch = reinterpret_cast<int32_t *>(gaussSmem);                 // [blockSize]
+        uintptr_t gaussAddr = smemAddr + cameraOpLocal.numSharedMemBytes();
+        gaussAddr           = alignUpAddress(gaussAddr, alignof(int32_t));
+        int32_t *idBatch    = reinterpret_cast<int32_t *>(gaussAddr); // [blockSize]
+        gaussAddr += static_cast<size_t>(blockSize) * sizeof(int32_t);
+        gaussAddr = alignUpAddress(gaussAddr, alignof(SharedGaussian<NUM_CHANNELS>));
         auto *gaussBatch =
-            reinterpret_cast<SharedGaussian<NUM_CHANNELS> *>(&idBatch[blockSize]); // [blockSize]
+            reinterpret_cast<SharedGaussian<NUM_CHANNELS> *>(gaussAddr); // [blockSize]
 
         float transmittance = 1.0f;
         int32_t curIdx      = -1;
@@ -268,8 +273,10 @@ launchForward(const torch::Tensor &means,
         outLastIds.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>()};
 
     const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
-    const size_t sharedMem = cameraOp.numSharedMemBytes() +
-                             blockSize * (sizeof(int32_t) + sizeof(SharedGaussian<NUM_CHANNELS>));
+    size_t sharedMem = (alignof(nanovdb::math::Mat3<float>) - 1) + cameraOp.numSharedMemBytes();
+    sharedMem += (alignof(int32_t) - 1) + blockSize * sizeof(int32_t);
+    sharedMem += (alignof(SharedGaussian<NUM_CHANNELS>) - 1) +
+                 blockSize * sizeof(SharedGaussian<NUM_CHANNELS>);
 
     auto stream = at::cuda::getDefaultCUDAStream();
     rasterizeGaussiansFromWorld<NUM_CHANNELS, CameraOp>
