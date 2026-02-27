@@ -25,7 +25,7 @@ RasterizeGaussiansToPixelsFromWorld3DGS::forward(
     const RasterizeGaussiansToPixelsFromWorld3DGS::Variable &projectionMatrices,
     const RasterizeGaussiansToPixelsFromWorld3DGS::Variable &distortionCoeffs,
     const fvdb::detail::ops::RollingShutterType rollingShutterType,
-    const fvdb::detail::ops::DistortionModel cameraModel,
+    const fvdb::detail::ops::DistortionModel distortionModel,
     const uint32_t imageWidth,
     const uint32_t imageHeight,
     const uint32_t imageOriginW,
@@ -56,7 +56,7 @@ RasterizeGaussiansToPixelsFromWorld3DGS::forward(
             projectionMatrices,
             distortionCoeffs,
             rollingShutterType,
-            cameraModel,
+            distortionModel,
             settings,
             tileOffsets,
             tileGaussianIds,
@@ -100,7 +100,7 @@ RasterizeGaussiansToPixelsFromWorld3DGS::forward(
     ctx->saved_data["imageOriginW"]       = (int64_t)imageOriginW;
     ctx->saved_data["imageOriginH"]       = (int64_t)imageOriginH;
     ctx->saved_data["tileSize"]           = (int64_t)tileSize;
-    ctx->saved_data["cameraModel"]        = (int64_t)cameraModel;
+    ctx->saved_data["distortionModel"]    = (int64_t)distortionModel;
     ctx->saved_data["rollingShutterType"] = (int64_t)rollingShutterType;
 
     return {renderedFeatures, renderedAlphas};
@@ -153,8 +153,8 @@ RasterizeGaussiansToPixelsFromWorld3DGS::backward(
     const uint32_t imageOriginW = (uint32_t)ctx->saved_data["imageOriginW"].toInt();
     const uint32_t imageOriginH = (uint32_t)ctx->saved_data["imageOriginH"].toInt();
     const uint32_t tileSize     = (uint32_t)ctx->saved_data["tileSize"].toInt();
-    const auto cameraModel =
-        static_cast<fvdb::detail::ops::DistortionModel>(ctx->saved_data["cameraModel"].toInt());
+    const auto distortionModel = static_cast<fvdb::detail::ops::DistortionModel>(
+        ctx->saved_data["distortionModel"].toInt());
     const auto rollingShutterType = static_cast<fvdb::detail::ops::RollingShutterType>(
         ctx->saved_data["rollingShutterType"].toInt());
 
@@ -177,7 +177,7 @@ RasterizeGaussiansToPixelsFromWorld3DGS::backward(
             projectionMatrices,
             distortionCoeffs,
             rollingShutterType,
-            cameraModel,
+            distortionModel,
             settings,
             tileOffsets,
             tileGaussianIds,

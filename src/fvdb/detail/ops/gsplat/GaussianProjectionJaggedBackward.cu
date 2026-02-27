@@ -205,7 +205,6 @@ dispatchGaussianProjectionJaggedBackward<torch::kCUDA>(
     const torch::Tensor &cSizes,             // [B] camera sizes
     const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
     const torch::Tensor &projectionMatrices, // [C, 3, 3]
-    const bool ortho,
     const uint32_t imageWidth,
     const uint32_t imageHeight,
     const float eps2d,
@@ -216,7 +215,8 @@ dispatchGaussianProjectionJaggedBackward<torch::kCUDA>(
     const torch::Tensor &dLossDMeans2d, // [N, 2]
     const torch::Tensor &dLossDDepths,  // [N]
     const torch::Tensor &dLossDConics,  // [N, 3]
-    const bool worldToCamMatricesRequiresGrad) {
+    const bool worldToCamMatricesRequiresGrad,
+    const bool ortho) {
     FVDB_FUNC_RANGE();
     // These are supported by the underlying kernel, but they are not exposed
     const at::optional<torch::Tensor> &covars              = std::nullopt;
@@ -367,7 +367,6 @@ dispatchGaussianProjectionJaggedBackward<torch::kCPU>(
     const torch::Tensor &cSizes,             // [B] camera sizes
     const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
     const torch::Tensor &projectionMatrices, // [C, 3, 3]
-    const bool ortho,
     const uint32_t imageWidth,
     const uint32_t imageHeight,
     const float eps2d,
@@ -376,7 +375,8 @@ dispatchGaussianProjectionJaggedBackward<torch::kCPU>(
     const torch::Tensor &dLossDMeans2d, // [N, 2]
     const torch::Tensor &dLossDDepths,  // [N]
     const torch::Tensor &dLossDConics,  // [N, 3]
-    const bool worldToCamMatricesRequiresGrad) {
+    const bool worldToCamMatricesRequiresGrad,
+    const bool ortho) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
 }
 

@@ -41,14 +41,14 @@ ProjectGaussians::forward(ProjectGaussians::AutogradContext *ctx,
                                                                  logScales,
                                                                  worldToCamMatrices,
                                                                  projectionMatrices,
-                                                                 ortho,
                                                                  imageWidth,
                                                                  imageHeight,
                                                                  eps2d,
                                                                  nearPlane,
                                                                  farPlane,
                                                                  minRadius2D,
-                                                                 calcCompensations);
+                                                                 calcCompensations,
+                                                                 ortho);
     });
     Variable radii   = std::get<0>(variables);
     Variable means2d = std::get<1>(variables);
@@ -160,7 +160,6 @@ ProjectGaussians::backward(ProjectGaussians::AutogradContext *ctx,
                                                                   logScales,
                                                                   worldToCamMatrices,
                                                                   projectionMatrices,
-                                                                  ortho,
                                                                   compensations,
                                                                   imageWidth,
                                                                   imageHeight,
@@ -172,6 +171,7 @@ ProjectGaussians::backward(ProjectGaussians::AutogradContext *ctx,
                                                                   dLossDConics,
                                                                   dLossDCompensations,
                                                                   ctx->needs_input_grad(4),
+                                                                  ortho,
                                                                   normalizeddLossdMeans2dNormAccum,
                                                                   normalizedMaxRadiiAccum,
                                                                   gradientStepCount);
@@ -227,13 +227,13 @@ ProjectGaussiansJagged::forward(
                                                                        cSizes,
                                                                        worldToCamMatrices,
                                                                        projectionMatrices,
-                                                                       ortho,
                                                                        imageWidth,
                                                                        imageHeight,
                                                                        eps2d,
                                                                        nearPlane,
                                                                        farPlane,
-                                                                       minRadius2D);
+                                                                       minRadius2D,
+                                                                       ortho);
     });
     Variable radii   = std::get<0>(variables);
     Variable means2d = std::get<1>(variables);
@@ -299,7 +299,6 @@ ProjectGaussiansJagged::backward(ProjectGaussiansJagged::AutogradContext *ctx,
                                                                         cSizes,
                                                                         worldToCamMatrices,
                                                                         projectionMatrices,
-                                                                        ortho,
                                                                         imageWidth,
                                                                         imageHeight,
                                                                         eps2d,
@@ -308,7 +307,8 @@ ProjectGaussiansJagged::backward(ProjectGaussiansJagged::AutogradContext *ctx,
                                                                         dLossDMeans2d,
                                                                         dLossDDepths,
                                                                         dLossDConics,
-                                                                        ctx->needs_input_grad(6));
+                                                                        ctx->needs_input_grad(6),
+                                                                        ortho);
     });
     Variable dLossDMeans  = std::get<0>(variables);
     // Variable dLossDCovars = std::get<1>(variables);

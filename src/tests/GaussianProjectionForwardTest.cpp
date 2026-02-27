@@ -123,13 +123,13 @@ TEST_F(GaussianProjectionForwardTestFixture, DISABLED_GenerateOutputData) {
                                                                                torch::log(scales),
                                                                                viewmats,
                                                                                Ks,
-                                                                               false,
                                                                                imageWidth,
                                                                                imageHeight,
                                                                                0.3,
                                                                                1e-2,
                                                                                1e10,
                                                                                0,
+                                                                               false,
                                                                                false);
 
         std::vector<torch::Tensor> outputData = {radii, means2d, depths, conics};
@@ -147,14 +147,14 @@ TEST_F(GaussianProjectionForwardTestFixture, DISABLED_GenerateOutputData) {
                                                                                torch::log(scales),
                                                                                viewmats,
                                                                                Ks,
-                                                                               true,
                                                                                imageWidth,
                                                                                imageHeight,
                                                                                0.3,
                                                                                1e-2,
                                                                                1e10,
                                                                                0,
-                                                                               false);
+                                                                               false,
+                                                                               true);
 
         std::vector<torch::Tensor> outputData = {radii, means2d, depths, conics};
 
@@ -173,13 +173,13 @@ TEST_F(GaussianProjectionForwardTestFixture, TestPerspectiveProjection) {
                                                                            torch::log(scales),
                                                                            viewmats,
                                                                            Ks,
-                                                                           false,
                                                                            imageWidth,
                                                                            imageHeight,
                                                                            0.3,
                                                                            1e-2,
                                                                            1e10,
                                                                            0,
+                                                                           false,
                                                                            false);
 
     // Use relaxed tolerances to account for minor numerical differences between debug and release
@@ -210,14 +210,14 @@ TEST_F(GaussianProjectionForwardTestFixture, TestOrthographicProjection) {
                                                                            torch::log(scales),
                                                                            viewmats,
                                                                            Ks,
-                                                                           true,
                                                                            imageWidth,
                                                                            imageHeight,
                                                                            0.3,
                                                                            1e-2,
                                                                            1e10,
                                                                            0,
-                                                                           false);
+                                                                           false,
+                                                                           true);
 
     // other outputs are undefined where radii is zero
     auto radiiNonZeroMask = radii > 0; // [C, N]

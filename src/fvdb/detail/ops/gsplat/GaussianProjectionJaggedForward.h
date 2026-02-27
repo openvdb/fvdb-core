@@ -56,13 +56,13 @@ dispatchGaussianProjectionJaggedForward(const torch::Tensor &gSizes, // [B] gaus
                                         const torch::Tensor &cSizes, // [B] camera sizes
                                         const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
                                         const torch::Tensor &projectionMatrices, // [C, 3, 3]
-                                        const bool ortho,
                                         const uint32_t imageWidth,
                                         const uint32_t imageHeight,
                                         const float eps2d,
                                         const float nearPlane,
                                         const float farPlane,
-                                        const float minRadius2d);
+                                        const float minRadius2d,
+                                        const bool ortho);
 
 } // namespace ops
 } // namespace detail

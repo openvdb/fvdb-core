@@ -253,7 +253,6 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
     const torch::Tensor &logScales,                   // [N, 3]
     const torch::Tensor &worldToCamMatrices,          // [C, 4, 4]
     const torch::Tensor &projectionMatrices,          // [C, 3, 3]
-    const bool ortho,
     const at::optional<torch::Tensor> &compensations, // [N, 6] optional
     const uint32_t imageWidth,
     const uint32_t imageHeight,
@@ -267,6 +266,7 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
     const torch::Tensor &dLossDConics,                               // [C, N, 3]
     const at::optional<torch::Tensor> &dLossDCompensations,          // [C, N] optional
     const bool worldToCamMatricesRequiresGrad,
+    const bool ortho,
     at::optional<torch::Tensor> outNormalizeddLossdMeans2dNormAccum, // [N]
     at::optional<torch::Tensor> outNormalizedMaxRadiiAccum,          // [N]
     at::optional<torch::Tensor> outGradientStepCounts                // [N]
@@ -443,7 +443,6 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
     const torch::Tensor &logScales,                   // [N, 3]
     const torch::Tensor &worldToCamMatrices,          // [C, 4, 4]
     const torch::Tensor &projectionMatrices,          // [C, 3, 3]
-    const bool ortho,
     const at::optional<torch::Tensor> &compensations, // [N, 6] optional
     const uint32_t imageWidth,
     const uint32_t imageHeight,
@@ -457,6 +456,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
     const torch::Tensor &dLossDConics,                      // [C, N, 3]
     const at::optional<torch::Tensor> &dLossDCompensations, // [C, N] optional
     const bool worldToCamMatricesRequiresGrad,
+    const bool ortho,
     at::optional<torch::Tensor> outNormalizeddLossdMeans2dNormAccum,
     at::optional<torch::Tensor> outNormalizedMaxRadiiAccum,
     at::optional<torch::Tensor> outGradientStepCounts) {
@@ -643,7 +643,6 @@ dispatchGaussianProjectionBackward<torch::kCPU>(
     const torch::Tensor &logScales,                   // [N, 3]
     const torch::Tensor &worldToCamMatrices,          // [C, 4, 4]
     const torch::Tensor &projectionMatrices,          // [C, 3, 3]
-    const bool ortho,
     const at::optional<torch::Tensor> &compensations, // [N, 6] optional
     const uint32_t imageWidth,
     const uint32_t imageHeight,
@@ -657,6 +656,7 @@ dispatchGaussianProjectionBackward<torch::kCPU>(
     const torch::Tensor &dLossDConics,                      // [C, N, 3]
     const at::optional<torch::Tensor> &dLossDCompensations, // [C, N] optional
     const bool worldToCamMatricesRequiresGrad,
+    const bool ortho,
     at::optional<torch::Tensor> outNormalizeddLossdMeans2dNormAccum,
     at::optional<torch::Tensor> outNormalizedMaxRadiiAccum,
     at::optional<torch::Tensor> outGradientStepCounts) {

@@ -58,7 +58,6 @@ dispatchGaussianProjectionJaggedBackward(const torch::Tensor &gSizes, // [B] gau
                                          const torch::Tensor &cSizes, // [B] camera sizes
                                          const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
                                          const torch::Tensor &projectionMatrices, // [C, 3, 3]
-                                         const bool ortho,
                                          const uint32_t imageWidth,
                                          const uint32_t imageHeight,
                                          const float eps2d,
@@ -67,7 +66,8 @@ dispatchGaussianProjectionJaggedBackward(const torch::Tensor &gSizes, // [B] gau
                                          const torch::Tensor &dLossDMeans2d, // [N, 2]
                                          const torch::Tensor &dLossDDepths,  // [N]
                                          const torch::Tensor &dLossDConics,  // [N, 3]
-                                         const bool worldToCamMatricesRequiresGrad);
+                                         const bool worldToCamMatricesRequiresGrad,
+                                         const bool ortho);
 
 } // namespace ops
 } // namespace detail

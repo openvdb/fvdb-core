@@ -65,6 +65,7 @@ isOutsideImageWithRadius(const nanovdb::math::Vec2<T> &mean2d,
             mean2d[1] + radiusY <= T(0) || mean2d[1] - radiusY >= T(imageHeight));
 }
 
+/// @brief Result state for world-point to pixel projection.
 enum class ProjectWorldToPixelStatus : uint8_t { BehindCamera, OutOfBounds, InImage };
 
 /// @brief Estimate projected radius from a 2x2 covariance using the largest eigenvalue heuristic.
@@ -145,6 +146,7 @@ loadQuatScaleFromScalesRowMajor(const T *quats4,
     outScale    = nanovdb::math::Vec3<T>(scales3[0], scales3[1], scales3[2]);
 }
 
+/// @brief Pinhole camera model without distortion for projection/rasterization kernels.
 template <typename T> struct PerspectiveCameraOp {
   public:
     using Mat3 = nanovdb::math::Mat3<T>;
@@ -178,12 +180,14 @@ template <typename T> struct PerspectiveCameraOp {
     Vec3 *__restrict__ worldToCamTranslationShared = nullptr; // [C,3], optional
 
   public:
+    /// @brief Bytes of dynamic shared memory needed to cache camera matrices.
     inline __host__ __device__ size_t
     numSharedMemBytes() const {
         return static_cast<size_t>(2 * numCameras) * sizeof(Mat3) +
                static_cast<size_t>(numCameras) * sizeof(Vec3);
     }
 
+    /// @brief Load per-camera intrinsics/extrinsics into dynamic shared memory.
     inline __device__ void
     loadSharedMemory(void *sharedMemory) {
         const int64_t C             = numCameras;
@@ -195,6 +199,7 @@ template <typename T> struct PerspectiveCameraOp {
         copyWorldToCamTranslation<T>(C, worldToCamTranslationShared, worldToCamMatricesAcc);
     }
 
+    /// @brief Check whether a camera-space depth lies in the clipping range.
     inline __device__ bool
     isDepthVisible(const T depth) const {
         return depth >= nearPlane && depth <= farPlane;
@@ -344,6 +349,7 @@ template <typename T> struct PerspectiveCameraOp {
     }
 };
 
+/// @brief Orthographic camera model without distortion for projection/rasterization kernels.
 template <typename T> struct OrthographicCameraOp {
   public:
     using Mat3 = nanovdb::math::Mat3<T>;
@@ -377,12 +383,14 @@ template <typename T> struct OrthographicCameraOp {
     Vec3 *__restrict__ worldToCamTranslationShared = nullptr; // [C,3], optional
 
   public:
+    /// @brief Bytes of dynamic shared memory needed to cache camera matrices.
     inline __host__ __device__ size_t
     numSharedMemBytes() const {
         return static_cast<size_t>(2 * numCameras) * sizeof(Mat3) +
                static_cast<size_t>(numCameras) * sizeof(Vec3);
     }
 
+    /// @brief Load per-camera intrinsics/extrinsics into dynamic shared memory.
     inline __device__ void
     loadSharedMemory(void *sharedMemory) {
         const int64_t C             = numCameras;
@@ -394,6 +402,7 @@ template <typename T> struct OrthographicCameraOp {
         copyWorldToCamTranslation<T>(C, worldToCamTranslationShared, worldToCamMatricesAcc);
     }
 
+    /// @brief Check whether a camera-space depth lies in the clipping range.
     inline __device__ bool
     isDepthVisible(const T depth) const {
         return depth >= nearPlane && depth <= farPlane;
@@ -493,6 +502,7 @@ template <typename T> struct OrthographicCameraOp {
     }
 };
 
+/// @brief Pinhole + OpenCV-distortion camera with optional rolling shutter support.
 template <typename T> struct PerspectiveWithDistortionCameraOp {
   public:
     using Mat3 = nanovdb::math::Mat3<T>;
@@ -544,12 +554,14 @@ template <typename T> struct PerspectiveWithDistortionCameraOp {
     T *__restrict__ distortionShared              = nullptr; // [C,K], optional
 
   public:
+    /// @brief Bytes of dynamic shared memory needed to cache camera state.
     inline __host__ __device__ size_t
     numSharedMemBytes() const {
         return static_cast<size_t>(numCameras) * (3 * sizeof(Mat3) + 2 * sizeof(Vec3)) +
                static_cast<size_t>(numCameras * numDistCoeffs) * sizeof(T);
     }
 
+    /// @brief Load per-camera state (poses, intrinsics, distortion) into shared memory.
     inline __device__ void
     loadSharedMemory(void *sharedMemory) {
         char *ptr                = reinterpret_cast<char *>(sharedMemory);
@@ -575,6 +587,7 @@ template <typename T> struct PerspectiveWithDistortionCameraOp {
         }
     }
 
+    /// @brief Compute camera-space depth at a given rolling-shutter time.
     inline __device__ T
     cameraDepthAtTime(const int64_t cid,
                       const nanovdb::math::Vec3<T> &pointWorld,
@@ -597,6 +610,7 @@ template <typename T> struct PerspectiveWithDistortionCameraOp {
         return pointCam[2];
     }
 
+    /// @brief Project a world-space point to pixel coordinates and classify visibility.
     inline __device__ ProjectWorldToPixelStatus
     projectWorldPointToPixel(const int64_t cid,
                              const nanovdb::math::Vec3<T> &pointWorld,
@@ -835,6 +849,7 @@ template <typename T> struct PerspectiveWithDistortionCameraOp {
     }
 
   public:
+    /// @brief Unproject a pixel center to a world-space ray.
     inline __device__ nanovdb::math::Ray<T>
     projectToRay(const int64_t cid, const uint32_t row, const uint32_t col) const {
         const auto [R_wc_start, t_wc_start, R_wc_end, t_wc_end] = worldToCamRtStartEnd(cid);
@@ -878,6 +893,7 @@ template <typename T> struct PerspectiveWithDistortionCameraOp {
     }
 };
 
+/// @brief Orthographic camera with optional rolling shutter support.
 template <typename T> struct OrthographicWithDistortionCameraOp {
   public:
     using Mat3 = nanovdb::math::Mat3<T>;
@@ -920,11 +936,13 @@ template <typename T> struct OrthographicWithDistortionCameraOp {
     Mat3 *__restrict__ projectionMatsShared       = nullptr; // [C,3,3], optional
 
   public:
+    /// @brief Bytes of dynamic shared memory needed to cache camera state.
     inline __host__ __device__ size_t
     numSharedMemBytes() const {
         return static_cast<size_t>(numCameras) * (3 * sizeof(Mat3) + 2 * sizeof(Vec3));
     }
 
+    /// @brief Load per-camera state (poses and intrinsics) into shared memory.
     inline __device__ void
     loadSharedMemory(void *sharedMemory) {
         char *ptr                = reinterpret_cast<char *>(sharedMemory);
@@ -944,6 +962,7 @@ template <typename T> struct OrthographicWithDistortionCameraOp {
         copyMat3Accessor<T>(numCameras, projectionMatsShared, projectionMatricesAcc);
     }
 
+    /// @brief Compute camera-space depth at a given rolling-shutter time.
     inline __device__ T
     cameraDepthAtTime(const int64_t cid,
                       const nanovdb::math::Vec3<T> &pointWorld,
@@ -966,6 +985,7 @@ template <typename T> struct OrthographicWithDistortionCameraOp {
         return pointCam[2];
     }
 
+    /// @brief Project a world-space point to pixel coordinates and classify visibility.
     inline __device__ ProjectWorldToPixelStatus
     projectWorldPointToPixel(const int64_t cid,
                              const nanovdb::math::Vec3<T> &pointWorld,
@@ -1116,6 +1136,7 @@ template <typename T> struct OrthographicWithDistortionCameraOp {
     }
 
   public:
+    /// @brief Unproject a pixel center to a world-space orthographic ray.
     inline __device__ nanovdb::math::Ray<T>
     projectToRay(const int64_t cid, const uint32_t row, const uint32_t col) const {
         const auto [R_wc_start, t_wc_start, R_wc_end, t_wc_end] = worldToCamRtStartEnd(cid);
