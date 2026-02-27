@@ -104,12 +104,13 @@ jaggedProjectionBackwardKernel(
     }
     const nanovdb::math::Vec3<T> meanWorldSpace(means[0], means[1], means[2]);
     auto [dLossDCovar, dLossDPoint, dLossDRotation, dLossDTranslation] =
-        cameraOp.projectWorldGaussianTo2DVJP(cId,
-                                             meanWorldSpace,
-                                             covar,
-                                             dLossDCovar2d,
-                                             nanovdb::math::Vec2<T>(dLossDMeans2d[0], dLossDMeans2d[1]),
-                                             dLossDDepths[0]);
+        cameraOp.projectWorldGaussianTo2DVJP(
+            cId,
+            meanWorldSpace,
+            covar,
+            dLossDCovar2d,
+            nanovdb::math::Vec2<T>(dLossDMeans2d[0], dLossDMeans2d[1]),
+            dLossDDepths[0]);
 
     // write out results with warp-level reduction
     auto warp         = cg::tiled_partition<32>(cg::this_thread_block());

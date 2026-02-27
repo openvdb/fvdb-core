@@ -7,10 +7,11 @@
 #include <c10/cuda/CUDAException.h>
 #include <torch/torch.h>
 
-#include <gtest/gtest.h>
-
 #include <cuda/std/cmath>
+
 #include <cuda_runtime_api.h>
+
+#include <gtest/gtest.h>
 
 namespace fvdb::detail::ops {
 namespace {
@@ -77,11 +78,12 @@ compareProjectWorldTo2DKernel(int64_t C,
     const Vec3f meanWorld(meansWorld[gid * 3], meansWorld[gid * 3 + 1], meansWorld[gid * 3 + 2]);
     const Mat3f covarWorld = loadCovarianceRowMajor6(covarsWorld6 + gid * 6);
 
-    const auto [cov2dNew, mean2dNew, depthNew] = cameraOp.projectWorldGaussianTo2D(cid, meanWorld, covarWorld);
+    const auto [cov2dNew, mean2dNew, depthNew] =
+        cameraOp.projectWorldGaussianTo2D(cid, meanWorld, covarWorld);
 
-    const auto [R, t]   = cameraOp.worldToCamRt(cid);
-    const Vec3f meanCam = transformPointWorldToCam(R, t, meanWorld);
-    const Mat3f covCam  = transformCovarianceWorldToCam(R, covarWorld);
+    const auto [R, t]                = cameraOp.worldToCamRt(cid);
+    const Vec3f meanCam              = transformPointWorldToCam(R, t, meanWorld);
+    const Mat3f covCam               = transformCovarianceWorldToCam(R, covarWorld);
     const auto [cov2dRef, mean2dRef] = cameraOp.projectTo2DGaussian(cid, meanCam, covCam);
     const float depthRef             = meanCam[2];
 
@@ -120,10 +122,11 @@ compareProjectWorldTo2DVJPKernel(int64_t C,
     const auto [dCovWorldNew, dMeanWorldNew, dRotNew, dTransNew] =
         cameraOp.projectWorldGaussianTo2DVJP(cid, meanWorld, covarWorld, dCov2d, dMean2d, dDepth);
 
-    const auto [R, t] = cameraOp.worldToCamRt(cid);
+    const auto [R, t]   = cameraOp.worldToCamRt(cid);
     const Vec3f meanCam = transformPointWorldToCam(R, t, meanWorld);
     const Mat3f covCam  = transformCovarianceWorldToCam(R, covarWorld);
-    auto [dCovCamRef, dMeanCamRef] = cameraOp.projectTo2DGaussianVJP(cid, meanCam, covCam, dCov2d, dMean2d);
+    auto [dCovCamRef, dMeanCamRef] =
+        cameraOp.projectTo2DGaussianVJP(cid, meanCam, covCam, dCov2d, dMean2d);
     dMeanCamRef[2] += dDepth;
 
     auto [dRotRef, dTransRef, dMeanWorldRef] =
@@ -140,8 +143,9 @@ compareProjectWorldTo2DVJPKernel(int64_t C,
 
 torch::Tensor
 makeWorldToCamMatrices(int64_t C) {
-    auto worldToCamCpu = torch::zeros({C, 4, 4}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
-    auto acc           = worldToCamCpu.accessor<float, 3>();
+    auto worldToCamCpu =
+        torch::zeros({C, 4, 4}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
+    auto acc = worldToCamCpu.accessor<float, 3>();
     for (int64_t c = 0; c < C; ++c) {
         acc[c][0][0] = 1.0f;
         acc[c][1][1] = 1.0f;
@@ -156,8 +160,9 @@ makeWorldToCamMatrices(int64_t C) {
 
 torch::Tensor
 makeProjectionMatrices(int64_t C, bool ortho) {
-    auto kCpu = torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
-    auto acc  = kCpu.accessor<float, 3>();
+    auto kCpu =
+        torch::zeros({C, 3, 3}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
+    auto acc = kCpu.accessor<float, 3>();
     for (int64_t c = 0; c < C; ++c) {
         const float fx = ortho ? (1.2f + 0.1f * c) : (480.0f + 7.0f * c);
         const float fy = ortho ? (1.3f + 0.1f * c) : (470.0f + 5.0f * c);
@@ -174,8 +179,9 @@ makeProjectionMatrices(int64_t C, bool ortho) {
 
 torch::Tensor
 makeMeansWorld(int64_t N) {
-    auto meansCpu = torch::zeros({N, 3}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
-    auto acc      = meansCpu.accessor<float, 2>();
+    auto meansCpu =
+        torch::zeros({N, 3}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
+    auto acc = meansCpu.accessor<float, 2>();
     for (int64_t i = 0; i < N; ++i) {
         acc[i][0] = -0.2f + 0.01f * static_cast<float>(i);
         acc[i][1] = 0.15f - 0.008f * static_cast<float>(i);
@@ -186,23 +192,28 @@ makeMeansWorld(int64_t N) {
 
 torch::Tensor
 makeCovarsWorld6(int64_t N) {
-    auto covCpu = torch::zeros({N, 6}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
-    auto acc    = covCpu.accessor<float, 2>();
+    auto covCpu =
+        torch::zeros({N, 6}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
+    auto acc = covCpu.accessor<float, 2>();
     for (int64_t i = 0; i < N; ++i) {
         const float f = 0.001f * static_cast<float>(i);
-        acc[i][0]     = 0.05f + f;   // xx
-        acc[i][1]     = 0.001f + f;  // xy
-        acc[i][2]     = -0.0005f;    // xz
-        acc[i][3]     = 0.07f + f;   // yy
-        acc[i][4]     = 0.0007f;     // yz
-        acc[i][5]     = 0.09f + f;   // zz
+        acc[i][0]     = 0.05f + f;  // xx
+        acc[i][1]     = 0.001f + f; // xy
+        acc[i][2]     = -0.0005f;   // xz
+        acc[i][3]     = 0.07f + f;  // yy
+        acc[i][4]     = 0.0007f;    // yz
+        acc[i][5]     = 0.09f + f;  // zz
     }
     return covCpu.cuda();
 }
 
 template <typename CameraOpT>
 void
-runForwardAndVjpParityChecks(const CameraOpT &cameraOp, int64_t C, int64_t N, const torch::Tensor &means, const torch::Tensor &covars6) {
+runForwardAndVjpParityChecks(const CameraOpT &cameraOp,
+                             int64_t C,
+                             int64_t N,
+                             const torch::Tensor &means,
+                             const torch::Tensor &covars6) {
     constexpr int kBlock = 256;
     const int64_t total  = C * N;
     const dim3 grid((total + kBlock - 1) / kBlock);
@@ -210,29 +221,27 @@ runForwardAndVjpParityChecks(const CameraOpT &cameraOp, int64_t C, int64_t N, co
     cudaStream_t stream = at::cuda::getDefaultCUDAStream().stream();
 
     auto fwdDiffs = torch::zeros({total, 3}, means.options());
-    compareProjectWorldTo2DKernel<<<grid, block, 0, stream>>>(
-        C,
-        N,
-        means.data_ptr<float>(),
-        covars6.data_ptr<float>(),
-        cameraOp,
-        fwdDiffs.data_ptr<float>());
+    compareProjectWorldTo2DKernel<<<grid, block, 0, stream>>>(C,
+                                                              N,
+                                                              means.data_ptr<float>(),
+                                                              covars6.data_ptr<float>(),
+                                                              cameraOp,
+                                                              fwdDiffs.data_ptr<float>());
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
     auto dCov2d   = torch::randn({total, 4}, means.options());
     auto dMean2d  = torch::randn({total, 2}, means.options());
     auto dDepth   = torch::randn({total}, means.options());
     auto bwdDiffs = torch::zeros({total, 4}, means.options());
-    compareProjectWorldTo2DVJPKernel<<<grid, block, 0, stream>>>(
-        C,
-        N,
-        means.data_ptr<float>(),
-        covars6.data_ptr<float>(),
-        dCov2d.data_ptr<float>(),
-        dMean2d.data_ptr<float>(),
-        dDepth.data_ptr<float>(),
-        cameraOp,
-        bwdDiffs.data_ptr<float>());
+    compareProjectWorldTo2DVJPKernel<<<grid, block, 0, stream>>>(C,
+                                                                 N,
+                                                                 means.data_ptr<float>(),
+                                                                 covars6.data_ptr<float>(),
+                                                                 dCov2d.data_ptr<float>(),
+                                                                 dMean2d.data_ptr<float>(),
+                                                                 dDepth.data_ptr<float>(),
+                                                                 cameraOp,
+                                                                 bwdDiffs.data_ptr<float>());
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
     const float maxFwd = fwdDiffs.abs().max().item<float>();
@@ -246,10 +255,10 @@ runForwardAndVjpParityChecks(const CameraOpT &cameraOp, int64_t C, int64_t N, co
 TEST(GaussianCamerasOpTest, PerspectiveEncapsulatedProjectionAndVJPMatchReferencePath) {
     constexpr int64_t C = 3;
     constexpr int64_t N = 64;
-    auto worldToCam      = makeWorldToCamMatrices(C);
-    auto projection      = makeProjectionMatrices(C, false);
-    auto meansWorld      = makeMeansWorld(N);
-    auto covarsWorld6    = makeCovarsWorld6(N);
+    auto worldToCam     = makeWorldToCamMatrices(C);
+    auto projection     = makeProjectionMatrices(C, false);
+    auto meansWorld     = makeMeansWorld(N);
+    auto covarsWorld6   = makeCovarsWorld6(N);
 
     auto cameraOp = PerspectiveCameraOp<float>(
         projection, worldToCam, static_cast<int32_t>(C), 640, 480, 0.01f, 1.0e8f);
@@ -259,10 +268,10 @@ TEST(GaussianCamerasOpTest, PerspectiveEncapsulatedProjectionAndVJPMatchReferenc
 TEST(GaussianCamerasOpTest, OrthographicEncapsulatedProjectionAndVJPMatchReferencePath) {
     constexpr int64_t C = 2;
     constexpr int64_t N = 64;
-    auto worldToCam      = makeWorldToCamMatrices(C);
-    auto projection      = makeProjectionMatrices(C, true);
-    auto meansWorld      = makeMeansWorld(N);
-    auto covarsWorld6    = makeCovarsWorld6(N);
+    auto worldToCam     = makeWorldToCamMatrices(C);
+    auto projection     = makeProjectionMatrices(C, true);
+    auto meansWorld     = makeMeansWorld(N);
+    auto covarsWorld6   = makeCovarsWorld6(N);
 
     auto cameraOp = OrthographicCameraOp<float>(
         projection, worldToCam, static_cast<int32_t>(C), 640, 480, -1.0e8f, 1.0e8f);

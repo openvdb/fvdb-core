@@ -69,7 +69,8 @@ jaggedProjectionForwardKernel(const uint32_t B,
         loadQuatScaleFromScalesRowMajor(quats, scales, quat, scale);
         covar = quaternionAndScaleToCovariance<T>(quat, scale);
     }
-    auto [covar2d, mean2d, depthCam] = cameraOp.projectWorldGaussianTo2D(cId, meanWorldSpace, covar);
+    auto [covar2d, mean2d, depthCam] =
+        cameraOp.projectWorldGaussianTo2D(cId, meanWorldSpace, covar);
     if (!cameraOp.isDepthVisible(depthCam)) {
         radii[idx] = 0;
         return;

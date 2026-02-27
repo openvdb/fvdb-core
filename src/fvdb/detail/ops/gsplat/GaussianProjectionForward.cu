@@ -104,7 +104,8 @@ template <typename T, typename CameraOp> struct ProjectionForward {
 
         const Vec3 meanWorldSpace(mMeansAcc[gid][0], mMeansAcc[gid][1], mMeansAcc[gid][2]);
         const Mat3 covar = computeCovarianceMatrix(gid);
-        auto [covar2d, mean2d, depthCam] = mCameraOp.projectWorldGaussianTo2D(cid, meanWorldSpace, covar);
+        auto [covar2d, mean2d, depthCam] =
+            mCameraOp.projectWorldGaussianTo2D(cid, meanWorldSpace, covar);
         if (!mCameraOp.isDepthVisible(depthCam)) {
             mOutRadiiAcc[cid][gid] = 0;
             return;
