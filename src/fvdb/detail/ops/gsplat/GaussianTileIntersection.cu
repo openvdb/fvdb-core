@@ -1087,10 +1087,8 @@ gaussianTileIntersectionPrivateUse1Impl(
             // the devices to the host ensuring that the elements of tilesPerGaussianCumsum are
             // ready to access.
             const auto tilesPerGaussianCumsumPtr = tilesPerGaussianCumsum.const_data_ptr<int32_t>();
-            auto intersectionsStart =
-                (deviceId == 0) ? 0 : tilesPerGaussianCumsumPtr[deviceGaussianOffset - 1];
-            auto intersectionsEnd =
-                tilesPerGaussianCumsumPtr[deviceGaussianOffset + deviceGaussianCount - 1];
+            auto intersectionsStart = (deviceId == 0) ? 0 : tilesPerGaussianCumsumPtr[deviceGaussianOffset - 1];
+            auto intersectionsEnd = tilesPerGaussianCumsumPtr[deviceGaussianOffset + deviceGaussianCount - 1];
 
             const int32_t numBits = 32 + numCamIdBits + numTileIdBits;
             CUB_WRAPPER(cub::DeviceRadixSort::SortPairs,
@@ -1104,6 +1102,14 @@ gaussianTileIntersectionPrivateUse1Impl(
                         stream);
         }
 
+        // for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        //     c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
+        // }
+
+        // for (auto i = 0; i < totalIntersections - 1; ++i) {
+        //     TORCH_CHECK(keysSorted.data_ptr<int64_t>()[i] <= keysSorted.data_ptr<int64_t>()[i+1]);
+        // }
+
         mergeStreams();
 
         TORCH_CHECK(!isSparse, "Sparse tile offsets are not implemented for mGPU");
@@ -1112,14 +1118,18 @@ gaussianTileIntersectionPrivateUse1Impl(
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
-            int64_t deviceIntersectionOffset, deviceIntersectionCount;
-            std::tie(deviceIntersectionOffset, deviceIntersectionCount) =
-                deviceChunk(totalIntersections, deviceId);
+            int64_t deviceGaussianOffset, deviceGaussianCount;
+            std::tie(deviceGaussianOffset, deviceGaussianCount) =
+                deviceChunk(totalGaussians, deviceId);
 
-            const int NUM_BLOCKS_2 = (deviceIntersectionCount + NUM_THREADS - 1) / NUM_THREADS;
+            const auto tilesPerGaussianCumsumPtr = tilesPerGaussianCumsum.const_data_ptr<int32_t>();
+            auto intersectionsStart = (deviceId == 0) ? 0 : tilesPerGaussianCumsumPtr[deviceGaussianOffset - 1];
+            auto intersectionsEnd = tilesPerGaussianCumsumPtr[deviceGaussianOffset + deviceGaussianCount - 1];
+
+            const int NUM_BLOCKS_2 = (intersectionsEnd - intersectionsStart + NUM_THREADS - 1) / NUM_THREADS;
             computeTileOffsets<<<NUM_BLOCKS_2, NUM_THREADS, 0, stream>>>(
-                deviceIntersectionOffset,
-                deviceIntersectionCount,
+                intersectionsStart,
+                intersectionsEnd - intersectionsStart,
                 totalIntersections,
                 numCameras,
                 totalTiles,
