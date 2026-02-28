@@ -417,6 +417,15 @@ launchRasterizeForwardKernel(
     return std::make_tuple(outFeatures, outAlphas, outLastIds);
 }
 
+namespace {
+
+[[maybe_unused]] __global__ void
+sleepKernel() {
+    __nanosleep(1000000U); // Puts the calling thread to sleep
+}
+
+} // namespace
+
 template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED>
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor, fvdb::JaggedTensor>
 launchRasterizeForwardKernels(
@@ -494,6 +503,7 @@ launchRasterizeForwardKernels(
             auto reshapedFeatures =
                 outFeatures.jdata().view({C, imageHeight, imageWidth, channels});
 
+            sleepKernel<<<1, 1, 0, stream>>>();
             std::vector<torch::Tensor> tensors = {means2d,
                                                   conics,
                                                   features,
