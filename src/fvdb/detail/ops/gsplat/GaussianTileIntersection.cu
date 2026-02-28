@@ -1027,7 +1027,7 @@ gaussianTileIntersectionPrivateUse1Impl(
 
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
-            auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+            auto stream = c10::cuda::getStreamFromPool(false, deviceId);
 
             int64_t deviceGaussianOffset, deviceGaussianCount;
             std::tie(deviceGaussianOffset, deviceGaussianCount) =
@@ -1041,16 +1041,43 @@ gaussianTileIntersectionPrivateUse1Impl(
                 (deviceId == 0) ? 0 : tilesPerGaussianCumsumPtr[deviceGaussianOffset - 1];
             auto intersectionsEnd =
                 tilesPerGaussianCumsumPtr[deviceGaussianOffset + deviceGaussianCount - 1];
-            nanovdb::util::cuda::memPrefetchAsync(
-                intersectionKeys.const_data_ptr<int64_t>() + intersectionsStart,
-                (intersectionsEnd - intersectionsStart) * sizeof(int64_t),
-                deviceId,
-                stream);
-            nanovdb::util::cuda::memPrefetchAsync(
-                intersectionValues.const_data_ptr<int32_t>() + intersectionsStart,
-                (intersectionsEnd - intersectionsStart) * sizeof(int32_t),
-                deviceId,
-                stream);
+
+            std::vector<void *> prefetchPointers;
+            std::vector<size_t> prefetchSizes;
+            const cudaMemLocation location                 = {cudaMemLocationTypeDevice, deviceId};
+            std::vector<cudaMemLocation> prefetchLocations = {location};
+            std::vector<size_t> prefetchLocationIndices    = {0};
+
+            prefetchPointers.emplace_back(intersectionKeys.data_ptr<int64_t>() +
+                                          intersectionsStart);
+            prefetchSizes.emplace_back((intersectionsEnd - intersectionsStart) * sizeof(int64_t));
+            prefetchPointers.emplace_back(intersectionValues.data_ptr<int32_t>() +
+                                          intersectionsStart);
+            prefetchSizes.emplace_back((intersectionsEnd - intersectionsStart) * sizeof(int32_t));
+            prefetchPointers.emplace_back(keysSorted.data_ptr<int64_t>() + intersectionsStart);
+            prefetchSizes.emplace_back((intersectionsEnd - intersectionsStart) * sizeof(int64_t));
+            prefetchPointers.emplace_back(valsSorted.data_ptr<int32_t>() + intersectionsStart);
+            prefetchSizes.emplace_back((intersectionsEnd - intersectionsStart) * sizeof(int32_t));
+
+            C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(prefetchPointers.data(),
+                                                     prefetchSizes.data(),
+                                                     prefetchPointers.size(),
+                                                     prefetchLocations.data(),
+                                                     prefetchLocationIndices.data(),
+                                                     prefetchLocations.size(),
+                                                     0,
+                                                     stream));
+        }
+
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            C10_CUDA_CHECK(cudaSetDevice(deviceId));
+            auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+
+            int64_t deviceGaussianOffset, deviceGaussianCount;
+            std::tie(deviceGaussianOffset, deviceGaussianCount) =
+                deviceChunk(totalGaussians, deviceId);
+
+            const auto tilesPerGaussianCumsumPtr = tilesPerGaussianCumsum.const_data_ptr<int32_t>();
 
             const int NUM_BLOCKS = (deviceGaussianCount + NUM_THREADS - 1) / NUM_THREADS;
             computeGaussianTileIntersections<scalar_t>
@@ -1087,8 +1114,10 @@ gaussianTileIntersectionPrivateUse1Impl(
             // the devices to the host ensuring that the elements of tilesPerGaussianCumsum are
             // ready to access.
             const auto tilesPerGaussianCumsumPtr = tilesPerGaussianCumsum.const_data_ptr<int32_t>();
-            auto intersectionsStart = (deviceId == 0) ? 0 : tilesPerGaussianCumsumPtr[deviceGaussianOffset - 1];
-            auto intersectionsEnd = tilesPerGaussianCumsumPtr[deviceGaussianOffset + deviceGaussianCount - 1];
+            auto intersectionsStart =
+                (deviceId == 0) ? 0 : tilesPerGaussianCumsumPtr[deviceGaussianOffset - 1];
+            auto intersectionsEnd =
+                tilesPerGaussianCumsumPtr[deviceGaussianOffset + deviceGaussianCount - 1];
 
             const int32_t numBits = 32 + numCamIdBits + numTileIdBits;
             CUB_WRAPPER(cub::DeviceRadixSort::SortPairs,
@@ -1107,7 +1136,8 @@ gaussianTileIntersectionPrivateUse1Impl(
         // }
 
         // for (auto i = 0; i < totalIntersections - 1; ++i) {
-        //     TORCH_CHECK(keysSorted.data_ptr<int64_t>()[i] <= keysSorted.data_ptr<int64_t>()[i+1]);
+        //     TORCH_CHECK(keysSorted.data_ptr<int64_t>()[i] <=
+        //     keysSorted.data_ptr<int64_t>()[i+1]);
         // }
 
         mergeStreams();
@@ -1123,10 +1153,13 @@ gaussianTileIntersectionPrivateUse1Impl(
                 deviceChunk(totalGaussians, deviceId);
 
             const auto tilesPerGaussianCumsumPtr = tilesPerGaussianCumsum.const_data_ptr<int32_t>();
-            auto intersectionsStart = (deviceId == 0) ? 0 : tilesPerGaussianCumsumPtr[deviceGaussianOffset - 1];
-            auto intersectionsEnd = tilesPerGaussianCumsumPtr[deviceGaussianOffset + deviceGaussianCount - 1];
+            auto intersectionsStart =
+                (deviceId == 0) ? 0 : tilesPerGaussianCumsumPtr[deviceGaussianOffset - 1];
+            auto intersectionsEnd =
+                tilesPerGaussianCumsumPtr[deviceGaussianOffset + deviceGaussianCount - 1];
 
-            const int NUM_BLOCKS_2 = (intersectionsEnd - intersectionsStart + NUM_THREADS - 1) / NUM_THREADS;
+            const int NUM_BLOCKS_2 =
+                (intersectionsEnd - intersectionsStart + NUM_THREADS - 1) / NUM_THREADS;
             computeTileOffsets<<<NUM_BLOCKS_2, NUM_THREADS, 0, stream>>>(
                 intersectionsStart,
                 intersectionsEnd - intersectionsStart,
