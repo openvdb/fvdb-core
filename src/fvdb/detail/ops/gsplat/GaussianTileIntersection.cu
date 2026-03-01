@@ -1106,29 +1106,33 @@ gaussianTileIntersectionPrivateUse1Impl(
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
-            int64_t deviceGaussianOffset, deviceGaussianCount;
-            std::tie(deviceGaussianOffset, deviceGaussianCount) =
-                deviceChunk(totalGaussians, deviceId);
+            int64_t deviceCameraOffset, deviceCameraCount;
+            std::tie(deviceCameraOffset, deviceCameraCount) = deviceChunk(numCameras, deviceId);
 
-            // The call to tilesPerGaussianCumsum[-1].item<int64_t>() above implicitly synchronizes
-            // the devices to the host ensuring that the elements of tilesPerGaussianCumsum are
-            // ready to access.
-            const auto tilesPerGaussianCumsumPtr = tilesPerGaussianCumsum.const_data_ptr<int32_t>();
-            auto intersectionsStart =
-                (deviceId == 0) ? 0 : tilesPerGaussianCumsumPtr[deviceGaussianOffset - 1];
-            auto intersectionsEnd =
-                tilesPerGaussianCumsumPtr[deviceGaussianOffset + deviceGaussianCount - 1];
+            if (deviceCameraCount > 0) {
+                auto deviceGaussianOffset = deviceCameraOffset * numGaussians;
+                auto deviceGaussianCount = deviceCameraCount * numGaussians;
 
-            const int32_t numBits = 32 + numCamIdBits + numTileIdBits;
-            CUB_WRAPPER(cub::DeviceRadixSort::SortPairs,
-                        intersectionKeys.data_ptr<int64_t>() + intersectionsStart,
-                        keysSorted.data_ptr<int64_t>() + intersectionsStart,
-                        intersectionValues.data_ptr<int32_t>() + intersectionsStart,
-                        valsSorted.data_ptr<int32_t>() + intersectionsStart,
-                        intersectionsEnd - intersectionsStart,
-                        0,
-                        numBits,
-                        stream);
+                // The call to tilesPerGaussianCumsum[-1].item<int64_t>() above implicitly synchronizes
+                // the devices to the host ensuring that the elements of tilesPerGaussianCumsum are
+                // ready to access.
+                const auto tilesPerGaussianCumsumPtr = tilesPerGaussianCumsum.const_data_ptr<int32_t>();
+                auto intersectionsStart =
+                    (deviceId == 0) ? 0 : tilesPerGaussianCumsumPtr[deviceGaussianOffset - 1];
+                auto intersectionsEnd =
+                    tilesPerGaussianCumsumPtr[deviceGaussianOffset + deviceGaussianCount - 1];
+
+                const int32_t numBits = 32 + numCamIdBits + numTileIdBits;
+                CUB_WRAPPER(cub::DeviceRadixSort::SortPairs,
+                            intersectionKeys.data_ptr<int64_t>() + intersectionsStart,
+                            keysSorted.data_ptr<int64_t>() + intersectionsStart,
+                            intersectionValues.data_ptr<int32_t>() + intersectionsStart,
+                            valsSorted.data_ptr<int32_t>() + intersectionsStart,
+                            intersectionsEnd - intersectionsStart,
+                            0,
+                            numBits,
+                            stream);
+            }
         }
 
         // for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
