@@ -1102,36 +1102,59 @@ gaussianTileIntersectionPrivateUse1Impl(
 
         mergeStreams();
 
-        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-            C10_CUDA_CHECK(cudaSetDevice(deviceId));
-            auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        const int32_t numBits = 32 + numCamIdBits + numTileIdBits;
+        if (static_cast<uint32_t>(c10::cuda::device_count()) == numCameras) {
+            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+                C10_CUDA_CHECK(cudaSetDevice(deviceId));
+                auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
-            int64_t deviceCameraOffset, deviceCameraCount;
-            std::tie(deviceCameraOffset, deviceCameraCount) = deviceChunk(numCameras, deviceId);
+                int64_t deviceCameraOffset, deviceCameraCount;
+                std::tie(deviceCameraOffset, deviceCameraCount) = deviceChunk(numCameras, deviceId);
 
-            if (deviceCameraCount > 0) {
-                auto deviceGaussianOffset = deviceCameraOffset * numGaussians;
-                auto deviceGaussianCount = deviceCameraCount * numGaussians;
+                if (deviceCameraCount > 0) {
+                    auto deviceGaussianOffset = deviceCameraOffset * numGaussians;
+                    auto deviceGaussianCount  = deviceCameraCount * numGaussians;
 
-                // The call to tilesPerGaussianCumsum[-1].item<int64_t>() above implicitly synchronizes
-                // the devices to the host ensuring that the elements of tilesPerGaussianCumsum are
-                // ready to access.
-                const auto tilesPerGaussianCumsumPtr = tilesPerGaussianCumsum.const_data_ptr<int32_t>();
-                auto intersectionsStart =
-                    (deviceId == 0) ? 0 : tilesPerGaussianCumsumPtr[deviceGaussianOffset - 1];
-                auto intersectionsEnd =
-                    tilesPerGaussianCumsumPtr[deviceGaussianOffset + deviceGaussianCount - 1];
+                    // The call to tilesPerGaussianCumsum[-1].item<int64_t>() above implicitly
+                    // synchronizes the devices to the host ensuring that the elements of
+                    // tilesPerGaussianCumsum are ready to access.
+                    const auto tilesPerGaussianCumsumPtr =
+                        tilesPerGaussianCumsum.const_data_ptr<int32_t>();
+                    auto intersectionsStart =
+                        (deviceId == 0) ? 0 : tilesPerGaussianCumsumPtr[deviceGaussianOffset - 1];
+                    auto intersectionsEnd =
+                        tilesPerGaussianCumsumPtr[deviceGaussianOffset + deviceGaussianCount - 1];
 
-                const int32_t numBits = 32 + numCamIdBits + numTileIdBits;
-                CUB_WRAPPER(cub::DeviceRadixSort::SortPairs,
-                            intersectionKeys.data_ptr<int64_t>() + intersectionsStart,
-                            keysSorted.data_ptr<int64_t>() + intersectionsStart,
-                            intersectionValues.data_ptr<int32_t>() + intersectionsStart,
-                            valsSorted.data_ptr<int32_t>() + intersectionsStart,
-                            intersectionsEnd - intersectionsStart,
-                            0,
-                            numBits,
-                            stream);
+                    CUB_WRAPPER(cub::DeviceRadixSort::SortPairs,
+                                intersectionKeys.data_ptr<int64_t>() + intersectionsStart,
+                                keysSorted.data_ptr<int64_t>() + intersectionsStart,
+                                intersectionValues.data_ptr<int32_t>() + intersectionsStart,
+                                valsSorted.data_ptr<int32_t>() + intersectionsStart,
+                                intersectionsEnd - intersectionsStart,
+                                0,
+                                numBits,
+                                stream);
+                }
+            }
+        } else {
+            std::vector<cudaEvent_t> events(c10::cuda::device_count());
+            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+                C10_CUDA_CHECK(cudaSetDevice(deviceId));
+                C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
+            }
+
+            radixSortAsync(intersectionKeys.data_ptr<int64_t>(),
+                           keysSorted.data_ptr<int64_t>(),
+                           intersectionValues.data_ptr<int32_t>(),
+                           valsSorted.data_ptr<int32_t>(),
+                           totalIntersections,
+                           0,
+                           numBits,
+                           events.data());
+
+            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+                C10_CUDA_CHECK(cudaSetDevice(deviceId));
+                C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
             }
         }
 
