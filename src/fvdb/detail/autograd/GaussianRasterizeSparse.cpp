@@ -7,6 +7,8 @@
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
 
+#include <vector>
+
 namespace fvdb::detail::autograd {
 
 RasterizeGaussiansToPixelsSparse::VariableList
@@ -30,7 +32,9 @@ RasterizeGaussiansToPixelsSparse::forward(
         &tilePixelMask, // [num_active_tiles, tileSize, tileSize]
     const RasterizeGaussiansToPixelsSparse::Variable &tilePixelCumsum, // [num_active_tiles + 1]
     const RasterizeGaussiansToPixelsSparse::Variable &pixelMap,        // [num_pixels]
-    const bool absgrad) {
+    const bool absgrad,
+    std::optional<RasterizeGaussiansToPixelsSparse::Variable> backgrounds,
+    std::optional<RasterizeGaussiansToPixelsSparse::Variable> masks) {
     FVDB_FUNC_RANGE_WITH_NAME("RasterizeGaussiansToPixelsSparse::forward");
 
     auto variables              = FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
@@ -49,7 +53,9 @@ RasterizeGaussiansToPixelsSparse::forward(
                                                                       activeTiles,
                                                                       tilePixelMask,
                                                                       tilePixelCumsum,
-                                                                      pixelMap);
+                                                                      pixelMap,
+                                                                      backgrounds,
+                                                                      masks);
     });
     JaggedTensor renderedColors = std::get<0>(variables);
     JaggedTensor renderedAlphas = std::get<1>(variables);
@@ -60,23 +66,37 @@ RasterizeGaussiansToPixelsSparse::forward(
     const auto jlidx         = pixelsToRender.jlidx();
     const auto numOuterLists = pixelsToRender.num_outer_lists();
 
-    ctx->save_for_backward({means2d,
-                            conics,
-                            colors,
-                            opacities,
-                            tileOffsets,
-                            tileGaussianIds,
-                            pixelsToRender.jdata(),
-                            renderedColors.jdata(),
-                            renderedAlphas.jdata(),
-                            lastIds.jdata(),
-                            joffsets,
-                            jidx,
-                            jlidx,
-                            activeTiles,
-                            tilePixelMask,
-                            tilePixelCumsum,
-                            pixelMap});
+    std::vector<Variable> toSave = {means2d,
+                                    conics,
+                                    colors,
+                                    opacities,
+                                    tileOffsets,
+                                    tileGaussianIds,
+                                    pixelsToRender.jdata(),
+                                    renderedColors.jdata(),
+                                    renderedAlphas.jdata(),
+                                    lastIds.jdata(),
+                                    joffsets,
+                                    jidx,
+                                    jlidx,
+                                    activeTiles,
+                                    tilePixelMask,
+                                    tilePixelCumsum,
+                                    pixelMap};
+    if (backgrounds.has_value()) {
+        toSave.push_back(backgrounds.value());
+        ctx->saved_data["has_backgrounds"] = true;
+    } else {
+        ctx->saved_data["has_backgrounds"] = false;
+    }
+    if (masks.has_value()) {
+        toSave.push_back(masks.value());
+        ctx->saved_data["has_masks"] = true;
+    } else {
+        ctx->saved_data["has_masks"] = false;
+    }
+    ctx->save_for_backward(toSave);
+
     ctx->saved_data["imageWidth"]    = (int64_t)imageWidth;
     ctx->saved_data["imageHeight"]   = (int64_t)imageHeight;
     ctx->saved_data["tileSize"]      = (int64_t)tileSize;
@@ -123,6 +143,18 @@ RasterizeGaussiansToPixelsSparse::backward(
     Variable tilePixelCumsum     = saved.at(15);
     Variable pixelMap            = saved.at(16);
 
+    const bool hasBackgrounds                = ctx->saved_data["has_backgrounds"].toBool();
+    const bool hasMasks                      = ctx->saved_data["has_masks"].toBool();
+    std::optional<torch::Tensor> backgrounds = std::nullopt;
+    std::optional<torch::Tensor> masks       = std::nullopt;
+    int64_t optIdx                           = 17;
+    if (hasBackgrounds) {
+        backgrounds = saved.at(optIdx++);
+    }
+    if (hasMasks) {
+        masks = saved.at(optIdx++);
+    }
+
     const int imageWidth        = (int)ctx->saved_data["imageWidth"].toInt();
     const int imageHeight       = (int)ctx->saved_data["imageHeight"].toInt();
     const int tileSize          = (int)ctx->saved_data["tileSize"].toInt();
@@ -160,7 +192,10 @@ RasterizeGaussiansToPixelsSparse::backward(
                                                                        tilePixelMask,
                                                                        tilePixelCumsum,
                                                                        pixelMap,
-                                                                       absgrad);
+                                                                       absgrad,
+                                                                       -1,
+                                                                       backgrounds,
+                                                                       masks);
     });
     Variable dLossDMean2dAbs;
     if (absgrad) {
@@ -191,6 +226,8 @@ RasterizeGaussiansToPixelsSparse::backward(
         Variable(),      // tilePixelCumsum
         Variable(),      // pixelMap
         Variable(),      // absgrad
+        Variable(),      // backgrounds
+        Variable(),      // masks
     };
 }
 

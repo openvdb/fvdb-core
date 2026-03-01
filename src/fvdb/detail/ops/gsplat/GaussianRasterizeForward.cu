@@ -805,12 +805,11 @@ dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
     const torch::Tensor &tilePixelMask,
     const torch::Tensor &tilePixelCumsum,
     const torch::Tensor &pixelMap,
-    const at::optional<torch::Tensor> &backgrounds) {
+    const at::optional<torch::Tensor> &backgrounds,
+    const at::optional<torch::Tensor> &masks) {
     FVDB_FUNC_RANGE();
     const uint32_t channels = features.size(-1);
     const bool isPacked     = means2d.dim() == 2;
-
-    const std::optional<torch::Tensor> masks = std::nullopt;
 
 #define CALL_FWD_SPARSE_CUDA(N)                                                   \
     case N: {                                                                     \
@@ -906,7 +905,8 @@ dispatchGaussianSparseRasterizeForward<torch::kPrivateUse1>(
     const torch::Tensor &tilePixelMask,
     const torch::Tensor &tilePixelCumsum,
     const torch::Tensor &pixelMap,
-    const at::optional<torch::Tensor> &backgrounds) {
+    const at::optional<torch::Tensor> &backgrounds,
+    const at::optional<torch::Tensor> &masks) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "PrivateUse1 implementation not available");
 }
 
@@ -931,7 +931,8 @@ dispatchGaussianSparseRasterizeForward<torch::kCPU>(
     const torch::Tensor &tilePixelMask,
     const torch::Tensor &tilePixelCumsum,
     const torch::Tensor &pixelMap,
-    const at::optional<torch::Tensor> &backgrounds) {
+    const at::optional<torch::Tensor> &backgrounds,
+    const at::optional<torch::Tensor> &masks) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
 }
 

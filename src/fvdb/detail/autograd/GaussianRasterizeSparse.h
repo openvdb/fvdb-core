@@ -35,7 +35,9 @@ struct RasterizeGaussiansToPixelsSparse
         const Variable &tilePixelMask,   // [num_active_tiles, tileSize, tileSize]
         const Variable &tilePixelCumsum, // [num_active_tiles + 1]
         const Variable &pixelMap,        // [num_pixels]
-        const bool absgrad);
+        const bool absgrad,
+        std::optional<Variable> backgrounds = std::nullopt, // [C, D]
+        std::optional<Variable> masks       = std::nullopt);      // [C, tileH, tileW]
 
     static VariableList backward(AutogradContext *ctx, VariableList gradOutput);
 };
