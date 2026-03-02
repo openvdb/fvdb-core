@@ -87,9 +87,6 @@ isOutsideImageWithRadius(const nanovdb::math::Vec2<T> &mean2d,
             mean2d[1] + radiusY <= T(0) || mean2d[1] - radiusY >= T(imageHeight));
 }
 
-/// @brief Result state for world-point to pixel projection.
-enum class ProjectWorldToPixelStatus : uint8_t { BehindCamera, OutOfBounds, InImage };
-
 /// @brief Estimate projected radius from a 2x2 covariance using the largest eigenvalue heuristic.
 template <typename T>
 inline __device__ T
@@ -657,6 +654,7 @@ template <typename T> struct PerspectiveWithDistortionCameraOp {
   public:
     using Mat3 = nanovdb::math::Mat3<T>;
     using Vec3 = nanovdb::math::Vec3<T>;
+    enum class ProjectionVisibility : uint8_t { BehindCamera, OutOfBounds, InImage };
 
     PerspectiveWithDistortionCameraOp(const torch::Tensor &worldToCamStart,
                                       const torch::Tensor &worldToCamEnd,
@@ -784,7 +782,7 @@ template <typename T> struct PerspectiveWithDistortionCameraOp {
     /// - `BehindCamera` when depth is not positive.
     /// - `OutOfBounds` when projection lies outside the image (+ margin).
     /// - `InImage` when projection is inside the image (+ margin).
-    inline __device__ ProjectWorldToPixelStatus
+    inline __device__ ProjectionVisibility
     projectWorldPointToPixel(const int64_t cid,
                              const nanovdb::math::Vec3<T> &pointWorld,
                              const T inImageMargin,
@@ -793,13 +791,12 @@ template <typename T> struct PerspectiveWithDistortionCameraOp {
         const Mat3 K                                            = projectionMatrix(cid);
         const T *distCoeffs                                     = distortionPtr(cid);
 
-        const auto projectWithTransform =
-            [&](const RigidTransform<T> &worldToCam,
-                nanovdb::math::Vec2<T> &pix) -> ProjectWorldToPixelStatus {
+        const auto projectWithTransform = [&](const RigidTransform<T> &worldToCam,
+                                              nanovdb::math::Vec2<T> &pix) -> ProjectionVisibility {
             const nanovdb::math::Vec3<T> pointCam = worldToCam.apply(pointWorld);
             if (pointCam[2] <= T(1e-6)) {
                 pix = nanovdb::math::Vec2<T>(T(0), T(0));
-                return ProjectWorldToPixelStatus::BehindCamera;
+                return ProjectionVisibility::BehindCamera;
             }
             const nanovdb::math::Vec2<T> pNormalized(pointCam[0] / pointCam[2],
                                                      pointCam[1] / pointCam[2]);
@@ -814,35 +811,33 @@ template <typename T> struct PerspectiveWithDistortionCameraOp {
             const T marginY  = T(imageHeight) * inImageMargin;
             const bool inImg = (pix[0] >= -marginX) && (pix[0] < T(imageWidth) + marginX) &&
                                (pix[1] >= -marginY) && (pix[1] < T(imageHeight) + marginY);
-            return inImg ? ProjectWorldToPixelStatus::InImage
-                         : ProjectWorldToPixelStatus::OutOfBounds;
+            return inImg ? ProjectionVisibility::InImage : ProjectionVisibility::OutOfBounds;
         };
 
         const RigidTransform<T> worldToCamStart(R_wc_start, t_wc_start);
         const RigidTransform<T> worldToCamEnd(R_wc_end, t_wc_end);
         nanovdb::math::Vec2<T> pixStart(T(0), T(0));
         nanovdb::math::Vec2<T> pixEnd(T(0), T(0));
-        const ProjectWorldToPixelStatus statusStart =
-            projectWithTransform(worldToCamStart, pixStart);
-        const ProjectWorldToPixelStatus statusEnd = projectWithTransform(worldToCamEnd, pixEnd);
+        const ProjectionVisibility statusStart = projectWithTransform(worldToCamStart, pixStart);
+        const ProjectionVisibility statusEnd   = projectWithTransform(worldToCamEnd, pixEnd);
 
         if (rollingShutterType == RollingShutterType::NONE) {
             outPixel = pixStart;
             return statusStart;
         }
-        if (statusStart == ProjectWorldToPixelStatus::BehindCamera &&
-            statusEnd == ProjectWorldToPixelStatus::BehindCamera) {
+        if (statusStart == ProjectionVisibility::BehindCamera &&
+            statusEnd == ProjectionVisibility::BehindCamera) {
             outPixel = pixEnd;
-            return ProjectWorldToPixelStatus::BehindCamera;
+            return ProjectionVisibility::BehindCamera;
         }
-        if (statusStart != ProjectWorldToPixelStatus::InImage &&
-            statusEnd != ProjectWorldToPixelStatus::InImage) {
-            outPixel = (statusEnd != ProjectWorldToPixelStatus::BehindCamera) ? pixEnd : pixStart;
-            return ProjectWorldToPixelStatus::OutOfBounds;
+        if (statusStart != ProjectionVisibility::InImage &&
+            statusEnd != ProjectionVisibility::InImage) {
+            outPixel = (statusEnd != ProjectionVisibility::BehindCamera) ? pixEnd : pixStart;
+            return ProjectionVisibility::OutOfBounds;
         }
 
         nanovdb::math::Vec2<T> pixPrev =
-            (statusStart == ProjectWorldToPixelStatus::InImage) ? pixStart : pixEnd;
+            (statusStart == ProjectionVisibility::InImage) ? pixStart : pixEnd;
         constexpr int kIters = 6;
         for (int it = 0; it < kIters; ++it) {
             const T tRs = rollingShutterTimeFromPixel(
@@ -850,15 +845,15 @@ template <typename T> struct PerspectiveWithDistortionCameraOp {
             const RigidTransform<T> worldToCam =
                 RigidTransform<T>::interpolate(tRs, worldToCamStart, worldToCamEnd);
             nanovdb::math::Vec2<T> pixRs(T(0), T(0));
-            const ProjectWorldToPixelStatus statusRs = projectWithTransform(worldToCam, pixRs);
-            pixPrev                                  = pixRs;
-            if (statusRs != ProjectWorldToPixelStatus::InImage) {
+            const ProjectionVisibility statusRs = projectWithTransform(worldToCam, pixRs);
+            pixPrev                             = pixRs;
+            if (statusRs != ProjectionVisibility::InImage) {
                 outPixel = pixRs;
                 return statusRs;
             }
         }
         outPixel = pixPrev;
-        return ProjectWorldToPixelStatus::InImage;
+        return ProjectionVisibility::InImage;
     }
 
   private:
@@ -1079,6 +1074,7 @@ template <typename T> struct OrthographicWithDistortionCameraOp {
   public:
     using Mat3 = nanovdb::math::Mat3<T>;
     using Vec3 = nanovdb::math::Vec3<T>;
+    enum class ProjectionVisibility : uint8_t { BehindCamera, OutOfBounds, InImage };
 
     OrthographicWithDistortionCameraOp(const torch::Tensor &worldToCamStart,
                                        const torch::Tensor &worldToCamEnd,
@@ -1188,7 +1184,7 @@ template <typename T> struct OrthographicWithDistortionCameraOp {
     /// - `BehindCamera` when depth is not positive.
     /// - `OutOfBounds` when projection lies outside the image (+ margin).
     /// - `InImage` when projection is inside the image (+ margin).
-    inline __device__ ProjectWorldToPixelStatus
+    inline __device__ ProjectionVisibility
     projectWorldPointToPixel(const int64_t cid,
                              const nanovdb::math::Vec3<T> &pointWorld,
                              const T inImageMargin,
@@ -1200,48 +1196,45 @@ template <typename T> struct OrthographicWithDistortionCameraOp {
         const T cx                                              = K[0][2];
         const T cy                                              = K[1][2];
 
-        const auto projectWithTransform =
-            [&](const RigidTransform<T> &worldToCam,
-                nanovdb::math::Vec2<T> &pix) -> ProjectWorldToPixelStatus {
+        const auto projectWithTransform = [&](const RigidTransform<T> &worldToCam,
+                                              nanovdb::math::Vec2<T> &pix) -> ProjectionVisibility {
             const nanovdb::math::Vec3<T> pointCam = worldToCam.apply(pointWorld);
             if (pointCam[2] <= T(0)) {
                 pix = nanovdb::math::Vec2<T>(T(0), T(0));
-                return ProjectWorldToPixelStatus::BehindCamera;
+                return ProjectionVisibility::BehindCamera;
             }
             pix              = nanovdb::math::Vec2<T>(fx * pointCam[0] + cx, fy * pointCam[1] + cy);
             const T marginX  = T(imageWidth) * inImageMargin;
             const T marginY  = T(imageHeight) * inImageMargin;
             const bool inImg = (pix[0] >= -marginX) && (pix[0] < T(imageWidth) + marginX) &&
                                (pix[1] >= -marginY) && (pix[1] < T(imageHeight) + marginY);
-            return inImg ? ProjectWorldToPixelStatus::InImage
-                         : ProjectWorldToPixelStatus::OutOfBounds;
+            return inImg ? ProjectionVisibility::InImage : ProjectionVisibility::OutOfBounds;
         };
 
         const RigidTransform<T> worldToCamStart(R_wc_start, t_wc_start);
         const RigidTransform<T> worldToCamEnd(R_wc_end, t_wc_end);
         nanovdb::math::Vec2<T> pixStart(T(0), T(0));
         nanovdb::math::Vec2<T> pixEnd(T(0), T(0));
-        const ProjectWorldToPixelStatus statusStart =
-            projectWithTransform(worldToCamStart, pixStart);
-        const ProjectWorldToPixelStatus statusEnd = projectWithTransform(worldToCamEnd, pixEnd);
+        const ProjectionVisibility statusStart = projectWithTransform(worldToCamStart, pixStart);
+        const ProjectionVisibility statusEnd   = projectWithTransform(worldToCamEnd, pixEnd);
 
         if (rollingShutterType == RollingShutterType::NONE) {
             outPixel = pixStart;
             return statusStart;
         }
-        if (statusStart == ProjectWorldToPixelStatus::BehindCamera &&
-            statusEnd == ProjectWorldToPixelStatus::BehindCamera) {
+        if (statusStart == ProjectionVisibility::BehindCamera &&
+            statusEnd == ProjectionVisibility::BehindCamera) {
             outPixel = pixEnd;
-            return ProjectWorldToPixelStatus::BehindCamera;
+            return ProjectionVisibility::BehindCamera;
         }
-        if (statusStart != ProjectWorldToPixelStatus::InImage &&
-            statusEnd != ProjectWorldToPixelStatus::InImage) {
-            outPixel = (statusEnd != ProjectWorldToPixelStatus::BehindCamera) ? pixEnd : pixStart;
-            return ProjectWorldToPixelStatus::OutOfBounds;
+        if (statusStart != ProjectionVisibility::InImage &&
+            statusEnd != ProjectionVisibility::InImage) {
+            outPixel = (statusEnd != ProjectionVisibility::BehindCamera) ? pixEnd : pixStart;
+            return ProjectionVisibility::OutOfBounds;
         }
 
         nanovdb::math::Vec2<T> pixPrev =
-            (statusStart == ProjectWorldToPixelStatus::InImage) ? pixStart : pixEnd;
+            (statusStart == ProjectionVisibility::InImage) ? pixStart : pixEnd;
         constexpr int kIters = 6;
         for (int it = 0; it < kIters; ++it) {
             const T tRs = rollingShutterTimeFromPixel(
@@ -1249,15 +1242,15 @@ template <typename T> struct OrthographicWithDistortionCameraOp {
             const RigidTransform<T> worldToCam =
                 RigidTransform<T>::interpolate(tRs, worldToCamStart, worldToCamEnd);
             nanovdb::math::Vec2<T> pixRs(T(0), T(0));
-            const ProjectWorldToPixelStatus statusRs = projectWithTransform(worldToCam, pixRs);
-            pixPrev                                  = pixRs;
-            if (statusRs != ProjectWorldToPixelStatus::InImage) {
+            const ProjectionVisibility statusRs = projectWithTransform(worldToCam, pixRs);
+            pixPrev                             = pixRs;
+            if (statusRs != ProjectionVisibility::InImage) {
                 outPixel = pixRs;
                 return statusRs;
             }
         }
         outPixel = pixPrev;
-        return ProjectWorldToPixelStatus::InImage;
+        return ProjectionVisibility::InImage;
     }
 
   private:

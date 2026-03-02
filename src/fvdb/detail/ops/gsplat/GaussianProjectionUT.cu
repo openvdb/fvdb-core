@@ -340,17 +340,18 @@ template <typename ScalarType, typename CameraOp> struct ProjectionForwardUT {
         nanovdb::math::Vec2<ScalarType> projected_points[7];
         bool valid_any                = false;
         constexpr int kNumSigmaPoints = 7;
+        using ProjectionVisibility    = typename CameraOp::ProjectionVisibility;
         for (int i = 0; i < kNumSigmaPoints; ++i) {
             Vec2 pix;
-            const ProjectWorldToPixelStatus status = mCameraOp.projectWorldPointToPixel(
+            const ProjectionVisibility status = mCameraOp.projectWorldPointToPixel(
                 camId, sigma_points_world[i], ScalarType(mUTParams.inImageMargin), pix);
             // Hard reject if any sigma point is behind the camera since the projection will be
             // discontinuous.
-            if (status == ProjectWorldToPixelStatus::BehindCamera) {
+            if (status == ProjectionVisibility::BehindCamera) {
                 mOutRadiiAcc[camId][gaussianId] = 0;
                 return;
             }
-            const bool valid_i  = (status == ProjectWorldToPixelStatus::InImage);
+            const bool valid_i  = (status == ProjectionVisibility::InImage);
             projected_points[i] = pix;
             valid_any |= valid_i;
             if (mUTParams.requireAllSigmaPointsInImage && !valid_i) {
