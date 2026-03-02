@@ -73,7 +73,7 @@ template <uint32_t NUM_CHANNELS, typename CameraOp> struct RasterizeFromWorldFor
         cameraOpLocal.loadSharedMemory(reinterpret_cast<void *>(smemAddr));
         __syncthreads();
 
-        const nanovdb::math::Ray<float> ray = cameraOpLocal.projectToRay(camId, row, col);
+        const nanovdb::math::Ray<float> ray = cameraOpLocal.unprojectPixelToRay(camId, row, col);
 
         const bool rayValid = ray.dir().dot(ray.dir()) > 0.0f;
         bool done           = (!inside) || (!rayValid);

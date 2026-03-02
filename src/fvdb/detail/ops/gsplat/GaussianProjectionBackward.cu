@@ -306,8 +306,8 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
                                                                   static_cast<int32_t>(C),
                                                                   static_cast<int32_t>(imageWidth),
                                                                   static_cast<int32_t>(imageHeight),
-                                                                  -1e10f,
-                                                                  1e10f};
+                                                                  kBackwardProjectionNearPlane,
+                                                                  kBackwardProjectionFarPlane};
             projectionBackwardKernel<float, OrthographicCameraOp<float>>
                 <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
                     0,
@@ -341,8 +341,8 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
                                                                  static_cast<int32_t>(C),
                                                                  static_cast<int32_t>(imageWidth),
                                                                  static_cast<int32_t>(imageHeight),
-                                                                 -1e10f,
-                                                                 1e10f};
+                                                                 kBackwardProjectionNearPlane,
+                                                                 kBackwardProjectionFarPlane};
             projectionBackwardKernel<float, PerspectiveCameraOp<float>>
                 <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
                     0,
@@ -478,8 +478,8 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                                                                   static_cast<int32_t>(C),
                                                                   static_cast<int32_t>(imageWidth),
                                                                   static_cast<int32_t>(imageHeight),
-                                                                  -1e10f,
-                                                                  1e10f};
+                                                                  kBackwardProjectionNearPlane,
+                                                                  kBackwardProjectionFarPlane};
                 projectionBackwardKernel<float, OrthographicCameraOp<float>>
                     <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
                         deviceProblemOffset,
@@ -514,8 +514,8 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                                                                  static_cast<int32_t>(C),
                                                                  static_cast<int32_t>(imageWidth),
                                                                  static_cast<int32_t>(imageHeight),
-                                                                 -1e10f,
-                                                                 1e10f};
+                                                                 kBackwardProjectionNearPlane,
+                                                                 kBackwardProjectionFarPlane};
                 projectionBackwardKernel<float, PerspectiveCameraOp<float>>
                     <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
                         deviceProblemOffset,

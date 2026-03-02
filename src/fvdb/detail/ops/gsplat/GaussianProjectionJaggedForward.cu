@@ -97,7 +97,7 @@ jaggedProjectionForwardKernel(const uint32_t B,
     }
 
     // mask out gaussians outside the image region
-    if (cameraOp.projectedFootprintOutsideImage(mean2d, radius, radius)) {
+    if (cameraOp.isProjectedFootprintOutsideImage(mean2d, radius, radius)) {
         radii[idx] = 0;
         return;
     }

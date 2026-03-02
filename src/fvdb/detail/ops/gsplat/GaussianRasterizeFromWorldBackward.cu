@@ -74,7 +74,7 @@ rasterizeFromWorld3DGSBackwardKernel(
     cameraOpLocal.loadSharedMemory(reinterpret_cast<void *>(smemAddr));
     block.sync();
 
-    const nanovdb::math::Ray<float> ray = cameraOpLocal.projectToRay(camId, row, col);
+    const nanovdb::math::Ray<float> ray = cameraOpLocal.unprojectPixelToRay(camId, row, col);
 
     // Whether this pixel participates in the backward pass.
     //

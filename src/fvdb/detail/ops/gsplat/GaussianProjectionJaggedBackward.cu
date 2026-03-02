@@ -261,8 +261,8 @@ dispatchGaussianProjectionJaggedBackward<torch::kCUDA>(
                                                               static_cast<int32_t>(C),
                                                               static_cast<int32_t>(imageWidth),
                                                               static_cast<int32_t>(imageHeight),
-                                                              -1e10f,
-                                                              1e10f};
+                                                              kBackwardProjectionNearPlane,
+                                                              kBackwardProjectionFarPlane};
             jaggedProjectionBackwardKernel<float, OrthographicCameraOp<float>>
                 <<<GET_BLOCKS(N, DEFAULT_BLOCK_DIM), DEFAULT_BLOCK_DIM, 0, stream>>>(
                     B,
@@ -298,8 +298,8 @@ dispatchGaussianProjectionJaggedBackward<torch::kCUDA>(
                                                              static_cast<int32_t>(C),
                                                              static_cast<int32_t>(imageWidth),
                                                              static_cast<int32_t>(imageHeight),
-                                                             -1e10f,
-                                                             1e10f};
+                                                             kBackwardProjectionNearPlane,
+                                                             kBackwardProjectionFarPlane};
             jaggedProjectionBackwardKernel<float, PerspectiveCameraOp<float>>
                 <<<GET_BLOCKS(N, DEFAULT_BLOCK_DIM), DEFAULT_BLOCK_DIM, 0, stream>>>(
                     B,

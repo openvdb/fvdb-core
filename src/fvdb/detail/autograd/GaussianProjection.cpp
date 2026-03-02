@@ -35,6 +35,7 @@ ProjectGaussians::forward(ProjectGaussians::AutogradContext *ctx,
     TORCH_CHECK(means.dim() == 2, "means must have shape (N, 3)");
     TORCH_CHECK(worldToCamMatrices.dim() == 3, "worldToCamMatrices must have shape (C, 4, 4)");
     TORCH_CHECK(projectionMatrices.dim() == 3, "projectionMatrices must have shape (C, 3, 3)");
+
     auto variables   = FVDB_DISPATCH_KERNEL(means.device(), [&]() {
         return ops::dispatchGaussianProjectionForward<DeviceTag>(means,
                                                                  quats,
@@ -142,6 +143,7 @@ ProjectGaussians::backward(ProjectGaussians::AutogradContext *ctx,
     const bool ortho          = ctx->saved_data["ortho"].toBool();
     const bool saveAccumState = ctx->saved_data["saveAccumState"].toBool();
     const bool trackMaxRadii  = ctx->saved_data["trackMaxRadii"].toBool();
+
     auto [normalizeddLossdMeans2dNormAccum, normalizedMaxRadiiAccum, gradientStepCount] = [&]() {
         return std::make_tuple(
             saveAccumState ? std::optional<at::Tensor>(

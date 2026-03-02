@@ -38,6 +38,12 @@ enum class DistortionModel : int32_t {
     ORTHOGRAPHIC               = 5,
 };
 
+/// @brief Near-plane used when backward projection runs without user near/far clipping.
+constexpr float kBackwardProjectionNearPlane = -1e10f;
+
+/// @brief Far-plane used when backward projection runs without user near/far clipping.
+constexpr float kBackwardProjectionFarPlane = 1e10f;
+
 /// @brief Unscented Transform hyperparameters.
 struct UTParams {
     float alpha                       = 0.1f;
@@ -188,8 +194,8 @@ template <typename T> struct PerspectiveCameraOp {
     int32_t numCameras  = 0;
     int32_t imageWidth  = 0;
     int32_t imageHeight = 0;
-    T nearPlane         = T(-1e10);
-    T farPlane          = T(1e10);
+    T nearPlane         = T(kBackwardProjectionNearPlane);
+    T farPlane          = T(kBackwardProjectionFarPlane);
 
     Mat3 *__restrict__ projectionMatsShared        = nullptr; // [C,3,3], optional
     Mat3 *__restrict__ worldToCamRotMatsShared     = nullptr; // [C,3,3], optional
@@ -228,9 +234,9 @@ template <typename T> struct PerspectiveCameraOp {
     /// - `true` only when that AABB does not overlap `[0, imageWidth) x [0, imageHeight)`.
     /// - `false` when the footprint is fully inside or partially overlaps the image.
     inline __device__ bool
-    projectedFootprintOutsideImage(const nanovdb::math::Vec2<T> &mean2d,
-                                   const T radiusX,
-                                   const T radiusY) const {
+    isProjectedFootprintOutsideImage(const nanovdb::math::Vec2<T> &mean2d,
+                                     const T radiusX,
+                                     const T radiusY) const {
         return isOutsideImageWithRadius(mean2d, radiusX, radiusY, imageWidth, imageHeight);
     }
 
@@ -455,8 +461,8 @@ template <typename T> struct OrthographicCameraOp {
     int32_t numCameras  = 0;
     int32_t imageWidth  = 0;
     int32_t imageHeight = 0;
-    T nearPlane         = T(-1e10);
-    T farPlane          = T(1e10);
+    T nearPlane         = T(kBackwardProjectionNearPlane);
+    T farPlane          = T(kBackwardProjectionFarPlane);
 
     Mat3 *__restrict__ projectionMatsShared        = nullptr; // [C,3,3], optional
     Mat3 *__restrict__ worldToCamRotMatsShared     = nullptr; // [C,3,3], optional
@@ -495,9 +501,9 @@ template <typename T> struct OrthographicCameraOp {
     /// - `true` only when that AABB does not overlap `[0, imageWidth) x [0, imageHeight)`.
     /// - `false` when the footprint is fully inside or partially overlaps the image.
     inline __device__ bool
-    projectedFootprintOutsideImage(const nanovdb::math::Vec2<T> &mean2d,
-                                   const T radiusX,
-                                   const T radiusY) const {
+    isProjectedFootprintOutsideImage(const nanovdb::math::Vec2<T> &mean2d,
+                                     const T radiusX,
+                                     const T radiusY) const {
         return isOutsideImageWithRadius(mean2d, radiusX, radiusY, imageWidth, imageHeight);
     }
 
@@ -1026,7 +1032,7 @@ template <typename T> struct PerspectiveWithDistortionCameraOp {
   public:
     /// @brief Unprojects a pixel center to a world-space ray.
     inline __device__ nanovdb::math::Ray<T>
-    projectToRay(const int64_t cid, const uint32_t row, const uint32_t col) const {
+    unprojectPixelToRay(const int64_t cid, const uint32_t row, const uint32_t col) const {
         const auto [R_wc_start, t_wc_start, R_wc_end, t_wc_end] = worldToCamRtStartEnd(cid);
         const Mat3 K                                            = projectionMatrix(cid);
         const T *distCoeffs                                     = distortionPtr(cid);
@@ -1339,7 +1345,7 @@ template <typename T> struct OrthographicWithDistortionCameraOp {
   public:
     /// @brief Unprojects a pixel center to a world-space orthographic ray.
     inline __device__ nanovdb::math::Ray<T>
-    projectToRay(const int64_t cid, const uint32_t row, const uint32_t col) const {
+    unprojectPixelToRay(const int64_t cid, const uint32_t row, const uint32_t col) const {
         const auto [R_wc_start, t_wc_start, R_wc_end, t_wc_end] = worldToCamRtStartEnd(cid);
         const Mat3 K                                            = projectionMatrix(cid);
         const T px                                              = T(col) + T(imageOriginW) + T(0.5);
