@@ -488,9 +488,19 @@ launchRasterizeForwardKernels(
 
     auto isSparse      = activeTiles.has_value();
     uint32_t tileCount = isSparse ? activeTiles.value().size(0) : C * tileExtentH * tileExtentW;
+
+    std::vector<cudaEvent_t> events(c10::cuda::device_count());
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+    }
+
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getStreamFromPool(false, deviceId);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
 
         uint32_t deviceTileOffset, deviceTileCount;
         std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
@@ -503,7 +513,6 @@ launchRasterizeForwardKernels(
             auto reshapedFeatures =
                 outFeatures.jdata().view({C, imageHeight, imageWidth, channels});
 
-            sleepKernel<<<1, 1, 0, stream>>>();
             std::vector<torch::Tensor> tensors = {means2d,
                                                   conics,
                                                   features,
@@ -514,12 +523,14 @@ launchRasterizeForwardKernels(
                                                   reshapedFeatures};
             perCameraPrefetchBatchAsync(tensors, cameraOffset, cameraCount, deviceId, stream);
         }
+        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
     }
 
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        TORCH_CHECK(!stream);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+        C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
         uint32_t deviceTileOffset, deviceTileCount;
         std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
@@ -561,7 +572,6 @@ launchRasterizeForwardKernels(
             const dim3 gridDim  = {deviceTileCount, 1, 1};
 
             rasterizeGaussiansForward<<<gridDim, blockDim, sharedMem, stream>>>(args);
-
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
     }

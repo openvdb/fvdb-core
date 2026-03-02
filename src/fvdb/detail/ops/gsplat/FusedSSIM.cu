@@ -612,7 +612,7 @@ imagePrefetchBatchAsync(const torch::TensorList &tensors,
                                              stream));
 }
 
-}
+} // namespace
 
 // ------------------------------------------
 // PyTorch Interface (Forward)
@@ -643,10 +643,19 @@ fusedSSIMPrivateUse1(
     auto img1_ = img1.contiguous();
     auto img2_ = img2.contiguous();
 
+    std::vector<cudaEvent_t> events(c10::cuda::device_count());
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+    }
+
     const auto globalBlockCount = ((W + BLOCK_X - 1) / BLOCK_X) * ((H + BLOCK_Y - 1) / BLOCK_Y) * B;
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getStreamFromPool(false, deviceId);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
 
         constexpr size_t kAlignment = kPageSize / (sizeof(float) * BLOCK_X * BLOCK_Y);
         int localBlockOffset, localBlockCount;
@@ -668,14 +677,17 @@ fusedSSIMPrivateUse1(
                 tensors.emplace_back(dm_dsigma1_sq);
                 tensors.emplace_back(dm_dsigma12);
             }
-            imagePrefetchBatchAsync(tensors, localElementOffset, localElementCount, deviceId, stream);
+            imagePrefetchBatchAsync(
+                tensors, localElementOffset, localElementCount, deviceId, stream);
         }
+        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
     }
 
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        TORCH_CHECK(!stream);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+        C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
         constexpr size_t kAlignment = kPageSize / (sizeof(float) * BLOCK_X * BLOCK_Y);
         int localBlockOffset, localBlockCount;
@@ -753,10 +765,19 @@ fusedSSIMBackwardPrivateUse1(double C1,
     auto dm_dsigma1_sq_ = dm_dsigma1_sq.contiguous();
     auto dm_dsigma12_   = dm_dsigma12.contiguous();
 
+    std::vector<cudaEvent_t> events(c10::cuda::device_count());
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+    }
+
     const auto globalBlockCount = ((W + BLOCK_X - 1) / BLOCK_X) * ((H + BLOCK_Y - 1) / BLOCK_Y) * B;
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getStreamFromPool(false, deviceId);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
 
         constexpr size_t kAlignment = kPageSize / (sizeof(float) * BLOCK_X * BLOCK_Y);
         int localBlockOffset, localBlockCount;
@@ -772,15 +793,19 @@ fusedSSIMBackwardPrivateUse1(double C1,
                                              static_cast<int>(img1_.numel()) - localElementOffset);
             }
 
-            std::vector<torch::Tensor> tensors = { img1_, img2_, dL_dmap_, dL_dimg1, dm_dmu1_, dm_dsigma1_sq_, dm_dsigma12_ };
-            imagePrefetchBatchAsync(tensors, localElementOffset, localElementCount, deviceId, stream);
+            std::vector<torch::Tensor> tensors = {
+                img1_, img2_, dL_dmap_, dL_dimg1, dm_dmu1_, dm_dsigma1_sq_, dm_dsigma12_};
+            imagePrefetchBatchAsync(
+                tensors, localElementOffset, localElementCount, deviceId, stream);
         }
+        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
     }
 
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        TORCH_CHECK(!stream);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+        C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
         constexpr size_t kAlignment = kPageSize / (sizeof(float) * BLOCK_X * BLOCK_Y);
         int localBlockOffset, localBlockCount;

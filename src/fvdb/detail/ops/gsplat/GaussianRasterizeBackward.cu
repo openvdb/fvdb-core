@@ -1217,9 +1217,18 @@ callRasterizeBackwardPrivateUse1(
         tileCount                  = C * tileExtentH * tileExtentW;
     }
 
+    std::vector<cudaEvent_t> events(c10::cuda::device_count());
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+    }
+
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getStreamFromPool(false, deviceId);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
 
         uint32_t deviceTileOffset, deviceTileCount;
         std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
@@ -1245,12 +1254,14 @@ callRasterizeBackwardPrivateUse1(
             }
             perCameraPrefetchBatchAsync(tensors, cameraOffset, cameraCount, deviceId, stream);
         }
+        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
     }
 
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        TORCH_CHECK(!stream);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+        C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
         uint32_t deviceTileOffset, deviceTileCount;
         std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
