@@ -6,10 +6,10 @@
 
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchImpl.h>
-#include <fvdb/detail/TorchDeviceBuffer.h>
 
-#include <nanovdb/GridHandle.h>
 #include <nanovdb/NanoVDB.h>
+
+#include <c10/util/intrusive_ptr.h>
 
 #include <optional>
 
@@ -17,7 +17,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-nanovdb::GridHandle<TorchDeviceBuffer>
+c10::intrusive_ptr<GridBatchImpl>
 buildFineGridFromCoarse(const GridBatchImpl &coarseBatchHdl,
                         const nanovdb::Coord subdivisionFactor,
                         const std::optional<JaggedTensor> &subdivMask);

@@ -239,6 +239,14 @@ createNanoGridFromIJK(const JaggedTensor &ijk) {
                                 [&]() { return dispatchCreateNanoGridFromIJK<DeviceTag>(ijk); });
 }
 
+c10::intrusive_ptr<GridBatchImpl>
+createNanoGridFromIJK(const JaggedTensor &ijk,
+                      const std::vector<nanovdb::Vec3d> &voxelSizes,
+                      const std::vector<nanovdb::Vec3d> &origins) {
+    auto handle = createNanoGridFromIJK(ijk);
+    return c10::make_intrusive<GridBatchImpl>(std::move(handle), voxelSizes, origins);
+}
+
 } // namespace ops
 } // namespace detail
 } // namespace fvdb

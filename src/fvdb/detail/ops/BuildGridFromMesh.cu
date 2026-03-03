@@ -123,10 +123,11 @@ dispatchBuildGridFromMesh<torch::kCPU>(const JaggedTensor &meshVertices,
         AT_EXPAND(AT_FLOATING_TYPES));
 }
 
-nanovdb::GridHandle<TorchDeviceBuffer>
+c10::intrusive_ptr<GridBatchImpl>
 buildGridFromMesh(const JaggedTensor &meshVertices,
                   const JaggedTensor &meshFaces,
-                  const std::vector<VoxelCoordTransform> &tx) {
+                  const std::vector<nanovdb::Vec3d> &voxelSizes,
+                  const std::vector<nanovdb::Vec3d> &origins) {
     TORCH_CHECK_VALUE(
         meshVertices.device() == meshFaces.device(),
         "meshVertices and meshFaces must be on the same device, but got meshVertices.device() = ",
@@ -175,9 +176,15 @@ buildGridFromMesh(const JaggedTensor &meshVertices,
                       "You passed in ",
                       numGrids,
                       " mesh sets.");
-    return FVDB_DISPATCH_KERNEL_DEVICE(meshVertices.device(), [&]() {
-        return dispatchBuildGridFromMesh<DeviceTag>(meshVertices, meshFaces, tx);
+    std::vector<VoxelCoordTransform> transforms;
+    transforms.reserve(numGrids);
+    for (int64_t i = 0; i < numGrids; i += 1) {
+        transforms.push_back(primalVoxelTransformForSizeAndOrigin(voxelSizes[i], origins[i]));
+    }
+    auto handle = FVDB_DISPATCH_KERNEL_DEVICE(meshVertices.device(), [&]() {
+        return dispatchBuildGridFromMesh<DeviceTag>(meshVertices, meshFaces, transforms);
     });
+    return c10::make_intrusive<GridBatchImpl>(std::move(handle), voxelSizes, origins);
 }
 
 } // namespace ops

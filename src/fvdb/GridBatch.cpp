@@ -243,8 +243,6 @@ GridBatch::max_pool(Vec3iOrScalar pool_factor,
                     const JaggedTensor &data,
                     Vec3iOrScalar stride,
                     std::optional<GridBatch> coarse_grid) const {
-    c10::DeviceGuard guard(device());
-
     nanovdb::Coord pool_factor_coord = pool_factor.value();
     nanovdb::Coord stride_coord      = stride.value();
 
@@ -274,8 +272,6 @@ GridBatch::avg_pool(Vec3iOrScalar pool_factor,
                     const JaggedTensor &data,
                     Vec3iOrScalar stride,
                     std::optional<GridBatch> coarse_grid) const {
-    c10::DeviceGuard guard(device());
-
     nanovdb::Coord pool_factor_coord = pool_factor.value();
     nanovdb::Coord stride_coord      = stride.value();
 
@@ -305,7 +301,6 @@ GridBatch::refine(Vec3iOrScalar subdiv_factor,
                   const JaggedTensor &data,
                   const std::optional<JaggedTensor> mask,
                   std::optional<GridBatch> fine_grid) const {
-    c10::DeviceGuard guard(device());
     const nanovdb::Coord upsampleFactorCoord = subdiv_factor.value();
 
     c10::intrusive_ptr<detail::GridBatchImpl> fineGrid;
@@ -326,7 +321,6 @@ GridBatch::refine(Vec3iOrScalar subdiv_factor,
 JaggedTensor
 GridBatch::read_from_dense_cminor(const torch::Tensor &dense_data,
                                   const Vec3iBatch &dense_origins) const {
-    c10::DeviceGuard guard(device());
     torch::Tensor retData =
         detail::autograd::ReadFromDenseCminor::apply(mImpl, dense_data, dense_origins)[0];
     return mImpl->jaggedTensor(retData);
@@ -335,7 +329,6 @@ GridBatch::read_from_dense_cminor(const torch::Tensor &dense_data,
 JaggedTensor
 GridBatch::read_from_dense_cmajor(const torch::Tensor &dense_data,
                                   const Vec3iBatch &dense_origins) const {
-    c10::DeviceGuard guard(device());
     torch::Tensor retData =
         detail::autograd::ReadFromDenseCmajor::apply(mImpl, dense_data, dense_origins)[0];
     return mImpl->jaggedTensor(retData);
@@ -345,7 +338,6 @@ torch::Tensor
 GridBatch::write_to_dense_cminor(const JaggedTensor &sparse_data,
                                  const std::optional<Vec3iBatch> &min_coord,
                                  const std::optional<Vec3i> &grid_size) const {
-    c10::DeviceGuard guard(device());
     return detail::autograd::ReadIntoDenseCminor::apply(
         mImpl, sparse_data.jdata(), min_coord, grid_size)[0];
 }
@@ -354,14 +346,12 @@ torch::Tensor
 GridBatch::write_to_dense_cmajor(const JaggedTensor &sparse_data,
                                  const std::optional<Vec3iBatch> &min_coord,
                                  const std::optional<Vec3i> &grid_size) const {
-    c10::DeviceGuard guard(device());
     return detail::autograd::ReadIntoDenseCmajor::apply(
         mImpl, sparse_data.jdata(), min_coord, grid_size)[0];
 }
 
 JaggedTensor
 GridBatch::grid_to_world(const JaggedTensor &ijk) const {
-    c10::DeviceGuard guard(device());
     torch::Tensor ret = detail::autograd::TransformPoints::apply(
         mImpl, ijk, ijk.jdata(), true /*isInverse*/, false /*isDual*/)[0];
 
@@ -370,7 +360,6 @@ GridBatch::grid_to_world(const JaggedTensor &ijk) const {
 
 JaggedTensor
 GridBatch::world_to_grid(const JaggedTensor &points) const {
-    c10::DeviceGuard guard(device());
     torch::Tensor ret = detail::autograd::TransformPoints::apply(
         mImpl, points, points.jdata(), false /* isInverse*/, false /*isDual*/)[0];
 
@@ -389,7 +378,6 @@ GridBatch::world_to_grid_matrices(const torch::Dtype &dtype) const {
 
 JaggedTensor
 GridBatch::sample_trilinear(const JaggedTensor &points, const JaggedTensor &voxel_data) const {
-    c10::DeviceGuard guard(device());
     torch::Tensor ret = detail::autograd::SampleGridTrilinear::apply(
         mImpl, points, voxel_data.jdata(), false /*returnGrad*/)[0];
     return points.jagged_like(ret);
@@ -398,7 +386,6 @@ GridBatch::sample_trilinear(const JaggedTensor &points, const JaggedTensor &voxe
 std::vector<JaggedTensor>
 GridBatch::sample_trilinear_with_grad(const JaggedTensor &points,
                                       const JaggedTensor &voxel_data) const {
-    c10::DeviceGuard guard(device());
     std::vector<torch::Tensor> ret = detail::autograd::SampleGridTrilinear::apply(
         mImpl, points, voxel_data.jdata(), true /*returnGrad*/);
 
@@ -407,7 +394,6 @@ GridBatch::sample_trilinear_with_grad(const JaggedTensor &points,
 
 JaggedTensor
 GridBatch::sample_bezier(const JaggedTensor &points, const JaggedTensor &voxel_data) const {
-    c10::DeviceGuard guard(device());
     torch::Tensor ret = detail::autograd::SampleGridBezier::apply(
         mImpl, points, voxel_data.jdata(), false /*returnGrad*/)[0];
     return points.jagged_like(ret);
@@ -416,7 +402,6 @@ GridBatch::sample_bezier(const JaggedTensor &points, const JaggedTensor &voxel_d
 std::vector<JaggedTensor>
 GridBatch::sample_bezier_with_grad(const JaggedTensor &points,
                                    const JaggedTensor &voxel_data) const {
-    c10::DeviceGuard guard(device());
     auto ret = detail::autograd::SampleGridBezier::apply(
         mImpl, points, voxel_data.jdata(), true /*returnGrad*/);
     return {points.jagged_like(ret[0]), points.jagged_like(ret[1])};
@@ -424,7 +409,6 @@ GridBatch::sample_bezier_with_grad(const JaggedTensor &points,
 
 JaggedTensor
 GridBatch::splat_trilinear(const JaggedTensor &points, const JaggedTensor &points_data) const {
-    c10::DeviceGuard guard(device());
     torch::Tensor ret =
         detail::autograd::SplatIntoGridTrilinear::apply(mImpl, points, points_data.jdata())[0];
     if (grid_count() == 1) {
@@ -436,7 +420,6 @@ GridBatch::splat_trilinear(const JaggedTensor &points, const JaggedTensor &point
 
 JaggedTensor
 GridBatch::splat_bezier(const JaggedTensor &points, const JaggedTensor &points_data) const {
-    c10::DeviceGuard guard(device());
     torch::Tensor ret =
         detail::autograd::SplatIntoGridBezier::apply(mImpl, points, points_data.jdata())[0];
     if (grid_count() == 1) {
@@ -451,7 +434,6 @@ GridBatch::set_from_mesh(const JaggedTensor &mesh_vertices,
                          const JaggedTensor &mesh_faces,
                          const Vec3dBatchOrScalar &voxel_sizes,
                          const Vec3dBatch &origins) {
-    c10::DeviceGuard guard(device());
     mImpl->checkDevice(mesh_vertices);
     mImpl->checkDevice(mesh_faces);
     const int64_t numGrids = mesh_vertices.joffsets().size(0) - 1;
@@ -467,7 +449,6 @@ void
 GridBatch::set_from_points(const JaggedTensor &points,
                            const Vec3dBatchOrScalar &voxel_sizes,
                            const Vec3dBatch &origins) {
-    c10::DeviceGuard guard(device());
     mImpl->checkDevice(points);
     const int64_t numGrids = points.joffsets().size(0) - 1;
     const std::vector<nanovdb::Vec3d> voxSizesVec =
@@ -481,7 +462,6 @@ void
 GridBatch::set_from_nearest_voxels_to_points(const JaggedTensor &points,
                                              const Vec3dBatchOrScalar &voxel_sizes,
                                              const Vec3dBatch &origins) {
-    c10::DeviceGuard guard(device());
     mImpl->checkDevice(points);
     const int64_t numGrids = points.joffsets().size(0) - 1;
     const std::vector<nanovdb::Vec3d> voxSizesVec =
@@ -496,7 +476,6 @@ void
 GridBatch::set_from_ijk(const JaggedTensor &coords,
                         const Vec3dBatchOrScalar &voxel_sizes,
                         const Vec3dBatch &origins) {
-    c10::DeviceGuard guard(device());
     mImpl->checkDevice(coords);
     const int64_t numGrids = coords.joffsets().size(0) - 1;
     const std::vector<nanovdb::Vec3d> voxSizesVec =
@@ -513,7 +492,6 @@ GridBatch::set_from_dense_grid(const int64_t num_grids,
                                const Vec3dBatchOrScalar &voxel_sizes,
                                const Vec3dBatch &origins,
                                std::optional<torch::Tensor> mask) {
-    c10::DeviceGuard guard(device());
     const nanovdb::Coord &denseDims = dense_dims.value();
     const nanovdb::Coord &ijkMin    = ijk_min.value();
     mImpl->checkDevice(mask);
@@ -563,8 +541,6 @@ std::pair<JaggedTensor, GridBatch>
 GridBatch::clip(const JaggedTensor &features,
                 const Vec3iBatch &ijk_min,
                 const Vec3iBatch &ijk_max) const {
-    c10::DeviceGuard guard(device());
-
     const std::vector<nanovdb::Coord> &bboxMins =
         ijk_min.value(mImpl->batchSize(), false, "ijk_min");
     const std::vector<nanovdb::Coord> &bboxMaxs =
@@ -580,7 +556,6 @@ GridBatch::clip(const JaggedTensor &features,
 
 std::vector<JaggedTensor>
 GridBatch::marching_cubes(const JaggedTensor &field, double level) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::marchingCubes(*mImpl, field, level);
 }
 
@@ -668,8 +643,6 @@ GridBatch::pruned_grid(const JaggedTensor &mask) const {
 
 void
 GridBatch::inject_to(const GridBatch &dstGrid, const JaggedTensor &src, JaggedTensor &dst) const {
-    c10::DeviceGuard guard(device());
-
     auto ret = detail::autograd::Inject::apply(mImpl,
                                                src.jdata(),
                                                src.joffsets(),
@@ -696,7 +669,6 @@ GridBatch::voxels_along_rays(const JaggedTensor &ray_origins,
                              double eps,
                              bool return_ijk,
                              bool cumulative) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::voxelsAlongRays(
         *mImpl, ray_origins, ray_directions, max_vox, eps, return_ijk, cumulative);
 }
@@ -706,7 +678,6 @@ GridBatch::segments_along_rays(const JaggedTensor &ray_origins,
                                const JaggedTensor &ray_directions,
                                int64_t max_segments,
                                double eps) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::segmentsAlongRays(
         *mImpl, ray_origins, ray_directions, max_segments, eps);
 }
@@ -716,7 +687,6 @@ GridBatch::ray_implicit_intersection(const JaggedTensor &ray_origins,
                                      const JaggedTensor &ray_directions,
                                      const JaggedTensor &gridScalars,
                                      double eps) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::rayImplicitIntersection(
         *mImpl, ray_origins, ray_directions, gridScalars, eps);
 }
@@ -731,7 +701,6 @@ GridBatch::uniform_ray_samples(const JaggedTensor &ray_origins,
                                bool include_end_segments,
                                bool return_midpoint,
                                double eps) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::uniformRaySamples(*mImpl,
                                                 ray_origins,
                                                 ray_directions,
@@ -746,13 +715,11 @@ GridBatch::uniform_ray_samples(const JaggedTensor &ray_origins,
 
 JaggedTensor
 GridBatch::neighbor_indexes(const JaggedTensor &ijk, int32_t extent, int32_t bitshift) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::voxelNeighborhood(*mImpl, ijk, extent, bitshift);
 }
 
 JaggedTensor
 GridBatch::points_in_grid(const JaggedTensor &points) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::pointsInGrid(*mImpl, points);
 }
 
@@ -760,7 +727,6 @@ JaggedTensor
 GridBatch::cubes_intersect_grid(const JaggedTensor &cube_centers,
                                 const Vec3dOrScalar &cube_min,
                                 const Vec3dOrScalar &cube_max) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::cubesIntersectGrid(*mImpl, cube_centers, cube_min, cube_max);
 }
 
@@ -768,65 +734,55 @@ JaggedTensor
 GridBatch::cubes_in_grid(const JaggedTensor &cube_centers,
                          const Vec3dOrScalar &cube_min,
                          const Vec3dOrScalar &cube_max) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::cubesInGrid(*mImpl, cube_centers, cube_min, cube_max);
 }
 
 JaggedTensor
 GridBatch::coords_in_grid(const JaggedTensor &ijk) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::coordsInGrid(*mImpl, ijk);
 }
 
 JaggedTensor
 GridBatch::ijk_to_index(const JaggedTensor &ijk, bool cumulative) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::ijkToIndex(*mImpl, ijk, cumulative);
 }
 
 JaggedTensor
 GridBatch::ijk_to_inv_index(const JaggedTensor &ijk, bool cumulative) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::ijkToInvIndex(*mImpl, ijk, cumulative);
 }
 
 JaggedTensor
 GridBatch::ijk() const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::activeGridCoords(*mImpl);
 }
 
 JaggedTensor
 GridBatch::morton(const torch::Tensor &offset) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::serializeEncode(
         *mImpl, SpaceFillingCurveType::ZOrder, tensorToCoord(offset));
 }
 
 JaggedTensor
 GridBatch::morton_zyx(const torch::Tensor &offset) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::serializeEncode(
         *mImpl, SpaceFillingCurveType::ZOrderTransposed, tensorToCoord(offset));
 }
 
 JaggedTensor
 GridBatch::hilbert(const torch::Tensor &offset) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::serializeEncode(
         *mImpl, SpaceFillingCurveType::Hilbert, tensorToCoord(offset));
 }
 
 JaggedTensor
 GridBatch::hilbert_zyx(const torch::Tensor &offset) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::serializeEncode(
         *mImpl, SpaceFillingCurveType::HilbertTransposed, tensorToCoord(offset));
 }
 
 std::vector<JaggedTensor>
 GridBatch::viz_edge_network(bool returnVoxelCoordinates) const {
-    c10::DeviceGuard guard(device());
     return fvdb::detail::ops::gridEdgeNetwork(*mImpl, returnVoxelCoordinates);
 }
 

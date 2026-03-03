@@ -259,15 +259,18 @@ dispatchBuildGridForConv<torch::kCPU>(const GridBatchImpl &baseBatchHdl,
     }
 }
 
-nanovdb::GridHandle<TorchDeviceBuffer>
+c10::intrusive_ptr<GridBatchImpl>
 buildGridForConv(const GridBatchImpl &baseBatchHdl,
                  const nanovdb::Coord &kernelSize,
                  const nanovdb::Coord &stride) {
     TORCH_CHECK_VALUE(nanovdb::Coord(0) < kernelSize, "kernel_size must be strictly positive.");
     TORCH_CHECK_VALUE(nanovdb::Coord(0) < stride, "stride must be strictly positive.");
-    return FVDB_DISPATCH_KERNEL_DEVICE(baseBatchHdl.device(), [&]() {
+    std::vector<nanovdb::Vec3d> voxS, voxO;
+    baseBatchHdl.gridVoxelSizesAndOrigins(voxS, voxO);
+    auto hdl = FVDB_DISPATCH_KERNEL_DEVICE(baseBatchHdl.device(), [&]() {
         return dispatchBuildGridForConv<DeviceTag>(baseBatchHdl, kernelSize, stride);
     });
+    return c10::make_intrusive<GridBatchImpl>(std::move(hdl), voxS, voxO);
 }
 
 } // namespace ops

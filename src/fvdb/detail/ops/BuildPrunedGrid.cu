@@ -142,15 +142,18 @@ dispatchPruneGrid<torch::kCPU>(const GridBatchImpl &gridBatch, const JaggedTenso
     }
 }
 
-nanovdb::GridHandle<TorchDeviceBuffer>
+c10::intrusive_ptr<GridBatchImpl>
 pruneGrid(const GridBatchImpl &gridBatch, const JaggedTensor &mask) {
     TORCH_CHECK_VALUE(mask.ldim() == 1, "Mask should be a list of tensors");
     TORCH_CHECK_VALUE(gridBatch.batchSize() == mask.num_tensors(),
                       "Cardinality of masks should match gridbatch size");
     TORCH_CHECK_VALUE(gridBatch.device() == mask.device(),
                       "GridBatch and mask should be on same device/host");
-    return FVDB_DISPATCH_KERNEL_DEVICE(
+    std::vector<nanovdb::Vec3d> voxS, voxO;
+    gridBatch.gridVoxelSizesAndOrigins(voxS, voxO);
+    auto hdl = FVDB_DISPATCH_KERNEL_DEVICE(
         gridBatch.device(), [&]() { return dispatchPruneGrid<DeviceTag>(gridBatch, mask); });
+    return c10::make_intrusive<GridBatchImpl>(std::move(hdl), voxS, voxO);
 }
 
 } // namespace fvdb::detail::ops

@@ -119,7 +119,7 @@ dispatchDilateGrid<torch::kCPU>(const GridBatchImpl &gridBatch,
     }
 }
 
-nanovdb::GridHandle<TorchDeviceBuffer>
+c10::intrusive_ptr<GridBatchImpl>
 dilateGrid(const GridBatchImpl &gridBatch, const std::vector<int64_t> &dilationAmount) {
     TORCH_CHECK_VALUE(static_cast<int64_t>(dilationAmount.size()) == gridBatch.batchSize(),
                       "dilationAmount should have same size as batch size, got ",
@@ -130,9 +130,12 @@ dilateGrid(const GridBatchImpl &gridBatch, const std::vector<int64_t> &dilationA
                                   dilationAmount.end(),
                                   [](int64_t amount) { return amount > 0; }),
                       "dilation amount must be strictly positive.");
-    return FVDB_DISPATCH_KERNEL_DEVICE(gridBatch.device(), [&]() {
+    std::vector<nanovdb::Vec3d> voxS, voxO;
+    gridBatch.gridVoxelSizesAndOrigins(voxS, voxO);
+    auto hdl = FVDB_DISPATCH_KERNEL_DEVICE(gridBatch.device(), [&]() {
         return dispatchDilateGrid<DeviceTag>(gridBatch, dilationAmount);
     });
+    return c10::make_intrusive<GridBatchImpl>(std::move(hdl), voxS, voxO);
 }
 
 } // namespace fvdb::detail::ops

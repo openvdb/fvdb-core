@@ -5,18 +5,16 @@
 #define FVDB_DETAIL_OPS_BUILDGRIDFORCONV_H
 
 #include <fvdb/detail/GridBatchImpl.h>
-#include <fvdb/detail/TorchDeviceBuffer.h>
 
-#include <nanovdb/GridHandle.h>
-#include <nanovdb/NanoVDB.h>
+#include <c10/util/intrusive_ptr.h>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-nanovdb::GridHandle<TorchDeviceBuffer> buildGridForConv(const GridBatchImpl &baseBatchHdl,
-                                                        const nanovdb::Coord &kernelSize,
-                                                        const nanovdb::Coord &stride);
+c10::intrusive_ptr<GridBatchImpl> buildGridForConv(const GridBatchImpl &baseBatchHdl,
+                                                   const nanovdb::Coord &kernelSize,
+                                                   const nanovdb::Coord &stride);
 
 } // namespace ops
 } // namespace detail

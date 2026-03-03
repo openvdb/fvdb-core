@@ -5,16 +5,14 @@
 #define FVDB_DETAIL_OPS_BUILDPADDEDGRID_H
 
 #include <fvdb/detail/GridBatchImpl.h>
-#include <fvdb/detail/TorchDeviceBuffer.h>
 
-#include <nanovdb/GridHandle.h>
-#include <nanovdb/NanoVDB.h>
+#include <c10/util/intrusive_ptr.h>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-nanovdb::GridHandle<TorchDeviceBuffer>
+c10::intrusive_ptr<GridBatchImpl>
 buildPaddedGrid(const GridBatchImpl &baseBatchHdl, int bmin, int bmax, bool excludeBorder);
 
 } // namespace ops

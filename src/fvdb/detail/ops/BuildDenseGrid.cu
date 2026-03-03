@@ -296,12 +296,14 @@ dispatchCreateNanoGridFromDense<torch::kCPU>(int64_t batchSize,
     }
 }
 
-nanovdb::GridHandle<TorchDeviceBuffer>
+c10::intrusive_ptr<GridBatchImpl>
 createNanoGridFromDense(int64_t batchSize,
                         nanovdb::Coord ijkMin,
                         nanovdb::Coord size,
                         torch::Device device,
-                        const std::optional<torch::Tensor> &maybeMask) {
+                        const std::optional<torch::Tensor> &maybeMask,
+                        const std::vector<nanovdb::Vec3d> &voxelSizes,
+                        const std::vector<nanovdb::Vec3d> &origins) {
     TORCH_CHECK_VALUE(batchSize >= 0, "numGrids must be non-negative");
     if (maybeMask.has_value()) {
         TORCH_CHECK_VALUE(maybeMask.value().dtype() == torch::kBool,
@@ -323,10 +325,11 @@ createNanoGridFromDense(int64_t batchSize,
                       "You requested ",
                       batchSize,
                       " grids.");
-    return FVDB_DISPATCH_KERNEL(device, [&]() {
+    auto handle = FVDB_DISPATCH_KERNEL(device, [&]() {
         return dispatchCreateNanoGridFromDense<DeviceTag>(
             batchSize, ijkMin, size, device, maybeMask);
     });
+    return c10::make_intrusive<GridBatchImpl>(std::move(handle), voxelSizes, origins);
 }
 
 } // namespace ops

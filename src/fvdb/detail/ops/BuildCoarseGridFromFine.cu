@@ -82,7 +82,7 @@ dispatchBuildCoarseGridFromFine<torch::kCPU>(const GridBatchImpl &fineBatchHdl,
     }
 }
 
-nanovdb::GridHandle<TorchDeviceBuffer>
+c10::intrusive_ptr<GridBatchImpl>
 buildCoarseGridFromFine(const GridBatchImpl &fineGridBatch, const nanovdb::Coord branchingFactor) {
     for (int i = 0; i < 3; i += 1) {
         TORCH_CHECK_VALUE(branchingFactor[i] > 0,
@@ -91,9 +91,14 @@ buildCoarseGridFromFine(const GridBatchImpl &fineGridBatch, const nanovdb::Coord
                               std::to_string(branchingFactor[1]) + ", " +
                               std::to_string(branchingFactor[2]) + "]");
     }
-    return FVDB_DISPATCH_KERNEL(fineGridBatch.device(), [&]() {
+    std::vector<nanovdb::Vec3d> voxS, voxO;
+    fineGridBatch.gridVoxelSizesAndOrigins(voxS, voxO);
+    auto hdl = FVDB_DISPATCH_KERNEL(fineGridBatch.device(), [&]() {
         return dispatchBuildCoarseGridFromFine<DeviceTag>(fineGridBatch, branchingFactor);
     });
+    auto ret = c10::make_intrusive<GridBatchImpl>(std::move(hdl), voxS, voxO);
+    ret->setCoarseTransformFromFineGrid(fineGridBatch, branchingFactor);
+    return ret;
 }
 
 } // namespace fvdb::detail::ops

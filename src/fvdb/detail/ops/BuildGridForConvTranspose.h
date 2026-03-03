@@ -8,10 +8,8 @@
 #define FVDB_DETAIL_OPS_BUILDGRIDFORCONVTRANSPOSE_H
 
 #include <fvdb/detail/GridBatchImpl.h>
-#include <fvdb/detail/TorchDeviceBuffer.h>
 
-#include <nanovdb/GridHandle.h>
-#include <nanovdb/NanoVDB.h>
+#include <c10/util/intrusive_ptr.h>
 
 namespace fvdb {
 namespace detail {
@@ -26,10 +24,10 @@ namespace ops {
 /// @param baseBatchHdl  Input grid batch providing the source topology.
 /// @param kernelSize    Spatial kernel dimensions [k0, k1, k2].
 /// @param stride        Convolution stride [s0, s1, s2].
-/// @return A NanoVDB grid handle backed by a TorchDeviceBuffer.
-nanovdb::GridHandle<TorchDeviceBuffer> buildGridForConvTranspose(const GridBatchImpl &baseBatchHdl,
-                                                                 const nanovdb::Coord &kernelSize,
-                                                                 const nanovdb::Coord &stride);
+/// @return An intrusive pointer to the constructed GridBatchImpl.
+c10::intrusive_ptr<GridBatchImpl> buildGridForConvTranspose(const GridBatchImpl &baseBatchHdl,
+                                                            const nanovdb::Coord &kernelSize,
+                                                            const nanovdb::Coord &stride);
 
 } // namespace ops
 } // namespace detail

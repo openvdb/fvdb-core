@@ -6,17 +6,15 @@
 
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchImpl.h>
-#include <fvdb/detail/TorchDeviceBuffer.h>
 
-#include <nanovdb/GridHandle.h>
-#include <nanovdb/NanoVDB.h>
+#include <c10/util/intrusive_ptr.h>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-nanovdb::GridHandle<TorchDeviceBuffer> pruneGrid(const GridBatchImpl &gridBatch,
-                                                 const JaggedTensor &mask);
+c10::intrusive_ptr<GridBatchImpl> pruneGrid(const GridBatchImpl &gridBatch,
+                                            const JaggedTensor &mask);
 
 } // namespace ops
 } // namespace detail

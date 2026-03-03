@@ -183,8 +183,10 @@ dispatchBuildGridFromPoints<torch::kCPU>(const JaggedTensor &pointsJagged,
         c10::kHalf);
 }
 
-nanovdb::GridHandle<TorchDeviceBuffer>
-buildGridFromPoints(const JaggedTensor &points, const std::vector<VoxelCoordTransform> &txs) {
+c10::intrusive_ptr<GridBatchImpl>
+buildGridFromPoints(const JaggedTensor &points,
+                    const std::vector<nanovdb::Vec3d> &voxelSizes,
+                    const std::vector<nanovdb::Vec3d> &origins) {
     TORCH_CHECK_VALUE(
         points.ldim() == 1,
         "Expected points to have 1 list dimension, i.e. be a single list of coordinate values, but got",
@@ -211,8 +213,15 @@ buildGridFromPoints(const JaggedTensor &points, const std::vector<VoxelCoordTran
     TORCH_CHECK(
         numGrids == points.num_outer_lists(),
         "If this happens, Francis' paranoia about grids and points was justified. File a bug");
-    return FVDB_DISPATCH_KERNEL(
-        points.device(), [&]() { return dispatchBuildGridFromPoints<DeviceTag>(points, txs); });
+    std::vector<VoxelCoordTransform> transforms;
+    transforms.reserve(numGrids);
+    for (int64_t i = 0; i < numGrids; i += 1) {
+        transforms.push_back(primalVoxelTransformForSizeAndOrigin(voxelSizes[i], origins[i]));
+    }
+    auto handle = FVDB_DISPATCH_KERNEL(points.device(), [&]() {
+        return dispatchBuildGridFromPoints<DeviceTag>(points, transforms);
+    });
+    return c10::make_intrusive<GridBatchImpl>(std::move(handle), voxelSizes, origins);
 }
 
 } // namespace ops

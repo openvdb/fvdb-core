@@ -435,7 +435,7 @@ dispatchBuildFineGridFromCoarse<torch::kCPU>(const GridBatchImpl &coarseBatchHdl
     }
 }
 
-nanovdb::GridHandle<TorchDeviceBuffer>
+c10::intrusive_ptr<GridBatchImpl>
 buildFineGridFromCoarse(const GridBatchImpl &coarseBatchHdl,
                         const nanovdb::Coord subdivisionFactor,
                         const std::optional<JaggedTensor> &subdivMask) {
@@ -461,10 +461,15 @@ buildFineGridFromCoarse(const GridBatchImpl &coarseBatchHdl,
                               std::to_string(subdivisionFactor[1]) + ", " +
                               std::to_string(subdivisionFactor[2]) + "]");
     }
-    return FVDB_DISPATCH_KERNEL(coarseBatchHdl.device(), [&]() {
+    std::vector<nanovdb::Vec3d> voxS, voxO;
+    coarseBatchHdl.gridVoxelSizesAndOrigins(voxS, voxO);
+    auto hdl = FVDB_DISPATCH_KERNEL(coarseBatchHdl.device(), [&]() {
         return dispatchBuildFineGridFromCoarse<DeviceTag>(
             coarseBatchHdl, subdivisionFactor, subdivMask);
     });
+    auto ret = c10::make_intrusive<GridBatchImpl>(std::move(hdl), voxS, voxO);
+    ret->setFineTransformFromCoarseGrid(coarseBatchHdl, subdivisionFactor);
+    return ret;
 }
 
 JaggedTensor

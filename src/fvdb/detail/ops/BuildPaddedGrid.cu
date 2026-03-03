@@ -430,11 +430,16 @@ dispatchBuildPaddedGrid<torch::kCPU>(const GridBatchImpl &baseBatchHdl,
     }
 }
 
-nanovdb::GridHandle<TorchDeviceBuffer>
+c10::intrusive_ptr<GridBatchImpl>
 buildPaddedGrid(const GridBatchImpl &baseBatchHdl, int bmin, int bmax, bool excludeBorder) {
-    return FVDB_DISPATCH_KERNEL(baseBatchHdl.device(), [&]() {
+    std::vector<nanovdb::Vec3d> voxS, voxO;
+    baseBatchHdl.gridVoxelSizesAndOrigins(voxS, voxO);
+    auto hdl = FVDB_DISPATCH_KERNEL(baseBatchHdl.device(), [&]() {
         return dispatchBuildPaddedGrid<DeviceTag>(baseBatchHdl, bmin, bmax, excludeBorder);
     });
+    auto ret = c10::make_intrusive<GridBatchImpl>(std::move(hdl), voxS, voxO);
+    ret->setPrimalTransformFromDualGrid(baseBatchHdl);
+    return ret;
 }
 
 } // namespace ops

@@ -5,17 +5,15 @@
 #define FVDB_DETAIL_OPS_BUILDMERGEDGRIDS_H
 
 #include <fvdb/detail/GridBatchImpl.h>
-#include <fvdb/detail/TorchDeviceBuffer.h>
 
-#include <nanovdb/GridHandle.h>
-#include <nanovdb/NanoVDB.h>
+#include <c10/util/intrusive_ptr.h>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-nanovdb::GridHandle<TorchDeviceBuffer> mergeGrids(const GridBatchImpl &gridBatch1,
-                                                  const GridBatchImpl &gridBatch2);
+c10::intrusive_ptr<GridBatchImpl> mergeGrids(const GridBatchImpl &gridBatch1,
+                                             const GridBatchImpl &gridBatch2);
 
 } // namespace ops
 } // namespace detail
