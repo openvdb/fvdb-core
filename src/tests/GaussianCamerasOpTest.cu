@@ -81,7 +81,7 @@ compareProjectWorldTo2DKernel(int64_t C,
     const auto [cov2dNew, mean2dNew, depthNew] =
         cameraOp.projectWorldGaussianTo2D(cid, meanWorld, covarWorld);
 
-    const auto [R, t]                = cameraOp.worldToCamRt(cid);
+    const auto [R, t]                = cameraOp.worldToCamTransform(cid);
     const Vec3f meanCam              = transformPointWorldToCam(R, t, meanWorld);
     const Mat3f covCam               = transformCovarianceWorldToCam(R, covarWorld);
     const auto [cov2dRef, mean2dRef] = cameraOp.projectTo2DGaussian(cid, meanCam, covCam);
@@ -122,7 +122,7 @@ compareProjectWorldTo2DVJPKernel(int64_t C,
     const auto [dCovWorldNew, dMeanWorldNew, dRotNew, dTransNew] =
         cameraOp.projectWorldGaussianTo2DVJP(cid, meanWorld, covarWorld, dCov2d, dMean2d, dDepth);
 
-    const auto [R, t]   = cameraOp.worldToCamRt(cid);
+    const auto [R, t]   = cameraOp.worldToCamTransform(cid);
     const Vec3f meanCam = transformPointWorldToCam(R, t, meanWorld);
     const Mat3f covCam  = transformCovarianceWorldToCam(R, covarWorld);
     auto [dCovCamRef, dMeanCamRef] =

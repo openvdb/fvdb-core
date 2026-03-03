@@ -285,22 +285,21 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeContributingGauss
         const std::optional<torch::Tensor> &tilePixelCumsum = std::nullopt, // [AT]
         const std::optional<torch::Tensor> &pixelMap        = std::nullopt)        // [AP]
 
-        : commonArgs(
-              means2d,
-              conics,
-              opacities,
-              std::nullopt,
-              backgrounds,
-              masks,
-              nanovdb::math::Vec4<uint32_t>(imageWidth, imageHeight, imageOriginW, imageOriginH),
-              tileSize,
-              0,
-              tileOffsets,
-              tileGaussianIds,
-              activeTiles,
-              tilePixelMask,
-              tilePixelCumsum,
-              pixelMap),
+        : commonArgs(means2d,
+                     conics,
+                     opacities,
+                     std::nullopt,
+                     backgrounds,
+                     masks,
+                     RenderWindow2D{imageWidth, imageHeight, imageOriginW, imageOriginH},
+                     tileSize,
+                     0,
+                     tileOffsets,
+                     tileGaussianIds,
+                     activeTiles,
+                     tilePixelMask,
+                     tilePixelCumsum,
+                     pixelMap),
           mNumDepthSamples(numDepthSamples),
           mOutIds(initJaggedAccessor<int32_t, 2>(outIds, "outIds")),
           mOutWeights(initJaggedAccessor<ScalarType, 2>(outWeights, "outWeights")) {}
@@ -362,8 +361,8 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeContributingGauss
 
         // (row, col) coordinates are relative to the specified image origin which may
         // be a crop so we need to add the origin to get the absolute pixel coordinates
-        const ScalarType px = col + commonArgs.mRenderOriginX + ScalarType{0.5f};
-        const ScalarType py = row + commonArgs.mRenderOriginY + ScalarType{0.5f};
+        const ScalarType px = col + commonArgs.renderOriginX() + ScalarType{0.5f};
+        const ScalarType py = row + commonArgs.renderOriginY() + ScalarType{0.5f};
 
         const auto pixIdx =
             pixelIsActive ? commonArgs.pixelIndex(cameraId, row, col, activePixelIndex) : 0;

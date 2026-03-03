@@ -97,7 +97,7 @@ radiusFromCovariance2dDet(const nanovdb::math::Mat2<T> &covar2d,
     // Matches the classic FVDB/gsplat heuristic: use the largest eigenvalue of the 2x2 covariance
     // (via trace/determinant) and take `sigma` standard deviations.
     const T b  = T(0.5) * (covar2d[0][0] + covar2d[1][1]);
-    const T v1 = b + ::cuda::std::sqrt(::cuda::std::max(detClamp, b * b - det));
+    const T v1 = b + ::cuda::std::sqrt(nanovdb::math::Max(detClamp, b * b - det));
     return ::cuda::std::ceil(sigma * ::cuda::std::sqrt(v1));
 }
 

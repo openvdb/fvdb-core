@@ -185,7 +185,7 @@ struct RasterizeBackwardArgs {
                               "Bad size for dLossDRenderedAlphas");
         } else {
             auto const tensorSize =
-                commonArgs.mNumCameras * commonArgs.mRenderHeight * commonArgs.mRenderWidth;
+                commonArgs.mNumCameras * commonArgs.renderHeight() * commonArgs.renderWidth();
             TORCH_CHECK_VALUE(tensorSize == mRenderedAlphas.data().size(0),
                               "Bad size for renderedAlphas");
             TORCH_CHECK_VALUE(1 == mRenderedAlphas.data().size(1), "Bad size for renderedAlphas");
@@ -622,8 +622,8 @@ struct RasterizeBackwardArgs {
             reinterpret_cast<ScalarType *>(&sharedGaussians[blockSize]); // [blockSize]
 
         // To protect against out of bounds access, we clamp the coordinates to the image bounds
-        const auto rowClamped = min(row, commonArgs.mRenderHeight - 1);
-        const auto colClamped = min(col, commonArgs.mRenderWidth - 1);
+        const auto rowClamped = min(row, commonArgs.renderHeight() - 1);
+        const auto colClamped = min(col, commonArgs.renderWidth() - 1);
 
         const auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
 
@@ -716,9 +716,9 @@ struct RasterizeBackwardArgs {
                     // (row, col) coordinates are relative to the specified image origin which may
                     // be a crop so we need to add the origin to get the absolute pixel coordinates
                     const ScalarType px =
-                        col + ScalarType(commonArgs.mRenderOriginX) + ScalarType{0.5};
+                        col + ScalarType(commonArgs.renderOriginX()) + ScalarType{0.5};
                     const ScalarType py =
-                        row + ScalarType(commonArgs.mRenderOriginY) + ScalarType{0.5};
+                        row + ScalarType(commonArgs.renderOriginY()) + ScalarType{0.5};
 
                     bool valid = pixelIsActive && (batchEnd - t <= lastGaussianId);
 
@@ -919,9 +919,8 @@ callRasterizeBackwardWithTemplatedSharedChannels(
     const bool tileOffsetsAreSparse = tileOffsets.dim() == 1;
     // Get C from tileOffsets for dense mode
     // For sparse mode, C is unused, only used for output sizing for dense mode
-    const uint32_t C = tileOffsetsAreSparse ? 0 : tileOffsets.size(0);
-    const uint32_t H = renderWindow.height;
-    const uint32_t W = renderWindow.width;
+    const uint32_t C  = tileOffsetsAreSparse ? 0 : tileOffsets.size(0);
+    const uint32_t HW = renderWindow.pixelCountPerCamera();
 
     auto [reshapedRenderedAlphas,
           reshapedLastGaussianIds,
@@ -930,10 +929,10 @@ callRasterizeBackwardWithTemplatedSharedChannels(
         if (!activeTiles.has_value()) {
             // Dense mode. Reshape the JaggedTensor inputs to match sparse mode
             return std::make_tuple(
-                fvdb::JaggedTensor(renderedAlphas.jdata().view({C * H * W, 1})),
-                fvdb::JaggedTensor(lastGaussianIds.jdata().view({C * H * W})),
-                fvdb::JaggedTensor(dLossDRenderedFeatures.jdata().view({C * H * W, NUM_CHANNELS})),
-                fvdb::JaggedTensor(dLossDRenderedAlphas.jdata().view({C * H * W, 1})));
+                fvdb::JaggedTensor(renderedAlphas.jdata().view({C * HW, 1})),
+                fvdb::JaggedTensor(lastGaussianIds.jdata().view({C * HW})),
+                fvdb::JaggedTensor(dLossDRenderedFeatures.jdata().view({C * HW, NUM_CHANNELS})),
+                fvdb::JaggedTensor(dLossDRenderedAlphas.jdata().view({C * HW, 1})));
         }
         return std::make_tuple(
             renderedAlphas, lastGaussianIds, dLossDRenderedFeatures, dLossDRenderedAlphas);
@@ -1188,9 +1187,8 @@ callRasterizeBackwardPrivateUse1(
     const bool tileOffsetsAreSparse = tileOffsets.dim() == 1;
     // Get C from tileOffsets for dense mode
     // For sparse mode, C is unused, only used for output sizing for dense mode
-    const uint32_t C = tileOffsetsAreSparse ? 0 : tileOffsets.size(0);
-    const uint32_t H = renderWindow.height;
-    const uint32_t W = renderWindow.width;
+    const uint32_t C  = tileOffsetsAreSparse ? 0 : tileOffsets.size(0);
+    const uint32_t HW = renderWindow.pixelCountPerCamera();
 
     auto [reshapedRenderedAlphas,
           reshapedLastGaussianIds,
@@ -1199,10 +1197,10 @@ callRasterizeBackwardPrivateUse1(
         if (!activeTiles.has_value()) {
             // Dense mode. Reshape the JaggedTensor inputs to match sparse mode
             return std::make_tuple(
-                fvdb::JaggedTensor(renderedAlphas.jdata().view({C * H * W, 1})),
-                fvdb::JaggedTensor(lastGaussianIds.jdata().view({C * H * W})),
-                fvdb::JaggedTensor(dLossDRenderedFeatures.jdata().view({C * H * W, NUM_CHANNELS})),
-                fvdb::JaggedTensor(dLossDRenderedAlphas.jdata().view({C * H * W, 1})));
+                fvdb::JaggedTensor(renderedAlphas.jdata().view({C * HW, 1})),
+                fvdb::JaggedTensor(lastGaussianIds.jdata().view({C * HW})),
+                fvdb::JaggedTensor(dLossDRenderedFeatures.jdata().view({C * HW, NUM_CHANNELS})),
+                fvdb::JaggedTensor(dLossDRenderedAlphas.jdata().view({C * HW, 1})));
         }
         return std::make_tuple(
             renderedAlphas, lastGaussianIds, dLossDRenderedFeatures, dLossDRenderedAlphas);
@@ -1213,8 +1211,8 @@ callRasterizeBackwardPrivateUse1(
     if (activeTiles.has_value()) {
         tileCount = activeTiles.value().size(0);
     } else {
-        const uint32_t tileExtentH = (renderWindow.height + tileSize - 1) / tileSize;
-        const uint32_t tileExtentW = (renderWindow.width + tileSize - 1) / tileSize;
+        const uint32_t tileExtentH = renderWindow.tileExtentH(tileSize);
+        const uint32_t tileExtentW = renderWindow.tileExtentW(tileSize);
         tileCount                  = C * tileExtentH * tileExtentW;
     }
 

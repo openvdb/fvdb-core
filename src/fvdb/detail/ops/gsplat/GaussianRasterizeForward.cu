@@ -146,8 +146,8 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Ras
 
         // (row, col) coordinates are relative to the specified image origin which may
         // be a crop so we need to add the origin to get the absolute pixel coordinates
-        const ScalarType px = col + commonArgs.mRenderOriginX + ScalarType{0.5f};
-        const ScalarType py = row + commonArgs.mRenderOriginY + ScalarType{0.5f};
+        const ScalarType px = col + commonArgs.renderOriginX() + ScalarType{0.5f};
+        const ScalarType py = row + commonArgs.renderOriginY() + ScalarType{0.5f};
 
         // collect and process batches of gaussians
         // each thread loads one gaussian at a time before rasterizing its
@@ -321,9 +321,9 @@ launchRasterizeForwardKernel(
     // tileOffsets can be 3D (dense) or 1D (sparse)
     const bool tileOffsetsAreSparse = tileOffsets.dim() == 1;
     if (!tileOffsetsAreSparse) {
-        TORCH_CHECK_VALUE(tileOffsets.size(2) == (renderWindow.width + tileSize - 1) / tileSize,
+        TORCH_CHECK_VALUE(tileOffsets.size(2) == renderWindow.tileExtentW(tileSize),
                           "tileOffsets width must match the number of tiles in image size");
-        TORCH_CHECK_VALUE(tileOffsets.size(1) == (renderWindow.height + tileSize - 1) / tileSize,
+        TORCH_CHECK_VALUE(tileOffsets.size(1) == renderWindow.tileExtentH(tileSize),
                           "tileOffsets height must match the number of tiles in image size");
     }
 
@@ -344,7 +344,7 @@ launchRasterizeForwardKernel(
 
     const auto sizes = pixelsToRender.has_value()
                            ? pixelsToRender.value().lsizes1()
-                           : std::vector<int64_t>{C * renderWindow.height * renderWindow.width};
+                           : std::vector<int64_t>{C * renderWindow.pixelCountPerCamera()};
     std::vector<torch::Tensor> featuresToRenderVec;
     std::vector<torch::Tensor> alphasToRenderVec;
     std::vector<torch::Tensor> lastIdsToRenderVec;
@@ -438,9 +438,9 @@ launchRasterizeForwardKernels(
     const std::optional<torch::Tensor> &tilePixelCumsum     = std::nullopt,
     const std::optional<torch::Tensor> &pixelMap            = std::nullopt) {
     TORCH_CHECK_VALUE(tileOffsets.dim() == 3, "tileOffsets must be 3D [C, TH, TW]");
-    TORCH_CHECK_VALUE(tileOffsets.size(2) == (renderWindow.width + tileSize - 1) / tileSize,
+    TORCH_CHECK_VALUE(tileOffsets.size(2) == renderWindow.tileExtentW(tileSize),
                       "tileOffsets width must match the number of tiles in image size");
-    TORCH_CHECK_VALUE(tileOffsets.size(1) == (renderWindow.height + tileSize - 1) / tileSize,
+    TORCH_CHECK_VALUE(tileOffsets.size(1) == renderWindow.tileExtentH(tileSize),
                       "tileOffsets height must match the number of tiles in image size");
 
     const bool packed = means2d.dim() == 2;
@@ -449,8 +449,8 @@ launchRasterizeForwardKernels(
     const uint32_t N        = packed ? 0 : means2d.size(1); // number of gaussians
     const uint32_t channels = features.size(-1);
 
-    const uint32_t tileExtentH = (renderWindow.height + tileSize - 1) / tileSize;
-    const uint32_t tileExtentW = (renderWindow.width + tileSize - 1) / tileSize;
+    const uint32_t tileExtentH = renderWindow.tileExtentH(tileSize);
+    const uint32_t tileExtentW = renderWindow.tileExtentW(tileSize);
 
     TORCH_CHECK_VALUE(pixelMap.has_value() == pixelsToRender.has_value(),
                       "pixelMap and pixelsToRender must be provided together");
@@ -461,7 +461,7 @@ launchRasterizeForwardKernels(
 
     const auto sizes = pixelsToRender.has_value()
                            ? pixelsToRender.value().lsizes1()
-                           : std::vector<int64_t>{C * renderWindow.height * renderWindow.width};
+                           : std::vector<int64_t>{C * renderWindow.pixelCountPerCamera()};
     std::vector<torch::Tensor> featuresToRenderVec;
     std::vector<torch::Tensor> alphasToRenderVec;
     std::vector<torch::Tensor> lastIdsToRenderVec;
