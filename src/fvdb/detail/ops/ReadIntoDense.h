@@ -6,23 +6,23 @@
 
 #include <fvdb/detail/GridBatchImpl.h>
 
+#include <nanovdb/NanoVDB.h>
+
 #include <torch/types.h>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-void dispatchReadIntoDenseCminor(const GridBatchImpl &batchHdl,
-                                 const torch::Tensor &inGridData,
-                                 const torch::Tensor &denseOrigins,
-                                 torch::Tensor &outDenseTensor);
+torch::Tensor readIntoDenseCminor(const GridBatchImpl &batchHdl,
+                                  const torch::Tensor &sparseData,
+                                  const torch::Tensor &denseOrigins,
+                                  const nanovdb::Coord &gridSize);
 
-template <torch::DeviceType>
-void dispatchReadIntoDenseCmajor(const GridBatchImpl &batchHdl,
-                                 const torch::Tensor &inGridData,
-                                 const torch::Tensor &denseOrigins,
-                                 torch::Tensor &outDenseTensor);
+torch::Tensor readIntoDenseCmajor(const GridBatchImpl &batchHdl,
+                                  const torch::Tensor &sparseData,
+                                  const torch::Tensor &denseOrigins,
+                                  const nanovdb::Coord &gridSize);
 
 } // namespace ops
 } // namespace detail

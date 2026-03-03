@@ -13,11 +13,10 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-void dispatchInject(const GridBatchImpl &dstGridBatch,
-                    const GridBatchImpl &srcGridBatch,
-                    JaggedTensor &dst,
-                    const JaggedTensor &src);
+void inject(const GridBatchImpl &dstGridBatch,
+            const GridBatchImpl &srcGridBatch,
+            JaggedTensor &dst,
+            const JaggedTensor &src);
 
 } // namespace ops
 } // namespace detail

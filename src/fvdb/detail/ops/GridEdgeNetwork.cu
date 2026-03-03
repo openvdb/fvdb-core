@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/GridEdgeNetwork.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <nanovdb/NanoVDB.h>
@@ -157,16 +158,11 @@ GridEdgeNetwork(const GridBatchImpl &batchHdl, bool returnVoxelCoordinates) {
                 outE, outEBidx2, batchHdl.jlidx(), batchHdl.batchSize())};
 }
 
-template <>
 std::vector<JaggedTensor>
-dispatchGridEdgeNetwork<torch::kCUDA>(const GridBatchImpl &gridHdl, bool returnVoxelCoordinates) {
-    return GridEdgeNetwork<torch::kCUDA>(gridHdl, returnVoxelCoordinates);
-}
-
-template <>
-std::vector<JaggedTensor>
-dispatchGridEdgeNetwork<torch::kCPU>(const GridBatchImpl &gridHdl, bool returnVoxelCoordinates) {
-    return GridEdgeNetwork<torch::kCPU>(gridHdl, returnVoxelCoordinates);
+gridEdgeNetwork(const GridBatchImpl &gridHdl, bool returnVoxelCoordinates) {
+    return FVDB_DISPATCH_KERNEL_DEVICE(gridHdl.device(), [&]() {
+        return GridEdgeNetwork<DeviceTag>(gridHdl, returnVoxelCoordinates);
+    });
 }
 
 } // namespace ops

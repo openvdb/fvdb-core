@@ -19,22 +19,25 @@
 
 namespace fvdb::detail::ops {
 
+template <torch::DeviceType>
+nanovdb::GridHandle<TorchDeviceBuffer>
+dispatchBuildCoarseGridFromFine(const GridBatchImpl &fineGridBatch,
+                                const nanovdb::Coord branchingFactor);
+
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildCoarseGridFromFine<torch::kCUDA>(const GridBatchImpl &fineGridBatch,
                                               const nanovdb::Coord branchingFactor) {
-    JaggedTensor coords =
-        ops::dispatchCoarseIJKForFineGrid<torch::kCUDA>(fineGridBatch, branchingFactor);
-    return ops::dispatchCreateNanoGridFromIJK<torch::kCUDA>(coords);
+    JaggedTensor coords = ops::coarseIJKForFineGrid(fineGridBatch, branchingFactor);
+    return ops::createNanoGridFromIJK(coords);
 }
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildCoarseGridFromFine<torch::kPrivateUse1>(const GridBatchImpl &fineGridBatch,
                                                      const nanovdb::Coord branchingFactor) {
-    JaggedTensor coords =
-        ops::dispatchCoarseIJKForFineGrid<torch::kPrivateUse1>(fineGridBatch, branchingFactor);
-    return ops::dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(coords);
+    JaggedTensor coords = ops::coarseIJKForFineGrid(fineGridBatch, branchingFactor);
+    return ops::createNanoGridFromIJK(coords);
 }
 
 template <>
@@ -77,6 +80,20 @@ dispatchBuildCoarseGridFromFine<torch::kCPU>(const GridBatchImpl &fineBatchHdl,
     } else {
         return nanovdb::mergeGrids(batchHandles);
     }
+}
+
+nanovdb::GridHandle<TorchDeviceBuffer>
+buildCoarseGridFromFine(const GridBatchImpl &fineGridBatch, const nanovdb::Coord branchingFactor) {
+    for (int i = 0; i < 3; i += 1) {
+        TORCH_CHECK_VALUE(branchingFactor[i] > 0,
+                          "coarseningFactor must be strictly positive. Got [" +
+                              std::to_string(branchingFactor[0]) + ", " +
+                              std::to_string(branchingFactor[1]) + ", " +
+                              std::to_string(branchingFactor[2]) + "]");
+    }
+    return FVDB_DISPATCH_KERNEL(fineGridBatch.device(), [&]() {
+        return dispatchBuildCoarseGridFromFine<DeviceTag>(fineGridBatch, branchingFactor);
+    });
 }
 
 } // namespace fvdb::detail::ops

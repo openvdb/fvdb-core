@@ -24,6 +24,11 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
+template <torch::DeviceType>
+nanovdb::GridHandle<TorchDeviceBuffer>
+dispatchBuildGridFromPoints(const JaggedTensor &points,
+                            const std::vector<VoxelCoordTransform> &txs);
+
 template <typename ScalarT>
 __device__ void
 ijkForPointsCallback(int32_t bidx,
@@ -82,7 +87,7 @@ nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildGridFromPoints<torch::kCUDA>(const JaggedTensor &points,
                                           const std::vector<VoxelCoordTransform> &txs) {
     JaggedTensor coords = ijkForPoints(points, txs);
-    return ops::dispatchCreateNanoGridFromIJK<torch::kCUDA>(coords);
+    return ops::createNanoGridFromIJK(coords);
 }
 
 template <>
@@ -117,7 +122,7 @@ dispatchBuildGridFromPoints<torch::kPrivateUse1>(const JaggedTensor &points,
                    c10::kHalf);
 
     JaggedTensor coords = points.jagged_like(ijk);
-    return ops::dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(coords);
+    return ops::createNanoGridFromIJK(coords);
 }
 
 template <>
@@ -176,6 +181,38 @@ dispatchBuildGridFromPoints<torch::kCPU>(const JaggedTensor &pointsJagged,
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
         c10::kHalf);
+}
+
+nanovdb::GridHandle<TorchDeviceBuffer>
+buildGridFromPoints(const JaggedTensor &points, const std::vector<VoxelCoordTransform> &txs) {
+    TORCH_CHECK_VALUE(
+        points.ldim() == 1,
+        "Expected points to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+        points.ldim(),
+        "list dimensions");
+    TORCH_CHECK_TYPE(points.is_floating_point(), "points must have a floating point type");
+    TORCH_CHECK_VALUE(points.rdim() == 2,
+                      std::string("Expected points to have 2 dimensions (shape (n, 3)) but got ") +
+                          std::to_string(points.rdim()) + " dimensions");
+    TORCH_CHECK_VALUE(points.rsize(1) == 3,
+                      "Expected 3 dimensional points but got points.rshape[1] = " +
+                          std::to_string(points.rsize(1)));
+    TORCH_CHECK(
+        points.num_tensors() == points.num_outer_lists(),
+        "If this happens, Francis' paranoia about tensors and points was justified. File a bug");
+    TORCH_CHECK_VALUE(points.num_outer_lists() <= GridBatchImpl::MAX_GRIDS_PER_BATCH,
+                      "Cannot create a grid with more than ",
+                      GridBatchImpl::MAX_GRIDS_PER_BATCH,
+                      " grids in a batch. ",
+                      "You passed in ",
+                      points.num_outer_lists(),
+                      " points sets.");
+    const int64_t numGrids = points.joffsets().size(0) - 1;
+    TORCH_CHECK(
+        numGrids == points.num_outer_lists(),
+        "If this happens, Francis' paranoia about grids and points was justified. File a bug");
+    return FVDB_DISPATCH_KERNEL(
+        points.device(), [&]() { return dispatchBuildGridFromPoints<DeviceTag>(points, txs); });
 }
 
 } // namespace ops

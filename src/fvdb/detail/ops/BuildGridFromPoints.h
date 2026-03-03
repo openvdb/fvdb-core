@@ -9,9 +9,6 @@
 #include <fvdb/detail/VoxelCoordTransform.h>
 
 #include <nanovdb/GridHandle.h>
-#include <nanovdb/NanoVDB.h>
-
-#include <torch/types.h>
 
 #include <vector>
 
@@ -19,10 +16,8 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
 nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildGridFromPoints(const JaggedTensor &points,
-                            const std::vector<VoxelCoordTransform> &txs);
+buildGridFromPoints(const JaggedTensor &points, const std::vector<VoxelCoordTransform> &txs);
 
 } // namespace ops
 } // namespace detail

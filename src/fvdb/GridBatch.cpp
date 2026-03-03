@@ -244,11 +244,6 @@ GridBatch::max_pool(Vec3iOrScalar pool_factor,
                     Vec3iOrScalar stride,
                     std::optional<GridBatch> coarse_grid) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        data.ldim() == 1,
-        "Expected data to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        data.ldim(),
-        "list dimensions");
 
     nanovdb::Coord pool_factor_coord = pool_factor.value();
     nanovdb::Coord stride_coord      = stride.value();
@@ -280,11 +275,6 @@ GridBatch::avg_pool(Vec3iOrScalar pool_factor,
                     Vec3iOrScalar stride,
                     std::optional<GridBatch> coarse_grid) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        data.ldim() == 1,
-        "Expected data to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        data.ldim(),
-        "list dimensions");
 
     nanovdb::Coord pool_factor_coord = pool_factor.value();
     nanovdb::Coord stride_coord      = stride.value();
@@ -316,18 +306,6 @@ GridBatch::refine(Vec3iOrScalar subdiv_factor,
                   const std::optional<JaggedTensor> mask,
                   std::optional<GridBatch> fine_grid) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        data.ldim() == 1,
-        "Expected data to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        data.ldim(),
-        "list dimensions");
-    if (mask.has_value()) {
-        TORCH_CHECK_VALUE(
-            mask.value().ldim() == 1,
-            "Expected mask to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-            mask.value().ldim(),
-            "list dimensions");
-    }
     const nanovdb::Coord upsampleFactorCoord = subdiv_factor.value();
 
     c10::intrusive_ptr<detail::GridBatchImpl> fineGrid;
@@ -368,11 +346,6 @@ GridBatch::write_to_dense_cminor(const JaggedTensor &sparse_data,
                                  const std::optional<Vec3iBatch> &min_coord,
                                  const std::optional<Vec3i> &grid_size) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        sparse_data.ldim() == 1,
-        "Expected sparse_data to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        sparse_data.ldim(),
-        "list dimensions");
     return detail::autograd::ReadIntoDenseCminor::apply(
         mImpl, sparse_data.jdata(), min_coord, grid_size)[0];
 }
@@ -382,11 +355,6 @@ GridBatch::write_to_dense_cmajor(const JaggedTensor &sparse_data,
                                  const std::optional<Vec3iBatch> &min_coord,
                                  const std::optional<Vec3i> &grid_size) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        sparse_data.ldim() == 1,
-        "Expected sparse_data to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        sparse_data.ldim(),
-        "list dimensions");
     return detail::autograd::ReadIntoDenseCmajor::apply(
         mImpl, sparse_data.jdata(), min_coord, grid_size)[0];
 }
@@ -394,11 +362,6 @@ GridBatch::write_to_dense_cmajor(const JaggedTensor &sparse_data,
 JaggedTensor
 GridBatch::grid_to_world(const JaggedTensor &ijk) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        ijk.ldim() == 1,
-        "Expected ijk to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        ijk.ldim(),
-        "list dimensions");
     torch::Tensor ret = detail::autograd::TransformPoints::apply(
         mImpl, ijk, ijk.jdata(), true /*isInverse*/, false /*isDual*/)[0];
 
@@ -408,11 +371,6 @@ GridBatch::grid_to_world(const JaggedTensor &ijk) const {
 JaggedTensor
 GridBatch::world_to_grid(const JaggedTensor &points) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        points.ldim() == 1,
-        "Expected points to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        points.ldim(),
-        "list dimensions");
     torch::Tensor ret = detail::autograd::TransformPoints::apply(
         mImpl, points, points.jdata(), false /* isInverse*/, false /*isDual*/)[0];
 
@@ -432,16 +390,6 @@ GridBatch::world_to_grid_matrices(const torch::Dtype &dtype) const {
 JaggedTensor
 GridBatch::sample_trilinear(const JaggedTensor &points, const JaggedTensor &voxel_data) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        points.ldim() == 1,
-        "Expected points to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        points.ldim(),
-        "list dimensions");
-    TORCH_CHECK_VALUE(
-        voxel_data.ldim() == 1,
-        "Expected voxel_data to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        voxel_data.ldim(),
-        "list dimensions");
     torch::Tensor ret = detail::autograd::SampleGridTrilinear::apply(
         mImpl, points, voxel_data.jdata(), false /*returnGrad*/)[0];
     return points.jagged_like(ret);
@@ -451,16 +399,6 @@ std::vector<JaggedTensor>
 GridBatch::sample_trilinear_with_grad(const JaggedTensor &points,
                                       const JaggedTensor &voxel_data) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        points.ldim() == 1,
-        "Expected points to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        points.ldim(),
-        "list dimensions");
-    TORCH_CHECK_VALUE(
-        voxel_data.ldim() == 1,
-        "Expected voxel_data to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        voxel_data.ldim(),
-        "list dimensions");
     std::vector<torch::Tensor> ret = detail::autograd::SampleGridTrilinear::apply(
         mImpl, points, voxel_data.jdata(), true /*returnGrad*/);
 
@@ -470,16 +408,6 @@ GridBatch::sample_trilinear_with_grad(const JaggedTensor &points,
 JaggedTensor
 GridBatch::sample_bezier(const JaggedTensor &points, const JaggedTensor &voxel_data) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        points.ldim() == 1,
-        "Expected points to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        points.ldim(),
-        "list dimensions");
-    TORCH_CHECK_VALUE(
-        voxel_data.ldim() == 1,
-        "Expected voxel_data to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        voxel_data.ldim(),
-        "list dimensions");
     torch::Tensor ret = detail::autograd::SampleGridBezier::apply(
         mImpl, points, voxel_data.jdata(), false /*returnGrad*/)[0];
     return points.jagged_like(ret);
@@ -489,16 +417,6 @@ std::vector<JaggedTensor>
 GridBatch::sample_bezier_with_grad(const JaggedTensor &points,
                                    const JaggedTensor &voxel_data) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        points.ldim() == 1,
-        "Expected points to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        points.ldim(),
-        "list dimensions");
-    TORCH_CHECK_VALUE(
-        voxel_data.ldim() == 1,
-        "Expected voxel_data to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        voxel_data.ldim(),
-        "list dimensions");
     auto ret = detail::autograd::SampleGridBezier::apply(
         mImpl, points, voxel_data.jdata(), true /*returnGrad*/);
     return {points.jagged_like(ret[0]), points.jagged_like(ret[1])};
@@ -507,16 +425,6 @@ GridBatch::sample_bezier_with_grad(const JaggedTensor &points,
 JaggedTensor
 GridBatch::splat_trilinear(const JaggedTensor &points, const JaggedTensor &points_data) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        points.ldim() == 1,
-        "Expected points to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        points.ldim(),
-        "list dimensions");
-    TORCH_CHECK_VALUE(
-        points_data.ldim() == 1,
-        "Expected points_data to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        points_data.ldim(),
-        "list dimensions");
     torch::Tensor ret =
         detail::autograd::SplatIntoGridTrilinear::apply(mImpl, points, points_data.jdata())[0];
     if (grid_count() == 1) {
@@ -529,16 +437,6 @@ GridBatch::splat_trilinear(const JaggedTensor &points, const JaggedTensor &point
 JaggedTensor
 GridBatch::splat_bezier(const JaggedTensor &points, const JaggedTensor &points_data) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        points.ldim() == 1,
-        "Expected points to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        points.ldim(),
-        "list dimensions");
-    TORCH_CHECK_VALUE(
-        points_data.ldim() == 1,
-        "Expected points_data to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        points_data.ldim(),
-        "list dimensions");
     torch::Tensor ret =
         detail::autograd::SplatIntoGridBezier::apply(mImpl, points, points_data.jdata())[0];
     if (grid_count() == 1) {
@@ -666,28 +564,15 @@ GridBatch::clip(const JaggedTensor &features,
                 const Vec3iBatch &ijk_min,
                 const Vec3iBatch &ijk_max) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        features.ldim() == 1,
-        "Expected features to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        features.ldim(),
-        "list dimensions");
-
-    mImpl->checkDevice(features);
-    TORCH_CHECK(features.rsize(0) == total_voxels(), "Value count of features does not match grid");
-    TORCH_CHECK(features.num_outer_lists() == grid_count(),
-                "Batch size of features does not match grid.");
-    TORCH_CHECK(torch::equal(features.joffsets(), mImpl->voxelOffsets()),
-                "Offsets of features does not match grid.");
 
     const std::vector<nanovdb::Coord> &bboxMins =
         ijk_min.value(mImpl->batchSize(), false, "ijk_min");
     const std::vector<nanovdb::Coord> &bboxMaxs =
         ijk_max.value(mImpl->batchSize(), false, "ijk_max");
 
-    auto [clippedGridPtr, activeVoxelMask] = mImpl->clipWithMask(bboxMins, bboxMaxs);
+    auto [clippedFeatures, clippedGridPtr] =
+        mImpl->clipFeaturesWithMask(features, bboxMins, bboxMaxs);
 
-    // features clipped to voxels in bounds
-    JaggedTensor clippedFeatures = features.rmask(activeVoxelMask.jdata());
     GridBatch clippedGrid;
     clippedGrid.mImpl = clippedGridPtr;
     return std::make_pair(clippedFeatures, clippedGrid);
@@ -696,28 +581,7 @@ GridBatch::clip(const JaggedTensor &features,
 std::vector<JaggedTensor>
 GridBatch::marching_cubes(const JaggedTensor &field, double level) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        field.ldim() == 1,
-        "Expected field to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        field.ldim(),
-        "list dimensions");
-    TORCH_CHECK_TYPE(field.is_floating_point(), "field must have a floating point type");
-    TORCH_CHECK_VALUE(field.numel() == total_voxels(), "Value count not match!");
-    TORCH_CHECK_VALUE(field.num_outer_lists() == grid_count(), "Batch size not match!");
-    torch::Tensor fieldJdata = field.jdata();
-    if (fieldJdata.dim() == 0) {
-        fieldJdata = fieldJdata.unsqueeze(0);
-    }
-    if (fieldJdata.dim() != 1) {
-        fieldJdata = fieldJdata.squeeze();
-    }
-    TORCH_CHECK(fieldJdata.dim() == 1,
-                std::string("Expected field to have 1 effective dimension but got ") +
-                    std::to_string(field.rdim()) + " dimensions");
-    mImpl->checkDevice(field);
-    return FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
-        return fvdb::detail::ops::dispatchMarchingCubes<DeviceTag>(*mImpl, fieldJdata, level);
-    });
+    return fvdb::detail::ops::marchingCubes(*mImpl, field, level);
 }
 
 std::tuple<GridBatch, JaggedTensor, JaggedTensor, JaggedTensor>
@@ -731,19 +595,16 @@ GridBatch::integrate_tsdf_with_features(const double truncationMargin,
                                         const torch::Tensor &featureImages,
                                         const std::optional<torch::Tensor> &weightImages) const {
     const auto [newGrid, outTSDF, outWeights, outFeatures] =
-        FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
-            return fvdb::detail::ops::dispatchIntegrateTSDFWithFeatures<DeviceTag>(
-                mImpl,
-                truncationMargin,
-                projectionMatrices,
-                camToWorldMatrices,
-                tsdf,
-                features,
-                weights,
-                depthImages,
-                featureImages,
-                weightImages);
-        });
+        fvdb::detail::ops::integrateTSDFWithFeatures(mImpl,
+                                                     truncationMargin,
+                                                     projectionMatrices,
+                                                     camToWorldMatrices,
+                                                     tsdf,
+                                                     features,
+                                                     weights,
+                                                     depthImages,
+                                                     featureImages,
+                                                     weightImages);
     GridBatch ret;
     ret.mImpl = newGrid;
     return {ret, outTSDF, outWeights, outFeatures};
@@ -757,16 +618,14 @@ GridBatch::integrate_tsdf(const double truncationMargin,
                           const JaggedTensor &weights,
                           const torch::Tensor &depthImages,
                           const std::optional<torch::Tensor> &weightImages) const {
-    const auto [newGrid, outTSDF, outWeights] = FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
-        return fvdb::detail::ops::dispatchIntegrateTSDF<DeviceTag>(mImpl,
-                                                                   truncationMargin,
-                                                                   projectionMatrices,
-                                                                   camToWorldMatrices,
-                                                                   tsdf,
-                                                                   weights,
-                                                                   depthImages,
-                                                                   weightImages);
-    });
+    const auto [newGrid, outTSDF, outWeights] = fvdb::detail::ops::integrateTSDF(mImpl,
+                                                                                 truncationMargin,
+                                                                                 projectionMatrices,
+                                                                                 camToWorldMatrices,
+                                                                                 tsdf,
+                                                                                 weights,
+                                                                                 depthImages,
+                                                                                 weightImages);
     GridBatch ret;
     ret.mImpl = newGrid;
     return {ret, outTSDF, outWeights};
@@ -810,18 +669,6 @@ GridBatch::pruned_grid(const JaggedTensor &mask) const {
 void
 GridBatch::inject_to(const GridBatch &dstGrid, const JaggedTensor &src, JaggedTensor &dst) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(this->grid_count() == src.num_tensors(),
-                      "Source GridBatch should match number of tensors");
-    TORCH_CHECK_VALUE(dstGrid.grid_count() == dst.num_tensors(),
-                      "Destination GridBatch should match number of tensors");
-    TORCH_CHECK_VALUE(this->device() == dstGrid.device(),
-                      "Source/destination GridBatches should be on the same device");
-    TORCH_CHECK_VALUE(this->device() == src.device(),
-                      "Source GridBatch should be on the same device");
-    TORCH_CHECK_VALUE(dstGrid.device() == dst.device(),
-                      "Destination GridBatch should be on the same device");
-    TORCH_CHECK_VALUE(src.ldim() == 1, "Source data should be a list of tensors");
-    TORCH_CHECK_VALUE(dst.ldim() == 1, "Destination data should be a list of tensors");
 
     auto ret = detail::autograd::Inject::apply(mImpl,
                                                src.jdata(),
@@ -850,20 +697,8 @@ GridBatch::voxels_along_rays(const JaggedTensor &ray_origins,
                              bool return_ijk,
                              bool cumulative) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        ray_origins.ldim() == 1,
-        "Expected ray_origins to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        ray_origins.ldim(),
-        "list dimensions");
-    TORCH_CHECK_VALUE(
-        ray_directions.ldim() == 1,
-        "Expected ray_directions to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        ray_directions.ldim(),
-        "list dimensions");
-    return FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
-        return fvdb::detail::ops::dispatchVoxelsAlongRays<DeviceTag>(
-            *mImpl, ray_origins, ray_directions, max_vox, eps, return_ijk, cumulative);
-    });
+    return fvdb::detail::ops::voxelsAlongRays(
+        *mImpl, ray_origins, ray_directions, max_vox, eps, return_ijk, cumulative);
 }
 
 JaggedTensor
@@ -872,20 +707,8 @@ GridBatch::segments_along_rays(const JaggedTensor &ray_origins,
                                int64_t max_segments,
                                double eps) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        ray_origins.ldim() == 1,
-        "Expected ray_origins to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        ray_origins.ldim(),
-        "list dimensions");
-    TORCH_CHECK_VALUE(
-        ray_directions.ldim() == 1,
-        "Expected ray_directions to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        ray_directions.ldim(),
-        "list dimensions");
-    return FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
-        return fvdb::detail::ops::dispatchSegmentsAlongRays<DeviceTag>(
-            *mImpl, ray_origins, ray_directions, max_segments, eps);
-    });
+    return fvdb::detail::ops::segmentsAlongRays(
+        *mImpl, ray_origins, ray_directions, max_segments, eps);
 }
 
 JaggedTensor
@@ -894,25 +717,8 @@ GridBatch::ray_implicit_intersection(const JaggedTensor &ray_origins,
                                      const JaggedTensor &gridScalars,
                                      double eps) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        ray_origins.ldim() == 1,
-        "Expected ray_origins to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        ray_origins.ldim(),
-        "list dimensions");
-    TORCH_CHECK_VALUE(
-        ray_directions.ldim() == 1,
-        "Expected ray_directions to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        ray_directions.ldim(),
-        "list dimensions");
-    TORCH_CHECK_VALUE(
-        gridScalars.ldim() == 1,
-        "Expected grid_scalars to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        gridScalars.ldim(),
-        "list dimensions");
-    return FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
-        return fvdb::detail::ops::dispatchRayImplicitIntersection<DeviceTag>(
-            *mImpl, ray_origins, ray_directions, gridScalars, eps);
-    });
+    return fvdb::detail::ops::rayImplicitIntersection(
+        *mImpl, ray_origins, ray_directions, gridScalars, eps);
 }
 
 JaggedTensor
@@ -926,68 +732,28 @@ GridBatch::uniform_ray_samples(const JaggedTensor &ray_origins,
                                bool return_midpoint,
                                double eps) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        ray_origins.ldim() == 1,
-        "Expected ray_origins to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        ray_origins.ldim(),
-        "list dimensions");
-    TORCH_CHECK_VALUE(
-        ray_directions.ldim() == 1,
-        "Expected ray_directions to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        ray_directions.ldim(),
-        "list dimensions");
-    TORCH_CHECK_VALUE(
-        t_min.ldim() == 1,
-        "Expected t_min to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        t_min.ldim(),
-        "list dimensions");
-    TORCH_CHECK_VALUE(
-        t_max.ldim() == 1,
-        "Expected t_max to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        t_max.ldim(),
-        "list dimensions");
-    return FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
-        return fvdb::detail::ops::dispatchUniformRaySamples<DeviceTag>(*mImpl,
-                                                                       ray_origins,
-                                                                       ray_directions,
-                                                                       t_min,
-                                                                       t_max,
-                                                                       step_size,
-                                                                       cone_angle,
-                                                                       include_end_segments,
-                                                                       return_midpoint,
-                                                                       eps);
-    });
+    return fvdb::detail::ops::uniformRaySamples(*mImpl,
+                                                ray_origins,
+                                                ray_directions,
+                                                t_min,
+                                                t_max,
+                                                step_size,
+                                                cone_angle,
+                                                include_end_segments,
+                                                return_midpoint,
+                                                eps);
 }
 
 JaggedTensor
 GridBatch::neighbor_indexes(const JaggedTensor &ijk, int32_t extent, int32_t bitshift) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        ijk.ldim() == 1,
-        "Expected ijk to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        ijk.ldim(),
-        "list dimensions");
-    TORCH_CHECK_VALUE(extent >= 0, "extent must be >= 0");
-    nanovdb::Coord extentMin(-extent, -extent, -extent);
-    nanovdb::Coord extentMax(extent, extent, extent);
-    return FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
-        return fvdb::detail::ops::dispatchVoxelNeighborhood<DeviceTag>(
-            *mImpl, ijk, extentMin, extentMax, bitshift);
-    });
+    return fvdb::detail::ops::voxelNeighborhood(*mImpl, ijk, extent, bitshift);
 }
 
 JaggedTensor
 GridBatch::points_in_grid(const JaggedTensor &points) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        points.ldim() == 1,
-        "Expected points to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        points.ldim(),
-        "list dimensions");
-    return FVDB_DISPATCH_KERNEL(device(), [&]() {
-        return fvdb::detail::ops::dispatchPointsInGrid<DeviceTag>(*mImpl, points);
-    });
+    return fvdb::detail::ops::pointsInGrid(*mImpl, points);
 }
 
 JaggedTensor
@@ -995,15 +761,7 @@ GridBatch::cubes_intersect_grid(const JaggedTensor &cube_centers,
                                 const Vec3dOrScalar &cube_min,
                                 const Vec3dOrScalar &cube_max) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        cube_centers.ldim() == 1,
-        "Expected cube_centers to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        cube_centers.ldim(),
-        "list dimensions");
-    return FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
-        return fvdb::detail::ops::dispatchCubesIntersectGrid<DeviceTag>(
-            *mImpl, cube_centers, cube_min, cube_max);
-    });
+    return fvdb::detail::ops::cubesIntersectGrid(*mImpl, cube_centers, cube_min, cube_max);
 }
 
 JaggedTensor
@@ -1011,111 +769,65 @@ GridBatch::cubes_in_grid(const JaggedTensor &cube_centers,
                          const Vec3dOrScalar &cube_min,
                          const Vec3dOrScalar &cube_max) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        cube_centers.ldim() == 1,
-        "Expected cube_centers to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        cube_centers.ldim(),
-        "list dimensions");
-    return FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
-        return fvdb::detail::ops::dispatchCubesInGrid<DeviceTag>(
-            *mImpl, cube_centers, cube_min, cube_max);
-    });
+    return fvdb::detail::ops::cubesInGrid(*mImpl, cube_centers, cube_min, cube_max);
 }
 
 JaggedTensor
 GridBatch::coords_in_grid(const JaggedTensor &ijk) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        ijk.ldim() == 1,
-        "Expected ijk to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        ijk.ldim(),
-        "list dimensions");
-    return FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
-        return fvdb::detail::ops::dispatchCoordsInGrid<DeviceTag>(*mImpl, ijk);
-    });
+    return fvdb::detail::ops::coordsInGrid(*mImpl, ijk);
 }
 
 JaggedTensor
 GridBatch::ijk_to_index(const JaggedTensor &ijk, bool cumulative) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        ijk.ldim() == 1,
-        "Expected ijk to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        ijk.ldim(),
-        "list dimensions");
-    return FVDB_DISPATCH_KERNEL(device(), [&]() {
-        return fvdb::detail::ops::dispatchIjkToIndex<DeviceTag>(*mImpl, ijk, cumulative);
-    });
+    return fvdb::detail::ops::ijkToIndex(*mImpl, ijk, cumulative);
 }
 
 JaggedTensor
 GridBatch::ijk_to_inv_index(const JaggedTensor &ijk, bool cumulative) const {
     c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        ijk.ldim() == 1,
-        "Expected ijk to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        ijk.ldim(),
-        "list dimensions");
-    return FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
-        return fvdb::detail::ops::dispatchIjkToInvIndex<DeviceTag>(*mImpl, ijk, cumulative);
-    });
+    return fvdb::detail::ops::ijkToInvIndex(*mImpl, ijk, cumulative);
 }
 
 JaggedTensor
 GridBatch::ijk() const {
     c10::DeviceGuard guard(device());
-    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
-        return fvdb::detail::ops::dispatchActiveGridCoords<DeviceTag>(*mImpl);
-    });
+    return fvdb::detail::ops::activeGridCoords(*mImpl);
 }
 
 JaggedTensor
 GridBatch::morton(const torch::Tensor &offset) const {
     c10::DeviceGuard guard(device());
-    const nanovdb::Coord offsetCoord = tensorToCoord(offset);
-    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
-        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
-            *mImpl, SpaceFillingCurveType::ZOrder, offsetCoord);
-    });
+    return fvdb::detail::ops::serializeEncode(
+        *mImpl, SpaceFillingCurveType::ZOrder, tensorToCoord(offset));
 }
 
 JaggedTensor
 GridBatch::morton_zyx(const torch::Tensor &offset) const {
     c10::DeviceGuard guard(device());
-    const nanovdb::Coord offsetCoord = tensorToCoord(offset);
-    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
-        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
-            *mImpl, SpaceFillingCurveType::ZOrderTransposed, offsetCoord);
-    });
+    return fvdb::detail::ops::serializeEncode(
+        *mImpl, SpaceFillingCurveType::ZOrderTransposed, tensorToCoord(offset));
 }
 
 JaggedTensor
 GridBatch::hilbert(const torch::Tensor &offset) const {
     c10::DeviceGuard guard(device());
-    const nanovdb::Coord offsetCoord = tensorToCoord(offset);
-    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
-        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
-            *mImpl, SpaceFillingCurveType::Hilbert, offsetCoord);
-    });
+    return fvdb::detail::ops::serializeEncode(
+        *mImpl, SpaceFillingCurveType::Hilbert, tensorToCoord(offset));
 }
 
 JaggedTensor
 GridBatch::hilbert_zyx(const torch::Tensor &offset) const {
     c10::DeviceGuard guard(device());
-    const nanovdb::Coord offsetCoord = tensorToCoord(offset);
-    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
-        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
-            *mImpl, SpaceFillingCurveType::HilbertTransposed, offsetCoord);
-    });
+    return fvdb::detail::ops::serializeEncode(
+        *mImpl, SpaceFillingCurveType::HilbertTransposed, tensorToCoord(offset));
 }
 
 std::vector<JaggedTensor>
 GridBatch::viz_edge_network(bool returnVoxelCoordinates) const {
     c10::DeviceGuard guard(device());
-    return FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
-        return fvdb::detail::ops::dispatchGridEdgeNetwork<DeviceTag>(*mImpl,
-                                                                     returnVoxelCoordinates);
-    });
+    return fvdb::detail::ops::gridEdgeNetwork(*mImpl, returnVoxelCoordinates);
 }
 
 GridBatch

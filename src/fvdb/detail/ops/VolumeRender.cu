@@ -3,6 +3,7 @@
 //
 #include <fvdb/detail/ops/VolumeRender.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 
 #include <c10/cuda/CUDAException.h>
@@ -15,6 +16,8 @@
 namespace fvdb {
 namespace detail {
 namespace ops {
+
+namespace {
 
 template <typename scalar_t, template <typename T, int32_t D> typename TensorAccessor>
 __hostdev__ void
@@ -291,6 +294,37 @@ volumeRenderBackward(const TorchRAcc32<scalar_t, 1> dLdOpacity,
                                                                  out_dLdRgbs);
 }
 
+template <torch::DeviceType DeviceTag>
+void dispatchVolumeRender(const torch::Tensor sigmas,
+                          const torch::Tensor rgbs,
+                          const torch::Tensor deltas,
+                          const torch::Tensor ts,
+                          const torch::Tensor jOffsets,
+                          const float tsmtThreshold,
+                          torch::Tensor &outOpacity,
+                          torch::Tensor &outDepth,
+                          torch::Tensor &outRgb,
+                          torch::Tensor &outWs,
+                          torch::Tensor &outTotalSamples);
+
+template <torch::DeviceType DeviceTag>
+void dispatchVolumeRenderBackward(const torch::Tensor dLdOpacity,
+                                  const torch::Tensor dLdDepth,
+                                  const torch::Tensor dLdRgb,
+                                  const torch::Tensor dLdWs,
+                                  const torch::Tensor sigmas,
+                                  const torch::Tensor rgbs,
+                                  const torch::Tensor ws,
+                                  const torch::Tensor deltas,
+                                  const torch::Tensor ts,
+                                  const torch::Tensor jOffsets,
+                                  const torch::Tensor opacity,
+                                  const torch::Tensor depth,
+                                  const torch::Tensor rgb,
+                                  const float tsmtThreshold,
+                                  torch::Tensor &outDLdSigmas,
+                                  torch::Tensor &outDLdRbgs);
+
 template <>
 void
 dispatchVolumeRender<torch::kCUDA>(
@@ -513,6 +547,111 @@ dispatchVolumeRenderBackward<torch::kCPU>(const torch::Tensor dLdOpacity,
                    }),
                    AT_EXPAND(AT_FLOATING_TYPES),
                    c10::kHalf);
+}
+
+} // anonymous namespace
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+volumeRender(const torch::Tensor &sigmas,
+             const torch::Tensor &rgbs,
+             const torch::Tensor &deltaTs,
+             const torch::Tensor &ts,
+             const torch::Tensor &jOffsets,
+             double tsmtThreshold) {
+    const int64_t numRays = jOffsets.size(0) - 1;
+    const int64_t N       = sigmas.size(0);
+
+    TORCH_CHECK(jOffsets.dim() == 1, "jOffsets must have shape (nRays+1,)");
+    TORCH_CHECK(sigmas.dim() == 1, "sigmas must have shape (nRays*nSamplesPerRay,)");
+    TORCH_CHECK(rgbs.dim() == 2, "rgbs must have shape (nRays*nSamplesPerRay, 3)");
+    TORCH_CHECK(deltaTs.dim() == 1, "deltaTs must have shape (nRays*nSamplesPerRay,)");
+    TORCH_CHECK(ts.dim() == 1, "ts must have shape (N,)");
+
+    TORCH_CHECK(sigmas.device() == rgbs.device(), "All tensors must be on the same device");
+    TORCH_CHECK(sigmas.device() == deltaTs.device(), "All tensors must be on the same device");
+    TORCH_CHECK(sigmas.device() == ts.device(), "All tensors must be on the same device");
+    TORCH_CHECK(sigmas.device() == jOffsets.device(), "All tensors must be on the same device");
+
+    TORCH_CHECK(sigmas.dtype() == rgbs.dtype(),
+                "All floating point tensors must be on the same dtype");
+    TORCH_CHECK(sigmas.dtype() == deltaTs.dtype(),
+                "All floating point tensors must be on the same dtype");
+    TORCH_CHECK(sigmas.dtype() == ts.dtype(),
+                "All floating point tensors must be on the same dtype");
+    TORCH_CHECK(jOffsets.dtype() == torch::dtype(JOffsetsScalarType).dtype(),
+                "jOffsets must be of type torch.int32");
+
+    TORCH_CHECK(sigmas.size(0) == rgbs.size(0),
+                "sigmas and rgbs must have the same number of elements");
+    TORCH_CHECK(sigmas.size(0) == deltaTs.size(0),
+                "sigmas and deltaTs must have the same number of elements");
+    TORCH_CHECK(sigmas.size(0) == ts.size(0),
+                "sigmas and ts must have the same number of elements");
+
+    torch::Tensor outOpacity = torch::zeros({numRays}, sigmas.options());
+    torch::Tensor outDepth   = torch::zeros({numRays}, sigmas.options());
+    torch::Tensor outRgb     = torch::zeros({numRays, 3}, sigmas.options());
+    torch::Tensor outWs      = torch::zeros({N}, sigmas.options());
+    torch::Tensor outTotalSamples =
+        torch::zeros({numRays}, torch::dtype(torch::kLong).device(sigmas.device()));
+
+    FVDB_DISPATCH_KERNEL_DEVICE(sigmas.device(), [&]() {
+        dispatchVolumeRender<DeviceTag>(sigmas,
+                                        rgbs,
+                                        deltaTs,
+                                        ts,
+                                        jOffsets,
+                                        static_cast<float>(tsmtThreshold),
+                                        outOpacity,
+                                        outDepth,
+                                        outRgb,
+                                        outWs,
+                                        outTotalSamples);
+    });
+
+    return {outRgb, outDepth, outOpacity, outWs, outTotalSamples};
+}
+
+std::tuple<torch::Tensor, torch::Tensor>
+volumeRenderBackward(const torch::Tensor &dLdOpacity,
+                     const torch::Tensor &dLdDepth,
+                     const torch::Tensor &dLdRgb,
+                     const torch::Tensor &dLdWs,
+                     const torch::Tensor &sigmas,
+                     const torch::Tensor &rgbs,
+                     const torch::Tensor &ws,
+                     const torch::Tensor &deltas,
+                     const torch::Tensor &ts,
+                     const torch::Tensor &jOffsets,
+                     const torch::Tensor &opacity,
+                     const torch::Tensor &depth,
+                     const torch::Tensor &rgb,
+                     float tsmtThreshold) {
+    const int64_t N = sigmas.size(0);
+
+    torch::Tensor dLdSigmas = torch::zeros({N}, sigmas.options());
+    torch::Tensor dLdRgbs   = torch::zeros({N, 3}, sigmas.options());
+
+    FVDB_DISPATCH_KERNEL_DEVICE(sigmas.device(), [&]() {
+        dispatchVolumeRenderBackward<DeviceTag>(dLdOpacity,
+                                                dLdDepth,
+                                                dLdRgb,
+                                                dLdWs,
+                                                sigmas,
+                                                rgbs,
+                                                ws,
+                                                deltas,
+                                                ts,
+                                                jOffsets,
+                                                opacity,
+                                                depth,
+                                                rgb,
+                                                tsmtThreshold,
+                                                dLdSigmas,
+                                                dLdRgbs);
+    });
+
+    return {dLdSigmas, dLdRgbs};
 }
 
 } // namespace ops

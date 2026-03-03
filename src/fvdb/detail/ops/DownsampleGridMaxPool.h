@@ -14,20 +14,18 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-torch::Tensor dispatchDownsampleGridMaxPool(const GridBatchImpl &fineBatchHdl,
-                                            const GridBatchImpl &coarseBatchHdl,
+torch::Tensor downsampleGridMaxPool(const GridBatchImpl &fineBatchHdl,
+                                    const GridBatchImpl &coarseBatchHdl,
+                                    const torch::Tensor &fineData,
+                                    nanovdb::Coord poolingFactor,
+                                    nanovdb::Coord stride);
+
+torch::Tensor downsampleGridMaxPoolBackward(const GridBatchImpl &coarseBatchHdl,
+                                            const GridBatchImpl &fineBatchHdl,
                                             const torch::Tensor &fineData,
+                                            const torch::Tensor &coarseGradOut,
                                             nanovdb::Coord poolingFactor,
                                             nanovdb::Coord stride);
-
-template <torch::DeviceType>
-torch::Tensor dispatchDownsampleGridMaxPoolBackward(const GridBatchImpl &coarseBatchHdl,
-                                                    const GridBatchImpl &fineBatchHdl,
-                                                    const torch::Tensor &fineData,
-                                                    const torch::Tensor &coarseGradOut,
-                                                    nanovdb::Coord poolingFactor,
-                                                    nanovdb::Coord stride);
 
 } // namespace ops
 } // namespace detail

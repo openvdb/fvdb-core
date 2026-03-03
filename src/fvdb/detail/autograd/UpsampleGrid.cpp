@@ -3,7 +3,6 @@
 //
 #include <fvdb/detail/autograd/UpsampleGrid.h>
 #include <fvdb/detail/ops/UpsampleGridNearest.h>
-#include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>
 
@@ -32,17 +31,15 @@ UpsampleGrid::forward(UpsampleGrid::AutogradContext *ctx,
         return variable_list({torch::empty({0, coarseData.size(1)}, coarseData.options())});
     }
 
-    torch::Tensor ret = FVDB_DISPATCH_KERNEL(coarseData.device(), [&]() {
-        return ops::dispatchUpsampleGridNearest<DeviceTag>(
-            *coarseGrid, *fineGrid, coarseData, upsamplingFactor);
-    });
+    torch::Tensor ret =
+        ops::upsampleGridNearest(*coarseGrid, *fineGrid, coarseData, upsamplingFactor);
     return variable_list({ret});
 }
 
 UpsampleGrid::variable_list
 UpsampleGrid::backward(UpsampleGrid::AutogradContext *ctx,
                        UpsampleGrid::variable_list grad_output) {
-    // // Use data saved in forward
+    // Use data saved in forward
     variable_list saved = ctx->get_saved_variables();
     Variable coarseData = saved.at(0);
 
@@ -59,10 +56,8 @@ UpsampleGrid::backward(UpsampleGrid::AutogradContext *ctx,
         return {torch::Tensor(), torch::Tensor(), torch::Tensor(), ret};
     }
 
-    torch::Tensor outGradIn = FVDB_DISPATCH_KERNEL_DEVICE(coarseData.device(), [&]() {
-        return ops::dispatchUpsampleGridNearestBackward<DeviceTag>(
-            *fineGrid, *coarseGrid, gradOut, coarseData, upsamplingFactor);
-    });
+    torch::Tensor outGradIn = ops::upsampleGridNearestBackward(
+        *fineGrid, *coarseGrid, gradOut, coarseData, upsamplingFactor);
 
     return {torch::Tensor(), torch::Tensor(), torch::Tensor(), outGradIn};
 }

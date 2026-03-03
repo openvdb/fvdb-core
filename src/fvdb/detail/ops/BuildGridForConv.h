@@ -10,16 +10,13 @@
 #include <nanovdb/GridHandle.h>
 #include <nanovdb/NanoVDB.h>
 
-#include <torch/types.h>
-
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer> dispatchBuildGridForConv(const GridBatchImpl &baseBatchHdl,
-                                                                const nanovdb::Coord &kernelSize,
-                                                                const nanovdb::Coord &stride);
+nanovdb::GridHandle<TorchDeviceBuffer> buildGridForConv(const GridBatchImpl &baseBatchHdl,
+                                                        const nanovdb::Coord &kernelSize,
+                                                        const nanovdb::Coord &stride);
 
 } // namespace ops
 } // namespace detail

@@ -692,64 +692,43 @@ jaggedTensorIndexIntPrivateUse1(const JaggedTensor &jt, int64_t idxVal) {
 // This corresponds to indexing with an integer
 // i.e. jt = JaggedTensor([...])
 //      jt[2] -> JaggedTensor([...]) where the 3rd list is selected
-template <>
 JaggedTensor
-dispatchJaggedTensorIndexInt<torch::kCPU>(const JaggedTensor &jt, int64_t idxVal) {
-    return jaggedTensorIndexIntCpu(jt, idxVal);
-}
-template <>
-JaggedTensor
-dispatchJaggedTensorIndexInt<torch::kCUDA>(const JaggedTensor &jt, int64_t idxVal) {
-    c10::cuda::CUDAGuard deviceGuard(jt.device());
-    return jaggedTensorIndexIntCuda(jt, idxVal);
-}
-template <>
-JaggedTensor
-dispatchJaggedTensorIndexInt<torch::kPrivateUse1>(const JaggedTensor &jt, int64_t idxVal) {
-    return jaggedTensorIndexIntPrivateUse1(jt, idxVal);
+jaggedTensorIndexInt(const JaggedTensor &jt, int64_t idxVal) {
+    if (jt.device().is_cuda()) {
+        c10::cuda::CUDAGuard deviceGuard(jt.device());
+        return jaggedTensorIndexIntCuda(jt, idxVal);
+    } else if (jt.device().is_privateuseone()) {
+        return jaggedTensorIndexIntPrivateUse1(jt, idxVal);
+    } else {
+        return jaggedTensorIndexIntCpu(jt, idxVal);
+    }
 }
 
-// This corresponds to indexing with a slice
-// i.e. jt = JaggedTensor([...])
-//      jt[2:11:4] -> JaggedTensor([...]) where every fourth entry from the third to the tenth list
-//      (inclusive) is selected
-template <>
 JaggedTensor
-dispatchJaggedTensorIndexSlice<torch::kCPU>(const JaggedTensor &jt,
-                                            int64_t start,
-                                            int64_t end,
-                                            int64_t step) {
-    return jaggedTensorIndexSliceCpu(jt, start, end, step);
-}
-template <>
-JaggedTensor
-dispatchJaggedTensorIndexSlice<torch::kCUDA>(const JaggedTensor &jt,
-                                             int64_t start,
-                                             int64_t end,
-                                             int64_t step) {
-    c10::cuda::CUDAGuard deviceGuard(jt.device());
-    return jaggedTensorIndexSliceCuda(jt, start, end, step);
+jaggedTensorIndexSlice(const JaggedTensor &jt, int64_t start, int64_t end, int64_t step) {
+    TORCH_CHECK_VALUE(step >= 1, "step in slice must be >= 1");
+    if (start >= at::indexing::INDEX_MAX) {
+        start = jt.num_outer_lists();
+    }
+    if (end <= at::indexing::INDEX_MIN) {
+        end = 0;
+    }
+    if (jt.device().is_cuda()) {
+        c10::cuda::CUDAGuard deviceGuard(jt.device());
+        return jaggedTensorIndexSliceCuda(jt, start, end, step);
+    } else {
+        return jaggedTensorIndexSliceCpu(jt, start, end, step);
+    }
 }
 
-// This corresponds to indexing with a JaggedTensor. i.e. using each tensor in an indexing
-// JaggedTensor to index the corresponding tensor in the JaggedTensor
-// i.e. jt = JaggedTensor([[t_11, t_12], [t_21, t_22, t_23], ...])
-//      indices = JaggedTensor([[i_11, i_12], [i_21, i_22, i_23], ...])
-//      jt[indices] -> JaggedTensor([[t_11[i_11], t_12[i_12]], [t_21[i_21], t_22[i_22], t_23[i_23]],
-//      ...])
-// Here indices can be integers or a boolean mask
-template <>
 JaggedTensor
-dispatchJaggedTensorIndexJaggedTensor<torch::kCPU>(const JaggedTensor &jt,
-                                                   const JaggedTensor &idx) {
-    return jaggedTensorIndexJaggedTensorImpl(jt, idx);
-}
-template <>
-JaggedTensor
-dispatchJaggedTensorIndexJaggedTensor<torch::kCUDA>(const JaggedTensor &jt,
-                                                    const JaggedTensor &idx) {
-    c10::cuda::CUDAGuard deviceGuard(jt.device());
-    return jaggedTensorIndexJaggedTensorImpl(jt, idx);
+jaggedTensorIndexJaggedTensor(const JaggedTensor &jt, const JaggedTensor &idx) {
+    if (jt.device().is_cuda()) {
+        c10::cuda::CUDAGuard deviceGuard(jt.device());
+        return jaggedTensorIndexJaggedTensorImpl(jt, idx);
+    } else {
+        return jaggedTensorIndexJaggedTensorImpl(jt, idx);
+    }
 }
 
 } // namespace ops

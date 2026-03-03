@@ -17,15 +17,6 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-/// @brief forEachJaggedElementCUDA callback to count the number of voxels to generate inside each
-/// triangle
-///        and save it to a buffer
-/// @param bidx Batch index
-/// @param eidx Element index
-/// @param transforms Array of transforms for each batch element
-/// @param vertices JaggedAccessor for vertex positions in each mesh in the batch
-/// @param triangles JaggedAccessor for triangle indices in each mesh in the batch
-/// @param outNumSamplesPerTri Output buffer for the number of voxels to generate in each triangle
 template <typename ScalarF, typename ScalarI>
 __device__ void
 countVoxelsPerTriToCheck(int32_t bidx,
@@ -184,6 +175,13 @@ generateSurfaceSamples(const VoxelCoordTransform *transforms,
     outJIdx[tid]   = triJIdx;
 }
 
+namespace {
+
+template <torch::DeviceType>
+JaggedTensor dispatchIJKForMesh(const JaggedTensor &meshVertices,
+                                const JaggedTensor &meshFaces,
+                                const std::vector<VoxelCoordTransform> &transforms);
+
 template <>
 JaggedTensor
 dispatchIJKForMesh<torch::kCUDA>(const JaggedTensor &meshVertices,
@@ -282,6 +280,16 @@ dispatchIJKForMesh<torch::kCUDA>(const JaggedTensor &meshVertices,
                 c10::kHalf);
         }),
         AT_EXPAND(AT_INTEGRAL_TYPES));
+}
+
+} // namespace
+
+JaggedTensor
+ijkForMesh(const JaggedTensor &meshVertices,
+           const JaggedTensor &meshFaces,
+           const std::vector<VoxelCoordTransform> &transforms) {
+    TORCH_CHECK(meshVertices.device().is_cuda(), "ijkForMesh only supports CUDA");
+    return dispatchIJKForMesh<torch::kCUDA>(meshVertices, meshFaces, transforms);
 }
 
 } // namespace ops

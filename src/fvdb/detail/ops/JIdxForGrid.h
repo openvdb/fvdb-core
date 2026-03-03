@@ -12,7 +12,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType> torch::Tensor dispatchJIdxForGrid(const GridBatchImpl &batchHdl);
+torch::Tensor jIdxForGrid(const GridBatchImpl &batchHdl);
 
 } // namespace ops
 } // namespace detail

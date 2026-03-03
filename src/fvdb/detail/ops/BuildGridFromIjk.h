@@ -5,20 +5,15 @@
 #define FVDB_DETAIL_OPS_BUILDGRIDFROMIJK_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/GridBatchImpl.h>
 #include <fvdb/detail/TorchDeviceBuffer.h>
 
 #include <nanovdb/GridHandle.h>
-#include <nanovdb/NanoVDB.h>
-
-#include <torch/types.h>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer> dispatchCreateNanoGridFromIJK(const JaggedTensor &ijk);
+nanovdb::GridHandle<TorchDeviceBuffer> createNanoGridFromIJK(const JaggedTensor &ijk);
 
 } // namespace ops
 } // namespace detail

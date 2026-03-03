@@ -10,15 +10,12 @@
 #include <nanovdb/GridHandle.h>
 #include <nanovdb/NanoVDB.h>
 
-#include <torch/types.h>
-
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer> dispatchMergeGrids(const GridBatchImpl &gridBatch1,
-                                                          const GridBatchImpl &gridBatch2);
+nanovdb::GridHandle<TorchDeviceBuffer> mergeGrids(const GridBatchImpl &gridBatch1,
+                                                  const GridBatchImpl &gridBatch2);
 
 } // namespace ops
 } // namespace detail

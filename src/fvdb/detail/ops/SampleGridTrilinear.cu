@@ -5,6 +5,7 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/TrilinearInterpolationIterator.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
@@ -201,6 +202,33 @@ template std::vector<torch::Tensor> dispatchSampleGridTrilinear<torch::kCUDA>(
     const GridBatchImpl &, const JaggedTensor &, const torch::Tensor &);
 template std::vector<torch::Tensor> dispatchSampleGridTrilinear<torch::kPrivateUse1>(
     const GridBatchImpl &, const JaggedTensor &, const torch::Tensor &);
+
+std::vector<torch::Tensor>
+sampleGridTrilinear(const GridBatchImpl &batchHdl,
+                    const JaggedTensor &points,
+                    const torch::Tensor &gridData) {
+    batchHdl.checkNonEmptyGrid();
+    TORCH_CHECK_VALUE(points.device() == gridData.device(),
+                      "points and data must be on the same device");
+    batchHdl.checkDevice(points);
+    batchHdl.checkDevice(gridData);
+    points.check_valid();
+    TORCH_CHECK_TYPE(points.is_floating_point(), "points must have a floating point type");
+    TORCH_CHECK_TYPE(points.dtype() == gridData.dtype(), "all tensors must have the same type");
+    TORCH_CHECK_VALUE(points.rdim() == 2,
+                      "Expected points to have shape [B*M, 3] (wrong number of dimensions)");
+    TORCH_CHECK(points.numel() > 0, "Empty tensor (points)");
+    TORCH_CHECK(points.rsize(1) == 3, "points must have shape [B, M, 3] (points must be 3D)");
+    TORCH_CHECK_TYPE(gridData.is_floating_point(), "data must have a floating point type");
+    TORCH_CHECK_VALUE(gridData.dim() >= 2,
+                      "Expected data to have shape [N, *] (at least 2 dimensions)");
+    TORCH_CHECK(gridData.numel() > 0, "Empty tensor (data)");
+    TORCH_CHECK(gridData.size(0) == batchHdl.totalVoxels(),
+                "grid_data must have one value per voxel (shape [N, *]) (wrong first dimension)");
+    return FVDB_DISPATCH_KERNEL(points.device(), [&]() {
+        return dispatchSampleGridTrilinear<DeviceTag>(batchHdl, points, gridData);
+    });
+}
 
 } // namespace ops
 } // namespace detail

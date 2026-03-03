@@ -7,18 +7,15 @@
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/VoxelCoordTransform.h>
 
-#include <torch/types.h>
-
 #include <vector>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-JaggedTensor dispatchIJKForMesh(const JaggedTensor &meshVertices,
-                                const JaggedTensor &meshFaces,
-                                const std::vector<VoxelCoordTransform> &transforms);
+JaggedTensor ijkForMesh(const JaggedTensor &meshVertices,
+                        const JaggedTensor &meshFaces,
+                        const std::vector<VoxelCoordTransform> &transforms);
 
 } // namespace ops
 } // namespace detail

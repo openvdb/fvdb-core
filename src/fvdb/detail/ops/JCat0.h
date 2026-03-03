@@ -14,7 +14,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType> JaggedTensor dispatchJCat0(const std::vector<JaggedTensor> &tensors);
+JaggedTensor jCat0(const std::vector<JaggedTensor> &tensors);
 
 } // namespace ops
 } // namespace detail

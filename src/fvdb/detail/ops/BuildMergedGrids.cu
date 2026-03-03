@@ -3,6 +3,7 @@
 //
 #include <fvdb/detail/TorchDeviceBuffer.h>
 #include <fvdb/detail/ops/BuildMergedGrids.h>
+#include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
@@ -13,6 +14,10 @@
 #include <c10/cuda/CUDAGuard.h>
 
 namespace fvdb::detail::ops {
+
+template <torch::DeviceType>
+nanovdb::GridHandle<TorchDeviceBuffer> dispatchMergeGrids(const GridBatchImpl &gridBatch1,
+                                                          const GridBatchImpl &gridBatch2);
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
@@ -109,6 +114,17 @@ dispatchMergeGrids<torch::kCPU>(const GridBatchImpl &gridBatch1, const GridBatch
     } else {
         return nanovdb::mergeGrids(gridHandles);
     }
+}
+
+nanovdb::GridHandle<TorchDeviceBuffer>
+mergeGrids(const GridBatchImpl &gridBatch1, const GridBatchImpl &gridBatch2) {
+    TORCH_CHECK_VALUE(gridBatch1.batchSize() == gridBatch2.batchSize(),
+                      "GridBatches to merge should have same batch size");
+    TORCH_CHECK_VALUE(gridBatch1.device() == gridBatch2.device(),
+                      "GridBatches to merge should be on same device/host");
+    return FVDB_DISPATCH_KERNEL_DEVICE(gridBatch1.device(), [&]() {
+        return dispatchMergeGrids<DeviceTag>(gridBatch1, gridBatch2);
+    });
 }
 
 } // namespace fvdb::detail::ops

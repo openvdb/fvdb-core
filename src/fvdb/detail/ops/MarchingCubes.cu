@@ -5,6 +5,7 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/MarchingCubesData.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <c10/cuda/CUDAException.h>
@@ -13,6 +14,8 @@
 namespace fvdb {
 namespace detail {
 namespace ops {
+
+namespace {
 
 template <typename ScalarT>
 __hostdev__ static inline int
@@ -382,20 +385,31 @@ MarchingCubes(const GridBatchImpl &batchHdl, const torch::Tensor &sdf, double le
     return {retVertices, retTriangles, retUniqueVertices};
 }
 
-template <>
-std::vector<JaggedTensor>
-dispatchMarchingCubes<torch::kCUDA>(const GridBatchImpl &batchHdl,
-                                    const torch::Tensor &sdf,
-                                    double level) {
-    return MarchingCubes<torch::kCUDA>(batchHdl, sdf, level);
-}
+} // anonymous namespace
 
-template <>
 std::vector<JaggedTensor>
-dispatchMarchingCubes<torch::kCPU>(const GridBatchImpl &batchHdl,
-                                   const torch::Tensor &sdf,
-                                   double level) {
-    return MarchingCubes<torch::kCPU>(batchHdl, sdf, level);
+marchingCubes(const GridBatchImpl &batchHdl, const JaggedTensor &field, double level) {
+    TORCH_CHECK_VALUE(
+        field.ldim() == 1,
+        "Expected field to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+        field.ldim(),
+        "list dimensions");
+    TORCH_CHECK_TYPE(field.is_floating_point(), "field must have a floating point type");
+    TORCH_CHECK_VALUE(field.numel() == batchHdl.totalVoxels(), "Value count not match!");
+    TORCH_CHECK_VALUE(field.num_outer_lists() == batchHdl.batchSize(), "Batch size not match!");
+    torch::Tensor fieldJdata = field.jdata();
+    if (fieldJdata.dim() == 0) {
+        fieldJdata = fieldJdata.unsqueeze(0);
+    }
+    if (fieldJdata.dim() != 1) {
+        fieldJdata = fieldJdata.squeeze();
+    }
+    TORCH_CHECK(fieldJdata.dim() == 1,
+                std::string("Expected field to have 1 effective dimension but got ") +
+                    std::to_string(field.rdim()) + " dimensions");
+    batchHdl.checkDevice(field);
+    return FVDB_DISPATCH_KERNEL_DEVICE(
+        field.device(), [&]() { return MarchingCubes<DeviceTag>(batchHdl, fieldJdata, level); });
 }
 
 } // namespace ops

@@ -11,15 +11,12 @@
 #include <nanovdb/GridHandle.h>
 #include <nanovdb/NanoVDB.h>
 
-#include <torch/types.h>
-
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer> dispatchPruneGrid(const GridBatchImpl &gridBatch,
-                                                         const JaggedTensor &mask);
+nanovdb::GridHandle<TorchDeviceBuffer> pruneGrid(const GridBatchImpl &gridBatch,
+                                                 const JaggedTensor &mask);
 
 } // namespace ops
 } // namespace detail

@@ -23,6 +23,17 @@
 
 namespace fvdb::detail::ops {
 
+template <torch::DeviceType>
+JaggedTensor dispatchFineIJKForCoarseGrid(const GridBatchImpl &batchHdl,
+                                          nanovdb::Coord upsamplingFactor,
+                                          const std::optional<JaggedTensor> &maybeMask);
+
+template <torch::DeviceType>
+nanovdb::GridHandle<TorchDeviceBuffer>
+dispatchBuildFineGridFromCoarse(const GridBatchImpl &coarseBatchHdl,
+                                const nanovdb::Coord subdivisionFactor,
+                                const std::optional<JaggedTensor> &subdivMask);
+
 __device__ inline void
 copyCoords(const fvdb::JIdxType bidx,
            const int64_t base,
@@ -345,7 +356,7 @@ dispatchBuildFineGridFromCoarse<torch::kCUDA>(const GridBatchImpl &coarseBatchHd
                                               const std::optional<JaggedTensor> &subdivMask) {
     JaggedTensor coords =
         dispatchFineIJKForCoarseGrid<torch::kCUDA>(coarseBatchHdl, subdivisionFactor, subdivMask);
-    return ops::dispatchCreateNanoGridFromIJK<torch::kCUDA>(coords);
+    return ops::createNanoGridFromIJK(coords);
 }
 
 template <>
@@ -356,7 +367,7 @@ dispatchBuildFineGridFromCoarse<torch::kPrivateUse1>(
     const std::optional<JaggedTensor> &subdivMask) {
     JaggedTensor coords = dispatchFineIJKForCoarseGrid<torch::kPrivateUse1>(
         coarseBatchHdl, subdivisionFactor, subdivMask);
-    return ops::dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(coords);
+    return ops::createNanoGridFromIJK(coords);
 }
 
 template <>
@@ -421,6 +432,53 @@ dispatchBuildFineGridFromCoarse<torch::kCPU>(const GridBatchImpl &coarseBatchHdl
         return std::move(batchHandles[0]);
     } else {
         return nanovdb::mergeGrids(batchHandles);
+    }
+}
+
+nanovdb::GridHandle<TorchDeviceBuffer>
+buildFineGridFromCoarse(const GridBatchImpl &coarseBatchHdl,
+                        const nanovdb::Coord subdivisionFactor,
+                        const std::optional<JaggedTensor> &subdivMask) {
+    if (subdivMask.has_value()) {
+        TORCH_CHECK_VALUE(
+            subdivMask.value().ldim() == 1,
+            "Expected mask to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+            subdivMask.value().ldim(),
+            "list dimensions");
+        TORCH_CHECK(subdivMask.value().device() == coarseBatchHdl.device(),
+                    "subdivision mask must be on the same device as the grid");
+        TORCH_CHECK(subdivMask.value().jdata().sizes().size() == 1,
+                    "subdivision mask must have 1 dimension");
+        TORCH_CHECK(subdivMask.value().jdata().size(0) == coarseBatchHdl.totalVoxels(),
+                    "subdivision mask must be either empty tensor or have one entry per voxel");
+        TORCH_CHECK(subdivMask.value().scalar_type() == torch::kBool,
+                    "subdivision mask must be a boolean tensor");
+    }
+    for (int i = 0; i < 3; i += 1) {
+        TORCH_CHECK_VALUE(subdivisionFactor[i] > 0,
+                          "subdiv_factor must be strictly positive. Got [" +
+                              std::to_string(subdivisionFactor[0]) + ", " +
+                              std::to_string(subdivisionFactor[1]) + ", " +
+                              std::to_string(subdivisionFactor[2]) + "]");
+    }
+    return FVDB_DISPATCH_KERNEL(coarseBatchHdl.device(), [&]() {
+        return dispatchBuildFineGridFromCoarse<DeviceTag>(
+            coarseBatchHdl, subdivisionFactor, subdivMask);
+    });
+}
+
+JaggedTensor
+fineIJKForCoarseGrid(const GridBatchImpl &batchHdl,
+                     nanovdb::Coord upsamplingFactor,
+                     const std::optional<JaggedTensor> &maybeMask) {
+    if (batchHdl.device().is_cuda()) {
+        return dispatchFineIJKForCoarseGrid<torch::kCUDA>(batchHdl, upsamplingFactor, maybeMask);
+    } else if (batchHdl.device().is_privateuseone()) {
+        return dispatchFineIJKForCoarseGrid<torch::kPrivateUse1>(
+            batchHdl, upsamplingFactor, maybeMask);
+    } else {
+        TORCH_CHECK(false,
+                    "fineIJKForCoarseGrid is only supported on CUDA and PrivateUse1 devices");
     }
 }
 

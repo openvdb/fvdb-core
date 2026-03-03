@@ -13,18 +13,16 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-torch::Tensor dispatchUpsampleGridNearest(const GridBatchImpl &coarseBatchHdl,
-                                          const GridBatchImpl &fineBatchHdl,
+torch::Tensor upsampleGridNearest(const GridBatchImpl &coarseBatchHdl,
+                                  const GridBatchImpl &fineBatchHdl,
+                                  const torch::Tensor &coarseData,
+                                  nanovdb::Coord upsamplingFactor);
+
+torch::Tensor upsampleGridNearestBackward(const GridBatchImpl &fineBatchHdl,
+                                          const GridBatchImpl &coarseBatchHdl,
+                                          const torch::Tensor &gradOut,
                                           const torch::Tensor &coarseData,
                                           nanovdb::Coord upsamplingFactor);
-
-template <torch::DeviceType>
-torch::Tensor dispatchUpsampleGridNearestBackward(const GridBatchImpl &fineBatchHdl,
-                                                  const GridBatchImpl &coarseBatchHdl,
-                                                  const torch::Tensor &gradOut,
-                                                  const torch::Tensor &coarseData,
-                                                  nanovdb::Coord upsamplingFactor);
 
 } // namespace ops
 } // namespace detail

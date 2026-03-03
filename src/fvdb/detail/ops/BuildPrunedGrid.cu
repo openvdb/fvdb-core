@@ -5,6 +5,7 @@
 #include <fvdb/detail/GridBatchImpl.h>
 #include <fvdb/detail/TorchDeviceBuffer.h>
 #include <fvdb/detail/ops/BuildPrunedGrid.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
 
 #include <nanovdb/NanoVDB.h>
@@ -20,6 +21,10 @@
 #include <c10/cuda/CUDAGuard.h>
 
 namespace fvdb::detail::ops {
+
+template <torch::DeviceType>
+nanovdb::GridHandle<TorchDeviceBuffer> dispatchPruneGrid(const GridBatchImpl &gridBatch,
+                                                         const JaggedTensor &mask);
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
@@ -135,6 +140,17 @@ dispatchPruneGrid<torch::kCPU>(const GridBatchImpl &gridBatch, const JaggedTenso
     } else {
         return nanovdb::mergeGrids(gridHandles);
     }
+}
+
+nanovdb::GridHandle<TorchDeviceBuffer>
+pruneGrid(const GridBatchImpl &gridBatch, const JaggedTensor &mask) {
+    TORCH_CHECK_VALUE(mask.ldim() == 1, "Mask should be a list of tensors");
+    TORCH_CHECK_VALUE(gridBatch.batchSize() == mask.num_tensors(),
+                      "Cardinality of masks should match gridbatch size");
+    TORCH_CHECK_VALUE(gridBatch.device() == mask.device(),
+                      "GridBatch and mask should be on same device/host");
+    return FVDB_DISPATCH_KERNEL_DEVICE(
+        gridBatch.device(), [&]() { return dispatchPruneGrid<DeviceTag>(gridBatch, mask); });
 }
 
 } // namespace fvdb::detail::ops

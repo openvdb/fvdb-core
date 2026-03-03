@@ -73,6 +73,14 @@ checkInputs(const torch::Device device,
 
 } // namespace
 
+template <torch::DeviceType>
+nanovdb::GridHandle<TorchDeviceBuffer>
+dispatchCreateNanoGridFromDense(int64_t batchSize,
+                                nanovdb::Coord ijkMin,
+                                nanovdb::Coord size,
+                                torch::Device device,
+                                const std::optional<torch::Tensor> &mask);
+
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
@@ -286,6 +294,39 @@ dispatchCreateNanoGridFromDense<torch::kCPU>(int64_t batchSize,
     } else {
         return nanovdb::mergeGrids(batchHandles);
     }
+}
+
+nanovdb::GridHandle<TorchDeviceBuffer>
+createNanoGridFromDense(int64_t batchSize,
+                        nanovdb::Coord ijkMin,
+                        nanovdb::Coord size,
+                        torch::Device device,
+                        const std::optional<torch::Tensor> &maybeMask) {
+    TORCH_CHECK_VALUE(batchSize >= 0, "numGrids must be non-negative");
+    if (maybeMask.has_value()) {
+        TORCH_CHECK_VALUE(maybeMask.value().dtype() == torch::kBool,
+                          "mask must be a boolean type or None");
+        TORCH_CHECK_VALUE(maybeMask.value().dim() == 3, "mask must be 3 dimensional");
+        TORCH_CHECK_VALUE(maybeMask.value().size(0) == size[0],
+                          "mask must have shape (w, h, d) = denseDims");
+        TORCH_CHECK_VALUE(maybeMask.value().size(1) == size[1],
+                          "mask must have shape (w, h, d) = denseDims");
+        TORCH_CHECK_VALUE(maybeMask.value().size(2) == size[2],
+                          "mask must have shape (w, h, d) = denseDims");
+    }
+    TORCH_CHECK_VALUE(size[0] >= 0 && size[1] >= 0 && size[2] >= 0,
+                      "denseDims must be non-negative");
+    TORCH_CHECK_VALUE(batchSize <= GridBatchImpl::MAX_GRIDS_PER_BATCH,
+                      "Cannot create a grid with more than ",
+                      GridBatchImpl::MAX_GRIDS_PER_BATCH,
+                      " grids in a batch. ",
+                      "You requested ",
+                      batchSize,
+                      " grids.");
+    return FVDB_DISPATCH_KERNEL(device, [&]() {
+        return dispatchCreateNanoGridFromDense<DeviceTag>(
+            batchSize, ijkMin, size, device, maybeMask);
+    });
 }
 
 } // namespace ops

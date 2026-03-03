@@ -6,40 +6,34 @@
 
 #include <torch/types.h>
 
+#include <tuple>
+
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-void dispatchVolumeRender(const torch::Tensor sigmas,
-                          const torch::Tensor rgbs,
-                          const torch::Tensor deltas,
-                          const torch::Tensor ts,
-                          const torch::Tensor raysAcc,
-                          const float opacityThreshold,
-                          torch::Tensor &outOpacity,
-                          torch::Tensor &outDepth,
-                          torch::Tensor &outRgb,
-                          torch::Tensor &outWs,
-                          torch::Tensor &outTotalSamples);
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+volumeRender(const torch::Tensor &sigmas,
+             const torch::Tensor &rgbs,
+             const torch::Tensor &deltaTs,
+             const torch::Tensor &ts,
+             const torch::Tensor &jOffsets,
+             double tsmtThreshold);
 
-template <torch::DeviceType>
-void dispatchVolumeRenderBackward(const torch::Tensor dLdOpacity,
-                                  const torch::Tensor dLdDepth,
-                                  const torch::Tensor dLdRgb,
-                                  const torch::Tensor dLdWs,
-                                  const torch::Tensor sigmas,
-                                  const torch::Tensor rgbs,
-                                  const torch::Tensor ws,
-                                  const torch::Tensor deltas,
-                                  const torch::Tensor ts,
-                                  const torch::Tensor raysAcc,
-                                  const torch::Tensor opacity,
-                                  const torch::Tensor depth,
-                                  const torch::Tensor rgb,
-                                  const float opacityThreshold,
-                                  torch::Tensor &outDLdSigmas,
-                                  torch::Tensor &outDLdRbgs);
+std::tuple<torch::Tensor, torch::Tensor> volumeRenderBackward(const torch::Tensor &dLdOpacity,
+                                                              const torch::Tensor &dLdDepth,
+                                                              const torch::Tensor &dLdRgb,
+                                                              const torch::Tensor &dLdWs,
+                                                              const torch::Tensor &sigmas,
+                                                              const torch::Tensor &rgbs,
+                                                              const torch::Tensor &ws,
+                                                              const torch::Tensor &deltas,
+                                                              const torch::Tensor &ts,
+                                                              const torch::Tensor &jOffsets,
+                                                              const torch::Tensor &opacity,
+                                                              const torch::Tensor &depth,
+                                                              const torch::Tensor &rgb,
+                                                              float tsmtThreshold);
 
 } // namespace ops
 } // namespace detail

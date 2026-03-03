@@ -22,6 +22,10 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
+template <torch::DeviceType>
+nanovdb::GridHandle<TorchDeviceBuffer>
+dispatchBuildPaddedGrid(const GridBatchImpl &baseBatchHdl, int bmin, int bmax, bool excludeBorder);
+
 __device__ inline void
 copyCoords(const fvdb::JIdxType bidx,
            const int64_t base,
@@ -394,7 +398,7 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchImpl &baseBatchHdl,
     } else {
         coords = paddedIJKForGrid<torch::kCUDA>(baseBatchHdl, bbox);
     }
-    return ops::dispatchCreateNanoGridFromIJK<torch::kCUDA>(coords);
+    return ops::createNanoGridFromIJK(coords);
 }
 
 template <>
@@ -410,7 +414,7 @@ dispatchBuildPaddedGrid<torch::kPrivateUse1>(const GridBatchImpl &baseBatchHdl,
     } else {
         coords = paddedIJKForGrid<torch::kPrivateUse1>(baseBatchHdl, bbox);
     }
-    return ops::dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(coords);
+    return ops::createNanoGridFromIJK(coords);
 }
 
 template <>
@@ -424,6 +428,13 @@ dispatchBuildPaddedGrid<torch::kCPU>(const GridBatchImpl &baseBatchHdl,
     } else {
         return buildPaddedGridFromGridCPU(baseBatchHdl, bmin, bmax);
     }
+}
+
+nanovdb::GridHandle<TorchDeviceBuffer>
+buildPaddedGrid(const GridBatchImpl &baseBatchHdl, int bmin, int bmax, bool excludeBorder) {
+    return FVDB_DISPATCH_KERNEL(baseBatchHdl.device(), [&]() {
+        return dispatchBuildPaddedGrid<DeviceTag>(baseBatchHdl, bmin, bmax, excludeBorder);
+    });
 }
 
 } // namespace ops

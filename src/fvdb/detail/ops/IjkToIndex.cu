@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/IjkToIndex.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
@@ -94,28 +95,15 @@ IjkToIndex(const GridBatchImpl &batchHdl, const JaggedTensor &ijk, bool cumulati
     return ijk.jagged_like(outIndex);
 }
 
-template <>
 JaggedTensor
-dispatchIjkToIndex<torch::kCUDA>(const GridBatchImpl &batchHdl,
-                                 const JaggedTensor &ijk,
-                                 bool cumulative) {
-    return IjkToIndex<torch::kCUDA>(batchHdl, ijk, cumulative);
-}
-
-template <>
-JaggedTensor
-dispatchIjkToIndex<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
-                                        const JaggedTensor &ijk,
-                                        bool cumulative) {
-    return IjkToIndex<torch::kPrivateUse1>(batchHdl, ijk, cumulative);
-}
-
-template <>
-JaggedTensor
-dispatchIjkToIndex<torch::kCPU>(const GridBatchImpl &batchHdl,
-                                const JaggedTensor &ijk,
-                                bool cumulative) {
-    return IjkToIndex<torch::kCPU>(batchHdl, ijk, cumulative);
+ijkToIndex(const GridBatchImpl &batchHdl, const JaggedTensor &ijk, bool cumulative) {
+    TORCH_CHECK_VALUE(
+        ijk.ldim() == 1,
+        "Expected ijk to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+        ijk.ldim(),
+        "list dimensions");
+    return FVDB_DISPATCH_KERNEL(ijk.device(),
+                                [&]() { return IjkToIndex<DeviceTag>(batchHdl, ijk, cumulative); });
 }
 
 } // namespace ops

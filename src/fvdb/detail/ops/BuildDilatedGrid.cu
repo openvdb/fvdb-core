@@ -3,6 +3,7 @@
 //
 #include <fvdb/detail/TorchDeviceBuffer.h>
 #include <fvdb/detail/ops/BuildDilatedGrid.h>
+#include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
@@ -13,7 +14,13 @@
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/types.h>
 
+#include <algorithm>
+
 namespace fvdb::detail::ops {
+
+template <torch::DeviceType>
+nanovdb::GridHandle<TorchDeviceBuffer>
+dispatchDilateGrid(const GridBatchImpl &gridBatch, const std::vector<int64_t> &dilationAmount);
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
@@ -110,6 +117,22 @@ dispatchDilateGrid<torch::kCPU>(const GridBatchImpl &gridBatch,
     } else {
         return nanovdb::mergeGrids(gridHandles);
     }
+}
+
+nanovdb::GridHandle<TorchDeviceBuffer>
+dilateGrid(const GridBatchImpl &gridBatch, const std::vector<int64_t> &dilationAmount) {
+    TORCH_CHECK_VALUE(static_cast<int64_t>(dilationAmount.size()) == gridBatch.batchSize(),
+                      "dilationAmount should have same size as batch size, got ",
+                      dilationAmount.size(),
+                      " != ",
+                      gridBatch.batchSize());
+    TORCH_CHECK_VALUE(std::all_of(dilationAmount.begin(),
+                                  dilationAmount.end(),
+                                  [](int64_t amount) { return amount > 0; }),
+                      "dilation amount must be strictly positive.");
+    return FVDB_DISPATCH_KERNEL_DEVICE(gridBatch.device(), [&]() {
+        return dispatchDilateGrid<DeviceTag>(gridBatch, dilationAmount);
+    });
 }
 
 } // namespace fvdb::detail::ops

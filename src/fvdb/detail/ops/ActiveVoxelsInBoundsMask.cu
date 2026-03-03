@@ -5,6 +5,7 @@
 #include <fvdb/detail/ops/ActiveVoxelsInBoundsMask.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <c10/cuda/CUDAException.h>
@@ -105,20 +106,13 @@ ActiveVoxelsInBoundsMask(const GridBatchImpl &batchHdl,
     return batchHdl.jaggedTensor(outGridBoundsMask);
 }
 
-template <>
 JaggedTensor
-dispatchActiveVoxelsInBoundsMask<torch::kCUDA>(const GridBatchImpl &batchHdl,
-                                               const std::vector<nanovdb::Coord> &bboxMins,
-                                               const std::vector<nanovdb::Coord> &bboxMaxs) {
-    return ActiveVoxelsInBoundsMask<torch::kCUDA>(batchHdl, bboxMins, bboxMaxs);
-}
-
-template <>
-JaggedTensor
-dispatchActiveVoxelsInBoundsMask<torch::kCPU>(const GridBatchImpl &batchHdl,
-                                              const std::vector<nanovdb::Coord> &bboxMins,
-                                              const std::vector<nanovdb::Coord> &bboxMaxs) {
-    return ActiveVoxelsInBoundsMask<torch::kCPU>(batchHdl, bboxMins, bboxMaxs);
+activeVoxelsInBoundsMask(const GridBatchImpl &batchHdl,
+                         const std::vector<nanovdb::Coord> &bboxMins,
+                         const std::vector<nanovdb::Coord> &bboxMaxs) {
+    return FVDB_DISPATCH_KERNEL_DEVICE(batchHdl.device(), [&]() {
+        return ActiveVoxelsInBoundsMask<DeviceTag>(batchHdl, bboxMins, bboxMaxs);
+    });
 }
 
 } // namespace ops

@@ -9,18 +9,15 @@
 
 #include <nanovdb/NanoVDB.h>
 
-#include <torch/types.h>
-
 #include <vector>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-JaggedTensor dispatchActiveVoxelsInBoundsMask(const GridBatchImpl &batchHdl,
-                                              const std::vector<nanovdb::Coord> &bboxMins,
-                                              const std::vector<nanovdb::Coord> &bboxMaxs);
+JaggedTensor activeVoxelsInBoundsMask(const GridBatchImpl &batchHdl,
+                                      const std::vector<nanovdb::Coord> &bboxMins,
+                                      const std::vector<nanovdb::Coord> &bboxMaxs);
 
 } // namespace ops
 } // namespace detail

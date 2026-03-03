@@ -5,6 +5,7 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/TrilinearInterpolationWithGradIterator.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
@@ -249,43 +250,23 @@ SampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
     return outGrad.reshape(outShape);
 }
 
-template <torch::DeviceType DeviceTag>
 torch::Tensor
-dispatchSampleGridTrilinearWithGradBackward<DeviceTag>(const GridBatchImpl &batchHdl,
-                                                       const JaggedTensor &points,
-                                                       const torch::Tensor &data,
-                                                       const torch::Tensor &gradOutFeatures,
-                                                       const torch::Tensor &gradOutGradFeatures) {
-    return AT_DISPATCH_V2(points.scalar_type(),
-                          "SampleGridTrilinearWithGradBackward",
-                          AT_WRAP([&] {
-                              return SampleGridTrilinearWithGradBackward<DeviceTag, scalar_t>(
-                                  batchHdl, points, data, gradOutFeatures, gradOutGradFeatures);
-                          }),
-                          AT_EXPAND(AT_FLOATING_TYPES),
-                          c10::kHalf);
+sampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
+                                    const JaggedTensor &points,
+                                    const torch::Tensor &data,
+                                    const torch::Tensor &gradOutFeatures,
+                                    const torch::Tensor &gradOutGradFeatures) {
+    return FVDB_DISPATCH_KERNEL(points.device(), [&]() {
+        return AT_DISPATCH_V2(points.scalar_type(),
+                              "SampleGridTrilinearWithGradBackward",
+                              AT_WRAP([&] {
+                                  return SampleGridTrilinearWithGradBackward<DeviceTag, scalar_t>(
+                                      batchHdl, points, data, gradOutFeatures, gradOutGradFeatures);
+                              }),
+                              AT_EXPAND(AT_FLOATING_TYPES),
+                              c10::kHalf);
+    });
 }
-
-template torch::Tensor
-dispatchSampleGridTrilinearWithGradBackward<torch::kCPU>(const GridBatchImpl &,
-                                                         const JaggedTensor &,
-                                                         const torch::Tensor &,
-                                                         const torch::Tensor &,
-                                                         const torch::Tensor &);
-
-template torch::Tensor
-dispatchSampleGridTrilinearWithGradBackward<torch::kCUDA>(const GridBatchImpl &,
-                                                          const JaggedTensor &,
-                                                          const torch::Tensor &,
-                                                          const torch::Tensor &,
-                                                          const torch::Tensor &);
-
-template torch::Tensor
-dispatchSampleGridTrilinearWithGradBackward<torch::kPrivateUse1>(const GridBatchImpl &,
-                                                                 const JaggedTensor &,
-                                                                 const torch::Tensor &,
-                                                                 const torch::Tensor &,
-                                                                 const torch::Tensor &);
 
 } // namespace ops
 } // namespace detail

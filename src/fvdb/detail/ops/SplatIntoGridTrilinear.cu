@@ -5,6 +5,7 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/TrilinearInterpolationIterator.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
@@ -193,32 +194,40 @@ SplatIntoGridTrilinear(const GridBatchImpl &batchHdl,
     return outGridData;
 }
 
-template <torch::DeviceType DeviceTag>
 torch::Tensor
-dispatchSplatIntoGridTrilinear<DeviceTag>(const GridBatchImpl &batchHdl,
-                                          const JaggedTensor &points,
-                                          const torch::Tensor &pointsData) {
-    return AT_DISPATCH_V2(points.scalar_type(),
-                          "SplatIntoGridTrilinear",
-                          AT_WRAP([&] {
-                              return SplatIntoGridTrilinear<DeviceTag, scalar_t>(
-                                  batchHdl, points, pointsData);
-                          }),
-                          AT_EXPAND(AT_FLOATING_TYPES),
-                          c10::kHalf);
+splatIntoGridTrilinear(const GridBatchImpl &batchHdl,
+                       const JaggedTensor &points,
+                       const torch::Tensor &pointsData) {
+    batchHdl.checkNonEmptyGrid();
+    TORCH_CHECK_VALUE(points.device() == pointsData.device(),
+                      "points and data must be on the same device");
+    batchHdl.checkDevice(points);
+    batchHdl.checkDevice(pointsData);
+    points.check_valid();
+    TORCH_CHECK_TYPE(points.is_floating_point(), "points must have a floating point type");
+    TORCH_CHECK_TYPE(points.dtype() == pointsData.dtype(), "all tensors must have the same type");
+    TORCH_CHECK_VALUE(points.rdim() == 2,
+                      "Expected points to have shape [B*M, 3] (wrong number of dimensions)");
+    TORCH_CHECK(points.numel() > 0, "Empty tensor (points)");
+    TORCH_CHECK(points.rsize(1) == 3, "points must have shape [B*M, 3] (points must be 3D)");
+    TORCH_CHECK_TYPE(pointsData.is_floating_point(), "point_data must have a floating point type");
+    TORCH_CHECK_VALUE(pointsData.dim() >= 2,
+                      "Expected data to have shape [B*M, *] (at least 3 dimensions)");
+    TORCH_CHECK(pointsData.numel() > 0, "Empty tensor (data)");
+    TORCH_CHECK(
+        pointsData.size(0) == points.rsize(0),
+        "point_data must have one value per point (shape [B*M, *]) (incorrect first dimension must match number of points)");
+    return FVDB_DISPATCH_KERNEL(points.device(), [&]() {
+        return AT_DISPATCH_V2(points.scalar_type(),
+                              "SplatIntoGridTrilinear",
+                              AT_WRAP([&] {
+                                  return SplatIntoGridTrilinear<DeviceTag, scalar_t>(
+                                      batchHdl, points, pointsData);
+                              }),
+                              AT_EXPAND(AT_FLOATING_TYPES),
+                              c10::kHalf);
+    });
 }
-
-template torch::Tensor dispatchSplatIntoGridTrilinear<torch::kCPU>(const GridBatchImpl &,
-                                                                   const JaggedTensor &,
-                                                                   const torch::Tensor &);
-
-template torch::Tensor dispatchSplatIntoGridTrilinear<torch::kCUDA>(const GridBatchImpl &,
-                                                                    const JaggedTensor &,
-                                                                    const torch::Tensor &);
-
-template torch::Tensor dispatchSplatIntoGridTrilinear<torch::kPrivateUse1>(const GridBatchImpl &,
-                                                                           const JaggedTensor &,
-                                                                           const torch::Tensor &);
 
 } // namespace ops
 } // namespace detail
