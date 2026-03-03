@@ -2738,6 +2738,28 @@ class TestJaggedTensor(unittest.TestCase):
     #         self.assertTrue(torch.all(data_sorted == jt_s[i].jdata).item())
     #         self.assertTrue(torch.all(data_sorted == jt[i].jdata[idx[i].jdata]).item())
 
+    def test_cpu_single_element_no_cuda_init(self):
+        """Test that constructing a single-element CPU JaggedTensor does not use pinned memory.
+
+        Pinned memory allocation triggers CUDA runtime initialization, which causes crashes
+        in forked DataLoader worker processes. This test verifies the fix for issue #467.
+        """
+        # Test the list-of-tensors constructor (single element)
+        cpu_tensor = torch.randn(5, 3)
+        jt = fvdb.JaggedTensor([cpu_tensor])
+        self.assertFalse(jt.joffsets.is_pinned(), "CPU single-element JaggedTensor offsets should not be pinned")
+        self.assertEqual(jt.joffsets.device.type, "cpu")
+        self.assertEqual(jt.jdata.shape, torch.Size([5, 3]))
+        self.assertTrue(torch.equal(jt.jdata, cpu_tensor))
+
+        # Test the bare-tensor constructor (dispatches through joffsetsFromJIdx)
+        cpu_tensor2 = torch.randn(10)
+        jt2 = fvdb.JaggedTensor(cpu_tensor2)
+        self.assertFalse(jt2.joffsets.is_pinned(), "CPU bare-tensor JaggedTensor offsets should not be pinned")
+        self.assertEqual(jt2.joffsets.device.type, "cpu")
+        self.assertEqual(jt2.jdata.shape, torch.Size([10]))
+        self.assertTrue(torch.equal(jt2.jdata, cpu_tensor2))
+
 
 if __name__ == "__main__":
     unittest.main()

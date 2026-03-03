@@ -9,6 +9,7 @@
 
 #include <fvdb/Config.h>
 #include <fvdb/FVDB.h>
+#include <fvdb/detail/autograd/SparseConvolutionKernelMap.h>
 
 #include <c10/cuda/CUDAFunctions.h>
 #include <torch/extension.h>
@@ -375,100 +376,80 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
                 fvdb::Config::global().setPedanticErrorChecking(enabled);
             });
 
-    py::enum_<fvdb::ConvPackBackend>(m, "ConvPackBackend")
-        .value("GATHER_SCATTER", fvdb::ConvPackBackend::GATHER_SCATTER)
-        .value("IGEMM", fvdb::ConvPackBackend::IGEMM)
-        .value("CUTLASS", fvdb::ConvPackBackend::CUTLASS)
-        .value("LGGS", fvdb::ConvPackBackend::LGGS)
-        .value("HALO", fvdb::ConvPackBackend::HALO)
-        .value("DENSE", fvdb::ConvPackBackend::DENSE)
-        .value("MATMUL", fvdb::ConvPackBackend::MATMUL)
-        .export_values();
+    // -----------------------------------------------------------------------
+    // Sparse convolution: standalone functions
+    // -----------------------------------------------------------------------
 
-    py::class_<fvdb::SparseConvPackInfo>(m, "SparseConvPackInfo")
-        .def(py::init<fvdb::Vec3iOrScalar,
-                      fvdb::Vec3iOrScalar,
-                      fvdb::GridBatch,
-                      std::optional<fvdb::GridBatch>>(),
-             py::arg("kernel_size"),
-             py::arg("stride"),
-             py::arg("source_grid"),
-             py::arg("target_grid"))
-        .def_property_readonly("neighborhood_map", &fvdb::SparseConvPackInfo::neighborMap)
-        .def_property_readonly("neighborhood_sizes", &fvdb::SparseConvPackInfo::neighborSizes)
-        .def_property_readonly("use_me", &fvdb::SparseConvPackInfo::useME)
-        .def_property_readonly("out_in_map", &fvdb::SparseConvPackInfo::outInMap)
-        .def_property_readonly("reorder_loc", &fvdb::SparseConvPackInfo::reorderLoc)
-        .def_property_readonly("sorted_mask", &fvdb::SparseConvPackInfo::sortedMask)
-        .def_property_readonly("reduced_sorted_mask", &fvdb::SparseConvPackInfo::reducedSortedMask)
-        .def_property_readonly("reorder_out_in_map", &fvdb::SparseConvPackInfo::reoderOutInMap)
+    m.def(
+        "build_kernel_map",
+        [](const fvdb::GridBatch &sourceGrid,
+           const fvdb::GridBatch &targetGrid,
+           fvdb::Vec3iOrScalar kernelSize,
+           fvdb::Vec3iOrScalar stride) -> std::tuple<torch::Tensor, torch::Tensor> {
+            int kernelVolume =
+                kernelSize.value().x() * kernelSize.value().y() * kernelSize.value().z();
 
-        .def_property_readonly("block_kernel_ranges", &fvdb::SparseConvPackInfo::blockKernelRanges)
-        .def_property_readonly("block_kernel_in_idx", &fvdb::SparseConvPackInfo::blockKernelInIdx)
-        .def_property_readonly("block_kernel_rel_out_idx",
-                               &fvdb::SparseConvPackInfo::blockKernelRelOutIdx)
+            torch::Tensor kmap = torch::full(
+                {targetGrid.total_voxels(), kernelVolume},
+                -1,
+                torch::TensorOptions().dtype(torch::kInt32).device(targetGrid.device()));
 
-        .def_property_readonly("use_tf32", &fvdb::SparseConvPackInfo::useTF32)
-        .def_property_readonly("out_in_map_bwd", &fvdb::SparseConvPackInfo::outInMapBwd)
-        .def_property_readonly("reorder_loc_bwd", &fvdb::SparseConvPackInfo::reorderLocBwd)
-        .def_property_readonly("sorted_mask_bwd_w", &fvdb::SparseConvPackInfo::sortedMaskBwdW)
-        .def_property_readonly("sorted_mask_bwd_d", &fvdb::SparseConvPackInfo::sortedMaskBwdD)
-        .def_property_readonly("reorder_out_in_map_bwd",
-                               &fvdb::SparseConvPackInfo::reorderOutInMapBwd)
-        .def_property_readonly("halo_index_buffer", &fvdb::SparseConvPackInfo::haloIndexBuffer)
-        .def_property_readonly("output_index_buffer", &fvdb::SparseConvPackInfo::outputIndexBuffer)
-        .def_property_readonly("stride",
-                               [](const fvdb::SparseConvPackInfo &self) {
-                                   nanovdb::math::Coord stride = self.stride().value();
-                                   return py::make_tuple(stride.x(), stride.y(), stride.z());
-                               })
-        .def_property_readonly("kernel_size",
-                               [](const fvdb::SparseConvPackInfo &self) {
-                                   nanovdb::math::Coord kernel_size = self.kernelSize().value();
-                                   return py::make_tuple(
-                                       kernel_size.x(), kernel_size.y(), kernel_size.z());
-                               })
-        .def_property_readonly("source_grid", &fvdb::SparseConvPackInfo::sourceGrid)
-        .def_property_readonly("target_grid", &fvdb::SparseConvPackInfo::targetGrid)
-        .def("build_gather_scatter",
-             &fvdb::SparseConvPackInfo::buildGatherScatter,
-             py::arg("use_me") = false)
-        .def("build_implicit_gemm",
-             &fvdb::SparseConvPackInfo::buildImplicitGEMM,
-             py::arg("sorted")             = false,
-             py::arg("split_mask_num")     = 1,
-             py::arg("training")           = false,
-             py::arg("split_mask_num_bwd") = 1,
-             py::arg("use_tf32")           = false)
-        .def("build_cutlass", &fvdb::SparseConvPackInfo::buildCutlass, py::arg("benchmark") = false)
-        .def("build_lggs", &fvdb::SparseConvPackInfo::buildLGGS)
-        .def("sparse_conv_3d",
-             &fvdb::SparseConvPackInfo::sparseConv3d,
-             "Sparse 3d convolution",
-             py::arg("input"),
-             py::arg("weights"),
-             py::arg("backend") = fvdb::ConvPackBackend::GATHER_SCATTER)
-        .def("sparse_transpose_conv_3d",
-             &fvdb::SparseConvPackInfo::sparseTransposeConv3d,
-             "Sparse 3d convolution transpose",
-             py::arg("input"),
-             py::arg("weights"),
-             py::arg("backend") = fvdb::ConvPackBackend::GATHER_SCATTER)
-        .def("to", &fvdb::SparseConvPackInfo::to, py::arg("to_device"))
-        .def(
-            "to",
-            [](const fvdb::SparseConvPackInfo &self, const std::string &to_device) {
-                return self.to(fvdb::parseDeviceString(to_device));
-            },
-            py::arg("to_device"))
-        .def("cuda", &fvdb::SparseConvPackInfo::cuda)
-        .def("cpu", &fvdb::SparseConvPackInfo::cpu);
+            fvdb::GridBatch::computeConvolutionKernelMap(
+                sourceGrid, targetGrid, kmap, kernelSize, stride);
+
+            kmap                  = kmap.t();
+            torch::Tensor kmask   = kmap != -1;
+            torch::Tensor nbsizes = torch::sum(kmask, -1);
+            torch::Tensor nbmap   = torch::nonzero(kmask).contiguous();
+
+            torch::Tensor indices = nbmap.index({torch::indexing::Slice(), 0}) * kmap.size(1) +
+                                    nbmap.index({torch::indexing::Slice(), 1});
+            nbmap.index_put_({torch::indexing::Slice(), 0}, kmap.reshape({-1}).index({indices}));
+
+            return std::make_tuple(nbmap.to(torch::kInt32), nbsizes.to(torch::kInt32));
+        },
+        "Build the gather-scatter kernel map between source and target grids.\n"
+        "Returns (neighbor_map [#IO, 2] int32, neighbor_sizes [K] int32).",
+        py::arg("source_grid"),
+        py::arg("target_grid"),
+        py::arg("kernel_size"),
+        py::arg("stride"));
+
+    m.def(
+        "sparse_conv_kernel_map",
+        [](torch::Tensor inFeatures,
+           torch::Tensor kernels,
+           torch::Tensor neighborMap,
+           torch::Tensor neighborSizes,
+           int64_t srcVoxels,
+           int64_t dstVoxels,
+           bool middleAcceleration,
+           bool transposed) -> torch::Tensor {
+            auto result =
+                fvdb::detail::autograd::SparseConvolutionKernelMap::apply(inFeatures,
+                                                                          kernels,
+                                                                          neighborMap,
+                                                                          neighborSizes,
+                                                                          srcVoxels,
+                                                                          dstVoxels,
+                                                                          middleAcceleration,
+                                                                          transposed);
+            return result[0];
+        },
+        "Sparse 3d convolution using pre-built gather-scatter kernel map.",
+        py::arg("in_features"),
+        py::arg("kernels"),
+        py::arg("neighbor_map"),
+        py::arg("neighbor_sizes"),
+        py::arg("src_voxels"),
+        py::arg("dst_voxels"),
+        py::arg("middle_acceleration"),
+        py::arg("transposed"));
 }
 
 TORCH_LIBRARY(fvdb, m) {
     m.class_<fvdb::GridBatch>("GridBatch");
     m.class_<fvdb::JaggedTensor>("JaggedTensor");
-    m.class_<fvdb::SparseConvPackInfo>("SparseConvPackInfo");
     m.class_<fvdb::detail::GridBatchImpl>("GridBatchImpl");
 
     m.def(

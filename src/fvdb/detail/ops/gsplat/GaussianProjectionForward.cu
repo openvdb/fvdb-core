@@ -91,15 +91,7 @@ template <typename T, bool Ortho> struct ProjectionForward {
           mOutDepthsAcc(outDepths.packed_accessor64<T, 2, torch::RestrictPtrTraits>()),
           mOutConicsAcc(outConics.packed_accessor64<T, 3, torch::RestrictPtrTraits>()),
           mOutCompensationsAcc(outCompensations.defined() ? outCompensations.data_ptr<T>()
-                                                          : nullptr) {
-        mMeansAcc     = means.packed_accessor64<T, 2, torch::RestrictPtrTraits>();
-        mQuatsAcc     = quats.packed_accessor64<T, 2, torch::RestrictPtrTraits>();
-        mLogScalesAcc = logScales.packed_accessor64<T, 2, torch::RestrictPtrTraits>();
-        mWorldToCamMatricesAcc =
-            worldToCamMatrices.packed_accessor32<T, 3, torch::RestrictPtrTraits>();
-        mProjectionMatricesAcc =
-            projectionMatrices.packed_accessor32<T, 3, torch::RestrictPtrTraits>();
-    }
+                                                          : nullptr) {}
 
     inline __device__ Mat3
     computeCovarianceMatrix(int64_t gid) const {

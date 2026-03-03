@@ -3,6 +3,7 @@
 //
 // Tests for functional.cu and op.cu examples - parameterized over implementation
 
+#include "dispatch/dispatch_table.h"
 #include "examples/common.h"
 #include "examples/functional.h"
 #include "examples/op.h"
@@ -171,8 +172,9 @@ TEST_P(CudaFloatScanTest, Float_Error_Deterministic) {
 
     auto input = make_arange_tensor(n, torch::kFloat, torch::kCUDA);
 
-    // CUDA float with deterministic should throw
-    EXPECT_THROW(call_scan(input, placement::out_of_place, determinism::required), c10::Error);
+    // CUDA float with deterministic should throw — coordinate not in dispatch space
+    EXPECT_THROW(call_scan(input, placement::out_of_place, determinism::required),
+                 dispatch::dispatch_lookup_error);
 }
 
 TEST_P(CudaFloatScanTest, Float_Error_InPlace) {
@@ -180,8 +182,9 @@ TEST_P(CudaFloatScanTest, Float_Error_InPlace) {
 
     auto input = make_arange_tensor(n, torch::kFloat, torch::kCUDA);
 
-    // CUDA with in-place should throw
-    EXPECT_THROW(call_scan(input, placement::in_place, determinism::not_required), c10::Error);
+    // CUDA with in-place should throw — coordinate not in dispatch space
+    EXPECT_THROW(call_scan(input, placement::in_place, determinism::not_required),
+                 dispatch::dispatch_lookup_error);
 }
 
 TEST_P(CudaFloatScanTest, Float_Error_Strided) {
@@ -189,8 +192,9 @@ TEST_P(CudaFloatScanTest, Float_Error_Strided) {
 
     auto input = make_strided_arange_tensor(n, torch::kFloat, torch::kCUDA);
 
-    // CUDA with strided should throw
-    EXPECT_THROW(call_scan(input, placement::out_of_place, determinism::not_required), c10::Error);
+    // CUDA with strided should throw — coordinate not in dispatch space
+    EXPECT_THROW(call_scan(input, placement::out_of_place, determinism::not_required),
+                 dispatch::dispatch_lookup_error);
 }
 
 INSTANTIATE_TEST_SUITE_P(CudaFloat,

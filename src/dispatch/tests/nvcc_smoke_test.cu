@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Purpose: Single .cu file that exercises all library templates under nvcc
-// to catch compiler-specific issues.
+// to catch compiler-specific issues. Excludes for_each (phase 3).
 
-#include "dispatch/axes_map.h"
+#include "dispatch/detail/axes_map.h"
+#include "dispatch/detail/visit_spaces.h"
 #include "dispatch/dispatch_table.h"
-#include "dispatch/torch.h"
-#include "dispatch/torch_types.h"
-#include "dispatch/types.h"
-#include "dispatch/visit_spaces.h"
+#include "dispatch/torch/dispatch.h"
+#include "dispatch/torch/types.h"
+#include "dispatch/with_value.h"
 
 #include <torch/torch.h>
 
@@ -17,15 +17,13 @@
 
 #include <gtest/gtest.h>
 
-#include <tuple>
-
 namespace dispatch {
 
 // =============================================================================
 // dispatch_table.h templates
 // =============================================================================
 
-struct CudaTestOp {
+struct cuda_test_op {
     template <typename Coord>
     static int
     op(Coord, int x) {
@@ -34,30 +32,28 @@ struct CudaTestOp {
 };
 
 TEST(NvccSmoke, DispatchTableTemplates) {
-    using A     = axis<1, 2>;
-    using Axes  = axes<A>;
-    using Table = dispatch_table<Axes, int(int)>;
+    using TestAxes = axes<torch_cpu_cuda_device_axis>;
+    using Table    = dispatch_table<TestAxes, int(int)>;
 
-    // Verify dispatch_table templates compile under nvcc
-    auto factory = Table::from_op<CudaTestOp>();
-    Table table(factory, Axes{});
+    auto factory = Table::from_op<cuda_test_op>();
+    Table table("nvcc_smoke", factory, TestAxes{});
 
-    // Exercise tag/axes types in device-compiled code
-    auto result = table(std::make_tuple(1), 5);
-    EXPECT_EQ(result, 10);
+    auto fn = table.select(dispatch_set{torch::kCPU});
+    EXPECT_EQ(fn(5), 10);
 }
 
-// CUDA kernel that uses dispatch table types
+// CUDA kernel that uses dispatch types
 __global__ void
 test_dispatch_kernel(int *result) {
     // Just verify we can use the types in device code
-    using A    = axis<1>;
+    using A    = axis<placement::in_place, placement::out_of_place>;
     using Axes = axes<A>;
-    // Types compile - that's what we're testing
+    // Types compile — that's what we're testing
+    (void)sizeof(Axes);
     *result = 42;
 }
 
-TEST(NvccSmoke, DispatchTableInDeviceCode) {
+TEST(NvccSmoke, DispatchTypesInDeviceCode) {
     int *d_result;
     cudaError_t err = cudaMalloc(&d_result, sizeof(int));
     ASSERT_EQ(cudaSuccess, err);
@@ -81,56 +77,21 @@ TEST(NvccSmoke, DispatchTableInDeviceCode) {
 }
 
 // =============================================================================
-// torch.h CUDA paths
-// =============================================================================
-
-TEST(NvccSmoke, TorchAccessorCudaOverloads) {
-    if (!torch::cuda::is_available()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
-
-    // Verify torch_accessor() CUDA overloads instantiate under nvcc
-    auto tensor =
-        torch::zeros({2, 3}, torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
-    torch_cuda_tensor<torch::kFloat, 2> ct(tensor);
-
-    // This should compile with nvcc
-    auto accessor = torch_accessor(ct);
-    EXPECT_EQ(accessor.size(0), 2);
-    EXPECT_EQ(accessor.size(1), 3);
-}
-
-TEST(NvccSmoke, TorchConcreteTensorCuda) {
-    if (!torch::cuda::is_available()) {
-        GTEST_SKIP() << "CUDA not available";
-    }
-
-    // Exercise torch_concrete_tensor with CUDA device tags
-    auto tensor =
-        torch::zeros({2, 3}, torch::TensorOptions().dtype(torch::kFloat).device(torch::kCUDA));
-    torch_cuda_tensor<torch::kFloat, 2> ct(tensor);
-
-    EXPECT_EQ(ct.tensor.device().type(), torch::kCUDA);
-    EXPECT_EQ(ct.tensor.scalar_type(), torch::kFloat);
-}
-
-// =============================================================================
-// types.h and detail.h
+// Core type templates
 // =============================================================================
 
 TEST(NvccSmoke, CoreTypeTemplates) {
-    // Verify core type templates instantiate under nvcc
-    using E    = extents<2, 3>;
-    using I    = indices<0, 1>;
-    using T    = tag<1, 2>;
-    using A    = axis<1, 2>;
-    using Axes = axes<A>;
+    using E      = extents<2, 3>;
+    using I      = indices<0, 1>;
+    using T      = tag<placement::in_place>;
+    using A      = axis<placement::in_place, placement::out_of_place>;
+    using MyAxes = axes<A>;
 
     static_assert(is_extents_v<E>());
     static_assert(is_indices_v<I>());
     static_assert(is_tag_v<T>());
     static_assert(is_axis_v<A>());
-    static_assert(is_axes_v<Axes>());
+    static_assert(is_axes_v<MyAxes>());
 
     SUCCEED();
 }
@@ -140,26 +101,37 @@ TEST(NvccSmoke, CoreTypeTemplates) {
 // =============================================================================
 
 TEST(NvccSmoke, AxesMapCompiles) {
-    // Verify map operations compile (host-side, but header included in nvcc)
-    using A1   = axis<1, 2>;
-    using A2   = axis<3, 4>;
-    using Axes = axes<A1, A2>;
-    axes_map<Axes, int> map;
+    using TestAxes = axes<full_placement_axis, full_determinism_axis>;
+    axes_map<TestAxes, int> map;
 
-    map.emplace(tag<1, 3>{}, 10);
+    map.emplace(tag<placement::in_place, determinism::required>{}, 10);
     EXPECT_EQ(map.size(), 1u);
 }
 
 TEST(NvccSmoke, VisitSpacesCompiles) {
-    // Verify visitation templates compile
-    using A    = axis<1, 2>;
-    using Axes = axes<A>;
-    int count  = 0;
+    using TestAxes = axes<full_placement_axis>;
+    int count      = 0;
 
     auto visitor = [&count](auto /*tag*/) { ++count; };
 
-    visit_axes_space(visitor, Axes{});
+    visit_axes_space(visitor, TestAxes{});
     EXPECT_EQ(count, 2);
+}
+
+// =============================================================================
+// with_value concepts
+// =============================================================================
+
+TEST(NvccSmoke, WithValueConcepts) {
+    using T = tag<placement::in_place, determinism::required>;
+
+    static_assert(with_value<T, placement::in_place>);
+    static_assert(!with_value<T, placement::out_of_place>);
+    static_assert(with_type<T, placement>);
+    static_assert(with_type<T, determinism>);
+    static_assert(!with_type<T, contiguity>);
+
+    SUCCEED();
 }
 
 // =============================================================================
@@ -167,19 +139,17 @@ TEST(NvccSmoke, VisitSpacesCompiles) {
 // =============================================================================
 
 TEST(NvccSmoke, AllHeadersTogether) {
-    // Exercise all headers together to catch any interaction issues
     using DeviceAxis = torch_cpu_cuda_device_axis;
     using StypeAxis  = torch_builtin_float_stype_axis;
-    using Axes       = axes<DeviceAxis, StypeAxis>;
-    using Table      = dispatch_table<Axes, int()>;
+    using TestAxes   = axes<DeviceAxis, StypeAxis>;
+    using Table      = dispatch_table<TestAxes, int()>;
 
     auto factory = [](auto coord) -> int (*)() { return []() { return 42; }; };
 
-    Table table(factory, Axes{});
+    Table table("nvcc_integration", factory, TestAxes{});
 
-    // Should compile and work
-    auto result = table(std::make_tuple(torch::kCPU, torch::kFloat));
-    EXPECT_EQ(result, 42);
+    auto fn = table.select(dispatch_set{torch::kCPU, torch::kFloat});
+    EXPECT_EQ(fn(), 42);
 }
 
 } // namespace dispatch

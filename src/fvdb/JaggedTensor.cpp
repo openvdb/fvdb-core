@@ -79,11 +79,12 @@ JaggedTensor::JaggedTensor(const std::vector<torch::Tensor> &tensors) {
                     "assigned data must have shape [N, ...], but got data.dim() = 0");
         mBatchIdx =
             torch::empty({0}, torch::TensorOptions().dtype(JIdxScalarType).device(mData.device()));
-        mOffsets = torch::tensor({JOffsetsType(0), mData.size(0)},
-                                 torch::TensorOptions()
-                                     .dtype(JOffsetsScalarType)
-                                     .device(mData.device())
-                                     .pinned_memory(true));
+        mOffsets = torch::tensor(
+            {JOffsetsType(0), mData.size(0)},
+            torch::TensorOptions()
+                .dtype(JOffsetsScalarType)
+                .device(mData.device())
+                .pinned_memory(mData.device().is_cuda() || mData.device().is_privateuseone()));
         mListIdx = torch::empty(
             {0, 1}, torch::TensorOptions().dtype(JLIdxScalarType).device(mData.device()));
         mNumOuterLists = 1;

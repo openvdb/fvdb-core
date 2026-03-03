@@ -1289,50 +1289,48 @@ callRasterizeBackwardPrivateUse1(
 
             TORCH_CHECK(means2d.is_contiguous());
             TORCH_CHECK(conics.is_contiguous());
-            TORCH_CHECK(opacities.is_contiguous());
             TORCH_CHECK(features.is_contiguous());
 
             if (deviceId > 0) {
                 cudaStreamWaitEvent(stream, events[deviceId - 1]);
             }
 
-            nanovdb::util::cuda::memPrefetchAsync(means2d.const_data_ptr<ScalarType>(),
-                                                  means2d.numel() * sizeof(ScalarType),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(conics.const_data_ptr<ScalarType>(),
-                                                  conics.numel() * sizeof(ScalarType),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(opacities.const_data_ptr<ScalarType>(),
-                                                  opacities.numel() * sizeof(ScalarType),
-                                                  deviceId,
-                                                  stream);
-            nanovdb::util::cuda::memPrefetchAsync(features.const_data_ptr<ScalarType>(),
-                                                  features.numel() * sizeof(ScalarType),
-                                                  deviceId,
-                                                  stream);
+            // Compute the number of bytes from data_ptr() to the end of the underlying
+            // storage. This safely handles both non-contiguous expanded views (where
+            // numel() exceeds actual storage) and sliced tensors with non-zero storage_offset.
+            auto prefetchBytes = [](const torch::Tensor &t) -> size_t {
+                return t.storage().nbytes() - t.storage_offset() * t.element_size();
+            };
+
+            nanovdb::util::cuda::memPrefetchAsync(
+                means2d.const_data_ptr<ScalarType>(), prefetchBytes(means2d), deviceId, stream);
+            nanovdb::util::cuda::memPrefetchAsync(
+                conics.const_data_ptr<ScalarType>(), prefetchBytes(conics), deviceId, stream);
+            nanovdb::util::cuda::memPrefetchAsync(
+                opacities.const_data_ptr<ScalarType>(), prefetchBytes(opacities), deviceId, stream);
+            nanovdb::util::cuda::memPrefetchAsync(
+                features.const_data_ptr<ScalarType>(), prefetchBytes(features), deviceId, stream);
 
             nanovdb::util::cuda::memPrefetchAsync(outDLossDMeans2d.const_data_ptr<ScalarType>(),
-                                                  outDLossDMeans2d.numel() * sizeof(ScalarType),
+                                                  prefetchBytes(outDLossDMeans2d),
                                                   deviceId,
                                                   stream);
             nanovdb::util::cuda::memPrefetchAsync(outDLossDConics.const_data_ptr<ScalarType>(),
-                                                  outDLossDConics.numel() * sizeof(ScalarType),
+                                                  prefetchBytes(outDLossDConics),
                                                   deviceId,
                                                   stream);
             nanovdb::util::cuda::memPrefetchAsync(outDLossDFeatures.const_data_ptr<ScalarType>(),
-                                                  outDLossDFeatures.numel() * sizeof(ScalarType),
+                                                  prefetchBytes(outDLossDFeatures),
                                                   deviceId,
                                                   stream);
             nanovdb::util::cuda::memPrefetchAsync(outDLossDOpacities.const_data_ptr<ScalarType>(),
-                                                  outDLossDOpacities.numel() * sizeof(ScalarType),
+                                                  prefetchBytes(outDLossDOpacities),
                                                   deviceId,
                                                   stream);
             if (absGrad) {
                 nanovdb::util::cuda::memPrefetchAsync(
                     outDLossDMeans2dAbs.const_data_ptr<ScalarType>(),
-                    outDLossDMeans2dAbs.numel() * sizeof(ScalarType),
+                    prefetchBytes(outDLossDMeans2dAbs),
                     deviceId,
                     stream);
             }

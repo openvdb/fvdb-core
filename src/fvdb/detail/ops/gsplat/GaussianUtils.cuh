@@ -44,6 +44,113 @@ binSearch(const T *arr, const uint32_t len, const T val) {
     return low - 1;
 }
 
+/// @brief Converts a 3x3 rotation matrix to a quaternion.
+///
+/// This function converts a 3x3 rotation matrix to the equivalent quaternion \([w,x,y,z]\) and
+/// normalizes the result.
+///
+/// The implementation uses the standard **branch-based** algorithm for numerical robustness:
+/// - If \(\mathrm{trace}(R) > 0\), it uses the closed-form trace formula
+///   \(w = \tfrac{1}{2}\sqrt{1 + \mathrm{trace}(R)}\) and derives \((x,y,z)\) from the
+///   off-diagonals.
+/// - Otherwise it selects the largest diagonal element and computes the quaternion from that
+///   branch (x-dominant / y-dominant / z-dominant cases).
+///
+/// Degenerate inputs (e.g. non-rotation matrices, NaNs) are guarded against to avoid division by
+/// near-zero intermediates; in such cases the function falls back to the identity quaternion.
+///
+/// @param R Input 3x3 rotation matrix.
+/// @return nanovdb::math::Vec4<T> Quaternion equivalent to the rotation matrix.
+template <typename T>
+__host__ __device__ nanovdb::math::Vec4<T>
+rotationMatrixToQuaternion(const nanovdb::math::Mat3<T> &R) {
+    T trace = R[0][0] + R[1][1] + R[2][2];
+    T x, y, z, w;
+
+    // Guard against division by ~0 in the branch formulas below.
+    // This can happen for degenerate / NaN inputs where `t` underflows to 0 or is clamped to 0,
+    // causing `s = 2*sqrt(t)` to be 0, while the numerators remain finite -> inf/NaN.
+    const T s_min = (sizeof(T) == sizeof(float)) ? T(1e-8) : T(1e-12);
+
+    if (trace > 0) {
+        T t = trace + T(1);
+        t   = (t > T(0)) ? t : T(0);
+        T s = sqrt(t) * T(2); // S=4*qw
+        if (!(s > s_min)) {
+            // Degenerate input; fall back to identity.
+            w = T(1);
+            x = y = z = T(0);
+        } else {
+            w = T(0.25) * s;
+            x = (R[2][1] - R[1][2]) / s;
+            y = (R[0][2] - R[2][0]) / s;
+            z = (R[1][0] - R[0][1]) / s;
+        }
+    } else if ((R[0][0] > R[1][1]) && (R[0][0] > R[2][2])) {
+        T t = T(1) + R[0][0] - R[1][1] - R[2][2];
+        t   = (t > T(0)) ? t : T(0);
+        T s = sqrt(t) * T(2); // S=4*qx
+        if (!(s > s_min)) {
+            w = T(1);
+            x = y = z = T(0);
+        } else {
+            w = (R[2][1] - R[1][2]) / s;
+            x = T(0.25) * s;
+            y = (R[0][1] + R[1][0]) / s;
+            z = (R[0][2] + R[2][0]) / s;
+        }
+    } else if (R[1][1] > R[2][2]) {
+        T t = T(1) + R[1][1] - R[0][0] - R[2][2];
+        t   = (t > T(0)) ? t : T(0);
+        T s = sqrt(t) * T(2); // S=4*qy
+        if (!(s > s_min)) {
+            w = T(1);
+            x = y = z = T(0);
+        } else {
+            w = (R[0][2] - R[2][0]) / s;
+            x = (R[0][1] + R[1][0]) / s;
+            y = T(0.25) * s;
+            z = (R[1][2] + R[2][1]) / s;
+        }
+    } else {
+        T t = T(1) + R[2][2] - R[0][0] - R[1][1];
+        t   = (t > T(0)) ? t : T(0);
+        T s = sqrt(t) * T(2); // S=4*qz
+        if (!(s > s_min)) {
+            w = T(1);
+            x = y = z = T(0);
+        } else {
+            w = (R[1][0] - R[0][1]) / s;
+            x = (R[0][2] + R[2][0]) / s;
+            y = (R[1][2] + R[2][1]) / s;
+            z = T(0.25) * s;
+        }
+    }
+
+    // Normalize to guard against accumulated FP error / slightly non-orthonormal inputs.
+    const T norm2 = (w * w + x * x + y * y + z * z);
+    if (norm2 > T(0)) {
+        const T invNorm = T(1) / sqrt(norm2);
+        w *= invNorm;
+        x *= invNorm;
+        y *= invNorm;
+        z *= invNorm;
+    } else {
+        // Degenerate input; fall back to identity.
+        w = T(1);
+        x = y = z = T(0);
+    }
+
+    // Optional convention: keep a consistent sign (q and -q represent the same rotation).
+    if (w < T(0)) {
+        w = -w;
+        x = -x;
+        y = -y;
+        z = -z;
+    }
+    return nanovdb::math::Vec4<T>(w, x, y, z);
+}
+
 /// @brief Converts a quaternion to a 3x3 rotation matrix
 ///
 /// This function takes a quaternion [w,x,y,z] and converts it to the equivalent
@@ -84,6 +191,61 @@ quaternionToRotationMatrix(nanovdb::math::Vec4<T> const &quat) {
                                   (2.f * (yz + wx)),
                                   (1.f - 2.f * (x2 + y2)) // 3rd row
     );
+}
+
+/// @brief Normalizes a quaternion to unit length
+///
+/// This function normalizes a quaternion to unit length. If the quaternion is zero, it is set to
+/// the identity quaternion.
+///
+/// @param q Input quaternion [w,x,y,z]
+/// @return nanovdb::math::Vec4<T> Normalized quaternion
+template <typename T>
+inline __host__ __device__ nanovdb::math::Vec4<T>
+normalizeQuaternionSafe(nanovdb::math::Vec4<T> q) {
+    const T n2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+    if (n2 > T(0)) {
+        const T invN = T(1) / sqrt(n2);
+        q[0] *= invN;
+        q[1] *= invN;
+        q[2] *= invN;
+        q[3] *= invN;
+    } else {
+        q[0] = T(1);
+        q[1] = q[2] = q[3] = T(0);
+    }
+    return q;
+}
+
+/// @brief Interpolates between two quaternions using normalized linear interpolation along the
+/// shortest path
+///
+/// This function interpolates between two quaternions using normalized linear interpolation along
+/// the shortest path.
+///
+/// @param q0 First quaternion [w,x,y,z]
+/// @param q1 Second quaternion [w,x,y,z]
+/// @param u Interpolation factor in [0,1]
+/// @return nanovdb::math::Vec4<T> Interpolated quaternion
+template <typename T>
+inline __host__ __device__ nanovdb::math::Vec4<T>
+nlerpQuaternionShortestPath(const nanovdb::math::Vec4<T> &q0,
+                            nanovdb::math::Vec4<T> q1,
+                            const T u) {
+    // Ensure shortest arc (q and -q represent the same rotation).
+    T dot = q0[0] * q1[0] + q0[1] * q1[1] + q0[2] * q1[2] + q0[3] * q1[3];
+    if (dot < T(0)) {
+        q1[0] = -q1[0];
+        q1[1] = -q1[1];
+        q1[2] = -q1[2];
+        q1[3] = -q1[3];
+    }
+
+    const T s = T(1) - u;
+    return normalizeQuaternionSafe<T>(nanovdb::math::Vec4<T>(s * q0[0] + u * q1[0],
+                                                             s * q0[1] + u * q1[1],
+                                                             s * q0[2] + u * q1[2],
+                                                             s * q0[3] + u * q1[3]));
 }
 
 /// @brief Computes the vector-Jacobian product for quaternion to rotation matrix transformation

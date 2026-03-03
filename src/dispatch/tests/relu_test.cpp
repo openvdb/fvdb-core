@@ -7,7 +7,7 @@
 #include <c10/util/BFloat16.h>
 #include <c10/util/Half.h>
 
-#include <dispatch/types.h>
+#include <dispatch/detail/core_types.h>
 #include <gtest/gtest.h>
 
 #include <string>

@@ -1,0 +1,344 @@
+#!/bin/bash
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+#
+# Remove a worktree created by fvdb-open or fvdb-issue
+# Usage: fvdb-close [worktree-name-or-path]
+#
+# Examples:
+#   fvdb-close                    # Interactive - shows list to select from
+#   fvdb-close issue-187          # Remove by name (checks both repos)
+#   fvdb-close mcmc-adaptive      # Remove by name
+#   fvdb-close /full/path/to/wt   # Remove by full path
+#
+# Configuration:
+#   Set FVDB_CORE_PATH and FVDB_RC_PATH environment variables, or
+#   create ~/.fvdb-devtools.conf with:
+#     FVDB_CORE_PATH=/path/to/fvdb-core
+#     FVDB_RC_PATH=/path/to/fvdb-reality-capture
+
+set -e
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Load configuration
+load_config() {
+    # Check for config file
+    if [[ -f ~/.fvdb-devtools.conf ]]; then
+        source ~/.fvdb-devtools.conf
+    fi
+
+    # Validate required paths
+    if [[ -z "$FVDB_CORE_PATH" ]]; then
+        echo -e "${RED}Error: FVDB_CORE_PATH is not set${NC}"
+        echo "Set the environment variable or add it to ~/.fvdb-devtools.conf"
+        exit 1
+    fi
+
+    if [[ -z "$FVDB_RC_PATH" ]]; then
+        echo -e "${RED}Error: FVDB_RC_PATH is not set${NC}"
+        echo "Set the environment variable or add it to ~/.fvdb-devtools.conf"
+        exit 1
+    fi
+
+    # Verify paths exist
+    if [[ ! -d "$FVDB_CORE_PATH" ]]; then
+        echo -e "${RED}Error: FVDB_CORE_PATH does not exist: $FVDB_CORE_PATH${NC}"
+        exit 1
+    fi
+
+    if [[ ! -d "$FVDB_RC_PATH" ]]; then
+        echo -e "${RED}Error: FVDB_RC_PATH does not exist: $FVDB_RC_PATH${NC}"
+        exit 1
+    fi
+}
+
+load_config
+
+CORE_BASE="$FVDB_CORE_PATH"
+RC_BASE="$FVDB_RC_PATH"
+
+usage() {
+    echo "Usage: fvdb-close [worktree-name-or-path]"
+    echo ""
+    echo "Examples:"
+    echo "  fvdb-close                    # Interactive mode"
+    echo "  fvdb-close issue-187          # Remove by name"
+    echo "  fvdb-close mcmc-adaptive      # Remove by name"
+    echo "  fvdb-close /full/path/to/wt   # Remove by full path"
+    exit 1
+}
+
+# Check if a directory is in use (processes with cwd there)
+# Returns true (exit 0) if in use, false (exit 1) if not - standard shell convention
+# Note: This detects terminals but may not detect all Cursor windows (remote server architecture)
+# Linux uses /proc; macOS falls back to lsof
+check_in_use() {
+    local check_path="$1"
+
+    if [[ -d /proc/1 ]]; then
+        # Linux: check /proc for processes with cwd in the directory
+        for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
+            if [[ -r "/proc/$pid/cwd" ]]; then
+                local cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)
+                if [[ "$cwd" == "$check_path"* ]]; then
+                    return 0
+                fi
+            fi
+        done
+    elif command -v lsof >/dev/null 2>&1; then
+        # macOS/other: fall back to lsof
+        if lsof +D "$check_path" >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+# Get all worktrees for a repo (excluding main)
+get_worktrees() {
+    local base="$1"
+    local repo_name="$2"
+
+    while IFS= read -r line; do
+        local wt_path=$(echo "$line" | awk '{print $1}')
+        local wt_branch=""
+        # Branch names are in [brackets], detached HEAD shows (parentheses)
+        if [[ "$line" == *"["*"]"* ]]; then
+            wt_branch=$(echo "$line" | sed -n 's/.*\[\(.*\)\].*/\1/p')
+        else
+            wt_branch="detached"
+        fi
+        if [[ "$wt_path" != "$base" ]]; then
+            local wt_name=$(basename "$wt_path")
+            echo "${repo_name}|${wt_name}|${wt_branch}|${wt_path}"
+        fi
+    done < <(git -C "$base" worktree list 2>/dev/null)
+}
+
+remove_worktree() {
+    local wt_path="$1"
+    local wt_name=$(basename "$wt_path")
+
+    echo -e "${YELLOW}Removing worktree: ${wt_name}${NC}"
+    echo "  Path: $wt_path"
+    echo ""
+
+    # Check if worktree is in use
+    if check_in_use "$wt_path"; then
+        echo -e "${RED}WARNING: This worktree is currently in use!${NC}"
+        echo ""
+        echo "Files are open or a terminal has its working directory here."
+        echo "Please close Cursor windows and terminals using this worktree first."
+        echo ""
+        read -p "Continue anyway? (may cause issues) [y/n]: " force_confirm
+        if [[ "$force_confirm" != "y" && "$force_confirm" != "Y" ]]; then
+            echo "Aborted. Please close applications using this worktree first."
+            exit 0
+        fi
+        echo ""
+    fi
+
+    read -p "Are you sure you want to remove this worktree? [y/n]: " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        echo "Aborted."
+        exit 0
+    fi
+
+    # Get branch name before removing (only if on a branch, not detached HEAD)
+    local branch_name=""
+    local wt_info=""
+    local base_for_branch=""
+
+    if [[ "$wt_path" == *"$(basename "$CORE_BASE")"* ]]; then
+        base_for_branch="$CORE_BASE"
+    elif [[ "$wt_path" == *"$(basename "$RC_BASE")"* ]]; then
+        base_for_branch="$RC_BASE"
+    else
+        echo -e "${RED}Error: Cannot determine repo for ${wt_path}${NC}"
+        exit 1
+    fi
+
+    wt_info=$(git -C "$base_for_branch" worktree list | grep -F -- "$wt_path" || true)
+    # Branch names are in [brackets], detached HEAD shows (parentheses)
+    if [[ "$wt_info" == *"["*"]"* ]]; then
+        branch_name=$(echo "$wt_info" | sed -n 's/.*\[\(.*\)\].*/\1/p')
+    fi
+
+    # Try to remove without force first; offer force if it fails
+    if ! git -C "$base_for_branch" worktree remove "$wt_path" 2>/dev/null; then
+        echo -e "${YELLOW}Worktree has uncommitted changes or untracked files.${NC}"
+        read -p "Force remove? (discards uncommitted changes) [y/n]: " force_rm
+        if [[ "$force_rm" == "y" || "$force_rm" == "Y" ]]; then
+            git -C "$base_for_branch" worktree remove "$wt_path" --force
+        else
+            echo "Aborted. Commit or stash your changes first."
+            exit 0
+        fi
+    fi
+
+    echo -e "${GREEN}Removed worktree: ${wt_name}${NC}"
+    echo ""
+
+    # Prompt to delete branch (only if worktree was on a branch, not detached)
+    if [[ -z "$branch_name" ]]; then
+        echo -e "${BLUE}Worktree was in detached HEAD state (no branch to delete).${NC}"
+    elif [[ "$branch_name" != "main" && "$branch_name" != "master" ]]; then
+        echo -e "${BLUE}The branch '${branch_name}' still exists.${NC}"
+        read -p "Delete the branch as well? [y/n]: " delete_branch
+
+        if [[ "$delete_branch" == "y" || "$delete_branch" == "Y" ]]; then
+            if git -C "$base_for_branch" branch -d "$branch_name" 2>/dev/null; then
+                echo -e "${GREEN}Deleted branch: ${branch_name}${NC}"
+            else
+                echo -e "${YELLOW}Branch not fully merged. Force delete? [y/n]:${NC}"
+                read -p "" force_delete
+                if [[ "$force_delete" == "y" || "$force_delete" == "Y" ]]; then
+                    git -C "$base_for_branch" branch -D "$branch_name"
+                    echo -e "${GREEN}Force deleted branch: ${branch_name}${NC}"
+                else
+                    echo "Branch kept."
+                fi
+            fi
+        else
+            echo "Branch kept."
+        fi
+    fi
+}
+
+# Check if worktree is in use (for display purposes)
+get_in_use_status() {
+    local wt_path="$1"
+    if check_in_use "$wt_path"; then
+        echo -e " ${RED}[IN USE]${NC}"
+    else
+        echo ""
+    fi
+}
+
+# Parse argument
+INPUT="${1:-}"
+
+if [[ "$INPUT" == "--help" || "$INPUT" == "-h" ]]; then
+    usage
+fi
+
+# Collect all worktrees from both repos
+ALL_WORKTREES=()
+while IFS= read -r line; do
+    [[ -n "$line" ]] && ALL_WORKTREES+=("$line")
+done < <(get_worktrees "$CORE_BASE" "$(basename "$CORE_BASE")")
+
+while IFS= read -r line; do
+    [[ -n "$line" ]] && ALL_WORKTREES+=("$line")
+done < <(get_worktrees "$RC_BASE" "$(basename "$RC_BASE")")
+
+if [[ ${#ALL_WORKTREES[@]} -eq 0 ]]; then
+    echo -e "${YELLOW}No worktrees found (other than main repos).${NC}"
+    exit 0
+fi
+
+if [[ -z "$INPUT" ]]; then
+    # Interactive mode - show list and let user select
+    echo -e "${BLUE}=== Worktrees ===${NC}"
+    echo -e "${YELLOW}Note: [IN USE] detects terminals; Cursor windows may not be detected${NC}\n"
+
+    i=1
+    for entry in "${ALL_WORKTREES[@]}"; do
+        IFS='|' read -r repo_name wt_name wt_branch wt_path <<< "$entry"
+        in_use_status=$(get_in_use_status "$wt_path")
+        echo -e "  ${GREEN}${i})${NC} ${repo_name}/${wt_name} (${wt_branch})${in_use_status}"
+        ((i++))
+    done
+    echo ""
+
+    while true; do
+        read -p "Select worktree to remove [1-$((i-1)) or q to quit]: " choice
+
+        if [[ "$choice" == "q" || "$choice" == "Q" ]]; then
+            echo "Aborted."
+            exit 0
+        fi
+
+        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice < i )); then
+            entry="${ALL_WORKTREES[$((choice-1))]}"
+            IFS='|' read -r repo_name wt_name wt_branch wt_path <<< "$entry"
+            remove_worktree "$wt_path"
+            exit 0
+        else
+            echo "Invalid selection. Try again."
+        fi
+    done
+else
+    # Direct mode - find worktree by name or path
+    if [[ "$INPUT" == /* ]]; then
+        # Full path provided
+        if [[ -d "$INPUT" ]]; then
+            remove_worktree "$INPUT"
+        else
+            echo -e "${RED}Error: Path does not exist: ${INPUT}${NC}"
+            exit 1
+        fi
+    else
+        # Name provided - search for it
+        MATCHES=()
+        for entry in "${ALL_WORKTREES[@]}"; do
+            IFS='|' read -r repo_name wt_name wt_branch wt_path <<< "$entry"
+            # Match if input is contained in the worktree name
+            if [[ "$wt_name" == *"$INPUT"* ]]; then
+                MATCHES+=("$entry")
+            fi
+        done
+
+        if [[ ${#MATCHES[@]} -eq 0 ]]; then
+            echo -e "${RED}Error: No worktree found matching '${INPUT}'${NC}"
+            echo ""
+            echo "Available worktrees:"
+            for entry in "${ALL_WORKTREES[@]}"; do
+                IFS='|' read -r repo_name wt_name wt_branch wt_path <<< "$entry"
+                echo "  - ${repo_name}/${wt_name}"
+            done
+            exit 1
+        elif [[ ${#MATCHES[@]} -eq 1 ]]; then
+            # Single match
+            IFS='|' read -r repo_name wt_name wt_branch wt_path <<< "${MATCHES[0]}"
+            remove_worktree "$wt_path"
+        else
+            # Multiple matches - prompt user
+            echo -e "${YELLOW}Multiple worktrees match '${INPUT}':${NC}"
+            echo ""
+            i=1
+            for entry in "${MATCHES[@]}"; do
+                IFS='|' read -r repo_name wt_name wt_branch wt_path <<< "$entry"
+                in_use_status=$(get_in_use_status "$wt_path")
+                echo -e "  ${GREEN}${i})${NC} ${repo_name}/${wt_name} (${wt_branch})${in_use_status}"
+                ((i++))
+            done
+            echo ""
+
+            while true; do
+                read -p "Select worktree to remove [1-$((i-1)) or q to quit]: " choice
+
+                if [[ "$choice" == "q" || "$choice" == "Q" ]]; then
+                    echo "Aborted."
+                    exit 0
+                fi
+
+                if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice < i )); then
+                    entry="${MATCHES[$((choice-1))]}"
+                    IFS='|' read -r repo_name wt_name wt_branch wt_path <<< "$entry"
+                    remove_worktree "$wt_path"
+                    exit 0
+                else
+                    echo "Invalid selection. Try again."
+                fi
+            done
+        fi
+    fi
+fi

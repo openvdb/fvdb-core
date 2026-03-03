@@ -1,0 +1,43 @@
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+#
+# Reusable workflow: detect whether a PR touches source files or only
+# documentation / non-code paths. Callers gate their real jobs on the
+# `should_test` output so that docs-only PRs are marked as passed
+# (not perpetually "waiting for status").
+
+name: Check for relevant changes
+
+on:
+  workflow_call:
+    outputs:
+      should_test:
+        description: "'true' when the change includes source files, 'false' for docs-only"
+        value: ${{ jobs.check-changes.outputs.should_test }}
+
+# Permissions are inherited from the calling workflow; do not set them here.
+
+jobs:
+  check-changes:
+    name: Check for relevant changes
+    runs-on: ubuntu-latest
+    outputs:
+      should_test: ${{ github.event_name != 'pull_request_target' || steps.filter.outputs.src == 'true' }}
+    steps:
+      # predicate-quantifier is supported in code but missing from action.yml in v3;
+      # produces a non-blocking "Invalid action input" warning. Upstream fix: PR #226.
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'pull_request_target'
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            src:
+              - '**'
+              - '!**/*.md'
+              - '!CODEOWNERS'
+              - '!debug/**'
+              - '!examples/**'
+              - '!notebooks/**'
+              - '!devtools/**'
+              - '!scripts/**'

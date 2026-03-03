@@ -64,3 +64,6 @@ tests/data/
 *.db
 
 scratch/
+
+# Cursor agent rules (worktree-specific)
+.cursor/rules/

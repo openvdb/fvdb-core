@@ -2,30 +2,46 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # ============================================================================
-# Dispatch Interface Library
+# Dispatch Library
 # ============================================================================
-# This is a header-only interface library that provides dispatch utilities.
-# It inherits CUDA and C++20 settings from the parent build.
+# Provides dispatch utilities for CPU/CUDA parallelization.
+# Uses a stub .cu file to enable propagating compile options to consumers.
 
-add_library(dispatch INTERFACE)
+add_library(dispatch STATIC dispatch_stub.cu)
 
-target_include_directories(dispatch INTERFACE
+set_target_properties(dispatch
+    PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+    CUDA_STANDARD 20
+    CUDA_STANDARD_REQUIRED ON
+    POSITION_INDEPENDENT_CODE ON
+)
+
+target_include_directories(dispatch PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-# ============================================================================
-# Examples Library (built when tests are enabled)
-# ============================================================================
-# Examples are compiled as a library that tests link against.
+# OpenMP flags - PUBLIC so they propagate to consumers (e.g., fvdb)
+if(FVDB_USE_OPENMP)
+    target_compile_options(dispatch PUBLIC
+        $<$<COMPILE_LANGUAGE:CXX>:-fopenmp>
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-fopenmp>
+    )
+    target_link_options(dispatch PUBLIC "-fopenmp")
+endif()
 
-if(FVDB_BUILD_TESTS)
-    # Get GTest via CPM (same as main tests)
-    include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/get_google_test.cmake)
+# ============================================================================
+# Examples Library (built when tests or benchmarks are enabled)
+# ============================================================================
+# Examples are compiled as a library that tests and benchmarks link against.
 
+if(FVDB_BUILD_TESTS OR FVDB_BUILD_BENCHMARKS)
     set(DISPATCH_EXAMPLE_SOURCES
         examples/functional.cu
         examples/op.cu
         examples/relu.cu
+        examples/softplus.cu
         examples/scan_lib.cpp
         examples/scan_lib.cu
     )
@@ -67,9 +83,23 @@ if(FVDB_BUILD_TESTS)
         >
     )
 
-    # ============================================================================
-    # Tests
-    # ============================================================================
+    # OpenMP for at::parallel_for and other CPU parallelization
+    if(FVDB_USE_OPENMP)
+        target_compile_options(dispatch_examples PRIVATE
+            $<$<COMPILE_LANGUAGE:CXX>:-fopenmp>
+            $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-fopenmp>
+        )
+        target_link_options(dispatch_examples PUBLIC "-fopenmp")
+    endif()
+endif()
+
+# ============================================================================
+# Tests (only built when tests are enabled)
+# ============================================================================
+if(FVDB_BUILD_TESTS)
+    # Get GTest via CPM (same as main tests)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/get_google_test.cmake)
+
     enable_testing()
     include(GoogleTest)
 
@@ -147,19 +177,24 @@ if(FVDB_BUILD_TESTS)
         )
     endfunction()
 
-    # Configure dispatch tests
-    ConfigureDispatchTest(DispatchTypesTest tests/types_test.cpp)
-    ConfigureDispatchTest(DispatchAxesMapTest tests/axes_map_test.cpp)
-    ConfigureDispatchTest(DispatchTableTest tests/dispatch_table_test.cpp)
-    ConfigureDispatchTest(DispatchVisitSpacesTest tests/visit_spaces_test.cpp)
-    ConfigureDispatchTest(DispatchTorchTest tests/torch_test.cpp)
-    ConfigureDispatchTest(DispatchNvccSmokeTest tests/nvcc_smoke_test.cu)
+    # ---- Foundational tests ----
+    ConfigureDispatchTest(DispatchLabelTagAxisTest tests/label_tag_axis_test.cpp)
     ConfigureDispatchTest(DispatchScanLibHostTest tests/scan_lib_host_test.cpp)
     ConfigureDispatchTest(DispatchScanLibCudaTest tests/scan_lib_cuda_test.cu)
-    ConfigureDispatchTest(DispatchInclusiveScanExamplesTest tests/inclusive_scan_examples_test.cpp)
-    ConfigureDispatchTest(DispatchReLUTest tests/relu_test.cpp)
 
-    # ============================================================================
+    ConfigureDispatchTest(DispatchDetailIndexMathTest tests/detail_index_math_test.cpp)
+    ConfigureDispatchTest(DispatchWithValueTest tests/with_value_test.cpp)
+    ConfigureDispatchTest(DispatchVisitSpacesTest tests/visit_spaces_test.cpp)
+    ConfigureDispatchTest(DispatchAxesMapTest tests/axes_map_test.cpp)
+    ConfigureDispatchTest(DispatchTableTest tests/dispatch_table_test.cpp)
+    ConfigureDispatchTest(DispatchTorchTest tests/torch_test.cpp)
+    ConfigureDispatchTest(DispatchNvccSmokeTest tests/nvcc_smoke_test.cu)
+    ConfigureDispatchTest(DispatchReLUTest tests/relu_test.cpp)
+    ConfigureDispatchTest(DispatchInclusiveScanExamplesTest tests/inclusive_scan_examples_test.cpp)
+    ConfigureDispatchTest(DispatchThreadPoolTest tests/thread_pool_test.cpp)
+    ConfigureDispatchTest(DispatchForEachTest tests/for_each_test.cu)
+
+     # ============================================================================
     # Negative Compilation Tests (Expected Failures)
     # ============================================================================
 
@@ -195,8 +230,10 @@ if(FVDB_BUILD_TESTS)
         )
     endfunction()
 
-    ConfigureCompileFailTest(MixedAxisTypes      TEST_MIXED_AXIS_TYPES)
-    ConfigureCompileFailTest(SubspaceNotWithin   TEST_SUBSPACE_NOT_WITHIN)
-    ConfigureCompileFailTest(OpMissingOverload   TEST_OP_MISSING_OVERLOAD)
-    ConfigureCompileFailTest(WrongTupleType      TEST_WRONG_TUPLE_TYPE)
+    ConfigureCompileFailTest(MixedAxisTypes          TEST_MIXED_AXIS_TYPES)
+    ConfigureCompileFailTest(TagDuplicateTypes       TEST_TAG_DUPLICATE_TYPES)
+    ConfigureCompileFailTest(AxesDuplicateValueTypes TEST_AXES_DUPLICATE_VALUE_TYPES)
+    ConfigureCompileFailTest(SubspaceNotWithin       TEST_SUBSPACE_NOT_WITHIN)
+    ConfigureCompileFailTest(OpMissingOverload       TEST_OP_MISSING_OVERLOAD)
+    ConfigureCompileFailTest(WrongTupleType          TEST_WRONG_TUPLE_TYPE)
 endif()

@@ -10,10 +10,12 @@ option(FVDB_BUILD_TESTS "Configure CMake to build tests" ON)
 option(FVDB_BUILD_BENCHMARKS "Configure CMake to build (google & nvbench) benchmarks" OFF)
 option(FVDB_STRIP_SYMBOLS "Strip symbols from the build" OFF)
 option(FVDB_LINEINFO "Enable lineinfo in the build" OFF)
+option(FVDB_USE_OPENMP "Enable OpenMP for CPU parallelization" ON)
 
 message(STATUS "FVDB: Configure CMake to build tests: ${FVDB_BUILD_TESTS}")
 message(STATUS "FVDB: Configure CMake to build (google & nvbench) benchmarks: ${FVDB_BUILD_BENCHMARKS}")
 message(STATUS "FVDB_STRIP_SYMBOLS: ${FVDB_STRIP_SYMBOLS}")
+message(STATUS "FVDB_USE_OPENMP: ${FVDB_USE_OPENMP}")
 
 # Get dependencies
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_cpm.cmake)
@@ -56,7 +58,6 @@ set(FVDB_CPP_FILES
     fvdb/detail/autograd/ReadIntoDense.cpp
     fvdb/detail/autograd/SampleGrid.cpp
     fvdb/detail/autograd/SparseConvolutionHalo.cpp
-    fvdb/detail/autograd/SparseConvolutionImplicitGEMM.cpp
     fvdb/detail/autograd/SparseConvolutionKernelMap.cpp
     fvdb/detail/autograd/SplatIntoGrid.cpp
     fvdb/detail/autograd/TransformPoints.cpp
@@ -72,7 +73,6 @@ set(FVDB_CPP_FILES
     fvdb/GaussianSplat3d.cpp
     fvdb/GridBatch.cpp
     fvdb/JaggedTensor.cpp
-    fvdb/SparseConvPackInfo.cpp
 )
 
 set(FVDB_CU_FILES
@@ -92,19 +92,10 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/BuildPaddedGrid.cu
     fvdb/detail/ops/BuildPrunedGrid.cu
     fvdb/detail/ops/CoarseIjkForFineGrid.cu
-    fvdb/detail/ops/convolution/backend/MESparseConvolution.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionCutlass.cu
     fvdb/detail/ops/convolution/backend/SparseConvolutionHalo.cu
     fvdb/detail/ops/convolution/backend/SparseConvolutionHaloGrad.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMM.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMMGrad.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMMGradSorted.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionImplicitGEMMSorted.cu
     fvdb/detail/ops/convolution/backend/SparseConvolutionKernelMap.cu
-    fvdb/detail/ops/convolution/backend/SparseConvolutionLggs.cu
-    fvdb/detail/ops/convolution/pack_info/BrickHaloBuffer.cu
     fvdb/detail/ops/convolution/pack_info/ConvolutionKernelMap.cu
-    fvdb/detail/ops/convolution/pack_info/IGEMMBitOperations.cu
     fvdb/detail/ops/CoordsInGrid.cu
     fvdb/detail/ops/CubesInGrid.cu
     fvdb/detail/ops/DownsampleGridAvgPool.cu
@@ -116,6 +107,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/gsplat/GaussianMCMCRelocation.cu
     fvdb/detail/ops/gsplat/GaussianProjectionBackward.cu
     fvdb/detail/ops/gsplat/GaussianProjectionForward.cu
+    fvdb/detail/ops/gsplat/GaussianProjectionUT.cu
     fvdb/detail/ops/gsplat/GaussianProjectionJaggedBackward.cu
     fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.cu
     fvdb/detail/ops/gsplat/GaussianRasterizeBackward.cu

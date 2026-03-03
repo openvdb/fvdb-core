@@ -468,18 +468,6 @@ bind_grid_batch(py::module &m) {
         // .def("clone", &fvdb::GridBatch::clone) // TODO: We totally want this
 
         .def("is_same", &fvdb::GridBatch::is_same, py::arg("other"))
-        .def(
-            "sparse_conv_kernel_map",
-            [](fvdb::GridBatch &self,
-               fvdb::Vec3iOrScalar kernelSize,
-               fvdb::Vec3iOrScalar stride,
-               std::optional<fvdb::GridBatch> targetGrid) {
-                auto ret = fvdb::SparseConvPackInfo(kernelSize, stride, self, targetGrid);
-                return std::make_tuple(ret, ret.targetGrid());
-            },
-            py::arg("kernel_size"),
-            py::arg("stride"),
-            py::arg("target_grid") = nullptr)
         .def("integrate_tsdf",
              &fvdb::GridBatch::integrate_tsdf,
              py::arg("voxel_truncation_distance"),
