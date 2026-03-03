@@ -15,6 +15,7 @@
 #include <fvdb/detail/autograd/GaussianRasterizeFromWorld.h>
 
 // Ops headers
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionUT.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeContributingGaussianIds.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeNumContributingGaussians.h>
@@ -895,7 +896,7 @@ GaussianSplat3d::renderImagesFromWorld(const torch::Tensor &worldToCameraMatrice
                                        const size_t imageHeight,
                                        const float near,
                                        const float far,
-                                       const fvdb::detail::ops::CameraModel cameraModel,
+                                       const fvdb::detail::ops::DistortionModel cameraModel,
                                        const std::optional<torch::Tensor> &distortionCoeffs,
                                        const int64_t shDegreeToUse,
                                        const size_t tileSize,
@@ -916,15 +917,15 @@ GaussianSplat3d::renderImagesFromWorld(const torch::Tensor &worldToCameraMatrice
     torch::Tensor tileOffsets;
     torch::Tensor tileGaussianIds;
 
-    if (cameraModel == fvdb::detail::ops::CameraModel::PINHOLE ||
-        cameraModel == fvdb::detail::ops::CameraModel::ORTHOGRAPHIC) {
+    if (cameraModel == fvdb::detail::ops::DistortionModel::PINHOLE ||
+        cameraModel == fvdb::detail::ops::DistortionModel::ORTHOGRAPHIC) {
         // Fast path: reuse the classic projection for tiling/sorting.
         RenderSettings settings;
         settings.imageWidth     = imageWidth;
         settings.imageHeight    = imageHeight;
         settings.nearPlane      = near;
         settings.farPlane       = far;
-        settings.projectionType = (cameraModel == fvdb::detail::ops::CameraModel::ORTHOGRAPHIC)
+        settings.projectionType = (cameraModel == fvdb::detail::ops::DistortionModel::ORTHOGRAPHIC)
                                       ? fvdb::detail::ops::ProjectionType::ORTHOGRAPHIC
                                       : fvdb::detail::ops::ProjectionType::PERSPECTIVE;
         settings.shDegreeToUse  = shDegreeToUse;

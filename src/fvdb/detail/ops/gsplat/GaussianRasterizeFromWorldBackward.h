@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLDBACKWARD_H
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLDBACKWARD_H
 
-#include <fvdb/detail/ops/gsplat/GaussianCameraModels.h>
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
 
 #include <torch/types.h>
@@ -39,7 +39,7 @@ dispatchGaussianRasterizeFromWorld3DGSBackward(
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]
     const torch::Tensor &distortionCoeffs,        // [C, K] (K=0 or 12)
     const RollingShutterType rollingShutterType,
-    const CameraModel cameraModel,
+    const DistortionModel cameraModel,
     // Render settings
     const RenderSettings &settings,
     // Intersections

@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLDFORWARD_H
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFROMWORLDFORWARD_H
 
-#include <fvdb/detail/ops/gsplat/GaussianCameraModels.h>
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
 
 #include <torch/types.h>
@@ -21,7 +21,7 @@ namespace fvdb::detail::ops {
 ///
 /// Inputs are world-space Gaussians (means/quats/logScales) and per-camera per-gaussian features
 /// and opacities. The camera is defined via world->camera matrices (start/end), intrinsics,
-/// `CameraModel`, rolling shutter policy, and packed OpenCV distortion coefficients.
+/// `DistortionModel`, rolling shutter policy, and packed OpenCV distortion coefficients.
 ///
 /// This is a dense-only rasterizer: outputs are dense tensors of shape
 /// - renderedFeatures: [C, H, W, D]
@@ -44,7 +44,7 @@ dispatchGaussianRasterizeFromWorld3DGSForward(
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]
     const torch::Tensor &distortionCoeffs,        // [C, K] (K=0 or 12)
     const RollingShutterType rollingShutterType,
-    const CameraModel cameraModel,
+    const DistortionModel cameraModel,
     // Render settings
     const RenderSettings &settings,
     // Intersections

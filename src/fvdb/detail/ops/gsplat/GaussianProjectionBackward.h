@@ -4,6 +4,8 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONBACKWARD_H
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONBACKWARD_H
 
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
+
 #include <torch/types.h>
 
 #include <tuple>

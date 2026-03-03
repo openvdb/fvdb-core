@@ -5,6 +5,7 @@
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZE_CUH
 
 #include <fvdb/detail/ops/gsplat/Gaussian2D.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 
@@ -71,10 +72,9 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
     uint32_t mNumCameras;
     uint32_t mNumGaussiansPerCamera;
     uint32_t mTotalIntersections;
-    uint32_t mImageWidth;
-    uint32_t mImageHeight;
-    uint32_t mImageOriginW;
-    uint32_t mImageOriginH;
+    // Raster window (crop) dimensions/origin. These are render-target coordinates, not full camera
+    // sensor dimensions.
+    RenderWindow2D mRenderWindow;
     uint32_t mTileOriginW;
     uint32_t mTileOriginH;
     uint32_t mTileSize;
@@ -114,10 +114,7 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
         const std::optional<torch::Tensor> &features, // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
         const std::optional<torch::Tensor> &backgrounds, // [C, NUM_CHANNELS]
         const std::optional<torch::Tensor> &masks,       // [C, numTilesH, numTilesW]
-        const uint32_t imageWidth,
-        const uint32_t imageHeight,
-        const uint32_t imageOriginW,
-        const uint32_t imageOriginH,
+        const RenderWindow2D &renderWindow,
         const uint32_t tileSize,
         const uint32_t blockOffset,
         const torch::Tensor &tileOffsets, // [C, numTilesH, numTilesW] (dense) or [AT + 1] (sparse)
@@ -127,9 +124,8 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
             std::nullopt, // [AT, wordsPerTileBitmask] e.g. [AT, 4]
         const std::optional<torch::Tensor> &tilePixelCumsum = std::nullopt, // [AT]
         const std::optional<torch::Tensor> &pixelMap        = std::nullopt)        // [AP]
-        : mImageWidth(imageWidth), mImageHeight(imageHeight), mImageOriginW(imageOriginW),
-          mImageOriginH(imageOriginH), mTileOriginW(imageOriginW / tileSize),
-          mTileOriginH(imageOriginH / tileSize), mTileSize(tileSize),
+        : mRenderWindow(renderWindow), mTileOriginW(renderWindow.originW / tileSize),
+          mTileOriginH(renderWindow.originH / tileSize), mTileSize(tileSize),
           mMeans2d(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(means2d, "means2d")),
           mConics(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(conics, "conics")),
           mOpacities(initAccessor<ScalarType, NUM_OUTER_DIMS>(opacities, "opacities")),
@@ -163,8 +159,8 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
               pixelMap, tileOffsets.options().dtype(torch::kInt64), "pixelMap")) {
         static_assert(NUM_OUTER_DIMS == 1 || NUM_OUTER_DIMS == 2, "NUM_OUTER_DIMS must be 1 or 2");
 
-        mNumTilesW = (imageWidth + tileSize - 1) / tileSize;
-        mNumTilesH = (imageHeight + tileSize - 1) / tileSize;
+        mNumTilesW = mRenderWindow.tileExtentW(tileSize);
+        mNumTilesH = mRenderWindow.tileExtentH(tileSize);
 
         if (mTileOffsetsAreSparse) {
             // Sparse mode: means2d is [C, N, 2] for non-packed, [nnz, 2] for packed
@@ -178,6 +174,23 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
         mTotalIntersections    = mTileGaussianIds.size(0);
 
         checkInputShapes();
+    }
+
+    inline __host__ __device__ uint32_t
+    renderWidth() const {
+        return mRenderWindow.width;
+    }
+    inline __host__ __device__ uint32_t
+    renderHeight() const {
+        return mRenderWindow.height;
+    }
+    inline __host__ __device__ uint32_t
+    renderOriginX() const {
+        return mRenderWindow.originW;
+    }
+    inline __host__ __device__ uint32_t
+    renderOriginY() const {
+        return mRenderWindow.originH;
     }
 
     // Check that the input tensor shapes are valid
@@ -250,9 +263,9 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
     // Get the index of the current pixel in the current block
     inline __device__ cuda::std::tuple<bool, uint32_t>
     activePixelIndex(uint32_t row, uint32_t col) {
-        uint32_t index = 0;
-        bool pixelInImage =
-            mIsSparse ? tilePixelActive() : (row < mImageHeight && col < mImageWidth);
+        uint32_t index    = 0;
+        bool pixelInImage = mIsSparse ? tilePixelActive()
+                                      : (row < mRenderWindow.height && col < mRenderWindow.width);
 
         if (mIsSparse) {
             // Use CUB BlockScan to compute the index of each active pixel in the block
@@ -320,8 +333,8 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
                const uint64_t col,
                const uint32_t activePixelIndex) {
         return mIsSparse ? sparsePixelIndex(blockIdx.x + mBlockOffset, activePixelIndex)
-                         : cameraId * this->mImageWidth * this->mImageHeight +
-                               row * this->mImageWidth + col;
+                         : cameraId * this->mRenderWindow.pixelCountPerCamera() +
+                               row * this->mRenderWindow.width + col;
     }
 
     // Check if the current thread is rendering an active sparse pixel in the current tile
@@ -361,8 +374,8 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
     inline __device__ cuda::std::tuple<int32_t, int32_t, int32_t, uint32_t, uint32_t>
     denseCoordinates() {
         auto globalLinearBlockIdx  = blockIdx.x + mBlockOffset;
-        const uint32_t tileExtentW = (mImageWidth + mTileSize - 1) / mTileSize;
-        const uint32_t tileExtentH = (mImageHeight + mTileSize - 1) / mTileSize;
+        const uint32_t tileExtentW = mRenderWindow.tileExtentW(mTileSize);
+        const uint32_t tileExtentH = mRenderWindow.tileExtentH(mTileSize);
         dim3 globalBlockIdx(globalLinearBlockIdx / (tileExtentH * tileExtentW),
                             (globalLinearBlockIdx / tileExtentW) % tileExtentH,
                             globalLinearBlockIdx % tileExtentW);
@@ -420,8 +433,8 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
             return {static_cast<uint32_t>(mActiveTiles.size(0)), 1, 1};
         } else {
             // Dense mode: launch blocks for all tiles
-            const uint32_t tileExtentW = (mImageWidth + mTileSize - 1) / mTileSize;
-            const uint32_t tileExtentH = (mImageHeight + mTileSize - 1) / mTileSize;
+            const uint32_t tileExtentW = mRenderWindow.tileExtentW(mTileSize);
+            const uint32_t tileExtentH = mRenderWindow.tileExtentH(mTileSize);
             return {mNumCameras * tileExtentH * tileExtentW, 1, 1};
         }
     }

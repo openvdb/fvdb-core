@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_AUTOGRAD_GAUSSIANRASTERIZEFROMWORLD_H
 #define FVDB_DETAIL_AUTOGRAD_GAUSSIANRASTERIZEFROMWORLD_H
 
-#include <fvdb/detail/ops/gsplat/GaussianCameraModels.h>
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 
 #include <torch/autograd.h>
 
@@ -31,7 +31,7 @@ struct RasterizeGaussiansToPixelsFromWorld3DGS
             const Variable &projectionMatrices,      // [C,3,3]
             const Variable &distortionCoeffs,        // [C,K]
             const fvdb::detail::ops::RollingShutterType rollingShutterType,
-            const fvdb::detail::ops::CameraModel cameraModel,
+            const fvdb::detail::ops::DistortionModel distortionModel,
             const uint32_t imageWidth,
             const uint32_t imageHeight,
             const uint32_t imageOriginW,
