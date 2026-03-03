@@ -5,6 +5,7 @@
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZE_CUH
 
 #include <fvdb/detail/ops/gsplat/Gaussian2D.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 
@@ -72,8 +73,7 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
     uint32_t mNumGaussiansPerCamera;
     uint32_t mTotalIntersections;
     // Raster window (crop) dimensions/origin. These are render-target coordinates, not full camera
-    // sensor dimensions. Packed render-window indexing is:
-    // [0] = renderWidth, [1] = renderHeight, [2] = renderOriginX, [3] = renderOriginY.
+    // sensor dimensions.
     uint32_t mRenderWidth;
     uint32_t mRenderHeight;
     uint32_t mRenderOriginX;
@@ -117,7 +117,7 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
         const std::optional<torch::Tensor> &features, // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
         const std::optional<torch::Tensor> &backgrounds, // [C, NUM_CHANNELS]
         const std::optional<torch::Tensor> &masks,       // [C, numTilesH, numTilesW]
-        const nanovdb::math::Vec4<uint32_t> &renderWindow,
+        const RenderWindow2D &renderWindow,
         const uint32_t tileSize,
         const uint32_t blockOffset,
         const torch::Tensor &tileOffsets, // [C, numTilesH, numTilesW] (dense) or [AT + 1] (sparse)
@@ -127,10 +127,10 @@ template <typename ScalarType, size_t NUM_CHANNELS, bool IS_PACKED> struct Raste
             std::nullopt, // [AT, wordsPerTileBitmask] e.g. [AT, 4]
         const std::optional<torch::Tensor> &tilePixelCumsum = std::nullopt, // [AT]
         const std::optional<torch::Tensor> &pixelMap        = std::nullopt)        // [AP]
-        : mRenderWidth(renderWindow[0]), mRenderHeight(renderWindow[1]),
-          mRenderOriginX(renderWindow[2]), mRenderOriginY(renderWindow[3]),
-          mTileOriginW(renderWindow[2] / tileSize), mTileOriginH(renderWindow[3] / tileSize),
-          mTileSize(tileSize),
+        : mRenderWidth(renderWindow.width), mRenderHeight(renderWindow.height),
+          mRenderOriginX(renderWindow.originW), mRenderOriginY(renderWindow.originH),
+          mTileOriginW(renderWindow.originW / tileSize),
+          mTileOriginH(renderWindow.originH / tileSize), mTileSize(tileSize),
           mMeans2d(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(means2d, "means2d")),
           mConics(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(conics, "conics")),
           mOpacities(initAccessor<ScalarType, NUM_OUTER_DIMS>(opacities, "opacities")),

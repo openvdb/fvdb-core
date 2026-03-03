@@ -5,6 +5,7 @@
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEBACKWARD_H
 
 #include <fvdb/JaggedTensor.h>
+#include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
 
 #include <nanovdb/math/Math.h>
 
@@ -29,8 +30,7 @@ namespace ops {
 /// ax² + 2bxy + cy²
 /// @param[in] features Feature / color values of Gaussians [C, N, D]
 /// @param[in] opacities Opacity values for each Gaussian [N]
-/// @param[in] renderWindow Packed render window as `[renderWidth, renderHeight, renderOriginX,
-/// renderOriginY]`
+/// @param[in] renderWindow Render window dimensions and origin.
 /// @param[in] tileSize Size of tiles used for rasterization optimization
 /// @param[in] tileOffsets Offsets for tiles [C, tile_height, tile_width]
 /// @param[in] tileGaussianIds Flattened Gaussian IDs for tile intersection [n_isects]
@@ -64,7 +64,7 @@ dispatchGaussianRasterizeBackward(
     const torch::Tensor &conics,                                 // [C, N, 3]
     const torch::Tensor &features,                               // [C, N, D]
     const torch::Tensor &opacities,                              // [N]
-    const nanovdb::math::Vec4<uint32_t> &renderWindow,
+    const RenderWindow2D &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,                            // [C, tile_height, tile_width]
     const torch::Tensor &tileGaussianIds,                        // [n_isects]
@@ -91,8 +91,7 @@ dispatchGaussianRasterizeBackward(
 /// ax² + 2bxy + cy²
 /// @param[in] features Feature / color values of Gaussians [C, N, D]
 /// @param[in] opacities Opacity values for each Gaussian [N]
-/// @param[in] renderWindow Packed render window as `[renderWidth, renderHeight, renderOriginX,
-/// renderOriginY]`
+/// @param[in] renderWindow Render window dimensions and origin.
 /// @param[in] tileSize Size of tiles used for rasterization optimization
 /// @param[in] tileOffsets Offsets for tiles [C, tile_height, tile_width]
 /// @param[in] tileGaussianIds Flattened Gaussian IDs for tile intersection [n_isects]
@@ -134,7 +133,7 @@ dispatchGaussianSparseRasterizeBackward(
     const torch::Tensor &features,  // [C, N, D]
     const torch::Tensor &opacities, // [N]
     // Image and tile setup
-    const nanovdb::math::Vec4<uint32_t> &renderWindow,
+    const RenderWindow2D &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
     const torch::Tensor &tileGaussianIds, // [n_isects]

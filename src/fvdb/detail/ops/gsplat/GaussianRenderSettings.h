@@ -11,6 +11,13 @@ namespace detail {
 namespace ops {
 enum ProjectionType { PERSPECTIVE, ORTHOGRAPHIC };
 
+struct RenderWindow2D {
+    std::uint32_t width   = 0;
+    std::uint32_t height  = 0;
+    std::uint32_t originW = 0;
+    std::uint32_t originH = 0;
+};
+
 struct RenderSettings {
     enum class RenderMode {
         RGB   = 0,

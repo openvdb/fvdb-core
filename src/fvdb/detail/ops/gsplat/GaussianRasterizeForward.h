@@ -5,6 +5,7 @@
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEFORWARD_H
 
 #include <fvdb/JaggedTensor.h>
+#include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
 
 #include <nanovdb/math/Math.h>
 
@@ -30,8 +31,7 @@ namespace ops {
 /// ax² + 2bxy + cy²
 /// @param[in] features Feature / color values of Gaussians [C, N, D]
 /// @param[in] opacities Opacity values for each Gaussian [N]
-/// @param[in] renderWindow Packed render window as `[renderWidth, renderHeight, renderOriginX,
-/// renderOriginY]`
+/// @param[in] renderWindow Render window dimensions and origin.
 /// @param[in] tileSize Size of tiles used for rasterization optimization
 /// @param[in] tileOffsets Offsets for tiles [C, tile_height, tile_width] indicating for each tile
 /// where its Gaussians start
@@ -51,7 +51,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> dispatchGaussianRasteriz
     const torch::Tensor &conics,                                  // [C, N, 3]
     const torch::Tensor &features,                                // [C, N, D]
     const torch::Tensor &opacities,                               // [N]
-    const nanovdb::math::Vec4<uint32_t> &renderWindow,
+    const RenderWindow2D &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,                             // [C, tile_height, tile_width]
     const torch::Tensor &tileGaussianIds,                         // [n_isects]
@@ -67,8 +67,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> dispatchGaussianRasteriz
 /// @param conics Tensor of conic parameters.
 /// @param features Tensor of features (colors, etc).
 /// @param opacities Tensor of opacities.
-/// @param renderWindow Packed render window as `[renderWidth, renderHeight, renderOriginX,
-/// renderOriginY]`.
+/// @param renderWindow Render window dimensions and origin.
 /// @param tileSize Size of the tiles used for processing.
 /// @param tileOffsets Tensor containing offsets for each tile.
 /// @param tileGaussianIds Tensor mapping tiles to Gaussian IDs.
@@ -91,7 +90,7 @@ dispatchGaussianSparseRasterizeForward(
     const torch::Tensor &conics,
     const torch::Tensor &features,
     const torch::Tensor &opacities,
-    const nanovdb::math::Vec4<uint32_t> &renderWindow,
+    const RenderWindow2D &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,
     const torch::Tensor &tileGaussianIds,

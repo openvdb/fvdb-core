@@ -115,7 +115,9 @@ struct RasterizeFromWorldCommonArgs {
     }
 };
 
-/// Vector-Jacobian product for y = normalizeSafe(x).
+/// Safely normalize a 3D vector.
+///
+/// Returns `v / ||v||` when `||v|| > 0`, otherwise returns zero.
 template <typename T>
 inline __device__ nanovdb::math::Vec3<T>
 normalizeSafe(const nanovdb::math::Vec3<T> &v) {
@@ -126,6 +128,9 @@ normalizeSafe(const nanovdb::math::Vec3<T> &v) {
     return nanovdb::math::Vec3<T>(T(0), T(0), T(0));
 }
 
+/// Vector-Jacobian product for `y = normalizeSafe(x)`.
+///
+/// Given upstream gradient `v_y = dL/dy`, returns `dL/dx`.
 template <typename T>
 inline __device__ nanovdb::math::Vec3<T>
 normalizeSafeVJP(const nanovdb::math::Vec3<T> &x, const nanovdb::math::Vec3<T> &v_y) {
