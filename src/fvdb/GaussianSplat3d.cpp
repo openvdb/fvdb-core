@@ -393,9 +393,9 @@ GaussianSplat3d::projectGaussiansImpl(const torch::Tensor &worldToCameraMatrices
 /// @brief Deduplicate pixel coordinates in a JaggedTensor.
 ///
 /// Encodes each pixel as a single int64 key incorporating its batch index and 2D coordinate,
-/// then calls torch::unique to find unique pixels and an inverse mapping. Returns the
-/// deduplicated pixels as a new JaggedTensor, the inverse index tensor, and a flag indicating
-/// whether any duplicates were found.
+/// sorts keys to find unique groups and builds an inverse mapping. Returns the deduplicated
+/// pixels as a new JaggedTensor, the inverse index tensor, and a flag indicating whether any
+/// duplicates were found.
 ///
 /// @param pixelsToRender The input JaggedTensor of pixel coordinates [total_pixels, 2]
 /// @param imageWidth Width of each image in pixels
@@ -440,7 +440,7 @@ deduplicatePixels(const JaggedTensor &pixelsToRender, int64_t imageWidth, int64_
     }
 
     // Assign a group ID (0-based) to each sorted position via cumsum
-    auto groupIds        = isGroupStart.to(torch::kLong).cumsum(0) - 1;
+    auto groupIds        = isGroupStart.cumsum(0) - 1;
     const auto numUnique = groupIds[-1].item<int64_t>() + 1;
 
     if (numUnique == totalPixels) {
@@ -459,8 +459,8 @@ deduplicatePixels(const JaggedTensor &pixelsToRender, int64_t imageWidth, int64_
     // Build new JaggedTensor offsets for the unique pixels
     auto uniqueBatchIdx = jidxLong.index_select(0, uniqueOrigIndices);
     auto numLists       = pixelsToRender.num_outer_lists();
-    auto countsPerList = torch::bincount(uniqueBatchIdx, {}, numLists);
-    auto newOffsets = torch::zeros({numLists + 1}, longOpts);
+    auto countsPerList  = torch::bincount(uniqueBatchIdx, {}, numLists);
+    auto newOffsets     = torch::zeros({numLists + 1}, longOpts);
     newOffsets.slice(0, 1).copy_(countsPerList.cumsum(0));
 
     auto newJidx = uniqueBatchIdx.to(fvdb::JIdxScalarType);
