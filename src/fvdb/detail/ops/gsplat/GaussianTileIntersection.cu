@@ -1020,10 +1020,6 @@ gaussianTileIntersectionPrivateUse1Impl(
         torch::Tensor intersectionValues =
             torch::empty({totalIntersections}, means2d.options().dtype(torch::kInt32));
 
-        // Allocate tensors to store the sorted intersections
-        torch::Tensor keysSorted = torch::empty_like(intersectionKeys);
-        torch::Tensor valsSorted = torch::empty_like(intersectionValues);
-
         // Compute a joffsets tensor that stores the offsets into the sorted Gaussian
         // intersections
         torch::Tensor tileJOffsets = torch::empty({numCameras, numTilesH, numTilesW},
@@ -1071,10 +1067,6 @@ gaussianTileIntersectionPrivateUse1Impl(
             prefetchSizes.emplace_back((intersectionsEnd - intersectionsStart) * sizeof(int64_t));
             prefetchPointers.emplace_back(intersectionValues.data_ptr<int32_t>() +
                                           intersectionsStart);
-            prefetchSizes.emplace_back((intersectionsEnd - intersectionsStart) * sizeof(int32_t));
-            prefetchPointers.emplace_back(keysSorted.data_ptr<int64_t>() + intersectionsStart);
-            prefetchSizes.emplace_back((intersectionsEnd - intersectionsStart) * sizeof(int64_t));
-            prefetchPointers.emplace_back(valsSorted.data_ptr<int32_t>() + intersectionsStart);
             prefetchSizes.emplace_back((intersectionsEnd - intersectionsStart) * sizeof(int32_t));
 
             sleepKernel<<<1, 1, 0, stream>>>();
@@ -1124,7 +1116,6 @@ gaussianTileIntersectionPrivateUse1Impl(
 
         mergeStreams();
 
-        const int32_t numBits = 32 + numCamIdBits + numTileIdBits;
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
@@ -1146,14 +1137,11 @@ gaussianTileIntersectionPrivateUse1Impl(
                 auto intersectionsEnd =
                     tilesPerGaussianCumsumPtr[deviceGaussianOffset + deviceGaussianCount - 1];
 
-                CUB_WRAPPER(cub::DeviceRadixSort::SortPairs,
+                CUB_WRAPPER(cub::DeviceMergeSort::SortPairs,
                             intersectionKeys.data_ptr<int64_t>() + intersectionsStart,
-                            keysSorted.data_ptr<int64_t>() + intersectionsStart,
                             intersectionValues.data_ptr<int32_t>() + intersectionsStart,
-                            valsSorted.data_ptr<int32_t>() + intersectionsStart,
                             intersectionsEnd - intersectionsStart,
-                            0,
-                            numBits,
+                            cuda::std::less<>{},
                             stream);
             }
         }
@@ -1185,14 +1173,14 @@ gaussianTileIntersectionPrivateUse1Impl(
                 numCameras,
                 totalTiles,
                 numTileIdBits,
-                keysSorted.const_data_ptr<int64_t>(),
+                intersectionKeys.const_data_ptr<int64_t>(),
                 tileJOffsets.data_ptr<int32_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
 
         mergeStreams();
 
-        return std::make_tuple(tileJOffsets, valsSorted);
+        return std::make_tuple(tileJOffsets, intersectionValues);
     }
 }
 
