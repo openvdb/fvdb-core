@@ -140,6 +140,31 @@ TYPED_TEST(DeduplicatePixelsTest, MultiBatchWithDuplicates) {
     EXPECT_EQ(inv[0].template item<int64_t>(), inv[2].template item<int64_t>());
 }
 
+TYPED_TEST(DeduplicatePixelsTest, MultiBatchAllSamePixel) {
+    auto opts   = tensorOpts<TypeParam>(torch::kCPU);
+    auto batch0 = torch::tensor({{1, 1}, {1, 1}, {1, 1}}, opts);
+    auto batch1 = torch::tensor({{2, 2}, {2, 2}}, opts);
+    auto pixels = fvdb::JaggedTensor(std::vector<torch::Tensor>{batch0, batch1}).to(torch::kCUDA);
+
+    auto [uniquePixels, inverseIndices, hasDuplicates] =
+        fvdb::deduplicatePixels(pixels, kImageWidth, kImageHeight);
+
+    EXPECT_TRUE(hasDuplicates);
+    EXPECT_EQ(uniquePixels.num_outer_lists(), 2);
+    EXPECT_EQ(uniquePixels.rsize(0), 2);
+
+    auto offsets = uniquePixels.joffsets().cpu();
+    EXPECT_EQ(offsets[0].template item<int64_t>(), 0);
+    EXPECT_EQ(offsets[1].template item<int64_t>(), 1);
+    EXPECT_EQ(offsets[2].template item<int64_t>(), 2);
+
+    auto inv = inverseIndices.cpu();
+    EXPECT_EQ(inv[0].template item<int64_t>(), inv[1].template item<int64_t>());
+    EXPECT_EQ(inv[0].template item<int64_t>(), inv[2].template item<int64_t>());
+    EXPECT_EQ(inv[3].template item<int64_t>(), inv[4].template item<int64_t>());
+    EXPECT_NE(inv[0].template item<int64_t>(), inv[3].template item<int64_t>());
+}
+
 TYPED_TEST(DeduplicatePixelsTest, RoundTripSomeDuplicates) {
     auto opts   = tensorOpts<TypeParam>(torch::kCPU);
     auto coords = torch::tensor({{3, 7}, {1, 2}, {3, 7}, {5, 5}, {1, 2}, {9, 0}}, opts);
