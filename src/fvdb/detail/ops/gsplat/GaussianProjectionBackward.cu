@@ -555,9 +555,18 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                 outNormalizeddLossdMeans2dNormAccum.value().data_ptr<float>();
             int32_t *outGradientStepCountsPtr = outGradientStepCounts.value().data_ptr<int32_t>();
 
+            std::vector<cudaEvent_t> events(c10::cuda::device_count());
+            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+                C10_CUDA_CHECK(cudaSetDevice(deviceId));
+                auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+                C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
+                C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+            }
+
             for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
                 C10_CUDA_CHECK(cudaSetDevice(deviceId));
                 auto stream = c10::cuda::getStreamFromPool(false, deviceId);
+                C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
 
                 int64_t deviceProblemOffset, deviceProblemSize;
                 std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
@@ -583,6 +592,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                                                          prefetchLocations.size(),
                                                          0,
                                                          stream));
+                C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
             }
 
             if (outNormalizedMaxRadiiAccum.has_value()) {
@@ -592,6 +602,8 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                 for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
                     C10_CUDA_CHECK(cudaSetDevice(deviceId));
                     auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+                    C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+                    C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
                     int64_t deviceProblemOffset, deviceProblemSize;
                     std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
@@ -618,6 +630,8 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                 for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
                     C10_CUDA_CHECK(cudaSetDevice(deviceId));
                     auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+                    C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+                    C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
                     int64_t deviceProblemOffset, deviceProblemSize;
                     std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
