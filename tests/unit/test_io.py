@@ -358,32 +358,6 @@ class TestIO(unittest.TestCase):
             self.assertTrue(torch.all(test_grid.voxel_sizes == test_grid_from_file.voxel_sizes))
             self.assertTrue(torch.all(test_grid.origins == test_grid_from_file.origins))
 
-    @parameterized.expand(["cpu", "cuda"])
-    def test_voxelsize_preserved_with_scalar_data(self, device):
-        """Issue #123: scalar float data grids should preserve voxel size and origin."""
-        torch.manual_seed(0)
-        np.random.seed(0)
-
-        pts = fvdb.JaggedTensor([torch.rand((100, 3)) for _ in range(4)]).to(device)
-        voxel_sizes = [0.1, 0.2, 0.3]
-        origins = [1.0, -2.0, 3.0]
-
-        test_grid = fvdb.GridBatch.from_points(pts, voxel_sizes=voxel_sizes, origins=origins)
-        data = test_grid.jagged_like(torch.rand(test_grid.total_voxels, device=device))
-
-        with tempfile.NamedTemporaryFile() as temp:
-            test_grid.save_nanovdb(temp.name, data)
-            loaded_grid, _, _ = fvdb.GridBatch.from_nanovdb(temp.name, device=device)
-
-            self.assertTrue(
-                torch.all(test_grid.voxel_sizes == loaded_grid.voxel_sizes),
-                f"Voxel sizes mismatch: {test_grid.voxel_sizes} vs {loaded_grid.voxel_sizes}",
-            )
-            self.assertTrue(
-                torch.all(test_grid.origins == loaded_grid.origins),
-                f"Origins mismatch: {test_grid.origins} vs {loaded_grid.origins}",
-            )
-
     @parameterized.expand(_voxelsize_standard_type_params)
     def test_voxelsize_preserved_with_standard_nanovdb_types(self, device, dtype_and_channels):
         """Issue #123: all standard NanoVDB data types should preserve voxel size and origin."""
