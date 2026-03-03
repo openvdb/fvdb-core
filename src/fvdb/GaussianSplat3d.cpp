@@ -390,6 +390,90 @@ GaussianSplat3d::projectGaussiansImpl(const torch::Tensor &worldToCameraMatrices
     return ret;
 }
 
+/// @brief Deduplicate pixel coordinates in a JaggedTensor.
+///
+/// Encodes each pixel as a single int64 key incorporating its batch index and 2D coordinate,
+/// then calls torch::unique to find unique pixels and an inverse mapping. Returns the
+/// deduplicated pixels as a new JaggedTensor, the inverse index tensor, and a flag indicating
+/// whether any duplicates were found.
+///
+/// @param pixelsToRender The input JaggedTensor of pixel coordinates [total_pixels, 2]
+/// @param imageWidth Width of each image in pixels
+/// @param imageHeight Height of each image in pixels
+/// @return Tuple of (uniquePixels JaggedTensor, inverseIndices tensor, hasDuplicates bool)
+std::tuple<JaggedTensor, torch::Tensor, bool>
+deduplicatePixels(const JaggedTensor &pixelsToRender, int64_t imageWidth, int64_t imageHeight) {
+    const auto totalPixels = pixelsToRender.rsize(0);
+    if (totalPixels == 0) {
+        auto emptyInverse = torch::empty({0}, pixelsToRender.jdata().options().dtype(torch::kLong));
+        return {pixelsToRender, emptyInverse, false};
+    }
+
+    const auto device  = pixelsToRender.device();
+    const auto jdata   = pixelsToRender.jdata();
+    const auto jidx    = pixelsToRender.jidx();
+    const int64_t numPixelsPerImage = imageHeight * imageWidth;
+    const auto longOpts = torch::TensorOptions().device(device).dtype(torch::kLong);
+    const auto boolOpts = torch::TensorOptions().device(device).dtype(torch::kBool);
+
+    // Encode (batchIdx, row, col) into a single int64 key:
+    //   key = batchIdx * (H * W) + row * W + col
+    // For single-list JaggedTensors, jidx may be empty; synthesize zeros.
+    auto jidxLong = jidx.size(0) == 0
+                        ? torch::zeros({totalPixels}, longOpts)
+                        : jidx.to(torch::kLong);
+    torch::Tensor rows, cols;
+    if (jdata.scalar_type() == torch::kInt32) {
+        rows = jdata.select(1, 0).to(torch::kLong);
+        cols = jdata.select(1, 1).to(torch::kLong);
+    } else {
+        rows = jdata.select(1, 0);
+        cols = jdata.select(1, 1);
+    }
+    auto keys = jidxLong * numPixelsPerImage + rows * imageWidth + cols;
+
+    // Sort keys and find group boundaries
+    auto [sortedKeys, sortPerm] = keys.sort();
+
+    auto isGroupStart = torch::ones({totalPixels}, boolOpts);
+    if (totalPixels > 1) {
+        isGroupStart.slice(0, 1).copy_(sortedKeys.slice(0, 1) != sortedKeys.slice(0, 0, -1));
+    }
+
+    // Assign a group ID (0-based) to each sorted position via cumsum
+    auto groupIds = isGroupStart.to(torch::kLong).cumsum(0) - 1;
+    const auto numUnique = groupIds[-1].item<int64_t>() + 1;
+
+    if (numUnique == totalPixels) {
+        return {pixelsToRender, torch::arange(totalPixels, longOpts), false};
+    }
+
+    // inverseIndices: map each original position to its group ID (= index in unique output)
+    auto inverseIndices = torch::empty({totalPixels}, longOpts);
+    inverseIndices.index_put_({sortPerm}, groupIds);
+
+    // Pick the first occurrence of each group (in sorted order) and map to original indices
+    auto firstInSorted     = isGroupStart.nonzero().squeeze(1);
+    auto uniqueOrigIndices = sortPerm.index_select(0, firstInSorted);
+    auto uniqueJData       = jdata.index_select(0, uniqueOrigIndices);
+
+    // Build new JaggedTensor offsets for the unique pixels
+    auto uniqueBatchIdx = jidxLong.index_select(0, uniqueOrigIndices);
+    auto numLists       = pixelsToRender.num_outer_lists();
+    auto countsPerList  = torch::zeros({numLists}, longOpts);
+    countsPerList.scatter_add_(0, uniqueBatchIdx.to(torch::kLong),
+                               torch::ones_like(uniqueBatchIdx, torch::kLong));
+    auto newOffsets = torch::zeros({numLists + 1}, longOpts);
+    newOffsets.slice(0, 1).copy_(countsPerList.cumsum(0));
+
+    auto newJidx = JaggedTensor::jidx_from_joffsets(newOffsets, numUnique);
+
+    auto uniquePixels = JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
+        uniqueJData, newOffsets, newJidx, pixelsToRender.jlidx(), numLists);
+
+    return {uniquePixels, inverseIndices, true};
+}
+
 GaussianSplat3d::SparseProjectedGaussianSplats
 GaussianSplat3d::sparseProjectGaussiansImpl(const JaggedTensor &pixelsToRender,
                                             const torch::Tensor &worldToCameraMatrices,
@@ -418,13 +502,21 @@ GaussianSplat3d::sparseProjectGaussiansImpl(const JaggedTensor &pixelsToRender,
     SparseProjectedGaussianSplats ret;
     ret.mRenderSettings = settings;
 
-    // Compute sparse tile info first (this determines which tiles are active)
+    // Deduplicate pixel coordinates. computeSparseInfo requires unique pixels because its
+    // tile bitmask has one bit per pixel position. We scatter results back after rendering.
+    auto [uniquePixels, inverseIndices, hasDuplicates] =
+        deduplicatePixels(pixelsToRender, settings.imageWidth, settings.imageHeight);
+    ret.inverseIndices      = inverseIndices;
+    ret.uniquePixelsToRender = uniquePixels;
+    ret.hasDuplicates       = hasDuplicates;
+
+    // Compute sparse tile info using deduplicated pixels
     const int numTilesW = std::ceil(settings.imageWidth / static_cast<float>(settings.tileSize));
     const int numTilesH = std::ceil(settings.imageHeight / static_cast<float>(settings.tileSize));
 
     const auto [activeTiles, activeTileMask, tilePixelMask, tilePixelCumsum, pixelMap] =
         fvdb::detail::ops::computeSparseInfo(
-            settings.tileSize, numTilesW, numTilesH, pixelsToRender);
+            settings.tileSize, numTilesW, numTilesH, uniquePixels);
 
     ret.activeTiles     = activeTiles;
     ret.activeTileMask  = activeTileMask;
@@ -594,8 +686,11 @@ GaussianSplat3d::sparseRenderImpl(const JaggedTensor &pixelsToRender,
     const SparseProjectedGaussianSplats &state = sparseProjectGaussiansImpl(
         pixelsToRender, worldToCameraMatrices, projectionMatrices, settings);
 
+    // Render using unique (deduplicated) pixels
+    const auto &renderPixels = state.hasDuplicates ? state.uniquePixelsToRender : pixelsToRender;
+
     auto rasterizeResult =
-        detail::autograd::RasterizeGaussiansToPixelsSparse::apply(pixelsToRender,
+        detail::autograd::RasterizeGaussiansToPixelsSparse::apply(renderPixels,
                                                                   state.perGaussian2dMean,
                                                                   state.perGaussianConic,
                                                                   state.perGaussianRenderQuantity,
@@ -613,8 +708,15 @@ GaussianSplat3d::sparseRenderImpl(const JaggedTensor &pixelsToRender,
                                                                   state.pixelMap,
                                                                   false);
     auto renderedPixelsJData = rasterizeResult[0];
-
     auto renderedAlphasJData = rasterizeResult[1];
+
+    // Scatter unique results back to all original positions (including duplicates).
+    // index_select's autograd backward (scatter_add) naturally sums gradients from duplicates.
+    if (state.hasDuplicates) {
+        renderedPixelsJData = renderedPixelsJData.index_select(0, state.inverseIndices);
+        renderedAlphasJData = renderedAlphasJData.index_select(0, state.inverseIndices);
+    }
+
     return {pixelsToRender.jagged_like(renderedPixelsJData),
             pixelsToRender.jagged_like(renderedAlphasJData)};
 }
@@ -649,20 +751,29 @@ GaussianSplat3d::sparseRenderNumContributingGaussiansImpl(
     const SparseProjectedGaussianSplats &state = sparseProjectGaussiansImpl(
         pixelsToRender, worldToCameraMatrices, projectionMatrices, settings);
 
-    return FVDB_DISPATCH_KERNEL_DEVICE(state.perGaussian2dMean.device(), [&]() {
+    const auto &renderPixels = state.hasDuplicates ? state.uniquePixelsToRender : pixelsToRender;
+
+    auto result = FVDB_DISPATCH_KERNEL_DEVICE(state.perGaussian2dMean.device(), [&]() {
         return fvdb::detail::ops::dispatchGaussianSparseRasterizeNumContributingGaussians<
             DeviceTag>(state.perGaussian2dMean,
                        state.perGaussianConic,
                        state.perGaussianOpacity,
                        state.tileOffsets,
                        state.tileGaussianIds,
-                       pixelsToRender,
+                       renderPixels,
                        state.activeTiles,
                        state.tilePixelMask,
                        state.tilePixelCumsum,
                        state.pixelMap,
                        settings);
     });
+
+    if (state.hasDuplicates) {
+        auto &[jt0, jt1] = result;
+        return {pixelsToRender.jagged_like(jt0.jdata().index_select(0, state.inverseIndices)),
+                pixelsToRender.jagged_like(jt1.jdata().index_select(0, state.inverseIndices))};
+    }
+    return result;
 }
 
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
@@ -715,21 +826,42 @@ GaussianSplat3d::sparseRenderContributingGaussianIdsImpl(
     const SparseProjectedGaussianSplats &state = sparseProjectGaussiansImpl(
         pixelsToRender, worldToCameraMatrices, projectionMatrices, settings);
 
-    return FVDB_DISPATCH_KERNEL_DEVICE(state.perGaussian2dMean.device(), [&]() {
+    const auto &renderPixels = state.hasDuplicates ? state.uniquePixelsToRender : pixelsToRender;
+
+    // When duplicates were removed, numContributingGaussians is in original (duplicated) space
+    // but the kernel expects it in unique-pixel space. Pick one representative per group.
+    std::optional<fvdb::JaggedTensor> kernelNumContrib = maybeNumContributingGaussians;
+    if (state.hasDuplicates && maybeNumContributingGaussians.has_value()) {
+        const auto device  = state.inverseIndices.device();
+        const auto longOpt = torch::TensorOptions().device(device).dtype(torch::kLong);
+        auto repIdx        = torch::empty({renderPixels.rsize(0)}, longOpt);
+        repIdx.scatter_(0, state.inverseIndices, torch::arange(pixelsToRender.rsize(0), longOpt));
+        auto uniqueData = maybeNumContributingGaussians->jdata().index_select(0, repIdx);
+        kernelNumContrib = renderPixels.jagged_like(uniqueData);
+    }
+
+    auto result = FVDB_DISPATCH_KERNEL_DEVICE(state.perGaussian2dMean.device(), [&]() {
         return fvdb::detail::ops::dispatchGaussianSparseRasterizeContributingGaussianIds<DeviceTag>(
             state.perGaussian2dMean,
             state.perGaussianConic,
             state.perGaussianOpacity,
             state.tileOffsets,
             state.tileGaussianIds,
-            pixelsToRender,
+            renderPixels,
             state.activeTiles,
             state.tilePixelMask,
             state.tilePixelCumsum,
             state.pixelMap,
             settings,
-            maybeNumContributingGaussians);
+            kernelNumContrib);
     });
+
+    if (state.hasDuplicates) {
+        auto &[jt0, jt1] = result;
+        return {pixelsToRender.jagged_like(jt0.jdata().index_select(0, state.inverseIndices)),
+                pixelsToRender.jagged_like(jt1.jdata().index_select(0, state.inverseIndices))};
+    }
+    return result;
 }
 
 GaussianSplat3d::ProjectedGaussianSplats
