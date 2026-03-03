@@ -459,13 +459,11 @@ deduplicatePixels(const JaggedTensor &pixelsToRender, int64_t imageWidth, int64_
     // Build new JaggedTensor offsets for the unique pixels
     auto uniqueBatchIdx = jidxLong.index_select(0, uniqueOrigIndices);
     auto numLists       = pixelsToRender.num_outer_lists();
-    auto countsPerList  = torch::zeros({numLists}, longOpts);
-    countsPerList.scatter_add_(
-        0, uniqueBatchIdx.to(torch::kLong), torch::ones_like(uniqueBatchIdx, torch::kLong));
+    auto countsPerList = torch::bincount(uniqueBatchIdx, {}, numLists);
     auto newOffsets = torch::zeros({numLists + 1}, longOpts);
     newOffsets.slice(0, 1).copy_(countsPerList.cumsum(0));
 
-    auto newJidx = JaggedTensor::jidx_from_joffsets(newOffsets, numUnique);
+    auto newJidx = uniqueBatchIdx.to(fvdb::JIdxScalarType);
 
     auto uniquePixels = JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
         uniqueJData, newOffsets, newJidx, pixelsToRender.jlidx(), numLists);
