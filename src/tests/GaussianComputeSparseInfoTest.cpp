@@ -396,10 +396,8 @@ TYPED_TEST(ComputeSparseInfo, MultiImageMultiTile) {
             uniqueUVsCPU, this->mTileSize, this->mNumTilesPerAxis, this->mNumPixelsPerAxis);
 
     EXPECT_TRUE(torch::equal(activeTiles, expectedActiveTiles.to(activeTiles.device())));
-    EXPECT_TRUE(
-        torch::equal(activeTileMask, expectedActiveTileMask.to(activeTileMask.device())));
+    EXPECT_TRUE(torch::equal(activeTileMask, expectedActiveTileMask.to(activeTileMask.device())));
     EXPECT_TRUE(torch::equal(tileBitMasks, expectedBitMasks.to(tileBitMasks.device())));
-    EXPECT_TRUE(
-        torch::equal(tilePixelOffsets, expectedPixelOffsets.to(tilePixelOffsets.device())));
+    EXPECT_TRUE(torch::equal(tilePixelOffsets, expectedPixelOffsets.to(tilePixelOffsets.device())));
     EXPECT_TRUE(torch::equal(pixelMap, expectedPixelMap.to(pixelMap.device())));
 }

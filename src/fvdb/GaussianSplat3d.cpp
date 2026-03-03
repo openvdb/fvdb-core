@@ -409,19 +409,18 @@ deduplicatePixels(const JaggedTensor &pixelsToRender, int64_t imageWidth, int64_
         return {pixelsToRender, emptyInverse, false};
     }
 
-    const auto device  = pixelsToRender.device();
-    const auto jdata   = pixelsToRender.jdata();
-    const auto jidx    = pixelsToRender.jidx();
+    const auto device               = pixelsToRender.device();
+    const auto jdata                = pixelsToRender.jdata();
+    const auto jidx                 = pixelsToRender.jidx();
     const int64_t numPixelsPerImage = imageHeight * imageWidth;
-    const auto longOpts = torch::TensorOptions().device(device).dtype(torch::kLong);
-    const auto boolOpts = torch::TensorOptions().device(device).dtype(torch::kBool);
+    const auto longOpts             = torch::TensorOptions().device(device).dtype(torch::kLong);
+    const auto boolOpts             = torch::TensorOptions().device(device).dtype(torch::kBool);
 
     // Encode (batchIdx, row, col) into a single int64 key:
     //   key = batchIdx * (H * W) + row * W + col
     // For single-list JaggedTensors, jidx may be empty; synthesize zeros.
-    auto jidxLong = jidx.size(0) == 0
-                        ? torch::zeros({totalPixels}, longOpts)
-                        : jidx.to(torch::kLong);
+    auto jidxLong =
+        jidx.size(0) == 0 ? torch::zeros({totalPixels}, longOpts) : jidx.to(torch::kLong);
     torch::Tensor rows, cols;
     if (jdata.scalar_type() == torch::kInt32) {
         rows = jdata.select(1, 0).to(torch::kLong);
@@ -441,7 +440,7 @@ deduplicatePixels(const JaggedTensor &pixelsToRender, int64_t imageWidth, int64_
     }
 
     // Assign a group ID (0-based) to each sorted position via cumsum
-    auto groupIds = isGroupStart.to(torch::kLong).cumsum(0) - 1;
+    auto groupIds        = isGroupStart.to(torch::kLong).cumsum(0) - 1;
     const auto numUnique = groupIds[-1].item<int64_t>() + 1;
 
     if (numUnique == totalPixels) {
@@ -461,8 +460,8 @@ deduplicatePixels(const JaggedTensor &pixelsToRender, int64_t imageWidth, int64_
     auto uniqueBatchIdx = jidxLong.index_select(0, uniqueOrigIndices);
     auto numLists       = pixelsToRender.num_outer_lists();
     auto countsPerList  = torch::zeros({numLists}, longOpts);
-    countsPerList.scatter_add_(0, uniqueBatchIdx.to(torch::kLong),
-                               torch::ones_like(uniqueBatchIdx, torch::kLong));
+    countsPerList.scatter_add_(
+        0, uniqueBatchIdx.to(torch::kLong), torch::ones_like(uniqueBatchIdx, torch::kLong));
     auto newOffsets = torch::zeros({numLists + 1}, longOpts);
     newOffsets.slice(0, 1).copy_(countsPerList.cumsum(0));
 
@@ -506,17 +505,16 @@ GaussianSplat3d::sparseProjectGaussiansImpl(const JaggedTensor &pixelsToRender,
     // tile bitmask has one bit per pixel position. We scatter results back after rendering.
     auto [uniquePixels, inverseIndices, hasDuplicates] =
         deduplicatePixels(pixelsToRender, settings.imageWidth, settings.imageHeight);
-    ret.inverseIndices      = inverseIndices;
+    ret.inverseIndices       = inverseIndices;
     ret.uniquePixelsToRender = uniquePixels;
-    ret.hasDuplicates       = hasDuplicates;
+    ret.hasDuplicates        = hasDuplicates;
 
     // Compute sparse tile info using deduplicated pixels
     const int numTilesW = std::ceil(settings.imageWidth / static_cast<float>(settings.tileSize));
     const int numTilesH = std::ceil(settings.imageHeight / static_cast<float>(settings.tileSize));
 
     const auto [activeTiles, activeTileMask, tilePixelMask, tilePixelCumsum, pixelMap] =
-        fvdb::detail::ops::computeSparseInfo(
-            settings.tileSize, numTilesW, numTilesH, uniquePixels);
+        fvdb::detail::ops::computeSparseInfo(settings.tileSize, numTilesW, numTilesH, uniquePixels);
 
     ret.activeTiles     = activeTiles;
     ret.activeTileMask  = activeTileMask;
@@ -836,7 +834,7 @@ GaussianSplat3d::sparseRenderContributingGaussianIdsImpl(
         const auto longOpt = torch::TensorOptions().device(device).dtype(torch::kLong);
         auto repIdx        = torch::empty({renderPixels.rsize(0)}, longOpt);
         repIdx.scatter_(0, state.inverseIndices, torch::arange(pixelsToRender.rsize(0), longOpt));
-        auto uniqueData = maybeNumContributingGaussians->jdata().index_select(0, repIdx);
+        auto uniqueData  = maybeNumContributingGaussians->jdata().index_select(0, repIdx);
         kernelNumContrib = renderPixels.jagged_like(uniqueData);
     }
 

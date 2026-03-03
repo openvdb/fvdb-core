@@ -61,8 +61,9 @@ namespace fvdb::detail::ops {
 //
 //  where uv_n is a tensor of shape [P_n, 2] of pixel coordinates in the n^th image in the batch.
 //  If a pixel (c, i, j) is in in pixels_to_render we call it *active*, otherwise it is *inactive*.
-//  PRECONDITION: pixels_to_render must not contain duplicates. The caller (sparseProjectGaussiansImpl)
-//  deduplicates before calling computeSparseInfo and scatters results back afterward.
+//  PRECONDITION: pixels_to_render must not contain duplicates. The caller
+//  (sparseProjectGaussiansImpl) deduplicates before calling computeSparseInfo and scatters results
+//  back afterward.
 //
 // Let:
 //     AP denote the number of active pixels.

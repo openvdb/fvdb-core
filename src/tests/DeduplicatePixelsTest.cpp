@@ -66,7 +66,7 @@ TYPED_TEST(DeduplicatePixelsTest, AllUnique) {
 }
 
 TYPED_TEST(DeduplicatePixelsTest, SomeDuplicates) {
-    auto opts   = tensorOpts<TypeParam>(torch::kCPU);
+    auto opts = tensorOpts<TypeParam>(torch::kCPU);
     // (0,0) appears at index 0 and 2
     auto coords = torch::tensor({{0, 0}, {1, 1}, {0, 0}, {2, 2}}, opts);
     auto pixels = fvdb::JaggedTensor(std::vector<torch::Tensor>{coords}).to(torch::kCUDA);
@@ -105,11 +105,11 @@ TYPED_TEST(DeduplicatePixelsTest, AllSamePixel) {
 }
 
 TYPED_TEST(DeduplicatePixelsTest, MultiBatchNoDuplicates) {
-    auto opts    = tensorOpts<TypeParam>(torch::kCPU);
+    auto opts = tensorOpts<TypeParam>(torch::kCPU);
     // Same (0,0) in different batches should NOT be considered duplicates
-    auto batch0  = torch::tensor({{0, 0}, {1, 1}}, opts);
-    auto batch1  = torch::tensor({{0, 0}, {2, 2}}, opts);
-    auto pixels  = fvdb::JaggedTensor(std::vector<torch::Tensor>{batch0, batch1}).to(torch::kCUDA);
+    auto batch0 = torch::tensor({{0, 0}, {1, 1}}, opts);
+    auto batch1 = torch::tensor({{0, 0}, {2, 2}}, opts);
+    auto pixels = fvdb::JaggedTensor(std::vector<torch::Tensor>{batch0, batch1}).to(torch::kCUDA);
 
     auto [uniquePixels, inverseIndices, hasDuplicates] =
         fvdb::deduplicatePixels(pixels, kImageWidth, kImageHeight);
@@ -120,7 +120,7 @@ TYPED_TEST(DeduplicatePixelsTest, MultiBatchNoDuplicates) {
 }
 
 TYPED_TEST(DeduplicatePixelsTest, MultiBatchWithDuplicates) {
-    auto opts   = tensorOpts<TypeParam>(torch::kCPU);
+    auto opts = tensorOpts<TypeParam>(torch::kCPU);
     // Batch 0: (0,0) duplicated; Batch 1: (0,0) alone (not a dup of batch 0's)
     auto batch0 = torch::tensor({{0, 0}, {1, 1}, {0, 0}}, opts);
     auto batch1 = torch::tensor({{0, 0}, {3, 3}}, opts);
@@ -174,8 +174,8 @@ TYPED_TEST(DeduplicatePixelsTest, RoundTripMultiBatch) {
 
 TYPED_TEST(DeduplicatePixelsTest, JaggedTensorOffsets) {
     auto opts   = tensorOpts<TypeParam>(torch::kCPU);
-    auto batch0 = torch::tensor({{0, 0}, {0, 0}, {1, 1}}, opts);     // 3 pixels, 2 unique
-    auto batch1 = torch::tensor({{2, 2}}, opts);                       // 1 pixel, 1 unique
+    auto batch0 = torch::tensor({{0, 0}, {0, 0}, {1, 1}}, opts);         // 3 pixels, 2 unique
+    auto batch1 = torch::tensor({{2, 2}}, opts);                         // 1 pixel, 1 unique
     auto batch2 = torch::tensor({{3, 3}, {4, 4}, {3, 3}, {4, 4}}, opts); // 4 pixels, 2 unique
     auto pixels =
         fvdb::JaggedTensor(std::vector<torch::Tensor>{batch0, batch1, batch2}).to(torch::kCUDA);
