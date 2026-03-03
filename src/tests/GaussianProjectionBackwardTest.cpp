@@ -387,10 +387,10 @@ TEST_F(GaussianProjectionBackwardTestFixture, TestPerspectiveProjection) {
               << "\n";
     std::cerr
         << "Max diff between outNormalizedMaxRadiiAccum "
-        << (outNormalizedMaxRadiiAccum - expectedNormalizedMaxRadiiAccum).abs().max().item<float>()
+        << (outNormalizedMaxRadiiAccum - expectedNormalizedMaxRadiiAccum).abs().max().item<int32_t>()
         << "\n";
     std::cerr << "Max diff between outGradientStepCounts "
-              << (outGradientStepCounts - expectedGradientStepCounts).abs().max().item<float>()
+              << (outGradientStepCounts - expectedGradientStepCounts).abs().max().item<int32_t>()
               << "\n";
 #endif
     EXPECT_TRUE(torch::allclose(dLossDMeans, expectedDLossDMeans, rtol, atol));
@@ -399,8 +399,8 @@ TEST_F(GaussianProjectionBackwardTestFixture, TestPerspectiveProjection) {
     EXPECT_TRUE(torch::allclose(dLossDCamToWorlds, expectedDLossDCamToWorlds, rtol, atol));
     EXPECT_TRUE(torch::allclose(
         outNormalizeddLossdMeans2dNormAccum, expectedNormalizeddLossdMeans2dNormAccum, rtol, atol));
-    EXPECT_TRUE(torch::allclose(outNormalizedMaxRadiiAccum, expectedNormalizedMaxRadiiAccum));
-    EXPECT_TRUE(torch::allclose(outGradientStepCounts, expectedGradientStepCounts));
+    EXPECT_TRUE(torch::equal(outNormalizedMaxRadiiAccum, expectedNormalizedMaxRadiiAccum));
+    EXPECT_TRUE(torch::equal(outGradientStepCounts, expectedGradientStepCounts));
 }
 
 TEST_F(GaussianProjectionBackwardTestFixture, TestOrthographicProjection) {
@@ -465,10 +465,10 @@ TEST_F(GaussianProjectionBackwardTestFixture, TestOrthographicProjection) {
               << "\n";
     std::cerr
         << "Max diff between outNormalizedMaxRadiiAccum "
-        << (outNormalizedMaxRadiiAccum - expectedNormalizedMaxRadiiAccum).abs().max().item<float>()
+        << (outNormalizedMaxRadiiAccum - expectedNormalizedMaxRadiiAccum).abs().max().item<int32_t>()
         << "\n";
     std::cerr << "Max diff between outGradientStepCounts "
-              << (outGradientStepCounts - expectedGradientStepCounts).abs().max().item<float>()
+              << (outGradientStepCounts - expectedGradientStepCounts).abs().max().item<int32_t>()
               << "\n";
 #endif
     double rtol = tol2.first;
@@ -480,6 +480,6 @@ TEST_F(GaussianProjectionBackwardTestFixture, TestOrthographicProjection) {
     EXPECT_TRUE(torch::allclose(dLossDCamToWorlds, expectedDLossDCamToWorlds, rtol, atol));
     EXPECT_TRUE(torch::allclose(
         outNormalizeddLossdMeans2dNormAccum, expectedNormalizeddLossdMeans2dNormAccum, rtol, atol));
-    EXPECT_TRUE(torch::allclose(outNormalizedMaxRadiiAccum, expectedNormalizedMaxRadiiAccum));
-    EXPECT_TRUE(torch::allclose(outGradientStepCounts, expectedGradientStepCounts));
+    EXPECT_TRUE(torch::equal(outNormalizedMaxRadiiAccum, expectedNormalizedMaxRadiiAccum));
+    EXPECT_TRUE(torch::equal(outGradientStepCounts, expectedGradientStepCounts));
 }

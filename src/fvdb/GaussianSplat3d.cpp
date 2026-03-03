@@ -48,7 +48,7 @@ GaussianSplat3d::evalSphericalHarmonicsImpl(const int64_t shDegreeToUse,
         // FIXME (Francis): Do this in the kernel instead of materializing a large
         //                  tensor here. It's a bit annoying because we'll have to update
         //                  the current backward pass
-        const torch::Tensor camToWorldMatrices = torch::inverse(worldToCameraMatrices);
+        auto [camToWorldMatrices, info] = torch::linalg_inv_ex(worldToCameraMatrices);
         // Equivalent to viewDirs = means[None, :, :] - camToWorldMatrices[:, None, :3, 3]
         // NOTE: viewDirs are not normalized here, they get normalized in the spherical
         //       harmonics evaluation kernel
@@ -1723,11 +1723,11 @@ gaussianRenderJagged(const JaggedTensor &means,     // [N1 + N2 + ..., 3]
                                                                     radii.unsqueeze(0))[0];
         } else {
             const auto sh0 =
-                sh_coeffs_batched.index({0, Slice(), Slice()}).unsqueeze(0);    // [1, nnz, 3]
+                sh_coeffs_batched.index({0, Slice(), Slice()}).unsqueeze(0);   // [1, nnz, 3]
             const auto shN =
-                sh_coeffs_batched.index({Slice(1, None), Slice(), Slice()});    // [K-1, nnz, 3]
-            const torch::Tensor camtoworlds = torch::inverse(viewmats.jdata()); // [ccz, 4, 4]
-            const torch::Tensor dirs        = means.jdata().index({gaussian_ids, Slice()}) -
+                sh_coeffs_batched.index({Slice(1, None), Slice(), Slice()});   // [K-1, nnz, 3]
+            auto [camtoworlds, info] = torch::linalg_inv_ex(viewmats.jdata()); // [ccz, 4, 4]
+            const torch::Tensor dirs = means.jdata().index({gaussian_ids, Slice()}) -
                                        camtoworlds.index({camera_ids, Slice(None, 3), 3});
             renderQuantities =
                 detail::autograd::EvaluateSphericalHarmonics::apply(actualShDegree,
