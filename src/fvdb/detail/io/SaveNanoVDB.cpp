@@ -435,6 +435,24 @@ saveIndexGridWithBlindData(const std::string &path,
             writeGridData->mGridName, nanovdb::GridData::MaxNameSize, name, "Grid name " + name);
         writeGridData->mGridSize =
             sourceGridByteSize + sizeof(nanovdb::GridBlindMetaData) + paddedBlindDataSizes[bi];
+
+        // Write voxelSize and origin
+        torch::Tensor voxelSize   = gridBatch.voxel_size_at(bi, torch::kFloat64);
+        torch::Tensor origin      = gridBatch.origin_at(bi, torch::kFloat64);
+        const double sx           = voxelSize[0].item<double>();
+        const double sy           = voxelSize[1].item<double>();
+        const double sz           = voxelSize[2].item<double>();
+        writeGridData->mVoxelSize = {sx, sy, sz};
+        const double mat[3][3]    = {{sx, 0.0, 0.0},        // row 0
+                                     {0.0, sy, 0.0},        // row 1
+                                     {0.0, 0.0, sz}};       // row 2
+        const double invMat[3][3] = {{1.0 / sx, 0.0, 0.0},  // row 0
+                                     {0.0, 1.0 / sy, 0.0},  // row 1
+                                     {0.0, 0.0, 1.0 / sz}}; // row 2
+        nanovdb::Vec3d trans      = {
+            origin[0].item<double>(), origin[1].item<double>(), origin[2].item<double>()};
+        writeGridData->mMap.set(mat, invMat, trans);
+
         readHead += sourceGridByteSize;
         writeHead += sourceGridByteSize;
 
