@@ -4,7 +4,6 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANUTILS_CUH
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANUTILS_CUH
 
-#include <fvdb/detail/ops/gsplat/GaussianCameraProjections.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 
 #include <nanovdb/math/Math.h>

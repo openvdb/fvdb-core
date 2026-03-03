@@ -75,8 +75,8 @@ C++ files:
 
 ## Opening Issues
 
-- Set appropriate labels (e.g. `bug`, `enhancement`, `documentation`).
 - Reference any related issues or PRs.
+- Set appropriate labels (e.g. `bug`, `enhancement`, `documentation`).
 - For bugs: provide clear reproduction steps, expected vs actual behavior, and
   environment details.
 
@@ -86,6 +86,7 @@ C++ files:
 - Include a test plan with specific commands to verify the change.
 - Ensure all CI checks pass before requesting review (DCO, codestyle, tests).
 - Keep PRs focused on a single concern.
+- Set appropriate labels matching the linked issue.
 
 **Do not commit unless directed:**
 - `.vscode/settings.json` - local IDE settings

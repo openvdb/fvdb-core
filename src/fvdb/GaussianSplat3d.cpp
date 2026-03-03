@@ -12,8 +12,11 @@
 #include <fvdb/detail/autograd/EvaluateSphericalHarmonics.h>
 #include <fvdb/detail/autograd/GaussianProjection.h>
 #include <fvdb/detail/autograd/GaussianRasterize.h>
+#include <fvdb/detail/autograd/GaussianRasterizeFromWorld.h>
 
 // Ops headers
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianProjectionUT.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeContributingGaussianIds.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeNumContributingGaussians.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeTopContributingGaussianIds.h>
@@ -46,7 +49,7 @@ GaussianSplat3d::evalSphericalHarmonicsImpl(const int64_t shDegreeToUse,
         // FIXME (Francis): Do this in the kernel instead of materializing a large
         //                  tensor here. It's a bit annoying because we'll have to update
         //                  the current backward pass
-        const torch::Tensor camToWorldMatrices = torch::inverse(worldToCameraMatrices);
+        auto [camToWorldMatrices, info] = torch::linalg_inv_ex(worldToCameraMatrices);
         // Equivalent to viewDirs = means[None, :, :] - camToWorldMatrices[:, None, :3, 3]
         // NOTE: viewDirs are not normalized here, they get normalized in the spherical
         //       harmonics evaluation kernel
@@ -343,12 +346,13 @@ GaussianSplat3d::projectGaussiansImpl(const torch::Tensor &worldToCameraMatrices
     ret.perGaussian2dMean = projectionResults[1];
     ret.perGaussianDepth  = projectionResults[2];
     ret.perGaussianConic  = projectionResults[3];
+    // FIXME: Use accessors in the kernel and use exapand
+    ret.perGaussianOpacity = opacities().repeat({C, 1});
     if (settings.antialias) {
-        // Antialias compensation is per-camera [C, N], so we must materialize [C, N]
-        ret.perGaussianOpacity = opacities().unsqueeze(0).expand({C, -1}) * projectionResults[4];
-    } else {
-        // Store as [N]; the opacities() accessor will lazily expand to [C, N] when accessed
-        ret.perGaussianOpacity = opacities();
+        ret.perGaussianOpacity *= projectionResults[4];
+        // FIXME (Francis): The contiguity requirement is dumb and should be
+        // removed by using accessors in the kernel
+        ret.perGaussianOpacity = ret.perGaussianOpacity.contiguous();
     }
 
     ret.perGaussianRenderQuantity = [&]() {
@@ -564,12 +568,13 @@ GaussianSplat3d::sparseProjectGaussiansImpl(const JaggedTensor &pixelsToRender,
     ret.perGaussian2dMean = projectionResults[1];
     ret.perGaussianDepth  = projectionResults[2];
     ret.perGaussianConic  = projectionResults[3];
+    // FIXME: Use accessors in the kernel and use expand
+    ret.perGaussianOpacity = opacities().repeat({C, 1});
     if (settings.antialias) {
-        // Antialias compensation is per-camera [C, N], so we must materialize [C, N]
-        ret.perGaussianOpacity = opacities().unsqueeze(0).expand({C, -1}) * projectionResults[4];
-    } else {
-        // Store as [N]; the opacities() accessor will lazily expand to [C, N] when accessed
-        ret.perGaussianOpacity = opacities();
+        ret.perGaussianOpacity *= projectionResults[4];
+        // FIXME (Francis): The contiguity requirement is dumb and should be
+        // removed by using accessors in the kernel
+        ret.perGaussianOpacity = ret.perGaussianOpacity.contiguous();
     }
 
     ret.perGaussianRenderQuantity = [&]() {
@@ -643,7 +648,7 @@ GaussianSplat3d::renderCropFromProjectedGaussiansImpl(
         projectedGaussians.perGaussian2dMean,
         projectedGaussians.perGaussianConic,
         projectedGaussians.perGaussianRenderQuantity,
-        projectedGaussians.opacities(),
+        projectedGaussians.perGaussianOpacity,
         cropWidth_,
         cropHeight_,
         cropOriginW_,
@@ -688,7 +693,7 @@ GaussianSplat3d::sparseRenderImpl(const JaggedTensor &pixelsToRender,
                                                                   state.perGaussian2dMean,
                                                                   state.perGaussianConic,
                                                                   state.perGaussianRenderQuantity,
-                                                                  state.opacities(),
+                                                                  state.perGaussianOpacity,
                                                                   settings.imageWidth,
                                                                   settings.imageHeight,
                                                                   0,
@@ -727,7 +732,7 @@ GaussianSplat3d::renderNumContributingGaussiansImpl(
         return fvdb::detail::ops::dispatchGaussianRasterizeNumContributingGaussians<DeviceTag>(
             state.perGaussian2dMean,
             state.perGaussianConic,
-            state.opacities(),
+            state.perGaussianOpacity,
             state.tileOffsets,
             state.tileGaussianIds,
             settings);
@@ -751,7 +756,7 @@ GaussianSplat3d::sparseRenderNumContributingGaussiansImpl(
         return fvdb::detail::ops::dispatchGaussianSparseRasterizeNumContributingGaussians<
             DeviceTag>(state.perGaussian2dMean,
                        state.perGaussianConic,
-                       state.opacities(),
+                       state.perGaussianOpacity,
                        state.tileOffsets,
                        state.tileGaussianIds,
                        renderPixels,
@@ -800,7 +805,7 @@ GaussianSplat3d::renderContributingGaussianIdsImpl(
         return fvdb::detail::ops::dispatchGaussianRasterizeContributingGaussianIds<DeviceTag>(
             state.perGaussian2dMean,
             state.perGaussianConic,
-            state.opacities(),
+            state.perGaussianOpacity,
             state.tileOffsets,
             state.tileGaussianIds,
             settings,
@@ -838,7 +843,7 @@ GaussianSplat3d::sparseRenderContributingGaussianIdsImpl(
         return fvdb::detail::ops::dispatchGaussianSparseRasterizeContributingGaussianIds<DeviceTag>(
             state.perGaussian2dMean,
             state.perGaussianConic,
-            state.opacities(),
+            state.perGaussianOpacity,
             state.tileOffsets,
             state.tileGaussianIds,
             renderPixels,
@@ -1010,6 +1015,154 @@ GaussianSplat3d::renderImages(const torch::Tensor &worldToCameraMatrices,
         projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settings);
     return renderCropFromProjectedGaussiansImpl(
         state, settings.tileSize, settings.imageWidth, settings.imageHeight, 0, 0, backgrounds);
+}
+
+std::tuple<torch::Tensor, torch::Tensor>
+GaussianSplat3d::renderImagesFromWorld(const torch::Tensor &worldToCameraMatrices,
+                                       const torch::Tensor &projectionMatrices,
+                                       const size_t imageWidth,
+                                       const size_t imageHeight,
+                                       const float near,
+                                       const float far,
+                                       const fvdb::detail::ops::DistortionModel cameraModel,
+                                       const std::optional<torch::Tensor> &distortionCoeffs,
+                                       const int64_t shDegreeToUse,
+                                       const size_t tileSize,
+                                       const float minRadius2d,
+                                       const float eps2d,
+                                       const bool antialias,
+                                       const std::optional<torch::Tensor> &backgrounds,
+                                       const std::optional<torch::Tensor> &masks) {
+    FVDB_FUNC_RANGE();
+    const int C = worldToCameraMatrices.size(0); // number of cameras
+    TORCH_CHECK(C > 0, "At least one camera must be provided (got 0)");
+
+    torch::Tensor perGaussianRadius;
+    torch::Tensor perGaussian2dMean;
+    torch::Tensor perGaussianDepth;
+    torch::Tensor perGaussianOpacity;
+    torch::Tensor perGaussianRenderQuantity;
+    torch::Tensor tileOffsets;
+    torch::Tensor tileGaussianIds;
+
+    if (cameraModel == fvdb::detail::ops::DistortionModel::PINHOLE ||
+        cameraModel == fvdb::detail::ops::DistortionModel::ORTHOGRAPHIC) {
+        // Fast path: reuse the classic projection for tiling/sorting.
+        RenderSettings settings;
+        settings.imageWidth     = imageWidth;
+        settings.imageHeight    = imageHeight;
+        settings.nearPlane      = near;
+        settings.farPlane       = far;
+        settings.projectionType = (cameraModel == fvdb::detail::ops::DistortionModel::ORTHOGRAPHIC)
+                                      ? fvdb::detail::ops::ProjectionType::ORTHOGRAPHIC
+                                      : fvdb::detail::ops::ProjectionType::PERSPECTIVE;
+        settings.shDegreeToUse  = shDegreeToUse;
+        settings.radiusClip     = minRadius2d;
+        settings.eps2d          = eps2d;
+        settings.antialias      = antialias;
+        settings.tileSize       = tileSize;
+        settings.renderMode     = RenderSettings::RenderMode::RGB;
+
+        const ProjectedGaussianSplats state =
+            projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settings);
+
+        perGaussianRadius         = state.perGaussianRadius;
+        perGaussian2dMean         = state.perGaussian2dMean;
+        perGaussianDepth          = state.perGaussianDepth;
+        perGaussianOpacity        = state.perGaussianOpacity;
+        perGaussianRenderQuantity = state.perGaussianRenderQuantity;
+        tileOffsets               = state.tileOffsets;
+        tileGaussianIds           = state.tileGaussianIds;
+    } else {
+        // OpenCV camera models: use UT projection to compute radii/depths for tiling/sorting.
+        // Rasterization itself is still performed with the 3DGS ray-ellipsoid kernel.
+        const torch::Tensor distortionCoeffs_ = distortionCoeffs.has_value()
+                                                    ? distortionCoeffs.value()
+                                                    : torch::empty({C, 0}, mMeans.options());
+
+        fvdb::detail::ops::UTParams utParams = fvdb::detail::ops::UTParams{};
+        const auto projectionResults         = FVDB_DISPATCH_KERNEL(mMeans.device(), [&]() {
+            return fvdb::detail::ops::dispatchGaussianProjectionForwardUT<DeviceTag>(
+                mMeans,
+                mQuats,
+                mLogScales,
+                worldToCameraMatrices,
+                worldToCameraMatrices,
+                projectionMatrices,
+                fvdb::detail::ops::RollingShutterType::NONE,
+                utParams,
+                cameraModel,
+                distortionCoeffs_,
+                static_cast<int64_t>(imageWidth),
+                static_cast<int64_t>(imageHeight),
+                eps2d,
+                near,
+                far,
+                minRadius2d,
+                antialias);
+        });
+
+        perGaussianRadius = std::get<0>(projectionResults);
+        perGaussian2dMean = std::get<1>(projectionResults);
+        perGaussianDepth  = std::get<2>(projectionResults);
+
+        // Opacities are stored per-Gaussian (shared across cameras). Expand to [C,N] and apply
+        // antialiasing compensation (if computed).
+        perGaussianOpacity = opacities().repeat({C, 1});
+        if (antialias) {
+            const torch::Tensor compensations = std::get<4>(projectionResults);
+            TORCH_CHECK(
+                compensations.defined(),
+                "UT projection returned an undefined compensation tensor in antialias mode");
+            perGaussianOpacity *= compensations;
+            perGaussianOpacity = perGaussianOpacity.contiguous();
+        }
+
+        // Evaluate SH for per-camera features. (We use the start pose for view-direction shading.)
+        perGaussianRenderQuantity =
+            evalSphericalHarmonicsImpl(shDegreeToUse, worldToCameraMatrices, perGaussianRadius);
+
+        const int numTilesW = std::ceil(imageWidth / static_cast<float>(tileSize));
+        const int numTilesH = std::ceil(imageHeight / static_cast<float>(tileSize));
+        std::tie(tileOffsets, tileGaussianIds) = FVDB_DISPATCH_KERNEL(mMeans.device(), [&]() {
+            return detail::ops::dispatchGaussianTileIntersection<DeviceTag>(perGaussian2dMean,
+                                                                            perGaussianRadius,
+                                                                            perGaussianDepth,
+                                                                            at::nullopt,
+                                                                            C,
+                                                                            tileSize,
+                                                                            numTilesH,
+                                                                            numTilesW);
+        });
+    }
+
+    const torch::Tensor distortionCoeffsForRaster = distortionCoeffs.has_value()
+                                                        ? distortionCoeffs.value()
+                                                        : torch::empty({C, 0}, mMeans.options());
+
+    auto outputs = detail::autograd::RasterizeGaussiansToPixelsFromWorld3DGS::apply(
+        mMeans,
+        mQuats,
+        mLogScales,
+        perGaussianRenderQuantity,
+        perGaussianOpacity,
+        worldToCameraMatrices,
+        worldToCameraMatrices,
+        projectionMatrices,
+        distortionCoeffsForRaster,
+        fvdb::detail::ops::RollingShutterType::NONE,
+        cameraModel,
+        static_cast<uint32_t>(imageWidth),
+        static_cast<uint32_t>(imageHeight),
+        0,
+        0,
+        static_cast<uint32_t>(tileSize),
+        tileOffsets,
+        tileGaussianIds,
+        backgrounds,
+        masks);
+
+    return {outputs[0], outputs[1]};
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
@@ -1666,11 +1819,11 @@ gaussianRenderJagged(const JaggedTensor &means,     // [N1 + N2 + ..., 3]
                                                                     radii.unsqueeze(0))[0];
         } else {
             const auto sh0 =
-                sh_coeffs_batched.index({0, Slice(), Slice()}).unsqueeze(0);    // [1, nnz, 3]
+                sh_coeffs_batched.index({0, Slice(), Slice()}).unsqueeze(0);   // [1, nnz, 3]
             const auto shN =
-                sh_coeffs_batched.index({Slice(1, None), Slice(), Slice()});    // [K-1, nnz, 3]
-            const torch::Tensor camtoworlds = torch::inverse(viewmats.jdata()); // [ccz, 4, 4]
-            const torch::Tensor dirs        = means.jdata().index({gaussian_ids, Slice()}) -
+                sh_coeffs_batched.index({Slice(1, None), Slice(), Slice()});   // [K-1, nnz, 3]
+            auto [camtoworlds, info] = torch::linalg_inv_ex(viewmats.jdata()); // [ccz, 4, 4]
+            const torch::Tensor dirs = means.jdata().index({gaussian_ids, Slice()}) -
                                        camtoworlds.index({camera_ids, Slice(None, 3), 3});
             renderQuantities =
                 detail::autograd::EvaluateSphericalHarmonics::apply(actualShDegree,

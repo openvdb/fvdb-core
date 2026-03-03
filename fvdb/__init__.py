@@ -126,7 +126,7 @@ def gaussian_render_jagged(
 
 from .convolution_plan import ConvolutionPlan
 from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
-from .enums import ProjectionType, ShOrderingMode
+from .enums import DistortionModel, ProjectionType, RollingShutterType, ShOrderingMode
 
 # Import torch-compatible functions that work with both Tensor and JaggedTensor
 from .torch_jagged import (
@@ -190,6 +190,8 @@ __all__ = [
     "JaggedTensor",
     "GaussianSplat3d",
     "ProjectedGaussianSplats",
+    "DistortionModel",
+    "RollingShutterType",
     "ProjectionType",
     "ShOrderingMode",
     "ConvolutionPlan",

@@ -1,6 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianMacros.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionJaggedForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
@@ -15,26 +16,21 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <typename T, bool Ortho>
+template <typename T, typename Camera>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 jaggedProjectionForwardKernel(const uint32_t B,
                               const int64_t N,
-                              const int64_t *__restrict__ gSizes,       // [B]
-                              const int64_t *__restrict__ cSizes,       // [B]
-                              const int64_t *__restrict__ gIndex,       // [B] start indices
-                              const int64_t *__restrict__ cIndex,       // [B] start indices
-                              const int64_t *__restrict__ nIndex,       // [B] start indices
-                              const T *__restrict__ means,              // [N, 3]
-                              const T *__restrict__ covars,             // [N, 6] optional
-                              const T *__restrict__ quats,              // [N, 4] optional
-                              const T *__restrict__ scales,             // [N, 3] optional
-                              const T *__restrict__ worldToCamMatrices, // [C, 4, 4]
-                              const T *__restrict__ projectionMatrices, // [C, 3, 3]
-                              const int32_t imageWidth,
-                              const int32_t imageHeight,
+                              const int64_t *__restrict__ gSizes, // [B]
+                              const int64_t *__restrict__ cSizes, // [B]
+                              const int64_t *__restrict__ gIndex, // [B] start indices
+                              const int64_t *__restrict__ cIndex, // [B] start indices
+                              const int64_t *__restrict__ nIndex, // [B] start indices
+                              const T *__restrict__ means,        // [N, 3]
+                              const T *__restrict__ covars,       // [N, 6] optional
+                              const T *__restrict__ quats,        // [N, 4] optional
+                              const T *__restrict__ scales,       // [N, 3] optional
+                              Camera camera,
                               const T eps2d,
-                              const T nearPlane,
-                              const T farPlane,
                               const T radiusClip,
                               // outputs
                               int32_t *__restrict__ radii,  // [N]
@@ -59,66 +55,25 @@ jaggedProjectionForwardKernel(const uint32_t B,
 
     // shift pointers to the current camera and gaussian
     means += gId * 3;
-    worldToCamMatrices += cId * 16;
-    projectionMatrices += cId * 9;
-
-    // input is row-major
-    const nanovdb::math::Mat3<T> R(worldToCamMatrices[0],
-                                   worldToCamMatrices[1],
-                                   worldToCamMatrices[2],   // 1st row
-                                   worldToCamMatrices[4],
-                                   worldToCamMatrices[5],
-                                   worldToCamMatrices[6],   // 2nd row
-                                   worldToCamMatrices[8],
-                                   worldToCamMatrices[9],
-                                   worldToCamMatrices[10]); // 3rd row
-    const nanovdb::math::Vec3<T> t(
-        worldToCamMatrices[3], worldToCamMatrices[7], worldToCamMatrices[11]);
-    // transform Gaussian center to camera space
-    const nanovdb::math::Vec3<T> meansCamSpace =
-        transformPointWorldToCam(R, t, nanovdb::math::Vec3<T>(means[0], means[1], means[2]));
-
-    if (meansCamSpace[2] < nearPlane || meansCamSpace[2] > farPlane) {
-        radii[idx] = 0;
-        return;
-    }
-
-    // transform Gaussian covariance to camera space
+    const nanovdb::math::Vec3<T> meanWorldSpace(means[0], means[1], means[2]);
     nanovdb::math::Mat3<T> covar;
     if (covars != nullptr) {
         covars += gId * 6;
-        covar = nanovdb::math::Mat3<T>(covars[0],
-                                       covars[1],
-                                       covars[2], // 1st row
-                                       covars[1],
-                                       covars[3],
-                                       covars[4], // 2nd row
-                                       covars[2],
-                                       covars[4],
-                                       covars[5]  // 3rd row
-        );
+        covar = loadCovarianceRowMajor6(covars);
     } else {
         // compute from quaternions and scales
         quats += gId * 4;
         scales += gId * 3;
-        covar = quaternionAndScaleToCovariance<T>(
-            nanovdb::math::Vec4<T>(quats[0], quats[1], quats[2], quats[3]),
-            nanovdb::math::Vec3<T>(scales[0], scales[1], scales[2]));
+        nanovdb::math::Vec4<T> quat;
+        nanovdb::math::Vec3<T> scale;
+        loadQuatScaleFromScalesRowMajor(quats, scales, quat, scale);
+        covar = quaternionAndScaleToCovariance<T>(quat, scale);
     }
-    const nanovdb::math::Mat3<T> covarCamSpace = transformCovarianceWorldToCam(R, covar);
-
-    // camera projection
-    const T fx = projectionMatrices[0], cx = projectionMatrices[2], fy = projectionMatrices[4],
-            cy             = projectionMatrices[5];
-    auto [covar2d, mean2d] = [&]() {
-        if constexpr (Ortho) {
-            return projectGaussianOrthographic<T>(
-                meansCamSpace, covarCamSpace, fx, fy, cx, cy, imageWidth, imageHeight);
-        } else {
-            return projectGaussianPerspective<T>(
-                meansCamSpace, covarCamSpace, fx, fy, cx, cy, imageWidth, imageHeight);
-        }
-    }();
+    auto [covar2d, mean2d, depthCam] = camera.projectWorldGaussianTo2D(cId, meanWorldSpace, covar);
+    if (!camera.isDepthVisible(depthCam)) {
+        radii[idx] = 0;
+        return;
+    }
 
     T compensation;
     const T det = addBlur(eps2d, covar2d, compensation);
@@ -130,10 +85,8 @@ jaggedProjectionForwardKernel(const uint32_t B,
     // compute the inverse of the 2d covariance
     const nanovdb::math::Mat2<T> covar2dInverse = covar2d.inverse();
 
-    // take 3 sigma as the radius (non differentiable)
-    const T b      = 0.5f * (covar2d[0][0] + covar2d[1][1]);
-    const T v1     = b + sqrt(max(0.01f, b * b - det));
-    const T radius = ceil(3.f * sqrt(v1));
+    // take 3 sigma as the radius (non-differentiable)
+    const T radius = radiusFromCovariance2dDet(covar2d, det, T(3));
     // T v2 = b - sqrt(max(0.1f, b * b - det));
     // T radius = ceil(3.f * sqrt(max(v1, v2)));
 
@@ -143,20 +96,20 @@ jaggedProjectionForwardKernel(const uint32_t B,
     }
 
     // mask out gaussians outside the image region
-    if (mean2d[0] + radius <= 0 || mean2d[0] - radius >= imageWidth || mean2d[1] + radius <= 0 ||
-        mean2d[1] - radius >= imageHeight) {
+    if (camera.isProjectedFootprintOutsideImage(mean2d, radius, radius)) {
         radii[idx] = 0;
         return;
     }
 
     // write to outputs
-    radii[idx]           = (int32_t)radius;
-    means2d[idx * 2]     = mean2d[0];
-    means2d[idx * 2 + 1] = mean2d[1];
-    depths[idx]          = meansCamSpace[2];
-    conics[idx * 3]      = covar2dInverse[0][0];
-    conics[idx * 3 + 1]  = covar2dInverse[0][1];
-    conics[idx * 3 + 2]  = covar2dInverse[1][1];
+    radii[idx]                               = (int32_t)radius;
+    means2d[idx * 2]                         = mean2d[0];
+    means2d[idx * 2 + 1]                     = mean2d[1];
+    depths[idx]                              = depthCam;
+    const nanovdb::math::Vec3<T> conicPacked = packConicRowMajor3(covar2dInverse);
+    conics[idx * 3]                          = conicPacked[0];
+    conics[idx * 3 + 1]                      = conicPacked[1];
+    conics[idx * 3 + 2]                      = conicPacked[2];
     if (compensations != nullptr) {
         compensations[idx] = compensation;
     }
@@ -199,6 +152,7 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
 
     // TODO: use inclusive sum
     const uint32_t B     = gSizes.size(0);
+    const int64_t C      = worldToCamMatrices.size(0);
     torch::Tensor cIndex = torch::cumsum(cSizes, 0, torch::kInt64) - cSizes;
     torch::Tensor gIndex = torch::cumsum(gSizes, 0, torch::kInt64) - gSizes;
     torch::Tensor nSize  = cSizes * gSizes;            // element size = Ci * Ni
@@ -219,7 +173,14 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
     }
     if (N) {
         if (ortho) {
-            jaggedProjectionForwardKernel<float, true>
+            const auto camera = OrthographicCamera<float>{projectionMatrices,
+                                                          worldToCamMatrices,
+                                                          static_cast<int32_t>(C),
+                                                          static_cast<int32_t>(imageWidth),
+                                                          static_cast<int32_t>(imageHeight),
+                                                          nearPlane,
+                                                          farPlane};
+            jaggedProjectionForwardKernel<float, OrthographicCamera<float>>
                 <<<GET_BLOCKS(N, DEFAULT_BLOCK_DIM), DEFAULT_BLOCK_DIM, 0, stream>>>(
                     B,
                     N,
@@ -232,13 +193,8 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
                     covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
                     covars.has_value() ? nullptr : quats.data_ptr<float>(),
                     covars.has_value() ? nullptr : scales.data_ptr<float>(),
-                    worldToCamMatrices.data_ptr<float>(),
-                    projectionMatrices.data_ptr<float>(),
-                    imageWidth,
-                    imageHeight,
+                    camera,
                     eps2d,
-                    nearPlane,
-                    farPlane,
                     minRadius2d,
                     radii.data_ptr<int32_t>(),
                     means2d.data_ptr<float>(),
@@ -246,7 +202,14 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
                     conics.data_ptr<float>(),
                     calc_compensations ? compensations.data_ptr<float>() : nullptr);
         } else {
-            jaggedProjectionForwardKernel<float, false>
+            const auto camera = PerspectiveCamera<float>{projectionMatrices,
+                                                         worldToCamMatrices,
+                                                         static_cast<int32_t>(C),
+                                                         static_cast<int32_t>(imageWidth),
+                                                         static_cast<int32_t>(imageHeight),
+                                                         nearPlane,
+                                                         farPlane};
+            jaggedProjectionForwardKernel<float, PerspectiveCamera<float>>
                 <<<GET_BLOCKS(N, DEFAULT_BLOCK_DIM), DEFAULT_BLOCK_DIM, 0, stream>>>(
                     B,
                     N,
@@ -259,13 +222,8 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
                     covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
                     covars.has_value() ? nullptr : quats.data_ptr<float>(),
                     covars.has_value() ? nullptr : scales.data_ptr<float>(),
-                    worldToCamMatrices.data_ptr<float>(),
-                    projectionMatrices.data_ptr<float>(),
-                    imageWidth,
-                    imageHeight,
+                    camera,
                     eps2d,
-                    nearPlane,
-                    farPlane,
                     minRadius2d,
                     radii.data_ptr<int32_t>(),
                     means2d.data_ptr<float>(),

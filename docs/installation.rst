@@ -42,6 +42,31 @@ PyTorch 2.8.0 + CUDA 12.8
 
 
 
+Installation from nightly builds
+-------------------------------------
+
+Nightly wheels are built from the latest ``main`` branch and published daily.
+The nightly version includes a date stamp and PyTorch/CUDA build identifiers
+(e.g. ``0.0.0.dev20260224+pt28.cu128``).
+
+PyTorch 2.8.0 + CUDA 12.8
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: bash
+
+    pip install fvdb-core==0.0.0.dev20260224+pt28.cu128 --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" torch==2.8.0 --extra-index-url https://download.pytorch.org/whl/cu128
+
+To list all available nightly versions:
+
+.. code-block:: bash
+
+    pip index versions fvdb-core --index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" --pre
+
+.. note::
+
+    Replace ``20260224`` with the desired nightly date. Nightly builds are retained for 30 days.
+
+
 Installation from source
 -----------------------------
 
