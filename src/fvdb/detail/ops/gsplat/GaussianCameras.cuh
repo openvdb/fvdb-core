@@ -166,18 +166,18 @@ loadQuatScaleFromScalesRowMajor(const T *quats4,
 }
 
 /// @brief Pinhole camera model without distortion for projection/rasterization kernels.
-template <typename T> struct PerspectiveCameraOp {
+template <typename T> struct PerspectiveCamera {
   public:
     using Mat3 = nanovdb::math::Mat3<T>;
     using Vec3 = nanovdb::math::Vec3<T>;
 
-    PerspectiveCameraOp(const torch::Tensor &projectionMatrices,
-                        const torch::Tensor &worldToCamMatrices,
-                        int32_t numCameras,
-                        int32_t imageWidth,
-                        int32_t imageHeight,
-                        T nearPlane,
-                        T farPlane)
+    PerspectiveCamera(const torch::Tensor &projectionMatrices,
+                      const torch::Tensor &worldToCamMatrices,
+                      int32_t numCameras,
+                      int32_t imageWidth,
+                      int32_t imageHeight,
+                      T nearPlane,
+                      T farPlane)
         : projectionMatricesAcc(
               projectionMatrices.template packed_accessor32<T, 3, torch::RestrictPtrTraits>()),
           worldToCamMatricesAcc(
@@ -431,18 +431,18 @@ template <typename T> struct PerspectiveCameraOp {
 };
 
 /// @brief Orthographic camera model without distortion for projection/rasterization kernels.
-template <typename T> struct OrthographicCameraOp {
+template <typename T> struct OrthographicCamera {
   public:
     using Mat3 = nanovdb::math::Mat3<T>;
     using Vec3 = nanovdb::math::Vec3<T>;
 
-    OrthographicCameraOp(const torch::Tensor &projectionMatrices,
-                         const torch::Tensor &worldToCamMatrices,
-                         int32_t numCameras,
-                         int32_t imageWidth,
-                         int32_t imageHeight,
-                         T nearPlane,
-                         T farPlane)
+    OrthographicCamera(const torch::Tensor &projectionMatrices,
+                       const torch::Tensor &worldToCamMatrices,
+                       int32_t numCameras,
+                       int32_t imageWidth,
+                       int32_t imageHeight,
+                       T nearPlane,
+                       T farPlane)
         : projectionMatricesAcc(
               projectionMatrices.template packed_accessor32<T, 3, torch::RestrictPtrTraits>()),
           worldToCamMatricesAcc(
@@ -646,24 +646,24 @@ template <typename T> struct OrthographicCameraOp {
 };
 
 /// @brief Pinhole + OpenCV-distortion camera with optional rolling shutter support.
-template <typename T> struct PerspectiveWithDistortionCameraOp {
+template <typename T> struct PerspectiveWithDistortionCamera {
   public:
     using Mat3 = nanovdb::math::Mat3<T>;
     using Vec3 = nanovdb::math::Vec3<T>;
     enum class ProjectionVisibility : uint8_t { BehindCamera, OutOfBounds, InImage };
 
-    PerspectiveWithDistortionCameraOp(const torch::Tensor &worldToCamStart,
-                                      const torch::Tensor &worldToCamEnd,
-                                      const torch::Tensor &projectionMatrices,
-                                      const torch::Tensor &distortionCoeffs,
-                                      uint32_t numCameras,
-                                      int64_t numDistCoeffs,
-                                      int32_t imageWidth,
-                                      int32_t imageHeight,
-                                      int32_t imageOriginW,
-                                      int32_t imageOriginH,
-                                      RollingShutterType rollingShutterType,
-                                      DistortionModel cameraModel)
+    PerspectiveWithDistortionCamera(const torch::Tensor &worldToCamStart,
+                                    const torch::Tensor &worldToCamEnd,
+                                    const torch::Tensor &projectionMatrices,
+                                    const torch::Tensor &distortionCoeffs,
+                                    uint32_t numCameras,
+                                    int64_t numDistCoeffs,
+                                    int32_t imageWidth,
+                                    int32_t imageHeight,
+                                    int32_t imageOriginW,
+                                    int32_t imageOriginH,
+                                    RollingShutterType rollingShutterType,
+                                    DistortionModel cameraModel)
         : worldToCamStartAcc(
               worldToCamStart.template packed_accessor32<T, 3, torch::RestrictPtrTraits>()),
           worldToCamEndAcc(
@@ -1066,21 +1066,21 @@ template <typename T> struct PerspectiveWithDistortionCameraOp {
 };
 
 /// @brief Orthographic camera with optional rolling shutter support.
-template <typename T> struct OrthographicWithDistortionCameraOp {
+template <typename T> struct OrthographicWithDistortionCamera {
   public:
     using Mat3 = nanovdb::math::Mat3<T>;
     using Vec3 = nanovdb::math::Vec3<T>;
     enum class ProjectionVisibility : uint8_t { BehindCamera, OutOfBounds, InImage };
 
-    OrthographicWithDistortionCameraOp(const torch::Tensor &worldToCamStart,
-                                       const torch::Tensor &worldToCamEnd,
-                                       const torch::Tensor &projectionMatrices,
-                                       uint32_t numCameras,
-                                       int32_t imageWidth,
-                                       int32_t imageHeight,
-                                       int32_t imageOriginW,
-                                       int32_t imageOriginH,
-                                       RollingShutterType rollingShutterType)
+    OrthographicWithDistortionCamera(const torch::Tensor &worldToCamStart,
+                                     const torch::Tensor &worldToCamEnd,
+                                     const torch::Tensor &projectionMatrices,
+                                     uint32_t numCameras,
+                                     int32_t imageWidth,
+                                     int32_t imageHeight,
+                                     int32_t imageOriginW,
+                                     int32_t imageOriginH,
+                                     RollingShutterType rollingShutterType)
         : worldToCamStartAcc(
               worldToCamStart.template packed_accessor32<T, 3, torch::RestrictPtrTraits>()),
           worldToCamEndAcc(

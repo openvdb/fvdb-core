@@ -179,7 +179,7 @@ enforcePSD2x2(const T minEigen, nanovdb::math::Mat2<T> &covar2d) {
 ///
 /// This struct owns tensor accessors, shared memory pointers, and scalar configuration for
 /// projecting N gaussians into C camera views.
-template <typename ScalarType, typename CameraOp> struct ProjectionForwardUT {
+template <typename ScalarType, typename Camera> struct ProjectionForwardUT {
     using Mat3 = nanovdb::math::Mat3<ScalarType>;
     using Vec3 = nanovdb::math::Vec3<ScalarType>;
     using Vec4 = nanovdb::math::Vec4<ScalarType>;
@@ -196,7 +196,7 @@ template <typename ScalarType, typename CameraOp> struct ProjectionForwardUT {
     const ScalarType mFarPlane;
     const ScalarType mRadiusClip;
     const UTParams mUTParams;
-    CameraOp mCameraOp;
+    Camera mCamera;
 
     // Tensor Inputs
     const fvdb::TorchRAcc64<ScalarType, 2> mMeansAcc;                   // [N, 3]
@@ -250,7 +250,7 @@ template <typename ScalarType, typename CameraOp> struct ProjectionForwardUT {
                         const ScalarType farPlane,
                         const ScalarType minRadius2d,
                         const UTParams &utParams,
-                        const CameraOp &cameraOp,
+                        const Camera &camera,
                         const bool calcCompensations,
                         const torch::Tensor &means,                   // [N, 3]
                         const torch::Tensor &quats,                   // [N, 4]
@@ -268,7 +268,7 @@ template <typename ScalarType, typename CameraOp> struct ProjectionForwardUT {
         : C(projectionMatrices.size(0)), N(means.size(0)),
           mImageWidth(static_cast<int32_t>(imageWidth)),
           mImageHeight(static_cast<int32_t>(imageHeight)), mEps2d(eps2d), mNearPlane(nearPlane),
-          mFarPlane(farPlane), mRadiusClip(minRadius2d), mUTParams(utParams), mCameraOp(cameraOp),
+          mFarPlane(farPlane), mRadiusClip(minRadius2d), mUTParams(utParams), mCamera(camera),
           mMeansAcc(means.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
           mQuatsAcc(quats.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
           mLogScalesAcc(logScales.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
@@ -317,7 +317,7 @@ template <typename ScalarType, typename CameraOp> struct ProjectionForwardUT {
         // - Rolling shutter modes: use center pose (t=0.5) as a conservative/stable cull.
         {
             const ScalarType tDepth = ScalarType(0.5);
-            const ScalarType depth  = mCameraOp.cameraDepthAtTime(camId, meanWorldSpace, tDepth);
+            const ScalarType depth  = mCamera.cameraDepthAtTime(camId, meanWorldSpace, tDepth);
             if (depth < mNearPlane || depth > mFarPlane) {
                 mOutRadiiAcc[camId][gaussianId] = 0;
                 return;
@@ -340,10 +340,10 @@ template <typename ScalarType, typename CameraOp> struct ProjectionForwardUT {
         nanovdb::math::Vec2<ScalarType> projected_points[7];
         bool valid_any                = false;
         constexpr int kNumSigmaPoints = 7;
-        using ProjectionVisibility    = typename CameraOp::ProjectionVisibility;
+        using ProjectionVisibility    = typename Camera::ProjectionVisibility;
         for (int i = 0; i < kNumSigmaPoints; ++i) {
             Vec2 pix;
-            const ProjectionVisibility status = mCameraOp.projectWorldPointToPixel(
+            const ProjectionVisibility status = mCamera.projectWorldPointToPixel(
                 camId, sigma_points_world[i], ScalarType(mUTParams.inImageMargin), pix);
             // Hard reject if any sigma point is behind the camera since the projection will be
             // discontinuous.
@@ -421,7 +421,7 @@ template <typename ScalarType, typename CameraOp> struct ProjectionForwardUT {
         mOutMeans2dAcc[camId][gaussianId][0] = mean2d[0];
         mOutMeans2dAcc[camId][gaussianId][1] = mean2d[1];
         mOutDepthsAcc[camId][gaussianId] =
-            mCameraOp.cameraDepthAtTime(camId, meanWorldSpace, ScalarType(0.5));
+            mCamera.cameraDepthAtTime(camId, meanWorldSpace, ScalarType(0.5));
         mOutConicsAcc[camId][gaussianId][0] = covar2dInverse[0][0];
         mOutConicsAcc[camId][gaussianId][1] = covar2dInverse[0][1];
         mOutConicsAcc[camId][gaussianId][2] = covar2dInverse[1][1];
@@ -434,13 +434,13 @@ template <typename ScalarType, typename CameraOp> struct ProjectionForwardUT {
 /// @brief CUDA kernel wrapper for `ProjectionForwardUT`.
 ///
 /// Each thread processes multiple (camera, gaussian) pairs in a grid-stride loop.
-template <typename ScalarType, typename CameraOp>
+template <typename ScalarType, typename Camera>
 __global__ __launch_bounds__(256) void
 projectionForwardUTKernel(int64_t offset,
                           int64_t count,
-                          ProjectionForwardUT<ScalarType, CameraOp> projectionForward) {
+                          ProjectionForwardUT<ScalarType, Camera> projectionForward) {
     alignas(nanovdb::math::Mat3<ScalarType>) extern __shared__ char sharedMemory[];
-    projectionForward.mCameraOp.loadSharedMemory(sharedMemory);
+    projectionForward.mCamera.loadSharedMemory(sharedMemory);
     __syncthreads();
 
     // parallelize over C * N
@@ -545,77 +545,77 @@ dispatchGaussianProjectionForwardUT<torch::kCUDA>(
 
     const size_t NUM_BLOCKS = GET_BLOCKS(C * N, 256);
     if (cameraModel == DistortionModel::ORTHOGRAPHIC) {
-        OrthographicWithDistortionCameraOp<scalar_t> cameraOp(worldToCamMatricesStart,
-                                                              worldToCamMatricesEnd,
-                                                              projectionMatrices,
-                                                              static_cast<uint32_t>(C),
-                                                              static_cast<int32_t>(imageWidth),
-                                                              static_cast<int32_t>(imageHeight),
-                                                              0,
-                                                              0,
-                                                              rollingShutterType);
-        const size_t SHARED_MEM_SIZE = cameraOp.numSharedMemBytes();
-        ProjectionForwardUT<scalar_t, OrthographicWithDistortionCameraOp<scalar_t>>
-            projectionForward(imageWidth,
-                              imageHeight,
-                              eps2d,
-                              nearPlane,
-                              farPlane,
-                              minRadius2d,
-                              utParams,
-                              cameraOp,
-                              calcCompensations,
-                              means,
-                              quats,
-                              logScales,
-                              worldToCamMatricesStart,
-                              worldToCamMatricesEnd,
-                              projectionMatrices,
-                              distortionCoeffs,
-                              outRadii,
-                              outMeans2d,
-                              outDepths,
-                              outConics,
-                              outCompensations);
-        projectionForwardUTKernel<scalar_t, OrthographicWithDistortionCameraOp<scalar_t>>
+        OrthographicWithDistortionCamera<scalar_t> camera(worldToCamMatricesStart,
+                                                          worldToCamMatricesEnd,
+                                                          projectionMatrices,
+                                                          static_cast<uint32_t>(C),
+                                                          static_cast<int32_t>(imageWidth),
+                                                          static_cast<int32_t>(imageHeight),
+                                                          0,
+                                                          0,
+                                                          rollingShutterType);
+        const size_t SHARED_MEM_SIZE = camera.numSharedMemBytes();
+        ProjectionForwardUT<scalar_t, OrthographicWithDistortionCamera<scalar_t>> projectionForward(
+            imageWidth,
+            imageHeight,
+            eps2d,
+            nearPlane,
+            farPlane,
+            minRadius2d,
+            utParams,
+            camera,
+            calcCompensations,
+            means,
+            quats,
+            logScales,
+            worldToCamMatricesStart,
+            worldToCamMatricesEnd,
+            projectionMatrices,
+            distortionCoeffs,
+            outRadii,
+            outMeans2d,
+            outDepths,
+            outConics,
+            outCompensations);
+        projectionForwardUTKernel<scalar_t, OrthographicWithDistortionCamera<scalar_t>>
             <<<NUM_BLOCKS, 256, SHARED_MEM_SIZE, stream>>>(0, C * N, projectionForward);
     } else {
-        PerspectiveWithDistortionCameraOp<scalar_t> cameraOp(worldToCamMatricesStart,
-                                                             worldToCamMatricesEnd,
-                                                             projectionMatrices,
-                                                             distortionCoeffs,
-                                                             static_cast<uint32_t>(C),
-                                                             distortionCoeffs.size(1),
-                                                             static_cast<int32_t>(imageWidth),
-                                                             static_cast<int32_t>(imageHeight),
-                                                             0,
-                                                             0,
-                                                             rollingShutterType,
-                                                             cameraModel);
-        const size_t SHARED_MEM_SIZE = cameraOp.numSharedMemBytes();
-        ProjectionForwardUT<scalar_t, PerspectiveWithDistortionCameraOp<scalar_t>>
-            projectionForward(imageWidth,
-                              imageHeight,
-                              eps2d,
-                              nearPlane,
-                              farPlane,
-                              minRadius2d,
-                              utParams,
-                              cameraOp,
-                              calcCompensations,
-                              means,
-                              quats,
-                              logScales,
-                              worldToCamMatricesStart,
-                              worldToCamMatricesEnd,
-                              projectionMatrices,
-                              distortionCoeffs,
-                              outRadii,
-                              outMeans2d,
-                              outDepths,
-                              outConics,
-                              outCompensations);
-        projectionForwardUTKernel<scalar_t, PerspectiveWithDistortionCameraOp<scalar_t>>
+        PerspectiveWithDistortionCamera<scalar_t> camera(worldToCamMatricesStart,
+                                                         worldToCamMatricesEnd,
+                                                         projectionMatrices,
+                                                         distortionCoeffs,
+                                                         static_cast<uint32_t>(C),
+                                                         distortionCoeffs.size(1),
+                                                         static_cast<int32_t>(imageWidth),
+                                                         static_cast<int32_t>(imageHeight),
+                                                         0,
+                                                         0,
+                                                         rollingShutterType,
+                                                         cameraModel);
+        const size_t SHARED_MEM_SIZE = camera.numSharedMemBytes();
+        ProjectionForwardUT<scalar_t, PerspectiveWithDistortionCamera<scalar_t>> projectionForward(
+            imageWidth,
+            imageHeight,
+            eps2d,
+            nearPlane,
+            farPlane,
+            minRadius2d,
+            utParams,
+            camera,
+            calcCompensations,
+            means,
+            quats,
+            logScales,
+            worldToCamMatricesStart,
+            worldToCamMatricesEnd,
+            projectionMatrices,
+            distortionCoeffs,
+            outRadii,
+            outMeans2d,
+            outDepths,
+            outConics,
+            outCompensations);
+        projectionForwardUTKernel<scalar_t, PerspectiveWithDistortionCamera<scalar_t>>
             <<<NUM_BLOCKS, 256, SHARED_MEM_SIZE, stream>>>(0, C * N, projectionForward);
     }
     C10_CUDA_KERNEL_LAUNCH_CHECK();

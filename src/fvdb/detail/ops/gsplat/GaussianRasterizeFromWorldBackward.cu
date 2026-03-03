@@ -28,9 +28,9 @@ template <uint32_t NUM_CHANNELS> struct SharedGaussian {
     float opacity;
 };
 
-template <uint32_t NUM_CHANNELS, typename CameraOp> struct RasterizeFromWorldBackwardArgs {
+template <uint32_t NUM_CHANNELS, typename Camera> struct RasterizeFromWorldBackwardArgs {
     RasterizeFromWorldCommonArgs commonArgs;
-    CameraOp cameraOp;
+    Camera camera;
     // Forward outputs
     fvdb::TorchRAcc64<float, 4> renderedAlphas; // [C,H,W,1]
     fvdb::TorchRAcc64<int32_t, 3> lastIds;      // [C,H,W]
@@ -45,10 +45,10 @@ template <uint32_t NUM_CHANNELS, typename CameraOp> struct RasterizeFromWorldBac
     fvdb::TorchRAcc64<float, 2> dOpacities; // [C,N]
 };
 
-template <uint32_t NUM_CHANNELS, typename CameraOp>
+template <uint32_t NUM_CHANNELS, typename Camera>
 __global__ void
 rasterizeFromWorld3DGSBackwardKernel(
-    const RasterizeFromWorldBackwardArgs<NUM_CHANNELS, CameraOp> args) {
+    const RasterizeFromWorldBackwardArgs<NUM_CHANNELS, Camera> args) {
     auto block               = cg::this_thread_block();
     const uint32_t blockSize = blockDim.x * blockDim.y;
     const auto &common       = args.commonArgs;
@@ -68,13 +68,13 @@ rasterizeFromWorld3DGSBackwardKernel(
     }
 
     extern __shared__ char smem[];
-    CameraOp cameraOpLocal = args.cameraOp;
-    uintptr_t smemAddr     = reinterpret_cast<uintptr_t>(smem);
-    smemAddr               = alignUpAddress(smemAddr, alignof(nanovdb::math::Mat3<float>));
-    cameraOpLocal.loadSharedMemory(reinterpret_cast<void *>(smemAddr));
+    Camera cameraLocal = args.camera;
+    uintptr_t smemAddr = reinterpret_cast<uintptr_t>(smem);
+    smemAddr           = alignUpAddress(smemAddr, alignof(nanovdb::math::Mat3<float>));
+    cameraLocal.loadSharedMemory(reinterpret_cast<void *>(smemAddr));
     block.sync();
 
-    const nanovdb::math::Ray<float> ray = cameraOpLocal.unprojectPixelToRay(camId, row, col);
+    const nanovdb::math::Ray<float> ray = cameraLocal.unprojectPixelToRay(camId, row, col);
 
     // Whether this pixel participates in the backward pass.
     //
@@ -123,7 +123,7 @@ rasterizeFromWorld3DGSBackwardKernel(
     }
 
     // Shared memory for gaussian batches (after camera-op shared state).
-    uintptr_t gaussAddr = smemAddr + cameraOpLocal.numSharedMemBytes();
+    uintptr_t gaussAddr = smemAddr + cameraLocal.numSharedMemBytes();
     gaussAddr           = alignUpAddress(gaussAddr, alignof(int32_t));
     int32_t *idBatch    = reinterpret_cast<int32_t *>(gaussAddr);               // [blockSize]
     gaussAddr += static_cast<size_t>(blockSize) * sizeof(int32_t);
@@ -369,14 +369,14 @@ rasterizeFromWorld3DGSBackwardKernel(
     }
 }
 
-template <uint32_t NUM_CHANNELS, typename CameraOp>
+template <uint32_t NUM_CHANNELS, typename Camera>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 launchBackward(const torch::Tensor &means,
                const torch::Tensor &quats,
                const torch::Tensor &logScales,
                const torch::Tensor &features,
                const torch::Tensor &opacities,
-               const CameraOp &cameraOp,
+               const Camera &camera,
                const uint32_t imageWidth,
                const uint32_t imageHeight,
                const uint32_t imageOriginW,
@@ -431,14 +431,14 @@ launchBackward(const torch::Tensor &means,
     args.masks       = opt.masks;
 
     const size_t blockSize = (size_t)tileSize * (size_t)tileSize;
-    size_t sharedMem = (alignof(nanovdb::math::Mat3<float>) - 1) + cameraOp.numSharedMemBytes();
+    size_t sharedMem       = (alignof(nanovdb::math::Mat3<float>) - 1) + camera.numSharedMemBytes();
     sharedMem += (alignof(int32_t) - 1) + blockSize * sizeof(int32_t);
     sharedMem += (alignof(SharedGaussian<NUM_CHANNELS>) - 1) +
                  blockSize * sizeof(SharedGaussian<NUM_CHANNELS>);
 
-    RasterizeFromWorldBackwardArgs<NUM_CHANNELS, CameraOp> kernelArgs{
+    RasterizeFromWorldBackwardArgs<NUM_CHANNELS, Camera> kernelArgs{
         args,
-        cameraOp,
+        camera,
         renderedAlphas.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
         lastIds.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
         dLossDRenderedFeatures.packed_accessor64<float, 4, torch::RestrictPtrTraits>(),
@@ -450,7 +450,7 @@ launchBackward(const torch::Tensor &means,
         dOpacities.packed_accessor64<float, 2, torch::RestrictPtrTraits>()};
 
     auto stream = at::cuda::getDefaultCUDAStream();
-    rasterizeFromWorld3DGSBackwardKernel<NUM_CHANNELS, CameraOp>
+    rasterizeFromWorld3DGSBackwardKernel<NUM_CHANNELS, Camera>
         <<<gridDim, blockDim, sharedMem, stream>>>(kernelArgs);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return {dMeans, dQuats, dLogScales, dFeatures, dOpacities};
@@ -534,76 +534,76 @@ dispatchGaussianRasterizeFromWorld3DGSBackward<torch::kCUDA>(
                                             masks);
 
     if (cameraModel == DistortionModel::ORTHOGRAPHIC) {
-        const OrthographicWithDistortionCameraOp<float> cameraOp{worldToCamMatricesStart,
-                                                                 worldToCamMatricesEnd,
-                                                                 projectionMatrices,
-                                                                 static_cast<uint32_t>(C),
-                                                                 (int32_t)imageWidth,
-                                                                 (int32_t)imageHeight,
-                                                                 (int32_t)imageOriginW,
-                                                                 (int32_t)imageOriginH,
-                                                                 rollingShutterType};
+        const OrthographicWithDistortionCamera<float> camera{worldToCamMatricesStart,
+                                                             worldToCamMatricesEnd,
+                                                             projectionMatrices,
+                                                             static_cast<uint32_t>(C),
+                                                             (int32_t)imageWidth,
+                                                             (int32_t)imageHeight,
+                                                             (int32_t)imageOriginW,
+                                                             (int32_t)imageOriginH,
+                                                             rollingShutterType};
         switch (channels) {
-            CALL_BWD_WITH_OP(1, OrthographicWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(2, OrthographicWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(3, OrthographicWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(4, OrthographicWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(5, OrthographicWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(8, OrthographicWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(9, OrthographicWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(16, OrthographicWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(17, OrthographicWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(32, OrthographicWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(33, OrthographicWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(64, OrthographicWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(65, OrthographicWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(128, OrthographicWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(129, OrthographicWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(192, OrthographicWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(193, OrthographicWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(256, OrthographicWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(257, OrthographicWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(512, OrthographicWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(513, OrthographicWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(1, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(2, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(3, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(4, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(5, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(8, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(9, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(16, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(17, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(32, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(33, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(64, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(65, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(128, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(129, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(192, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(193, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(256, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(257, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(512, OrthographicWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(513, OrthographicWithDistortionCamera<float>, camera)
         default:
             TORCH_CHECK_VALUE(
                 false, "Unsupported channels for rasterize-from-world-3dgs backward: ", channels);
         }
     } else {
-        const PerspectiveWithDistortionCameraOp<float> cameraOp{worldToCamMatricesStart,
-                                                                worldToCamMatricesEnd,
-                                                                projectionMatrices,
-                                                                distortionCoeffs,
-                                                                static_cast<uint32_t>(C),
-                                                                distortionCoeffs.size(1),
-                                                                (int32_t)imageWidth,
-                                                                (int32_t)imageHeight,
-                                                                (int32_t)imageOriginW,
-                                                                (int32_t)imageOriginH,
-                                                                rollingShutterType,
-                                                                cameraModel};
+        const PerspectiveWithDistortionCamera<float> camera{worldToCamMatricesStart,
+                                                            worldToCamMatricesEnd,
+                                                            projectionMatrices,
+                                                            distortionCoeffs,
+                                                            static_cast<uint32_t>(C),
+                                                            distortionCoeffs.size(1),
+                                                            (int32_t)imageWidth,
+                                                            (int32_t)imageHeight,
+                                                            (int32_t)imageOriginW,
+                                                            (int32_t)imageOriginH,
+                                                            rollingShutterType,
+                                                            cameraModel};
         switch (channels) {
-            CALL_BWD_WITH_OP(1, PerspectiveWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(2, PerspectiveWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(3, PerspectiveWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(4, PerspectiveWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(5, PerspectiveWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(8, PerspectiveWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(9, PerspectiveWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(16, PerspectiveWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(17, PerspectiveWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(32, PerspectiveWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(33, PerspectiveWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(64, PerspectiveWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(65, PerspectiveWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(128, PerspectiveWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(129, PerspectiveWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(192, PerspectiveWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(193, PerspectiveWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(256, PerspectiveWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(257, PerspectiveWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(512, PerspectiveWithDistortionCameraOp<float>, cameraOp)
-            CALL_BWD_WITH_OP(513, PerspectiveWithDistortionCameraOp<float>, cameraOp)
+            CALL_BWD_WITH_OP(1, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(2, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(3, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(4, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(5, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(8, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(9, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(16, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(17, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(32, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(33, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(64, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(65, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(128, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(129, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(192, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(193, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(256, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(257, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(512, PerspectiveWithDistortionCamera<float>, camera)
+            CALL_BWD_WITH_OP(513, PerspectiveWithDistortionCamera<float>, camera)
         default:
             TORCH_CHECK_VALUE(
                 false, "Unsupported channels for rasterize-from-world-3dgs backward: ", channels);

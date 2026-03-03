@@ -71,7 +71,7 @@ computeGradientState(const int32_t offset,
     outGradientStepCounts[idx] += stepCount;
 }
 
-template <typename T, typename CameraOp>
+template <typename T, typename Camera>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 projectionBackwardKernel(const int32_t offset,
                          const int32_t count,
@@ -82,7 +82,7 @@ projectionBackwardKernel(const int32_t offset,
                          const T *__restrict__ covars,    // [N, 6] optional
                          const T *__restrict__ quats,     // [N, 4] optional
                          const T *__restrict__ logScales, // [N, 3] optional
-                         CameraOp cameraOp,
+                         Camera camera,
                          const T eps2d,
                          // fwd outputs
                          const int32_t *__restrict__ radii,   // [C, N]
@@ -150,7 +150,7 @@ projectionBackwardKernel(const int32_t offset,
     }
     const nanovdb::math::Vec3<T> meanWorldSpace(means[0], means[1], means[2]);
     auto [dLossDCovar, dLossDPoint, dLossDRotation, dLossDTranslation] =
-        cameraOp.projectWorldGaussianTo2DVJP(
+        camera.projectWorldGaussianTo2DVJP(
             cId,
             meanWorldSpace,
             covar,
@@ -301,14 +301,14 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
     if (C && N) {
         if (ortho) {
             const size_t NUM_BLOCKS = GET_BLOCKS(C * N, DEFAULT_BLOCK_DIM);
-            const auto cameraOp     = OrthographicCameraOp<float>{projectionMatrices,
-                                                                  worldToCamMatrices,
-                                                                  static_cast<int32_t>(C),
-                                                                  static_cast<int32_t>(imageWidth),
-                                                                  static_cast<int32_t>(imageHeight),
-                                                                  kBackwardProjectionNearPlane,
-                                                                  kBackwardProjectionFarPlane};
-            projectionBackwardKernel<float, OrthographicCameraOp<float>>
+            const auto camera       = OrthographicCamera<float>{projectionMatrices,
+                                                                worldToCamMatrices,
+                                                                static_cast<int32_t>(C),
+                                                                static_cast<int32_t>(imageWidth),
+                                                                static_cast<int32_t>(imageHeight),
+                                                                kBackwardProjectionNearPlane,
+                                                                kBackwardProjectionFarPlane};
+            projectionBackwardKernel<float, OrthographicCamera<float>>
                 <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
                     0,
                     C * N,
@@ -318,7 +318,7 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
                     covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
                     covars.has_value() ? nullptr : quats.data_ptr<float>(),
                     covars.has_value() ? nullptr : logScales.data_ptr<float>(),
-                    cameraOp,
+                    camera,
                     eps2d,
                     radii.data_ptr<int32_t>(),
                     conics.data_ptr<float>(),
@@ -336,14 +336,14 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
                                                    : nullptr);
         } else {
             const size_t NUM_BLOCKS = GET_BLOCKS(C * N, DEFAULT_BLOCK_DIM);
-            const auto cameraOp     = PerspectiveCameraOp<float>{projectionMatrices,
-                                                                 worldToCamMatrices,
-                                                                 static_cast<int32_t>(C),
-                                                                 static_cast<int32_t>(imageWidth),
-                                                                 static_cast<int32_t>(imageHeight),
-                                                                 kBackwardProjectionNearPlane,
-                                                                 kBackwardProjectionFarPlane};
-            projectionBackwardKernel<float, PerspectiveCameraOp<float>>
+            const auto camera       = PerspectiveCamera<float>{projectionMatrices,
+                                                               worldToCamMatrices,
+                                                               static_cast<int32_t>(C),
+                                                               static_cast<int32_t>(imageWidth),
+                                                               static_cast<int32_t>(imageHeight),
+                                                               kBackwardProjectionNearPlane,
+                                                               kBackwardProjectionFarPlane};
+            projectionBackwardKernel<float, PerspectiveCamera<float>>
                 <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
                     0,
                     C * N,
@@ -353,7 +353,7 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
                     covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
                     covars.has_value() ? nullptr : quats.data_ptr<float>(),
                     covars.has_value() ? nullptr : logScales.data_ptr<float>(),
-                    cameraOp,
+                    camera,
                     eps2d,
                     radii.data_ptr<int32_t>(),
                     conics.data_ptr<float>(),
@@ -473,14 +473,14 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
             const size_t NUM_BLOCKS = GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM);
 
             if (ortho) {
-                const auto cameraOp = OrthographicCameraOp<float>{projectionMatrices,
-                                                                  worldToCamMatrices,
-                                                                  static_cast<int32_t>(C),
-                                                                  static_cast<int32_t>(imageWidth),
-                                                                  static_cast<int32_t>(imageHeight),
-                                                                  kBackwardProjectionNearPlane,
-                                                                  kBackwardProjectionFarPlane};
-                projectionBackwardKernel<float, OrthographicCameraOp<float>>
+                const auto camera = OrthographicCamera<float>{projectionMatrices,
+                                                              worldToCamMatrices,
+                                                              static_cast<int32_t>(C),
+                                                              static_cast<int32_t>(imageWidth),
+                                                              static_cast<int32_t>(imageHeight),
+                                                              kBackwardProjectionNearPlane,
+                                                              kBackwardProjectionFarPlane};
+                projectionBackwardKernel<float, OrthographicCamera<float>>
                     <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
                         deviceProblemOffset,
                         deviceProblemSize,
@@ -490,7 +490,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                         covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
                         covars.has_value() ? nullptr : quats.data_ptr<float>(),
                         covars.has_value() ? nullptr : logScales.data_ptr<float>(),
-                        cameraOp,
+                        camera,
                         eps2d,
                         radii.data_ptr<int32_t>(),
                         conics.data_ptr<float>(),
@@ -509,14 +509,14 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                         worldToCamMatricesRequiresGrad ? dLossDWorldToCamMatrices.data_ptr<float>()
                                                        : nullptr);
             } else {
-                const auto cameraOp = PerspectiveCameraOp<float>{projectionMatrices,
-                                                                 worldToCamMatrices,
-                                                                 static_cast<int32_t>(C),
-                                                                 static_cast<int32_t>(imageWidth),
-                                                                 static_cast<int32_t>(imageHeight),
-                                                                 kBackwardProjectionNearPlane,
-                                                                 kBackwardProjectionFarPlane};
-                projectionBackwardKernel<float, PerspectiveCameraOp<float>>
+                const auto camera = PerspectiveCamera<float>{projectionMatrices,
+                                                             worldToCamMatrices,
+                                                             static_cast<int32_t>(C),
+                                                             static_cast<int32_t>(imageWidth),
+                                                             static_cast<int32_t>(imageHeight),
+                                                             kBackwardProjectionNearPlane,
+                                                             kBackwardProjectionFarPlane};
+                projectionBackwardKernel<float, PerspectiveCamera<float>>
                     <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
                         deviceProblemOffset,
                         deviceProblemSize,
@@ -526,7 +526,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                         covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
                         covars.has_value() ? nullptr : quats.data_ptr<float>(),
                         covars.has_value() ? nullptr : logScales.data_ptr<float>(),
-                        cameraOp,
+                        camera,
                         eps2d,
                         radii.data_ptr<int32_t>(),
                         conics.data_ptr<float>(),

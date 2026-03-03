@@ -16,7 +16,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <typename T, typename CameraOp>
+template <typename T, typename Camera>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 jaggedProjectionForwardKernel(const uint32_t B,
                               const int64_t N,
@@ -29,7 +29,7 @@ jaggedProjectionForwardKernel(const uint32_t B,
                               const T *__restrict__ covars,       // [N, 6] optional
                               const T *__restrict__ quats,        // [N, 4] optional
                               const T *__restrict__ scales,       // [N, 3] optional
-                              CameraOp cameraOp,
+                              Camera camera,
                               const T eps2d,
                               const T radiusClip,
                               // outputs
@@ -69,9 +69,8 @@ jaggedProjectionForwardKernel(const uint32_t B,
         loadQuatScaleFromScalesRowMajor(quats, scales, quat, scale);
         covar = quaternionAndScaleToCovariance<T>(quat, scale);
     }
-    auto [covar2d, mean2d, depthCam] =
-        cameraOp.projectWorldGaussianTo2D(cId, meanWorldSpace, covar);
-    if (!cameraOp.isDepthVisible(depthCam)) {
+    auto [covar2d, mean2d, depthCam] = camera.projectWorldGaussianTo2D(cId, meanWorldSpace, covar);
+    if (!camera.isDepthVisible(depthCam)) {
         radii[idx] = 0;
         return;
     }
@@ -97,7 +96,7 @@ jaggedProjectionForwardKernel(const uint32_t B,
     }
 
     // mask out gaussians outside the image region
-    if (cameraOp.isProjectedFootprintOutsideImage(mean2d, radius, radius)) {
+    if (camera.isProjectedFootprintOutsideImage(mean2d, radius, radius)) {
         radii[idx] = 0;
         return;
     }
@@ -174,14 +173,14 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
     }
     if (N) {
         if (ortho) {
-            const auto cameraOp = OrthographicCameraOp<float>{projectionMatrices,
-                                                              worldToCamMatrices,
-                                                              static_cast<int32_t>(C),
-                                                              static_cast<int32_t>(imageWidth),
-                                                              static_cast<int32_t>(imageHeight),
-                                                              nearPlane,
-                                                              farPlane};
-            jaggedProjectionForwardKernel<float, OrthographicCameraOp<float>>
+            const auto camera = OrthographicCamera<float>{projectionMatrices,
+                                                          worldToCamMatrices,
+                                                          static_cast<int32_t>(C),
+                                                          static_cast<int32_t>(imageWidth),
+                                                          static_cast<int32_t>(imageHeight),
+                                                          nearPlane,
+                                                          farPlane};
+            jaggedProjectionForwardKernel<float, OrthographicCamera<float>>
                 <<<GET_BLOCKS(N, DEFAULT_BLOCK_DIM), DEFAULT_BLOCK_DIM, 0, stream>>>(
                     B,
                     N,
@@ -194,7 +193,7 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
                     covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
                     covars.has_value() ? nullptr : quats.data_ptr<float>(),
                     covars.has_value() ? nullptr : scales.data_ptr<float>(),
-                    cameraOp,
+                    camera,
                     eps2d,
                     minRadius2d,
                     radii.data_ptr<int32_t>(),
@@ -203,14 +202,14 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
                     conics.data_ptr<float>(),
                     calc_compensations ? compensations.data_ptr<float>() : nullptr);
         } else {
-            const auto cameraOp = PerspectiveCameraOp<float>{projectionMatrices,
-                                                             worldToCamMatrices,
-                                                             static_cast<int32_t>(C),
-                                                             static_cast<int32_t>(imageWidth),
-                                                             static_cast<int32_t>(imageHeight),
-                                                             nearPlane,
-                                                             farPlane};
-            jaggedProjectionForwardKernel<float, PerspectiveCameraOp<float>>
+            const auto camera = PerspectiveCamera<float>{projectionMatrices,
+                                                         worldToCamMatrices,
+                                                         static_cast<int32_t>(C),
+                                                         static_cast<int32_t>(imageWidth),
+                                                         static_cast<int32_t>(imageHeight),
+                                                         nearPlane,
+                                                         farPlane};
+            jaggedProjectionForwardKernel<float, PerspectiveCamera<float>>
                 <<<GET_BLOCKS(N, DEFAULT_BLOCK_DIM), DEFAULT_BLOCK_DIM, 0, stream>>>(
                     B,
                     N,
@@ -223,7 +222,7 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
                     covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
                     covars.has_value() ? nullptr : quats.data_ptr<float>(),
                     covars.has_value() ? nullptr : scales.data_ptr<float>(),
-                    cameraOp,
+                    camera,
                     eps2d,
                     minRadius2d,
                     radii.data_ptr<int32_t>(),

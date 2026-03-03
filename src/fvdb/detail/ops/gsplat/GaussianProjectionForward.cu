@@ -19,7 +19,7 @@ namespace ops {
 
 namespace {
 
-template <typename T, typename CameraOp> struct ProjectionForward {
+template <typename T, typename Camera> struct ProjectionForward {
     using Mat3 = nanovdb::math::Mat3<T>;
     using Vec3 = nanovdb::math::Vec3<T>;
     using Vec4 = nanovdb::math::Vec4<T>;
@@ -50,9 +50,9 @@ template <typename T, typename CameraOp> struct ProjectionForward {
     // This is okay since we allocate the memory and know the striding apriori.
     T *__restrict__ mOutCompensationsAcc; // [C, N] optional
 
-    CameraOp mCameraOp;
+    Camera mCamera;
 
-    ProjectionForward(CameraOp cameraOp,
+    ProjectionForward(Camera camera,
                       const T eps2d,
                       const T radiusClip,
                       const bool calcCompensations,
@@ -74,7 +74,7 @@ template <typename T, typename CameraOp> struct ProjectionForward {
           mOutConicsAcc(outConics.packed_accessor64<T, 3, torch::RestrictPtrTraits>()),
           mOutCompensationsAcc(outCompensations.defined() ? outCompensations.data_ptr<T>()
                                                           : nullptr),
-          mCameraOp(cameraOp) {}
+          mCamera(camera) {}
 
     inline __device__ Mat3
     computeCovarianceMatrix(int64_t gid) const {
@@ -105,8 +105,8 @@ template <typename T, typename CameraOp> struct ProjectionForward {
         const Vec3 meanWorldSpace(mMeansAcc[gid][0], mMeansAcc[gid][1], mMeansAcc[gid][2]);
         const Mat3 covar = computeCovarianceMatrix(gid);
         auto [covar2d, mean2d, depthCam] =
-            mCameraOp.projectWorldGaussianTo2D(cid, meanWorldSpace, covar);
-        if (!mCameraOp.isDepthVisible(depthCam)) {
+            mCamera.projectWorldGaussianTo2D(cid, meanWorldSpace, covar);
+        if (!mCamera.isDepthVisible(depthCam)) {
             mOutRadiiAcc[cid][gid] = 0;
             return;
         }
@@ -129,7 +129,7 @@ template <typename T, typename CameraOp> struct ProjectionForward {
         }
 
         // Mask out gaussians outside the image region
-        if (mCameraOp.isProjectedFootprintOutsideImage(mean2d, radius, radius)) {
+        if (mCamera.isProjectedFootprintOutsideImage(mean2d, radius, radius)) {
             mOutRadiiAcc[cid][gid] = 0;
             return;
         }
@@ -152,15 +152,15 @@ template <typename T, typename CameraOp> struct ProjectionForward {
     inline __device__ void
     loadCamerasIntoSharedMemory() {
         alignas(Mat3) extern __shared__ char sharedMemory[];
-        mCameraOp.loadSharedMemory(sharedMemory);
+        mCamera.loadSharedMemory(sharedMemory);
     }
 };
 
-template <typename T, typename CameraOp>
+template <typename T, typename Camera>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 projectionForwardKernel(int64_t offset,
                         int64_t count,
-                        ProjectionForward<T, CameraOp> projectionForward) {
+                        ProjectionForward<T, Camera> projectionForward) {
     projectionForward.loadCamerasIntoSharedMemory();
     __syncthreads();
 
@@ -225,15 +225,15 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
         C * (2 * sizeof(nanovdb::math::Mat3<scalar_t>) + sizeof(nanovdb::math::Vec3<scalar_t>));
 
     if (ortho) {
-        const auto cameraOp = OrthographicCameraOp<scalar_t>{projectionMatrices,
-                                                             worldToCamMatrices,
-                                                             static_cast<int32_t>(C),
-                                                             static_cast<int32_t>(imageWidth),
-                                                             static_cast<int32_t>(imageHeight),
-                                                             nearPlane,
-                                                             farPlane};
-        ProjectionForward<scalar_t, OrthographicCameraOp<scalar_t>> projectionForward(
-            cameraOp,
+        const auto camera = OrthographicCamera<scalar_t>{projectionMatrices,
+                                                         worldToCamMatrices,
+                                                         static_cast<int32_t>(C),
+                                                         static_cast<int32_t>(imageWidth),
+                                                         static_cast<int32_t>(imageHeight),
+                                                         nearPlane,
+                                                         farPlane};
+        ProjectionForward<scalar_t, OrthographicCamera<scalar_t>> projectionForward(
+            camera,
             eps2d,
             radiusClip,
             calcCompensations,
@@ -245,20 +245,20 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
             outDepths,
             outConics,
             outCompensations);
-        projectionForwardKernel<scalar_t, OrthographicCameraOp<scalar_t>>
+        projectionForwardKernel<scalar_t, OrthographicCamera<scalar_t>>
             <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
                 0, C * N, projectionForward);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     } else {
-        const auto cameraOp = PerspectiveCameraOp<scalar_t>{projectionMatrices,
-                                                            worldToCamMatrices,
-                                                            static_cast<int32_t>(C),
-                                                            static_cast<int32_t>(imageWidth),
-                                                            static_cast<int32_t>(imageHeight),
-                                                            nearPlane,
-                                                            farPlane};
-        ProjectionForward<scalar_t, PerspectiveCameraOp<scalar_t>> projectionForward(
-            cameraOp,
+        const auto camera = PerspectiveCamera<scalar_t>{projectionMatrices,
+                                                        worldToCamMatrices,
+                                                        static_cast<int32_t>(C),
+                                                        static_cast<int32_t>(imageWidth),
+                                                        static_cast<int32_t>(imageHeight),
+                                                        nearPlane,
+                                                        farPlane};
+        ProjectionForward<scalar_t, PerspectiveCamera<scalar_t>> projectionForward(
+            camera,
             eps2d,
             radiusClip,
             calcCompensations,
@@ -270,7 +270,7 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
             outDepths,
             outConics,
             outCompensations);
-        projectionForwardKernel<scalar_t, PerspectiveCameraOp<scalar_t>>
+        projectionForwardKernel<scalar_t, PerspectiveCamera<scalar_t>>
             <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
                 0, C * N, projectionForward);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
@@ -334,15 +334,15 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
             C * (2 * sizeof(nanovdb::math::Mat3<scalar_t>) + sizeof(nanovdb::math::Vec3<scalar_t>));
 
         if (ortho) {
-            const auto cameraOp = OrthographicCameraOp<scalar_t>{projectionMatrices,
-                                                                 worldToCamMatrices,
-                                                                 static_cast<int32_t>(C),
-                                                                 static_cast<int32_t>(imageWidth),
-                                                                 static_cast<int32_t>(imageHeight),
-                                                                 nearPlane,
-                                                                 farPlane};
-            ProjectionForward<scalar_t, OrthographicCameraOp<scalar_t>> projectionForward(
-                cameraOp,
+            const auto camera = OrthographicCamera<scalar_t>{projectionMatrices,
+                                                             worldToCamMatrices,
+                                                             static_cast<int32_t>(C),
+                                                             static_cast<int32_t>(imageWidth),
+                                                             static_cast<int32_t>(imageHeight),
+                                                             nearPlane,
+                                                             farPlane};
+            ProjectionForward<scalar_t, OrthographicCamera<scalar_t>> projectionForward(
+                camera,
                 eps2d,
                 radiusClip,
                 calcCompensations,
@@ -354,20 +354,20 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
                 outDepths,
                 outConics,
                 outCompensations);
-            projectionForwardKernel<scalar_t, OrthographicCameraOp<scalar_t>>
+            projectionForwardKernel<scalar_t, OrthographicCamera<scalar_t>>
                 <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
                     deviceProblemOffset, deviceProblemSize, projectionForward);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         } else {
-            const auto cameraOp = PerspectiveCameraOp<scalar_t>{projectionMatrices,
-                                                                worldToCamMatrices,
-                                                                static_cast<int32_t>(C),
-                                                                static_cast<int32_t>(imageWidth),
-                                                                static_cast<int32_t>(imageHeight),
-                                                                nearPlane,
-                                                                farPlane};
-            ProjectionForward<scalar_t, PerspectiveCameraOp<scalar_t>> projectionForward(
-                cameraOp,
+            const auto camera = PerspectiveCamera<scalar_t>{projectionMatrices,
+                                                            worldToCamMatrices,
+                                                            static_cast<int32_t>(C),
+                                                            static_cast<int32_t>(imageWidth),
+                                                            static_cast<int32_t>(imageHeight),
+                                                            nearPlane,
+                                                            farPlane};
+            ProjectionForward<scalar_t, PerspectiveCamera<scalar_t>> projectionForward(
+                camera,
                 eps2d,
                 radiusClip,
                 calcCompensations,
@@ -379,7 +379,7 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
                 outDepths,
                 outConics,
                 outCompensations);
-            projectionForwardKernel<scalar_t, PerspectiveCameraOp<scalar_t>>
+            projectionForwardKernel<scalar_t, PerspectiveCamera<scalar_t>>
                 <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
                     deviceProblemOffset, deviceProblemSize, projectionForward);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
