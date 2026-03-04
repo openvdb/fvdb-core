@@ -554,47 +554,6 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
             float *outNormalizeddLossdMeans2dNormAccumPtr =
                 outNormalizeddLossdMeans2dNormAccum.value().data_ptr<float>();
             int32_t *outGradientStepCountsPtr = outGradientStepCounts.value().data_ptr<int32_t>();
-
-            std::vector<cudaEvent_t> events(c10::cuda::device_count());
-            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-                C10_CUDA_CHECK(cudaSetDevice(deviceId));
-                auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-                C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
-                C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
-            }
-
-            // for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-            //     C10_CUDA_CHECK(cudaSetDevice(deviceId));
-            //     auto stream = c10::cuda::getStreamFromPool(false, deviceId);
-            //     C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
-
-            //     int64_t deviceProblemOffset, deviceProblemSize;
-            //     std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
-
-            //     std::vector<void *> prefetchPointers;
-            //     std::vector<size_t> prefetchSizes;
-            //     cudaMemLocation location = {cudaMemLocationTypeDevice, deviceId};
-            //     std::vector<cudaMemLocation> prefetchLocations = {location};
-            //     std::vector<size_t> prefetchLocationIndices    = {0};
-            //     for (uint32_t i = 0; i < C; ++i) {
-            //         prefetchPointers.emplace_back(radii.data_ptr<int32_t>() + deviceProblemOffset +
-            //                                       i * N);
-            //         prefetchSizes.emplace_back(deviceProblemSize * sizeof(int32_t));
-            //         prefetchPointers.emplace_back(dLossDMeans2d.data_ptr<float>() +
-            //                                       deviceProblemOffset + i * N);
-            //         prefetchSizes.emplace_back(deviceProblemSize * sizeof(float));
-            //     }
-            //     C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(prefetchPointers.data(),
-            //                                              prefetchSizes.data(),
-            //                                              prefetchPointers.size(),
-            //                                              prefetchLocations.data(),
-            //                                              prefetchLocationIndices.data(),
-            //                                              prefetchLocations.size(),
-            //                                              0,
-            //                                              stream));
-            //     C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
-            // }
-
             if (outNormalizedMaxRadiiAccum.has_value()) {
                 int32_t *outNormalizedMaxRadiiAccumPtr =
                     outNormalizedMaxRadiiAccum.value().data_ptr<int32_t>();
@@ -602,8 +561,6 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                 for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
                     C10_CUDA_CHECK(cudaSetDevice(deviceId));
                     auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-                    C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
-                    C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
                     int64_t deviceProblemOffset, deviceProblemSize;
                     std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
@@ -630,8 +587,6 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                 for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
                     C10_CUDA_CHECK(cudaSetDevice(deviceId));
                     auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-                    C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
-                    C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
                     int64_t deviceProblemOffset, deviceProblemSize;
                     std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);

@@ -563,6 +563,7 @@ launchRasterizeForwardKernels(
             const dim3 gridDim  = {deviceTileCount, 1, 1};
 
             rasterizeGaussiansForward<<<gridDim, blockDim, sharedMem, stream>>>(args);
+
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
     }
