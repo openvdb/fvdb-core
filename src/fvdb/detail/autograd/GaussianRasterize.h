@@ -26,7 +26,8 @@ struct RasterizeGaussiansToPixels : public torch::autograd::Function<RasterizeGa
                                 const Variable &tileOffsets,     // [C, tile_height, tile_width]
                                 const Variable &tileGaussianIds, // [n_isects]
                                 const bool absgrad,
-                                std::optional<Variable> backgrounds = std::nullopt); // [C, D]
+                                std::optional<Variable> backgrounds = std::nullopt, // [C, D]
+                                std::optional<Variable> masks = std::nullopt); // [C, tileH, tileW]
 
     static VariableList backward(AutogradContext *ctx, VariableList gradOutput);
 };

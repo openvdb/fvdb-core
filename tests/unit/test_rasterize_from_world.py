@@ -121,8 +121,8 @@ def _render_images_from_world_masked_edge_tile_worker(queue) -> None:
         world_to_cam, K = _default_camera(device, dtype, cx=8.0, cy=8.0)
 
         backgrounds = torch.tensor([[0.10, -0.20, 0.30]], device=device, dtype=dtype)  # [C,D]
-        masks = torch.ones((C, 2, 2), device=device, dtype=torch.bool)
-        masks[0, 1, 1] = False  # mask out the bottom-right edge tile
+        masks = torch.ones((C, image_height, image_width), device=device, dtype=torch.bool)
+        masks[0, tile_size:, tile_size:] = False  # mask out all pixels in the bottom-right edge tile
 
         rendered, alphas = _render_from_world(
             fvdb,
@@ -579,7 +579,7 @@ def test_gaussiansplat3d_render_images_from_world_backward_with_backgrounds_and_
     world_to_cam, K = _default_camera(device, dtype, cx=7.5, cy=7.5)
 
     backgrounds = torch.tensor([[0.1, -0.2, 0.3]], device=device, dtype=dtype)  # [C,D]
-    masks = torch.ones((C, 1, 1), device=device, dtype=torch.bool)  # enable the only tile
+    masks = torch.ones((C, image_height, image_width), device=device, dtype=torch.bool)
 
     rendered, alphas = _render_from_world(
         fvdb,
@@ -636,7 +636,7 @@ def test_gaussiansplat3d_render_images_from_world_masks_write_background_and_zer
     world_to_cam, K = _default_camera(device, dtype, cx=7.5, cy=7.5)
 
     backgrounds = torch.tensor([[0.10, -0.20, 0.30]], device=device, dtype=dtype)  # [C,D]
-    masks = torch.zeros((C, 1, 1), device=device, dtype=torch.bool)  # mask out the only tile
+    masks = torch.zeros((C, image_height, image_width), device=device, dtype=torch.bool)
 
     rendered, alphas = _render_from_world(
         fvdb,
