@@ -793,7 +793,7 @@ fusedSSIMBackwardPrivateUse1(double C1,
                                              static_cast<int>(img1_.numel()) - localElementOffset);
             }
 
-            std::vector<torch::Tensor> tensors = { dL_dimg1 };
+            std::vector<torch::Tensor> tensors = {dL_dimg1};
             imagePrefetchBatchAsync(
                 tensors, localElementOffset, localElementCount, deviceId, stream);
         }
