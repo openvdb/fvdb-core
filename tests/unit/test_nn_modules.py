@@ -277,17 +277,17 @@ class TestNNModules(unittest.TestCase):
             data = torch.randn(grid.total_voxels, num_channels, device=device, dtype=dtype, requires_grad=True)
             features = grid.jagged_like(data)
 
-            our_gn = fvnn.GroupNorm(
-                num_groups=num_groups, num_channels=num_channels, affine=affine, dtype=dtype
-            ).to(device)
+            our_gn = fvnn.GroupNorm(num_groups=num_groups, num_channels=num_channels, affine=affine, dtype=dtype).to(
+                device
+            )
             our_output = our_gn(features, grid)
             our_output.jdata.sum().backward()
             self.assertIsNotNone(data.grad)
             our_grad = data.grad.clone()
 
-            torch_gn = nn.GroupNorm(
-                num_groups=num_groups, num_channels=num_channels, affine=affine, dtype=dtype
-            ).to(device)
+            torch_gn = nn.GroupNorm(num_groups=num_groups, num_channels=num_channels, affine=affine, dtype=dtype).to(
+                device
+            )
             if affine:
                 with torch.no_grad():
                     torch_gn.weight.copy_(our_gn.weight)
