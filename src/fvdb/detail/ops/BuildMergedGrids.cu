@@ -3,6 +3,7 @@
 //
 #include <fvdb/detail/TorchDeviceBuffer.h>
 #include <fvdb/detail/ops/BuildMergedGrids.h>
+#include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
@@ -13,6 +14,10 @@
 #include <c10/cuda/CUDAGuard.h>
 
 namespace fvdb::detail::ops {
+
+template <torch::DeviceType>
+nanovdb::GridHandle<TorchDeviceBuffer> dispatchMergeGrids(const GridBatchImpl &gridBatch1,
+                                                          const GridBatchImpl &gridBatch2);
 
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
@@ -109,6 +114,20 @@ dispatchMergeGrids<torch::kCPU>(const GridBatchImpl &gridBatch1, const GridBatch
     } else {
         return nanovdb::mergeGrids(gridHandles);
     }
+}
+
+c10::intrusive_ptr<GridBatchImpl>
+mergeGrids(const GridBatchImpl &gridBatch1, const GridBatchImpl &gridBatch2) {
+    TORCH_CHECK_VALUE(gridBatch1.batchSize() == gridBatch2.batchSize(),
+                      "GridBatches to merge should have same batch size");
+    TORCH_CHECK_VALUE(gridBatch1.device() == gridBatch2.device(),
+                      "GridBatches to merge should be on same device/host");
+    std::vector<nanovdb::Vec3d> voxS, voxO;
+    gridBatch1.gridVoxelSizesAndOrigins(voxS, voxO);
+    auto hdl = FVDB_DISPATCH_KERNEL_DEVICE(gridBatch1.device(), [&]() {
+        return dispatchMergeGrids<DeviceTag>(gridBatch1, gridBatch2);
+    });
+    return c10::make_intrusive<GridBatchImpl>(std::move(hdl), voxS, voxO);
 }
 
 } // namespace fvdb::detail::ops

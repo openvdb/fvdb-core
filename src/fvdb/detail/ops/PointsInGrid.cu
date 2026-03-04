@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/PointsInGrid.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
@@ -70,9 +71,11 @@ PointsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points) {
     return points.jagged_like(outMask);
 }
 
+namespace {
+
 template <torch::DeviceType DeviceTag>
 JaggedTensor
-dispatchPointsInGrid<DeviceTag>(const GridBatchImpl &batchHdl, const JaggedTensor &points) {
+dispatchPointsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points) {
     batchHdl.checkNonEmptyGrid();
     batchHdl.checkDevice(points);
     TORCH_CHECK_TYPE(points.is_floating_point(), "points must have a floating point type");
@@ -92,12 +95,18 @@ dispatchPointsInGrid<DeviceTag>(const GridBatchImpl &batchHdl, const JaggedTenso
         c10::kHalf);
 }
 
-template JaggedTensor dispatchPointsInGrid<torch::kCPU>(const GridBatchImpl &,
-                                                        const JaggedTensor &);
-template JaggedTensor dispatchPointsInGrid<torch::kCUDA>(const GridBatchImpl &,
-                                                         const JaggedTensor &);
-template JaggedTensor dispatchPointsInGrid<torch::kPrivateUse1>(const GridBatchImpl &,
-                                                                const JaggedTensor &);
+} // namespace
+
+JaggedTensor
+pointsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points) {
+    TORCH_CHECK_VALUE(
+        points.ldim() == 1,
+        "Expected points to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+        points.ldim(),
+        "list dimensions");
+    return FVDB_DISPATCH_KERNEL(
+        points.device(), [&]() { return dispatchPointsInGrid<DeviceTag>(batchHdl, points); });
+}
 
 } // namespace ops
 } // namespace detail

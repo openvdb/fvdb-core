@@ -13,10 +13,9 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-torch::Tensor dispatchSplatIntoGridBezier(const GridBatchImpl &batchHdl,
-                                          const JaggedTensor &points,
-                                          const torch::Tensor &pointsData);
+torch::Tensor splatIntoGridBezier(const GridBatchImpl &batchHdl,
+                                  const JaggedTensor &points,
+                                  const torch::Tensor &pointsData);
 
 } // namespace ops
 } // namespace detail

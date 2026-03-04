@@ -7,14 +7,11 @@
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchImpl.h>
 
-#include <torch/types.h>
-
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-JaggedTensor dispatchCoordsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &coords);
+JaggedTensor coordsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &coords);
 
 } // namespace ops
 } // namespace detail

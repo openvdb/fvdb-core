@@ -6,13 +6,6 @@
 
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchImpl.h>
-#include <fvdb/detail/TorchDeviceBuffer.h>
-#include <fvdb/detail/VoxelCoordTransform.h>
-
-#include <nanovdb/GridHandle.h>
-#include <nanovdb/NanoVDB.h>
-
-#include <torch/types.h>
 
 #include <vector>
 
@@ -20,11 +13,10 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildGridFromMesh(const JaggedTensor &meshVertices,
-                          const JaggedTensor &meshFaces,
-                          const std::vector<VoxelCoordTransform> &tx);
+c10::intrusive_ptr<GridBatchImpl> buildGridFromMesh(const JaggedTensor &meshVertices,
+                                                    const JaggedTensor &meshFaces,
+                                                    const std::vector<nanovdb::Vec3d> &voxelSizes,
+                                                    const std::vector<nanovdb::Vec3d> &origins);
 
 } // namespace ops
 } // namespace detail

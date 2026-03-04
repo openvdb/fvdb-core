@@ -7,17 +7,14 @@
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchImpl.h>
 
-#include <torch/types.h>
-
 #include <vector>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-std::vector<JaggedTensor> dispatchGridEdgeNetwork(const GridBatchImpl &gridHdl,
-                                                  bool returnVoxelCoordinates);
+std::vector<JaggedTensor> gridEdgeNetwork(const GridBatchImpl &gridHdl,
+                                          bool returnVoxelCoordinates);
 
 } // namespace ops
 } // namespace detail

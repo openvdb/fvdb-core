@@ -13,17 +13,16 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-JaggedTensor dispatchUniformRaySamples(const GridBatchImpl &batchHdl,
-                                       const JaggedTensor &rayO,
-                                       const JaggedTensor &rayD,
-                                       const JaggedTensor &tMin,
-                                       const JaggedTensor &tMax,
-                                       const double minStepSize,
-                                       const double coneAngle,
-                                       const bool includeEndSegments,
-                                       const bool return_midpoint,
-                                       const double eps);
+JaggedTensor uniformRaySamples(const GridBatchImpl &batchHdl,
+                               const JaggedTensor &rayO,
+                               const JaggedTensor &rayD,
+                               const JaggedTensor &tMin,
+                               const JaggedTensor &tMax,
+                               const double minStepSize,
+                               const double coneAngle,
+                               const bool includeEndSegments,
+                               const bool return_midpoint,
+                               const double eps);
 
 } // namespace ops
 } // namespace detail

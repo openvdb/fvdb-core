@@ -15,14 +15,13 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-std::vector<JaggedTensor> dispatchVoxelsAlongRays(const GridBatchImpl &batchHdl,
-                                                  const JaggedTensor &rayOrigins,
-                                                  const JaggedTensor &rayDirections,
-                                                  int64_t maxVox,
-                                                  float eps,
-                                                  bool returnIjk,
-                                                  bool cumulative);
+std::vector<JaggedTensor> voxelsAlongRays(const GridBatchImpl &batchHdl,
+                                          const JaggedTensor &rayOrigins,
+                                          const JaggedTensor &rayDirections,
+                                          int64_t maxVox,
+                                          float eps,
+                                          bool returnIjk,
+                                          bool cumulative);
 
 } // namespace ops
 } // namespace detail

@@ -8,23 +8,19 @@
 #include <fvdb/detail/GridBatchImpl.h>
 #include <fvdb/detail/utils/Utils.h>
 
-#include <torch/types.h>
-
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-JaggedTensor dispatchCubesInGrid(const GridBatchImpl &batchHdl,
-                                 const JaggedTensor &cubeCenters,
-                                 const Vec3dOrScalar &padMin,
-                                 const Vec3dOrScalar &padMax);
+JaggedTensor cubesInGrid(const GridBatchImpl &batchHdl,
+                         const JaggedTensor &cubeCenters,
+                         const Vec3dOrScalar &padMin,
+                         const Vec3dOrScalar &padMax);
 
-template <torch::DeviceType>
-JaggedTensor dispatchCubesIntersectGrid(const GridBatchImpl &batchHdl,
-                                        const JaggedTensor &cubeCenters,
-                                        const Vec3dOrScalar &padMin,
-                                        const Vec3dOrScalar &padMax);
+JaggedTensor cubesIntersectGrid(const GridBatchImpl &batchHdl,
+                                const JaggedTensor &cubeCenters,
+                                const Vec3dOrScalar &padMin,
+                                const Vec3dOrScalar &padMax);
 
 } // namespace ops
 } // namespace detail

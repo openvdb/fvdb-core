@@ -12,7 +12,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType> torch::Tensor dispatchJaggedArgsort(const JaggedTensor &jt);
+torch::Tensor jaggedArgsort(const JaggedTensor &jt);
 
 } // namespace ops
 } // namespace detail

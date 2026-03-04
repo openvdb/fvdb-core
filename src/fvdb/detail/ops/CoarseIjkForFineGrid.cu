@@ -40,6 +40,12 @@ coarseIjkForFineGridVoxelCallback(int32_t bidx,
     }
 }
 
+namespace {
+
+template <torch::DeviceType>
+JaggedTensor dispatchCoarseIJKForFineGrid(const GridBatchImpl &batchHdl,
+                                          nanovdb::Coord coarseningFactor);
+
 template <>
 JaggedTensor
 dispatchCoarseIJKForFineGrid<torch::kCUDA>(const GridBatchImpl &batchHdl,
@@ -106,6 +112,18 @@ dispatchCoarseIJKForFineGrid<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
 
     return JaggedTensor::from_data_offsets_and_list_ids(
         outIJK, batchHdl.voxelOffsets(), batchHdl.jlidx());
+}
+
+} // namespace
+
+JaggedTensor
+coarseIJKForFineGrid(const GridBatchImpl &batchHdl, nanovdb::Coord coarseningFactor) {
+    if (batchHdl.device().is_cuda()) {
+        return dispatchCoarseIJKForFineGrid<torch::kCUDA>(batchHdl, coarseningFactor);
+    } else if (batchHdl.device().is_privateuseone()) {
+        return dispatchCoarseIJKForFineGrid<torch::kPrivateUse1>(batchHdl, coarseningFactor);
+    }
+    TORCH_CHECK(false, "coarseIJKForFineGrid only supports CUDA and PrivateUse1 devices");
 }
 
 } // namespace fvdb::detail::ops

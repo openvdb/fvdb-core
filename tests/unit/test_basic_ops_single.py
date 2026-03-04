@@ -72,6 +72,13 @@ class TestBasicOpsSingle(unittest.TestCase):
         self.assertTrue(torch.equal(dilated_grid.ijk, expected_grid.ijk))
 
     @parameterized.expand(["cpu", "cuda"])
+    def test_dilate_grid_zero(self, device):
+        pts = torch.randn(500, 3, device=device, dtype=torch.float32)
+        grid = Grid.from_points(pts, voxel_size=0.3, device=device)
+        dilated_grid = grid.dilated_grid(0)
+        self.assertTrue(torch.equal(grid.ijk, dilated_grid.ijk))
+
+    @parameterized.expand(["cpu", "cuda"])
     def test_merge_grids(self, device):
         def get_points(npc: int, device: torch.device | str) -> torch.Tensor:
             return torch.randn((npc, 3), dtype=torch.float32, device=device, requires_grad=False)

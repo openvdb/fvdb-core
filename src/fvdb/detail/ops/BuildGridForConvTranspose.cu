@@ -22,6 +22,12 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
+template <torch::DeviceType>
+nanovdb::GridHandle<TorchDeviceBuffer>
+dispatchBuildGridForConvTranspose(const GridBatchImpl &baseBatchHdl,
+                                  const nanovdb::Coord &kernelSize,
+                                  const nanovdb::Coord &stride);
+
 nanovdb::GridHandle<TorchDeviceBuffer>
 buildFineGridFromCoarseGridCPU(const GridBatchImpl &coarseBatchHdl,
                                const nanovdb::Coord subdivisionFactor) {
@@ -133,7 +139,7 @@ convTransposeIJKForGrid(const GridBatchImpl &batchHdl,
 
     // Special case: kernel size 1 or stride equals kernel size is pure subdivision
     if (kernelSize == nanovdb::Coord(1) || stride == kernelSize) {
-        return dispatchFineIJKForCoarseGrid<torch::kCUDA>(batchHdl, stride, std::nullopt);
+        return fineIJKForCoarseGrid(batchHdl, stride, std::nullopt);
     }
 
     const int32_t kernelVolume = kernelSize.x() * kernelSize.y() * kernelSize.z();
@@ -178,7 +184,7 @@ dispatchBuildGridForConvTranspose<torch::kCUDA>(const GridBatchImpl &baseGridHdl
                                                 const nanovdb::Coord &kernelSize,
                                                 const nanovdb::Coord &stride) {
     JaggedTensor coords = convTransposeIJKForGrid(baseGridHdl, kernelSize, stride);
-    return ops::dispatchCreateNanoGridFromIJK<torch::kCUDA>(coords);
+    return ops::_createNanoGridFromIJK(coords);
 }
 
 template <>
@@ -246,6 +252,20 @@ dispatchBuildGridForConvTranspose<torch::kCPU>(const GridBatchImpl &baseBatchHdl
     } else {
         return nanovdb::mergeGrids(batchHandles);
     }
+}
+
+c10::intrusive_ptr<GridBatchImpl>
+buildGridForConvTranspose(const GridBatchImpl &baseBatchHdl,
+                          const nanovdb::Coord &kernelSize,
+                          const nanovdb::Coord &stride) {
+    TORCH_CHECK_VALUE(nanovdb::Coord(0) < kernelSize, "kernel_size must be strictly positive.");
+    TORCH_CHECK_VALUE(nanovdb::Coord(0) < stride, "stride must be strictly positive.");
+    std::vector<nanovdb::Vec3d> voxS, voxO;
+    baseBatchHdl.gridVoxelSizesAndOrigins(voxS, voxO);
+    auto hdl = FVDB_DISPATCH_KERNEL_DEVICE(baseBatchHdl.device(), [&]() {
+        return dispatchBuildGridForConvTranspose<DeviceTag>(baseBatchHdl, kernelSize, stride);
+    });
+    return c10::make_intrusive<GridBatchImpl>(std::move(hdl), voxS, voxO);
 }
 
 } // namespace ops

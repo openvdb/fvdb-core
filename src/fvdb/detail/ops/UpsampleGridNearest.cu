@@ -292,56 +292,28 @@ UpsampleGridNearestBackward(const GridBatchImpl &fineBatchAccessor,
     return outGradIn;
 }
 
-template <torch::DeviceType DeviceTag>
 torch::Tensor
-dispatchUpsampleGridNearest<DeviceTag>(const GridBatchImpl &coarseBatchAccessor,
-                                       const GridBatchImpl &fineBatchAccessor,
-                                       const torch::Tensor &coarseData,
-                                       nanovdb::Coord upsamplingFactor) {
-    return UpsampleGridNearest<DeviceTag>(
-        coarseBatchAccessor, fineBatchAccessor, coarseData, upsamplingFactor);
+upsampleGridNearest(const GridBatchImpl &coarseBatchHdl,
+                    const GridBatchImpl &fineBatchHdl,
+                    const torch::Tensor &coarseData,
+                    nanovdb::Coord upsamplingFactor) {
+    return FVDB_DISPATCH_KERNEL(coarseData.device(), [&]() {
+        return UpsampleGridNearest<DeviceTag>(
+            coarseBatchHdl, fineBatchHdl, coarseData, upsamplingFactor);
+    });
 }
 
-template <torch::DeviceType DeviceTag>
 torch::Tensor
-dispatchUpsampleGridNearestBackward<DeviceTag>(const GridBatchImpl &fineBatchAccessor,
-                                               const GridBatchImpl &coarseBatchAccessor,
-                                               const torch::Tensor &gradOut,
-                                               const torch::Tensor &coarseData,
-                                               nanovdb::Coord upsamplingFactor) {
-    return UpsampleGridNearestBackward<DeviceTag>(
-        fineBatchAccessor, coarseBatchAccessor, gradOut, coarseData, upsamplingFactor);
+upsampleGridNearestBackward(const GridBatchImpl &fineBatchHdl,
+                            const GridBatchImpl &coarseBatchHdl,
+                            const torch::Tensor &gradOut,
+                            const torch::Tensor &coarseData,
+                            nanovdb::Coord upsamplingFactor) {
+    return FVDB_DISPATCH_KERNEL_DEVICE(coarseData.device(), [&]() {
+        return UpsampleGridNearestBackward<DeviceTag>(
+            fineBatchHdl, coarseBatchHdl, gradOut, coarseData, upsamplingFactor);
+    });
 }
-
-template torch::Tensor dispatchUpsampleGridNearest<torch::kCPU>(const GridBatchImpl &,
-                                                                const GridBatchImpl &,
-                                                                const torch::Tensor &,
-                                                                nanovdb::Coord);
-template torch::Tensor dispatchUpsampleGridNearest<torch::kCUDA>(const GridBatchImpl &,
-                                                                 const GridBatchImpl &,
-                                                                 const torch::Tensor &,
-                                                                 nanovdb::Coord);
-template torch::Tensor dispatchUpsampleGridNearest<torch::kPrivateUse1>(const GridBatchImpl &,
-                                                                        const GridBatchImpl &,
-                                                                        const torch::Tensor &,
-                                                                        nanovdb::Coord);
-
-template torch::Tensor dispatchUpsampleGridNearestBackward<torch::kCPU>(const GridBatchImpl &,
-                                                                        const GridBatchImpl &,
-                                                                        const torch::Tensor &,
-                                                                        const torch::Tensor &,
-                                                                        nanovdb::Coord);
-template torch::Tensor dispatchUpsampleGridNearestBackward<torch::kCUDA>(const GridBatchImpl &,
-                                                                         const GridBatchImpl &,
-                                                                         const torch::Tensor &,
-                                                                         const torch::Tensor &,
-                                                                         nanovdb::Coord);
-template torch::Tensor
-dispatchUpsampleGridNearestBackward<torch::kPrivateUse1>(const GridBatchImpl &,
-                                                         const GridBatchImpl &,
-                                                         const torch::Tensor &,
-                                                         const torch::Tensor &,
-                                                         nanovdb::Coord);
 
 } // namespace ops
 } // namespace detail

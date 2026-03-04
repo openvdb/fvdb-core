@@ -16,29 +16,27 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
 std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor>
-dispatchIntegrateTSDF(const c10::intrusive_ptr<GridBatchImpl> grid,
-                      const double truncationMargin,
-                      const torch::Tensor &projectionMatrices,
-                      const torch::Tensor &camToWorldMatrices,
-                      const JaggedTensor &tsdf,
-                      const JaggedTensor &weights,
-                      const torch::Tensor &depthImages,
-                      const std::optional<torch::Tensor> &weightImages);
+integrateTSDF(const c10::intrusive_ptr<GridBatchImpl> grid,
+              const double truncationMargin,
+              const torch::Tensor &projectionMatrices,
+              const torch::Tensor &camToWorldMatrices,
+              const JaggedTensor &tsdf,
+              const JaggedTensor &weights,
+              const torch::Tensor &depthImages,
+              const std::optional<torch::Tensor> &weightImages);
 
-template <torch::DeviceType>
 std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor, JaggedTensor>
-dispatchIntegrateTSDFWithFeatures(const c10::intrusive_ptr<GridBatchImpl> grid,
-                                  const double truncationMargin,
-                                  const torch::Tensor &projectionMatrices,
-                                  const torch::Tensor &camToWorldMatrices,
-                                  const JaggedTensor &tsdf,
-                                  const JaggedTensor &features,
-                                  const JaggedTensor &weights,
-                                  const torch::Tensor &depthImages,
-                                  const torch::Tensor &featureImages,
-                                  const std::optional<torch::Tensor> &weightImages);
+integrateTSDFWithFeatures(const c10::intrusive_ptr<GridBatchImpl> grid,
+                          const double truncationMargin,
+                          const torch::Tensor &projectionMatrices,
+                          const torch::Tensor &camToWorldMatrices,
+                          const JaggedTensor &tsdf,
+                          const JaggedTensor &features,
+                          const JaggedTensor &weights,
+                          const torch::Tensor &depthImages,
+                          const torch::Tensor &featureImages,
+                          const std::optional<torch::Tensor> &weightImages);
 
 } // namespace ops
 } // namespace detail

@@ -5,13 +5,7 @@
 #define FVDB_DETAIL_OPS_BUILDGRIDFROMPOINTS_H
 
 #include <fvdb/JaggedTensor.h>
-#include <fvdb/detail/TorchDeviceBuffer.h>
-#include <fvdb/detail/VoxelCoordTransform.h>
-
-#include <nanovdb/GridHandle.h>
-#include <nanovdb/NanoVDB.h>
-
-#include <torch/types.h>
+#include <fvdb/detail/GridBatchImpl.h>
 
 #include <vector>
 
@@ -19,10 +13,9 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildGridFromPoints(const JaggedTensor &points,
-                            const std::vector<VoxelCoordTransform> &txs);
+c10::intrusive_ptr<GridBatchImpl> buildGridFromPoints(const JaggedTensor &points,
+                                                      const std::vector<nanovdb::Vec3d> &voxelSizes,
+                                                      const std::vector<nanovdb::Vec3d> &origins);
 
 } // namespace ops
 } // namespace detail

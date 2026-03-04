@@ -10,11 +10,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType> torch::Tensor dispatchMortonFromIjk(torch::Tensor ijk);
-
 torch::Tensor mortonFromIjk(torch::Tensor ijk);
-
-template <torch::DeviceType> torch::Tensor dispatchHilbertFromIjk(torch::Tensor ijk);
 
 torch::Tensor hilbertFromIjk(torch::Tensor ijk);
 

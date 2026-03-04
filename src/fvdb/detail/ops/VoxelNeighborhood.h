@@ -6,20 +6,17 @@
 
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchImpl.h>
-#include <fvdb/detail/utils/Utils.h>
 
-#include <torch/types.h>
+#include <cstdint>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-JaggedTensor dispatchVoxelNeighborhood(const GridBatchImpl &batchHdl,
-                                       const JaggedTensor &coords,
-                                       nanovdb::Coord extentMin,
-                                       nanovdb::Coord extentMax,
-                                       int32_t shift);
+JaggedTensor voxelNeighborhood(const GridBatchImpl &batchHdl,
+                               const JaggedTensor &coords,
+                               int32_t extent,
+                               int32_t shift);
 
 } // namespace ops
 } // namespace detail
