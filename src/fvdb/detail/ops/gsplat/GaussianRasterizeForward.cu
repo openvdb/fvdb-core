@@ -499,10 +499,12 @@ launchRasterizeForwardKernels(
         uint32_t cameraCount =
             cuda::ceil_div(deviceTileOffset + deviceTileCount, tileCount / C) - cameraOffset;
         if (deviceTileCount) {
-            auto reshapedAlphas  = outAlphas.jdata().view({C, imageHeight, imageWidth, 1});
-            auto reshapedLastIds = outLastIds.jdata().view({C, imageHeight, imageWidth});
+            auto reshapedAlphas =
+                outAlphas.jdata().view({C, renderWindow.height, renderWindow.width, 1});
+            auto reshapedLastIds =
+                outLastIds.jdata().view({C, renderWindow.height, renderWindow.width});
             auto reshapedFeatures =
-                outFeatures.jdata().view({C, imageHeight, imageWidth, channels});
+                outFeatures.jdata().view({C, renderWindow.height, renderWindow.width, channels});
 
             std::vector<torch::Tensor> tensors = {means2d,
                                                   conics,
