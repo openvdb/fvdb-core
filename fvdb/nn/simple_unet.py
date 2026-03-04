@@ -235,7 +235,9 @@ class SimpleUNetDown(nn.Module):
         data, _ = self.max_pool(data, fine_grid, coarse_grid)
 
         # Increase the channel count at the lower resolution
-        plan = ConvolutionPlan.from_grid_batch(kernel_size=1, stride=1, source_grid=coarse_grid, target_grid=coarse_grid)
+        plan = ConvolutionPlan.from_grid_batch(
+            kernel_size=1, stride=1, source_grid=coarse_grid, target_grid=coarse_grid
+        )
         data = self.channel_fan_out(data, plan)
         return self.batch_norm(data, coarse_grid)
 
@@ -281,7 +283,9 @@ class SimpleUNetUp(nn.Module):
 
     def forward(self, data: JaggedTensor, coarse_grid: GridBatch, fine_grid: GridBatch) -> JaggedTensor:
         # Decrease the channel count at the lower resolution
-        plan = ConvolutionPlan.from_grid_batch(kernel_size=1, stride=1, source_grid=coarse_grid, target_grid=coarse_grid)
+        plan = ConvolutionPlan.from_grid_batch(
+            kernel_size=1, stride=1, source_grid=coarse_grid, target_grid=coarse_grid
+        )
         data = self.channel_fan_in(data, plan)
         data = self.batch_norm(data, coarse_grid)
 
