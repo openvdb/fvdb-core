@@ -9,13 +9,14 @@
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <nanovdb/math/Math.h>
 
+#include <c10/core/DeviceType.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/util/Exception.h>
 
-#include <cub/block/block_scan.cuh>
 #include <cuda/std/tuple>
 
 #include <cstdint>
@@ -45,6 +46,7 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Ras
         const uint32_t imageOriginW,
         const uint32_t imageOriginH,
         const uint32_t tileSize,
+        const uint32_t blockOffset,
         const torch::Tensor &tileOffsets,     // [C, numTilesH, numTilesW]
         const torch::Tensor &tileGaussianIds, // [totalIntersections]
         // output JaggedTensors:
@@ -69,6 +71,7 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Ras
                      imageOriginW,
                      imageOriginH,
                      tileSize,
+                     blockOffset,
                      tileOffsets,
                      tileGaussianIds,
                      activeTiles,
@@ -125,7 +128,7 @@ template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED> struct Ras
                             const uint32_t blockSize,
                             const bool pixelIsActive,
                             const uint32_t activePixelIndex) {
-        extern __shared__ int s[];
+        alignas(Gaussian2D<ScalarType>) extern __shared__ char s[];
         auto *sharedGaussians = reinterpret_cast<Gaussian2D<ScalarType> *>(s); // [blockSize]
 
         // NOTE: The accumulated transmittance is used in the backward pass, and
@@ -256,11 +259,21 @@ rasterizeGaussiansForward(RasterizeForwardArgs<ScalarType, NUM_CHANNELS, IS_PACK
     uint32_t activePixelIndex{0};
     cuda::std::tie(pixelInImage, activePixelIndex) = commonArgs.activePixelIndex(row, col);
 
-    if (commonArgs.mHasMasks && pixelInImage && !commonArgs.mMasks[cameraId][tileRow][tileCol]) {
-        auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
-        args.writeFeatures(pixIdx, [&](uint32_t k) {
-            return commonArgs.mHasBackgrounds ? commonArgs.mBackgrounds[cameraId][k] : 0.0f;
-        });
+    // Parity with classic semantics: masked tiles write background and contribute nothing.
+    //
+    // IMPORTANT: this kernel uses block-level barriers later (`__syncthreads_count`,
+    // `__syncthreads`). Any early return must be taken by *all* threads in the block, otherwise
+    // edge tiles can deadlock when some threads are outside the image bounds.
+    const bool tileMasked = commonArgs.mHasMasks && !commonArgs.mMasks[cameraId][tileRow][tileCol];
+    if (tileMasked) {
+        if (pixelInImage) {
+            auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
+            args.writeAlpha(pixIdx, 0.0f);
+            args.writeLastId(pixIdx, -1);
+            args.writeFeatures(pixIdx, [&](uint32_t k) {
+                return commonArgs.mHasBackgrounds ? commonArgs.mBackgrounds[cameraId][k] : 0.0f;
+            });
+        }
         return;
     }
 
@@ -314,19 +327,22 @@ launchRasterizeForwardKernel(
     const std::optional<torch::Tensor> &pixelMap            = std::nullopt) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means2d));
 
-    TORCH_CHECK_VALUE(tileOffsets.size(2) == (imageWidth + tileSize - 1) / tileSize,
-                      "tileOffsets width must match the number of tiles in image size");
-    TORCH_CHECK_VALUE(tileOffsets.size(1) == (imageHeight + tileSize - 1) / tileSize,
-                      "tileOffsets height must match the number of tiles in image size");
+    // tileOffsets can be 3D (dense) or 1D (sparse)
+    const bool tileOffsetsAreSparse = tileOffsets.dim() == 1;
+    if (!tileOffsetsAreSparse) {
+        TORCH_CHECK_VALUE(tileOffsets.size(2) == (imageWidth + tileSize - 1) / tileSize,
+                          "tileOffsets width must match the number of tiles in image size");
+        TORCH_CHECK_VALUE(tileOffsets.size(1) == (imageHeight + tileSize - 1) / tileSize,
+                          "tileOffsets height must match the number of tiles in image size");
+    }
 
     const bool packed = means2d.dim() == 2;
 
-    const uint32_t C        = tileOffsets.size(0);          // number of cameras
-    const uint32_t N        = packed ? 0 : means2d.size(1); // number of gaussians
+    // Get C from tileOffsets for dense mode (means2d.size(0) is nnz in packed mode)
+    // For sparse mode, C is unused, only used for output sizing for dense mode
+    const uint32_t C        = tileOffsetsAreSparse ? 0 : tileOffsets.size(0); // number of cameras
+    const uint32_t N        = packed ? 0 : means2d.size(1);                   // number of gaussians
     const uint32_t channels = features.size(-1);
-
-    const uint32_t tileExtentH = tileOffsets.size(1);
-    const uint32_t tileExtentW = tileOffsets.size(2);
 
     TORCH_CHECK_VALUE(pixelMap.has_value() == pixelsToRender.has_value(),
                       "pixelMap and pixelsToRender must be provided together");
@@ -343,10 +359,8 @@ launchRasterizeForwardKernel(
     std::vector<torch::Tensor> lastIdsToRenderVec;
 
     for (const auto &size: sizes) {
-        featuresToRenderVec.push_back(
-            torch::empty({size, channels}, features.options().dtype(torch::kFloat32)));
-        alphasToRenderVec.push_back(
-            torch::empty({size, 1}, features.options().dtype(torch::kFloat32)));
+        featuresToRenderVec.push_back(torch::empty({size, channels}, features.options()));
+        alphasToRenderVec.push_back(torch::empty({size, 1}, features.options()));
         lastIdsToRenderVec.push_back(torch::empty({size}, features.options().dtype(torch::kInt32)));
     }
 
@@ -365,6 +379,7 @@ launchRasterizeForwardKernel(
                                                                           imageOriginW,
                                                                           imageOriginH,
                                                                           tileSize,
+                                                                          0,
                                                                           tileOffsets,
                                                                           tileGaussianIds,
                                                                           outFeatures,
@@ -411,6 +426,159 @@ launchRasterizeForwardKernel(
     return std::make_tuple(outFeatures, outAlphas, outLastIds);
 }
 
+template <typename ScalarType, uint32_t NUM_CHANNELS, bool IS_PACKED>
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor, fvdb::JaggedTensor>
+launchRasterizeForwardKernels(
+    // Gaussian parameters
+    const torch::Tensor &means2d,                   // [C, N, 2] or [nnz, 2]
+    const torch::Tensor &conics,                    // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &features,                  // [C, N, channels] or [nnz, channels]
+    const torch::Tensor &opacities,                 // [C, N]  or [nnz]
+    const at::optional<torch::Tensor> &backgrounds, // [C, channels]
+    const at::optional<torch::Tensor> &masks,       // [C, tile_height, tile_width]
+    // image size
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const uint32_t imageOriginW,
+    const uint32_t imageOriginH,
+    const uint32_t tileSize,
+    // intersections
+    const torch::Tensor &tileOffsets,     // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds, // [n_isects]
+    const std::optional<fvdb::JaggedTensor> &pixelsToRender = std::nullopt,
+    const std::optional<torch::Tensor> &activeTiles         = std::nullopt,
+    const std::optional<torch::Tensor> &tilePixelMask       = std::nullopt,
+    const std::optional<torch::Tensor> &tilePixelCumsum     = std::nullopt,
+    const std::optional<torch::Tensor> &pixelMap            = std::nullopt) {
+    TORCH_CHECK_VALUE(tileOffsets.dim() == 3, "tileOffsets must be 3D [C, TH, TW]");
+    TORCH_CHECK_VALUE(tileOffsets.size(2) == (imageWidth + tileSize - 1) / tileSize,
+                      "tileOffsets width must match the number of tiles in image size");
+    TORCH_CHECK_VALUE(tileOffsets.size(1) == (imageHeight + tileSize - 1) / tileSize,
+                      "tileOffsets height must match the number of tiles in image size");
+
+    const bool packed = means2d.dim() == 2;
+
+    const uint32_t C        = tileOffsets.size(0);          // number of cameras
+    const uint32_t N        = packed ? 0 : means2d.size(1); // number of gaussians
+    const uint32_t channels = features.size(-1);
+
+    const uint32_t tileExtentH = (imageHeight + tileSize - 1) / tileSize;
+    const uint32_t tileExtentW = (imageWidth + tileSize - 1) / tileSize;
+
+    TORCH_CHECK_VALUE(pixelMap.has_value() == pixelsToRender.has_value(),
+                      "pixelMap and pixelsToRender must be provided together");
+    if (pixelMap.has_value()) {
+        TORCH_CHECK_VALUE(pixelMap.value().size(0) == pixelsToRender.value().numel() / 2,
+                          "pixelMap must have the same number of elements as pixelsToRender");
+    }
+
+    const auto sizes = pixelsToRender.has_value()
+                           ? pixelsToRender.value().lsizes1()
+                           : std::vector<int64_t>{C * imageHeight * imageWidth};
+    std::vector<torch::Tensor> featuresToRenderVec;
+    std::vector<torch::Tensor> alphasToRenderVec;
+    std::vector<torch::Tensor> lastIdsToRenderVec;
+
+    for (const auto &size: sizes) {
+        featuresToRenderVec.push_back(torch::empty({size, channels}, features.options()));
+        alphasToRenderVec.push_back(torch::empty({size, 1}, features.options()));
+        lastIdsToRenderVec.push_back(torch::empty({size}, features.options().dtype(torch::kInt32)));
+    }
+
+    auto outFeatures = fvdb::JaggedTensor(featuresToRenderVec);
+    auto outAlphas   = fvdb::JaggedTensor(alphasToRenderVec);
+    auto outLastIds  = fvdb::JaggedTensor(lastIdsToRenderVec);
+
+    auto isSparse      = activeTiles.has_value();
+    uint32_t tileCount = isSparse ? activeTiles.value().size(0) : C * tileExtentH * tileExtentW;
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+
+        uint32_t deviceTileOffset, deviceTileCount;
+        std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
+
+        if (deviceTileCount) {
+            auto args = RasterizeForwardArgs<ScalarType, NUM_CHANNELS, IS_PACKED>(means2d,
+                                                                                  conics,
+                                                                                  opacities,
+                                                                                  features,
+                                                                                  backgrounds,
+                                                                                  masks,
+                                                                                  imageWidth,
+                                                                                  imageHeight,
+                                                                                  imageOriginW,
+                                                                                  imageOriginH,
+                                                                                  tileSize,
+                                                                                  deviceTileOffset,
+                                                                                  tileOffsets,
+                                                                                  tileGaussianIds,
+                                                                                  outFeatures,
+                                                                                  outAlphas,
+                                                                                  outLastIds,
+                                                                                  activeTiles,
+                                                                                  tilePixelMask,
+                                                                                  tilePixelCumsum,
+                                                                                  pixelMap);
+
+            TORCH_CHECK(means2d.is_contiguous());
+            TORCH_CHECK(conics.is_contiguous());
+            TORCH_CHECK(features.is_contiguous());
+
+            // Compute the number of bytes from data_ptr() to the end of the underlying
+            // storage. This safely handles both non-contiguous expanded views (where
+            // numel() exceeds actual storage) and sliced tensors with non-zero storage_offset.
+            auto prefetchBytes = [](const torch::Tensor &t) -> size_t {
+                return t.storage().nbytes() - t.storage_offset() * t.element_size();
+            };
+
+            nanovdb::util::cuda::memPrefetchAsync(
+                means2d.const_data_ptr<ScalarType>(), prefetchBytes(means2d), deviceId, stream);
+            nanovdb::util::cuda::memPrefetchAsync(
+                conics.const_data_ptr<ScalarType>(), prefetchBytes(conics), deviceId, stream);
+            nanovdb::util::cuda::memPrefetchAsync(
+                opacities.const_data_ptr<ScalarType>(), prefetchBytes(opacities), deviceId, stream);
+            nanovdb::util::cuda::memPrefetchAsync(
+                features.const_data_ptr<ScalarType>(), prefetchBytes(features), deviceId, stream);
+
+            // Thread blocks cooperatively cache a tile of Gaussians in shared memory
+            const uint32_t sharedMem = getSharedMemRequirements<ScalarType>(tileSize);
+
+            // TODO: an optimization can be done by passing the actual number of
+            // channels into the kernel functions and avoid necessary global memory
+            // writes. This requires moving the channel padding from python to C side.
+            if (cudaFuncSetAttribute(rasterizeGaussiansForward<ScalarType, NUM_CHANNELS, IS_PACKED>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     sharedMem) != cudaSuccess) {
+                AT_ERROR("Failed to set maximum shared memory size (requested ",
+                         sharedMem,
+                         " bytes), try lowering tile_size.");
+            }
+
+            const dim3 blockDim = {tileSize, tileSize, 1};
+            const dim3 gridDim  = {deviceTileCount, 1, 1};
+
+            rasterizeGaussiansForward<<<gridDim, blockDim, sharedMem, stream>>>(args);
+
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+        }
+    }
+
+    mergeStreams();
+
+    // In dense mode, we need to reshape the output tensors to the original image size
+    // because they are packed into a single JaggedTensor so that the output code is the same
+    // for dense and sparse modes.
+    if (!isSparse) {
+        outFeatures =
+            fvdb::JaggedTensor(outFeatures.jdata().view({C, imageHeight, imageWidth, channels}));
+        outAlphas  = fvdb::JaggedTensor(outAlphas.jdata().view({C, imageHeight, imageWidth, 1}));
+        outLastIds = fvdb::JaggedTensor(outLastIds.jdata().view({C, imageHeight, imageWidth}));
+    }
+
+    return std::make_tuple(outFeatures, outAlphas, outLastIds);
+}
+
 } // namespace
 
 template <>
@@ -426,15 +594,14 @@ dispatchGaussianRasterizeForward<torch::kCUDA>(
     const uint32_t imageOriginW,
     const uint32_t imageOriginH,
     const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,    // [C, tile_height, tile_width]
-    const torch::Tensor &tileGaussianIds // [n_isects]
+    const torch::Tensor &tileOffsets,               // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds,           // [n_isects]
+    const at::optional<torch::Tensor> &backgrounds, // [C, D]
+    const at::optional<torch::Tensor> &masks        // [C, tile_height, tile_width] bool
 ) {
     FVDB_FUNC_RANGE();
     const uint32_t channels = features.size(-1);
     const bool isPacked     = means2d.dim() == 2;
-
-    const std::optional<torch::Tensor> backgrounds = std::nullopt;
-    const std::optional<torch::Tensor> masks       = std::nullopt;
 
 #define CALL_FWD_CUDA(N)                                                                        \
     case N: {                                                                                   \
@@ -505,6 +672,97 @@ dispatchGaussianRasterizeForward<torch::kCUDA>(
 
 template <>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchGaussianRasterizeForward<torch::kPrivateUse1>(
+    // Gaussian parameters
+    const torch::Tensor &means2d,   // [C, N, 2]
+    const torch::Tensor &conics,    // [C, N, 3]
+    const torch::Tensor &features,  // [C, N, D]
+    const torch::Tensor &opacities, // [N]
+    // image size
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const uint32_t imageOriginW,
+    const uint32_t imageOriginH,
+    const uint32_t tileSize,
+    // intersections
+    const torch::Tensor &tileOffsets,               // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds,           // [n_isects]
+    const at::optional<torch::Tensor> &backgrounds, // [C, D]
+    const at::optional<torch::Tensor> &masks        // [C, tile_height, tile_width] bool
+) {
+    FVDB_FUNC_RANGE();
+    const uint32_t channels = features.size(-1);
+    const bool isPacked     = means2d.dim() == 2;
+
+#define CALL_FWD_PRIVATEUSE1(N)                                                                 \
+    case N: {                                                                                   \
+        if (isPacked) {                                                                         \
+            auto [outFeatures, outAlphas, outLastIds] =                                         \
+                launchRasterizeForwardKernels<float, N, true>(means2d,                          \
+                                                              conics,                           \
+                                                              features,                         \
+                                                              opacities,                        \
+                                                              backgrounds,                      \
+                                                              masks,                            \
+                                                              imageWidth,                       \
+                                                              imageHeight,                      \
+                                                              imageOriginW,                     \
+                                                              imageOriginH,                     \
+                                                              tileSize,                         \
+                                                              tileOffsets,                      \
+                                                              tileGaussianIds);                 \
+            return std::make_tuple(outFeatures.jdata(), outAlphas.jdata(), outLastIds.jdata()); \
+        } else {                                                                                \
+            auto [outFeatures, outAlphas, outLastIds] =                                         \
+                launchRasterizeForwardKernels<float, N, false>(means2d,                         \
+                                                               conics,                          \
+                                                               features,                        \
+                                                               opacities,                       \
+                                                               backgrounds,                     \
+                                                               masks,                           \
+                                                               imageWidth,                      \
+                                                               imageHeight,                     \
+                                                               imageOriginW,                    \
+                                                               imageOriginH,                    \
+                                                               tileSize,                        \
+                                                               tileOffsets,                     \
+                                                               tileGaussianIds);                \
+            return std::make_tuple(outFeatures.jdata(), outAlphas.jdata(), outLastIds.jdata()); \
+        }                                                                                       \
+    }
+
+    // Make channels a compile time constant and do everything in register space
+    // but at the expense of making this code ugly. NOTE: We do powers of two and
+    // powers of two plus one to handle rendering common feature channel
+    // dimensions with an optional additional depth channel
+    switch (channels) {
+        CALL_FWD_PRIVATEUSE1(1)
+        CALL_FWD_PRIVATEUSE1(2)
+        CALL_FWD_PRIVATEUSE1(3)
+        CALL_FWD_PRIVATEUSE1(4)
+        CALL_FWD_PRIVATEUSE1(5)
+        CALL_FWD_PRIVATEUSE1(8)
+        CALL_FWD_PRIVATEUSE1(9)
+        CALL_FWD_PRIVATEUSE1(16)
+        CALL_FWD_PRIVATEUSE1(17)
+        CALL_FWD_PRIVATEUSE1(32)
+        CALL_FWD_PRIVATEUSE1(33)
+        CALL_FWD_PRIVATEUSE1(64)
+        CALL_FWD_PRIVATEUSE1(65)
+        CALL_FWD_PRIVATEUSE1(128)
+        CALL_FWD_PRIVATEUSE1(129)
+        CALL_FWD_PRIVATEUSE1(192)
+        CALL_FWD_PRIVATEUSE1(193)
+        CALL_FWD_PRIVATEUSE1(256)
+        CALL_FWD_PRIVATEUSE1(257)
+        CALL_FWD_PRIVATEUSE1(512)
+        CALL_FWD_PRIVATEUSE1(513)
+    default: AT_ERROR("Unsupported number of channels: ", channels);
+    }
+}
+
+template <>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchGaussianRasterizeForward<torch::kCPU>(
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2]
@@ -518,8 +776,10 @@ dispatchGaussianRasterizeForward<torch::kCPU>(
     const uint32_t imageOriginH,
     const uint32_t tileSize,
     // intersections
-    const torch::Tensor &tileOffsets,    // [C, tile_height, tile_width]
-    const torch::Tensor &tileGaussianIds // [n_isects]
+    const torch::Tensor &tileOffsets,               // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds,           // [n_isects]
+    const at::optional<torch::Tensor> &backgrounds, // [C, D]
+    const at::optional<torch::Tensor> &masks        // [C, tile_height, tile_width] bool
 ) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
 }
@@ -539,18 +799,18 @@ dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
     const uint32_t imageOriginW,
     const uint32_t imageOriginH,
     const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,     // [C, tile_height, tile_width]
+    const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
     const torch::Tensor &tileGaussianIds, // [n_isects]
     const torch::Tensor &activeTiles,
     const torch::Tensor &tilePixelMask,
     const torch::Tensor &tilePixelCumsum,
-    const torch::Tensor &pixelMap) {
+    const torch::Tensor &pixelMap,
+    const at::optional<torch::Tensor> &backgrounds) {
     FVDB_FUNC_RANGE();
     const uint32_t channels = features.size(-1);
     const bool isPacked     = means2d.dim() == 2;
 
-    const std::optional<torch::Tensor> backgrounds = std::nullopt;
-    const std::optional<torch::Tensor> masks       = std::nullopt;
+    const std::optional<torch::Tensor> masks = std::nullopt;
 
 #define CALL_FWD_SPARSE_CUDA(N)                                                   \
     case N: {                                                                     \
@@ -627,6 +887,31 @@ dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
 
 template <>
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor, fvdb::JaggedTensor>
+dispatchGaussianSparseRasterizeForward<torch::kPrivateUse1>(
+    // sparse pixel coordinates
+    const fvdb::JaggedTensor &pixelsToRender, // [C, maxPixelsPerCamera, 2]
+    // Gaussian parameters
+    const torch::Tensor &means2d,   // [C, N, 2]
+    const torch::Tensor &conics,    // [C, N, 3]
+    const torch::Tensor &features,  // [C, N, D]
+    const torch::Tensor &opacities, // [N]
+    const uint32_t imageWidth,
+    const uint32_t imageHeight,
+    const uint32_t imageOriginW,
+    const uint32_t imageOriginH,
+    const uint32_t tileSize,
+    const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
+    const torch::Tensor &tileGaussianIds, // [n_isects]
+    const torch::Tensor &activeTiles,
+    const torch::Tensor &tilePixelMask,
+    const torch::Tensor &tilePixelCumsum,
+    const torch::Tensor &pixelMap,
+    const at::optional<torch::Tensor> &backgrounds) {
+    TORCH_CHECK_NOT_IMPLEMENTED(false, "PrivateUse1 implementation not available");
+}
+
+template <>
+std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor, fvdb::JaggedTensor>
 dispatchGaussianSparseRasterizeForward<torch::kCPU>(
     // sparse pixel coordinates
     const fvdb::JaggedTensor &pixelsToRender, // [C, maxPixelsPerCamera, 2]
@@ -640,12 +925,13 @@ dispatchGaussianSparseRasterizeForward<torch::kCPU>(
     const uint32_t imageOriginW,
     const uint32_t imageOriginH,
     const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,     // [C, tile_height, tile_width]
+    const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
     const torch::Tensor &tileGaussianIds, // [n_isects]
     const torch::Tensor &activeTiles,
     const torch::Tensor &tilePixelMask,
     const torch::Tensor &tilePixelCumsum,
-    const torch::Tensor &pixelMap) {
+    const torch::Tensor &pixelMap,
+    const at::optional<torch::Tensor> &backgrounds) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
 }
 

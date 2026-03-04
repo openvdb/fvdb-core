@@ -117,6 +117,8 @@ AllowShortLoopsOnASingleLine: false
 IncludeBlocks: Regroup
 IncludeIsMainRegex: "$"
 IncludeCategories:
+  - Regex:           '^<pybind11/' # pybind11 includes
+    Priority:        0
   - Regex:           '^"' # quoted includes
     Priority:        1
   - Regex:           '^<fvdb/' # fvdb includes

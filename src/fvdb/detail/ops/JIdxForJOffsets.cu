@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/JIdxForJOffsets.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <c10/cuda/CUDAGuard.h>
 
@@ -26,22 +27,25 @@ jIdxForJOffsets(TorchRAcc32<fvdb::JOffsetsType, 1> offsets,
     while (left <= right) {
         fvdb::JIdxType mid = left + (right - left) / 2;
 
-        // Check if key is present at mid
-        if (idx >= offsets[mid] && idx < offsets[mid + 1]) {
-            outJIdx[idx] = mid;
-            return;
-        }
-
-        if (offsets[mid] < idx) {
-            // If key greater, ignore left half
-            left = mid + 1;
+        // the bin-search should consider when there are some value in offsets
+        if (offsets[mid] <= idx) {
+            // if offsets[mid] <= idx, just means possible.
+            // the case [0, 10, 10, 40], when idx=10, mid=1,
+            // what we need is 2, so we need to let left = mid+1
+            if ((mid < (offsets.size(0) - 1)) && (idx < offsets[mid + 1])) {
+                outJIdx[idx] = mid;
+                return;
+            } else {
+                // if idx >= offsets[mid+1], means target may in the right.
+                left = mid + 1;
+            }
         } else {
-            // If key is smaller, ignore right half
+            // if idx < offsets[mid], means target is in the left
             right = mid - 1;
         }
     }
-
     outJIdx[idx] = -1;
+    return;
 }
 
 template <>
@@ -90,11 +94,11 @@ dispatchJIdxForJOffsets<torch::kPrivateUse1>(torch::Tensor joffsets, int64_t num
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
 
-        auto deviceJOffsetsCount =
-            ((joffsets.size(0) - 1) + c10::cuda::device_count() - 1) / c10::cuda::device_count();
-        auto deviceJOffsetsStart = deviceId * deviceJOffsetsCount;
-        auto deviceJOffsetsEnd   = (deviceId + 1) * deviceJOffsetsCount;
-        deviceJOffsetsEnd        = std::min(deviceJOffsetsEnd, joffsets.size(0) - 1);
+        size_t deviceJOffsetsStart, deviceJOffsetsCount;
+        std::tie(deviceJOffsetsStart, deviceJOffsetsCount) =
+            deviceChunk(joffsets.size(0) - 1, deviceId);
+        size_t deviceJOffsetsEnd = deviceJOffsetsStart + deviceJOffsetsCount;
+
         for (auto i = deviceJOffsetsStart; i < deviceJOffsetsEnd; ++i) {
             auto start = joffsets[i].item<fvdb::JOffsetsType>();
             auto end   = joffsets[i + 1].item<fvdb::JOffsetsType>();

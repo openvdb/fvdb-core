@@ -13,16 +13,16 @@ namespace detail {
 namespace ops {
 
 template <torch::DeviceType>
-void dispatchReadFromDenseXyzc(const GridBatchImpl &batchHdl,
-                               const torch::Tensor &inDenseTensor,
-                               const torch::Tensor &denseOrigins,
-                               torch::Tensor &outSparseTensor);
+void dispatchReadFromDenseCminor(const GridBatchImpl &batchHdl,
+                                 const torch::Tensor &inDenseTensor,
+                                 const torch::Tensor &denseOrigins,
+                                 torch::Tensor &outSparseTensor);
 
 template <torch::DeviceType>
-void dispatchReadFromDenseCzyx(const GridBatchImpl &batchHdl,
-                               const torch::Tensor &inDenseTensor,
-                               const torch::Tensor &denseOrigins,
-                               torch::Tensor &outSparseTensor);
+void dispatchReadFromDenseCmajor(const GridBatchImpl &batchHdl,
+                                 const torch::Tensor &inDenseTensor,
+                                 const torch::Tensor &denseOrigins,
+                                 torch::Tensor &outSparseTensor);
 
 } // namespace ops
 } // namespace detail

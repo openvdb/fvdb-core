@@ -243,14 +243,25 @@ loadGaussianPly(const std::string &filename, torch::Device device) {
     size_t vertex_count = meansData->count;
 
     // Create tensors to hold the data
-    torch::Tensor means = torch::from_blob(
-        meansData->buffer.get(), {static_cast<int64_t>(vertex_count), 3}, torch::kFloat32);
-    torch::Tensor logitOpacities = torch::from_blob(
-        logitOpacitiesData->buffer.get(), {static_cast<int64_t>(vertex_count)}, torch::kFloat32);
-    torch::Tensor logScales = torch::from_blob(
-        logScalesData->buffer.get(), {static_cast<int64_t>(vertex_count), 3}, torch::kFloat32);
-    torch::Tensor quats = torch::from_blob(
-        quatsData->buffer.get(), {static_cast<int64_t>(vertex_count), 4}, torch::kFloat32);
+    // NOTE: We must clone() after from_blob() because from_blob() does not take ownership of the
+    // underlying memory. The PlyData buffers will be freed when this function returns, so we need
+    // to copy the data into tensors that own their memory.
+    torch::Tensor means = torch::from_blob(meansData->buffer.get(),
+                                           {static_cast<int64_t>(vertex_count), 3},
+                                           torch::kFloat32)
+                              .clone();
+    torch::Tensor logitOpacities = torch::from_blob(logitOpacitiesData->buffer.get(),
+                                                    {static_cast<int64_t>(vertex_count)},
+                                                    torch::kFloat32)
+                                       .clone();
+    torch::Tensor logScales = torch::from_blob(logScalesData->buffer.get(),
+                                               {static_cast<int64_t>(vertex_count), 3},
+                                               torch::kFloat32)
+                                  .clone();
+    torch::Tensor quats = torch::from_blob(quatsData->buffer.get(),
+                                           {static_cast<int64_t>(vertex_count), 4},
+                                           torch::kFloat32)
+                              .clone();
 
     // Create tensor to hold SH coefficients
     const int numChannels  = static_cast<int>(sh0PlyPropertyNames.size());
@@ -261,13 +272,19 @@ loadGaussianPly(const std::string &filename, torch::Device device) {
     if (sh0Data && sh0Data->count > 0) {
         sh0Coeffs = torch::from_blob(sh0Data->buffer.get(),
                                      {static_cast<int64_t>(vertex_count), 1, numChannels},
-                                     torch::kFloat32);
+                                     torch::kFloat32)
+                        .clone();
     }
     torch::Tensor shNCoeffs; // (N, K-1, D)
     if (shNData && shNData->count > 0) {
+        // fVDB expected shNCoeffs to be ordered by basis, then channel. i.e. RRR...GGG...BBB...
+        // The PLY stores them by channel, then basis. i.e. RGBRGB... So we need to permute the
+        // axes.
         shNCoeffs = torch::from_blob(shNData->buffer.get(),
-                                     {static_cast<int64_t>(vertex_count), nShNBases, numChannels},
-                                     torch::kFloat32);
+                                     {static_cast<int64_t>(vertex_count), numChannels, nShNBases},
+                                     torch::kFloat32)
+                        .permute({0, 2, 1})
+                        .contiguous(); // to (N, K-1, D)
     } else {
         shNCoeffs =
             torch::empty({static_cast<int64_t>(vertex_count), 0, numChannels}, torch::kFloat32);
@@ -279,7 +296,7 @@ loadGaussianPly(const std::string &filename, torch::Device device) {
         const auto tensorShape = std::get<1>(kv.second);
         const auto tensorDtype = plyTypeToTensorDtype(plyData->t);
         const auto tensor =
-            torch::from_blob(plyData->buffer.get(), tensorShape, tensorDtype).to(device);
+            torch::from_blob(plyData->buffer.get(), tensorShape, tensorDtype).clone().to(device);
 
         retMetadata[key] = tensor;
     }
@@ -302,15 +319,14 @@ saveGaussianPly(const std::string &filename,
                 std::optional<std::unordered_map<std::string, PlyMetadataTypes>> trainingMetadata) {
     using namespace tinyply;
 
-    const fvdb::JaggedTensor validMask =
-        FVDB_DISPATCH_KERNEL_DEVICE(gaussians.means().device(), [&]() {
-            return detail::ops::dispatchGaussianNanInfMask<DeviceTag>(gaussians.means(),
-                                                                      gaussians.quats(),
-                                                                      gaussians.logScales(),
-                                                                      gaussians.logitOpacities(),
-                                                                      gaussians.sh0(),
-                                                                      gaussians.shN());
-        });
+    const fvdb::JaggedTensor validMask = FVDB_DISPATCH_KERNEL(gaussians.means().device(), [&]() {
+        return detail::ops::dispatchGaussianNanInfMask<DeviceTag>(gaussians.means(),
+                                                                  gaussians.quats(),
+                                                                  gaussians.logScales(),
+                                                                  gaussians.logitOpacities(),
+                                                                  gaussians.sh0(),
+                                                                  gaussians.shN());
+    });
 
     std::filebuf fb;
     fb.open(filename, std::ios::out | std::ios::binary);
@@ -340,6 +356,11 @@ saveGaussianPly(const std::string &filename,
             return torch::zeros({meansCPU.size(0), 0},
                                 gaussians.shN().options().device(torch::kCPU));
         } else {
+            // ShN has shape [N, K-1, D], meaning the spherical harmonic coefficients are ordered
+            // by basis, then channel. i.e. RGBRGB...
+            // Gaussian PLYs expect the coefficients to be ordered by channel, then basis. i.e.
+            // RR...GG...BB... So we permute the axes to [N, D, K-1] and then reshape to [N,
+            // D*(K-1)]
             return gaussians.shN()
                 .index({validMask.jdata(), torch::indexing::Slice(), torch::indexing::Ellipsis})
                 .cpu()

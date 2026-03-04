@@ -7,6 +7,7 @@
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/Types.h>
 #include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 #include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>
@@ -256,24 +257,24 @@ struct GridBatch : torch::CustomClassHolder {
            std::optional<GridBatch> fine_grid     = std::nullopt) const;
 
     /// @brief Read the values from a dense tensor of the voxels at the specified coordinates
-    /// @param dense_data A dense tensor of shape [B, X, Y, Z, C*]
+    /// @param dense_data A dense tensor of shape [B, X, Y, Z, C]
     /// @param dense_origins A tensor of shape [B, 3] or [3,] specifying the voxel coordinate(s) of
     /// the origin of the dense tensor i.e. [:, 0, 0, 0]
     /// @return A JaggedTensor with shape [B, -1, *] containing the values at the specified
     /// coordinates
     JaggedTensor
-    read_from_dense_xyzc(const torch::Tensor &dense_data,
-                         const Vec3iBatch &dense_origins = torch::zeros(3, torch::kInt32)) const;
+    read_from_dense_cminor(const torch::Tensor &dense_data,
+                           const Vec3iBatch &dense_origins = torch::zeros(3, torch::kInt32)) const;
 
     /// @brief Read the values from a dense tensor of the voxels at the specified coordinates
-    /// @param dense_data A dense tensor of shape [B, C*, X, Y, Z]
+    /// @param dense_data A dense tensor of shape [B, C, X, Y, Z]
     /// @param dense_origins A tensor of shape [B, 3] or [3,] specifying the voxel coordinate(s) of
     /// the origin of the dense tensor i.e. [:, 0, 0, 0]
     /// @return A JaggedTensor with shape [B, -1, *] containing the values at the specified
     /// coordinates
     JaggedTensor
-    read_from_dense_czyx(const torch::Tensor &dense_data,
-                         const Vec3iBatch &dense_origins = torch::zeros(3, torch::kInt32)) const;
+    read_from_dense_cmajor(const torch::Tensor &dense_data,
+                           const Vec3iBatch &dense_origins = torch::zeros(3, torch::kInt32)) const;
 
     /// @brief Read the values from a JaggedTensor indexed by this batch into a dense tensor
     /// @param sparse_data A JaggedTensor of shape [B, -1, *] containing one value per voxel in the
@@ -283,11 +284,11 @@ struct GridBatch : torch::CustomClassHolder {
     ///                  Defaults to the minimum coordinate of the batch.
     /// @param grid_size An optional grid size to read from the batch (in voxel coordinates).
     ///                  Defaults to the total size of a grid containing the whole batch.
-    /// @return A dense tensor of shape [B, X, Y, Z, C*] containing the values at the specified
+    /// @return A dense tensor of shape [B, X, Y, Z, C] containing the values at the specified
     /// coordinates (and zero elsewhere)
-    torch::Tensor write_to_dense_xyzc(const JaggedTensor &sparse_data,
-                                      const std::optional<Vec3iBatch> &min_coord = std::nullopt,
-                                      const std::optional<Vec3i> &grid_size = std::nullopt) const;
+    torch::Tensor write_to_dense_cminor(const JaggedTensor &sparse_data,
+                                        const std::optional<Vec3iBatch> &min_coord = std::nullopt,
+                                        const std::optional<Vec3i> &grid_size = std::nullopt) const;
 
     /// @brief Read the values from a JaggedTensor indexed by this batch into a dense tensor
     /// @param sparse_data A JaggedTensor of shape [B, -1, *] containing one value per voxel in the
@@ -297,11 +298,11 @@ struct GridBatch : torch::CustomClassHolder {
     ///                  Defaults to the minimum coordinate of the batch.
     /// @param grid_size An optional grid size to read from the batch (in voxel coordinates).
     ///                  Defaults to the total size of a grid containing the whole batch.
-    /// @return A dense tensor of shape [B, C*, X, Y, Z] containing the values at the specified
+    /// @return A dense tensor of shape [B, C, X, Y, Z] containing the values at the specified
     /// coordinates (and zero elsewhere)
-    torch::Tensor write_to_dense_czyx(const JaggedTensor &sparse_data,
-                                      const std::optional<Vec3iBatch> &min_coord = std::nullopt,
-                                      const std::optional<Vec3i> &grid_size = std::nullopt) const;
+    torch::Tensor write_to_dense_cmajor(const JaggedTensor &sparse_data,
+                                        const std::optional<Vec3iBatch> &min_coord = std::nullopt,
+                                        const std::optional<Vec3i> &grid_size = std::nullopt) const;
 
     /// @brief Convert grid coordinates to world coordinates
     /// @param ijk A JaggedTensor of grid coordinates with shape [B, -1, 3] (one point set per grid
@@ -472,6 +473,28 @@ struct GridBatch : torch::CustomClassHolder {
     /// @return A JaggedTensor of voxel coordinates indexed by this grid batch (shape [B, -1, 3])
     JaggedTensor ijk() const;
 
+    /// @brief Return Morton codes (Z-order curve) for active voxels in this grid batch (xyz bit
+    /// interleaving)
+    /// @param offset Offset to apply to voxel coordinates before encoding
+    /// @return A JaggedTensor of Morton codes for active voxels (shape [B, -1, 1])
+    JaggedTensor morton(const torch::Tensor &offset) const;
+
+    /// @brief Return transposed Morton codes (Z-order curve) for active voxels in this grid batch
+    /// (zyx bit interleaving)
+    /// @param offset Offset to apply to voxel coordinates before encoding
+    /// @return A JaggedTensor of transposed Morton codes for active voxels (shape [B, -1, 1])
+    JaggedTensor morton_zyx(const torch::Tensor &offset) const;
+
+    /// @brief Return Hilbert curve codes for active voxels in this grid batch (xyz)
+    /// @param offset Offset to apply to voxel coordinates before encoding
+    /// @return A JaggedTensor of Hilbert codes for active voxels (shape [B, -1, 1])
+    JaggedTensor hilbert(const torch::Tensor &offset) const;
+
+    /// @brief Return transposed Hilbert curve codes for active voxels in this grid batch (zyx)
+    /// @param offset Offset to apply to voxel coordinates before encoding
+    /// @return A JaggedTensor of transposed Hilbert codes for active voxels (shape [B, -1, 1])
+    JaggedTensor hilbert_zyx(const torch::Tensor &offset) const;
+
     /// @brief Find the intersection between a collection of rays and the zero level set of a scalar
     /// field
     ///        at each voxel in the grid batch
@@ -611,6 +634,12 @@ struct GridBatch : torch::CustomClassHolder {
     /// @return A GridBatch representing the convolved grid.
     GridBatch conv_grid(Vec3iOrScalar kernel_size, Vec3iOrScalar stride) const;
 
+    /// @brief Return a batch of grids representing the output of a transposed convolution.
+    /// @param kernel_size The kernel size of convolution
+    /// @param stride The stride of the convolution
+    /// @return A GridBatch representing the transposed convolved grid.
+    GridBatch conv_transpose_grid(Vec3iOrScalar kernel_size, Vec3iOrScalar stride) const;
+
     /// @brief Return a batch of grids representing the dilated version of this batch of grids.
     /// @param dilation The dilation factor of the grid batch
     /// @return A GridBatch representing the dilated version of this batch of grids.
@@ -651,15 +680,6 @@ struct GridBatch : torch::CustomClassHolder {
     /// @param level level set of the surface to extract
     /// @return vertices and faces arrays of the extracted isosurface
     std::vector<JaggedTensor> marching_cubes(const JaggedTensor &field, double level = 0.0) const;
-
-    /// @brief Perform in-grid convolution using fast halo buffer method. Currently only supports
-    /// kernel_size = 3.
-    /// @param features A JaggedTensor of shape [B, -1, *] containing features associated with this
-    /// batch of grids.
-    /// @param kernel A tensor of shape [Out, In, 3, 3, 3] containing the kernel to convolve with.
-    /// @return A JaggedTensor of shape [B, -1, *] containing the convolved features.
-    JaggedTensor
-    sparse_conv_halo(const JaggedTensor &features, const torch::Tensor &kernel, int variant) const;
 
     /// @brief Return a grid batch on the specified device. If the passed in device is the same as
     /// this grid batch's
@@ -797,13 +817,29 @@ struct GridBatch : torch::CustomClassHolder {
 
     static GridBatch concatenate(const std::vector<GridBatch> &vec);
 
-    static void computeConvolutionKernelMap(const GridBatch &source,
-                                            const GridBatch &target,
-                                            torch::Tensor &kernelMap,
-                                            const Vec3iOrScalar &kernelSize,
-                                            const Vec3iOrScalar &stride);
+    /// @brief Build the forward compacted CSR topology for gather-scatter convolution.
+    /// @param feature_grid Grid batch containing the input feature voxels.
+    /// @param output_grid  Grid batch containing the output voxels.
+    /// @param kernelSize   Spatial kernel dimensions (scalar or 3-vector).
+    /// @param stride       Convolution stride (scalar or 3-vector).
+    /// @return A GatherScatterDefaultTopology with direction=Forward.
+    static detail::ops::GatherScatterDefaultTopology
+    buildGatherScatterDefaultTopology(const GridBatch &feature_grid,
+                                      const GridBatch &output_grid,
+                                      const Vec3iOrScalar &kernelSize,
+                                      const Vec3iOrScalar &stride);
 
-    std::vector<torch::Tensor> computeBrickHaloBuffer(bool benchmark) const;
+    /// @brief Build the transposed compacted CSR topology for gather-scatter convolution.
+    /// @param feature_grid Grid batch containing the input feature voxels.
+    /// @param output_grid  Grid batch containing the output voxels.
+    /// @param kernelSize   Spatial kernel dimensions (scalar or 3-vector).
+    /// @param stride       Convolution stride (scalar or 3-vector).
+    /// @return A GatherScatterDefaultTopology with direction=Transposed.
+    static detail::ops::GatherScatterDefaultTopology
+    buildGatherScatterDefaultTransposeTopology(const GridBatch &feature_grid,
+                                               const GridBatch &output_grid,
+                                               const Vec3iOrScalar &kernelSize,
+                                               const Vec3iOrScalar &stride);
 
     /// @brief Perform one integration step of the TSDF fusion algorithm on a batch of sparse grids.
     ///        The TSDF fusion algorithm integrates depth and feature images (e.g. colors)

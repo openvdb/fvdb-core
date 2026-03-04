@@ -4,23 +4,6 @@ on:
   pull_request_target:
     branches:
       - '**'
-    paths-ignore:
-        - 'CODEOWNERS'
-        - '**.md'
-        - 'debug/**'
-        - 'examples/**'
-        - 'notebooks/**'
-        - 'scripts/**'
-  push:
-    branches:
-      - main
-    paths-ignore:
-        - 'CODEOWNERS'
-        - '**.md'
-        - 'debug/**'
-        - 'examples/**'
-        - 'notebooks/**'
-        - 'scripts/**'
   workflow_dispatch:
     inputs:
       branch:
@@ -43,11 +26,21 @@ permissions:
 
 jobs:
   ##############################################################################
+  # CHECK FOR RELEVANT CHANGES
+  ##############################################################################
+  check-changes:
+    uses: ./.github/workflows/check-changes.yml
+
+  ##############################################################################
   # BUILD FVDB
   ##############################################################################
   start-build-runner:
     name: Start CPU-only EC2 runner for build
+    needs: check-changes
     runs-on: ubuntu-latest
+    if: >-
+      needs.check-changes.outputs.should_test == 'true'
+      && (github.event.pull_request.draft == false || github.event_name != 'pull_request_target')
     outputs:
       label: ${{ steps.start-build-runner.outputs.label }}
       ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
@@ -59,7 +52,7 @@ jobs:
           aws-region: us-east-2
       - name: Start EC2 runner
         id: start-build-runner
-        uses: machulav/ec2-github-runner@v2.4.1
+        uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -127,7 +120,7 @@ jobs:
           environment-name: fvdb_build
           environment-file: env/build_environment.yml
 
-      - name: Buid fvdb
+      - name: Build fvdb
         run: |
           micromamba activate fvdb_build
           ./build.sh wheel verbose gtests benchmarks --cuda-arch-list '8.9+PTX'
@@ -157,7 +150,9 @@ jobs:
       - start-build-runner # required to get output from the start-build-runner job
       - fvdb-build # required to wait when the main job is done
     runs-on: ubuntu-latest
-    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
+    # required to stop the runner even if the error happened in the previous jobs, but only if the
+    # start-build-runner job was not skipped
+    if: ${{ always() && needs.start-build-runner.result != 'skipped' }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -165,7 +160,7 @@ jobs:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
       - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2.4.1
+        uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -191,7 +186,7 @@ jobs:
           aws-region: us-east-2
       - name: Start EC2 GPU runner
         id: start-tests-gpu-runner
-        uses: machulav/ec2-github-runner@v2.4.1
+        uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -407,7 +402,9 @@ jobs:
       - fvdb-unit-tests # required to wait when the main job is done
       - fvdb-docs-test # required to wait when the main job is done
     runs-on: ubuntu-latest
-    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
+    # required to stop the runner even if the error happened in the previous jobs
+    # but only if the start-tests-gpu-runner job was not skipped
+    if: ${{ always() && needs.start-tests-gpu-runner.result != 'skipped' }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -415,7 +412,7 @@ jobs:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
       - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2.4.1
+        uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}

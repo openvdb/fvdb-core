@@ -16,7 +16,7 @@ namespace ops {
 
 template <typename ScalarType>
 __hostdev__ inline void
-readIntoDenseXyzcVoxelCallback(
+readIntoDenseCminorVoxelCallback(
     int32_t batchIdx,
     int32_t leafIdx,
     int32_t voxelIdx,
@@ -26,7 +26,7 @@ readIntoDenseXyzcVoxelCallback(
     torch::PackedTensorAccessor64<int32_t, 2, torch::RestrictPtrTraits> denseOrigins, // [B, 3]
     // [B*N, C]
     torch::PackedTensorAccessor64<ScalarType, 2, torch::RestrictPtrTraits> inSparseTensor,
-    // [B, W, H, D, C]
+    // [B, X, Y, Z, C]
     torch::PackedTensorAccessor64<ScalarType, 5, torch::RestrictPtrTraits> outDenseTensor) {
     using LeafNodeT = typename nanovdb::OnIndexGrid::LeafNodeType;
 
@@ -54,7 +54,7 @@ readIntoDenseXyzcVoxelCallback(
 
 template <typename ScalarType>
 __hostdev__ inline void
-readIntoDenseCzyxVoxelCallback(
+readIntoDenseCmajorVoxelCallback(
     int32_t batchIdx,
     int32_t leafIdx,
     int32_t voxelIdx,
@@ -64,13 +64,13 @@ readIntoDenseCzyxVoxelCallback(
     torch::PackedTensorAccessor64<int32_t, 2, torch::RestrictPtrTraits> denseOrigins,
     // [B*N, C]
     torch::PackedTensorAccessor64<ScalarType, 2, torch::RestrictPtrTraits> inSparseTensor,
-    // [B, C, D, H, W]
+    // [B, C, X, Y, Z]
     torch::PackedTensorAccessor64<ScalarType, 5, torch::RestrictPtrTraits> outDenseTensor) {
     using LeafNodeT = typename nanovdb::OnIndexGrid::LeafNodeType;
 
     const nanovdb::OnIndexGrid *gpuGrid = batchHandle.grid(batchIdx);
     const nanovdb::Coord denseDim(
-        outDenseTensor.size(4), outDenseTensor.size(3), outDenseTensor.size(2));
+        outDenseTensor.size(2), outDenseTensor.size(3), outDenseTensor.size(4));
     const nanovdb::Coord denseOrigin(
         denseOrigins[batchIdx][0], denseOrigins[batchIdx][1], denseOrigins[batchIdx][2]);
     const nanovdb::CoordBBox bbox(denseOrigin, denseOrigin + denseDim - nanovdb::Coord(1, 1, 1));
@@ -85,18 +85,18 @@ readIntoDenseCzyxVoxelCallback(
     const int64_t offset     = baseOffset + leaf.getValue(voxelIdx) - 1;
 
     if (isActive && bbox.isInside(voxIjk)) {
-        outDenseTensor[batchIdx][channelIdx][ijk[2]][ijk[1]][ijk[0]] =
+        outDenseTensor[batchIdx][channelIdx][ijk[0]][ijk[1]][ijk[2]] =
             inSparseTensor[offset][channelIdx];
     }
 }
 
 template <typename ScalarType>
 void
-readIntoDenseXyzcCPU(const GridBatchImpl::Accessor &gridHandle,
-                     const torch::TensorAccessor<ScalarType, 2> inGridData,
-                     const torch::TensorAccessor<int32_t, 2> denseOrigins,
-                     torch::TensorAccessor<ScalarType, 5> outDenseTensor,
-                     bool isContiguous) {
+readIntoDenseCminorCPU(const GridBatchImpl::Accessor &gridHandle,
+                       const torch::TensorAccessor<ScalarType, 2> inGridData,
+                       const torch::TensorAccessor<int32_t, 2> denseOrigins,
+                       torch::TensorAccessor<ScalarType, 5> outDenseTensor,
+                       bool isContiguous) {
     for (int64_t bi = 0; bi < gridHandle.batchSize(); bi += 1) {
         const nanovdb::OnIndexGrid *grid = gridHandle.grid(bi);
 
@@ -129,16 +129,16 @@ readIntoDenseXyzcCPU(const GridBatchImpl::Accessor &gridHandle,
 
 template <typename ScalarType>
 void
-readIntoDenseCzyxCPU(const GridBatchImpl::Accessor &gridHandle,
-                     const torch::TensorAccessor<ScalarType, 2> inGridData,
-                     const torch::TensorAccessor<int32_t, 2> denseOrigins,
-                     torch::TensorAccessor<ScalarType, 5> outDenseTensor) {
+readIntoDenseCmajorCPU(const GridBatchImpl::Accessor &gridHandle,
+                       const torch::TensorAccessor<ScalarType, 2> inGridData,
+                       const torch::TensorAccessor<int32_t, 2> denseOrigins,
+                       torch::TensorAccessor<ScalarType, 5> outDenseTensor) {
     for (int64_t bi = 0; bi < gridHandle.batchSize(); bi += 1) {
         const nanovdb::OnIndexGrid *grid = gridHandle.grid(bi);
 
         const nanovdb::Coord bbmin(denseOrigins[bi][0], denseOrigins[bi][1], denseOrigins[bi][2]);
         const nanovdb::Coord bbsize(
-            outDenseTensor.size(4), outDenseTensor.size(3), outDenseTensor.size(2));
+            outDenseTensor.size(2), outDenseTensor.size(3), outDenseTensor.size(4));
         const nanovdb::CoordBBox bbox(bbmin, bbmin + bbsize - nanovdb::Coord(1, 1, 1));
         const int64_t baseOffset = gridHandle.voxelOffset(bi);
 
@@ -150,7 +150,7 @@ readIntoDenseCzyxCPU(const GridBatchImpl::Accessor &gridHandle,
                 const nanovdb::Coord ijk = voxIjk - bbox.min();
 
                 for (int c = 0; c < inGridData.size(1); ++c) {
-                    outBatch[c][ijk[2]][ijk[1]][ijk[0]] = inGridData[it->second][c];
+                    outBatch[c][ijk[0]][ijk[1]][ijk[2]] = inGridData[it->second][c];
                 }
             }
         }
@@ -159,13 +159,13 @@ readIntoDenseCzyxCPU(const GridBatchImpl::Accessor &gridHandle,
 
 template <>
 void
-dispatchReadIntoDenseXyzc<torch::kCUDA>(const GridBatchImpl &batchHdl,
-                                        const torch::Tensor &inGridData,
-                                        const torch::Tensor &denseOrigins,
-                                        torch::Tensor &outDenseTensor) {
+dispatchReadIntoDenseCminor<torch::kCUDA>(const GridBatchImpl &batchHdl,
+                                          const torch::Tensor &inGridData,
+                                          const torch::Tensor &denseOrigins,
+                                          torch::Tensor &outDenseTensor) {
     AT_DISPATCH_V2(
         outDenseTensor.scalar_type(),
-        "readIntoDense",
+        "readIntoDenseCminor",
         AT_WRAP([&]() {
             auto outDenseAcc =
                 outDenseTensor.packed_accessor64<scalar_t, 5, torch::RestrictPtrTraits>();
@@ -178,7 +178,7 @@ dispatchReadIntoDenseXyzc<torch::kCUDA>(const GridBatchImpl &batchHdl,
                                            int32_t vidx,
                                            int32_t cidx,
                                            GridBatchImpl::Accessor batchAcc) {
-                readIntoDenseXyzcVoxelCallback<scalar_t>(
+                readIntoDenseCminorVoxelCallback<scalar_t>(
                     bidx, lidx, vidx, cidx, batchAcc, denseOriginsAcc, inGridDataAcc, outDenseAcc);
             };
             forEachVoxelCUDA(1024, inGridData.size(1), batchHdl, callback);
@@ -190,13 +190,13 @@ dispatchReadIntoDenseXyzc<torch::kCUDA>(const GridBatchImpl &batchHdl,
 
 template <>
 void
-dispatchReadIntoDenseXyzc<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
-                                               const torch::Tensor &inGridData,
-                                               const torch::Tensor &denseOrigins,
-                                               torch::Tensor &outDenseTensor) {
+dispatchReadIntoDenseCminor<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
+                                                 const torch::Tensor &inGridData,
+                                                 const torch::Tensor &denseOrigins,
+                                                 torch::Tensor &outDenseTensor) {
     AT_DISPATCH_V2(
         outDenseTensor.scalar_type(),
-        "readIntoDense",
+        "readIntoDenseCminor",
         AT_WRAP([&]() {
             auto outDenseAcc =
                 outDenseTensor.packed_accessor64<scalar_t, 5, torch::RestrictPtrTraits>();
@@ -209,7 +209,7 @@ dispatchReadIntoDenseXyzc<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
                                            int32_t vidx,
                                            int32_t cidx,
                                            GridBatchImpl::Accessor batchAcc) {
-                readIntoDenseXyzcVoxelCallback<scalar_t>(
+                readIntoDenseCminorVoxelCallback<scalar_t>(
                     bidx, lidx, vidx, cidx, batchAcc, denseOriginsAcc, inGridDataAcc, outDenseAcc);
             };
             forEachVoxelPrivateUse1(inGridData.size(1), batchHdl, callback);
@@ -221,20 +221,20 @@ dispatchReadIntoDenseXyzc<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
 
 template <>
 void
-dispatchReadIntoDenseXyzc<torch::kCPU>(const GridBatchImpl &gridHdl,
-                                       const torch::Tensor &inGridData,
-                                       const torch::Tensor &denseOrigins,
-                                       torch::Tensor &outDenseTensor) {
+dispatchReadIntoDenseCminor<torch::kCPU>(const GridBatchImpl &gridHdl,
+                                         const torch::Tensor &inGridData,
+                                         const torch::Tensor &denseOrigins,
+                                         torch::Tensor &outDenseTensor) {
     bool isContiguous = inGridData.is_contiguous() && outDenseTensor.is_contiguous();
 
     AT_DISPATCH_V2(outDenseTensor.scalar_type(),
-                   "readIntoDense",
+                   "readIntoDenseCminor",
                    AT_WRAP([&]() {
-                       readIntoDenseXyzcCPU(gridHdl.hostAccessor(),
-                                            inGridData.accessor<scalar_t, 2>(),
-                                            denseOrigins.accessor<int32_t, 2>(),
-                                            outDenseTensor.accessor<scalar_t, 5>(),
-                                            isContiguous);
+                       readIntoDenseCminorCPU(gridHdl.hostAccessor(),
+                                              inGridData.accessor<scalar_t, 2>(),
+                                              denseOrigins.accessor<int32_t, 2>(),
+                                              outDenseTensor.accessor<scalar_t, 5>(),
+                                              isContiguous);
                    }),
                    AT_EXPAND(AT_FLOATING_TYPES),
                    c10::kHalf,
@@ -243,13 +243,13 @@ dispatchReadIntoDenseXyzc<torch::kCPU>(const GridBatchImpl &gridHdl,
 
 template <>
 void
-dispatchReadIntoDenseCzyx<torch::kCUDA>(const GridBatchImpl &batchHdl,
-                                        const torch::Tensor &inGridData,
-                                        const torch::Tensor &denseOrigins,
-                                        torch::Tensor &outDenseTensor) {
+dispatchReadIntoDenseCmajor<torch::kCUDA>(const GridBatchImpl &batchHdl,
+                                          const torch::Tensor &inGridData,
+                                          const torch::Tensor &denseOrigins,
+                                          torch::Tensor &outDenseTensor) {
     AT_DISPATCH_V2(
         outDenseTensor.scalar_type(),
-        "readIntoDense",
+        "readIntoDenseCmajor",
         AT_WRAP([&]() {
             auto outDenseAcc =
                 outDenseTensor.packed_accessor64<scalar_t, 5, torch::RestrictPtrTraits>();
@@ -262,7 +262,7 @@ dispatchReadIntoDenseCzyx<torch::kCUDA>(const GridBatchImpl &batchHdl,
                                            int32_t vidx,
                                            int32_t cidx,
                                            GridBatchImpl::Accessor batchAcc) {
-                readIntoDenseCzyxVoxelCallback<scalar_t>(
+                readIntoDenseCmajorVoxelCallback<scalar_t>(
                     bidx, lidx, vidx, cidx, batchAcc, denseOriginsAcc, inGridDataAcc, outDenseAcc);
             };
             forEachVoxelCUDA(1024, inGridData.size(1), batchHdl, callback);
@@ -274,13 +274,13 @@ dispatchReadIntoDenseCzyx<torch::kCUDA>(const GridBatchImpl &batchHdl,
 
 template <>
 void
-dispatchReadIntoDenseCzyx<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
-                                               const torch::Tensor &inGridData,
-                                               const torch::Tensor &denseOrigins,
-                                               torch::Tensor &outDenseTensor) {
+dispatchReadIntoDenseCmajor<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
+                                                 const torch::Tensor &inGridData,
+                                                 const torch::Tensor &denseOrigins,
+                                                 torch::Tensor &outDenseTensor) {
     AT_DISPATCH_V2(
         outDenseTensor.scalar_type(),
-        "readIntoDense",
+        "readIntoDenseCmajor",
         AT_WRAP([&]() {
             auto outDenseAcc =
                 outDenseTensor.packed_accessor64<scalar_t, 5, torch::RestrictPtrTraits>();
@@ -293,7 +293,7 @@ dispatchReadIntoDenseCzyx<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
                                            int32_t vidx,
                                            int32_t cidx,
                                            GridBatchImpl::Accessor batchAcc) {
-                readIntoDenseCzyxVoxelCallback<scalar_t>(
+                readIntoDenseCmajorVoxelCallback<scalar_t>(
                     bidx, lidx, vidx, cidx, batchAcc, denseOriginsAcc, inGridDataAcc, outDenseAcc);
             };
             forEachVoxelPrivateUse1(inGridData.size(1), batchHdl, callback);
@@ -305,17 +305,17 @@ dispatchReadIntoDenseCzyx<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
 
 template <>
 void
-dispatchReadIntoDenseCzyx<torch::kCPU>(const GridBatchImpl &gridHdl,
-                                       const torch::Tensor &inGridData,
-                                       const torch::Tensor &denseOrigins,
-                                       torch::Tensor &outDenseTensor) {
+dispatchReadIntoDenseCmajor<torch::kCPU>(const GridBatchImpl &gridHdl,
+                                         const torch::Tensor &inGridData,
+                                         const torch::Tensor &denseOrigins,
+                                         torch::Tensor &outDenseTensor) {
     AT_DISPATCH_V2(outDenseTensor.scalar_type(),
-                   "readIntoDense",
+                   "readIntoDenseCmajor",
                    AT_WRAP([&]() {
-                       readIntoDenseCzyxCPU(gridHdl.hostAccessor(),
-                                            inGridData.accessor<scalar_t, 2>(),
-                                            denseOrigins.accessor<int32_t, 2>(),
-                                            outDenseTensor.accessor<scalar_t, 5>());
+                       readIntoDenseCmajorCPU(gridHdl.hostAccessor(),
+                                              inGridData.accessor<scalar_t, 2>(),
+                                              denseOrigins.accessor<int32_t, 2>(),
+                                              outDenseTensor.accessor<scalar_t, 5>());
                    }),
                    AT_EXPAND(AT_FLOATING_TYPES),
                    c10::kHalf,

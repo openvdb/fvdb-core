@@ -1,55 +1,62 @@
-# *ƒ*(VDB)
+# *ƒ*VDB
 
+fVDB is a Python library of data structures and algorithms for building high-performance and large-domain
+spatial applications using [NanoVDB](https://dl.acm.org/doi/abs/10.1145/3450623.3464653) on the GPU
+in [PyTorch](https://pytorch.org/).
+Applications of fVDB include 3D deep learning, computer graphics/vision, robotics, and scientific computing.
 
-This repository contains the code for *f*VDB, a framework for encoding and operating on *sparse voxel hierarchies* of features in PyTorch. A sparse voxel hierarchy is a coarse-to-fine hierarchy of sparse voxel grids such that every fine voxel is contained within some coarse voxel. The image below illustrates an example. *f*VDB supports using PyTorch Tensors to represent features at the corners and centers of voxels in a hierarchy and enables a number of differentiable operations on these Tensors (*e.g.* trilinear interpolation, convolution, splatting, ray tracing).
 
 <p align="center">
-  <img src="docs/imgs/fvdb_teaser.png" style="width: 40%;"alt="fVDB Teaser">
-  <!-- <img src="docs/imgs/readme/av_screenshot.png" style="width: 100%;"alt="fVDB Teaser"> -->
-  <figcaption style="text-align: center; font-style: italic;">An example of a sparse voxel hierarchy with 3 levels. Each fine voxel is contained within exactly one coarse voxel.</figcaption>
+  <img src="docs/imgs/fvdb_teaser.jpg" style="width: 90%;" alt="fVDB Teaser">
 </p>
 
-*f*VDB was first developed by the [NVIDIA High-Fidelity Physics Research Group](https://research.nvidia.com/labs/prl/) (a part of the NVIDIA Spatial Intelligence Lab) and continues to be developed with the OpenVDB community to suit the growing needs for a robust framework for spatial intelligence research and applications.  Please review [the paper](https://research.nvidia.com/labs/prl/publication/williams2024fvdb/) for more details and kindly consider [citing it in your work](#references) if you find it useful.
+
+
+fVDB was first developed by the [NVIDIA High-Fidelity Physics Research Group](https://research.nvidia.com/labs/prl/)
+within the [NVIDIA Spatial Intelligence Lab](https://research.nvidia.com/labs/sil/), and continues to be
+developed with the OpenVDB community to suit the growing needs for a robust framework for
+spatial intelligence research and applications.
+
+[The paper](https://research.nvidia.com/labs/prl/publication/williams2024fvdb/) is available for more details, kindly consider [citing it in your work](#references) if you find it useful.
 
 ## Learning to Use *f*VDB
 
-After [installing *f*VDB](#installing-fvdb), we recommend starting with our walk-through [notebooks](notebooks) which provide a gentle, illustrated introduction to the main concepts and operations in *f*VDB.
+After [installing *f*VDB](#installing-fvdb), we recommend starting with our [documentation](https://fvdb.ai/).
 
-Once familiar with the basics, [Usage Examples](#usage-examples) introduces a few of the practical python scripts that can be further explored in the [examples](examples) directory.
+Beyond the [documentation](https://fvdb.ai/), the walk-through [notebooks](notebooks) in this repository
+can provide an illustrated introduction to the main concepts in *f*VDB.
 
-Lastly, our [documentation](docs) provides deeper details on the concepts as well as an exhaustive set of illustrations of all the operations available in *f*VDB and an API reference. The [documentation can be built locally](#building-documentation) or can be accessed online at https://www.openvdb.org/documentation/fvdb/.
 
 ## Installing *f*VDB
 
-During the project's initial development stages, it is necessary to [run the build steps](#building-fvdb-from-source) to install ƒVDB. Eventually, ƒVDB will be provided as a pre-built, installable package from anaconda.  We support building the latest ƒVDB version for the following dependent library configurations:
+The `fvdb-core` Python package can be installed either using published packages with pip or built
+from source.
 
-|   PyTorch      | Python      | CUDA |
-| -------------- | ----------- | ------------ |
-|  2.4.0-2.4.1   | 3.10 - 3.12 | 12.1 - 12.4 |
-
-
-
-** Notes:**
-* Linux is the only platform currently supported (Ubuntu >= 20.04 recommended).
-* A CUDA-capable GPU with Ampere architecture or newer (i.e. compute capability >=8.0) is recommended to run the CUDA-accelerated operations in ƒVDB.  A GPU with compute capabililty >=7.0 (Volta architecture) is the minimum requirement but some operations and data types are not supported.
+For the most up-to-date information on installing *f*VDB's pip packages, please see the
+[installation documentation](https://fvdb.ai/installation.html).
 
 
 ## Building *f*VDB from Source
 
+If the [pre-built packages](https://fvdb.ai/installation.html) do not meet your needs, you can build *f*VDB from source in this repository.
+
 ### Environment Management
-ƒVDB is a Python library implemented as a C++ Pytorch extension.  Of course you can build ƒVDB in whatever environment suits you, but we provide three paths to constructing reliable environments for building and running ƒVDB. These are separate options,
-choose only one. They're not intended to be used together.
+
+ƒVDB is a Python library implemented as a C++ PyTorch extension. We provide three paths to
+constructing reliable environments for building and running ƒVDB. These are separate options not
+intended to be used together (however with modification you can of course use, for example, a conda
+or pip environment inside a docker container).
 
 1. **RECOMMENDED** [conda](#option-1-setting-up-a-conda-environment-recommended)
 2. Using [docker](#option-2-setting-up-a-docker-container)
 3. Python virtual environment. [venv](#option-3-setting-up-a-python-virtual-environment)
 
-`conda` tends to be more flexible since reconfiguring toolchains and modules to suit your larger project can be dynamic, but at the same time this can be a more brittle experience compared to using a virtualized `docker` container.  Using `conda` is generally recommended for development and testing, while using `docker` is recommended for CI/CD and deployment.
+`conda` tends to be more flexible since reconfiguring toolchains and modules to suit your larger
+project can be dynamic, but at the same time this can be a more brittle experience compared to using
+a virtualized `docker` container.  Using `conda` is generally recommended for development and
+testing, while using `docker` is recommended for CI/CD and deployment.
 
----
-
-
-#### **OPTION 1** Setting up a Conda Environment (Recommended)
+#### **OPTION 1** Conda Environment (Recommended)
 
 *f*VDB can be used with any Conda distribution installed on your system. Below is an installation guide using
 [miniforge](https://github.com/conda-forge/miniforge). You can skip steps 1-3 if you already have a Conda installation.
@@ -84,71 +91,64 @@ conda activate fvdb
 
 ---
 
-#### **OPTION 2** Setting up a Docker Container
+#### **OPTION 2** Docker Container
 
-Running a docker container is a great way to ensure that you have a consistent environment for building and running ƒVDB.
+Running a Docker container ensures that you have a consistent environment for building and running ƒVDB. Start by installing Docker and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 
-Our provided [`Dockerfile`](Dockerfile) constructs a Docker image which is ready to build ƒVDB.  The docker image is configured to install miniforge and the `fvdb` conda environment with all the dependencies needed to build and run ƒVDB.
+Our provided [`Dockerfile`](Dockerfile) constructs a container that pre-installs the dependencies needed to build and run ƒVDB.
 
-Building and starting the docker image is done by running the following command from the fvdb directory:
+1. In the fvdb-core directory, build the Docker image:
 ```shell
-docker compose run --rm fvdb-dev
+docker build -t fvdb-devel .
 ```
 
-
-When you are ready to build ƒVDB, run the following command within the docker container.  `TORCH_CUDA_ARCH_LIST` specifies which CUDA architectures to build for.
+2. When you are ready to build ƒVDB, run the following command within the docker container.  `TORCH_CUDA_ARCH_LIST` specifies which CUDA architectures to build for.
 ```shell
-conda activate fvdb;
+docker run -it --mount type=bind,src="$(pwd)",target=/workspace fvdb-devel bash
 cd /workspace;
-TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6+PTX" \
-./build.sh install verbose
+pip install -r env/build_requirements.txt
+./build.sh install --cuda-arch-list="7.5;8.0;9.0;10.0;12.0+PTX" -v
 ```
 
-If you've built an artifact that you want to extract from the container, with "wheel" being the
-most useful... The built wheel can be extracted from the running docker image using `docker cp`, given the
-ID of the running image. For example:
-
-```shell
-docker cp fvdb-fvdb-dev-run-0123456789ab:/workspace/dist/fvdb-0.2.1-cp312-cp312-linux_x86_64.whl .
-```
-
-where `0123456789ab` is the ID of the running docker container, obtained via `docker ps`.
-
-Additional information about the ƒVDB docker setup, with troubleshooting for common errors, can be found
-here: [`ƒVDB Docker`](docs/markdown/docker_readme.md)
+In order to extract an artifact from the container such as the Python wheel, query the container ID using `docker ps` and copy the artifact using `docker cp`.
 
 ---
 
-#### **OPTION 3** Setting up a Python virtual environment
+#### **OPTION 3** Python Virtual Environment
 
-Create a python virtual environment and then proceed to install the exact version of PyTorch that corresponds to your CUDA version. Finally, install the rest of the build requirements.
+Using a Python virtual environment enables you to use your system provided compiler and CUDA toolkit. This can be especially useful if you are using ƒVDB in conjunction with other Python packages, especially packages that have been built from source.
+
+1. Start by installing GCC, the CUDA Toolkit, and cuDNN.
+
+2. Then, create a Python virtual environment, install the requisite dependencies, and build:
 
 ```shell
 python -m venv fvdb
 source fvdb/bin/activate
-pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu126
 pip install -r env/build_requirements.txt
+./build.sh install --cuda-arch-list="7.5;8.0;9.0;10.0;12.0+PTX" -v
 ```
 
-When you're ready to build fVDB, run the following command after activating the Python virtual environment
-```shell
-TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6+PTX" ./build.sh install
-```
+Note: adjust the TORCH_CUDA_ARCH_LIST to suit your needs. If you are building just to run on a single machine, including only the present GPU architecture(s) reduces build time.
 
 ---
 
 ### Building *f*VDB
 
-**:warning: Note:** Compilation can be very memory-consuming. As part of our build script, we set the `CMAKE_BUILD_PARALLEL_LEVEL` environment variable to control compilation job parallelism with a value that we find works well for most machines (allowing for one job every 2.5GB of memory) but this can be overridden by setting the `CMAKE_BUILD_PARALLEL_LEVEL` environment variable to a different value.
+#### Tips for Building *f*VDB
 
-** Note:** To save time and trouble on repeated clean builds, configure your `CPM_SOURCE_CACHE`. Add the following to your shell configuration (e.g. `.bashrc`)
+  - **:warning:** Compilation can be very memory-consuming. As part of our build script, we set the `CMAKE_BUILD_PARALLEL_LEVEL` environment variable to control compilation job parallelism with a value that we find works well for most machines (allowing for one job every 2.5GB of memory) but this can be overridden by setting the `CMAKE_BUILD_PARALLEL_LEVEL` environment variable to a different value.
 
-```shell
-export CPM_SOURCE_CACHE=$HOME/.cache/CPM
-```
+  - To save time and trouble on repeated clean builds, configure your `CPM_SOURCE_CACHE`. Add the following to your shell configuration (e.g. `.bashrc`)
 
-If this is not set, CMake Package Manager (CPM) will cache in the fVDB build directory. Keeping the cache outside of the build directory allows build-time dependencies
-to be reused across fvdb clean-build cycles and saves build time. [See the CPM documentation for more detail](https://github.com/cpm-cmake/CPM.cmake?tab=readme-ov-file#cpm_source_cache)
+    ```shell
+    export CPM_SOURCE_CACHE=$HOME/.cache/CPM
+    ```
+
+    If this is not set, CMake Package Manager (CPM) will cache in the fVDB build directory. Keeping the cache outside of the build directory allows build-time dependencies
+    to be reused across fvdb clean-build cycles and saves build time. [See the CPM documentation for more detail](https://github.com/cpm-cmake/CPM.cmake?tab=readme-ov-file#cpm_source_cache)
+
+#### Build Commands
 
 You can either perform an install:
 ```shell
@@ -160,10 +160,38 @@ or if you would like to build a packaged wheel for installing in other environme
 ./build.sh wheel
 ```
 
+The build script automatically detects the CUDA architectures to build for based on the available GPUs on the system. You can override this behavior by setting the `--cuda-arch-list` option.
+
+```shell
+./build.sh --cuda-arch-list=8.0;8.6+PTX
+```
+
+#### Build Modifiers
+
+The build script supports the following build modifiers:
+
+- `gtests`: Enable building the gtest C++ unit tests.
+- `benchmarks`: Enable building the benchmarks.
+- `editor_skip`: Skip building the nanovdb_editor dependency.
+- `editor_force`: Force rebuild of the nanovdb_editor dependency.
+- `debug`: Build in debug mode with full debug symbols and no optimizations.
+- `strip_symbols`: Strip symbols from the build (will be ignored if debug is enabled).
+- `verbose`: Enable verbose build output for pip and CMake.
 
 ### Running Tests
 
-To make sure that everything works by running tests:
+#### C++ Tests
+
+To run the gtest C++ unit tests
+
+```shell
+./build.sh ctest
+```
+
+#### Python Tests
+
+To run the pytests
+
 ```shell
 cd tests
 pytest unit
@@ -173,10 +201,13 @@ pytest unit
 
 To build the documentation, simply run:
 ```shell
-python setup.py build_ext --inplace
-sphinx-build -E -a docs/ build/sphinx
+sphinx-build ./docs -a -E build/sphinx
 # View the docs
 open build/sphinx/index.html
+# View docs as served
+cd build/sphinx
+python -m http.server
+# Open localhost:8000 in browser
 ```
 
 ### Setting up Intellisense with clangd in Visual Studio Code
@@ -184,83 +215,18 @@ open build/sphinx/index.html
 Please see the guide [`Clangd for Intellisense in fVDB`](docs/markdown/clangd.md)
 
 
-## Usage Examples
-The [examples](examples) directory contains a number of useful illustrations using the `fvdb` Python package. The sections below show some notable examples and their outputs. Run all commands from the directory containing this README.
-
-### Trilinear sampling of grids
-```
-python examples/sample_trilinear.py
-```
-This script generates a grid with scalars at the corners of each voxel and samples this grid at points. The visualization below shows the points colored according to their sampled values as well as the values at grid corners.
-<p align="center">
-  <img src="docs/imgs/readme/trilerp.png" style="width: 40%;"alt="fVDB trilinear interpolation demo">
-  <figcaption style="text-align: center; font-style: italic;">Trilinearly interpolate the corner values at the points.</figcaption>
-</p>
-
-
-### Trilinear splatting into grids
-```
-python examples/splat_trilinear.py
-```
-This script splats normals of a point cloud onto grid centers. The green arrows represent the values of the normals splatted onto each grid center
-<p align="center">
-  <img src="docs/imgs/readme/splat.png" style="width: 40%;"alt="fVDB trilinear splatting demo">
-  <figcaption style="text-align: center; font-style: italic;">Splat the normals at the blue points into the center of each grid cell. The green arrows are the splatted normals</figcaption>
-</p>
-
-
-### Tracing voxels along rays (hierarchical DDA)
-```
-python examples/ray_voxel_marching.py
-```
-This script demonstrates finding the first `N` voxels which lie along a ray (returning thier index as well as their entry and exit points).
-<p align="center">
-  <img src="docs/imgs/readme/rayvox.png" style="width: 70%;"alt="fVDB ray voxel marching">
-  <figcaption style="text-align: center; font-style: italic;">Find the voxels (yellow) which intersect the pink rays eminating from the green dot.</figcaption>
-</p>
-
-
-### Tracing contiguous segments along rays
-```
-python examples/ray_segment_marching.py
-```
-This script demonstrates finding the first `N` continuous segments of voxels which lie along a ray (returning thier index as well as their entry and exit points).
-<p align="center">
-  <img src="docs/imgs/readme/rayseg.png" style="width: 70%;"alt="fVDB ray voxel marching">
-  <figcaption style="text-align: center; font-style: italic;">Find the contiguous segments of voxels (red and blue lines) which intersect the cyan rays eminating from the pink dot.</figcaption>
-</p>
-
-
-### Backpropagating through sampling and splatting
-```
-python examples/overfit_sdf.py
-```
-This scripts fits SDF values at a grid corner to the SDF of a mesh using gradient descent.
-<p align="center">
-  <img src="docs/imgs/readme/fitsdf.png" style="width: 70%;"alt="fVDB SDF fitting">
-  <figcaption style="text-align: center; font-style: italic;">SDF values at grid corners (colored dots) fitted using gradient descent to the SDF of a mesh.</figcaption>
-</p>
-
-The following scripts also show how to bakcprop through splatting and sampling with fVDB:
-```
-python scripts/debug_grad_trilerp.py
-```
-```
-python scripts/debug_grad_splat.py
-```
-
 ## Code Structure
 The main source code for fVDB lives in the [src](src) directory. There are several important files here:
 * `src/python/Bindings.cpp` exposes functionality directly to Python. It is mainly a wrapper around the core classes such as `fvdb::GridBatch` and `fvdb::JaggedTensor`.
-* `src/GridBatch.h` contains the implementation of `fvdb::GridBatch` which is the core data structure on which fVDB is built. A `GridBatch` acts as a map between `(i, j, k)` integer coordinates and offsets in linear memory. This mapping can be used to perform a host of operations. The methods in this class are mostly lightweight wrappers around a set of CPU and CUDA *kernels*. The function prototypes for these kernels are defined in `src/detail/ops/Ops.h`.
-* `src/detail/ops/Ops.h` contains the function prototypes for the main kernels used by fVDB. Host and device kernel implementations are provided in the `src/detail/ops/*.cu` source files.
+* `src/GridBatch.h` contains the implementation of `fvdb::GridBatch` which is the core data structure on which fVDB is built. A `GridBatch` acts as a map between `(i, j, k)` voxel coordinates and offsets in linear memory. This mapping can be used to perform a host of operations. The methods in this class are mostly lightweight wrappers around a set of CPU and CUDA *kernels*. The function prototypes for these kernels are defined in `src/detail/ops/*.h`.
+* `src/detail/ops/*.h` contains the function prototypes for the main kernels used by fVDB. Host and device kernel implementations are provided in the `src/detail/ops/*.cu` source files.
 * `src/detail/autograd` contains C++ implementations of PyTorch autograd functions for differentiable operations.  `#include <detail/autograd/Autograd.h>` includes all of the functions in this directory.
 * `src/detail/utils/nanovdb` contains a number of utilities which make it easier to use NanoVDB.
 
 
 ## References
 
-Please consider citing this when using *f*VDB in a project. You can use the citation BibTeX:
+Please consider citing the following technical paper, presented at ACM SIGGRAPH 2024, when adopting *f*VDB in your project:
 
 ```bibtex
 @article{williams2024fvdb,
@@ -283,3 +249,5 @@ Please consider citing this when using *f*VDB in a project. You can use the cita
 ```
 
 ## Contact
+
+For questions or feedback, please use the [GitHub Issues](https://github.com/openvdb/fvdb-core/issues) for this repository.

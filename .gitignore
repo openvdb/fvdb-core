@@ -62,3 +62,13 @@ logs
 tests/data/
 *.lock
 *.db
+
+scratch/
+
+# Cursor agent rules (worktree-specific)
+.cursor/rules/
+
+# benchmark json files
+*_benchmark.json
+*_results.json
+comparison_*.png

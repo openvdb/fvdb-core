@@ -65,18 +65,18 @@ avgPoolVoxelCallback(int32_t batchIdx,
 
 template <typename Dtype, template <typename T, int32_t D> typename TensorAccessor>
 __hostdev__ inline void
-avgPoolBackardVoxelCallback(int32_t batchIdx,
-                            int32_t leafIdx,
-                            int32_t voxelIdx,
-                            int32_t channelIdx,
-                            GridBatchImpl::Accessor coarseBatchAccessor,
-                            GridBatchImpl::Accessor fineBatchAccessor,
-                            const TensorAccessor<Dtype, 2> fineData,
-                            const TensorAccessor<Dtype, 2> coarseGradOut,
-                            TensorAccessor<Dtype, 2> outFineGradIn,
-                            nanovdb::Coord poolingFactor,
-                            nanovdb::Coord stride,
-                            Dtype avgFactor) {
+avgPoolBackwardVoxelCallback(int32_t batchIdx,
+                             int32_t leafIdx,
+                             int32_t voxelIdx,
+                             int32_t channelIdx,
+                             GridBatchImpl::Accessor coarseBatchAccessor,
+                             GridBatchImpl::Accessor fineBatchAccessor,
+                             const TensorAccessor<Dtype, 2> fineData,
+                             const TensorAccessor<Dtype, 2> coarseGradOut,
+                             TensorAccessor<Dtype, 2> outFineGradIn,
+                             nanovdb::Coord poolingFactor,
+                             nanovdb::Coord stride,
+                             Dtype avgFactor) {
     const nanovdb::OnIndexGrid *coarseGrid = coarseBatchAccessor.grid(batchIdx);
     const nanovdb::OnIndexGrid *fineGrid   = fineBatchAccessor.grid(batchIdx);
     const typename nanovdb::OnIndexGrid::LeafNodeType &coarseLeaf =
@@ -237,7 +237,7 @@ DownsampleGridAvgPoolBackward(const GridBatchImpl &coarseBatchHdl,
                                                     int32_t voxelIdx,
                                                     int32_t channelIdx,
                                                     GridBatchImpl::Accessor coarseBatchAccessor) {
-                               avgPoolBackardVoxelCallback<scalar_t, TorchRAcc32>(
+                               avgPoolBackwardVoxelCallback<scalar_t, TorchRAcc32>(
                                    batchIdx,
                                    leafIdx,
                                    voxelIdx,
@@ -258,7 +258,7 @@ DownsampleGridAvgPoolBackward(const GridBatchImpl &coarseBatchHdl,
                                          int32_t voxelIdx,
                                          int32_t channelIdx,
                                          GridBatchImpl::Accessor coarseBatchAccessor) {
-                               avgPoolBackardVoxelCallback<scalar_t, TorchAcc>(
+                               avgPoolBackwardVoxelCallback<scalar_t, TorchAcc>(
                                    batchIdx,
                                    leafIdx,
                                    voxelIdx,

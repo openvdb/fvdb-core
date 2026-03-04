@@ -11,7 +11,7 @@ pushd ../benchmarks
 format_files
 popd
 
-pushd ../tests
+pushd ../dispatch
 format_files
 popd
 
@@ -20,6 +20,10 @@ format_files
 popd
 
 pushd ../python
+format_files
+popd
+
+pushd ../tests
 format_files
 popd
 

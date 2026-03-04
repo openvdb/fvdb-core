@@ -7,7 +7,9 @@
 #include <fvdb/Config.h>
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchImpl.h>
+#include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <nanovdb/NanoVDB.h>
 
@@ -87,6 +89,24 @@ forEachJaggedElementChannelPrivateUse1Kernel(int64_t numel,
     }
 }
 
+template <int32_t NDIMS, typename ScalarT, typename Func, typename... Args>
+__global__ void
+forEachTensorElementChannelPrivateUse1Kernel(int64_t numel,
+                                             int64_t offset,
+                                             TorchRAcc32<ScalarT, NDIMS> tensorAcc,
+                                             int64_t channelsPerElement,
+                                             Func func,
+                                             Args... args) {
+    for (int64_t idx = (static_cast<int64_t>(blockIdx.x) * blockDim.x) + threadIdx.x;
+         idx < numel * channelsPerElement;
+         idx += blockDim.x * gridDim.x) {
+        const int64_t elementIdx = (idx + offset) / channelsPerElement;
+        const int64_t channelIdx = (idx + offset) % channelsPerElement;
+
+        func(elementIdx, channelIdx, tensorAcc, args...);
+    }
+}
+
 } // namespace _private
 
 template <typename Func, typename... Args>
@@ -105,10 +125,9 @@ forEachLeafPrivateUse1(int64_t numChannels,
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
 
-        auto deviceLeafCount =
-            (leafCount + c10::cuda::device_count() - 1) / c10::cuda::device_count();
-        const auto deviceLeafOffset = deviceLeafCount * deviceId;
-        deviceLeafCount             = std::min(deviceLeafCount, leafCount - deviceLeafOffset);
+        size_t deviceLeafOffset, deviceLeafCount;
+        std::tie(deviceLeafOffset, deviceLeafCount) =
+            fvdb::detail::deviceChunk(leafCount, deviceId);
 
         const auto deviceLeafChannelCount  = deviceLeafCount * numChannels;
         const auto deviceLeafChannelOffset = deviceLeafOffset * numChannels;
@@ -130,9 +149,7 @@ forEachLeafPrivateUse1(int64_t numChannels,
         }
     }
 
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-    }
+    fvdb::detail::mergeStreams();
 }
 
 template <typename Func, typename... Args>
@@ -153,10 +170,9 @@ forEachVoxelPrivateUse1(int64_t numChannels,
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
 
-        auto deviceLeafCount =
-            (leafCount + c10::cuda::device_count() - 1) / c10::cuda::device_count();
-        const auto deviceLeafOffset = deviceLeafCount * deviceId;
-        deviceLeafCount             = std::min(deviceLeafCount, leafCount - deviceLeafOffset);
+        size_t deviceLeafOffset, deviceLeafCount;
+        std::tie(deviceLeafOffset, deviceLeafCount) =
+            fvdb::detail::deviceChunk(leafCount, deviceId);
 
         const auto deviceLeafVoxelChannelCount  = deviceLeafCount * VOXELS_PER_LEAF * numChannels;
         const auto deviceLeafVoxelChannelOffset = deviceLeafOffset * VOXELS_PER_LEAF * numChannels;
@@ -179,9 +195,7 @@ forEachVoxelPrivateUse1(int64_t numChannels,
         }
     }
 
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
-    }
+    fvdb::detail::mergeStreams();
 }
 
 template <typename ScalarT, int32_t NDIMS, typename Func, typename... Args>
@@ -195,19 +209,18 @@ forEachJaggedElementChannelPrivateUse1(int64_t numChannels,
 
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        cudaStream_t stream    = c10::cuda::getCurrentCUDAStream(deviceId).stream();
-        auto deviceNumElements = (jaggedTensor.element_count() + c10::cuda::device_count() - 1) /
-                                 c10::cuda::device_count();
-        const auto deviceOffset = deviceNumElements * deviceId;
-        deviceNumElements =
-            std::min(deviceNumElements, jaggedTensor.element_count() - deviceOffset);
+        cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
 
-        const int64_t deviceNumBlocks = GET_BLOCKS(deviceNumElements, DEFAULT_BLOCK_DIM);
+        size_t deviceElementOffset, deviceElementCount;
+        std::tie(deviceElementOffset, deviceElementCount) =
+            fvdb::detail::deviceChunk(jaggedTensor.element_count(), deviceId);
+
+        const int64_t deviceNumBlocks = GET_BLOCKS(deviceElementCount, DEFAULT_BLOCK_DIM);
         if (deviceNumBlocks > 0) {
             _private::forEachJaggedElementChannelPrivateUse1Kernel<NDIMS, ScalarT, Func, Args...>
                 <<<deviceNumBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
-                    deviceNumElements,
-                    deviceOffset,
+                    deviceElementCount,
+                    deviceElementOffset,
                     jaggedTensor.packed_accessor32<ScalarT, NDIMS, torch::RestrictPtrTraits>(),
                     numChannels,
                     func,
@@ -216,9 +229,40 @@ forEachJaggedElementChannelPrivateUse1(int64_t numChannels,
         }
     }
 
+    fvdb::detail::mergeStreams();
+}
+
+template <typename ScalarT, int32_t NDIMS, typename Func, typename... Args>
+void
+forEachTensorElementChannelPrivateUse1(int64_t numChannels,
+                                       const torch::Tensor &tensor,
+                                       Func func,
+                                       Args... args) {
+    TORCH_CHECK(tensor.device().is_privateuseone(), "Tensor must be on a PrivateUse1 device");
+
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        c10::cuda::getCurrentCUDAStream(deviceId).synchronize();
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
+
+        size_t deviceElementOffset, deviceElementCount;
+        std::tie(deviceElementOffset, deviceElementCount) =
+            fvdb::detail::deviceChunk(tensor.size(0), deviceId);
+
+        const int64_t deviceNumBlocks = GET_BLOCKS(deviceElementCount, DEFAULT_BLOCK_DIM);
+        if (deviceNumBlocks > 0) {
+            _private::forEachTensorElementChannelPrivateUse1Kernel<NDIMS, ScalarT, Func, Args...>
+                <<<deviceNumBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                    deviceElementCount,
+                    deviceElementOffset,
+                    tensor.packed_accessor32<ScalarT, NDIMS, torch::RestrictPtrTraits>(),
+                    numChannels,
+                    func,
+                    args...);
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+        }
     }
+
+    fvdb::detail::mergeStreams();
 }
 
 } // namespace fvdb

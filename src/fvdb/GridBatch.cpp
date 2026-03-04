@@ -13,7 +13,6 @@
 #include <fvdb/detail/autograd/ReadFromDense.h>
 #include <fvdb/detail/autograd/ReadIntoDense.h>
 #include <fvdb/detail/autograd/SampleGrid.h>
-#include <fvdb/detail/autograd/SparseConvolutionHalo.h>
 #include <fvdb/detail/autograd/SplatIntoGrid.h>
 #include <fvdb/detail/autograd/TransformPoints.h>
 #include <fvdb/detail/autograd/UpsampleGrid.h>
@@ -31,14 +30,16 @@
 #include <fvdb/detail/ops/RayImplicitIntersection.h>
 #include <fvdb/detail/ops/SampleRaysUniform.h>
 #include <fvdb/detail/ops/SegmentsAlongRays.h>
+#include <fvdb/detail/ops/SerializeEncode.h>
 #include <fvdb/detail/ops/VoxelNeighborhood.h>
 #include <fvdb/detail/ops/VoxelsAlongRays.h>
-#include <fvdb/detail/ops/convolution/pack_info/BrickHaloBuffer.h>
-#include <fvdb/detail/ops/convolution/pack_info/ConvolutionKernelMap.h>
-#include <fvdb/detail/ops/convolution/pack_info/IGEMMBitOperations.h>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
 
 #include <torch/types.h>
+
+#include <tuple>
+#include <vector>
 
 namespace fvdb {
 
@@ -345,48 +346,48 @@ GridBatch::refine(Vec3iOrScalar subdiv_factor,
 }
 
 JaggedTensor
-GridBatch::read_from_dense_xyzc(const torch::Tensor &dense_data,
-                                const Vec3iBatch &dense_origins) const {
+GridBatch::read_from_dense_cminor(const torch::Tensor &dense_data,
+                                  const Vec3iBatch &dense_origins) const {
     c10::DeviceGuard guard(device());
     torch::Tensor retData =
-        detail::autograd::ReadFromDenseXyzc::apply(mImpl, dense_data, dense_origins)[0];
+        detail::autograd::ReadFromDenseCminor::apply(mImpl, dense_data, dense_origins)[0];
     return mImpl->jaggedTensor(retData);
 }
 
 JaggedTensor
-GridBatch::read_from_dense_czyx(const torch::Tensor &dense_data,
-                                const Vec3iBatch &dense_origins) const {
+GridBatch::read_from_dense_cmajor(const torch::Tensor &dense_data,
+                                  const Vec3iBatch &dense_origins) const {
     c10::DeviceGuard guard(device());
     torch::Tensor retData =
-        detail::autograd::ReadFromDenseCzyx::apply(mImpl, dense_data, dense_origins)[0];
+        detail::autograd::ReadFromDenseCmajor::apply(mImpl, dense_data, dense_origins)[0];
     return mImpl->jaggedTensor(retData);
 }
 
 torch::Tensor
-GridBatch::write_to_dense_xyzc(const JaggedTensor &sparse_data,
-                               const std::optional<Vec3iBatch> &min_coord,
-                               const std::optional<Vec3i> &grid_size) const {
+GridBatch::write_to_dense_cminor(const JaggedTensor &sparse_data,
+                                 const std::optional<Vec3iBatch> &min_coord,
+                                 const std::optional<Vec3i> &grid_size) const {
     c10::DeviceGuard guard(device());
     TORCH_CHECK_VALUE(
         sparse_data.ldim() == 1,
         "Expected sparse_data to have 1 list dimension, i.e. be a single list of coordinate values, but got",
         sparse_data.ldim(),
         "list dimensions");
-    return detail::autograd::ReadIntoDenseXyzc::apply(
+    return detail::autograd::ReadIntoDenseCminor::apply(
         mImpl, sparse_data.jdata(), min_coord, grid_size)[0];
 }
 
 torch::Tensor
-GridBatch::write_to_dense_czyx(const JaggedTensor &sparse_data,
-                               const std::optional<Vec3iBatch> &min_coord,
-                               const std::optional<Vec3i> &grid_size) const {
+GridBatch::write_to_dense_cmajor(const JaggedTensor &sparse_data,
+                                 const std::optional<Vec3iBatch> &min_coord,
+                                 const std::optional<Vec3i> &grid_size) const {
     c10::DeviceGuard guard(device());
     TORCH_CHECK_VALUE(
         sparse_data.ldim() == 1,
         "Expected sparse_data to have 1 list dimension, i.e. be a single list of coordinate values, but got",
         sparse_data.ldim(),
         "list dimensions");
-    return detail::autograd::ReadIntoDenseCzyx::apply(
+    return detail::autograd::ReadIntoDenseCmajor::apply(
         mImpl, sparse_data.jdata(), min_coord, grid_size)[0];
 }
 
@@ -771,29 +772,17 @@ GridBatch::integrate_tsdf(const double truncationMargin,
     return {ret, outTSDF, outWeights};
 }
 
-JaggedTensor
-GridBatch::sparse_conv_halo(const JaggedTensor &input,
-                            const torch::Tensor &weight,
-                            int variant) const {
-    c10::DeviceGuard guard(device());
-    TORCH_CHECK_VALUE(
-        input.ldim() == 1,
-        "Expected input to have 1 list dimension, i.e. be a single list of coordinate values, but got",
-        input.ldim(),
-        "list dimensions");
-    TORCH_CHECK_TYPE(input.is_floating_point(), "input must have a floating point type");
-    TORCH_CHECK_VALUE(input.rsize(0) == total_voxels(), "Value count not match!");
-    TORCH_CHECK_VALUE(input.num_outer_lists() == grid_count(), "Batch size not match!");
-    mImpl->checkDevice(input);
-    torch::Tensor ret =
-        detail::autograd::SparseConvolutionHalo::apply(mImpl, input.jdata(), weight, variant)[0];
-    return input.jagged_like(ret);
-}
-
 GridBatch
 GridBatch::conv_grid(Vec3iOrScalar kernel_size, Vec3iOrScalar stride) const {
     GridBatch result;
     result.mImpl = mImpl->convolutionOutput(kernel_size.value(), stride.value());
+    return result;
+}
+
+GridBatch
+GridBatch::conv_transpose_grid(Vec3iOrScalar kernel_size, Vec3iOrScalar stride) const {
+    GridBatch result;
+    result.mImpl = mImpl->convolutionTransposeOutput(kernel_size.value(), stride.value());
     return result;
 }
 
@@ -1080,6 +1069,46 @@ GridBatch::ijk() const {
     });
 }
 
+JaggedTensor
+GridBatch::morton(const torch::Tensor &offset) const {
+    c10::DeviceGuard guard(device());
+    const nanovdb::Coord offsetCoord = tensorToCoord(offset);
+    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
+        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
+            *mImpl, SpaceFillingCurveType::ZOrder, offsetCoord);
+    });
+}
+
+JaggedTensor
+GridBatch::morton_zyx(const torch::Tensor &offset) const {
+    c10::DeviceGuard guard(device());
+    const nanovdb::Coord offsetCoord = tensorToCoord(offset);
+    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
+        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
+            *mImpl, SpaceFillingCurveType::ZOrderTransposed, offsetCoord);
+    });
+}
+
+JaggedTensor
+GridBatch::hilbert(const torch::Tensor &offset) const {
+    c10::DeviceGuard guard(device());
+    const nanovdb::Coord offsetCoord = tensorToCoord(offset);
+    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
+        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
+            *mImpl, SpaceFillingCurveType::Hilbert, offsetCoord);
+    });
+}
+
+JaggedTensor
+GridBatch::hilbert_zyx(const torch::Tensor &offset) const {
+    c10::DeviceGuard guard(device());
+    const nanovdb::Coord offsetCoord = tensorToCoord(offset);
+    return FVDB_DISPATCH_KERNEL(this->device(), [&]() {
+        return fvdb::detail::ops::dispatchSerializeEncode<DeviceTag>(
+            *mImpl, SpaceFillingCurveType::HilbertTransposed, offsetCoord);
+    });
+}
+
 std::vector<JaggedTensor>
 GridBatch::viz_edge_network(bool returnVoxelCoordinates) const {
     c10::DeviceGuard guard(device());
@@ -1173,25 +1202,22 @@ GridBatch::concatenate(const std::vector<GridBatch> &vec) {
     return result;
 }
 
-void
-GridBatch::computeConvolutionKernelMap(const GridBatch &source,
-                                       const GridBatch &target,
-                                       torch::Tensor &kernelMap,
-                                       const Vec3iOrScalar &kernelSize,
-                                       const Vec3iOrScalar &stride) {
-    c10::DeviceGuard guard(source.device());
-    FVDB_DISPATCH_KERNEL_DEVICE(source.device(), [&]() {
-        detail::ops::dispatchConvolutionKernelMap<DeviceTag>(
-            *source.mImpl, *target.mImpl, kernelMap, kernelSize, stride);
-    });
+detail::ops::GatherScatterDefaultTopology
+GridBatch::buildGatherScatterDefaultTopology(const GridBatch &feature_grid,
+                                             const GridBatch &output_grid,
+                                             const Vec3iOrScalar &kernelSize,
+                                             const Vec3iOrScalar &stride) {
+    return detail::ops::gatherScatterDefaultSparseConvTopology(
+        *feature_grid.mImpl, *output_grid.mImpl, kernelSize.value(), stride.value());
 }
 
-std::vector<torch::Tensor>
-GridBatch::computeBrickHaloBuffer(bool benchmark) const {
-    c10::DeviceGuard guard(device());
-    return FVDB_DISPATCH_KERNEL_DEVICE(device(), [&]() {
-        return detail::ops::dispatchBrickHaloBuffer<DeviceTag>(*mImpl, benchmark);
-    });
+detail::ops::GatherScatterDefaultTopology
+GridBatch::buildGatherScatterDefaultTransposeTopology(const GridBatch &feature_grid,
+                                                      const GridBatch &output_grid,
+                                                      const Vec3iOrScalar &kernelSize,
+                                                      const Vec3iOrScalar &stride) {
+    return detail::ops::gatherScatterDefaultSparseConvTransposeTopology(
+        *feature_grid.mImpl, *output_grid.mImpl, kernelSize.value(), stride.value());
 }
 
 } // namespace fvdb

@@ -13,7 +13,7 @@ namespace fvdb {
 namespace detail {
 namespace autograd {
 
-struct ReadFromDenseXyzc : public torch::autograd::Function<ReadFromDenseXyzc> {
+struct ReadFromDenseCminor : public torch::autograd::Function<ReadFromDenseCminor> {
     using variable_list   = torch::autograd::variable_list;
     using AutogradContext = torch::autograd::AutogradContext;
     using Variable        = torch::autograd::Variable;
@@ -26,7 +26,7 @@ struct ReadFromDenseXyzc : public torch::autograd::Function<ReadFromDenseXyzc> {
     static variable_list backward(AutogradContext *ctx, variable_list grad_output);
 };
 
-struct ReadFromDenseCzyx : public torch::autograd::Function<ReadFromDenseCzyx> {
+struct ReadFromDenseCmajor : public torch::autograd::Function<ReadFromDenseCmajor> {
     using variable_list   = torch::autograd::variable_list;
     using AutogradContext = torch::autograd::AutogradContext;
     using Variable        = torch::autograd::Variable;

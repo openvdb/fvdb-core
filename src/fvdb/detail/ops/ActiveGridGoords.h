@@ -13,8 +13,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-JaggedTensor dispatchActiveGridCoords(const GridBatchImpl &gridAccessor);
+template <torch::DeviceType> JaggedTensor dispatchActiveGridCoords(GridBatchImpl const &gridBatch);
 
 } // namespace ops
 } // namespace detail

@@ -1,8 +1,8 @@
 name: fVDB Nightly Build and Tests
 
 on:
-  schedule:
-    - cron: "01 15 * * *"  # Runs every day at 4am pacific/11am UTC
+  # schedule:
+  #   - cron: "01 15 * * *"  # Runs every day at 4am pacific/11am UTC
   workflow_dispatch:
 
 
@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   fvdb-build:
-    if: ${{ !startsWith(github.event.pull_request.title, 'Draft:') }}
+    if: ${{ github.repository == 'openvdb/fvdb-core' && !startsWith(github.event.pull_request.title, 'Draft:') }}
     name: fVDB Build
     runs-on:
       - self-hosted
@@ -101,7 +101,7 @@ jobs:
           activate-environment: fvdb_build
           environment-file: fvdb/env/build_environment.yml
 
-      - name: Buid fvdb
+      - name: Build fvdb
         run: |
           cd fvdb;
           TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6+PTX" conda run --no-capture-output -n fvdb_build ./build.sh wheel verbose gtests benchmarks
@@ -133,6 +133,7 @@ jobs:
           echo "Cleanup completed"
 
   fvdb-benchmarks:
+    if: ${{ github.repository == 'openvdb/fvdb-core' }}
     needs: [fvdb-build]
     name: fVDB Continuous Benchmarking
     runs-on:

@@ -21,10 +21,6 @@ template <typename TreeT> struct ActiveVoxelIteratorDataTypeExtractor {
 template <> struct ActiveVoxelIteratorDataTypeExtractor<nanovdb::OnIndexTree> {
     using DataType = int64_t;
 };
-template <>
-struct ActiveVoxelIteratorDataTypeExtractor<nanovdb::NanoTree<nanovdb::ValueOnIndexMask>> {
-    using DataType = int64_t;
-};
 
 /*
  * Const iterator over voxels in a nanovdb Index grid

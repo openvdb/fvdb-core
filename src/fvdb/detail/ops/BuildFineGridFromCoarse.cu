@@ -277,10 +277,8 @@ dispatchFineIJKForCoarseGrid<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
 
-            auto deviceNumSegments =
-                (batchHdl.batchSize() + c10::cuda::device_count() - 1) / c10::cuda::device_count();
-            const auto deviceOffset = deviceNumSegments * deviceId;
-            deviceNumSegments = std::min(deviceNumSegments, batchHdl.batchSize() - deviceOffset);
+            size_t deviceOffset, deviceNumSegments;
+            std::tie(deviceOffset, deviceNumSegments) = deviceChunk(batchHdl.batchSize(), deviceId);
 
             auto maskCounts   = outVoxelCounts.data_ptr<int64_t>() + deviceOffset + 1;
             auto beginOffsets = batchHdl.voxelOffsets().const_data_ptr<int64_t>() + deviceOffset;

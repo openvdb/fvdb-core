@@ -22,14 +22,21 @@ all_device_dtype_combos = [
     ["cuda", torch.float64],
 ]
 
+all_device_dtype_channel_combos = [
+    (*combo, nc) for combo, nc in itertools.product(all_device_dtype_combos, [1, 3, 4, 5, 16])
+]
+
 
 def trilinear_sample_pytorch(grid: GridBatch, p: JaggedTensor, features: JaggedTensor, is_dual: bool) -> torch.Tensor:
-    dual_features_grid = grid.write_to_dense_xyzc(features).squeeze(0).permute(3, 2, 1, 0).unsqueeze(0)
+    dual_features_grid = grid.inject_to_dense_cminor(features).squeeze(0).permute(3, 2, 1, 0).unsqueeze(0)
     p_in = p.jdata.reshape(1, 1, 1, -1, 3)  # [1, 1, 1, N, 3]
+    # grid_sample output: [1, C, 1, 1, N] -> squeeze batch and spatial dims, keep C
     res = (
         torch.nn.functional.grid_sample(dual_features_grid, p_in, mode="bilinear", align_corners=is_dual)
-        .squeeze()
-        .transpose(0, 1)
+        .squeeze(0)
+        .squeeze(-2)
+        .squeeze(-2)  # [1, C, 1, 1, N] -> [C, N]
+        .transpose(0, 1)  # [N, C]
     )
     return res
 
@@ -59,7 +66,7 @@ def sample_trilinear_naive(pts: JaggedTensor, corner_feats: torch.Tensor, grid: 
     if pts.dtype == torch.half:
         pts = pts.to(torch.float)
 
-    grid_pts = grid.world_to_grid(pts).jdata
+    grid_pts = grid.world_to_voxel(pts).jdata
     nearest_ijk = torch.floor(grid_pts)
 
     offsets = torch.tensor(list(itertools.product([0, 1], [0, 1], [0, 1])), device=device, dtype=torch.long)
@@ -94,7 +101,7 @@ def sample_bezier_naive(pts: JaggedTensor, corner_feats: torch.Tensor, grid: Gri
     if pts.dtype == torch.half:
         pts = pts.to(torch.float)
 
-    grid_pts = grid.world_to_grid(pts).jdata
+    grid_pts = grid.world_to_voxel(pts).jdata
     nearest_ijk = torch.round(grid_pts)
 
     offsets = torch.tensor(
@@ -122,7 +129,7 @@ def splat_trilinear_naive(pts: JaggedTensor, feats: torch.Tensor, grid: GridBatc
     if pts.dtype == torch.half:
         pts = pts.to(torch.float)
 
-    grid_pts = grid.world_to_grid(pts).jdata
+    grid_pts = grid.world_to_voxel(pts).jdata
     nearest_ijk = torch.floor(grid_pts)
     offsets = torch.tensor(
         [
@@ -151,7 +158,7 @@ def splat_trilinear_naive(pts: JaggedTensor, feats: torch.Tensor, grid: GridBatc
     output = torch.zeros((grid.ijk.jdata.shape[0], feats_dim), device=device, dtype=dtype)
     mask = grid.coords_in_grid(JaggedTensor(unique_ijk)).jdata
     sum_interpolated_feats = sum_interpolated_feats[mask]
-    valid_ijk = grid.ijk_to_index(unique_ijk[mask]).jdata
+    valid_ijk = grid.ijk_to_index(JaggedTensor(unique_ijk[mask])).jdata
     output[valid_ijk] = sum_interpolated_feats.to(dtype)
     return output
 
@@ -164,7 +171,7 @@ def splat_bezier_naive(pts: JaggedTensor, feats: torch.Tensor, grid: GridBatch) 
     if pts.dtype == torch.half:
         pts = pts.to(torch.float)
 
-    grid_pts = grid.world_to_grid(pts).jdata
+    grid_pts = grid.world_to_voxel(pts).jdata
     nearest_ijk = torch.round(grid_pts)
 
     offsets = torch.tensor(
@@ -184,7 +191,7 @@ def splat_bezier_naive(pts: JaggedTensor, feats: torch.Tensor, grid: GridBatch) 
     output = torch.zeros((grid.ijk.jdata.shape[0], feats_dim), device=device, dtype=dtype)
     mask = grid.coords_in_grid(JaggedTensor(unique_ijk)).jdata
     sum_interpolated_feats = sum_interpolated_feats[mask]
-    valid_ijk = grid.ijk_to_index(unique_ijk[mask]).jdata
+    valid_ijk = grid.ijk_to_index(JaggedTensor(unique_ijk[mask])).jdata
     output[valid_ijk] = sum_interpolated_feats.to(dtype)
     return output
 
@@ -194,8 +201,8 @@ class TestSample(unittest.TestCase):
         torch.random.manual_seed(0)
         np.random.seed(0)
 
-    @parameterized.expand(all_device_dtype_combos)
-    def test_trilinear_dense_vs_pytorch(self, device, dtype):
+    @parameterized.expand(all_device_dtype_channel_combos)
+    def test_trilinear_dense_vs_pytorch(self, device, dtype, num_channels):
         if dtype == torch.half:
             atol = 1e-2
             rtol = 1e-2
@@ -208,9 +215,9 @@ class TestSample(unittest.TestCase):
         grid, grid_d, p = make_dense_grid_batch_and_jagged_point_data(7, device, dtype)
 
         # Primal
-        primal_features = torch.rand((grid.total_voxels, 4), device=device, dtype=dtype)
+        primal_features = torch.rand((grid.total_voxels, num_channels), device=device, dtype=dtype)
         primal_features.requires_grad = True
-        fv = grid.sample_trilinear(p, JaggedTensor(primal_features)).jdata.squeeze()
+        fv = grid.sample_trilinear(p, JaggedTensor(primal_features)).jdata
         grad_out = torch.rand_like(fv) + 0.1
         fv.backward(grad_out)
         assert primal_features.grad is not None
@@ -230,9 +237,9 @@ class TestSample(unittest.TestCase):
         )
 
         # Dual
-        dual_features = torch.rand((grid_d.total_voxels, 4), device=device, dtype=dtype)
+        dual_features = torch.rand((grid_d.total_voxels, num_channels), device=device, dtype=dtype)
         dual_features.requires_grad = True
-        fv = grid_d.sample_trilinear(p, JaggedTensor(dual_features)).jdata.squeeze()
+        fv = grid_d.sample_trilinear(p, JaggedTensor(dual_features)).jdata
         grad_out = torch.rand_like(fv) + 0.1
         fv.backward(grad_out)
         assert dual_features.grad is not None
@@ -272,13 +279,13 @@ class TestSample(unittest.TestCase):
 
         small_features = torch.rand((1, nvox, nvox, nvox), device=device, dtype=dtype)
         small_features.requires_grad = True
-        small_features_vdb = grid.read_from_dense_xyzc(small_features.permute(3, 2, 1, 0).contiguous().unsqueeze(0))
+        small_features_vdb = grid.inject_from_dense_cminor(small_features.permute(3, 2, 1, 0).contiguous().unsqueeze(0))
 
         grid_big = grid.refined_grid(scale)
-        big_pos = grid_big.grid_to_world(grid_big.ijk.type(dtype)).jdata
+        big_pos = grid_big.voxel_to_world(grid_big.ijk.type(dtype)).jdata
         self.assertEqual(big_pos.dtype, dtype)
         big_features_vdb = grid.sample_trilinear(JaggedTensor(big_pos), small_features_vdb).jdata
-        fv = grid_big.write_to_dense_xyzc(JaggedTensor(big_features_vdb)).squeeze(0).permute(3, 2, 1, 0)
+        fv = grid_big.inject_to_dense_cminor(JaggedTensor(big_features_vdb)).squeeze(0).permute(3, 2, 1, 0)
         grad_out = torch.rand_like(fv) + 0.1
         fv.backward(grad_out)
         assert small_features.grad is not None
@@ -299,11 +306,11 @@ class TestSample(unittest.TestCase):
             torch.allclose(gv, gp, atol=atol, rtol=rtol),
             f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
-        small_features_vdb = grid.read_from_dense_xyzc(small_features.permute(3, 2, 1, 0).contiguous().unsqueeze(0))
+        small_features_vdb = grid.inject_from_dense_cminor(small_features.permute(3, 2, 1, 0).contiguous().unsqueeze(0))
         grid_big = grid.refined_grid(scale)
-        big_pos = grid_big.grid_to_world(grid_big.ijk.type(dtype)).jdata
+        big_pos = grid_big.voxel_to_world(grid_big.ijk.type(dtype)).jdata
         big_features_vdb, _ = grid.refine(scale, small_features_vdb, fine_grid=grid_big)
-        fv = grid_big.write_to_dense_xyzc(big_features_vdb).squeeze(0).permute(3, 2, 1, 0)
+        fv = grid_big.inject_to_dense_cminor(big_features_vdb).squeeze(0).permute(3, 2, 1, 0)
         fv.backward(grad_out)
         gv = small_features.grad.clone()
         small_features.grad.zero_()
@@ -321,8 +328,8 @@ class TestSample(unittest.TestCase):
             f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
-    def test_trilinear_sparse_vs_brute(self, device, dtype):
+    @parameterized.expand(all_device_dtype_channel_combos)
+    def test_trilinear_sparse_vs_brute(self, device, dtype, num_channels):
         if dtype == torch.half:
             atol = 1e-3
             rtol = 1e-3
@@ -333,10 +340,10 @@ class TestSample(unittest.TestCase):
         grid, grid_d, p = make_grid_batch_and_jagged_point_data(device, dtype)
 
         # Primal
-        primal_features = torch.rand((grid.total_voxels, 4), device=device, dtype=dtype)
+        primal_features = torch.rand((grid.total_voxels, num_channels), device=device, dtype=dtype)
         primal_features.requires_grad = True
         fv = grid.sample_trilinear(p, JaggedTensor(primal_features)).jdata
-        grad_out = torch.rand_like(fv.squeeze()) + 0.1
+        grad_out = torch.rand_like(fv) + 0.1
         fv.backward(grad_out)
         assert primal_features.grad is not None
         gv = primal_features.grad.clone()
@@ -356,10 +363,10 @@ class TestSample(unittest.TestCase):
         )
 
         # Dual
-        dual_features = torch.rand((grid_d.total_voxels, 4), device=device, dtype=dtype)
+        dual_features = torch.rand((grid_d.total_voxels, num_channels), device=device, dtype=dtype)
         dual_features.requires_grad = True
         fv = grid_d.sample_trilinear(p, JaggedTensor(dual_features)).jdata
-        grad_out = torch.rand_like(fv.squeeze()) + 0.1
+        grad_out = torch.rand_like(fv) + 0.1
         fv.backward(grad_out)
         assert dual_features.grad is not None
         gv = dual_features.grad.clone()
@@ -376,8 +383,8 @@ class TestSample(unittest.TestCase):
             f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
-    def test_trilinear_with_grad_sparse_vs_brute(self, device, dtype):
+    @parameterized.expand(all_device_dtype_channel_combos)
+    def test_trilinear_with_grad_sparse_vs_brute(self, device, dtype, num_channels):
         if dtype == torch.half:
             atol = 1e-3
             rtol = 1e-3
@@ -388,12 +395,12 @@ class TestSample(unittest.TestCase):
         grid, grid_d, p = make_grid_batch_and_jagged_point_data(device, dtype)
 
         # Primal
-        primal_features = torch.rand((grid.total_voxels, 4), device=device, dtype=dtype)
+        primal_features = torch.rand((grid.total_voxels, num_channels), device=device, dtype=dtype)
         primal_features.requires_grad = True
         fv, dfv = grid.sample_trilinear_with_grad(p, JaggedTensor(primal_features))
         self.assertEqual(fv.dtype, dtype)
         self.assertEqual(dfv.dtype, dtype)
-        grad_out = torch.rand_like(fv.jdata.squeeze()) + 0.1
+        grad_out = torch.rand_like(fv.jdata) + 0.1
         fv.jdata.backward(grad_out)
         assert primal_features.grad is not None
         gv = primal_features.grad.clone()
@@ -413,10 +420,10 @@ class TestSample(unittest.TestCase):
         )
 
         # Dual
-        dual_features = torch.rand((grid_d.total_voxels, 4), device=device, dtype=dtype)
+        dual_features = torch.rand((grid_d.total_voxels, num_channels), device=device, dtype=dtype)
         dual_features.requires_grad = True
         fv, _ = grid_d.sample_trilinear_with_grad(p, JaggedTensor(dual_features))
-        grad_out = torch.rand_like(fv.jdata.squeeze()) + 0.1
+        grad_out = torch.rand_like(fv.jdata) + 0.1
         fv.jdata.backward(grad_out)
         assert dual_features.grad is not None
         gv = dual_features.grad.clone()
@@ -433,8 +440,8 @@ class TestSample(unittest.TestCase):
             f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
-    def test_trilinear_sparse_onbound_vs_brute(self, device, dtype):
+    @parameterized.expand(all_device_dtype_channel_combos)
+    def test_trilinear_sparse_onbound_vs_brute(self, device, dtype, num_channels):
         if dtype == torch.half:
             f_atol = 1e-2
             f_rtol = 1e-2
@@ -450,10 +457,10 @@ class TestSample(unittest.TestCase):
 
         p.requires_grad = True
         # Primal
-        primal_features = torch.rand((grid.total_voxels, 4), device=device, dtype=dtype)
+        primal_features = torch.rand((grid.total_voxels, num_channels), device=device, dtype=dtype)
         primal_features.requires_grad = True
         fv = grid.sample_trilinear(p, JaggedTensor(primal_features)).jdata
-        grad_out = torch.rand_like(fv.squeeze()) + 0.1
+        grad_out = torch.rand_like(fv) + 0.1
         fv.backward(grad_out)
         assert primal_features.grad is not None
         gv = primal_features.grad.clone()
@@ -474,10 +481,10 @@ class TestSample(unittest.TestCase):
         )
 
         # Dual
-        dual_features = torch.rand((grid_d.total_voxels, 4), device=device, dtype=dtype)
+        dual_features = torch.rand((grid_d.total_voxels, num_channels), device=device, dtype=dtype)
         dual_features.requires_grad = True
         fv = grid_d.sample_trilinear(p, JaggedTensor(dual_features)).jdata
-        grad_out = torch.rand_like(fv.squeeze()) + 0.1
+        grad_out = torch.rand_like(fv) + 0.1
         fv.backward(grad_out)
         assert dual_features.grad is not None
         gv = dual_features.grad.clone()
@@ -497,8 +504,8 @@ class TestSample(unittest.TestCase):
             f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
-    def test_trilinear_with_grad_sparse_onbound_vs_brute(self, device, dtype):
+    @parameterized.expand(all_device_dtype_channel_combos)
+    def test_trilinear_with_grad_sparse_onbound_vs_brute(self, device, dtype, num_channels):
         if dtype == torch.half:
             f_atol = 1e-2
             f_rtol = 1e-2
@@ -514,11 +521,11 @@ class TestSample(unittest.TestCase):
 
         p.requires_grad = True
         # Primal
-        primal_features = torch.rand((grid.total_voxels, 4), device=device, dtype=dtype)
+        primal_features = torch.rand((grid.total_voxels, num_channels), device=device, dtype=dtype)
         primal_features.requires_grad = True
         fv, _ = grid.sample_trilinear_with_grad(p, JaggedTensor(primal_features))
         fv = fv.jdata
-        grad_out = torch.rand_like(fv.squeeze()) + 0.1
+        grad_out = torch.rand_like(fv) + 0.1
         fv.backward(grad_out)
         assert primal_features.grad is not None
         gv = primal_features.grad.clone()
@@ -539,11 +546,11 @@ class TestSample(unittest.TestCase):
         )
 
         # Dual
-        dual_features = torch.rand((grid_d.total_voxels, 4), device=device, dtype=dtype)
+        dual_features = torch.rand((grid_d.total_voxels, num_channels), device=device, dtype=dtype)
         dual_features.requires_grad = True
         fv, _ = grid_d.sample_trilinear_with_grad(p, JaggedTensor(dual_features))
         fv = fv.jdata
-        grad_out = torch.rand_like(fv.squeeze()) + 0.1
+        grad_out = torch.rand_like(fv) + 0.1
         fv.backward(grad_out)
         assert dual_features.grad is not None
         gv = dual_features.grad.clone()
@@ -578,7 +585,7 @@ class TestSample(unittest.TestCase):
         primal_features = torch.rand((grid.total_voxels, 4), device=device, dtype=dtype)
         primal_features.requires_grad = True
         fv = grid.sample_bezier(p, JaggedTensor(primal_features)).jdata
-        grad_out = torch.rand_like(fv.squeeze()) + 0.1
+        grad_out = torch.rand_like(fv) + 0.1
         fv.backward(grad_out)
         assert primal_features.grad is not None
         gv = primal_features.grad.clone()
@@ -602,7 +609,7 @@ class TestSample(unittest.TestCase):
         dual_features = torch.rand((grid_d.total_voxels, 4), device=device, dtype=dtype)
         dual_features.requires_grad = True
         fv = grid_d.sample_bezier(p, JaggedTensor(dual_features)).jdata
-        grad_out = torch.rand_like(fv.squeeze()) + 0.1
+        grad_out = torch.rand_like(fv) + 0.1
         fv.backward(grad_out)
         assert dual_features.grad is not None
         gv = dual_features.grad.clone()
@@ -637,7 +644,7 @@ class TestSample(unittest.TestCase):
         primal_features.requires_grad = True
         fv, _ = grid.sample_bezier_with_grad(p, JaggedTensor(primal_features))
         fv = fv.jdata
-        grad_out = torch.rand_like(fv.squeeze()) + 0.1
+        grad_out = torch.rand_like(fv) + 0.1
         fv.backward(grad_out)
         assert primal_features.grad is not None
         gv = primal_features.grad.clone()
@@ -662,7 +669,7 @@ class TestSample(unittest.TestCase):
         dual_features.requires_grad = True
         fv, _ = grid_d.sample_bezier_with_grad(p, JaggedTensor(dual_features))
         fv = fv.jdata
-        grad_out = torch.rand_like(fv.squeeze()) + 0.1
+        grad_out = torch.rand_like(fv) + 0.1
         fv.backward(grad_out)
         assert dual_features.grad is not None
         gv = dual_features.grad.clone()
@@ -700,7 +707,7 @@ class TestSample(unittest.TestCase):
         primal_features = torch.rand((grid.total_voxels, 4), device=device, dtype=dtype)
         primal_features.requires_grad = True
         fv = grid.sample_bezier(p, JaggedTensor(primal_features)).jdata
-        grad_out = torch.rand_like(fv.squeeze()) + 0.1
+        grad_out = torch.rand_like(fv) + 0.1
         fv.backward(grad_out)
         assert primal_features.grad is not None
         gv = primal_features.grad.clone()
@@ -724,7 +731,7 @@ class TestSample(unittest.TestCase):
         dual_features = torch.rand((grid_d.total_voxels, 4), device=device, dtype=dtype)
         dual_features.requires_grad = True
         fv = grid_d.sample_bezier(p, JaggedTensor(dual_features)).jdata
-        grad_out = torch.rand_like(fv.squeeze()) + 0.1
+        grad_out = torch.rand_like(fv) + 0.1
         fv.backward(grad_out)
         assert dual_features.grad is not None
         gv = dual_features.grad.clone()
@@ -763,7 +770,7 @@ class TestSample(unittest.TestCase):
         primal_features.requires_grad = True
         fv, _ = grid.sample_bezier_with_grad(p, JaggedTensor(primal_features))
         fv = fv.jdata
-        grad_out = torch.rand_like(fv.squeeze()) + 0.1
+        grad_out = torch.rand_like(fv) + 0.1
         fv.backward(grad_out)
         assert primal_features.grad is not None
         gv = primal_features.grad.clone()
@@ -788,7 +795,7 @@ class TestSample(unittest.TestCase):
         dual_features.requires_grad = True
         fv, _ = grid_d.sample_bezier_with_grad(p, JaggedTensor(dual_features))
         fv = fv.jdata
-        grad_out = torch.rand_like(fv.squeeze()) + 0.1
+        grad_out = torch.rand_like(fv) + 0.1
         fv.backward(grad_out)
         assert dual_features.grad is not None
         gv = dual_features.grad.clone()
@@ -807,8 +814,8 @@ class TestSample(unittest.TestCase):
             f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
-    def test_splat_trilinear_vs_brute(self, device, dtype):
+    @parameterized.expand(all_device_dtype_channel_combos)
+    def test_splat_trilinear_vs_brute(self, device, dtype, num_channels):
         if dtype == torch.half:
             fatol = 1e-3
             frtol = 1e-4
@@ -822,7 +829,7 @@ class TestSample(unittest.TestCase):
 
         grid, grid_d, p = make_grid_batch_and_jagged_point_data(device, dtype, include_boundary_points=True, expand=1)
 
-        points_data = torch.randn(p.jdata.shape[0], 7, device=device, dtype=dtype, requires_grad=True)
+        points_data = torch.randn(p.jdata.shape[0], num_channels, device=device, dtype=dtype, requires_grad=True)
 
         fv = grid.splat_trilinear(p, JaggedTensor(points_data)).jdata
         grad_out = torch.rand_like(fv)

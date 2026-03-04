@@ -5,6 +5,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <ATen/cuda/Atomic.cuh>
 #include <c10/cuda/CUDAGuard.h>
@@ -26,8 +27,8 @@ evalShFunction(const int64_t degree,                      // degree of SH to be 
                const int64_t gi,                          // gaussian index
                const int64_t c,                           // render channel
                const typename Vec3Type<T>::type &viewDir, // [D]
-               const torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits> sh0Coeffs,
-               const torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits> shNCoeffs) {
+               const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> sh0Coeffs,
+               const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> shNCoeffs) {
     const T cSH0 = sh0Coeffs[gi][0][c];
 
     T result = T(0.2820947917738781) * cSH0;
@@ -129,28 +130,29 @@ evalShFunction(const int64_t degree,                      // degree of SH to be 
     return result + T(0.5);
 }
 
-} // namespace
-
 // Evalute Spherical Harmonic functions at the given directions, assuming a uniform minibatch
 // of C cameras, each with N gaussians, and K SH coefficients per gaussian.
 template <typename T>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 computeSh(
+    const int64_t offset,
+    const int64_t count,
     const int64_t C,
     const int64_t N,
     const int64_t D,
     const int64_t shDegreeToUse,
-    const torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits> viewDirs,  // [C, N, 3]
-    const torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits> sh0Coeffs, // [1, N, D]
-    const torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits> shNCoeffs, // [K-1, N, D]
+    const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> viewDirs,  // [C, N, 3]
+    const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> sh0Coeffs, // [1, N, D]
+    const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> shNCoeffs, // [K-1, N, D]
     const int *__restrict__ radii,                                                 // [C, N]
     T *__restrict__ outRenderQuantities                                            // [C, N, D]
 ) {
     // parallelize over C * N * D
-    const auto idx = blockIdx.x * blockDim.x + threadIdx.x; // cidx * N * D + gidx * D + kidx
-    if (idx >= C * N * D) {
+    auto idx = blockIdx.x * blockDim.x + threadIdx.x; // cidx * N * D + gidx * D + kidx
+    if (idx >= count) {
         return;
     }
+    idx += offset;
 
     const auto eid = idx / D; // cidx * N + gidx
     const auto cid = eid / N; // camera index
@@ -170,17 +172,20 @@ computeSh(
 
 template <typename T>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
-computeShDiffuseOnly(const int64_t C,
+computeShDiffuseOnly(const int64_t offset,
+                     const int64_t count,
+                     const int64_t C,
                      const int64_t N,
                      const int64_t D,
-                     const torch::PackedTensorAccessor32<T, 3, torch::RestrictPtrTraits> sh0Coeffs,
+                     const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> sh0Coeffs,
                      const int *__restrict__ radii, // [C, N]
                      T *__restrict__ outRenderQuantities) {
     // parallelize over C * N * D
-    const auto idx = blockIdx.x * blockDim.x + threadIdx.x; // cidx * N * D + gidx * D + kidx
-    if (idx >= C * N * D) {
+    auto idx = blockIdx.x * blockDim.x + threadIdx.x; // cidx * N * D + gidx * D + kidx
+    if (idx >= count) {
         return;
     }
+    idx += offset;
 
     const auto eid = idx / D; // cidx * N + gidx
     const auto gid = eid % N; // gaussian index
@@ -191,6 +196,8 @@ computeShDiffuseOnly(const int64_t C,
         outRenderQuantities[eid * D + c] = T(0.2820947917738781) * sh0Coeffs[gid][0][c] + T(0.5);
     }
 }
+
+} // namespace
 
 template <>
 torch::Tensor
@@ -211,7 +218,7 @@ dispatchSphericalHarmonicsForward<torch::kCUDA>(const int64_t shDegreeToUse,
     const at::cuda::OptionalCUDAGuard device_guard(at::device_of(sh0Coeffs));
 
     const bool hasShNCoeffs = shNCoeffs.defined();
-    const bool hasViewirs   = viewDirs.defined();
+    const bool hasViewDirs  = viewDirs.defined();
     const bool hasRadii     = radii.defined();
 
     const int64_t numGaussians = sh0Coeffs.size(0);
@@ -220,7 +227,7 @@ dispatchSphericalHarmonicsForward<torch::kCUDA>(const int64_t shDegreeToUse,
     TORCH_CHECK_VALUE(sh0Coeffs.is_cuda(), "sh0Coeffs must be a CUDA tensor");
 
     if (hasShNCoeffs) {
-        TORCH_CHECK_VALUE(hasViewirs, "viewDirs must be defined if shNCoeffs is defined");
+        TORCH_CHECK_VALUE(hasViewDirs, "viewDirs must be defined if shNCoeffs is defined");
         TORCH_CHECK_VALUE(shNCoeffs.is_cuda(), "shNCoeffs must be a CUDA tensor");
         TORCH_CHECK_VALUE(shNCoeffs.dim() == 3, "shNCoeffs must have shape [N, K, D]");
         TORCH_CHECK_VALUE(shNCoeffs.size(0) == numGaussians, "shNCoeffs must have shape [N, K, D]");
@@ -266,26 +273,141 @@ dispatchSphericalHarmonicsForward<torch::kCUDA>(const int64_t shDegreeToUse,
     torch::Tensor renderQuantities = torch::empty({int64_t(C), N, D}, sh0Coeffs.options());
     if (hasShNCoeffs && shDegreeToUse > 0) {
         computeSh<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+            0,
+            TOTAL_ELEMS,
             C,
             N,
             D,
             shDegreeToUse,
-            viewDirs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-            sh0Coeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-            shNCoeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            viewDirs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+            sh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+            shNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
             radiiPtr,
             renderQuantities.data_ptr<scalar_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     } else {
         computeShDiffuseOnly<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+            0,
+            TOTAL_ELEMS,
             C,
             N,
             D,
-            sh0Coeffs.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            sh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
             radiiPtr,
             renderQuantities.data_ptr<scalar_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
+    return renderQuantities;
+}
+
+template <>
+torch::Tensor
+dispatchSphericalHarmonicsForward<torch::kPrivateUse1>(
+    const int64_t shDegreeToUse,
+    const int64_t numCameras,
+    const torch::Tensor &viewDirs,  // [C, N, 3]
+    const torch::Tensor &sh0Coeffs, // [N, 1, D]
+    const torch::Tensor &shNCoeffs, // [N, K-1, D]
+    const torch::Tensor &radii      // [C, N]
+) {
+    // Valid modes:
+    // 0: sh0Coeffs only
+    // 1: sh0Coeffs + radii
+    // 2: sh0Coeffs + shNCoeffs + viewDirs
+    // 2: sh0Coeffs + shNCoeffs + viewDirs + radii
+
+    const bool hasShNCoeffs = shNCoeffs.defined();
+    const bool hasViewDirs  = viewDirs.defined();
+    const bool hasRadii     = radii.defined();
+
+    const int64_t numGaussians = sh0Coeffs.size(0);
+
+    TORCH_CHECK_VALUE(sh0Coeffs.dim() == 3, "sh0Coeffs must have shape [K, N, D]");
+    TORCH_CHECK_VALUE(sh0Coeffs.is_privateuseone(), "sh0Coeffs must be a PrivateUse1 tensor");
+
+    if (hasShNCoeffs) {
+        TORCH_CHECK_VALUE(hasViewDirs, "viewDirs must be defined if shNCoeffs is defined");
+        TORCH_CHECK_VALUE(shNCoeffs.is_privateuseone(), "shNCoeffs must be a PrivateUse1 tensor");
+        TORCH_CHECK_VALUE(shNCoeffs.dim() == 3, "shNCoeffs must have shape [N, K, D]");
+        TORCH_CHECK_VALUE(shNCoeffs.size(0) == numGaussians, "shNCoeffs must have shape [N, K, D]");
+    } else {
+        TORCH_CHECK_VALUE(shDegreeToUse == 0, "shDegreeToUse must be 0 if no shNCoeffs");
+    }
+
+    if (hasRadii) {
+        TORCH_CHECK_VALUE(radii.dim() == 2, "radii must have two dimensions with shape [C, N]");
+        TORCH_CHECK_VALUE(numGaussians == radii.size(1), "radii must have shape [C, N]");
+        TORCH_CHECK_VALUE(radii.size(0) == numCameras,
+                          "radii must have shape [C, N] and C must match numCameras");
+        TORCH_CHECK_VALUE(radii.is_privateuseone(), "radii must be a PrivateUse1 tensor");
+        TORCH_CHECK_VALUE(radii.is_contiguous(), "radii must be a contiguous");
+    }
+
+    const int64_t K = hasShNCoeffs ? shNCoeffs.size(1) + 1 : 1;
+    const int64_t N = sh0Coeffs.size(0);
+    const int64_t C = numCameras;
+    const int64_t D = sh0Coeffs.size(2);
+
+    // If you are using degree > 0, then we are going to use the directions tensor which means
+    // we need to check it has the right shape
+    if (hasShNCoeffs && K > 0 && shDegreeToUse > 0) {
+        TORCH_CHECK_VALUE(viewDirs.dim() == 3, "viewDirs must have shape [C, N, 3]");
+        TORCH_CHECK_VALUE(
+            shNCoeffs.size(0) == viewDirs.size(1),
+            "shNCoeffs must have shape [N, K, D] and viewDirs must have shape [C, N, 3]");
+        TORCH_CHECK_VALUE(viewDirs.is_privateuseone(), "dirs must be a PrivateUse1 tensor");
+        TORCH_CHECK_VALUE(viewDirs.size(-1) == 3, "dirs must have last dimension 3");
+    }
+
+    if (N == 0) {
+        return torch::empty({int64_t(C), N, D}, sh0Coeffs.options());
+    }
+
+    using scalar_t = float;
+
+    const int *radiiPtr            = hasRadii ? radii.data_ptr<int>() : nullptr;
+    torch::Tensor renderQuantities = torch::empty({int64_t(C), N, D}, sh0Coeffs.options());
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+
+        int64_t elementOffset, elementCount;
+        std::tie(elementOffset, elementCount) = deviceChunk(N * C, deviceId);
+        elementCount *= D;
+        elementOffset *= D;
+
+        const auto NUM_BLOCKS = GET_BLOCKS(elementCount, DEFAULT_BLOCK_DIM);
+
+        if (hasShNCoeffs && shDegreeToUse > 0) {
+            computeSh<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                elementOffset,
+                elementCount,
+                C,
+                N,
+                D,
+                shDegreeToUse,
+                viewDirs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+                sh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+                shNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+                radiiPtr,
+                renderQuantities.data_ptr<scalar_t>());
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+        } else {
+            computeShDiffuseOnly<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                elementOffset,
+                elementCount,
+                C,
+                N,
+                D,
+                sh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+                radiiPtr,
+                renderQuantities.data_ptr<scalar_t>());
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+        }
+    }
+
+    mergeStreams();
     return renderQuantities;
 }
 

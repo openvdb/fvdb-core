@@ -159,12 +159,12 @@ jaggedTensorIndexJaggedTensorImpl(const JaggedTensor &jt, const JaggedTensor &jt
             jtIndices.jlidx().size(i) == jt.jlidx().size(i),
             "Indices must have the same list structure as JaggedTensor being indexed");
     }
-    if (Config::global().pendanticErrorCheckingEnabled()) {
+    if (Config::global().pedanticErrorCheckingEnabled()) {
         // This is a slow check that we cap optionally do for correctness.
         TORCH_CHECK_INDEX(
             torch::all(jtIndices.jlidx() == jt.jlidx()).item<bool>(),
             "Indices must have the same list structure as JaggedTensor being indexed. ",
-            "This error was raised because config.pendatic_error_checking was enabled");
+            "This error was raised because config.pedantic_error_checking was enabled");
     }
 
     c10::ScalarType idxDtype = jtIndices.scalar_type();

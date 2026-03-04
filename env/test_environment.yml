@@ -36,6 +36,7 @@ dependencies:
   ## 3dgs
   - pyproj
   - scikit-image
+  - torchvision
   - viser
   - pip:
     - gsplat

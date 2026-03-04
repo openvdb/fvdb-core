@@ -27,10 +27,10 @@ class ScopedTimer:
         Splitting timings:
         >>> with ScopedTimer(cuda=True) as timer:
         ...     # setup phase
-        ...     kmap, _ = grid.sparse_conv_kernel_map(kernel_size=kernel.size(-1), stride=1)
+        ...     plan = ConvolutionPlan.from_grid_batch(kernel_size=3, stride=1, source_grid=grid)
         ...     setup_time = timer.split()
         ...     # computation phase
-        ...     out_feature = kmap.sparse_conv_3d(in_feature, kernel)
+        ...     out_feature = plan.execute(in_feature, kernel)
         ...     compute_time = timer.split()
         >>> print(f"Setup: {setup_time:.4f}s, Compute: {compute_time:.4f}s")
     """

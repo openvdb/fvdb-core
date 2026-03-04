@@ -1,15 +1,35 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <pybind11/cast.h>
+
 #include "TypeCasters.h"
 
 #include <fvdb/FVDB.h>
 #include <fvdb/GaussianSplat3d.h>
+#include <fvdb/detail/autograd/EvaluateSphericalHarmonics.h>
+#include <fvdb/detail/ops/gsplat/GaussianCameraModels.h>
 
 #include <torch/extension.h>
 
 void
 bind_gaussian_splat3d(py::module &m) {
+    py::enum_<fvdb::detail::ops::RollingShutterType>(m, "RollingShutterType")
+        .value("NONE", fvdb::detail::ops::RollingShutterType::NONE)
+        .value("VERTICAL", fvdb::detail::ops::RollingShutterType::VERTICAL)
+        .value("HORIZONTAL", fvdb::detail::ops::RollingShutterType::HORIZONTAL)
+        .export_values();
+
+    py::enum_<fvdb::detail::ops::CameraModel>(m, "CameraModel")
+        .value("PINHOLE", fvdb::detail::ops::CameraModel::PINHOLE)
+        .value("OPENCV_RADTAN_5", fvdb::detail::ops::CameraModel::OPENCV_RADTAN_5)
+        .value("OPENCV_RATIONAL_8", fvdb::detail::ops::CameraModel::OPENCV_RATIONAL_8)
+        .value("OPENCV_RADTAN_THIN_PRISM_9",
+               fvdb::detail::ops::CameraModel::OPENCV_RADTAN_THIN_PRISM_9)
+        .value("OPENCV_THIN_PRISM_12", fvdb::detail::ops::CameraModel::OPENCV_THIN_PRISM_12)
+        .value("ORTHOGRAPHIC", fvdb::detail::ops::CameraModel::ORTHOGRAPHIC)
+        .export_values();
+
     py::class_<fvdb::GaussianSplat3d::ProjectedGaussianSplats>(m, "ProjectedGaussianSplats")
         .def_property_readonly("means2d", &fvdb::GaussianSplat3d::ProjectedGaussianSplats::means2d)
         .def_property_readonly("conics", &fvdb::GaussianSplat3d::ProjectedGaussianSplats::conics)
@@ -179,7 +199,8 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("crop_height")   = -1,
              py::arg("crop_origin_w") = -1,
              py::arg("crop_origin_h") = -1,
-             py::arg("tile_size")     = 16)
+             py::arg("tile_size")     = 16,
+             py::arg("backgrounds")   = std::nullopt)
 
         .def("render_images",
              &fvdb::GaussianSplat3d::renderImages,
@@ -194,7 +215,26 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("tile_size")        = 16,
              py::arg("min_radius_2d")    = 0.0,
              py::arg("eps_2d")           = 0.3,
-             py::arg("antialias")        = false)
+             py::arg("antialias")        = false,
+             py::arg("backgrounds")      = std::nullopt)
+
+        .def("render_images_from_world",
+             &fvdb::GaussianSplat3d::renderImagesFromWorld,
+             py::arg("world_to_camera_matrices"),
+             py::arg("projection_matrices"),
+             py::arg("image_width"),
+             py::arg("image_height"),
+             py::arg("near"),
+             py::arg("far"),
+             py::arg("camera_model")      = fvdb::detail::ops::CameraModel::PINHOLE,
+             py::arg("distortion_coeffs") = std::nullopt,
+             py::arg("sh_degree_to_use")  = -1,
+             py::arg("tile_size")         = 16,
+             py::arg("min_radius_2d")     = 0.0,
+             py::arg("eps_2d")            = 0.3,
+             py::arg("antialias")         = false,
+             py::arg("backgrounds")       = std::nullopt,
+             py::arg("masks")             = std::nullopt)
 
         .def("render_depths",
              &fvdb::GaussianSplat3d::renderDepths,
@@ -208,10 +248,59 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("tile_size")       = 16,
              py::arg("min_radius_2d")   = 0.0,
              py::arg("eps_2d")          = 0.3,
-             py::arg("antialias")       = false)
+             py::arg("antialias")       = false,
+             py::arg("backgrounds")     = std::nullopt)
 
         .def("render_images_and_depths",
              &fvdb::GaussianSplat3d::renderImagesAndDepths,
+             py::arg("world_to_camera_matrices"),
+             py::arg("projection_matrices"),
+             py::arg("image_width"),
+             py::arg("image_height"),
+             py::arg("near"),
+             py::arg("far"),
+             py::arg("projection_type")  = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
+             py::arg("sh_degree_to_use") = -1,
+             py::arg("tile_size")        = 16,
+             py::arg("min_radius_2d")    = 0.0,
+             py::arg("eps_2d")           = 0.3,
+             py::arg("antialias")        = false,
+             py::arg("backgrounds")      = std::nullopt)
+
+        .def("sparse_render_images",
+             &fvdb::GaussianSplat3d::sparseRenderImages,
+             py::arg("pixels_to_render"),
+             py::arg("world_to_camera_matrices"),
+             py::arg("projection_matrices"),
+             py::arg("image_width"),
+             py::arg("image_height"),
+             py::arg("near"),
+             py::arg("far"),
+             py::arg("projection_type")  = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
+             py::arg("sh_degree_to_use") = -1,
+             py::arg("tile_size")        = 16,
+             py::arg("min_radius_2d")    = 0.0,
+             py::arg("eps_2d")           = 0.3,
+             py::arg("antialias")        = false)
+
+        .def("sparse_render_depths",
+             &fvdb::GaussianSplat3d::sparseRenderDepths,
+             py::arg("pixels_to_render"),
+             py::arg("world_to_camera_matrices"),
+             py::arg("projection_matrices"),
+             py::arg("image_width"),
+             py::arg("image_height"),
+             py::arg("near"),
+             py::arg("far"),
+             py::arg("projection_type") = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
+             py::arg("tile_size")       = 16,
+             py::arg("min_radius_2d")   = 0.0,
+             py::arg("eps_2d")          = 0.3,
+             py::arg("antialias")       = false)
+
+        .def("sparse_render_images_and_depths",
+             &fvdb::GaussianSplat3d::sparseRenderImagesAndDepths,
+             py::arg("pixels_to_render"),
              py::arg("world_to_camera_matrices"),
              py::arg("projection_matrices"),
              py::arg("image_width"),
@@ -254,24 +343,23 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("eps_2d")          = 0.3,
              py::arg("antialias")       = false)
 
-        .def("render_top_contributing_gaussian_ids",
-             &fvdb::GaussianSplat3d::renderTopContributingGaussianIds,
-             py::arg("num_samples"),
+        .def("render_contributing_gaussian_ids",
+             &fvdb::GaussianSplat3d::renderContributingGaussianIds,
              py::arg("world_to_camera_matrices"),
              py::arg("projection_matrices"),
              py::arg("image_width"),
              py::arg("image_height"),
              py::arg("near"),
              py::arg("far"),
-             py::arg("projection_type") = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
-             py::arg("tile_size")       = 16,
-             py::arg("min_radius_2d")   = 0.0,
-             py::arg("eps_2d")          = 0.3,
-             py::arg("antialias")       = false)
+             py::arg("projection_type")    = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
+             py::arg("tile_size")          = 16,
+             py::arg("min_radius_2d")      = 0.0,
+             py::arg("eps_2d")             = 0.3,
+             py::arg("antialias")          = false,
+             py::arg("top_k_contributors") = 0)
 
-        .def("sparse_render_top_contributing_gaussian_ids",
-             &fvdb::GaussianSplat3d::sparseRenderTopContributingGaussianIds,
-             py::arg("num_samples"),
+        .def("sparse_render_contributing_gaussian_ids",
+             &fvdb::GaussianSplat3d::sparseRenderContributingGaussianIds,
              py::arg("pixels_to_render"),
              py::arg("world_to_camera_matrices"),
              py::arg("projection_matrices"),
@@ -279,27 +367,27 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("image_height"),
              py::arg("near"),
              py::arg("far"),
-             py::arg("projection_type") = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
-             py::arg("tile_size")       = 16,
-             py::arg("min_radius_2d")   = 0.0,
-             py::arg("eps_2d")          = 0.3,
-             py::arg("antialias")       = false)
+             py::arg("projection_type")    = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
+             py::arg("tile_size")          = 16,
+             py::arg("min_radius_2d")      = 0.0,
+             py::arg("eps_2d")             = 0.3,
+             py::arg("antialias")          = false,
+             py::arg("top_k_contributors") = 0)
 
-        .def("sparse_render_top_contributing_gaussian_ids",
-             &fvdb::GaussianSplat3d::sparseRenderTopContributingGaussianIds,
-             py::arg("num_samples"),
-             py::arg("pixels_to_render"),
-             py::arg("world_to_camera_matrices"),
-             py::arg("projection_matrices"),
-             py::arg("image_width"),
-             py::arg("image_height"),
-             py::arg("near"),
-             py::arg("far"),
-             py::arg("projection_type") = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
-             py::arg("tile_size")       = 16,
-             py::arg("min_radius_2d")   = 0.0,
-             py::arg("eps_2d")          = 0.3,
-             py::arg("antialias")       = false)
+        .def("relocate_gaussians",
+             &fvdb::GaussianSplat3d::relocateGaussians,
+             py::arg("log_scales"),
+             py::arg("logit_opacities"),
+             py::arg("ratios"),
+             py::arg("binomial_coeffs"),
+             py::arg("n_max"),
+             py::arg("min_opacity"))
+
+        .def("add_noise_to_means",
+             &fvdb::GaussianSplat3d::addNoiseToMeans,
+             py::arg("noise_scale"),
+             py::arg("t") = 0.005,
+             py::arg("k") = 100.0)
 
         .def("index_select", &fvdb::GaussianSplat3d::indexSelect, py::arg("indices"))
         .def("mask_select", &fvdb::GaussianSplat3d::maskSelect, py::arg("mask"))
@@ -337,6 +425,50 @@ bind_gaussian_splat3d(py::module &m) {
           py::arg("antialias")            = false,
           py::arg("render_depth_channel") = false,
           py::arg("return_debug_info")    = false,
-          py::arg("return_debug_info")    = false,
-          py::arg("ortho")                = false);
+          py::arg("render_depth_only")    = false,
+          py::arg("ortho")                = false,
+          py::arg("backgrounds")          = std::nullopt);
+
+    m.def(
+        "evaluate_spherical_harmonics",
+        [](int64_t shDegree,
+           int64_t numCameras,
+           const torch::Tensor &sh0,
+           const torch::Tensor &radii,
+           const std::optional<torch::Tensor> &shN,
+           const std::optional<torch::Tensor> &viewDirections) {
+            return fvdb::detail::autograd::EvaluateSphericalHarmonics::apply(
+                shDegree, numCameras, viewDirections, sh0, shN, radii)[0];
+        },
+        R"doc(
+Evaluate spherical harmonics to compute view-dependent features/colors.
+
+This function evaluates spherical harmonics (SH) coefficients to compute
+features (typically RGB colors) for a set of points, optionally considering
+view directions for view-dependent appearance.
+
+Args:
+    sh_degree: Degree of spherical harmonics to use (0-3 typically).
+               Degree 0 uses only sh0 (view-independent).
+               Higher degrees require view_directions and shN.
+    num_cameras: Number of camera views (C). The output will have shape [C, N, D].
+    sh0: DC term coefficients with shape [N, 1, D] where N is the number of
+         points and D is the number of feature channels.
+    radii: Projected radii with shape [C, N] (int32). Points with radii <= 0
+           will output zeros (used to skip invisible gaussians). Pass a tensor
+           of ones to evaluate all points.
+    shN: Higher-order SH coefficients with shape [N, K-1, D] where
+         K = (sh_degree+1)^2. Required when sh_degree > 0. Pass None for degree 0.
+    view_directions: Unnormalized view directions with shape [C, N, 3].
+                     Required when sh_degree > 0. Pass None for degree 0.
+
+Returns:
+    Tensor of shape [C, N, D] containing the evaluated features/colors.
+)doc",
+        py::arg("sh_degree"),
+        py::arg("num_cameras"),
+        py::arg("sh0"),
+        py::arg("radii"),
+        py::arg("shN")             = std::nullopt,
+        py::arg("view_directions") = std::nullopt);
 }

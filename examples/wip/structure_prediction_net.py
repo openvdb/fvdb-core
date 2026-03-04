@@ -4,18 +4,16 @@
 
 import os
 
+import fvdb.nn as fvnn
 import numpy as np
+import point_cloud_utils as pcu
+import polyscope as ps
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-import point_cloud_utils as pcu
-import polyscope as ps
-
 import torch_cudamanaged
 
 import fvdb
-import fvdb.nn as fvnn
 
 torch.backends.cudnn.deterministic = True
 np.random.seed(42)
@@ -125,7 +123,7 @@ def normalize_pts(xyz: np.ndarray):
 
 def visualize_grid(grid: fvdb.GridBatch):
     ps.init()
-    xyz = grid.grid_to_world(grid.ijk.float())
+    xyz = grid.voxel_to_world(grid.ijk.float())
     for batch_idx in range(grid.grid_count):
         pts = xyz[batch_idx].jdata.cpu().numpy()
         ps.register_point_cloud(f"grid_{batch_idx}", pts, radius=0.0025)

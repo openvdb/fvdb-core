@@ -4,13 +4,6 @@ on:
   pull_request_target:
     branches:
       - '**'
-    paths-ignore:
-        - 'CODEOWNERS'
-        - '**.md'
-        - 'debug/**'
-        - 'examples/**'
-        - 'notebooks/**'
-        - 'scripts/**'
 
 # Allow subsequent pushes to the same PR or REF to cancel any previous jobs.
 concurrency:
@@ -27,11 +20,21 @@ permissions:
 
 jobs:
   ##############################################################################
+  # CHECK FOR RELEVANT CHANGES
+  ##############################################################################
+  check-changes:
+    uses: ./.github/workflows/check-changes.yml
+
+  ##############################################################################
   # START FVDB BUILD RUNNER
   ##############################################################################
   start-build-runner:
     name: Start CPU-only EC2 runner for build
+    needs: check-changes
     runs-on: ubuntu-latest
+    if: >-
+      needs.check-changes.outputs.should_test == 'true'
+      && (github.event.pull_request.draft == false || github.event_name != 'pull_request_target')
     outputs:
       label: ${{ steps.start-build-runner.outputs.label }}
       ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
@@ -43,7 +46,7 @@ jobs:
           aws-region: us-east-2
       - name: Start EC2 runner
         id: start-build-runner
-        uses: machulav/ec2-github-runner@v2
+        uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -56,7 +59,6 @@ jobs:
   # BUILD FVDB
   ##############################################################################
   fvdb-build:
-    if: ${{ !startsWith(github.event.pull_request.title, 'Draft:') }}
     name: fVDB Build
     needs: start-build-runner
     runs-on: ${{ needs.start-build-runner.outputs.label }}
@@ -179,7 +181,9 @@ jobs:
       - start-build-runner # required to get output from the start-build-runner job
       - fvdb-build # required to wait when the main job is done
     runs-on: ubuntu-latest
-    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
+    # required to stop the runner even if the error happened in the previous jobs
+    # but only if the start-tests-gpu-runner job was not skipped
+    if: ${{ always() && needs.start-build-runner.result != 'skipped' }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -187,7 +191,7 @@ jobs:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
       - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2
+        uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -212,7 +216,7 @@ jobs:
           aws-region: us-east-2
       - name: Start EC2 GPU runner
         id: start-tests-gpu-runner
-        uses: machulav/ec2-github-runner@v2
+        uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -229,7 +233,7 @@ jobs:
     name: fVDB GTests
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
+      image: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
@@ -283,7 +287,7 @@ jobs:
           cmake --version
 
       - name: Install apt dependencies
-        run: apt install -y zlib1g-dev libpng-dev mesa-vulkan-drivers vulkan-tools
+        run: apt install -y zlib1g-dev libpng-dev mesa-vulkan-drivers vulkan-tools make
 
       - name: Install pip dependencies
         run: |
@@ -366,7 +370,6 @@ jobs:
           cd $GITHUB_WORKSPACE
           git merge pr_branch
 
-
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
         with:
@@ -386,9 +389,9 @@ jobs:
         run: |
           uv venv
           uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
-          uv pip install torch-scatter -f https://data.pyg.org/whl/torch-2.7.0+cu128.html
-          source .venv/bin/activate
-          TORCH_CUDA_ARCH_LIST="8.9+PTX" pip install -v git+https://github.com/heiwang1997/torchsparse.git
+          uv pip install --no-cache-dir setuptools
+          TORCH_CUDA_ARCH_LIST="8.9+PTX" uv pip install -v --no-build-isolation git+https://github.com/rusty1s/pytorch_scatter.git
+          TORCH_CUDA_ARCH_LIST="8.9+PTX" uv pip install -v --no-build-isolation git+https://github.com/heiwang1997/torchsparse.git
 
       - name: Download package
         uses: actions/download-artifact@v4
@@ -414,7 +417,6 @@ jobs:
           rm -rf /__w/_temp/*
           echo "Cleanup completed"
 
-
   ##############################################################################
   # RUN FVDB DOCUMENTATION TESTS
   ##############################################################################
@@ -423,7 +425,7 @@ jobs:
     name: fVDB Documentation Tests
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
+      image: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
       env:
         PYTHONPATH: ""
       options: --rm
@@ -509,7 +511,9 @@ jobs:
       - fvdb-unit-test # required to wait when the main job is done
       - fvdb-docs-test # required to wait when the main job is done
     runs-on: ubuntu-latest
-    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
+    # required to stop the runner even if the error happened in the previous jobs
+    # but only if the start-tests-gpu-runner job was not skipped
+    if: ${{ always() && needs.start-tests-gpu-runner.result != 'skipped' }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -517,7 +521,7 @@ jobs:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
       - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2
+        uses: machulav/ec2-github-runner@v2.4.3
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}

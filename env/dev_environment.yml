@@ -15,7 +15,6 @@ dependencies:
   - cuda-nvrtc-dev
   - cuda-nvtx-dev
   - cuda-version=12.9
-  - cudnn>=9.10.0
   - cxx-compiler
   - gcc_linux-64=13
   - git
@@ -32,10 +31,12 @@ dependencies:
   - linkify-it-py
   - make
   - matplotlib
+  - msgpack-python
   - myst-parser
   - ninja
   - numpy
   - openssl
+  - openusd
   - pandas
   - parameterized
   - pip
@@ -49,6 +50,7 @@ dependencies:
   - python=3.12
   - pytorch-gpu=2.8.0
   - rich
+  - seaborn
   - scikit-build-core
   - setuptools>=68.2.2
   - sparsehash
@@ -59,12 +61,12 @@ dependencies:
   - zlib
     ## 3dgs
   - gdal
-  - open3d
   - pillow
   - pyproj
   - pyyaml
   - scikit-learn
   - srt
+  - torchvision
   - tyro
   - utm
   - viser
@@ -78,4 +80,3 @@ dependencies:
     - dlnr_lite
     - einops
     - oiio-static-python
-    - torchvision --index-url https://download.pytorch.org/whl/cu129 # NOTE: torchvision is not available on conda-forge for pytorch 2.8.0 yet

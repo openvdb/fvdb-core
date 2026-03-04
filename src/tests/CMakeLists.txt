@@ -71,12 +71,13 @@ function(ConfigureTest CMAKE_TEST_NAME)
     $<TARGET_PROPERTY:GTest::gtest,INTERFACE_INCLUDE_DIRECTORIES> # Get includes exposed by GTest::gtest
     $<TARGET_PROPERTY:GTest::gtest_main,INTERFACE_INCLUDE_DIRECTORIES> # Get includes exposed by GTest::gtest_main
     ${CUDAToolkit_INCLUDE_DIRS}
+    ${CUDAToolkit_INCLUDE_DIRS}/cccl
     ${NANOVDB_EDITOR_INCLUDE_DIR}
   )
 
   target_compile_options(${CMAKE_TEST_NAME}_obj PRIVATE
-    $<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANGUAGE:CUDA>>:-G -Xcompiler=-O0>
-    $<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANGUAGE:CXX>>:-O0>
+    $<$<AND:$<CONFIG:Debug>,$<COMPILE_LANGUAGE:CUDA>>:-G -Xcompiler=-O0>
+    $<$<AND:$<CONFIG:Debug>,$<COMPILE_LANGUAGE:CXX>>:-O0>
     $<$<COMPILE_LANGUAGE:CXX>:
     "-Wall"
     "-Werror"
@@ -99,6 +100,11 @@ function(ConfigureTest CMAKE_TEST_NAME)
     ${CMAKE_TEST_NAME}
     PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${TEST_BINARY_DIRECTORY}
                INSTALL_RPATH "\$ORIGIN/../../../lib"
+  )
+
+  # Add linker flags for Debug builds to preserve symbols
+  target_link_options(${CMAKE_TEST_NAME} PRIVATE
+    $<$<CONFIG:Debug>:-rdynamic>
   )
 
   # Link the FINAL executable against necessary libraries
@@ -144,7 +150,13 @@ ConfigureTest(GaussianSphericalHarmonicsForwardTest "GaussianSphericalHarmonicsF
 ConfigureTest(GaussianSphericalHarmonicsBackwardTest "GaussianSphericalHarmonicsBackwardTest.cpp")
 ConfigureTest(GaussianProjectionForwardTest "GaussianProjectionForwardTest.cpp")
 ConfigureTest(GaussianProjectionBackwardTest "GaussianProjectionBackwardTest.cpp")
+ConfigureTest(GaussianProjectionUTTest "GaussianProjectionUTTest.cpp")
+ConfigureTest(GaussianUtilsTest "GaussianUtilsTest.cu")
 ConfigureTest(GaussianRasterizeTopContributorsTest "GaussianRasterizeTopContributorsTest.cpp")
+ConfigureTest(GaussianRasterizeContributingGaussianIdsTest "GaussianRasterizeContributingGaussianIdsTest.cpp")
+ConfigureTest(GaussianMCMCAddNoiseTest "GaussianMCMCAddNoiseTest.cpp")
+ConfigureTest(GaussianMCMCRelocationTest "GaussianMCMCRelocationTest.cpp")
+ConfigureTest(GatherScatterDefaultConvTest "GatherScatterDefaultConvTest.cu")
 
 if(NOT NANOVDB_EDITOR_SKIP)
   ConfigureTest(ViewerTest "ViewerTest.cpp")

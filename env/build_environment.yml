@@ -12,7 +12,6 @@ dependencies:
   - cuda-nvrtc-dev
   - cuda-nvtx-dev
   - cuda-version=12.9
-  - cudnn>=9.10.0
   - cxx-compiler
   - gcc_linux-64=13
   - git

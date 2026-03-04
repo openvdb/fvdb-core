@@ -25,7 +25,7 @@ EvaluateSphericalHarmonics::forward(
     FVDB_FUNC_RANGE_WITH_NAME("EvaluateSphericalHarmonics::forward");
     const Variable viewDirectionsValue = viewDirections.value_or(torch::Tensor());
     const Variable shNCoeffsValue      = shNCoeffs.value_or(torch::Tensor());
-    const Variable renderQuantities    = FVDB_DISPATCH_KERNEL_DEVICE(sh0Coeffs.device(), [&]() {
+    const Variable renderQuantities    = FVDB_DISPATCH_KERNEL(sh0Coeffs.device(), [&]() {
         return ops::dispatchSphericalHarmonicsForward<DeviceTag>(
             shDegreeToUse, numCameras, viewDirectionsValue, sh0Coeffs, shNCoeffsValue, radii);
     });
@@ -40,10 +40,9 @@ EvaluateSphericalHarmonics::VariableList
 EvaluateSphericalHarmonics::backward(EvaluateSphericalHarmonics::AutogradContext *ctx,
                                      EvaluateSphericalHarmonics::VariableList gradOutput) {
     FVDB_FUNC_RANGE_WITH_NAME("EvaluateSphericalHarmonics::backward");
-    Variable dLossDColors = gradOutput.at(0);
 
     // ensure the gradients are contiguous if they are not None
-    auto const dLossdColors =
+    auto const dLossDColors =
         gradOutput.at(0).defined() ? gradOutput.at(0).contiguous() : gradOutput.at(0);
 
     VariableList saved = ctx->get_saved_variables();
@@ -51,12 +50,13 @@ EvaluateSphericalHarmonics::backward(EvaluateSphericalHarmonics::AutogradContext
     Variable shNCoeffs = saved.at(1);
     Variable radii     = saved.at(2);
 
-    const int shDegreeToUse          = static_cast<int>(ctx->saved_data["shDegreeToUse"].toInt());
-    const int numCameras             = static_cast<int>(ctx->saved_data["numCameras"].toInt());
-    const int numGaussians           = static_cast<int>(ctx->saved_data["numGaussians"].toInt());
-    const bool computeDLossDViewDirs = ctx->needs_input_grad(1);
+    const int shDegreeToUse = static_cast<int>(ctx->saved_data["shDegreeToUse"].toInt());
+    const int numCameras    = static_cast<int>(ctx->saved_data["numCameras"].toInt());
+    const int numGaussians  = static_cast<int>(ctx->saved_data["numGaussians"].toInt());
+    // Only compute viewDirs gradients if viewDirs is defined and requires grad
+    const bool computeDLossDViewDirs = viewDirs.defined() && viewDirs.requires_grad();
 
-    auto variables           = FVDB_DISPATCH_KERNEL_DEVICE(dLossdColors.device(), [&]() {
+    auto variables           = FVDB_DISPATCH_KERNEL(dLossDColors.device(), [&]() {
         return ops::dispatchSphericalHarmonicsBackward<DeviceTag>(shDegreeToUse,
                                                                   numCameras,
                                                                   numGaussians,

@@ -6,11 +6,20 @@
 
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
+#include <fvdb/detail/ops/gsplat/GaussianTileIntersection.h>
 
+#include <c10/cuda/CUDAFunctions.h>
+#include <c10/cuda/CUDAGuard.h>
 #include <torch/script.h>
 #include <torch/types.h>
 
 #include <gtest/gtest.h>
+
+#if defined(__linux__)
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 #include <cstdlib>
 #include <string>
@@ -19,6 +28,10 @@
 #ifndef FVDB_EXTERNAL_TEST_DATA_PATH
 #error "FVDB_EXTERNAL_TEST_DATA_PATH must be defined"
 #endif
+
+namespace {
+constexpr const char *kMaskedEdgeTileChildEnv = "FVDB_GSPLAT_MASKED_EDGE_TILE_CHILD";
+} // namespace
 
 struct GaussianRasterizeForwardTestFixture : public ::testing::Test {
     void
@@ -289,6 +302,127 @@ struct GaussianRasterizeForwardTestFixture : public ::testing::Test {
     uint32_t tileSize;
 };
 
+TEST(GaussianRasterizeForwardMaskedEdgeTile, Child) {
+#if !defined(__linux__)
+    GTEST_SKIP() << "This regression test is Linux-only.";
+#else
+    const char *isChild = std::getenv(kMaskedEdgeTileChildEnv);
+    if (!(isChild && std::string(isChild) == "1")) {
+        GTEST_SKIP() << "Not running child path.";
+    }
+
+    if (c10::cuda::device_count() <= 0) {
+        GTEST_SKIP() << "CUDA not available.";
+    }
+
+    const at::cuda::CUDAGuard device_guard(0);
+
+    constexpr int64_t C = 1;
+
+    constexpr uint32_t imageWidth  = 17;
+    constexpr uint32_t imageHeight = 17;
+    constexpr uint32_t tileSize    = 16;
+    constexpr uint32_t tileExtentH = (imageHeight + tileSize - 1) / tileSize; // 2
+    constexpr uint32_t tileExtentW = (imageWidth + tileSize - 1) / tileSize;  // 2
+
+    auto fopts = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32);
+
+    // Single Gaussian that intersects the bottom-right edge tile.
+    const auto means2d   = torch::tensor({{{16.5f, 16.5f}}}, fopts);                  // [C,N,2]
+    const auto conics    = torch::tensor({{{1.0f, 0.0f, 1.0f}}}, fopts);              // [C,N,3]
+    const auto features  = torch::tensor({{{0.4f, 0.5f, -0.6f}}}, fopts);             // [C,N,D]
+    const auto opacities = torch::tensor({{0.9f}}, fopts);                            // [C,N]
+    const auto radii     = torch::tensor(
+        {{1}}, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt32)); // [C,N]
+    const auto depths      = torch::tensor({{1.0f}}, fopts);                          // [C,N]
+    const auto backgrounds = torch::tensor({{0.1f, -0.2f, 0.3f}}, fopts);             // [C,D]
+
+    auto masks     = torch::ones({C, (int64_t)tileExtentH, (int64_t)tileExtentW},
+                             torch::TensorOptions().device(torch::kCUDA).dtype(torch::kBool));
+    masks[0][1][1] = false; // mask out bottom-right edge tile
+
+    auto [tileOffsets, tileGaussianIds] =
+        fvdb::detail::ops::dispatchGaussianTileIntersection<torch::kCUDA>(
+            means2d, radii, depths, at::nullopt, (uint32_t)C, tileSize, tileExtentH, tileExtentW);
+
+    auto [outFeatures, outAlphas, outLastIds] =
+        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(means2d,
+                                                                          conics,
+                                                                          features,
+                                                                          opacities,
+                                                                          imageWidth,
+                                                                          imageHeight,
+                                                                          0,
+                                                                          0,
+                                                                          tileSize,
+                                                                          tileOffsets,
+                                                                          tileGaussianIds,
+                                                                          backgrounds,
+                                                                          masks);
+
+    (void)outLastIds;
+
+    // Ensure the kernel completed (this would hang if there is a deadlock).
+    C10_CUDA_CHECK(cudaDeviceSynchronize());
+
+    // The only in-bounds pixel in the bottom-right edge tile is (16,16). It should be filled
+    // with background and alpha=0.
+    const auto outFeaturesCpu = outFeatures.cpu();
+    const auto outAlphasCpu   = outAlphas.cpu();
+
+    EXPECT_EQ(outAlphasCpu[0][16][16][0].item<float>(), 0.0f);
+    EXPECT_EQ(outFeaturesCpu[0][16][16][0].item<float>(), 0.1f);
+    EXPECT_EQ(outFeaturesCpu[0][16][16][1].item<float>(), -0.2f);
+    EXPECT_EQ(outFeaturesCpu[0][16][16][2].item<float>(), 0.3f);
+#endif
+}
+
+TEST(GaussianRasterizeForwardMaskedEdgeTile, NoDeadlock) {
+#if !defined(__linux__)
+    GTEST_SKIP() << "This regression test is Linux-only.";
+#else
+    const char *isChild = std::getenv(kMaskedEdgeTileChildEnv);
+    if (isChild && std::string(isChild) == "1") {
+        GTEST_SKIP() << "Running child path.";
+    }
+
+    pid_t pid = fork();
+    ASSERT_GE(pid, 0) << "fork() failed";
+
+    if (pid == 0) {
+        // Child: exec the same test binary but run only the child test.
+        setenv(kMaskedEdgeTileChildEnv, "1", 1);
+        execl("/proc/self/exe",
+              "/proc/self/exe",
+              "--gtest_filter=GaussianRasterizeForwardMaskedEdgeTile.Child",
+              "--gtest_color=no",
+              (char *)nullptr);
+        _exit(127);
+    }
+
+    int status = 0;
+    bool exited{false};
+    constexpr int kTimeoutMs = 20000;
+    for (int elapsed = 0; elapsed < kTimeoutMs; elapsed += 50) {
+        const pid_t r = waitpid(pid, &status, WNOHANG);
+        if (r == pid) {
+            exited = true;
+            break;
+        }
+        usleep(50 * 1000);
+    }
+
+    if (!exited) {
+        kill(pid, SIGKILL);
+        (void)waitpid(pid, &status, 0);
+        FAIL() << "Deadlock detected: child process timed out.";
+    }
+
+    ASSERT_TRUE(WIFEXITED(status)) << "Child did not exit cleanly.";
+    ASSERT_EQ(WEXITSTATUS(status), 0) << "Child test failed.";
+#endif
+}
+
 // This is a helper function to generate the output data for the test cases.
 // Only enable this test when you want to update the output data.
 TEST_F(GaussianRasterizeForwardTestFixture, DISABLED_GenerateOutputData) {
@@ -386,7 +520,7 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestConcatenatedChannels) {
     EXPECT_TRUE(torch::equal(outLastIds, expectedLastIds));
 }
 
-// Compares the output of multi-camera rasterization with the output of sequentialsingle-camera
+// Compares the output of multi-camera rasterization with the output of sequential single-camera
 // rasterization.
 TEST_F(GaussianRasterizeForwardTestFixture, TestMultipleCameras) {
     // the output here is not used in this test.
@@ -505,6 +639,75 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestMultipleCameras) {
     EXPECT_TRUE(torch::allclose(combinedColors, outColorsAll));
     EXPECT_TRUE(torch::allclose(combinedAlphas, outAlphasAll));
     EXPECT_TRUE(torch::equal(combinedLastIds, outLastIdsAll));
+}
+
+TEST_F(GaussianRasterizeForwardTestFixture, TestMultipleCamerasWithBackgrounds) {
+    loadTestData("rasterize_forward_inputs_3cams.pt", "rasterize_forward_outputs.pt");
+
+    const int numCameras  = means2d.size(0);
+    const int numChannels = colors.size(-1);
+
+    // Create different background colors for each camera
+    // Camera 0: Red [1, 0, 0]
+    // Camera 1: Green [0, 1, 0]
+    // Camera 2: Blue [0, 0, 1]
+    torch::Tensor backgrounds = torch::zeros({numCameras, numChannels}, colors.options());
+    backgrounds[0][0]         = 1.0f; // Red
+    if (numCameras > 1)
+        backgrounds[1][1] = 1.0f;     // Green
+    if (numCameras > 2)
+        backgrounds[2][2] = 1.0f;     // Blue
+
+    // Render without background
+    const auto [outColorsNoBackground, outAlphasNoBackground, outLastIdsNoBackground] =
+        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(means2d,
+                                                                          conics,
+                                                                          colors,
+                                                                          opacities,
+                                                                          imageWidth,
+                                                                          imageHeight,
+                                                                          imageOriginW,
+                                                                          imageOriginH,
+                                                                          tileSize,
+                                                                          tileOffsets,
+                                                                          tileGaussianIds);
+
+    // Render with different background per camera
+    const auto [outColorsWithBackground, outAlphasWithBackground, outLastIdsWithBackground] =
+        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(means2d,
+                                                                          conics,
+                                                                          colors,
+                                                                          opacities,
+                                                                          imageWidth,
+                                                                          imageHeight,
+                                                                          imageOriginW,
+                                                                          imageOriginH,
+                                                                          tileSize,
+                                                                          tileOffsets,
+                                                                          tileGaussianIds,
+                                                                          backgrounds);
+
+    // Alphas and last IDs should be identical regardless of background
+    EXPECT_TRUE(torch::allclose(outAlphasNoBackground, outAlphasWithBackground));
+    EXPECT_TRUE(torch::equal(outLastIdsNoBackground, outLastIdsWithBackground));
+
+    // Verify that we have at least some non-opaque pixels to actually test background blending
+    auto nonOpaquePixels = (outAlphasNoBackground < 0.99f).sum();
+    EXPECT_GT(nonOpaquePixels.item<int64_t>(), 0)
+        << "Test requires some non-opaque pixels to validate background blending";
+
+    // Compute expected colors with background blending and compare per camera
+    torch::Tensor expectedColorsWithBackground = torch::zeros_like(outColorsNoBackground);
+    for (int c = 0; c < numCameras; c++) {
+        auto alpha     = outAlphasNoBackground[c];                 // [H, W, 1]
+        auto baseColor = outColorsNoBackground[c];                 // [H, W, D]
+        auto bg        = backgrounds[c].view({1, 1, numChannels}); // [1, 1, D]
+
+        // Expected: renderedColor + (1 - alpha) * background
+        expectedColorsWithBackground[c] = baseColor + (1.0f - alpha) * bg;
+    }
+
+    EXPECT_TRUE(torch::allclose(outColorsWithBackground, expectedColorsWithBackground, 1e-5, 1e-5));
 }
 
 TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterization) {
@@ -637,6 +840,265 @@ TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationMultipleCamer
                                              outColorsAll,
                                              outAlphasAll,
                                              outLastIdsAll));
+}
+
+TEST_F(GaussianRasterizeForwardTestFixture, TestSparseRasterizationMultipleCamerasWithBackgrounds) {
+    loadTestData("rasterize_forward_inputs_3cams.pt", "rasterize_forward_outputs.pt");
+
+    const int numCameras  = means2d.size(0);
+    const int numChannels = colors.size(-1);
+
+    // Create different background colors for each camera
+    // Camera 0: Red [1, 0, 0]
+    // Camera 1: Green [0, 1, 0]
+    // Camera 2: Blue [0, 0, 1]
+    torch::Tensor backgrounds = torch::zeros({numCameras, numChannels}, colors.options());
+    backgrounds[0][0]         = 1.0f; // Red
+    if (numCameras > 1)
+        backgrounds[1][1] = 1.0f;     // Green
+    if (numCameras > 2)
+        backgrounds[2][2] = 1.0f;     // Blue
+
+    auto const pixelsToRender = generateSparsePixelCoords(numCameras, 100).cuda();
+
+    auto [activeTiles, activeTileMask, tilePixelMask, tilePixelCumsum, pixelMap] =
+        fvdb::detail::ops::computeSparseInfo(
+            tileSize, tileOffsets.size(2), tileOffsets.size(1), pixelsToRender);
+
+    // Render sparse without background
+    const auto [outColorsSparseNoBackground,
+                outAlphasSparseNoBackground,
+                outLastIdsSparseNoBackground] =
+        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(pixelsToRender,
+                                                                                means2d,
+                                                                                conics,
+                                                                                colors,
+                                                                                opacities,
+                                                                                imageWidth,
+                                                                                imageHeight,
+                                                                                imageOriginW,
+                                                                                imageOriginH,
+                                                                                tileSize,
+                                                                                tileOffsets,
+                                                                                tileGaussianIds,
+                                                                                activeTiles,
+                                                                                tilePixelMask,
+                                                                                tilePixelCumsum,
+                                                                                pixelMap);
+
+    // Render sparse with different background per camera
+    const auto [outColorsSparseWithBackground,
+                outAlphasSparseWithBackground,
+                outLastIdsSparseWithBackground] =
+        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(pixelsToRender,
+                                                                                means2d,
+                                                                                conics,
+                                                                                colors,
+                                                                                opacities,
+                                                                                imageWidth,
+                                                                                imageHeight,
+                                                                                imageOriginW,
+                                                                                imageOriginH,
+                                                                                tileSize,
+                                                                                tileOffsets,
+                                                                                tileGaussianIds,
+                                                                                activeTiles,
+                                                                                tilePixelMask,
+                                                                                tilePixelCumsum,
+                                                                                pixelMap,
+                                                                                backgrounds);
+
+    // Alphas and last IDs should be identical regardless of background
+    for (int c = 0; c < numCameras; c++) {
+        EXPECT_TRUE(torch::allclose(outAlphasSparseNoBackground.index(c).jdata(),
+                                    outAlphasSparseWithBackground.index(c).jdata()));
+        EXPECT_TRUE(torch::equal(outLastIdsSparseNoBackground.index(c).jdata(),
+                                 outLastIdsSparseWithBackground.index(c).jdata()));
+    }
+
+    // Verify that we have at least some non-opaque pixels
+    bool hasTransparentPixels = false;
+    for (int c = 0; c < numCameras; c++) {
+        auto alphas          = outAlphasSparseNoBackground.index(c).jdata();
+        auto nonOpaquePixels = (alphas < 0.99f).sum();
+        if (nonOpaquePixels.item<int64_t>() > 0) {
+            hasTransparentPixels = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(hasTransparentPixels)
+        << "Test requires some non-opaque pixels to validate background blending";
+
+    // Compute expected colors with background blending and compare per camera
+    for (int c = 0; c < numCameras; c++) {
+        auto alpha     = outAlphasSparseNoBackground.index(c).jdata(); // [N, 1]
+        auto baseColor = outColorsSparseNoBackground.index(c).jdata(); // [N, D]
+        auto bg        = backgrounds[c].view({1, numChannels});        // [1, D]
+
+        // Expected: renderedColor + (1 - alpha) * background
+        auto expectedColors = baseColor + (1.0f - alpha) * bg;
+        auto actualColors   = outColorsSparseWithBackground.index(c).jdata();
+
+        EXPECT_TRUE(torch::allclose(actualColors, expectedColors, 1e-5, 1e-5))
+            << "Background blending mismatch for camera " << c;
+    }
+}
+
+// Test packed mode rasterization with multiple cameras.
+// This verifies that when means2d has shape [nnz, 2] (packed) instead of [C, N, 2] (non-packed),
+// the rasterization produces the same results as non-packed mode.
+// This specifically tests the fix for deriving numCameras from tileOffsets instead of means2d.
+TEST_F(GaussianRasterizeForwardTestFixture, TestPackedModeMultipleCameras) {
+    loadTestData("rasterize_forward_inputs_3cams.pt", "rasterize_forward_outputs.pt");
+
+    const int numCameras         = means2d.size(0);
+    const int numGaussiansPerCam = means2d.size(1);
+    const int totalGaussians     = numCameras * numGaussiansPerCam;
+
+    ASSERT_GT(numCameras, 1) << "This test requires multiple cameras";
+
+    // Step 1: Run non-packed rasterization to get expected results
+    const auto [expectedColors, expectedAlphas, expectedLastIds] =
+        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(means2d,
+                                                                          conics,
+                                                                          colors,
+                                                                          opacities,
+                                                                          imageWidth,
+                                                                          imageHeight,
+                                                                          imageOriginW,
+                                                                          imageOriginH,
+                                                                          tileSize,
+                                                                          tileOffsets,
+                                                                          tileGaussianIds);
+
+    // Step 2: Reshape tensors to packed format [nnz, D]
+    // The test data's tileGaussianIds already contains global indices (0 to C*N-1).
+    // In non-packed mode, the kernel converts these to [cid][gid] internally.
+    // In packed mode, the kernel uses them directly as indices into the packed tensor.
+    auto means2dPacked   = means2d.reshape({totalGaussians, 2});
+    auto conicsPacked    = conics.reshape({totalGaussians, 3});
+    auto colorsPacked    = colors.reshape({totalGaussians, colors.size(-1)});
+    auto opacitiesPacked = opacities.reshape({totalGaussians});
+
+    // Step 3: Run packed rasterization with same tileOffsets and tileGaussianIds
+    const auto [outColorsPacked, outAlphasPacked, outLastIdsPacked] =
+        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(means2dPacked,
+                                                                          conicsPacked,
+                                                                          colorsPacked,
+                                                                          opacitiesPacked,
+                                                                          imageWidth,
+                                                                          imageHeight,
+                                                                          imageOriginW,
+                                                                          imageOriginH,
+                                                                          tileSize,
+                                                                          tileOffsets,
+                                                                          tileGaussianIds);
+
+    // Step 4: Compare results
+    // The output shapes should match: [C, H, W, D] for colors, [C, H, W, 1] for alphas
+    EXPECT_EQ(outColorsPacked.sizes(), expectedColors.sizes())
+        << "Packed output colors shape mismatch";
+    EXPECT_EQ(outAlphasPacked.sizes(), expectedAlphas.sizes())
+        << "Packed output alphas shape mismatch";
+    EXPECT_EQ(outLastIdsPacked.sizes(), expectedLastIds.sizes())
+        << "Packed output lastIds shape mismatch";
+
+    // The rendered colors and alphas should match (allowing for small numerical differences)
+    EXPECT_TRUE(torch::allclose(outColorsPacked, expectedColors, 1e-4, 1e-4))
+        << "Packed mode colors don't match non-packed mode";
+    EXPECT_TRUE(torch::allclose(outAlphasPacked, expectedAlphas, 1e-4, 1e-4))
+        << "Packed mode alphas don't match non-packed mode";
+
+    // lastIds should be identical since both modes use the same global indices
+    EXPECT_TRUE(torch::equal(outLastIdsPacked, expectedLastIds))
+        << "Packed mode lastIds don't match non-packed mode";
+}
+
+// Test packed mode with sparse rasterization and multiple cameras
+TEST_F(GaussianRasterizeForwardTestFixture, TestPackedModeSparseMultipleCameras) {
+    loadTestData("rasterize_forward_inputs_3cams.pt", "rasterize_forward_outputs.pt");
+
+    const int numCameras         = means2d.size(0);
+    const int numGaussiansPerCam = means2d.size(1);
+    const int totalGaussians     = numCameras * numGaussiansPerCam;
+
+    ASSERT_GT(numCameras, 1) << "This test requires multiple cameras";
+
+    // Generate sparse pixel coordinates to render
+    auto const pixelsToRender = generateSparsePixelCoords(numCameras, 100).cuda();
+
+    // Compute sparse info from pixels
+    auto [activeTiles, activeTileMask, tilePixelMask, tilePixelCumsum, pixelMap] =
+        fvdb::detail::ops::computeSparseInfo(
+            tileSize, tileOffsets.size(2), tileOffsets.size(1), pixelsToRender);
+
+    // Step 1: Run non-packed sparse rasterization to get expected results
+    const auto [expectedColorsSparse, expectedAlphasSparse, expectedLastIdsSparse] =
+        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(pixelsToRender,
+                                                                                means2d,
+                                                                                conics,
+                                                                                colors,
+                                                                                opacities,
+                                                                                imageWidth,
+                                                                                imageHeight,
+                                                                                imageOriginW,
+                                                                                imageOriginH,
+                                                                                tileSize,
+                                                                                tileOffsets,
+                                                                                tileGaussianIds,
+                                                                                activeTiles,
+                                                                                tilePixelMask,
+                                                                                tilePixelCumsum,
+                                                                                pixelMap);
+
+    // Step 2: Reshape tensors to packed format [nnz, D]
+    // The test data's tileGaussianIds already contains global indices (0 to C*N-1).
+    // In non-packed mode, the kernel converts these to [cid][gid] internally.
+    // In packed mode, the kernel uses them directly as indices into the packed tensor.
+    auto means2dPacked   = means2d.reshape({totalGaussians, 2});
+    auto conicsPacked    = conics.reshape({totalGaussians, 3});
+    auto colorsPacked    = colors.reshape({totalGaussians, colors.size(-1)});
+    auto opacitiesPacked = opacities.reshape({totalGaussians});
+
+    // Step 3: Run packed sparse rasterization with same sparse info and same gaussian IDs
+    const auto [outColorsPacked, outAlphasPacked, outLastIdsPacked] =
+        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(pixelsToRender,
+                                                                                means2dPacked,
+                                                                                conicsPacked,
+                                                                                colorsPacked,
+                                                                                opacitiesPacked,
+                                                                                imageWidth,
+                                                                                imageHeight,
+                                                                                imageOriginW,
+                                                                                imageOriginH,
+                                                                                tileSize,
+                                                                                tileOffsets,
+                                                                                tileGaussianIds,
+                                                                                activeTiles,
+                                                                                tilePixelMask,
+                                                                                tilePixelCumsum,
+                                                                                pixelMap);
+
+    // Step 4: Compare results
+    EXPECT_EQ(outColorsPacked.num_outer_lists(), expectedColorsSparse.num_outer_lists())
+        << "Packed sparse output has wrong number of cameras";
+
+    for (int c = 0; c < numCameras; ++c) {
+        auto expectedColors = expectedColorsSparse.index(c).jdata();
+        auto actualColors   = outColorsPacked.index(c).jdata();
+        auto expectedAlphas = expectedAlphasSparse.index(c).jdata();
+        auto actualAlphas   = outAlphasPacked.index(c).jdata();
+
+        EXPECT_EQ(actualColors.sizes(), expectedColors.sizes())
+            << "Packed sparse colors shape mismatch for camera " << c;
+        EXPECT_EQ(actualAlphas.sizes(), expectedAlphas.sizes())
+            << "Packed sparse alphas shape mismatch for camera " << c;
+
+        EXPECT_TRUE(torch::allclose(actualColors, expectedColors, 1e-4, 1e-4))
+            << "Packed sparse mode colors don't match for camera " << c;
+        EXPECT_TRUE(torch::allclose(actualAlphas, expectedAlphas, 1e-4, 1e-4))
+            << "Packed sparse mode alphas don't match for camera " << c;
+    }
 }
 
 TEST_F(GaussianRasterizeForwardTestFixture, CPUThrows) {

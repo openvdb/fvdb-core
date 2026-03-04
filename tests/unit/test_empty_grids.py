@@ -46,7 +46,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertEqual(grids.cum_voxels.shape, (0,))
         self.assertEqual(grids.dual_bboxes.shape, (0, 2, 3))
         self.assertEqual(grids.grid_count, 0)
-        self.assertEqual(grids.grid_to_world_matrices.shape, (0, 4, 4))
+        self.assertEqual(grids.voxel_to_world_matrices.shape, (0, 4, 4))
         self.assertTrue(grids.has_zero_grids)
         self.assertEqual(grids.ijk.jdata.shape, (0, 3))
         self.assertEqual(grids.jidx.shape, (0,))
@@ -60,7 +60,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertEqual(grids.total_leaf_nodes, 0)
         self.assertEqual(grids.total_voxels, 0)
         self.assertEqual(grids.voxel_sizes.shape, (0, 3))
-        self.assertEqual(grids.world_to_grid_matrices.shape, (0, 4, 4))
+        self.assertEqual(grids.world_to_voxel_matrices.shape, (0, 4, 4))
 
     @parameterized.expand(["cuda", "cpu"])
     def test_building_zero_voxels_constructor(self, device):
@@ -74,7 +74,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertEqual(grids.cum_voxels.shape, (1,))
         self.assertEqual(grids.dual_bboxes.shape, (1, 2, 3))
         self.assertEqual(grids.grid_count, 1)
-        self.assertEqual(grids.grid_to_world_matrices.shape, (1, 4, 4))
+        self.assertEqual(grids.voxel_to_world_matrices.shape, (1, 4, 4))
         self.assertFalse(grids.has_zero_grids)
         self.assertEqual(grids.ijk.jdata.shape, (0, 3))
         self.assertEqual(grids.jidx.shape, (0,))
@@ -87,7 +87,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertEqual(grids.total_leaf_nodes, 0)
         self.assertEqual(grids.total_voxels, 0)
         self.assertEqual(grids.voxel_sizes.shape, (1, 3))
-        self.assertEqual(grids.world_to_grid_matrices.shape, (1, 4, 4))
+        self.assertEqual(grids.world_to_voxel_matrices.shape, (1, 4, 4))
         self.assertTrue(torch.allclose(grids.voxel_sizes, expected_voxel_sizes))
         self.assertTrue(torch.allclose(grids.origins, expected_origins))
 
@@ -215,28 +215,28 @@ class TestBasicOps(unittest.TestCase):
 
         # Test concat batches with 1 grid
         grid1, grid2 = _make_random_grid(1), _make_random_grid(1)
-        grid_cat = fvdb.jcat([grid1, grid2])
+        grid_cat = fvdb.GridBatch.from_cat([grid1, grid2])
         self.assertTrue(torch.allclose(grid_cat.ijk.jdata, torch.cat([grid1.ijk.jdata, grid2.ijk.jdata])))
         self.assertEqual(len(grid_cat), len(grid1) + len(grid2))
         self.assertEqual(len(grid_cat), 2)
 
         # Test concat batches with 1 grid and multiple grids
         grid1, grid2 = _make_random_grid(2), _make_random_grid(1)
-        grid_cat = fvdb.jcat([grid1, grid2])
+        grid_cat = fvdb.GridBatch.from_cat([grid1, grid2])
         self.assertTrue(torch.allclose(grid_cat.ijk.jdata, torch.cat([grid1.ijk.jdata, grid2.ijk.jdata])))
         self.assertEqual(len(grid_cat), len(grid1) + len(grid2))
         self.assertEqual(len(grid_cat), 3)
 
         # Test concat batches with multiple grids
         grid1, grid2 = _make_random_grid(2), _make_random_grid(5)
-        grid_cat = fvdb.jcat([grid1, grid2])
+        grid_cat = fvdb.GridBatch.from_cat([grid1, grid2])
         self.assertTrue(torch.allclose(grid_cat.ijk.jdata, torch.cat([grid1.ijk.jdata, grid2.ijk.jdata])))
         self.assertEqual(len(grid_cat), len(grid1) + len(grid2))
         self.assertEqual(len(grid_cat), 7)
 
         # Test concat 3 grids
         grid1, grid2, grid3 = _make_random_grid(2), _make_random_grid(1), _make_random_grid(5)
-        grid_cat = fvdb.jcat([grid1, grid2, grid3])
+        grid_cat = fvdb.GridBatch.from_cat([grid1, grid2, grid3])
         self.assertTrue(
             torch.allclose(grid_cat.ijk.jdata, torch.cat([grid1.ijk.jdata, grid2.ijk.jdata, grid3.ijk.jdata]))
         )
@@ -245,7 +245,7 @@ class TestBasicOps(unittest.TestCase):
 
         # Test concat 3 grids
         grid1, grid2, grid3 = _make_random_grid(2), _make_random_grid(4), _make_random_grid(5)
-        grid_cat = fvdb.jcat([grid1, grid2, grid3])
+        grid_cat = fvdb.GridBatch.from_cat([grid1, grid2, grid3])
         self.assertTrue(
             torch.allclose(grid_cat.ijk.jdata, torch.cat([grid1.ijk.jdata, grid2.ijk.jdata, grid3.ijk.jdata]))
         )
@@ -254,7 +254,7 @@ class TestBasicOps(unittest.TestCase):
 
         # Cat to the cat /ᐠ - ˕ -マ < Meow
         grid4, grid5 = _make_random_grid(2), _make_random_grid(5)
-        grid_cat2 = fvdb.jcat([grid_cat, grid1, grid4, grid5, grid3])
+        grid_cat2 = fvdb.GridBatch.from_cat([grid_cat, grid1, grid4, grid5, grid3])
         self.assertTrue(
             torch.allclose(
                 grid_cat2.ijk.jdata,
@@ -295,28 +295,28 @@ class TestBasicOps(unittest.TestCase):
 
         # Test concat batches with 1 grid
         grid1, grid2 = _make_random_grid(1), _make_zero_voxels_grid(1)
-        grid_cat = fvdb.jcat([grid1, grid2])
+        grid_cat = fvdb.GridBatch.from_cat([grid1, grid2])
         self.assertTrue(torch.allclose(grid_cat.ijk.jdata, torch.cat([grid1.ijk.jdata, grid2.ijk.jdata])))
         self.assertEqual(len(grid_cat), len(grid1) + len(grid2))
         self.assertEqual(len(grid_cat), 2)
 
         # Test concat batches with 1 grid and multiple grids
         grid1, grid2 = _make_zero_voxels_grid(2), _make_random_grid(1)
-        grid_cat = fvdb.jcat([grid1, grid2])
+        grid_cat = fvdb.GridBatch.from_cat([grid1, grid2])
         self.assertTrue(torch.allclose(grid_cat.ijk.jdata, torch.cat([grid1.ijk.jdata, grid2.ijk.jdata])))
         self.assertEqual(len(grid_cat), len(grid1) + len(grid2))
         self.assertEqual(len(grid_cat), 3)
 
         # Test concat batches with multiple grids
         grid1, grid2 = _make_random_grid(2), _make_zero_voxels_grid(5)
-        grid_cat = fvdb.jcat([grid1, grid2])
+        grid_cat = fvdb.GridBatch.from_cat([grid1, grid2])
         self.assertTrue(torch.allclose(grid_cat.ijk.jdata, torch.cat([grid1.ijk.jdata, grid2.ijk.jdata])))
         self.assertEqual(len(grid_cat), len(grid1) + len(grid2))
         self.assertEqual(len(grid_cat), 7)
 
         # Test concat 3 grids
         grid1, grid2, grid3 = _make_random_grid(2), _make_zero_voxels_grid(1), _make_random_grid(5)
-        grid_cat = fvdb.jcat([grid1, grid2, grid3])
+        grid_cat = fvdb.GridBatch.from_cat([grid1, grid2, grid3])
         self.assertTrue(
             torch.allclose(grid_cat.ijk.jdata, torch.cat([grid1.ijk.jdata, grid2.ijk.jdata, grid3.ijk.jdata]))
         )
@@ -325,7 +325,7 @@ class TestBasicOps(unittest.TestCase):
 
         # Test concat 3 grids
         grid1, grid2, grid3 = _make_random_grid(2), _make_zero_voxels_grid(4), _make_random_grid(5)
-        grid_cat = fvdb.jcat([grid1, grid2, grid3])
+        grid_cat = fvdb.GridBatch.from_cat([grid1, grid2, grid3])
         self.assertTrue(
             torch.allclose(grid_cat.ijk.jdata, torch.cat([grid1.ijk.jdata, grid2.ijk.jdata, grid3.ijk.jdata]))
         )
@@ -334,7 +334,7 @@ class TestBasicOps(unittest.TestCase):
 
         # Cat to the cat /ᐠ - ˕ -マ < Meow
         grid4, grid5 = _make_zero_voxels_grid(2), _make_random_grid(5)
-        grid_cat2 = fvdb.jcat([grid_cat, grid1, grid4, grid5, grid3])
+        grid_cat2 = fvdb.GridBatch.from_cat([grid_cat, grid1, grid4, grid5, grid3])
         self.assertTrue(
             torch.allclose(
                 grid_cat2.ijk.jdata,

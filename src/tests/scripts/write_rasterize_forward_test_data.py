@@ -1,13 +1,13 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from pathlib import Path
 
 import numpy as np
 import torch
-import os
 
-from fvdb import GaussianSplat3d, JaggedTensor, gaussian_render_jagged
+from fvdb import GaussianSplat3d, JaggedTensor, ProjectionType, gaussian_render_jagged
 
 device = "cuda:0"
 
@@ -41,15 +41,17 @@ sh_coeffs[:, 0, :] = rgb_to_sh(colors)
 sh_0 = sh_coeffs[:, 0:1, :].clone()
 sh_n = sh_coeffs[:, 1:, :].clone()
 
-gs3d = GaussianSplat3d(
+gs3d = GaussianSplat3d.from_tensors(
     means=means,
     quats=quats,
     log_scales=torch.log(scales),
     logit_opacities=torch.logit(opacities),
     sh0=sh_0,
     shN=sh_n,
-    requires_grad=True,
+    detach=True,
 )
+
+gs3d.requires_grad = True
 
 num_cameras = cam_to_world_mats.shape[0]
 near_plane = 0.01
@@ -62,7 +64,7 @@ projected_gaussians = gs3d.project_gaussians_for_images(
     height,
     near_plane,
     far_plane,
-    "perspective",
+    ProjectionType.PERSPECTIVE,
     sh_degree,
     min_radius_2d=0.0,
     eps_2d=1e-4,
@@ -81,7 +83,7 @@ image_dims = torch.tensor([width, height], device=device, dtype=torch.int32)
 
 projected_data_to_save = {
     "means2d": projected_gaussians.means2d,
-    "conics": projected_gaussians.conics,
+    "conics": projected_gaussians.inv_covar_2d,
     "colors": projected_gaussians.render_quantities,
     "opacities": projected_gaussians.opacities,
     "tile_offsets": projected_gaussians.tile_offsets,

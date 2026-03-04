@@ -6,6 +6,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeBackward.h>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianSplatSparse.h>
+#include <fvdb/detail/ops/gsplat/GaussianTileIntersection.h>
 
 #include <torch/types.h>
 
@@ -102,8 +103,9 @@ class GaussianTestHelper {
                         int tileSize,
                         const std::vector<std::pair<float, float>> &gaussianPositions,
                         int numCameras = 1) {
-        const int32_t numTilesW = (imageWidth + tileSize - 1) / tileSize;
-        const int32_t numTilesH = (imageHeight + tileSize - 1) / tileSize;
+        const int32_t numTilesW    = (imageWidth + tileSize - 1) / tileSize;
+        const int32_t numTilesH    = (imageHeight + tileSize - 1) / tileSize;
+        const int32_t numGaussians = (int32_t)gaussianPositions.size();
 
         auto tileOffsets = torch::zeros({numCameras, numTilesH, numTilesW},
                                         torch::dtype(torch::kInt32).device(torch::kCUDA));
@@ -118,14 +120,16 @@ class GaussianTestHelper {
                     tileOffsets[cameraIdx][h][w] = currentOffset;
 
                     // Add gaussians that intersect this tile
-                    for (int g = 0; g < (int)gaussianPositions.size(); g++) {
+                    for (int g = 0; g < numGaussians; g++) {
                         int32_t gaussianTileRow = (int)gaussianPositions[g].second / tileSize;
                         int32_t gaussianTileCol = (int)gaussianPositions[g].first / tileSize;
 
                         if (h == gaussianTileRow && w == gaussianTileCol) {
-                            // Each camera references the same gaussian indices (0 to
-                            // numGaussians-1)
-                            tileGaussianIds.push_back(g);
+                            // Use global indices: camera c's gaussian g is at index c*N + g
+                            // The kernel uses cid = globalIdx / N, gid = globalIdx % N
+                            // to access means2d[cid][gid] in non-packed mode.
+                            int32_t globalIdx = cameraIdx * numGaussians + g;
+                            tileGaussianIds.push_back(globalIdx);
                             currentOffset++;
                         }
                     }
@@ -1054,4 +1058,418 @@ TEST_F(GaussianRasterizeTestFixture, TestSparseBackwardMultiChannelMultiCamera) 
 //       checking. We just need to test that the backward pass doesn't throw.
 // TODO: Test empty inputs
 // TODO: Test error inputs
-// TODO: Test with backgrounds
+
+// ============================================================================
+// Background Tests
+// ============================================================================
+
+TEST_F(GaussianRasterizeTestFixture, TestDenseBackwardWithBackgrounds) {
+    const int numCameras   = 3;
+    const int numGaussians = 5;
+    const int channels     = 3;
+    const int imageWidth   = 64;
+    const int imageHeight  = 64;
+    const int tileSize     = 16;
+
+    // Create test gaussians with partial opacity to ensure background blending
+    auto gaussians = GaussianTestHelper::createTestGaussians(numCameras, numGaussians, channels);
+    gaussians.opacities.fill_(0.7f); // Partial opacity to test background blending
+
+    // Create tile structure
+    std::vector<std::pair<float, float>> positions;
+    for (int i = 0; i < numGaussians; i++) {
+        positions.push_back({16.0f + i * 8.0f, 16.0f + i * 8.0f});
+    }
+    auto tiles = GaussianTestHelper::createTileStructure(
+        imageWidth, imageHeight, tileSize, positions, numCameras);
+
+    // Create different background colors for each camera
+    // Camera 0: Red [1, 0, 0]
+    // Camera 1: Green [0, 1, 0]
+    // Camera 2: Blue [0, 0, 1]
+    torch::Tensor backgrounds =
+        torch::zeros({numCameras, channels}, torch::dtype(torch::kFloat32).device(torch::kCUDA));
+    backgrounds[0][0] = 1.0f; // Red
+    backgrounds[1][1] = 1.0f; // Green
+    backgrounds[2][2] = 1.0f; // Blue
+
+    // Run forward pass WITH backgrounds
+    auto [colorsWithBg, alphasWithBg, lastIdsWithBg] =
+        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(gaussians.means2d,
+                                                                          gaussians.conics,
+                                                                          gaussians.colors,
+                                                                          gaussians.opacities,
+                                                                          imageWidth,
+                                                                          imageHeight,
+                                                                          0,
+                                                                          0,
+                                                                          tileSize,
+                                                                          tiles.tileOffsets,
+                                                                          tiles.tileGaussianIds,
+                                                                          backgrounds);
+
+    // Run forward pass WITHOUT backgrounds
+    auto [colorsNoBg, alphasNoBg, lastIdsNoBg] =
+        fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(gaussians.means2d,
+                                                                          gaussians.conics,
+                                                                          gaussians.colors,
+                                                                          gaussians.opacities,
+                                                                          imageWidth,
+                                                                          imageHeight,
+                                                                          0,
+                                                                          0,
+                                                                          tileSize,
+                                                                          tiles.tileOffsets,
+                                                                          tiles.tileGaussianIds);
+
+    // Alphas and last IDs should be identical
+    EXPECT_TRUE(torch::allclose(alphasWithBg, alphasNoBg));
+    EXPECT_TRUE(torch::equal(lastIdsWithBg, lastIdsNoBg));
+
+    // Create gradients (uniform gradient for simplicity)
+    auto gradColors = torch::ones_like(colorsWithBg);
+    auto gradAlphas = torch::ones_like(alphasWithBg);
+
+    // Run backward pass WITH backgrounds
+    auto [dLossDMeans2dAbsWithBg,
+          dLossDMeans2dWithBg,
+          dLossDConicsWithBg,
+          dLossDColorsWithBg,
+          dLossDOpacitiesWithBg] =
+        fvdb::detail::ops::dispatchGaussianRasterizeBackward<torch::kCUDA>(gaussians.means2d,
+                                                                           gaussians.conics,
+                                                                           gaussians.colors,
+                                                                           gaussians.opacities,
+                                                                           imageWidth,
+                                                                           imageHeight,
+                                                                           0,
+                                                                           0,
+                                                                           tileSize,
+                                                                           tiles.tileOffsets,
+                                                                           tiles.tileGaussianIds,
+                                                                           alphasWithBg,
+                                                                           lastIdsWithBg,
+                                                                           gradColors,
+                                                                           gradAlphas,
+                                                                           false,
+                                                                           -1,
+                                                                           backgrounds);
+
+    // Run backward pass WITHOUT backgrounds
+    auto [dLossDMeans2dAbsNoBg,
+          dLossDMeans2dNoBg,
+          dLossDConicsNoBg,
+          dLossDColorsNoBg,
+          dLossDOpacitiesNoBg] =
+        fvdb::detail::ops::dispatchGaussianRasterizeBackward<torch::kCUDA>(gaussians.means2d,
+                                                                           gaussians.conics,
+                                                                           gaussians.colors,
+                                                                           gaussians.opacities,
+                                                                           imageWidth,
+                                                                           imageHeight,
+                                                                           0,
+                                                                           0,
+                                                                           tileSize,
+                                                                           tiles.tileOffsets,
+                                                                           tiles.tileGaussianIds,
+                                                                           alphasNoBg,
+                                                                           lastIdsNoBg,
+                                                                           gradColors,
+                                                                           gradAlphas,
+                                                                           false);
+
+    // Gradients should be DIFFERENT when backgrounds are used
+    // (because transparent pixels now have background contribution)
+    EXPECT_FALSE(torch::allclose(dLossDMeans2dWithBg, dLossDMeans2dNoBg, 1e-5, 1e-5))
+        << "Gradients should differ with backgrounds";
+    EXPECT_FALSE(torch::allclose(dLossDOpacitiesWithBg, dLossDOpacitiesNoBg, 1e-5, 1e-5))
+        << "Opacity gradients should differ with backgrounds";
+
+    // Verify that we have some non-opaque pixels to ensure test is meaningful
+    auto nonOpaquePixels = (alphasWithBg < 0.99f).sum();
+    EXPECT_GT(nonOpaquePixels.item<int64_t>(), 0)
+        << "Test requires some non-opaque pixels to validate background effects";
+}
+
+TEST_F(GaussianRasterizeTestFixture, TestSparseBackwardWithBackgrounds) {
+    const int numCameras   = 3;
+    const int numGaussians = 5;
+    const int channels     = 3;
+    const int imageWidth   = 64;
+    const int imageHeight  = 64;
+    const int tileSize     = 16;
+
+    // Create test gaussians with partial opacity
+    auto gaussians = GaussianTestHelper::createTestGaussians(numCameras, numGaussians, channels);
+    gaussians.opacities.fill_(0.7f); // Partial opacity
+
+    // Create tile structure
+    std::vector<std::pair<float, float>> positions;
+    for (int i = 0; i < numGaussians; i++) {
+        positions.push_back({16.0f + i * 8.0f, 16.0f + i * 8.0f});
+    }
+    auto tiles = GaussianTestHelper::createTileStructure(
+        imageWidth, imageHeight, tileSize, positions, numCameras);
+
+    // Create sparse pixel selection
+    std::vector<std::pair<int, int>> pixelPositions = {{16, 16}, {24, 24}, {32, 32}, {40, 40}};
+    auto sparse                                     = GaussianTestHelper::createSparseSetup(
+        tileSize, tiles.numTilesW, tiles.numTilesH, pixelPositions, numCameras);
+
+    // Create different background colors for each camera
+    torch::Tensor backgrounds =
+        torch::zeros({numCameras, channels}, torch::dtype(torch::kFloat32).device(torch::kCUDA));
+    backgrounds[0][0] = 1.0f; // Red
+    backgrounds[1][1] = 1.0f; // Green
+    backgrounds[2][2] = 1.0f; // Blue
+
+    // Run sparse forward pass WITH backgrounds
+    auto [colorsWithBg, alphasWithBg, lastIdsWithBg] =
+        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
+            sparse.pixelsToRender,
+            gaussians.means2d,
+            gaussians.conics,
+            gaussians.colors,
+            gaussians.opacities,
+            imageWidth,
+            imageHeight,
+            0,
+            0,
+            tileSize,
+            tiles.tileOffsets,
+            tiles.tileGaussianIds,
+            sparse.activeTiles,
+            sparse.tilePixelMask,
+            sparse.tilePixelCumsum,
+            sparse.pixelMap,
+            backgrounds);
+
+    // Run sparse forward pass WITHOUT backgrounds
+    auto [colorsNoBg, alphasNoBg, lastIdsNoBg] =
+        fvdb::detail::ops::dispatchGaussianSparseRasterizeForward<torch::kCUDA>(
+            sparse.pixelsToRender,
+            gaussians.means2d,
+            gaussians.conics,
+            gaussians.colors,
+            gaussians.opacities,
+            imageWidth,
+            imageHeight,
+            0,
+            0,
+            tileSize,
+            tiles.tileOffsets,
+            tiles.tileGaussianIds,
+            sparse.activeTiles,
+            sparse.tilePixelMask,
+            sparse.tilePixelCumsum,
+            sparse.pixelMap);
+
+    // Create jagged gradients
+    std::vector<torch::Tensor> gradColorsList, gradAlphasList;
+    for (int c = 0; c < numCameras; c++) {
+        auto numPixels = colorsWithBg.index(c).jdata().size(0);
+        gradColorsList.push_back(
+            torch::ones({numPixels, channels}, torch::dtype(torch::kFloat32).device(torch::kCUDA)));
+        gradAlphasList.push_back(
+            torch::ones({numPixels, 1}, torch::dtype(torch::kFloat32).device(torch::kCUDA)));
+    }
+    auto gradColors = fvdb::JaggedTensor(gradColorsList);
+    auto gradAlphas = fvdb::JaggedTensor(gradAlphasList);
+
+    // Run sparse backward pass WITH backgrounds
+    auto [dLossDMeans2dAbsWithBg,
+          dLossDMeans2dWithBg,
+          dLossDConicsWithBg,
+          dLossDColorsWithBg,
+          dLossDOpacitiesWithBg] =
+        fvdb::detail::ops::dispatchGaussianSparseRasterizeBackward<torch::kCUDA>(
+            sparse.pixelsToRender,
+            gaussians.means2d,
+            gaussians.conics,
+            gaussians.colors,
+            gaussians.opacities,
+            imageWidth,
+            imageHeight,
+            0,
+            0,
+            tileSize,
+            tiles.tileOffsets,
+            tiles.tileGaussianIds,
+            alphasWithBg,
+            lastIdsWithBg,
+            gradColors,
+            gradAlphas,
+            sparse.activeTiles,
+            sparse.tilePixelMask,
+            sparse.tilePixelCumsum,
+            sparse.pixelMap,
+            false,
+            -1,
+            backgrounds);
+
+    // Run sparse backward pass WITHOUT backgrounds
+    auto [dLossDMeans2dAbsNoBg,
+          dLossDMeans2dNoBg,
+          dLossDConicsNoBg,
+          dLossDColorsNoBg,
+          dLossDOpacitiesNoBg] =
+        fvdb::detail::ops::dispatchGaussianSparseRasterizeBackward<torch::kCUDA>(
+            sparse.pixelsToRender,
+            gaussians.means2d,
+            gaussians.conics,
+            gaussians.colors,
+            gaussians.opacities,
+            imageWidth,
+            imageHeight,
+            0,
+            0,
+            tileSize,
+            tiles.tileOffsets,
+            tiles.tileGaussianIds,
+            alphasNoBg,
+            lastIdsNoBg,
+            gradColors,
+            gradAlphas,
+            sparse.activeTiles,
+            sparse.tilePixelMask,
+            sparse.tilePixelCumsum,
+            sparse.pixelMap,
+            false);
+
+    // Gradients should be DIFFERENT when backgrounds are used
+    EXPECT_FALSE(torch::allclose(dLossDMeans2dWithBg, dLossDMeans2dNoBg, 1e-5, 1e-5))
+        << "Gradients should differ with backgrounds";
+    EXPECT_FALSE(torch::allclose(dLossDOpacitiesWithBg, dLossDOpacitiesNoBg, 1e-5, 1e-5))
+        << "Opacity gradients should differ with backgrounds";
+
+    // Verify that we have some non-opaque pixels
+    bool hasTransparentPixels = false;
+    for (int c = 0; c < numCameras; c++) {
+        auto alphas          = alphasWithBg.index(c).jdata();
+        auto nonOpaquePixels = (alphas < 0.99f).sum();
+        if (nonOpaquePixels.item<int64_t>() > 0) {
+            hasTransparentPixels = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(hasTransparentPixels)
+        << "Test requires some non-opaque pixels to validate background effects";
+}
+
+// Test packed mode backward rasterization with multiple cameras.
+// This verifies that when means2d has shape [nnz, 2] (packed) instead of [C, N, 2] (non-packed),
+// the backward pass produces the same gradients as non-packed mode.
+// This specifically tests the fix for deriving numCameras from tileOffsets instead of means2d.
+TEST_F(GaussianRasterizeTestFixture, TestPackedModeBackwardMultipleCameras) {
+    const int numCameras          = 3;
+    const int numGaussians        = 4;
+    const int channels            = 3;
+    const int32_t testImageWidth  = 64;
+    const int32_t testImageHeight = 64;
+    const int32_t testTileSize    = 16;
+
+    // Define pixel/gaussian positions
+    std::vector<std::pair<int, int>> pixelPositions = {{8, 8}, {24, 24}, {40, 40}, {56, 56}};
+    auto gaussianPositions = GaussianTestHelper::getGaussianPositionsFromPixels(pixelPositions);
+
+    // Create test gaussians using helper (non-packed format: [C, N, D])
+    auto gaussians = GaussianTestHelper::createTestGaussians(
+        numCameras, numGaussians, channels, gaussianPositions);
+
+    // Create tile structure using helper
+    auto tiles = GaussianTestHelper::createTileStructure(
+        testImageWidth, testImageHeight, testTileSize, gaussianPositions, numCameras);
+
+    // Step 1: Run non-packed forward pass
+    auto denseResults = GaussianTestHelper::runForwardDense(
+        gaussians, tiles, testImageWidth, testImageHeight, testTileSize);
+
+    // Create gradient inputs
+    auto dLossDColors = torch::ones_like(denseResults.colors) * 0.1f;
+    auto dLossDAlphas = torch::ones_like(denseResults.alphas) * 0.1f;
+
+    // Step 2: Run non-packed backward to get expected gradients
+    const auto [expectedDMeans2dAbs,
+                expectedDMeans2d,
+                expectedDConics,
+                expectedDColors,
+                expectedDOpacities] =
+        fvdb::detail::ops::dispatchGaussianRasterizeBackward<torch::kCUDA>(
+            gaussians.means2d,
+            gaussians.conics,
+            gaussians.colors,
+            gaussians.opacities,
+            testImageWidth,
+            testImageHeight,
+            0, // imageOriginW
+            0, // imageOriginH
+            testTileSize,
+            tiles.tileOffsets,
+            tiles.tileGaussianIds,
+            denseResults.alphas,
+            denseResults.lastIds,
+            dLossDColors,
+            dLossDAlphas,
+            false, // absGrad
+            -1);   // numSharedChannelsOverride
+
+    // Step 3: Reshape to packed format [nnz, D]
+    // Non-packed mode: kernel converts index to [cid][gid] using division/modulo
+    // Packed mode: kernel uses index directly into the packed tensor
+    const int totalGaussians = numCameras * numGaussians;
+    auto means2dPacked       = gaussians.means2d.reshape({totalGaussians, 2});
+    auto conicsPacked        = gaussians.conics.reshape({totalGaussians, 3});
+    auto colorsPacked        = gaussians.colors.reshape({totalGaussians, channels});
+    auto opacitiesPacked     = gaussians.opacities.reshape({totalGaussians});
+
+    // Step 4: Run packed backward with same tileGaussianIds (global indices)
+    const auto [outDMeans2dAbsPacked,
+                outDMeans2dPacked,
+                outDConicsPacked,
+                outDColorsPacked,
+                outDOpacitiesPacked] =
+        fvdb::detail::ops::dispatchGaussianRasterizeBackward<torch::kCUDA>(
+            means2dPacked,
+            conicsPacked,
+            colorsPacked,
+            opacitiesPacked,
+            testImageWidth,
+            testImageHeight,
+            0,
+            0,
+            testTileSize,
+            tiles.tileOffsets, // Still use [C, H, W] tile offsets
+            tiles.tileGaussianIds,
+            denseResults.alphas,
+            denseResults.lastIds,
+            dLossDColors,
+            dLossDAlphas,
+            false,
+            -1);
+
+    // Step 5: Reshape expected gradients to packed format for comparison
+    auto expectedDMeans2dPacked   = expectedDMeans2d.reshape({totalGaussians, 2});
+    auto expectedDConicsPacked    = expectedDConics.reshape({totalGaussians, 3});
+    auto expectedDColorsPacked    = expectedDColors.reshape({totalGaussians, channels});
+    auto expectedDOpacitiesPacked = expectedDOpacities.reshape({totalGaussians});
+
+    // Step 6: Compare results
+    EXPECT_EQ(outDMeans2dPacked.sizes(), expectedDMeans2dPacked.sizes())
+        << "Packed gradient means2d shape mismatch";
+    EXPECT_EQ(outDConicsPacked.sizes(), expectedDConicsPacked.sizes())
+        << "Packed gradient conics shape mismatch";
+    EXPECT_EQ(outDColorsPacked.sizes(), expectedDColorsPacked.sizes())
+        << "Packed gradient colors shape mismatch";
+    EXPECT_EQ(outDOpacitiesPacked.sizes(), expectedDOpacitiesPacked.sizes())
+        << "Packed gradient opacities shape mismatch";
+
+    // gradients should match
+    EXPECT_TRUE(torch::allclose(outDMeans2dPacked, expectedDMeans2dPacked, 1e-4, 1e-4))
+        << "Packed mode means2d gradients don't match non-packed mode";
+    EXPECT_TRUE(torch::allclose(outDConicsPacked, expectedDConicsPacked, 1e-4, 1e-4))
+        << "Packed mode conics gradients don't match non-packed mode";
+    EXPECT_TRUE(torch::allclose(outDColorsPacked, expectedDColorsPacked, 1e-4, 1e-4))
+        << "Packed mode colors gradients don't match non-packed mode";
+    EXPECT_TRUE(torch::allclose(outDOpacitiesPacked, expectedDOpacitiesPacked, 1e-4, 1e-4))
+        << "Packed mode opacities gradients don't match non-packed mode";
+}

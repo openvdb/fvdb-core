@@ -367,7 +367,7 @@ class TestBatching(unittest.TestCase):
         gridbatch_2 = fvdb.GridBatch.from_points(randpts_2, voxel_sizes=0.01)
         self.assertTrue(gridbatch_2.is_contiguous())
 
-        gridbatch_cat = fvdb.jcat([gridbatch_1, gridbatch_2])
+        gridbatch_cat = fvdb.GridBatch.from_cat([gridbatch_1, gridbatch_2])
         self.assertTrue(gridbatch_cat.is_contiguous())
 
         self.assertEqual(gridbatch_cat.grid_count, gridbatch.grid_count)
@@ -375,7 +375,9 @@ class TestBatching(unittest.TestCase):
         self.assertTrue(torch.equal(gridbatch_cat.num_voxels, gridbatch.num_voxels))
         self.assertTrue(torch.equal(gridbatch_cat.ijk.jdata, gridbatch.ijk.jdata))
 
-        gridbatch_cat_2 = fvdb.jcat([gridbatch_1, fvdb.GridBatch.from_zero_grids(device=device), gridbatch_2])
+        gridbatch_cat_2 = fvdb.GridBatch.from_cat(
+            [gridbatch_1, fvdb.GridBatch.from_zero_grids(device=device), gridbatch_2]
+        )
 
         self.assertEqual(gridbatch_cat_2.grid_count, gridbatch.grid_count)
         self.assertEqual(len(gridbatch), len(gridbatch_cat_2))
@@ -391,7 +393,7 @@ class TestBatching(unittest.TestCase):
         pts_list_2 = [pts_list[i] for i in [7, 11, 13, 15, 17, 19, 19, 21, 33, 44, 55]]
         gridbatch_target = fvdb.GridBatch.from_points(fvdb.JaggedTensor(pts_list_2), voxel_sizes=0.01)
 
-        gridbatch_cat_3 = fvdb.jcat([gridbatch_3, gridbatch_4])
+        gridbatch_cat_3 = fvdb.GridBatch.from_cat([gridbatch_3, gridbatch_4])
         self.assertEqual(gridbatch_cat_3.grid_count, gridbatch_target.grid_count)
         self.assertEqual(len(gridbatch_cat_3), len(gridbatch_target))
         self.assertTrue(torch.equal(gridbatch_cat_3.num_voxels, gridbatch_target.num_voxels))
@@ -424,7 +426,7 @@ class TestBatching(unittest.TestCase):
         grid_pts = fvdb.JaggedTensor(pts_to_cat)
         target_grid = fvdb.GridBatch.from_points(grid_pts, voxel_sizes=0.01)
 
-        gridbatch_cat_4 = fvdb.jcat(grids_to_cat)
+        gridbatch_cat_4 = fvdb.GridBatch.from_cat(grids_to_cat)
 
         self.assertEqual(gridbatch_cat_4.grid_count, target_grid.grid_count)
         self.assertEqual(len(gridbatch_cat_4), len(target_grid))
@@ -640,6 +642,83 @@ class TestBatching(unittest.TestCase):
             self.assertTrue(torch.equal(gridbatch.voxel_size_at(-n), gridbatch.voxel_size_at(gridbatch.grid_count - n)))
             self.assertTrue(torch.equal(gridbatch.bbox_at(-n), gridbatch.bbox_at(gridbatch.grid_count - n)))
             self.assertEqual(gridbatch.num_voxels_at(-n), gridbatch.num_voxels_at(num_grids - n))
+
+    @parameterized.expand(all_device_dtype_combos)
+    def test_from_cat_edge_cases(self, device, dtype):
+        """Test edge cases and error handling in jcat function"""
+        num_grids = np.random.randint(8, 16)
+        nvox_per_grid = NVOX if device == "cuda" else 100
+        nrand = 10_000 if device == "cuda" else 100
+
+        # Create test data
+        pts_list = [
+            torch.rand(nvox_per_grid + np.random.randint(nrand), 3, device=device, dtype=dtype)
+            for _ in range(num_grids)
+        ]
+        randpts = fvdb.JaggedTensor(pts_list)
+        gridbatch = fvdb.GridBatch.from_points(randpts, voxel_sizes=0.01)
+
+        # Create JaggedTensor test data
+        jt1 = fvdb.JaggedTensor(
+            [
+                torch.rand(nvox_per_grid + np.random.randint(nrand), 3, device=device, dtype=dtype)
+                for _ in range(num_grids)
+            ]
+        )
+        jt2 = fvdb.JaggedTensor(
+            [
+                torch.rand(nvox_per_grid + np.random.randint(nrand), 3, device=device, dtype=dtype)
+                for _ in range(num_grids)
+            ]
+        )
+
+        # Empty list should raise ValueError
+        with self.assertRaises(ValueError) as context:
+            fvdb.GridBatch.from_cat([])
+        with self.assertRaises(ValueError) as context:
+            fvdb.JaggedTensor.from_cat([])
+
+        # Invalid type (not GridBatch or JaggedTensor) should raise TypeError
+        with self.assertRaises(TypeError) as context:
+            fvdb.jcat([torch.rand(10, 3, device=device, dtype=dtype)])  # type: ignore
+
+        with self.assertRaises(TypeError) as context:
+            fvdb.jcat([[1, 2, 3], [4, 5, 6]])  # type: ignore
+
+        # Invalid type (not GridBatch or JaggedTensor) should raise TypeError
+        with self.assertRaises(TypeError) as context:
+            fvdb.gcat([torch.rand(10, 3, device=device, dtype=dtype)])  # type: ignore
+
+        with self.assertRaises(TypeError) as context:
+            fvdb.gcat([[1, 2, 3], [4, 5, 6]])  # type: ignore
+
+        # Test 4: Valid GridBatch concatenation (without dim) should work and return GridBatch
+        gridbatch_cat = fvdb.gcat([gridbatch, gridbatch])
+        self.assertIsInstance(gridbatch_cat, fvdb.GridBatch)
+        self.assertEqual(gridbatch_cat.grid_count, 2 * gridbatch.grid_count)
+        self.assertTrue(gridbatch_cat.is_contiguous())
+
+        # Test 5: Valid JaggedTensor concatenation with dim=None should work and return JaggedTensor
+        jt_cat_none = fvdb.jcat([jt1, jt2], dim=None)
+        self.assertIsInstance(jt_cat_none, fvdb.JaggedTensor)
+        self.assertEqual(len(jt_cat_none), len(jt1) + len(jt2))
+
+        # Test 6: Valid JaggedTensor concatenation with dim=0 should work and return JaggedTensor
+        jt_cat_0 = fvdb.jcat([jt1, jt2], dim=0)
+        self.assertIsInstance(jt_cat_0, fvdb.JaggedTensor)
+        self.assertEqual(len(jt_cat_0), len(jt1))
+        for i in range(len(jt1)):
+            expected = torch.cat([jt1[i].jdata, jt2[i].jdata], dim=0)
+            self.assertTrue(torch.equal(jt_cat_0[i].jdata, expected))
+
+        # Test 7: Valid JaggedTensor concatenation with dim=1 should work and return JaggedTensor
+        jt3 = jt1.jagged_like(torch.rand_like(jt1.jdata))
+        jt_cat_1 = fvdb.jcat([jt1, jt3], dim=1)
+        self.assertIsInstance(jt_cat_1, fvdb.JaggedTensor)
+        self.assertEqual(len(jt_cat_1), len(jt1))
+        for i in range(len(jt1)):
+            expected = torch.cat([jt1[i].jdata, jt3[i].jdata], dim=1)
+            self.assertTrue(torch.equal(jt_cat_1[i].jdata, expected))
 
 
 if __name__ == "__main__":

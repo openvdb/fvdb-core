@@ -1,16 +1,18 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+
+#include <pybind11/numpy.h>
+#include <pybind11/stl.h>
+
 #include "TypeCasters.h"
 
 #include <fvdb/Config.h>
 #include <fvdb/FVDB.h>
+#include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 
 #include <c10/cuda/CUDAFunctions.h>
 #include <torch/extension.h>
-
-#include <pybind11/numpy.h>
-#include <pybind11/stl.h>
 
 void bind_grid_batch(py::module &m);
 void bind_jagged_tensor(py::module &m);
@@ -80,7 +82,7 @@ bind_jt_build_functions(py::module &m){
     __FVDB__BUILDER(jrandn, "jrandn")
     __FVDB__BUILDER(jzeros, "jzeros")
     __FVDB__BUILDER(jones, "jones")
-    __FVDB__BUILDER(jones, "jempty")
+    __FVDB__BUILDER(jempty, "jempty")
     // clang-format on
 }
 #undef __FVDB__BUILDER_INNER
@@ -347,6 +349,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("compressed") = false,
           py::arg("verbose")    = false);
 
+    m.def("morton", &fvdb::morton, py::arg("ijk"));
+    m.def("hilbert", &fvdb::hilbert, py::arg("ijk"));
+
     /*
               py::overload_cast<const std::vector<int64_t>&,
                                 std::optional<const std::vector<int64_t>>&,
@@ -366,105 +371,127 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
             })
         .def_property_static(
             "pedantic_error_checking",
-            [](py::object) { return fvdb::Config::global().pendanticErrorCheckingEnabled(); },
+            [](py::object) { return fvdb::Config::global().pedanticErrorCheckingEnabled(); },
             [](py::object, bool enabled) {
-                fvdb::Config::global().setPendanticErrorChecking(enabled);
+                fvdb::Config::global().setPedanticErrorChecking(enabled);
             });
 
-    py::enum_<fvdb::ConvPackBackend>(m, "ConvPackBackend")
-        .value("GATHER_SCATTER", fvdb::ConvPackBackend::GATHER_SCATTER)
-        .value("IGEMM", fvdb::ConvPackBackend::IGEMM)
-        .value("CUTLASS", fvdb::ConvPackBackend::CUTLASS)
-        .value("LGGS", fvdb::ConvPackBackend::LGGS)
-        .value("HALO", fvdb::ConvPackBackend::HALO)
-        .value("DENSE", fvdb::ConvPackBackend::DENSE)
-        .value("MATMUL", fvdb::ConvPackBackend::MATMUL)
-        .export_values();
+    // -----------------------------------------------------------------------
+    // GatherScatterDefault convolution: Python-side autograd
+    // -----------------------------------------------------------------------
 
-    py::class_<fvdb::SparseConvPackInfo>(m, "SparseConvPackInfo")
-        .def(py::init<fvdb::Vec3iOrScalar,
-                      fvdb::Vec3iOrScalar,
-                      fvdb::GridBatch,
-                      std::optional<fvdb::GridBatch>>(),
-             py::arg("kernel_size"),
-             py::arg("stride"),
-             py::arg("source_grid"),
-             py::arg("target_grid"))
-        .def_property_readonly("neighborhood_map", &fvdb::SparseConvPackInfo::neighborMap)
-        .def_property_readonly("neighborhood_sizes", &fvdb::SparseConvPackInfo::neighborSizes)
-        .def_property_readonly("use_me", &fvdb::SparseConvPackInfo::useME)
-        .def_property_readonly("out_in_map", &fvdb::SparseConvPackInfo::outInMap)
-        .def_property_readonly("reorder_loc", &fvdb::SparseConvPackInfo::reorderLoc)
-        .def_property_readonly("sorted_mask", &fvdb::SparseConvPackInfo::sortedMask)
-        .def_property_readonly("reduced_sorted_mask", &fvdb::SparseConvPackInfo::reducedSortedMask)
-        .def_property_readonly("reorder_out_in_map", &fvdb::SparseConvPackInfo::reoderOutInMap)
+    using GSDTopo = fvdb::detail::ops::GatherScatterDefaultTopology;
 
-        .def_property_readonly("block_kernel_ranges", &fvdb::SparseConvPackInfo::blockKernelRanges)
-        .def_property_readonly("block_kernel_in_idx", &fvdb::SparseConvPackInfo::blockKernelInIdx)
-        .def_property_readonly("block_kernel_rel_out_idx",
-                               &fvdb::SparseConvPackInfo::blockKernelRelOutIdx)
-
-        .def_property_readonly("use_tf32", &fvdb::SparseConvPackInfo::useTF32)
-        .def_property_readonly("out_in_map_bwd", &fvdb::SparseConvPackInfo::outInMapBwd)
-        .def_property_readonly("reorder_loc_bwd", &fvdb::SparseConvPackInfo::reorderLocBwd)
-        .def_property_readonly("sorted_mask_bwd_w", &fvdb::SparseConvPackInfo::sortedMaskBwdW)
-        .def_property_readonly("sorted_mask_bwd_d", &fvdb::SparseConvPackInfo::sortedMaskBwdD)
-        .def_property_readonly("reorder_out_in_map_bwd",
-                               &fvdb::SparseConvPackInfo::reorderOutInMapBwd)
-        .def_property_readonly("halo_index_buffer", &fvdb::SparseConvPackInfo::haloIndexBuffer)
-        .def_property_readonly("output_index_buffer", &fvdb::SparseConvPackInfo::outputIndexBuffer)
-        .def_property_readonly("stride",
-                               [](const fvdb::SparseConvPackInfo &self) {
-                                   nanovdb::math::Coord stride = self.stride().value();
-                                   return py::make_tuple(stride.x(), stride.y(), stride.z());
-                               })
+    py::class_<GSDTopo>(m, "GatherScatterDefaultTopology")
+        .def_readonly("gather_indices", &GSDTopo::gatherIndices)
+        .def_readonly("scatter_indices", &GSDTopo::scatterIndices)
+        .def_readonly("offsets", &GSDTopo::offsets)
+        .def_readonly("feature_total_voxels", &GSDTopo::featureTotalVoxels)
+        .def_readonly("output_total_voxels", &GSDTopo::outputTotalVoxels)
+        .def_readonly("kernel_volume", &GSDTopo::kernelVolume)
+        .def_readonly("total_pairs", &GSDTopo::totalPairs)
         .def_property_readonly("kernel_size",
-                               [](const fvdb::SparseConvPackInfo &self) {
-                                   nanovdb::math::Coord kernel_size = self.kernelSize().value();
-                                   return py::make_tuple(
-                                       kernel_size.x(), kernel_size.y(), kernel_size.z());
+                               [](const GSDTopo &t) {
+                                   return std::vector<int>{
+                                       t.kernelSize[0], t.kernelSize[1], t.kernelSize[2]};
                                })
-        .def_property_readonly("source_grid", &fvdb::SparseConvPackInfo::sourceGrid)
-        .def_property_readonly("target_grid", &fvdb::SparseConvPackInfo::targetGrid)
-        .def("build_gather_scatter",
-             &fvdb::SparseConvPackInfo::buildGatherScatter,
-             py::arg("use_me") = false)
-        .def("build_implicit_gemm",
-             &fvdb::SparseConvPackInfo::buildImplicitGEMM,
-             py::arg("sorted")             = false,
-             py::arg("split_mask_num")     = 1,
-             py::arg("training")           = false,
-             py::arg("split_mask_num_bwd") = 1,
-             py::arg("use_tf32")           = false)
-        .def("build_cutlass", &fvdb::SparseConvPackInfo::buildCutlass, py::arg("benchmark") = false)
-        .def("build_lggs", &fvdb::SparseConvPackInfo::buildLGGS)
-        .def("sparse_conv_3d",
-             &fvdb::SparseConvPackInfo::sparseConv3d,
-             "Sparse 3d convolution",
-             py::arg("input"),
-             py::arg("weights"),
-             py::arg("backend") = fvdb::ConvPackBackend::GATHER_SCATTER)
-        .def("sparse_transpose_conv_3d",
-             &fvdb::SparseConvPackInfo::sparseTransposeConv3d,
-             "Sparse 3d convolution transpose",
-             py::arg("input"),
-             py::arg("weights"),
-             py::arg("backend") = fvdb::ConvPackBackend::GATHER_SCATTER)
-        .def("to", &fvdb::SparseConvPackInfo::to, py::arg("to_device"))
-        .def(
-            "to",
-            [](const fvdb::SparseConvPackInfo &self, const std::string &to_device) {
-                return self.to(fvdb::parseDeviceString(to_device));
-            },
-            py::arg("to_device"))
-        .def("cuda", &fvdb::SparseConvPackInfo::cuda)
-        .def("cpu", &fvdb::SparseConvPackInfo::cpu);
+        .def_property_readonly("stride",
+                               [](const GSDTopo &t) {
+                                   return std::vector<int>{t.stride[0], t.stride[1], t.stride[2]};
+                               })
+        .def_property_readonly("is_transposed", [](const GSDTopo &t) {
+            return t.direction == fvdb::detail::ops::ConvDirection::Transposed;
+        });
+
+    // --- Forward topology + conv ---
+
+    m.def(
+        "gs_build_topology",
+        [](const fvdb::GridBatch &feature_grid,
+           const fvdb::GridBatch &output_grid,
+           fvdb::Vec3iOrScalar kernelSize,
+           fvdb::Vec3iOrScalar stride) -> GSDTopo {
+            return fvdb::GridBatch::buildGatherScatterDefaultTopology(
+                feature_grid, output_grid, kernelSize, stride);
+        },
+        "Build the forward gather-scatter default topology.",
+        py::arg("feature_grid"),
+        py::arg("output_grid"),
+        py::arg("kernel_size"),
+        py::arg("stride"));
+
+    m.def(
+        "gs_conv",
+        [](torch::Tensor features, torch::Tensor weights, const GSDTopo &topo) -> torch::Tensor {
+            return fvdb::detail::ops::gatherScatterDefaultSparseConv(features, weights, topo);
+        },
+        "Gather-scatter default forward sparse convolution using precomputed topology.",
+        py::arg("features"),
+        py::arg("weights"),
+        py::arg("topology"));
+
+    m.def(
+        "gs_conv_backward",
+        [](torch::Tensor grad_output,
+           torch::Tensor features,
+           torch::Tensor weights,
+           const GSDTopo &topo) -> std::tuple<torch::Tensor, torch::Tensor> {
+            return fvdb::detail::ops::gatherScatterDefaultSparseConvBackward(
+                grad_output, features, weights, topo);
+        },
+        "Gather-scatter default backward sparse convolution using precomputed topology.",
+        py::arg("grad_output"),
+        py::arg("features"),
+        py::arg("weights"),
+        py::arg("topology"));
+
+    // --- Transposed topology + conv ---
+
+    m.def(
+        "gs_build_transpose_topology",
+        [](const fvdb::GridBatch &feature_grid,
+           const fvdb::GridBatch &output_grid,
+           fvdb::Vec3iOrScalar kernelSize,
+           fvdb::Vec3iOrScalar stride) -> GSDTopo {
+            return fvdb::GridBatch::buildGatherScatterDefaultTransposeTopology(
+                feature_grid, output_grid, kernelSize, stride);
+        },
+        "Build the transposed gather-scatter default topology.",
+        py::arg("feature_grid"),
+        py::arg("output_grid"),
+        py::arg("kernel_size"),
+        py::arg("stride"));
+
+    m.def(
+        "gs_conv_transpose",
+        [](torch::Tensor features, torch::Tensor weights, const GSDTopo &topo) -> torch::Tensor {
+            return fvdb::detail::ops::gatherScatterDefaultSparseConvTranspose(
+                features, weights, topo);
+        },
+        "Gather-scatter default transposed sparse convolution using precomputed topology.",
+        py::arg("features"),
+        py::arg("weights"),
+        py::arg("topology"));
+
+    m.def(
+        "gs_conv_transpose_backward",
+        [](torch::Tensor grad_output,
+           torch::Tensor features,
+           torch::Tensor weights,
+           const GSDTopo &topo) -> std::tuple<torch::Tensor, torch::Tensor> {
+            return fvdb::detail::ops::gatherScatterDefaultSparseConvTransposeBackward(
+                grad_output, features, weights, topo);
+        },
+        "Gather-scatter default transposed backward sparse convolution.",
+        py::arg("grad_output"),
+        py::arg("features"),
+        py::arg("weights"),
+        py::arg("topology"));
 }
 
 TORCH_LIBRARY(fvdb, m) {
     m.class_<fvdb::GridBatch>("GridBatch");
     m.class_<fvdb::JaggedTensor>("JaggedTensor");
-    m.class_<fvdb::SparseConvPackInfo>("SparseConvPackInfo");
     m.class_<fvdb::detail::GridBatchImpl>("GridBatchImpl");
 
     m.def(

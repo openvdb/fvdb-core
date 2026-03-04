@@ -56,8 +56,8 @@ def main():
 
         dual_v = dual_v.cpu()
         dual_e = dual_e.cpu()
-        gp = index.grid_to_world(gp.to(dtype)).cpu()
-        gd = dual_index.grid_to_world(gd.to(dtype)).cpu()
+        gp = index.voxel_to_world(gp.to(dtype)).cpu()
+        gd = dual_index.voxel_to_world(gd.to(dtype)).cpu()
         gp, gd = gp.cpu(), gd.cpu()
 
         ps.register_curve_network(f"grid edges {i}", dual_v.cpu(), dual_e.cpu(), enabled=True, radius=0.0005)

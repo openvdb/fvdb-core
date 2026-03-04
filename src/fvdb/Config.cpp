@@ -24,12 +24,12 @@ Config::ultraSparseAccelerationEnabled() const {
 }
 
 void
-Config::setPendanticErrorChecking(bool enabled) {
-    mPendanticErrorChecking = enabled;
+Config::setPedanticErrorChecking(bool enabled) {
+    mPedanticErrorChecking = enabled;
 }
 bool
-Config::pendanticErrorCheckingEnabled() const {
-    return mPendanticErrorChecking;
+Config::pedanticErrorCheckingEnabled() const {
+    return mPedanticErrorChecking;
 }
 
 } // namespace fvdb

@@ -12,6 +12,8 @@
 #include <THC/THCAtomics.cuh>
 #include <c10/cuda/CUDAException.h>
 
+#include <cstdint>
+
 namespace fvdb {
 namespace detail {
 namespace ops {
@@ -67,6 +69,77 @@ sampleTrilinearWithGradBackwardCallback(int32_t bidx,
     }
 }
 
+// Vectorized callback for float32 - processes 4 channels per thread
+template <torch::DeviceType DeviceTag,
+          template <typename T, int32_t D>
+          typename JaggedAccessor,
+          template <typename T, int32_t D>
+          typename TensorAccessor>
+__device__ void
+sampleTrilinearWithGradBackwardCallbackVec4(int32_t bidx,
+                                            int32_t eidx,
+                                            int32_t cidx, // channel group index
+                                            JaggedAccessor<float, 2> points,
+                                            TensorAccessor<float, 2> gradOutFeatures,
+                                            TensorAccessor<float, 3> gradOutGradFeatures,
+                                            BatchGridAccessor batchAccessor,
+                                            TensorAccessor<float, 2> outGridData) {
+    const int32_t cBase = cidx * 4;
+
+    const auto &pointsData = points.data();
+
+    const nanovdb::OnIndexGrid *gpuGrid = batchAccessor.grid(bidx);
+    auto transform                      = batchAccessor.primalTransform(bidx);
+    const int64_t baseOffset            = batchAccessor.voxelOffset(bidx);
+
+    auto gridAcc = gpuGrid->getAccessor();
+
+    const nanovdb::math::Vec3<float> xyz =
+        transform.apply(pointsData[eidx][0], pointsData[eidx][1], pointsData[eidx][2]);
+    auto gradTransform = transform.template applyGrad<float>(xyz);
+
+    // Vectorized load of gradOutFeatures
+    auto gradFeat =
+        static_cast<const float *>(__builtin_assume_aligned(&gradOutFeatures[eidx][cBase], 16));
+
+    // Load gradOutGradFeatures for 4 channels (each has 3 components)
+    float gradGrad[4][3];
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        gradGrad[i][0] = gradOutGradFeatures[eidx][cBase + i][0];
+        gradGrad[i][1] = gradOutGradFeatures[eidx][cBase + i][1];
+        gradGrad[i][2] = gradOutGradFeatures[eidx][cBase + i][2];
+    }
+
+#pragma unroll
+    for (auto it = TrilinearInterpolationWithGradIterator<float>(xyz); it.isValid(); ++it) {
+        if (gridAcc.isActive(it->first)) {
+            const int64_t indexIjk                 = gridAcc.getValue(it->first) - 1 + baseOffset;
+            const nanovdb::math::Vec4<float> &wXYZ = it->second;
+
+            // Compute addValue for each of the 4 channels
+            float addValue[4];
+#pragma unroll
+            for (int i = 0; i < 4; ++i) {
+                addValue[i] = wXYZ[0] * gradFeat[i] + wXYZ[1] * gradGrad[i][0] * gradTransform[0] +
+                              wXYZ[2] * gradGrad[i][1] * gradTransform[1] +
+                              wXYZ[3] * gradGrad[i][2] * gradTransform[2];
+            }
+
+            // Scalar atomic writes
+            if constexpr (DeviceTag == torch::kCUDA) {
+#pragma unroll
+                for (int i = 0; i < 4; ++i)
+                    gpuAtomicAddNoReturn(&outGridData[indexIjk][cBase + i], addValue[i]);
+            } else if constexpr (DeviceTag == torch::kPrivateUse1) {
+#pragma unroll
+                for (int i = 0; i < 4; ++i)
+                    atomicAdd_system(&outGridData[indexIjk][cBase + i], addValue[i]);
+            }
+        }
+    }
+}
+
 template <torch::DeviceType DeviceTag, typename scalar_t>
 torch::Tensor
 SampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
@@ -80,45 +153,84 @@ SampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
     torch::Tensor outGrad = torch::zeros_like(dataReshape);          // [N, -1]
     auto outShape         = spliceShape({outGrad.size(0)}, data, 1); // [B*M, *]
 
+    // Make gradOutFeatures contiguous for vectorized reads
+    torch::Tensor gradOutFeaturesContig = gradOutFeatures.contiguous();
+
     auto batchAcc               = gridBatchAccessor<DeviceTag>(batchHdl);
-    auto gradOutFeaturesAcc     = tensorAccessor<DeviceTag, scalar_t, 2>(gradOutFeatures);
+    auto gradOutFeaturesAcc     = tensorAccessor<DeviceTag, scalar_t, 2>(gradOutFeaturesContig);
     auto gradOutGradFeaturesAcc = tensorAccessor<DeviceTag, scalar_t, 3>(gradOutGradFeatures);
     auto outGradAcc             = tensorAccessor<DeviceTag, scalar_t, 2>(outGrad);
+    const int64_t numChannels   = outGrad.size(1);
 
-    if constexpr (DeviceTag == torch::kCUDA) {
-        auto cb = [=] __device__(int32_t bidx,
-                                 int32_t eidx,
-                                 int32_t cidx,
-                                 JaggedRAcc32<scalar_t, 2> pts) {
-            sampleTrilinearWithGradBackwardCallback<DeviceTag, scalar_t, JaggedRAcc32, TorchRAcc32>(
-                bidx,
-                eidx,
-                cidx,
-                pts,
-                gradOutFeaturesAcc,
-                gradOutGradFeaturesAcc,
-                batchAcc,
-                outGradAcc);
+    if constexpr (DeviceTag == torch::kCUDA || DeviceTag == torch::kPrivateUse1) {
+        auto dispatchForEach = [&](auto numCh, const auto &cb) {
+            if constexpr (DeviceTag == torch::kCUDA) {
+                forEachJaggedElementChannelCUDA<scalar_t, 2>(DEFAULT_BLOCK_DIM, numCh, points, cb);
+            } else {
+                forEachJaggedElementChannelPrivateUse1<scalar_t, 2>(numCh, points, cb);
+            }
         };
-        forEachJaggedElementChannelCUDA<scalar_t, 2>(256, outGrad.size(1), points, cb);
-    }
 
-    else if constexpr (DeviceTag == torch::kPrivateUse1) {
-        auto cb = [=] __device__(int32_t bidx,
-                                 int32_t eidx,
-                                 int32_t cidx,
-                                 JaggedRAcc32<scalar_t, 2> pts) {
-            sampleTrilinearWithGradBackwardCallback<DeviceTag, scalar_t, JaggedRAcc32, TorchRAcc32>(
-                bidx,
-                eidx,
-                cidx,
-                pts,
-                gradOutFeaturesAcc,
-                gradOutGradFeaturesAcc,
-                batchAcc,
-                outGradAcc);
-        };
-        forEachJaggedElementChannelPrivateUse1<scalar_t, 2>(outGrad.size(1), points, cb);
+        // Use vectorized float4 loads for float32 when channels is a multiple of 4
+        // and base pointers are 16-byte aligned
+        if constexpr (std::is_same_v<scalar_t, float>) {
+            if (numChannels >= 4 && numChannels % 4 == 0 &&
+                reinterpret_cast<uintptr_t>(gradOutFeaturesContig.data_ptr<float>()) % 16 == 0) {
+                const auto numChannelGroups = (numChannels + 3) / 4;
+                auto cb                     = [=] __device__(int32_t bidx,
+                                         int32_t eidx,
+                                         int32_t cidx,
+                                         JaggedRAcc32<float, 2> pts) {
+                    sampleTrilinearWithGradBackwardCallbackVec4<DeviceTag,
+                                                                                    JaggedRAcc32,
+                                                                                    TorchRAcc32>(bidx,
+                                                                             eidx,
+                                                                             cidx,
+                                                                             pts,
+                                                                             gradOutFeaturesAcc,
+                                                                             gradOutGradFeaturesAcc,
+                                                                             batchAcc,
+                                                                             outGradAcc);
+                };
+                dispatchForEach(numChannelGroups, cb);
+            } else {
+                auto cb = [=] __device__(int32_t bidx,
+                                         int32_t eidx,
+                                         int32_t cidx,
+                                         JaggedRAcc32<float, 2> pts) {
+                    sampleTrilinearWithGradBackwardCallback<DeviceTag,
+                                                            float,
+                                                            JaggedRAcc32,
+                                                            TorchRAcc32>(bidx,
+                                                                         eidx,
+                                                                         cidx,
+                                                                         pts,
+                                                                         gradOutFeaturesAcc,
+                                                                         gradOutGradFeaturesAcc,
+                                                                         batchAcc,
+                                                                         outGradAcc);
+                };
+                dispatchForEach(numChannels, cb);
+            }
+        } else {
+            auto cb = [=] __device__(int32_t bidx,
+                                     int32_t eidx,
+                                     int32_t cidx,
+                                     JaggedRAcc32<scalar_t, 2> pts) {
+                sampleTrilinearWithGradBackwardCallback<DeviceTag,
+                                                        scalar_t,
+                                                        JaggedRAcc32,
+                                                        TorchRAcc32>(bidx,
+                                                                     eidx,
+                                                                     cidx,
+                                                                     pts,
+                                                                     gradOutFeaturesAcc,
+                                                                     gradOutGradFeaturesAcc,
+                                                                     batchAcc,
+                                                                     outGradAcc);
+            };
+            dispatchForEach(numChannels, cb);
+        }
     } else {
         auto cb = [=](int32_t bidx, int32_t eidx, int32_t cidx, JaggedAcc<scalar_t, 2> pts) {
             sampleTrilinearWithGradBackwardCallback<DeviceTag, scalar_t, JaggedAcc, TorchAcc>(
@@ -131,7 +243,7 @@ SampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
                 batchAcc,
                 outGradAcc);
         };
-        forEachJaggedElementChannelCPU<scalar_t, 2>(outGrad.size(1), points, cb);
+        forEachJaggedElementChannelCPU<scalar_t, 2>(numChannels, points, cb);
     }
 
     return outGrad.reshape(outShape);

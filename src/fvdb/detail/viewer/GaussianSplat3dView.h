@@ -22,7 +22,18 @@ class GaussianSplat3dView {
     GaussianSplat3dView(const GaussianSplat3dView &)            = delete;
     GaussianSplat3dView &operator=(const GaussianSplat3dView &) = delete;
 
-    std::string mViewName;
+    std::string mName;
+    pnanovdb_editor_token_t *mSceneToken;
+
+    void
+    syncSet() {
+        mSyncCallback(true);
+    }
+
+    void
+    syncGet() const {
+        mSyncCallback(false);
+    }
 
   protected:
     pnanovdb_raster_shader_params_t mParams;
@@ -31,61 +42,37 @@ class GaussianSplat3dView {
   public:
     GaussianSplat3dView(const std::string &name, const Viewer &viewer);
 
-    const float
-    getNear() const {
-        float nearPlane = mParams.near_plane_override;
-        mSyncCallback(false);
-        return nearPlane;
-    }
-    void
-    setNear(const float near) {
-        mParams.near_plane_override = near;
-        mSyncCallback(true);
-    }
-
-    const float
-    getFar() const {
-        float farPlane = mParams.far_plane_override;
-        mSyncCallback(false);
-        return farPlane;
-    }
-    void
-    setFar(const float far) {
-        mParams.far_plane_override = far;
-        mSyncCallback(true);
-    }
-
     const size_t
     getTileSize() const {
-        mSyncCallback(false);
+        syncGet();
         return mParams.tile_size;
     }
     void
     setTileSize(const size_t tileSize) {
         mParams.tile_size = tileSize;
-        mSyncCallback(true);
+        syncSet();
     }
 
     const float
     getMinRadius2d() const {
-        mSyncCallback(false);
+        syncGet();
         return mParams.min_radius_2d;
     }
     void
     setMinRadius2d(const float minRadius2d) {
         mParams.min_radius_2d = minRadius2d;
-        mSyncCallback(true);
+        syncSet();
     }
 
     const float
     getEps2d() const {
-        mSyncCallback(false);
+        syncGet();
         return mParams.eps2d;
     }
     void
     setEps2d(const float eps2d) {
         mParams.eps2d = eps2d;
-        mSyncCallback(true);
+        syncSet();
     }
 
     const bool
@@ -97,13 +84,24 @@ class GaussianSplat3dView {
 
     int
     getShDegreeToUse() const {
-        mSyncCallback(false);
+        syncGet();
         return mParams.sh_degree_override;
     }
     void
     setShDegreeToUse(const int shDegree) {
         mParams.sh_degree_override = shDegree;
-        mSyncCallback(true);
+        syncSet();
+    }
+
+    const bool
+    isShStrideRgbRgbRgb() const {
+        syncGet();
+        return (mParams.sh_stride_rgbrgbrgb_override != 0u);
+    }
+    void
+    setShStrideRgbRgbRgb(bool value) {
+        mParams.sh_stride_rgbrgbrgb_override = value ? 1u : 0u;
+        syncSet();
     }
 };
 

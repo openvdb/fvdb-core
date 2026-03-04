@@ -162,7 +162,7 @@ def main(output_path: str, h=512, w=1024):
     sh0 = torch.randn(means3d.shape[0], 1, 3, device=means3d.device)
     shN = torch.randn(means3d.shape[0], 1, 3, device=means3d.device)
 
-    gs3d = GaussianSplat3d(means3d, quats, log_scales, logit_opacities, sh0, shN)
+    gs3d = GaussianSplat3d.from_tensors(means3d, quats, log_scales, logit_opacities, sh0, shN)
 
     state = gs3d.project_gaussians_for_images(
         world_to_cam_xform.unsqueeze(0).contiguous(), intrinsics.unsqueeze(0).contiguous(), w, h, 0.1, 10000.0
@@ -171,7 +171,14 @@ def main(output_path: str, h=512, w=1024):
     image_dims = torch.tensor([w, h], dtype=torch.int32, device="cuda")
 
     # Save the input tensors using TorchScript format
-    inputs = [state.means2d, state.conics, state.opacities, state.tile_offsets, state.tile_gaussian_ids, image_dims]
+    inputs = [
+        state.means2d,
+        state.inv_covar_2d,
+        state.opacities,
+        state.tile_offsets,
+        state.tile_gaussian_ids,
+        image_dims,
+    ]
     input_names = ["means2d", "conics", "opacities", "tile_offsets", "tile_gaussian_ids", "image_dims"]
     inputs_path = os.path.join(output_path, "gaussian_top_contributors_1point_input.pt")
     print(f"Saving inputs to {inputs_path}")

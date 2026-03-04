@@ -37,25 +37,25 @@ class TestDenseInterfaceBatch(unittest.TestCase):
         )
         self.assertTrue(dense_vdb.total_voxels == 10 * 11 * 12)
 
-        vdb_coords = dense_vdb.grid_to_world(dense_vdb.ijk.float()).jdata
+        vdb_coords = dense_vdb.voxel_to_world(dense_vdb.ijk.float()).jdata
         self.assertAlmostEqual(torch.min(vdb_coords).item(), -2.0 + 3 / 12 * 0.5, places=6)
         self.assertAlmostEqual(torch.max(vdb_coords).item(), 1.0 - 3 / 12 * 0.5, places=6)
 
         vdb_feature = torch.randn((dense_vdb.total_voxels, 4), device=device, dtype=dtype)
-        dense_feature = dense_vdb.write_to_dense_xyzc(JaggedTensor(vdb_feature)).squeeze(0)
+        dense_feature = dense_vdb.inject_to_dense_cminor(JaggedTensor(vdb_feature)).squeeze(0)
         for i in range(10):
             for j in range(11):
                 for k in range(12):
                     vdb_f = vdb_feature[
                         dense_vdb.ijk_to_index(JaggedTensor(torch.tensor([[i, j, k]], device=device))).jdata
                     ]
-                    dense_f = dense_feature[i, j, k, :]  # dense_feature[:, k, j, i]
+                    dense_f = dense_feature[i, j, k, :]
                     self.assertTrue(torch.allclose(vdb_f, dense_f))
-        vdb_feature2 = dense_vdb.read_from_dense_xyzc(dense_feature.unsqueeze(0)).jdata
+        vdb_feature2 = dense_vdb.inject_from_dense_cminor(dense_feature.unsqueeze(0)).jdata
         self.assertTrue(torch.allclose(vdb_feature, vdb_feature2))
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_read_from_dense_xyzc(self, device, dtype):
+    def test_read_from_dense_cminor(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
         grid = GridBatch.from_points(JaggedTensor(random_points), voxel_sizes=0.1, origins=[0.0] * 3)
@@ -88,13 +88,13 @@ class TestDenseInterfaceBatch(unittest.TestCase):
             target_sparse = torch.zeros(grid.total_voxels, *feat_shape, device=device, dtype=dtype)
             target_sparse[grid_index] = random_grid.view(-1, *feat_shape)[offset]
 
-            pred_sparse = grid.read_from_dense_xyzc(random_grid.unsqueeze(0), dense_origin).jdata
+            pred_sparse = grid.inject_from_dense_cminor(random_grid.unsqueeze(0), dense_origin).jdata
 
             self.assertEqual(torch.abs(target_sparse - pred_sparse).max().item(), 0.0)
             self.assertTrue(torch.all(target_sparse == pred_sparse))
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_read_from_dense_xyzc_multidim(self, device, dtype):
+    def test_read_from_dense_cminor_multidim(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
         grid = GridBatch.from_points(JaggedTensor(random_points), voxel_sizes=0.1, origins=[0.0] * 3)
@@ -127,13 +127,13 @@ class TestDenseInterfaceBatch(unittest.TestCase):
             target_sparse = torch.zeros(grid.total_voxels, *feat_shape, device=device, dtype=dtype)
             target_sparse[grid_index] = random_grid.view(-1, *feat_shape)[offset]
 
-            pred_sparse = grid.read_from_dense_xyzc(random_grid.unsqueeze(0), dense_origin).jdata
+            pred_sparse = grid.inject_from_dense_cminor(random_grid.unsqueeze(0), dense_origin).jdata
 
             self.assertEqual(torch.abs(target_sparse - pred_sparse).max().item(), 0.0)
             self.assertTrue(torch.all(target_sparse == pred_sparse))
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_read_from_dense_xyzc_multidim_grad(self, device, dtype):
+    def test_read_from_dense_cminor_multidim_grad(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
         grid = GridBatch.from_points(JaggedTensor(random_points), voxel_sizes=0.1, origins=[0.0] * 3)
@@ -172,7 +172,7 @@ class TestDenseInterfaceBatch(unittest.TestCase):
             loss_copy = target_sparse.sum()
             loss_copy.backward()
 
-            pred_sparse = grid.read_from_dense_xyzc(random_grid.unsqueeze(0), dense_origin).jdata
+            pred_sparse = grid.inject_from_dense_cminor(random_grid.unsqueeze(0), dense_origin).jdata
             loss = pred_sparse.sum()
             loss.backward()
 
@@ -184,7 +184,7 @@ class TestDenseInterfaceBatch(unittest.TestCase):
             self.assertTrue(torch.equal(random_grid.grad, random_grid_copy.grad))
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_write_to_dense_xyzc(self, device, dtype):
+    def test_write_to_dense_cminor(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
         grid = GridBatch.from_points(JaggedTensor(random_points), voxel_sizes=0.1, origins=[0.0] * 3)
@@ -221,12 +221,12 @@ class TestDenseInterfaceBatch(unittest.TestCase):
             idx = write_ijk[:, 0] * crop_size[1] * crop_size[2] + write_ijk[:, 1] * crop_size[2] + write_ijk[:, 2]
             target_crop.view(-1, sparse_data.shape[-1])[idx] = sparse_data[keep_mask]
 
-            pred_crop = grid.write_to_dense_xyzc(JaggedTensor(sparse_data), crop_min, crop_size).squeeze(0)
+            pred_crop = grid.inject_to_dense_cminor(JaggedTensor(sparse_data), crop_min, crop_size).squeeze(0)
 
             self.assertTrue(torch.all(pred_crop == target_crop))
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_write_to_dense_xyzc_multidim(self, device, dtype):
+    def test_write_to_dense_cminor_multidim(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
         grid = GridBatch.from_points(JaggedTensor(random_points), voxel_sizes=0.1, origins=[0.0] * 3)
@@ -263,12 +263,12 @@ class TestDenseInterfaceBatch(unittest.TestCase):
             idx = write_ijk[:, 0] * crop_size[1] * crop_size[2] + write_ijk[:, 1] * crop_size[2] + write_ijk[:, 2]
             target_crop.view(-1, *sparse_data.shape[1:])[idx] = sparse_data[keep_mask]
 
-            pred_crop = grid.write_to_dense_xyzc(JaggedTensor(sparse_data), crop_min, crop_size).squeeze(0)
+            pred_crop = grid.inject_to_dense_cminor(JaggedTensor(sparse_data), crop_min, crop_size).squeeze(0)
 
             self.assertTrue(torch.all(pred_crop == target_crop))
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_write_to_dense_xyzc_multidim_grad(self, device, dtype):
+    def test_write_to_dense_cminor_multidim_grad(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
         grid = GridBatch.from_points(JaggedTensor(random_points), voxel_sizes=0.1, origins=[0.0] * 3)
@@ -311,7 +311,7 @@ class TestDenseInterfaceBatch(unittest.TestCase):
             loss_copy = target_crop.sum()
             loss_copy.backward()
 
-            pred_crop = grid.write_to_dense_xyzc(JaggedTensor(sparse_data), crop_min, crop_size).squeeze(0)
+            pred_crop = grid.inject_to_dense_cminor(JaggedTensor(sparse_data), crop_min, crop_size).squeeze(0)
             loss = pred_crop.sum()
             loss.backward()
 
@@ -321,7 +321,7 @@ class TestDenseInterfaceBatch(unittest.TestCase):
             self.assertTrue(torch.all(pred_crop == target_crop))
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_write_to_dense_xyzc_czyx_dense_grid(self, device, dtype):
+    def test_write_to_dense_cminor_cmajor_dense_grid(self, device, dtype):
 
         dims = [11, 6, 8]
         grid = GridBatch.from_dense(1, dims, 0, 1, 0, device=device)
@@ -334,16 +334,16 @@ class TestDenseInterfaceBatch(unittest.TestCase):
         for eshape in [(3,), (5, 7)]:
             sparse_data = torch.randn((total_voxels, *eshape), device=device, dtype=dtype)
 
-            dense_default = grid.write_to_dense_xyzc(JaggedTensor(sparse_data), min_coord, dense_size)
-            dense_conv = grid.write_to_dense_czyx(JaggedTensor(sparse_data), min_coord, dense_size)
+            dense_default = grid.inject_to_dense_cminor(JaggedTensor(sparse_data), min_coord, dense_size)
+            dense_conv = grid.inject_to_dense_cmajor(JaggedTensor(sparse_data), min_coord, dense_size)
 
             self.assertEqual(dense_default.shape, (1, dims[0], dims[1], dims[2], *eshape))
-            self.assertEqual(dense_conv.shape, (1, *eshape, dims[2], dims[1], dims[0]))
+            self.assertEqual(dense_conv.shape, (1, *eshape, dims[0], dims[1], dims[2]))
 
             n = len(eshape)
-            conv_to_default_permute_order = (0, n + 3, n + 2, n + 1, *range(1, 1 + n))
+            conv_to_default_permute_order = (0, n + 1, n + 2, n + 3, *range(1, 1 + n))
             if n == 1:
-                assert conv_to_default_permute_order == (0, 4, 3, 2, 1)
+                assert conv_to_default_permute_order == (0, 2, 3, 4, 1)
 
             dense_conv_like_default = dense_conv.permute(*conv_to_default_permute_order).contiguous()
 
@@ -355,7 +355,7 @@ class TestDenseInterfaceBatch(unittest.TestCase):
             self.assertTrue(torch.equal(dense_default, dense_conv_like_default))
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_write_to_dense_xyzc_czyx_rand_point_grid(self, device, dtype):
+    def test_write_to_dense_cminor_cmajor_rand_point_grid(self, device, dtype):
 
         # Build a random sparse grid
         random_points = torch.randn(100000, 3).to(device).to(dtype)
@@ -373,16 +373,16 @@ class TestDenseInterfaceBatch(unittest.TestCase):
         for eshape in [(3,), (5, 7)]:
             sparse_data = torch.randn((total_voxels, *eshape), device=device, dtype=dtype)
 
-            dense_default = grid.write_to_dense_xyzc(JaggedTensor(sparse_data), min_coord, dense_size)
-            dense_conv = grid.write_to_dense_czyx(JaggedTensor(sparse_data), min_coord, dense_size)
+            dense_default = grid.inject_to_dense_cminor(JaggedTensor(sparse_data), min_coord, dense_size)
+            dense_conv = grid.inject_to_dense_cmajor(JaggedTensor(sparse_data), min_coord, dense_size)
 
             self.assertEqual(dense_default.shape, (1, dims[0], dims[1], dims[2], *eshape))
-            self.assertEqual(dense_conv.shape, (1, *eshape, dims[2], dims[1], dims[0]))
+            self.assertEqual(dense_conv.shape, (1, *eshape, dims[0], dims[1], dims[2]))
 
             n = len(eshape)
-            conv_to_default_permute_order = (0, n + 3, n + 2, n + 1, *range(1, 1 + n))
+            conv_to_default_permute_order = (0, n + 1, n + 2, n + 3, *range(1, 1 + n))
             if n == 1:
-                assert conv_to_default_permute_order == (0, 4, 3, 2, 1)
+                assert conv_to_default_permute_order == (0, 2, 3, 4, 1)
 
             dense_conv_like_default = dense_conv.permute(*conv_to_default_permute_order).contiguous()
 
@@ -394,7 +394,7 @@ class TestDenseInterfaceBatch(unittest.TestCase):
             self.assertTrue(torch.equal(dense_default, dense_conv_like_default))
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_read_from_dense_xyzc_czyx_dense_grid(self, device, dtype):
+    def test_read_from_dense_cminor_cmajor_dense_grid(self, device, dtype):
 
         dims = [11, 6, 8]
         grid = GridBatch.from_dense(1, dims, 0, 1, 0, device=device)
@@ -408,13 +408,13 @@ class TestDenseInterfaceBatch(unittest.TestCase):
             dense_conv = torch.randn((1, *eshape, dims[2], dims[1], dims[0]), device=device, dtype=dtype)
 
             n = len(eshape)
-            conv_to_default_permute_order = (0, n + 3, n + 2, n + 1, *range(1, 1 + n))
+            conv_to_default_permute_order = (0, n + 1, n + 2, n + 3, *range(1, 1 + n))
             if n == 1:
-                assert conv_to_default_permute_order == (0, 4, 3, 2, 1)
+                assert conv_to_default_permute_order == (0, 2, 3, 4, 1)
             dense_default = dense_conv.permute(*conv_to_default_permute_order).contiguous()
 
-            sparse_conv = grid.read_from_dense_czyx(dense_conv, min_coord)
-            sparse_default = grid.read_from_dense_xyzc(dense_default, min_coord)
+            sparse_conv = grid.inject_from_dense_cmajor(dense_conv, min_coord)
+            sparse_default = grid.inject_from_dense_cminor(dense_default, min_coord)
 
             self.assertEqual(sparse_conv.jdata.shape, (total_voxels, *eshape))
             self.assertEqual(sparse_default.jdata.shape, (total_voxels, *eshape))
@@ -478,23 +478,23 @@ class TestDenseInterfaceSingle(unittest.TestCase):
         )
         self.assertTrue(dense_vdb.num_voxels == 10 * 11 * 12)
 
-        vdb_coords = dense_vdb.grid_to_world(dense_vdb.ijk.float())
+        vdb_coords = dense_vdb.voxel_to_world(dense_vdb.ijk.float())
         self.assertAlmostEqual(torch.min(vdb_coords).item(), -2.0 + 3 / 12 * 0.5, places=6)
         self.assertAlmostEqual(torch.max(vdb_coords).item(), 1.0 - 3 / 12 * 0.5, places=6)
 
         vdb_feature = torch.randn((dense_vdb.num_voxels, 4), device=device, dtype=dtype)
-        dense_feature = dense_vdb.write_to_dense_xyzc(vdb_feature)
+        dense_feature = dense_vdb.inject_to_dense_cminor(vdb_feature)
         for i in range(10):
             for j in range(11):
                 for k in range(12):
                     vdb_f = vdb_feature[dense_vdb.ijk_to_index(torch.tensor([[i, j, k]], device=device))]
                     dense_f = dense_feature[i, j, k, :]
                     self.assertTrue(torch.allclose(vdb_f, dense_f))
-        vdb_feature2 = dense_vdb.read_from_dense_xyzc(dense_feature)
+        vdb_feature2 = dense_vdb.inject_from_dense_cminor(dense_feature)
         self.assertTrue(torch.allclose(vdb_feature, vdb_feature2))
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_read_from_dense_xyzc(self, device, dtype):
+    def test_read_from_dense_cminor(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
         grid = Grid.from_points(random_points, voxel_size=0.1, origin=[0.0] * 3)
@@ -527,13 +527,13 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             target_sparse = torch.zeros(grid.num_voxels, *feat_shape, device=device, dtype=dtype)
             target_sparse[grid_index] = random_grid.view(-1, *feat_shape)[offset]
 
-            pred_sparse = grid.read_from_dense_xyzc(random_grid, dense_origin)
+            pred_sparse = grid.inject_from_dense_cminor(random_grid, dense_origin)
 
             self.assertEqual(torch.abs(target_sparse - pred_sparse).max().item(), 0.0)
             self.assertTrue(torch.all(target_sparse == pred_sparse))
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_read_from_dense_xyzc_multidim(self, device, dtype):
+    def test_read_from_dense_cminor_multidim(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
         grid = Grid.from_points(random_points, voxel_size=0.1, origin=[0.0] * 3)
@@ -566,13 +566,13 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             target_sparse = torch.zeros(grid.num_voxels, *feat_shape, device=device, dtype=dtype)
             target_sparse[grid_index] = random_grid.view(-1, *feat_shape)[offset]
 
-            pred_sparse = grid.read_from_dense_xyzc(random_grid, dense_origin)
+            pred_sparse = grid.inject_from_dense_cminor(random_grid, dense_origin)
 
             self.assertEqual(torch.abs(target_sparse - pred_sparse).max().item(), 0.0)
             self.assertTrue(torch.all(target_sparse == pred_sparse))
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_read_from_dense_xyzc_multidim_grad(self, device, dtype):
+    def test_read_from_dense_cminor_multidim_grad(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
         grid = Grid.from_points(random_points, voxel_size=0.1, origin=[0.0] * 3)
@@ -611,7 +611,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             loss_copy = target_sparse.sum()
             loss_copy.backward()
 
-            pred_sparse = grid.read_from_dense_xyzc(random_grid, dense_origin)
+            pred_sparse = grid.inject_from_dense_cminor(random_grid, dense_origin)
             loss = pred_sparse.sum()
             loss.backward()
 
@@ -623,7 +623,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             self.assertTrue(torch.equal(random_grid.grad, random_grid_copy.grad))
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_write_to_dense_xyzc(self, device, dtype):
+    def test_write_to_dense_cminor(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
         grid = Grid.from_points(random_points, voxel_size=0.1, origin=[0.0] * 3)
@@ -660,12 +660,12 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             idx = write_ijk[:, 0] * crop_size[1] * crop_size[2] + write_ijk[:, 1] * crop_size[2] + write_ijk[:, 2]
             target_crop.view(-1, sparse_data.shape[-1])[idx] = sparse_data[keep_mask]
 
-            pred_crop = grid.write_to_dense_xyzc(sparse_data, crop_min, crop_size)
+            pred_crop = grid.inject_to_dense_cminor(sparse_data, crop_min, crop_size)
 
             self.assertTrue(torch.all(pred_crop == target_crop))
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_write_to_dense_xyzc_multidim(self, device, dtype):
+    def test_write_to_dense_cminor_multidim(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
         grid = Grid.from_points(random_points, voxel_size=0.1, origin=[0.0] * 3)
@@ -702,12 +702,12 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             idx = write_ijk[:, 0] * crop_size[1] * crop_size[2] + write_ijk[:, 1] * crop_size[2] + write_ijk[:, 2]
             target_crop.view(-1, *sparse_data.shape[1:])[idx] = sparse_data[keep_mask]
 
-            pred_crop = grid.write_to_dense_xyzc(sparse_data, crop_min, crop_size)
+            pred_crop = grid.inject_to_dense_cminor(sparse_data, crop_min, crop_size)
 
             self.assertTrue(torch.all(pred_crop == target_crop))
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_write_to_dense_xyzc_multidim_grad(self, device, dtype):
+    def test_write_to_dense_cminor_multidim_grad(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
         grid = Grid.from_points(random_points, voxel_size=0.1, origin=[0.0] * 3)
@@ -750,7 +750,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             loss_copy = target_crop.sum()
             loss_copy.backward()
 
-            pred_crop = grid.write_to_dense_xyzc(sparse_data, crop_min, crop_size)
+            pred_crop = grid.inject_to_dense_cminor(sparse_data, crop_min, crop_size)
             loss = pred_crop.sum()
             loss.backward()
 
@@ -760,7 +760,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             self.assertTrue(torch.all(pred_crop == target_crop))
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_write_to_dense_xyzc_czyx_dense_grid(self, device, dtype):
+    def test_write_to_dense_cminor_cmajor_dense_grid(self, device, dtype):
 
         dims = [11, 6, 8]
         grid = Grid.from_dense(dims, 0, 1, 0, device=device)
@@ -773,16 +773,16 @@ class TestDenseInterfaceSingle(unittest.TestCase):
         for eshape in [(3,), (5, 7)]:
             sparse_data = torch.randn((total_voxels, *eshape), device=device, dtype=dtype)
 
-            dense_default = grid.write_to_dense_xyzc(sparse_data, min_coord, dense_size)
-            dense_conv = grid.write_to_dense_czyx(sparse_data, min_coord, dense_size)
+            dense_default = grid.inject_to_dense_cminor(sparse_data, min_coord, dense_size)
+            dense_conv = grid.inject_to_dense_cmajor(sparse_data, min_coord, dense_size)
 
             self.assertEqual(dense_default.shape, (dims[0], dims[1], dims[2], *eshape))
-            self.assertEqual(dense_conv.shape, (*eshape, dims[2], dims[1], dims[0]))
+            self.assertEqual(dense_conv.shape, (*eshape, dims[0], dims[1], dims[2]))
 
             n = len(eshape)
-            conv_to_default_permute_order = (n + 2, n + 1, n, *range(0, n))
+            conv_to_default_permute_order = (n, n + 1, n + 2, *range(0, n))
             if n == 1:
-                assert conv_to_default_permute_order == (3, 2, 1, 0)
+                assert conv_to_default_permute_order == (1, 2, 3, 0)
 
             dense_conv_like_default = dense_conv.permute(*conv_to_default_permute_order).contiguous()
 
@@ -794,7 +794,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             self.assertTrue(torch.equal(dense_default, dense_conv_like_default))
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_write_to_dense_xyzc_czyx_rand_point_grid(self, device, dtype):
+    def test_write_to_dense_cminor_cmajor_rand_point_grid(self, device, dtype):
 
         # Build a random sparse grid
         random_points = torch.randn(100000, 3).to(device).to(dtype)
@@ -812,16 +812,16 @@ class TestDenseInterfaceSingle(unittest.TestCase):
         for eshape in [(3,), (5, 7)]:
             sparse_data = torch.randn((total_voxels, *eshape), device=device, dtype=dtype)
 
-            dense_default = grid.write_to_dense_xyzc(sparse_data, min_coord, dense_size)
-            dense_conv = grid.write_to_dense_czyx(sparse_data, min_coord, dense_size)
+            dense_default = grid.inject_to_dense_cminor(sparse_data, min_coord, dense_size)
+            dense_conv = grid.inject_to_dense_cmajor(sparse_data, min_coord, dense_size)
 
             self.assertEqual(dense_default.shape, (dims[0], dims[1], dims[2], *eshape))
-            self.assertEqual(dense_conv.shape, (*eshape, dims[2], dims[1], dims[0]))
+            self.assertEqual(dense_conv.shape, (*eshape, dims[0], dims[1], dims[2]))
 
             n = len(eshape)
-            conv_to_default_permute_order = (n + 2, n + 1, n, *range(0, n))
+            conv_to_default_permute_order = (n, n + 1, n + 2, *range(0, n))
             if n == 1:
-                assert conv_to_default_permute_order == (3, 2, 1, 0)
+                assert conv_to_default_permute_order == (1, 2, 3, 0)
 
             dense_conv_like_default = dense_conv.permute(*conv_to_default_permute_order).contiguous()
 
@@ -833,7 +833,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             self.assertTrue(torch.equal(dense_default, dense_conv_like_default))
 
     @parameterized.expand(all_device_dtype_combos)
-    def test_read_from_dense_xyzc_czyx_dense_grid(self, device, dtype):
+    def test_read_from_dense_cminor_cmajor_dense_grid(self, device, dtype):
 
         dims = [11, 6, 8]
         grid = Grid.from_dense(dims, 0, 1, 0, device=device)
@@ -844,16 +844,16 @@ class TestDenseInterfaceSingle(unittest.TestCase):
 
         # Single-channel and multi-dimensional channel shapes
         for eshape in [(3,), (5, 7)]:
-            dense_conv = torch.randn((*eshape, dims[2], dims[1], dims[0]), device=device, dtype=dtype)
+            dense_conv = torch.randn((*eshape, dims[0], dims[1], dims[2]), device=device, dtype=dtype)
 
             n = len(eshape)
-            conv_to_default_permute_order = (n + 2, n + 1, n, *range(0, n))
+            conv_to_default_permute_order = (n, n + 1, n + 2, *range(0, n))
             if n == 1:
-                assert conv_to_default_permute_order == (3, 2, 1, 0)
+                assert conv_to_default_permute_order == (1, 2, 3, 0)
             dense_default = dense_conv.permute(*conv_to_default_permute_order).contiguous()
 
-            sparse_conv = grid.read_from_dense_czyx(dense_conv, min_coord)
-            sparse_default = grid.read_from_dense_xyzc(dense_default, min_coord)
+            sparse_conv = grid.inject_from_dense_cmajor(dense_conv, min_coord)
+            sparse_default = grid.inject_from_dense_cminor(dense_default, min_coord)
 
             self.assertEqual(sparse_conv.shape, (total_voxels, *eshape))
             self.assertEqual(sparse_default.shape, (total_voxels, *eshape))

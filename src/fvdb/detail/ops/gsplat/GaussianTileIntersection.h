@@ -27,7 +27,7 @@ dispatchGaussianTileIntersection(const torch::Tensor &means2d, // [C, N, 2] or [
 /// @brief Compute the intersection of 2D Gaussians with image tiles for sparse rendering
 template <torch::DeviceType>
 std::tuple<torch::Tensor, torch::Tensor>
-dispatchGaussianTileIntersectionSparse(const torch::Tensor &means2d,     // [C, N, 2] or [M, 2]
+dispatchGaussianSparseTileIntersection(const torch::Tensor &means2d,     // [C, N, 2] or [M, 2]
                                        const torch::Tensor &radii,       // [C, N] or [M]
                                        const torch::Tensor &depths,      // [C, N] or [M]
                                        const torch::Tensor &tileMask,    // [C, H, W]

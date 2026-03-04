@@ -12,13 +12,16 @@
 
 option(NANOVDB_EDITOR_FORCE "Force rebuild of nanovdb_editor wheel" OFF)
 option(NANOVDB_EDITOR_SKIP "Skip nanovdb_editor wheel build" OFF)
+set(NANOVDB_EDITOR_BUILD_TYPE "Release" CACHE STRING "Build type for nanovdb_editor (Release/Debug)")
 
-set(NANOVDB_EDITOR_TAG 798cd8195c795b8063fa9a3298f85d684b1a034c)
-set(NANOVDB_EDITOR_VERSION 0.0.2)
+# For fVDB main use nanovdb-editor main
+set(NANOVDB_EDITOR_TAG 90f0733dd61b7a4753772a3e2a154c6bbd2185ec)
+set(NANOVDB_EDITOR_VERSION 0.0.19)   # version at this commit
 
 # If skip is set, get the latest tagged version to prevent unnecessary rebuilds each hash update
 if(NANOVDB_EDITOR_SKIP)
-    set(NANOVDB_EDITOR_TAG v${NANOVDB_EDITOR_VERSION})
+    set(NANOVDB_EDITOR_VERSION 0.0.19)   # latest tagged version
+    set(NANOVDB_EDITOR_TAG v${NANOVDB_EDITOR_VERSION}-dev)  # use dev tag according to PyPI published wheel
 endif()
 
 CPMAddPackage(
@@ -33,11 +36,13 @@ if(NOT nanovdb_editor_ADDED)
     message(FATAL_ERROR "CPM failed to add nanovdb_editor package")
 endif()
 
+string(SUBSTRING "${NANOVDB_EDITOR_TAG}" 0 7 NANOVDB_EDITOR_TAG_SHORT)
+
 if(NANOVDB_EDITOR_SKIP)
     if(NOT CPM_PACKAGE_nanovdb_editor_VERSION)
         message(STATUS "NANOVDB_EDITOR_SKIP is set; skipping nanovdb_editor wheel build, using the local repository for includes")
     else()
-        message(STATUS "NANOVDB_EDITOR_SKIP is set; using the latest tagged version ${NANOVDB_EDITOR_TAG} for includes")
+        message(STATUS "NANOVDB_EDITOR_SKIP is set; using the latest tagged version ${NANOVDB_EDITOR_TAG_SHORT} for includes")
     endif()
     set(NANOVDB_EDITOR_INCLUDE_DIR ${nanovdb_editor_SOURCE_DIR})
     message(STATUS "NANOVDB_EDITOR_INCLUDE_DIR: ${NANOVDB_EDITOR_INCLUDE_DIR}")
@@ -118,7 +123,7 @@ message(STATUS "Latest nanovdb_editor version: ${NANOVDB_EDITOR_LATEST_VERSION}"
 # Directory where locally built wheels are stored (project root /dist)
 set(NANOVDB_EDITOR_WHEEL_DIR ${CMAKE_SOURCE_DIR}/dist)
 
-# If not forcing a rebuild, check for installed version and compare with latest wheel version on nanovdb-editor repo; skip build if up-to-date
+# If not forcing a rebuild, check for installed version and compare with the latest wheel version on nanovdb-editor repo; skip build if up-to-date
 if (NOT NANOVDB_EDITOR_FORCE)
     if(NANOVDB_EDITOR_INSTALLED_VERSION VERSION_GREATER_EQUAL NANOVDB_EDITOR_LATEST_VERSION)
         message(STATUS "Installed nanovdb_editor is up-to-date; skipping build")
@@ -129,27 +134,34 @@ else()
     message(STATUS "NANOVDB_EDITOR_FORCE is set; rebuilding nanovdb_editor wheel")
 endif()
 
-# If not forcing a rebuild, check for requested version wheel in /dist; build when version empty (local repo) or not found
+# If not forcing a rebuild, check for the latest version wheel in /dist; build when version empty (local repo) or not found
 if (NOT NANOVDB_EDITOR_FORCE)
     if(NOT CPM_PACKAGE_nanovdb_editor_VERSION)
         message(STATUS "Using local nanovdb_editor repository ${CPM_PACKAGE_nanovdb_editor_SOURCE_DIR}; will build wheel")
     else()
-        file(GLOB REQUESTED_WHEELS "${NANOVDB_EDITOR_WHEEL_DIR}/nanovdb_editor-*${NANOVDB_EDITOR_LATEST_VERSION}*.whl")
-        list(LENGTH REQUESTED_WHEELS NUM_REQUESTED_WHEELS)
-        if(NUM_REQUESTED_WHEELS GREATER 0)
-            list(GET REQUESTED_WHEELS 0 REQUESTED_WHEEL)
-            message(STATUS "Found wheel in dist for requested version ${NANOVDB_EDITOR_LATEST_VERSION}: ${REQUESTED_WHEEL}")
+        file(GLOB LATEST_WHEELS "${NANOVDB_EDITOR_WHEEL_DIR}/nanovdb_editor-*${NANOVDB_EDITOR_LATEST_VERSION}*.whl")
+        list(LENGTH LATEST_WHEELS NUM_LATEST_WHEELS)
+        if(NUM_LATEST_WHEELS GREATER 0)
+            list(GET LATEST_WHEELS 0 LATEST_WHEEL)
+            message(STATUS "Found wheel in dist for the latest version ${NANOVDB_EDITOR_LATEST_VERSION}: ${LATEST_WHEEL}")
+            message(STATUS "Installing nanovdb_editor wheel with: ${Python3_EXECUTABLE} -m pip install --force-reinstall -v ${LATEST_WHEEL}")
+            # CPM's nanovdb_editor_BINARY_DIR may not exist yet on this fast-path (installing a prebuilt wheel),
+            # but execute_process requires WORKING_DIRECTORY to exist.
+            file(MAKE_DIRECTORY ${nanovdb_editor_BINARY_DIR})
             execute_process(
-                COMMAND bash -lc "
-                ${Python3_EXECUTABLE} -m pip install --force-reinstall ${REQUESTED_WHEEL}
-                "
+                COMMAND ${Python3_EXECUTABLE} -m pip install --force-reinstall -v ${LATEST_WHEEL}
                 WORKING_DIRECTORY ${nanovdb_editor_BINARY_DIR}
                 RESULT_VARIABLE install_result
                 OUTPUT_VARIABLE install_output
                 ERROR_VARIABLE install_error
             )
             if(NOT install_result EQUAL 0)
-                message(FATAL_ERROR "nanovdb_editor wheel install failed.\nSTDOUT:\n${install_output}\n\nSTDERR:\n${install_error}")
+                message(FATAL_ERROR
+                    "nanovdb_editor wheel install failed (exit=${install_result}).\n"
+                    "Python3_EXECUTABLE: ${Python3_EXECUTABLE}\n"
+                    "Wheel: ${LATEST_WHEEL}\n"
+                    "WORKING_DIRECTORY: ${nanovdb_editor_BINARY_DIR}\n"
+                    "STDOUT:\n${install_output}\n\nSTDERR:\n${install_error}")
             else()
                 message(STATUS "Successfully installed: ${install_output}")
 
@@ -161,7 +173,7 @@ if (NOT NANOVDB_EDITOR_FORCE)
                 return()
             endif()
         else()
-            message(STATUS "No wheel found in dist for requested version ${NANOVDB_EDITOR_VERSION}; will build wheel")
+            message(STATUS "No wheel found in dist for the latest version ${NANOVDB_EDITOR_LATEST_VERSION}; will build wheel")
         endif()
     endif()
 endif()
@@ -177,10 +189,43 @@ file(MAKE_DIRECTORY ${NANOVDB_EDITOR_WHEEL_DIR})
 # Ensure the build directory used by scikit-build exists; this is where the nested build writes
 file(MAKE_DIRECTORY ${nanovdb_editor_BINARY_DIR})
 
+find_package(Git QUIET)
 if(NOT CPM_PACKAGE_nanovdb_editor_VERSION)
     message(STATUS "Using local nanovdb_editor repository: ${nanovdb_editor_SOURCE_DIR}")
+    set(NANOVDB_EDITOR_COMMIT_HASH "unknown")
+    if(GIT_FOUND)
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} -C ${nanovdb_editor_SOURCE_DIR} rev-parse --short HEAD
+            OUTPUT_VARIABLE NANOVDB_EDITOR_COMMIT_HASH
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+            RESULT_VARIABLE _nanovdb_rev_result
+        )
+        if(NOT _nanovdb_rev_result EQUAL 0)
+            set(NANOVDB_EDITOR_COMMIT_HASH "unknown")
+        endif()
+    endif()
+    if(NANOVDB_EDITOR_COMMIT_HASH STREQUAL "unknown" AND DEFINED NANOVDB_EDITOR_TAG_SHORT)
+        set(NANOVDB_EDITOR_COMMIT_HASH ${NANOVDB_EDITOR_TAG_SHORT})
+    endif()
+    message(STATUS "NanoVDB Editor build: ${NANOVDB_EDITOR_COMMIT_HASH}")
 else()
     message(STATUS "Using nanovdb_editor version: ${CPM_PACKAGE_nanovdb_editor_VERSION} from ${nanovdb_editor_SOURCE_DIR}")
+    set(NANOVDB_EDITOR_COMMIT_HASH ${NANOVDB_EDITOR_TAG_SHORT})
+endif()
+
+set(FVDB_COMMIT_HASH "unknown")
+if(GIT_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} -C ${CMAKE_SOURCE_DIR} rev-parse --short HEAD
+        OUTPUT_VARIABLE FVDB_COMMIT_HASH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE _fvdb_rev_result
+    )
+    if(NOT _fvdb_rev_result EQUAL 0)
+        set(FVDB_COMMIT_HASH "unknown")
+    endif()
 endif()
 
 message(STATUS "Building nanovdb_editor wheel version ${NANOVDB_EDITOR_LATEST_VERSION} to ${NANOVDB_EDITOR_WHEEL_DIR}...")
@@ -193,7 +238,9 @@ execute_process(
         -Clogging.level=WARNING \
         -Ccmake.define.NANOVDB_EDITOR_USE_GLFW=OFF \
         -Ccmake.define.NANOVDB_EDITOR_BUILD_TESTS=OFF \
-        --config-settings=cmake.build-type=Release \
+        -Ccmake.define.NANOVDB_EDITOR_COMMIT_HASH=${NANOVDB_EDITOR_COMMIT_HASH} \
+        -Ccmake.define.NANOVDB_EDITOR_FVDB_COMMIT_HASH=${FVDB_COMMIT_HASH} \
+        --config-settings=cmake.build-type=${NANOVDB_EDITOR_BUILD_TYPE} \
         -v \
         --no-build-isolation
     ${Python3_EXECUTABLE} -m pip install --force-reinstall ${NANOVDB_EDITOR_WHEEL_DIR}/nanovdb_editor*.whl
@@ -217,5 +264,3 @@ else()
     endif()
     message(STATUS "NANOVDB_EDITOR_INCLUDE_DIR: ${NANOVDB_EDITOR_INCLUDE_DIR}")
 endif()
-
-

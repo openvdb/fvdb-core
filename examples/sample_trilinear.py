@@ -27,8 +27,8 @@ def main():
     nsplat = index.splat_trilinear(p, n)
     gp = index.ijk
     gd = index_dual.ijk
-    gp = index.grid_to_world(gp.type(dtype))
-    gd = index_dual.grid_to_world(gd.type(dtype))
+    gp = index.voxel_to_world(gp.type(dtype))
+    gd = index_dual.voxel_to_world(gd.type(dtype))
 
     features = torch.ones(index_dual.num_voxels, 32).to(device).to(dtype) * torch.norm(
         gd.type(dtype), dim=-1, keepdim=True
