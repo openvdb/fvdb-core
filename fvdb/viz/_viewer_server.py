@@ -21,9 +21,7 @@ def _get_viewer_server_cpp() -> ViewerCpp:
     """
     global _viewer_server_cpp
     if _viewer_server_cpp is None:
-        raise RuntimeError(
-            "Viewer server is not initialized. Call fvdb.viz.init() first."
-        )
+        raise RuntimeError("Viewer server is not initialized. Call fvdb.viz.init() first.")
     return _viewer_server_cpp
 
 
@@ -82,9 +80,7 @@ def init(
             raise RuntimeError(
                 f"Failed to create Vulkan device with ID {vk_device_id}. You may have an incompatible version of Vulkan installed."
             ) from e
-        _viewer_server_cpp = ViewerCpp(
-            ip_address=ip_address, port=port, device_id=vk_device_id, verbose=verbose
-        )
+        _viewer_server_cpp = ViewerCpp(ip_address=ip_address, port=port, device_id=vk_device_id, verbose=verbose)
     else:
         warnings.warn(
             f"Viewer server is already initialized with IP = {_viewer_server_cpp.ip_address()} and port = {_viewer_server_cpp.port()}."
@@ -141,19 +137,19 @@ def show():
                     var protocol = window.location.protocol; // e.g., "http:" or "https:"
                     var hostname = window.location.hostname; // e.g., "localhost" or "example.com"
                     var viewerPort = "{viewer_server_port}";
-                    
+
                     // Explicitly construct the viewer URL
                     var viewerUrl = protocol + "//" + hostname + ":" + viewerPort;
-                    
+
                     console.log("Viewer URL: " + viewerUrl);
-                    
+
                     // Create and insert the iframe
                     var iframe = document.createElement('iframe');
                     iframe.src = viewerUrl;
                     iframe.width = '100%';
                     iframe.height = '600px';
                     iframe.style.border = 'none';
-                    
+
                     var container = document.getElementById('{viewer_id}');
                     if (container) {{
                         container.appendChild(iframe);
