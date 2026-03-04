@@ -13,6 +13,8 @@ usage() {
   echo "                   wheel      - Build the Python wheel."
   echo "                   ctest      - Run tests (requires tests to be built)."
   echo "                   docstest   - Run pytest markdown documentation tests."
+  echo "                   black      - Run black over Python (matches CI)."
+  echo "                   clang-format - Run clang-format over src/ (matches CI)."
   echo ""
   echo "Options:"
   echo "  -h, --help     Display this help message and exit."
@@ -220,7 +222,7 @@ _first_arg_val="$1"
 BUILD_TYPE="install" # Default build type
 
 if [[ -n "$_first_arg_val" ]]; then
-  if [[ "$_first_arg_val" == "install" || "$_first_arg_val" == "wheel" || "$_first_arg_val" == "ctest" || "$_first_arg_val" == "docstest" ]]; then
+  if [[ "$_first_arg_val" == "install" || "$_first_arg_val" == "wheel" || "$_first_arg_val" == "ctest" || "$_first_arg_val" == "docstest" || "$_first_arg_val" == "black" || "$_first_arg_val" == "clang-format" ]]; then
     BUILD_TYPE="$_first_arg_val"
     shift # Consume the build_type argument
   else
@@ -348,7 +350,15 @@ if [ "$BUILD_TYPE" != "ctest" ] && [ "$BUILD_TYPE" != "docstest" ]; then
 fi
 
 # if the user specified 'wheel' as the build type, then we will build the wheel
-if [ "$BUILD_TYPE" == "wheel" ]; then
+if [ "$BUILD_TYPE" == "black" ]; then
+    echo "Running black (matches CI)"
+    ./src/scripts/run_black.sh
+
+elif [ "$BUILD_TYPE" == "clang-format" ]; then
+    echo "Running clang-format (matches CI clangFormatVersion=18, style=file)"
+    ./src/scripts/run_clang_format.sh
+
+elif [ "$BUILD_TYPE" == "wheel" ]; then
     echo "Build wheel"
     echo "pip wheel . --no-deps --wheel-dir dist/ $PIP_ARGS"
     run_with_sanitized_paths pip wheel . --no-deps --wheel-dir dist/ $PIP_ARGS
@@ -438,6 +448,6 @@ elif [ "$BUILD_TYPE" == "docstest" ]; then
 
 else
     echo "Invalid build/run type: $BUILD_TYPE"
-    echo "Valid build/run types are: wheel, install, ctest, docstest"
+    echo "Valid build/run types are: wheel, install, ctest, docstest, black, clang-format"
     exit 1
 fi
