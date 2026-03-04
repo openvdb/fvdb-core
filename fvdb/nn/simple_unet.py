@@ -30,24 +30,12 @@ The architecture is designed for tasks requiring dense predictions on sparse 3D 
 such as 3D semantic segmentation, shape completion, or volumetric reconstruction.
 """
 
-import math
-from typing import Any, Sequence
-
 import fvdb.nn as fvnn
 import fvdb.torch_jagged as fvdb_jagged
-import torch
 import torch.nn as nn
-from fvdb.types import (
-    NumericMaxRank1,
-    NumericMaxRank2,
-    ValueConstraint,
-    to_Vec3i,
-    to_Vec3iBroadcastable,
-)
-from torch.profiler import record_function
+from fvdb.types import NumericMaxRank1
 
-import fvdb
-from fvdb import ConvolutionPlan, Grid, GridBatch, JaggedTensor
+from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
 
 from .modules import fvnn_module
 
@@ -231,6 +219,7 @@ class SimpleUNetDown(nn.Module):
         self.out_channels = out_channels
         self.momentum = momentum
 
+        self.max_pool = fvnn.MaxPool(kernel_size=2)
         self.channel_fan_out = fvnn.SparseConv3d(in_channels, out_channels, kernel_size=1, stride=1, bias=False)
         self.batch_norm = fvnn.BatchNorm(out_channels, momentum=momentum)
 
@@ -242,12 +231,11 @@ class SimpleUNetDown(nn.Module):
         self.batch_norm.reset_parameters()
 
     def forward(self, data: JaggedTensor, fine_grid: GridBatch, coarse_grid: GridBatch) -> JaggedTensor:
-        plan = ConvolutionPlan.from_grid_batch(kernel_size=1, stride=1, source_grid=fine_grid, target_grid=coarse_grid)
-
         # Decrease the resolution by a factor of 2, same channel count
-        data = fine_grid.max_pool(pool_factor=2, data=data, coarse_grid=coarse_grid)[0]
+        data, _ = self.max_pool(data, fine_grid, coarse_grid)
 
         # Increase the channel count at the lower resolution
+        plan = ConvolutionPlan.from_grid_batch(kernel_size=1, stride=1, source_grid=coarse_grid, target_grid=coarse_grid)
         data = self.channel_fan_out(data, plan)
         return self.batch_norm(data, coarse_grid)
 
@@ -292,9 +280,8 @@ class SimpleUNetUp(nn.Module):
         self.batch_norm.reset_parameters()
 
     def forward(self, data: JaggedTensor, coarse_grid: GridBatch, fine_grid: GridBatch) -> JaggedTensor:
-        plan = ConvolutionPlan.from_grid_batch(kernel_size=1, stride=1, source_grid=coarse_grid, target_grid=fine_grid)
-
         # Decrease the channel count at the lower resolution
+        plan = ConvolutionPlan.from_grid_batch(kernel_size=1, stride=1, source_grid=coarse_grid, target_grid=coarse_grid)
         data = self.channel_fan_in(data, plan)
         data = self.batch_norm(data, coarse_grid)
 
