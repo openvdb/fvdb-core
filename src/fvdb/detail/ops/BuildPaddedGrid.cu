@@ -398,7 +398,7 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchImpl &baseBatchHdl,
     } else {
         coords = paddedIJKForGrid<torch::kCUDA>(baseBatchHdl, bbox);
     }
-    return ops::createNanoGridFromIJK(coords);
+    return ops::_createNanoGridFromIJK(coords);
 }
 
 template <>
@@ -414,7 +414,7 @@ dispatchBuildPaddedGrid<torch::kPrivateUse1>(const GridBatchImpl &baseBatchHdl,
     } else {
         coords = paddedIJKForGrid<torch::kPrivateUse1>(baseBatchHdl, bbox);
     }
-    return ops::createNanoGridFromIJK(coords);
+    return ops::_createNanoGridFromIJK(coords);
 }
 
 template <>

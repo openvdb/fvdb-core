@@ -6,8 +6,6 @@
 
 #include <fvdb/detail/GridBatchImpl.h>
 
-#include <c10/util/intrusive_ptr.h>
-
 #include <cstdint>
 #include <vector>
 

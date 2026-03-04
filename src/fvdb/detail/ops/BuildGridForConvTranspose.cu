@@ -184,7 +184,7 @@ dispatchBuildGridForConvTranspose<torch::kCUDA>(const GridBatchImpl &baseGridHdl
                                                 const nanovdb::Coord &kernelSize,
                                                 const nanovdb::Coord &stride) {
     JaggedTensor coords = convTransposeIJKForGrid(baseGridHdl, kernelSize, stride);
-    return ops::createNanoGridFromIJK(coords);
+    return ops::_createNanoGridFromIJK(coords);
 }
 
 template <>

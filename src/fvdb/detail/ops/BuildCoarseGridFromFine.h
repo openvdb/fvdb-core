@@ -6,10 +6,6 @@
 
 #include <fvdb/detail/GridBatchImpl.h>
 
-#include <nanovdb/NanoVDB.h>
-
-#include <c10/util/intrusive_ptr.h>
-
 namespace fvdb {
 namespace detail {
 namespace ops {

@@ -210,7 +210,7 @@ dispatchCreateNanoGridFromIJK<torch::kCPU>(const JaggedTensor &jaggedCoords) {
 }
 
 nanovdb::GridHandle<TorchDeviceBuffer>
-createNanoGridFromIJK(const JaggedTensor &ijk) {
+_createNanoGridFromIJK(const JaggedTensor &ijk) {
     TORCH_CHECK_VALUE(
         ijk.ldim() == 1,
         "Expected coords to have 1 list dimension, i.e. be a single list of coordinate values, but got",
@@ -243,7 +243,7 @@ c10::intrusive_ptr<GridBatchImpl>
 createNanoGridFromIJK(const JaggedTensor &ijk,
                       const std::vector<nanovdb::Vec3d> &voxelSizes,
                       const std::vector<nanovdb::Vec3d> &origins) {
-    auto handle = createNanoGridFromIJK(ijk);
+    auto handle = _createNanoGridFromIJK(ijk);
     return c10::make_intrusive<GridBatchImpl>(std::move(handle), voxelSizes, origins);
 }
 

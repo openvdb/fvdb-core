@@ -7,10 +7,6 @@
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchImpl.h>
 
-#include <nanovdb/NanoVDB.h>
-
-#include <c10/util/intrusive_ptr.h>
-
 #include <optional>
 
 namespace fvdb {

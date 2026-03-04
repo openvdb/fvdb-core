@@ -30,7 +30,7 @@ nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildGridFromNearestVoxelsToPoints<torch::kCUDA>(
     const JaggedTensor &points, const std::vector<VoxelCoordTransform> &txs) {
     JaggedTensor coords = ops::nearestNeighborIJKForPoints(points, txs);
-    return ops::createNanoGridFromIJK(coords);
+    return ops::_createNanoGridFromIJK(coords);
 }
 
 template <>

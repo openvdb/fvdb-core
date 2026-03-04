@@ -356,7 +356,7 @@ dispatchBuildFineGridFromCoarse<torch::kCUDA>(const GridBatchImpl &coarseBatchHd
                                               const std::optional<JaggedTensor> &subdivMask) {
     JaggedTensor coords =
         dispatchFineIJKForCoarseGrid<torch::kCUDA>(coarseBatchHdl, subdivisionFactor, subdivMask);
-    return ops::createNanoGridFromIJK(coords);
+    return ops::_createNanoGridFromIJK(coords);
 }
 
 template <>
@@ -367,7 +367,7 @@ dispatchBuildFineGridFromCoarse<torch::kPrivateUse1>(
     const std::optional<JaggedTensor> &subdivMask) {
     JaggedTensor coords = dispatchFineIJKForCoarseGrid<torch::kPrivateUse1>(
         coarseBatchHdl, subdivisionFactor, subdivMask);
-    return ops::createNanoGridFromIJK(coords);
+    return ops::_createNanoGridFromIJK(coords);
 }
 
 template <>

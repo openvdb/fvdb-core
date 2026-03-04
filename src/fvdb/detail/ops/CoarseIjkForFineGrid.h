@@ -7,8 +7,6 @@
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchImpl.h>
 
-#include <nanovdb/NanoVDB.h>
-
 namespace fvdb {
 namespace detail {
 namespace ops {

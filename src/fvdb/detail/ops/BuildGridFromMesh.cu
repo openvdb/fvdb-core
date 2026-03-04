@@ -108,7 +108,7 @@ dispatchBuildGridFromMesh<torch::kCUDA>(const JaggedTensor &meshVertices,
                                         const JaggedTensor &meshFaces,
                                         const std::vector<VoxelCoordTransform> &tx) {
     JaggedTensor coords = ops::ijkForMesh(meshVertices, meshFaces, tx);
-    return ops::createNanoGridFromIJK(coords);
+    return ops::_createNanoGridFromIJK(coords);
 }
 
 template <>

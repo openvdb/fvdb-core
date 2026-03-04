@@ -87,7 +87,7 @@ nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildGridFromPoints<torch::kCUDA>(const JaggedTensor &points,
                                           const std::vector<VoxelCoordTransform> &txs) {
     JaggedTensor coords = ijkForPoints(points, txs);
-    return ops::createNanoGridFromIJK(coords);
+    return ops::_createNanoGridFromIJK(coords);
 }
 
 template <>
@@ -122,7 +122,7 @@ dispatchBuildGridFromPoints<torch::kPrivateUse1>(const JaggedTensor &points,
                    c10::kHalf);
 
     JaggedTensor coords = points.jagged_like(ijk);
-    return ops::createNanoGridFromIJK(coords);
+    return ops::_createNanoGridFromIJK(coords);
 }
 
 template <>
