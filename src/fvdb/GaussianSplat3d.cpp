@@ -625,7 +625,8 @@ GaussianSplat3d::renderCropFromProjectedGaussiansImpl(
     const ssize_t cropHeight,
     const ssize_t cropOriginW,
     const ssize_t cropOriginH,
-    const std::optional<torch::Tensor> &backgrounds) {
+    const std::optional<torch::Tensor> &backgrounds,
+    const std::optional<torch::Tensor> &masks) {
     FVDB_FUNC_RANGE();
     // Negative values mean use the whole image, but all values must be negative
     if (cropWidth <= 0 || cropHeight <= 0 || cropOriginW < 0 || cropOriginH < 0) {
@@ -657,29 +658,21 @@ GaussianSplat3d::renderCropFromProjectedGaussiansImpl(
         projectedGaussians.tileOffsets,
         projectedGaussians.tileGaussianIds,
         false,
-        backgrounds);
+        backgrounds,
+        masks);
     torch::Tensor renderedImage  = outputs[0];
     torch::Tensor renderedAlphas = outputs[1];
 
     return {renderedImage, renderedAlphas};
 }
 
-std::tuple<torch::Tensor, torch::Tensor>
-GaussianSplat3d::renderImpl(const torch::Tensor &worldToCameraMatrices,
-                            const torch::Tensor &projectionMatrices,
-                            const fvdb::detail::ops::RenderSettings &settings) {
-    FVDB_FUNC_RANGE();
-    const ProjectedGaussianSplats state =
-        projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settings);
-    return renderCropFromProjectedGaussiansImpl(
-        state, settings.tileSize, settings.imageWidth, settings.imageHeight, 0, 0);
-}
-
 std::tuple<JaggedTensor, JaggedTensor>
 GaussianSplat3d::sparseRenderImpl(const JaggedTensor &pixelsToRender,
                                   const torch::Tensor &worldToCameraMatrices,
                                   const torch::Tensor &projectionMatrices,
-                                  const fvdb::detail::ops::RenderSettings &settings) {
+                                  const fvdb::detail::ops::RenderSettings &settings,
+                                  const std::optional<torch::Tensor> &backgrounds,
+                                  const std::optional<torch::Tensor> &masks) {
     FVDB_FUNC_RANGE();
 
     const SparseProjectedGaussianSplats &state = sparseProjectGaussiansImpl(
@@ -705,7 +698,9 @@ GaussianSplat3d::sparseRenderImpl(const JaggedTensor &pixelsToRender,
                                                                   state.tilePixelMask,
                                                                   state.tilePixelCumsum,
                                                                   state.pixelMap,
-                                                                  false);
+                                                                  false,
+                                                                  backgrounds,
+                                                                  masks);
     auto renderedPixelsJData = rasterizeResult[0];
     auto renderedAlphasJData = rasterizeResult[1];
 
@@ -979,9 +974,16 @@ GaussianSplat3d::renderFromProjectedGaussians(
     const ssize_t cropOriginW,
     const ssize_t cropOriginH,
     const size_t tileSize,
-    const std::optional<torch::Tensor> &backgrounds) {
-    return renderCropFromProjectedGaussiansImpl(
-        projectedGaussians, tileSize, cropWidth, cropHeight, cropOriginW, cropOriginH, backgrounds);
+    const std::optional<torch::Tensor> &backgrounds,
+    const std::optional<torch::Tensor> &masks) {
+    return renderCropFromProjectedGaussiansImpl(projectedGaussians,
+                                                tileSize,
+                                                cropWidth,
+                                                cropHeight,
+                                                cropOriginW,
+                                                cropOriginH,
+                                                backgrounds,
+                                                masks);
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
@@ -997,7 +999,8 @@ GaussianSplat3d::renderImages(const torch::Tensor &worldToCameraMatrices,
                               const float minRadius2d,
                               const float eps2d,
                               const bool antialias,
-                              const std::optional<torch::Tensor> &backgrounds) {
+                              const std::optional<torch::Tensor> &backgrounds,
+                              const std::optional<torch::Tensor> &masks) {
     RenderSettings settings;
     settings.imageWidth     = imageWidth;
     settings.imageHeight    = imageHeight;
@@ -1013,8 +1016,14 @@ GaussianSplat3d::renderImages(const torch::Tensor &worldToCameraMatrices,
 
     const ProjectedGaussianSplats state =
         projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settings);
-    return renderCropFromProjectedGaussiansImpl(
-        state, settings.tileSize, settings.imageWidth, settings.imageHeight, 0, 0, backgrounds);
+    return renderCropFromProjectedGaussiansImpl(state,
+                                                settings.tileSize,
+                                                settings.imageWidth,
+                                                settings.imageHeight,
+                                                0,
+                                                0,
+                                                backgrounds,
+                                                masks);
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
@@ -1177,7 +1186,8 @@ GaussianSplat3d::renderDepths(const torch::Tensor &worldToCameraMatrices,
                               const float minRadius2d,
                               const float eps2d,
                               const bool antialias,
-                              const std::optional<torch::Tensor> &backgrounds) {
+                              const std::optional<torch::Tensor> &backgrounds,
+                              const std::optional<torch::Tensor> &masks) {
     RenderSettings settings;
     settings.imageWidth     = imageWidth;
     settings.imageHeight    = imageHeight;
@@ -1192,8 +1202,14 @@ GaussianSplat3d::renderDepths(const torch::Tensor &worldToCameraMatrices,
 
     const ProjectedGaussianSplats state =
         projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settings);
-    return renderCropFromProjectedGaussiansImpl(
-        state, settings.tileSize, settings.imageWidth, settings.imageHeight, 0, 0, backgrounds);
+    return renderCropFromProjectedGaussiansImpl(state,
+                                                settings.tileSize,
+                                                settings.imageWidth,
+                                                settings.imageHeight,
+                                                0,
+                                                0,
+                                                backgrounds,
+                                                masks);
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
@@ -1235,7 +1251,9 @@ GaussianSplat3d::sparseRenderDepths(const fvdb::JaggedTensor &pixelsToRender,
                                     const size_t tileSize,
                                     const float minRadius2d,
                                     const float eps2d,
-                                    const bool antialias) {
+                                    const bool antialias,
+                                    const std::optional<torch::Tensor> &backgrounds,
+                                    const std::optional<torch::Tensor> &masks) {
     RenderSettings settings;
     settings.imageWidth     = imageWidth;
     settings.imageHeight    = imageHeight;
@@ -1248,7 +1266,8 @@ GaussianSplat3d::sparseRenderDepths(const fvdb::JaggedTensor &pixelsToRender,
     settings.eps2d          = eps2d;
     settings.renderMode     = RenderSettings::RenderMode::DEPTH;
 
-    return sparseRenderImpl(pixelsToRender, worldToCameraMatrices, projectionMatrices, settings);
+    return sparseRenderImpl(
+        pixelsToRender, worldToCameraMatrices, projectionMatrices, settings, backgrounds, masks);
 }
 
 std::tuple<JaggedTensor, JaggedTensor>
@@ -1264,7 +1283,9 @@ GaussianSplat3d::sparseRenderImages(const fvdb::JaggedTensor &pixelsToRender,
                                     const size_t tileSize,
                                     const float minRadius2d,
                                     const float eps2d,
-                                    const bool antialias) {
+                                    const bool antialias,
+                                    const std::optional<torch::Tensor> &backgrounds,
+                                    const std::optional<torch::Tensor> &masks) {
     RenderSettings settings;
     settings.imageWidth     = imageWidth;
     settings.imageHeight    = imageHeight;
@@ -1277,7 +1298,8 @@ GaussianSplat3d::sparseRenderImages(const fvdb::JaggedTensor &pixelsToRender,
     settings.eps2d          = eps2d;
     settings.renderMode     = RenderSettings::RenderMode::RGB;
 
-    return sparseRenderImpl(pixelsToRender, worldToCameraMatrices, projectionMatrices, settings);
+    return sparseRenderImpl(
+        pixelsToRender, worldToCameraMatrices, projectionMatrices, settings, backgrounds, masks);
 }
 
 std::tuple<JaggedTensor, JaggedTensor>
@@ -1293,7 +1315,9 @@ GaussianSplat3d::sparseRenderImagesAndDepths(const fvdb::JaggedTensor &pixelsToR
                                              const size_t tileSize,
                                              const float minRadius2d,
                                              const float eps2d,
-                                             const bool antialias) {
+                                             const bool antialias,
+                                             const std::optional<torch::Tensor> &backgrounds,
+                                             const std::optional<torch::Tensor> &masks) {
     RenderSettings settings;
     settings.imageWidth     = imageWidth;
     settings.imageHeight    = imageHeight;
@@ -1306,7 +1330,8 @@ GaussianSplat3d::sparseRenderImagesAndDepths(const fvdb::JaggedTensor &pixelsToR
     settings.eps2d          = eps2d;
     settings.renderMode     = RenderSettings::RenderMode::RGBD;
 
-    return sparseRenderImpl(pixelsToRender, worldToCameraMatrices, projectionMatrices, settings);
+    return sparseRenderImpl(
+        pixelsToRender, worldToCameraMatrices, projectionMatrices, settings, backgrounds, masks);
 }
 
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
@@ -1432,7 +1457,8 @@ GaussianSplat3d::renderImagesAndDepths(const torch::Tensor &worldToCameraMatrice
                                        const float minRadius2d,
                                        const float eps2d,
                                        const bool antialias,
-                                       const std::optional<torch::Tensor> &backgrounds) {
+                                       const std::optional<torch::Tensor> &backgrounds,
+                                       const std::optional<torch::Tensor> &masks) {
     RenderSettings settings;
     settings.imageWidth     = imageWidth;
     settings.imageHeight    = imageHeight;
@@ -1448,8 +1474,14 @@ GaussianSplat3d::renderImagesAndDepths(const torch::Tensor &worldToCameraMatrice
 
     const ProjectedGaussianSplats state =
         projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settings);
-    return renderCropFromProjectedGaussiansImpl(
-        state, settings.tileSize, settings.imageWidth, settings.imageHeight, 0, 0, backgrounds);
+    return renderCropFromProjectedGaussiansImpl(state,
+                                                settings.tileSize,
+                                                settings.imageWidth,
+                                                settings.imageHeight,
+                                                0,
+                                                0,
+                                                backgrounds,
+                                                masks);
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
@@ -1698,7 +1730,8 @@ gaussianRenderJagged(const JaggedTensor &means,     // [N1 + N2 + ..., 3]
                      const bool return_debug_info,
                      const bool render_depth_only,
                      const bool ortho,
-                     const std::optional<torch::Tensor> &backgrounds) {
+                     const std::optional<torch::Tensor> &backgrounds,
+                     const std::optional<torch::Tensor> &masks) {
     const int ccz = viewmats.rsize(0);                           // number of cameras
     const int ggz = means.rsize(0);                              // number of gaussians
     const int D   = render_depth_only ? 1 : sh_coeffs.rsize(-1); // Dimension of output
@@ -1870,7 +1903,8 @@ gaussianRenderJagged(const JaggedTensor &means,     // [N1 + N2 + ..., 3]
                                                             tile_offsets,
                                                             tile_gaussian_ids,
                                                             false,
-                                                            backgrounds);
+                                                            backgrounds,
+                                                            masks);
     torch::Tensor renderedImages      = outputs[0];
     torch::Tensor renderedAlphaImages = outputs[1];
 

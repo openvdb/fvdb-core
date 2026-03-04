@@ -60,21 +60,22 @@ template <torch::DeviceType>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchGaussianRasterizeBackward(
     // Gaussian parameters
-    const torch::Tensor &means2d,                                // [C, N, 2]
-    const torch::Tensor &conics,                                 // [C, N, 3]
-    const torch::Tensor &features,                               // [C, N, D]
-    const torch::Tensor &opacities,                              // [N]
+    const torch::Tensor &means2d,                                 // [C, N, 2]
+    const torch::Tensor &conics,                                  // [C, N, 3]
+    const torch::Tensor &features,                                // [C, N, D]
+    const torch::Tensor &opacities,                               // [N]
     const RenderWindow2D &renderWindow,
     const uint32_t tileSize,
-    const torch::Tensor &tileOffsets,                            // [C, tile_height, tile_width]
-    const torch::Tensor &tileGaussianIds,                        // [n_isects]
-    const torch::Tensor &renderedAlphas,                         // [C, imageHeight, imageWidth, 1]
-    const torch::Tensor &lastIds,                                // [C, imageHeight, imageWidth]
-    const torch::Tensor &dLossDRenderedFeatures,                 // [C, imageHeight, imageWidth, D]
-    const torch::Tensor &dLossDRenderedAlphas,                   // [C, imageHeight, imageWidth, 1]
+    const torch::Tensor &tileOffsets,                             // [C, tile_height, tile_width]
+    const torch::Tensor &tileGaussianIds,                         // [n_isects]
+    const torch::Tensor &renderedAlphas,                          // [C, imageHeight, imageWidth, 1]
+    const torch::Tensor &lastIds,                                 // [C, imageHeight, imageWidth]
+    const torch::Tensor &dLossDRenderedFeatures,                  // [C, imageHeight, imageWidth, D]
+    const torch::Tensor &dLossDRenderedAlphas,                    // [C, imageHeight, imageWidth, 1]
     const bool absGrad,
     const int64_t numSharedChannelsOverride        = -1,
-    const at::optional<torch::Tensor> &backgrounds = at::nullopt // [C, D]
+    const at::optional<torch::Tensor> &backgrounds = at::nullopt, // [C, D]
+    const at::optional<torch::Tensor> &masks = at::nullopt // [C, tile_height, tile_width] bool
 );
 
 /// @brief Calculate gradients for the sparse Gaussian rasterization process (backward pass)
@@ -151,7 +152,8 @@ dispatchGaussianSparseRasterizeBackward(
     // Options
     const bool absGrad,
     const int64_t numSharedChannelsOverride        = -1,
-    const at::optional<torch::Tensor> &backgrounds = at::nullopt // [C, D]
+    const at::optional<torch::Tensor> &backgrounds = at::nullopt, // [C, D]
+    const at::optional<torch::Tensor> &masks = at::nullopt // [C, tile_height, tile_width] bool
 );
 
 } // namespace ops

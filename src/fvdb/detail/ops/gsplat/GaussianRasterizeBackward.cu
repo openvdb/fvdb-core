@@ -1363,12 +1363,11 @@ dispatchGaussianRasterizeBackward<torch::kCUDA>(
     const torch::Tensor &dLossDRenderedAlphas,   // [C, renderHeight, renderWidth, 1]
     const bool absGrad,
     const int64_t numSharedChannelsOverride,
-    const at::optional<torch::Tensor> &backgrounds) {
+    const at::optional<torch::Tensor> &backgrounds,
+    const at::optional<torch::Tensor> &masks) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means2d));
     uint32_t colorDim   = features.size(-1);
     const bool isPacked = means2d.dim() == 2;
-
-    const std::optional<torch::Tensor> masks = std::nullopt;
 
 #define CALL_BWD_CUDA(N)                                                            \
     case N: {                                                                       \
@@ -1455,13 +1454,12 @@ dispatchGaussianRasterizeBackward<torch::kPrivateUse1>(
     const torch::Tensor &dLossDRenderedAlphas,   // [C, renderHeight, renderWidth, 1]
     const bool absGrad,
     const int64_t numSharedChannelsOverride,
-    const at::optional<torch::Tensor> &backgrounds) {
+    const at::optional<torch::Tensor> &backgrounds,
+    const at::optional<torch::Tensor> &masks) {
     TORCH_CHECK(numSharedChannelsOverride == -1,
                 "PrivateUse1 implementation does not support shared channels override");
     uint32_t colorDim   = features.size(-1);
     const bool isPacked = means2d.dim() == 2;
-
-    const std::optional<torch::Tensor> masks = std::nullopt;
 
 #define CALL_BWD_PRIVATEUSE1(N)                                                                 \
     case N: {                                                                                   \
@@ -1544,7 +1542,8 @@ dispatchGaussianRasterizeBackward<torch::kCPU>(
     const torch::Tensor &dLossDRenderedAlphas,   // [C, renderHeight, renderWidth, 1]
     const bool absGrad,
     const int64_t numSharedChannelsOverride,
-    const at::optional<torch::Tensor> &backgrounds) {
+    const at::optional<torch::Tensor> &backgrounds,
+    const at::optional<torch::Tensor> &masks) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
 }
 
@@ -1570,11 +1569,10 @@ dispatchGaussianSparseRasterizeBackward<torch::kCUDA>(
     const torch::Tensor &pixelMap,                    // [AP]
     const bool absGrad,
     const int64_t numSharedChannelsOverride,
-    const at::optional<torch::Tensor> &backgrounds) {
+    const at::optional<torch::Tensor> &backgrounds,
+    const at::optional<torch::Tensor> &masks) {
     uint32_t colorDim   = features.size(-1);
     const bool isPacked = means2d.dim() == 2;
-
-    const std::optional<torch::Tensor> masks = std::nullopt;
 
 #define CALL_BWD_SPARSE_CUDA(N)                                                     \
     case N: {                                                                       \
@@ -1674,7 +1672,8 @@ dispatchGaussianSparseRasterizeBackward<torch::kPrivateUse1>(
     const torch::Tensor &pixelMap,                    // [AP]
     const bool absGrad,
     const int64_t numSharedChannelsOverride,
-    const at::optional<torch::Tensor> &backgrounds) {
+    const at::optional<torch::Tensor> &backgrounds,
+    const at::optional<torch::Tensor> &masks) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "PrivateUse1 implementation not available");
 }
 
@@ -1700,7 +1699,8 @@ dispatchGaussianSparseRasterizeBackward<torch::kCPU>(
     const torch::Tensor &pixelMap,                    // [AP]
     const bool absGrad,
     const int64_t numSharedChannelsOverride,
-    const at::optional<torch::Tensor> &backgrounds) {
+    const at::optional<torch::Tensor> &backgrounds,
+    const at::optional<torch::Tensor> &masks) {
     TORCH_CHECK_NOT_IMPLEMENTED(false, "CPU implementation not available");
 }
 
