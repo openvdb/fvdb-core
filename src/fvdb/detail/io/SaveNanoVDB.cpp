@@ -437,20 +437,20 @@ saveIndexGridWithBlindData(const std::string &path,
             sourceGridByteSize + sizeof(nanovdb::GridBlindMetaData) + paddedBlindDataSizes[bi];
 
         // Write voxelSize and origin
-        torch::Tensor voxelSize   = gridBatch.voxel_size_at(bi, torch::kFloat64).to(torch::kCPU);
-        torch::Tensor origin      = gridBatch.origin_at(bi, torch::kFloat64).to(torch::kCPU);
-        const double* voxelSizePtr = voxelSize.data_ptr<double>();
+        torch::Tensor voxelSize    = gridBatch.voxel_size_at(bi, torch::kFloat64).to(torch::kCPU);
+        torch::Tensor origin       = gridBatch.origin_at(bi, torch::kFloat64).to(torch::kCPU);
+        const double *voxelSizePtr = voxelSize.data_ptr<double>();
         const double sx            = voxelSizePtr[0];
         const double sy            = voxelSizePtr[1];
         const double sz            = voxelSizePtr[2];
         writeGridData->mVoxelSize  = {sx, sy, sz};
         const double mat[3][3]     = {{sx, 0.0, 0.0},        // row 0
-                                     {0.0, sy, 0.0},        // row 1
-                                     {0.0, 0.0, sz}};       // row 2
+                                      {0.0, sy, 0.0},        // row 1
+                                      {0.0, 0.0, sz}};       // row 2
         const double invMat[3][3]  = {{1.0 / sx, 0.0, 0.0},  // row 0
-                                     {0.0, 1.0 / sy, 0.0},  // row 1
-                                     {0.0, 0.0, 1.0 / sz}}; // row 2
-        const double* originPtr    = origin.data_ptr<double>();
+                                      {0.0, 1.0 / sy, 0.0},  // row 1
+                                      {0.0, 0.0, 1.0 / sz}}; // row 2
+        const double *originPtr    = origin.data_ptr<double>();
         nanovdb::Vec3d trans       = {originPtr[0], originPtr[1], originPtr[2]};
         writeGridData->mMap.set(mat, invMat, trans);
 
