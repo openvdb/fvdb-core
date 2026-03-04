@@ -54,10 +54,7 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeNumContributingGa
                      std::nullopt,
                      backgrounds,
                      masks,
-                     imageWidth,
-                     imageHeight,
-                     imageOriginW,
-                     imageOriginH,
+                     RenderWindow2D{imageWidth, imageHeight, imageOriginW, imageOriginH},
                      tileSize,
                      0,
                      tileOffsets,
@@ -112,8 +109,8 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeNumContributingGa
 
         // (row, col) coordinates are relative to the specified image origin which may
         // be a crop so we need to add the origin to get the absolute pixel coordinates
-        const ScalarType px = col + commonArgs.mImageOriginW + ScalarType{0.5f};
-        const ScalarType py = row + commonArgs.mImageOriginH + ScalarType{0.5f};
+        const ScalarType px = col + commonArgs.renderOriginX() + ScalarType{0.5f};
+        const ScalarType py = row + commonArgs.renderOriginY() + ScalarType{0.5f};
 
         // collect and process batches of gaussians
         // each thread loads one gaussian at a time before rasterizing its

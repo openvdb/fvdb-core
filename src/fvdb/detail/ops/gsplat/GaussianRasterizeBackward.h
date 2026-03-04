@@ -5,6 +5,9 @@
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRASTERIZEBACKWARD_H
 
 #include <fvdb/JaggedTensor.h>
+#include <fvdb/detail/ops/gsplat/GaussianRenderSettings.h>
+
+#include <nanovdb/math/Math.h>
 
 #include <torch/types.h>
 
@@ -27,19 +30,17 @@ namespace ops {
 /// ax² + 2bxy + cy²
 /// @param[in] features Feature / color values of Gaussians [C, N, D]
 /// @param[in] opacities Opacity values for each Gaussian [N]
-/// @param[in] imageWidth Width of the rendered image
-/// @param[in] imageHeight Height of the rendered image
-/// @param[in] imageOriginW X-coordinate of the image origin (left)
-/// @param[in] imageOriginH Y-coordinate of the image origin (top)
+/// @param[in] renderWindow Render window dimensions and origin.
 /// @param[in] tileSize Size of tiles used for rasterization optimization
 /// @param[in] tileOffsets Offsets for tiles [C, tile_height, tile_width]
 /// @param[in] tileGaussianIds Flattened Gaussian IDs for tile intersection [n_isects]
-/// @param[in] renderedAlphas Alpha values from forward pass [C, image_height, image_width, 1]
-/// @param[in] lastIds Last Gaussian IDs per pixel from forward pass [C, image_height, image_width]
+/// @param[in] renderedAlphas Alpha values from forward pass [C, render_height, render_width, 1]
+/// @param[in] lastIds Last Gaussian IDs per pixel from forward pass [C, render_height,
+/// render_width]
 /// @param[out] dLossDRenderedFeatures Gradients of loss with respect to rendered features [C,
-/// image_height, image_width, D]
+/// render_height, render_width, D]
 /// @param[out] dLossDRenderedAlphas Gradients of loss with respect to rendered alphas [C,
-/// image_height, image_width, 1]
+/// render_height, render_width, 1]
 /// @param[in] absGrad Whether to use absolute gradients
 /// @param[in] numSharedChannelsOverride Override for number of shared memory channels (-1 means
 /// auto-select)
@@ -59,14 +60,11 @@ template <torch::DeviceType>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchGaussianRasterizeBackward(
     // Gaussian parameters
-    const torch::Tensor &means2d,   // [C, N, 2]
-    const torch::Tensor &conics,    // [C, N, 3]
-    const torch::Tensor &features,  // [C, N, D]
-    const torch::Tensor &opacities, // [N]
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
+    const torch::Tensor &means2d,                                // [C, N, 2]
+    const torch::Tensor &conics,                                 // [C, N, 3]
+    const torch::Tensor &features,                               // [C, N, D]
+    const torch::Tensor &opacities,                              // [N]
+    const RenderWindow2D &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,                             // [C, tile_height, tile_width]
     const torch::Tensor &tileGaussianIds,                         // [n_isects]
@@ -94,10 +92,7 @@ dispatchGaussianRasterizeBackward(
 /// ax² + 2bxy + cy²
 /// @param[in] features Feature / color values of Gaussians [C, N, D]
 /// @param[in] opacities Opacity values for each Gaussian [N]
-/// @param[in] imageWidth Width of the full image (for coordinate calculations)
-/// @param[in] imageHeight Height of the full image (for coordinate calculations)
-/// @param[in] imageOriginW X-coordinate of the image origin (left)
-/// @param[in] imageOriginH Y-coordinate of the image origin (top)
+/// @param[in] renderWindow Render window dimensions and origin.
 /// @param[in] tileSize Size of tiles used for rasterization optimization
 /// @param[in] tileOffsets Offsets for tiles [C, tile_height, tile_width]
 /// @param[in] tileGaussianIds Flattened Gaussian IDs for tile intersection [n_isects]
@@ -139,10 +134,7 @@ dispatchGaussianSparseRasterizeBackward(
     const torch::Tensor &features,  // [C, N, D]
     const torch::Tensor &opacities, // [N]
     // Image and tile setup
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
+    const RenderWindow2D &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets, // [C, tile_height, tile_width] (dense) or [AT + 1] (sparse)
     const torch::Tensor &tileGaussianIds, // [n_isects]

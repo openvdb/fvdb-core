@@ -74,9 +74,9 @@ class RollingShutterType(IntEnum):
     """
 
 
-class CameraModel(IntEnum):
+class DistortionModel(IntEnum):
     """
-    Camera model for projection / ray generation.
+    Distortion model for projection / ray generation.
 
     Notes:
     - ``PINHOLE`` and ``ORTHOGRAPHIC`` ignore distortion coefficients.

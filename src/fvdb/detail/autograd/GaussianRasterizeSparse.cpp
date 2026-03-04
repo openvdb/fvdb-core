@@ -7,7 +7,7 @@
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
 
-#include <vector>
+#include <nanovdb/math/Math.h>
 
 namespace fvdb::detail::autograd {
 
@@ -38,15 +38,13 @@ RasterizeGaussiansToPixelsSparse::forward(
     FVDB_FUNC_RANGE_WITH_NAME("RasterizeGaussiansToPixelsSparse::forward");
 
     auto variables              = FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
+        const ops::RenderWindow2D renderWindow{imageWidth, imageHeight, imageOriginW, imageOriginH};
         return ops::dispatchGaussianSparseRasterizeForward<DeviceTag>(pixelsToRender,
                                                                       means2d,
                                                                       conics,
                                                                       colors,
                                                                       opacities,
-                                                                      imageWidth,
-                                                                      imageHeight,
-                                                                      imageOriginW,
-                                                                      imageOriginH,
+                                                                      renderWindow,
                                                                       tileSize,
                                                                       tileOffsets,
                                                                       tileGaussianIds,
@@ -172,15 +170,16 @@ RasterizeGaussiansToPixelsSparse::backward(
     auto dLossDRenderedAlphas   = pixelsToRender.jagged_like(dLossDRenderedAlphasJData);
 
     auto variables = FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
+        const ops::RenderWindow2D renderWindow{static_cast<uint32_t>(imageWidth),
+                                               static_cast<uint32_t>(imageHeight),
+                                               static_cast<uint32_t>(imageOriginW),
+                                               static_cast<uint32_t>(imageOriginH)};
         return ops::dispatchGaussianSparseRasterizeBackward<DeviceTag>(pixelsToRender,
                                                                        means2d,
                                                                        conics,
                                                                        features,
                                                                        opacities,
-                                                                       imageWidth,
-                                                                       imageHeight,
-                                                                       imageOriginW,
-                                                                       imageOriginH,
+                                                                       renderWindow,
                                                                        tileSize,
                                                                        tileOffsets,
                                                                        tileGaussianIds,
