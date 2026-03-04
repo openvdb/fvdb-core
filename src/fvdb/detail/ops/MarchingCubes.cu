@@ -18,7 +18,7 @@ namespace ops {
 namespace {
 
 template <typename ScalarT>
-__hostdev__ static inline int
+__hostdev__ inline int
 getCubeType(const ScalarT *sdfValues) {
     int cubeType = 0;
     if (sdfValues[0] < 0) {
@@ -49,7 +49,7 @@ getCubeType(const ScalarT *sdfValues) {
 }
 
 template <typename ScalarT>
-__hostdev__ static inline nanovdb::math::Vec4<ScalarT>
+__hostdev__ inline nanovdb::math::Vec4<ScalarT>
 sdfInterp(const nanovdb::math::Vec3<ScalarT> p1,
           const nanovdb::math::Vec3<ScalarT> p2,
           ScalarT valp1,
@@ -74,7 +74,7 @@ sdfInterp(const nanovdb::math::Vec3<ScalarT> p1,
 }
 
 template <typename ScalarT>
-__hostdev__ static inline void
+__hostdev__ inline void
 fillVertList(nanovdb::math::Vec4<ScalarT> *vert_list,
              int edge_config,
              nanovdb::math::Vec3<ScalarT> *points,

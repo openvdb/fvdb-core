@@ -128,8 +128,8 @@ dilateGrid(const GridBatchImpl &gridBatch, const std::vector<int64_t> &dilationA
                       gridBatch.batchSize());
     TORCH_CHECK_VALUE(std::all_of(dilationAmount.begin(),
                                   dilationAmount.end(),
-                                  [](int64_t amount) { return amount > 0; }),
-                      "dilation amount must be strictly positive.");
+                                  [](int64_t amount) { return amount >= 0; }),
+                      "dilation amount must be non-negative.");
     std::vector<nanovdb::Vec3d> voxS, voxO;
     gridBatch.gridVoxelSizesAndOrigins(voxS, voxO);
     auto hdl = FVDB_DISPATCH_KERNEL_DEVICE(gridBatch.device(), [&]() {

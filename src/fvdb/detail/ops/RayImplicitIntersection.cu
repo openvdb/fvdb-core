@@ -14,7 +14,7 @@ namespace detail {
 namespace ops {
 namespace {
 
-const int INVALID_SIGN = 10;
+constexpr int INVALID_SIGN = 10;
 
 template <typename T>
 __forceinline__ __hostdev__ int

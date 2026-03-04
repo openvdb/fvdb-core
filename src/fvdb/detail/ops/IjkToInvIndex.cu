@@ -6,7 +6,6 @@
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
-#include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
 #include <c10/cuda/CUDAException.h>
 
@@ -70,15 +69,6 @@ IjkToInvIndex(const GridBatchImpl &batchHdl, const JaggedTensor &ijk, bool cumul
                                    bidx, eidx, batchAcc, ijkAcc, outInvIndexAcc, cumulative);
                            };
                            forEachJaggedElementChannelCUDA<scalar_t, 2>(512, 1, ijk, cb);
-                       } else if constexpr (DeviceTag == torch::kPrivateUse1) {
-                           auto cb = [=] __device__(fvdb::JIdxType bidx,
-                                                    int64_t eidx,
-                                                    int64_t cidx,
-                                                    JaggedRAcc32<scalar_t, 2> ijkAcc) {
-                               ijkToInvIndexCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
-                                   bidx, eidx, batchAcc, ijkAcc, outInvIndexAcc, cumulative);
-                           };
-                           forEachJaggedElementChannelPrivateUse1<scalar_t, 2>(1, ijk, cb);
                        } else {
                            auto cb = [=](fvdb::JIdxType bidx,
                                          int64_t eidx,
@@ -102,7 +92,7 @@ ijkToInvIndex(const GridBatchImpl &batchHdl, const JaggedTensor &ijk, bool cumul
         "Expected ijk to have 1 list dimension, i.e. be a single list of coordinate values, but got",
         ijk.ldim(),
         "list dimensions");
-    return FVDB_DISPATCH_KERNEL(
+    return FVDB_DISPATCH_KERNEL_DEVICE(
         ijk.device(), [&]() { return IjkToInvIndex<DeviceTag>(batchHdl, ijk, cumulative); });
 }
 
