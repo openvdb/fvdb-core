@@ -421,9 +421,8 @@ deduplicatePixels(const JaggedTensor &pixelsToRender, int64_t imageWidth, int64_
 
     // Encode (batchIdx, row, col) into a single int64 key:
     //   key = batchIdx * (H * W) + row * W + col
-    // For single-list JaggedTensors, jidx may be empty; synthesize zeros.
-    auto jidxLong =
-        jidx.size(0) == 0 ? torch::zeros({totalPixels}, longOpts) : jidx.to(torch::kLong);
+    // For single-list JaggedTensors, jidx is empty so we skip the batch term entirely.
+    const bool singleList = (jidx.size(0) == 0);
     torch::Tensor rows, cols;
     if (jdata.scalar_type() == torch::kInt32) {
         rows = jdata.select(1, 0).to(torch::kLong);
@@ -432,7 +431,13 @@ deduplicatePixels(const JaggedTensor &pixelsToRender, int64_t imageWidth, int64_
         rows = jdata.select(1, 0);
         cols = jdata.select(1, 1);
     }
-    auto keys = jidxLong * numPixelsPerImage + rows * imageWidth + cols;
+    torch::Tensor keys;
+    if (singleList) {
+        keys = rows * imageWidth + cols;
+    } else {
+        auto jidxLong = jidx.to(torch::kLong);
+        keys          = jidxLong * numPixelsPerImage + rows * imageWidth + cols;
+    }
 
     // Sort keys and find group boundaries
     auto [sortedKeys, sortPerm] = keys.sort();
@@ -442,8 +447,12 @@ deduplicatePixels(const JaggedTensor &pixelsToRender, int64_t imageWidth, int64_
         isGroupStart.slice(0, 1).copy_(sortedKeys.slice(0, 1) != sortedKeys.slice(0, 0, -1));
     }
 
-    // Assign a group ID (0-based) to each sorted position via cumsum
-    auto groupIds        = isGroupStart.cumsum(0) - 1;
+    // Extract first-of-group positions before mutating isGroupStart
+    auto firstInSorted = isGroupStart.nonzero().squeeze(1);
+
+    // Assign a group ID (0-based) to each sorted position via in-place cumsum
+    auto groupIds = isGroupStart.to(torch::kLong);
+    groupIds.cumsum_(0).sub_(1);
     const auto numUnique = groupIds[-1].item<int64_t>() + 1;
 
     if (numUnique == totalPixels) {
@@ -455,12 +464,12 @@ deduplicatePixels(const JaggedTensor &pixelsToRender, int64_t imageWidth, int64_
     inverseIndices.index_put_({sortPerm}, groupIds);
 
     // Pick the first occurrence of each group (in sorted order) and map to original indices
-    auto firstInSorted     = isGroupStart.nonzero().squeeze(1);
     auto uniqueOrigIndices = sortPerm.index_select(0, firstInSorted);
     auto uniqueJData       = jdata.index_select(0, uniqueOrigIndices);
 
     // Build new JaggedTensor offsets for the unique pixels
-    auto uniqueBatchIdx = jidxLong.index_select(0, uniqueOrigIndices);
+    auto uniqueBatchIdx = singleList ? torch::zeros({numUnique}, longOpts)
+                                     : jidx.to(torch::kLong).index_select(0, uniqueOrigIndices);
     auto numLists       = pixelsToRender.num_outer_lists();
     auto countsPerList  = torch::bincount(uniqueBatchIdx, {}, numLists);
     auto newOffsets     = torch::zeros({numLists + 1}, longOpts);
