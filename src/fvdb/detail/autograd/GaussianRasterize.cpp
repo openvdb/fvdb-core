@@ -7,8 +7,6 @@
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
 
-#include <nanovdb/math/Math.h>
-
 namespace fvdb::detail::autograd {
 
 RasterizeGaussiansToPixels::VariableList
@@ -18,20 +16,18 @@ RasterizeGaussiansToPixels::forward(
     const RasterizeGaussiansToPixels::Variable &conics,    // [C, N, 3]
     const RasterizeGaussiansToPixels::Variable &colors,    // [C, N, 3]
     const RasterizeGaussiansToPixels::Variable &opacities, // [N]
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
-    const uint32_t tileSize,
-    const RasterizeGaussiansToPixels::Variable &tileOffsets,     // [C, tile_height, tile_width]
-    const RasterizeGaussiansToPixels::Variable &tileGaussianIds, // [n_isects]
+    const ops::RenderWindow2D &renderWindow,
+    const ops::DenseTileIntersections &tileIntersections,
     const bool absgrad,
     std::optional<RasterizeGaussiansToPixels::Variable> backgrounds,
     std::optional<RasterizeGaussiansToPixels::Variable> masks) {
     FVDB_FUNC_RANGE_WITH_NAME("RasterizeGaussiansToPixels::forward");
 
+    const auto &tileOffsets     = tileIntersections.tileOffsets();
+    const auto &tileGaussianIds = tileIntersections.tileGaussianIds();
+    const uint32_t tileSize     = tileIntersections.tileSize();
+
     auto variables          = FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
-        const ops::RenderWindow2D renderWindow{imageWidth, imageHeight, imageOriginW, imageOriginH};
         return ops::dispatchGaussianRasterizeForward<DeviceTag>(means2d,
                                                                 conics,
                                                                 colors,
@@ -63,11 +59,11 @@ RasterizeGaussiansToPixels::forward(
     }
     ctx->save_for_backward(toSave);
 
-    ctx->saved_data["imageWidth"]   = (int64_t)imageWidth;
-    ctx->saved_data["imageHeight"]  = (int64_t)imageHeight;
+    ctx->saved_data["imageWidth"]   = (int64_t)renderWindow.width;
+    ctx->saved_data["imageHeight"]  = (int64_t)renderWindow.height;
     ctx->saved_data["tileSize"]     = (int64_t)tileSize;
-    ctx->saved_data["imageOriginW"] = (int64_t)imageOriginW;
-    ctx->saved_data["imageOriginH"] = (int64_t)imageOriginH;
+    ctx->saved_data["imageOriginW"] = (int64_t)renderWindow.originW;
+    ctx->saved_data["imageOriginH"] = (int64_t)renderWindow.originH;
     ctx->saved_data["absgrad"]      = absgrad;
 
     return {renderedColors, renderedAlphas};
@@ -80,7 +76,6 @@ RasterizeGaussiansToPixels::backward(RasterizeGaussiansToPixels::AutogradContext
     Variable dLossDRenderedColors = gradOutput.at(0);
     Variable dLossDRenderedAlphas = gradOutput.at(1);
 
-    // ensure the gradients are contiguous if they are not None
     if (dLossDRenderedColors.defined()) {
         dLossDRenderedColors = dLossDRenderedColors.contiguous();
     }
@@ -110,18 +105,15 @@ RasterizeGaussiansToPixels::backward(RasterizeGaussiansToPixels::AutogradContext
         masks = saved.at(optIdx++);
     }
 
-    const int imageWidth   = (int)ctx->saved_data["imageWidth"].toInt();
-    const int imageHeight  = (int)ctx->saved_data["imageHeight"].toInt();
-    const int tileSize     = (int)ctx->saved_data["tileSize"].toInt();
-    const int imageOriginW = (int)ctx->saved_data["imageOriginW"].toInt();
-    const int imageOriginH = (int)ctx->saved_data["imageOriginH"].toInt();
-    const bool absgrad     = ctx->saved_data["absgrad"].toBool();
+    const ops::RenderWindow2D renderWindow{
+        static_cast<uint32_t>(ctx->saved_data["imageWidth"].toInt()),
+        static_cast<uint32_t>(ctx->saved_data["imageHeight"].toInt()),
+        static_cast<uint32_t>(ctx->saved_data["imageOriginW"].toInt()),
+        static_cast<uint32_t>(ctx->saved_data["imageOriginH"].toInt())};
+    const int tileSize = (int)ctx->saved_data["tileSize"].toInt();
+    const bool absgrad = ctx->saved_data["absgrad"].toBool();
 
     auto variables = FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
-        const ops::RenderWindow2D renderWindow{static_cast<uint32_t>(imageWidth),
-                                               static_cast<uint32_t>(imageHeight),
-                                               static_cast<uint32_t>(imageOriginW),
-                                               static_cast<uint32_t>(imageOriginH)};
         return ops::dispatchGaussianRasterizeBackward<DeviceTag>(means2d,
                                                                  conics,
                                                                  colors,
@@ -150,19 +142,16 @@ RasterizeGaussiansToPixels::backward(RasterizeGaussiansToPixels::AutogradContext
     Variable dLossDColors    = std::get<3>(variables);
     Variable dLossDOpacities = std::get<4>(variables);
 
+    // 9 forward params (excluding ctx): means2d, conics, colors, opacities,
+    // renderWindow, tileIntersections, absgrad, backgrounds, masks
     return {
         dLossDMeans2d,
         dLossDConics,
         dLossDColors,
         dLossDOpacities,
-        Variable(),
-        Variable(),
-        Variable(),
-        Variable(),
-        Variable(),
-        Variable(),
-        Variable(),
-        Variable(),
+        Variable(), // renderWindow
+        Variable(), // tileIntersections
+        Variable(), // absgrad
         Variable(), // backgrounds
         Variable(), // masks
     };

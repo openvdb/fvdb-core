@@ -7,8 +7,6 @@
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
 
-#include <nanovdb/math/Math.h>
-
 namespace fvdb::detail::autograd {
 
 RasterizeGaussiansToPixelsSparse::VariableList
@@ -19,26 +17,22 @@ RasterizeGaussiansToPixelsSparse::forward(
     const RasterizeGaussiansToPixelsSparse::Variable &conics,    // [C, N, 3]
     const RasterizeGaussiansToPixelsSparse::Variable &colors,    // [C, N, 3]
     const RasterizeGaussiansToPixelsSparse::Variable &opacities, // [N]
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
-    const uint32_t tileSize,
-    const RasterizeGaussiansToPixelsSparse::Variable
-        &tileOffsets, // [C, tile_height, tile_width] (dense) or [num_active_tiles + 1] (sparse)
-    const RasterizeGaussiansToPixelsSparse::Variable &tileGaussianIds, // [n_isects]
-    const RasterizeGaussiansToPixelsSparse::Variable &activeTiles,     // [num_active_tiles]
-    const RasterizeGaussiansToPixelsSparse::Variable
-        &tilePixelMask, // [num_active_tiles, tileSize, tileSize]
-    const RasterizeGaussiansToPixelsSparse::Variable &tilePixelCumsum, // [num_active_tiles + 1]
-    const RasterizeGaussiansToPixelsSparse::Variable &pixelMap,        // [num_pixels]
+    const ops::RenderWindow2D &renderWindow,
+    const ops::SparseTileIntersections &tileIntersections,
     const bool absgrad,
     std::optional<RasterizeGaussiansToPixelsSparse::Variable> backgrounds,
     std::optional<RasterizeGaussiansToPixelsSparse::Variable> masks) {
     FVDB_FUNC_RANGE_WITH_NAME("RasterizeGaussiansToPixelsSparse::forward");
 
+    const auto &tileOffsets     = tileIntersections.tileOffsets();
+    const auto &tileGaussianIds = tileIntersections.tileGaussianIds();
+    const auto &activeTiles     = tileIntersections.activeTiles();
+    const auto &tilePixelMask   = tileIntersections.tilePixelMask();
+    const auto &tilePixelCumsum = tileIntersections.tilePixelCumsum();
+    const auto &pixelMap        = tileIntersections.pixelMap();
+    const uint32_t tileSize     = tileIntersections.tileSize();
+
     auto variables              = FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
-        const ops::RenderWindow2D renderWindow{imageWidth, imageHeight, imageOriginW, imageOriginH};
         return ops::dispatchGaussianSparseRasterizeForward<DeviceTag>(pixelsToRender,
                                                                       means2d,
                                                                       conics,
@@ -95,11 +89,11 @@ RasterizeGaussiansToPixelsSparse::forward(
     }
     ctx->save_for_backward(toSave);
 
-    ctx->saved_data["imageWidth"]    = (int64_t)imageWidth;
-    ctx->saved_data["imageHeight"]   = (int64_t)imageHeight;
+    ctx->saved_data["imageWidth"]    = (int64_t)renderWindow.width;
+    ctx->saved_data["imageHeight"]   = (int64_t)renderWindow.height;
     ctx->saved_data["tileSize"]      = (int64_t)tileSize;
-    ctx->saved_data["imageOriginW"]  = (int64_t)imageOriginW;
-    ctx->saved_data["imageOriginH"]  = (int64_t)imageOriginH;
+    ctx->saved_data["imageOriginW"]  = (int64_t)renderWindow.originW;
+    ctx->saved_data["imageOriginH"]  = (int64_t)renderWindow.originH;
     ctx->saved_data["numOuterLists"] = (int64_t)numOuterLists;
     ctx->saved_data["absgrad"]       = absgrad;
 
@@ -114,7 +108,6 @@ RasterizeGaussiansToPixelsSparse::backward(
     Variable dLossDRenderedFeaturesJData = gradOutput.at(0);
     Variable dLossDRenderedAlphasJData   = gradOutput.at(1);
 
-    // ensure the gradients are contiguous if they are not None
     if (dLossDRenderedFeaturesJData.defined()) {
         dLossDRenderedFeaturesJData = dLossDRenderedFeaturesJData.contiguous();
     }
@@ -153,11 +146,12 @@ RasterizeGaussiansToPixelsSparse::backward(
         masks = saved.at(optIdx++);
     }
 
-    const int imageWidth        = (int)ctx->saved_data["imageWidth"].toInt();
-    const int imageHeight       = (int)ctx->saved_data["imageHeight"].toInt();
+    const ops::RenderWindow2D renderWindow{
+        static_cast<uint32_t>(ctx->saved_data["imageWidth"].toInt()),
+        static_cast<uint32_t>(ctx->saved_data["imageHeight"].toInt()),
+        static_cast<uint32_t>(ctx->saved_data["imageOriginW"].toInt()),
+        static_cast<uint32_t>(ctx->saved_data["imageOriginH"].toInt())};
     const int tileSize          = (int)ctx->saved_data["tileSize"].toInt();
-    const int imageOriginW      = (int)ctx->saved_data["imageOriginW"].toInt();
-    const int imageOriginH      = (int)ctx->saved_data["imageOriginH"].toInt();
     const int64_t numOuterLists = ctx->saved_data["numOuterLists"].toInt();
     const bool absgrad          = ctx->saved_data["absgrad"].toBool();
 
@@ -170,10 +164,6 @@ RasterizeGaussiansToPixelsSparse::backward(
     auto dLossDRenderedAlphas   = pixelsToRender.jagged_like(dLossDRenderedAlphasJData);
 
     auto variables = FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
-        const ops::RenderWindow2D renderWindow{static_cast<uint32_t>(imageWidth),
-                                               static_cast<uint32_t>(imageHeight),
-                                               static_cast<uint32_t>(imageOriginW),
-                                               static_cast<uint32_t>(imageOriginH)};
         return ops::dispatchGaussianSparseRasterizeBackward<DeviceTag>(pixelsToRender,
                                                                        means2d,
                                                                        conics,
@@ -207,23 +197,16 @@ RasterizeGaussiansToPixelsSparse::backward(
     Variable dLossDColors    = std::get<3>(variables);
     Variable dLossDOpacities = std::get<4>(variables);
 
+    // 10 forward params (excluding ctx): pixelsToRender, means2d, conics, features,
+    // opacities, renderWindow, tileIntersections, absgrad, backgrounds, masks
     return {
         Variable(),      // pixelsToRender
         dLossDMeans2d,   // means2d
         dLossDConics,    // conics
         dLossDColors,    // features
         dLossDOpacities, // opacities
-        Variable(),      // imageWidth
-        Variable(),      // imageHeight
-        Variable(),      // imageOriginW
-        Variable(),      // imageOriginH
-        Variable(),      // tileSize
-        Variable(),      // tileOffsets
-        Variable(),      // tileGaussianIds
-        Variable(),      // activeTiles
-        Variable(),      // tilePixelMask
-        Variable(),      // tilePixelCumsum
-        Variable(),      // pixelMap
+        Variable(),      // renderWindow
+        Variable(),      // tileIntersections
         Variable(),      // absgrad
         Variable(),      // backgrounds
         Variable(),      // masks

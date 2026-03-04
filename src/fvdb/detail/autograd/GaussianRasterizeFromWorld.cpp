@@ -26,22 +26,21 @@ RasterizeGaussiansToPixelsFromWorld3DGS::forward(
     const RasterizeGaussiansToPixelsFromWorld3DGS::Variable &distortionCoeffs,
     const fvdb::detail::ops::RollingShutterType rollingShutterType,
     const fvdb::detail::ops::DistortionModel distortionModel,
-    const uint32_t imageWidth,
-    const uint32_t imageHeight,
-    const uint32_t imageOriginW,
-    const uint32_t imageOriginH,
-    const uint32_t tileSize,
-    const RasterizeGaussiansToPixelsFromWorld3DGS::Variable &tileOffsets,
-    const RasterizeGaussiansToPixelsFromWorld3DGS::Variable &tileGaussianIds,
+    const ops::RenderWindow2D &renderWindow,
+    const ops::DenseTileIntersections &tileIntersections,
     std::optional<RasterizeGaussiansToPixelsFromWorld3DGS::Variable> backgrounds,
     std::optional<RasterizeGaussiansToPixelsFromWorld3DGS::Variable> masks) {
     FVDB_FUNC_RANGE_WITH_NAME("RasterizeGaussiansToPixelsFromWorld3DGS::forward");
 
+    const auto &tileOffsets     = tileIntersections.tileOffsets();
+    const auto &tileGaussianIds = tileIntersections.tileGaussianIds();
+    const uint32_t tileSize     = tileIntersections.tileSize();
+
     fvdb::detail::ops::RenderSettings settings;
-    settings.imageWidth   = imageWidth;
-    settings.imageHeight  = imageHeight;
-    settings.imageOriginW = imageOriginW;
-    settings.imageOriginH = imageOriginH;
+    settings.imageWidth   = renderWindow.width;
+    settings.imageHeight  = renderWindow.height;
+    settings.imageOriginW = renderWindow.originW;
+    settings.imageOriginH = renderWindow.originH;
     settings.tileSize     = tileSize;
 
     auto outputs = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
@@ -95,10 +94,10 @@ RasterizeGaussiansToPixelsFromWorld3DGS::forward(
     }
     ctx->save_for_backward(toSave);
 
-    ctx->saved_data["imageWidth"]         = (int64_t)imageWidth;
-    ctx->saved_data["imageHeight"]        = (int64_t)imageHeight;
-    ctx->saved_data["imageOriginW"]       = (int64_t)imageOriginW;
-    ctx->saved_data["imageOriginH"]       = (int64_t)imageOriginH;
+    ctx->saved_data["imageWidth"]         = (int64_t)renderWindow.width;
+    ctx->saved_data["imageHeight"]        = (int64_t)renderWindow.height;
+    ctx->saved_data["imageOriginW"]       = (int64_t)renderWindow.originW;
+    ctx->saved_data["imageOriginH"]       = (int64_t)renderWindow.originH;
     ctx->saved_data["tileSize"]           = (int64_t)tileSize;
     ctx->saved_data["distortionModel"]    = (int64_t)distortionModel;
     ctx->saved_data["rollingShutterType"] = (int64_t)rollingShutterType;
@@ -148,21 +147,22 @@ RasterizeGaussiansToPixelsFromWorld3DGS::backward(
         masks = saved.at(optIdx++);
     }
 
-    const uint32_t imageWidth   = (uint32_t)ctx->saved_data["imageWidth"].toInt();
-    const uint32_t imageHeight  = (uint32_t)ctx->saved_data["imageHeight"].toInt();
-    const uint32_t imageOriginW = (uint32_t)ctx->saved_data["imageOriginW"].toInt();
-    const uint32_t imageOriginH = (uint32_t)ctx->saved_data["imageOriginH"].toInt();
-    const uint32_t tileSize     = (uint32_t)ctx->saved_data["tileSize"].toInt();
+    const ops::RenderWindow2D renderWindow{
+        static_cast<uint32_t>(ctx->saved_data["imageWidth"].toInt()),
+        static_cast<uint32_t>(ctx->saved_data["imageHeight"].toInt()),
+        static_cast<uint32_t>(ctx->saved_data["imageOriginW"].toInt()),
+        static_cast<uint32_t>(ctx->saved_data["imageOriginH"].toInt())};
+    const uint32_t tileSize = (uint32_t)ctx->saved_data["tileSize"].toInt();
     const auto distortionModel =
         static_cast<fvdb::detail::ops::DistortionModel>(ctx->saved_data["distortionModel"].toInt());
     const auto rollingShutterType = static_cast<fvdb::detail::ops::RollingShutterType>(
         ctx->saved_data["rollingShutterType"].toInt());
 
     fvdb::detail::ops::RenderSettings settings;
-    settings.imageWidth   = imageWidth;
-    settings.imageHeight  = imageHeight;
-    settings.imageOriginW = imageOriginW;
-    settings.imageOriginH = imageOriginH;
+    settings.imageWidth   = renderWindow.width;
+    settings.imageHeight  = renderWindow.height;
+    settings.imageOriginW = renderWindow.originW;
+    settings.imageOriginH = renderWindow.originH;
     settings.tileSize     = tileSize;
 
     auto grads = FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
@@ -195,10 +195,10 @@ RasterizeGaussiansToPixelsFromWorld3DGS::backward(
     Variable dFeatures  = std::get<3>(grads);
     Variable dOpacities = std::get<4>(grads);
 
-    // Return gradients in the same order as forward inputs.
+    // Return gradients in the same order as forward inputs (excluding ctx).
     return {dMeans,     dQuats,     dLogScales, dFeatures,  dOpacities, Variable(), Variable(),
             Variable(), Variable(), Variable(), Variable(), Variable(), Variable(), Variable(),
-            Variable(), Variable(), Variable(), Variable(), Variable(), Variable()};
+            Variable()};
 }
 
 } // namespace fvdb::detail::autograd

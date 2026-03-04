@@ -18,8 +18,9 @@ namespace fvdb::detail::ops {
 namespace {
 
 // Structure to hold arguments and methods for the rasterize num contributing gaussians kernel
-template <typename ScalarType, bool IS_PACKED> struct RasterizeNumContributingGaussiansArgs {
-    using CommonArgs = RasterizeCommonArgs<ScalarType, 1, IS_PACKED>;
+template <typename ScalarType, bool IS_PACKED, typename TileIntersectionsT>
+struct RasterizeNumContributingGaussiansArgs {
+    using CommonArgs = RasterizeCommonArgs<ScalarType, 1, IS_PACKED, TileIntersectionsT>;
     CommonArgs commonArgs;
 
     // In Dense mode, first dimension X = C * imageHeight * imageWidth
@@ -33,36 +34,24 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeNumContributingGa
         const torch::Tensor &opacities,                    // [C, N] or [nnz]
         const at::optional<torch::Tensor> &backgrounds,    // [C, 1]
         const at::optional<torch::Tensor> &masks,          // [C, numTilesH, numTilesW]
+        const TileIntersectionsT &tileIntersections,
         const uint32_t imageWidth,
         const uint32_t imageHeight,
         const uint32_t imageOriginW,
         const uint32_t imageOriginH,
         const uint32_t tileSize,
-        const torch::Tensor &tileOffsets,                               // [C, numTilesH, numTilesW]
-        const torch::Tensor &tileGaussianIds,                           // [totalIntersections]
         const fvdb::JaggedTensor &outNumContributingGaussians,          // [C, imgH, imgW]
-        const fvdb::JaggedTensor &outAlphas,                            // [C, imgH, imgW]
-        const std::optional<torch::Tensor> &activeTiles = std::nullopt, // [AT]
-        const std::optional<torch::Tensor> &tilePixelMask =
-            std::nullopt, // [AT, wordsPerTileBitmask] e.g. [AT, 4]
-        const std::optional<torch::Tensor> &tilePixelCumsum = std::nullopt, // [AT]
-        const std::optional<torch::Tensor> &pixelMap        = std::nullopt)        // [AP]
+        const fvdb::JaggedTensor &outAlphas) // [C, imgH, imgW]
 
-        : commonArgs(means2d,
-                     conics,
-                     opacities,
-                     std::nullopt,
-                     backgrounds,
-                     masks,
-                     RenderWindow2D{imageWidth, imageHeight, imageOriginW, imageOriginH},
-                     tileSize,
-                     0,
-                     tileOffsets,
-                     tileGaussianIds,
-                     activeTiles,
-                     tilePixelMask,
-                     tilePixelCumsum,
-                     pixelMap),
+        : commonArgs(
+              means2d,
+              conics,
+              opacities,
+              std::nullopt,
+              backgrounds,
+              masks,
+              tileIntersections,
+              RenderWindow2D{imageWidth, imageHeight, imageOriginW, imageOriginH}),
           mOutNumContributingGaussians(initJaggedAccessor<int32_t, 1>(
               outNumContributingGaussians, "outNumContributingGaussians")),
           mOutAlphas(initJaggedAccessor<ScalarType, 1>(outAlphas, "outAlphas")) {}
@@ -87,11 +76,15 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeNumContributingGa
     volumeRenderTileForward(const uint32_t cameraId,
                             const uint32_t row,
                             const uint32_t col,
-                            const uint32_t firstGaussianIdInBlock,
-                            const uint32_t lastGaussianIdInBlock,
+                            const int32_t tileRow,
+                            const int32_t tileCol,
                             const uint32_t blockSize,
                             const bool pixelIsActive,
                             const uint32_t activePixelIndex) {
+        const auto [firstGaussianIdInBlock, lastGaussianIdInBlock] =
+            commonArgs.mTileIntersections.tileGaussianRangeFromBlock(
+                blockIdx.x, cameraId, tileRow, tileCol);
+
         alignas(Gaussian2D<ScalarType>) extern __shared__ char s[];
         auto *sharedGaussians = reinterpret_cast<Gaussian2D<ScalarType> *>(s); // [blockSize]
 
@@ -105,12 +98,12 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeNumContributingGa
         bool done = !pixelIsActive;
 
         const uint32_t numBatches =
-            (lastGaussianIdInBlock - firstGaussianIdInBlock + blockSize - 1) / blockSize;
+            commonArgs.numGaussianBatches(firstGaussianIdInBlock, lastGaussianIdInBlock, blockSize);
 
         // (row, col) coordinates are relative to the specified image origin which may
         // be a crop so we need to add the origin to get the absolute pixel coordinates
-        const ScalarType px = col + commonArgs.renderOriginX() + ScalarType{0.5f};
-        const ScalarType py = row + commonArgs.renderOriginY() + ScalarType{0.5f};
+        const ScalarType px = col + commonArgs.mRenderWindow.originW + ScalarType{0.5f};
+        const ScalarType py = row + commonArgs.mRenderWindow.originH + ScalarType{0.5f};
 
         // collect and process batches of gaussians
         // each thread loads one gaussian at a time before rasterizing its
@@ -124,20 +117,20 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeNumContributingGa
 
             // Each thread fetches one gaussian from front to back (tile_gaussian_ids is depth
             // sorted)
-            const uint32_t batchStart = firstGaussianIdInBlock + blockSize * b;
-            const uint32_t idx        = batchStart + tidx;
-            if (idx < lastGaussianIdInBlock) {
-                const int32_t g =
-                    commonArgs.mTileGaussianIds[idx]; // which gaussian we're rendering
-                sharedGaussians[tidx] = commonArgs.getGaussian(g);
-            }
+            commonArgs.loadGaussianBatchFrontToBack(
+                firstGaussianIdInBlock, lastGaussianIdInBlock, b, blockSize, tidx, sharedGaussians);
 
             // Sync threads so all gaussians for this batch are loaded in shared memory
             __syncthreads();
 
             // Volume render Gaussians in this batch
             if (pixelIsActive) { // skip inactive sparse pixels
-                const uint32_t batchSize = min(blockSize, lastGaussianIdInBlock - batchStart);
+                const uint32_t batchStart =
+                    commonArgs.gaussianBatchStartFrontToBack(firstGaussianIdInBlock, b, blockSize);
+                const uint32_t batchSize =
+                    commonArgs.gaussianBatchSizeFrontToBack(lastGaussianIdInBlock,
+                                                            batchStart,
+                                                            blockSize);
                 for (uint32_t t = 0; (t < batchSize) && !done; ++t) {
                     const Gaussian2D<ScalarType> &gaussian = sharedGaussians[t];
 
@@ -162,7 +155,8 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeNumContributingGa
         }
 
         if (pixelIsActive) {
-            const auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
+            const auto pixIdx = commonArgs.mTileIntersections.pixelIndexFromBlock(
+                cameraId, row, col, activePixelIndex, blockIdx.x);
 
             writeNumContributingGaussians(pixIdx, numContributingGaussians);
             writeAlpha(pixIdx, 1.0f - accumTransmittance);
@@ -174,21 +168,16 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeNumContributingGa
  * Rasterization to Pixels Forward Pass
  ****************************************************************************/
 
-template <typename ScalarType, bool IS_PACKED>
+template <typename ScalarType, bool IS_PACKED, typename TileIntersectionsT>
 __global__ void
 rasterizeNumContributingGaussiansForward(
-    RasterizeNumContributingGaussiansArgs<ScalarType, IS_PACKED> args) {
+    RasterizeNumContributingGaussiansArgs<ScalarType, IS_PACKED, TileIntersectionsT> args) {
     auto &commonArgs = args.commonArgs;
 
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
-    int32_t cameraId;
-    int32_t tileRow;
-    int32_t tileCol;
-    uint32_t row, col;
-
-    cuda::std::tie(cameraId, tileRow, tileCol, row, col) =
-        commonArgs.mIsSparse ? commonArgs.sparseCoordinates() : commonArgs.denseCoordinates();
+    const auto [cameraId, tileRow, tileCol, row, col] =
+        commonArgs.mTileIntersections.coordinates(blockIdx.x, threadIdx.x, threadIdx.y);
 
     // NOTE: We keep threads which correspond to pixels outside the image bounds around
     //       to load gaussians from global memory, but they do not contribute to the output.
@@ -196,12 +185,13 @@ rasterizeNumContributingGaussiansForward(
     // pixelInImage: Whether this pixel is inside the image bounds.
     // activePixelIndex: Index of this pixel in the output for the block if it is active
     // (sparse mode only).
-    bool pixelInImage{false};
-    uint32_t activePixelIndex{0};
-    cuda::std::tie(pixelInImage, activePixelIndex) = commonArgs.activePixelIndex(row, col);
+    __shared__ typename TileIntersectionsT::ActivePixelScratch activePixelScratch;
+    const auto [pixelInImage, activePixelIndex] = commonArgs.mTileIntersections.activePixelIndexFromBlock(
+        blockIdx.x, threadIdx.y, threadIdx.x, row, col, activePixelScratch);
 
     if (commonArgs.mHasMasks && pixelInImage && !commonArgs.mMasks[cameraId][tileRow][tileCol]) {
-        auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
+        auto pixIdx = commonArgs.mTileIntersections.pixelIndexFromBlock(
+            cameraId, row, col, activePixelIndex, blockIdx.x);
 
         args.writeNumContributingGaussians(
             pixIdx, commonArgs.mHasBackgrounds ? commonArgs.mBackgrounds[cameraId][0] : 0);
@@ -209,16 +199,11 @@ rasterizeNumContributingGaussiansForward(
         return;
     }
 
-    int32_t firstGaussianIdInBlock;
-    int32_t lastGaussianIdInBlock;
-    cuda::std::tie(firstGaussianIdInBlock, lastGaussianIdInBlock) =
-        commonArgs.tileGaussianRange(cameraId, tileRow, tileCol);
-
     args.volumeRenderTileForward(cameraId,
                                  row,
                                  col,
-                                 firstGaussianIdInBlock,
-                                 lastGaussianIdInBlock,
+                                 tileRow,
+                                 tileCol,
                                  blockDim.x * blockDim.y,
                                  pixelInImage,
                                  activePixelIndex);
@@ -244,20 +229,30 @@ launchRasterizeNumContributingGaussiansForwardKernel(
     const std::optional<torch::Tensor> &pixelMap            = std::nullopt) {
     const at::cuda::OptionalCUDAGuard device_guard(device_of(means2d));
 
-    // tileOffsets can be 3D (dense) or 1D (sparse)
-    const bool tileOffsetsAreSparse = tileOffsets.dim() == 1;
-    if (!tileOffsetsAreSparse) {
-        TORCH_CHECK_VALUE(tileOffsets.size(2) ==
-                              (settings.imageWidth + settings.tileSize - 1) / settings.tileSize,
-                          "tileOffsets width must match the number of tiles in image size");
-        TORCH_CHECK_VALUE(tileOffsets.size(1) ==
-                              (settings.imageHeight + settings.tileSize - 1) / settings.tileSize,
-                          "tileOffsets height must match the number of tiles in image size");
-    }
+    uint32_t C = 0;
+    dispatchTileIntersectionsAccessor(
+        tileOffsets,
+        tileGaussianIds,
+        RenderWindow2D{settings.imageWidth, settings.imageHeight, settings.imageOriginW, settings.imageOriginH},
+        settings.tileSize,
+        0,
+        [&](const auto &tileIntersectionsAccessor) {
+            TORCH_CHECK_VALUE(tileIntersectionsAccessor.numTilesW() ==
+                                  (settings.imageWidth + settings.tileSize - 1) / settings.tileSize,
+                              "tileOffsets width must match the number of tiles in image size");
+            TORCH_CHECK_VALUE(tileIntersectionsAccessor.numTilesH() ==
+                                  (settings.imageHeight + settings.tileSize - 1) / settings.tileSize,
+                              "tileOffsets height must match the number of tiles in image size");
+            C = tileIntersectionsAccessor.cameraCount(static_cast<uint32_t>(means2d.size(0)));
+
+        },
+        activeTiles,
+        tilePixelMask,
+        tilePixelCumsum,
+        pixelMap);
 
     // Get C from tileOffsets for dense mode
     // For sparse mode, C is unused, only used for output sizing for dense mode
-    const uint32_t C           = tileOffsetsAreSparse ? 0 : tileOffsets.size(0);
     const uint32_t tileExtentH = (settings.imageHeight + settings.tileSize - 1) / settings.tileSize;
     const uint32_t tileExtentW = (settings.imageWidth + settings.tileSize - 1) / settings.tileSize;
 
@@ -294,39 +289,51 @@ launchRasterizeNumContributingGaussiansForwardKernel(
     const uint32_t sharedMem =
         settings.tileSize * settings.tileSize * sizeof(Gaussian2D<ScalarType>);
 
-    if (cudaFuncSetAttribute(rasterizeNumContributingGaussiansForward<ScalarType, IS_PACKED>,
-                             cudaFuncAttributeMaxDynamicSharedMemorySize,
-                             sharedMem) != cudaSuccess) {
-        AT_ERROR("Failed to set maximum shared memory size (requested ",
-                 sharedMem,
-                 " bytes), try lowering tile_size.");
-    }
+    const auto launchWithTileIntersections = [&](auto tileIntersections) {
+        using TileIntersectionsT = decltype(tileIntersections);
+        if (cudaFuncSetAttribute(
+                rasterizeNumContributingGaussiansForward<ScalarType, IS_PACKED, TileIntersectionsT>,
+                cudaFuncAttributeMaxDynamicSharedMemorySize,
+                sharedMem) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ",
+                     sharedMem,
+                     " bytes), try lowering tile_size.");
+        }
 
-    const dim3 blockDim = {settings.tileSize, settings.tileSize, 1};
-    const dim3 gridDim  = activeTiles.has_value() // sparse mode
-                              ? dim3(activeTiles.value().size(0), 1, 1)
-                              : dim3(C * tileExtentH * tileExtentW, 1, 1);
-    auto args =
-        RasterizeNumContributingGaussiansArgs<ScalarType, IS_PACKED>(means2d,
-                                                                     conics,
-                                                                     opacities,
-                                                                     backgrounds,
-                                                                     masks,
-                                                                     settings.imageWidth,
-                                                                     settings.imageHeight,
-                                                                     settings.imageOriginW,
-                                                                     settings.imageOriginH,
-                                                                     settings.tileSize,
-                                                                     tileOffsets,
-                                                                     tileGaussianIds,
-                                                                     outNumContributingGaussians,
-                                                                     outAlphas,
-                                                                     activeTiles,
-                                                                     tilePixelMask,
-                                                                     tilePixelCumsum,
-                                                                     pixelMap);
+        auto args = RasterizeNumContributingGaussiansArgs<ScalarType, IS_PACKED, TileIntersectionsT>(
+            means2d,
+            conics,
+            opacities,
+            backgrounds,
+            masks,
+            tileIntersections,
+            settings.imageWidth,
+            settings.imageHeight,
+            settings.imageOriginW,
+            settings.imageOriginH,
+            settings.tileSize,
+            outNumContributingGaussians,
+            outAlphas);
+        const dim3 blockDim = {settings.tileSize, settings.tileSize, 1};
+        const dim3 gridDim  = {static_cast<uint32_t>(tileIntersections.numActiveTiles()), 1, 1};
 
-    rasterizeNumContributingGaussiansForward<<<gridDim, blockDim, sharedMem, stream>>>(args);
+        rasterizeNumContributingGaussiansForward<ScalarType, IS_PACKED, TileIntersectionsT>
+            <<<gridDim, blockDim, sharedMem, stream>>>(args);
+    };
+
+    dispatchTileIntersectionsAccessor(
+        tileOffsets,
+        tileGaussianIds,
+        RenderWindow2D{settings.imageWidth, settings.imageHeight, settings.imageOriginW, settings.imageOriginH},
+        settings.tileSize,
+        0,
+        [&](const auto &tileIntersectionsAccessor) {
+            launchWithTileIntersections(tileIntersectionsAccessor);
+        },
+        activeTiles,
+        tilePixelMask,
+        tilePixelCumsum,
+        pixelMap);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     C10_CUDA_CHECK(cudaStreamSynchronize(stream));
 

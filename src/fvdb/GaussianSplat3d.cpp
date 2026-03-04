@@ -375,20 +375,11 @@ GaussianSplat3d::projectGaussiansImpl(const torch::Tensor &worldToCameraMatrices
     }();
 
     // Intersect projected Gaussians with image tiles [non-differentiable]
-    const int numTilesW = std::ceil(settings.imageWidth / static_cast<float>(settings.tileSize));
-    const int numTilesH = std::ceil(settings.imageHeight / static_cast<float>(settings.tileSize));
-    const auto [tileOffsets, tileGaussianIds] = FVDB_DISPATCH_KERNEL(mMeans.device(), [&]() {
-        return detail::ops::dispatchGaussianTileIntersection<DeviceTag>(ret.perGaussian2dMean,
-                                                                        ret.perGaussianRadius,
-                                                                        ret.perGaussianDepth,
-                                                                        at::nullopt,
-                                                                        C,
-                                                                        settings.tileSize,
-                                                                        numTilesH,
-                                                                        numTilesW);
-    });
-    ret.tileOffsets                           = tileOffsets;     // [C, TH, TW]
-    ret.tileGaussianIds                       = tileGaussianIds; // [TOT_INTERSECTIONS]
+    const detail::ops::DenseTileIntersections tileIntersections(
+        ret.perGaussian2dMean, ret.perGaussianRadius, ret.perGaussianDepth, at::nullopt,
+        settings.tileSize, settings.imageHeight, settings.imageWidth);
+    ret.tileOffsets     = tileIntersections.tileOffsets();     // [C, TH, TW]
+    ret.tileGaussianIds = tileIntersections.tileGaussianIds(); // [TOT_INTERSECTIONS]
 
     return ret;
 }
@@ -607,21 +598,18 @@ GaussianSplat3d::sparseProjectGaussiansImpl(const JaggedTensor &pixelsToRender,
 
     // Intersect projected Gaussians with image tiles [non-differentiable]
     // Use sparse tile intersection which only computes intersections for active tiles
-    const auto [sparseTileOffsets, tileGaussianIds] = FVDB_DISPATCH_KERNEL(mMeans.device(), [&]() {
-        return detail::ops::dispatchGaussianSparseTileIntersection<DeviceTag>(ret.perGaussian2dMean,
-                                                                              ret.perGaussianRadius,
-                                                                              ret.perGaussianDepth,
-                                                                              ret.activeTileMask,
-                                                                              ret.activeTiles,
-                                                                              at::nullopt,
-                                                                              C,
-                                                                              settings.tileSize,
-                                                                              numTilesH,
-                                                                              numTilesW);
-    });
+    const detail::ops::SparseTileIntersections tileIntersections(ret.perGaussian2dMean,
+                                                                 ret.perGaussianRadius,
+                                                                 ret.perGaussianDepth,
+                                                                 ret.activeTileMask,
+                                                                 ret.activeTiles,
+                                                                 at::nullopt,
+                                                                 settings.tileSize,
+                                                                 settings.imageHeight,
+                                                                 settings.imageWidth);
     // Use sparse 1D tile offsets - RasterizeCommonArgs detects the format from dimensions
-    ret.tileOffsets     = sparseTileOffsets; // [num_active_tiles + 1]
-    ret.tileGaussianIds = tileGaussianIds;   // [TOT_INTERSECTIONS]
+    ret.tileOffsets     = tileIntersections.tileOffsets();     // [num_active_tiles + 1]
+    ret.tileGaussianIds = tileIntersections.tileGaussianIds(); // [TOT_INTERSECTIONS]
 
     return ret;
 }
@@ -654,18 +642,19 @@ GaussianSplat3d::renderCropFromProjectedGaussiansImpl(
     // Rasterize projected Gaussians to pixels (differentiable)
     // NOTE:  projectGaussians* performs input checking, we need to apply some further
     // checking before GaussianRasterizeToPixels
+    const detail::ops::DenseTileIntersections tileIntersections(
+        projectedGaussians.tileOffsets, projectedGaussians.tileGaussianIds, tileSize);
+    const detail::ops::RenderWindow2D renderWindow{static_cast<uint32_t>(cropWidth_),
+                                                   static_cast<uint32_t>(cropHeight_),
+                                                   static_cast<uint32_t>(cropOriginW_),
+                                                   static_cast<uint32_t>(cropOriginH_)};
     auto outputs = detail::autograd::RasterizeGaussiansToPixels::apply(
         projectedGaussians.perGaussian2dMean,
         projectedGaussians.perGaussianConic,
         projectedGaussians.perGaussianRenderQuantity,
         projectedGaussians.perGaussianOpacity,
-        cropWidth_,
-        cropHeight_,
-        cropOriginW_,
-        cropOriginH_,
-        tileSize,
-        projectedGaussians.tileOffsets,
-        projectedGaussians.tileGaussianIds,
+        renderWindow,
+        tileIntersections,
         false,
         backgrounds,
         masks);
@@ -690,23 +679,18 @@ GaussianSplat3d::sparseRenderImpl(const JaggedTensor &pixelsToRender,
     // Render using unique (deduplicated) pixels
     const auto &renderPixels = state.hasDuplicates ? state.uniquePixelsToRender : pixelsToRender;
 
+    const detail::ops::SparseTileIntersections tileIntersections(
+        state.tileOffsets, state.tileGaussianIds, settings.tileSize, state.activeTiles,
+        state.tilePixelMask, state.tilePixelCumsum, state.pixelMap);
+    const detail::ops::RenderWindow2D renderWindow{settings.imageWidth, settings.imageHeight, 0, 0};
     auto rasterizeResult =
         detail::autograd::RasterizeGaussiansToPixelsSparse::apply(renderPixels,
                                                                   state.perGaussian2dMean,
                                                                   state.perGaussianConic,
                                                                   state.perGaussianRenderQuantity,
                                                                   state.perGaussianOpacity,
-                                                                  settings.imageWidth,
-                                                                  settings.imageHeight,
-                                                                  0,
-                                                                  0,
-                                                                  settings.tileSize,
-                                                                  state.tileOffsets,
-                                                                  state.tileGaussianIds,
-                                                                  state.activeTiles,
-                                                                  state.tilePixelMask,
-                                                                  state.tilePixelCumsum,
-                                                                  state.pixelMap,
+                                                                  renderWindow,
+                                                                  tileIntersections,
                                                                   false,
                                                                   backgrounds,
                                                                   masks);
@@ -1060,8 +1044,7 @@ GaussianSplat3d::renderImagesFromWorld(const torch::Tensor &worldToCameraMatrice
     torch::Tensor perGaussianDepth;
     torch::Tensor perGaussianOpacity;
     torch::Tensor perGaussianRenderQuantity;
-    torch::Tensor tileOffsets;
-    torch::Tensor tileGaussianIds;
+    detail::ops::DenseTileIntersections tileIntersections;
 
     if (cameraModel == fvdb::detail::ops::DistortionModel::PINHOLE ||
         cameraModel == fvdb::detail::ops::DistortionModel::ORTHOGRAPHIC) {
@@ -1089,8 +1072,8 @@ GaussianSplat3d::renderImagesFromWorld(const torch::Tensor &worldToCameraMatrice
         perGaussianDepth          = state.perGaussianDepth;
         perGaussianOpacity        = state.perGaussianOpacity;
         perGaussianRenderQuantity = state.perGaussianRenderQuantity;
-        tileOffsets               = state.tileOffsets;
-        tileGaussianIds           = state.tileGaussianIds;
+        tileIntersections = detail::ops::DenseTileIntersections(
+            state.tileOffsets, state.tileGaussianIds, tileSize);
     } else {
         // OpenCV camera models: use UT projection to compute radii/depths for tiling/sorting.
         // Rasterization itself is still performed with the 3DGS ray-ellipsoid kernel.
@@ -1140,24 +1123,17 @@ GaussianSplat3d::renderImagesFromWorld(const torch::Tensor &worldToCameraMatrice
         perGaussianRenderQuantity =
             evalSphericalHarmonicsImpl(shDegreeToUse, worldToCameraMatrices, perGaussianRadius);
 
-        const int numTilesW = std::ceil(imageWidth / static_cast<float>(tileSize));
-        const int numTilesH = std::ceil(imageHeight / static_cast<float>(tileSize));
-        std::tie(tileOffsets, tileGaussianIds) = FVDB_DISPATCH_KERNEL(mMeans.device(), [&]() {
-            return detail::ops::dispatchGaussianTileIntersection<DeviceTag>(perGaussian2dMean,
-                                                                            perGaussianRadius,
-                                                                            perGaussianDepth,
-                                                                            at::nullopt,
-                                                                            C,
-                                                                            tileSize,
-                                                                            numTilesH,
-                                                                            numTilesW);
-        });
+        tileIntersections = detail::ops::DenseTileIntersections(
+            perGaussian2dMean, perGaussianRadius, perGaussianDepth, at::nullopt, tileSize,
+            imageHeight, imageWidth);
     }
 
     const torch::Tensor distortionCoeffsForRaster = distortionCoeffs.has_value()
                                                         ? distortionCoeffs.value()
                                                         : torch::empty({C, 0}, mMeans.options());
 
+    const detail::ops::RenderWindow2D renderWindow{
+        static_cast<uint32_t>(imageWidth), static_cast<uint32_t>(imageHeight), 0, 0};
     auto outputs = detail::autograd::RasterizeGaussiansToPixelsFromWorld3DGS::apply(
         mMeans,
         mQuats,
@@ -1170,13 +1146,8 @@ GaussianSplat3d::renderImagesFromWorld(const torch::Tensor &worldToCameraMatrice
         distortionCoeffsForRaster,
         fvdb::detail::ops::RollingShutterType::NONE,
         cameraModel,
-        static_cast<uint32_t>(imageWidth),
-        static_cast<uint32_t>(imageHeight),
-        0,
-        0,
-        static_cast<uint32_t>(tileSize),
-        tileOffsets,
-        tileGaussianIds,
+        renderWindow,
+        tileIntersections,
         backgrounds,
         masks);
 
@@ -1861,11 +1832,11 @@ gaussianRenderJagged(const JaggedTensor &means,     // [N1 + N2 + ..., 3]
                                                                     radii.unsqueeze(0))[0];
         } else {
             const auto sh0 =
-                sh_coeffs_batched.index({0, Slice(), Slice()}).unsqueeze(0);   // [1, nnz, 3]
+                sh_coeffs_batched.index({0, Slice(), Slice()}).unsqueeze(0);    // [1, nnz, 3]
             const auto shN =
-                sh_coeffs_batched.index({Slice(1, None), Slice(), Slice()});   // [K-1, nnz, 3]
+                sh_coeffs_batched.index({Slice(1, None), Slice(), Slice()});    // [K-1, nnz, 3]
             auto [camtoworlds, info] = torch::linalg_inv_ex(viewmats.jdata()); // [ccz, 4, 4]
-            const torch::Tensor dirs = means.jdata().index({gaussian_ids, Slice()}) -
+            const torch::Tensor dirs        = means.jdata().index({gaussian_ids, Slice()}) -
                                        camtoworlds.index({camera_ids, Slice(None, 3), 3});
             renderQuantities =
                 detail::autograd::EvaluateSphericalHarmonics::apply(actualShDegree,
@@ -1884,33 +1855,22 @@ gaussianRenderJagged(const JaggedTensor &means,     // [N1 + N2 + ..., 3]
     }
 
     // Intersect projected Gaussians with image tiles [non-differentiable]
-    const int num_tiles_w = std::ceil(image_width / static_cast<float>(tile_size));
-    const int num_tiles_h = std::ceil(image_height / static_cast<float>(tile_size));
-    std::tuple<torch::Tensor, torch::Tensor> tile_intersections =
-        FVDB_DISPATCH_KERNEL_DEVICE(means.device(), [&]() {
-            return detail::ops::dispatchGaussianTileIntersection<DeviceTag>(
-                means2d, radii, depths, camera_ids, ccz, tile_size, num_tiles_h, num_tiles_w);
-        });
-    torch::Tensor tile_offsets      = std::get<0>(tile_intersections);
-    torch::Tensor tile_gaussian_ids = std::get<1>(tile_intersections);
+    const detail::ops::DenseTileIntersections tileIntersections(
+        means2d, radii, depths, camera_ids, tile_size, image_height, image_width);
     if (return_debug_info) {
-        debug_info["tile_offsets"]      = tile_offsets;
-        debug_info["tile_gaussian_ids"] = tile_gaussian_ids;
+        debug_info["tile_offsets"]      = tileIntersections.tileOffsets();
+        debug_info["tile_gaussian_ids"] = tileIntersections.tileGaussianIds();
     }
 
     // Rasterize projected Gaussians to pixels [differentiable]
+    const detail::ops::RenderWindow2D renderWindow{image_width, image_height, 0, 0};
     auto outputs =
         detail::autograd::RasterizeGaussiansToPixels::apply(means2d,
                                                             conics,
                                                             renderQuantities,
                                                             opacities_batched.contiguous(),
-                                                            image_width,
-                                                            image_height,
-                                                            0,
-                                                            0,
-                                                            tile_size,
-                                                            tile_offsets,
-                                                            tile_gaussian_ids,
+                                                            renderWindow,
+                                                            tileIntersections,
                                                             false,
                                                             backgrounds,
                                                             masks);
