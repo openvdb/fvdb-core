@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/CoordsInGrid.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <c10/cuda/CUDAException.h>
@@ -79,16 +80,15 @@ CoordsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &ijk) {
     return ijk.jagged_like(outMask);
 }
 
-template <>
 JaggedTensor
-dispatchCoordsInGrid<torch::kCUDA>(const GridBatchImpl &batchHdl, const JaggedTensor &coords) {
-    return CoordsInGrid<torch::kCUDA>(batchHdl, coords);
-}
-
-template <>
-JaggedTensor
-dispatchCoordsInGrid<torch::kCPU>(const GridBatchImpl &batchHdl, const JaggedTensor &coords) {
-    return CoordsInGrid<torch::kCPU>(batchHdl, coords);
+coordsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &coords) {
+    TORCH_CHECK_VALUE(
+        coords.ldim() == 1,
+        "Expected ijk to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+        coords.ldim(),
+        "list dimensions");
+    return FVDB_DISPATCH_KERNEL_DEVICE(coords.device(),
+                                       [&]() { return CoordsInGrid<DeviceTag>(batchHdl, coords); });
 }
 
 } // namespace ops

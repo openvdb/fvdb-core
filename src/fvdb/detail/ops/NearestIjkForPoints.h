@@ -7,18 +7,14 @@
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/VoxelCoordTransform.h>
 
-#include <torch/types.h>
-
 #include <vector>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-JaggedTensor
-dispatchNearestNeighborIJKForPoints(const JaggedTensor &points,
-                                    const std::vector<VoxelCoordTransform> &transforms);
+JaggedTensor nearestNeighborIJKForPoints(const JaggedTensor &points,
+                                         const std::vector<VoxelCoordTransform> &transforms);
 
 } // namespace ops
 } // namespace detail

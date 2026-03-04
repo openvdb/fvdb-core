@@ -5,6 +5,7 @@
 #include <fvdb/detail/ops/CubesInGrid.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <ATen/OpMathType.h>
@@ -123,40 +124,34 @@ CubesInGrid(const GridBatchImpl &batchHdl,
     return cubeCenters.jagged_like(outMask);
 }
 
-template <>
 JaggedTensor
-dispatchCubesInGrid<torch::kCUDA>(const GridBatchImpl &batchHdl,
-                                  const JaggedTensor &cubeCenters,
-                                  const Vec3dOrScalar &padMin,
-                                  const Vec3dOrScalar &padMax) {
-    return CubesInGrid<torch::kCUDA, false>(batchHdl, cubeCenters, padMin, padMax);
+cubesInGrid(const GridBatchImpl &batchHdl,
+            const JaggedTensor &cubeCenters,
+            const Vec3dOrScalar &padMin,
+            const Vec3dOrScalar &padMax) {
+    TORCH_CHECK_VALUE(
+        cubeCenters.ldim() == 1,
+        "Expected cube_centers to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+        cubeCenters.ldim(),
+        "list dimensions");
+    return FVDB_DISPATCH_KERNEL_DEVICE(cubeCenters.device(), [&]() {
+        return CubesInGrid<DeviceTag, false>(batchHdl, cubeCenters, padMin, padMax);
+    });
 }
 
-template <>
 JaggedTensor
-dispatchCubesInGrid<torch::kCPU>(const GridBatchImpl &batchHdl,
-                                 const JaggedTensor &cubeCenters,
-                                 const Vec3dOrScalar &padMin,
-                                 const Vec3dOrScalar &padMax) {
-    return CubesInGrid<torch::kCPU, false>(batchHdl, cubeCenters, padMin, padMax);
-}
-
-template <>
-JaggedTensor
-dispatchCubesIntersectGrid<torch::kCUDA>(const GridBatchImpl &batchHdl,
-                                         const JaggedTensor &cubeCenters,
-                                         const Vec3dOrScalar &padMin,
-                                         const Vec3dOrScalar &padMax) {
-    return CubesInGrid<torch::kCUDA, true>(batchHdl, cubeCenters, padMin, padMax);
-}
-
-template <>
-JaggedTensor
-dispatchCubesIntersectGrid<torch::kCPU>(const GridBatchImpl &batchHdl,
-                                        const JaggedTensor &cubeCenters,
-                                        const Vec3dOrScalar &padMin,
-                                        const Vec3dOrScalar &padMax) {
-    return CubesInGrid<torch::kCPU, true>(batchHdl, cubeCenters, padMin, padMax);
+cubesIntersectGrid(const GridBatchImpl &batchHdl,
+                   const JaggedTensor &cubeCenters,
+                   const Vec3dOrScalar &padMin,
+                   const Vec3dOrScalar &padMax) {
+    TORCH_CHECK_VALUE(
+        cubeCenters.ldim() == 1,
+        "Expected cube_centers to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+        cubeCenters.ldim(),
+        "list dimensions");
+    return FVDB_DISPATCH_KERNEL_DEVICE(cubeCenters.device(), [&]() {
+        return CubesInGrid<DeviceTag, true>(batchHdl, cubeCenters, padMin, padMax);
+    });
 }
 
 } // namespace ops

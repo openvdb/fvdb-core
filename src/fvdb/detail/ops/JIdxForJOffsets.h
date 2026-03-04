@@ -10,8 +10,7 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-torch::Tensor dispatchJIdxForJOffsets(torch::Tensor joffsets, int64_t numElements);
+torch::Tensor jIdxForJOffsets(torch::Tensor joffsets, int64_t numElements);
 
 } // namespace ops
 } // namespace detail

@@ -5,6 +5,7 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
 #include <fvdb/detail/utils/TrilinearStencil.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
@@ -276,11 +277,11 @@ SampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
 
 template <torch::DeviceType DeviceTag>
 torch::Tensor
-dispatchSampleGridTrilinearWithGradBackward<DeviceTag>(const GridBatchImpl &batchHdl,
-                                                       const JaggedTensor &points,
-                                                       const torch::Tensor &data,
-                                                       const torch::Tensor &gradOutFeatures,
-                                                       const torch::Tensor &gradOutGradFeatures) {
+dispatchSampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
+                                            const JaggedTensor &points,
+                                            const torch::Tensor &data,
+                                            const torch::Tensor &gradOutFeatures,
+                                            const torch::Tensor &gradOutGradFeatures) {
     return AT_DISPATCH_V2(points.scalar_type(),
                           "SampleGridTrilinearWithGradBackward",
                           AT_WRAP([&] {
@@ -311,6 +312,18 @@ dispatchSampleGridTrilinearWithGradBackward<torch::kPrivateUse1>(const GridBatch
                                                                  const torch::Tensor &,
                                                                  const torch::Tensor &,
                                                                  const torch::Tensor &);
+
+torch::Tensor
+sampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
+                                    const JaggedTensor &points,
+                                    const torch::Tensor &data,
+                                    const torch::Tensor &gradOutFeatures,
+                                    const torch::Tensor &gradOutGradFeatures) {
+    return FVDB_DISPATCH_KERNEL(points.device(), [&]() {
+        return dispatchSampleGridTrilinearWithGradBackward<DeviceTag>(
+            batchHdl, points, data, gradOutFeatures, gradOutGradFeatures);
+    });
+}
 
 } // namespace ops
 } // namespace detail

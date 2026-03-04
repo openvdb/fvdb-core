@@ -4,6 +4,7 @@
 #include <fvdb/detail/GridBatchImpl.h>
 #include <fvdb/detail/ops/JIdxForGrid.h>
 #include <fvdb/detail/ops/JIdxForJOffsets.h>
+#include <fvdb/detail/utils/Utils.h>
 
 #include <c10/cuda/CUDAException.h>
 
@@ -11,18 +12,13 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <>
 torch::Tensor
-dispatchJIdxForGrid<torch::kCPU>(const GridBatchImpl &gridBatch) {
-    return ops::dispatchJIdxForJOffsets<torch::kCPU>(gridBatch.voxelOffsets(),
-                                                     gridBatch.totalVoxels());
-}
-
-template <>
-torch::Tensor
-dispatchJIdxForGrid<torch::kCUDA>(const GridBatchImpl &gridBatch) {
-    return ops::dispatchJIdxForJOffsets<torch::kCUDA>(gridBatch.voxelOffsets(),
-                                                      gridBatch.totalVoxels());
+jIdxForGrid(const GridBatchImpl &batchHdl) {
+    if (batchHdl.batchSize() == 1 || batchHdl.totalVoxels() == 0) {
+        return torch::empty(
+            {0}, torch::TensorOptions().dtype(fvdb::JIdxScalarType).device(batchHdl.device()));
+    }
+    return jIdxForJOffsets(batchHdl.voxelOffsets(), batchHdl.totalVoxels());
 }
 
 } // namespace ops

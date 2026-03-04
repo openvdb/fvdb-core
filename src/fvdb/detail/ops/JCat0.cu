@@ -85,9 +85,8 @@ computeIndexPutArg(
         jidx;            // Which tensor the current element belongs to in the output
 }
 
-template <>
 JaggedTensor
-dispatchJCat0<torch::kCUDA>(const std::vector<JaggedTensor> &vec) {
+jCat0CUDA(const std::vector<JaggedTensor> &vec) {
     c10::cuda::CUDAGuard deviceGuard(vec[0].device());
 
     int64_t totalElements = 0;
@@ -177,9 +176,8 @@ dispatchJCat0<torch::kCUDA>(const std::vector<JaggedTensor> &vec) {
         outJData, outJOffsets, outJIdx, vec[0].jlidx(), vec[0].num_outer_lists());
 }
 
-template <>
 JaggedTensor
-dispatchJCat0<torch::kCPU>(const std::vector<JaggedTensor> &vec) {
+jCat0CPU(const std::vector<JaggedTensor> &vec) {
     const auto device = vec[0].device();
     const auto dtype  = vec[0].scalar_type();
 
@@ -232,6 +230,17 @@ dispatchJCat0<torch::kCPU>(const std::vector<JaggedTensor> &vec) {
     }
     return JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
         outJdata, outJoffsets, outJidx, outJLidx, outNumOuterLists);
+}
+
+JaggedTensor
+jCat0(const std::vector<JaggedTensor> &tensors) {
+    if (tensors[0].device().is_cuda()) {
+        return jCat0CUDA(tensors);
+    } else if (tensors[0].device().is_cpu()) {
+        return jCat0CPU(tensors);
+    } else {
+        TORCH_CHECK(false, "Only CPU and CUDA devices are supported");
+    }
 }
 
 } // namespace ops

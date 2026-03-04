@@ -5,6 +5,7 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/BezierInterpolationWithGradIterator.h>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <ATen/OpMathType.h>
@@ -130,26 +131,16 @@ SampleGridBezierWithGradBackward(const GridBatchImpl &batchHdl,
     return outGrad.reshape(outShape);
 }
 
-template <>
 torch::Tensor
-dispatchSampleGridBezierWithGradBackward<torch::kCUDA>(const GridBatchImpl &batchHdl,
-                                                       const JaggedTensor &points,
-                                                       const torch::Tensor &gradOutFeatures,
-                                                       const torch::Tensor &gradOutGradFeatures,
-                                                       const torch::Tensor &data) {
-    return SampleGridBezierWithGradBackward<torch::kCUDA>(
-        batchHdl, points, gradOutFeatures, gradOutGradFeatures, data);
-}
-
-template <>
-torch::Tensor
-dispatchSampleGridBezierWithGradBackward<torch::kCPU>(const GridBatchImpl &batchHdl,
-                                                      const JaggedTensor &points,
-                                                      const torch::Tensor &gradOutFeatures,
-                                                      const torch::Tensor &gradOutGradFeatures,
-                                                      const torch::Tensor &data) {
-    return SampleGridBezierWithGradBackward<torch::kCPU>(
-        batchHdl, points, gradOutFeatures, gradOutGradFeatures, data);
+sampleGridBezierWithGradBackward(const GridBatchImpl &batchHdl,
+                                 const JaggedTensor &points,
+                                 const torch::Tensor &gradOutFeatures,
+                                 const torch::Tensor &gradOutGradFeatures,
+                                 const torch::Tensor &data) {
+    return FVDB_DISPATCH_KERNEL_DEVICE(points.device(), [&]() {
+        return SampleGridBezierWithGradBackward<DeviceTag>(
+            batchHdl, points, gradOutFeatures, gradOutGradFeatures, data);
+    });
 }
 
 } // namespace ops

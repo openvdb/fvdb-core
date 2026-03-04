@@ -22,6 +22,10 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
+template <torch::DeviceType>
+nanovdb::GridHandle<TorchDeviceBuffer>
+dispatchBuildPaddedGrid(const GridBatchImpl &baseBatchHdl, int bmin, int bmax, bool excludeBorder);
+
 __device__ inline void
 copyCoords(const fvdb::JIdxType bidx,
            const int64_t base,
@@ -394,7 +398,7 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchImpl &baseBatchHdl,
     } else {
         coords = paddedIJKForGrid<torch::kCUDA>(baseBatchHdl, bbox);
     }
-    return ops::dispatchCreateNanoGridFromIJK<torch::kCUDA>(coords);
+    return ops::_createNanoGridFromIJK(coords);
 }
 
 template <>
@@ -410,7 +414,7 @@ dispatchBuildPaddedGrid<torch::kPrivateUse1>(const GridBatchImpl &baseBatchHdl,
     } else {
         coords = paddedIJKForGrid<torch::kPrivateUse1>(baseBatchHdl, bbox);
     }
-    return ops::dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(coords);
+    return ops::_createNanoGridFromIJK(coords);
 }
 
 template <>
@@ -424,6 +428,18 @@ dispatchBuildPaddedGrid<torch::kCPU>(const GridBatchImpl &baseBatchHdl,
     } else {
         return buildPaddedGridFromGridCPU(baseBatchHdl, bmin, bmax);
     }
+}
+
+c10::intrusive_ptr<GridBatchImpl>
+buildPaddedGrid(const GridBatchImpl &baseBatchHdl, int bmin, int bmax, bool excludeBorder) {
+    std::vector<nanovdb::Vec3d> voxS, voxO;
+    baseBatchHdl.gridVoxelSizesAndOrigins(voxS, voxO);
+    auto hdl = FVDB_DISPATCH_KERNEL(baseBatchHdl.device(), [&]() {
+        return dispatchBuildPaddedGrid<DeviceTag>(baseBatchHdl, bmin, bmax, excludeBorder);
+    });
+    auto ret = c10::make_intrusive<GridBatchImpl>(std::move(hdl), voxS, voxO);
+    ret->setPrimalTransformFromDualGrid(baseBatchHdl);
+    return ret;
 }
 
 } // namespace ops

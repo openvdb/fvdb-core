@@ -3,7 +3,6 @@
 //
 #include <fvdb/detail/autograd/JaggedReduce.h>
 #include <fvdb/detail/ops/jagged/JaggedReduce.h>
-#include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>
 
@@ -26,13 +25,7 @@ JaggedSum::forward(JaggedSum::AutogradContext *ctx,
                    JaggedSum::Variable jidx,
                    JaggedSum::Variable joffsets,
                    int64_t dim_size) {
-    TORCH_CHECK_VALUE(jdata.device() == jidx.device(), "jdata and jidx must be on the same device");
-    TORCH_CHECK_VALUE(jdata.device() == joffsets.device(),
-                      "jdata and joffsets must be on the same device");
-
-    torch::Tensor outData = FVDB_DISPATCH_KERNEL_DEVICE(jdata.device(), [&]() {
-        return ops::dispatchJaggedSum<DeviceTag>(jdata, jidx, joffsets, dim_size);
-    });
+    torch::Tensor outData = ops::jaggedSum(jdata, jidx, joffsets, dim_size);
 
     ctx->save_for_backward({jidx});
     return variable_list({outData});
@@ -52,13 +45,7 @@ JaggedMin::forward(JaggedMin::AutogradContext *ctx,
                    JaggedMin::Variable jidx,
                    JaggedMin::Variable joffsets,
                    int64_t dim_size) {
-    TORCH_CHECK_VALUE(jdata.device() == jidx.device(), "jdata and jidx must be on the same device");
-    TORCH_CHECK_VALUE(jdata.device() == joffsets.device(),
-                      "jdata and joffsets must be on the same device");
-
-    auto minOut           = FVDB_DISPATCH_KERNEL_DEVICE(jdata.device(), [&]() {
-        return ops::dispatchJaggedMin<DeviceTag>(jdata, jidx, joffsets, dim_size);
-    });
+    auto minOut           = ops::jaggedMin(jdata, jidx, joffsets, dim_size);
     torch::Tensor minData = minOut[0];
     torch::Tensor minIdx  = minOut[1];
     ctx->save_for_backward({minIdx, joffsets});
@@ -94,13 +81,7 @@ JaggedMax::forward(JaggedMax::AutogradContext *ctx,
                    JaggedMax::Variable jidx,
                    JaggedMax::Variable joffsets,
                    int64_t dim_size) {
-    TORCH_CHECK_VALUE(jdata.device() == jidx.device(), "jdata and jidx must be on the same device");
-    TORCH_CHECK_VALUE(jdata.device() == joffsets.device(),
-                      "jdata and joffsets must be on the same device");
-
-    auto maxOut           = FVDB_DISPATCH_KERNEL_DEVICE(jdata.device(), [&]() {
-        return ops::dispatchJaggedMax<DeviceTag>(jdata, jidx, joffsets, dim_size);
-    });
+    auto maxOut           = ops::jaggedMax(jdata, jidx, joffsets, dim_size);
     torch::Tensor maxData = maxOut[0];
     torch::Tensor maxIdx  = maxOut[1];
 

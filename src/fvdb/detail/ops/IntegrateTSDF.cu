@@ -885,16 +885,17 @@ integrateTSDFImpl(const c10::intrusive_ptr<GridBatchImpl> grid,
     return {unionGrid, outTsdf, outWeights, outFeatures};
 }
 
-template <>
 std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor>
-dispatchIntegrateTSDF<torch::kCUDA>(const c10::intrusive_ptr<GridBatchImpl> grid,
-                                    const double truncationMargin,
-                                    const torch::Tensor &projectionMatrices,
-                                    const torch::Tensor &camToWorldMatrices,
-                                    const JaggedTensor &tsdf,
-                                    const JaggedTensor &weights,
-                                    const torch::Tensor &depthImages,
-                                    const std::optional<torch::Tensor> &weightImages) {
+integrateTSDF(const c10::intrusive_ptr<GridBatchImpl> grid,
+              const double truncationMargin,
+              const torch::Tensor &projectionMatrices,
+              const torch::Tensor &camToWorldMatrices,
+              const JaggedTensor &tsdf,
+              const JaggedTensor &weights,
+              const torch::Tensor &depthImages,
+              const std::optional<torch::Tensor> &weightImages) {
+    TORCH_CHECK_NOT_IMPLEMENTED(grid->device().is_cuda(),
+                                "TSDF integration not implemented on the CPU.");
     const auto [unionGrid, outTsdf, outWeights, outFeatures] = integrateTSDFImpl(grid,
                                                                                  truncationMargin,
                                                                                  projectionMatrices,
@@ -908,31 +909,19 @@ dispatchIntegrateTSDF<torch::kCUDA>(const c10::intrusive_ptr<GridBatchImpl> grid
     return {unionGrid, outTsdf, outWeights};
 }
 
-template <>
-std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor>
-dispatchIntegrateTSDF<torch::kCPU>(const c10::intrusive_ptr<GridBatchImpl> grid,
-                                   const double truncationMargin,
-                                   const torch::Tensor &projectionMatrices,
-                                   const torch::Tensor &camToWorldMatrices,
-                                   const JaggedTensor &tsdf,
-                                   const JaggedTensor &weights,
-                                   const torch::Tensor &depthImages,
-                                   const std::optional<torch::Tensor> &weightImages) {
-    TORCH_CHECK_NOT_IMPLEMENTED(false, "TSDF integration not implemented on the CPU.");
-}
-
-template <>
 std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor, JaggedTensor>
-dispatchIntegrateTSDFWithFeatures<torch::kCUDA>(const c10::intrusive_ptr<GridBatchImpl> grid,
-                                                const double truncationMargin,
-                                                const torch::Tensor &projectionMatrices,
-                                                const torch::Tensor &camToWorldMatrices,
-                                                const JaggedTensor &tsdf,
-                                                const JaggedTensor &features,
-                                                const JaggedTensor &weights,
-                                                const torch::Tensor &depthImages,
-                                                const torch::Tensor &featureImages,
-                                                const std::optional<torch::Tensor> &weightImages) {
+integrateTSDFWithFeatures(const c10::intrusive_ptr<GridBatchImpl> grid,
+                          const double truncationMargin,
+                          const torch::Tensor &projectionMatrices,
+                          const torch::Tensor &camToWorldMatrices,
+                          const JaggedTensor &tsdf,
+                          const JaggedTensor &features,
+                          const JaggedTensor &weights,
+                          const torch::Tensor &depthImages,
+                          const torch::Tensor &featureImages,
+                          const std::optional<torch::Tensor> &weightImages) {
+    TORCH_CHECK_NOT_IMPLEMENTED(grid->device().is_cuda(),
+                                "TSDF integration not implemented on the CPU.");
     return integrateTSDFImpl(grid,
                              truncationMargin,
                              projectionMatrices,
@@ -945,18 +934,4 @@ dispatchIntegrateTSDFWithFeatures<torch::kCUDA>(const c10::intrusive_ptr<GridBat
                              weightImages);
 }
 
-template <>
-std::tuple<c10::intrusive_ptr<GridBatchImpl>, JaggedTensor, JaggedTensor, JaggedTensor>
-dispatchIntegrateTSDFWithFeatures<torch::kCPU>(const c10::intrusive_ptr<GridBatchImpl> grid,
-                                               const double truncationMargin,
-                                               const torch::Tensor &projectionMatrices,
-                                               const torch::Tensor &camToWorldMatrices,
-                                               const JaggedTensor &tsdf,
-                                               const JaggedTensor &features,
-                                               const JaggedTensor &weights,
-                                               const torch::Tensor &depthImages,
-                                               const torch::Tensor &featureImages,
-                                               const std::optional<torch::Tensor> &weightImages) {
-    TORCH_CHECK_NOT_IMPLEMENTED(false, "TSDF integration not implemented on the CPU.");
-}
 } // namespace fvdb::detail::ops

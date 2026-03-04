@@ -3,6 +3,7 @@
 //
 #include <fvdb/detail/ops/JIdxForJOffsets.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
@@ -48,9 +49,8 @@ jIdxForJOffsets(TorchRAcc32<fvdb::JOffsetsType, 1> offsets,
     return;
 }
 
-template <>
 torch::Tensor
-dispatchJIdxForJOffsets<torch::kCUDA>(torch::Tensor joffsets, int64_t numElements) {
+jIdxForJOffsetsCUDA(torch::Tensor joffsets, int64_t numElements) {
     TORCH_CHECK(numElements >= 0,
                 "Cannot call dispatchJIDxForOffsets with negative number of elements");
     auto options = torch::TensorOptions().dtype(fvdb::JIdxScalarType).device(joffsets.device());
@@ -79,9 +79,8 @@ jIdxFill(fvdb::JOffsetsType start,
     }
 }
 
-template <>
 torch::Tensor
-dispatchJIdxForJOffsets<torch::kPrivateUse1>(torch::Tensor joffsets, int64_t numElements) {
+jIdxForJOffsetsPrivateUse1(torch::Tensor joffsets, int64_t numElements) {
     TORCH_CHECK(numElements >= 0,
                 "Cannot call dispatchJIDxForOffsets with negative number of elements");
     auto options = torch::TensorOptions().dtype(fvdb::JIdxScalarType).device(joffsets.device());
@@ -121,9 +120,8 @@ dispatchJIdxForJOffsets<torch::kPrivateUse1>(torch::Tensor joffsets, int64_t num
     return retJIdx;
 }
 
-template <>
 torch::Tensor
-dispatchJIdxForJOffsets<torch::kCPU>(torch::Tensor joffsets, int64_t numElements) {
+jIdxForJOffsetsCPU(torch::Tensor joffsets, int64_t numElements) {
     TORCH_CHECK(numElements >= 0,
                 "Cannot call dispatchJIDxForOffsets with negative number of elements");
     auto options = torch::TensorOptions().dtype(fvdb::JIdxScalarType).device(joffsets.device());
@@ -138,6 +136,17 @@ dispatchJIdxForJOffsets<torch::kCPU>(torch::Tensor joffsets, int64_t numElements
         batchIdxs.push_back(torch::full({count}, i, options));
     }
     return torch::cat(batchIdxs, 0);
+}
+
+torch::Tensor
+jIdxForJOffsets(torch::Tensor joffsets, int64_t numElements) {
+    if (joffsets.device().is_cuda()) {
+        return jIdxForJOffsetsCUDA(joffsets, numElements);
+    } else if (joffsets.device().is_privateuseone()) {
+        return jIdxForJOffsetsPrivateUse1(joffsets, numElements);
+    } else {
+        return jIdxForJOffsetsCPU(joffsets, numElements);
+    }
 }
 
 } // namespace ops

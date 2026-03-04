@@ -4,6 +4,7 @@
 #include <fvdb/detail/GridBatchImpl.h>
 #include <fvdb/detail/ops/ActiveGridGoords.h>
 #include <fvdb/detail/utils/SimpleOpHelper.h>
+#include <fvdb/detail/utils/Utils.h>
 
 namespace fvdb {
 namespace detail {
@@ -31,15 +32,11 @@ struct Processor : public BasePerActiveVoxelProcessor<DeviceTag,
 
 } // End anonymous namespace
 
-template <torch::DeviceType DeviceTag>
 JaggedTensor
-dispatchActiveGridCoords(GridBatchImpl const &gridBatch) {
-    return Processor<DeviceTag>{}.execute(gridBatch);
+activeGridCoords(GridBatchImpl const &gridBatch) {
+    return FVDB_DISPATCH_KERNEL(gridBatch.device(),
+                                [&]() { return Processor<DeviceTag>{}.execute(gridBatch); });
 }
-
-template JaggedTensor dispatchActiveGridCoords<torch::kCUDA>(GridBatchImpl const &);
-template JaggedTensor dispatchActiveGridCoords<torch::kCPU>(GridBatchImpl const &);
-template JaggedTensor dispatchActiveGridCoords<torch::kPrivateUse1>(GridBatchImpl const &);
 
 } // namespace ops
 } // namespace detail

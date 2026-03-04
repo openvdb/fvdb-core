@@ -13,12 +13,11 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-torch::Tensor dispatchSampleGridBezierWithGradBackward(const GridBatchImpl &batchHdl,
-                                                       const JaggedTensor &points,
-                                                       const torch::Tensor &gradOutFeatures,
-                                                       const torch::Tensor &gradOutGradFeatures,
-                                                       const torch::Tensor &data);
+torch::Tensor sampleGridBezierWithGradBackward(const GridBatchImpl &batchHdl,
+                                               const JaggedTensor &points,
+                                               const torch::Tensor &gradOutFeatures,
+                                               const torch::Tensor &gradOutGradFeatures,
+                                               const torch::Tensor &data);
 
 } // namespace ops
 } // namespace detail

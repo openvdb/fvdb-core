@@ -3,7 +3,6 @@
 //
 #include <fvdb/detail/autograd/AvgPoolGrid.h>
 #include <fvdb/detail/ops/DownsampleGridAvgPool.h>
-#include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>
 
@@ -18,10 +17,8 @@ AvgPoolGrid::forward(AvgPoolGrid::AutogradContext *ctx,
                      nanovdb::Coord poolingFactor,
                      nanovdb::Coord stride,
                      AvgPoolGrid::Variable fineData) {
-    torch::Tensor outCoarseData = FVDB_DISPATCH_KERNEL_DEVICE(fineData.device(), [&]() {
-        return ops::dispatchDownsampleGridAvgPool<DeviceTag>(
-            *fineGrid, *coarseGrid, fineData, poolingFactor, stride);
-    });
+    torch::Tensor outCoarseData =
+        ops::downsampleGridAvgPool(*fineGrid, *coarseGrid, fineData, poolingFactor, stride);
 
     ctx->save_for_backward({fineData});
     ctx->saved_data["fine_grid"]        = fineGrid;
@@ -51,12 +48,10 @@ AvgPoolGrid::backward(AvgPoolGrid::AutogradContext *ctx, AvgPoolGrid::variable_l
     const int64_t strideZ        = ctx->saved_data["stride_z"].toInt();
     const nanovdb::Coord poolingFactor(poolingFactorX, poolingFactorY, poolingFactorZ);
     const nanovdb::Coord stride(strideX, strideY, strideZ);
-    Variable gradOut = grad_output.at(0).contiguous(); // [#coarse_voxels | #coarse_corners, *]
+    Variable gradOut = grad_output.at(0); // [#coarse_voxels | #coarse_corners, *]
 
-    Variable outGradIn = FVDB_DISPATCH_KERNEL_DEVICE(gradOut.device(), [&]() {
-        return ops::dispatchDownsampleGridAvgPoolBackward<DeviceTag>(
-            *coarseGrid, *fineGrid, fineData, gradOut, poolingFactor, stride);
-    });
+    Variable outGradIn = ops::downsampleGridAvgPoolBackward(
+        *coarseGrid, *fineGrid, fineData, gradOut, poolingFactor, stride);
 
     return {torch::Tensor(), torch::Tensor(), torch::Tensor(), torch::Tensor(), outGradIn};
 }

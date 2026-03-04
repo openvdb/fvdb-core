@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/VoxelNeighborhood.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <c10/cuda/CUDAException.h>
@@ -102,24 +103,22 @@ VoxelNeighborhood(const GridBatchImpl &batchHdl,
     return ijk.jagged_like(outIndex);
 }
 
-template <>
 JaggedTensor
-dispatchVoxelNeighborhood<torch::kCUDA>(const GridBatchImpl &batchHdl,
-                                        const JaggedTensor &coords,
-                                        nanovdb::Coord extentMin,
-                                        nanovdb::Coord extentMax,
-                                        int32_t shift) {
-    return VoxelNeighborhood<torch::kCUDA>(batchHdl, coords, extentMin, extentMax, shift);
-}
-
-template <>
-JaggedTensor
-dispatchVoxelNeighborhood<torch::kCPU>(const GridBatchImpl &batchHdl,
-                                       const JaggedTensor &coords,
-                                       nanovdb::Coord extentMin,
-                                       nanovdb::Coord extentMax,
-                                       int32_t shift) {
-    return VoxelNeighborhood<torch::kCPU>(batchHdl, coords, extentMin, extentMax, shift);
+voxelNeighborhood(const GridBatchImpl &batchHdl,
+                  const JaggedTensor &coords,
+                  int32_t extent,
+                  int32_t shift) {
+    TORCH_CHECK_VALUE(
+        coords.ldim() == 1,
+        "Expected ijk to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+        coords.ldim(),
+        "list dimensions");
+    TORCH_CHECK_VALUE(extent >= 0, "extent must be >= 0");
+    nanovdb::Coord extentMin(-extent, -extent, -extent);
+    nanovdb::Coord extentMax(extent, extent, extent);
+    return FVDB_DISPATCH_KERNEL_DEVICE(coords.device(), [&]() {
+        return VoxelNeighborhood<DeviceTag>(batchHdl, coords, extentMin, extentMax, shift);
+    });
 }
 
 } // namespace ops

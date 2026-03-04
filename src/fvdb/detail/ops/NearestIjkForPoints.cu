@@ -50,6 +50,13 @@ nearestNeighborIJKForPointCallback(fvdb::JIdxType bidx,
     }
 }
 
+namespace {
+
+template <torch::DeviceType>
+JaggedTensor
+dispatchNearestNeighborIJKForPoints(const JaggedTensor &jaggedPoints,
+                                    const std::vector<VoxelCoordTransform> &transforms);
+
 template <>
 JaggedTensor
 dispatchNearestNeighborIJKForPoints<torch::kCUDA>(
@@ -93,6 +100,15 @@ dispatchNearestNeighborIJKForPoints<torch::kCUDA>(
 
     return JaggedTensor::from_data_offsets_and_list_ids(
         outIJK, jaggedPoints.joffsets() * 8, jaggedPoints.jlidx());
+}
+
+} // namespace
+
+JaggedTensor
+nearestNeighborIJKForPoints(const JaggedTensor &points,
+                            const std::vector<VoxelCoordTransform> &transforms) {
+    TORCH_CHECK(points.device().is_cuda(), "nearestNeighborIJKForPoints only supports CUDA");
+    return dispatchNearestNeighborIJKForPoints<torch::kCUDA>(points, transforms);
 }
 
 } // namespace ops

@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/jagged/JaggedSort.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
 #include <c10/cuda/CUDAException.h>
@@ -138,18 +139,9 @@ JaggedArgsort(const JaggedTensor &jt) {
     return idx;
 }
 
-template <>
 torch::Tensor
-dispatchJaggedArgsort<torch::kCPU>(const JaggedTensor &jt) {
-    TORCH_CHECK(jt.is_cpu(), "jagged tensor must be on CPU");
-    return JaggedArgsort<torch::kCPU>(jt);
-}
-
-template <>
-torch::Tensor
-dispatchJaggedArgsort<torch::kCUDA>(const JaggedTensor &jt) {
-    TORCH_CHECK(jt.is_cuda(), "jagged tensor must be on CUDA");
-    return JaggedArgsort<torch::kCUDA>(jt);
+jaggedArgsort(const JaggedTensor &jt) {
+    return FVDB_DISPATCH_KERNEL_DEVICE(jt.device(), [&]() { return JaggedArgsort<DeviceTag>(jt); });
 }
 
 } // namespace ops

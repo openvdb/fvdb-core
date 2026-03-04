@@ -13,25 +13,19 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-torch::Tensor dispatchTransformPointsToGrid(const GridBatchImpl &batchHdl,
-                                            const JaggedTensor &points,
+torch::Tensor
+transformPointsToGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points, bool isPrimal);
+
+torch::Tensor
+invTransformPointsToGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points, bool isPrimal);
+
+torch::Tensor transformPointsToGridBackward(const GridBatchImpl &batchHdl,
+                                            const JaggedTensor &gradOut,
                                             bool isPrimal);
 
-template <torch::DeviceType>
-torch::Tensor dispatchInvTransformPointsToGrid(const GridBatchImpl &batchHdl,
-                                               const JaggedTensor &points,
+torch::Tensor invTransformPointsToGridBackward(const GridBatchImpl &batchHdl,
+                                               const JaggedTensor &gradOut,
                                                bool isPrimal);
-
-template <torch::DeviceType>
-torch::Tensor dispatchTransformPointsToGridBackward(const GridBatchImpl &batchHdl,
-                                                    const JaggedTensor &gradOut,
-                                                    bool isPrimal);
-
-template <torch::DeviceType>
-torch::Tensor dispatchInvTransformPointsToGridBackward(const GridBatchImpl &batchHdl,
-                                                       const JaggedTensor &gradOut,
-                                                       bool isPrimal);
 
 } // namespace ops
 } // namespace detail
