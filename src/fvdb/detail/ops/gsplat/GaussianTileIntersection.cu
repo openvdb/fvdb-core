@@ -1056,6 +1056,7 @@ gaussianTileIntersectionPrivateUse1Impl(
             auto intersectionsEnd =
                 tilesPerGaussianCumsumPtr[deviceGaussianOffset + deviceGaussianCount - 1];
 #if (CUDART_VERSION < 13000)
+            sleepKernel<<<1, 1, 0, stream>>>();
             nanovdb::util::cuda::memPrefetchAsync(
                 intersectionKeys.data_ptr<int64_t>() + intersectionsStart,
                 (intersectionsEnd - intersectionsStart) * sizeof(int64_t),
