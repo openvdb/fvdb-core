@@ -251,11 +251,6 @@ launchRasterizeNumContributingGaussiansForwardKernel(
         tilePixelCumsum,
         pixelMap);
 
-    // Get C from tileOffsets for dense mode
-    // For sparse mode, C is unused, only used for output sizing for dense mode
-    const uint32_t tileExtentH = (settings.imageHeight + settings.tileSize - 1) / settings.tileSize;
-    const uint32_t tileExtentW = (settings.imageWidth + settings.tileSize - 1) / settings.tileSize;
-
     TORCH_CHECK_VALUE(pixelMap.has_value() == pixelsToRender.has_value(),
                       "pixelMap and pixelsToRender must be provided together");
     if (pixelMap.has_value()) {

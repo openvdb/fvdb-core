@@ -154,7 +154,7 @@ struct RasterizeCommonArgs {
 
     // Construct a Gaussian2D object from the input tensors at the given index
     inline __device__ Gaussian2D<ScalarType>
-    getGaussian(const uint32_t index) {
+    getGaussian(const uint32_t index) const {
         if constexpr (IS_PACKED) {
             return Gaussian2D<ScalarType>(
                 index,
