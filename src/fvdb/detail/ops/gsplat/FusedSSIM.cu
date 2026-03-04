@@ -589,7 +589,17 @@ imagePrefetchBatchAsync(const torch::TensorList &tensors,
                         int deviceId,
                         cudaStream_t stream) {
     TORCH_CHECK(stream, "cudaMemPrefetchBatchAsync does not support the default stream");
-
+#if (CUDART_VERSION < 13000)
+    for (size_t i = 0; i < tensors.size(); ++i) {
+        const auto &tensor = tensors[i];
+        TORCH_CHECK(tensor.is_contiguous(), "Tensor to prefetch is not contiguous");
+        C10_CUDA_CHECK(
+            nanovdb::util::cuda::memPrefetchAsync(tensor.data_ptr<float>() + localElementOffset,
+                                                  localElementCount * sizeof(float),
+                                                  deviceId,
+                                                  stream));
+    }
+#else
     std::vector<void *> prefetchPointers;
     std::vector<size_t> prefetchSizes;
     cudaMemLocation location                       = {cudaMemLocationTypeDevice, deviceId};
@@ -610,6 +620,7 @@ imagePrefetchBatchAsync(const torch::TensorList &tensors,
                                              prefetchLocations.size(),
                                              0,
                                              stream));
+#endif
 }
 
 } // namespace

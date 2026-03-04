@@ -1055,7 +1055,18 @@ gaussianTileIntersectionPrivateUse1Impl(
                 (deviceId == 0) ? 0 : tilesPerGaussianCumsumPtr[deviceGaussianOffset - 1];
             auto intersectionsEnd =
                 tilesPerGaussianCumsumPtr[deviceGaussianOffset + deviceGaussianCount - 1];
-
+#if (CUDART_VERSION < 13000)
+            nanovdb::util::cuda::memPrefetchAsync(
+                intersectionKeys.data_ptr<int64_t>() + intersectionsStart,
+                (intersectionsEnd - intersectionsStart) * sizeof(int64_t),
+                deviceId,
+                stream);
+            nanovdb::util::cuda::memPrefetchAsync(
+                intersectionValues.data_ptr<int32_t>() + intersectionsStart,
+                (intersectionsEnd - intersectionsStart) * sizeof(int32_t),
+                deviceId,
+                stream);
+#else
             std::vector<void *> prefetchPointers;
             std::vector<size_t> prefetchSizes;
             const cudaMemLocation location                 = {cudaMemLocationTypeDevice, deviceId};
@@ -1078,6 +1089,7 @@ gaussianTileIntersectionPrivateUse1Impl(
                                                      prefetchLocations.size(),
                                                      0,
                                                      stream));
+#endif
             C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
         }
 

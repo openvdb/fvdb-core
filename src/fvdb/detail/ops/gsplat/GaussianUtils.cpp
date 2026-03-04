@@ -35,7 +35,21 @@ perCameraPrefetchBatchAsync(const torch::TensorList &tensors,
                             int deviceId,
                             cudaStream_t stream) {
     TORCH_CHECK(stream, "cudaMemPrefetchBatchAsync does not support the default stream");
-
+#if (CUDART_VERSION < 13000)
+    for (size_t i = 0; i < tensors.size(); ++i) {
+        const auto &tensor = tensors[i];
+        TORCH_CHECK(tensor.is_contiguous(), "Tensor to prefetch is not contiguous");
+        TORCH_CHECK(cameraOffset + cameraCount <= tensor.size(0),
+                    "Tensor does not have a batched first dimension");
+        size_t scalarSize = c10::elementSize(tensor.scalar_type());
+        C10_CUDA_CHECK(
+            nanovdb::util::cuda::memPrefetchAsync(static_cast<uint8_t *>(tensor.data_ptr()) +
+                                                      cameraOffset * tensor.stride(0) * scalarSize,
+                                                  cameraCount * tensor.stride(0) * scalarSize,
+                                                  deviceId,
+                                                  stream));
+    }
+#else
     std::vector<void *> prefetchPointers;
     std::vector<size_t> prefetchSizes;
     const cudaMemLocation location                 = {cudaMemLocationTypeDevice, deviceId};
@@ -60,6 +74,7 @@ perCameraPrefetchBatchAsync(const torch::TensorList &tensors,
                                              prefetchLocations.size(),
                                              0,
                                              stream));
+#endif
 }
 
 } // namespace fvdb::detail::ops
