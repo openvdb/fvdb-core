@@ -14,7 +14,7 @@ patterns. The architecture includes:
 
 - Encoder path: Progressive downsampling with channel expansion
 - Decoder path: Progressive upsampling with channel reduction
-- Skip connections: Feature concatenation between encoder and decoder
+- Skip connections: Feature addition between encoder and decoder
 - Residual connections: Within convolutional blocks for improved gradient flow
 - Adaptive padding: Handles convolution boundary conditions for sparse grids
 
@@ -523,7 +523,6 @@ class SimpleUNetUnpad(nn.Module):
         in_channels (int): Number of input channels (base channels from the network).
         out_channels (int): Number of output channels for final predictions.
         kernel_size (NumericMaxRank1): Size of convolution kernels. Defaults to 3.
-        momentum (float): Momentum parameter for batch normalization. Defaults to 0.1.
     """
 
     def __init__(self, in_channels: int, out_channels: int, kernel_size: NumericMaxRank1 = 3):
