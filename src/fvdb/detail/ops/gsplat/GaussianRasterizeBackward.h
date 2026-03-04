@@ -60,10 +60,10 @@ template <torch::DeviceType>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchGaussianRasterizeBackward(
     // Gaussian parameters
-    const torch::Tensor &means2d,                                // [C, N, 2]
-    const torch::Tensor &conics,                                 // [C, N, 3]
-    const torch::Tensor &features,                               // [C, N, D]
-    const torch::Tensor &opacities,                              // [N]
+    const torch::Tensor &means2d,                                 // [C, N, 2]
+    const torch::Tensor &conics,                                  // [C, N, 3]
+    const torch::Tensor &features,                                // [C, N, D]
+    const torch::Tensor &opacities,                               // [N]
     const RenderWindow2D &renderWindow,
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,                             // [C, tile_height, tile_width]
