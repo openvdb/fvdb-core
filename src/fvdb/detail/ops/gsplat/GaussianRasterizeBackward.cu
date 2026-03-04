@@ -1236,13 +1236,13 @@ callRasterizeBackwardPrivateUse1(
         uint32_t cameraCount =
             cuda::ceil_div(deviceTileOffset + deviceTileCount, tileCount / C) - cameraOffset;
         if (deviceTileCount) {
-            std::vector<torch::Tensor> tensors = {means2d,
-                                                  conics,
-                                                  features,
-                                                  opacities,
-                                                  tileOffsets,
-                                                  renderedAlphas.jdata(),
-                                                  lastGaussianIds.jdata(),
+            std::vector<torch::Tensor> tensors = {// means2d,
+                                                  // conics,
+                                                  // features,
+                                                  // opacities,
+                                                  // tileOffsets,
+                                                  // renderedAlphas.jdata(),
+                                                  // lastGaussianIds.jdata(),
                                                   dLossDRenderedFeatures.jdata(),
                                                   dLossDRenderedAlphas.jdata(),
                                                   outDLossDMeans2d,
