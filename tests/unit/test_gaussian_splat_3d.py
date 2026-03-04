@@ -3831,5 +3831,266 @@ class TestGaussianRenderMasks(BaseGaussianTestCase):
         self.assertTrue(torch.equal(out, expected))
 
 
+class TestGaussianRenderSparseDuplicatePixels(BaseGaussianTestCase):
+    """Tests that sparse rendering correctly handles duplicate pixel coordinates."""
+
+    def _make_pixels_with_duplicates(self, num_unique=200, num_extra_dupes=50):
+        """Create pixel coords with guaranteed duplicates, returning (pixels, y_all, x_all)."""
+        idx = torch.randperm(self.width * self.height)[:num_unique]
+        x_coords = idx % self.width
+        y_coords = idx // self.width
+        base = torch.stack([y_coords, x_coords], 1)
+        dupes = base[:num_extra_dupes]
+        pixels = torch.cat([base, dupes], dim=0)
+        perm = torch.randperm(pixels.size(0))
+        pixels = pixels[perm]
+        return pixels, pixels[:, 0], pixels[:, 1]
+
+    def test_sparse_render_depths_with_duplicates(self):
+        pixels, y_all, x_all = self._make_pixels_with_duplicates()
+        pixels_to_render = JaggedTensor([pixels]).to(self.device)
+
+        sparse_depth, sparse_alphas = self.gs3d.sparse_render_depths(
+            pixels_to_render,
+            self.cam_to_world_mats[0:1],
+            self.projection_mats[0:1],
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+        )
+
+        self.assertEqual(sparse_depth.jdata.size(0), pixels.size(0))
+        self.assertEqual(sparse_alphas.jdata.size(0), pixels.size(0))
+
+        dense_depth, dense_alphas = self.gs3d.render_depths(
+            self.cam_to_world_mats[0:1],
+            self.projection_mats[0:1],
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+        )
+
+        dense_depth_pixels = dense_depth[0, y_all.to(self.device), x_all.to(self.device)]
+        dense_alphas_pixels = dense_alphas[0, y_all.to(self.device), x_all.to(self.device)]
+
+        self.assertTrue(
+            torch.allclose(sparse_depth.jdata, dense_depth_pixels, atol=1e-5, rtol=1e-8),
+            "Sparse depth with duplicates does not match dense",
+        )
+        self.assertTrue(
+            torch.allclose(sparse_alphas.jdata, dense_alphas_pixels, atol=1e-5, rtol=1e-8),
+            "Sparse alphas with duplicates does not match dense",
+        )
+
+    def test_sparse_render_images_with_duplicates(self):
+        pixels, y_all, x_all = self._make_pixels_with_duplicates()
+        pixels_to_render = JaggedTensor([pixels]).to(self.device)
+
+        sparse_features, sparse_alphas = self.gs3d.sparse_render_images(
+            pixels_to_render,
+            self.cam_to_world_mats[0:1],
+            self.projection_mats[0:1],
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+        )
+
+        self.assertEqual(sparse_features.jdata.size(0), pixels.size(0))
+
+        dense_features, dense_alphas = self.gs3d.render_images(
+            self.cam_to_world_mats[0:1],
+            self.projection_mats[0:1],
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+        )
+
+        dense_features_pixels = dense_features[0, y_all.to(self.device), x_all.to(self.device)]
+        dense_alphas_pixels = dense_alphas[0, y_all.to(self.device), x_all.to(self.device)]
+
+        self.assertTrue(
+            torch.allclose(sparse_features.jdata, dense_features_pixels, atol=1e-5, rtol=1e-8),
+            "Sparse features with duplicates does not match dense",
+        )
+        self.assertTrue(
+            torch.allclose(sparse_alphas.jdata, dense_alphas_pixels, atol=1e-5, rtol=1e-8),
+            "Sparse alphas with duplicates does not match dense",
+        )
+
+    def test_sparse_render_depth_backward_with_duplicates(self):
+        pixels, y_all, x_all = self._make_pixels_with_duplicates(num_unique=500, num_extra_dupes=100)
+        pixels_to_render = JaggedTensor([pixels]).to(self.device)
+
+        sparse_depth, sparse_alphas = self.gs3d.sparse_render_depths(
+            pixels_to_render,
+            self.cam_to_world_mats[0:1],
+            self.projection_mats[0:1],
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+        )
+
+        l1 = torch.mean(sparse_depth.jdata) + sparse_alphas.jdata.sum()
+        l1.backward()
+
+        assert self.gs3d.means.grad is not None
+        sparse_means_grad = self.gs3d.means.grad.clone()
+        sparse_quats_grad = self.gs3d.quats.grad.clone()
+        sparse_log_scales_grad = self.gs3d.log_scales.grad.clone()
+        sparse_logit_opacities_grad = self.gs3d.logit_opacities.grad.clone()
+        self.gs3d.means.grad.zero_()
+        self.gs3d.quats.grad.zero_()
+        self.gs3d.log_scales.grad.zero_()
+        self.gs3d.logit_opacities.grad.zero_()
+
+        dense_depth, dense_alphas = self.gs3d.render_depths(
+            self.cam_to_world_mats[0:1],
+            self.projection_mats[0:1],
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+        )
+
+        y_dev = y_all.to(self.device)
+        x_dev = x_all.to(self.device)
+        dense_depth_pixels = dense_depth[0, y_dev, x_dev]
+        dense_alphas_pixels = dense_alphas[0, y_dev, x_dev]
+
+        l2 = torch.mean(dense_depth_pixels) + dense_alphas_pixels.sum()
+        l2.backward()
+
+        dense_means_grad = self.gs3d.means.grad.clone()
+        dense_quats_grad = self.gs3d.quats.grad.clone()
+        dense_log_scales_grad = self.gs3d.log_scales.grad.clone()
+        dense_logit_opacities_grad = self.gs3d.logit_opacities.grad.clone()
+
+        self.assertTrue(
+            torch.allclose(sparse_means_grad, dense_means_grad, atol=1e-4, rtol=1e-8),
+            "Sparse means grad with duplicates does not match dense",
+        )
+        self.assertTrue(
+            torch.allclose(sparse_quats_grad, dense_quats_grad, atol=1e-4, rtol=1e-8),
+            "Sparse quats grad with duplicates does not match dense",
+        )
+        self.assertTrue(
+            torch.allclose(sparse_log_scales_grad, dense_log_scales_grad, atol=1e-4, rtol=1e-8),
+            "Sparse log_scales grad with duplicates does not match dense",
+        )
+        self.assertTrue(
+            torch.allclose(sparse_logit_opacities_grad, dense_logit_opacities_grad, atol=1e-4, rtol=1e-8),
+            "Sparse logit_opacities grad with duplicates does not match dense",
+        )
+
+    def test_sparse_render_num_contributing_with_duplicates(self):
+        pixels, y_all, x_all = self._make_pixels_with_duplicates(num_unique=100, num_extra_dupes=30)
+        pixels_to_render = JaggedTensor([pixels]).to(self.device)
+
+        num_contributing, alphas = self.gs3d.sparse_render_num_contributing_gaussians(
+            pixels_to_render,
+            self.cam_to_world_mats[0:1],
+            self.projection_mats[0:1],
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+        )
+
+        self.assertEqual(num_contributing.jdata.size(0), pixels.size(0))
+
+        # Verify duplicate positions get the same value: group by (y,x) and check consistency
+        coords = pixels.to(self.device)
+        keys = coords[:, 0] * self.width + coords[:, 1]
+        unique_keys, inverse = keys.unique(return_inverse=True)
+        for i in range(unique_keys.size(0)):
+            mask = inverse == i
+            vals = num_contributing.jdata[mask]
+            self.assertTrue(
+                torch.all(vals == vals[0]),
+                f"Duplicate pixels at key {unique_keys[i].item()} have different num_contributing values",
+            )
+
+    def test_sparse_render_contributing_ids_with_duplicates(self):
+        pixels, y_all, x_all = self._make_pixels_with_duplicates(num_unique=100, num_extra_dupes=30)
+        pixels_to_render = JaggedTensor([pixels]).to(self.device)
+
+        ids, weights = self.gs3d.sparse_render_contributing_gaussian_ids(
+            pixels_to_render,
+            self.cam_to_world_mats[0:1],
+            self.projection_mats[0:1],
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+        )
+
+        self.assertEqual(ids.jdata.size(0), pixels.size(0))
+
+        coords = pixels.to(self.device)
+        keys = coords[:, 0] * self.width + coords[:, 1]
+        unique_keys, inverse = keys.unique(return_inverse=True)
+        for i in range(unique_keys.size(0)):
+            mask = inverse == i
+            id_vals = ids.jdata[mask]
+            weight_vals = weights.jdata[mask]
+            self.assertTrue(torch.all(id_vals == id_vals[0:1]), "Duplicate pixels have different contributing IDs")
+            self.assertTrue(
+                torch.allclose(weight_vals, weight_vals[0:1], atol=1e-6, rtol=1e-8),
+                "Duplicate pixels have different contributing weights",
+            )
+
+    def test_sparse_render_multi_camera_with_duplicates(self):
+        pixels_list = []
+        for _ in range(self.num_cameras):
+            px, _, _ = self._make_pixels_with_duplicates(num_unique=100, num_extra_dupes=25)
+            pixels_list.append(px)
+        pixels_to_render = JaggedTensor(pixels_list).to(self.device)
+
+        sparse_depth, sparse_alphas = self.gs3d.sparse_render_depths(
+            pixels_to_render,
+            self.cam_to_world_mats,
+            self.projection_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+        )
+
+        dense_depth, dense_alphas = self.gs3d.render_depths(
+            self.cam_to_world_mats,
+            self.projection_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+        )
+
+        for cam_idx, cam_pixels in enumerate(pixels_to_render.unbind()):
+            assert isinstance(cam_pixels, torch.Tensor)
+            y_coords = cam_pixels[:, 0]
+            x_coords = cam_pixels[:, 1]
+            expected_depth = dense_depth[cam_idx, y_coords, x_coords]
+            expected_alphas = dense_alphas[cam_idx, y_coords, x_coords]
+
+            offset = pixels_to_render.joffsets[cam_idx].item()
+            end = pixels_to_render.joffsets[cam_idx + 1].item()
+            sparse_cam_depth = sparse_depth.jdata[offset:end]
+            sparse_cam_alphas = sparse_alphas.jdata[offset:end]
+
+            self.assertTrue(
+                torch.allclose(sparse_cam_depth, expected_depth, atol=1e-5, rtol=1e-8),
+                f"Camera {cam_idx}: sparse depth with duplicates does not match dense",
+            )
+            self.assertTrue(
+                torch.allclose(sparse_cam_alphas, expected_alphas, atol=1e-5, rtol=1e-8),
+                f"Camera {cam_idx}: sparse alphas with duplicates does not match dense",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
