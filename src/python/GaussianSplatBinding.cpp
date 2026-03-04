@@ -8,7 +8,7 @@
 #include <fvdb/FVDB.h>
 #include <fvdb/GaussianSplat3d.h>
 #include <fvdb/detail/autograd/EvaluateSphericalHarmonics.h>
-#include <fvdb/detail/ops/gsplat/GaussianCameraModels.h>
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 
 #include <torch/extension.h>
 
@@ -20,14 +20,14 @@ bind_gaussian_splat3d(py::module &m) {
         .value("HORIZONTAL", fvdb::detail::ops::RollingShutterType::HORIZONTAL)
         .export_values();
 
-    py::enum_<fvdb::detail::ops::CameraModel>(m, "CameraModel")
-        .value("PINHOLE", fvdb::detail::ops::CameraModel::PINHOLE)
-        .value("OPENCV_RADTAN_5", fvdb::detail::ops::CameraModel::OPENCV_RADTAN_5)
-        .value("OPENCV_RATIONAL_8", fvdb::detail::ops::CameraModel::OPENCV_RATIONAL_8)
+    py::enum_<fvdb::detail::ops::DistortionModel>(m, "DistortionModel")
+        .value("PINHOLE", fvdb::detail::ops::DistortionModel::PINHOLE)
+        .value("OPENCV_RADTAN_5", fvdb::detail::ops::DistortionModel::OPENCV_RADTAN_5)
+        .value("OPENCV_RATIONAL_8", fvdb::detail::ops::DistortionModel::OPENCV_RATIONAL_8)
         .value("OPENCV_RADTAN_THIN_PRISM_9",
-               fvdb::detail::ops::CameraModel::OPENCV_RADTAN_THIN_PRISM_9)
-        .value("OPENCV_THIN_PRISM_12", fvdb::detail::ops::CameraModel::OPENCV_THIN_PRISM_12)
-        .value("ORTHOGRAPHIC", fvdb::detail::ops::CameraModel::ORTHOGRAPHIC)
+               fvdb::detail::ops::DistortionModel::OPENCV_RADTAN_THIN_PRISM_9)
+        .value("OPENCV_THIN_PRISM_12", fvdb::detail::ops::DistortionModel::OPENCV_THIN_PRISM_12)
+        .value("ORTHOGRAPHIC", fvdb::detail::ops::DistortionModel::ORTHOGRAPHIC)
         .export_values();
 
     py::class_<fvdb::GaussianSplat3d::ProjectedGaussianSplats>(m, "ProjectedGaussianSplats")
@@ -200,7 +200,8 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("crop_origin_w") = -1,
              py::arg("crop_origin_h") = -1,
              py::arg("tile_size")     = 16,
-             py::arg("backgrounds")   = std::nullopt)
+             py::arg("backgrounds")   = std::nullopt,
+             py::arg("masks")         = std::nullopt)
 
         .def("render_images",
              &fvdb::GaussianSplat3d::renderImages,
@@ -216,7 +217,8 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("min_radius_2d")    = 0.0,
              py::arg("eps_2d")           = 0.3,
              py::arg("antialias")        = false,
-             py::arg("backgrounds")      = std::nullopt)
+             py::arg("backgrounds")      = std::nullopt,
+             py::arg("masks")            = std::nullopt)
 
         .def("render_images_from_world",
              &fvdb::GaussianSplat3d::renderImagesFromWorld,
@@ -226,7 +228,7 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("image_height"),
              py::arg("near"),
              py::arg("far"),
-             py::arg("camera_model")      = fvdb::detail::ops::CameraModel::PINHOLE,
+             py::arg("camera_model")      = fvdb::detail::ops::DistortionModel::PINHOLE,
              py::arg("distortion_coeffs") = std::nullopt,
              py::arg("sh_degree_to_use")  = -1,
              py::arg("tile_size")         = 16,
@@ -249,7 +251,8 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("min_radius_2d")   = 0.0,
              py::arg("eps_2d")          = 0.3,
              py::arg("antialias")       = false,
-             py::arg("backgrounds")     = std::nullopt)
+             py::arg("backgrounds")     = std::nullopt,
+             py::arg("masks")           = std::nullopt)
 
         .def("render_images_and_depths",
              &fvdb::GaussianSplat3d::renderImagesAndDepths,
@@ -265,7 +268,8 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("min_radius_2d")    = 0.0,
              py::arg("eps_2d")           = 0.3,
              py::arg("antialias")        = false,
-             py::arg("backgrounds")      = std::nullopt)
+             py::arg("backgrounds")      = std::nullopt,
+             py::arg("masks")            = std::nullopt)
 
         .def("sparse_render_images",
              &fvdb::GaussianSplat3d::sparseRenderImages,
@@ -281,7 +285,9 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("tile_size")        = 16,
              py::arg("min_radius_2d")    = 0.0,
              py::arg("eps_2d")           = 0.3,
-             py::arg("antialias")        = false)
+             py::arg("antialias")        = false,
+             py::arg("backgrounds")      = std::nullopt,
+             py::arg("masks")            = std::nullopt)
 
         .def("sparse_render_depths",
              &fvdb::GaussianSplat3d::sparseRenderDepths,
@@ -296,7 +302,9 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("tile_size")       = 16,
              py::arg("min_radius_2d")   = 0.0,
              py::arg("eps_2d")          = 0.3,
-             py::arg("antialias")       = false)
+             py::arg("antialias")       = false,
+             py::arg("backgrounds")     = std::nullopt,
+             py::arg("masks")           = std::nullopt)
 
         .def("sparse_render_images_and_depths",
              &fvdb::GaussianSplat3d::sparseRenderImagesAndDepths,
@@ -312,7 +320,9 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("tile_size")        = 16,
              py::arg("min_radius_2d")    = 0.0,
              py::arg("eps_2d")           = 0.3,
-             py::arg("antialias")        = false)
+             py::arg("antialias")        = false,
+             py::arg("backgrounds")      = std::nullopt,
+             py::arg("masks")            = std::nullopt)
 
         .def("render_num_contributing_gaussians",
              &fvdb::GaussianSplat3d::renderNumContributingGaussians,
@@ -427,7 +437,8 @@ bind_gaussian_splat3d(py::module &m) {
           py::arg("return_debug_info")    = false,
           py::arg("render_depth_only")    = false,
           py::arg("ortho")                = false,
-          py::arg("backgrounds")          = std::nullopt);
+          py::arg("backgrounds")          = std::nullopt,
+          py::arg("masks")                = std::nullopt);
 
     m.def(
         "evaluate_spherical_harmonics",

@@ -4,7 +4,7 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONUT_H
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANPROJECTIONUT_H
 
-#include <fvdb/detail/ops/gsplat/GaussianCameraModels.h>
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 
 #include <ATen/core/TensorBody.h>
 #include <torch/types.h>
@@ -14,19 +14,6 @@
 namespace fvdb {
 namespace detail {
 namespace ops {
-
-/// @brief Unscented Transform hyperparameters.
-///
-/// This kernel implements the canonical 3D UT with a fixed \(2D+1\) sigma point set (7 points).
-/// The parameters here control the standard UT scaling / weighting.
-struct UTParams {
-    float alpha         = 0.1f; // Blending parameter for UT
-    float beta          = 2.0f; // Scaling parameter for UT
-    float kappa         = 0.0f; // Additional scaling parameter for UT
-    float inImageMargin = 0.1f; // Margin for in-image check
-    bool requireAllSigmaPointsInImage =
-        true; // Require all sigma points to be in image to consider a Gaussian valid
-};
 
 /// @brief Project 3D Gaussians to 2D screen space pixel coordinates for rendering using the
 /// Unscented Transform (UT) algorithm.
@@ -48,7 +35,8 @@ struct UTParams {
 ///
 /// High-level algorithm:
 /// 1. **Generate sigma points** in world space for each 3D Gaussian (fixed 7-point UT in 3D).
-/// 2. **Project** each sigma point to pixels using the selected `CameraModel` and rolling-shutter
+/// 2. **Project** each sigma point to pixels using the selected `DistortionModel` and
+/// rolling-shutter
 ///    policy.
 /// 3. **Reconstruct** the 2D mean and covariance from the projected sigma points + UT weights.
 /// 4. **Stabilize** covariance by adding a small blur term (`eps2d`) and compute the conic form.
@@ -70,9 +58,9 @@ struct UTParams {
 /// @param[in] utParams Unscented Transform parameters
 /// @param[in] cameraModel Camera model for projection.
 /// @param[in] distortionCoeffs Distortion coefficients for each camera.
-///   - CameraModel::PINHOLE: ignored (use [C,0] or [C,K] tensor).
-///   - CameraModel::ORTHOGRAPHIC: ignored (use [C,0] or [C,K] tensor).
-///   - CameraModel::OPENCV_*: expects [C,12] coefficients in the following order:
+///   - DistortionModel::PINHOLE: ignored (use [C,0] or [C,K] tensor).
+///   - DistortionModel::ORTHOGRAPHIC: ignored (use [C,0] or [C,K] tensor).
+///   - DistortionModel::OPENCV_*: expects [C,12] coefficients in the following order:
 ///       [k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]
 ///     where k1..k6 are radial (rational), p1,p2 are tangential, and s1..s4 are thin-prism.
 /// @param[in] imageWidth Width of the output image in pixels
@@ -101,7 +89,7 @@ dispatchGaussianProjectionForwardUT(
     const torch::Tensor &projectionMatrices,      // [C, 3, 3]
     const RollingShutterType rollingShutterType,
     const UTParams &utParams,
-    const CameraModel cameraModel,
+    const DistortionModel cameraModel,
     const torch::Tensor &distortionCoeffs, // [C, 12] for OPENCV_*, or [C, 0] for PINHOLE/ORTHO
     const int64_t imageWidth,
     const int64_t imageHeight,

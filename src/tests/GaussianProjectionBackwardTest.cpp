@@ -3,6 +3,7 @@
 
 #include "utils/Tensor.h"
 
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionBackward.h>
 #include <fvdb/detail/ops/gsplat/GaussianProjectionForward.h>
 
@@ -183,7 +184,7 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
                                                                                1e-2,
                                                                                1e10,
                                                                                0,
-                                                                               true,
+                                                                               false,
                                                                                false);
 
         const auto C = radii_proj.size(0);
@@ -259,7 +260,7 @@ TEST_F(GaussianProjectionBackwardTestFixture, DISABLED_GenerateOutputData) {
                                                                                1e-2,
                                                                                1e10,
                                                                                0,
-                                                                               true,
+                                                                               false,
                                                                                true);
 
         const auto C = radii_proj.size(0);

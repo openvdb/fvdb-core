@@ -99,6 +99,7 @@ def gaussian_render_jagged(
     return_debug_info: bool = False,
     ortho: bool = False,
     backgrounds: torch.Tensor | None = None,
+    masks: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
     return _gaussian_render_jagged_cpp(
         means=means._impl,
@@ -121,12 +122,13 @@ def gaussian_render_jagged(
         return_debug_info=return_debug_info,
         ortho=ortho,
         backgrounds=backgrounds,
+        masks=masks,
     )
 
 
 from .convolution_plan import ConvolutionPlan
 from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
-from .enums import CameraModel, ProjectionType, RollingShutterType, ShOrderingMode
+from .enums import DistortionModel, ProjectionType, RollingShutterType, ShOrderingMode
 
 # Import torch-compatible functions that work with both Tensor and JaggedTensor
 from .torch_jagged import (
@@ -190,7 +192,7 @@ __all__ = [
     "JaggedTensor",
     "GaussianSplat3d",
     "ProjectedGaussianSplats",
-    "CameraModel",
+    "DistortionModel",
     "RollingShutterType",
     "ProjectionType",
     "ShOrderingMode",
