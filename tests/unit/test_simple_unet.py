@@ -85,7 +85,7 @@ class TestSimpleUNet(unittest.TestCase):
 
     @parameterized.expand(REDUCED_DEVICE_DTYPE_COMBOS)
     def test_forward_single_downup_layer(self, device: DeviceIdentifier, dtype: torch.dtype):
-        """UNet with downup_layer_count=1 (bottleneck only, no pooling) runs cleanly."""
+        """UNet with downup_layer_count=1 (single down/up stage with bottleneck) runs cleanly."""
         device = resolve_device(device)
         grid, features, model = self._make_grid_and_features(device, dtype, extent=8, downup_layer_count=1)
 
