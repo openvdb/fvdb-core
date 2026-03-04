@@ -236,8 +236,10 @@ JaggedTensor
 jCat0(const std::vector<JaggedTensor> &tensors) {
     if (tensors[0].device().is_cuda()) {
         return jCat0CUDA(tensors);
-    } else {
+    } else if (tensors[0].device().is_cpu()) {
         return jCat0CPU(tensors);
+    } else {
+        TORCH_CHECK(false, "Only CPU and CUDA devices are supported");
     }
 }
 

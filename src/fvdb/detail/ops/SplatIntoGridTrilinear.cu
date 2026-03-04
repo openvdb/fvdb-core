@@ -281,7 +281,7 @@ splatIntoGridTrilinear(const GridBatchImpl &batchHdl,
     TORCH_CHECK(
         pointsData.size(0) == points.rsize(0),
         "point_data must have one value per point (shape [B*M, *]) (incorrect first dimension must match number of points)");
-    return FVDB_DISPATCH_KERNEL(points.device(), [&]() {
+    return FVDB_DISPATCH_KERNEL_DEVICE(points.device(), [&]() {
         return dispatchSplatIntoGridTrilinear<DeviceTag>(batchHdl, points, pointsData);
     });
 }

@@ -716,8 +716,10 @@ jaggedTensorIndexSlice(const JaggedTensor &jt, int64_t start, int64_t end, int64
     if (jt.device().is_cuda()) {
         c10::cuda::CUDAGuard deviceGuard(jt.device());
         return jaggedTensorIndexSliceCuda(jt, start, end, step);
-    } else {
+    } else if (jt.device().is_cpu()) {
         return jaggedTensorIndexSliceCpu(jt, start, end, step);
+    } else {
+        TORCH_CHECK(false, "Only CPU and CUDA devices are supported");
     }
 }
 
@@ -726,8 +728,10 @@ jaggedTensorIndexJaggedTensor(const JaggedTensor &jt, const JaggedTensor &idx) {
     if (jt.device().is_cuda()) {
         c10::cuda::CUDAGuard deviceGuard(jt.device());
         return jaggedTensorIndexJaggedTensorImpl(jt, idx);
-    } else {
+    } else if (jt.device().is_cpu()) {
         return jaggedTensorIndexJaggedTensorImpl(jt, idx);
+    } else {
+        TORCH_CHECK(false, "Only CPU and CUDA devices are supported");
     }
 }
 

@@ -309,7 +309,7 @@ upsampleGridNearestBackward(const GridBatchImpl &fineBatchHdl,
                             const torch::Tensor &gradOut,
                             const torch::Tensor &coarseData,
                             nanovdb::Coord upsamplingFactor) {
-    return FVDB_DISPATCH_KERNEL(coarseData.device(), [&]() {
+    return FVDB_DISPATCH_KERNEL_DEVICE(coarseData.device(), [&]() {
         return UpsampleGridNearestBackward<DeviceTag>(
             fineBatchHdl, coarseBatchHdl, gradOut, coarseData, upsamplingFactor);
     });
