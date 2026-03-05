@@ -66,9 +66,7 @@ def parse_benchmark_name(full_name):
     or None if the name does not match.
     """
     # BM_Cutlass_<Phase>_<Grid>_<Backend>/<dim>[/<Cin>/<Cout>]
-    m = re.match(
-        r"BM_Cutlass_(\w+?)_(Dense|Sphere)_(GroupedGemm|Cutlass)/(.+)", full_name
-    )
+    m = re.match(r"BM_Cutlass_(\w+?)_(Dense|Sphere)_(GroupedGemm|Cutlass)/(.+)", full_name)
     if not m:
         return None
 
@@ -384,9 +382,7 @@ def plot_training_iteration(df, out_dir):
         ax.set_xticklabels([f"C={c}" for c in channels])
         ax.set_xlabel("Channels (Cin = Cout)")
         ax.set_ylabel("Time (ms)")
-        ax.set_title(
-            f"Training Iteration (Fwd + Bwd) -- {grid} (dim={max_dim}, ~{voxels:,} voxels)"
-        )
+        ax.set_title(f"Training Iteration (Fwd + Bwd) -- {grid} (dim={max_dim}, ~{voxels:,} voxels)")
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3, axis="y")
 
@@ -440,9 +436,7 @@ def print_summary(df):
 
         if speedups:
             geo_mean = np.exp(np.mean(np.log(speedups)))
-            print(
-                f"\n  {_PHASE_LABELS[phase]} geometric mean speedup: {geo_mean:.2f}x"
-            )
+            print(f"\n  {_PHASE_LABELS[phase]} geometric mean speedup: {geo_mean:.2f}x")
             print()
 
     # Topology summary
@@ -452,23 +446,14 @@ def print_summary(df):
         for grid in sorted(topo_df["Grid"].unique()):
             for dim in sorted(topo_df["Dim"].unique()):
                 gg = topo_df[
-                    (topo_df["Grid"] == grid)
-                    & (topo_df["Dim"] == dim)
-                    & (topo_df["Backend"] == "GroupedGemm")
+                    (topo_df["Grid"] == grid) & (topo_df["Dim"] == dim) & (topo_df["Backend"] == "GroupedGemm")
                 ]
-                cu = topo_df[
-                    (topo_df["Grid"] == grid)
-                    & (topo_df["Dim"] == dim)
-                    & (topo_df["Backend"] == "Cutlass")
-                ]
+                cu = topo_df[(topo_df["Grid"] == grid) & (topo_df["Dim"] == dim) & (topo_df["Backend"] == "Cutlass")]
                 if len(gg) > 0 and len(cu) > 0:
                     gg_t = gg["time_ms"].values[0]
                     cu_t = cu["time_ms"].values[0]
                     sp = gg_t / cu_t if cu_t > 0 else 0
-                    print(
-                        f"  {grid:>6s}  dim={dim:<3d}  "
-                        f"GG={gg_t:8.3f}ms  CU={cu_t:8.3f}ms  speedup={sp:.2f}x"
-                    )
+                    print(f"  {grid:>6s}  dim={dim:<3d}  " f"GG={gg_t:8.3f}ms  CU={cu_t:8.3f}ms  speedup={sp:.2f}x")
 
     print("=" * 70)
 
@@ -479,18 +464,12 @@ def print_summary(df):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Visualize CUTLASS vs GroupedGemm benchmark results."
-    )
+    parser = argparse.ArgumentParser(description="Visualize CUTLASS vs GroupedGemm benchmark results.")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--file", help="Path to Google Benchmark JSON output file")
     group.add_argument("--run", help="Path to benchmark executable (will run it)")
-    parser.add_argument(
-        "--filter", default="", help="Google Benchmark --benchmark_filter regex"
-    )
-    parser.add_argument(
-        "--out-dir", default=".", help="Directory for output figures (default: cwd)"
-    )
+    parser.add_argument("--filter", default="", help="Google Benchmark --benchmark_filter regex")
+    parser.add_argument("--out-dir", default=".", help="Directory for output figures (default: cwd)")
     args = parser.parse_args()
 
     if args.run:

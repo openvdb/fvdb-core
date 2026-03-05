@@ -88,10 +88,10 @@ def parse_benchmark_name(full_name):
     # Detect category
     if base.startswith("Topology_"):
         category = "Topology"
-        rest = base[len("Topology_"):]
+        rest = base[len("Topology_") :]
     elif base.startswith("Conv_"):
         category = "Convolution"
-        rest = base[len("Conv_"):]
+        rest = base[len("Conv_") :]
     else:
         return None
 
@@ -106,7 +106,7 @@ def parse_benchmark_name(full_name):
     if underscore < 0:
         return None
     grid = rest[:underscore]
-    backend_str = rest[underscore + 1:]
+    backend_str = rest[underscore + 1 :]
 
     # Match backend against known names (longest first)
     backend = backend_str
@@ -203,8 +203,8 @@ def _save(fig, name):
 def _approx_voxels(grid, dim):
     """Approximate voxel count from grid type and dimension."""
     if grid == "Dense":
-        return dim ** 3
-    return int(4 * np.pi * dim ** 2)
+        return dim**3
+    return int(4 * np.pi * dim**2)
 
 
 # ---------------------------------------------------------------------------
@@ -234,9 +234,13 @@ def plot_time_vs_channels(df, device, suffix):
                 if bd.empty:
                     continue
                 ax.plot(
-                    bd["C_in"], bd["Time_ms"],
-                    marker="o", linewidth=2, markersize=6,
-                    label=_label(backend), color=_color(backend),
+                    bd["C_in"],
+                    bd["Time_ms"],
+                    marker="o",
+                    linewidth=2,
+                    markersize=6,
+                    label=_label(backend),
+                    color=_color(backend),
                 )
             ax.set_xlabel("Channels (C_in = C_out)")
             ax.set_ylabel("Time (ms)")
@@ -287,8 +291,14 @@ def plot_bars_by_channel(df, device, suffix):
             bars = ax.bar(x + offset, times, w, label=_label(backend), color=_color(backend))
             for bar, val in zip(bars, times):
                 if val > 0:
-                    ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
-                            f"{val:.2f}", ha="center", va="bottom", fontsize=7)
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2,
+                        bar.get_height(),
+                        f"{val:.2f}",
+                        ha="center",
+                        va="bottom",
+                        fontsize=7,
+                    )
 
         ax.set_xticks(x)
         ax.set_xticklabels([f"C={c}" for c in channels])
@@ -350,7 +360,9 @@ def plot_speedup_bars(df, device, suffix):
                             bar.get_x() + bar.get_width() / 2,
                             bar.get_height(),
                             f"{val:.2f}x",
-                            ha="center", va="bottom", fontsize=7,
+                            ha="center",
+                            va="bottom",
+                            fontsize=7,
                         )
 
             baseline_label = _label(_BASELINE_BACKEND)
@@ -386,8 +398,7 @@ def plot_speedup_heatmap(df):
             continue
         baseline_idx = baseline.set_index(["Dim", "C_in"])["Time_ms"]
 
-        compare = [b for b in _BACKEND_ORDER
-                    if b != _BASELINE_BACKEND and b in gdata["Backend"].values]
+        compare = [b for b in _BACKEND_ORDER if b != _BASELINE_BACKEND and b in gdata["Backend"].values]
         if not compare:
             continue
 
@@ -401,11 +412,13 @@ def plot_speedup_heatmap(df):
             for _, row in nbd.iterrows():
                 key = (row["Dim"], row["C_in"])
                 if key in baseline_idx.index and row["Time_ms"] > 0:
-                    rows.append({
-                        "Grid Size": _grid_label(grid, row["Dim"]),
-                        "Channels": f"C={int(row['C_in'])}",
-                        "Speedup": baseline_idx[key] / row["Time_ms"],
-                    })
+                    rows.append(
+                        {
+                            "Grid Size": _grid_label(grid, row["Dim"]),
+                            "Channels": f"C={int(row['C_in'])}",
+                            "Speedup": baseline_idx[key] / row["Time_ms"],
+                        }
+                    )
             if not rows:
                 continue
 
@@ -418,8 +431,16 @@ def plot_speedup_heatmap(df):
             vmax = max(pivot.max().max(), 2.0)
             norm = TwoSlopeNorm(vmin=vmin, vcenter=1.0, vmax=vmax)
 
-            sns.heatmap(pivot, annot=True, fmt=".2f", cmap="RdYlGn", norm=norm,
-                        linewidths=0.5, ax=ax, cbar_kws={"label": f"Speedup vs {baseline_label}"})
+            sns.heatmap(
+                pivot,
+                annot=True,
+                fmt=".2f",
+                cmap="RdYlGn",
+                norm=norm,
+                linewidths=0.5,
+                ax=ax,
+                cbar_kws={"label": f"Speedup vs {baseline_label}"},
+            )
             ax.set_title(f"{_label(nb)}\nspeedup over {baseline_label}", fontsize=11)
             ax.set_ylabel("")
             ax.set_xlabel("")
@@ -456,9 +477,15 @@ def plot_time_vs_voxels(df):
                 if bd.empty:
                     continue
                 voxels = np.array([_approx_voxels(grid, d) for d in bd["Dim"].values])
-                ax.plot(voxels, bd["Time_ms"].values,
-                        marker="o", linewidth=2, markersize=6,
-                        label=_label(backend), color=_color(backend))
+                ax.plot(
+                    voxels,
+                    bd["Time_ms"].values,
+                    marker="o",
+                    linewidth=2,
+                    markersize=6,
+                    label=_label(backend),
+                    color=_color(backend),
+                )
             ax.set_xlabel("Approx. voxel count")
             ax.set_ylabel("Time (ms)")
             ax.set_title(f"C={int(ch)}", fontsize=11)
@@ -505,8 +532,14 @@ def plot_topology(df):
             bars = ax.bar(x + offset, times, w, label=_label(backend), color=_color(backend))
             for bar, val in zip(bars, times):
                 if val > 0:
-                    ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
-                            f"{val:.2f}", ha="center", va="bottom", fontsize=9)
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2,
+                        bar.get_height(),
+                        f"{val:.2f}",
+                        ha="center",
+                        va="bottom",
+                        fontsize=9,
+                    )
 
         ax.set_xticks(x)
         ax.set_xticklabels([_grid_label(grid, d) for d in dims], fontsize=9)
@@ -554,9 +587,7 @@ def _print_speedup_table(gdata, grid, baseline_idx, backends):
             fastest = max(speedups)
             slowest = min(speedups)
             print(
-                f"      {'Geo-mean:':25s}         "
-                f"       {geo:5.2f}x   "
-                f"(range {slowest:.2f}x -- {fastest:.2f}x)"
+                f"      {'Geo-mean:':25s}         " f"       {geo:5.2f}x   " f"(range {slowest:.2f}x -- {fastest:.2f}x)"
             )
         print()
 
@@ -579,8 +610,7 @@ def print_summary(df):
             baseline = gdata[gdata["Backend"] == _BASELINE_BACKEND]
             if not baseline.empty:
                 baseline_idx = baseline.set_index(["Dim", "C_in"])["Time_ms"]
-                _print_speedup_table(gdata, grid, baseline_idx,
-                                     [b for b in _BACKEND_ORDER if b != _BASELINE_BACKEND])
+                _print_speedup_table(gdata, grid, baseline_idx, [b for b in _BACKEND_ORDER if b != _BASELINE_BACKEND])
             else:
                 # No baseline data -- just print raw times
                 for backend in _BACKEND_ORDER:

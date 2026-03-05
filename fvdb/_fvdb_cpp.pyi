@@ -86,7 +86,6 @@ def gs_conv_transpose_backward(
     weights: torch.Tensor,
     topology: GatherScatterDefaultTopology,
 ) -> tuple[torch.Tensor, torch.Tensor]: ...
-
 def gs_conv_fused(
     features: torch.Tensor,
     weights: torch.Tensor,
@@ -95,7 +94,6 @@ def gs_conv_fused(
     kernel_size: Vec3iOrScalar,
     stride: Vec3iOrScalar,
 ) -> torch.Tensor: ...
-
 def gs_conv_fused_backward(
     grad_output: torch.Tensor,
     features: torch.Tensor,
@@ -105,7 +103,6 @@ def gs_conv_fused_backward(
     kernel_size: Vec3iOrScalar,
     stride: Vec3iOrScalar,
 ) -> tuple[torch.Tensor, torch.Tensor]: ...
-
 def gs_conv_fused_transpose(
     features: torch.Tensor,
     weights: torch.Tensor,
@@ -114,7 +111,6 @@ def gs_conv_fused_transpose(
     kernel_size: Vec3iOrScalar,
     stride: Vec3iOrScalar,
 ) -> torch.Tensor: ...
-
 def gs_conv_fused_transpose_backward(
     grad_output: torch.Tensor,
     features: torch.Tensor,
