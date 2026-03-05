@@ -102,8 +102,8 @@ CubesInGrid(const GridBatchImpl &batchHdl,
                            auto cb = [=] __device__(int32_t bidx,
                                                     int32_t eidx,
                                                     int32_t cidx,
-                                                    JaggedRAcc32<scalar_t, 2> ptsA) {
-                               cubesInGridCallback<scalar_t, IsTouch, JaggedRAcc32, TorchRAcc32>(
+                                                    JaggedRAcc64<scalar_t, 2> ptsA) {
+                               cubesInGridCallback<scalar_t, IsTouch, JaggedRAcc64, TorchRAcc64>(
                                    bidx, eidx, ptsA, outMaskAccessor, batchAcc, dstart, dend);
                            };
                            forEachJaggedElementChannelCUDA<scalar_t, 2>(512, 1, cubeCenters, cb);

@@ -117,7 +117,7 @@ GridEdgeNetwork(const GridBatchImpl &batchHdl, bool returnVoxelCoordinates) {
                                  int32_t voxelIdx,
                                  int32_t,
                                  GridBatchImpl::Accessor gridAccessor) {
-            gridEdgeNetworkCallback<TorchRAcc32>(batchIdx,
+            gridEdgeNetworkCallback<TorchRAcc64>(batchIdx,
                                                  leafIdx,
                                                  voxelIdx,
                                                  gridAccessor,

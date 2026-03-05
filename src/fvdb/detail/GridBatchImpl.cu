@@ -38,7 +38,7 @@ __global__ void
 computeBatchOffsetsFromMetadata(
     uint32_t numGrids,
     fvdb::detail::GridBatchImpl::GridMetadata *perGridMetadata,
-    torch::PackedTensorAccessor32<fvdb::JOffsetsType, 1, torch::RestrictPtrTraits>
+    torch::PackedTensorAccessor64<fvdb::JOffsetsType, 1, torch::RestrictPtrTraits>
         outBatchOffsets) {
     if (numGrids == 0) {
         return;
@@ -410,7 +410,7 @@ GridBatchImpl::recomputeBatchOffsets() {
         computeBatchOffsetsFromMetadata<<<1, 1>>>(
             batchSize(),
             mDeviceGridMetadata,
-            mBatchOffsets.packed_accessor32<fvdb::JOffsetsType, 1, torch::RestrictPtrTraits>());
+            mBatchOffsets.packed_accessor64<fvdb::JOffsetsType, 1, torch::RestrictPtrTraits>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     } else {
         auto outBatchOffsets = mBatchOffsets.accessor<fvdb::JOffsetsType, 1>();

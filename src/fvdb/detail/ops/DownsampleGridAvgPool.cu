@@ -158,7 +158,7 @@ DownsampleGridAvgPool(const GridBatchImpl &fineBatchHdl,
                                                       int32_t voxelIdx,
                                                       int32_t channelIdx,
                                                       GridBatchImpl::Accessor coarseBatchAccessor) {
-                    avgPoolVoxelCallback<scalar_t, TorchRAcc32>(batchIdx,
+                    avgPoolVoxelCallback<scalar_t, TorchRAcc64>(batchIdx,
                                                                 leafIdx,
                                                                 voxelIdx,
                                                                 channelIdx,
@@ -238,7 +238,7 @@ DownsampleGridAvgPoolBackward(const GridBatchImpl &coarseBatchHdl,
                                                     int32_t voxelIdx,
                                                     int32_t channelIdx,
                                                     GridBatchImpl::Accessor coarseBatchAccessor) {
-                               avgPoolBackwardVoxelCallback<scalar_t, TorchRAcc32>(
+                               avgPoolBackwardVoxelCallback<scalar_t, TorchRAcc64>(
                                    batchIdx,
                                    leafIdx,
                                    voxelIdx,

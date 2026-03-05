@@ -30,7 +30,7 @@ __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 ijkForDense(uint64_t offset,
             nanovdb::Coord ijkMin,
             nanovdb::Coord size,
-            TorchRAcc32<int32_t, 2> outIJKAccessor) {
+            TorchRAcc64<int32_t, 2> outIJKAccessor) {
     const uint64_t tid = (static_cast<uint64_t>(blockIdx.x) * blockDim.x) + threadIdx.x + offset;
 
     if (tid >= outIJKAccessor.size(0)) {
@@ -104,7 +104,7 @@ dispatchCreateNanoGridFromDense<torch::kCUDA>(int64_t batchSize,
 
     if (NUM_BLOCKS > 0) {
         ijkForDense<<<NUM_BLOCKS, DEFAULT_BLOCK_DIM>>>(
-            0u, ijkMin, size, ijkData.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
+            0u, ijkMin, size, ijkData.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 
@@ -176,7 +176,7 @@ dispatchCreateNanoGridFromDense<torch::kPrivateUse1>(int64_t batchSize,
                 deviceOffset,
                 ijkMin,
                 size,
-                ijkData.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
+                ijkData.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
     }

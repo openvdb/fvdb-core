@@ -77,9 +77,9 @@ convIjkForGridCallback(int32_t bidx,
                        const nanovdb::Coord &kernelSize,
                        const nanovdb::Coord &stride,
                        int kernelVolume,
-                       TorchRAcc32<int32_t, 2> outIJKData,
-                       TorchRAcc32<fvdb::JIdxType, 1> outIJKBIdx,
-                       TorchRAcc32<bool, 1> outMask) {
+                       TorchRAcc64<int32_t, 2> outIJKData,
+                       TorchRAcc64<fvdb::JIdxType, 1> outIJKBIdx,
+                       TorchRAcc64<bool, 1> outMask) {
     const nanovdb::OnIndexGrid *gridPtr = batchAcc.grid(bidx);
     const typename nanovdb::OnIndexGrid::LeafNodeType &leaf =
         gridPtr->tree().template getFirstNode<0>()[lidx];
@@ -152,10 +152,10 @@ convIJKForGrid(const GridBatchImpl &batchHdl,
     torch::Tensor outMask    = torch::zeros({batchHdl.totalVoxels() * kernelVolume}, optsMask);
 
     // For each voxel in source grid, compute possible voxels in target grid that affect them
-    auto outIJKAcc = outIJK.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>();
+    auto outIJKAcc = outIJK.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>();
     auto outIJKBIdxAcc =
-        outIJKBIdx.packed_accessor32<fvdb::JIdxType, 1, torch::RestrictPtrTraits>();
-    auto outMaskAcc = outMask.packed_accessor32<bool, 1, torch::RestrictPtrTraits>();
+        outIJKBIdx.packed_accessor64<fvdb::JIdxType, 1, torch::RestrictPtrTraits>();
+    auto outMaskAcc = outMask.packed_accessor64<bool, 1, torch::RestrictPtrTraits>();
 
     auto cb = [=] __device__(int32_t bidx,
                              int32_t lidx,

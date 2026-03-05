@@ -153,12 +153,12 @@ dispatchPopulateGridMetadata<torch::kCUDA>(
     // Read metadata into device buffers
     TORCH_CHECK(gridHdl.deviceData() != nullptr, "GridHandle is empty");
     const nanovdb::OnIndexGrid *grids = (nanovdb::OnIndexGrid *)gridHdl.deviceData();
-    populateGridMetadataCUDA<TorchRAcc32><<<1, NUM_THREADS>>>(
+    populateGridMetadataCUDA<TorchRAcc64><<<1, NUM_THREADS>>>(
         gridHdl.gridCount(),
         grids,
         (const nanovdb::Vec3d *)deviceVoxSizesPtr,
         (const nanovdb::Vec3d *)deviceVoxOriginsPtr,
-        outBatchOffsets.packed_accessor32<fvdb::JOffsetsType, 1, torch::RestrictPtrTraits>(),
+        outBatchOffsets.packed_accessor64<fvdb::JOffsetsType, 1, torch::RestrictPtrTraits>(),
         outPerGridMetadataDevice,
         outBatchMetadataDevice);
 

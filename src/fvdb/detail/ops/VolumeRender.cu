@@ -222,23 +222,23 @@ volumeRenderBackwardCPU(const TorchAcc<scalar_t, 1> dLdOpacity,     // [B*R]
 
 template <typename scalar_t>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
-volumeRender(const TorchRAcc32<scalar_t, 1> sigmas,
-             const TorchRAcc32<scalar_t, 2> rgbs,
-             const TorchRAcc32<scalar_t, 1> deltas,
-             const TorchRAcc32<scalar_t, 1> ts,
-             const TorchRAcc32<JOffsetsType, 1> jOffsets,
+volumeRender(const TorchRAcc64<scalar_t, 1> sigmas,
+             const TorchRAcc64<scalar_t, 2> rgbs,
+             const TorchRAcc64<scalar_t, 1> deltas,
+             const TorchRAcc64<scalar_t, 1> ts,
+             const TorchRAcc64<JOffsetsType, 1> jOffsets,
              const scalar_t tsmtThreshold,
-             TorchRAcc32<int64_t, 1> outTotalSamples,
-             TorchRAcc32<scalar_t, 1> outOpacity,
-             TorchRAcc32<scalar_t, 1> outDepth,
-             TorchRAcc32<scalar_t, 2> outRGB,
-             TorchRAcc32<scalar_t, 1> outWs) {
+             TorchRAcc64<int64_t, 1> outTotalSamples,
+             TorchRAcc64<scalar_t, 1> outOpacity,
+             TorchRAcc64<scalar_t, 1> outDepth,
+             TorchRAcc64<scalar_t, 2> outRGB,
+             TorchRAcc64<scalar_t, 1> outWs) {
     const int rayIdx = blockIdx.x * blockDim.x + threadIdx.x;
     if (rayIdx >= outOpacity.size(0)) {
         return;
     }
     const int numChannels = rgbs.size(1);
-    volumeRenderFwdCallback<scalar_t, TorchRAcc32>(sigmas,
+    volumeRenderFwdCallback<scalar_t, TorchRAcc64>(sigmas,
                                                    rgbs,
                                                    deltas,
                                                    ts,
@@ -255,27 +255,27 @@ volumeRender(const TorchRAcc32<scalar_t, 1> sigmas,
 
 template <typename scalar_t>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
-volumeRenderBackward(const TorchRAcc32<scalar_t, 1> dLdOpacity,
-                     const TorchRAcc32<scalar_t, 1> dLdDepth,
-                     const TorchRAcc32<scalar_t, 2> dLdRgb,
-                     const TorchRAcc32<scalar_t, 1> dLdWs,
-                     const TorchRAcc32<scalar_t, 1> dLdWs_times_ws,
-                     const TorchRAcc32<scalar_t, 1> sigmas,
-                     const TorchRAcc32<scalar_t, 2> rgbs,
-                     const TorchRAcc32<scalar_t, 1> deltas,
-                     const TorchRAcc32<scalar_t, 1> ts,
-                     const TorchRAcc32<JOffsetsType, 1> jOffsets,
-                     const TorchRAcc32<scalar_t, 1> opacity,
-                     const TorchRAcc32<scalar_t, 1> depth,
-                     const TorchRAcc32<scalar_t, 2> rgb,
+volumeRenderBackward(const TorchRAcc64<scalar_t, 1> dLdOpacity,
+                     const TorchRAcc64<scalar_t, 1> dLdDepth,
+                     const TorchRAcc64<scalar_t, 2> dLdRgb,
+                     const TorchRAcc64<scalar_t, 1> dLdWs,
+                     const TorchRAcc64<scalar_t, 1> dLdWs_times_ws,
+                     const TorchRAcc64<scalar_t, 1> sigmas,
+                     const TorchRAcc64<scalar_t, 2> rgbs,
+                     const TorchRAcc64<scalar_t, 1> deltas,
+                     const TorchRAcc64<scalar_t, 1> ts,
+                     const TorchRAcc64<JOffsetsType, 1> jOffsets,
+                     const TorchRAcc64<scalar_t, 1> opacity,
+                     const TorchRAcc64<scalar_t, 1> depth,
+                     const TorchRAcc64<scalar_t, 2> rgb,
                      const scalar_t tsmtThreshold,
-                     TorchRAcc32<scalar_t, 1> out_dL_dsigmas,
-                     TorchRAcc32<scalar_t, 2> out_dLdRgbs) {
+                     TorchRAcc64<scalar_t, 1> out_dL_dsigmas,
+                     TorchRAcc64<scalar_t, 2> out_dLdRgbs) {
     const int rayIdx = blockIdx.x * blockDim.x + threadIdx.x;
     if (rayIdx >= opacity.size(0)) {
         return;
     }
-    volumeRenderBwdCallback<torch::kCUDA, scalar_t, TorchRAcc32>(dLdOpacity,
+    volumeRenderBwdCallback<torch::kCUDA, scalar_t, TorchRAcc64>(dLdOpacity,
                                                                  dLdDepth,
                                                                  dLdRgb,
                                                                  dLdWs,
@@ -372,18 +372,18 @@ dispatchVolumeRender<torch::kCUDA>(
         "volumeRender",
         AT_WRAP([&] {
             volumeRender<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM>>>(
-                sigmas.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
-                rgbs.packed_accessor32<scalar_t, 2, torch::RestrictPtrTraits>(),
-                deltas.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
-                ts.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
-                jOffsets.packed_accessor32<JOffsetsType, 1, torch::RestrictPtrTraits>(),
+                sigmas.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                rgbs.packed_accessor64<scalar_t, 2, torch::RestrictPtrTraits>(),
+                deltas.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                ts.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                jOffsets.packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>(),
                 tsmtThreshold,
-                outTotalSamples.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
-                outOpacity.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
-                outDepth.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
-                // outDepthSq.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
-                outRgb.packed_accessor32<scalar_t, 2, torch::RestrictPtrTraits>(),
-                outWs.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>());
+                outTotalSamples.packed_accessor64<int64_t, 1, torch::RestrictPtrTraits>(),
+                outOpacity.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                outDepth.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                // outDepthSq.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                outRgb.packed_accessor64<scalar_t, 2, torch::RestrictPtrTraits>(),
+                outWs.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
@@ -447,24 +447,24 @@ dispatchVolumeRenderBackward<torch::kCUDA>(const torch::Tensor dLdOpacity,
         "volumeRenderBackward",
         AT_WRAP([&] {
             volumeRenderBackward<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM>>>(
-                dLdOpacity.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
-                dLdDepth.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
-                // dLdDepthSq.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
-                dLdRgb.packed_accessor32<scalar_t, 2, torch::RestrictPtrTraits>(),
-                dLdWs.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
-                dLdWs_times_ws.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
-                sigmas.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
-                rgbs.packed_accessor32<scalar_t, 2, torch::RestrictPtrTraits>(),
-                deltas.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
-                ts.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
-                jOffsets.packed_accessor32<JOffsetsType, 1, torch::RestrictPtrTraits>(),
-                opacity.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
-                depth.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
-                // depthSq.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
-                rgb.packed_accessor32<scalar_t, 2, torch::RestrictPtrTraits>(),
+                dLdOpacity.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                dLdDepth.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                // dLdDepthSq.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                dLdRgb.packed_accessor64<scalar_t, 2, torch::RestrictPtrTraits>(),
+                dLdWs.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                dLdWs_times_ws.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                sigmas.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                rgbs.packed_accessor64<scalar_t, 2, torch::RestrictPtrTraits>(),
+                deltas.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                ts.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                jOffsets.packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>(),
+                opacity.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                depth.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                // depthSq.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                rgb.packed_accessor64<scalar_t, 2, torch::RestrictPtrTraits>(),
                 tsmtThreshold,
-                outDLdSigmas.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
-                outDLdRbgs.packed_accessor32<scalar_t, 2, torch::RestrictPtrTraits>());
+                outDLdSigmas.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                outDLdRbgs.packed_accessor64<scalar_t, 2, torch::RestrictPtrTraits>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }),
         AT_EXPAND(AT_FLOATING_TYPES),

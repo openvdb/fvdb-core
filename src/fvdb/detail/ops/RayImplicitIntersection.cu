@@ -162,8 +162,8 @@ RayImplicitIntersection(const GridBatchImpl &batchHdl,
                 auto cb = [=] __device__(int32_t bidx,
                                          int32_t eidx,
                                          int32_t cidx,
-                                         JaggedRAcc32<scalar_t, 2> rOA) {
-                    rayImplicitCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+                                         JaggedRAcc64<scalar_t, 2> rOA) {
+                    rayImplicitCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                         bidx, eidx, rOA, rayDAcc, gridScalarsAcc, batchAcc, outTimesAcc, eps);
                 };
                 forEachJaggedElementChannelCUDA<scalar_t, 2>(numThreads, 1, rayO, cb);

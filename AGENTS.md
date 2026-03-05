@@ -64,10 +64,18 @@ C++ files:
 
 ## Testing
 
-- Run relevant tests before pushing:
+- Run relevant tests before pushing. Tests **must** be run from the `tests/`
+  directory so that the installed `fvdb` package (with compiled C++ extensions)
+  is imported instead of the unbuilt source tree at the repo root:
 
   ```
-  python -m pytest tests/ -v
+  cd tests && pytest unit -v
+  ```
+
+- To run the C++ gtest suite:
+
+  ```
+  ./build.sh ctest
   ```
 
 - The `wip/` directory is excluded from test collection (see `norecursedirs` in
