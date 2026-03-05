@@ -106,7 +106,17 @@ install(TARGETS _fvdb_cpp fvdb
     LIBRARY DESTINATION fvdb COMPONENT PythonModule
     RUNTIME DESTINATION fvdb COMPONENT PythonModule)
 
-# Add at the beginning after project() call:
+# Capture the git short SHA for embedding in version.py
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE FVDB_GIT_SHA
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+if(NOT FVDB_GIT_SHA)
+    set(FVDB_GIT_SHA "Unknown")
+endif()
+
 set(VERSION_PY_PATH "${CMAKE_CURRENT_SOURCE_DIR}/fvdb/version.py")
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/fvdb/version.py.in" "${VERSION_PY_PATH}" @ONLY)
 
