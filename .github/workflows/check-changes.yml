@@ -37,7 +37,5 @@ jobs:
               - '!**/*.md'
               - '!CODEOWNERS'
               - '!debug/**'
-              - '!examples/**'
-              - '!notebooks/**'
               - '!devtools/**'
               - '!scripts/**'

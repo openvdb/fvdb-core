@@ -390,10 +390,20 @@ jobs:
             micromamba activate fvdb_test
             pip install ./dist/*.whl
 
-      - name: Run tests
+      - name: Run markdown docs tests
         run: |
             micromamba activate fvdb_test
             pytest --markdown-docs docs --ignore-glob="**/wip/**"
+
+      - name: Run notebook tests
+        run: |
+            micromamba activate fvdb_test
+            pytest --nbmake notebooks/
+
+      - name: Run example tests
+        run: |
+            micromamba activate fvdb_test
+            pytest tests/test_examples.py -v
 
   ##############################################################################
   # STOP FVDB TESTS GPU RUNNER
