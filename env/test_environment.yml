@@ -38,6 +38,8 @@ dependencies:
   - scikit-image
   - torchvision
   - viser
+  - ipykernel
+  - nbmake
   - pip:
     - gsplat
     - pytest-markdown-docs

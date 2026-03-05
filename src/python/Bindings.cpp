@@ -11,8 +11,13 @@
 #include <fvdb/FVDB.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 
+#include <nanovdb/NanoVDB.h>
+
 #include <c10/cuda/CUDAFunctions.h>
 #include <torch/extension.h>
+#include <torch/version.h>
+
+#include <cuda_runtime_api.h>
 
 void bind_grid_batch(py::module &m);
 void bind_jagged_tensor(py::module &m);
@@ -375,6 +380,16 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
             [](py::object, bool enabled) {
                 fvdb::Config::global().setPedanticErrorChecking(enabled);
             });
+
+    // Build-time version information exposed to Python
+    auto version =
+        m.def_submodule("version", "Build-time version information for fVDB dependencies.");
+    version.attr("nanovdb") = py::str(std::to_string(NANOVDB_MAJOR_VERSION_NUMBER) + "." +
+                                      std::to_string(NANOVDB_MINOR_VERSION_NUMBER) + "." +
+                                      std::to_string(NANOVDB_PATCH_VERSION_NUMBER));
+    version.attr("cuda")    = py::str(std::to_string(CUDART_VERSION / 1000) + "." +
+                                   std::to_string((CUDART_VERSION % 1000) / 10));
+    version.attr("torch")   = py::str(TORCH_VERSION);
 
     // -----------------------------------------------------------------------
     // GatherScatterDefault convolution: Python-side autograd

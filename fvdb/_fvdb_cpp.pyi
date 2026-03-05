@@ -25,6 +25,11 @@ from .types import (
     Vec3iOrScalar,
 )
 
+class version:
+    nanovdb: str
+    cuda: str
+    torch: str
+
 class GatherScatterDefaultTopology:
     """Precomputed compacted CSR topology for default gather-scatter sparse convolution."""
 

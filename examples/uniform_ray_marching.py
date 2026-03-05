@@ -60,8 +60,8 @@ def main():
         torch.cuda.synchronize()
     logging.info(f"Done in {timeit.default_timer() - start}s!")
 
-    tmin = fvdb.jzeros(ray_o.lshape, device=device, dtype=dtype)
-    tmax = fvdb.jones(ray_o.lshape, device=device, dtype=dtype) * 1e10
+    tmin = JaggedTensor.from_zeros(ray_o.lshape, device=device, dtype=dtype)
+    tmax = JaggedTensor.from_ones(ray_o.lshape, device=device, dtype=dtype) * 1e10
 
     logging.info(f"Generating samples for {ray_o.rshape[0]} Ray Segments...")
     start = timeit.default_timer()

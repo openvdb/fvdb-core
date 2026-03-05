@@ -1,2 +1,29 @@
-# This file is auto-generated during the build process
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+#
+# This file is auto-generated during the build process.
+# CMake substitutes @-delimited variables via configure_file().
+
+"""Build-time version information for fVDB and its dependencies.
+
+Attributes:
+    fvdb (str): fVDB package version.
+    git (str): Abbreviated Git commit SHA of the build.
+    nanovdb (str): NanoVDB version (major.minor.patch).
+    cuda (str): CUDA runtime version (major.minor).
+    torch (str): PyTorch version.
+"""
+
 __version__ = "@SKBUILD_PROJECT_VERSION@"
+fvdb = __version__
+git = "@FVDB_GIT_SHA@"
+
+
+def __getattr__(name):
+    if name in ("nanovdb", "cuda", "torch"):
+        from ._fvdb_cpp import version as _cpp_version
+
+        val = getattr(_cpp_version, name)
+        globals()[name] = val
+        return val
+    raise AttributeError(f"module 'fvdb.version' has no attribute {name}")

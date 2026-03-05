@@ -22,7 +22,7 @@ open source software best practice policies of the Linux Foundation.
 
 #### License
 
-ƒVDB is licensed under the [Apache License, version 2.0](LICENSE.md)
+ƒVDB is licensed under the [Apache License, version 2.0](LICENSE)
 license. Contributions to ƒVDB should abide by that standard
 license.
 
@@ -54,7 +54,7 @@ Every commit must be signed off.  That is, every commit log message
 must include a “`Signed-off-by`” line (generated, for example, with
 “`git commit --signoff`”), indicating that the committer wrote the
 code and has the right to release it under the
-[Apache License, version 2.0](LICENSE.md)
+[Apache License, version 2.0](LICENSE)
 license. See the [TAC documentation on contribution sign off](https://github.com/AcademySoftwareFoundation/tac/blob/master/process/contributing.md#contribution-sign-off) for more information on this requirement.
 
 ## Maintainer

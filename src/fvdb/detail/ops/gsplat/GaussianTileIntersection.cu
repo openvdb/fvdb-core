@@ -541,8 +541,8 @@ gaussianTileIntersectionCUDAImpl(
                 totalIntersections,
                 totalTiles,
                 numTileIdBits,
-                intersectionKeys.data_ptr<int64_t>(),
-                activeTiles.value().data_ptr<int32_t>(),
+                intersectionKeys.const_data_ptr<int64_t>(),
+                activeTiles.value().const_data_ptr<int32_t>(),
                 numActiveTiles,
                 tileJOffsets.data_ptr<int32_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
@@ -561,7 +561,7 @@ gaussianTileIntersectionCUDAImpl(
                 numCameras,
                 totalTiles,
                 numTileIdBits,
-                intersectionKeys.data_ptr<int64_t>(),
+                intersectionKeys.const_data_ptr<int64_t>(),
                 tileJOffsets.data_ptr<int32_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
 
@@ -875,6 +875,15 @@ radixSortAsync(KeyT *keysIn,
     }
 }
 
+namespace {
+
+[[maybe_unused]] __global__ void
+sleepKernel() {
+    __nanosleep(1000000U); // Puts the calling thread to sleep
+}
+
+} // namespace
+
 std::tuple<torch::Tensor, torch::Tensor>
 gaussianTileIntersectionPrivateUse1Impl(
     const torch::Tensor &means2d,                   // [C, N, 2] or [M, 2]
@@ -1011,12 +1020,6 @@ gaussianTileIntersectionPrivateUse1Impl(
         torch::Tensor intersectionValues =
             torch::empty({totalIntersections}, means2d.options().dtype(torch::kInt32));
 
-        // Allocate tensors to store the sorted intersections
-        torch::Tensor keysSorted = torch::empty_like(intersectionKeys);
-        torch::Tensor valsSorted = torch::empty_like(intersectionValues);
-
-        std::vector<cudaEvent_t> events(c10::cuda::device_count());
-
         // Compute a joffsets tensor that stores the offsets into the sorted Gaussian
         // intersections
         torch::Tensor tileJOffsets = torch::empty({numCameras, numTilesH, numTilesW},
@@ -1027,10 +1030,18 @@ gaussianTileIntersectionPrivateUse1Impl(
         // where intersectionKeys encodes (camera_id, tile_id, depth) and intersectionValues
         // encodes the index of the Gaussian in the input arrays.
 
+        std::vector<cudaEvent_t> events(c10::cuda::device_count());
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-            cudaEventCreate(&events[deviceId], cudaEventDisableTiming);
+            C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
+            C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+        }
+
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            C10_CUDA_CHECK(cudaSetDevice(deviceId));
+            auto stream = c10::cuda::getStreamFromPool(false, deviceId);
+            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
 
             int64_t deviceGaussianOffset, deviceGaussianCount;
             std::tie(deviceGaussianOffset, deviceGaussianCount) =
@@ -1044,16 +1055,56 @@ gaussianTileIntersectionPrivateUse1Impl(
                 (deviceId == 0) ? 0 : tilesPerGaussianCumsumPtr[deviceGaussianOffset - 1];
             auto intersectionsEnd =
                 tilesPerGaussianCumsumPtr[deviceGaussianOffset + deviceGaussianCount - 1];
+#if (CUDART_VERSION < 13000)
+            sleepKernel<<<1, 1, 0, stream>>>();
             nanovdb::util::cuda::memPrefetchAsync(
-                intersectionKeys.const_data_ptr<int64_t>() + intersectionsStart,
+                intersectionKeys.data_ptr<int64_t>() + intersectionsStart,
                 (intersectionsEnd - intersectionsStart) * sizeof(int64_t),
                 deviceId,
                 stream);
             nanovdb::util::cuda::memPrefetchAsync(
-                intersectionValues.const_data_ptr<int32_t>() + intersectionsStart,
+                intersectionValues.data_ptr<int32_t>() + intersectionsStart,
                 (intersectionsEnd - intersectionsStart) * sizeof(int32_t),
                 deviceId,
                 stream);
+#else
+            std::vector<void *> prefetchPointers;
+            std::vector<size_t> prefetchSizes;
+            const cudaMemLocation location                 = {cudaMemLocationTypeDevice, deviceId};
+            std::vector<cudaMemLocation> prefetchLocations = {location};
+            std::vector<size_t> prefetchLocationIndices    = {0};
+
+            prefetchPointers.emplace_back(intersectionKeys.data_ptr<int64_t>() +
+                                          intersectionsStart);
+            prefetchSizes.emplace_back((intersectionsEnd - intersectionsStart) * sizeof(int64_t));
+            prefetchPointers.emplace_back(intersectionValues.data_ptr<int32_t>() +
+                                          intersectionsStart);
+            prefetchSizes.emplace_back((intersectionsEnd - intersectionsStart) * sizeof(int32_t));
+
+            sleepKernel<<<1, 1, 0, stream>>>();
+            C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(prefetchPointers.data(),
+                                                     prefetchSizes.data(),
+                                                     prefetchPointers.size(),
+                                                     prefetchLocations.data(),
+                                                     prefetchLocationIndices.data(),
+                                                     prefetchLocations.size(),
+                                                     0,
+                                                     stream));
+#endif
+            C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+        }
+
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            C10_CUDA_CHECK(cudaSetDevice(deviceId));
+            auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+            C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
+
+            int64_t deviceGaussianOffset, deviceGaussianCount;
+            std::tie(deviceGaussianOffset, deviceGaussianCount) =
+                deviceChunk(totalGaussians, deviceId);
+
+            const auto tilesPerGaussianCumsumPtr = tilesPerGaussianCumsum.const_data_ptr<int32_t>();
 
             const int NUM_BLOCKS = (deviceGaussianCount + NUM_THREADS - 1) / NUM_THREADS;
             computeGaussianTileIntersections<scalar_t>
@@ -1074,74 +1125,75 @@ gaussianTileIntersectionPrivateUse1Impl(
                                                          intersectionKeys.data_ptr<int64_t>(),
                                                          intersectionValues.data_ptr<int32_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
-            C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
         }
 
-        {
-            C10_CUDA_CHECK(cudaSetDevice(0));
-            auto stream = c10::cuda::getCurrentCUDAStream(0);
-            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-                C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
-            }
-            C10_CUDA_CHECK(cudaEventRecord(events[0], stream));
-        }
+        mergeStreams();
 
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[0]));
-        }
 
-        const int32_t numBits = 32 + numCamIdBits + numTileIdBits;
-        radixSortAsync(intersectionKeys.data_ptr<int64_t>(),
-                       keysSorted.data_ptr<int64_t>(),
-                       intersectionValues.data_ptr<int32_t>(),
-                       valsSorted.data_ptr<int32_t>(),
-                       totalIntersections,
-                       0,
-                       numBits,
-                       events.data());
+            int64_t deviceCameraOffset, deviceCameraCount;
+            std::tie(deviceCameraOffset, deviceCameraCount) = deviceChunk(numCameras, deviceId);
 
-        {
-            C10_CUDA_CHECK(cudaSetDevice(0));
-            auto stream = c10::cuda::getCurrentCUDAStream(0);
-            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-                C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+            if (deviceCameraCount > 0) {
+                auto deviceGaussianOffset = deviceCameraOffset * numGaussians;
+                auto deviceGaussianCount  = deviceCameraCount * numGaussians;
+
+                // The call to tilesPerGaussianCumsum[-1].item<int64_t>() above implicitly
+                // synchronizes the devices to the host ensuring that the elements of
+                // tilesPerGaussianCumsum are ready to access.
+                const auto tilesPerGaussianCumsumPtr =
+                    tilesPerGaussianCumsum.const_data_ptr<int32_t>();
+                auto intersectionsStart =
+                    (deviceId == 0) ? 0 : tilesPerGaussianCumsumPtr[deviceGaussianOffset - 1];
+                auto intersectionsEnd =
+                    tilesPerGaussianCumsumPtr[deviceGaussianOffset + deviceGaussianCount - 1];
+
+                CUB_WRAPPER(cub::DeviceMergeSort::SortPairs,
+                            intersectionKeys.data_ptr<int64_t>() + intersectionsStart,
+                            intersectionValues.data_ptr<int32_t>() + intersectionsStart,
+                            intersectionsEnd - intersectionsStart,
+                            cuda::std::less<>{},
+                            stream);
             }
-            C10_CUDA_CHECK(cudaEventRecord(events[0], stream));
         }
+
+        mergeStreams();
 
         TORCH_CHECK(!isSparse, "Sparse tile offsets are not implemented for mGPU");
 
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[0]));
 
-            int64_t deviceIntersectionOffset, deviceIntersectionCount;
-            std::tie(deviceIntersectionOffset, deviceIntersectionCount) =
-                deviceChunk(totalIntersections, deviceId);
+            int64_t deviceGaussianOffset, deviceGaussianCount;
+            std::tie(deviceGaussianOffset, deviceGaussianCount) =
+                deviceChunk(totalGaussians, deviceId);
 
-            const int NUM_BLOCKS_2 = (deviceIntersectionCount + NUM_THREADS - 1) / NUM_THREADS;
+            const auto tilesPerGaussianCumsumPtr = tilesPerGaussianCumsum.const_data_ptr<int32_t>();
+            auto intersectionsStart =
+                (deviceId == 0) ? 0 : tilesPerGaussianCumsumPtr[deviceGaussianOffset - 1];
+            auto intersectionsEnd =
+                tilesPerGaussianCumsumPtr[deviceGaussianOffset + deviceGaussianCount - 1];
+
+            const int NUM_BLOCKS_2 =
+                (intersectionsEnd - intersectionsStart + NUM_THREADS - 1) / NUM_THREADS;
             computeTileOffsets<<<NUM_BLOCKS_2, NUM_THREADS, 0, stream>>>(
-                deviceIntersectionOffset,
-                deviceIntersectionCount,
+                intersectionsStart,
+                intersectionsEnd - intersectionsStart,
                 totalIntersections,
                 numCameras,
                 totalTiles,
                 numTileIdBits,
-                keysSorted.data_ptr<int64_t>(),
+                intersectionKeys.const_data_ptr<int64_t>(),
                 tileJOffsets.data_ptr<int32_t>());
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
 
-        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-            cudaEventDestroy(events[deviceId]);
-        }
-
         mergeStreams();
 
-        return std::make_tuple(tileJOffsets, valsSorted);
+        return std::make_tuple(tileJOffsets, intersectionValues);
     }
 }
 

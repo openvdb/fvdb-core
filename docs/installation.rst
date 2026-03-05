@@ -2,7 +2,7 @@ Installing fVDB
 ================================================================
 
 fVDB depends on `PyTorch <https://pytorch.org/>`_, and requires a CUDA-capable GPU. Below are the
-supported sofware and hardware configurations.
+supported software and hardware configurations.
 
 Software Requirements
 ------------------------
@@ -21,7 +21,7 @@ Driver and Hardware Requirements
 The following table specifies the minimum NVIDIA driver versions and GPU architectures needed to run fVDB-Reality-Capture:
 
 +------------------+----------------+------------------+---------------------+
-| Operating System | Driver Version | GPU Architecture | Comptue Capability  |
+| Operating System | Driver Version | GPU Architecture | Compute Capability  |
 +------------------+----------------+------------------+---------------------+
 | Linux Only       | 550.0 or later | Ampere or later  | 8.0 or greater      |
 +------------------+----------------+------------------+---------------------+
@@ -72,7 +72,7 @@ Installation from source
 
 .. note::
 
-    For more complete instructions including setting up a build enviroment and obtaining the
+    For more complete instructions including setting up a build environment and obtaining the
     necessary dependencies, see the fVDB `README <https://github.com/openvdb/fvdb-core/blob/main/README.md>`_.
 
 
