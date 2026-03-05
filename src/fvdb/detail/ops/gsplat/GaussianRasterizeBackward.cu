@@ -1236,14 +1236,10 @@ callRasterizeBackwardPrivateUse1(
         uint32_t cameraCount =
             cuda::ceil_div(deviceTileOffset + deviceTileCount, tileCount / C) - cameraOffset;
         if (deviceTileCount) {
-            std::vector<torch::Tensor> tensors = {// means2d,
-                                                  // conics,
-                                                  // features,
-                                                  // opacities,
-                                                  // tileOffsets,
-                                                  // renderedAlphas.jdata(),
-                                                  // lastGaussianIds.jdata(),
-                                                  dLossDRenderedFeatures.jdata(),
+            // Prefetch the outputs of the operator. The inputs are already resident on the GPU from
+            // the forward pass and while prefetching them is idempotent, it does incur an
+            // additional overhead.
+            std::vector<torch::Tensor> tensors = {dLossDRenderedFeatures.jdata(),
                                                   dLossDRenderedAlphas.jdata(),
                                                   outDLossDMeans2d,
                                                   outDLossDConics,
