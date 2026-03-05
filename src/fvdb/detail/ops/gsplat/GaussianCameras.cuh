@@ -179,15 +179,15 @@ template <typename T> struct PerspectiveCamera {
                       T nearPlane,
                       T farPlane)
         : projectionMatricesAcc(
-              projectionMatrices.template packed_accessor32<T, 3, torch::RestrictPtrTraits>()),
+              projectionMatrices.template packed_accessor64<T, 3, torch::RestrictPtrTraits>()),
           worldToCamMatricesAcc(
-              worldToCamMatrices.template packed_accessor32<T, 3, torch::RestrictPtrTraits>()),
+              worldToCamMatrices.template packed_accessor64<T, 3, torch::RestrictPtrTraits>()),
           numCameras(numCameras), imageWidth(imageWidth), imageHeight(imageHeight),
           nearPlane(nearPlane), farPlane(farPlane) {}
 
   private:
-    fvdb::TorchRAcc32<T, 3> projectionMatricesAcc; // [C,3,3]
-    fvdb::TorchRAcc32<T, 3> worldToCamMatricesAcc; // [C,4,4]
+    fvdb::TorchRAcc64<T, 3> projectionMatricesAcc; // [C,3,3]
+    fvdb::TorchRAcc64<T, 3> worldToCamMatricesAcc; // [C,4,4]
     int32_t numCameras  = 0;
     int32_t imageWidth  = 0;
     int32_t imageHeight = 0;
@@ -444,15 +444,15 @@ template <typename T> struct OrthographicCamera {
                        T nearPlane,
                        T farPlane)
         : projectionMatricesAcc(
-              projectionMatrices.template packed_accessor32<T, 3, torch::RestrictPtrTraits>()),
+              projectionMatrices.template packed_accessor64<T, 3, torch::RestrictPtrTraits>()),
           worldToCamMatricesAcc(
-              worldToCamMatrices.template packed_accessor32<T, 3, torch::RestrictPtrTraits>()),
+              worldToCamMatrices.template packed_accessor64<T, 3, torch::RestrictPtrTraits>()),
           numCameras(numCameras), imageWidth(imageWidth), imageHeight(imageHeight),
           nearPlane(nearPlane), farPlane(farPlane) {}
 
   private:
-    fvdb::TorchRAcc32<T, 3> projectionMatricesAcc; // [C,3,3]
-    fvdb::TorchRAcc32<T, 3> worldToCamMatricesAcc; // [C,4,4]
+    fvdb::TorchRAcc64<T, 3> projectionMatricesAcc; // [C,3,3]
+    fvdb::TorchRAcc64<T, 3> worldToCamMatricesAcc; // [C,4,4]
     int32_t numCameras  = 0;
     int32_t imageWidth  = 0;
     int32_t imageHeight = 0;
@@ -665,22 +665,22 @@ template <typename T> struct PerspectiveWithDistortionCamera {
                                     RollingShutterType rollingShutterType,
                                     DistortionModel cameraModel)
         : worldToCamStartAcc(
-              worldToCamStart.template packed_accessor32<T, 3, torch::RestrictPtrTraits>()),
+              worldToCamStart.template packed_accessor64<T, 3, torch::RestrictPtrTraits>()),
           worldToCamEndAcc(
-              worldToCamEnd.template packed_accessor32<T, 3, torch::RestrictPtrTraits>()),
+              worldToCamEnd.template packed_accessor64<T, 3, torch::RestrictPtrTraits>()),
           projectionMatricesAcc(
-              projectionMatrices.template packed_accessor32<T, 3, torch::RestrictPtrTraits>()),
+              projectionMatrices.template packed_accessor64<T, 3, torch::RestrictPtrTraits>()),
           distortionCoeffsAcc(
-              distortionCoeffs.template packed_accessor32<T, 2, torch::RestrictPtrTraits>()),
+              distortionCoeffs.template packed_accessor64<T, 2, torch::RestrictPtrTraits>()),
           numCameras(numCameras), numDistCoeffs(numDistCoeffs), imageWidth(imageWidth),
           imageHeight(imageHeight), imageOriginW(imageOriginW), imageOriginH(imageOriginH),
           rollingShutterType(rollingShutterType), cameraModel(cameraModel) {}
 
   private:
-    fvdb::TorchRAcc32<T, 3> worldToCamStartAcc;    // [C,4,4]
-    fvdb::TorchRAcc32<T, 3> worldToCamEndAcc;      // [C,4,4]
-    fvdb::TorchRAcc32<T, 3> projectionMatricesAcc; // [C,3,3]
-    fvdb::TorchRAcc32<T, 2> distortionCoeffsAcc;   // [C,K]
+    fvdb::TorchRAcc64<T, 3> worldToCamStartAcc;    // [C,4,4]
+    fvdb::TorchRAcc64<T, 3> worldToCamEndAcc;      // [C,4,4]
+    fvdb::TorchRAcc64<T, 3> projectionMatricesAcc; // [C,3,3]
+    fvdb::TorchRAcc64<T, 2> distortionCoeffsAcc;   // [C,K]
     uint32_t numCameras                   = 0;
     int64_t numDistCoeffs                 = 0;
     int32_t imageWidth                    = 0;
@@ -1082,19 +1082,19 @@ template <typename T> struct OrthographicWithDistortionCamera {
                                      int32_t imageOriginH,
                                      RollingShutterType rollingShutterType)
         : worldToCamStartAcc(
-              worldToCamStart.template packed_accessor32<T, 3, torch::RestrictPtrTraits>()),
+              worldToCamStart.template packed_accessor64<T, 3, torch::RestrictPtrTraits>()),
           worldToCamEndAcc(
-              worldToCamEnd.template packed_accessor32<T, 3, torch::RestrictPtrTraits>()),
+              worldToCamEnd.template packed_accessor64<T, 3, torch::RestrictPtrTraits>()),
           projectionMatricesAcc(
-              projectionMatrices.template packed_accessor32<T, 3, torch::RestrictPtrTraits>()),
+              projectionMatrices.template packed_accessor64<T, 3, torch::RestrictPtrTraits>()),
           numCameras(numCameras), imageWidth(imageWidth), imageHeight(imageHeight),
           imageOriginW(imageOriginW), imageOriginH(imageOriginH),
           rollingShutterType(rollingShutterType) {}
 
   private:
-    fvdb::TorchRAcc32<T, 3> worldToCamStartAcc;    // [C,4,4]
-    fvdb::TorchRAcc32<T, 3> worldToCamEndAcc;      // [C,4,4]
-    fvdb::TorchRAcc32<T, 3> projectionMatricesAcc; // [C,3,3]
+    fvdb::TorchRAcc64<T, 3> worldToCamStartAcc;    // [C,4,4]
+    fvdb::TorchRAcc64<T, 3> worldToCamEndAcc;      // [C,4,4]
+    fvdb::TorchRAcc64<T, 3> projectionMatricesAcc; // [C,3,3]
     uint32_t numCameras                   = 0;
     int32_t imageWidth                    = 0;
     int32_t imageHeight                   = 0;

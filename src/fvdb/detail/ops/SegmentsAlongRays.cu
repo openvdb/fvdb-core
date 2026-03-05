@@ -192,8 +192,8 @@ SegmentsAlongRays(const GridBatchImpl &batchHdl,
                 auto cb1 = [=] __device__(int32_t bidx,
                                           int32_t eidx,
                                           int32_t cidx,
-                                          JaggedRAcc32<scalar_t, 2> rOA) {
-                    countSegmentsAlongRaysCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+                                          JaggedRAcc64<scalar_t, 2> rOA) {
+                    countSegmentsAlongRaysCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                         bidx,
                         eidx,
                         rOA,
@@ -248,8 +248,8 @@ SegmentsAlongRays(const GridBatchImpl &batchHdl,
                 auto cb2 = [=] __device__(int32_t bidx,
                                           int32_t eidx,
                                           int32_t cidx,
-                                          JaggedRAcc32<scalar_t, 2> rayOriginsAcc) {
-                    segmentsAlongRaysCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(bidx,
+                                          JaggedRAcc64<scalar_t, 2> rayOriginsAcc) {
+                    segmentsAlongRaysCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(bidx,
                                                                                    eidx,
                                                                                    rayOriginsAcc,
                                                                                    rayDirectionsAcc,

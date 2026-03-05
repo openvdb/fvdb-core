@@ -118,15 +118,15 @@ TransformPointsToGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points,
     auto outCoordsAcc = tensorAccessor<DeviceTag, scalar_t, 2>(outCoords);
     if constexpr (DeviceTag == torch::kCUDA) {
         auto cb = [=]
-            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc32<scalar_t, 2> ptsA) {
-                transformPointsToGridCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc64<scalar_t, 2> ptsA) {
+                transformPointsToGridCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                     bidx, eidx, ptsA, outCoordsAcc, batchAcc, isPrimal);
             };
         forEachJaggedElementChannelCUDA<scalar_t, 2>(512, 1, points, cb);
     } else if constexpr (DeviceTag == torch::kPrivateUse1) {
         auto cb = [=]
-            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc32<scalar_t, 2> ptsA) {
-                transformPointsToGridCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc64<scalar_t, 2> ptsA) {
+                transformPointsToGridCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                     bidx, eidx, ptsA, outCoordsAcc, batchAcc, isPrimal);
             };
         forEachJaggedElementChannelPrivateUse1<scalar_t, 2>(1, points, cb);
@@ -157,15 +157,15 @@ InvTransformPointsToGrid(const GridBatchImpl &batchHdl, const JaggedTensor &poin
     auto outCoordsAcc = tensorAccessor<DeviceTag, scalar_t, 2>(outCoords);
     if constexpr (DeviceTag == torch::kCUDA) {
         auto cb = [=]
-            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc32<scalar_t, 2> ptsA) {
-                invTransformPointsToGridCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc64<scalar_t, 2> ptsA) {
+                invTransformPointsToGridCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                     bidx, eidx, ptsA, outCoordsAcc, batchAcc, isPrimal);
             };
         forEachJaggedElementChannelCUDA<scalar_t, 2>(512, 1, points, cb);
     } else if constexpr (DeviceTag == torch::kPrivateUse1) {
         auto cb = [=]
-            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc32<scalar_t, 2> ptsA) {
-                invTransformPointsToGridCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc64<scalar_t, 2> ptsA) {
+                invTransformPointsToGridCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                     bidx, eidx, ptsA, outCoordsAcc, batchAcc, isPrimal);
             };
         forEachJaggedElementChannelPrivateUse1<scalar_t, 2>(1, points, cb);
@@ -191,15 +191,15 @@ TransformPointsToGridBackward(const GridBatchImpl &batchHdl,
     auto outGradInAcc = tensorAccessor<DeviceTag, scalar_t, 2>(outGradIn);
     if constexpr (DeviceTag == torch::kCUDA) {
         auto cb = [=]
-            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc32<scalar_t, 2> ptsA) {
-                transformPointsToGridBackwardCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc64<scalar_t, 2> ptsA) {
+                transformPointsToGridBackwardCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                     bidx, eidx, ptsA, outGradInAcc, batchAcc, isPrimal);
             };
         forEachJaggedElementChannelCUDA<scalar_t, 2>(512, 1, gradOut, cb);
     } else if constexpr (DeviceTag == torch::kPrivateUse1) {
         auto cb = [=]
-            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc32<scalar_t, 2> ptsA) {
-                transformPointsToGridBackwardCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc64<scalar_t, 2> ptsA) {
+                transformPointsToGridBackwardCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                     bidx, eidx, ptsA, outGradInAcc, batchAcc, isPrimal);
             };
         forEachJaggedElementChannelPrivateUse1<scalar_t, 2>(1, gradOut, cb);
@@ -225,15 +225,15 @@ InvTransformPointsToGridBackward(const GridBatchImpl &batchHdl,
     auto outGradInAcc = tensorAccessor<DeviceTag, scalar_t, 2>(outGradIn);
     if constexpr (DeviceTag == torch::kCUDA) {
         auto cb = [=]
-            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc32<scalar_t, 2> ptsA) {
-                invTransformPointsToGridBackwardCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc64<scalar_t, 2> ptsA) {
+                invTransformPointsToGridBackwardCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                     bidx, eidx, ptsA, outGradInAcc, batchAcc, isPrimal);
             };
         forEachJaggedElementChannelCUDA<scalar_t, 2>(512, 1, gradOut, cb);
     } else if constexpr (DeviceTag == torch::kPrivateUse1) {
         auto cb = [=]
-            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc32<scalar_t, 2> ptsA) {
-                invTransformPointsToGridBackwardCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+            __device__(int32_t bidx, int32_t eidx, int32_t cidx, JaggedRAcc64<scalar_t, 2> ptsA) {
+                invTransformPointsToGridBackwardCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                     bidx, eidx, ptsA, outGradInAcc, batchAcc, isPrimal);
             };
         forEachJaggedElementChannelPrivateUse1<scalar_t, 2>(1, gradOut, cb);

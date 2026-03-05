@@ -15,8 +15,8 @@ namespace ops {
 
 template <int blockSize>
 __global__ __launch_bounds__(blockSize) void
-jIdxForJOffsets(TorchRAcc32<fvdb::JOffsetsType, 1> offsets,
-                TorchRAcc32<fvdb::JIdxType, 1> outJIdx) {
+jIdxForJOffsets(TorchRAcc64<fvdb::JOffsetsType, 1> offsets,
+                TorchRAcc64<fvdb::JIdxType, 1> outJIdx) {
     const int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (idx >= outJIdx.size(0)) {
@@ -61,8 +61,8 @@ jIdxForJOffsetsCUDA(torch::Tensor joffsets, int64_t numElements) {
 
     const int NUM_BLOCKS = GET_BLOCKS(numElements, DEFAULT_BLOCK_DIM);
     jIdxForJOffsets<DEFAULT_BLOCK_DIM><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM>>>(
-        joffsets.packed_accessor32<fvdb::JOffsetsType, 1, torch::RestrictPtrTraits>(),
-        retJIdx.packed_accessor32<fvdb::JIdxType, 1, torch::RestrictPtrTraits>());
+        joffsets.packed_accessor64<fvdb::JOffsetsType, 1, torch::RestrictPtrTraits>(),
+        retJIdx.packed_accessor64<fvdb::JIdxType, 1, torch::RestrictPtrTraits>());
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return retJIdx;
 }
@@ -72,7 +72,7 @@ __global__ __launch_bounds__(blockSize) void
 jIdxFill(fvdb::JOffsetsType start,
          fvdb::JOffsetsType end,
          fvdb::JIdxType i,
-         TorchRAcc32<fvdb::JIdxType, 1> outJIdx) {
+         TorchRAcc64<fvdb::JIdxType, 1> outJIdx) {
     for (int64_t idx = start + blockIdx.x * blockDim.x + threadIdx.x; idx < end;
          idx += blockDim.x * gridDim.x) {
         outJIdx[idx] = i;
@@ -107,7 +107,7 @@ jIdxForJOffsetsPrivateUse1(torch::Tensor joffsets, int64_t numElements) {
                     start,
                     end,
                     static_cast<fvdb::JIdxType>(i),
-                    retJIdx.packed_accessor32<fvdb::JIdxType, 1, torch::RestrictPtrTraits>());
+                    retJIdx.packed_accessor64<fvdb::JIdxType, 1, torch::RestrictPtrTraits>());
                 C10_CUDA_KERNEL_LAUNCH_CHECK();
             }
         }

@@ -74,7 +74,7 @@ template <int32_t NDIMS, typename ScalarT, typename Func, typename... Args>
 __global__ void
 forEachJaggedElementChannelPrivateUse1Kernel(int64_t numel,
                                              int64_t offset,
-                                             JaggedRAcc32<ScalarT, NDIMS> jaggedAcc,
+                                             JaggedRAcc64<ScalarT, NDIMS> jaggedAcc,
                                              int64_t channelsPerElement,
                                              Func func,
                                              Args... args) {
@@ -93,7 +93,7 @@ template <int32_t NDIMS, typename ScalarT, typename Func, typename... Args>
 __global__ void
 forEachTensorElementChannelPrivateUse1Kernel(int64_t numel,
                                              int64_t offset,
-                                             TorchRAcc32<ScalarT, NDIMS> tensorAcc,
+                                             TorchRAcc64<ScalarT, NDIMS> tensorAcc,
                                              int64_t channelsPerElement,
                                              Func func,
                                              Args... args) {
@@ -221,7 +221,7 @@ forEachJaggedElementChannelPrivateUse1(int64_t numChannels,
                 <<<deviceNumBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
                     deviceElementCount,
                     deviceElementOffset,
-                    jaggedTensor.packed_accessor32<ScalarT, NDIMS, torch::RestrictPtrTraits>(),
+                    jaggedTensor.packed_accessor64<ScalarT, NDIMS, torch::RestrictPtrTraits>(),
                     numChannels,
                     func,
                     args...);
@@ -254,7 +254,7 @@ forEachTensorElementChannelPrivateUse1(int64_t numChannels,
                 <<<deviceNumBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
                     deviceElementCount,
                     deviceElementOffset,
-                    tensor.packed_accessor32<ScalarT, NDIMS, torch::RestrictPtrTraits>(),
+                    tensor.packed_accessor64<ScalarT, NDIMS, torch::RestrictPtrTraits>(),
                     numChannels,
                     func,
                     args...);

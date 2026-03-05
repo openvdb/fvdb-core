@@ -202,9 +202,9 @@ template <typename ScalarType, typename Camera> struct ProjectionForwardUT {
     const fvdb::TorchRAcc64<ScalarType, 2> mMeansAcc;                   // [N, 3]
     const fvdb::TorchRAcc64<ScalarType, 2> mQuatsAcc;                   // [N, 4]
     const fvdb::TorchRAcc64<ScalarType, 2> mLogScalesAcc;               // [N, 3]
-    const fvdb::TorchRAcc32<ScalarType, 3> mWorldToCamMatricesStartAcc; // [C, 4, 4]
-    const fvdb::TorchRAcc32<ScalarType, 3> mWorldToCamMatricesEndAcc;   // [C, 4, 4]
-    const fvdb::TorchRAcc32<ScalarType, 3> mProjectionMatricesAcc;      // [C, 3, 3]
+    const fvdb::TorchRAcc64<ScalarType, 3> mWorldToCamMatricesStartAcc; // [C, 4, 4]
+    const fvdb::TorchRAcc64<ScalarType, 3> mWorldToCamMatricesEndAcc;   // [C, 4, 4]
+    const fvdb::TorchRAcc64<ScalarType, 3> mProjectionMatricesAcc;      // [C, 3, 3]
     const fvdb::TorchRAcc64<ScalarType, 2> mDistortionCoeffsAcc;        // [C, K]
 
     // Outputs
@@ -273,11 +273,11 @@ template <typename ScalarType, typename Camera> struct ProjectionForwardUT {
           mQuatsAcc(quats.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
           mLogScalesAcc(logScales.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
           mWorldToCamMatricesStartAcc(
-              worldToCamMatricesStart.packed_accessor32<ScalarType, 3, torch::RestrictPtrTraits>()),
+              worldToCamMatricesStart.packed_accessor64<ScalarType, 3, torch::RestrictPtrTraits>()),
           mWorldToCamMatricesEndAcc(
-              worldToCamMatricesEnd.packed_accessor32<ScalarType, 3, torch::RestrictPtrTraits>()),
+              worldToCamMatricesEnd.packed_accessor64<ScalarType, 3, torch::RestrictPtrTraits>()),
           mProjectionMatricesAcc(
-              projectionMatrices.packed_accessor32<ScalarType, 3, torch::RestrictPtrTraits>()),
+              projectionMatrices.packed_accessor64<ScalarType, 3, torch::RestrictPtrTraits>()),
           mDistortionCoeffsAcc(
               distortionCoeffs.packed_accessor64<ScalarType, 2, torch::RestrictPtrTraits>()),
           mOutRadiiAcc(outRadii.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>()),

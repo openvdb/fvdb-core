@@ -18,7 +18,7 @@ template <typename ScalarT>
 __device__ void
 nearestNeighborIJKForPointCallback(fvdb::JIdxType bidx,
                                    int32_t eidx,
-                                   const JaggedRAcc32<ScalarT, 2> points,
+                                   const JaggedRAcc64<ScalarT, 2> points,
                                    const VoxelCoordTransform *transforms,
                                    TorchRAcc64<int32_t, 2> outIJKData,
                                    TorchRAcc64<fvdb::JIdxType, 1> outIJKBIdx) {
@@ -88,7 +88,7 @@ dispatchNearestNeighborIJKForPoints<torch::kCUDA>(
             auto cb = [=] __device__(int32_t bidx,
                                      int32_t eidx,
                                      int32_t cidx,
-                                     JaggedRAcc32<scalar_t, 2> pacc) {
+                                     JaggedRAcc64<scalar_t, 2> pacc) {
                 nearestNeighborIJKForPointCallback(
                     bidx, eidx, pacc, transformDevPtr, outIJKAcc, outIJKBIdxAcc);
             };

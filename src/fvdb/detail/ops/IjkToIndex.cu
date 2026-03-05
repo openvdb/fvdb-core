@@ -65,8 +65,8 @@ IjkToIndex(const GridBatchImpl &batchHdl, const JaggedTensor &ijk, bool cumulati
                            auto cb = [=] __device__(fvdb::JIdxType bidx,
                                                     int64_t eidx,
                                                     int64_t cidx,
-                                                    JaggedRAcc32<scalar_t, 2> ijkAcc) {
-                               ijkToIndexCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+                                                    JaggedRAcc64<scalar_t, 2> ijkAcc) {
+                               ijkToIndexCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                                    bidx, eidx, batchAcc, ijkAcc, outIndexAcc, cumulative);
                            };
                            forEachJaggedElementChannelCUDA<scalar_t, 2>(512, 1, ijk, cb);
@@ -74,8 +74,8 @@ IjkToIndex(const GridBatchImpl &batchHdl, const JaggedTensor &ijk, bool cumulati
                            auto cb = [=] __device__(fvdb::JIdxType bidx,
                                                     int64_t eidx,
                                                     int64_t cidx,
-                                                    JaggedRAcc32<scalar_t, 2> ijkAcc) {
-                               ijkToIndexCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+                                                    JaggedRAcc64<scalar_t, 2> ijkAcc) {
+                               ijkToIndexCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                                    bidx, eidx, batchAcc, ijkAcc, outIndexAcc, cumulative);
                            };
                            forEachJaggedElementChannelPrivateUse1<scalar_t, 2>(1, ijk, cb);

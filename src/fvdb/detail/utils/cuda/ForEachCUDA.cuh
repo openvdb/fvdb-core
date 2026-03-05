@@ -71,12 +71,12 @@ forEachLeafSingleGridCUDAKernel(fvdb::detail::GridBatchImpl::Accessor batchAcces
 }
 
 __global__ void voxelMetaIndexCUDAKernel(fvdb::detail::GridBatchImpl::Accessor gridAccessor,
-                                         TorchRAcc32<int64_t, 2> metaIndex);
+                                         TorchRAcc64<int64_t, 2> metaIndex);
 
 template <typename Func, typename... Args>
 __global__ void
 forEachVoxelWithMetaCUDAKernel(fvdb::detail::GridBatchImpl::Accessor grid,
-                               TorchRAcc32<int64_t, 2> metaIndex,
+                               TorchRAcc64<int64_t, 2> metaIndex,
                                const bool returnIfOutOfRange,
                                const int64_t channelsPerVoxel,
                                Func func,
@@ -136,7 +136,7 @@ forEachVoxelCUDAKernel(fvdb::detail::GridBatchImpl::Accessor grid,
 
 template <int32_t NDIMS, typename ScalarT, typename Func, typename... Args>
 __global__ void __launch_bounds__(1024)
-forEachJaggedElementChannelCUDAKernel(JaggedRAcc32<ScalarT, NDIMS> jaggedAcc,
+forEachJaggedElementChannelCUDAKernel(JaggedRAcc64<ScalarT, NDIMS> jaggedAcc,
                                       const bool returnIfOutOfRange,
                                       const int64_t channelsPerElement,
                                       Func func,
@@ -160,7 +160,7 @@ forEachJaggedElementChannelCUDAKernel(JaggedRAcc32<ScalarT, NDIMS> jaggedAcc,
 
 template <int32_t NDIMS, typename ScalarT, typename Func, typename... Args>
 __global__ void
-forEachTensorElementChannelCUDAKernel(TorchRAcc32<ScalarT, NDIMS> tensorAcc,
+forEachTensorElementChannelCUDAKernel(TorchRAcc64<ScalarT, NDIMS> tensorAcc,
                                       const bool returnIfOutOfRange,
                                       const int64_t channelsPerElement,
                                       Func func,
@@ -376,7 +376,7 @@ forEachVoxelCUDA(const at::cuda::CUDAStream &stream,
     if (fvdb::Config::global().ultraSparseAccelerationEnabled()) {
         torch::Tensor metaIndex =
             torch::empty({numVoxels, 3}, torch::dtype(torch::kInt64).device(batchHdl.device()));
-        auto metaIndexAcc = metaIndex.packed_accessor32<int64_t, 2, torch::RestrictPtrTraits>();
+        auto metaIndexAcc = metaIndex.packed_accessor64<int64_t, 2, torch::RestrictPtrTraits>();
 
         const int64_t numMetaBlocks = GET_BLOCKS(numLeaves * VOXELS_PER_LEAF, 128);
         _private::voxelMetaIndexCUDAKernel<<<numMetaBlocks, 128, 0, stream>>>(batchAccessor,
@@ -488,7 +488,7 @@ forEachJaggedElementChannelCUDA(const at::cuda::CUDAStream &stream,
         }
         _private::forEachJaggedElementChannelCUDAKernel<NDIMS, ScalarT, Func, Args...>
             <<<numBlocks, numThreads, sharedMemBytes, stream>>>(
-                jaggedTensor.packed_accessor32<ScalarT, NDIMS, torch::RestrictPtrTraits>(),
+                jaggedTensor.packed_accessor64<ScalarT, NDIMS, torch::RestrictPtrTraits>(),
                 returnIfOutOfRange,
                 numChannels,
                 func,
@@ -562,7 +562,7 @@ forEachTensorElementChannelCUDA(const at::cuda::CUDAStream &stream,
         }
         _private::forEachTensorElementChannelCUDAKernel<NDIMS, ScalarT, Func, Args...>
             <<<numBlocks, numThreads, sharedMemBytes, stream>>>(
-                tensor.packed_accessor32<ScalarT, NDIMS, torch::RestrictPtrTraits>(),
+                tensor.packed_accessor64<ScalarT, NDIMS, torch::RestrictPtrTraits>(),
                 returnIfOutOfRange,
                 numChannels,
                 func,

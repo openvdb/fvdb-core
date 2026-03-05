@@ -232,8 +232,8 @@ VoxelsAlongRays(const GridBatchImpl &batchHdl,
                 auto cb1 = [=] __device__(int32_t bidx,
                                           int32_t eidx,
                                           int32_t cidx,
-                                          JaggedRAcc32<scalar_t, 2> rOA) {
-                    countVoxelsAlongRaysCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+                                          JaggedRAcc64<scalar_t, 2> rOA) {
+                    countVoxelsAlongRaysCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                         bidx, eidx, rOA, rayDirectionsAcc, outCountsAcc, batchAcc, maxVox, eps);
                 };
                 forEachJaggedElementChannelCUDA<scalar_t, 2>(numThreads, 1, rayOrigins, cb1);
@@ -274,8 +274,8 @@ VoxelsAlongRays(const GridBatchImpl &batchHdl,
                 auto cbIjk = [=] __device__(int32_t bidx,
                                             int32_t eidx,
                                             int32_t cidx,
-                                            JaggedRAcc32<scalar_t, 2> rayOriginsAcc) {
-                    voxelsAlongRaysCallback<true, scalar_t, JaggedRAcc32, TorchRAcc32>(
+                                            JaggedRAcc64<scalar_t, 2> rayOriginsAcc) {
+                    voxelsAlongRaysCallback<true, scalar_t, JaggedRAcc64, TorchRAcc64>(
                         bidx,
                         eidx,
                         rayOriginsAcc,
@@ -293,8 +293,8 @@ VoxelsAlongRays(const GridBatchImpl &batchHdl,
                 auto cbIdx = [=] __device__(int32_t bidx,
                                             int32_t eidx,
                                             int32_t cidx,
-                                            JaggedRAcc32<scalar_t, 2> rayOriginsAcc) {
-                    voxelsAlongRaysCallback<false, scalar_t, JaggedRAcc32, TorchRAcc32>(
+                                            JaggedRAcc64<scalar_t, 2> rayOriginsAcc) {
+                    voxelsAlongRaysCallback<false, scalar_t, JaggedRAcc64, TorchRAcc64>(
                         bidx,
                         eidx,
                         rayOriginsAcc,

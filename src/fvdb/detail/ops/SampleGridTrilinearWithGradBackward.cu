@@ -198,10 +198,10 @@ SampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
                 auto cb = [=] __device__(int32_t bidx,
                                          int32_t eidx,
                                          int32_t cidx,
-                                         JaggedRAcc32<float, 2> pts) {
+                                         JaggedRAcc64<float, 2> pts) {
                     sampleTrilinearWithGradBackwardStencilCallbackVec4<DeviceTag,
-                                                                       JaggedRAcc32,
-                                                                       TorchRAcc32>(
+                                                                       JaggedRAcc64,
+                                                                       TorchRAcc64>(
                         bidx,
                         eidx,
                         cidx,
@@ -217,11 +217,11 @@ SampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
                 auto cb = [=] __device__(int32_t bidx,
                                          int32_t eidx,
                                          int32_t cidx,
-                                         JaggedRAcc32<float, 2> pts) {
+                                         JaggedRAcc64<float, 2> pts) {
                     sampleTrilinearWithGradBackwardStencilCallback<DeviceTag,
                                                                    float,
-                                                                   JaggedRAcc32,
-                                                                   TorchRAcc32>(
+                                                                   JaggedRAcc64,
+                                                                   TorchRAcc64>(
                         bidx,
                         eidx,
                         cidx,
@@ -238,11 +238,11 @@ SampleGridTrilinearWithGradBackward(const GridBatchImpl &batchHdl,
             auto cb = [=] __device__(int32_t bidx,
                                      int32_t eidx,
                                      int32_t cidx,
-                                     JaggedRAcc32<scalar_t, 2> pts) {
+                                     JaggedRAcc64<scalar_t, 2> pts) {
                 sampleTrilinearWithGradBackwardStencilCallback<DeviceTag,
                                                                scalar_t,
-                                                               JaggedRAcc32,
-                                                               TorchRAcc32>(bidx,
+                                                               JaggedRAcc64,
+                                                               TorchRAcc64>(bidx,
                                                                             eidx,
                                                                             cidx,
                                                                             pts,

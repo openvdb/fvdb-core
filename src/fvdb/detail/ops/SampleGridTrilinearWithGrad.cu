@@ -189,8 +189,8 @@ SampleGridTrilinearWithGrad(const GridBatchImpl &batchHdl,
                 auto cb = [=] __device__(int32_t bidx,
                                          int32_t eidx,
                                          int32_t cidx,
-                                         JaggedRAcc32<float, 2> pts) {
-                    sampleTrilinearWithGradStencilCallbackVec4<JaggedRAcc32, TorchRAcc32>(
+                                         JaggedRAcc64<float, 2> pts) {
+                    sampleTrilinearWithGradStencilCallbackVec4<JaggedRAcc64, TorchRAcc64>(
                         bidx,
                         eidx,
                         cidx,
@@ -206,8 +206,8 @@ SampleGridTrilinearWithGrad(const GridBatchImpl &batchHdl,
                 auto cb = [=] __device__(int32_t bidx,
                                          int32_t eidx,
                                          int32_t cidx,
-                                         JaggedRAcc32<float, 2> pts) {
-                    sampleTrilinearWithGradStencilCallback<float, JaggedRAcc32, TorchRAcc32>(
+                                         JaggedRAcc64<float, 2> pts) {
+                    sampleTrilinearWithGradStencilCallback<float, JaggedRAcc64, TorchRAcc64>(
                         bidx,
                         eidx,
                         cidx,
@@ -224,8 +224,8 @@ SampleGridTrilinearWithGrad(const GridBatchImpl &batchHdl,
             auto cb = [=] __device__(int32_t bidx,
                                      int32_t eidx,
                                      int32_t cidx,
-                                     JaggedRAcc32<scalar_t, 2> pts) {
-                sampleTrilinearWithGradStencilCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+                                     JaggedRAcc64<scalar_t, 2> pts) {
+                sampleTrilinearWithGradStencilCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                     bidx,
                     eidx,
                     cidx,

@@ -255,7 +255,7 @@ MarchingCubes(const GridBatchImpl &batchHdl, const torch::Tensor &sdf, double le
                                          int32_t vidx,
                                          int32_t cidx,
                                          BatchGridAccessor batchAcc) {
-                    countVerticesCallback<scalar_t, TorchRAcc32>(bidx,
+                    countVerticesCallback<scalar_t, TorchRAcc64>(bidx,
                                                                  lidx,
                                                                  vidx,
                                                                  cidx,
@@ -312,7 +312,7 @@ MarchingCubes(const GridBatchImpl &batchHdl, const torch::Tensor &sdf, double le
                                              int32_t vidx,
                                              int32_t cidx,
                                              BatchGridAccessor batchAcc) {
-                        meshingCubeCallback<scalar_t, TorchRAcc32>(bidx,
+                        meshingCubeCallback<scalar_t, TorchRAcc64>(bidx,
                                                                    lidx,
                                                                    vidx,
                                                                    cidx,
