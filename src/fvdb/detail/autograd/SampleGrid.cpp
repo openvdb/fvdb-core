@@ -10,34 +10,6 @@
 #include <fvdb/detail/ops/SampleGridTrilinearWithGradBackward.h>
 #include <fvdb/detail/ops/SplatIntoGridBezier.h>
 #include <fvdb/detail/ops/SplatIntoGridTrilinear.h>
-#include <fvdb/detail/utils/Utils.h>
-
-void
-checkForwardInputs(c10::intrusive_ptr<fvdb::detail::GridBatchImpl> grid,
-                   fvdb::detail::autograd::SampleGridTrilinear::JaggedVariable points,
-                   fvdb::detail::autograd::SampleGridTrilinear::Variable data,
-                   bool returnGrad) {
-    grid->checkNonEmptyGrid();
-    TORCH_CHECK_VALUE(points.device() == data.device(),
-                      "points and data must be on the same device");
-    grid->checkDevice(points);
-    grid->checkDevice(data);
-    points.check_valid();
-
-    TORCH_CHECK_TYPE(points.is_floating_point(), "points must have a floating point type");
-    TORCH_CHECK_TYPE(points.dtype() == data.dtype(), "all tensors must have the same type");
-    TORCH_CHECK_VALUE(points.rdim() == 2,
-                      "Expected points to have shape [B*M, 3] (wrong number of dimensions)");
-    TORCH_CHECK(points.numel() > 0, "Empty tensor (points)");
-    TORCH_CHECK(points.rsize(1) == 3, "points must have shape [B, M, 3] (points must be 3D)");
-
-    TORCH_CHECK_TYPE(data.is_floating_point(), "data must have a floating point type");
-    TORCH_CHECK_VALUE(data.dim() >= 2,
-                      "Expected data to have shape [N, *] (at least 2 dimensions)");
-    TORCH_CHECK(data.numel() > 0, "Empty tensor (data)");
-    TORCH_CHECK(data.size(0) == grid->totalVoxels(),
-                "grid_data must have one value per voxel (shape [N, *]) (wrong first dimension)");
-}
 
 namespace fvdb {
 namespace detail {
@@ -49,15 +21,12 @@ SampleGridTrilinear::forward(SampleGridTrilinear::AutogradContext *ctx,
                              SampleGridTrilinear::JaggedVariable points,
                              SampleGridTrilinear::Variable data,
                              bool returnGrad) {
-    checkForwardInputs(grid, points, data, returnGrad);
-
-    auto ret = FVDB_DISPATCH_KERNEL(points.device(), [&]() {
-        if (returnGrad) {
-            return ops::dispatchSampleGridTrilinearWithGrad<DeviceTag>(*grid, points, data);
-        } else {
-            return ops::dispatchSampleGridTrilinear<DeviceTag>(*grid, points, data);
-        }
-    });
+    std::vector<torch::Tensor> ret;
+    if (returnGrad) {
+        ret = ops::sampleGridTrilinearWithGrad(*grid, points, data);
+    } else {
+        ret = ops::sampleGridTrilinear(*grid, points, data);
+    }
 
     // Save data for backward in context
     ctx->save_for_backward({data, points.jdata(), points.joffsets(), points.jlidx()});
@@ -81,24 +50,21 @@ SampleGridTrilinear::backward(SampleGridTrilinear::AutogradContext *ctx,
     bool returnGrad  = ctx->saved_data["return_grad"].toBool();
     Variable gradOut = grad_output.at(0); // [B*M, *]
 
-    torch::Tensor outGrad = FVDB_DISPATCH_KERNEL(gradOut.device(), [&]() {
-        if (returnGrad) {
-            Variable gradPtsGrad = grad_output.at(1); // [B*M, -1, 3]
-            return ops::dispatchSampleGridTrilinearWithGradBackward<DeviceTag>(
-                *grid,
-                JaggedTensor::from_data_offsets_and_list_ids(
-                    pointCoords, pointJOffsets, pointsJLidx),
-                data,
-                gradOut,
-                gradPtsGrad);
-        } else {
-            return ops::dispatchSplatIntoGridTrilinear<DeviceTag>(
-                *grid,
-                JaggedTensor::from_data_offsets_and_list_ids(
-                    pointCoords, pointJOffsets, pointsJLidx),
-                gradOut);
-        }
-    });
+    torch::Tensor outGrad;
+    if (returnGrad) {
+        Variable gradPtsGrad = grad_output.at(1); // [B*M, -1, 3]
+        outGrad              = ops::sampleGridTrilinearWithGradBackward(
+            *grid,
+            JaggedTensor::from_data_offsets_and_list_ids(pointCoords, pointJOffsets, pointsJLidx),
+            data,
+            gradOut,
+            gradPtsGrad);
+    } else {
+        outGrad = ops::splatIntoGridTrilinear(
+            *grid,
+            JaggedTensor::from_data_offsets_and_list_ids(pointCoords, pointJOffsets, pointsJLidx),
+            gradOut);
+    }
 
     return {torch::Tensor(), torch::Tensor(), outGrad, torch::Tensor()};
 }
@@ -109,15 +75,12 @@ SampleGridBezier::forward(SampleGridBezier::AutogradContext *ctx,
                           SampleGridBezier::JaggedVariable points,
                           SampleGridBezier::Variable data,
                           bool returnGrad) {
-    checkForwardInputs(grid, points, data, returnGrad);
-
-    std::vector<torch::Tensor> ret = FVDB_DISPATCH_KERNEL_DEVICE(points.device(), [&]() {
-        if (returnGrad) {
-            return ops::dispatchSampleGridBezierWithGrad<DeviceTag>(*grid, points, data);
-        } else {
-            return ops::dispatchSampleGridBezier<DeviceTag>(*grid, points, data);
-        }
-    });
+    std::vector<torch::Tensor> ret;
+    if (returnGrad) {
+        ret = ops::sampleGridBezierWithGrad(*grid, points, data);
+    } else {
+        ret = ops::sampleGridBezier(*grid, points, data);
+    }
 
     // Save data for backward in context
     ctx->save_for_backward({data, points.jdata(), points.joffsets(), points.jlidx()});
@@ -142,24 +105,21 @@ SampleGridBezier::backward(SampleGridBezier::AutogradContext *ctx,
     bool returnGrad  = ctx->saved_data["return_grad"].toBool();
     Variable gradOut = grad_output.at(0); // [B*M, *]
 
-    Variable outGrad = FVDB_DISPATCH_KERNEL_DEVICE(gradOut.device(), [&]() {
-        if (returnGrad) {
-            Variable gradPtsGrad = grad_output.at(1); // [B*M, -1, 3]
-            return ops::dispatchSampleGridBezierWithGradBackward<DeviceTag>(
-                *grid,
-                JaggedTensor::from_data_offsets_and_list_ids(
-                    pointCoords, pointJOffsets, pointsJLidx),
-                gradOut,
-                gradPtsGrad,
-                data);
-        } else {
-            return ops::dispatchSplatIntoGridBezier<DeviceTag>(
-                *grid,
-                JaggedTensor::from_data_offsets_and_list_ids(
-                    pointCoords, pointJOffsets, pointsJLidx),
-                gradOut);
-        }
-    });
+    Variable outGrad;
+    if (returnGrad) {
+        Variable gradPtsGrad = grad_output.at(1); // [B*M, -1, 3]
+        outGrad              = ops::sampleGridBezierWithGradBackward(
+            *grid,
+            JaggedTensor::from_data_offsets_and_list_ids(pointCoords, pointJOffsets, pointsJLidx),
+            gradOut,
+            gradPtsGrad,
+            data);
+    } else {
+        outGrad = ops::splatIntoGridBezier(
+            *grid,
+            JaggedTensor::from_data_offsets_and_list_ids(pointCoords, pointJOffsets, pointsJLidx),
+            gradOut);
+    }
 
     return {torch::Tensor(), torch::Tensor(), outGrad, torch::Tensor()};
 }

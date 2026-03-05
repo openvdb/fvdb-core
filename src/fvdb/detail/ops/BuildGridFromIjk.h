@@ -6,19 +6,21 @@
 
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchImpl.h>
-#include <fvdb/detail/TorchDeviceBuffer.h>
 
-#include <nanovdb/GridHandle.h>
-#include <nanovdb/NanoVDB.h>
-
-#include <torch/types.h>
+#include <vector>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer> dispatchCreateNanoGridFromIJK(const JaggedTensor &ijk);
+// Internal helper used by other grid-building ops (BuildCoarseGridFromFine, BuildGridFromPoints,
+// etc.)
+nanovdb::GridHandle<TorchDeviceBuffer> _createNanoGridFromIJK(const JaggedTensor &ijk);
+
+c10::intrusive_ptr<GridBatchImpl>
+createNanoGridFromIJK(const JaggedTensor &ijk,
+                      const std::vector<nanovdb::Vec3d> &voxelSizes,
+                      const std::vector<nanovdb::Vec3d> &origins);
 
 } // namespace ops
 } // namespace detail

@@ -20,6 +20,12 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
+template <torch::DeviceType>
+nanovdb::GridHandle<TorchDeviceBuffer>
+dispatchBuildGridFromMesh(const JaggedTensor &meshVertices,
+                          const JaggedTensor &meshFaces,
+                          const std::vector<VoxelCoordTransform> &tx);
+
 template <typename ScalarType>
 nanovdb::GridHandle<TorchDeviceBuffer>
 buildGridFromMeshCPU(const JaggedTensor &vertices,
@@ -101,8 +107,8 @@ nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchBuildGridFromMesh<torch::kCUDA>(const JaggedTensor &meshVertices,
                                         const JaggedTensor &meshFaces,
                                         const std::vector<VoxelCoordTransform> &tx) {
-    JaggedTensor coords = ops::dispatchIJKForMesh<torch::kCUDA>(meshVertices, meshFaces, tx);
-    return ops::dispatchCreateNanoGridFromIJK<torch::kCUDA>(coords);
+    JaggedTensor coords = ops::ijkForMesh(meshVertices, meshFaces, tx);
+    return ops::_createNanoGridFromIJK(coords);
 }
 
 template <>
@@ -115,6 +121,70 @@ dispatchBuildGridFromMesh<torch::kCPU>(const JaggedTensor &meshVertices,
         "buildGridFromMeshCPU",
         AT_WRAP([&]() { return buildGridFromMeshCPU<scalar_t>(meshVertices, meshFaces, tx); }),
         AT_EXPAND(AT_FLOATING_TYPES));
+}
+
+c10::intrusive_ptr<GridBatchImpl>
+buildGridFromMesh(const JaggedTensor &meshVertices,
+                  const JaggedTensor &meshFaces,
+                  const std::vector<nanovdb::Vec3d> &voxelSizes,
+                  const std::vector<nanovdb::Vec3d> &origins) {
+    TORCH_CHECK_VALUE(
+        meshVertices.device() == meshFaces.device(),
+        "meshVertices and meshFaces must be on the same device, but got meshVertices.device() = ",
+        meshVertices.device(),
+        " and meshFaces.device() = ",
+        meshFaces.device());
+    TORCH_CHECK_VALUE(
+        meshVertices.ldim() == 1,
+        "Expected meshVertices to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+        meshVertices.ldim(),
+        "list dimensions");
+    TORCH_CHECK_VALUE(
+        meshFaces.ldim() == 1,
+        "Expected meshFaces to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+        meshFaces.ldim(),
+        "list dimensions");
+    TORCH_CHECK_TYPE(meshVertices.is_floating_point(),
+                     "meshVertices must have a floating point type");
+    TORCH_CHECK_VALUE(
+        meshVertices.rdim() == 2,
+        std::string("Expected meshVertices to have 2 dimensions (shape (n, 3)) but got ") +
+            std::to_string(meshVertices.rdim()) + " dimensions");
+    TORCH_CHECK_VALUE(meshVertices.rsize(1) == 3,
+                      "Expected 3 dimensional meshVertices but got meshVertices.rshape[1] = " +
+                          std::to_string(meshVertices.rsize(1)));
+    TORCH_CHECK_TYPE(!meshFaces.is_floating_point(), "meshFaces must have an integer type");
+    TORCH_CHECK_VALUE(
+        meshFaces.rdim() == 2,
+        std::string("Expected meshFaces to have 2 dimensions (shape (n, 3)) but got ") +
+            std::to_string(meshFaces.rdim()) + " dimensions");
+    TORCH_CHECK_VALUE(meshFaces.rsize(1) == 3,
+                      "Expected 3 dimensional meshFaces but got meshFaces.rshape[1] = " +
+                          std::to_string(meshFaces.rsize(1)));
+    TORCH_CHECK_VALUE(meshVertices.num_outer_lists() == meshFaces.num_outer_lists(),
+                      "Expected same number of vertex and face sets got len(meshVertices) = ",
+                      meshVertices.num_outer_lists(),
+                      " and len(meshFaces) = ",
+                      meshFaces.num_outer_lists());
+    const int64_t numGrids = meshVertices.joffsets().size(0) - 1;
+    TORCH_CHECK(numGrids == meshVertices.num_outer_lists(),
+                "If this happens, Francis' paranoia was justified. File a bug");
+    TORCH_CHECK_VALUE(numGrids <= GridBatchImpl::MAX_GRIDS_PER_BATCH,
+                      "Cannot create a grid with more than ",
+                      GridBatchImpl::MAX_GRIDS_PER_BATCH,
+                      " grids in a batch. ",
+                      "You passed in ",
+                      numGrids,
+                      " mesh sets.");
+    std::vector<VoxelCoordTransform> transforms;
+    transforms.reserve(numGrids);
+    for (int64_t i = 0; i < numGrids; i += 1) {
+        transforms.push_back(primalVoxelTransformForSizeAndOrigin(voxelSizes[i], origins[i]));
+    }
+    auto handle = FVDB_DISPATCH_KERNEL_DEVICE(meshVertices.device(), [&]() {
+        return dispatchBuildGridFromMesh<DeviceTag>(meshVertices, meshFaces, transforms);
+    });
+    return c10::make_intrusive<GridBatchImpl>(std::move(handle), voxelSizes, origins);
 }
 
 } // namespace ops

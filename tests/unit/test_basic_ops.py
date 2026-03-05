@@ -77,6 +77,13 @@ class TestBasicOps(unittest.TestCase):
         self.assertTrue(torch.equal(dilated_grid_batch.ijk.jdata, expected_grid.ijk.jdata))
 
     @parameterized.expand(["cpu", "cuda"])
+    def test_dilate_grid_zero(self, device):
+        pts = torch.randn(500, 3, device=device, dtype=torch.float32)
+        grid = fvdb.GridBatch.from_points(fvdb.JaggedTensor(pts), voxel_sizes=0.3)
+        dilated_grid = grid.dilated_grid(0)
+        self.assertTrue(torch.equal(grid.ijk.jdata, dilated_grid.ijk.jdata))
+
+    @parameterized.expand(["cpu", "cuda"])
     def test_merge_grids(self, device):
         def get_point_list(npc: list, device: torch.device | str) -> list[torch.Tensor]:
             batch_size = len(npc)

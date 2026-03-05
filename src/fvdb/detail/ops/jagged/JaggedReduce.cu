@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/jagged/JaggedReduce.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/Atomics.cuh>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 
@@ -183,7 +184,8 @@ JaggedReduce(const torch::Tensor &jdataRaw,
             }
         }),
         AT_EXPAND(AT_ALL_TYPES),
-        c10::kHalf);
+        c10::kHalf,
+        c10::kBFloat16);
 
     torch::Tensor rOut                   = out.reshape(spliceShape({out.size(0)}, jdataRaw));
     std::optional<torch::Tensor> rArgOut = std::nullopt;
@@ -194,70 +196,46 @@ JaggedReduce(const torch::Tensor &jdataRaw,
     return std::make_tuple(rOut, rArgOut);
 }
 
-template <>
 torch::Tensor
-dispatchJaggedSum<torch::kCPU>(const torch::Tensor &jdata,
-                               const torch::Tensor &jidx,
-                               const torch::Tensor &joffsets,
-                               int64_t dimSize) {
-    TORCH_CHECK(jdata.is_cpu(), "jagged tensor must be on CPU");
-    return std::get<0>(
-        JaggedReduce<torch::kCPU, ReductionType::SUM>(jdata, jidx, joffsets, dimSize));
+jaggedSum(const torch::Tensor &jdata,
+          const torch::Tensor &jidx,
+          const torch::Tensor &joffsets,
+          int64_t dimSize) {
+    TORCH_CHECK_VALUE(jdata.device() == jidx.device(), "jdata and jidx must be on the same device");
+    TORCH_CHECK_VALUE(jdata.device() == joffsets.device(),
+                      "jdata and joffsets must be on the same device");
+    return FVDB_DISPATCH_KERNEL_DEVICE(jdata.device(), [&]() {
+        return std::get<0>(
+            JaggedReduce<DeviceTag, ReductionType::SUM>(jdata, jidx, joffsets, dimSize));
+    });
 }
 
-template <>
-torch::Tensor
-dispatchJaggedSum<torch::kCUDA>(const torch::Tensor &jdata,
-                                const torch::Tensor &jidx,
-                                const torch::Tensor &joffsets,
-                                int64_t dimSize) {
-    TORCH_CHECK(jdata.is_cuda(), "jagged tensor must be on CUDA");
-    return std::get<0>(
-        JaggedReduce<torch::kCUDA, ReductionType::SUM>(jdata, jidx, joffsets, dimSize));
-}
-
-template <>
 std::vector<torch::Tensor>
-dispatchJaggedMin<torch::kCPU>(const torch::Tensor &jdata,
-                               const torch::Tensor &jidx,
-                               const torch::Tensor &joffsets,
-                               int64_t dimSize) {
-    TORCH_CHECK(jdata.is_cpu(), "jagged tensor must be on CPU");
-    auto res = JaggedReduce<torch::kCPU, ReductionType::MIN>(jdata, jidx, joffsets, dimSize);
-    return {std::get<0>(res), std::get<1>(res).value()};
+jaggedMin(const torch::Tensor &jdata,
+          const torch::Tensor &jidx,
+          const torch::Tensor &joffsets,
+          int64_t dimSize) {
+    TORCH_CHECK_VALUE(jdata.device() == jidx.device(), "jdata and jidx must be on the same device");
+    TORCH_CHECK_VALUE(jdata.device() == joffsets.device(),
+                      "jdata and joffsets must be on the same device");
+    return FVDB_DISPATCH_KERNEL_DEVICE(jdata.device(), [&]() {
+        auto res = JaggedReduce<DeviceTag, ReductionType::MIN>(jdata, jidx, joffsets, dimSize);
+        return std::vector<torch::Tensor>{std::get<0>(res), std::get<1>(res).value()};
+    });
 }
 
-template <>
 std::vector<torch::Tensor>
-dispatchJaggedMin<torch::kCUDA>(const torch::Tensor &jdata,
-                                const torch::Tensor &jidx,
-                                const torch::Tensor &joffsets,
-                                int64_t dimSize) {
-    TORCH_CHECK(jdata.is_cuda(), "jagged tensor must be on CUDA");
-    auto res = JaggedReduce<torch::kCUDA, ReductionType::MIN>(jdata, jidx, joffsets, dimSize);
-    return {std::get<0>(res), std::get<1>(res).value()};
-}
-
-template <>
-std::vector<torch::Tensor>
-dispatchJaggedMax<torch::kCPU>(const torch::Tensor &jdata,
-                               const torch::Tensor &jidx,
-                               const torch::Tensor &joffsets,
-                               int64_t dimSize) {
-    TORCH_CHECK(jdata.is_cpu(), "jagged tensor must be on CPU");
-    auto res = JaggedReduce<torch::kCPU, ReductionType::MAX>(jdata, jidx, joffsets, dimSize);
-    return {std::get<0>(res), std::get<1>(res).value()};
-}
-
-template <>
-std::vector<torch::Tensor>
-dispatchJaggedMax<torch::kCUDA>(const torch::Tensor &jdata,
-                                const torch::Tensor &jidx,
-                                const torch::Tensor &joffsets,
-                                int64_t dimSize) {
-    TORCH_CHECK(jdata.is_cuda(), "jagged tensor must be on CUDA");
-    auto res = JaggedReduce<torch::kCUDA, ReductionType::MAX>(jdata, jidx, joffsets, dimSize);
-    return {std::get<0>(res), std::get<1>(res).value()};
+jaggedMax(const torch::Tensor &jdata,
+          const torch::Tensor &jidx,
+          const torch::Tensor &joffsets,
+          int64_t dimSize) {
+    TORCH_CHECK_VALUE(jdata.device() == jidx.device(), "jdata and jidx must be on the same device");
+    TORCH_CHECK_VALUE(jdata.device() == joffsets.device(),
+                      "jdata and joffsets must be on the same device");
+    return FVDB_DISPATCH_KERNEL_DEVICE(jdata.device(), [&]() {
+        auto res = JaggedReduce<DeviceTag, ReductionType::MAX>(jdata, jidx, joffsets, dimSize);
+        return std::vector<torch::Tensor>{std::get<0>(res), std::get<1>(res).value()};
+    });
 }
 
 } // namespace ops

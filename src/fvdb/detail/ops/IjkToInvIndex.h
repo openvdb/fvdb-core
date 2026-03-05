@@ -7,15 +7,11 @@
 #include <fvdb/JaggedTensor.h>
 #include <fvdb/detail/GridBatchImpl.h>
 
-#include <torch/types.h>
-
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-JaggedTensor
-dispatchIjkToInvIndex(const GridBatchImpl &batchHdl, const JaggedTensor &ijk, bool cumulative);
+JaggedTensor ijkToInvIndex(const GridBatchImpl &batchHdl, const JaggedTensor &ijk, bool cumulative);
 
 } // namespace ops
 } // namespace detail

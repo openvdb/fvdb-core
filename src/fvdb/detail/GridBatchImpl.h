@@ -569,6 +569,11 @@ class GridBatchImpl : public torch::CustomClassHolder {
     clipWithMask(const std::vector<nanovdb::Coord> &ijkMin,
                  const std::vector<nanovdb::Coord> &ijkMax);
 
+    std::pair<JaggedTensor, c10::intrusive_ptr<GridBatchImpl>>
+    clipFeaturesWithMask(const JaggedTensor &features,
+                         const std::vector<nanovdb::Coord> &ijkMin,
+                         const std::vector<nanovdb::Coord> &ijkMax);
+
     c10::intrusive_ptr<GridBatchImpl> dilate(const int64_t dilationAmount);
 
     c10::intrusive_ptr<GridBatchImpl> dilate(const std::vector<int64_t> dilationAmount);

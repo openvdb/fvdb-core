@@ -6,6 +6,7 @@
 #include <fvdb/detail/utils/HilbertCode.h>
 #include <fvdb/detail/utils/MortonCode.h>
 #include <fvdb/detail/utils/SimpleOpHelper.h>
+#include <fvdb/detail/utils/Utils.h>
 
 #include <cuda_runtime.h>
 
@@ -59,24 +60,15 @@ struct Processor : public BasePerActiveVoxelProcessor<DeviceTag,
 
 } // End anonymous namespace
 
-template <torch::DeviceType DeviceTag>
 JaggedTensor
-dispatchSerializeEncode(GridBatchImpl const &gridBatch,
-                        SpaceFillingCurveType order_type,
-                        nanovdb::Coord const &offset) {
-    Processor<DeviceTag> processor{.offset = offset, .order_type = order_type};
-    return processor.execute(gridBatch);
+serializeEncode(GridBatchImpl const &gridBatch,
+                SpaceFillingCurveType order_type,
+                nanovdb::Coord const &offset) {
+    return FVDB_DISPATCH_KERNEL(gridBatch.device(), [&]() {
+        Processor<DeviceTag> processor{.offset = offset, .order_type = order_type};
+        return processor.execute(gridBatch);
+    });
 }
-
-template JaggedTensor dispatchSerializeEncode<torch::kCUDA>(GridBatchImpl const &,
-                                                            SpaceFillingCurveType,
-                                                            nanovdb::Coord const &);
-template JaggedTensor dispatchSerializeEncode<torch::kCPU>(GridBatchImpl const &,
-                                                           SpaceFillingCurveType,
-                                                           nanovdb::Coord const &);
-template JaggedTensor dispatchSerializeEncode<torch::kPrivateUse1>(GridBatchImpl const &,
-                                                                   SpaceFillingCurveType,
-                                                                   nanovdb::Coord const &);
 
 } // namespace ops
 } // namespace detail

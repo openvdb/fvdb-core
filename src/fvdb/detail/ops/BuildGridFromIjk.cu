@@ -23,6 +23,9 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
+template <torch::DeviceType>
+nanovdb::GridHandle<TorchDeviceBuffer> dispatchCreateNanoGridFromIJK(const JaggedTensor &ijk);
+
 template <>
 nanovdb::GridHandle<TorchDeviceBuffer>
 dispatchCreateNanoGridFromIJK<torch::kCUDA>(const JaggedTensor &ijk) {
@@ -204,6 +207,44 @@ dispatchCreateNanoGridFromIJK<torch::kCPU>(const JaggedTensor &jaggedCoords) {
             }
         }),
         AT_EXPAND(AT_INTEGRAL_TYPES));
+}
+
+nanovdb::GridHandle<TorchDeviceBuffer>
+_createNanoGridFromIJK(const JaggedTensor &ijk) {
+    TORCH_CHECK_VALUE(
+        ijk.ldim() == 1,
+        "Expected coords to have 1 list dimension, i.e. be a single list of coordinate values, but got",
+        ijk.ldim(),
+        "list dimensions");
+    TORCH_CHECK_TYPE(at::isIntegralType(ijk.scalar_type(), false), "ijk must have an integer type");
+    TORCH_CHECK_VALUE(ijk.rdim() == 2,
+                      std::string("Expected ijk to have 2 dimensions (shape (n, 3)) but got ") +
+                          std::to_string(ijk.rdim()) + " dimensions");
+    TORCH_CHECK_VALUE(ijk.rsize(1) == 3,
+                      "Expected 3 dimensional coords but got ijk.rshape[1] = " +
+                          std::to_string(ijk.rsize(1)));
+    TORCH_CHECK(ijk.num_tensors() == ijk.num_outer_lists(),
+                "If this happens, Francis' paranoia was justified. File a bug");
+    TORCH_CHECK_VALUE(ijk.num_outer_lists() <= GridBatchImpl::MAX_GRIDS_PER_BATCH,
+                      "Cannot create a batch of grids with more than ",
+                      GridBatchImpl::MAX_GRIDS_PER_BATCH,
+                      " grids in it. ",
+                      "You passed in ",
+                      ijk.num_outer_lists(),
+                      " ijk sets.");
+    const int64_t numGrids = ijk.joffsets().size(0) - 1;
+    TORCH_CHECK(numGrids == ijk.num_outer_lists(),
+                "If this happens, Francis' paranoia was justified. File a bug");
+    return FVDB_DISPATCH_KERNEL(ijk.device(),
+                                [&]() { return dispatchCreateNanoGridFromIJK<DeviceTag>(ijk); });
+}
+
+c10::intrusive_ptr<GridBatchImpl>
+createNanoGridFromIJK(const JaggedTensor &ijk,
+                      const std::vector<nanovdb::Vec3d> &voxelSizes,
+                      const std::vector<nanovdb::Vec3d> &origins) {
+    auto handle = _createNanoGridFromIJK(ijk);
+    return c10::make_intrusive<GridBatchImpl>(std::move(handle), voxelSizes, origins);
 }
 
 } // namespace ops

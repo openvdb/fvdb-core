@@ -17,6 +17,7 @@ dependencies:
   - cuda-version=12.9
   - cxx-compiler
   - gcc_linux-64=13
+  - gh
   - git
   - gitpython
   - gxx_linux-64=13

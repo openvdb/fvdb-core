@@ -13,12 +13,11 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-JaggedTensor dispatchSegmentsAlongRays(const GridBatchImpl &batchHdl,
-                                       const JaggedTensor &rayOrigins,
-                                       const JaggedTensor &rayDirections,
-                                       int64_t maxSegments,
-                                       const double eps);
+JaggedTensor segmentsAlongRays(const GridBatchImpl &batchHdl,
+                               const JaggedTensor &rayOrigins,
+                               const JaggedTensor &rayDirections,
+                               int64_t maxSegments,
+                               const double eps);
 
 } // namespace ops
 } // namespace detail

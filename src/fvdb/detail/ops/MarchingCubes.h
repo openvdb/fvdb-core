@@ -15,9 +15,8 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
 std::vector<JaggedTensor>
-dispatchMarchingCubes(const GridBatchImpl &batchHdl, const torch::Tensor &sdf, double level);
+marchingCubes(const GridBatchImpl &batchHdl, const JaggedTensor &field, double level);
 
 } // namespace ops
 } // namespace detail

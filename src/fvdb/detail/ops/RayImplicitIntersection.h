@@ -13,12 +13,11 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-JaggedTensor dispatchRayImplicitIntersection(const GridBatchImpl &batchHdl,
-                                             const JaggedTensor &rayOrigins,
-                                             const JaggedTensor &rayDirections,
-                                             const JaggedTensor &gridScalars,
-                                             float eps);
+JaggedTensor rayImplicitIntersection(const GridBatchImpl &batchHdl,
+                                     const JaggedTensor &rayOrigins,
+                                     const JaggedTensor &rayDirections,
+                                     const JaggedTensor &gridScalars,
+                                     float eps);
 
 } // namespace ops
 } // namespace detail

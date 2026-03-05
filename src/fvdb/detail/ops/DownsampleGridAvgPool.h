@@ -6,28 +6,24 @@
 
 #include <fvdb/detail/GridBatchImpl.h>
 
-#include <nanovdb/NanoVDB.h>
-
 #include <torch/types.h>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-torch::Tensor dispatchDownsampleGridAvgPool(const GridBatchImpl &fineBatchHdl,
-                                            const GridBatchImpl &coarseBatchHdl,
+torch::Tensor downsampleGridAvgPool(const GridBatchImpl &fineBatchHdl,
+                                    const GridBatchImpl &coarseBatchHdl,
+                                    const torch::Tensor &fineData,
+                                    nanovdb::Coord poolingFactor,
+                                    nanovdb::Coord stride);
+
+torch::Tensor downsampleGridAvgPoolBackward(const GridBatchImpl &coarseBatchHdl,
+                                            const GridBatchImpl &fineBatchHdl,
                                             const torch::Tensor &fineData,
+                                            const torch::Tensor &coarseGradOut,
                                             nanovdb::Coord poolingFactor,
                                             nanovdb::Coord stride);
-
-template <torch::DeviceType>
-torch::Tensor dispatchDownsampleGridAvgPoolBackward(const GridBatchImpl &coarseBatchHdl,
-                                                    const GridBatchImpl &fineBatchHdl,
-                                                    const torch::Tensor &fineData,
-                                                    const torch::Tensor &coarseGradOut,
-                                                    nanovdb::Coord poolingFactor,
-                                                    nanovdb::Coord stride);
 
 } // namespace ops
 } // namespace detail

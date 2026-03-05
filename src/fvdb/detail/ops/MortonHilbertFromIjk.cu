@@ -50,8 +50,6 @@ struct HilbertProcessor : public BasePerElementProcessor<DeviceTag,
     }
 };
 
-} // End anonymous namespace
-
 template <torch::DeviceType DeviceTag>
 torch::Tensor
 dispatchMortonFromIjk(torch::Tensor ijk) {
@@ -60,6 +58,17 @@ dispatchMortonFromIjk(torch::Tensor ijk) {
     TORCH_CHECK_VALUE(ijk.scalar_type() == torch::kInt32, "ijk must be int32");
     return MortonProcessor<DeviceTag>{}.execute(ijk);
 }
+
+template <torch::DeviceType DeviceTag>
+torch::Tensor
+dispatchHilbertFromIjk(torch::Tensor ijk) {
+    TORCH_CHECK_VALUE(ijk.dim() == 2, "ijk must be a 2D tensor of shape [N, 3]");
+    TORCH_CHECK_VALUE(ijk.size(1) == 3, "ijk must have 3 dimensions");
+    TORCH_CHECK_VALUE(ijk.scalar_type() == torch::kInt32, "ijk must be int32");
+    return HilbertProcessor<DeviceTag>{}.execute(ijk);
+}
+
+} // End anonymous namespace
 
 torch::Tensor
 mortonFromIjk(torch::Tensor ijk) {
@@ -70,15 +79,6 @@ mortonFromIjk(torch::Tensor ijk) {
     } else {
         return dispatchMortonFromIjk<torch::kCPU>(ijk);
     }
-}
-
-template <torch::DeviceType DeviceTag>
-torch::Tensor
-dispatchHilbertFromIjk(torch::Tensor ijk) {
-    TORCH_CHECK_VALUE(ijk.dim() == 2, "ijk must be a 2D tensor of shape [N, 3]");
-    TORCH_CHECK_VALUE(ijk.size(1) == 3, "ijk must have 3 dimensions");
-    TORCH_CHECK_VALUE(ijk.scalar_type() == torch::kInt32, "ijk must be int32");
-    return HilbertProcessor<DeviceTag>{}.execute(ijk);
 }
 
 torch::Tensor

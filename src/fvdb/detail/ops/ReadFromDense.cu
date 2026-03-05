@@ -3,6 +3,7 @@
 //
 #include <fvdb/detail/ops/ReadFromDense.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
@@ -153,12 +154,11 @@ readFromDenseCmajorCPU(const GridBatchImpl::Accessor &gridHandle,
     }
 }
 
-template <>
 void
-dispatchReadFromDenseCminor<torch::kCUDA>(const GridBatchImpl &batchHdl,
-                                          const torch::Tensor &inDenseTensor,
-                                          const torch::Tensor &denseOrigins,
-                                          torch::Tensor &outSparseTensor) {
+readFromDenseCminorCUDA(const GridBatchImpl &batchHdl,
+                        const torch::Tensor &inDenseTensor,
+                        const torch::Tensor &denseOrigins,
+                        torch::Tensor &outSparseTensor) {
     AT_DISPATCH_V2(
         inDenseTensor.scalar_type(),
         "readFromDenseCminor",
@@ -184,12 +184,11 @@ dispatchReadFromDenseCminor<torch::kCUDA>(const GridBatchImpl &batchHdl,
         c10::kBFloat16);
 }
 
-template <>
 void
-dispatchReadFromDenseCminor<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
-                                                 const torch::Tensor &inDenseTensor,
-                                                 const torch::Tensor &denseOrigins,
-                                                 torch::Tensor &outSparseTensor) {
+readFromDenseCminorPrivateUse1(const GridBatchImpl &batchHdl,
+                               const torch::Tensor &inDenseTensor,
+                               const torch::Tensor &denseOrigins,
+                               torch::Tensor &outSparseTensor) {
     AT_DISPATCH_V2(
         inDenseTensor.scalar_type(),
         "readFromDenseCminor",
@@ -215,12 +214,11 @@ dispatchReadFromDenseCminor<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
         c10::kBFloat16);
 }
 
-template <>
 void
-dispatchReadFromDenseCminor<torch::kCPU>(const GridBatchImpl &gridHdl,
-                                         const torch::Tensor &inDenseTensor,
-                                         const torch::Tensor &denseOrigins,
-                                         torch::Tensor &outSparseTensor) {
+readFromDenseCminorCPUDispatch(const GridBatchImpl &gridHdl,
+                               const torch::Tensor &inDenseTensor,
+                               const torch::Tensor &denseOrigins,
+                               torch::Tensor &outSparseTensor) {
     bool isContiguous = inDenseTensor.is_contiguous() && outSparseTensor.is_contiguous();
 
     AT_DISPATCH_V2(inDenseTensor.scalar_type(),
@@ -237,12 +235,11 @@ dispatchReadFromDenseCminor<torch::kCPU>(const GridBatchImpl &gridHdl,
                    c10::kBFloat16);
 }
 
-template <>
 void
-dispatchReadFromDenseCmajor<torch::kCUDA>(const GridBatchImpl &batchHdl,
-                                          const torch::Tensor &inDenseTensor,
-                                          const torch::Tensor &denseOrigins,
-                                          torch::Tensor &outSparseTensor) {
+readFromDenseCmajorCUDA(const GridBatchImpl &batchHdl,
+                        const torch::Tensor &inDenseTensor,
+                        const torch::Tensor &denseOrigins,
+                        torch::Tensor &outSparseTensor) {
     AT_DISPATCH_V2(
         inDenseTensor.scalar_type(),
         "readFromDenseCmajor",
@@ -268,12 +265,11 @@ dispatchReadFromDenseCmajor<torch::kCUDA>(const GridBatchImpl &batchHdl,
         c10::kBFloat16);
 }
 
-template <>
 void
-dispatchReadFromDenseCmajor<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
-                                                 const torch::Tensor &inDenseTensor,
-                                                 const torch::Tensor &denseOrigins,
-                                                 torch::Tensor &outSparseTensor) {
+readFromDenseCmajorPrivateUse1(const GridBatchImpl &batchHdl,
+                               const torch::Tensor &inDenseTensor,
+                               const torch::Tensor &denseOrigins,
+                               torch::Tensor &outSparseTensor) {
     AT_DISPATCH_V2(
         inDenseTensor.scalar_type(),
         "readFromDenseCmajor",
@@ -299,12 +295,11 @@ dispatchReadFromDenseCmajor<torch::kPrivateUse1>(const GridBatchImpl &batchHdl,
         c10::kBFloat16);
 }
 
-template <>
 void
-dispatchReadFromDenseCmajor<torch::kCPU>(const GridBatchImpl &gridHdl,
-                                         const torch::Tensor &inDenseTensor,
-                                         const torch::Tensor &denseOrigins,
-                                         torch::Tensor &outSparseTensor) {
+readFromDenseCmajorCPUDispatch(const GridBatchImpl &gridHdl,
+                               const torch::Tensor &inDenseTensor,
+                               const torch::Tensor &denseOrigins,
+                               torch::Tensor &outSparseTensor) {
     AT_DISPATCH_V2(inDenseTensor.scalar_type(),
                    "readFromDenseCmajor",
                    AT_WRAP([&]() {
@@ -316,6 +311,68 @@ dispatchReadFromDenseCmajor<torch::kCPU>(const GridBatchImpl &gridHdl,
                    AT_EXPAND(AT_FLOATING_TYPES),
                    c10::kHalf,
                    c10::kBFloat16);
+}
+
+torch::Tensor
+readFromDenseCminor(const GridBatchImpl &batchHdl,
+                    const torch::Tensor &denseData,
+                    const torch::Tensor &denseOrigins) {
+    batchHdl.checkNonEmptyGrid();
+    batchHdl.checkDevice(denseData);
+    TORCH_CHECK_VALUE(denseData.dim() > 4, "dense data must have shape [B, X, Y, Z, C]");
+    TORCH_CHECK_VALUE(denseData.size(0) == batchHdl.batchSize(),
+                      "dense data must have shape [B, X, Y, Z, *]");
+    TORCH_CHECK_VALUE(denseOrigins.dim() == 2, "denseOrigins must have shape [B, 3]");
+    TORCH_CHECK_VALUE(denseOrigins.size(0) == batchHdl.batchSize(),
+                      "denseOrigins must have shape [B, 3]");
+    TORCH_CHECK_VALUE(denseOrigins.size(1) == 3, "denseOrigins must have shape [B, 3]");
+
+    torch::Tensor denseDataContig  = denseData.contiguous();
+    torch::Tensor denseDataReshape = featureCoalescedView(denseDataContig, 4);
+
+    torch::Tensor outSparseTensor =
+        torch::zeros({batchHdl.totalVoxels(), denseDataReshape.size(4)}, denseData.options());
+
+    if (batchHdl.device().is_cuda()) {
+        readFromDenseCminorCUDA(batchHdl, denseDataReshape, denseOrigins, outSparseTensor);
+    } else if (batchHdl.device().is_privateuseone()) {
+        readFromDenseCminorPrivateUse1(batchHdl, denseDataReshape, denseOrigins, outSparseTensor);
+    } else {
+        readFromDenseCminorCPUDispatch(batchHdl, denseDataReshape, denseOrigins, outSparseTensor);
+    }
+
+    return outSparseTensor;
+}
+
+torch::Tensor
+readFromDenseCmajor(const GridBatchImpl &batchHdl,
+                    const torch::Tensor &denseData,
+                    const torch::Tensor &denseOrigins) {
+    batchHdl.checkNonEmptyGrid();
+    batchHdl.checkDevice(denseData);
+    TORCH_CHECK_VALUE(denseData.dim() > 4, "dense data must have shape [B, *, X, Y, Z]");
+    TORCH_CHECK_VALUE(denseData.size(0) == batchHdl.batchSize(),
+                      "dense data must have shape [B, *, X, Y, Z]");
+    TORCH_CHECK_VALUE(denseOrigins.dim() == 2, "denseOrigins must have shape [B, 3]");
+    TORCH_CHECK_VALUE(denseOrigins.size(0) == batchHdl.batchSize(),
+                      "denseOrigins must have shape [B, 3]");
+    TORCH_CHECK_VALUE(denseOrigins.size(1) == 3, "denseOrigins must have shape [B, 3]");
+
+    torch::Tensor denseDataContig  = denseData.contiguous();
+    torch::Tensor denseDataReshape = featureCoalescedViewTrailing(denseDataContig, 1, 3);
+
+    torch::Tensor outSparseTensor =
+        torch::zeros({batchHdl.totalVoxels(), denseDataReshape.size(1)}, denseData.options());
+
+    if (batchHdl.device().is_cuda()) {
+        readFromDenseCmajorCUDA(batchHdl, denseDataReshape, denseOrigins, outSparseTensor);
+    } else if (batchHdl.device().is_privateuseone()) {
+        readFromDenseCmajorPrivateUse1(batchHdl, denseDataReshape, denseOrigins, outSparseTensor);
+    } else {
+        readFromDenseCmajorCPUDispatch(batchHdl, denseDataReshape, denseOrigins, outSparseTensor);
+    }
+
+    return outSparseTensor;
 }
 
 } // namespace ops

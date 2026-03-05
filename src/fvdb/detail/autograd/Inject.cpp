@@ -7,7 +7,6 @@
 #include <fvdb/detail/GridBatchImpl.h>
 #include <fvdb/detail/autograd/Inject.h>
 #include <fvdb/detail/ops/Inject.h>
-#include <fvdb/detail/utils/Utils.h>
 
 #include <nanovdb/NanoVDB.h>
 
@@ -27,17 +26,6 @@ Inject::forward(AutogradContext *ctx,
                 Inject::Variable const &dstFeaturesJOffsets,
                 Inject::Variable const &dstFeaturesJIdx,
                 Inject::Variable const &dstFeaturesJLIdx) {
-    TORCH_CHECK_VALUE(srcFeaturesJData.size(0) == srcGrid->totalVoxels(),
-                      "Source features must conform to source Grid");
-    TORCH_CHECK_VALUE(dstFeaturesJData.size(0) == dstGrid->totalVoxels(),
-                      "Destination features must conform to destination Grid");
-    TORCH_CHECK_VALUE(srcGrid->batchSize() == dstGrid->batchSize(),
-                      "Source grid and destination GridBatches must have the same number of grids");
-
-    TORCH_CHECK(
-        !(dstFeaturesJData.is_leaf() && dstFeaturesJData.requires_grad()),
-        "tried to perform an in-place operation (Inject) on a leaf tensor that requires grad. ");
-
     const JaggedTensor srcFeatures =
         JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(srcFeaturesJData,
                                                                srcFeaturesJOffsets,
@@ -51,14 +39,7 @@ Inject::forward(AutogradContext *ctx,
                                                                dstFeaturesJLIdx,
                                                                dstGrid->batchSize());
 
-    TORCH_CHECK_VALUE(srcFeatures.device() == srcGrid->device(),
-                      "Source features must be on the same device as source Grid");
-    TORCH_CHECK_VALUE(dstFeatures.device() == dstGrid->device(),
-                      "Destination features must be on the same device as destination Grid");
-
-    FVDB_DISPATCH_KERNEL(srcGrid->device(), [&]() {
-        ops::dispatchInject<DeviceTag>(*dstGrid, *srcGrid, dstFeatures, srcFeatures);
-    });
+    ops::inject(*dstGrid, *srcGrid, dstFeatures, srcFeatures);
 
     ctx->saved_data["src_grid"]     = srcGrid;
     ctx->saved_data["src_jidx"]     = srcFeaturesJIdx;
@@ -95,11 +76,7 @@ Inject::backward(AutogradContext *ctx, Inject::variable_list grad_output) {
     JaggedTensor dLossDSrcFeatures = JaggedTensor::from_jdata_joffsets_jidx_and_lidx_unsafe(
         dLossDSrcFeaturesJData, srcJOffsets, srcJIdx, srcJLIdx, srcGrid->batchSize());
 
-    // Inject the destination output gradients (dLoss/dDstFeatures) into the source input gradients
-    // (dLoss/dSrcFeatures)
-    FVDB_DISPATCH_KERNEL_DEVICE(srcGrid->device(), [&]() {
-        ops::dispatchInject<DeviceTag>(*srcGrid, *dstGrid, dLossDSrcFeatures, dLossDDstFeatures);
-    });
+    ops::inject(*srcGrid, *dstGrid, dLossDSrcFeatures, dLossDDstFeatures);
 
     // We've already accounted for the dLoss/dSrcFeatures, so we inject zeros at those locations
     // into dLoss/dDstFeatures so the gradient is zero for those locations.
@@ -113,9 +90,7 @@ Inject::backward(AutogradContext *ctx, Inject::variable_list grad_output) {
     const auto injectZerosJData = torch::zeros(allOnesShape, dLossDSrcFeaturesJData.options())
                                       .expand(dLossDSrcFeaturesJData.sizes());
     const JaggedTensor injectZeros = dLossDSrcFeatures.jagged_like(injectZerosJData);
-    FVDB_DISPATCH_KERNEL_DEVICE(srcGrid->device(), [&]() {
-        ops::dispatchInject<DeviceTag>(*dstGrid, *srcGrid, dLossDDstFeatures, injectZeros);
-    });
+    ops::inject(*dstGrid, *srcGrid, dLossDDstFeatures, injectZeros);
 
     return {
         torch::Tensor(),           // srcGrid

@@ -12,17 +12,13 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-void dispatchReadFromDenseCminor(const GridBatchImpl &batchHdl,
-                                 const torch::Tensor &inDenseTensor,
-                                 const torch::Tensor &denseOrigins,
-                                 torch::Tensor &outSparseTensor);
+torch::Tensor readFromDenseCminor(const GridBatchImpl &batchHdl,
+                                  const torch::Tensor &denseData,
+                                  const torch::Tensor &denseOrigins);
 
-template <torch::DeviceType>
-void dispatchReadFromDenseCmajor(const GridBatchImpl &batchHdl,
-                                 const torch::Tensor &inDenseTensor,
-                                 const torch::Tensor &denseOrigins,
-                                 torch::Tensor &outSparseTensor);
+torch::Tensor readFromDenseCmajor(const GridBatchImpl &batchHdl,
+                                  const torch::Tensor &denseData,
+                                  const torch::Tensor &denseOrigins);
 
 } // namespace ops
 } // namespace detail

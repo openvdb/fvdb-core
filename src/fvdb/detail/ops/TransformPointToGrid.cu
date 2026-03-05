@@ -4,6 +4,7 @@
 #include <fvdb/detail/ops/TransformPointToGrid.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/ForEachCPU.h>
+#include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 
@@ -12,6 +13,8 @@
 namespace fvdb {
 namespace detail {
 namespace ops {
+
+namespace {
 
 template <typename ScalarType,
           template <typename T, int32_t D>
@@ -247,9 +250,9 @@ InvTransformPointsToGridBackward(const GridBatchImpl &batchHdl,
 
 template <torch::DeviceType DeviceTag>
 torch::Tensor
-dispatchTransformPointsToGrid<DeviceTag>(const GridBatchImpl &batchHdl,
-                                         const JaggedTensor &points,
-                                         bool isPrimal) {
+dispatchTransformPointsToGrid(const GridBatchImpl &batchHdl,
+                              const JaggedTensor &points,
+                              bool isPrimal) {
     return AT_DISPATCH_V2(points.scalar_type(),
                           "transformPointsToGrid",
                           AT_WRAP([&]() {
@@ -262,9 +265,9 @@ dispatchTransformPointsToGrid<DeviceTag>(const GridBatchImpl &batchHdl,
 
 template <torch::DeviceType DeviceTag>
 torch::Tensor
-dispatchInvTransformPointsToGrid<DeviceTag>(const GridBatchImpl &batchHdl,
-                                            const JaggedTensor &points,
-                                            bool isPrimal) {
+dispatchInvTransformPointsToGrid(const GridBatchImpl &batchHdl,
+                                 const JaggedTensor &points,
+                                 bool isPrimal) {
     return AT_DISPATCH_V2(points.scalar_type(),
                           "invTransformPointsToGrid",
                           AT_WRAP([&]() {
@@ -277,9 +280,9 @@ dispatchInvTransformPointsToGrid<DeviceTag>(const GridBatchImpl &batchHdl,
 
 template <torch::DeviceType DeviceTag>
 torch::Tensor
-dispatchTransformPointsToGridBackward<DeviceTag>(const GridBatchImpl &batchHdl,
-                                                 const JaggedTensor &gradOut,
-                                                 bool isPrimal) {
+dispatchTransformPointsToGridBackward(const GridBatchImpl &batchHdl,
+                                      const JaggedTensor &gradOut,
+                                      bool isPrimal) {
     return AT_DISPATCH_V2(gradOut.scalar_type(),
                           "transformPointsToGridBackward",
                           AT_WRAP([&]() {
@@ -292,9 +295,9 @@ dispatchTransformPointsToGridBackward<DeviceTag>(const GridBatchImpl &batchHdl,
 
 template <torch::DeviceType DeviceTag>
 torch::Tensor
-dispatchInvTransformPointsToGridBackward<DeviceTag>(const GridBatchImpl &batchHdl,
-                                                    const JaggedTensor &gradOut,
-                                                    bool isPrimal) {
+dispatchInvTransformPointsToGridBackward(const GridBatchImpl &batchHdl,
+                                         const JaggedTensor &gradOut,
+                                         bool isPrimal) {
     return AT_DISPATCH_V2(gradOut.scalar_type(),
                           "invTransformPointsToGridBackward",
                           AT_WRAP([&]() {
@@ -305,43 +308,49 @@ dispatchInvTransformPointsToGridBackward<DeviceTag>(const GridBatchImpl &batchHd
                           c10::kHalf);
 }
 
-template torch::Tensor dispatchTransformPointsToGrid<torch::kCPU>(const GridBatchImpl &,
-                                                                  const JaggedTensor &,
-                                                                  bool isPrimal);
-template torch::Tensor dispatchTransformPointsToGrid<torch::kCUDA>(const GridBatchImpl &,
-                                                                   const JaggedTensor &,
-                                                                   bool isPrimal);
-template torch::Tensor dispatchTransformPointsToGrid<torch::kPrivateUse1>(const GridBatchImpl &,
-                                                                          const JaggedTensor &,
-                                                                          bool isPrimal);
+} // anonymous namespace
 
-template torch::Tensor dispatchInvTransformPointsToGrid<torch::kCPU>(const GridBatchImpl &,
-                                                                     const JaggedTensor &,
-                                                                     bool isPrimal);
-template torch::Tensor dispatchInvTransformPointsToGrid<torch::kCUDA>(const GridBatchImpl &,
-                                                                      const JaggedTensor &,
-                                                                      bool isPrimal);
-template torch::Tensor dispatchInvTransformPointsToGrid<torch::kPrivateUse1>(const GridBatchImpl &,
-                                                                             const JaggedTensor &,
-                                                                             bool isPrimal);
+torch::Tensor
+transformPointsToGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points, bool isPrimal) {
+    batchHdl.checkDevice(points);
+    TORCH_CHECK_VALUE(points.rdim() == 2, "points must have shape [B*N, 3]");
+    TORCH_CHECK_VALUE(points.rsize(-1) == 3, "points must have shape [B*N, 3]");
+    TORCH_CHECK_TYPE(points.is_floating_point(), "points must have a floating point type");
+    points.check_valid();
+    return FVDB_DISPATCH_KERNEL(points.device(), [&]() {
+        return dispatchTransformPointsToGrid<DeviceTag>(batchHdl, points, isPrimal);
+    });
+}
 
-template torch::Tensor dispatchTransformPointsToGridBackward<torch::kCPU>(const GridBatchImpl &,
-                                                                          const JaggedTensor &,
-                                                                          bool isPrimal);
-template torch::Tensor dispatchTransformPointsToGridBackward<torch::kCUDA>(const GridBatchImpl &,
-                                                                           const JaggedTensor &,
-                                                                           bool isPrimal);
-template torch::Tensor dispatchTransformPointsToGridBackward<torch::kPrivateUse1>(
-    const GridBatchImpl &, const JaggedTensor &, bool isPrimal);
+torch::Tensor
+invTransformPointsToGrid(const GridBatchImpl &batchHdl, const JaggedTensor &points, bool isPrimal) {
+    batchHdl.checkDevice(points);
+    TORCH_CHECK_VALUE(points.rdim() == 2, "points must have shape [B*N, 3]");
+    TORCH_CHECK_VALUE(points.rsize(-1) == 3, "points must have shape [B*N, 3]");
+    TORCH_CHECK_TYPE(points.is_floating_point(), "points must have a floating point type");
+    points.check_valid();
+    return FVDB_DISPATCH_KERNEL(points.device(), [&]() {
+        return dispatchInvTransformPointsToGrid<DeviceTag>(batchHdl, points, isPrimal);
+    });
+}
 
-template torch::Tensor dispatchInvTransformPointsToGridBackward<torch::kCPU>(const GridBatchImpl &,
-                                                                             const JaggedTensor &,
-                                                                             bool isPrimal);
-template torch::Tensor dispatchInvTransformPointsToGridBackward<torch::kCUDA>(const GridBatchImpl &,
-                                                                              const JaggedTensor &,
-                                                                              bool isPrimal);
-template torch::Tensor dispatchInvTransformPointsToGridBackward<torch::kPrivateUse1>(
-    const GridBatchImpl &, const JaggedTensor &, bool isPrimal);
+torch::Tensor
+transformPointsToGridBackward(const GridBatchImpl &batchHdl,
+                              const JaggedTensor &gradOut,
+                              bool isPrimal) {
+    return FVDB_DISPATCH_KERNEL(gradOut.device(), [&]() {
+        return dispatchTransformPointsToGridBackward<DeviceTag>(batchHdl, gradOut, isPrimal);
+    });
+}
+
+torch::Tensor
+invTransformPointsToGridBackward(const GridBatchImpl &batchHdl,
+                                 const JaggedTensor &gradOut,
+                                 bool isPrimal) {
+    return FVDB_DISPATCH_KERNEL(gradOut.device(), [&]() {
+        return dispatchInvTransformPointsToGridBackward<DeviceTag>(batchHdl, gradOut, isPrimal);
+    });
+}
 
 } // namespace ops
 } // namespace detail
