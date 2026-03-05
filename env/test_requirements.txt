@@ -17,3 +17,5 @@ rich
 pytest_benchmark
 parameterized
 polyscope
+ipykernel
+nbmake
