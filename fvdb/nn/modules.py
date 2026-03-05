@@ -582,11 +582,11 @@ class SyncBatchNorm(nn.SyncBatchNorm):
 
         Example::
 
-            >>> # Network with fvdb.nn.SyncBatchNorm layer
-            >>> module = fvdb.nn.Sequential(
-            >>>            fvdb.nn.Linear(20, 100),
+            >>> # Network with fvdb.nn.BatchNorm layer
+            >>> module = torch.nn.ModuleList([
+            >>>            fvdb.nn.SparseConv3d(20, 100),
             >>>            fvdb.nn.BatchNorm(100)
-            >>>          )
+            >>>          ])
             >>> # creating process group (optional)
             >>> # process_ids is a list of int identifying rank ids.
             >>> process_group = torch.distributed.new_group(process_ids)
