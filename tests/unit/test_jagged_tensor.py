@@ -1668,6 +1668,8 @@ class TestJaggedTensor(unittest.TestCase):
 
     @parameterized.expand(all_device_dtype_combos)
     def test_jsum_list_of_lists(self, device, dtype):
+        torch.random.manual_seed(111)
+        np.random.seed(111)
         tol = {}
         if dtype == torch.bfloat16:
             tol["rtol"] = 2e-1
