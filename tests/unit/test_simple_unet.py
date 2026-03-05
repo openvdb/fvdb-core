@@ -33,12 +33,18 @@ def _make_dense_block_coords(extent: int, offset: int, device: torch.device) -> 
 class TestSimpleUNet(unittest.TestCase):
     """Smoke / integration tests for SimpleUNet and its sub-modules."""
 
+    SEED = 42
     IN_CHANNELS = 3
     BASE_CHANNELS = 4
     OUT_CHANNELS = 5
     KERNEL_SIZE = 3
     CHANNEL_GROWTH_RATE = 2
     BLOCK_LAYER_COUNT = 1
+
+    def setUp(self):
+        torch.manual_seed(self.SEED)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(self.SEED)
 
     def _make_grid_and_features(
         self,
