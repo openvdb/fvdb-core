@@ -487,6 +487,90 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("features"),
         py::arg("weights"),
         py::arg("topology"));
+
+    // -----------------------------------------------------------------------
+    // Fused gather-scatter convolution (no precomputed topology, small-C)
+    // -----------------------------------------------------------------------
+
+    m.def(
+        "gs_conv_fused",
+        [](torch::Tensor features,
+           torch::Tensor weights,
+           const fvdb::GridBatch &feature_grid,
+           const fvdb::GridBatch &output_grid,
+           fvdb::Vec3iOrScalar kernelSize,
+           fvdb::Vec3iOrScalar stride) -> torch::Tensor {
+            return fvdb::GridBatch::gatherScatterConvFused(
+                features, weights, feature_grid, output_grid, kernelSize, stride);
+        },
+        "Fused gather-scatter forward sparse convolution (small-C optimized).",
+        py::arg("features"),
+        py::arg("weights"),
+        py::arg("feature_grid"),
+        py::arg("output_grid"),
+        py::arg("kernel_size"),
+        py::arg("stride"));
+
+    m.def(
+        "gs_conv_fused_backward",
+        [](torch::Tensor grad_output,
+           torch::Tensor features,
+           torch::Tensor weights,
+           const fvdb::GridBatch &feature_grid,
+           const fvdb::GridBatch &output_grid,
+           fvdb::Vec3iOrScalar kernelSize,
+           fvdb::Vec3iOrScalar stride) -> std::tuple<torch::Tensor, torch::Tensor> {
+            return fvdb::GridBatch::gatherScatterConvFusedBackward(
+                grad_output, features, weights, feature_grid, output_grid, kernelSize, stride);
+        },
+        "Fused gather-scatter backward sparse convolution (small-C optimized).",
+        py::arg("grad_output"),
+        py::arg("features"),
+        py::arg("weights"),
+        py::arg("feature_grid"),
+        py::arg("output_grid"),
+        py::arg("kernel_size"),
+        py::arg("stride"));
+
+    m.def(
+        "gs_conv_fused_transpose",
+        [](torch::Tensor features,
+           torch::Tensor weights,
+           const fvdb::GridBatch &feature_grid,
+           const fvdb::GridBatch &output_grid,
+           fvdb::Vec3iOrScalar kernelSize,
+           fvdb::Vec3iOrScalar stride) -> torch::Tensor {
+            return fvdb::GridBatch::gatherScatterConvFusedTranspose(
+                features, weights, feature_grid, output_grid, kernelSize, stride);
+        },
+        "Fused gather-scatter transposed sparse convolution (small-C optimized).",
+        py::arg("features"),
+        py::arg("weights"),
+        py::arg("feature_grid"),
+        py::arg("output_grid"),
+        py::arg("kernel_size"),
+        py::arg("stride"));
+
+    m.def(
+        "gs_conv_fused_transpose_backward",
+        [](torch::Tensor grad_output,
+           torch::Tensor features,
+           torch::Tensor weights,
+           const fvdb::GridBatch &feature_grid,
+           const fvdb::GridBatch &output_grid,
+           fvdb::Vec3iOrScalar kernelSize,
+           fvdb::Vec3iOrScalar stride) -> std::tuple<torch::Tensor, torch::Tensor> {
+            return fvdb::GridBatch::gatherScatterConvFusedTransposeBackward(
+                grad_output, features, weights, feature_grid, output_grid, kernelSize, stride);
+        },
+        "Fused gather-scatter transposed backward sparse convolution (small-C optimized).",
+        py::arg("grad_output"),
+        py::arg("features"),
+        py::arg("weights"),
+        py::arg("feature_grid"),
+        py::arg("output_grid"),
+        py::arg("kernel_size"),
+        py::arg("stride"));
 }
 
 TORCH_LIBRARY(fvdb, m) {

@@ -65,6 +65,49 @@ class _GatherScatterConvFn(torch.autograd.Function):
         return grad_feat, grad_w, None, None
 
 
+class _GatherScatterFusedConvFn(torch.autograd.Function):
+    """Autograd wrapper for the fused gather-scatter convolution (forward + transposed)."""
+
+    @staticmethod
+    def forward(  # type: ignore[override]
+        ctx,
+        features: torch.Tensor,
+        weights: torch.Tensor,
+        feature_grid: _fvdb_cpp.GridBatch,
+        output_grid: _fvdb_cpp.GridBatch,
+        kernel_size: torch.Tensor,
+        stride: torch.Tensor,
+        transposed: bool,
+    ) -> torch.Tensor:
+        if transposed:
+            output = _fvdb_cpp.gs_conv_fused_transpose(
+                features, weights, feature_grid, output_grid, kernel_size, stride
+            )
+        else:
+            output = _fvdb_cpp.gs_conv_fused(features, weights, feature_grid, output_grid, kernel_size, stride)
+        ctx.save_for_backward(features, weights)
+        ctx.feature_grid = feature_grid
+        ctx.output_grid = output_grid
+        ctx.kernel_size = kernel_size
+        ctx.stride = stride
+        ctx.transposed = transposed
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, None, None, None, None, None]:  # type: ignore[override]
+        features, weights = ctx.saved_tensors
+        grad_output = grad_output.contiguous()
+        if ctx.transposed:
+            grad_feat, grad_w = _fvdb_cpp.gs_conv_fused_transpose_backward(
+                grad_output, features, weights, ctx.feature_grid, ctx.output_grid, ctx.kernel_size, ctx.stride
+            )
+        else:
+            grad_feat, grad_w = _fvdb_cpp.gs_conv_fused_backward(
+                grad_output, features, weights, ctx.feature_grid, ctx.output_grid, ctx.kernel_size, ctx.stride
+            )
+        return grad_feat, grad_w, None, None, None, None, None
+
+
 # ============================================================
 #  Backend data classes — cached precomputed data per method
 # ============================================================
@@ -91,7 +134,14 @@ class _GatherScatterBackend:
     topology: _fvdb_cpp.GatherScatterDefaultTopology
 
 
-_Backend = _MatmulBackend | _DenseBackend | _GatherScatterBackend
+@dataclass(frozen=True)
+class _GatherScatterFusedBackend:
+    """Fused gather-scatter convolution -- no precomputed topology (Python autograd)."""
+
+    pass
+
+
+_Backend = _MatmulBackend | _DenseBackend | _GatherScatterBackend | _GatherScatterFusedBackend
 
 
 @dataclass(frozen=True)
@@ -604,6 +654,22 @@ class ConvolutionPlan:
                 raise ValueError("Gather-scatter convolution returned non-tensor")
             result = self._target_grid.jagged_like(out_tensor)
 
+        elif isinstance(backend, _GatherScatterFusedBackend):
+            out_tensor = _GatherScatterFusedConvFn.apply(
+                data.jdata,
+                weights,
+                self._source_grid._impl,
+                self._target_grid._impl,
+                self._kernel_size,
+                self._stride,
+                self._transposed,
+            )
+            if out_tensor is None:
+                raise ValueError("Gather-scatter fused convolution returned None")
+            if not isinstance(out_tensor, torch.Tensor):
+                raise ValueError("Gather-scatter fused convolution returned non-tensor")
+            result = self._target_grid.jagged_like(out_tensor)
+
         else:
             raise TypeError(f"Unknown backend type: {type(backend)}")
 
@@ -723,6 +789,10 @@ class ConvolutionPlan:
             else:
                 topo = _fvdb_cpp.gs_build_topology(source_grid._impl, target_grid._impl, kernel_size, stride)
             return _GatherScatterBackend(topology=topo)
+
+        # Fused gather-scatter — no precomputed topology, Python autograd
+        if backend_name == "gather_scatter_fused":
+            return _GatherScatterFusedBackend()
 
         raise ValueError(f"Unknown backend: {backend_name!r}")
 
