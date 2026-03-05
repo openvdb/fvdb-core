@@ -2,25 +2,24 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import math
-from typing import Any, Sequence
+from typing import Any
 
 import torch
 import torch.nn as nn
-from fvdb.types import (
-    NumericMaxRank1,
-    NumericMaxRank2,
-    ValueConstraint,
-    to_Vec3i,
-    to_Vec3iBroadcastable,
-)
+from fvdb.types import NumericMaxRank1, ValueConstraint, to_Vec3i, to_Vec3iBroadcastable
 from torch.profiler import record_function
 
-import fvdb
-from fvdb import ConvolutionPlan, Grid, GridBatch, JaggedTensor
+from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
 
 
-def fvnn_module(module):
-    # Register class as a module in fvdb.nn
+def _trace_fvdb_nn_forward(module):
+    """Class decorator that wraps ``forward`` with :func:`torch.profiler.record_function`.
+
+    When the decorated module's ``forward`` is called, the call is recorded as a
+    CPU activity in PyTorch's profiler under the name returned by ``repr(self)``.
+    This makes fvdb.nn modules visible in profiler traces (e.g. ``torch.profiler``
+    or Chrome trace exports) without any manual instrumentation at call sites.
+    """
     old_forward = module.forward
 
     def _forward(self, *args, **kwargs):
@@ -31,7 +30,7 @@ def fvnn_module(module):
     return module
 
 
-@fvnn_module
+@_trace_fvdb_nn_forward
 class AvgPool(nn.Module):
     """
     Applies a 3D average pooling over an input :class:`JaggedTensor` of features
@@ -112,7 +111,7 @@ class AvgPool(nn.Module):
         return fine_grid.avg_pool(self.kernel_size, fine_data, stride=self.stride, coarse_grid=coarse_grid)
 
 
-@fvnn_module
+@_trace_fvdb_nn_forward
 class MaxPool(nn.Module):
     """
     Applies a 3D max pooling over an input :class:`JaggedTensor` of features
@@ -201,7 +200,7 @@ class MaxPool(nn.Module):
         return new_coarse_data, new_coarse_grid
 
 
-@fvnn_module
+@_trace_fvdb_nn_forward
 class UpsamplingNearest(nn.Module):
     """
     Refines a :class:`JaggedTensor` of features associated with a coarse :class:`fvdb.GridBatch`
@@ -309,7 +308,7 @@ class _SparseConv3dBase(nn.Module):
             self.bias.data.uniform_(-std, std)
 
 
-@fvnn_module
+@_trace_fvdb_nn_forward
 class SparseConv3d(_SparseConv3dBase):
     """
     A sparse 3D convolution module that operates on :class:`JaggedTensor` inputs
@@ -373,7 +372,7 @@ class SparseConv3d(_SparseConv3dBase):
         return out_data
 
 
-@fvnn_module
+@_trace_fvdb_nn_forward
 class SparseConvTranspose3d(_SparseConv3dBase):
     """
     A sparse 3D transposed convolution module that operates on :class:`JaggedTensor` inputs
@@ -435,7 +434,7 @@ class SparseConvTranspose3d(_SparseConv3dBase):
         return out_data
 
 
-@fvnn_module
+@_trace_fvdb_nn_forward
 class GroupNorm(nn.GroupNorm):
     """
     Applies Group Normalization over a :class:`JaggedTensor` batch of features associated with a :class:`GridBatch`.
@@ -481,7 +480,7 @@ class GroupNorm(nn.GroupNorm):
         return grid.jagged_like(result_data)
 
 
-@fvnn_module
+@_trace_fvdb_nn_forward
 class BatchNorm(nn.BatchNorm1d):
     """
     Applies Batch Normalization over a :class:`JaggedTensor` batch of features associated with a :class:`GridBatch`.
@@ -521,7 +520,7 @@ class BatchNorm(nn.BatchNorm1d):
         return grid.jagged_like(result_data)
 
 
-@fvnn_module
+@_trace_fvdb_nn_forward
 class SyncBatchNorm(nn.SyncBatchNorm):
     """
     Applies distributed Batch Normalization over a :class:`JaggedTensor` batch of features associated with a :class:`GridBatch`.

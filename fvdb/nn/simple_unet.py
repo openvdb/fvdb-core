@@ -37,10 +37,10 @@ from fvdb.types import NumericMaxRank1
 
 from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
 
-from .modules import fvnn_module
+from .modules import _trace_fvdb_nn_forward
 
 
-@fvnn_module
+@_trace_fvdb_nn_forward
 class SimpleUNetBasicBlock(nn.Module):
     """
     Basic convolutional block with batch normalization and ReLU activation.
@@ -99,7 +99,7 @@ class SimpleUNetBasicBlock(nn.Module):
         return x
 
 
-@fvnn_module
+@_trace_fvdb_nn_forward
 class SimpleUNetConvBlock(nn.Module):
     """
     Multi-layer residual convolutional block.
@@ -190,7 +190,7 @@ class SimpleUNetConvBlock(nn.Module):
         return data
 
 
-@fvnn_module
+@_trace_fvdb_nn_forward
 class SimpleUNetDown(nn.Module):
     """
     Downsampling module for the encoder path of the U-Net.
@@ -242,7 +242,7 @@ class SimpleUNetDown(nn.Module):
         return self.batch_norm(data, coarse_grid)
 
 
-@fvnn_module
+@_trace_fvdb_nn_forward
 class SimpleUNetUp(nn.Module):
     """
     Upsampling module for the decoder path of the U-Net.
@@ -293,7 +293,7 @@ class SimpleUNetUp(nn.Module):
         return coarse_grid.refine(subdiv_factor=2, data=data, fine_grid=fine_grid)[0]
 
 
-@fvnn_module
+@_trace_fvdb_nn_forward
 class SimpleUNetBottleneck(nn.Module):
     """
     Bottleneck module at the deepest level of the U-Net architecture.
@@ -340,7 +340,7 @@ class SimpleUNetBottleneck(nn.Module):
         return self.block(data, plan)
 
 
-@fvnn_module
+@_trace_fvdb_nn_forward
 class SimpleUNetDownUp(nn.Module):
     """
     Recursive encoder-decoder module forming the core U-Net structure.
@@ -447,7 +447,7 @@ class SimpleUNetDownUp(nn.Module):
         return self.conv_out(data, conv_plan)
 
 
-@fvnn_module
+@_trace_fvdb_nn_forward
 class SimpleUNetPad(nn.Module):
     """
     Input padding module for handling convolution boundary conditions.
@@ -501,7 +501,7 @@ class SimpleUNetPad(nn.Module):
         return data
 
 
-@fvnn_module
+@_trace_fvdb_nn_forward
 class SimpleUNetUnpad(nn.Module):
     """
     Output unpadding module for producing final predictions.
@@ -549,7 +549,7 @@ class SimpleUNetUnpad(nn.Module):
         return self.deconv(data, plan)
 
 
-@fvnn_module
+@_trace_fvdb_nn_forward
 class SimpleUNet(nn.Module):
     """
     Complete U-Net architecture for sparse voxel data processing.
