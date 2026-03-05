@@ -12,7 +12,7 @@
 ///   - Forward pass only (no transpose, no gradient)
 ///   - Input and output channel counts must be multiples of 32
 ///   - Float32 tensors only (internally promoted to TF32)
-///   - Currently instantiated for 3x3x3 kernel, stride 1 only
+///   - Uniform kernel sizes {3, 5, 7} and uniform strides {1, 2}
 #ifndef FVDB_DETAIL_OPS_CONVOLUTION_PREDGATHERIGEMM_H
 #define FVDB_DETAIL_OPS_CONVOLUTION_PREDGATHERIGEMM_H
 
@@ -31,14 +31,18 @@ namespace ops {
 /// internally.
 ///
 /// @param features      Input features, shape [N_in, C], float32, on CUDA.
-/// @param weights       Kernel weights, shape [K, C, k0, k1, k2], float32.
+/// @param weights       Kernel weights, shape [K, C, ks, ks, ks], float32.
 /// @param feature_grid  NanoVDB grid batch for the input (feature) voxels.
 /// @param output_grid   NanoVDB grid batch for the output voxels.
+/// @param kernel_size   Uniform spatial kernel extent (3, 5, or 7).
+/// @param stride        Uniform convolution stride (1 or 2).
 /// @return              Output features, shape [N_out, K], float32.
 torch::Tensor predGatherIGemmSparseConv(torch::Tensor features,
                                         torch::Tensor weights,
                                         GridBatchImpl const &feature_grid,
-                                        GridBatchImpl const &output_grid);
+                                        GridBatchImpl const &output_grid,
+                                        int kernel_size,
+                                        int stride);
 
 } // namespace ops
 } // namespace detail

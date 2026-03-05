@@ -79,18 +79,22 @@ class _PredGatherIGemmConvFn(torch.autograd.Function):
         feature_grid: _fvdb_cpp.GridBatch,
         output_grid: _fvdb_cpp.GridBatch,
         gs_topo: _fvdb_cpp.GatherScatterDefaultTopology,
+        kernel_size: int,
+        stride: int,
     ) -> torch.Tensor:
-        output = _fvdb_cpp.pred_gather_igemm_conv(features, weights, feature_grid, output_grid)
+        output = _fvdb_cpp.pred_gather_igemm_conv(
+            features, weights, feature_grid, output_grid, kernel_size, stride
+        )
         ctx.save_for_backward(features, weights)
         ctx.gs_topo = gs_topo
         return output
 
     @staticmethod
-    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, None, None, None]:  # type: ignore[override]
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, None, None, None, None, None]:  # type: ignore[override]
         features, weights = ctx.saved_tensors
         grad_output = grad_output.contiguous()
         grad_feat, grad_w = _fvdb_cpp.gs_conv_backward(grad_output, features, weights, ctx.gs_topo)
-        return grad_feat, grad_w, None, None, None
+        return grad_feat, grad_w, None, None, None, None, None
 
 
 # ============================================================
@@ -127,6 +131,8 @@ class _PredGatherIGemmBackend:
     """
 
     gs_topology: _fvdb_cpp.GatherScatterDefaultTopology
+    kernel_size: int
+    stride: int
 
 
 _Backend = _MatmulBackend | _DenseBackend | _GatherScatterBackend | _PredGatherIGemmBackend
@@ -649,6 +655,8 @@ class ConvolutionPlan:
                 self._source_grid._impl,
                 self._target_grid._impl,
                 backend.gs_topology,
+                backend.kernel_size,
+                backend.stride,
             )
             if out_tensor is None:
                 raise ValueError("PredGatherIGemm convolution returned None")
@@ -780,15 +788,17 @@ class ConvolutionPlan:
         if backend_name == "pred_gather_igemm":
             if transposed:
                 raise ValueError("PredGatherIGemm backend does not support transposed convolution.")
-            if not _vec_is_all(kernel_size, 3):
-                raise ValueError("PredGatherIGemm currently only supports 3x3x3 kernels.")
-            if not _vec_is_all(stride, 1):
-                raise ValueError("PredGatherIGemm currently only supports stride 1.")
+            ks_vals = kernel_size.tolist()
+            if len(set(ks_vals)) != 1 or ks_vals[0] not in (3, 5, 7):
+                raise ValueError(f"PredGatherIGemm supports uniform kernel sizes 3, 5, 7; got {ks_vals}.")
+            st_vals = stride.tolist()
+            if len(set(st_vals)) != 1 or st_vals[0] not in (1, 2):
+                raise ValueError(f"PredGatherIGemm supports uniform strides 1, 2; got {st_vals}.")
             for cin, cout in channel_pairs:
                 if cin % 32 != 0 or cout % 32 != 0:
                     raise ValueError(f"PredGatherIGemm requires channel counts divisible by 32, got ({cin}, {cout}).")
             gs_topo = _fvdb_cpp.gs_build_topology(source_grid._impl, target_grid._impl, kernel_size, stride)
-            return _PredGatherIGemmBackend(gs_topology=gs_topo)
+            return _PredGatherIGemmBackend(gs_topology=gs_topo, kernel_size=int(ks_vals[0]), stride=int(st_vals[0]))
 
         raise ValueError(f"Unknown backend: {backend_name!r}")
 

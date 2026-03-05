@@ -93,6 +93,8 @@ def pred_gather_igemm_conv(
     weights: torch.Tensor,
     feature_grid: GridBatch,
     output_grid: GridBatch,
+    kernel_size: int,
+    stride: int,
 ) -> torch.Tensor: ...
 
 class GaussianSplat3d:

@@ -13,6 +13,10 @@
 // NOTE: <torch/types.h> MUST precede CuTe / CUTLASS headers to avoid
 // CCCL include-order issues between toolkit versions.  See sifakis_ref_2.cu
 // for the full explanation.
+#include "dispatch/detail/core_types.h"
+#include "dispatch/dispatch_table.h"
+#include "dispatch/with_value.h"
+
 #include <fvdb/detail/ops/convolution/PredGatherIGemm.h>
 
 #include <nanovdb/NanoVDB.h>
@@ -935,22 +939,138 @@ __global__ void
 } // namespace pred_gather_igemm
 
 // ============================================================================
-// fVDB entry point (torch::Tensor API matching GatherScatterDefault)
+// Dispatch axis types for kernel size and stride
+// ============================================================================
+// The dispatch framework's tag machinery (is_with_type, tag_get, etc.) relies
+// on enum/integer NTTPs. C++20 class-type NTTPs (named<>, structs) fail with
+// gcc 13 / nvcc due to partial-specialization matching issues, so we use
+// typed enums whose underlying values are the actual kernel sizes and strides.
+
+namespace fvdb {
+namespace detail {
+namespace ops {
+
+enum class conv_kernel_size : int { k3 = 3, k5 = 5, k7 = 7 };
+enum class conv_stride : int { s1 = 1, s2 = 2 };
+
+} // namespace ops
+} // namespace detail
+} // namespace fvdb
+
+namespace dispatch {
+
+template <> struct type_label<fvdb::detail::ops::conv_kernel_size> {
+    static consteval auto
+    value() {
+        return fixed_label("conv.kernel_size");
+    }
+};
+
+template <> struct type_label<fvdb::detail::ops::conv_stride> {
+    static consteval auto
+    value() {
+        return fixed_label("conv.stride");
+    }
+};
+
+} // namespace dispatch
+
+// ============================================================================
+// fVDB entry point with dispatch over kernel size and stride
 // ============================================================================
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
+using kernel_size_axis =
+    dispatch::axis<conv_kernel_size::k3, conv_kernel_size::k5, conv_kernel_size::k7>;
+using stride_axis = dispatch::axis<conv_stride::s1, conv_stride::s2>;
+
+struct pred_gather_igemm_op {
+    template <typename Tag>
+    static torch::Tensor
+    op(Tag tg,
+       torch::Tensor features,
+       torch::Tensor weights,
+       GridBatchImpl const &feature_grid,
+       GridBatchImpl const &output_grid) {
+        using namespace pred_gather_igemm;
+        constexpr int ks = static_cast<int>(dispatch::tag_get<conv_kernel_size>(tg));
+        constexpr int st = static_cast<int>(dispatch::tag_get<conv_stride>(tg));
+        using GeomT      = Geometry<ks, ks, ks, st, st, st>;
+        using ConvOp     = SparseFpropSm80<GeomT>;
+
+        const int64_t N_in = features.size(0);
+        const int64_t C    = features.size(1);
+        const int64_t K    = weights.size(0);
+
+        const int64_t N_out            = output_grid.totalVoxels();
+        const uint32_t outputLeafCount = output_grid.numLeavesAt(0);
+
+        auto filter_igemm = weights.permute({2, 3, 4, 0, 1}).contiguous();
+
+        auto opts         = torch::dtype(torch::kFloat32).device(features.device());
+        auto padded_input = torch::zeros({N_in + 1, C}, opts);
+        padded_input.slice(0, 1).copy_(features);
+
+        auto padded_output = torch::zeros({N_out + 1, K}, opts);
+
+        auto *nanoInputGrid =
+            feature_grid.nanoGridHandle().template deviceGrid<nanovdb::ValueOnIndex>();
+        auto *nanoOutputGrid =
+            output_grid.nanoGridHandle().template deviceGrid<nanovdb::ValueOnIndex>();
+        TORCH_CHECK(nanoInputGrid != nullptr, "Failed to get device input grid");
+        TORCH_CHECK(nanoOutputGrid != nullptr, "Failed to get device output grid");
+
+        GeomT geometry{};
+        geometry.c  = static_cast<int>(C);
+        geometry.k  = static_cast<int>(K);
+        geometry.dx = -(GeomT::T / 2);
+        geometry.dy = -(GeomT::R / 2);
+        geometry.dz = -(GeomT::S / 2);
+
+        Layouts<GeomT> layouts(geometry);
+        auto tFilter = cute::make_tensor(cute::make_gmem_ptr(filter_igemm.data_ptr<float>()),
+                                         layouts.filterLayout());
+
+        ConvOp conv_op(geometry);
+
+        constexpr size_t smem_size = sizeof(typename ConvOp::SharedStorage);
+        cudaStream_t stream        = at::cuda::getCurrentCUDAStream();
+
+        cudaFuncSetAttribute(kernelEntrypoint<ConvOp, nanovdb::ValueOnIndex, decltype(tFilter)>,
+                             cudaFuncAttributeMaxDynamicSharedMemorySize,
+                             smem_size);
+
+        kernelEntrypoint<ConvOp, nanovdb::ValueOnIndex, decltype(tFilter)>
+            <<<outputLeafCount, ConvOp::MaxThreadsPerBlock, smem_size, stream>>>(
+                tFilter,
+                nanoInputGrid,
+                nanoOutputGrid,
+                padded_input.data_ptr<float>(),
+                padded_output.data_ptr<float>(),
+                conv_op);
+
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+        return padded_output.slice(0, 1).contiguous();
+    }
+
+    using space      = dispatch::axes<kernel_size_axis, stride_axis>;
+    using subspaces  = dispatch::coverage<space>;
+    using dispatcher = dispatch::dispatch_table<
+        space,
+        torch::Tensor(torch::Tensor, torch::Tensor, GridBatchImpl const &, GridBatchImpl const &)>;
+};
+
 torch::Tensor
 predGatherIGemmSparseConv(torch::Tensor features,
                           torch::Tensor weights,
                           GridBatchImpl const &feature_grid,
-                          GridBatchImpl const &output_grid) {
-    using namespace pred_gather_igemm;
-    using GeomT  = Geometry3x3x3;
-    using ConvOp = SparseFpropSm80<GeomT>;
-
+                          GridBatchImpl const &output_grid,
+                          int kernel_size,
+                          int stride) {
     TORCH_CHECK(features.is_cuda(), "features must be a CUDA tensor");
     TORCH_CHECK(weights.is_cuda(), "weights must be a CUDA tensor");
     TORCH_CHECK(features.scalar_type() == torch::kFloat32, "features must be float32");
@@ -959,78 +1079,41 @@ predGatherIGemmSparseConv(torch::Tensor features,
     TORCH_CHECK(weights.dim() == 5, "weights must be 5-D [K, C, T, R, S]");
     TORCH_CHECK(features.is_contiguous(), "features must be contiguous");
 
-    const int64_t N_in = features.size(0);
-    const int64_t C    = features.size(1);
-    const int64_t K    = weights.size(0);
+    TORCH_CHECK(kernel_size == 3 || kernel_size == 5 || kernel_size == 7,
+                "PredGatherIGemm supports kernel sizes 3, 5, 7; got ",
+                kernel_size);
+    TORCH_CHECK(stride == 1 || stride == 2, "PredGatherIGemm supports strides 1, 2; got ", stride);
+
+    const int64_t C = features.size(1);
+    const int64_t K = weights.size(0);
 
     TORCH_CHECK(weights.size(1) == C, "weights C dimension must match features");
-    TORCH_CHECK(weights.size(2) == 3 && weights.size(3) == 3 && weights.size(4) == 3,
-                "PredGatherIGemm currently supports only 3x3x3 kernels");
+    TORCH_CHECK(weights.size(2) == kernel_size && weights.size(3) == kernel_size &&
+                    weights.size(4) == kernel_size,
+                "weights spatial dimensions must be ",
+                kernel_size,
+                "x",
+                kernel_size,
+                "x",
+                kernel_size);
     TORCH_CHECK(C % 32 == 0, "Input channels must be a multiple of 32, got ", C);
     TORCH_CHECK(K % 32 == 0, "Output channels must be a multiple of 32, got ", K);
 
     TORCH_CHECK(feature_grid.batchSize() == 1, "PredGatherIGemm currently supports batch size 1");
     TORCH_CHECK(output_grid.batchSize() == 1, "PredGatherIGemm currently supports batch size 1");
-    TORCH_CHECK(feature_grid.totalVoxels() == N_in,
+    TORCH_CHECK(feature_grid.totalVoxels() == features.size(0),
                 "feature_grid voxel count (",
                 feature_grid.totalVoxels(),
                 ") must match features row count (",
-                N_in,
+                features.size(0),
                 ")");
 
-    const int64_t N_out            = output_grid.totalVoxels();
-    const uint32_t outputLeafCount = output_grid.numLeavesAt(0);
+    static auto const table =
+        dispatch::dispatch_table_from_op<pred_gather_igemm_op>("pred_gather_igemm_sparse_conv");
 
-    // Permute weights from fVDB [K, C, T, R, S] to IGEMM [T, R, S, K, C]
-    auto filter_igemm = weights.permute({2, 3, 4, 0, 1}).contiguous();
-
-    // Pad features: row 0 = zeros (background), rows 1..N_in = features (1-indexed)
-    auto opts         = torch::dtype(torch::kFloat32).device(features.device());
-    auto padded_input = torch::zeros({N_in + 1, C}, opts);
-    padded_input.slice(0, 1).copy_(features);
-
-    auto padded_output = torch::zeros({N_out + 1, K}, opts);
-
-    auto *nanoInputGrid =
-        feature_grid.nanoGridHandle().template deviceGrid<nanovdb::ValueOnIndex>();
-    auto *nanoOutputGrid =
-        output_grid.nanoGridHandle().template deviceGrid<nanovdb::ValueOnIndex>();
-    TORCH_CHECK(nanoInputGrid != nullptr, "Failed to get device input grid");
-    TORCH_CHECK(nanoOutputGrid != nullptr, "Failed to get device output grid");
-
-    GeomT geometry{};
-    geometry.c  = static_cast<int>(C);
-    geometry.k  = static_cast<int>(K);
-    geometry.dx = -(GeomT::T / 2);
-    geometry.dy = -(GeomT::R / 2);
-    geometry.dz = -(GeomT::S / 2);
-
-    Layouts<GeomT> layouts(geometry);
-    auto tFilter = cute::make_tensor(cute::make_gmem_ptr(filter_igemm.data_ptr<float>()),
-                                     layouts.filterLayout());
-
-    ConvOp op(geometry);
-
-    constexpr size_t smem_size = sizeof(typename ConvOp::SharedStorage);
-    cudaStream_t stream        = at::cuda::getCurrentCUDAStream();
-
-    cudaFuncSetAttribute(kernelEntrypoint<ConvOp, nanovdb::ValueOnIndex, decltype(tFilter)>,
-                         cudaFuncAttributeMaxDynamicSharedMemorySize,
-                         smem_size);
-
-    kernelEntrypoint<ConvOp, nanovdb::ValueOnIndex, decltype(tFilter)>
-        <<<outputLeafCount, ConvOp::MaxThreadsPerBlock, smem_size, stream>>>(
-            tFilter,
-            nanoInputGrid,
-            nanoOutputGrid,
-            padded_input.data_ptr<float>(),
-            padded_output.data_ptr<float>(),
-            op);
-
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-    // Strip the padding row and return 0-indexed output
-    return padded_output.slice(0, 1).contiguous();
+    return table.select(dispatch::dispatch_set{static_cast<conv_kernel_size>(kernel_size),
+                                               static_cast<conv_stride>(stride)})(
+        features, weights, feature_grid, output_grid);
 }
 
 } // namespace ops

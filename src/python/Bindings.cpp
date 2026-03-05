@@ -497,15 +497,19 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         [](torch::Tensor features,
            torch::Tensor weights,
            const fvdb::GridBatch &feature_grid,
-           const fvdb::GridBatch &output_grid) -> torch::Tensor {
+           const fvdb::GridBatch &output_grid,
+           int kernel_size,
+           int stride) -> torch::Tensor {
             return fvdb::GridBatch::predGatherIGemmConv(
-                features, weights, feature_grid, output_grid);
+                features, weights, feature_grid, output_grid, kernel_size, stride);
         },
         "PredGatherIGemm forward sparse convolution (SM80 CUTLASS IGEMM).",
         py::arg("features"),
         py::arg("weights"),
         py::arg("feature_grid"),
-        py::arg("output_grid"));
+        py::arg("output_grid"),
+        py::arg("kernel_size"),
+        py::arg("stride"));
 }
 
 TORCH_LIBRARY(fvdb, m) {

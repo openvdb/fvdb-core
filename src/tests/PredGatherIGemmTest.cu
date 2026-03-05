@@ -205,10 +205,10 @@ runBenchmark(const BenchConfig &cfg, torch::Device device) {
 
     // --- PredGatherIGemm ---
     for (int i = 0; i < kWarmup; ++i)
-        ops::predGatherIGemmSparseConv(features, fvdb_weights, *input_grid, *output_grid);
+        ops::predGatherIGemmSparseConv(features, fvdb_weights, *input_grid, *output_grid, 3, 1);
     timer.recordStart();
     for (int i = 0; i < kIters; ++i)
-        ops::predGatherIGemmSparseConv(features, fvdb_weights, *input_grid, *output_grid);
+        ops::predGatherIGemmSparseConv(features, fvdb_weights, *input_grid, *output_grid, 3, 1);
     float igemm_ms = timer.recordStopMs() / kIters;
 
     // --- GatherScatterDefault (with topology build) ---
@@ -238,7 +238,7 @@ runBenchmark(const BenchConfig &cfg, torch::Device device) {
 
     // -- Correctness sanity check --
     auto igemm_output =
-        ops::predGatherIGemmSparseConv(features, fvdb_weights, *input_grid, *output_grid);
+        ops::predGatherIGemmSparseConv(features, fvdb_weights, *input_grid, *output_grid, 3, 1);
     auto gs_output = ops::gatherScatterDefaultSparseConv(features, fvdb_weights, topo);
 
     auto igemm_f64 = igemm_output.cpu().to(torch::kFloat64);
@@ -271,35 +271,44 @@ TEST(PredGatherIGemm, MatchesGatherScatterDefault) {
     ASSERT_GT(N_out, 0);
 
     const int64_t Cin = 64, Cout = 128;
-    torch::manual_seed(8888);
 
-    auto features     = torch::randn({N_in, Cin}, topts(device));
-    auto fvdb_weights = torch::randn({Cout, Cin, 3, 3, 3}, topts(device));
+    struct GeomConfig {
+        int kernel_size, stride;
+    };
+    GeomConfig geom_configs[] = {{3, 1}, {3, 2}, {5, 1}, {5, 2}, {7, 1}, {7, 2}};
 
-    // -- Run PredGatherIGemm --
-    auto igemm_output =
-        ops::predGatherIGemmSparseConv(features, fvdb_weights, *input_grid, *output_grid);
+    for (const auto &gc: geom_configs) {
+        torch::manual_seed(8888);
 
-    // -- Run GatherScatterDefault --
-    nanovdb::Coord ks(3, 3, 3);
-    nanovdb::Coord stride(1, 1, 1);
-    auto topo = ops::gatherScatterDefaultSparseConvTopology(*input_grid, *output_grid, ks, stride);
-    auto gs_output = ops::gatherScatterDefaultSparseConv(features, fvdb_weights, topo);
+        auto features     = torch::randn({N_in, Cin}, topts(device));
+        auto fvdb_weights = torch::randn(
+            {Cout, Cin, gc.kernel_size, gc.kernel_size, gc.kernel_size}, topts(device));
 
-    // -- Compare --
-    auto igemm_f64 = igemm_output.cpu().to(torch::kFloat64);
-    auto gs_f64    = gs_output.cpu().to(torch::kFloat64);
-    auto diff      = (igemm_f64 - gs_f64).abs();
+        auto igemm_output = ops::predGatherIGemmSparseConv(
+            features, fvdb_weights, *input_grid, *output_grid, gc.kernel_size, gc.stride);
 
-    ASSERT_EQ(igemm_f64.size(0), gs_f64.size(0));
-    ASSERT_EQ(igemm_f64.size(1), gs_f64.size(1));
+        nanovdb::Coord ks(gc.kernel_size, gc.kernel_size, gc.kernel_size);
+        nanovdb::Coord st(gc.stride, gc.stride, gc.stride);
+        auto topo = ops::gatherScatterDefaultSparseConvTopology(*input_grid, *output_grid, ks, st);
+        auto gs_output = ops::gatherScatterDefaultSparseConv(features, fvdb_weights, topo);
 
-    // TF32 tensor-core arithmetic (10-bit mantissa) vs full f32 cuBLAS in
-    // GatherScatterDefault.  With randn inputs the expected per-element error
-    // is ~0.3% relative; observed max diff is ~0.14 on outputs of magnitude ~40.
-    EXPECT_TRUE(torch::allclose(igemm_f64, gs_f64, /*rtol=*/5e-3, /*atol=*/0.5))
-        << "MatchesGatherScatterDefault: max diff=" << diff.max().item<double>()
-        << ", mean diff=" << diff.mean().item<double>();
+        auto igemm_f64 = igemm_output.cpu().to(torch::kFloat64);
+        auto gs_f64    = gs_output.cpu().to(torch::kFloat64);
+        auto diff      = (igemm_f64 - gs_f64).abs();
+
+        ASSERT_EQ(igemm_f64.size(0), gs_f64.size(0))
+            << "kernel=" << gc.kernel_size << " stride=" << gc.stride;
+        ASSERT_EQ(igemm_f64.size(1), gs_f64.size(1))
+            << "kernel=" << gc.kernel_size << " stride=" << gc.stride;
+
+        // TF32 tensor-core arithmetic (10-bit mantissa) vs full f32 cuBLAS in
+        // GatherScatterDefault.  With randn inputs the expected per-element error
+        // is ~0.3% relative; observed max diff is ~0.14 on outputs of magnitude ~40.
+        EXPECT_TRUE(torch::allclose(igemm_f64, gs_f64, /*rtol=*/5e-3, /*atol=*/0.5))
+            << "kernel=" << gc.kernel_size << " stride=" << gc.stride
+            << ": max diff=" << diff.max().item<double>()
+            << ", mean diff=" << diff.mean().item<double>();
+    }
 }
 
 TEST(PredGatherIGemm, MatchesGatherScatterDefaultMultipleChannels) {
@@ -321,7 +330,7 @@ TEST(PredGatherIGemm, MatchesGatherScatterDefaultMultipleChannels) {
     struct ChannelConfig {
         int64_t cin, cout;
     };
-    ChannelConfig configs[] = {
+    ChannelConfig channel_configs[] = {
         {32, 32},
         {32, 64},
         {64, 64},
@@ -331,34 +340,44 @@ TEST(PredGatherIGemm, MatchesGatherScatterDefaultMultipleChannels) {
         {256, 128},
     };
 
-    for (const auto &cfg: configs) {
-        torch::manual_seed(42);
+    struct GeomConfig {
+        int kernel_size, stride;
+    };
+    GeomConfig geom_configs[] = {{3, 1}, {3, 2}, {5, 1}, {5, 2}, {7, 1}, {7, 2}};
 
-        auto features     = torch::randn({N_in, cfg.cin}, topts(device));
-        auto fvdb_weights = torch::randn({cfg.cout, cfg.cin, 3, 3, 3}, topts(device));
+    for (const auto &gc: geom_configs) {
+        for (const auto &cfg: channel_configs) {
+            torch::manual_seed(42);
 
-        auto igemm_output =
-            ops::predGatherIGemmSparseConv(features, fvdb_weights, *input_grid, *output_grid);
+            auto features     = torch::randn({N_in, cfg.cin}, topts(device));
+            auto fvdb_weights = torch::randn(
+                {cfg.cout, cfg.cin, gc.kernel_size, gc.kernel_size, gc.kernel_size}, topts(device));
 
-        nanovdb::Coord ks(3, 3, 3);
-        nanovdb::Coord stride(1, 1, 1);
-        auto topo =
-            ops::gatherScatterDefaultSparseConvTopology(*input_grid, *output_grid, ks, stride);
-        auto gs_output = ops::gatherScatterDefaultSparseConv(features, fvdb_weights, topo);
+            auto igemm_output = ops::predGatherIGemmSparseConv(
+                features, fvdb_weights, *input_grid, *output_grid, gc.kernel_size, gc.stride);
 
-        auto igemm_f64 = igemm_output.cpu().to(torch::kFloat64);
-        auto gs_f64    = gs_output.cpu().to(torch::kFloat64);
-        auto diff      = (igemm_f64 - gs_f64).abs();
+            nanovdb::Coord ks(gc.kernel_size, gc.kernel_size, gc.kernel_size);
+            nanovdb::Coord st(gc.stride, gc.stride, gc.stride);
+            auto topo =
+                ops::gatherScatterDefaultSparseConvTopology(*input_grid, *output_grid, ks, st);
+            auto gs_output = ops::gatherScatterDefaultSparseConv(features, fvdb_weights, topo);
 
-        ASSERT_EQ(igemm_f64.size(0), gs_f64.size(0))
-            << "Shape mismatch for C=" << cfg.cin << ", K=" << cfg.cout;
-        ASSERT_EQ(igemm_f64.size(1), gs_f64.size(1))
-            << "Shape mismatch for C=" << cfg.cin << ", K=" << cfg.cout;
+            auto igemm_f64 = igemm_output.cpu().to(torch::kFloat64);
+            auto gs_f64    = gs_output.cpu().to(torch::kFloat64);
+            auto diff      = (igemm_f64 - gs_f64).abs();
 
-        EXPECT_TRUE(torch::allclose(igemm_f64, gs_f64, /*rtol=*/5e-3, /*atol=*/0.5))
-            << "Channel config C=" << cfg.cin << ", K=" << cfg.cout
-            << ": max diff=" << diff.max().item<double>()
-            << ", mean diff=" << diff.mean().item<double>();
+            ASSERT_EQ(igemm_f64.size(0), gs_f64.size(0))
+                << "kernel=" << gc.kernel_size << " stride=" << gc.stride << " C=" << cfg.cin
+                << " K=" << cfg.cout;
+            ASSERT_EQ(igemm_f64.size(1), gs_f64.size(1))
+                << "kernel=" << gc.kernel_size << " stride=" << gc.stride << " C=" << cfg.cin
+                << " K=" << cfg.cout;
+
+            EXPECT_TRUE(torch::allclose(igemm_f64, gs_f64, /*rtol=*/5e-3, /*atol=*/0.5))
+                << "kernel=" << gc.kernel_size << " stride=" << gc.stride << " C=" << cfg.cin
+                << " K=" << cfg.cout << ": max diff=" << diff.max().item<double>()
+                << ", mean diff=" << diff.mean().item<double>();
+        }
     }
 }
 
