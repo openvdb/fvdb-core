@@ -129,12 +129,7 @@ class _PredGatherIGemmBackend:
     gs_topology: _fvdb_cpp.GatherScatterDefaultTopology
 
 
-_Backend = (
-    _MatmulBackend
-    | _DenseBackend
-    | _GatherScatterBackend
-    | _PredGatherIGemmBackend
-)
+_Backend = _MatmulBackend | _DenseBackend | _GatherScatterBackend | _PredGatherIGemmBackend
 
 
 @dataclass(frozen=True)
@@ -791,9 +786,7 @@ class ConvolutionPlan:
                 raise ValueError("PredGatherIGemm currently only supports stride 1.")
             for cin, cout in channel_pairs:
                 if cin % 32 != 0 or cout % 32 != 0:
-                    raise ValueError(
-                        f"PredGatherIGemm requires channel counts divisible by 32, got ({cin}, {cout})."
-                    )
+                    raise ValueError(f"PredGatherIGemm requires channel counts divisible by 32, got ({cin}, {cout}).")
             gs_topo = _fvdb_cpp.gs_build_topology(source_grid._impl, target_grid._impl, kernel_size, stride)
             return _PredGatherIGemmBackend(gs_topology=gs_topo)
 
