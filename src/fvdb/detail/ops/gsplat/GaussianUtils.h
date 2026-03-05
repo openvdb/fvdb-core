@@ -12,12 +12,17 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
+// Given a contiguous tensor with dimensions [C, ...] where C is the number of cameras, we prefetch
+// the slices [cameraOffset : cameraCount, ...] to the specified device ordered on the input stream.
 void perCameraPrefetchAsync(const torch::Tensor &tensor,
                             uint32_t cameraOffset,
                             uint32_t cameraCount,
                             int deviceId,
                             cudaStream_t stream);
 
+// Given a list of contiguous tensors each with dimensions [C, ...] where C is the number of
+// cameras, we prefetch the slices [cameraOffset : cameraCount, ...] to the specified device ordered
+// on the input stream in a single asynchronous batched prefetch call.
 void perCameraPrefetchBatchAsync(const torch::TensorList &tensors,
                                  uint32_t cameraOffset,
                                  uint32_t cameraCount,
