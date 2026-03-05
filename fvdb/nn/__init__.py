@@ -27,7 +27,6 @@ __all__ = [
     "AvgPool",
     "BatchNorm",
     "GroupNorm",
-    "InjectFromGrid",
     "MaxPool",
     "SimpleUNet",
     "SimpleUNetBasicBlock",
