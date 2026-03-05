@@ -13,12 +13,6 @@
 
 namespace fvdb {
 
-/// @brief Shorthand for torch::PackedTensorAccessor32 with RestrictPtrTraits
-/// @tparam ScalarType The type of the tensor
-/// @tparam DIMS The number of dimensions of the tensor
-template <typename ScalarType, int32_t DIMS>
-using TorchRAcc32 = torch::PackedTensorAccessor32<ScalarType, DIMS, torch::RestrictPtrTraits>;
-
 /// @brief Shorthand for torch::PackedTensorAccessor64 with RestrictPtrTraits
 /// @tparam ScalarType The type of the tensor
 /// @tparam DIMS The number of dimensions of the tensor
@@ -30,12 +24,6 @@ using TorchRAcc64 = torch::PackedTensorAccessor64<ScalarType, DIMS, torch::Restr
 /// @tparam DIMS The number of dimensions of the tensor
 template <typename ScalarType, int32_t DIMS>
 using TorchAcc = torch::TensorAccessor<ScalarType, DIMS>;
-
-/// @brief Shorthand for fvdb::PackedJaggedAccessor32 with RestrictPtrTraits
-/// @tparam ScalarType The type of the tensor
-/// @tparam DIMS The number of dimensions of the tensor
-template <typename ScalarType, int32_t DIMS>
-using JaggedRAcc32 = fvdb::PackedJaggedAccessor32<ScalarType, DIMS, torch::RestrictPtrTraits>;
 
 /// @brief Shorthand for fvdb::PackedJaggedAccessor64 with RestrictPtrTraits
 /// @tparam ScalarType The type of the tensor
