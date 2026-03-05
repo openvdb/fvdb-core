@@ -417,10 +417,10 @@ class TestNNModules(unittest.TestCase):
         self.assertTrue(torch.equal(converted.running_var, original_running_var))
 
     # =========================================================================
-    # fvnn_module decorator
+    # _trace_fvdb_nn_forward decorator
     # =========================================================================
 
-    def test_fvnn_module_decorator(self):
+    def test_trace_fvdb_nn_forward_decorator(self):
         for cls in (
             fvnn.AvgPool,
             fvnn.MaxPool,
