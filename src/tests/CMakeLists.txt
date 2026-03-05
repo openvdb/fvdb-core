@@ -161,5 +161,5 @@ ConfigureTest(GaussianMCMCRelocationTest "GaussianMCMCRelocationTest.cpp")
 ConfigureTest(GatherScatterDefaultConvTest "GatherScatterDefaultConvTest.cu")
 
 if(NOT NANOVDB_EDITOR_SKIP)
-  #ConfigureTest(ViewerTest "ViewerTest.cpp")
+  ConfigureTest(ViewerTest "ViewerTest.cpp")
 endif()
