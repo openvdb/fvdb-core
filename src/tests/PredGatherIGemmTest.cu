@@ -382,6 +382,6 @@ TEST(PredGatherIGemm, SpeedComparison) {
     // clang-format on
 
     std::cout << "SpeedComparison (Cin=64, Cout=128, kernel 3x3x3):" << std::endl;
-    for (const auto &cfg : configs)
+    for (const auto &cfg: configs)
         runBenchmark(cfg, device);
 }

@@ -842,40 +842,6 @@ struct GridBatch : torch::CustomClassHolder {
                                                const Vec3iOrScalar &kernelSize,
                                                const Vec3iOrScalar &stride);
 
-    // ---- Fused gather-scatter convolution (no precomputed topology) ----
-
-    static torch::Tensor gatherScatterConvFused(torch::Tensor features,
-                                                torch::Tensor weights,
-                                                const GridBatch &feature_grid,
-                                                const GridBatch &output_grid,
-                                                const Vec3iOrScalar &kernelSize,
-                                                const Vec3iOrScalar &stride);
-
-    static std::tuple<torch::Tensor, torch::Tensor>
-    gatherScatterConvFusedBackward(torch::Tensor grad_output,
-                                   torch::Tensor features,
-                                   torch::Tensor weights,
-                                   const GridBatch &feature_grid,
-                                   const GridBatch &output_grid,
-                                   const Vec3iOrScalar &kernelSize,
-                                   const Vec3iOrScalar &stride);
-
-    static torch::Tensor gatherScatterConvFusedTranspose(torch::Tensor features,
-                                                         torch::Tensor weights,
-                                                         const GridBatch &feature_grid,
-                                                         const GridBatch &output_grid,
-                                                         const Vec3iOrScalar &kernelSize,
-                                                         const Vec3iOrScalar &stride);
-
-    static std::tuple<torch::Tensor, torch::Tensor>
-    gatherScatterConvFusedTransposeBackward(torch::Tensor grad_output,
-                                            torch::Tensor features,
-                                            torch::Tensor weights,
-                                            const GridBatch &feature_grid,
-                                            const GridBatch &output_grid,
-                                            const Vec3iOrScalar &kernelSize,
-                                            const Vec3iOrScalar &stride);
-
     // ---- PredGatherIGemm convolution (CUTLASS IGEMM, SM80+) ----
 
     /// @brief Forward pass of predicated-gather IGEMM sparse convolution.

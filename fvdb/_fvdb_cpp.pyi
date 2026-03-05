@@ -94,41 +94,6 @@ def pred_gather_igemm_conv(
     output_grid: GridBatch,
 ) -> torch.Tensor: ...
 
-def gs_conv_fused(
-    features: torch.Tensor,
-    weights: torch.Tensor,
-    feature_grid: GridBatch,
-    output_grid: GridBatch,
-    kernel_size: Vec3iOrScalar,
-    stride: Vec3iOrScalar,
-) -> torch.Tensor: ...
-def gs_conv_fused_backward(
-    grad_output: torch.Tensor,
-    features: torch.Tensor,
-    weights: torch.Tensor,
-    feature_grid: GridBatch,
-    output_grid: GridBatch,
-    kernel_size: Vec3iOrScalar,
-    stride: Vec3iOrScalar,
-) -> tuple[torch.Tensor, torch.Tensor]: ...
-def gs_conv_fused_transpose(
-    features: torch.Tensor,
-    weights: torch.Tensor,
-    feature_grid: GridBatch,
-    output_grid: GridBatch,
-    kernel_size: Vec3iOrScalar,
-    stride: Vec3iOrScalar,
-) -> torch.Tensor: ...
-def gs_conv_fused_transpose_backward(
-    grad_output: torch.Tensor,
-    features: torch.Tensor,
-    weights: torch.Tensor,
-    feature_grid: GridBatch,
-    output_grid: GridBatch,
-    kernel_size: Vec3iOrScalar,
-    stride: Vec3iOrScalar,
-) -> tuple[torch.Tensor, torch.Tensor]: ...
-
 class GaussianSplat3d:
     class ProjectionType(Enum):
         PERSPECTIVE = ...

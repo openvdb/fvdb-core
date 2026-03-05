@@ -648,8 +648,7 @@ template <class SettingsT> struct Layouts {
         auto Bz = Int<SettingsT::Bz>{};
         return make_layout(
             make_shape(K, make_shape(make_shape(Bx, By, Bz), Z, P, Q)),
-            make_stride(_0{},
-                        make_stride(make_stride(_64{} * Z, _8{} * P, Q), _64{}, _8{}, _1{})));
+            make_stride(_0{}, make_stride(make_stride(_64{} * Z, _8{} * P, Q), _64{}, _8{}, _1{})));
     }
 
     __hostdev__ static auto

@@ -139,13 +139,8 @@ ConfigureDispatchBench(for_each_benchmark
     dispatch/for_each_benchmark.cu
 )
 
-# Sparse convolution benchmark (GatherScatterDefault, GatherScatterFused, GroupedGemm)
-ConfigureDispatchBench(convolution_benchmark
-    convolution/convolution_benchmark.cu
-)
-
-# CUTLASS grouped GEMM convolution benchmark
-ConfigureDispatchBench(cutlass_benchmark
-    convolution/cutlass_benchmark.cu
+# GatherScatterDefault sparse convolution benchmark
+ConfigureDispatchBench(gather_scatter_conv_benchmark
+    convolution/gather_scatter_conv_benchmark.cu
 )
 
