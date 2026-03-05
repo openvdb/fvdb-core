@@ -358,8 +358,8 @@ gaussianTileIntersectionCUDAImpl(
     const uint32_t tileSize,
     const uint32_t imageHeight,
     const uint32_t imageWidth) {
-    const bool isPacked = cameraJIdx.has_value();
-    const bool isSparse = activeTiles.has_value();
+    const bool isPacked       = cameraJIdx.has_value();
+    const bool isSparse       = activeTiles.has_value();
     const uint32_t numCameras = [&]() -> uint32_t {
         if (!isPacked) {
             return static_cast<uint32_t>(means2d.size(0));
@@ -369,8 +369,8 @@ gaussianTileIntersectionCUDAImpl(
         }
         return static_cast<uint32_t>(cameraJIdx.value().max().item<int64_t>() + 1);
     }();
-    const uint32_t numTilesH  = (imageHeight + tileSize - 1) / tileSize;
-    const uint32_t numTilesW  = (imageWidth + tileSize - 1) / tileSize;
+    const uint32_t numTilesH = (imageHeight + tileSize - 1) / tileSize;
+    const uint32_t numTilesW = (imageWidth + tileSize - 1) / tileSize;
 
     TORCH_CHECK(means2d.is_cuda(), "means2d must be a CUDA tensor");
     TORCH_CHECK(radii.is_cuda(), "radii must be a CUDA tensor");
@@ -907,8 +907,8 @@ gaussianTileIntersectionPrivateUse1Impl(
     const uint32_t tileSize,
     const uint32_t imageHeight,
     const uint32_t imageWidth) {
-    const bool isPacked = cameraJIdx.has_value();
-    const bool isSparse = activeTiles.has_value();
+    const bool isPacked       = cameraJIdx.has_value();
+    const bool isSparse       = activeTiles.has_value();
     const uint32_t numCameras = [&]() -> uint32_t {
         if (!isPacked) {
             return static_cast<uint32_t>(means2d.size(0));
@@ -918,8 +918,8 @@ gaussianTileIntersectionPrivateUse1Impl(
         }
         return static_cast<uint32_t>(cameraJIdx.value().max().item<int64_t>() + 1);
     }();
-    const uint32_t numTilesH  = (imageHeight + tileSize - 1) / tileSize;
-    const uint32_t numTilesW  = (imageWidth + tileSize - 1) / tileSize;
+    const uint32_t numTilesH = (imageHeight + tileSize - 1) / tileSize;
+    const uint32_t numTilesW = (imageWidth + tileSize - 1) / tileSize;
 
     TORCH_CHECK(means2d.is_privateuseone(), "means2d must be a PrivateUse1 tensor");
     TORCH_CHECK(radii.is_privateuseone(), "radii must be a PrivateUse1 tensor");
@@ -1226,8 +1226,7 @@ gaussianTileIntersectionPrivateUse1Impl(
 DenseTileIntersections::DenseTileIntersections(torch::Tensor tileOffsets,
                                                torch::Tensor tileGaussianIds,
                                                uint32_t tileSize)
-    : mTileOffsets(std::move(tileOffsets)),
-      mTileGaussianIds(std::move(tileGaussianIds)),
+    : mTileOffsets(std::move(tileOffsets)), mTileGaussianIds(std::move(tileGaussianIds)),
       mTileSize(tileSize) {}
 
 DenseTileIntersections::DenseTileIntersections(const torch::Tensor &means2d,
@@ -1238,35 +1237,35 @@ DenseTileIntersections::DenseTileIntersections(const torch::Tensor &means2d,
                                                uint32_t imageHeight,
                                                uint32_t imageWidth) {
     std::tuple<torch::Tensor, torch::Tensor> out = [&]() {
-    if (means2d.device().type() == torch::kCUDA) {
-        return gaussianTileIntersectionCUDAImpl(means2d,
-                                                radii,
-                                                depths,
-                                                cameraJIdx,
-                                                at::nullopt,
-                                                at::nullopt,
-                                                tileSize,
-                                                imageHeight,
-                                                imageWidth);
-    } else if (means2d.device().type() == torch::kPrivateUse1) {
-        return gaussianTileIntersectionPrivateUse1Impl(means2d,
-                                                       radii,
-                                                       depths,
-                                                       cameraJIdx,
-                                                       at::nullopt,
-                                                       at::nullopt,
-                                                       tileSize,
-                                                       imageHeight,
-                                                       imageWidth);
-    } else {
-        TORCH_CHECK(false, "CPU implementation not available");
-        return std::make_tuple(torch::Tensor(), torch::Tensor());
-    }
+        if (means2d.device().type() == torch::kCUDA) {
+            return gaussianTileIntersectionCUDAImpl(means2d,
+                                                    radii,
+                                                    depths,
+                                                    cameraJIdx,
+                                                    at::nullopt,
+                                                    at::nullopt,
+                                                    tileSize,
+                                                    imageHeight,
+                                                    imageWidth);
+        } else if (means2d.device().type() == torch::kPrivateUse1) {
+            return gaussianTileIntersectionPrivateUse1Impl(means2d,
+                                                           radii,
+                                                           depths,
+                                                           cameraJIdx,
+                                                           at::nullopt,
+                                                           at::nullopt,
+                                                           tileSize,
+                                                           imageHeight,
+                                                           imageWidth);
+        } else {
+            TORCH_CHECK(false, "CPU implementation not available");
+            return std::make_tuple(torch::Tensor(), torch::Tensor());
+        }
     }();
     auto [tileOffsets, tileGaussianIds] = std::move(out);
-    mTileOffsets     = std::move(tileOffsets);
-    mTileGaussianIds = std::move(tileGaussianIds);
-    mTileSize        = tileSize;
+    mTileOffsets                        = std::move(tileOffsets);
+    mTileGaussianIds                    = std::move(tileGaussianIds);
+    mTileSize                           = tileSize;
 }
 
 const torch::Tensor &
@@ -1291,8 +1290,7 @@ DenseTileIntersections::totalIntersections() const {
 
 #if defined(__CUDACC__)
 DenseTileIntersections::Accessor
-DenseTileIntersections::accessor(const RenderWindow2D &renderWindow,
-                                 uint32_t blockOffset) const {
+DenseTileIntersections::accessor(const RenderWindow2D &renderWindow, uint32_t blockOffset) const {
     return Accessor(mTileOffsets.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
                     mTileGaussianIds.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>(),
                     static_cast<uint32_t>(mTileOffsets.size(0)),
@@ -1311,17 +1309,13 @@ SparseTileIntersections::SparseTileIntersections(
     const std::optional<torch::Tensor> &tilePixelMask,
     const std::optional<torch::Tensor> &tilePixelCumsum,
     const std::optional<torch::Tensor> &pixelMap)
-    : mTileOffsets(std::move(tileOffsets)),
-      mTileGaussianIds(std::move(tileGaussianIds)),
+    : mTileOffsets(std::move(tileOffsets)), mTileGaussianIds(std::move(tileGaussianIds)),
       mTileSize(tileSize) {
-    auto opts = mTileOffsets.options();
-    mActiveTiles =
-        activeTiles.value_or(torch::empty({0}, opts.dtype(torch::kInt32)));
-    mTilePixelMask =
-        tilePixelMask.value_or(torch::empty({0, 0}, opts.dtype(torch::kUInt64)));
-    mTilePixelCumsum =
-        tilePixelCumsum.value_or(torch::empty({0}, opts.dtype(torch::kInt64)));
-    mPixelMap = pixelMap.value_or(torch::empty({0}, opts.dtype(torch::kInt64)));
+    auto opts        = mTileOffsets.options();
+    mActiveTiles     = activeTiles.value_or(torch::empty({0}, opts.dtype(torch::kInt32)));
+    mTilePixelMask   = tilePixelMask.value_or(torch::empty({0, 0}, opts.dtype(torch::kUInt64)));
+    mTilePixelCumsum = tilePixelCumsum.value_or(torch::empty({0}, opts.dtype(torch::kInt64)));
+    mPixelMap        = pixelMap.value_or(torch::empty({0}, opts.dtype(torch::kInt64)));
 }
 
 SparseTileIntersections::SparseTileIntersections(const torch::Tensor &means2d,
@@ -1334,35 +1328,35 @@ SparseTileIntersections::SparseTileIntersections(const torch::Tensor &means2d,
                                                  uint32_t imageHeight,
                                                  uint32_t imageWidth) {
     std::tuple<torch::Tensor, torch::Tensor> out = [&]() {
-    if (means2d.device().type() == torch::kCUDA) {
-        return gaussianTileIntersectionCUDAImpl(means2d,
-                                                radii,
-                                                depths,
-                                                cameraJIdx,
-                                                tileMask,
-                                                activeTiles,
-                                                tileSize,
-                                                imageHeight,
-                                                imageWidth);
-    } else if (means2d.device().type() == torch::kPrivateUse1) {
-        return gaussianTileIntersectionPrivateUse1Impl(means2d,
-                                                       radii,
-                                                       depths,
-                                                       cameraJIdx,
-                                                       tileMask,
-                                                       activeTiles,
-                                                       tileSize,
-                                                       imageHeight,
-                                                       imageWidth);
-    } else {
-        TORCH_CHECK(false, "CPU implementation not available for sparse tile intersection");
-        return std::make_tuple(torch::Tensor(), torch::Tensor());
-    }
+        if (means2d.device().type() == torch::kCUDA) {
+            return gaussianTileIntersectionCUDAImpl(means2d,
+                                                    radii,
+                                                    depths,
+                                                    cameraJIdx,
+                                                    tileMask,
+                                                    activeTiles,
+                                                    tileSize,
+                                                    imageHeight,
+                                                    imageWidth);
+        } else if (means2d.device().type() == torch::kPrivateUse1) {
+            return gaussianTileIntersectionPrivateUse1Impl(means2d,
+                                                           radii,
+                                                           depths,
+                                                           cameraJIdx,
+                                                           tileMask,
+                                                           activeTiles,
+                                                           tileSize,
+                                                           imageHeight,
+                                                           imageWidth);
+        } else {
+            TORCH_CHECK(false, "CPU implementation not available for sparse tile intersection");
+            return std::make_tuple(torch::Tensor(), torch::Tensor());
+        }
     }();
     auto [tileOffsets, tileGaussianIds] = std::move(out);
-    mTileOffsets     = std::move(tileOffsets);
-    mTileGaussianIds = std::move(tileGaussianIds);
-    mTileSize        = tileSize;
+    mTileOffsets                        = std::move(tileOffsets);
+    mTileGaussianIds                    = std::move(tileGaussianIds);
+    mTileSize                           = tileSize;
 }
 
 const torch::Tensor &
@@ -1407,9 +1401,12 @@ SparseTileIntersections::totalIntersections() const {
 
 #if defined(__CUDACC__)
 SparseTileIntersections::Accessor
-SparseTileIntersections::accessor(const RenderWindow2D &renderWindow,
-                                  uint32_t blockOffset) const {
+SparseTileIntersections::accessor(const RenderWindow2D &renderWindow, uint32_t blockOffset) const {
+    auto dummyDense = torch::empty({0, 0, 0}, mTileOffsets.options());
     return Accessor(mTileOffsets.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>(),
+                    dummyDense.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
+                    false,
+                    0,
                     mTileGaussianIds.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>(),
                     mActiveTiles.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>(),
                     mTilePixelMask.packed_accessor64<uint64_t, 2, torch::RestrictPtrTraits>(),
@@ -1433,14 +1430,14 @@ dispatchDenseTileIntersections<torch::kCUDA>(
     const uint32_t imageHeight,
     const uint32_t imageWidth) {
     auto [tileOffsets, tileGaussianIds] = gaussianTileIntersectionCUDAImpl(means2d,
-                                                                            radii,
-                                                                            depths,
-                                                                            cameraJIdx,
-                                                                            at::nullopt,
-                                                                            at::nullopt,
-                                                                            tileSize,
-                                                                            imageHeight,
-                                                                            imageWidth);
+                                                                           radii,
+                                                                           depths,
+                                                                           cameraJIdx,
+                                                                           at::nullopt,
+                                                                           at::nullopt,
+                                                                           tileSize,
+                                                                           imageHeight,
+                                                                           imageWidth);
     return DenseTileIntersections(tileOffsets, tileGaussianIds, tileSize);
 }
 
@@ -1455,14 +1452,14 @@ dispatchDenseTileIntersections<torch::kPrivateUse1>(
     const uint32_t imageHeight,
     const uint32_t imageWidth) {
     auto [tileOffsets, tileGaussianIds] = gaussianTileIntersectionPrivateUse1Impl(means2d,
-                                                                                   radii,
-                                                                                   depths,
-                                                                                   cameraJIdx,
-                                                                                   at::nullopt,
-                                                                                   at::nullopt,
-                                                                                   tileSize,
-                                                                                   imageHeight,
-                                                                                   imageWidth);
+                                                                                  radii,
+                                                                                  depths,
+                                                                                  cameraJIdx,
+                                                                                  at::nullopt,
+                                                                                  at::nullopt,
+                                                                                  tileSize,
+                                                                                  imageHeight,
+                                                                                  imageWidth);
     return DenseTileIntersections(tileOffsets, tileGaussianIds, tileSize);
 }
 
@@ -1492,14 +1489,14 @@ dispatchSparseTileIntersections<torch::kCUDA>(
     const uint32_t imageHeight,
     const uint32_t imageWidth) {
     auto [tileOffsets, tileGaussianIds] = gaussianTileIntersectionCUDAImpl(means2d,
-                                                                            radii,
-                                                                            depths,
-                                                                            cameraJIdx,
-                                                                            tileMask,
-                                                                            activeTiles,
-                                                                            tileSize,
-                                                                            imageHeight,
-                                                                            imageWidth);
+                                                                           radii,
+                                                                           depths,
+                                                                           cameraJIdx,
+                                                                           tileMask,
+                                                                           activeTiles,
+                                                                           tileSize,
+                                                                           imageHeight,
+                                                                           imageWidth);
     return SparseTileIntersections(tileOffsets, tileGaussianIds, tileSize);
 }
 
@@ -1516,14 +1513,14 @@ dispatchSparseTileIntersections<torch::kPrivateUse1>(
     const uint32_t imageHeight,
     const uint32_t imageWidth) {
     auto [tileOffsets, tileGaussianIds] = gaussianTileIntersectionPrivateUse1Impl(means2d,
-                                                                                   radii,
-                                                                                   depths,
-                                                                                   cameraJIdx,
-                                                                                   tileMask,
-                                                                                   activeTiles,
-                                                                                   tileSize,
-                                                                                   imageHeight,
-                                                                                   imageWidth);
+                                                                                  radii,
+                                                                                  depths,
+                                                                                  cameraJIdx,
+                                                                                  tileMask,
+                                                                                  activeTiles,
+                                                                                  tileSize,
+                                                                                  imageHeight,
+                                                                                  imageWidth);
     return SparseTileIntersections(tileOffsets, tileGaussianIds, tileSize);
 }
 
@@ -1602,8 +1599,15 @@ dispatchGaussianSparseTileIntersection<torch::kCUDA>(
     const uint32_t imageHeight,
     const uint32_t imageWidth) {
     FVDB_FUNC_RANGE();
-    SparseTileIntersections out = dispatchSparseTileIntersections<torch::kCUDA>(
-        means2d, radii, depths, tileMask, activeTiles, cameraJIdx, tileSize, imageHeight, imageWidth);
+    SparseTileIntersections out = dispatchSparseTileIntersections<torch::kCUDA>(means2d,
+                                                                                radii,
+                                                                                depths,
+                                                                                tileMask,
+                                                                                activeTiles,
+                                                                                cameraJIdx,
+                                                                                tileSize,
+                                                                                imageHeight,
+                                                                                imageWidth);
     return std::make_tuple(out.tileOffsets(), out.tileGaussianIds());
 }
 
@@ -1620,16 +1624,15 @@ dispatchGaussianSparseTileIntersection<torch::kPrivateUse1>(
     const uint32_t imageHeight,
     const uint32_t imageWidth) {
     FVDB_FUNC_RANGE();
-    SparseTileIntersections out =
-        dispatchSparseTileIntersections<torch::kPrivateUse1>(means2d,
-                                                             radii,
-                                                             depths,
-                                                             tileMask,
-                                                             activeTiles,
-                                                             cameraJIdx,
-                                                             tileSize,
-                                                             imageHeight,
-                                                             imageWidth);
+    SparseTileIntersections out = dispatchSparseTileIntersections<torch::kPrivateUse1>(means2d,
+                                                                                       radii,
+                                                                                       depths,
+                                                                                       tileMask,
+                                                                                       activeTiles,
+                                                                                       cameraJIdx,
+                                                                                       tileSize,
+                                                                                       imageHeight,
+                                                                                       imageWidth);
     return std::make_tuple(out.tileOffsets(), out.tileGaussianIds());
 }
 
@@ -1646,8 +1649,15 @@ dispatchGaussianSparseTileIntersection<torch::kCPU>(
     const uint32_t imageHeight,
     const uint32_t imageWidth) {
     FVDB_FUNC_RANGE();
-    SparseTileIntersections out = dispatchSparseTileIntersections<torch::kCPU>(
-        means2d, radii, depths, tileMask, activeTiles, cameraJIdx, tileSize, imageHeight, imageWidth);
+    SparseTileIntersections out = dispatchSparseTileIntersections<torch::kCPU>(means2d,
+                                                                               radii,
+                                                                               depths,
+                                                                               tileMask,
+                                                                               activeTiles,
+                                                                               cameraJIdx,
+                                                                               tileSize,
+                                                                               imageHeight,
+                                                                               imageWidth);
     return std::make_tuple(out.tileOffsets(), out.tileGaussianIds());
 }
 

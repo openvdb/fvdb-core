@@ -69,9 +69,9 @@ struct RasterizeCommonArgs {
     TileIntersectionsT mTileIntersections;
 
     // Common input tensors
-    VectorAccessor mMeans2d;                  // [C, N, 2] or [nnz, 2]
-    VectorAccessor mConics;                   // [C, N, 3] or [nnz, 3]
-    ScalarAccessor mOpacities;                // [C, N] or [nnz]
+    VectorAccessor mMeans2d;   // [C, N, 2] or [nnz, 2]
+    VectorAccessor mConics;    // [C, N, 3] or [nnz, 3]
+    ScalarAccessor mOpacities; // [C, N] or [nnz]
     // Common optional input tensors
     bool mHasFeatures;
     VectorAccessor mFeatures;                // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
@@ -89,8 +89,7 @@ struct RasterizeCommonArgs {
         const std::optional<torch::Tensor> &masks,       // [C, numTilesH, numTilesW]
         const TileIntersectionsT &tileIntersections,
         const RenderWindow2D &renderWindow)
-        : mRenderWindow(renderWindow),
-          mTileIntersections(tileIntersections),
+        : mRenderWindow(renderWindow), mTileIntersections(tileIntersections),
           mMeans2d(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(means2d, "means2d")),
           mConics(initAccessor<ScalarType, NUM_OUTER_DIMS + 1>(conics, "conics")),
           mOpacities(initAccessor<ScalarType, NUM_OUTER_DIMS>(opacities, "opacities")),
@@ -141,15 +140,19 @@ struct RasterizeCommonArgs {
             }
         }
         if (mHasBackgrounds) {
-            TORCH_CHECK_VALUE(mMeans2d.size(0) == mBackgrounds.size(0), "Bad size for backgrounds");
+            TORCH_CHECK_VALUE(mTileIntersections.cameraCount(mMeans2d.size(0)) ==
+                                  mBackgrounds.size(0),
+                              "Bad size for backgrounds");
             TORCH_CHECK_VALUE(NUM_CHANNELS == mBackgrounds.size(1), "Bad size for backgrounds");
         }
         if (mHasMasks) {
-            TORCH_CHECK_VALUE(mMeans2d.size(0) == mMasks.size(0), "Bad size for masks");
-            TORCH_CHECK_VALUE(mTileIntersections.numTilesH() == mMasks.size(1), "Bad size for masks");
-            TORCH_CHECK_VALUE(mTileIntersections.numTilesW() == mMasks.size(2), "Bad size for masks");
+            TORCH_CHECK_VALUE(mTileIntersections.cameraCount(mMeans2d.size(0)) == mMasks.size(0),
+                              "Bad size for masks");
+            TORCH_CHECK_VALUE(mTileIntersections.numTilesH() == mMasks.size(1),
+                              "Bad size for masks");
+            TORCH_CHECK_VALUE(mTileIntersections.numTilesW() == mMasks.size(2),
+                              "Bad size for masks");
         }
-
     }
 
     // Construct a Gaussian2D object from the input tensors at the given index
@@ -218,8 +221,8 @@ struct RasterizeCommonArgs {
                                  uint32_t blockSize,
                                  uint32_t tidx,
                                  SharedGaussianT *sharedGaussians) const {
-        const uint32_t batchStart = gaussianBatchStartFrontToBack(
-            firstGaussianIdInBlock, batchIdx, blockSize);
+        const uint32_t batchStart =
+            gaussianBatchStartFrontToBack(firstGaussianIdInBlock, batchIdx, blockSize);
         const uint32_t intersectionIdx = batchStart + tidx;
         if (intersectionIdx < static_cast<uint32_t>(lastGaussianIdInBlock)) {
             const int32_t gaussianIdx = mTileIntersections.gaussianIdAt(intersectionIdx);
@@ -251,9 +254,7 @@ struct RasterizeCommonArgs {
                                  SharedGaussianT *sharedGaussians,
                                  int32_t &outGaussianId,
                                  int32_t &outBatchEnd) const {
-        outBatchEnd               = gaussianBatchEndBackToFront(lastGaussianIdInBlock,
-                                                  batchIdx,
-                                                  blockSize);
+        outBatchEnd = gaussianBatchEndBackToFront(lastGaussianIdInBlock, batchIdx, blockSize);
         const int32_t intersectionIdx = outBatchEnd - tidx;
         if (intersectionIdx >= firstGaussianIdInBlock) {
             outGaussianId         = mTileIntersections.gaussianIdAt(intersectionIdx);
@@ -263,7 +264,6 @@ struct RasterizeCommonArgs {
         outGaussianId = -1;
         return false;
     }
-
 };
 
 } // namespace fvdb::detail::ops

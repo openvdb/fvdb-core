@@ -26,8 +26,7 @@ template <typename ScalarType,
           bool IS_PACKED,
           typename TileIntersectionsT>
 struct RasterizeBackwardArgs {
-    using CommonArgs =
-        RasterizeCommonArgs<ScalarType, NUM_CHANNELS, IS_PACKED, TileIntersectionsT>;
+    using CommonArgs = RasterizeCommonArgs<ScalarType, NUM_CHANNELS, IS_PACKED, TileIntersectionsT>;
     CommonArgs commonArgs;
 
     using vec2t          = typename CommonArgs::vec2t;
@@ -158,30 +157,40 @@ struct RasterizeBackwardArgs {
                               "Bad size for outDLossDOpacities");
         }
 
-        const uint32_t numCameras = static_cast<uint32_t>(commonArgs.mMeans2d.size(0));
-        const uint32_t expectedNumTensors = commonArgs.mTileIntersections.outputNumTensors(numCameras);
+        const uint32_t numCameras = commonArgs.mTileIntersections.cameraCount(
+            static_cast<uint32_t>(commonArgs.mMeans2d.size(0)));
+        const uint32_t expectedNumTensors =
+            commonArgs.mTileIntersections.outputNumTensors(numCameras);
         const uint64_t expectedPixelCount = commonArgs.mTileIntersections.outputPixelCount(
             numCameras, commonArgs.mRenderWindow.height, commonArgs.mRenderWindow.width);
         TORCH_CHECK_VALUE(expectedNumTensors == static_cast<uint32_t>(mRenderedAlphas.numTensors()),
                           "Bad size for renderedAlphas");
-        TORCH_CHECK_VALUE(expectedPixelCount == static_cast<uint64_t>(mRenderedAlphas.elementCount()),
+        TORCH_CHECK_VALUE(expectedPixelCount ==
+                              static_cast<uint64_t>(mRenderedAlphas.elementCount()),
                           "Bad size for renderedAlphas");
-        TORCH_CHECK_VALUE(expectedNumTensors == static_cast<uint32_t>(mLastGaussianIds.numTensors()),
+        TORCH_CHECK_VALUE(expectedNumTensors ==
+                              static_cast<uint32_t>(mLastGaussianIds.numTensors()),
                           "Bad size for lastGaussianIds");
-        TORCH_CHECK_VALUE(expectedPixelCount == static_cast<uint64_t>(mLastGaussianIds.elementCount()),
+        TORCH_CHECK_VALUE(expectedPixelCount ==
+                              static_cast<uint64_t>(mLastGaussianIds.elementCount()),
                           "Bad size for lastGaussianIds");
-        TORCH_CHECK_VALUE(expectedNumTensors == static_cast<uint32_t>(mDLossDRenderedFeatures.numTensors()),
+        TORCH_CHECK_VALUE(expectedNumTensors ==
+                              static_cast<uint32_t>(mDLossDRenderedFeatures.numTensors()),
                           "Bad size for dLossDRenderedFeatures");
-        TORCH_CHECK_VALUE(expectedPixelCount == static_cast<uint64_t>(mDLossDRenderedFeatures.elementCount()),
+        TORCH_CHECK_VALUE(expectedPixelCount ==
+                              static_cast<uint64_t>(mDLossDRenderedFeatures.elementCount()),
                           "Bad size for dLossDRenderedFeatures");
         TORCH_CHECK_VALUE(NUM_CHANNELS == mDLossDRenderedFeatures.data().size(1),
                           "Bad size for dLossDRenderedFeatures");
-        TORCH_CHECK_VALUE(expectedNumTensors == static_cast<uint32_t>(mDLossDRenderedAlphas.numTensors()),
+        TORCH_CHECK_VALUE(expectedNumTensors ==
+                              static_cast<uint32_t>(mDLossDRenderedAlphas.numTensors()),
                           "Bad size for dLossDRenderedAlphas");
-        TORCH_CHECK_VALUE(expectedPixelCount == static_cast<uint64_t>(mDLossDRenderedAlphas.elementCount()),
+        TORCH_CHECK_VALUE(expectedPixelCount ==
+                              static_cast<uint64_t>(mDLossDRenderedAlphas.elementCount()),
                           "Bad size for dLossDRenderedAlphas");
         TORCH_CHECK_VALUE(1 == mRenderedAlphas.data().size(1), "Bad size for renderedAlphas");
-        TORCH_CHECK_VALUE(1 == mDLossDRenderedAlphas.data().size(1), "Bad size for dLossDRenderedAlphas");
+        TORCH_CHECK_VALUE(1 == mDLossDRenderedAlphas.data().size(1),
+                          "Bad size for dLossDRenderedAlphas");
     }
 
     /// @brief Read the alpha value for a pixel
@@ -244,7 +253,6 @@ struct RasterizeBackwardArgs {
                     outFeatures[k] = featureAccessor[k];
                 }
             }
-
         }
     }
 
@@ -701,8 +709,8 @@ struct RasterizeBackwardArgs {
                 // 0 index is the furthest back gaussian in the batch
                 // For each Gaussian which contributes to this pixel, compute this pixel's
                 // gradient contribution to that Gaussian
-                const int32_t batchEnd = commonArgs.gaussianBatchEndBackToFront(
-                    lastGaussianIdInBlock, b, blockSize);
+                const int32_t batchEnd =
+                    commonArgs.gaussianBatchEndBackToFront(lastGaussianIdInBlock, b, blockSize);
                 const int32_t batchSize = commonArgs.gaussianBatchSizeBackToFront(
                     firstGaussianIdInBlock, batchEnd, blockSize);
                 for (uint32_t t = max(0, batchEnd - lastGaussianIdInWarp); t < batchSize; ++t) {
@@ -811,12 +819,11 @@ template <typename ScalarType,
           bool IS_PACKED,
           typename TileIntersectionsT>
 __global__ void
-rasterizeGaussiansBackward(
-    RasterizeBackwardArgs<ScalarType,
-                          NUM_CHANNELS,
-                          NUM_SHARED_CHANNELS,
-                          IS_PACKED,
-                          TileIntersectionsT> args) {
+rasterizeGaussiansBackward(RasterizeBackwardArgs<ScalarType,
+                                                 NUM_CHANNELS,
+                                                 NUM_SHARED_CHANNELS,
+                                                 IS_PACKED,
+                                                 TileIntersectionsT> args) {
     auto &commonArgs = args.commonArgs;
 
     const auto [cameraId, tileRow, tileCol, row, col] =
@@ -829,8 +836,9 @@ rasterizeGaussiansBackward(
     // activePixelIndex: Index of this pixel in the output for the block if it is active (sparse
     // mode only).
     __shared__ typename TileIntersectionsT::ActivePixelScratch activePixelScratch;
-    const auto [pixelInImage, activePixelIndex] = commonArgs.mTileIntersections.activePixelIndexFromBlock(
-        blockIdx.x, threadIdx.y, threadIdx.x, row, col, activePixelScratch);
+    const auto [pixelInImage, activePixelIndex] =
+        commonArgs.mTileIntersections.activePixelIndexFromBlock(
+            blockIdx.x, threadIdx.y, threadIdx.x, row, col, activePixelScratch);
 
     // If the caller provides a per-tile mask and this tile is masked, do nothing and return
     if (commonArgs.mHasMasks && !commonArgs.mMasks[cameraId][tileRow][tileCol]) {
@@ -912,9 +920,7 @@ callRasterizeBackwardWithTemplatedSharedChannels(
         tileSize,
         0,
         [&](const auto &tileIntersectionsAccessor) {
-                            C = tileIntersectionsAccessor.cameraCount(
-                                static_cast<uint32_t>(means2d.size(0)));
-
+            C = tileIntersectionsAccessor.cameraCount(static_cast<uint32_t>(means2d.size(0)));
         },
         activeTiles,
         tilePixelMask,
@@ -945,26 +951,26 @@ callRasterizeBackwardWithTemplatedSharedChannels(
                               NUM_CHANNELS,
                               NUM_SHARED_CHANNELS,
                               IS_PACKED,
-                              TileIntersectionsT> args(means2d,
-                                                       conics,
-                                                       opacities,
-                                                       features,
-                                                       backgrounds,
-                                                       masks,
-                                                       tileIntersections,
-                                                       renderWindow,
-                                                       tileSize,
-                                                       0,
-                                                       reshapedRenderedAlphas,
-                                                       reshapedLastGaussianIds,
-                                                       reshapedDLossDRenderedFeatures,
-                                                       reshapedDLossDRenderedAlphas,
-                                                       outDLossDMeans2d,
-                                                       outDLossDConics,
-                                                       outDLossDFeatures,
-                                                       outDLossDOpacities,
-                                                       absGrad ? std::make_optional(outDLossDMeans2dAbs)
-                                                               : std::nullopt);
+                              TileIntersectionsT>
+            args(means2d,
+                 conics,
+                 opacities,
+                 features,
+                 backgrounds,
+                 masks,
+                 tileIntersections,
+                 renderWindow,
+                 tileSize,
+                 0,
+                 reshapedRenderedAlphas,
+                 reshapedLastGaussianIds,
+                 reshapedDLossDRenderedFeatures,
+                 reshapedDLossDRenderedAlphas,
+                 outDLossDMeans2d,
+                 outDLossDConics,
+                 outDLossDFeatures,
+                 outDLossDOpacities,
+                 absGrad ? std::make_optional(outDLossDMeans2dAbs) : std::nullopt);
 
         const size_t numChannels =
             (NUM_SHARED_CHANNELS == NUM_CHANNELS) ? NUM_CHANNELS : NUM_SHARED_CHANNELS + 1;
@@ -987,7 +993,8 @@ callRasterizeBackwardWithTemplatedSharedChannels(
                                    NUM_CHANNELS,
                                    NUM_SHARED_CHANNELS,
                                    IS_PACKED,
-                                   TileIntersectionsT><<<gridDim, blockDim, sharedMemSize, stream>>>(args);
+                                   TileIntersectionsT>
+            <<<gridDim, blockDim, sharedMemSize, stream>>>(args);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     };
 
@@ -1290,27 +1297,27 @@ callRasterizeBackwardPrivateUse1(
                                   NUM_CHANNELS,
                                   NUM_SHARED_CHANNELS,
                                   IS_PACKED,
-                                  DenseTileIntersections::Accessor> args(
-                means2d,
-                conics,
-                opacities,
-                features,
-                backgrounds,
-                masks,
-                DenseTileIntersections(tileOffsets, tileGaussianIds, tileSize).accessor(
-                    renderWindow, deviceTileOffset),
-                renderWindow,
-                tileSize,
-                deviceTileOffset,
-                reshapedRenderedAlphas,
-                reshapedLastGaussianIds,
-                reshapedDLossDRenderedFeatures,
-                reshapedDLossDRenderedAlphas,
-                outDLossDMeans2d,
-                outDLossDConics,
-                outDLossDFeatures,
-                outDLossDOpacities,
-                absGrad ? std::make_optional(outDLossDMeans2dAbs) : std::nullopt);
+                                  DenseTileIntersections::Accessor>
+                args(means2d,
+                     conics,
+                     opacities,
+                     features,
+                     backgrounds,
+                     masks,
+                     DenseTileIntersections(tileOffsets, tileGaussianIds, tileSize)
+                         .accessor(renderWindow, deviceTileOffset),
+                     renderWindow,
+                     tileSize,
+                     deviceTileOffset,
+                     reshapedRenderedAlphas,
+                     reshapedLastGaussianIds,
+                     reshapedDLossDRenderedFeatures,
+                     reshapedDLossDRenderedAlphas,
+                     outDLossDMeans2d,
+                     outDLossDConics,
+                     outDLossDFeatures,
+                     outDLossDOpacities,
+                     absGrad ? std::make_optional(outDLossDMeans2dAbs) : std::nullopt);
 
             const size_t numChannels =
                 (NUM_SHARED_CHANNELS == NUM_CHANNELS) ? NUM_CHANNELS : NUM_SHARED_CHANNELS + 1;

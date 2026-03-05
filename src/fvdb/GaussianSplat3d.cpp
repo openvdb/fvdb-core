@@ -375,9 +375,13 @@ GaussianSplat3d::projectGaussiansImpl(const torch::Tensor &worldToCameraMatrices
     }();
 
     // Intersect projected Gaussians with image tiles [non-differentiable]
-    const detail::ops::DenseTileIntersections tileIntersections(
-        ret.perGaussian2dMean, ret.perGaussianRadius, ret.perGaussianDepth, at::nullopt,
-        settings.tileSize, settings.imageHeight, settings.imageWidth);
+    const detail::ops::DenseTileIntersections tileIntersections(ret.perGaussian2dMean,
+                                                                ret.perGaussianRadius,
+                                                                ret.perGaussianDepth,
+                                                                at::nullopt,
+                                                                settings.tileSize,
+                                                                settings.imageHeight,
+                                                                settings.imageWidth);
     ret.tileOffsets     = tileIntersections.tileOffsets();     // [C, TH, TW]
     ret.tileGaussianIds = tileIntersections.tileGaussianIds(); // [TOT_INTERSECTIONS]
 
@@ -679,9 +683,13 @@ GaussianSplat3d::sparseRenderImpl(const JaggedTensor &pixelsToRender,
     // Render using unique (deduplicated) pixels
     const auto &renderPixels = state.hasDuplicates ? state.uniquePixelsToRender : pixelsToRender;
 
-    const detail::ops::SparseTileIntersections tileIntersections(
-        state.tileOffsets, state.tileGaussianIds, settings.tileSize, state.activeTiles,
-        state.tilePixelMask, state.tilePixelCumsum, state.pixelMap);
+    const detail::ops::SparseTileIntersections tileIntersections(state.tileOffsets,
+                                                                 state.tileGaussianIds,
+                                                                 settings.tileSize,
+                                                                 state.activeTiles,
+                                                                 state.tilePixelMask,
+                                                                 state.tilePixelCumsum,
+                                                                 state.pixelMap);
     const detail::ops::RenderWindow2D renderWindow{settings.imageWidth, settings.imageHeight, 0, 0};
     auto rasterizeResult =
         detail::autograd::RasterizeGaussiansToPixelsSparse::apply(renderPixels,
@@ -1072,8 +1080,8 @@ GaussianSplat3d::renderImagesFromWorld(const torch::Tensor &worldToCameraMatrice
         perGaussianDepth          = state.perGaussianDepth;
         perGaussianOpacity        = state.perGaussianOpacity;
         perGaussianRenderQuantity = state.perGaussianRenderQuantity;
-        tileIntersections = detail::ops::DenseTileIntersections(
-            state.tileOffsets, state.tileGaussianIds, tileSize);
+        tileIntersections =
+            detail::ops::DenseTileIntersections(state.tileOffsets, state.tileGaussianIds, tileSize);
     } else {
         // OpenCV camera models: use UT projection to compute radii/depths for tiling/sorting.
         // Rasterization itself is still performed with the 3DGS ray-ellipsoid kernel.
@@ -1123,9 +1131,13 @@ GaussianSplat3d::renderImagesFromWorld(const torch::Tensor &worldToCameraMatrice
         perGaussianRenderQuantity =
             evalSphericalHarmonicsImpl(shDegreeToUse, worldToCameraMatrices, perGaussianRadius);
 
-        tileIntersections = detail::ops::DenseTileIntersections(
-            perGaussian2dMean, perGaussianRadius, perGaussianDepth, at::nullopt, tileSize,
-            imageHeight, imageWidth);
+        tileIntersections = detail::ops::DenseTileIntersections(perGaussian2dMean,
+                                                                perGaussianRadius,
+                                                                perGaussianDepth,
+                                                                at::nullopt,
+                                                                tileSize,
+                                                                imageHeight,
+                                                                imageWidth);
     }
 
     const torch::Tensor distortionCoeffsForRaster = distortionCoeffs.has_value()
@@ -1547,7 +1559,7 @@ GaussianSplat3d::indexSelect(const torch::Tensor &indices) const {
     TORCH_CHECK_VALUE(indices.dim() == 1, "indices must be a 1D tensor");
     TORCH_CHECK_VALUE(indices.dtype() == torch::kInt64 || indices.dtype() == torch::kInt32,
                       "indices must be of type int64 or int32");
-    TORCH_CHECK_VALUE(indices.device() == indices.device(),
+    TORCH_CHECK_VALUE(indices.device() == mMeans.device(),
                       "indices must be on the same device as the GaussianSplat3d object");
 
     return tensorIndexGetImpl(indices);
@@ -1670,7 +1682,7 @@ GaussianSplat3d::indexSet(const torch::Tensor &indices, const GaussianSplat3d &o
     TORCH_CHECK_VALUE(indices.dim() == 1, "indices must be a 1D tensor");
     TORCH_CHECK_VALUE(indices.dtype() == torch::kInt64 || indices.dtype() == torch::kInt32,
                       "indices must be of type int64 or int32");
-    TORCH_CHECK_VALUE(indices.device() == indices.device(),
+    TORCH_CHECK_VALUE(indices.device() == mMeans.device(),
                       "indices must be on the same device as the GaussianSplat3d object");
 
     tensorIndexSetImpl(indices, other);
@@ -1832,11 +1844,11 @@ gaussianRenderJagged(const JaggedTensor &means,     // [N1 + N2 + ..., 3]
                                                                     radii.unsqueeze(0))[0];
         } else {
             const auto sh0 =
-                sh_coeffs_batched.index({0, Slice(), Slice()}).unsqueeze(0);    // [1, nnz, 3]
+                sh_coeffs_batched.index({0, Slice(), Slice()}).unsqueeze(0);   // [1, nnz, 3]
             const auto shN =
-                sh_coeffs_batched.index({Slice(1, None), Slice(), Slice()});    // [K-1, nnz, 3]
+                sh_coeffs_batched.index({Slice(1, None), Slice(), Slice()});   // [K-1, nnz, 3]
             auto [camtoworlds, info] = torch::linalg_inv_ex(viewmats.jdata()); // [ccz, 4, 4]
-            const torch::Tensor dirs        = means.jdata().index({gaussian_ids, Slice()}) -
+            const torch::Tensor dirs = means.jdata().index({gaussian_ids, Slice()}) -
                                        camtoworlds.index({camera_ids, Slice(None, 3), 3});
             renderQuantities =
                 detail::autograd::EvaluateSphericalHarmonics::apply(actualShDegree,
