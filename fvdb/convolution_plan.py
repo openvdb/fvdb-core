@@ -82,9 +82,7 @@ class _PredGatherIGemmConvFn(torch.autograd.Function):
         kernel_size: int,
         stride: int,
     ) -> torch.Tensor:
-        output = _fvdb_cpp.pred_gather_igemm_conv(
-            features, weights, feature_grid, output_grid, kernel_size, stride
-        )
+        output = _fvdb_cpp.pred_gather_igemm_conv(features, weights, feature_grid, output_grid, kernel_size, stride)
         ctx.save_for_backward(features, weights)
         ctx.gs_topo = gs_topo
         return output
