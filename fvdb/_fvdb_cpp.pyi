@@ -86,6 +86,14 @@ def gs_conv_transpose_backward(
     weights: torch.Tensor,
     topology: GatherScatterDefaultTopology,
 ) -> tuple[torch.Tensor, torch.Tensor]: ...
+# PredGatherIGemm convolution (SM80 CUTLASS IGEMM)
+def pred_gather_igemm_conv(
+    features: torch.Tensor,
+    weights: torch.Tensor,
+    feature_grid: GridBatch,
+    output_grid: GridBatch,
+) -> torch.Tensor: ...
+
 def gs_conv_fused(
     features: torch.Tensor,
     weights: torch.Tensor,

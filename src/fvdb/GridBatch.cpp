@@ -1265,4 +1265,13 @@ GridBatch::gatherScatterConvFusedTransposeBackward(torch::Tensor grad_output,
                                                                       stride.value());
 }
 
+torch::Tensor
+GridBatch::predGatherIGemmConv(torch::Tensor features,
+                               torch::Tensor weights,
+                               const GridBatch &feature_grid,
+                               const GridBatch &output_grid) {
+    return detail::ops::predGatherIGemmSparseConv(
+        features, weights, *feature_grid.mImpl, *output_grid.mImpl);
+}
+
 } // namespace fvdb

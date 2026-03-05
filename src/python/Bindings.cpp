@@ -489,6 +489,25 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("topology"));
 
     // -----------------------------------------------------------------------
+    // PredGatherIGemm convolution (CUTLASS IGEMM, SM80+)
+    // -----------------------------------------------------------------------
+
+    m.def(
+        "pred_gather_igemm_conv",
+        [](torch::Tensor features,
+           torch::Tensor weights,
+           const fvdb::GridBatch &feature_grid,
+           const fvdb::GridBatch &output_grid) -> torch::Tensor {
+            return fvdb::GridBatch::predGatherIGemmConv(
+                features, weights, feature_grid, output_grid);
+        },
+        "PredGatherIGemm forward sparse convolution (SM80 CUTLASS IGEMM).",
+        py::arg("features"),
+        py::arg("weights"),
+        py::arg("feature_grid"),
+        py::arg("output_grid"));
+
+    // -----------------------------------------------------------------------
     // Fused gather-scatter convolution (no precomputed topology, small-C)
     // -----------------------------------------------------------------------
 

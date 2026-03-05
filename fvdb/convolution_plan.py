@@ -108,6 +108,34 @@ class _GatherScatterFusedConvFn(torch.autograd.Function):
         return grad_feat, grad_w, None, None, None, None, None
 
 
+class _PredGatherIGemmConvFn(torch.autograd.Function):
+    """Autograd wrapper for the PredGatherIGemm CUTLASS IGEMM convolution.
+
+    Forward uses the IGEMM kernel; backward falls back to GatherScatterDefault.
+    """
+
+    @staticmethod
+    def forward(  # type: ignore[override]
+        ctx,
+        features: torch.Tensor,
+        weights: torch.Tensor,
+        feature_grid: _fvdb_cpp.GridBatch,
+        output_grid: _fvdb_cpp.GridBatch,
+        gs_topo: _fvdb_cpp.GatherScatterDefaultTopology,
+    ) -> torch.Tensor:
+        output = _fvdb_cpp.pred_gather_igemm_conv(features, weights, feature_grid, output_grid)
+        ctx.save_for_backward(features, weights)
+        ctx.gs_topo = gs_topo
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, None, None, None]:  # type: ignore[override]
+        features, weights = ctx.saved_tensors
+        grad_output = grad_output.contiguous()
+        grad_feat, grad_w = _fvdb_cpp.gs_conv_backward(grad_output, features, weights, ctx.gs_topo)
+        return grad_feat, grad_w, None, None, None
+
+
 # ============================================================
 #  Backend data classes — cached precomputed data per method
 # ============================================================
@@ -141,7 +169,23 @@ class _GatherScatterFusedBackend:
     pass
 
 
-_Backend = _MatmulBackend | _DenseBackend | _GatherScatterBackend | _GatherScatterFusedBackend
+@dataclass(frozen=True)
+class _PredGatherIGemmBackend:
+    """CUTLASS IGEMM convolution with predicated gather (SM80+, forward only).
+
+    The GatherScatterDefault topology is precomputed for backward pass fallback.
+    """
+
+    gs_topology: _fvdb_cpp.GatherScatterDefaultTopology
+
+
+_Backend = (
+    _MatmulBackend
+    | _DenseBackend
+    | _GatherScatterBackend
+    | _GatherScatterFusedBackend
+    | _PredGatherIGemmBackend
+)
 
 
 @dataclass(frozen=True)
@@ -670,6 +714,20 @@ class ConvolutionPlan:
                 raise ValueError("Gather-scatter fused convolution returned non-tensor")
             result = self._target_grid.jagged_like(out_tensor)
 
+        elif isinstance(backend, _PredGatherIGemmBackend):
+            out_tensor = _PredGatherIGemmConvFn.apply(
+                data.jdata,
+                weights,
+                self._source_grid._impl,
+                self._target_grid._impl,
+                backend.gs_topology,
+            )
+            if out_tensor is None:
+                raise ValueError("PredGatherIGemm convolution returned None")
+            if not isinstance(out_tensor, torch.Tensor):
+                raise ValueError("PredGatherIGemm convolution returned non-tensor")
+            result = self._target_grid.jagged_like(out_tensor)
+
         else:
             raise TypeError(f"Unknown backend type: {type(backend)}")
 
@@ -793,6 +851,22 @@ class ConvolutionPlan:
         # Fused gather-scatter — no precomputed topology, Python autograd
         if backend_name == "gather_scatter_fused":
             return _GatherScatterFusedBackend()
+
+        # PredGatherIGemm — CUTLASS IGEMM on SM80+, forward only
+        if backend_name == "pred_gather_igemm":
+            if transposed:
+                raise ValueError("PredGatherIGemm backend does not support transposed convolution.")
+            if not _vec_is_all(kernel_size, 3):
+                raise ValueError("PredGatherIGemm currently only supports 3x3x3 kernels.")
+            if not _vec_is_all(stride, 1):
+                raise ValueError("PredGatherIGemm currently only supports stride 1.")
+            for cin, cout in channel_pairs:
+                if cin % 32 != 0 or cout % 32 != 0:
+                    raise ValueError(
+                        f"PredGatherIGemm requires channel counts divisible by 32, got ({cin}, {cout})."
+                    )
+            gs_topo = _fvdb_cpp.gs_build_topology(source_grid._impl, target_grid._impl, kernel_size, stride)
+            return _PredGatherIGemmBackend(gs_topology=gs_topo)
 
         raise ValueError(f"Unknown backend: {backend_name!r}")
 

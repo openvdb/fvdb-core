@@ -162,6 +162,7 @@ ConfigureTest(GatherScatterDefaultConvTest "GatherScatterDefaultConvTest.cu")
 ConfigureTest(GroupedGemmConvTest "GroupedGemmConvTest.cu")
 ConfigureTest(CutlassGroupedGemmConvTest "CutlassGroupedGemmConvTest.cu")
 ConfigureTest(SifakisRefConvTest "SifakisRefConvTest.cu")
+ConfigureTest(PredGatherIGemmTest "PredGatherIGemmTest.cu")
 
 if(NOT NANOVDB_EDITOR_SKIP)
   #ConfigureTest(ViewerTest "ViewerTest.cpp")
