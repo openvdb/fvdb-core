@@ -168,6 +168,13 @@ class GaussianSplat3d {
         torch::Tensor tilePixelCumsum; // [num_active_tiles] - cumulative sum of active pixels
         torch::Tensor pixelMap;        // [num_active_pixels] - mapping for pixel write order
         // Note: tileOffsets (inherited) is 1D [num_active_tiles + 1] in sparse mode
+
+        // Duplicate pixel handling: when pixelsToRender contains duplicates, we deduplicate
+        // before rendering and scatter results back. inverseIndices maps each original pixel
+        // position to its corresponding unique pixel index.
+        torch::Tensor inverseIndices;      // [total_pixels] maps original -> unique index
+        JaggedTensor uniquePixelsToRender; // deduplicated pixels passed to computeSparseInfo
+        bool hasDuplicates = false;
     };
 
   public:

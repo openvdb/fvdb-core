@@ -57,6 +57,7 @@ class _GatherScatterConvFn(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, None, None]:  # type: ignore[override]
         features, weights = ctx.saved_tensors
+        grad_output = grad_output.contiguous()
         if ctx.transposed:
             grad_feat, grad_w = _fvdb_cpp.gs_conv_transpose_backward(grad_output, features, weights, ctx.topo)
         else:

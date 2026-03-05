@@ -81,7 +81,7 @@ jobs:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
         run: |
@@ -90,7 +90,8 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$(pwd)"
-          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+          git fetch origin ${{ github.event.pull_request.head.sha }}
+          git branch pr_branch FETCH_HEAD
 
       - name: Merge PR branch into base
         if: github.event_name == 'pull_request_target'
@@ -250,7 +251,7 @@ jobs:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
         run: |
@@ -259,7 +260,8 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$(pwd)"
-          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+          git fetch origin ${{ github.event.pull_request.head.sha }}
+          git branch pr_branch FETCH_HEAD
 
       - name: Merge PR branch into base
         if: github.event_name == 'pull_request_target'
@@ -352,7 +354,7 @@ jobs:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
 
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
@@ -362,7 +364,8 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$(pwd)"
-          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+          git fetch origin ${{ github.event.pull_request.head.sha }}
+          git branch pr_branch FETCH_HEAD
 
       - name: Merge PR branch into base
         if: github.event_name == 'pull_request_target'
@@ -441,7 +444,7 @@ jobs:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
 
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
@@ -451,7 +454,8 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$(pwd)"
-          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+          git fetch origin ${{ github.event.pull_request.head.sha }}
+          git branch pr_branch FETCH_HEAD
 
       - name: Merge PR branch into base
         if: github.event_name == 'pull_request_target'

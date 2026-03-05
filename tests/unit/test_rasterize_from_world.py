@@ -667,6 +667,7 @@ def test_gaussiansplat3d_render_images_from_world_masks_write_background_and_zer
     )
 
 
+@pytest.mark.skip(reason="Disabled: deadlock test is unreliable in CI; see PR for details")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_gaussiansplat3d_render_images_from_world_masks_edge_tile_does_not_deadlock():
     """

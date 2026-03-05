@@ -17,10 +17,12 @@ dependencies:
   - cuda-version=12.9
   - cxx-compiler
   - gcc_linux-64=13
+  - gh
   - git
   - gitpython
   - gxx_linux-64=13
   - ipython
+  - ipykernel
   - jupyterlab
   - libclang
   - libcublas-dev
@@ -33,6 +35,7 @@ dependencies:
   - matplotlib
   - msgpack-python
   - myst-parser
+  - nbmake
   - ninja
   - numpy
   - openssl
