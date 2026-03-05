@@ -94,6 +94,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/convolution/GatherScatterDefault.cu
     fvdb/detail/ops/convolution/GatherScatterFused.cu
     fvdb/detail/ops/convolution/GroupedGemm.cu
+    fvdb/detail/ops/convolution/sifakis_ref.cu
     fvdb/detail/ops/CoordsInGrid.cu
     fvdb/detail/ops/CubesInGrid.cu
     fvdb/detail/ops/DownsampleGridAvgPool.cu
