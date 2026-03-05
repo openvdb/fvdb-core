@@ -6,6 +6,7 @@
 #include <fvdb/detail/ops/gsplat/GaussianRasterize.cuh>
 #include <fvdb/detail/ops/gsplat/GaussianRasterizeForward.h>
 #include <fvdb/detail/ops/gsplat/GaussianUtils.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianUtils.h>
 #include <fvdb/detail/ops/gsplat/GaussianVectorTypes.cuh>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
@@ -478,13 +479,54 @@ launchRasterizeForwardKernels(
 
     auto isSparse      = activeTiles.has_value();
     uint32_t tileCount = isSparse ? activeTiles.value().size(0) : C * tileExtentH * tileExtentW;
+
+    std::vector<cudaEvent_t> events(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+    }
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getStreamFromPool(false, deviceId);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
 
         uint32_t deviceTileOffset, deviceTileCount;
         std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
+        uint32_t cameraOffset                       = deviceTileOffset / (tileCount / C);
+        uint32_t cameraCount =
+            cuda::ceil_div(deviceTileOffset + deviceTileCount, tileCount / C) - cameraOffset;
+        if (deviceTileCount) {
+            auto reshapedAlphas =
+                outAlphas.jdata().view({C, renderWindow.height, renderWindow.width, 1});
+            auto reshapedLastIds =
+                outLastIds.jdata().view({C, renderWindow.height, renderWindow.width});
+            auto reshapedFeatures =
+                outFeatures.jdata().view({C, renderWindow.height, renderWindow.width, channels});
 
+            std::vector<torch::Tensor> tensors = {means2d,
+                                                  conics,
+                                                  features,
+                                                  opacities,
+                                                  tileOffsets,
+                                                  reshapedAlphas,
+                                                  reshapedLastIds,
+                                                  reshapedFeatures};
+            perCameraPrefetchBatchAsync(tensors, cameraOffset, cameraCount, deviceId, stream);
+        }
+        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+    }
+
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+        C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
+
+        uint32_t deviceTileOffset, deviceTileCount;
+        std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
         if (deviceTileCount) {
             auto args = RasterizeForwardArgs<ScalarType, NUM_CHANNELS, IS_PACKED>(means2d,
                                                                                   conics,
@@ -504,26 +546,6 @@ launchRasterizeForwardKernels(
                                                                                   tilePixelMask,
                                                                                   tilePixelCumsum,
                                                                                   pixelMap);
-
-            TORCH_CHECK(means2d.is_contiguous());
-            TORCH_CHECK(conics.is_contiguous());
-            TORCH_CHECK(features.is_contiguous());
-
-            // Compute the number of bytes from data_ptr() to the end of the underlying
-            // storage. This safely handles both non-contiguous expanded views (where
-            // numel() exceeds actual storage) and sliced tensors with non-zero storage_offset.
-            auto prefetchBytes = [](const torch::Tensor &t) -> size_t {
-                return t.storage().nbytes() - t.storage_offset() * t.element_size();
-            };
-
-            nanovdb::util::cuda::memPrefetchAsync(
-                means2d.const_data_ptr<ScalarType>(), prefetchBytes(means2d), deviceId, stream);
-            nanovdb::util::cuda::memPrefetchAsync(
-                conics.const_data_ptr<ScalarType>(), prefetchBytes(conics), deviceId, stream);
-            nanovdb::util::cuda::memPrefetchAsync(
-                opacities.const_data_ptr<ScalarType>(), prefetchBytes(opacities), deviceId, stream);
-            nanovdb::util::cuda::memPrefetchAsync(
-                features.const_data_ptr<ScalarType>(), prefetchBytes(features), deviceId, stream);
 
             // Thread blocks cooperatively cache a tile of Gaussians in shared memory
             const uint32_t sharedMem = getSharedMemRequirements<ScalarType>(tileSize);
