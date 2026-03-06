@@ -280,15 +280,14 @@ struct RasterizeContributingGaussianIdsArgs {
         const fvdb::JaggedTensor &outIds,     // [C, imgH, imgW, numDepthSamples]
         const fvdb::JaggedTensor &outWeights) // [C, imgH, imgW, numDepthSamples]
 
-        : commonArgs(
-              means2d,
-              conics,
-              opacities,
-              std::nullopt,
-              backgrounds,
-              masks,
-              tileIntersections,
-              RenderWindow2D{imageWidth, imageHeight, imageOriginW, imageOriginH}),
+        : commonArgs(means2d,
+                     conics,
+                     opacities,
+                     std::nullopt,
+                     backgrounds,
+                     masks,
+                     tileIntersections,
+                     RenderWindow2D{imageWidth, imageHeight, imageOriginW, imageOriginH}),
           mNumDepthSamples(numDepthSamples),
           mOutIds(initJaggedAccessor<int32_t, 2>(outIds, "outIds")),
           mOutWeights(initJaggedAccessor<ScalarType, 2>(outWeights, "outWeights")) {}
@@ -357,10 +356,9 @@ struct RasterizeContributingGaussianIdsArgs {
         const ScalarType px = col + commonArgs.mRenderWindow.originW + ScalarType{0.5f};
         const ScalarType py = row + commonArgs.mRenderWindow.originH + ScalarType{0.5f};
 
-        const auto pixIdx = pixelIsActive
-                                ? commonArgs.mTileIntersections.pixelIndexFromBlock(
-                                      cameraId, row, col, activePixelIndex, blockIdx.x)
-                                : 0;
+        const auto pixIdx = pixelIsActive ? commonArgs.mTileIntersections.pixelIndexFromBlock(
+                                                cameraId, row, col, activePixelIndex, blockIdx.x)
+                                          : 0;
 
         // collect and process batches of gaussians
         // each thread loads one gaussian at a time before rasterizing its
@@ -384,10 +382,8 @@ struct RasterizeContributingGaussianIdsArgs {
             if (pixelIsActive) { // skip inactive sparse pixels
                 const uint32_t batchStart =
                     commonArgs.gaussianBatchStartFrontToBack(firstGaussianIdInBlock, b, blockSize);
-                const uint32_t batchSize =
-                    commonArgs.gaussianBatchSizeFrontToBack(lastGaussianIdInBlock,
-                                                            batchStart,
-                                                            blockSize);
+                const uint32_t batchSize = commonArgs.gaussianBatchSizeFrontToBack(
+                    lastGaussianIdInBlock, batchStart, blockSize);
                 for (uint32_t t = 0; (t < batchSize) && !done; ++t) {
                     const Gaussian2D<ScalarType> gaussian = sharedGaussians[t];
 
@@ -466,8 +462,9 @@ rasterizeContributingGaussianIdsForward(
     // activePixelIndex: Index of this pixel in the output for the block if it is active (sparse
     // mode only).
     __shared__ typename TileIntersectionsT::ActivePixelScratch activePixelScratch;
-    const auto [pixelInImage, activePixelIndex] = commonArgs.mTileIntersections.activePixelIndexFromBlock(
-        blockIdx.x, threadIdx.y, threadIdx.x, row, col, activePixelScratch);
+    const auto [pixelInImage, activePixelIndex] =
+        commonArgs.mTileIntersections.activePixelIndexFromBlock(
+            blockIdx.x, threadIdx.y, threadIdx.x, row, col, activePixelScratch);
 
     if (commonArgs.mHasMasks && pixelInImage && !commonArgs.mMasks[cameraId][tileRow][tileCol]) {
         auto pixIdx = commonArgs.mTileIntersections.pixelIndexFromBlock(
@@ -596,7 +593,10 @@ launchRasterizeContributingGaussianIdsForwardKernel(
     dispatchTileIntersectionsAccessor(
         tileOffsets,
         tileGaussianIds,
-        RenderWindow2D{settings.imageWidth, settings.imageHeight, settings.imageOriginW, settings.imageOriginH},
+        RenderWindow2D{settings.imageWidth,
+                       settings.imageHeight,
+                       settings.imageOriginW,
+                       settings.imageOriginH},
         settings.tileSize,
         0,
         [&](const auto &tileIntersectionsAccessor) {
@@ -637,7 +637,10 @@ launchRasterizeContributingGaussianIdsForwardKernel(
     dispatchTileIntersectionsAccessor(
         tileOffsets,
         tileGaussianIds,
-        RenderWindow2D{settings.imageWidth, settings.imageHeight, settings.imageOriginW, settings.imageOriginH},
+        RenderWindow2D{settings.imageWidth,
+                       settings.imageHeight,
+                       settings.imageOriginW,
+                       settings.imageOriginH},
         settings.tileSize,
         0,
         [&](const auto &tileIntersectionsAccessor) {
@@ -645,7 +648,6 @@ launchRasterizeContributingGaussianIdsForwardKernel(
                               "tileOffsets width must match the number of tiles in image size");
             TORCH_CHECK_VALUE(tileIntersectionsAccessor.numTilesH() == tileExtentH,
                               "tileOffsets height must match the number of tiles in image size");
-
         },
         activeTiles,
         tilePixelMask,
@@ -707,7 +709,7 @@ launchRasterizeContributingGaussianIdsForwardKernel(
     const uint32_t sharedMem =
         settings.tileSize * settings.tileSize * sizeof(Gaussian2D<ScalarType>);
 
-    const at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+    const at::cuda::CUDAStream stream      = at::cuda::getCurrentCUDAStream();
     const auto launchWithTileIntersections = [&](auto tileIntersections) {
         using TileIntersectionsT = decltype(tileIntersections);
         if (cudaFuncSetAttribute(
@@ -744,7 +746,10 @@ launchRasterizeContributingGaussianIdsForwardKernel(
     dispatchTileIntersectionsAccessor(
         tileOffsets,
         tileGaussianIds,
-        RenderWindow2D{settings.imageWidth, settings.imageHeight, settings.imageOriginW, settings.imageOriginH},
+        RenderWindow2D{settings.imageWidth,
+                       settings.imageHeight,
+                       settings.imageOriginW,
+                       settings.imageOriginH},
         settings.tileSize,
         0,
         [&](const auto &tileIntersectionsAccessor) {

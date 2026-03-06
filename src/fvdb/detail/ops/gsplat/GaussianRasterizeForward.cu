@@ -50,9 +50,9 @@ struct RasterizeForwardArgs {
         // output JaggedTensors:
         // In Dense mode, first dimension X = C * renderHeight * renderWidth
         // In Sparse mode, first dimension X = C * nPixels_i (i from 0 to C-1)
-        const fvdb::JaggedTensor &outFeatures,                          // [X, NUM_CHANNELS]
-        const fvdb::JaggedTensor &outAlphas,                            // [X, 1]
-        const fvdb::JaggedTensor &outLastIds) // [X]
+        const fvdb::JaggedTensor &outFeatures, // [X, NUM_CHANNELS]
+        const fvdb::JaggedTensor &outAlphas,   // [X, 1]
+        const fvdb::JaggedTensor &outLastIds)  // [X]
         : commonArgs(means2d,
                      conics,
                      opacities,
@@ -164,10 +164,8 @@ struct RasterizeForwardArgs {
             if (pixelIsActive) { // skip inactive sparse pixels
                 const uint32_t batchStart =
                     commonArgs.gaussianBatchStartFrontToBack(firstGaussianIdInBlock, b, blockSize);
-                const uint32_t batchSize =
-                    commonArgs.gaussianBatchSizeFrontToBack(lastGaussianIdInBlock,
-                                                            batchStart,
-                                                            blockSize);
+                const uint32_t batchSize = commonArgs.gaussianBatchSizeFrontToBack(
+                    lastGaussianIdInBlock, batchStart, blockSize);
                 for (uint32_t t = 0; (t < batchSize) && !done; ++t) {
                     const Gaussian2D<ScalarType> gaussian = sharedGaussians[t];
 
@@ -237,8 +235,9 @@ rasterizeGaussiansForward(
     // activePixelIndex: Index of this pixel in the output for the block if it is active (sparse
     // mode only).
     __shared__ typename TileIntersectionsT::ActivePixelScratch activePixelScratch;
-    const auto [pixelInImage, activePixelIndex] = commonArgs.mTileIntersections.activePixelIndexFromBlock(
-        blockIdx.x, threadIdx.y, threadIdx.x, row, col, activePixelScratch);
+    const auto [pixelInImage, activePixelIndex] =
+        commonArgs.mTileIntersections.activePixelIndexFromBlock(
+            blockIdx.x, threadIdx.y, threadIdx.x, row, col, activePixelScratch);
 
     // Parity with classic semantics: masked tiles write background and contribute nothing.
     //
@@ -309,14 +308,13 @@ launchRasterizeForwardKernel(
         tileSize,
         0,
         [&](const auto &tileIntersectionsAccessor) {
-                            TORCH_CHECK_VALUE(tileIntersectionsAccessor.numTilesW() ==
-                                      renderWindow.tileExtentW(tileSize),
-                                  "tileOffsets width must match the number of tiles in image size");
-                TORCH_CHECK_VALUE(tileIntersectionsAccessor.numTilesH() ==
-                                      renderWindow.tileExtentH(tileSize),
-                                  "tileOffsets height must match the number of tiles in image size");
+            TORCH_CHECK_VALUE(tileIntersectionsAccessor.numTilesW() ==
+                                  renderWindow.tileExtentW(tileSize),
+                              "tileOffsets width must match the number of tiles in image size");
+            TORCH_CHECK_VALUE(tileIntersectionsAccessor.numTilesH() ==
+                                  renderWindow.tileExtentH(tileSize),
+                              "tileOffsets height must match the number of tiles in image size");
             C = tileIntersectionsAccessor.cameraCount(static_cast<uint32_t>(means2d.size(0)));
-
         },
         activeTiles,
         tilePixelMask,
@@ -327,7 +325,7 @@ launchRasterizeForwardKernel(
 
     // Get C from tileOffsets for dense mode (means2d.size(0) is nnz in packed mode)
     // For sparse mode, C is unused, only used for output sizing for dense mode
-    const uint32_t N        = packed ? 0 : means2d.size(1);                   // number of gaussians
+    const uint32_t N        = packed ? 0 : means2d.size(1); // number of gaussians
     const uint32_t channels = features.size(-1);
 
     TORCH_CHECK_VALUE(pixelMap.has_value() == pixelsToRender.has_value(),
@@ -414,12 +412,12 @@ launchRasterizeForwardKernel(
     // because they are packed into a single JaggedTensor so that the output code is the same
     // for dense and sparse modes.
     if (!activeTiles.has_value()) {
-        outFeatures = fvdb::JaggedTensor(outFeatures.jdata().view(
-            {C, renderWindow.height, renderWindow.width, channels}));
-        outAlphas   = fvdb::JaggedTensor(outAlphas.jdata().view(
-            {C, renderWindow.height, renderWindow.width, 1}));
-        outLastIds  = fvdb::JaggedTensor(outLastIds.jdata().view(
-            {C, renderWindow.height, renderWindow.width}));
+        outFeatures = fvdb::JaggedTensor(
+            outFeatures.jdata().view({C, renderWindow.height, renderWindow.width, channels}));
+        outAlphas = fvdb::JaggedTensor(
+            outAlphas.jdata().view({C, renderWindow.height, renderWindow.width, 1}));
+        outLastIds = fvdb::JaggedTensor(
+            outLastIds.jdata().view({C, renderWindow.height, renderWindow.width}));
     }
 
     return std::make_tuple(outFeatures, outAlphas, outLastIds);
@@ -546,8 +544,8 @@ launchRasterizeForwardKernels(
                 features,
                 backgrounds,
                 masks,
-                DenseTileIntersections(tileOffsets, tileGaussianIds, tileSize).accessor(
-                    renderWindow, deviceTileOffset),
+                DenseTileIntersections(tileOffsets, tileGaussianIds, tileSize)
+                    .accessor(renderWindow, deviceTileOffset),
                 renderWindow,
                 tileSize,
                 deviceTileOffset,
@@ -578,11 +576,8 @@ launchRasterizeForwardKernels(
             rasterizeGaussiansForward<ScalarType,
                                       NUM_CHANNELS,
                                       IS_PACKED,
-                                      DenseTileIntersections::Accessor><<<gridDim,
-                                                                           blockDim,
-                                                                           sharedMem,
-                                                                           stream>>>(
-                args);
+                                      DenseTileIntersections::Accessor>
+                <<<gridDim, blockDim, sharedMem, stream>>>(args);
 
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
@@ -596,10 +591,10 @@ launchRasterizeForwardKernels(
     if (!isSparse) {
         outFeatures = fvdb::JaggedTensor(
             outFeatures.jdata().view({C, renderWindow.height, renderWindow.width, channels}));
-        outAlphas =
-            fvdb::JaggedTensor(outAlphas.jdata().view({C, renderWindow.height, renderWindow.width, 1}));
-        outLastIds =
-            fvdb::JaggedTensor(outLastIds.jdata().view({C, renderWindow.height, renderWindow.width}));
+        outAlphas = fvdb::JaggedTensor(
+            outAlphas.jdata().view({C, renderWindow.height, renderWindow.width, 1}));
+        outLastIds = fvdb::JaggedTensor(
+            outLastIds.jdata().view({C, renderWindow.height, renderWindow.width}));
     }
 
     return std::make_tuple(outFeatures, outAlphas, outLastIds);

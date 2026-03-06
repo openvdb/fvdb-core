@@ -196,8 +196,20 @@ RasterizeGaussiansToPixelsFromWorld3DGS::backward(
     Variable dOpacities = std::get<4>(grads);
 
     // Return gradients in the same order as forward inputs (excluding ctx).
-    return {dMeans,     dQuats,     dLogScales, dFeatures,  dOpacities, Variable(), Variable(),
-            Variable(), Variable(), Variable(), Variable(), Variable(), Variable(), Variable(),
+    return {dMeans,
+            dQuats,
+            dLogScales,
+            dFeatures,
+            dOpacities,
+            Variable(),
+            Variable(),
+            Variable(),
+            Variable(),
+            Variable(),
+            Variable(),
+            Variable(),
+            Variable(),
+            Variable(),
             Variable()};
 }
 
