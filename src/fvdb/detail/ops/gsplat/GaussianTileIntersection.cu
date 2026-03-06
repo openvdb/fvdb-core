@@ -1301,6 +1301,76 @@ DenseTileIntersections::accessor(const RenderWindow2D &renderWindow, uint32_t bl
 }
 #endif
 
+SparseDenseTileIntersections::SparseDenseTileIntersections(torch::Tensor tileOffsets,
+                                                           torch::Tensor tileGaussianIds,
+                                                           uint32_t tileSize,
+                                                           torch::Tensor activeTiles,
+                                                           torch::Tensor tilePixelMask,
+                                                           torch::Tensor tilePixelCumsum,
+                                                           torch::Tensor pixelMap)
+    : mTileOffsets(std::move(tileOffsets)), mTileGaussianIds(std::move(tileGaussianIds)),
+      mTileSize(tileSize), mActiveTiles(std::move(activeTiles)),
+      mTilePixelMask(std::move(tilePixelMask)), mTilePixelCumsum(std::move(tilePixelCumsum)),
+      mPixelMap(std::move(pixelMap)) {}
+
+const torch::Tensor &
+SparseDenseTileIntersections::tileOffsets() const {
+    return mTileOffsets;
+}
+
+const torch::Tensor &
+SparseDenseTileIntersections::tileGaussianIds() const {
+    return mTileGaussianIds;
+}
+
+uint32_t
+SparseDenseTileIntersections::tileSize() const {
+    return mTileSize;
+}
+
+const torch::Tensor &
+SparseDenseTileIntersections::activeTiles() const {
+    return mActiveTiles;
+}
+
+const torch::Tensor &
+SparseDenseTileIntersections::tilePixelMask() const {
+    return mTilePixelMask;
+}
+
+const torch::Tensor &
+SparseDenseTileIntersections::tilePixelCumsum() const {
+    return mTilePixelCumsum;
+}
+
+const torch::Tensor &
+SparseDenseTileIntersections::pixelMap() const {
+    return mPixelMap;
+}
+
+int64_t
+SparseDenseTileIntersections::totalIntersections() const {
+    return mTileGaussianIds.size(0);
+}
+
+#if defined(__CUDACC__)
+SparseDenseTileIntersections::Accessor
+SparseDenseTileIntersections::accessor(const RenderWindow2D &renderWindow,
+                                       uint32_t blockOffset) const {
+    return Accessor(mTileOffsets.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
+                    mTileGaussianIds.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>(),
+                    static_cast<uint32_t>(mTileOffsets.size(0)),
+                    mActiveTiles.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>(),
+                    mTilePixelMask.packed_accessor64<uint64_t, 2, torch::RestrictPtrTraits>(),
+                    mTilePixelCumsum.packed_accessor64<int64_t, 1, torch::RestrictPtrTraits>(),
+                    mPixelMap.packed_accessor64<int64_t, 1, torch::RestrictPtrTraits>(),
+                    renderWindow,
+                    mTileSize,
+                    blockOffset,
+                    static_cast<int32_t>(mTileGaussianIds.size(0)));
+}
+#endif
+
 SparseTileIntersections::SparseTileIntersections(
     torch::Tensor tileOffsets,
     torch::Tensor tileGaussianIds,
@@ -1402,11 +1472,7 @@ SparseTileIntersections::totalIntersections() const {
 #if defined(__CUDACC__)
 SparseTileIntersections::Accessor
 SparseTileIntersections::accessor(const RenderWindow2D &renderWindow, uint32_t blockOffset) const {
-    auto dummyDense = torch::empty({0, 0, 0}, mTileOffsets.options());
     return Accessor(mTileOffsets.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>(),
-                    dummyDense.packed_accessor64<int32_t, 3, torch::RestrictPtrTraits>(),
-                    false,
-                    0,
                     mTileGaussianIds.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>(),
                     mActiveTiles.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>(),
                     mTilePixelMask.packed_accessor64<uint64_t, 2, torch::RestrictPtrTraits>(),
