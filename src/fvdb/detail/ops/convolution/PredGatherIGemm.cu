@@ -330,13 +330,13 @@ namespace gather_util {
 
 using namespace cute;
 
-template <class Index> struct IndexedGather {
+template <class Index, int Offset = 0> struct IndexedGather {
     CUTE_HOST_DEVICE constexpr IndexedGather(Index const *indices = {}) : indices_(indices) {}
 
     template <typename I>
     CUTE_HOST_DEVICE constexpr Index
     operator()(I i) const {
-        return indices_[i];
+        return indices_[i] + Index(Offset);
     }
 
     CUTE_HOST_DEVICE friend void
@@ -444,13 +444,15 @@ using namespace cute;
 // Templatized convolution geometry
 // ---------------------------------------------------------------------------
 
-template <int T_, int R_, int S_, int STx_, int STy_, int STz_> struct Geometry {
+template <int T_, int R_, int S_, int STx_, int STy_, int STz_, int KoutDenom_> struct Geometry {
     static constexpr int T   = T_;
     static constexpr int R   = R_;
     static constexpr int S   = S_;
     static constexpr int STx = STx_;
     static constexpr int STy = STy_;
     static constexpr int STz = STz_;
+
+    static_assert(KoutDenom_ == 32 || KoutDenom_ == 128, "KoutDenom must be 32 or 128");
 
     static constexpr int Z = 4;
     static constexpr int P = 2;
@@ -481,7 +483,7 @@ template <int T_, int R_, int S_, int STx_, int STy_, int STz_> struct Geometry 
     }
 
     static constexpr int TC = 32;
-    static constexpr int TK = 32;
+    static constexpr int TK = KoutDenom_;
 
     static constexpr int ZZ = 1;
     static constexpr int PP = 2;
@@ -516,9 +518,6 @@ template <int T_, int R_, int S_, int STx_, int STy_, int STz_> struct Geometry 
         return CHx * CHy * CHz;
     }
 };
-
-// Alias for the currently supported configuration
-using Geometry3x3x3 = Geometry<3, 3, 3, 1, 1, 1>;
 
 // ---------------------------------------------------------------------------
 // CuTe layout construction for the IGEMM
@@ -562,10 +561,12 @@ template <class SettingsT> struct Layouts {
                             STz * EG),
                 make_stride(EC, CHy * CHz * EG, CHz * EG, EG)));
 
-        auto xformed_act_gather_outer = make_layout(
-            make_shape(_1{}, _1{}),
-            make_stride(gather_util::CustomStride{gather_util::IndexedGather{gather_idx_buf}, C},
-                        _1{}));
+        auto xformed_act_gather_outer =
+            make_layout(make_shape(_1{}, _1{}),
+                        make_stride(
+                            gather_util::CustomStride{
+                                gather_util::IndexedGather<uint64_t, -1>{gather_idx_buf}, C},
+                            _1{}));
 
         return composition(
             xformed_act_gather_outer, make_arithmetic_tuple(_0{}, _0{}), xformed_act_logical_inner);
@@ -635,10 +636,12 @@ template <class SettingsT> struct Layouts {
                                                 _64{} * ES,
                                                 _8{} * ES,
                                                 ES)));
-        auto xformed_out_scatter_outer = make_layout(
-            make_shape(_1{}, _1{}),
-            make_stride(gather_util::CustomStride{gather_util::IndexedGather{scatter_idx_buf}, K},
-                        _1{}));
+        auto xformed_out_scatter_outer =
+            make_layout(make_shape(_1{}, _1{}),
+                        make_stride(
+                            gather_util::CustomStride{
+                                gather_util::IndexedGather<uint64_t, -1>{scatter_idx_buf}, K},
+                            _1{}));
         return composition(xformed_out_scatter_outer,
                            make_arithmetic_tuple(_0{}, _0{}),
                            xformed_out_logical_inner);
@@ -952,6 +955,7 @@ namespace ops {
 
 enum class conv_kernel_size : int { k3 = 3, k5 = 5, k7 = 7 };
 enum class conv_stride : int { s1 = 1, s2 = 2 };
+enum class conv_kout_denom : int { K32 = 32, K128 = 128 };
 
 } // namespace ops
 } // namespace detail
@@ -973,6 +977,13 @@ template <> struct type_label<fvdb::detail::ops::conv_stride> {
     }
 };
 
+template <> struct type_label<fvdb::detail::ops::conv_kout_denom> {
+    static consteval auto
+    value() {
+        return fixed_label("conv.kout_denom");
+    }
+};
+
 } // namespace dispatch
 
 // ============================================================================
@@ -985,7 +996,8 @@ namespace ops {
 
 using kernel_size_axis =
     dispatch::axis<conv_kernel_size::k3, conv_kernel_size::k5, conv_kernel_size::k7>;
-using stride_axis = dispatch::axis<conv_stride::s1, conv_stride::s2>;
+using stride_axis     = dispatch::axis<conv_stride::s1, conv_stride::s2>;
+using kout_denom_axis = dispatch::axis<conv_kout_denom::K32, conv_kout_denom::K128>;
 
 struct pred_gather_igemm_op {
     template <typename Tag>
@@ -996,25 +1008,22 @@ struct pred_gather_igemm_op {
        GridBatchImpl const &feature_grid,
        GridBatchImpl const &output_grid) {
         using namespace pred_gather_igemm;
-        constexpr int ks = static_cast<int>(dispatch::tag_get<conv_kernel_size>(tg));
-        constexpr int st = static_cast<int>(dispatch::tag_get<conv_stride>(tg));
-        using GeomT      = Geometry<ks, ks, ks, st, st, st>;
-        using ConvOp     = SparseFpropSm80<GeomT>;
+        constexpr int ks         = static_cast<int>(dispatch::tag_get<conv_kernel_size>(tg));
+        constexpr int st         = static_cast<int>(dispatch::tag_get<conv_stride>(tg));
+        constexpr int kout_denom = static_cast<int>(dispatch::tag_get<conv_kout_denom>(tg));
+        using GeomT              = Geometry<ks, ks, ks, st, st, st, kout_denom>;
+        using ConvOp             = SparseFpropSm80<GeomT>;
 
-        const int64_t N_in = features.size(0);
-        const int64_t C    = features.size(1);
-        const int64_t K    = weights.size(0);
+        const int64_t C = features.size(1);
+        const int64_t K = weights.size(0);
 
         const int64_t N_out            = output_grid.totalVoxels();
         const uint32_t outputLeafCount = output_grid.numLeavesAt(0);
 
         auto filter_igemm = weights.permute({2, 3, 4, 0, 1}).contiguous();
 
-        auto opts         = torch::dtype(torch::kFloat32).device(features.device());
-        auto padded_input = torch::zeros({N_in + 1, C}, opts);
-        padded_input.slice(0, 1).copy_(features);
-
-        auto padded_output = torch::zeros({N_out + 1, K}, opts);
+        auto opts   = torch::dtype(torch::kFloat32).device(features.device());
+        auto output = torch::zeros({N_out, K}, opts);
 
         auto *nanoInputGrid =
             feature_grid.nanoGridHandle().template deviceGrid<nanovdb::ValueOnIndex>();
@@ -1048,16 +1057,16 @@ struct pred_gather_igemm_op {
                 tFilter,
                 nanoInputGrid,
                 nanoOutputGrid,
-                padded_input.data_ptr<float>(),
-                padded_output.data_ptr<float>(),
+                features.data_ptr<float>(),
+                output.data_ptr<float>(),
                 conv_op);
 
         C10_CUDA_KERNEL_LAUNCH_CHECK();
 
-        return padded_output.slice(0, 1).contiguous();
+        return output;
     }
 
-    using space      = dispatch::axes<kernel_size_axis, stride_axis>;
+    using space      = dispatch::axes<kernel_size_axis, stride_axis, kout_denom_axis>;
     using subspaces  = dispatch::coverage<space>;
     using dispatcher = dispatch::dispatch_table<
         space,
@@ -1111,8 +1120,12 @@ predGatherIGemmSparseConv(torch::Tensor features,
     static auto const table =
         dispatch::dispatch_table_from_op<pred_gather_igemm_op>("pred_gather_igemm_sparse_conv");
 
-    return table.select(dispatch::dispatch_set{static_cast<conv_kernel_size>(kernel_size),
-                                               static_cast<conv_stride>(stride)})(
+    // We've already checked that K is a multiple of 32, so we can use that as the kout_denom, but
+    // if it is a multiple of 128, we can use that instead.
+    conv_kout_denom kout_denom = (K % 128 == 0) ? conv_kout_denom::K128 : conv_kout_denom::K32;
+
+    return table.select(dispatch::dispatch_set{
+        static_cast<conv_kernel_size>(kernel_size), static_cast<conv_stride>(stride), kout_denom})(
         features, weights, feature_grid, output_grid);
 }
 
