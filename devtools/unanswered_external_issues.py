@@ -8,11 +8,12 @@ Requires the GitHub CLI (`gh`) to be installed and authenticated.
 
 Usage::
 
-    python devtools/unanswered_external_issues.py
+    python devtools/unanswered_external_issues.py [--format terminal|slack]
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -151,6 +152,11 @@ def analyse_repo(repo: str) -> RepoReport:
     return report
 
 
+# ---------------------------------------------------------------------------
+# Terminal formatter
+# ---------------------------------------------------------------------------
+
+
 def _format_issue_line(issue: Issue, suffix: str = "") -> str:
     num = hyperlink(issue.url, f"#{issue.number}")
     parts = [
@@ -166,7 +172,7 @@ def _format_issue_line(issue: Issue, suffix: str = "") -> str:
     return "".join(parts)
 
 
-def print_report(reports: list[RepoReport]) -> None:
+def print_report_terminal(reports: list[RepoReport]) -> None:
     for report in reports:
         total = len(report.no_response) + len(report.awaiting_response)
         color = RED if total else GREEN
@@ -191,12 +197,69 @@ def print_report(reports: list[RepoReport]) -> None:
     print()
 
 
+# ---------------------------------------------------------------------------
+# Slack mrkdwn formatter
+# ---------------------------------------------------------------------------
+
+
+def _slack_issue_line(issue: Issue, suffix: str = "") -> str:
+    line = f"\u2022 <{issue.url}|#{issue.number}> {issue.created_at}  @{issue.author} -- {issue.title}"
+    if suffix:
+        line += f"  _{suffix}_"
+    return line
+
+
+def print_report_slack(reports: list[RepoReport]) -> None:
+    lines: list[str] = []
+    for report in reports:
+        total = len(report.no_response) + len(report.awaiting_response)
+        lines.append(f"*{report.repo} -- {total} issue(s) needing attention*")
+
+        if report.no_response:
+            lines.append(f"\n:red_circle: *No team response ({len(report.no_response)}):*")
+            for issue in sorted(report.no_response, key=lambda i: i.created_at):
+                lines.append(_slack_issue_line(issue))
+        else:
+            lines.append("\n:white_check_mark: No team response: (none)")
+
+        if report.awaiting_response:
+            lines.append(f"\n:large_yellow_circle: *Awaiting follow-up ({len(report.awaiting_response)}):*")
+            for issue in sorted(report.awaiting_response, key=lambda i: i.created_at):
+                lines.append(_slack_issue_line(issue, suffix=f"last: @{issue.last_commenter}"))
+        else:
+            lines.append("\n:white_check_mark: Awaiting follow-up: (none)")
+
+        lines.append("")
+
+    print("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+FORMATTERS = {
+    "terminal": print_report_terminal,
+    "slack": print_report_slack,
+}
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--format",
+        choices=FORMATTERS,
+        default="terminal",
+        dest="fmt",
+        help="Output format (default: terminal)",
+    )
+    args = parser.parse_args()
+
     reports: list[RepoReport] = []
     for repo in REPOS:
         print(f"\nScanning {repo} ...", file=sys.stderr)
         reports.append(analyse_repo(repo))
-    print_report(reports)
+    FORMATTERS[args.fmt](reports)
 
 
 if __name__ == "__main__":
