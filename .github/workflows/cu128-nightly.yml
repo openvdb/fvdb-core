@@ -125,7 +125,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r fvdb/env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+          uv pip install --no-cache-dir torch==2.10.0 -r fvdb/env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
 
       - name: Build fvdb
         run: |
@@ -262,7 +262,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r fvdb/env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+          uv pip install --no-cache-dir torch==2.10.0 -r fvdb/env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
 
       - name: Download package
         uses: actions/download-artifact@v4
