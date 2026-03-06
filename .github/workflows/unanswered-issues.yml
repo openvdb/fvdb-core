@@ -5,7 +5,7 @@ name: Unanswered External Issues Report
 
 on:
   schedule:
-    - cron: "0 18 * * *"  # 18:00 UTC = 10:00 AM Pacific
+    - cron: "0 18 * * 1"  # 18:00 UTC = 10:00 AM Pacific
   workflow_dispatch:
 
 permissions:
