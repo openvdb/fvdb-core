@@ -4,6 +4,8 @@
 #ifndef FVDB_DETAIL_AUTOGRAD_GAUSSIANRASTERIZE_H
 #define FVDB_DETAIL_AUTOGRAD_GAUSSIANRASTERIZE_H
 
+#include <fvdb/detail/ops/gsplat/GaussianTileIntersection.h>
+
 #include <torch/autograd.h>
 
 namespace fvdb::detail::autograd {
@@ -18,13 +20,8 @@ struct RasterizeGaussiansToPixels : public torch::autograd::Function<RasterizeGa
                                 const Variable &conics,    // [C, N, 3]
                                 const Variable &colors,    // [C, N, 3]
                                 const Variable &opacities, // [N]
-                                const uint32_t imageWidth,
-                                const uint32_t imageHeight,
-                                const uint32_t imageOriginW,
-                                const uint32_t imageOriginH,
-                                const uint32_t tileSize,
-                                const Variable &tileOffsets,     // [C, tile_height, tile_width]
-                                const Variable &tileGaussianIds, // [n_isects]
+                                const ops::RenderWindow2D &renderWindow,
+                                const ops::DenseTileIntersections &tileIntersections,
                                 const bool absgrad,
                                 std::optional<Variable> backgrounds = std::nullopt, // [C, D]
                                 std::optional<Variable> masks = std::nullopt); // [C, tileH, tileW]

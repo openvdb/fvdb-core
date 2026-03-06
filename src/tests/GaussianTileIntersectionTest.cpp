@@ -20,6 +20,8 @@ class GaussianTileIntersectionTest : public ::testing::Test {
         tile_size     = 16;
         num_tiles_h   = 4;
         num_tiles_w   = 4;
+        image_height  = num_tiles_h * tile_size;
+        image_width   = num_tiles_w * tile_size;
     }
 
     // Helper function to create a simple test case
@@ -211,6 +213,8 @@ class GaussianTileIntersectionTest : public ::testing::Test {
     uint32_t tile_size;
     uint32_t num_tiles_h;
     uint32_t num_tiles_w;
+    uint32_t image_height;
+    uint32_t image_width;
 };
 
 TEST_F(GaussianTileIntersectionTest, CPUNotImplementedTest) {
@@ -221,10 +225,9 @@ TEST_F(GaussianTileIntersectionTest, CPUNotImplementedTest) {
                      radii,
                      depths,
                      /*camera_jidx=*/at::nullopt,
-                     num_cameras,
                      tile_size,
-                     num_tiles_h,
-                     num_tiles_w),
+                     image_height,
+                     image_width),
                  c10::Error);
 }
 
@@ -242,10 +245,9 @@ TEST_F(GaussianTileIntersectionTest, ZeroLengthGaussianTest) {
             radii.cuda(),
             depths.cuda(),
             /*camera_jidx=*/at::nullopt,
-            numCameras,
             tile_size,
-            num_tiles_h,
-            num_tiles_w);
+            image_height,
+            image_width);
 
     // Move results back to CPU for verification
     tile_offsets        = tile_offsets.cpu();
@@ -309,10 +311,9 @@ TEST_F(GaussianTileIntersectionTest, BadInputsFailTest) {
                                                                                   radii.cuda(),
                                                                                   depths.cuda(),
                                                                                   cameraJidx.cuda(),
-                                                                                  nc,
                                                                                   tile_size,
-                                                                                  num_tiles_h,
-                                                                                  num_tiles_w),
+                                                                                  image_height,
+                                                                                  image_width),
                 c10::ValueError);
 
         } else {
@@ -321,10 +322,9 @@ TEST_F(GaussianTileIntersectionTest, BadInputsFailTest) {
                              radii.cuda(),
                              depths.cuda(),
                              /*camera_jidx=*/at::nullopt,
-                             nc,
                              tile_size,
-                             num_tiles_h,
-                             num_tiles_w),
+                             image_height,
+                             image_width),
                          c10::ValueError);
         }
     }
@@ -341,10 +341,9 @@ TEST_F(GaussianTileIntersectionTest, ZeroRadiusGaussianTest) {
             radii.cuda(),
             depths.cuda(),
             /*camera_jidx=*/at::nullopt,
-            num_cameras,
             tile_size,
-            num_tiles_h,
-            num_tiles_w);
+            image_height,
+            image_width);
 
     // Verify that there are no intersections
     EXPECT_EQ(tile_offsets.sum().item<int32_t>(), 0);
@@ -359,10 +358,9 @@ TEST_F(GaussianTileIntersectionTest, BasicIntersectionTest) {
             radii.cuda(),
             depths.cuda(),
             /*camera_jidx=*/at::nullopt,
-            num_cameras,
             tile_size,
-            num_tiles_h,
-            num_tiles_w);
+            image_height,
+            image_width);
 
     // Move results back to CPU for verification
     tile_offsets        = tile_offsets.cpu();
@@ -392,10 +390,9 @@ TEST_F(GaussianTileIntersectionTest, PackedFormatTest) {
                                                                           radii_packed.cuda(),
                                                                           depths_packed.cuda(),
                                                                           camera_indices.cuda(),
-                                                                          num_cameras,
                                                                           tile_size,
-                                                                          num_tiles_h,
-                                                                          num_tiles_w);
+                                                                          image_height,
+                                                                          image_width);
 
     // Move results back to CPU for verification
     tile_offsets        = tile_offsets.cpu();
@@ -432,10 +429,9 @@ TEST_F(GaussianTileIntersectionTest, DenseViaSparseTest) {
             tile_mask.cuda(),
             active_tiles.cuda(),
             /*camera_jidx=*/at::nullopt,
-            num_cameras,
             tile_size,
-            num_tiles_h,
-            num_tiles_w);
+            image_height,
+            image_width);
 
     // Move results back to CPU for verification
     tile_offsets        = tile_offsets.cpu();
@@ -477,10 +473,9 @@ TEST_F(GaussianTileIntersectionTest, SparseIntersectionTest) {
             tile_mask.cuda(),
             active_tiles.cuda(),
             /*camera_jidx=*/at::nullopt,
-            num_cameras,
             tile_size,
-            num_tiles_h,
-            num_tiles_w);
+            image_height,
+            image_width);
 
     // Move results back to CPU for verification
     tile_offsets        = tile_offsets.cpu();
@@ -515,10 +510,9 @@ TEST_F(GaussianTileIntersectionTest, SparseCPUNotImplementedTest) {
                      tile_mask,
                      active_tiles,
                      /*camera_jidx=*/at::nullopt,
-                     num_cameras,
                      tile_size,
-                     num_tiles_h,
-                     num_tiles_w),
+                     image_height,
+                     image_width),
                  c10::Error);
 }
 
@@ -542,10 +536,9 @@ TEST_F(GaussianTileIntersectionTest, SparseZeroLengthGaussianTest) {
             tile_mask.cuda(),
             active_tiles.cuda(),
             /*camera_jidx=*/at::nullopt,
-            numCameras,
             tile_size,
-            num_tiles_h,
-            num_tiles_w);
+            image_height,
+            image_width);
 
     // Move results back to CPU for verification
     tile_offsets        = tile_offsets.cpu();
@@ -581,10 +574,9 @@ TEST_F(GaussianTileIntersectionTest, SparsePackedFormatTest) {
             tile_mask.cuda(),
             active_tiles.cuda(),
             camera_indices.cuda(),
-            num_cameras,
             tile_size,
-            num_tiles_h,
-            num_tiles_w);
+            image_height,
+            image_width);
 
     // Move results back to CPU for verification
     tile_offsets        = tile_offsets.cpu();
@@ -628,10 +620,9 @@ TEST_F(GaussianTileIntersectionTest, RandomSparsePatternTest) {
             tile_mask.cuda(),
             active_tiles.cuda(),
             /*camera_jidx=*/at::nullopt,
-            num_cameras,
             tile_size,
-            num_tiles_h,
-            num_tiles_w);
+            image_height,
+            image_width);
 
     // Move results back to CPU for verification
     tile_offsets        = tile_offsets.cpu();

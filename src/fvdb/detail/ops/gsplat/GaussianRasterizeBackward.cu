@@ -20,9 +20,13 @@
 namespace fvdb::detail::ops {
 namespace {
 
-template <typename ScalarType, size_t NUM_CHANNELS, size_t NUM_SHARED_CHANNELS, bool IS_PACKED>
+template <typename ScalarType,
+          size_t NUM_CHANNELS,
+          size_t NUM_SHARED_CHANNELS,
+          bool IS_PACKED,
+          typename TileIntersectionsT>
 struct RasterizeBackwardArgs {
-    using CommonArgs = RasterizeCommonArgs<ScalarType, NUM_CHANNELS, IS_PACKED>;
+    using CommonArgs = RasterizeCommonArgs<ScalarType, NUM_CHANNELS, IS_PACKED, TileIntersectionsT>;
     CommonArgs commonArgs;
 
     using vec2t          = typename CommonArgs::vec2t;
@@ -57,11 +61,10 @@ struct RasterizeBackwardArgs {
         const torch::Tensor &features,   // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
         const at::optional<torch::Tensor> &backgrounds, // [C, NUM_CHANNELS]
         const at::optional<torch::Tensor> &masks,       // [C, numTilesH, numTilesW]
+        const TileIntersectionsT &tileIntersections,
         const RenderWindow2D &renderWindow,
         const uint32_t tileSize,
         const uint32_t blockOffset,
-        const torch::Tensor &tileOffsets,          // [C, numTilesH, numTilesW]
-        const torch::Tensor &tileGaussianIds,      // [totalIntersections]
         const fvdb::JaggedTensor &renderedAlphas,  // {C, [AP_i, 1]} or {1, [C, H, W, 1]}
         const fvdb::JaggedTensor &lastGaussianIds, // {C, [AP_i]} or {1, [C, H, W]}
         const fvdb::JaggedTensor
@@ -71,27 +74,15 @@ struct RasterizeBackwardArgs {
         const torch::Tensor &outDLossDConics,           // [C, N, 3] or [nnz, 3]
         const torch::Tensor &outDLossDFeatures,  // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
         const torch::Tensor &outDLossDOpacities, // [C, N] or [nnz]
-        const std::optional<torch::Tensor> &outDLossDMeans2dAbs,        // [C, N, 2] or [nnz, 2]
-        const std::optional<torch::Tensor> &activeTiles = std::nullopt, // [AT]
-        const std::optional<torch::Tensor> &tilePixelMask =
-            std::nullopt, // [AT, wordsPerTileBitmask] e.g. [AT, 4]
-        const std::optional<torch::Tensor> &tilePixelCumsum = std::nullopt, // [AT]
-        const std::optional<torch::Tensor> &pixelMap        = std::nullopt)        // [AP]
+        const std::optional<torch::Tensor> &outDLossDMeans2dAbs) // [C, N, 2] or [nnz, 2]
         : commonArgs(means2d,
                      conics,
                      opacities,
                      features,
                      backgrounds,
                      masks,
-                     renderWindow,
-                     tileSize,
-                     blockOffset,
-                     tileOffsets,
-                     tileGaussianIds,
-                     activeTiles,
-                     tilePixelMask,
-                     tilePixelCumsum,
-                     pixelMap),
+                     tileIntersections,
+                     renderWindow),
           mAbsGrad(outDLossDMeans2dAbs.has_value()),
           mRenderedAlphas(initJaggedAccessor<ScalarType, 2>(renderedAlphas, "renderedAlphas")),
           mLastGaussianIds(initJaggedAccessor<int32_t, 1>(lastGaussianIds, "lastGaussianIds")),
@@ -146,64 +137,60 @@ struct RasterizeBackwardArgs {
             TORCH_CHECK_VALUE(totalGaussians == mOutDLossDOpacities.size(0),
                               "Bad size for outDLossDOpacities");
         } else {
+            const int64_t numCameras = commonArgs.mMeans2d.size(0);
             if (mAbsGrad) {
-                TORCH_CHECK_VALUE(commonArgs.mNumCameras == mOutDLossDMeans2dAbs.size(0),
+                TORCH_CHECK_VALUE(numCameras == mOutDLossDMeans2dAbs.size(0),
                                   "Bad size for outDLossDMeans2dAbs");
                 TORCH_CHECK_VALUE(2 == mOutDLossDMeans2dAbs.size(CommonArgs::NUM_OUTER_DIMS),
                                   "Bad size for outDLossDMeans2dAbs");
             }
 
-            TORCH_CHECK_VALUE(commonArgs.mNumCameras == mOutDLossDMeans2d.size(0),
+            TORCH_CHECK_VALUE(numCameras == mOutDLossDMeans2d.size(0),
                               "Bad size for outDLossDMeans2d");
-            TORCH_CHECK_VALUE(commonArgs.mNumCameras == mOutDLossDConics.size(0),
+            TORCH_CHECK_VALUE(numCameras == mOutDLossDConics.size(0),
                               "Bad size for outDLossDConics");
-            TORCH_CHECK_VALUE(commonArgs.mNumCameras == mOutDLossDFeatures.size(0),
+            TORCH_CHECK_VALUE(numCameras == mOutDLossDFeatures.size(0),
                               "Bad size for outDLossDFeatures");
-            TORCH_CHECK_VALUE(commonArgs.mNumCameras == mOutDLossDOpacities.size(0),
+            TORCH_CHECK_VALUE(numCameras == mOutDLossDOpacities.size(0),
                               "Bad size for outDLossDOpacities");
             TORCH_CHECK_VALUE(commonArgs.mNumGaussiansPerCamera == mOutDLossDOpacities.size(1),
                               "Bad size for outDLossDOpacities");
         }
 
-        if (commonArgs.mIsSparse) {
-            // just check that the number of cameras and number of pixels are correct
-            TORCH_CHECK_VALUE(commonArgs.mNumCameras == mRenderedAlphas.numTensors(),
-                              "Bad size for renderedAlphas");
-            TORCH_CHECK_VALUE(commonArgs.mPixelMap.size(0) == mRenderedAlphas.elementCount(),
-                              "Bad size for renderedAlphas");
-            TORCH_CHECK_VALUE(commonArgs.mNumCameras == mLastGaussianIds.numTensors(),
-                              "Bad size for lastGaussianIds");
-            TORCH_CHECK_VALUE(commonArgs.mPixelMap.size(0) == mLastGaussianIds.elementCount(),
-                              "Bad size for lastGaussianIds");
-            TORCH_CHECK_VALUE(commonArgs.mNumCameras == mDLossDRenderedFeatures.numTensors(),
-                              "Bad size for dLossDRenderedFeatures");
-            TORCH_CHECK_VALUE(commonArgs.mPixelMap.size(0) ==
-                                  mDLossDRenderedFeatures.elementCount(),
-                              "Bad size for dLossDRenderedFeatures");
-            TORCH_CHECK_VALUE(commonArgs.mNumCameras == mDLossDRenderedAlphas.numTensors(),
-                              "Bad size for dLossDRenderedAlphas");
-            TORCH_CHECK_VALUE(commonArgs.mPixelMap.size(0) == mDLossDRenderedAlphas.elementCount(),
-                              "Bad size for dLossDRenderedAlphas");
-        } else {
-            auto const tensorSize =
-                commonArgs.mNumCameras * commonArgs.renderHeight() * commonArgs.renderWidth();
-            TORCH_CHECK_VALUE(tensorSize == mRenderedAlphas.data().size(0),
-                              "Bad size for renderedAlphas");
-            TORCH_CHECK_VALUE(1 == mRenderedAlphas.data().size(1), "Bad size for renderedAlphas");
-
-            TORCH_CHECK_VALUE(tensorSize == mLastGaussianIds.data().size(0),
-                              "Bad size for lastGaussianIds");
-
-            TORCH_CHECK_VALUE(tensorSize == mDLossDRenderedFeatures.data().size(0),
-                              "Bad size for dLossDRenderedFeatures");
-            TORCH_CHECK_VALUE(NUM_CHANNELS == mDLossDRenderedFeatures.data().size(1),
-                              "Bad size for dLossDRenderedFeatures");
-
-            TORCH_CHECK_VALUE(tensorSize == mDLossDRenderedAlphas.data().size(0),
-                              "Bad size for dLossDRenderedAlphas");
-            TORCH_CHECK_VALUE(1 == mDLossDRenderedAlphas.data().size(1),
-                              "Bad size for dLossDRenderedAlphas");
-        }
+        const uint32_t numCameras = commonArgs.mTileIntersections.cameraCount(
+            static_cast<uint32_t>(commonArgs.mMeans2d.size(0)));
+        const uint32_t expectedNumTensors =
+            commonArgs.mTileIntersections.outputNumTensors(numCameras);
+        const uint64_t expectedPixelCount = commonArgs.mTileIntersections.outputPixelCount(
+            numCameras, commonArgs.mRenderWindow.height, commonArgs.mRenderWindow.width);
+        TORCH_CHECK_VALUE(expectedNumTensors == static_cast<uint32_t>(mRenderedAlphas.numTensors()),
+                          "Bad size for renderedAlphas");
+        TORCH_CHECK_VALUE(expectedPixelCount ==
+                              static_cast<uint64_t>(mRenderedAlphas.elementCount()),
+                          "Bad size for renderedAlphas");
+        TORCH_CHECK_VALUE(expectedNumTensors ==
+                              static_cast<uint32_t>(mLastGaussianIds.numTensors()),
+                          "Bad size for lastGaussianIds");
+        TORCH_CHECK_VALUE(expectedPixelCount ==
+                              static_cast<uint64_t>(mLastGaussianIds.elementCount()),
+                          "Bad size for lastGaussianIds");
+        TORCH_CHECK_VALUE(expectedNumTensors ==
+                              static_cast<uint32_t>(mDLossDRenderedFeatures.numTensors()),
+                          "Bad size for dLossDRenderedFeatures");
+        TORCH_CHECK_VALUE(expectedPixelCount ==
+                              static_cast<uint64_t>(mDLossDRenderedFeatures.elementCount()),
+                          "Bad size for dLossDRenderedFeatures");
+        TORCH_CHECK_VALUE(NUM_CHANNELS == mDLossDRenderedFeatures.data().size(1),
+                          "Bad size for dLossDRenderedFeatures");
+        TORCH_CHECK_VALUE(expectedNumTensors ==
+                              static_cast<uint32_t>(mDLossDRenderedAlphas.numTensors()),
+                          "Bad size for dLossDRenderedAlphas");
+        TORCH_CHECK_VALUE(expectedPixelCount ==
+                              static_cast<uint64_t>(mDLossDRenderedAlphas.elementCount()),
+                          "Bad size for dLossDRenderedAlphas");
+        TORCH_CHECK_VALUE(1 == mRenderedAlphas.data().size(1), "Bad size for renderedAlphas");
+        TORCH_CHECK_VALUE(1 == mDLossDRenderedAlphas.data().size(1),
+                          "Bad size for dLossDRenderedAlphas");
     }
 
     /// @brief Read the alpha value for a pixel
@@ -465,6 +452,7 @@ struct RasterizeBackwardArgs {
                     accum += commonArgs.mBackgrounds[cameraId][k] * dLossDRenderedFeature[k];
                 }
             }
+
             if (includeLastTerm) {
                 alphaGradientContribution += -finalTransmittance * oneOverOneMinusAlpha * accum;
             }
@@ -603,18 +591,21 @@ struct RasterizeBackwardArgs {
     /// @param cameraId The ID of the camera
     /// @param i The row index of the pixel
     /// @param j The column index of the pixel
-    /// @param firstGaussianIdInBlock The ID of the first Gaussian in the block
     template <size_t WARP_TILE_SIZE>
     inline __device__ void
     volumeRenderTileBackward( // const cooperative_groups::thread_block_tile<WARP_TILE_SIZE> &warp,
         const uint32_t cameraId,
         const uint32_t row,
         const uint32_t col,
-        const int32_t firstGaussianIdInBlock,
-        const int32_t lastGaussianIdInBlock,
+        const int32_t tileRow,
+        const int32_t tileCol,
         const uint32_t blockSize,
         const bool pixelIsActive,
         const uint32_t activePixelIndex) {
+        const auto [firstGaussianIdInBlock, lastGaussianIdInBlock] =
+            commonArgs.mTileIntersections.tileGaussianRangeFromBlock(
+                blockIdx.x, cameraId, tileRow, tileCol);
+
         alignas(Gaussian2D<ScalarType>) extern __shared__ char s[];
 
         Gaussian2D<ScalarType> *sharedGaussians =
@@ -623,10 +614,11 @@ struct RasterizeBackwardArgs {
             reinterpret_cast<ScalarType *>(&sharedGaussians[blockSize]); // [blockSize]
 
         // To protect against out of bounds access, we clamp the coordinates to the image bounds
-        const auto rowClamped = min(row, commonArgs.renderHeight() - 1);
-        const auto colClamped = min(col, commonArgs.renderWidth() - 1);
+        const auto rowClamped = min(row, commonArgs.mRenderWindow.height - 1);
+        const auto colClamped = min(col, commonArgs.mRenderWindow.width - 1);
 
-        const auto pixIdx = commonArgs.pixelIndex(cameraId, row, col, activePixelIndex);
+        const auto pixIdx = commonArgs.mTileIntersections.pixelIndexFromBlock(
+            cameraId, row, col, activePixelIndex, blockIdx.x);
 
         // Only access memory if the pixel is active (within image bounds)
         ScalarType finalTransmittance  = ScalarType{1};
@@ -655,7 +647,7 @@ struct RasterizeBackwardArgs {
         // Process Gaussians in batches of block size (i.e. one Gaussian per thread in the block)
         const uint32_t tidx = threadIdx.y * blockDim.x + threadIdx.x;
         const uint32_t numBatches =
-            (lastGaussianIdInBlock - firstGaussianIdInBlock + blockSize - 1) / blockSize;
+            commonArgs.numGaussianBatches(firstGaussianIdInBlock, lastGaussianIdInBlock, blockSize);
 
         constexpr size_t NUM_CHUNKS =
             (NUM_CHANNELS + NUM_SHARED_CHANNELS - 1) / NUM_SHARED_CHANNELS;
@@ -681,6 +673,7 @@ struct RasterizeBackwardArgs {
                     dLossDRenderedFeature[k] = ScalarType{0};
                 }
             }
+
             for (auto k = numChannels; k < NUM_SHARED_CHANNELS; ++k) {
                 dLossDRenderedFeature[k] = ScalarType{0};
             }
@@ -695,13 +688,17 @@ struct RasterizeBackwardArgs {
                 // blockSize (i.e. one Gaussian per thread in the block), and batchEnd is the
                 // index of the last gaussian. NOTE: These values can be negative so must be
                 // int32 instead of uint32
-                const int32_t batchEnd = lastGaussianIdInBlock - 1 - blockSize * b;
-                const int32_t idx      = batchEnd - tidx;
-                if (idx >= firstGaussianIdInBlock) {
-                    const int32_t g =
-                        commonArgs.mTileGaussianIds[idx]; // Gaussian index in [C * N] or [nnz]
-                    sharedGaussians[tidx] = commonArgs.getGaussian(g);
-                    ScalarType *feature   = &sharedGaussianFeatures[tidx * NUM_SHARED_CHANNELS];
+                int32_t g                 = -1;
+                int32_t batchEndForShared = 0;
+                if (commonArgs.loadGaussianBatchBackToFront(firstGaussianIdInBlock,
+                                                            lastGaussianIdInBlock,
+                                                            b,
+                                                            blockSize,
+                                                            tidx,
+                                                            sharedGaussians,
+                                                            g,
+                                                            batchEndForShared)) {
+                    ScalarType *feature = &sharedGaussianFeatures[tidx * NUM_SHARED_CHANNELS];
                     fetchGaussianFeatureIntoSharedMemory(g, channelStart, numChannels, feature);
                 }
 
@@ -712,14 +709,17 @@ struct RasterizeBackwardArgs {
                 // 0 index is the furthest back gaussian in the batch
                 // For each Gaussian which contributes to this pixel, compute this pixel's
                 // gradient contribution to that Gaussian
-                const int32_t batchSize = min(blockSize, batchEnd + 1 - firstGaussianIdInBlock);
+                const int32_t batchEnd =
+                    commonArgs.gaussianBatchEndBackToFront(lastGaussianIdInBlock, b, blockSize);
+                const int32_t batchSize = commonArgs.gaussianBatchSizeBackToFront(
+                    firstGaussianIdInBlock, batchEnd, blockSize);
                 for (uint32_t t = max(0, batchEnd - lastGaussianIdInWarp); t < batchSize; ++t) {
                     // (row, col) coordinates are relative to the specified image origin which may
                     // be a crop so we need to add the origin to get the absolute pixel coordinates
                     const ScalarType px =
-                        col + ScalarType(commonArgs.renderOriginX()) + ScalarType{0.5};
+                        col + ScalarType(commonArgs.mRenderWindow.originW) + ScalarType{0.5};
                     const ScalarType py =
-                        row + ScalarType(commonArgs.renderOriginY()) + ScalarType{0.5};
+                        row + ScalarType(commonArgs.mRenderWindow.originH) + ScalarType{0.5};
 
                     bool valid = pixelIsActive && (batchEnd - t <= lastGaussianId);
 
@@ -813,20 +813,21 @@ struct RasterizeBackwardArgs {
 /// @param NUM_CHANNELS The number of channels in the features
 /// @param NUM_SHARED_CHANNELS The number of channels to chunk in shared memory
 /// @param IS_PACKED Whether the features are packed (i.e. linearized across the outer dimensions)
-template <typename ScalarType, size_t NUM_CHANNELS, size_t NUM_SHARED_CHANNELS, bool IS_PACKED>
+template <typename ScalarType,
+          size_t NUM_CHANNELS,
+          size_t NUM_SHARED_CHANNELS,
+          bool IS_PACKED,
+          typename TileIntersectionsT>
 __global__ void
-rasterizeGaussiansBackward(
-    RasterizeBackwardArgs<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED> args) {
+rasterizeGaussiansBackward(RasterizeBackwardArgs<ScalarType,
+                                                 NUM_CHANNELS,
+                                                 NUM_SHARED_CHANNELS,
+                                                 IS_PACKED,
+                                                 TileIntersectionsT> args) {
     auto &commonArgs = args.commonArgs;
 
-    int32_t cameraId;
-    int32_t tileRow;
-    int32_t tileCol;
-    uint32_t row;
-    uint32_t col;
-
-    cuda::std::tie(cameraId, tileRow, tileCol, row, col) =
-        commonArgs.mIsSparse ? commonArgs.sparseCoordinates() : commonArgs.denseCoordinates();
+    const auto [cameraId, tileRow, tileCol, row, col] =
+        commonArgs.mTileIntersections.coordinates(blockIdx.x, threadIdx.x, threadIdx.y);
 
     // NOTE: We keep threads which correspond to pixels outside the image bounds around
     //       to load gaussians from global memory, but they do not contribute to the output.
@@ -834,28 +835,23 @@ rasterizeGaussiansBackward(
     // pixelInImage: Whether this pixel is inside the image bounds.
     // activePixelIndex: Index of this pixel in the output for the block if it is active (sparse
     // mode only).
-    bool pixelInImage{false};
-    uint32_t activePixelIndex{0};
-    cuda::std::tie(pixelInImage, activePixelIndex) = commonArgs.activePixelIndex(row, col);
+    __shared__ typename TileIntersectionsT::ActivePixelScratch activePixelScratch;
+    const auto [pixelInImage, activePixelIndex] =
+        commonArgs.mTileIntersections.activePixelIndexFromBlock(
+            blockIdx.x, threadIdx.y, threadIdx.x, row, col, activePixelScratch);
 
     // If the caller provides a per-tile mask and this tile is masked, do nothing and return
     if (commonArgs.mHasMasks && !commonArgs.mMasks[cameraId][tileRow][tileCol]) {
         return;
     }
 
-    int32_t firstGaussianIdInBlock;
-    int32_t lastGaussianIdInBlock;
-    cuda::std::tie(firstGaussianIdInBlock, lastGaussianIdInBlock) =
-        commonArgs.tileGaussianRange(cameraId, tileRow, tileCol);
-
-    // Compute the backward pass for the current tile starting at pixel (i, j)
-    // and containing Gaussians with ids in [firstGaussianIdInBlock, lastGaussianIdInBlock)
+    // Compute the backward pass for the current tile starting at pixel (i, j).
     constexpr uint32_t WARP_TILE_SIZE = 32; // TODO (fwilliams): Tune this value
     args.template volumeRenderTileBackward<WARP_TILE_SIZE>(cameraId,
                                                            row,
                                                            col,
-                                                           firstGaussianIdInBlock,
-                                                           lastGaussianIdInBlock,
+                                                           tileRow,
+                                                           tileCol,
                                                            blockDim.x * blockDim.y,
                                                            pixelInImage,
                                                            activePixelIndex);
@@ -916,12 +912,22 @@ callRasterizeBackwardWithTemplatedSharedChannels(
                                outDLossDOpacities);
     }
 
-    // tileOffsets can be 3D (dense) or 1D (sparse)
-    const bool tileOffsetsAreSparse = tileOffsets.dim() == 1;
-    // Get C from tileOffsets for dense mode
-    // For sparse mode, C is unused, only used for output sizing for dense mode
-    const uint32_t C  = tileOffsetsAreSparse ? 0 : tileOffsets.size(0);
-    const uint32_t HW = renderWindow.pixelCountPerCamera();
+    uint32_t C = 0;
+    dispatchTileIntersectionsAccessor(
+        tileOffsets,
+        tileGaussianIds,
+        renderWindow,
+        tileSize,
+        0,
+        [&](const auto &tileIntersectionsAccessor) {
+            C = tileIntersectionsAccessor.cameraCount(static_cast<uint32_t>(means2d.size(0)));
+        },
+        activeTiles,
+        tilePixelMask,
+        tilePixelCumsum,
+        pixelMap);
+    const uint32_t H = renderWindow.height;
+    const uint32_t W = renderWindow.width;
 
     auto [reshapedRenderedAlphas,
           reshapedLastGaussianIds,
@@ -930,57 +936,81 @@ callRasterizeBackwardWithTemplatedSharedChannels(
         if (!activeTiles.has_value()) {
             // Dense mode. Reshape the JaggedTensor inputs to match sparse mode
             return std::make_tuple(
-                fvdb::JaggedTensor(renderedAlphas.jdata().view({C * HW, 1})),
-                fvdb::JaggedTensor(lastGaussianIds.jdata().view({C * HW})),
-                fvdb::JaggedTensor(dLossDRenderedFeatures.jdata().view({C * HW, NUM_CHANNELS})),
-                fvdb::JaggedTensor(dLossDRenderedAlphas.jdata().view({C * HW, 1})));
+                fvdb::JaggedTensor(renderedAlphas.jdata().view({C * H * W, 1})),
+                fvdb::JaggedTensor(lastGaussianIds.jdata().view({C * H * W})),
+                fvdb::JaggedTensor(dLossDRenderedFeatures.jdata().view({C * H * W, NUM_CHANNELS})),
+                fvdb::JaggedTensor(dLossDRenderedAlphas.jdata().view({C * H * W, 1})));
         }
         return std::make_tuple(
             renderedAlphas, lastGaussianIds, dLossDRenderedFeatures, dLossDRenderedAlphas);
     }();
 
-    RasterizeBackwardArgs<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED> args(
-        means2d,
-        conics,
-        opacities,
-        features,
-        backgrounds,
-        masks,
+    const auto launchWithTileIntersections = [&](auto tileIntersections) {
+        using TileIntersectionsT = decltype(tileIntersections);
+        RasterizeBackwardArgs<ScalarType,
+                              NUM_CHANNELS,
+                              NUM_SHARED_CHANNELS,
+                              IS_PACKED,
+                              TileIntersectionsT>
+            args(means2d,
+                 conics,
+                 opacities,
+                 features,
+                 backgrounds,
+                 masks,
+                 tileIntersections,
+                 renderWindow,
+                 tileSize,
+                 0,
+                 reshapedRenderedAlphas,
+                 reshapedLastGaussianIds,
+                 reshapedDLossDRenderedFeatures,
+                 reshapedDLossDRenderedAlphas,
+                 outDLossDMeans2d,
+                 outDLossDConics,
+                 outDLossDFeatures,
+                 outDLossDOpacities,
+                 absGrad ? std::make_optional(outDLossDMeans2dAbs) : std::nullopt);
+
+        const size_t numChannels =
+            (NUM_SHARED_CHANNELS == NUM_CHANNELS) ? NUM_CHANNELS : NUM_SHARED_CHANNELS + 1;
+        const size_t sharedMemSize = getSharedMemRequirements<ScalarType>(numChannels, tileSize);
+
+        if (cudaFuncSetAttribute(rasterizeGaussiansBackward<ScalarType,
+                                                            NUM_CHANNELS,
+                                                            NUM_SHARED_CHANNELS,
+                                                            IS_PACKED,
+                                                            TileIntersectionsT>,
+                                 cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                 sharedMemSize) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ",
+                     sharedMemSize,
+                     " bytes), try lowering tileSize.");
+        }
+        const dim3 blockDim = {tileSize, tileSize, 1};
+        const dim3 gridDim  = {static_cast<uint32_t>(tileIntersections.numActiveTiles()), 1, 1};
+        rasterizeGaussiansBackward<ScalarType,
+                                   NUM_CHANNELS,
+                                   NUM_SHARED_CHANNELS,
+                                   IS_PACKED,
+                                   TileIntersectionsT>
+            <<<gridDim, blockDim, sharedMemSize, stream>>>(args);
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+    };
+
+    dispatchTileIntersectionsAccessor(
+        tileOffsets,
+        tileGaussianIds,
         renderWindow,
         tileSize,
         0,
-        tileOffsets,
-        tileGaussianIds,
-        reshapedRenderedAlphas,
-        reshapedLastGaussianIds,
-        reshapedDLossDRenderedFeatures,
-        reshapedDLossDRenderedAlphas,
-        outDLossDMeans2d,
-        outDLossDConics,
-        outDLossDFeatures,
-        outDLossDOpacities,
-        absGrad ? std::make_optional(outDLossDMeans2dAbs) : std::nullopt,
+        [&](const auto &tileIntersectionsAccessor) {
+            launchWithTileIntersections(tileIntersectionsAccessor);
+        },
         activeTiles,
         tilePixelMask,
         tilePixelCumsum,
         pixelMap);
-
-    const size_t numChannels =
-        (NUM_SHARED_CHANNELS == NUM_CHANNELS) ? NUM_CHANNELS : NUM_SHARED_CHANNELS + 1;
-    const size_t sharedMemSize = getSharedMemRequirements<ScalarType>(numChannels, tileSize);
-
-    if (cudaFuncSetAttribute(
-            rasterizeGaussiansBackward<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED>,
-            cudaFuncAttributeMaxDynamicSharedMemorySize,
-            sharedMemSize) != cudaSuccess) {
-        AT_ERROR("Failed to set maximum shared memory size (requested ",
-                 sharedMemSize,
-                 " bytes), try lowering tileSize.");
-    }
-    rasterizeGaussiansBackward<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED>
-        <<<args.commonArgs.getGridDim(), args.commonArgs.getBlockDim(), sharedMemSize, stream>>>(
-            args);
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
     return std::make_tuple(outDLossDMeans2dAbs,
                            outDLossDMeans2d,
                            outDLossDConics,
@@ -1188,8 +1218,9 @@ callRasterizeBackwardPrivateUse1(
     const bool tileOffsetsAreSparse = tileOffsets.dim() == 1;
     // Get C from tileOffsets for dense mode
     // For sparse mode, C is unused, only used for output sizing for dense mode
-    const uint32_t C  = tileOffsetsAreSparse ? 0 : tileOffsets.size(0);
-    const uint32_t HW = renderWindow.pixelCountPerCamera();
+    const uint32_t C = tileOffsetsAreSparse ? 0 : tileOffsets.size(0);
+    const uint32_t H = renderWindow.height;
+    const uint32_t W = renderWindow.width;
 
     auto [reshapedRenderedAlphas,
           reshapedLastGaussianIds,
@@ -1198,10 +1229,10 @@ callRasterizeBackwardPrivateUse1(
         if (!activeTiles.has_value()) {
             // Dense mode. Reshape the JaggedTensor inputs to match sparse mode
             return std::make_tuple(
-                fvdb::JaggedTensor(renderedAlphas.jdata().view({C * HW, 1})),
-                fvdb::JaggedTensor(lastGaussianIds.jdata().view({C * HW})),
-                fvdb::JaggedTensor(dLossDRenderedFeatures.jdata().view({C * HW, NUM_CHANNELS})),
-                fvdb::JaggedTensor(dLossDRenderedAlphas.jdata().view({C * HW, 1})));
+                fvdb::JaggedTensor(renderedAlphas.jdata().view({C * H * W, 1})),
+                fvdb::JaggedTensor(lastGaussianIds.jdata().view({C * H * W})),
+                fvdb::JaggedTensor(dLossDRenderedFeatures.jdata().view({C * H * W, NUM_CHANNELS})),
+                fvdb::JaggedTensor(dLossDRenderedAlphas.jdata().view({C * H * W, 1})));
         }
         return std::make_tuple(
             renderedAlphas, lastGaussianIds, dLossDRenderedFeatures, dLossDRenderedAlphas);
@@ -1262,31 +1293,31 @@ callRasterizeBackwardPrivateUse1(
         uint32_t deviceTileOffset, deviceTileCount;
         std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
         if (deviceTileCount) {
-            RasterizeBackwardArgs<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED> args(
-                means2d,
-                conics,
-                opacities,
-                features,
-                backgrounds,
-                masks,
-                renderWindow,
-                tileSize,
-                deviceTileOffset,
-                tileOffsets,
-                tileGaussianIds,
-                reshapedRenderedAlphas,
-                reshapedLastGaussianIds,
-                reshapedDLossDRenderedFeatures,
-                reshapedDLossDRenderedAlphas,
-                outDLossDMeans2d,
-                outDLossDConics,
-                outDLossDFeatures,
-                outDLossDOpacities,
-                absGrad ? std::make_optional(outDLossDMeans2dAbs) : std::nullopt,
-                activeTiles,
-                tilePixelMask,
-                tilePixelCumsum,
-                pixelMap);
+            RasterizeBackwardArgs<ScalarType,
+                                  NUM_CHANNELS,
+                                  NUM_SHARED_CHANNELS,
+                                  IS_PACKED,
+                                  DenseTileIntersections::Accessor>
+                args(means2d,
+                     conics,
+                     opacities,
+                     features,
+                     backgrounds,
+                     masks,
+                     DenseTileIntersections(tileOffsets, tileGaussianIds, tileSize)
+                         .accessor(renderWindow, deviceTileOffset),
+                     renderWindow,
+                     tileSize,
+                     deviceTileOffset,
+                     reshapedRenderedAlphas,
+                     reshapedLastGaussianIds,
+                     reshapedDLossDRenderedFeatures,
+                     reshapedDLossDRenderedAlphas,
+                     outDLossDMeans2d,
+                     outDLossDConics,
+                     outDLossDFeatures,
+                     outDLossDOpacities,
+                     absGrad ? std::make_optional(outDLossDMeans2dAbs) : std::nullopt);
 
             const size_t numChannels =
                 (NUM_SHARED_CHANNELS == NUM_CHANNELS) ? NUM_CHANNELS : NUM_SHARED_CHANNELS + 1;
@@ -1296,7 +1327,8 @@ callRasterizeBackwardPrivateUse1(
             if (cudaFuncSetAttribute(rasterizeGaussiansBackward<ScalarType,
                                                                 NUM_CHANNELS,
                                                                 NUM_SHARED_CHANNELS,
-                                                                IS_PACKED>,
+                                                                IS_PACKED,
+                                                                DenseTileIntersections::Accessor>,
                                      cudaFuncAttributeMaxDynamicSharedMemorySize,
                                      sharedMemSize) != cudaSuccess) {
                 AT_ERROR("Failed to set maximum shared memory size (requested ",
@@ -1305,9 +1337,13 @@ callRasterizeBackwardPrivateUse1(
             }
 
             const dim3 blockDim = {tileSize, tileSize, 1};
-            const dim3 gridDim  = {deviceTileCount, 1, 1};
+            const dim3 gridDim  = {static_cast<uint32_t>(deviceTileCount), 1, 1};
 
-            rasterizeGaussiansBackward<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED>
+            rasterizeGaussiansBackward<ScalarType,
+                                       NUM_CHANNELS,
+                                       NUM_SHARED_CHANNELS,
+                                       IS_PACKED,
+                                       DenseTileIntersections::Accessor>
                 <<<gridDim, blockDim, sharedMemSize, stream>>>(args);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }

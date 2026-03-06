@@ -345,7 +345,7 @@ TEST(GaussianRasterizeForwardMaskedEdgeTile, Child) {
 
     auto [tileOffsets, tileGaussianIds] =
         fvdb::detail::ops::dispatchGaussianTileIntersection<torch::kCUDA>(
-            means2d, radii, depths, at::nullopt, (uint32_t)C, tileSize, tileExtentH, tileExtentW);
+            means2d, radii, depths, at::nullopt, tileSize, imageHeight, imageWidth);
 
     auto [outFeatures, outAlphas, outLastIds] =
         fvdb::detail::ops::dispatchGaussianRasterizeForward<torch::kCUDA>(

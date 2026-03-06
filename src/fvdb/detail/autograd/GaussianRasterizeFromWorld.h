@@ -5,6 +5,7 @@
 #define FVDB_DETAIL_AUTOGRAD_GAUSSIANRASTERIZEFROMWORLD_H
 
 #include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
+#include <fvdb/detail/ops/gsplat/GaussianTileIntersection.h>
 
 #include <torch/autograd.h>
 
@@ -32,13 +33,8 @@ struct RasterizeGaussiansToPixelsFromWorld3DGS
             const Variable &distortionCoeffs,        // [C,K]
             const fvdb::detail::ops::RollingShutterType rollingShutterType,
             const fvdb::detail::ops::DistortionModel distortionModel,
-            const uint32_t imageWidth,
-            const uint32_t imageHeight,
-            const uint32_t imageOriginW,
-            const uint32_t imageOriginH,
-            const uint32_t tileSize,
-            const Variable &tileOffsets,                        // [C, tileH, tileW]
-            const Variable &tileGaussianIds,                    // [n_isects]
+            const ops::RenderWindow2D &renderWindow,
+            const ops::DenseTileIntersections &tileIntersections,
             std::optional<Variable> backgrounds = std::nullopt, // [C,D]
             std::optional<Variable> masks       = std::nullopt);      // [C,tileH,tileW] bool
 
