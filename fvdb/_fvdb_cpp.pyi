@@ -92,6 +92,16 @@ def gs_conv_transpose_backward(
     topology: GatherScatterDefaultTopology,
 ) -> tuple[torch.Tensor, torch.Tensor]: ...
 
+# PredGatherIGemm convolution (SM80 CUTLASS IGEMM)
+def pred_gather_igemm_conv(
+    features: torch.Tensor,
+    weights: torch.Tensor,
+    feature_grid: GridBatch,
+    output_grid: GridBatch,
+    kernel_size: int,
+    stride: int,
+) -> torch.Tensor: ...
+
 class GaussianSplat3d:
     class ProjectionType(Enum):
         PERSPECTIVE = ...

@@ -159,6 +159,7 @@ ConfigureTest(GaussianRasterizeContributingGaussianIdsTest "GaussianRasterizeCon
 ConfigureTest(GaussianMCMCAddNoiseTest "GaussianMCMCAddNoiseTest.cpp")
 ConfigureTest(GaussianMCMCRelocationTest "GaussianMCMCRelocationTest.cpp")
 ConfigureTest(GatherScatterDefaultConvTest "GatherScatterDefaultConvTest.cu")
+ConfigureTest(PredGatherIGemmTest "PredGatherIGemmTest.cu")
 
 if(NOT NANOVDB_EDITOR_SKIP)
   #ConfigureTest(ViewerTest "ViewerTest.cpp")
