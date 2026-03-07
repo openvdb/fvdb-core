@@ -36,7 +36,7 @@ using RenderSettings = fvdb::detail::ops::RenderSettings;
 
 namespace {
 
-using CameraModel = fvdb::GaussianSplat3d::CameraModel;
+using CameraModel      = fvdb::GaussianSplat3d::CameraModel;
 using ProjectionMethod = fvdb::GaussianSplat3d::ProjectionMethod;
 
 bool
@@ -49,8 +49,9 @@ usesOpenCVDistortion(const CameraModel cameraModel) {
 
 fvdb::detail::ops::ProjectionType
 projectionTypeForCameraModel(const CameraModel cameraModel) {
-    return cameraModel == CameraModel::ORTHOGRAPHIC ? fvdb::detail::ops::ProjectionType::ORTHOGRAPHIC
-                                                    : fvdb::detail::ops::ProjectionType::PERSPECTIVE;
+    return cameraModel == CameraModel::ORTHOGRAPHIC
+               ? fvdb::detail::ops::ProjectionType::ORTHOGRAPHIC
+               : fvdb::detail::ops::ProjectionType::PERSPECTIVE;
 }
 
 ProjectionMethod
@@ -361,9 +362,9 @@ GaussianSplat3d::projectGaussiansImpl(const torch::Tensor &worldToCameraMatrices
 
     ProjectedGaussianSplats ret;
     ret.mRenderSettings = settings;
-    ret.mCameraModel = settings.projectionType == fvdb::detail::ops::ProjectionType::ORTHOGRAPHIC
-                           ? CameraModel::ORTHOGRAPHIC
-                           : CameraModel::PINHOLE;
+    ret.mCameraModel    = settings.projectionType == fvdb::detail::ops::ProjectionType::ORTHOGRAPHIC
+                              ? CameraModel::ORTHOGRAPHIC
+                              : CameraModel::PINHOLE;
     ret.mProjectionMethod = ProjectionMethod::ANALYTIC;
 
     // Track gradients for the 2D means in the backward pass if you're optimizing
@@ -477,7 +478,8 @@ GaussianSplat3d::projectGaussiansForCameraImpl(
     settingsForProjection.projectionType = projectionTypeForCameraModel(cameraModel);
 
     if (resolvedProjectionMethod == ProjectionMethod::ANALYTIC) {
-        auto ret = projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settingsForProjection);
+        auto ret =
+            projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settingsForProjection);
         ret.mCameraModel      = cameraModel;
         ret.mProjectionMethod = resolvedProjectionMethod;
         return ret;
@@ -492,8 +494,8 @@ GaussianSplat3d::projectGaussiansForCameraImpl(
     const torch::Tensor distortionCoeffsTensor = distortionCoeffs.has_value()
                                                      ? distortionCoeffs.value()
                                                      : torch::empty({C, 0}, mMeans.options());
-    fvdb::detail::ops::UTParams utParams = fvdb::detail::ops::UTParams{};
-    const auto projectionResults         = FVDB_DISPATCH_KERNEL(mMeans.device(), [&]() {
+    fvdb::detail::ops::UTParams utParams       = fvdb::detail::ops::UTParams{};
+    const auto projectionResults               = FVDB_DISPATCH_KERNEL(mMeans.device(), [&]() {
         return fvdb::detail::ops::dispatchGaussianProjectionForwardUT<DeviceTag>(
             mMeans,
             mQuats,
@@ -534,8 +536,8 @@ GaussianSplat3d::projectGaussiansForCameraImpl(
             renderQuantity = ret.perGaussianDepth.unsqueeze(-1);
         } else if (settings.renderMode == RenderMode::RGB ||
                    settings.renderMode == RenderMode::RGBD) {
-            renderQuantity =
-                evalSphericalHarmonicsImpl(settings.shDegreeToUse, worldToCameraMatrices, ret.perGaussianRadius);
+            renderQuantity = evalSphericalHarmonicsImpl(
+                settings.shDegreeToUse, worldToCameraMatrices, ret.perGaussianRadius);
             if (settings.renderMode == RenderMode::RGBD) {
                 renderQuantity =
                     torch::cat({renderQuantity, ret.perGaussianDepth.unsqueeze(-1)}, -1);
@@ -546,10 +548,8 @@ GaussianSplat3d::projectGaussiansForCameraImpl(
         return renderQuantity;
     }();
 
-    const int numTilesW =
-        std::ceil(settings.imageWidth / static_cast<float>(settings.tileSize));
-    const int numTilesH =
-        std::ceil(settings.imageHeight / static_cast<float>(settings.tileSize));
+    const int numTilesW = std::ceil(settings.imageWidth / static_cast<float>(settings.tileSize));
+    const int numTilesH = std::ceil(settings.imageHeight / static_cast<float>(settings.tileSize));
     std::tie(ret.tileOffsets, ret.tileGaussianIds) = FVDB_DISPATCH_KERNEL(mMeans.device(), [&]() {
         return detail::ops::dispatchGaussianTileIntersection<DeviceTag>(ret.perGaussian2dMean,
                                                                         ret.perGaussianRadius,
@@ -857,8 +857,8 @@ GaussianSplat3d::sparseProjectGaussiansForCameraImpl(
     const torch::Tensor distortionCoeffsTensor = distortionCoeffs.has_value()
                                                      ? distortionCoeffs.value()
                                                      : torch::empty({C, 0}, mMeans.options());
-    fvdb::detail::ops::UTParams utParams = fvdb::detail::ops::UTParams{};
-    const auto projectionResults         = FVDB_DISPATCH_KERNEL(mMeans.device(), [&]() {
+    fvdb::detail::ops::UTParams utParams       = fvdb::detail::ops::UTParams{};
+    const auto projectionResults               = FVDB_DISPATCH_KERNEL(mMeans.device(), [&]() {
         return fvdb::detail::ops::dispatchGaussianProjectionForwardUT<DeviceTag>(
             mMeans,
             mQuats,
@@ -878,10 +878,10 @@ GaussianSplat3d::sparseProjectGaussiansForCameraImpl(
             settings.radiusClip,
             settings.antialias);
     });
-    ret.perGaussianRadius = std::get<0>(projectionResults);
-    ret.perGaussian2dMean = std::get<1>(projectionResults);
-    ret.perGaussianDepth  = std::get<2>(projectionResults);
-    ret.perGaussianConic  = std::get<3>(projectionResults);
+    ret.perGaussianRadius                      = std::get<0>(projectionResults);
+    ret.perGaussian2dMean                      = std::get<1>(projectionResults);
+    ret.perGaussianDepth                       = std::get<2>(projectionResults);
+    ret.perGaussianConic                       = std::get<3>(projectionResults);
 
     ret.perGaussianOpacity = opacities().repeat({C, 1});
     if (settings.antialias) {
@@ -898,8 +898,8 @@ GaussianSplat3d::sparseProjectGaussiansForCameraImpl(
             renderQuantity = ret.perGaussianDepth.unsqueeze(-1);
         } else if (settings.renderMode == RenderMode::RGB ||
                    settings.renderMode == RenderMode::RGBD) {
-            renderQuantity =
-                evalSphericalHarmonicsImpl(settings.shDegreeToUse, worldToCameraMatrices, ret.perGaussianRadius);
+            renderQuantity = evalSphericalHarmonicsImpl(
+                settings.shDegreeToUse, worldToCameraMatrices, ret.perGaussianRadius);
             if (settings.renderMode == RenderMode::RGBD) {
                 renderQuantity =
                     torch::cat({renderQuantity, ret.perGaussianDepth.unsqueeze(-1)}, -1);
@@ -922,8 +922,8 @@ GaussianSplat3d::sparseProjectGaussiansForCameraImpl(
                                                                               numTilesH,
                                                                               numTilesW);
     });
-    ret.tileOffsets     = sparseTileOffsets;
-    ret.tileGaussianIds = tileGaussianIds;
+    ret.tileOffsets                                 = sparseTileOffsets;
+    ret.tileGaussianIds                             = tileGaussianIds;
 
     return ret;
 }
@@ -989,14 +989,14 @@ GaussianSplat3d::sparseRenderImpl(const JaggedTensor &pixelsToRender,
                                   const std::optional<torch::Tensor> &masks) {
     FVDB_FUNC_RANGE();
 
-    const SparseProjectedGaussianSplats &state = sparseProjectGaussiansForCameraImpl(
-        pixelsToRender,
-        worldToCameraMatrices,
-        projectionMatrices,
-        settings,
-        cameraModel,
-        projectionMethod,
-        distortionCoeffs);
+    const SparseProjectedGaussianSplats &state =
+        sparseProjectGaussiansForCameraImpl(pixelsToRender,
+                                            worldToCameraMatrices,
+                                            projectionMatrices,
+                                            settings,
+                                            cameraModel,
+                                            projectionMethod,
+                                            distortionCoeffs);
 
     // Render using unique (deduplicated) pixels
     const auto &renderPixels = state.hasDuplicates ? state.uniquePixelsToRender : pixelsToRender;
@@ -1044,8 +1044,12 @@ GaussianSplat3d::renderNumContributingGaussiansImpl(
     const ProjectionMethod projectionMethod,
     const std::optional<torch::Tensor> &distortionCoeffs) {
     FVDB_FUNC_RANGE();
-    const ProjectedGaussianSplats &state = projectGaussiansForCameraImpl(
-        worldToCameraMatrices, projectionMatrices, settings, cameraModel, projectionMethod, distortionCoeffs);
+    const ProjectedGaussianSplats &state = projectGaussiansForCameraImpl(worldToCameraMatrices,
+                                                                         projectionMatrices,
+                                                                         settings,
+                                                                         cameraModel,
+                                                                         projectionMethod,
+                                                                         distortionCoeffs);
     return FVDB_DISPATCH_KERNEL_DEVICE(state.perGaussian2dMean.device(), [&]() {
         return fvdb::detail::ops::dispatchGaussianRasterizeNumContributingGaussians<DeviceTag>(
             state.perGaussian2dMean,
@@ -1068,14 +1072,14 @@ GaussianSplat3d::sparseRenderNumContributingGaussiansImpl(
     const std::optional<torch::Tensor> &distortionCoeffs) {
     FVDB_FUNC_RANGE();
 
-    const SparseProjectedGaussianSplats &state = sparseProjectGaussiansForCameraImpl(
-        pixelsToRender,
-        worldToCameraMatrices,
-        projectionMatrices,
-        settings,
-        cameraModel,
-        projectionMethod,
-        distortionCoeffs);
+    const SparseProjectedGaussianSplats &state =
+        sparseProjectGaussiansForCameraImpl(pixelsToRender,
+                                            worldToCameraMatrices,
+                                            projectionMatrices,
+                                            settings,
+                                            cameraModel,
+                                            projectionMethod,
+                                            distortionCoeffs);
 
     const auto &renderPixels = state.hasDuplicates ? state.uniquePixelsToRender : pixelsToRender;
 
@@ -1112,8 +1116,12 @@ GaussianSplat3d::renderContributingGaussianIdsImpl(
     const std::optional<torch::Tensor> &distortionCoeffs,
     const std::optional<torch::Tensor> &maybeNumContributingGaussians) {
     FVDB_FUNC_RANGE();
-    const ProjectedGaussianSplats &state = projectGaussiansForCameraImpl(
-        worldToCameraMatrices, projectionMatrices, settings, cameraModel, projectionMethod, distortionCoeffs);
+    const ProjectedGaussianSplats &state = projectGaussiansForCameraImpl(worldToCameraMatrices,
+                                                                         projectionMatrices,
+                                                                         settings,
+                                                                         cameraModel,
+                                                                         projectionMethod,
+                                                                         distortionCoeffs);
     // TODO: Currently projection only performs spherical harmonics evaluation on input SH/features,
     //       whereas we'd really like rendering to be more generic to be able to supply some
     //       other render quantity directly, such as an integer ID as we need in this case.  So, to
@@ -1155,14 +1163,14 @@ GaussianSplat3d::sparseRenderContributingGaussianIdsImpl(
     const std::optional<fvdb::JaggedTensor> &maybeNumContributingGaussians) {
     FVDB_FUNC_RANGE();
 
-    const SparseProjectedGaussianSplats &state = sparseProjectGaussiansForCameraImpl(
-        pixelsToRender,
-        worldToCameraMatrices,
-        projectionMatrices,
-        settings,
-        cameraModel,
-        projectionMethod,
-        distortionCoeffs);
+    const SparseProjectedGaussianSplats &state =
+        sparseProjectGaussiansForCameraImpl(pixelsToRender,
+                                            worldToCameraMatrices,
+                                            projectionMatrices,
+                                            settings,
+                                            cameraModel,
+                                            projectionMethod,
+                                            distortionCoeffs);
 
     const auto &renderPixels = state.hasDuplicates ? state.uniquePixelsToRender : pixelsToRender;
 
@@ -1217,20 +1225,24 @@ GaussianSplat3d::projectGaussiansForImages(const torch::Tensor &worldToCameraMat
                                            const float eps2d,
                                            const bool antialias) {
     RenderSettings settings;
-    settings.imageWidth     = imageWidth;
-    settings.imageHeight    = imageHeight;
-    settings.nearPlane      = near;
-    settings.farPlane       = far;
-    settings.shDegreeToUse  = shDegreeToUse;
-    settings.radiusClip     = minRadius2d;
-    settings.eps2d          = eps2d;
-    settings.antialias      = antialias;
-    settings.shDegreeToUse  = shDegreeToUse;
+    settings.imageWidth    = imageWidth;
+    settings.imageHeight   = imageHeight;
+    settings.nearPlane     = near;
+    settings.farPlane      = far;
+    settings.shDegreeToUse = shDegreeToUse;
+    settings.radiusClip    = minRadius2d;
+    settings.eps2d         = eps2d;
+    settings.antialias     = antialias;
+    settings.shDegreeToUse = shDegreeToUse;
 
     settings.renderMode = RenderMode::RGB;
 
-    return projectGaussiansForCameraImpl(
-        worldToCameraMatrices, projectionMatrices, settings, cameraModel, projectionMethod, distortionCoeffs);
+    return projectGaussiansForCameraImpl(worldToCameraMatrices,
+                                         projectionMatrices,
+                                         settings,
+                                         cameraModel,
+                                         projectionMethod,
+                                         distortionCoeffs);
 }
 
 GaussianSplat3d::ProjectedGaussianSplats
@@ -1247,18 +1259,22 @@ GaussianSplat3d::projectGaussiansForDepths(const torch::Tensor &worldToCameraMat
                                            const float eps2d,
                                            const bool antialias) {
     RenderSettings settings;
-    settings.imageWidth     = imageWidth;
-    settings.imageHeight    = imageHeight;
-    settings.nearPlane      = near;
-    settings.farPlane       = far;
-    settings.shDegreeToUse  = -1;
-    settings.radiusClip     = minRadius2d;
-    settings.eps2d          = eps2d;
-    settings.antialias      = antialias;
-    settings.renderMode     = RenderMode::DEPTH;
+    settings.imageWidth    = imageWidth;
+    settings.imageHeight   = imageHeight;
+    settings.nearPlane     = near;
+    settings.farPlane      = far;
+    settings.shDegreeToUse = -1;
+    settings.radiusClip    = minRadius2d;
+    settings.eps2d         = eps2d;
+    settings.antialias     = antialias;
+    settings.renderMode    = RenderMode::DEPTH;
 
-    return projectGaussiansForCameraImpl(
-        worldToCameraMatrices, projectionMatrices, settings, cameraModel, projectionMethod, distortionCoeffs);
+    return projectGaussiansForCameraImpl(worldToCameraMatrices,
+                                         projectionMatrices,
+                                         settings,
+                                         cameraModel,
+                                         projectionMethod,
+                                         distortionCoeffs);
 }
 
 GaussianSplat3d::ProjectedGaussianSplats
@@ -1277,19 +1293,23 @@ GaussianSplat3d::projectGaussiansForImagesAndDepths(
     const float eps2d,
     const bool antialias) {
     RenderSettings settings;
-    settings.imageWidth     = imageWidth;
-    settings.imageHeight    = imageHeight;
-    settings.nearPlane      = near;
-    settings.farPlane       = far;
-    settings.shDegreeToUse  = shDegreeToUse;
-    settings.radiusClip     = minRadius2d;
-    settings.eps2d          = eps2d;
-    settings.antialias      = antialias;
+    settings.imageWidth    = imageWidth;
+    settings.imageHeight   = imageHeight;
+    settings.nearPlane     = near;
+    settings.farPlane      = far;
+    settings.shDegreeToUse = shDegreeToUse;
+    settings.radiusClip    = minRadius2d;
+    settings.eps2d         = eps2d;
+    settings.antialias     = antialias;
 
     settings.renderMode = RenderMode::RGBD;
 
-    return projectGaussiansForCameraImpl(
-        worldToCameraMatrices, projectionMatrices, settings, cameraModel, projectionMethod, distortionCoeffs);
+    return projectGaussiansForCameraImpl(worldToCameraMatrices,
+                                         projectionMatrices,
+                                         settings,
+                                         cameraModel,
+                                         projectionMethod,
+                                         distortionCoeffs);
 }
 
 namespace {
@@ -1354,16 +1374,16 @@ GaussianSplat3d::renderImages(const torch::Tensor &worldToCameraMatrices,
                               const std::optional<torch::Tensor> &backgrounds,
                               const std::optional<torch::Tensor> &masks) {
     RenderSettings settings;
-    settings.imageWidth     = imageWidth;
-    settings.imageHeight    = imageHeight;
-    settings.nearPlane      = near;
-    settings.farPlane       = far;
-    settings.shDegreeToUse  = shDegreeToUse;
-    settings.radiusClip     = minRadius2d;
-    settings.eps2d          = eps2d;
-    settings.antialias      = antialias;
-    settings.tileSize       = tileSize;
-    settings.renderMode     = RenderSettings::RenderMode::RGB;
+    settings.imageWidth    = imageWidth;
+    settings.imageHeight   = imageHeight;
+    settings.nearPlane     = near;
+    settings.farPlane      = far;
+    settings.shDegreeToUse = shDegreeToUse;
+    settings.radiusClip    = minRadius2d;
+    settings.eps2d         = eps2d;
+    settings.antialias     = antialias;
+    settings.tileSize      = tileSize;
+    settings.renderMode    = RenderSettings::RenderMode::RGB;
 
     const ProjectedGaussianSplats state = projectGaussiansForCameraImpl(worldToCameraMatrices,
                                                                         projectionMatrices,
@@ -1402,16 +1422,16 @@ GaussianSplat3d::renderImagesFromWorld(const torch::Tensor &worldToCameraMatrice
     const int C = worldToCameraMatrices.size(0); // number of cameras
     TORCH_CHECK(C > 0, "At least one camera must be provided (got 0)");
     RenderSettings settings;
-    settings.imageWidth     = imageWidth;
-    settings.imageHeight    = imageHeight;
-    settings.nearPlane      = near;
-    settings.farPlane       = far;
-    settings.shDegreeToUse  = shDegreeToUse;
-    settings.radiusClip     = minRadius2d;
-    settings.eps2d          = eps2d;
-    settings.antialias      = antialias;
-    settings.tileSize       = tileSize;
-    settings.renderMode     = RenderSettings::RenderMode::RGB;
+    settings.imageWidth    = imageWidth;
+    settings.imageHeight   = imageHeight;
+    settings.nearPlane     = near;
+    settings.farPlane      = far;
+    settings.shDegreeToUse = shDegreeToUse;
+    settings.radiusClip    = minRadius2d;
+    settings.eps2d         = eps2d;
+    settings.antialias     = antialias;
+    settings.tileSize      = tileSize;
+    settings.renderMode    = RenderSettings::RenderMode::RGB;
 
     const ProjectedGaussianSplats state = projectGaussiansForCameraImpl(worldToCameraMatrices,
                                                                         projectionMatrices,
@@ -1466,15 +1486,15 @@ GaussianSplat3d::renderDepths(const torch::Tensor &worldToCameraMatrices,
                               const std::optional<torch::Tensor> &backgrounds,
                               const std::optional<torch::Tensor> &masks) {
     RenderSettings settings;
-    settings.imageWidth     = imageWidth;
-    settings.imageHeight    = imageHeight;
-    settings.nearPlane      = near;
-    settings.farPlane       = far;
-    settings.shDegreeToUse  = -1;
-    settings.radiusClip     = minRadius2d;
-    settings.eps2d          = eps2d;
-    settings.tileSize       = tileSize;
-    settings.renderMode     = RenderSettings::RenderMode::DEPTH;
+    settings.imageWidth    = imageWidth;
+    settings.imageHeight   = imageHeight;
+    settings.nearPlane     = near;
+    settings.farPlane      = far;
+    settings.shDegreeToUse = -1;
+    settings.radiusClip    = minRadius2d;
+    settings.eps2d         = eps2d;
+    settings.tileSize      = tileSize;
+    settings.renderMode    = RenderSettings::RenderMode::DEPTH;
 
     const ProjectedGaussianSplats state = projectGaussiansForCameraImpl(worldToCameraMatrices,
                                                                         projectionMatrices,
@@ -1513,16 +1533,16 @@ GaussianSplat3d::renderDepthsFromWorld(const torch::Tensor &worldToCameraMatrice
     TORCH_CHECK(C > 0, "At least one camera must be provided (got 0)");
 
     RenderSettings settings;
-    settings.imageWidth     = imageWidth;
-    settings.imageHeight    = imageHeight;
-    settings.nearPlane      = near;
-    settings.farPlane       = far;
-    settings.shDegreeToUse  = -1;
-    settings.radiusClip     = minRadius2d;
-    settings.eps2d          = eps2d;
-    settings.antialias      = antialias;
-    settings.tileSize       = tileSize;
-    settings.renderMode     = RenderSettings::RenderMode::DEPTH;
+    settings.imageWidth    = imageWidth;
+    settings.imageHeight   = imageHeight;
+    settings.nearPlane     = near;
+    settings.farPlane      = far;
+    settings.shDegreeToUse = -1;
+    settings.radiusClip    = minRadius2d;
+    settings.eps2d         = eps2d;
+    settings.antialias     = antialias;
+    settings.tileSize      = tileSize;
+    settings.renderMode    = RenderSettings::RenderMode::DEPTH;
 
     const ProjectedGaussianSplats state = projectGaussiansForCameraImpl(worldToCameraMatrices,
                                                                         projectionMatrices,
@@ -1559,29 +1579,30 @@ GaussianSplat3d::renderDepthsFromWorld(const torch::Tensor &worldToCameraMatrice
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
-GaussianSplat3d::renderNumContributingGaussians(const torch::Tensor &worldToCameraMatrices,
-                                                const torch::Tensor &projectionMatrices,
-                                                const size_t imageWidth,
-                                                const size_t imageHeight,
-                                                const float near,
-                                                const float far,
-                                                const CameraModel cameraModel,
-                                                const ProjectionMethod projectionMethod,
-                                                const std::optional<torch::Tensor> &distortionCoeffs,
-                                                const size_t tileSize,
-                                                const float minRadius2d,
-                                                const float eps2d,
-                                                const bool antialias) {
+GaussianSplat3d::renderNumContributingGaussians(
+    const torch::Tensor &worldToCameraMatrices,
+    const torch::Tensor &projectionMatrices,
+    const size_t imageWidth,
+    const size_t imageHeight,
+    const float near,
+    const float far,
+    const CameraModel cameraModel,
+    const ProjectionMethod projectionMethod,
+    const std::optional<torch::Tensor> &distortionCoeffs,
+    const size_t tileSize,
+    const float minRadius2d,
+    const float eps2d,
+    const bool antialias) {
     RenderSettings settings;
-    settings.imageWidth     = imageWidth;
-    settings.imageHeight    = imageHeight;
-    settings.nearPlane      = near;
-    settings.farPlane       = far;
-    settings.shDegreeToUse  = 0;
-    settings.tileSize       = tileSize;
-    settings.radiusClip     = minRadius2d;
-    settings.eps2d          = eps2d;
-    settings.renderMode     = RenderSettings::RenderMode::DEPTH;
+    settings.imageWidth    = imageWidth;
+    settings.imageHeight   = imageHeight;
+    settings.nearPlane     = near;
+    settings.farPlane      = far;
+    settings.shDegreeToUse = 0;
+    settings.tileSize      = tileSize;
+    settings.radiusClip    = minRadius2d;
+    settings.eps2d         = eps2d;
+    settings.renderMode    = RenderSettings::RenderMode::DEPTH;
 
     return renderNumContributingGaussiansImpl(worldToCameraMatrices,
                                               projectionMatrices,
@@ -1609,15 +1630,15 @@ GaussianSplat3d::sparseRenderDepths(const fvdb::JaggedTensor &pixelsToRender,
                                     const std::optional<torch::Tensor> &backgrounds,
                                     const std::optional<torch::Tensor> &masks) {
     RenderSettings settings;
-    settings.imageWidth     = imageWidth;
-    settings.imageHeight    = imageHeight;
-    settings.nearPlane      = near;
-    settings.farPlane       = far;
-    settings.shDegreeToUse  = 0;
-    settings.tileSize       = tileSize;
-    settings.radiusClip     = minRadius2d;
-    settings.eps2d          = eps2d;
-    settings.renderMode     = RenderSettings::RenderMode::DEPTH;
+    settings.imageWidth    = imageWidth;
+    settings.imageHeight   = imageHeight;
+    settings.nearPlane     = near;
+    settings.farPlane      = far;
+    settings.shDegreeToUse = 0;
+    settings.tileSize      = tileSize;
+    settings.radiusClip    = minRadius2d;
+    settings.eps2d         = eps2d;
+    settings.renderMode    = RenderSettings::RenderMode::DEPTH;
 
     return sparseRenderImpl(pixelsToRender,
                             worldToCameraMatrices,
@@ -1649,15 +1670,15 @@ GaussianSplat3d::sparseRenderImages(const fvdb::JaggedTensor &pixelsToRender,
                                     const std::optional<torch::Tensor> &backgrounds,
                                     const std::optional<torch::Tensor> &masks) {
     RenderSettings settings;
-    settings.imageWidth     = imageWidth;
-    settings.imageHeight    = imageHeight;
-    settings.nearPlane      = near;
-    settings.farPlane       = far;
-    settings.shDegreeToUse  = shDegreeToUse;
-    settings.tileSize       = tileSize;
-    settings.radiusClip     = minRadius2d;
-    settings.eps2d          = eps2d;
-    settings.renderMode     = RenderSettings::RenderMode::RGB;
+    settings.imageWidth    = imageWidth;
+    settings.imageHeight   = imageHeight;
+    settings.nearPlane     = near;
+    settings.farPlane      = far;
+    settings.shDegreeToUse = shDegreeToUse;
+    settings.tileSize      = tileSize;
+    settings.radiusClip    = minRadius2d;
+    settings.eps2d         = eps2d;
+    settings.renderMode    = RenderSettings::RenderMode::RGB;
 
     return sparseRenderImpl(pixelsToRender,
                             worldToCameraMatrices,
@@ -1689,15 +1710,15 @@ GaussianSplat3d::sparseRenderImagesAndDepths(const fvdb::JaggedTensor &pixelsToR
                                              const std::optional<torch::Tensor> &backgrounds,
                                              const std::optional<torch::Tensor> &masks) {
     RenderSettings settings;
-    settings.imageWidth     = imageWidth;
-    settings.imageHeight    = imageHeight;
-    settings.nearPlane      = near;
-    settings.farPlane       = far;
-    settings.shDegreeToUse  = shDegreeToUse;
-    settings.tileSize       = tileSize;
-    settings.radiusClip     = minRadius2d;
-    settings.eps2d          = eps2d;
-    settings.renderMode     = RenderSettings::RenderMode::RGBD;
+    settings.imageWidth    = imageWidth;
+    settings.imageHeight   = imageHeight;
+    settings.nearPlane     = near;
+    settings.farPlane      = far;
+    settings.shDegreeToUse = shDegreeToUse;
+    settings.tileSize      = tileSize;
+    settings.radiusClip    = minRadius2d;
+    settings.eps2d         = eps2d;
+    settings.renderMode    = RenderSettings::RenderMode::RGBD;
 
     return sparseRenderImpl(pixelsToRender,
                             worldToCameraMatrices,
@@ -1711,31 +1732,31 @@ GaussianSplat3d::sparseRenderImagesAndDepths(const fvdb::JaggedTensor &pixelsToR
 }
 
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
-GaussianSplat3d::sparseRenderNumContributingGaussians(const fvdb::JaggedTensor &pixelsToRender,
-                                                      const torch::Tensor &worldToCameraMatrices,
-                                                      const torch::Tensor &projectionMatrices,
-                                                      const size_t imageWidth,
-                                                      const size_t imageHeight,
-                                                      const float near,
-                                                      const float far,
-                                                      const CameraModel cameraModel,
-                                                      const ProjectionMethod projectionMethod,
-                                                      const std::optional<torch::Tensor>
-                                                          &distortionCoeffs,
-                                                      const size_t tileSize,
-                                                      const float minRadius2d,
-                                                      const float eps2d,
-                                                      const bool antialias) {
+GaussianSplat3d::sparseRenderNumContributingGaussians(
+    const fvdb::JaggedTensor &pixelsToRender,
+    const torch::Tensor &worldToCameraMatrices,
+    const torch::Tensor &projectionMatrices,
+    const size_t imageWidth,
+    const size_t imageHeight,
+    const float near,
+    const float far,
+    const CameraModel cameraModel,
+    const ProjectionMethod projectionMethod,
+    const std::optional<torch::Tensor> &distortionCoeffs,
+    const size_t tileSize,
+    const float minRadius2d,
+    const float eps2d,
+    const bool antialias) {
     RenderSettings settings;
-    settings.imageWidth     = imageWidth;
-    settings.imageHeight    = imageHeight;
-    settings.nearPlane      = near;
-    settings.farPlane       = far;
-    settings.shDegreeToUse  = 0;
-    settings.tileSize       = tileSize;
-    settings.radiusClip     = minRadius2d;
-    settings.eps2d          = eps2d;
-    settings.renderMode     = RenderSettings::RenderMode::DEPTH;
+    settings.imageWidth    = imageWidth;
+    settings.imageHeight   = imageHeight;
+    settings.nearPlane     = near;
+    settings.farPlane      = far;
+    settings.shDegreeToUse = 0;
+    settings.tileSize      = tileSize;
+    settings.radiusClip    = minRadius2d;
+    settings.eps2d         = eps2d;
+    settings.renderMode    = RenderSettings::RenderMode::DEPTH;
 
     return sparseRenderNumContributingGaussiansImpl(pixelsToRender,
                                                     worldToCameraMatrices,
@@ -1784,8 +1805,12 @@ GaussianSplat3d::renderContributingGaussianIds(const torch::Tensor &worldToCamer
         // Use the standard path - compute actual number of contributing gaussians
         torch::Tensor numContributingGaussians, weights;
         std::tie(numContributingGaussians, weights) =
-            renderNumContributingGaussiansImpl(
-                worldToCameraMatrices, projectionMatrices, settings, cameraModel, projectionMethod, distortionCoeffs);
+            renderNumContributingGaussiansImpl(worldToCameraMatrices,
+                                               projectionMatrices,
+                                               settings,
+                                               cameraModel,
+                                               projectionMethod,
+                                               distortionCoeffs);
         return renderContributingGaussianIdsImpl(worldToCameraMatrices,
                                                  projectionMatrices,
                                                  settings,
@@ -1797,22 +1822,22 @@ GaussianSplat3d::renderContributingGaussianIds(const torch::Tensor &worldToCamer
 }
 
 std::tuple<fvdb::JaggedTensor, fvdb::JaggedTensor>
-GaussianSplat3d::sparseRenderContributingGaussianIds(const fvdb::JaggedTensor &pixelsToRender,
-                                                     const torch::Tensor &worldToCameraMatrices,
-                                                     const torch::Tensor &projectionMatrices,
-                                                     const size_t imageWidth,
-                                                     const size_t imageHeight,
-                                                     const float near,
-                                                     const float far,
-                                                     const CameraModel cameraModel,
-                                                     const ProjectionMethod projectionMethod,
-                                                     const std::optional<torch::Tensor>
-                                                         &distortionCoeffs,
-                                                     const size_t tileSize,
-                                                     const float minRadius2d,
-                                                     const float eps2d,
-                                                     const bool antialias,
-                                                     const int topKContributors) {
+GaussianSplat3d::sparseRenderContributingGaussianIds(
+    const fvdb::JaggedTensor &pixelsToRender,
+    const torch::Tensor &worldToCameraMatrices,
+    const torch::Tensor &projectionMatrices,
+    const size_t imageWidth,
+    const size_t imageHeight,
+    const float near,
+    const float far,
+    const CameraModel cameraModel,
+    const ProjectionMethod projectionMethod,
+    const std::optional<torch::Tensor> &distortionCoeffs,
+    const size_t tileSize,
+    const float minRadius2d,
+    const float eps2d,
+    const bool antialias,
+    const int topKContributors) {
     RenderSettings settings;
     settings.imageWidth      = imageWidth;
     settings.imageHeight     = imageHeight;
@@ -1835,14 +1860,14 @@ GaussianSplat3d::sparseRenderContributingGaussianIds(const fvdb::JaggedTensor &p
                                                        distortionCoeffs);
     } else {
         fvdb::JaggedTensor numContributingGaussians, weights;
-        std::tie(numContributingGaussians, weights) = sparseRenderNumContributingGaussiansImpl(
-            pixelsToRender,
-            worldToCameraMatrices,
-            projectionMatrices,
-            settings,
-            cameraModel,
-            projectionMethod,
-            distortionCoeffs);
+        std::tie(numContributingGaussians, weights) =
+            sparseRenderNumContributingGaussiansImpl(pixelsToRender,
+                                                     worldToCameraMatrices,
+                                                     projectionMatrices,
+                                                     settings,
+                                                     cameraModel,
+                                                     projectionMethod,
+                                                     distortionCoeffs);
         return sparseRenderContributingGaussianIdsImpl(pixelsToRender,
                                                        worldToCameraMatrices,
                                                        projectionMatrices,
@@ -1872,16 +1897,16 @@ GaussianSplat3d::renderImagesAndDepths(const torch::Tensor &worldToCameraMatrice
                                        const std::optional<torch::Tensor> &backgrounds,
                                        const std::optional<torch::Tensor> &masks) {
     RenderSettings settings;
-    settings.imageWidth     = imageWidth;
-    settings.imageHeight    = imageHeight;
-    settings.nearPlane      = near;
-    settings.farPlane       = far;
-    settings.shDegreeToUse  = shDegreeToUse;
-    settings.radiusClip     = minRadius2d;
-    settings.eps2d          = eps2d;
-    settings.antialias      = antialias;
-    settings.tileSize       = tileSize;
-    settings.renderMode     = RenderSettings::RenderMode::RGBD;
+    settings.imageWidth    = imageWidth;
+    settings.imageHeight   = imageHeight;
+    settings.nearPlane     = near;
+    settings.farPlane      = far;
+    settings.shDegreeToUse = shDegreeToUse;
+    settings.radiusClip    = minRadius2d;
+    settings.eps2d         = eps2d;
+    settings.antialias     = antialias;
+    settings.tileSize      = tileSize;
+    settings.renderMode    = RenderSettings::RenderMode::RGBD;
 
     const ProjectedGaussianSplats state = projectGaussiansForCameraImpl(worldToCameraMatrices,
                                                                         projectionMatrices,
@@ -1922,16 +1947,16 @@ GaussianSplat3d::renderImagesAndDepthsFromWorld(
     TORCH_CHECK(C > 0, "At least one camera must be provided (got 0)");
 
     RenderSettings settings;
-    settings.imageWidth     = imageWidth;
-    settings.imageHeight    = imageHeight;
-    settings.nearPlane      = near;
-    settings.farPlane       = far;
-    settings.shDegreeToUse  = shDegreeToUse;
-    settings.radiusClip     = minRadius2d;
-    settings.eps2d          = eps2d;
-    settings.antialias      = antialias;
-    settings.tileSize       = tileSize;
-    settings.renderMode     = RenderSettings::RenderMode::RGBD;
+    settings.imageWidth    = imageWidth;
+    settings.imageHeight   = imageHeight;
+    settings.nearPlane     = near;
+    settings.farPlane      = far;
+    settings.shDegreeToUse = shDegreeToUse;
+    settings.radiusClip    = minRadius2d;
+    settings.eps2d         = eps2d;
+    settings.antialias     = antialias;
+    settings.tileSize      = tileSize;
+    settings.renderMode    = RenderSettings::RenderMode::RGBD;
 
     const ProjectedGaussianSplats state = projectGaussiansForCameraImpl(worldToCameraMatrices,
                                                                         projectionMatrices,
