@@ -19,7 +19,7 @@ def _parse_device_string(device_string: str | torch.device) -> torch.device: ...
 from . import nn, utils, viz
 from ._fvdb_cpp import config, hilbert, morton, volume_render
 from .convolution_plan import ConvolutionPlan
-from .enums import DistortionModel, ProjectionType, RollingShutterType, ShOrderingMode
+from .enums import CameraModel, ProjectionMethod, ProjectionType, RollingShutterType, ShOrderingMode
 from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
 from .grid import Grid
 from .grid_batch import GridBatch, gcat
@@ -109,7 +109,8 @@ __all__ = [
     "GaussianSplat3d",
     "ProjectedGaussianSplats",
     "ConvolutionPlan",
-    "DistortionModel",
+    "CameraModel",
+    "ProjectionMethod",
     "RollingShutterType",
     "ProjectionType",
     "ShOrderingMode",

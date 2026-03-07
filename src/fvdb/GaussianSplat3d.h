@@ -53,6 +53,8 @@ class GaussianSplat3d {
     }
 
     using ProjectionType = fvdb::detail::ops::ProjectionType;
+    using CameraModel = fvdb::detail::ops::DistortionModel;
+    using ProjectionMethod = fvdb::detail::ops::ProjectionMethod;
 
     /// @brief A set of projected Gaussians that can be used to render images.
     struct ProjectedGaussianSplats {
@@ -66,6 +68,8 @@ class GaussianSplat3d {
         torch::Tensor tileGaussianIds; // [C, num_tiles_h, num_tiles_w, max_gaussians_per_tile]
 
         fvdb::detail::ops::RenderSettings mRenderSettings;
+        CameraModel mCameraModel               = CameraModel::PINHOLE;
+        ProjectionMethod mProjectionMethod     = ProjectionMethod::ANALYTIC;
 
         ssize_t
         imageHeight() const {
@@ -87,9 +91,14 @@ class GaussianSplat3d {
             return mRenderSettings.farPlane;
         }
 
-        ProjectionType
-        projectionType() const {
-            return mRenderSettings.projectionType;
+        CameraModel
+        cameraModel() const {
+            return mCameraModel;
+        }
+
+        ProjectionMethod
+        projectionMethod() const {
+            return mProjectionMethod;
         }
 
         int64_t
@@ -764,7 +773,9 @@ class GaussianSplat3d {
     /// @param imageHeight Height of the image
     /// @param near Near plane
     /// @param far Far plane
-    /// @param projectionType Type of projection (PERSPECTIVE or ORTHOGRAPHIC)
+    /// @param cameraModel Semantic camera model for projection
+    /// @param projectionMethod Projection implementation selector
+    /// @param distortionCoeffs Optional OpenCV distortion coefficients for distorted cameras
     /// @param shDegreeToUse Degree of SH to use for rendering (use -1 to use all SH bases)
     /// @param minRadius2d Minimum radius in pixels below which projected Gaussians are ignored
     /// @param eps2d Blur factor for antialiasing (only used if antialias is true)
@@ -777,11 +788,16 @@ class GaussianSplat3d {
                                                       size_t imageHeight,
                                                       const float near,
                                                       const float far,
-                                                      const ProjectionType projectionType,
-                                                      const int64_t shDegreeToUse,
-                                                      const float minRadius2d,
-                                                      const float eps2d,
-                                                      const bool antialias);
+                                                      const CameraModel cameraModel =
+                                                          CameraModel::PINHOLE,
+                                                      const ProjectionMethod projectionMethod =
+                                                          ProjectionMethod::AUTO,
+                                                      const std::optional<torch::Tensor>
+                                                          &distortionCoeffs = std::nullopt,
+                                                      const int64_t shDegreeToUse = -1,
+                                                      const float minRadius2d     = 0.0,
+                                                      const float eps2d           = 0.3,
+                                                      const bool antialias        = false);
 
     /// @brief Precompute the projected Gaussians to be re-used for rendering depths (e.g. if
     /// you want to render multiple depth maps with the same camera settings or image patches).
@@ -791,7 +807,9 @@ class GaussianSplat3d {
     /// @param imageHeight Height of the image
     /// @param near Near plane
     /// @param far Far plane
-    /// @param projectionType Type of projection (PERSPECTIVE or ORTHOGRAPHIC)
+    /// @param cameraModel Semantic camera model for projection
+    /// @param projectionMethod Projection implementation selector
+    /// @param distortionCoeffs Optional OpenCV distortion coefficients for distorted cameras
     /// @param minRadius2d Minimum radius in pixels below which projected Gaussians are ignored
     /// @param eps2d Blur factor for antialiasing (only used if antialias is true)
     /// @param antialias Whether to antialias the image
@@ -803,10 +821,15 @@ class GaussianSplat3d {
                                                       size_t imageHeight,
                                                       const float near,
                                                       const float far,
-                                                      const ProjectionType projectionType,
-                                                      const float minRadius2d,
-                                                      const float eps2d,
-                                                      const bool antialias);
+                                                      const CameraModel cameraModel =
+                                                          CameraModel::PINHOLE,
+                                                      const ProjectionMethod projectionMethod =
+                                                          ProjectionMethod::AUTO,
+                                                      const std::optional<torch::Tensor>
+                                                          &distortionCoeffs = std::nullopt,
+                                                      const float minRadius2d = 0.0,
+                                                      const float eps2d       = 0.3,
+                                                      const bool antialias    = false);
 
     /// @brief Precompute the projected Gaussians to be re-used for rendering images and depths
     /// (e.g. if you want to render multiple images and depth maps with the same camera settings
@@ -817,7 +840,9 @@ class GaussianSplat3d {
     /// @param imageHeight Height of the image
     /// @param near Near plane
     /// @param far Far plane
-    /// @param projectionType Type of projection (PERSPECTIVE or ORTHOGRAPHIC)
+    /// @param cameraModel Semantic camera model for projection
+    /// @param projectionMethod Projection implementation selector
+    /// @param distortionCoeffs Optional OpenCV distortion coefficients for distorted cameras
     /// @param shDegreeToUse Degree of SH to use for rendering (use -1 to use all SH bases)
     /// @param minRadius2d Minimum radius in pixels below which projected Gaussians are ignored
     /// @param eps2d Blur factor for antialiasing (only used if antialias is true)
@@ -831,11 +856,15 @@ class GaussianSplat3d {
                                        size_t imageHeight,
                                        const float near,
                                        const float far,
-                                       const ProjectionType projectionType,
-                                       const int64_t shDegreeToUse,
-                                       const float minRadius2d,
-                                       const float eps2d,
-                                       const bool antialias);
+                                       const CameraModel cameraModel = CameraModel::PINHOLE,
+                                       const ProjectionMethod projectionMethod =
+                                           ProjectionMethod::AUTO,
+                                       const std::optional<torch::Tensor> &distortionCoeffs =
+                                           std::nullopt,
+                                       const int64_t shDegreeToUse = -1,
+                                       const float minRadius2d     = 0.0,
+                                       const float eps2d           = 0.3,
+                                       const bool antialias        = false);
 
     /// @brief Save this scene and optional training metadata to a PLY file with the given filename
     /// @param filename The path to save the PLY file to
@@ -891,7 +920,9 @@ class GaussianSplat3d {
     /// @param imageHeight Height of the image
     /// @param near Near plane
     /// @param far Far plane
-    /// @param projectionType Type of projection (PERSPECTIVE or ORTHOGRAPHIC)
+    /// @param cameraModel Semantic camera model for projection
+    /// @param projectionMethod Projection implementation selector
+    /// @param distortionCoeffs Optional OpenCV distortion coefficients for distorted cameras
     /// @param shDegreeToUse Degree of SH to use for rendering (use -1 to use all SH bases)
     /// @param tileSize Size of the tiles used for rendering
     /// @param minRadius2d Minimum radius in pixels below which projected Gaussians are ignored
@@ -908,7 +939,9 @@ class GaussianSplat3d {
                  const size_t imageHeight,
                  const float near,
                  const float far,
-                 const ProjectionType projectionType             = ProjectionType::PERSPECTIVE,
+                 const CameraModel cameraModel                   = CameraModel::PINHOLE,
+                 const ProjectionMethod projectionMethod         = ProjectionMethod::AUTO,
+                 const std::optional<torch::Tensor> &distortionCoeffs = std::nullopt,
                  const int64_t shDegreeToUse                     = -1,
                  const size_t tileSize                           = 16,
                  const float minRadius2d                         = 0.0,
@@ -924,7 +957,7 @@ class GaussianSplat3d {
     /// geometry gradients through the rasterization step.
     ///
     /// Tile intersections are still computed using a (non-differentiable) projection step:
-    /// - For `cameraModel == DistortionModel::PINHOLE` or `DistortionModel::ORTHOGRAPHIC`, we
+    /// - For `cameraModel == CameraModel::PINHOLE` or `CameraModel::ORTHOGRAPHIC`, we
     ///   reuse the classic projection path.
     /// - For OpenCV camera models, we use the Unscented Transform (UT) projection kernel to
     ///   compute per-Gaussian radii and depths for sorting / tiling, then rasterize with 3DGS.
@@ -935,8 +968,8 @@ class GaussianSplat3d {
                           const size_t imageHeight,
                           const float near,
                           const float far,
-                          const fvdb::detail::ops::DistortionModel cameraModel =
-                              fvdb::detail::ops::DistortionModel::PINHOLE,
+                          const CameraModel cameraModel = CameraModel::PINHOLE,
+                          const ProjectionMethod projectionMethod = ProjectionMethod::AUTO,
                           const std::optional<torch::Tensor> &distortionCoeffs = std::nullopt,
                           const int64_t shDegreeToUse                          = -1,
                           const size_t tileSize                                = 16,
@@ -954,7 +987,9 @@ class GaussianSplat3d {
     /// @param imageHeight Height of the image
     /// @param near Near plane
     /// @param far Far plane
-    /// @param projectionType Type of projection (PERSPECTIVE or ORTHOGRAPHIC)
+    /// @param cameraModel Semantic camera model for projection
+    /// @param projectionMethod Projection implementation selector
+    /// @param distortionCoeffs Optional OpenCV distortion coefficients for distorted cameras
     /// @param tileSize Size of the tiles used for rendering
     /// @param minRadius2d Minimum radius in pixels below which projected Gaussians are ignored
     /// @param eps2d Blur factor for antialiasing (only used if antialias is true)
@@ -970,7 +1005,9 @@ class GaussianSplat3d {
                  const size_t imageHeight,
                  const float near,
                  const float far,
-                 const ProjectionType projectionType             = ProjectionType::PERSPECTIVE,
+                 const CameraModel cameraModel                   = CameraModel::PINHOLE,
+                 const ProjectionMethod projectionMethod         = ProjectionMethod::AUTO,
+                 const std::optional<torch::Tensor> &distortionCoeffs = std::nullopt,
                  const size_t tileSize                           = 16,
                  const float minRadius2d                         = 0.0,
                  const float eps2d                               = 0.3,
@@ -979,20 +1016,59 @@ class GaussianSplat3d {
                  const std::optional<torch::Tensor> &masks       = std::nullopt);
 
     std::tuple<torch::Tensor, torch::Tensor>
+    renderDepthsFromWorld(const torch::Tensor &worldToCameraMatrices,
+                          const torch::Tensor &projectionMatrices,
+                          const size_t imageWidth,
+                          const size_t imageHeight,
+                          const float near,
+                          const float far,
+                          const CameraModel cameraModel = CameraModel::PINHOLE,
+                          const ProjectionMethod projectionMethod = ProjectionMethod::AUTO,
+                          const std::optional<torch::Tensor> &distortionCoeffs = std::nullopt,
+                          const size_t tileSize                                = 16,
+                          const float minRadius2d                              = 0.0,
+                          const float eps2d                                    = 0.3,
+                          const bool antialias                                 = false,
+                          const std::optional<torch::Tensor> &backgrounds      = std::nullopt,
+                          const std::optional<torch::Tensor> &masks            = std::nullopt);
+
+    std::tuple<torch::Tensor, torch::Tensor>
     renderImagesAndDepths(const torch::Tensor &worldToCameraMatrices,
                           const torch::Tensor &projectionMatrices,
                           const size_t imageWidth,
                           const size_t imageHeight,
                           const float near,
                           const float far,
-                          const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
-                          const int64_t shDegreeToUse         = -1,
-                          const size_t tileSize               = 16,
-                          const float minRadius2d             = 0.0,
-                          const float eps2d                   = 0.3,
-                          const bool antialias                = false,
+                          const CameraModel cameraModel                   = CameraModel::PINHOLE,
+                          const ProjectionMethod projectionMethod         = ProjectionMethod::AUTO,
+                          const std::optional<torch::Tensor> &distortionCoeffs = std::nullopt,
+                          const int64_t shDegreeToUse                     = -1,
+                          const size_t tileSize                           = 16,
+                          const float minRadius2d                         = 0.0,
+                          const float eps2d                               = 0.3,
+                          const bool antialias                            = false,
                           const std::optional<torch::Tensor> &backgrounds = std::nullopt,
                           const std::optional<torch::Tensor> &masks       = std::nullopt);
+
+    std::tuple<torch::Tensor, torch::Tensor>
+    renderImagesAndDepthsFromWorld(const torch::Tensor &worldToCameraMatrices,
+                                   const torch::Tensor &projectionMatrices,
+                                   const size_t imageWidth,
+                                   const size_t imageHeight,
+                                   const float near,
+                                   const float far,
+                                   const CameraModel cameraModel = CameraModel::PINHOLE,
+                                   const ProjectionMethod projectionMethod =
+                                       ProjectionMethod::AUTO,
+                                   const std::optional<torch::Tensor> &distortionCoeffs =
+                                       std::nullopt,
+                                   const int64_t shDegreeToUse                     = -1,
+                                   const size_t tileSize                           = 16,
+                                   const float minRadius2d                         = 0.0,
+                                   const float eps2d                               = 0.3,
+                                   const bool antialias                            = false,
+                                   const std::optional<torch::Tensor> &backgrounds = std::nullopt,
+                                   const std::optional<torch::Tensor> &masks       = std::nullopt);
 
     std::tuple<JaggedTensor, JaggedTensor>
     sparseRenderImages(const fvdb::JaggedTensor &pixelsToRender,
@@ -1002,12 +1078,14 @@ class GaussianSplat3d {
                        const size_t imageHeight,
                        const float near,
                        const float far,
-                       const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
-                       const int64_t shDegreeToUse         = -1,
-                       const size_t tileSize               = 16,
-                       const float minRadius2d             = 0.0,
-                       const float eps2d                   = 0.3,
-                       const bool antialias                = false,
+                       const CameraModel cameraModel                   = CameraModel::PINHOLE,
+                       const ProjectionMethod projectionMethod         = ProjectionMethod::AUTO,
+                       const std::optional<torch::Tensor> &distortionCoeffs = std::nullopt,
+                       const int64_t shDegreeToUse                     = -1,
+                       const size_t tileSize                           = 16,
+                       const float minRadius2d                         = 0.0,
+                       const float eps2d                               = 0.3,
+                       const bool antialias                            = false,
                        const std::optional<torch::Tensor> &backgrounds = std::nullopt,
                        const std::optional<torch::Tensor> &masks       = std::nullopt);
 
@@ -1019,11 +1097,13 @@ class GaussianSplat3d {
                        const size_t imageHeight,
                        const float near,
                        const float far,
-                       const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
-                       const size_t tileSize               = 16,
-                       const float minRadius2d             = 0.0,
-                       const float eps2d                   = 0.3,
-                       const bool antialias                = false,
+                       const CameraModel cameraModel                   = CameraModel::PINHOLE,
+                       const ProjectionMethod projectionMethod         = ProjectionMethod::AUTO,
+                       const std::optional<torch::Tensor> &distortionCoeffs = std::nullopt,
+                       const size_t tileSize                           = 16,
+                       const float minRadius2d                         = 0.0,
+                       const float eps2d                               = 0.3,
+                       const bool antialias                            = false,
                        const std::optional<torch::Tensor> &backgrounds = std::nullopt,
                        const std::optional<torch::Tensor> &masks       = std::nullopt);
 
@@ -1035,12 +1115,14 @@ class GaussianSplat3d {
                                 const size_t imageHeight,
                                 const float near,
                                 const float far,
-                                const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
-                                const int64_t shDegreeToUse         = -1,
-                                const size_t tileSize               = 16,
-                                const float minRadius2d             = 0.0,
-                                const float eps2d                   = 0.3,
-                                const bool antialias                = false,
+                                const CameraModel cameraModel                   = CameraModel::PINHOLE,
+                                const ProjectionMethod projectionMethod         = ProjectionMethod::AUTO,
+                                const std::optional<torch::Tensor> &distortionCoeffs = std::nullopt,
+                                const int64_t shDegreeToUse                     = -1,
+                                const size_t tileSize                           = 16,
+                                const float minRadius2d                         = 0.0,
+                                const float eps2d                               = 0.3,
+                                const bool antialias                            = false,
                                 const std::optional<torch::Tensor> &backgrounds = std::nullopt,
                                 const std::optional<torch::Tensor> &masks       = std::nullopt);
 
@@ -1051,7 +1133,9 @@ class GaussianSplat3d {
     /// @param imageHeight Height of the image
     /// @param near Near plane
     /// @param far Far plane
-    /// @param projectionType Type of projection (PERSPECTIVE or ORTHOGRAPHIC)
+    /// @param cameraModel Semantic camera model for projection
+    /// @param projectionMethod Projection implementation selector
+    /// @param distortionCoeffs Optional OpenCV distortion coefficients for distorted cameras
     /// @param tileSize Size of the tiles used for rendering
     /// @param minRadius2d Minimum radius in pixels below which projected Gaussians are ignored
     /// @param eps2d Blur factor for antialiasing (only used if antialias is true)
@@ -1067,11 +1151,13 @@ class GaussianSplat3d {
         const size_t imageHeight,
         const float near,
         const float far,
-        const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
-        const size_t tileSize               = 16,
-        const float minRadius2d             = 0.0,
-        const float eps2d                   = 0.3,
-        const bool antialias                = false);
+        const CameraModel cameraModel                   = CameraModel::PINHOLE,
+        const ProjectionMethod projectionMethod         = ProjectionMethod::AUTO,
+        const std::optional<torch::Tensor> &distortionCoeffs = std::nullopt,
+        const size_t tileSize                           = 16,
+        const float minRadius2d                         = 0.0,
+        const float eps2d                               = 0.3,
+        const bool antialias                            = false);
 
     /// @brief Render the number of contributing Gaussians for each pixel in the image.
     /// @param pixelsToRender [P1 + P2 + ..., 2] JaggedTensor of pixels per camera to render.
@@ -1092,7 +1178,9 @@ class GaussianSplat3d {
                                          const size_t imageHeight,
                                          const float near,
                                          const float far,
-                                         const ProjectionType projectionType,
+                                         const CameraModel cameraModel,
+                                         const ProjectionMethod projectionMethod,
+                                         const std::optional<torch::Tensor> &distortionCoeffs,
                                          const size_t tileSize,
                                          const float minRadius2d,
                                          const float eps2d,
@@ -1109,7 +1197,9 @@ class GaussianSplat3d {
     /// @param imageHeight Height of the image
     /// @param near Near plane
     /// @param far Far plane
-    /// @param projectionType Type of projection (PERSPECTIVE or ORTHOGRAPHIC)
+    /// @param cameraModel Semantic camera model for projection
+    /// @param projectionMethod Projection implementation selector
+    /// @param distortionCoeffs Optional OpenCV distortion coefficients for distorted cameras
     /// @param tileSize Size of the tiles used for rendering
     /// @param minRadius2d Minimum radius in pixels below which projected Gaussians are ignored
     /// @param eps2d Blur factor for antialiasing (only used if antialias is true)
@@ -1128,11 +1218,13 @@ class GaussianSplat3d {
         const size_t imageHeight,
         const float near,
         const float far,
-        const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
-        const size_t tileSize               = 16,
-        const float minRadius2d             = 0.0,
-        const float eps2d                   = 0.3,
-        const bool antialias                = false);
+        const CameraModel cameraModel                   = CameraModel::PINHOLE,
+        const ProjectionMethod projectionMethod         = ProjectionMethod::AUTO,
+        const std::optional<torch::Tensor> &distortionCoeffs = std::nullopt,
+        const size_t tileSize                           = 16,
+        const float minRadius2d                         = 0.0,
+        const float eps2d                               = 0.3,
+        const bool antialias                            = false);
 
     /// @brief Render the IDs of the gaussians that are the top K contributors to the rendered
     /// pixels and the value of the weighted contribution to the rendered pixels.  If the size of
@@ -1148,7 +1240,9 @@ class GaussianSplat3d {
     /// @param imageHeight Height of the image
     /// @param near Near plane
     /// @param far Far plane
-    /// @param projectionType Type of projection (PERSPECTIVE or ORTHOGRAPHIC)
+    /// @param cameraModel Semantic camera model for projection
+    /// @param projectionMethod Projection implementation selector
+    /// @param distortionCoeffs Optional OpenCV distortion coefficients for distorted cameras
     /// @param tileSize Size of the tiles used for rendering
     /// @param minRadius2d Minimum radius in pixels below which projected Gaussians are ignored
     /// @param eps2d Blur factor for antialiasing (only used if antialias is true)
@@ -1170,11 +1264,13 @@ class GaussianSplat3d {
         const size_t imageHeight,
         const float near,
         const float far,
-        const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
-        const size_t tileSize               = 16,
-        const float minRadius2d             = 0.0,
-        const float eps2d                   = 0.3,
-        const bool antialias                = false);
+        const CameraModel cameraModel                   = CameraModel::PINHOLE,
+        const ProjectionMethod projectionMethod         = ProjectionMethod::AUTO,
+        const std::optional<torch::Tensor> &distortionCoeffs = std::nullopt,
+        const size_t tileSize                           = 16,
+        const float minRadius2d                         = 0.0,
+        const float eps2d                               = 0.3,
+        const bool antialias                            = false);
 
     /// @brief Render the IDs of the gaussians that are the contributors to the rendered images'
     /// pixels and the value of their weighted contributions to the rendered pixels.
@@ -1184,7 +1280,9 @@ class GaussianSplat3d {
     /// @param imageHeight Height of the image
     /// @param near Near plane
     /// @param far Far plane
-    /// @param projectionType Type of projection (PERSPECTIVE or ORTHOGRAPHIC)
+    /// @param cameraModel Semantic camera model for projection
+    /// @param projectionMethod Projection implementation selector
+    /// @param distortionCoeffs Optional OpenCV distortion coefficients for distorted cameras
     /// @param tileSize Size of the tiles used for rendering
     /// @param minRadius2d Minimum radius in pixels below which projected Gaussians are ignored
     /// @param eps2d Blur factor for antialiasing (only used if antialias is true)
@@ -1207,11 +1305,13 @@ class GaussianSplat3d {
                                   const size_t imageHeight,
                                   const float near,
                                   const float far,
-                                  const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
-                                  const size_t tileSize               = 16,
-                                  const float minRadius2d             = 0.0,
-                                  const float eps2d                   = 0.3,
-                                  const bool antialias                = false,
+                                  const CameraModel cameraModel                   = CameraModel::PINHOLE,
+                                  const ProjectionMethod projectionMethod         = ProjectionMethod::AUTO,
+                                  const std::optional<torch::Tensor> &distortionCoeffs = std::nullopt,
+                                  const size_t tileSize                           = 16,
+                                  const float minRadius2d                         = 0.0,
+                                  const float eps2d                               = 0.3,
+                                  const bool antialias                            = false,
                                   const int topKContributors          = 0);
 
     /// @brief Render the IDs of the gaussians that are the contributors to the rendered images'
@@ -1225,7 +1325,9 @@ class GaussianSplat3d {
     /// @param imageHeight Height of the image
     /// @param near Near plane
     /// @param far Far plane
-    /// @param projectionType Type of projection (PERSPECTIVE or ORTHOGRAPHIC)
+    /// @param cameraModel Semantic camera model for projection
+    /// @param projectionMethod Projection implementation selector
+    /// @param distortionCoeffs Optional OpenCV distortion coefficients for distorted cameras
     /// @param tileSize Size of the tiles used for rendering
     /// @param minRadius2d Minimum radius in pixels below which projected Gaussians are ignored
     /// @param eps2d Blur factor for antialiasing (only used if antialias is true)
@@ -1248,11 +1350,13 @@ class GaussianSplat3d {
         const size_t imageHeight,
         const float near,
         const float far,
-        const ProjectionType projectionType = ProjectionType::PERSPECTIVE,
-        const size_t tileSize               = 16,
-        const float minRadius2d             = 0.0,
-        const float eps2d                   = 0.3,
-        const bool antialias                = false,
+        const CameraModel cameraModel                   = CameraModel::PINHOLE,
+        const ProjectionMethod projectionMethod         = ProjectionMethod::AUTO,
+        const std::optional<torch::Tensor> &distortionCoeffs = std::nullopt,
+        const size_t tileSize                           = 16,
+        const float minRadius2d                         = 0.0,
+        const float eps2d                               = 0.3,
+        const bool antialias                            = false,
         const int topKContributors          = 0);
 
     /// @brief Relocate Gaussians by adjusting opacity and scale based on replication ratio.
@@ -1350,6 +1454,14 @@ class GaussianSplat3d {
                                                  const torch::Tensor &projectionMatrices,
                                                  const fvdb::detail::ops::RenderSettings &settings);
 
+    ProjectedGaussianSplats
+    projectGaussiansForCameraImpl(const torch::Tensor &worldToCameraMatrices,
+                                  const torch::Tensor &projectionMatrices,
+                                  const fvdb::detail::ops::RenderSettings &settings,
+                                  const CameraModel cameraModel,
+                                  const ProjectionMethod projectionMethod,
+                                  const std::optional<torch::Tensor> &distortionCoeffs);
+
     /// @brief Project Gaussians with sparse tile intersection for efficient sparse rendering.
     /// @param pixelsToRender JaggedTensor of pixel coordinates to render [P1 + P2 + ..., 2]
     /// @param worldToCameraMatrices [C, 4, 4] Camera-to-world matrices
@@ -1361,6 +1473,15 @@ class GaussianSplat3d {
                                const torch::Tensor &worldToCameraMatrices,
                                const torch::Tensor &projectionMatrices,
                                const fvdb::detail::ops::RenderSettings &settings);
+
+    SparseProjectedGaussianSplats
+    sparseProjectGaussiansForCameraImpl(const JaggedTensor &pixelsToRender,
+                                        const torch::Tensor &worldToCameraMatrices,
+                                        const torch::Tensor &projectionMatrices,
+                                        const fvdb::detail::ops::RenderSettings &settings,
+                                        const CameraModel cameraModel,
+                                        const ProjectionMethod projectionMethod,
+                                        const std::optional<torch::Tensor> &distortionCoeffs);
 
     std::tuple<torch::Tensor, torch::Tensor> renderCropFromProjectedGaussiansImpl(
         const ProjectedGaussianSplats &state,
@@ -1399,6 +1520,9 @@ class GaussianSplat3d {
                      const torch::Tensor &worldToCameraMatrices,
                      const torch::Tensor &projectionMatrices,
                      const fvdb::detail::ops::RenderSettings &settings,
+                     const CameraModel cameraModel,
+                     const ProjectionMethod projectionMethod,
+                     const std::optional<torch::Tensor> &distortionCoeffs,
                      const std::optional<torch::Tensor> &backgrounds = std::nullopt,
                      const std::optional<torch::Tensor> &masks       = std::nullopt);
 
@@ -1412,7 +1536,10 @@ class GaussianSplat3d {
     std::tuple<torch::Tensor, torch::Tensor>
     renderNumContributingGaussiansImpl(const torch::Tensor &worldToCameraMatrices,
                                        const torch::Tensor &projectionMatrices,
-                                       const fvdb::detail::ops::RenderSettings &settings);
+                                       const fvdb::detail::ops::RenderSettings &settings,
+                                       const CameraModel cameraModel,
+                                       const ProjectionMethod projectionMethod,
+                                       const std::optional<torch::Tensor> &distortionCoeffs);
 
     /// @brief Render the number of contributing Gaussians for each pixel in the image.
     /// @param pixelsToRender [P1 + P2 + ..., 2] JaggedTensor of pixels per camera to render.
@@ -1429,7 +1556,10 @@ class GaussianSplat3d {
     sparseRenderNumContributingGaussiansImpl(const fvdb::JaggedTensor &pixelsToRender,
                                              const torch::Tensor &worldToCameraMatrices,
                                              const torch::Tensor &projectionMatrices,
-                                             const fvdb::detail::ops::RenderSettings &settings);
+                                             const fvdb::detail::ops::RenderSettings &settings,
+                                             const CameraModel cameraModel,
+                                             const ProjectionMethod projectionMethod,
+                                             const std::optional<torch::Tensor> &distortionCoeffs);
 
     /// @brief Render the gaussian splatting scene
     ///         For every pixel being rendered, this function returns multiple samples in depth of
@@ -1455,6 +1585,9 @@ class GaussianSplat3d {
         const torch::Tensor &worldToCameraMatrices,
         const torch::Tensor &projectionMatrices,
         const fvdb::detail::ops::RenderSettings &settings,
+        const CameraModel cameraModel,
+        const ProjectionMethod projectionMethod,
+        const std::optional<torch::Tensor> &distortionCoeffs,
         const std::optional<torch::Tensor> &maybeNumContributingGaussians = std::nullopt);
 
     /// @brief Sparse render the gaussian splatting scene
@@ -1488,6 +1621,9 @@ class GaussianSplat3d {
         const torch::Tensor &worldToCameraMatrices,
         const torch::Tensor &projectionMatrices,
         const fvdb::detail::ops::RenderSettings &settings,
+        const CameraModel cameraModel,
+        const ProjectionMethod projectionMethod,
+        const std::optional<torch::Tensor> &distortionCoeffs,
         const std::optional<fvdb::JaggedTensor> &maybeNumContributingGaussians = std::nullopt);
 
     torch::Tensor evalSphericalHarmonicsImpl(const int64_t shDegreeToUse,

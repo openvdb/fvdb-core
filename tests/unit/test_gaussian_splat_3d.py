@@ -12,9 +12,11 @@ import torch
 from parameterized import parameterized, parameterized_class
 
 from fvdb import (
+    CameraModel,
     GaussianSplat3d,
     Grid,
     JaggedTensor,
+    ProjectionMethod,
     evaluate_spherical_harmonics,
     gaussian_render_jagged,
 )
@@ -1407,6 +1409,64 @@ class TestGaussianRender(BaseGaussianTestCase):
         torch.testing.assert_close(means2d[radii > 0], test_means2d[radii > 0])
         torch.testing.assert_close(depths[radii > 0], test_depths[radii > 0])
         torch.testing.assert_close(conics[radii > 0], test_conics[radii > 0], atol=1e-5, rtol=1e-4)
+
+    def test_projection_camera_metadata(self):
+        projected = self.gs3d.project_gaussians_for_images(
+            self.cam_to_world_mats[:1],
+            self.projection_mats[:1],
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            camera_model=CameraModel.PINHOLE,
+            projection_method=ProjectionMethod.AUTO,
+        )
+
+        self.assertEqual(projected.camera_model, CameraModel.PINHOLE)
+        self.assertEqual(projected.projection_method, ProjectionMethod.ANALYTIC)
+
+    def test_from_world_depth_and_rgbd_render(self):
+        cam_mats = self.cam_to_world_mats[:1]
+        proj_mats = self.projection_mats[:1]
+
+        images, image_alphas = self.gs3d.render_images_from_world(
+            cam_mats,
+            proj_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            camera_model=CameraModel.PINHOLE,
+            projection_method=ProjectionMethod.AUTO,
+        )
+        depths, depth_alphas = self.gs3d.render_depths_from_world(
+            cam_mats,
+            proj_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            camera_model=CameraModel.PINHOLE,
+            projection_method=ProjectionMethod.AUTO,
+        )
+        rgbd, rgbd_alphas = self.gs3d.render_images_and_depths_from_world(
+            cam_mats,
+            proj_mats,
+            self.width,
+            self.height,
+            self.near_plane,
+            self.far_plane,
+            camera_model=CameraModel.PINHOLE,
+            projection_method=ProjectionMethod.AUTO,
+        )
+
+        self.assertEqual(images.shape, (1, self.height, self.width, self.gs3d.num_channels))
+        self.assertEqual(depths.shape, (1, self.height, self.width, 1))
+        self.assertEqual(rgbd.shape, (1, self.height, self.width, self.gs3d.num_channels + 1))
+        torch.testing.assert_close(image_alphas, depth_alphas, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(image_alphas, rgbd_alphas, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(rgbd[..., :-1], images, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(rgbd[..., -1:], depths, atol=1e-5, rtol=1e-5)
 
     def _tensors_to_pixel(self, colors, alphas):
         canvas = (

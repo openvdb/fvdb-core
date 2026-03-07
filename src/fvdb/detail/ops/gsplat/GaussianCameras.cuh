@@ -38,6 +38,13 @@ enum class DistortionModel : int32_t {
     ORTHOGRAPHIC               = 5,
 };
 
+/// @brief Public-facing projection implementation selector.
+enum class ProjectionMethod : int32_t {
+    AUTO       = 0,
+    ANALYTIC   = 1,
+    UNSCENTED  = 2,
+};
+
 /// @brief Near-plane used when backward projection runs without user near/far clipping.
 constexpr float kBackwardProjectionNearPlane = -1e10f;
 

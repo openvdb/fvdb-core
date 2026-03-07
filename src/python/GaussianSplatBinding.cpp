@@ -20,7 +20,7 @@ bind_gaussian_splat3d(py::module &m) {
         .value("HORIZONTAL", fvdb::detail::ops::RollingShutterType::HORIZONTAL)
         .export_values();
 
-    py::enum_<fvdb::detail::ops::DistortionModel>(m, "DistortionModel")
+    py::enum_<fvdb::detail::ops::DistortionModel>(m, "CameraModel")
         .value("PINHOLE", fvdb::detail::ops::DistortionModel::PINHOLE)
         .value("OPENCV_RADTAN_5", fvdb::detail::ops::DistortionModel::OPENCV_RADTAN_5)
         .value("OPENCV_RATIONAL_8", fvdb::detail::ops::DistortionModel::OPENCV_RATIONAL_8)
@@ -28,6 +28,12 @@ bind_gaussian_splat3d(py::module &m) {
                fvdb::detail::ops::DistortionModel::OPENCV_RADTAN_THIN_PRISM_9)
         .value("OPENCV_THIN_PRISM_12", fvdb::detail::ops::DistortionModel::OPENCV_THIN_PRISM_12)
         .value("ORTHOGRAPHIC", fvdb::detail::ops::DistortionModel::ORTHOGRAPHIC)
+        .export_values();
+
+    py::enum_<fvdb::detail::ops::ProjectionMethod>(m, "ProjectionMethod")
+        .value("AUTO", fvdb::detail::ops::ProjectionMethod::AUTO)
+        .value("ANALYTIC", fvdb::detail::ops::ProjectionMethod::ANALYTIC)
+        .value("UNSCENTED", fvdb::detail::ops::ProjectionMethod::UNSCENTED)
         .export_values();
 
     py::class_<fvdb::GaussianSplat3d::ProjectedGaussianSplats>(m, "ProjectedGaussianSplats")
@@ -51,8 +57,10 @@ bind_gaussian_splat3d(py::module &m) {
                                &fvdb::GaussianSplat3d::ProjectedGaussianSplats::nearPlane)
         .def_property_readonly("far_plane",
                                &fvdb::GaussianSplat3d::ProjectedGaussianSplats::farPlane)
-        .def_property_readonly("projection_type",
-                               &fvdb::GaussianSplat3d::ProjectedGaussianSplats::projectionType)
+        .def_property_readonly("camera_model",
+                               &fvdb::GaussianSplat3d::ProjectedGaussianSplats::cameraModel)
+        .def_property_readonly("projection_method",
+                               &fvdb::GaussianSplat3d::ProjectedGaussianSplats::projectionMethod)
         .def_property_readonly("sh_degree_to_use",
                                &fvdb::GaussianSplat3d::ProjectedGaussianSplats::shDegreeToUse)
         .def_property_readonly("min_radius_2d",
@@ -62,11 +70,6 @@ bind_gaussian_splat3d(py::module &m) {
                                &fvdb::GaussianSplat3d::ProjectedGaussianSplats::antialias);
 
     py::class_<fvdb::GaussianSplat3d> gs3d(m, "GaussianSplat3d", "A gaussian splat scene");
-
-    py::enum_<fvdb::GaussianSplat3d::ProjectionType>(gs3d, "ProjectionType")
-        .value("PERSPECTIVE", fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE)
-        .value("ORTHOGRAPHIC", fvdb::GaussianSplat3d::ProjectionType::ORTHOGRAPHIC)
-        .export_values();
 
     gs3d.def(py::init<torch::Tensor,
                       torch::Tensor,
@@ -159,7 +162,10 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("image_height"),
              py::arg("near"),
              py::arg("far"),
-             py::arg("projection_type")  = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
+             py::arg("camera_model")     = fvdb::GaussianSplat3d::CameraModel::PINHOLE,
+             py::arg("projection_method") =
+                 fvdb::GaussianSplat3d::ProjectionMethod::AUTO,
+             py::arg("distortion_coeffs") = std::nullopt,
              py::arg("sh_degree_to_use") = -1,
              py::arg("min_radius_2d")    = 0.0,
              py::arg("eps_2d")           = 0.3,
@@ -173,10 +179,13 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("image_height"),
              py::arg("near"),
              py::arg("far"),
-             py::arg("projection_type") = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
-             py::arg("min_radius_2d")   = 0.0,
-             py::arg("eps_2d")          = 0.3,
-             py::arg("antialias")       = false)
+             py::arg("camera_model")     = fvdb::GaussianSplat3d::CameraModel::PINHOLE,
+             py::arg("projection_method") =
+                 fvdb::GaussianSplat3d::ProjectionMethod::AUTO,
+             py::arg("distortion_coeffs") = std::nullopt,
+             py::arg("min_radius_2d")     = 0.0,
+             py::arg("eps_2d")            = 0.3,
+             py::arg("antialias")         = false)
 
         .def("project_gaussians_for_images_and_depths",
              &fvdb::GaussianSplat3d::projectGaussiansForImagesAndDepths,
@@ -186,7 +195,10 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("image_height"),
              py::arg("near"),
              py::arg("far"),
-             py::arg("projection_type")  = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
+             py::arg("camera_model")     = fvdb::GaussianSplat3d::CameraModel::PINHOLE,
+             py::arg("projection_method") =
+                 fvdb::GaussianSplat3d::ProjectionMethod::AUTO,
+             py::arg("distortion_coeffs") = std::nullopt,
              py::arg("sh_degree_to_use") = -1,
              py::arg("min_radius_2d")    = 0.0,
              py::arg("eps_2d")           = 0.3,
@@ -211,14 +223,17 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("image_height"),
              py::arg("near"),
              py::arg("far"),
-             py::arg("projection_type")  = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
-             py::arg("sh_degree_to_use") = -1,
-             py::arg("tile_size")        = 16,
-             py::arg("min_radius_2d")    = 0.0,
-             py::arg("eps_2d")           = 0.3,
-             py::arg("antialias")        = false,
-             py::arg("backgrounds")      = std::nullopt,
-             py::arg("masks")            = std::nullopt)
+             py::arg("camera_model")     = fvdb::GaussianSplat3d::CameraModel::PINHOLE,
+             py::arg("projection_method") =
+                 fvdb::GaussianSplat3d::ProjectionMethod::AUTO,
+             py::arg("distortion_coeffs") = std::nullopt,
+             py::arg("sh_degree_to_use")  = -1,
+             py::arg("tile_size")         = 16,
+             py::arg("min_radius_2d")     = 0.0,
+             py::arg("eps_2d")            = 0.3,
+             py::arg("antialias")         = false,
+             py::arg("backgrounds")       = std::nullopt,
+             py::arg("masks")             = std::nullopt)
 
         .def("render_images_from_world",
              &fvdb::GaussianSplat3d::renderImagesFromWorld,
@@ -228,9 +243,30 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("image_height"),
              py::arg("near"),
              py::arg("far"),
-             py::arg("camera_model")      = fvdb::detail::ops::DistortionModel::PINHOLE,
+             py::arg("camera_model")     = fvdb::GaussianSplat3d::CameraModel::PINHOLE,
+             py::arg("projection_method") =
+                 fvdb::GaussianSplat3d::ProjectionMethod::AUTO,
              py::arg("distortion_coeffs") = std::nullopt,
              py::arg("sh_degree_to_use")  = -1,
+             py::arg("tile_size")         = 16,
+             py::arg("min_radius_2d")     = 0.0,
+             py::arg("eps_2d")            = 0.3,
+             py::arg("antialias")         = false,
+             py::arg("backgrounds")       = std::nullopt,
+             py::arg("masks")             = std::nullopt)
+
+        .def("render_depths_from_world",
+             &fvdb::GaussianSplat3d::renderDepthsFromWorld,
+             py::arg("world_to_camera_matrices"),
+             py::arg("projection_matrices"),
+             py::arg("image_width"),
+             py::arg("image_height"),
+             py::arg("near"),
+             py::arg("far"),
+             py::arg("camera_model")     = fvdb::GaussianSplat3d::CameraModel::PINHOLE,
+             py::arg("projection_method") =
+                 fvdb::GaussianSplat3d::ProjectionMethod::AUTO,
+             py::arg("distortion_coeffs") = std::nullopt,
              py::arg("tile_size")         = 16,
              py::arg("min_radius_2d")     = 0.0,
              py::arg("eps_2d")            = 0.3,
@@ -246,13 +282,16 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("image_height"),
              py::arg("near"),
              py::arg("far"),
-             py::arg("projection_type") = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
-             py::arg("tile_size")       = 16,
-             py::arg("min_radius_2d")   = 0.0,
-             py::arg("eps_2d")          = 0.3,
-             py::arg("antialias")       = false,
-             py::arg("backgrounds")     = std::nullopt,
-             py::arg("masks")           = std::nullopt)
+             py::arg("camera_model")     = fvdb::GaussianSplat3d::CameraModel::PINHOLE,
+             py::arg("projection_method") =
+                 fvdb::GaussianSplat3d::ProjectionMethod::AUTO,
+             py::arg("distortion_coeffs") = std::nullopt,
+             py::arg("tile_size")         = 16,
+             py::arg("min_radius_2d")     = 0.0,
+             py::arg("eps_2d")            = 0.3,
+             py::arg("antialias")         = false,
+             py::arg("backgrounds")       = std::nullopt,
+             py::arg("masks")             = std::nullopt)
 
         .def("render_images_and_depths",
              &fvdb::GaussianSplat3d::renderImagesAndDepths,
@@ -262,14 +301,37 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("image_height"),
              py::arg("near"),
              py::arg("far"),
-             py::arg("projection_type")  = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
-             py::arg("sh_degree_to_use") = -1,
-             py::arg("tile_size")        = 16,
-             py::arg("min_radius_2d")    = 0.0,
-             py::arg("eps_2d")           = 0.3,
-             py::arg("antialias")        = false,
-             py::arg("backgrounds")      = std::nullopt,
-             py::arg("masks")            = std::nullopt)
+             py::arg("camera_model")     = fvdb::GaussianSplat3d::CameraModel::PINHOLE,
+             py::arg("projection_method") =
+                 fvdb::GaussianSplat3d::ProjectionMethod::AUTO,
+             py::arg("distortion_coeffs") = std::nullopt,
+             py::arg("sh_degree_to_use")  = -1,
+             py::arg("tile_size")         = 16,
+             py::arg("min_radius_2d")     = 0.0,
+             py::arg("eps_2d")            = 0.3,
+             py::arg("antialias")         = false,
+             py::arg("backgrounds")       = std::nullopt,
+             py::arg("masks")             = std::nullopt)
+
+        .def("render_images_and_depths_from_world",
+             &fvdb::GaussianSplat3d::renderImagesAndDepthsFromWorld,
+             py::arg("world_to_camera_matrices"),
+             py::arg("projection_matrices"),
+             py::arg("image_width"),
+             py::arg("image_height"),
+             py::arg("near"),
+             py::arg("far"),
+             py::arg("camera_model")     = fvdb::GaussianSplat3d::CameraModel::PINHOLE,
+             py::arg("projection_method") =
+                 fvdb::GaussianSplat3d::ProjectionMethod::AUTO,
+             py::arg("distortion_coeffs") = std::nullopt,
+             py::arg("sh_degree_to_use")  = -1,
+             py::arg("tile_size")         = 16,
+             py::arg("min_radius_2d")     = 0.0,
+             py::arg("eps_2d")            = 0.3,
+             py::arg("antialias")         = false,
+             py::arg("backgrounds")       = std::nullopt,
+             py::arg("masks")             = std::nullopt)
 
         .def("sparse_render_images",
              &fvdb::GaussianSplat3d::sparseRenderImages,
@@ -280,14 +342,17 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("image_height"),
              py::arg("near"),
              py::arg("far"),
-             py::arg("projection_type")  = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
-             py::arg("sh_degree_to_use") = -1,
-             py::arg("tile_size")        = 16,
-             py::arg("min_radius_2d")    = 0.0,
-             py::arg("eps_2d")           = 0.3,
-             py::arg("antialias")        = false,
-             py::arg("backgrounds")      = std::nullopt,
-             py::arg("masks")            = std::nullopt)
+             py::arg("camera_model")     = fvdb::GaussianSplat3d::CameraModel::PINHOLE,
+             py::arg("projection_method") =
+                 fvdb::GaussianSplat3d::ProjectionMethod::AUTO,
+             py::arg("distortion_coeffs") = std::nullopt,
+             py::arg("sh_degree_to_use")  = -1,
+             py::arg("tile_size")         = 16,
+             py::arg("min_radius_2d")     = 0.0,
+             py::arg("eps_2d")            = 0.3,
+             py::arg("antialias")         = false,
+             py::arg("backgrounds")       = std::nullopt,
+             py::arg("masks")             = std::nullopt)
 
         .def("sparse_render_depths",
              &fvdb::GaussianSplat3d::sparseRenderDepths,
@@ -298,13 +363,16 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("image_height"),
              py::arg("near"),
              py::arg("far"),
-             py::arg("projection_type") = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
-             py::arg("tile_size")       = 16,
-             py::arg("min_radius_2d")   = 0.0,
-             py::arg("eps_2d")          = 0.3,
-             py::arg("antialias")       = false,
-             py::arg("backgrounds")     = std::nullopt,
-             py::arg("masks")           = std::nullopt)
+             py::arg("camera_model")     = fvdb::GaussianSplat3d::CameraModel::PINHOLE,
+             py::arg("projection_method") =
+                 fvdb::GaussianSplat3d::ProjectionMethod::AUTO,
+             py::arg("distortion_coeffs") = std::nullopt,
+             py::arg("tile_size")         = 16,
+             py::arg("min_radius_2d")     = 0.0,
+             py::arg("eps_2d")            = 0.3,
+             py::arg("antialias")         = false,
+             py::arg("backgrounds")       = std::nullopt,
+             py::arg("masks")             = std::nullopt)
 
         .def("sparse_render_images_and_depths",
              &fvdb::GaussianSplat3d::sparseRenderImagesAndDepths,
@@ -315,14 +383,17 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("image_height"),
              py::arg("near"),
              py::arg("far"),
-             py::arg("projection_type")  = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
-             py::arg("sh_degree_to_use") = -1,
-             py::arg("tile_size")        = 16,
-             py::arg("min_radius_2d")    = 0.0,
-             py::arg("eps_2d")           = 0.3,
-             py::arg("antialias")        = false,
-             py::arg("backgrounds")      = std::nullopt,
-             py::arg("masks")            = std::nullopt)
+             py::arg("camera_model")     = fvdb::GaussianSplat3d::CameraModel::PINHOLE,
+             py::arg("projection_method") =
+                 fvdb::GaussianSplat3d::ProjectionMethod::AUTO,
+             py::arg("distortion_coeffs") = std::nullopt,
+             py::arg("sh_degree_to_use")  = -1,
+             py::arg("tile_size")         = 16,
+             py::arg("min_radius_2d")     = 0.0,
+             py::arg("eps_2d")            = 0.3,
+             py::arg("antialias")         = false,
+             py::arg("backgrounds")       = std::nullopt,
+             py::arg("masks")             = std::nullopt)
 
         .def("render_num_contributing_gaussians",
              &fvdb::GaussianSplat3d::renderNumContributingGaussians,
@@ -332,11 +403,14 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("image_height"),
              py::arg("near"),
              py::arg("far"),
-             py::arg("projection_type") = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
-             py::arg("tile_size")       = 16,
-             py::arg("min_radius_2d")   = 0.0,
-             py::arg("eps_2d")          = 0.3,
-             py::arg("antialias")       = false)
+             py::arg("camera_model")     = fvdb::GaussianSplat3d::CameraModel::PINHOLE,
+             py::arg("projection_method") =
+                 fvdb::GaussianSplat3d::ProjectionMethod::AUTO,
+             py::arg("distortion_coeffs") = std::nullopt,
+             py::arg("tile_size")         = 16,
+             py::arg("min_radius_2d")     = 0.0,
+             py::arg("eps_2d")            = 0.3,
+             py::arg("antialias")         = false)
 
         .def("sparse_render_num_contributing_gaussians",
              &fvdb::GaussianSplat3d::sparseRenderNumContributingGaussians,
@@ -347,11 +421,14 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("image_height"),
              py::arg("near"),
              py::arg("far"),
-             py::arg("projection_type") = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
-             py::arg("tile_size")       = 16,
-             py::arg("min_radius_2d")   = 0.0,
-             py::arg("eps_2d")          = 0.3,
-             py::arg("antialias")       = false)
+             py::arg("camera_model")     = fvdb::GaussianSplat3d::CameraModel::PINHOLE,
+             py::arg("projection_method") =
+                 fvdb::GaussianSplat3d::ProjectionMethod::AUTO,
+             py::arg("distortion_coeffs") = std::nullopt,
+             py::arg("tile_size")         = 16,
+             py::arg("min_radius_2d")     = 0.0,
+             py::arg("eps_2d")            = 0.3,
+             py::arg("antialias")         = false)
 
         .def("render_contributing_gaussian_ids",
              &fvdb::GaussianSplat3d::renderContributingGaussianIds,
@@ -361,7 +438,9 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("image_height"),
              py::arg("near"),
              py::arg("far"),
-             py::arg("projection_type")    = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
+             py::arg("camera_model")       = fvdb::GaussianSplat3d::CameraModel::PINHOLE,
+             py::arg("projection_method")  = fvdb::GaussianSplat3d::ProjectionMethod::AUTO,
+             py::arg("distortion_coeffs")  = std::nullopt,
              py::arg("tile_size")          = 16,
              py::arg("min_radius_2d")      = 0.0,
              py::arg("eps_2d")             = 0.3,
@@ -377,7 +456,9 @@ bind_gaussian_splat3d(py::module &m) {
              py::arg("image_height"),
              py::arg("near"),
              py::arg("far"),
-             py::arg("projection_type")    = fvdb::GaussianSplat3d::ProjectionType::PERSPECTIVE,
+             py::arg("camera_model")       = fvdb::GaussianSplat3d::CameraModel::PINHOLE,
+             py::arg("projection_method")  = fvdb::GaussianSplat3d::ProjectionMethod::AUTO,
+             py::arg("distortion_coeffs")  = std::nullopt,
              py::arg("tile_size")          = 16,
              py::arg("min_radius_2d")      = 0.0,
              py::arg("eps_2d")             = 0.3,
