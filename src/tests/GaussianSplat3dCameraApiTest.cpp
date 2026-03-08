@@ -208,21 +208,6 @@ TEST_F(GaussianSplat3dCameraApiTest, CameraApiValidationRejectsInvalidArguments)
 
     expectTorchErrorContains(
         [&]() {
-            gs.renderImages(worldToCam,
-                            projection,
-                            kImageWidth,
-                            kImageHeight,
-                            kNearPlane,
-                            kFarPlane,
-                            CameraModel::PINHOLE,
-                            ProjectionMethod::AUTO,
-                            distortion,
-                            0);
-        },
-        "distortionCoeffs must be None");
-
-    expectTorchErrorContains(
-        [&]() {
             gs.renderImagesFromWorld(worldToCam,
                                      projection,
                                      kImageWidth,
@@ -265,6 +250,89 @@ TEST_F(GaussianSplat3dCameraApiTest, CameraApiValidationRejectsInvalidArguments)
                                          0);
         },
         "worldToCameraMatrices must be contiguous");
+}
+
+TEST_F(GaussianSplat3dCameraApiTest, PinholeAndOrthographicIgnoreDistortionTensor) {
+    auto gs         = makeSimpleGaussianSplat();
+    auto distortion = makeDistortionCoeffs(1);
+
+    for (const CameraModel cameraModel: {CameraModel::PINHOLE, CameraModel::ORTHOGRAPHIC}) {
+        SCOPED_TRACE(static_cast<int>(cameraModel));
+        const auto worldToCam   = makeWorldToCameraMatrices(1);
+        const auto projection   = makeProjectionMatrices(1, cameraModel);
+        const auto noDistortion = std::optional<torch::Tensor>{};
+
+        const auto projectedDefault = gs.projectGaussiansForImages(worldToCam,
+                                                                   projection,
+                                                                   kImageWidth,
+                                                                   kImageHeight,
+                                                                   kNearPlane,
+                                                                   kFarPlane,
+                                                                   cameraModel,
+                                                                   ProjectionMethod::AUTO,
+                                                                   noDistortion,
+                                                                   0);
+        const auto projectedIgnored = gs.projectGaussiansForImages(worldToCam,
+                                                                   projection,
+                                                                   kImageWidth,
+                                                                   kImageHeight,
+                                                                   kNearPlane,
+                                                                   kFarPlane,
+                                                                   cameraModel,
+                                                                   ProjectionMethod::AUTO,
+                                                                   distortion,
+                                                                   0);
+        EXPECT_TRUE(
+            torch::allclose(projectedDefault.means2d(), projectedIgnored.means2d(), 1e-6, 1e-6));
+
+        const auto [imagesDefault, imageAlphasDefault] = gs.renderImages(worldToCam,
+                                                                         projection,
+                                                                         kImageWidth,
+                                                                         kImageHeight,
+                                                                         kNearPlane,
+                                                                         kFarPlane,
+                                                                         cameraModel,
+                                                                         ProjectionMethod::AUTO,
+                                                                         noDistortion,
+                                                                         0);
+        const auto [imagesIgnored, imageAlphasIgnored] = gs.renderImages(worldToCam,
+                                                                         projection,
+                                                                         kImageWidth,
+                                                                         kImageHeight,
+                                                                         kNearPlane,
+                                                                         kFarPlane,
+                                                                         cameraModel,
+                                                                         ProjectionMethod::AUTO,
+                                                                         distortion,
+                                                                         0);
+        EXPECT_TRUE(torch::allclose(imagesDefault, imagesIgnored, 1e-6, 1e-6));
+        EXPECT_TRUE(torch::allclose(imageAlphasDefault, imageAlphasIgnored, 1e-6, 1e-6));
+
+        const auto [worldImagesDefault, worldImageAlphasDefault] =
+            gs.renderImagesFromWorld(worldToCam,
+                                     projection,
+                                     kImageWidth,
+                                     kImageHeight,
+                                     kNearPlane,
+                                     kFarPlane,
+                                     cameraModel,
+                                     ProjectionMethod::AUTO,
+                                     noDistortion,
+                                     0);
+        const auto [worldImagesIgnored, worldImageAlphasIgnored] =
+            gs.renderImagesFromWorld(worldToCam,
+                                     projection,
+                                     kImageWidth,
+                                     kImageHeight,
+                                     kNearPlane,
+                                     kFarPlane,
+                                     cameraModel,
+                                     ProjectionMethod::AUTO,
+                                     distortion,
+                                     0);
+        EXPECT_TRUE(torch::allclose(worldImagesDefault, worldImagesIgnored, 1e-6, 1e-6));
+        EXPECT_TRUE(torch::allclose(worldImageAlphasDefault, worldImageAlphasIgnored, 1e-6, 1e-6));
+    }
 }
 
 TEST_F(GaussianSplat3dCameraApiTest, ProjectedRenderMatchesDenseProjectedApis) {
