@@ -4,12 +4,13 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRENDERSETTINGS_H
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRENDERSETTINGS_H
 
+#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
+
 #include <cstdint>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
-enum ProjectionType { PERSPECTIVE, ORTHOGRAPHIC };
 
 struct RenderWindow2D {
     std::uint32_t width   = 0;
@@ -42,18 +43,17 @@ struct RenderSettings {
 
     std::uint32_t imageWidth;
     std::uint32_t imageHeight;
-    std::uint32_t imageOriginW    = 0;
-    std::uint32_t imageOriginH    = 0;
-    ProjectionType projectionType = ProjectionType::PERSPECTIVE;
-    RenderMode renderMode         = RenderMode::RGB;
-    float nearPlane               = 0.01;
-    float farPlane                = 1e10;
-    std::uint32_t tileSize        = 16;
-    float radiusClip              = 0.0;
-    float eps2d                   = 0.3;
-    bool antialias                = false;
-    int shDegreeToUse             = -1;
-    int numDepthSamples           = -1;
+    std::uint32_t imageOriginW = 0;
+    std::uint32_t imageOriginH = 0;
+    RenderMode renderMode      = RenderMode::RGB;
+    float nearPlane            = 0.01;
+    float farPlane             = 1e10;
+    std::uint32_t tileSize     = 16;
+    float radiusClip           = 0.0;
+    float eps2d                = 0.3;
+    bool antialias             = false;
+    int shDegreeToUse          = -1;
+    int numDepthSamples        = -1;
 };
 } // namespace ops
 } // namespace detail

@@ -1443,7 +1443,8 @@ class GaussianSplat3d {
 
     ProjectedGaussianSplats projectGaussiansImpl(const torch::Tensor &worldToCameraMatrices,
                                                  const torch::Tensor &projectionMatrices,
-                                                 const fvdb::detail::ops::RenderSettings &settings);
+                                                 const fvdb::detail::ops::RenderSettings &settings,
+                                                 const CameraModel cameraModel);
 
     ProjectedGaussianSplats
     projectGaussiansForCameraImpl(const torch::Tensor &worldToCameraMatrices,
@@ -1463,7 +1464,8 @@ class GaussianSplat3d {
     sparseProjectGaussiansImpl(const JaggedTensor &pixelsToRender,
                                const torch::Tensor &worldToCameraMatrices,
                                const torch::Tensor &projectionMatrices,
-                               const fvdb::detail::ops::RenderSettings &settings);
+                               const fvdb::detail::ops::RenderSettings &settings,
+                               const CameraModel cameraModel);
 
     SparseProjectedGaussianSplats
     sparseProjectGaussiansForCameraImpl(const JaggedTensor &pixelsToRender,

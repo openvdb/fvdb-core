@@ -47,13 +47,6 @@ usesOpenCVDistortion(const CameraModel cameraModel) {
            cameraModel == CameraModel::OPENCV_THIN_PRISM_12;
 }
 
-fvdb::detail::ops::ProjectionType
-projectionTypeForCameraModel(const CameraModel cameraModel) {
-    return cameraModel == CameraModel::ORTHOGRAPHIC
-               ? fvdb::detail::ops::ProjectionType::ORTHOGRAPHIC
-               : fvdb::detail::ops::ProjectionType::PERSPECTIVE;
-}
-
 ProjectionMethod
 resolveProjectionMethod(const CameraModel cameraModel, const ProjectionMethod projectionMethod) {
     if (projectionMethod == ProjectionMethod::AUTO) {
@@ -346,9 +339,10 @@ GaussianSplat3d::loadStateDict(const std::unordered_map<std::string, torch::Tens
 GaussianSplat3d::ProjectedGaussianSplats
 GaussianSplat3d::projectGaussiansImpl(const torch::Tensor &worldToCameraMatrices,
                                       const torch::Tensor &projectionMatrices,
-                                      const RenderSettings &settings) {
+                                      const RenderSettings &settings,
+                                      const CameraModel cameraModel) {
     FVDB_FUNC_RANGE();
-    const bool ortho = settings.projectionType == fvdb::detail::ops::ProjectionType::ORTHOGRAPHIC;
+    const bool ortho = cameraModel == CameraModel::ORTHOGRAPHIC;
     const int C      = worldToCameraMatrices.size(0); // number of cameras
     const int N      = mMeans.size(0);                // number of gaussians
 
@@ -361,10 +355,8 @@ GaussianSplat3d::projectGaussiansImpl(const torch::Tensor &worldToCameraMatrices
     TORCH_CHECK(projectionMatrices.is_contiguous(), "projectionMatrices must be contiguous");
 
     ProjectedGaussianSplats ret;
-    ret.mRenderSettings = settings;
-    ret.mCameraModel    = settings.projectionType == fvdb::detail::ops::ProjectionType::ORTHOGRAPHIC
-                              ? CameraModel::ORTHOGRAPHIC
-                              : CameraModel::PINHOLE;
+    ret.mRenderSettings   = settings;
+    ret.mCameraModel      = cameraModel;
     ret.mProjectionMethod = ProjectionMethod::ANALYTIC;
 
     // Track gradients for the 2D means in the backward pass if you're optimizing
@@ -475,11 +467,10 @@ GaussianSplat3d::projectGaussiansForCameraImpl(
         resolveProjectionMethod(cameraModel, projectionMethod);
 
     RenderSettings settingsForProjection = settings;
-    settingsForProjection.projectionType = projectionTypeForCameraModel(cameraModel);
 
     if (resolvedProjectionMethod == ProjectionMethod::ANALYTIC) {
         auto ret =
-            projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settingsForProjection);
+            projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settingsForProjection, cameraModel);
         ret.mCameraModel      = cameraModel;
         ret.mProjectionMethod = resolvedProjectionMethod;
         return ret;
@@ -658,9 +649,10 @@ GaussianSplat3d::SparseProjectedGaussianSplats
 GaussianSplat3d::sparseProjectGaussiansImpl(const JaggedTensor &pixelsToRender,
                                             const torch::Tensor &worldToCameraMatrices,
                                             const torch::Tensor &projectionMatrices,
-                                            const RenderSettings &settings) {
+                                            const RenderSettings &settings,
+                                            const CameraModel cameraModel) {
     FVDB_FUNC_RANGE();
-    const bool ortho = settings.projectionType == fvdb::detail::ops::ProjectionType::ORTHOGRAPHIC;
+    const bool ortho = cameraModel == CameraModel::ORTHOGRAPHIC;
     const int C      = worldToCameraMatrices.size(0); // number of cameras
     const int N      = mMeans.size(0);                // number of gaussians
 
@@ -680,7 +672,9 @@ GaussianSplat3d::sparseProjectGaussiansImpl(const JaggedTensor &pixelsToRender,
                 " cameras. ");
 
     SparseProjectedGaussianSplats ret;
-    ret.mRenderSettings = settings;
+    ret.mRenderSettings   = settings;
+    ret.mCameraModel      = cameraModel;
+    ret.mProjectionMethod = ProjectionMethod::ANALYTIC;
 
     // Deduplicate pixel coordinates. computeSparseInfo requires unique pixels because its
     // tile bitmask has one bit per pixel position. We scatter results back after rendering.
@@ -814,11 +808,10 @@ GaussianSplat3d::sparseProjectGaussiansForCameraImpl(
         resolveProjectionMethod(cameraModel, projectionMethod);
 
     RenderSettings settingsForProjection = settings;
-    settingsForProjection.projectionType = projectionTypeForCameraModel(cameraModel);
 
     if (resolvedProjectionMethod == ProjectionMethod::ANALYTIC) {
         auto ret = sparseProjectGaussiansImpl(
-            pixelsToRender, worldToCameraMatrices, projectionMatrices, settingsForProjection);
+            pixelsToRender, worldToCameraMatrices, projectionMatrices, settingsForProjection, cameraModel);
         ret.mCameraModel      = cameraModel;
         ret.mProjectionMethod = resolvedProjectionMethod;
         return ret;
