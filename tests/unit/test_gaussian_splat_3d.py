@@ -9,6 +9,7 @@ import numpy as np
 import OpenImageIO as oiio
 import point_cloud_utils as pcu
 import torch
+import torch.nn.functional as nnf
 from parameterized import parameterized, parameterized_class
 
 from fvdb import (
@@ -4251,6 +4252,93 @@ class TestGaussianCameraApi(unittest.TestCase):
             shN=shN,
         )
 
+    def _make_structural_comparison_splat(self) -> GaussianSplat3d:
+        means = torch.tensor(
+            [
+                [-0.95, -0.65, 2.3],
+                [-0.55, -0.35, 2.8],
+                [-0.15, -0.55, 3.1],
+                [0.30, -0.25, 2.6],
+                [0.78, -0.45, 3.4],
+                [-0.85, 0.10, 2.9],
+                [-0.35, 0.28, 3.6],
+                [0.12, 0.18, 2.4],
+                [0.55, 0.42, 3.2],
+                [0.92, 0.12, 2.7],
+                [-0.18, 0.72, 4.1],
+                [0.48, 0.78, 3.8],
+            ],
+            device=self.device,
+            dtype=self.dtype,
+        )
+        quats = torch.tensor(
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.991, 0.0, 0.131, 0.0],
+                [0.981, 0.0, 0.0, 0.195],
+                [0.966, 0.0, 0.259, 0.0],
+                [0.953, 0.0, 0.0, 0.302],
+                [0.991, 0.131, 0.0, 0.0],
+                [0.966, 0.259, 0.0, 0.0],
+                [0.953, 0.0, 0.214, 0.214],
+                [0.924, 0.0, 0.0, 0.383],
+                [0.981, 0.195, 0.0, 0.0],
+                [0.966, 0.0, 0.259, 0.0],
+                [0.924, 0.271, 0.0, 0.271],
+            ],
+            device=self.device,
+            dtype=self.dtype,
+        )
+        quats = quats / torch.linalg.norm(quats, dim=1, keepdim=True)
+        log_scales = torch.log(
+            torch.tensor(
+                [
+                    [0.09, 0.07, 0.06],
+                    [0.08, 0.06, 0.05],
+                    [0.07, 0.08, 0.05],
+                    [0.10, 0.07, 0.06],
+                    [0.08, 0.09, 0.07],
+                    [0.07, 0.06, 0.05],
+                    [0.09, 0.08, 0.07],
+                    [0.10, 0.08, 0.06],
+                    [0.08, 0.07, 0.05],
+                    [0.07, 0.09, 0.06],
+                    [0.09, 0.08, 0.07],
+                    [0.08, 0.10, 0.06],
+                ],
+                device=self.device,
+                dtype=self.dtype,
+            )
+        )
+        logit_opacities = torch.tensor([2.1, 1.8, 1.6, 2.0, 1.7, 1.9, 1.5, 2.2, 1.8, 1.7, 1.6, 1.9], device=self.device)
+        sh0 = torch.tensor(
+            [
+                [[0.70, -0.05, -0.20]],
+                [[0.40, 0.15, -0.30]],
+                [[0.10, 0.35, -0.15]],
+                [[-0.05, 0.55, 0.00]],
+                [[-0.25, 0.40, 0.20]],
+                [[0.65, 0.05, -0.10]],
+                [[0.25, 0.30, 0.05]],
+                [[-0.10, 0.55, 0.30]],
+                [[-0.30, 0.20, 0.45]],
+                [[0.20, -0.10, 0.55]],
+                [[0.05, 0.45, 0.50]],
+                [[-0.20, 0.10, 0.65]],
+            ],
+            device=self.device,
+            dtype=self.dtype,
+        )
+        shN = torch.empty((means.shape[0], 0, 3), device=self.device, dtype=self.dtype)
+        return GaussianSplat3d.from_tensors(
+            means=means,
+            quats=quats,
+            log_scales=log_scales,
+            logit_opacities=logit_opacities,
+            sh0=sh0,
+            shN=shN,
+        )
+
     def _all_pixels(self, C: int) -> JaggedTensor:
         ys, xs = torch.meshgrid(
             torch.arange(self.height, device=self.device),
@@ -4290,6 +4378,87 @@ class TestGaussianCameraApi(unittest.TestCase):
             expected = dense[cam_idx, y_coords, x_coords]
             actual = sparse.jdata[offset:end]
             torch.testing.assert_close(actual, expected, atol=1e-4, rtol=1e-4)
+
+    def _support_bbox(self, support_mask: torch.Tensor) -> torch.Tensor:
+        coords = torch.nonzero(support_mask, as_tuple=False)
+        if coords.numel() == 0:
+            return torch.tensor([-1.0, -1.0, -1.0, -1.0], device=self.device, dtype=self.dtype)
+        y_min, x_min = coords.min(dim=0).values
+        y_max, x_max = coords.max(dim=0).values
+        return torch.stack((x_min, y_min, x_max, y_max)).to(device=self.device, dtype=self.dtype)
+
+    def _alpha_weighted_centroid(self, alpha: torch.Tensor) -> torch.Tensor:
+        total = torch.clamp(alpha.sum(), min=1.0e-8)
+        ys, xs = torch.meshgrid(
+            torch.arange(alpha.shape[0], device=alpha.device, dtype=alpha.dtype),
+            torch.arange(alpha.shape[1], device=alpha.device, dtype=alpha.dtype),
+            indexing="ij",
+        )
+        centroid_x = (alpha * xs).sum() / total
+        centroid_y = (alpha * ys).sum() / total
+        return torch.stack((centroid_x, centroid_y))
+
+    def _blurred_rgb_rmse(self, rgb_a: torch.Tensor, rgb_b: torch.Tensor, union_mask: torch.Tensor) -> float:
+        pooled_a = nnf.avg_pool2d(rgb_a.permute(2, 0, 1).unsqueeze(0), kernel_size=5, stride=1, padding=2)
+        pooled_b = nnf.avg_pool2d(rgb_b.permute(2, 0, 1).unsqueeze(0), kernel_size=5, stride=1, padding=2)
+        pooled_mask = nnf.avg_pool2d(
+            union_mask.to(dtype=rgb_a.dtype).unsqueeze(0).unsqueeze(0), kernel_size=5, stride=1, padding=2
+        )[0, 0]
+        if not bool((pooled_mask > 1.0e-3).any()):
+            return 0.0
+        diff = (pooled_a - pooled_b)[0].permute(1, 2, 0)
+        rmse = torch.sqrt((diff[pooled_mask > 1.0e-3] ** 2).mean())
+        return float(rmse.item())
+
+    def _blurred_alpha_rmse(self, alpha_a: torch.Tensor, alpha_b: torch.Tensor) -> float:
+        pooled_a = nnf.avg_pool2d(alpha_a.unsqueeze(0).unsqueeze(0), kernel_size=5, stride=1, padding=2)[0, 0]
+        pooled_b = nnf.avg_pool2d(alpha_b.unsqueeze(0).unsqueeze(0), kernel_size=5, stride=1, padding=2)[0, 0]
+        return float(torch.sqrt(((pooled_a - pooled_b) ** 2).mean()).item())
+
+    def _structural_comparison_metrics(
+        self,
+        projected_rgbd: torch.Tensor,
+        projected_alpha: torch.Tensor,
+        world_rgbd: torch.Tensor,
+        world_alpha: torch.Tensor,
+        support_threshold: float = 1.0e-3,
+    ) -> dict[str, float]:
+        projected_alpha_2d = projected_alpha[0, ..., 0]
+        world_alpha_2d = world_alpha[0, ..., 0]
+        projected_support = projected_alpha_2d > support_threshold
+        world_support = world_alpha_2d > support_threshold
+        union_support = projected_support | world_support
+        intersection_support = projected_support & world_support
+
+        projected_alpha_sum = float(projected_alpha_2d.sum().item())
+        world_alpha_sum = float(world_alpha_2d.sum().item())
+
+        projected_bbox = self._support_bbox(projected_support)
+        world_bbox = self._support_bbox(world_support)
+        projected_centroid = self._alpha_weighted_centroid(projected_alpha_2d)
+        world_centroid = self._alpha_weighted_centroid(world_alpha_2d)
+
+        projected_depth_mass = projected_rgbd[0, ..., -1].sum()
+        world_depth_mass = world_rgbd[0, ..., -1].sum()
+        projected_depth_mean = projected_depth_mass / torch.clamp(projected_alpha_2d.sum(), min=1.0e-8)
+        world_depth_mean = world_depth_mass / torch.clamp(world_alpha_2d.sum(), min=1.0e-8)
+        depth_scale = max(abs(float(projected_depth_mean.item())), abs(float(world_depth_mean.item())), 1.0e-8)
+
+        return {
+            "support_iou": float(
+                intersection_support.sum(dtype=self.dtype).item()
+                / max(float(union_support.sum(dtype=self.dtype).item()), 1.0)
+            ),
+            "bbox_linf_err": float((projected_bbox - world_bbox).abs().max().item()),
+            "centroid_err": float(torch.linalg.norm(projected_centroid - world_centroid).item()),
+            "blurred_alpha_rmse": self._blurred_alpha_rmse(projected_alpha_2d, world_alpha_2d),
+            "depth_mean_rel_err": abs(float(projected_depth_mean.item()) - float(world_depth_mean.item())) / depth_scale,
+            "blurred_rgb_rmse": self._blurred_rgb_rmse(
+                projected_rgbd[0, ..., :-1],
+                world_rgbd[0, ..., :-1],
+                union_support,
+            ),
+        }
 
     def test_projection_method_resolution_and_metadata(self):
         cases = [
@@ -4408,6 +4577,38 @@ class TestGaussianCameraApi(unittest.TestCase):
 
                 self.assertGreater(int((alpha_from_projection > 1.0e-4).sum().item()), 0)
                 self.assertGreater(int((alpha_from_world > 1.0e-4).sum().item()), 0)
+
+    def test_structural_projected_render_matches_from_world_for_medium_scene(self):
+        # The two rasterization paths diverge too much for stable pixelwise parity on richer scenes,
+        # so this test checks that they preserve the same overall support, location, depth, and appearance.
+        for camera_model in (CameraModel.PINHOLE, CameraModel.ORTHOGRAPHIC, CameraModel.OPENCV_RADTAN_5):
+            with self.subTest(camera_model=camera_model):
+                parity_gs3d = self._make_structural_comparison_splat()
+                render_args = self._render_args(camera_model)
+
+                projected_rgbd = parity_gs3d.project_gaussians_for_images_and_depths(
+                    **render_args,
+                    sh_degree_to_use=0,
+                )
+                rgbd_from_projection, alpha_from_projection = parity_gs3d.render_from_projected_gaussians(projected_rgbd)
+                rgbd_from_world, alpha_from_world = parity_gs3d.render_images_and_depths_from_world(
+                    **render_args,
+                    sh_degree_to_use=0,
+                )
+
+                metrics = self._structural_comparison_metrics(
+                    rgbd_from_projection,
+                    alpha_from_projection,
+                    rgbd_from_world,
+                    alpha_from_world,
+                )
+
+                self.assertGreater(metrics["support_iou"], 0.50)
+                self.assertLess(metrics["bbox_linf_err"], 1.1)
+                self.assertLess(metrics["centroid_err"], 0.3)
+                self.assertLess(metrics["blurred_alpha_rmse"], 0.055)
+                self.assertLess(metrics["depth_mean_rel_err"], 0.03)
+                self.assertLess(metrics["blurred_rgb_rmse"], 0.055)
 
     def test_sparse_render_camera_args_match_dense_render(self):
         pixels = self._all_pixels(C=2)
