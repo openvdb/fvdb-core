@@ -366,6 +366,8 @@ TEST(GaussianCamerasTest, DistortedPerspectiveEncapsulatedProjectionAndVJPMatchR
                                                          RollingShutterType::NONE,
                                                          DistortionModel::OPENCV_RADTAN_5);
 
+    using ProjectionVisibility = PerspectiveWithDistortionCamera<float>::ProjectionVisibility;
+
     auto outPixels =
         torch::zeros({C, 2}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
     auto outStatuses =
@@ -413,7 +415,7 @@ TEST(GaussianCamerasTest, DistortedPerspectiveEncapsulatedProjectionAndVJPMatchR
                                               distortionAcc[c][6],
                                               distortionAcc[c][7]);
 
-        EXPECT_EQ(statusAcc[c], 2);
+        EXPECT_EQ(static_cast<ProjectionVisibility>(statusAcc[c]), ProjectionVisibility::InImage);
         EXPECT_NEAR(pixelAcc[c][0], expectedU, 1.0e-4f);
         EXPECT_NEAR(pixelAcc[c][1], expectedV, 1.0e-4f);
     }
