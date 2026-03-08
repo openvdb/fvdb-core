@@ -52,7 +52,6 @@ class GaussianSplat3d {
         loadStateDict(stateDict);
     }
 
-    using ProjectionType   = fvdb::detail::ops::ProjectionType;
     using CameraModel      = fvdb::detail::ops::DistortionModel;
     using ProjectionMethod = fvdb::detail::ops::ProjectionMethod;
 

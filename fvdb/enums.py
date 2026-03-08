@@ -5,23 +5,6 @@
 from enum import Enum, IntEnum
 
 
-class ProjectionType(str, Enum):
-    """
-    Enum representing camera projection types. Used in :class:`fvdb.GaussianSplat3d`, and
-    :mod:`fvdb.viz`.
-    """
-
-    PERSPECTIVE = "perspective"
-    """
-    Perspective projection type.
-    """
-
-    ORTHOGRAPHIC = "orthographic"
-    """
-    Orthographic projection type.
-    """
-
-
 class ShOrderingMode(str, Enum):
     """
     Enum representing spherical harmonics ordering modes used by Gaussian Splats..
