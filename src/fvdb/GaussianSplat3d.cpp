@@ -469,8 +469,8 @@ GaussianSplat3d::projectGaussiansForCameraImpl(
     RenderSettings settingsForProjection = settings;
 
     if (resolvedProjectionMethod == ProjectionMethod::ANALYTIC) {
-        auto ret =
-            projectGaussiansImpl(worldToCameraMatrices, projectionMatrices, settingsForProjection, cameraModel);
+        auto ret = projectGaussiansImpl(
+            worldToCameraMatrices, projectionMatrices, settingsForProjection, cameraModel);
         ret.mCameraModel      = cameraModel;
         ret.mProjectionMethod = resolvedProjectionMethod;
         return ret;
@@ -810,8 +810,11 @@ GaussianSplat3d::sparseProjectGaussiansForCameraImpl(
     RenderSettings settingsForProjection = settings;
 
     if (resolvedProjectionMethod == ProjectionMethod::ANALYTIC) {
-        auto ret = sparseProjectGaussiansImpl(
-            pixelsToRender, worldToCameraMatrices, projectionMatrices, settingsForProjection, cameraModel);
+        auto ret              = sparseProjectGaussiansImpl(pixelsToRender,
+                                              worldToCameraMatrices,
+                                              projectionMatrices,
+                                              settingsForProjection,
+                                              cameraModel);
         ret.mCameraModel      = cameraModel;
         ret.mProjectionMethod = resolvedProjectionMethod;
         return ret;
@@ -1486,6 +1489,7 @@ GaussianSplat3d::renderDepths(const torch::Tensor &worldToCameraMatrices,
     settings.shDegreeToUse = -1;
     settings.radiusClip    = minRadius2d;
     settings.eps2d         = eps2d;
+    settings.antialias     = antialias;
     settings.tileSize      = tileSize;
     settings.renderMode    = RenderSettings::RenderMode::DEPTH;
 
@@ -1595,6 +1599,7 @@ GaussianSplat3d::renderNumContributingGaussians(
     settings.tileSize      = tileSize;
     settings.radiusClip    = minRadius2d;
     settings.eps2d         = eps2d;
+    settings.antialias     = antialias;
     settings.renderMode    = RenderSettings::RenderMode::DEPTH;
 
     return renderNumContributingGaussiansImpl(worldToCameraMatrices,
@@ -1631,6 +1636,7 @@ GaussianSplat3d::sparseRenderDepths(const fvdb::JaggedTensor &pixelsToRender,
     settings.tileSize      = tileSize;
     settings.radiusClip    = minRadius2d;
     settings.eps2d         = eps2d;
+    settings.antialias     = antialias;
     settings.renderMode    = RenderSettings::RenderMode::DEPTH;
 
     return sparseRenderImpl(pixelsToRender,
@@ -1671,6 +1677,7 @@ GaussianSplat3d::sparseRenderImages(const fvdb::JaggedTensor &pixelsToRender,
     settings.tileSize      = tileSize;
     settings.radiusClip    = minRadius2d;
     settings.eps2d         = eps2d;
+    settings.antialias     = antialias;
     settings.renderMode    = RenderSettings::RenderMode::RGB;
 
     return sparseRenderImpl(pixelsToRender,
@@ -1711,6 +1718,7 @@ GaussianSplat3d::sparseRenderImagesAndDepths(const fvdb::JaggedTensor &pixelsToR
     settings.tileSize      = tileSize;
     settings.radiusClip    = minRadius2d;
     settings.eps2d         = eps2d;
+    settings.antialias     = antialias;
     settings.renderMode    = RenderSettings::RenderMode::RGBD;
 
     return sparseRenderImpl(pixelsToRender,
@@ -1749,6 +1757,7 @@ GaussianSplat3d::sparseRenderNumContributingGaussians(
     settings.tileSize      = tileSize;
     settings.radiusClip    = minRadius2d;
     settings.eps2d         = eps2d;
+    settings.antialias     = antialias;
     settings.renderMode    = RenderSettings::RenderMode::DEPTH;
 
     return sparseRenderNumContributingGaussiansImpl(pixelsToRender,

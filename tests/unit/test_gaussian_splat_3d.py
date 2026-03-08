@@ -4452,7 +4452,8 @@ class TestGaussianCameraApi(unittest.TestCase):
             "bbox_linf_err": float((projected_bbox - world_bbox).abs().max().item()),
             "centroid_err": float(torch.linalg.norm(projected_centroid - world_centroid).item()),
             "blurred_alpha_rmse": self._blurred_alpha_rmse(projected_alpha_2d, world_alpha_2d),
-            "depth_mean_rel_err": abs(float(projected_depth_mean.item()) - float(world_depth_mean.item())) / depth_scale,
+            "depth_mean_rel_err": abs(float(projected_depth_mean.item()) - float(world_depth_mean.item()))
+            / depth_scale,
             "blurred_rgb_rmse": self._blurred_rgb_rmse(
                 projected_rgbd[0, ..., :-1],
                 world_rgbd[0, ..., :-1],
@@ -4590,7 +4591,9 @@ class TestGaussianCameraApi(unittest.TestCase):
                     **render_args,
                     sh_degree_to_use=0,
                 )
-                rgbd_from_projection, alpha_from_projection = parity_gs3d.render_from_projected_gaussians(projected_rgbd)
+                rgbd_from_projection, alpha_from_projection = parity_gs3d.render_from_projected_gaussians(
+                    projected_rgbd
+                )
                 rgbd_from_world, alpha_from_world = parity_gs3d.render_images_and_depths_from_world(
                     **render_args,
                     sh_degree_to_use=0,

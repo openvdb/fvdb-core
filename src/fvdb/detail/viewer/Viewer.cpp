@@ -371,7 +371,8 @@ Viewer::setCameraModel(const std::string &scene_name, GaussianSplat3d::CameraMod
     } else if (mode == GaussianSplat3d::CameraModel::ORTHOGRAPHIC) {
         mEditor.camera.config.is_orthographic = PNANOVDB_TRUE;
     } else {
-        throw std::invalid_argument("Viewer currently only supports CameraModel::PINHOLE and ORTHOGRAPHIC");
+        throw std::invalid_argument(
+            "Viewer currently only supports CameraModel::PINHOLE and ORTHOGRAPHIC");
     }
 
     updateCamera(scene_name);
