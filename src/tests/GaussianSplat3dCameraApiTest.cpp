@@ -252,6 +252,30 @@ TEST_F(GaussianSplat3dCameraApiTest, CameraApiValidationRejectsInvalidArguments)
         "worldToCameraMatrices must be contiguous");
 }
 
+TEST_F(GaussianSplat3dCameraApiTest, CameraApiValidationRejectsEmptyCameraBatches) {
+    auto gs = makeSimpleGaussianSplat();
+
+    auto emptyWorldToCam =
+        torch::empty({0, 4, 4}, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32));
+    auto emptyProjection =
+        torch::empty({0, 3, 3}, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32));
+
+    expectTorchErrorContains(
+        [&]() {
+            gs.projectGaussiansForImages(emptyWorldToCam,
+                                         emptyProjection,
+                                         kImageWidth,
+                                         kImageHeight,
+                                         kNearPlane,
+                                         kFarPlane,
+                                         CameraModel::PINHOLE,
+                                         ProjectionMethod::UNSCENTED,
+                                         std::nullopt,
+                                         0);
+        },
+        "At least one camera must be provided (got 0)");
+}
+
 TEST_F(GaussianSplat3dCameraApiTest, PinholeAndOrthographicIgnoreDistortionTensor) {
     auto gs         = makeSimpleGaussianSplat();
     auto distortion = makeDistortionCoeffs(1);

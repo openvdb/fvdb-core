@@ -63,6 +63,7 @@ validateCameraProjectionArgs(const torch::Tensor &worldToCameraMatrices,
                              const ProjectionMethod requestedProjectionMethod,
                              const std::optional<torch::Tensor> &distortionCoeffs) {
     const int64_t C = worldToCameraMatrices.size(0);
+    TORCH_CHECK(C > 0, "At least one camera must be provided (got 0)");
     TORCH_CHECK(worldToCameraMatrices.sizes() == torch::IntArrayRef({C, 4, 4}),
                 "worldToCameraMatrices must have shape (C, 4, 4)");
     TORCH_CHECK(projectionMatrices.sizes() == torch::IntArrayRef({C, 3, 3}),
@@ -345,14 +346,6 @@ GaussianSplat3d::projectGaussiansImpl(const torch::Tensor &worldToCameraMatrices
     const bool ortho = cameraModel == CameraModel::ORTHOGRAPHIC;
     const int C      = worldToCameraMatrices.size(0); // number of cameras
     const int N      = mMeans.size(0);                // number of gaussians
-
-    TORCH_CHECK(C > 0, "At least one camera must be provided (got 0)");
-    TORCH_CHECK(worldToCameraMatrices.sizes() == torch::IntArrayRef({C, 4, 4}),
-                "worldToCameraMatrices must have shape (C, 4, 4)");
-    TORCH_CHECK(projectionMatrices.sizes() == torch::IntArrayRef({C, 3, 3}),
-                "projectionMatrices must have shape (C, 3, 3)");
-    TORCH_CHECK(worldToCameraMatrices.is_contiguous(), "worldToCameraMatrices must be contiguous");
-    TORCH_CHECK(projectionMatrices.is_contiguous(), "projectionMatrices must be contiguous");
 
     ProjectedGaussianSplats ret;
     ret.mRenderSettings   = settings;
@@ -655,14 +648,6 @@ GaussianSplat3d::sparseProjectGaussiansImpl(const JaggedTensor &pixelsToRender,
     const bool ortho = cameraModel == CameraModel::ORTHOGRAPHIC;
     const int C      = worldToCameraMatrices.size(0); // number of cameras
     const int N      = mMeans.size(0);                // number of gaussians
-
-    TORCH_CHECK(C > 0, "At least one camera must be provided (got 0)");
-    TORCH_CHECK(worldToCameraMatrices.sizes() == torch::IntArrayRef({C, 4, 4}),
-                "worldToCameraMatrices must have shape (C, 4, 4)");
-    TORCH_CHECK(projectionMatrices.sizes() == torch::IntArrayRef({C, 3, 3}),
-                "projectionMatrices must have shape (C, 3, 3)");
-    TORCH_CHECK(worldToCameraMatrices.is_contiguous(), "worldToCameraMatrices must be contiguous");
-    TORCH_CHECK(projectionMatrices.is_contiguous(), "projectionMatrices must be contiguous");
     TORCH_CHECK(static_cast<int64_t>(pixelsToRender.num_outer_lists()) == C,
                 "pixelsToRender must have the same number of outer lists as the number of cameras. "
                 "Got ",

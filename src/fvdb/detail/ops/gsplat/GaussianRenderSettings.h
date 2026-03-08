@@ -4,8 +4,6 @@
 #ifndef FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRENDERSETTINGS_H
 #define FVDB_DETAIL_OPS_GSPLAT_GAUSSIANRENDERSETTINGS_H
 
-#include <fvdb/detail/ops/gsplat/GaussianCameras.cuh>
-
 #include <cstdint>
 
 namespace fvdb {
