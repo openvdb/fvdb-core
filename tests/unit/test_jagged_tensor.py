@@ -1667,6 +1667,14 @@ class TestJaggedTensor(unittest.TestCase):
             self.assertTrue(torch.allclose(zgours, zgcmp))
 
     @parameterized.expand(all_device_dtype_combos)
+    @probabilistic_test(
+        iterations=20,
+        pass_percentage=80,
+        conditional_args=[
+            ["cuda"],
+            [torch.float16, torch.bfloat16, torch.float32],
+        ],
+    )
     def test_jsum_list_of_lists(self, device, dtype):
         torch.random.manual_seed(111)
         np.random.seed(111)
