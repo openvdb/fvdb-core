@@ -4502,15 +4502,6 @@ class TestGaussianCameraApi(unittest.TestCase):
                 sh_degree_to_use=0,
             )
 
-        with self.assertRaisesRegex(RuntimeError, "distortionCoeffs must be None"):
-            self.gs3d.render_images(
-                **self._with_overrides(
-                    pinhole_args,
-                    distortion_coeffs=torch.zeros((1, 12), device=self.device, dtype=self.dtype),
-                ),
-                sh_degree_to_use=0,
-            )
-
         with self.assertRaisesRegex(RuntimeError, "ProjectionMethod::UNSCENTED or AUTO"):
             self.gs3d.render_images_from_world(
                 **self._with_overrides(opencv_args, projection_method=ProjectionMethod.ANALYTIC),
@@ -4525,6 +4516,72 @@ class TestGaussianCameraApi(unittest.TestCase):
                 ),
                 sh_degree_to_use=0,
             )
+
+    def test_pinhole_and_orthographic_ignore_distortion_coeffs_tensor(self):
+        ignored_distortion = torch.tensor(
+            [[0.12, -0.03, 0.01, 0.0, 0.0, 0.0, 0.02, -0.015, 0.004, -0.003, 0.002, -0.001]],
+            device=self.device,
+            dtype=self.dtype,
+        )
+
+        for camera_model in (CameraModel.PINHOLE, CameraModel.ORTHOGRAPHIC):
+            with self.subTest(camera_model=camera_model):
+                parity_gs3d = self._make_tiny_parity_splat()
+                render_args = self._render_args(camera_model)
+                ignored_args = self._with_overrides(render_args, distortion_coeffs=ignored_distortion)
+
+                projected_default = parity_gs3d.project_gaussians_for_images(**render_args, sh_degree_to_use=0)
+                projected_ignored = parity_gs3d.project_gaussians_for_images(**ignored_args, sh_degree_to_use=0)
+                torch.testing.assert_close(projected_default.means2d, projected_ignored.means2d)
+                torch.testing.assert_close(projected_default.inv_covar_2d, projected_ignored.inv_covar_2d)
+
+                images_default, alpha_default = parity_gs3d.render_images(**render_args, sh_degree_to_use=0)
+                images_ignored, alpha_ignored = parity_gs3d.render_images(**ignored_args, sh_degree_to_use=0)
+                torch.testing.assert_close(images_default, images_ignored)
+                torch.testing.assert_close(alpha_default, alpha_ignored)
+
+                depths_default, depth_alpha_default = parity_gs3d.render_depths(**render_args)
+                depths_ignored, depth_alpha_ignored = parity_gs3d.render_depths(**ignored_args)
+                torch.testing.assert_close(depths_default, depths_ignored)
+                torch.testing.assert_close(depth_alpha_default, depth_alpha_ignored)
+
+                rgbd_default, rgbd_alpha_default = parity_gs3d.render_images_and_depths(
+                    **render_args,
+                    sh_degree_to_use=0,
+                )
+                rgbd_ignored, rgbd_alpha_ignored = parity_gs3d.render_images_and_depths(
+                    **ignored_args,
+                    sh_degree_to_use=0,
+                )
+                torch.testing.assert_close(rgbd_default, rgbd_ignored)
+                torch.testing.assert_close(rgbd_alpha_default, rgbd_alpha_ignored)
+
+                world_default, world_alpha_default = parity_gs3d.render_images_from_world(
+                    **render_args,
+                    sh_degree_to_use=0,
+                )
+                world_ignored, world_alpha_ignored = parity_gs3d.render_images_from_world(
+                    **ignored_args,
+                    sh_degree_to_use=0,
+                )
+                torch.testing.assert_close(world_default, world_ignored)
+                torch.testing.assert_close(world_alpha_default, world_alpha_ignored)
+
+                world_depth_default, world_depth_alpha_default = parity_gs3d.render_depths_from_world(**render_args)
+                world_depth_ignored, world_depth_alpha_ignored = parity_gs3d.render_depths_from_world(**ignored_args)
+                torch.testing.assert_close(world_depth_default, world_depth_ignored)
+                torch.testing.assert_close(world_depth_alpha_default, world_depth_alpha_ignored)
+
+                world_rgbd_default, world_rgbd_alpha_default = parity_gs3d.render_images_and_depths_from_world(
+                    **render_args,
+                    sh_degree_to_use=0,
+                )
+                world_rgbd_ignored, world_rgbd_alpha_ignored = parity_gs3d.render_images_and_depths_from_world(
+                    **ignored_args,
+                    sh_degree_to_use=0,
+                )
+                torch.testing.assert_close(world_rgbd_default, world_rgbd_ignored)
+                torch.testing.assert_close(world_rgbd_alpha_default, world_rgbd_alpha_ignored)
 
     def test_projected_render_matches_from_world_for_stable_scene(self):
         for camera_model in (CameraModel.PINHOLE, CameraModel.ORTHOGRAPHIC, CameraModel.OPENCV_RADTAN_5):

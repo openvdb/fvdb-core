@@ -1355,8 +1355,11 @@ class GaussianSplat3d:
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
                 :attr:`fvdb.ProjectionMethod.AUTO`.
-            distortion_coeffs (torch.Tensor | None): Optional OpenCV distortion coefficients used
-                by distorted camera models. Pass ``None`` for pinhole/orthographic cameras.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
             eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
                 numerical issues.
@@ -1457,8 +1460,11 @@ class GaussianSplat3d:
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
                 :attr:`fvdb.ProjectionMethod.AUTO`.
-            distortion_coeffs (torch.Tensor | None): Optional OpenCV distortion coefficients used
-                by distorted camera models. Pass ``None`` for pinhole/orthographic cameras.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             sh_degree_to_use (int): The degree of spherical harmonics to use for rendering. -1 means use all available SH bases.
                 0 means use only the first SH base (constant color). Note that you can't use more SH bases than available in the GaussianSplat3d instance.
                 Default is -1.
@@ -1569,8 +1575,11 @@ class GaussianSplat3d:
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
                 :attr:`fvdb.ProjectionMethod.AUTO`.
-            distortion_coeffs (torch.Tensor | None): Optional OpenCV distortion coefficients used
-                by distorted camera models. Pass ``None`` for pinhole/orthographic cameras.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             sh_degree_to_use (int): The degree of spherical harmonics to use for rendering. -1 means use all available SH bases.
                 0 means use only the first SH base (constant color). Note that you can't use more SH bases than available in the GaussianSplat3d instance.
                 Default is -1.
@@ -1772,8 +1781,11 @@ class GaussianSplat3d:
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
                 :attr:`fvdb.ProjectionMethod.AUTO`.
-            distortion_coeffs (torch.Tensor | None): Optional OpenCV distortion coefficients used
-                by distorted camera models. Pass ``None`` for pinhole/orthographic cameras.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             tile_size (int): The size of the tiles to use for rendering. Default is 16. You shouldn't set this parameter unless you really know what you are doing.
             min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
             eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
@@ -1877,8 +1889,11 @@ class GaussianSplat3d:
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
                 :attr:`fvdb.ProjectionMethod.AUTO`.
-            distortion_coeffs (torch.Tensor | None): Optional OpenCV distortion coefficients used
-                by distorted camera models. Pass ``None`` for pinhole/orthographic cameras.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             tile_size (int): The size of the tiles to use for rendering. Default is 16. You shouldn't set this parameter unless you really know what you are doing.
             min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
             eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
@@ -1987,8 +2002,11 @@ class GaussianSplat3d:
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
                 :attr:`fvdb.ProjectionMethod.AUTO`.
-            distortion_coeffs (torch.Tensor | None): Optional OpenCV distortion coefficients used
-                by distorted camera models. Pass ``None`` for pinhole/orthographic cameras.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             sh_degree_to_use (int): The degree of spherical harmonics to use for rendering. -1 means use all available SH bases.
                 0 means use only the first SH base (constant color). Note that you can't use more SH bases than available in the GaussianSplat3d instance.
                 Default is -1.
@@ -2108,10 +2126,12 @@ class GaussianSplat3d:
             camera_model (CameraModel): Semantic camera model used for ray generation.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
                 :attr:`fvdb.ProjectionMethod.AUTO`.
-            distortion_coeffs (torch.Tensor | None): Distortion coefficients for OpenCV camera
-                models. Use ``None`` for no distortion. Expected shape is ``(C, 12)`` with packed
-                layout ``[k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]``. For camera models that use fewer
-                coefficients, unused entries should be set to 0.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape
+                ``(C, 12)`` and packed layout ``[k1,k2,k3,k4,k5,k6,p1,p2,s1,s2,s3,s4]``.
+                Required for :class:`CameraModel.OPENCV_*` camera models; use a zero-filled
+                tensor to represent no distortion. For :class:`CameraModel.PINHOLE` and
+                :class:`CameraModel.ORTHOGRAPHIC`, pass ``None`` or a ``(C, 12)`` tensor,
+                which is ignored.
             sh_degree_to_use (int): SH degree to use. ``-1`` means use all available SH bases.
             tile_size (int): Tile size (in pixels). ``tileH = ceil(H / tile_size)``,
                 ``tileW = ceil(W / tile_size)``.
@@ -2262,8 +2282,11 @@ class GaussianSplat3d:
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
                 :attr:`fvdb.ProjectionMethod.AUTO`.
-            distortion_coeffs (torch.Tensor | None): Optional OpenCV distortion coefficients used
-                by distorted camera models. Pass ``None`` for pinhole/orthographic cameras.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             sh_degree_to_use (int): The degree of spherical harmonics to use for rendering. -1 means use all available SH bases.
                 0 means use only the first SH base (constant color). Note that you can't use more SH bases than available in the GaussianSplat3d instance.
                 Default is -1.
@@ -2378,8 +2401,11 @@ class GaussianSplat3d:
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
                 :attr:`fvdb.ProjectionMethod.AUTO`.
-            distortion_coeffs (torch.Tensor | None): Optional OpenCV distortion coefficients used
-                by distorted camera models. Pass ``None`` for pinhole/orthographic cameras.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             sh_degree_to_use (int): The degree of spherical harmonics to use for rendering. -1 means use all available SH bases.
                 0 means use only the first SH base (constant color). Note that you can't use more SH bases than available in the GaussianSplat3d instance.
                 Default is -1.
@@ -2500,8 +2526,11 @@ class GaussianSplat3d:
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
                 :attr:`fvdb.ProjectionMethod.AUTO`.
-            distortion_coeffs (torch.Tensor | None): Optional OpenCV distortion coefficients used
-                by distorted camera models. Pass ``None`` for pinhole/orthographic cameras.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             sh_degree_to_use (int): The degree of spherical harmonics to use for rendering. -1 means use all available SH bases.
                 0 means use only the first SH base (constant color). Note that you can't use more SH bases than available in the GaussianSplat3d instance.
                 Default is -1.
@@ -2656,8 +2685,11 @@ class GaussianSplat3d:
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
                 :attr:`fvdb.ProjectionMethod.AUTO`.
-            distortion_coeffs (torch.Tensor | None): Optional OpenCV distortion coefficients used
-                by distorted camera models. Pass ``None`` for pinhole/orthographic cameras.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             tile_size (int): The size of the tiles to use for rendering. Default is 16. You shouldn't set this parameter unless you really know what you are doing.
             min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
             eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
@@ -2769,8 +2801,11 @@ class GaussianSplat3d:
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
                 :attr:`fvdb.ProjectionMethod.AUTO`.
-            distortion_coeffs (torch.Tensor | None): Optional OpenCV distortion coefficients used
-                by distorted camera models. Pass ``None`` for pinhole/orthographic cameras.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             tile_size (int): The size of the tiles to use for rendering. Default is 16. You shouldn't set this parameter unless you really know what you are doing.
             min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
             eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
@@ -2872,8 +2907,11 @@ class GaussianSplat3d:
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
                 :attr:`fvdb.ProjectionMethod.AUTO`.
-            distortion_coeffs (torch.Tensor | None): Optional OpenCV distortion coefficients used
-                by distorted camera models. Pass ``None`` for pinhole/orthographic cameras.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             tile_size (int): The size of the tiles to use for rendering. Default is 16. You shouldn't set this parameter unless you really know what you are doing.
             min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
             eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and
@@ -2989,8 +3027,11 @@ class GaussianSplat3d:
                 :attr:`fvdb.CameraModel.PINHOLE`.
             projection_method (ProjectionMethod): Projection implementation selector. Default is
                 :attr:`fvdb.ProjectionMethod.AUTO`.
-            distortion_coeffs (torch.Tensor | None): Optional OpenCV distortion coefficients used
-                by distorted camera models. Pass ``None`` for pinhole/orthographic cameras.
+            distortion_coeffs (torch.Tensor | None): Distortion coefficients with shape ``(C, 12)``.
+                Required for :class:`CameraModel.OPENCV_*` camera models. For
+                :class:`CameraModel.PINHOLE` and :class:`CameraModel.ORTHOGRAPHIC`, pass
+                ``None`` or a ``(C, 12)`` tensor, which is ignored. To represent no
+                distortion with an OpenCV camera model, pass a zero-filled tensor.
             tile_size (int): The size of the tiles to use for rendering. Default is 16. You shouldn't set this parameter unless you really know what you are doing.
             min_radius_2d (float): The minimum radius (in pixels) below which Gaussians are ignored during rendering.
             eps_2d (float): A value used to pad Gaussians when projecting them onto the image plane, to avoid very projected Gaussians which create artifacts and

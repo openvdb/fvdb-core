@@ -73,17 +73,17 @@ validateCameraProjectionArgs(const torch::Tensor &worldToCameraMatrices,
     const ProjectionMethod resolvedProjectionMethod =
         resolveProjectionMethod(cameraModel, requestedProjectionMethod);
 
+    if (distortionCoeffs.has_value()) {
+        TORCH_CHECK(distortionCoeffs->sizes() == torch::IntArrayRef({C, 12}),
+                    "distortionCoeffs must have shape (C, 12)");
+        TORCH_CHECK(distortionCoeffs->is_contiguous(), "distortionCoeffs must be contiguous");
+    }
+
     if (usesOpenCVDistortion(cameraModel)) {
         TORCH_CHECK(distortionCoeffs.has_value(),
                     "distortionCoeffs must be provided for OpenCV camera models");
-        TORCH_CHECK(distortionCoeffs->sizes() == torch::IntArrayRef({C, 12}),
-                    "distortionCoeffs must have shape (C, 12) for OpenCV camera models");
-        TORCH_CHECK(distortionCoeffs->is_contiguous(), "distortionCoeffs must be contiguous");
         TORCH_CHECK(resolvedProjectionMethod == ProjectionMethod::UNSCENTED,
                     "OpenCV camera models require ProjectionMethod::UNSCENTED or AUTO");
-    } else {
-        TORCH_CHECK(!distortionCoeffs.has_value(),
-                    "distortionCoeffs must be None for PINHOLE and ORTHOGRAPHIC camera models");
     }
 }
 
