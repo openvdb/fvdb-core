@@ -16,11 +16,11 @@ dependencies:
   - cuda-nvtx-dev
   - cuda-version=12.9
   - cxx-compiler
-  - gcc_linux-64=13
+  - gcc_linux-64=14
   - gh
   - git
   - gitpython
-  - gxx_linux-64=13
+  - gxx_linux-64=14
   - ipython
   - ipykernel
   - jupyterlab
@@ -50,7 +50,7 @@ dependencies:
   - py-opencv>=4.10[build=headless*]
   - pyrender
   - pytest-benchmark
-  - python=3.12
+  - python=3.13
   - pytorch-gpu=2.8.0
   - rich
   - seaborn

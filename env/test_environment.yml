@@ -24,7 +24,7 @@ dependencies:
   - pybind11=2.13.6
   - py-opencv>=4.10[build=headless*]
   - pytest-benchmark
-  - python=3.12
+  - python=3.13
   - pytorch-gpu=2.8.0
   - rich
   - scikit-learn

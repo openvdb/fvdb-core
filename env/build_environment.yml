@@ -13,10 +13,10 @@ dependencies:
   - cuda-nvtx-dev
   - cuda-version=12.9
   - cxx-compiler
-  - gcc_linux-64=13
+  - gcc_linux-64=14
   - git
   - gitpython
-  - gxx_linux-64=13
+  - gxx_linux-64=14
   - libcublas-dev
   - libcusolver-dev
   - libcusparse-dev
@@ -30,7 +30,7 @@ dependencies:
   - pkg-config
   - psutil
   - pybind11=2.13.6
-  - python=3.12
+  - python=3.13
   - pytorch-gpu=2.8.0
   - scikit-build-core
   - setuptools>=68.2.2

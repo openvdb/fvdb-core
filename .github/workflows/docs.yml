@@ -54,11 +54,11 @@ jobs:
     needs: start-build-runner # required to start the main job when the runner is ready
     runs-on: ${{ needs.start-build-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: aswf/ci-openvdb:2024-clang17.2
+      image: rockylinux/rockylinux:8
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
-        CONDA_OVERRIDE_CUDA: "12.8"  # this is to build an environment on machines that lack a CUDA device and needs to match the CUDA version in the build_environment.yml file
+        CONDA_OVERRIDE_CUDA: "13.0"  # this is to build an environment on machines that lack a CUDA device and needs to match the CUDA version in the build_environment.yml file
       options: --rm
     defaults:
       run:

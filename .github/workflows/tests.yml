@@ -65,7 +65,7 @@ jobs:
     needs: start-build-runner # required to start the main job when the runner is ready
     runs-on: ${{ needs.start-build-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: aswf/ci-openvdb:2024-clang17.2
+      image: rockylinux/rockylinux:8
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
@@ -204,7 +204,7 @@ jobs:
     name: fVDB GTests
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: aswf/ci-openvdb:2024-clang17.2
+      image: rockylinux/rockylinux:8
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
@@ -277,7 +277,7 @@ jobs:
     name: fVDB Unit Tests
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: aswf/ci-openvdb:2024-clang17.2
+      image: rockylinux/rockylinux:8
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
@@ -341,7 +341,7 @@ jobs:
     name: fVDB Documentation Tests
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: aswf/ci-openvdb:2024-clang17.2
+      image: rockylinux/rockylinux:8
       env:
         PYTHONPATH: ""
       options: --rm
