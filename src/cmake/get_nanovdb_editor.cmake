@@ -230,7 +230,7 @@ endif()
 
 message(STATUS "Building nanovdb_editor wheel version ${NANOVDB_EDITOR_LATEST_VERSION} to ${NANOVDB_EDITOR_WHEEL_DIR}...")
 execute_process(
-    COMMAND bash -lc "
+    COMMAND bash -c "
     ${Python3_EXECUTABLE} -m pip wheel ${nanovdb_editor_SOURCE_DIR}/pymodule \
         --wheel-dir ${NANOVDB_EDITOR_WHEEL_DIR} \
         -Cbuild-dir=${nanovdb_editor_SOURCE_DIR}/../build \

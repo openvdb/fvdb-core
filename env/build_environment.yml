@@ -7,7 +7,6 @@ dependencies:
   - ca-certificates
   - certifi
   - cmake
-  - cuda-command-line-tools
   - cuda-compiler
   - cuda-nvrtc-dev
   - cuda-nvtx-dev
