@@ -21,7 +21,6 @@ dependencies:
   - pip>=23.3.1
   - pkg-config
   - polyscope
-  - pybind11=2.13.6
   - py-opencv>=4.10[build=headless*]
   - pytest-benchmark
   - python=3.12

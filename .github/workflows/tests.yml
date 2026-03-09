@@ -116,8 +116,6 @@ jobs:
 
       - name: Set up fvdb_build Conda env
         uses: mamba-org/setup-micromamba@v2
-        env:
-          CONDA_OVERRIDE_CUDA: "13.0"
         with:
           post-cleanup: 'all'
           environment-name: fvdb_build
