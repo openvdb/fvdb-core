@@ -172,8 +172,8 @@ SplatIntoGridTrilinear(const GridBatchImpl &batchHdl,
                 auto cb = [=] __device__(int32_t bidx,
                                          int32_t eidx,
                                          int32_t cidx,
-                                         JaggedRAcc32<float, 2> pts) {
-                    splatIntoGridTrilinearStencilCallbackVec4<DeviceTag, JaggedRAcc32, TorchRAcc32>(
+                                         JaggedRAcc64<float, 2> pts) {
+                    splatIntoGridTrilinearStencilCallbackVec4<DeviceTag, JaggedRAcc64, TorchRAcc64>(
                         bidx,
                         eidx,
                         cidx,
@@ -188,11 +188,11 @@ SplatIntoGridTrilinear(const GridBatchImpl &batchHdl,
                 auto cb = [=] __device__(int32_t bidx,
                                          int32_t eidx,
                                          int32_t cidx,
-                                         JaggedRAcc32<float, 2> pts) {
+                                         JaggedRAcc64<float, 2> pts) {
                     splatIntoGridTrilinearStencilCallback<DeviceTag,
                                                           float,
-                                                          JaggedRAcc32,
-                                                          TorchRAcc32>(bidx,
+                                                          JaggedRAcc64,
+                                                          TorchRAcc64>(bidx,
                                                                        eidx,
                                                                        cidx,
                                                                        pts,
@@ -207,11 +207,11 @@ SplatIntoGridTrilinear(const GridBatchImpl &batchHdl,
             auto cb = [=] __device__(int32_t bidx,
                                      int32_t eidx,
                                      int32_t cidx,
-                                     JaggedRAcc32<scalar_t, 2> pts) {
+                                     JaggedRAcc64<scalar_t, 2> pts) {
                 splatIntoGridTrilinearStencilCallback<DeviceTag,
                                                       scalar_t,
-                                                      JaggedRAcc32,
-                                                      TorchRAcc32>(
+                                                      JaggedRAcc64,
+                                                      TorchRAcc64>(
                     bidx, eidx, cidx, pts, pointsDataAcc, batchAcc, outGridDataAcc, numChannels);
             };
             dispatchForEach(cb);

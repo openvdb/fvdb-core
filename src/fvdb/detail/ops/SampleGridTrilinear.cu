@@ -147,8 +147,8 @@ SampleGridTrilinear(const GridBatchImpl &batchHdl,
                 auto cb = [=] __device__(int32_t bidx,
                                          int32_t eidx,
                                          int32_t cidx,
-                                         JaggedRAcc32<float, 2> pts) {
-                    sampleTrilinearStencilCallbackVec4<JaggedRAcc32, TorchRAcc32>(
+                                         JaggedRAcc64<float, 2> pts) {
+                    sampleTrilinearStencilCallbackVec4<JaggedRAcc64, TorchRAcc64>(
                         bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc, numChannels);
                 };
                 dispatchForEach(cb);
@@ -156,8 +156,8 @@ SampleGridTrilinear(const GridBatchImpl &batchHdl,
                 auto cb = [=] __device__(int32_t bidx,
                                          int32_t eidx,
                                          int32_t cidx,
-                                         JaggedRAcc32<float, 2> pts) {
-                    sampleTrilinearStencilCallback<float, JaggedRAcc32, TorchRAcc32>(
+                                         JaggedRAcc64<float, 2> pts) {
+                    sampleTrilinearStencilCallback<float, JaggedRAcc64, TorchRAcc64>(
                         bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc, numChannels);
                 };
                 dispatchForEach(cb);
@@ -166,8 +166,8 @@ SampleGridTrilinear(const GridBatchImpl &batchHdl,
             auto cb = [=] __device__(int32_t bidx,
                                      int32_t eidx,
                                      int32_t cidx,
-                                     JaggedRAcc32<scalar_t, 2> pts) {
-                sampleTrilinearStencilCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+                                     JaggedRAcc64<scalar_t, 2> pts) {
+                sampleTrilinearStencilCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                     bidx, eidx, cidx, pts, gridDataAcc, batchAcc, outFeaturesAcc, numChannels);
             };
             dispatchForEach(cb);

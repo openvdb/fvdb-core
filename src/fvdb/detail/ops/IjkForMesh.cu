@@ -22,15 +22,15 @@ __device__ void
 countVoxelsPerTriToCheck(int32_t bidx,
                          int32_t eidx,
                          const VoxelCoordTransform *transforms,
-                         const JaggedRAcc32<ScalarF, 2> vertices,
-                         const JaggedRAcc32<ScalarI, 2> triangles,
-                         TorchRAcc32<int32_t, 1> outNumSamplesPerTri) {
+                         const JaggedRAcc64<ScalarF, 2> vertices,
+                         const JaggedRAcc64<ScalarI, 2> triangles,
+                         TorchRAcc64<int32_t, 1> outNumSamplesPerTri) {
     using Vec3F = nanovdb::math::Vec3<ScalarF>;
     using Vec3I = nanovdb::math::Vec3<ScalarI>;
 
     const VoxelCoordTransform tx        = transforms[bidx];
-    const TorchRAcc32<ScalarI, 2> faces = triangles.data();
-    const TorchRAcc32<ScalarF, 2> verts = vertices.data();
+    const TorchRAcc64<ScalarI, 2> faces = triangles.data();
+    const TorchRAcc64<ScalarF, 2> verts = vertices.data();
 
     // Voxel space triangle vertices
     const int64_t off = vertices.offsetStart(bidx);
@@ -69,9 +69,9 @@ template <typename ScalarF,
           typename TensorAccessor>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 generateSurfaceSamples(const VoxelCoordTransform *transforms,
-                       const JaggedRAcc32<ScalarF, 2> vertices,
-                       const JaggedRAcc32<ScalarI, 2> triangles,
-                       const TorchRAcc32<int64_t, 1> cumSamplesPerTri,
+                       const JaggedRAcc64<ScalarF, 2> vertices,
+                       const JaggedRAcc64<ScalarI, 2> triangles,
+                       const TorchRAcc64<int64_t, 1> cumSamplesPerTri,
                        TensorAccessor<int32_t, 2> outIJK,
                        TensorAccessor<fvdb::JIdxType, 1> outJIdx) {
     using Vec3F = nanovdb::math::Vec3<ScalarF>;
@@ -130,8 +130,8 @@ generateSurfaceSamples(const VoxelCoordTransform *transforms,
     // Compute the voxel coordinate vertices and edges of the triangle containing this sample
     const fvdb::JIdxType triJIdx        = triangles.batchIdx(triIdx);
     const VoxelCoordTransform tx        = transforms[triJIdx];
-    const TorchRAcc32<ScalarI, 2> faces = triangles.data();
-    const TorchRAcc32<ScalarF, 2> verts = vertices.data();
+    const TorchRAcc64<ScalarI, 2> faces = triangles.data();
+    const TorchRAcc64<ScalarF, 2> verts = vertices.data();
 
     // Voxel space vertices of the triangle containing this sample
     const int64_t off = vertices.offsetStart(triJIdx);
@@ -217,15 +217,15 @@ dispatchIJKForMesh<torch::kCUDA>(const JaggedTensor &meshVertices,
                     torch::Tensor samplesPerTri =
                         torch::empty({meshFaces.jdata().size(0) + 1}, optsI32);
                     auto samplesPerTriAcc =
-                        samplesPerTri.packed_accessor32<int32_t, 1, torch::RestrictPtrTraits>();
+                        samplesPerTri.packed_accessor64<int32_t, 1, torch::RestrictPtrTraits>();
                     auto verticesAcc =
-                        meshVertices.packed_accessor32<scalar_f, 2, torch::RestrictPtrTraits>();
+                        meshVertices.packed_accessor64<scalar_f, 2, torch::RestrictPtrTraits>();
                     auto facesAcc =
-                        meshFaces.packed_accessor32<scalar_i, 2, torch::RestrictPtrTraits>();
+                        meshFaces.packed_accessor64<scalar_i, 2, torch::RestrictPtrTraits>();
                     auto cb = [=] __device__(int32_t bidx,
                                              int32_t eidx,
                                              int32_t cidx,
-                                             JaggedRAcc32<scalar_i, 2> acc) {
+                                             JaggedRAcc64<scalar_i, 2> acc) {
                         countVoxelsPerTriToCheck<scalar_f, scalar_i>(
                             bidx, eidx, transformDevPtr, verticesAcc, facesAcc, samplesPerTriAcc);
                     };
@@ -236,7 +236,7 @@ dispatchIJKForMesh<torch::kCUDA>(const JaggedTensor &meshVertices,
                     torch::Tensor samplesPerTriCumSum = samplesPerTri.cumsum(0);
                     auto samplesPerTriCumSumAcc =
                         samplesPerTriCumSum
-                            .packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>();
+                            .packed_accessor64<int64_t, 1, torch::RestrictPtrTraits>();
                     const int64_t totalSurfaceSamples = samplesPerTriCumSum[-1].item<int64_t>();
 
                     // Now write out the surface samples
@@ -259,11 +259,11 @@ dispatchIJKForMesh<torch::kCUDA>(const JaggedTensor &meshVertices,
                                                                outJidxKAcc);
                     } else {
                         auto outIJKAcc =
-                            outIJK.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>();
+                            outIJK.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>();
                         auto outJidxKAcc =
                             outJidx
-                                .packed_accessor32<fvdb::JIdxType, 1, torch::RestrictPtrTraits>();
-                        generateSurfaceSamples<scalar_f, scalar_i, TorchRAcc32>
+                                .packed_accessor64<fvdb::JIdxType, 1, torch::RestrictPtrTraits>();
+                        generateSurfaceSamples<scalar_f, scalar_i, TorchRAcc64>
                             <<<numBlocks, DEFAULT_BLOCK_DIM>>>(transformDevPtr,
                                                                verticesAcc,
                                                                facesAcc,

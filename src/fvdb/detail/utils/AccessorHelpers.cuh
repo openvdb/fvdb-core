@@ -13,12 +13,6 @@
 
 namespace fvdb {
 
-/// @brief Shorthand for torch::PackedTensorAccessor32 with RestrictPtrTraits
-/// @tparam ScalarType The type of the tensor
-/// @tparam DIMS The number of dimensions of the tensor
-template <typename ScalarType, int32_t DIMS>
-using TorchRAcc32 = torch::PackedTensorAccessor32<ScalarType, DIMS, torch::RestrictPtrTraits>;
-
 /// @brief Shorthand for torch::PackedTensorAccessor64 with RestrictPtrTraits
 /// @tparam ScalarType The type of the tensor
 /// @tparam DIMS The number of dimensions of the tensor
@@ -30,12 +24,6 @@ using TorchRAcc64 = torch::PackedTensorAccessor64<ScalarType, DIMS, torch::Restr
 /// @tparam DIMS The number of dimensions of the tensor
 template <typename ScalarType, int32_t DIMS>
 using TorchAcc = torch::TensorAccessor<ScalarType, DIMS>;
-
-/// @brief Shorthand for fvdb::PackedJaggedAccessor32 with RestrictPtrTraits
-/// @tparam ScalarType The type of the tensor
-/// @tparam DIMS The number of dimensions of the tensor
-template <typename ScalarType, int32_t DIMS>
-using JaggedRAcc32 = fvdb::PackedJaggedAccessor32<ScalarType, DIMS, torch::RestrictPtrTraits>;
 
 /// @brief Shorthand for fvdb::PackedJaggedAccessor64 with RestrictPtrTraits
 /// @tparam ScalarType The type of the tensor
@@ -53,10 +41,10 @@ using JaggedAcc = fvdb::JaggedAccessor<ScalarType, DIMS>;
 /// @tparam DeviceTag The device tag to use for the accessor (either torch::kCUDA or torch::kCPU)
 /// @tparam T The scalar type of the tensor
 /// @tparam N The number of dimensions of the tensor
-/// @tparam IndexT The type of index to use for packed tensors on the GPU (default is int32_t)
+/// @tparam IndexT The type of index to use for packed tensors on the GPU (default is int64_t)
 /// @param tensor The tensor to get an accessor for
-/// @return A tensor accessor (either torch::TensorAccessor or torch::PackedTensorAccessor32)
-template <c10::DeviceType DeviceTag, typename T, size_t N, typename IndexT = int32_t>
+/// @return A tensor accessor (either torch::TensorAccessor or torch::PackedTensorAccessor64)
+template <c10::DeviceType DeviceTag, typename T, size_t N, typename IndexT = int64_t>
 typename std::conditional<
     DeviceTag == torch::kCUDA || DeviceTag == torch::kPrivateUse1,
     torch::GenericPackedTensorAccessor<T, N, torch::RestrictPtrTraits, IndexT>,
@@ -88,14 +76,14 @@ gridBatchAccessor(const fvdb::detail::GridBatchImpl &batchHdl) {
 /// @tparam T The scalar type of the JaggedTensor
 /// @tparam N The number of dimensions of the JaggedTensor data tensor
 /// @param jaggedTensor The JaggedTensor to get an accessor for
-/// @return A JaggedTensor accessor (either JaggedAccessor or PackedJaggedAccessor32)
+/// @return A JaggedTensor accessor (either JaggedAccessor or PackedJaggedAccessor64)
 template <c10::DeviceType DeviceTag, typename T, size_t N>
 typename std::conditional<DeviceTag == torch::kCUDA || DeviceTag == torch::kPrivateUse1,
-                          fvdb::JaggedRAcc32<T, N>,
+                          fvdb::JaggedRAcc64<T, N>,
                           fvdb::JaggedAcc<T, N>>::type
 jaggedAccessor(const fvdb::JaggedTensor &jaggedTensor) {
     if constexpr (DeviceTag == torch::kCUDA || DeviceTag == torch::kPrivateUse1) {
-        return jaggedTensor.packed_accessor32<T, N, torch::RestrictPtrTraits>();
+        return jaggedTensor.packed_accessor64<T, N, torch::RestrictPtrTraits>();
     } else {
         return jaggedTensor.accessor<T, N>();
     }

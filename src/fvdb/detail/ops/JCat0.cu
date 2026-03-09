@@ -18,7 +18,7 @@ namespace ops {
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 computeTensorSizes(const JOffsetsType *__restrict__ const *__restrict__ offsets,
                    const size_t numOffsets,
-                   TorchRAcc32<JOffsetsType, 1> outTensorSizes) {
+                   TorchRAcc64<JOffsetsType, 1> outTensorSizes) {
     int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (idx > outTensorSizes.size(0) - 1) {
@@ -45,11 +45,11 @@ computeIndexPutArg(
     const JOffsetsType *__restrict__ const *__restrict__ offsets,
     const size_t numOffsets,
     const size_t numElements,
-    const TorchRAcc32<JIdxType, 1> inJIdxI,         // Jidx of the i^th input tensor
-    const TorchRAcc32<JOffsetsType, 1> inJoffsetsI, // JOffsets of the i^th input tensor
-    const TorchRAcc32<JOffsetsType, 1> outJOffsets, // Output JOffsets (already computed earlier)
-    TorchRAcc32<IdxT, 1> outSelIdx,                 // Output selection indices
-    TorchRAcc32<JIdxType, 1> outJIdx                // Output Jidx
+    const TorchRAcc64<JIdxType, 1> inJIdxI,         // Jidx of the i^th input tensor
+    const TorchRAcc64<JOffsetsType, 1> inJoffsetsI, // JOffsets of the i^th input tensor
+    const TorchRAcc64<JOffsetsType, 1> outJOffsets, // Output JOffsets (already computed earlier)
+    TorchRAcc64<IdxT, 1> outSelIdx,                 // Output selection indices
+    TorchRAcc64<JIdxType, 1> outJIdx                // Output Jidx
 ) {
     int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -121,7 +121,7 @@ jCat0CUDA(const std::vector<JaggedTensor> &vec) {
     computeTensorSizes<<<numBlocksCalcTensorSizes, DEFAULT_BLOCK_DIM>>>(
         thrust::raw_pointer_cast(offsets_d.data()),
         offsets_d.size(),
-        outJOffsets.packed_accessor32<JOffsetsType, 1, torch::RestrictPtrTraits>());
+        outJOffsets.packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>());
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     torch::cumsum_out(outJOffsets, outJOffsets, 0);
 
@@ -157,11 +157,11 @@ jCat0CUDA(const std::vector<JaggedTensor> &vec) {
                     thrust::raw_pointer_cast(offsets_d.data()),
                     offsets_d.size(),
                     jt.jdata().size(0),
-                    jt.jidx().packed_accessor32<JIdxType, 1, torch::RestrictPtrTraits>(),
-                    jt.joffsets().packed_accessor32<JOffsetsType, 1, torch::RestrictPtrTraits>(),
-                    outJOffsets.packed_accessor32<JOffsetsType, 1, torch::RestrictPtrTraits>(),
-                    selectIndices.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>(),
-                    outJIdx.packed_accessor32<JIdxType, 1, torch::RestrictPtrTraits>());
+                    jt.jidx().packed_accessor64<JIdxType, 1, torch::RestrictPtrTraits>(),
+                    jt.joffsets().packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>(),
+                    outJOffsets.packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>(),
+                    selectIndices.packed_accessor64<scalar_t, 1, torch::RestrictPtrTraits>(),
+                    outJIdx.packed_accessor64<JIdxType, 1, torch::RestrictPtrTraits>());
                 C10_CUDA_KERNEL_LAUNCH_CHECK();
 
                 torch::Tensor selIdxI =

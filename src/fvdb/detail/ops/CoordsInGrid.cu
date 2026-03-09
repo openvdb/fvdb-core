@@ -59,8 +59,8 @@ CoordsInGrid(const GridBatchImpl &batchHdl, const JaggedTensor &ijk) {
                            auto cb = [=] __device__(int32_t bidx,
                                                     int32_t eidx,
                                                     int32_t cidx,
-                                                    JaggedRAcc32<scalar_t, 2> ijkAcc) {
-                               coordsInGridCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+                                                    JaggedRAcc64<scalar_t, 2> ijkAcc) {
+                               coordsInGridCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                                    bidx, eidx, ijkAcc, outMaskAccessor, batchAcc);
                            };
                            forEachJaggedElementChannelCUDA<scalar_t, 2>(1024, 1, ijk, cb);

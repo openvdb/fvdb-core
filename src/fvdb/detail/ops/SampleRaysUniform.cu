@@ -366,8 +366,8 @@ UniformRaySamples(const GridBatchImpl &batchHdl,
                 auto cb = [=] __device__(int32_t bidx,
                                          int32_t eidx,
                                          int32_t cidx,
-                                         JaggedRAcc32<scalar_t, 2> rayOriginsAcc) {
-                    countSamplesPerRayCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+                                         JaggedRAcc64<scalar_t, 2> rayOriginsAcc) {
+                    countSamplesPerRayCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                         bidx,
                         eidx,
                         rayOriginsAcc,
@@ -429,8 +429,8 @@ UniformRaySamples(const GridBatchImpl &batchHdl,
                 auto cb = [=] __device__(int32_t bidx,
                                          int32_t eidx,
                                          int32_t cidx,
-                                         JaggedRAcc32<scalar_t, 2> rayOriginsAcc) {
-                    generateRaySamplesCallback<scalar_t, JaggedRAcc32, TorchRAcc32>(
+                                         JaggedRAcc64<scalar_t, 2> rayOriginsAcc) {
+                    generateRaySamplesCallback<scalar_t, JaggedRAcc64, TorchRAcc64>(
                         bidx,
                         eidx,
                         rayOriginsAcc,
