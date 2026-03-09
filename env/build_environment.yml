@@ -14,7 +14,6 @@ dependencies:
   - cxx-compiler
   - gcc_linux-64=14.2
   - git
-  - gitpython
   - gxx_linux-64=14.2
   - libcublas-dev
   - libcusolver-dev
@@ -27,7 +26,6 @@ dependencies:
   - numpy
   - openssl
   - pkg-config
-  - psutil
   - pybind11
   - python=3.12
   - pytorch-gpu=2.10.0
@@ -35,7 +33,6 @@ dependencies:
   - setuptools>=68.2.2
   - sphinx_rtd_theme
   - sphinx>=7.0.0
-  - tqdm
   - zlib
 platforms:
   - linux-64
