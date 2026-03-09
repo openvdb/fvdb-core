@@ -54,7 +54,7 @@ jobs:
     needs: start-build-runner # required to start the main job when the runner is ready
     runs-on: ${{ needs.start-build-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: aswf/ci-openvdb:2024-clang17.2
+      image: rockylinux/rockylinux:8
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"

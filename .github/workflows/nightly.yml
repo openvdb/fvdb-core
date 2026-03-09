@@ -21,7 +21,7 @@ jobs:
     runs-on:
       - self-hosted
     container:
-      image: aswf/ci-openvdb:2024
+      image: rockylinux/rockylinux:8
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
@@ -138,7 +138,7 @@ jobs:
     runs-on:
       - self-hosted
     container:
-      image: aswf/ci-openvdb:2024
+      image: rockylinux/rockylinux:8
       env:
         PYTHONPATH: ""
       options: --rm
