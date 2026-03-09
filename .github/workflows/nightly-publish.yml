@@ -22,6 +22,7 @@ jobs:
   ##############################################################################
   check-new-commits:
     name: Check for new commits on main
+    if: github.repository == 'openvdb/fvdb-core'
     runs-on: ubuntu-latest
     outputs:
       should_build: ${{ steps.decide.outputs.should_build }}
