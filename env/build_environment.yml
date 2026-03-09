@@ -13,10 +13,10 @@ dependencies:
   - cuda-nvtx-dev
   - cuda-version=13.0
   - cxx-compiler
-  - gcc_linux-64=13
+  - gcc_linux-64=14.2
   - git
   - gitpython
-  - gxx_linux-64=13
+  - gxx_linux-64=14.2
   - libcublas-dev
   - libcusolver-dev
   - libcusparse-dev
