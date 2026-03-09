@@ -230,12 +230,13 @@ endif()
 
 message(STATUS "Building nanovdb_editor wheel version ${NANOVDB_EDITOR_LATEST_VERSION} to ${NANOVDB_EDITOR_WHEEL_DIR}...")
 execute_process(
-    COMMAND bash -c "
+    COMMAND bash -lc "
     ${Python3_EXECUTABLE} -m pip wheel ${nanovdb_editor_SOURCE_DIR}/pymodule \
         --wheel-dir ${NANOVDB_EDITOR_WHEEL_DIR} \
         -Cbuild-dir=${nanovdb_editor_SOURCE_DIR}/../build \
         -Cbuild.verbose=false \
         -Clogging.level=WARNING \
+        -Ccmake.define.CMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM} \
         -Ccmake.define.NANOVDB_EDITOR_USE_GLFW=OFF \
         -Ccmake.define.NANOVDB_EDITOR_BUILD_TESTS=OFF \
         -Ccmake.define.NANOVDB_EDITOR_COMMIT_HASH=${NANOVDB_EDITOR_COMMIT_HASH} \

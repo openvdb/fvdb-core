@@ -337,6 +337,11 @@ done
 CONFIG_SETTINGS+=" --config-settings=cmake.define.NANOVDB_EDITOR_SKIP=$NANOVDB_EDITOR_SKIP"
 CONFIG_SETTINGS+=" --config-settings=cmake.define.NANOVDB_EDITOR_FORCE=$NANOVDB_EDITOR_FORCE"
 
+NINJA_PATH=$(command -v ninja 2>/dev/null || command -v ninja-build 2>/dev/null)
+if [ -n "$NINJA_PATH" ]; then
+    CONFIG_SETTINGS+=" --config-settings=cmake.define.CMAKE_MAKE_PROGRAM=$NINJA_PATH"
+fi
+
 # Construct PIP_ARGS with potential CMake args and other pass-through args
 export PIP_ARGS="--no-build-isolation$CONFIG_SETTINGS$PASS_THROUGH_ARGS"
 
