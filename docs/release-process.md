@@ -80,11 +80,13 @@ Once the release branch exists, PR targeting rules change:
 - **New PRs opened during burndown** target `main` by default and will ship in
   the *following* release. If a PR is needed in the current release, it must
   target the release branch directly and requires maintainer approval.
-- **PRs opened before burndown** that have not yet merged can still land on
-  `main`. If the change is also needed in the current release, cherry-pick the
-  squash-merged commit from `main` onto the release branch:
+- **PRs opened before burndown** that have not yet merged should be triaged
+  during burndown planning. Decide whether each open PR is needed in the current
+  release and retarget it to the release branch if so. After merging, if the
+  change is also needed immediately on `main`, cherry-pick the squash-merged commit
+  from the release branch back onto `main`:
   ```bash
-  git checkout release/v0.4
+  git checkout main
   git cherry-pick <commit-sha>
   ```
   This may cause a minor conflict when the release branch is merged back into
