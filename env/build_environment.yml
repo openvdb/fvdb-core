@@ -27,7 +27,7 @@ dependencies:
   - openssl
   - pkg-config
   - pybind11
-  - python=3.13
+  - python=3.12
   - pytorch-gpu=2.10.0
   - scikit-build-core
   - setuptools>=68.2.2
