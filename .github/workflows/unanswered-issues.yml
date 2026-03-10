@@ -17,8 +17,46 @@ permissions:
 # cannot resolve team membership, so author_association alone is unreliable.
 
 jobs:
+  # TODO: remove this job after cleaning up incorrect Slack messages
+  cleanup-slack:
+    if: github.repository == 'openvdb/fvdb-core'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find and delete bot messages
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+        run: |
+          BOT_ID=$(curl -s -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+            https://slack.com/api/auth.test | jq -r '.user_id')
+          echo "Bot user ID: $BOT_ID"
+
+          MESSAGES=$(curl -s -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+            "https://slack.com/api/conversations.history?channel=$SLACK_CHANNEL_ID&limit=50" \
+            | jq -r --arg bot "$BOT_ID" '.messages[] | select(.user == $bot) | .ts')
+
+          if [ -z "$MESSAGES" ]; then
+            echo "No bot messages found."
+            exit 0
+          fi
+
+          COUNT=$(echo "$MESSAGES" | wc -l)
+          echo "Found $COUNT bot message(s), deleting..."
+
+          for TS in $MESSAGES; do
+            RESULT=$(curl -s -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"channel\": \"$SLACK_CHANNEL_ID\", \"ts\": \"$TS\"}" \
+              https://slack.com/api/chat.delete)
+            OK=$(echo "$RESULT" | jq -r '.ok')
+            ERR=$(echo "$RESULT" | jq -r '.error // empty')
+            echo "  $TS: ok=$OK ${ERR:+error=$ERR}"
+            sleep 1
+          done
+
   report:
     if: github.repository == 'openvdb/fvdb-core'
+    needs: cleanup-slack
     runs-on: ubuntu-latest
     steps:
       - name: Download report script
