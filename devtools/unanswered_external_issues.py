@@ -123,21 +123,17 @@ def fetch_comments(repo: str, issue_number: int) -> list[dict]:
 def fetch_team_members(org: str, team_slug: str) -> set[str]:
     """Return login names of all members of *org*/*team_slug*.
 
-    Falls back to an empty set if the token lacks the required scope
-    (``read:org`` for classic PATs, ``Organization > Members > Read``
-    for fine-grained tokens).
+    Raises if the API call fails so that a misconfigured token does not
+    silently produce a wrong report.  The token needs ``read:org`` scope
+    (classic PAT) or ``Organization > Members > Read`` (fine-grained).
     """
-    try:
-        members = gh_api_paginated(f"orgs/{org}/teams/{team_slug}/members")
-        return {m["login"] for m in members}
-    except subprocess.CalledProcessError:
-        print(
-            f"  WARNING: could not list members of {org}/{team_slug} "
-            "(token may lack read:org scope); "
-            "falling back to author_association only",
-            file=sys.stderr,
+    members = gh_api_paginated(f"orgs/{org}/teams/{team_slug}/members")
+    if not members:
+        raise RuntimeError(
+            f"No members returned for {org}/{team_slug}. "
+            "Check that the team exists and the token has read:org scope."
         )
-        return set()
+    return {m["login"] for m in members}
 
 
 def is_insider(association: str) -> bool:

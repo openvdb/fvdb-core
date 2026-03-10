@@ -28,12 +28,6 @@ jobs:
           gh api repos/openvdb/fvdb-core/contents/devtools/unanswered_external_issues.py \
             --jq .content | base64 -d > unanswered_external_issues.py
 
-      - name: Verify ISSUES_PAT can read team members
-        env:
-          GH_TOKEN: ${{ secrets.ISSUES_PAT }}
-        run: |
-          gh api orgs/openvdb/teams/fvdb-dev/members --jq '[.[].login] | length | tostring + " team members found"'
-
       - name: Generate report (dry run)
         env:
           GH_TOKEN: ${{ secrets.ISSUES_PAT }}
