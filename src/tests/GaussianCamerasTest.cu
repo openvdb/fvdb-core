@@ -21,6 +21,37 @@ using Mat3f = nanovdb::math::Mat3<float>;
 using Vec2f = nanovdb::math::Vec2<float>;
 using Vec3f = nanovdb::math::Vec3<float>;
 
+inline std::tuple<float, float>
+projectPointWithRadTan5Distortion(const float x,
+                                  const float y,
+                                  const float z,
+                                  const float fx,
+                                  const float fy,
+                                  const float cx,
+                                  const float cy,
+                                  const float k1,
+                                  const float k2,
+                                  const float k3,
+                                  const float p1,
+                                  const float p2) {
+    const float xn = x / z;
+    const float yn = y / z;
+    const float x2 = xn * xn;
+    const float y2 = yn * yn;
+    const float xy = xn * yn;
+    const float r2 = x2 + y2;
+    const float r4 = r2 * r2;
+    const float r6 = r4 * r2;
+
+    const float radial = 1.0f + k1 * r2 + k2 * r4 + k3 * r6;
+    float xd           = xn * radial;
+    float yd           = yn * radial;
+    xd += 2.0f * p1 * xy + p2 * (r2 + 2.0f * x2);
+    yd += p1 * (r2 + 2.0f * y2) + 2.0f * p2 * xy;
+
+    return {fx * xd + cx, fy * yd + cy};
+}
+
 inline __device__ float
 maxAbs2(float a, float b) {
     return ::cuda::std::fabs(a - b);
@@ -141,6 +172,24 @@ compareProjectWorldTo2DVJPKernel(int64_t C,
     outMaxDiffs[idx * 4 + 3] = maxAbsVec3(dTransNew, dTransRef);
 }
 
+template <typename CameraT>
+__global__ void
+projectWorldPointToPixelKernel(
+    int64_t C, const float *pointsWorld, CameraT camera, float *outPixels, int32_t *outStatuses) {
+    const int64_t cid = int64_t(blockIdx.x) * int64_t(blockDim.x) + int64_t(threadIdx.x);
+    if (cid >= C) {
+        return;
+    }
+
+    const Vec3f pointWorld(
+        pointsWorld[cid * 3 + 0], pointsWorld[cid * 3 + 1], pointsWorld[cid * 3 + 2]);
+    Vec2f pixel(0.0f, 0.0f);
+    const auto status      = camera.projectWorldPointToPixel(cid, pointWorld, 0.0f, pixel);
+    outPixels[cid * 2 + 0] = pixel[0];
+    outPixels[cid * 2 + 1] = pixel[1];
+    outStatuses[cid]       = static_cast<int32_t>(status);
+}
+
 torch::Tensor
 makeWorldToCamMatrices(int64_t C) {
     auto worldToCamCpu =
@@ -205,6 +254,22 @@ makeCovarsWorld6(int64_t N) {
         acc[i][5]     = 0.09f + f;  // zz
     }
     return covCpu.cuda();
+}
+
+torch::Tensor
+makeOpenCVDistortionCoeffs(int64_t C) {
+    auto distCpu =
+        torch::zeros({C, 12}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
+    auto acc = distCpu.accessor<float, 2>();
+    for (int64_t c = 0; c < C; ++c) {
+        const float s = static_cast<float>(c + 1);
+        acc[c][0]     = 0.02f * s;
+        acc[c][1]     = -0.004f * s;
+        acc[c][2]     = 0.001f * s;
+        acc[c][6]     = 0.0015f * s;
+        acc[c][7]     = -0.0012f * s;
+    }
+    return distCpu.cuda();
 }
 
 template <typename CameraT>
@@ -276,6 +341,84 @@ TEST(GaussianCamerasTest, OrthographicEncapsulatedProjectionAndVJPMatchReference
     auto camera = OrthographicCamera<float>(
         projection, worldToCam, static_cast<int32_t>(C), 640, 480, -1.0e8f, 1.0e8f);
     runForwardAndVjpParityChecks(camera, C, N, meansWorld, covarsWorld6);
+}
+
+TEST(GaussianCamerasTest, DistortedPerspectiveEncapsulatedProjectionAndVJPMatchReferencePath) {
+    constexpr int64_t C = 2;
+    auto worldToCam     = makeWorldToCamMatrices(C);
+    auto projection     = makeProjectionMatrices(C, false);
+    auto distortion     = makeOpenCVDistortionCoeffs(C);
+    auto pointsWorldCpu =
+        torch::tensor({{-0.18f, 0.10f, 2.5f}, {-0.05f, -0.12f, 2.8f}},
+                      torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
+    auto pointsWorld = pointsWorldCpu.cuda();
+
+    auto camera = PerspectiveWithDistortionCamera<float>(worldToCam,
+                                                         worldToCam.clone(),
+                                                         projection,
+                                                         distortion,
+                                                         static_cast<uint32_t>(C),
+                                                         /*numDistCoeffs=*/12,
+                                                         /*imageWidth=*/640,
+                                                         /*imageHeight=*/480,
+                                                         /*imageOriginW=*/0,
+                                                         /*imageOriginH=*/0,
+                                                         RollingShutterType::NONE,
+                                                         DistortionModel::OPENCV_RADTAN_5);
+
+    using ProjectionVisibility = PerspectiveWithDistortionCamera<float>::ProjectionVisibility;
+
+    auto outPixels =
+        torch::zeros({C, 2}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    auto outStatuses =
+        torch::zeros({C}, torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA));
+
+    constexpr int kBlock = 64;
+    const dim3 grid((C + kBlock - 1) / kBlock);
+    const dim3 block(kBlock);
+    cudaStream_t stream = at::cuda::getDefaultCUDAStream().stream();
+    projectWorldPointToPixelKernel<<<grid, block, 0, stream>>>(C,
+                                                               pointsWorld.data_ptr<float>(),
+                                                               camera,
+                                                               outPixels.data_ptr<float>(),
+                                                               outStatuses.data_ptr<int32_t>());
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+    auto worldToCamCpu  = worldToCam.cpu();
+    auto projectionCpu  = projection.cpu();
+    auto distortionCpu  = distortion.cpu();
+    auto outPixelsCpu   = outPixels.cpu();
+    auto outStatusesCpu = outStatuses.cpu();
+
+    auto worldAcc      = worldToCamCpu.accessor<float, 3>();
+    auto projectionAcc = projectionCpu.accessor<float, 3>();
+    auto distortionAcc = distortionCpu.accessor<float, 2>();
+    auto pointAcc      = pointsWorldCpu.accessor<float, 2>();
+    auto pixelAcc      = outPixelsCpu.accessor<float, 2>();
+    auto statusAcc     = outStatusesCpu.accessor<int32_t, 1>();
+
+    for (int64_t c = 0; c < C; ++c) {
+        const float xCam = pointAcc[c][0] + worldAcc[c][0][3];
+        const float yCam = pointAcc[c][1] + worldAcc[c][1][3];
+        const float zCam = pointAcc[c][2] + worldAcc[c][2][3];
+        const auto [expectedU, expectedV] =
+            projectPointWithRadTan5Distortion(xCam,
+                                              yCam,
+                                              zCam,
+                                              projectionAcc[c][0][0],
+                                              projectionAcc[c][1][1],
+                                              projectionAcc[c][0][2],
+                                              projectionAcc[c][1][2],
+                                              distortionAcc[c][0],
+                                              distortionAcc[c][1],
+                                              distortionAcc[c][2],
+                                              distortionAcc[c][6],
+                                              distortionAcc[c][7]);
+
+        EXPECT_EQ(static_cast<ProjectionVisibility>(statusAcc[c]), ProjectionVisibility::InImage);
+        EXPECT_NEAR(pixelAcc[c][0], expectedU, 1.0e-4f);
+        EXPECT_NEAR(pixelAcc[c][1], expectedV, 1.0e-4f);
+    }
 }
 
 } // namespace fvdb::detail::ops

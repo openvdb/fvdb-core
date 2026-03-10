@@ -93,10 +93,6 @@ def gs_conv_transpose_backward(
 ) -> tuple[torch.Tensor, torch.Tensor]: ...
 
 class GaussianSplat3d:
-    class ProjectionType(Enum):
-        PERSPECTIVE = ...
-        ORTHOGRAPHIC = ...
-
     log_scales: torch.Tensor
     logit_opacities: torch.Tensor
     means: torch.Tensor
@@ -157,7 +153,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: ProjectionType = ...,
+        camera_model: "CameraModel" = ...,
+        projection_method: "ProjectionMethod" = ...,
+        distortion_coeffs: Optional[torch.Tensor] = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
         antialias: bool = ...,
@@ -170,7 +168,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: ProjectionType = ...,
+        camera_model: "CameraModel" = ...,
+        projection_method: "ProjectionMethod" = ...,
+        distortion_coeffs: Optional[torch.Tensor] = ...,
         sh_degree_to_use: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -184,7 +184,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: ProjectionType = ...,
+        camera_model: "CameraModel" = ...,
+        projection_method: "ProjectionMethod" = ...,
+        distortion_coeffs: Optional[torch.Tensor] = ...,
         sh_degree_to_use: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -198,12 +200,33 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: ProjectionType = ...,
+        camera_model: "CameraModel" = ...,
+        projection_method: "ProjectionMethod" = ...,
+        distortion_coeffs: Optional[torch.Tensor] = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
         antialias: bool = ...,
         backgrounds: Optional[torch.Tensor] = ...,
+        masks: Optional[torch.Tensor] = ...,
+    ) -> tuple[torch.Tensor, torch.Tensor]: ...
+    def render_depths_from_world(
+        self,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        image_width: int,
+        image_height: int,
+        near: float,
+        far: float,
+        camera_model: "CameraModel" = ...,
+        projection_method: "ProjectionMethod" = ...,
+        distortion_coeffs: Optional[torch.Tensor] = ...,
+        tile_size: int = ...,
+        min_radius_2d: float = ...,
+        eps_2d: float = ...,
+        antialias: bool = ...,
+        backgrounds: Optional[torch.Tensor] = ...,
+        masks: Optional[torch.Tensor] = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
     def sparse_render_depths(
         self,
@@ -214,11 +237,15 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: ProjectionType = ...,
+        camera_model: "CameraModel" = ...,
+        projection_method: "ProjectionMethod" = ...,
+        distortion_coeffs: Optional[torch.Tensor] = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
         antialias: bool = ...,
+        backgrounds: Optional[torch.Tensor] = ...,
+        masks: Optional[torch.Tensor] = ...,
     ) -> tuple[JaggedTensor, JaggedTensor]: ...
     def render_from_projected_gaussians(
         self,
@@ -238,13 +265,16 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: ProjectionType = ...,
+        camera_model: "CameraModel" = ...,
+        projection_method: "ProjectionMethod" = ...,
+        distortion_coeffs: Optional[torch.Tensor] = ...,
         sh_degree_to_use: int = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
         antialias: bool = ...,
         backgrounds: Optional[torch.Tensor] = ...,
+        masks: Optional[torch.Tensor] = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
     def render_images_from_world(
         self,
@@ -254,7 +284,8 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        camera_model: "DistortionModel" = ...,
+        camera_model: "CameraModel" = ...,
+        projection_method: "ProjectionMethod" = ...,
         distortion_coeffs: Optional[torch.Tensor] = ...,
         sh_degree_to_use: int = ...,
         tile_size: int = ...,
@@ -273,12 +304,16 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: ProjectionType = ...,
+        camera_model: "CameraModel" = ...,
+        projection_method: "ProjectionMethod" = ...,
+        distortion_coeffs: Optional[torch.Tensor] = ...,
         sh_degree_to_use: int = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
         antialias: bool = ...,
+        backgrounds: Optional[torch.Tensor] = ...,
+        masks: Optional[torch.Tensor] = ...,
     ) -> tuple[JaggedTensor, JaggedTensor]: ...
     def render_images_and_depths(
         self,
@@ -288,13 +323,35 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: ProjectionType = ...,
+        camera_model: "CameraModel" = ...,
+        projection_method: "ProjectionMethod" = ...,
+        distortion_coeffs: Optional[torch.Tensor] = ...,
         sh_degree_to_use: int = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
         antialias: bool = ...,
         backgrounds: Optional[torch.Tensor] = ...,
+        masks: Optional[torch.Tensor] = ...,
+    ) -> tuple[torch.Tensor, torch.Tensor]: ...
+    def render_images_and_depths_from_world(
+        self,
+        world_to_camera_matrices: torch.Tensor,
+        projection_matrices: torch.Tensor,
+        image_width: int,
+        image_height: int,
+        near: float,
+        far: float,
+        camera_model: "CameraModel" = ...,
+        projection_method: "ProjectionMethod" = ...,
+        distortion_coeffs: Optional[torch.Tensor] = ...,
+        sh_degree_to_use: int = ...,
+        tile_size: int = ...,
+        min_radius_2d: float = ...,
+        eps_2d: float = ...,
+        antialias: bool = ...,
+        backgrounds: Optional[torch.Tensor] = ...,
+        masks: Optional[torch.Tensor] = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
     def sparse_render_images_and_depths(
         self,
@@ -305,12 +362,16 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: ProjectionType = ...,
+        camera_model: "CameraModel" = ...,
+        projection_method: "ProjectionMethod" = ...,
+        distortion_coeffs: Optional[torch.Tensor] = ...,
         sh_degree_to_use: int = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
         antialias: bool = ...,
+        backgrounds: Optional[torch.Tensor] = ...,
+        masks: Optional[torch.Tensor] = ...,
     ) -> tuple[JaggedTensor, JaggedTensor]: ...
     def render_num_contributing_gaussians(
         self,
@@ -320,7 +381,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: ProjectionType = ...,
+        camera_model: "CameraModel" = ...,
+        projection_method: "ProjectionMethod" = ...,
+        distortion_coeffs: Optional[torch.Tensor] = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -335,7 +398,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: ProjectionType = ...,
+        camera_model: "CameraModel" = ...,
+        projection_method: "ProjectionMethod" = ...,
+        distortion_coeffs: Optional[torch.Tensor] = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -349,7 +414,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: ProjectionType = ...,
+        camera_model: "CameraModel" = ...,
+        projection_method: "ProjectionMethod" = ...,
+        distortion_coeffs: Optional[torch.Tensor] = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -365,7 +432,9 @@ class GaussianSplat3d:
         image_height: int,
         near: float,
         far: float,
-        projection_type: ProjectionType = ...,
+        camera_model: "CameraModel" = ...,
+        projection_method: "ProjectionMethod" = ...,
+        distortion_coeffs: Optional[torch.Tensor] = ...,
         tile_size: int = ...,
         min_radius_2d: float = ...,
         eps_2d: float = ...,
@@ -949,7 +1018,9 @@ class ProjectedGaussianSplats:
     @property
     def opacities(self) -> torch.Tensor: ...
     @property
-    def projection_type(self) -> GaussianSplat3d.ProjectionType: ...
+    def camera_model(self) -> CameraModel: ...
+    @property
+    def projection_method(self) -> ProjectionMethod: ...
     @property
     def radii(self) -> torch.Tensor: ...
     @property
@@ -1042,8 +1113,8 @@ class Viewer:
     def set_camera_near(self, scene_name: str, near: float) -> None: ...
     def camera_far(self, scene_name: str) -> float: ...
     def set_camera_far(self, scene_name: str, far: float) -> None: ...
-    def camera_projection_type(self, scene_name: str) -> str: ...
-    def set_camera_projection_type(self, scene_name: str, projection_type: GaussianSplat3d.ProjectionType) -> None: ...
+    def camera_model(self, scene_name: str) -> CameraModel: ...
+    def set_camera_model(self, scene_name: str, mode: CameraModel) -> None: ...
     def add_camera_view(
         self,
         scene_name: str,
@@ -1252,10 +1323,15 @@ class RollingShutterType(Enum):
     VERTICAL = ...
     HORIZONTAL = ...
 
-class DistortionModel(Enum):
+class CameraModel(Enum):
     PINHOLE = ...
     OPENCV_RADTAN_5 = ...
     OPENCV_RATIONAL_8 = ...
     OPENCV_RADTAN_THIN_PRISM_9 = ...
     OPENCV_THIN_PRISM_12 = ...
     ORTHOGRAPHIC = ...
+
+class ProjectionMethod(Enum):
+    AUTO = ...
+    ANALYTIC = ...
+    UNSCENTED = ...
