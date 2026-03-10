@@ -6,6 +6,7 @@ dependencies:
   - blas=*=mkl
   - ca-certificates
   - certifi
+  - cmake
   - cuda-version=13.0
   - git
   - gitpython
