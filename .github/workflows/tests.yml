@@ -211,7 +211,8 @@ jobs:
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
-      options: --rm
+        CONDA_PKGS_DIRS: "/opt/conda-pkgs-cache"
+      options: --rm -v /tmp/conda-pkgs-cache:/opt/conda-pkgs-cache
     defaults:
       run:
         shell: bash -el {0}
@@ -287,7 +288,8 @@ jobs:
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
-      options: --rm
+        CONDA_PKGS_DIRS: "/opt/conda-pkgs-cache"
+      options: --rm -v /tmp/conda-pkgs-cache:/opt/conda-pkgs-cache
     defaults:
       run:
         shell: bash -el {0}
@@ -353,7 +355,8 @@ jobs:
       image: nvidia/cuda:13.0.2-base-rockylinux8
       env:
         PYTHONPATH: ""
-      options: --rm
+        CONDA_PKGS_DIRS: "/opt/conda-pkgs-cache"
+      options: --rm -v /tmp/conda-pkgs-cache:/opt/conda-pkgs-cache
     defaults:
       run:
         shell: bash -el {0}
