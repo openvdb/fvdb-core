@@ -387,7 +387,7 @@ elif [ "$BUILD_TYPE" == "ctest" ]; then
 
     echo "Running CMake configure in temporary directory ($TEMP_BUILD_DIR) to trigger data download..."
     pushd "$TEMP_BUILD_DIR" > /dev/null
-    run_with_sanitized_paths cmake "$SOURCE_DIR/src/cmake/download_test_data"
+    run_with_sanitized_paths cmake -G Ninja "$SOURCE_DIR/src/cmake/download_test_data"
     popd > /dev/null # Back to SOURCE_DIR
 
     # Clean up temporary directory

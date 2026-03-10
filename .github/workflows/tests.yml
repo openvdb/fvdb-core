@@ -207,7 +207,7 @@ jobs:
     name: fVDB GTests
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: nvidia/cuda:13.0.2-runtime-rockylinux8
+      image: nvidia/cuda:13.0.2-base-rockylinux8
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
@@ -283,7 +283,7 @@ jobs:
     name: fVDB Unit Tests
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: nvidia/cuda:13.0.2-runtime-rockylinux8
+      image: nvidia/cuda:13.0.2-base-rockylinux8
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
@@ -350,7 +350,7 @@ jobs:
     name: fVDB Documentation Tests
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: nvidia/cuda:13.0.2-runtime-rockylinux8
+      image: nvidia/cuda:13.0.2-base-rockylinux8
       env:
         PYTHONPATH: ""
       options: --rm

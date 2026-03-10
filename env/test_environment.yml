@@ -13,6 +13,7 @@ dependencies:
   - ipython
   - libpng
   - linkify-it-py
+  - ninja
   - matplotlib
   - myst-parser
   - numpy
