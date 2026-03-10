@@ -140,7 +140,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir torch==2.10.0 -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+          uv pip install --no-cache-dir -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
 
       - name: Build fvdb
         run: |
@@ -294,7 +294,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir torch==2.10.0 -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+          uv pip install --no-cache-dir -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
 
       - name: Download package with nanovdb_editor
         uses: actions/download-artifact@v4
@@ -391,7 +391,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir torch==2.10.0 -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+          uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
           uv pip install --no-cache-dir setuptools
           TORCH_CUDA_ARCH_LIST="8.9+PTX" uv pip install -v --no-build-isolation git+https://github.com/rusty1s/pytorch_scatter.git
           TORCH_CUDA_ARCH_LIST="8.9+PTX" uv pip install -v --no-build-isolation git+https://github.com/heiwang1997/torchsparse.git
@@ -479,7 +479,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir torch==2.10.0 -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+          uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
 
       - name: Download package
         uses: actions/download-artifact@v4
