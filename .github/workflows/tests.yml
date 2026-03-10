@@ -75,6 +75,9 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
+      - name: Install system dependencies
+        run: dnf install -y procps-ng findutils
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Fetch all history for all branches
@@ -204,7 +207,7 @@ jobs:
     name: fVDB GTests
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: rockylinux/rockylinux:8
+      image: nvidia/cuda:13.0.2-runtime-rockylinux8
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
@@ -213,6 +216,9 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
+      - name: Install system dependencies
+        run: dnf install -y procps-ng findutils
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Fetch all history for all branches
@@ -277,7 +283,7 @@ jobs:
     name: fVDB Unit Tests
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: rockylinux/rockylinux:8
+      image: nvidia/cuda:13.0.2-runtime-rockylinux8
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
@@ -286,6 +292,9 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
+      - name: Install system dependencies
+        run: dnf install -y procps-ng findutils
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Fetch all history for all branches
@@ -341,7 +350,7 @@ jobs:
     name: fVDB Documentation Tests
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
-      image: rockylinux/rockylinux:8
+      image: nvidia/cuda:13.0.2-runtime-rockylinux8
       env:
         PYTHONPATH: ""
       options: --rm
@@ -349,6 +358,9 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
+      - name: Install system dependencies
+        run: dnf install -y procps-ng findutils
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Fetch all history for all branches
