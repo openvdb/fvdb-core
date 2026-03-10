@@ -11,6 +11,11 @@ on:
 permissions:
   contents: read
 
+# ISSUES_PAT must be a classic PAT with read:org + repo scopes (or a
+# fine-grained token with Organization > Members > Read and Issues >
+# Read-only for the repos listed in the script).  The default GITHUB_TOKEN
+# cannot resolve team membership, so author_association alone is unreliable.
+
 jobs:
   report:
     if: github.repository == 'openvdb/fvdb-core'
@@ -23,22 +28,29 @@ jobs:
           gh api repos/openvdb/fvdb-core/contents/devtools/unanswered_external_issues.py \
             --jq .content | base64 -d > unanswered_external_issues.py
 
-      - name: Generate report
+      - name: Verify ISSUES_PAT can read team members
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.ISSUES_PAT }}
         run: |
-          python3 unanswered_external_issues.py --format slack > report.txt
+          gh api orgs/openvdb/teams/fvdb-dev/members --jq '[.[].login] | length | tostring + " team members found"'
 
-      - name: Build Slack payload
-        run: |
-          jq -n --arg channel "$SLACK_CHANNEL_ID" --rawfile text report.txt \
-            '{channel: $channel, text: $text}' > payload.json
+      - name: Generate report (dry run)
         env:
-          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          GH_TOKEN: ${{ secrets.ISSUES_PAT }}
+        run: |
+          python3 unanswered_external_issues.py --format slack | tee report.txt
 
-      - name: Post to Slack
-        uses: slackapi/slack-github-action@v2.1.1
-        with:
-          method: chat.postMessage
-          token: ${{ secrets.SLACK_BOT_TOKEN }}
-          payload-file-path: payload.json
+      # TODO: re-enable Slack posting once the report is verified
+      # - name: Build Slack payload
+      #   run: |
+      #     jq -n --arg channel "$SLACK_CHANNEL_ID" --rawfile text report.txt \
+      #       '{channel: $channel, text: $text}' > payload.json
+      #   env:
+      #     SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+      #
+      # - name: Post to Slack
+      #   uses: slackapi/slack-github-action@v2.1.1
+      #   with:
+      #     method: chat.postMessage
+      #     token: ${{ secrets.SLACK_BOT_TOKEN }}
+      #     payload-file-path: payload.json
