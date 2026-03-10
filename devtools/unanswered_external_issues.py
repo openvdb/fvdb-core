@@ -4,7 +4,12 @@
 
 """Report open issues from external users that lack a team-member response.
 
-Requires the GitHub CLI (`gh`) to be installed and authenticated.
+Requires the GitHub CLI (``gh``) to be installed and authenticated.
+The token should have ``read:org`` scope (classic PAT) or
+``Organization > Members > Read`` (fine-grained) so that team members
+can be reliably identified.  If that scope is missing, the script falls
+back to the ``author_association`` field, which may be unreliable with
+tokens that lack org-level visibility (e.g. the default GITHUB_TOKEN).
 
 Usage::
 
@@ -24,6 +29,8 @@ REPOS = [
     "openvdb/fvdb-core",
     "openvdb/fvdb-reality-capture",
 ]
+
+TEAM_SLUG = "fvdb-dev"
 
 INSIDER_ASSOCIATIONS = {"MEMBER", "COLLABORATOR", "OWNER"}
 
@@ -77,9 +84,9 @@ class RepoReport:
 
 
 def gh_api(endpoint: str) -> list[dict] | dict:
-    """Call ``gh api`` with automatic pagination and return parsed JSON."""
+    """Call ``gh api`` and return parsed JSON (single page)."""
     result = subprocess.run(
-        ["gh", "api", "--paginate", endpoint],
+        ["gh", "api", endpoint],
         capture_output=True,
         text=True,
         check=True,
@@ -87,34 +94,64 @@ def gh_api(endpoint: str) -> list[dict] | dict:
     return json.loads(result.stdout)
 
 
-def fetch_open_issues(repo: str) -> list[dict]:
-    """Return all open issues (not pull requests) for *repo*."""
-    all_issues: list[dict] = []
+def gh_api_paginated(endpoint: str) -> list[dict]:
+    """Call ``gh api`` with manual pagination and return all items."""
+    all_items: list[dict] = []
+    sep = "&" if "?" in endpoint else "?"
     page = 1
     while True:
-        batch = gh_api(f"repos/{repo}/issues?state=open&per_page=100&page={page}")
-        if not batch:
+        batch = gh_api(f"{endpoint}{sep}per_page=100&page={page}")
+        if not isinstance(batch, list) or not batch:
             break
-        all_issues.extend(batch)
+        all_items.extend(batch)
         if len(batch) < 100:
             break
         page += 1
-    return [i for i in all_issues if "pull_request" not in i]
+    return all_items
+
+
+def fetch_open_issues(repo: str) -> list[dict]:
+    """Return all open issues (not pull requests) for *repo*."""
+    return [i for i in gh_api_paginated(f"repos/{repo}/issues?state=open") if "pull_request" not in i]
 
 
 def fetch_comments(repo: str, issue_number: int) -> list[dict]:
     """Return all comments on a single issue."""
-    return gh_api(f"repos/{repo}/issues/{issue_number}/comments")
+    return gh_api_paginated(f"repos/{repo}/issues/{issue_number}/comments")
+
+
+def fetch_team_members(org: str, team_slug: str) -> set[str]:
+    """Return login names of all members of *org*/*team_slug*.
+
+    Falls back to an empty set if the token lacks the required scope
+    (``read:org`` for classic PATs, ``Organization > Members > Read``
+    for fine-grained tokens).
+    """
+    try:
+        members = gh_api_paginated(f"orgs/{org}/teams/{team_slug}/members")
+        return {m["login"] for m in members}
+    except subprocess.CalledProcessError:
+        print(
+            f"  WARNING: could not list members of {org}/{team_slug} "
+            "(token may lack read:org scope); "
+            "falling back to author_association only",
+            file=sys.stderr,
+        )
+        return set()
 
 
 def is_insider(association: str) -> bool:
     return association in INSIDER_ASSOCIATIONS
 
 
-def analyse_repo(repo: str) -> RepoReport:
+def analyse_repo(repo: str, org_members: set[str]) -> RepoReport:
     report = RepoReport(repo=repo)
     issues = fetch_open_issues(repo)
-    external_issues = [i for i in issues if not is_insider(i.get("author_association", ""))]
+
+    def _is_team(login: str, association: str) -> bool:
+        return login in org_members or is_insider(association)
+
+    external_issues = [i for i in issues if not _is_team(i["user"]["login"], i.get("author_association", ""))]
 
     total = len(external_issues)
     for idx, raw in enumerate(external_issues, 1):
@@ -137,7 +174,7 @@ def analyse_repo(repo: str) -> RepoReport:
         print(f"  [{idx}/{total}] #{number} -- fetching {issue.comment_count} comment(s)", file=sys.stderr)
         comments = fetch_comments(repo, number)
 
-        has_insider_reply = any(is_insider(c.get("author_association", "")) for c in comments)
+        has_insider_reply = any(_is_team(c["user"]["login"], c.get("author_association", "")) for c in comments)
         if not has_insider_reply:
             report.no_response.append(issue)
             continue
@@ -146,7 +183,7 @@ def analyse_repo(repo: str) -> RepoReport:
             last = comments[-1]
             issue.last_commenter = last["user"]["login"]
             issue.last_commenter_association = last.get("author_association", "NONE")
-            if not is_insider(issue.last_commenter_association):
+            if not _is_team(issue.last_commenter, issue.last_commenter_association):
                 report.awaiting_response.append(issue)
 
     return report
@@ -255,10 +292,18 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    orgs = sorted({repo.split("/")[0] for repo in REPOS})
+    team_members: set[str] = set()
+    for org in orgs:
+        print(f"\nFetching members of {org}/{TEAM_SLUG} ...", file=sys.stderr)
+        team_members.update(fetch_team_members(org, TEAM_SLUG))
+    if team_members:
+        print(f"  {len(team_members)} team member(s) will be treated as insiders", file=sys.stderr)
+
     reports: list[RepoReport] = []
     for repo in REPOS:
         print(f"\nScanning {repo} ...", file=sys.stderr)
-        reports.append(analyse_repo(repo))
+        reports.append(analyse_repo(repo, team_members))
     FORMATTERS[args.fmt](reports)
 
 
