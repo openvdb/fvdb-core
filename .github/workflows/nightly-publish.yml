@@ -22,6 +22,7 @@ jobs:
   ##############################################################################
   check-new-commits:
     name: Check for new commits on main
+    if: github.repository == 'openvdb/fvdb-core'
     runs-on: ubuntu-latest
     outputs:
       should_build: ${{ steps.decide.outputs.should_build }}
@@ -60,8 +61,13 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ['3.10', '3.11', '3.12', '3.13']
-        torch-version: ['2.8']
-        cuda-version: ['12.8']
+        torch-version: ['2.10']
+        cuda-version: ['12.8', '13.0']
+        include:
+          - cuda-version: '12.8'
+            cuda-image-tag: '12.8.1'
+          - cuda-version: '13.0'
+            cuda-image-tag: '13.0.2'
     steps:
       - name: Stagger job starts to avoid API rate limits
         run: |
@@ -102,7 +108,7 @@ jobs:
     if: needs.check-new-commits.outputs.should_build == 'true'
     runs-on: nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
     container:
-      image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
+      image: nvidia/cuda:${{ matrix.cuda-image-tag }}-cudnn-devel-ubuntu22.04
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
@@ -169,20 +175,21 @@ jobs:
           source .venv/bin/activate
           pip install auditwheel patchelf
           ldd --version | head -n1
+          CUDA_MAJOR=$(echo "${{ matrix.cuda-version }}" | cut -d. -f1)
           auditwheel repair dist/fvdb_core-*.whl -w dist/ \
             --exclude libcuda.so.1 \
-            --exclude libcudart.so.12 \
+            --exclude libcudart.so.${CUDA_MAJOR} \
             --exclude libcufile.so.1 \
-            --exclude libnvrtc.so.12 \
+            --exclude libnvrtc.so.${CUDA_MAJOR} \
             --exclude libnvToolsExt.so.1 \
-            --exclude libcublas.so.12 \
-            --exclude libcublasLt.so.12 \
+            --exclude libcublas.so.${CUDA_MAJOR} \
+            --exclude libcublasLt.so.${CUDA_MAJOR} \
             --exclude libcudnn.so.9 \
             --exclude libcufft.so.11 \
             --exclude libcurand.so.10 \
             --exclude libcusolver.so.11 \
-            --exclude libcusparse.so.12 \
-            --exclude libnvJitLink.so.12 \
+            --exclude libcusparse.so.${CUDA_MAJOR} \
+            --exclude libnvJitLink.so.${CUDA_MAJOR} \
             --exclude libtorch.so \
             --exclude libtorch_cpu.so \
             --exclude libtorch_cuda.so \

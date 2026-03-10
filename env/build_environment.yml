@@ -7,16 +7,14 @@ dependencies:
   - ca-certificates
   - certifi
   - cmake
-  - cuda-command-line-tools
   - cuda-compiler
   - cuda-nvrtc-dev
   - cuda-nvtx-dev
-  - cuda-version=12.9
+  - cuda-version=13.0
   - cxx-compiler
-  - gcc_linux-64=13
+  - gcc_linux-64=14.2
   - git
-  - gitpython
-  - gxx_linux-64=13
+  - gxx_linux-64=14.2
   - libcublas-dev
   - libcusolver-dev
   - libcusparse-dev
@@ -28,15 +26,13 @@ dependencies:
   - numpy
   - openssl
   - pkg-config
-  - psutil
-  - pybind11=2.13.6
+  - pybind11
   - python=3.12
-  - pytorch-gpu=2.8.0
+  - pytorch-gpu=2.10.0
   - scikit-build-core
   - setuptools>=68.2.2
   - sphinx_rtd_theme
   - sphinx>=7.0.0
-  - tqdm
   - zlib
 platforms:
   - linux-64

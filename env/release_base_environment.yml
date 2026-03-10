@@ -11,8 +11,8 @@ dependencies:
   - ca-certificates
   - certifi
   - openssl
-  - gcc_linux-64=11
-  - gxx_linux-64=11
+  - gcc_linux-64=14.2
+  - gxx_linux-64=14.2
   - cxx-compiler
   - setuptools>=68.2.2
   - cmake
