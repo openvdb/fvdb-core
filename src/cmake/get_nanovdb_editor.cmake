@@ -236,6 +236,7 @@ execute_process(
         -Cbuild-dir=${nanovdb_editor_SOURCE_DIR}/../build \
         -Cbuild.verbose=false \
         -Clogging.level=WARNING \
+        -Ccmake.define.CMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM} \
         -Ccmake.define.NANOVDB_EDITOR_USE_GLFW=OFF \
         -Ccmake.define.NANOVDB_EDITOR_BUILD_TESTS=OFF \
         -Ccmake.define.NANOVDB_EDITOR_COMMIT_HASH=${NANOVDB_EDITOR_COMMIT_HASH} \
