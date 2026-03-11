@@ -291,7 +291,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       S3_BUCKET: fvdb-packages
-      SIMPLE_PREFIX: ${{ (github.event_name == 'push' || github.event_name == 'pull_request') && 'simple-staging' || 'simple' }}
+      SIMPLE_PREFIX: ${{ github.event_name == 'release' && 'simple' || 'simple-staging' }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
