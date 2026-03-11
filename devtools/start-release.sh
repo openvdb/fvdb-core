@@ -116,37 +116,53 @@ echo ""
 
 if ! $DRY_RUN; then
     CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-    [[ "$CURRENT_BRANCH" == "main" ]] || die "must be on main (currently on $CURRENT_BRANCH)"
+    [[ "$CURRENT_BRANCH" == "main" || "$CURRENT_BRANCH" == "$RELEASE_BRANCH" ]] \
+        || die "must be on main or $RELEASE_BRANCH (currently on $CURRENT_BRANCH)"
 
     if ! git diff --quiet || ! git diff --cached --quiet; then
         die "working tree is not clean; commit or stash changes first"
     fi
 
-    if git show-ref --verify --quiet "refs/heads/$RELEASE_BRANCH"; then
-        die "branch $RELEASE_BRANCH already exists locally"
+    if [[ "$CURRENT_BRANCH" != "main" ]]; then
+        git checkout main
     fi
 fi
 
 # --- create release branch and set version ------------------------------------
-log "Creating branch $RELEASE_BRANCH from main..."
-run git checkout -b "$RELEASE_BRANCH"
+if ! $DRY_RUN && git show-ref --verify --quiet "refs/heads/$RELEASE_BRANCH"; then
+    log "Branch $RELEASE_BRANCH already exists locally, checking out..."
+    run git checkout "$RELEASE_BRANCH"
+else
+    log "Creating branch $RELEASE_BRANCH from main..."
+    run git checkout -b "$RELEASE_BRANCH"
+fi
 
-log "Setting version to $VERSION on $RELEASE_BRANCH..."
 if ! $DRY_RUN; then
-    set_version "$VERSION"
-    git add pyproject.toml
-    git commit -s -S -m "Set version to $VERSION for release"
+    CURRENT_VER="$(get_version)"
+    if [[ "$CURRENT_VER" == "$VERSION" ]]; then
+        log "Version already set to $VERSION on $RELEASE_BRANCH"
+    else
+        log "Setting version to $VERSION on $RELEASE_BRANCH..."
+        set_version "$VERSION"
+        git add pyproject.toml
+        git commit -s -S -m "Set version to $VERSION for release"
+    fi
 fi
 
 # --- switch back to main and bump to next dev version -------------------------
 log "Switching back to main..."
 run git checkout main
 
-log "Bumping main version to $NEXT_DEV..."
 if ! $DRY_RUN; then
-    set_version "$NEXT_DEV"
-    git add pyproject.toml
-    git commit -s -S -m "Bump version to $NEXT_DEV after $RELEASE_BRANCH branch"
+    CURRENT_VER="$(get_version)"
+    if [[ "$CURRENT_VER" == "$NEXT_DEV" ]]; then
+        log "Main already at $NEXT_DEV"
+    else
+        log "Bumping main version to $NEXT_DEV..."
+        set_version "$NEXT_DEV"
+        git add pyproject.toml
+        git commit -s -S -m "Bump version to $NEXT_DEV after $RELEASE_BRANCH branch"
+    fi
 fi
 
 # --- push ---------------------------------------------------------------------
@@ -164,9 +180,15 @@ fi
 if $NO_PR || $DRY_RUN; then
     log "Skipping PR creation"
 else
-    log "Creating PR from $RELEASE_BRANCH to main..."
+    REPO_SLUG="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+    EXISTING_PR="$(gh pr list --repo "$REPO_SLUG" --head "$RELEASE_BRANCH" --base main --state open --json number -q '.[0].number' 2>/dev/null || true)"
 
-    PR_BODY="$(cat <<EOF
+    if [[ -n "$EXISTING_PR" ]]; then
+        log "Release PR #${EXISTING_PR} already exists"
+    else
+        log "Creating draft PR from $RELEASE_BRANCH to main..."
+
+        PR_BODY="$(cat <<EOF
 ## Release v${VERSION}
 
 Merge release branch \`${RELEASE_BRANCH}\` into \`main\` at release time.
@@ -186,13 +208,14 @@ Merge release branch \`${RELEASE_BRANCH}\` into \`main\` at release time.
 \`\`\`
 EOF
 )"
-    gh pr create \
-        --repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)" \
-        --base main \
-        --head "$RELEASE_BRANCH" \
-        --title "Release v${VERSION}" \
-        --body "$PR_BODY" \
-        --draft
+        gh pr create \
+            --repo "$REPO_SLUG" \
+            --base main \
+            --head "$RELEASE_BRANCH" \
+            --title "Release v${VERSION}" \
+            --body "$PR_BODY" \
+            --draft
+    fi
 fi
 
 echo ""

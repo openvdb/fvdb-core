@@ -156,14 +156,21 @@ git checkout main >/dev/null 2>&1
 
 echo ""
 echo "============================================="
-echo " Test: start-release.sh rejects duplicate"
+echo " Test: start-release.sh is idempotent"
 echo "============================================="
 
-if "$START_RELEASE" 0.4.0 --no-push --no-pr 2>&1; then
-    fail "should reject when release branch already exists"
-else
-    pass "rejects duplicate release branch"
-fi
+RERUN_OUTPUT="$("$START_RELEASE" 0.4.0 --no-push --no-pr 2>&1)"
+pass "re-running start-release succeeds"
+assert_contains "re-run detects existing branch" "$RERUN_OUTPUT" "already exists"
+assert_contains "re-run detects version already set" "$RERUN_OUTPUT" "already"
+
+MAIN_VERSION_RERUN="$(get_version)"
+assert_eq "main still at 0.5.0.dev0 after re-run" "0.5.0.dev0" "$MAIN_VERSION_RERUN"
+
+git checkout release/v0.4 >/dev/null 2>&1
+RELEASE_VERSION_RERUN="$(get_version)"
+assert_eq "release branch still at 0.4.0 after re-run" "0.4.0" "$RELEASE_VERSION_RERUN"
+git checkout main >/dev/null 2>&1
 
 echo ""
 echo "============================================="
