@@ -112,10 +112,16 @@ On release day:
 ```
 
 This will:
-1. Tag `v0.4.0` on the HEAD of `release/v0.4`
-2. Push the tag
-3. Merge the release PR into `main` (merge commit, not squash)
-4. Create a GitHub Release (triggers the publish workflow)
+1. Verify the publish workflow passed on the release branch
+2. Tag `v0.4.0` on the HEAD of `release/v0.4`
+3. Push the tag
+4. Merge the release PR into `main` (merge commit, not squash)
+5. Create a GitHub Release (triggers the publish workflow)
+
+The merge in step 4 will produce a conflict on the `version` line in
+`pyproject.toml` because the release branch has `0.4.0` while `main` has
+`0.5.0.dev0`. **Resolve the conflict by keeping the `main` version**
+(`0.5.0.dev0`), since development continues from that point forward.
 
 Use `--remote origin` to target a different remote.
 Use `--dry-run` to preview without making changes.

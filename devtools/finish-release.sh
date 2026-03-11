@@ -163,6 +163,10 @@ else
     fi
 
     log "Merging PR #${PR_NUMBER} with merge commit..."
+    echo ""
+    echo "NOTE: The merge will conflict on the version line in pyproject.toml."
+    echo "      Resolve by keeping the main branch version (the .dev0 version)."
+    echo ""
     gh pr merge "$PR_NUMBER" \
         --repo "$REPO_SLUG" \
         --merge \
