@@ -561,8 +561,11 @@ launchRasterizeForwardKernels(
                                                                                   tilePixelCumsum,
                                                                                   pixelMap);
 
-            const dim3 gridDim  = {deviceTileCount, 1, 1};
-            rasterizeGaussiansForward<<<gridDim, args.commonArgs.getBlockDim(), sharedMem, stream>>>(args);
+            const dim3 gridDim = {deviceTileCount, 1, 1};
+            rasterizeGaussiansForward<<<gridDim,
+                                        args.commonArgs.getBlockDim(),
+                                        sharedMem,
+                                        stream>>>(args);
 
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
