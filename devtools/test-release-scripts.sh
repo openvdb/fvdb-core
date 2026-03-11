@@ -131,9 +131,10 @@ echo "============================================="
 echo " Test: start-release.sh (no-push, no-pr)"
 echo "============================================="
 
-"$START_RELEASE" 0.4.0 --no-push --no-pr 2>&1
+START_OUTPUT="$("$START_RELEASE" 0.4.0 --no-push --no-pr 2>&1)"
 
 assert_branch_exists "release/v0.4 branch exists" "release/v0.4"
+assert_contains "next steps mention retarget" "$START_OUTPUT" "retarget"
 
 CURRENT="$(git rev-parse --abbrev-ref HEAD)"
 assert_eq "on main after start-release" "main" "$CURRENT"
