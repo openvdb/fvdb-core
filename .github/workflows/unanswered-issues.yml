@@ -11,6 +11,11 @@ on:
 permissions:
   contents: read
 
+# ISSUES_PAT must be a classic PAT with read:org + repo scopes (or a
+# fine-grained token with Organization > Members > Read and Issues >
+# Read-only for the repos listed in the script).  The default GITHUB_TOKEN
+# cannot resolve team membership, so author_association alone is unreliable.
+
 jobs:
   report:
     if: github.repository == 'openvdb/fvdb-core'
@@ -25,7 +30,7 @@ jobs:
 
       - name: Generate report
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.ISSUES_PAT }}
         run: |
           python3 unanswered_external_issues.py --format slack > report.txt
 
