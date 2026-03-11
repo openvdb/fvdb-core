@@ -162,11 +162,21 @@ else
         die "no open PR found from $RELEASE_BRANCH to main"
     fi
 
-    log "Merging PR #${PR_NUMBER} with merge commit..."
-    echo ""
-    echo "NOTE: The merge will conflict on the version line in pyproject.toml."
-    echo "      Resolve by keeping the main branch version (the .dev0 version)."
-    echo ""
+    log "Checking PR #${PR_NUMBER} approval status..."
+    REVIEW_DECISION="$(gh pr view "$PR_NUMBER" \
+        --repo "$REPO_SLUG" \
+        --json reviewDecision \
+        -q '.reviewDecision')"
+
+    if [[ "$REVIEW_DECISION" != "APPROVED" ]]; then
+        echo "ERROR: PR #${PR_NUMBER} review status is: ${REVIEW_DECISION:-NONE}" >&2
+        die "aborted -- get the PR approved first"
+    fi
+
+    log "Merging PR #${PR_NUMBER} with merge commit"
+    log "NOTE: The merge will conflict on the version line in pyproject.toml."
+    log "      Resolve by keeping the main branch version (the .dev0 version)."
+
     gh pr merge "$PR_NUMBER" \
         --repo "$REPO_SLUG" \
         --merge \
