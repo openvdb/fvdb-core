@@ -3,6 +3,9 @@ name: Publish fVDB Pip Package
 on:
   release:
     types: [published]
+  push:
+    branches:
+      - 'release/v[0-9]*'
   workflow_dispatch:
     inputs:
       branch:
@@ -13,6 +16,11 @@ on:
         description: "Publish target: testpypi | s3 | none"
         required: false
         default: "testpypi"
+      run_validation:
+        description: "Run GPU validation tests on built wheel"
+        required: false
+        type: boolean
+        default: false
 
 # Allow subsequent pushes to the same PR or REF to cancel any previous jobs.
 concurrency:
@@ -29,27 +37,33 @@ permissions:
 
 jobs:
   pr-flags:
-    name: Determine PR flags
+    name: Determine publish flags
     runs-on: ubuntu-latest
     outputs:
       s3: ${{ steps.flags.outputs.s3 }}
+      release_push: ${{ steps.flags.outputs.release_push }}
     steps:
-      - name: Compute flags from PR head commit
+      - name: Compute publish routing flags
         id: flags
         uses: actions/github-script@v7
         with:
           script: |
             const isPR = context.eventName === 'pull_request';
+            const isPush = context.eventName === 'push';
             let s3 = '${{ inputs.publish_target }}' == 's3';
-            let reuse = false;
+            let releasePush = false;
             if (isPR) {
               const {owner, repo} = context.repo;
               const sha = context.payload.pull_request.head.sha;
               const commit = await github.rest.repos.getCommit({ owner, repo, ref: sha });
               const msg = (commit.data.commit.message || '').toString();
               s3 = /\[s3\]/i.test(msg);
+            } else if (isPush) {
+              s3 = true;
+              releasePush = true;
             }
             core.setOutput('s3', s3 ? 'true' : 'false');
+            core.setOutput('release_push', releasePush ? 'true' : 'false');
   start-build-runner:
     name: Start CPU-only EC2 runner for build
     runs-on: ubuntu-latest
@@ -168,7 +182,7 @@ jobs:
           uv pip install --no-cache-dir torch==${TORCH_VERSION}.0 -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
 
       - name: Add a post-release to version (used for testing on TestPyPI)
-        if: ${{ ((inputs.publish_target == 'testpypi') || (needs.pr-flags.outputs.s3 == 'false')) }}
+        if: ${{ needs.pr-flags.outputs.s3 == 'false' }}
         run: |
           VERSION_LINE=$(grep '^version *= *"' pyproject.toml)
           VERSION=$(echo "$VERSION_LINE" | sed -E 's/^version *= *"([^"]+)".*/\1/')
@@ -182,7 +196,7 @@ jobs:
           grep '^version' pyproject.toml
 
       - name: Add local version for S3 publish
-        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.s3 == 'true') }}
+        if: ${{ needs.pr-flags.outputs.s3 == 'true' }}
         run: |
           TORCH_TAG="$(echo "${{ matrix.torch-version }}" | tr -d '.')"
           CUDA_TAG="$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
@@ -195,7 +209,7 @@ jobs:
           ./build.sh wheel strip_symbols verbose --cuda-arch-list '7.5;8.0;9.0;10.0;12.0+PTX'
 
       - name: Repair wheel for manylinux
-        if: ${{ !((github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.s3 == 'true')) }}
+        if: ${{ needs.pr-flags.outputs.s3 != 'true' || needs.pr-flags.outputs.release_push == 'true' }}
         run: |
           source .venv/bin/activate
           pip install auditwheel patchelf
@@ -249,10 +263,11 @@ jobs:
           retention-days: 2
 
   publish-dist:
-    name: Publish Python 🐍 distribution 📦
+    name: Publish Python distribution to PyPI/TestPyPI
     needs:
+      - pr-flags
       - fvdb-build
-    if: ${{ !cancelled() && (needs.fvdb-build.result == 'success') && !((github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.s3 ==  'true')) }}
+    if: ${{ !cancelled() && needs.fvdb-build.result == 'success' && needs.pr-flags.outputs.s3 != 'true' }}
     runs-on: ubuntu-latest
 
     environment:
@@ -278,11 +293,11 @@ jobs:
   publish-to-s3:
     name: Publish wheels to custom S3 Simple Index
     needs: [pr-flags, fvdb-build]
-    if: ${{ !cancelled() && ((github.event_name == 'workflow_dispatch' && inputs.publish_target == 's3') || (github.event_name == 'pull_request' && needs.pr-flags.outputs.s3 == 'true')) && (needs.fvdb-build.result == 'success') }}
+    if: ${{ !cancelled() && needs.pr-flags.outputs.s3 == 'true' && needs.fvdb-build.result == 'success' }}
     runs-on: ubuntu-latest
     env:
       S3_BUCKET: fvdb-packages
-      SIMPLE_PREFIX: ${{ (github.event_name == 'pull_request') && 'simple-staging' || 'simple' }}
+      SIMPLE_PREFIX: ${{ github.event_name == 'release' && 'simple' || 'simple-staging' }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -312,6 +327,29 @@ jobs:
           echo "project_name=$PROJECT" >> $GITHUB_OUTPUT
           echo "normalized=$NORM" >> $GITHUB_OUTPUT
           echo "Project: $PROJECT, Normalized: $NORM"
+
+      - name: Prune staging wheels older than 30 days
+        if: ${{ env.SIMPLE_PREFIX == 'simple-staging' }}
+        run: |
+          set -euo pipefail
+          CUTOFF=$(date -u -d '30 days ago' '+%Y-%m-%d')
+          echo "Pruning staging wheels uploaded before $CUTOFF"
+          LISTING=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/" 2>/dev/null || true)
+          if [ -z "$LISTING" ]; then
+            echo "No existing wheels found -- nothing to prune"
+            exit 0
+          fi
+          DELETED=0
+          while read -r line; do
+            DATE_PART=$(echo "$line" | awk '{print $1}')
+            FILE_PART=$(echo "$line" | awk '{print $4}')
+            if [[ "$FILE_PART" == *.whl ]] && [[ "$DATE_PART" < "$CUTOFF" ]]; then
+              echo "Removing: $FILE_PART (uploaded $DATE_PART)"
+              aws s3 rm "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${{ steps.proj.outputs.normalized }}/$FILE_PART" --only-show-errors
+              DELETED=$((DELETED + 1))
+            fi
+          done <<< "$LISTING"
+          echo "Pruned $DELETED old staging wheel(s)"
 
       - name: Upload wheels to S3 project directory
         run: |
@@ -420,6 +458,184 @@ jobs:
             echo "</body></html>";
           } > "$ROOT_INDEX"
           aws s3 cp "$ROOT_INDEX" "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/index.html" --content-type text/html --only-show-errors
+
+  ##############################################################################
+  # GPU VALIDATION: SMOKE TEST + UNIT TESTS
+  ##############################################################################
+  start-validation-runner:
+    name: Start GPU EC2 runner for validation
+    needs: [pr-flags, fvdb-build]
+    if: ${{ !cancelled() && needs.fvdb-build.result == 'success' && (needs.pr-flags.outputs.release_push == 'true' || inputs.run_validation == true) }}
+    runs-on: ubuntu-latest
+    strategy: *matrix-strategy
+    steps:
+      - name: Stagger job starts to avoid API rate limits
+        run: |
+          DELAY=$((RANDOM % 16))
+          echo "Delaying start by ${DELAY} seconds for Python ${{ matrix.python-version }}"
+          sleep $DELAY
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
+          aws-region: us-east-2
+      - name: Start EC2 GPU runner
+        id: start-validation-runner
+        uses: machulav/ec2-github-runner@v2.4.3
+        with:
+          mode: start
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          ec2-image-id: ami-0f5c0b65fde08ae43
+          ec2-instance-type: g6.xlarge
+          subnet-id: subnet-03f2320d6e6e0005b
+          security-group-id: sg-0cd08bd89d6212223
+          label: val-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+          aws-resource-tags: >
+            [
+              {"Key": "RunnerLabel", "Value": "val-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"},
+              {"Key": "PythonVersion", "Value": "${{ matrix.python-version }}"},
+              {"Key": "TorchVersion", "Value": "${{ matrix.torch-version }}"},
+              {"Key": "CudaVersion", "Value": "${{ matrix.cuda-version }}"},
+              {"Key": "GitHubRunId", "Value": "${{ github.run_id }}"}
+            ]
+
+  validate-smoke-test:
+    name: Smoke test built wheel
+    needs: [start-validation-runner, fvdb-build, pr-flags]
+    if: ${{ !cancelled() && needs.start-validation-runner.result == 'success' }}
+    runs-on: val-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+    container:
+      image: nvidia/cuda:${{ matrix.cuda-image-tag }}-cudnn-runtime-ubuntu22.04
+      env:
+        PYTHONPATH: ""
+      options: --rm
+    defaults:
+      run:
+        shell: bash -el {0}
+    strategy: *matrix-strategy
+    steps:
+      - name: Install Python and pip
+        run: |
+          apt update && apt install -y python${{ matrix.python-version }} python3-pip wget
+          update-alternatives --install /usr/bin/python3 python3 /usr/bin/python${{ matrix.python-version }} 1
+          python3 --version
+
+      - name: Download wheel artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: fvdb-publish-package-${{ matrix.python-version }}-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
+          path: dist
+
+      - name: Install wheel
+        run: |
+          CUDA_TAG="cu$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
+          python3 -m pip install --no-cache-dir torch==${{ matrix.torch-version }}.0 --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
+          python3 -m pip install dist/fvdb_core-*.whl
+
+      - name: Run smoke test
+        run: |
+          python3 -c "
+          import fvdb
+          import torch
+          print(f'fvdb version: {fvdb.__version__}')
+          print(f'torch version: {torch.__version__}')
+          print(f'CUDA available: {torch.cuda.is_available()}')
+          assert torch.cuda.is_available(), 'CUDA not available'
+          ijk = fvdb.JaggedTensor([torch.tensor([[0,0,0],[1,1,1],[2,2,2]], device='cuda')])
+          grid = fvdb.GridBatch.from_ijk(ijk)
+          print(f'GridBatch created: {grid.total_voxels} voxels on {grid.device}')
+          assert grid.total_voxels == 3, f'Expected 3 voxels, got {grid.total_voxels}'
+          print('Smoke test PASSED')
+          "
+
+  validate-unit-tests:
+    name: Full unit tests on built wheel
+    needs: [start-validation-runner, validate-smoke-test, pr-flags]
+    if: ${{ !cancelled() && needs.validate-smoke-test.result == 'success' && (needs.pr-flags.outputs.release_push == 'true' || inputs.run_validation == true) }}
+    runs-on: val-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+    container:
+      image: aswf/ci-openvdb:2024-clang17.2
+      env:
+        PYTHONPATH: ""
+        CPM_SOURCE_CACHE: "/__w/cpm_cache"
+      options: --rm
+    defaults:
+      run:
+        shell: bash -el {0}
+    strategy: *matrix-strategy
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+
+      - name: Set up fvdb_test Conda env
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          cache-environment: false
+          post-cleanup: 'all'
+          environment-name: fvdb_test
+          environment-file: env/test_environment.yml
+
+      - name: Download wheel artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: fvdb-publish-package-${{ matrix.python-version }}-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
+          path: dist
+
+      - name: Install wheel
+        run: |
+          micromamba activate fvdb_test
+          pip install dist/fvdb_core-*.whl
+
+      - name: Run unit tests
+        run: |
+          micromamba activate fvdb_test
+          cd tests
+          pytest -v unit
+
+  stop-validation-runner:
+    name: Stop GPU EC2 runner for validation
+    needs:
+      - start-validation-runner
+      - validate-smoke-test
+      - validate-unit-tests
+    runs-on: ubuntu-latest
+    if: ${{ always() && needs.start-validation-runner.result != 'skipped' }}
+    strategy: *matrix-strategy
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
+          aws-region: us-east-2
+      - name: Find EC2 instance ID by label
+        id: find-instance
+        run: |
+          LABEL="val-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}"
+          echo "Looking for instance with RunnerLabel: $LABEL"
+
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:RunnerLabel,Values=$LABEL" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
+            --query 'Reservations[0].Instances[0].InstanceId' \
+            --output text)
+
+          if [ "$INSTANCE_ID" == "None" ] || [ -z "$INSTANCE_ID" ]; then
+            echo "ERROR: No instance found with RunnerLabel=$LABEL"
+            echo "instance-id=" >> $GITHUB_OUTPUT
+            exit 1
+          else
+            echo "Found instance: $INSTANCE_ID"
+            echo "instance-id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          fi
+      - name: Stop EC2 runner
+        if: steps.find-instance.outputs.instance-id != ''
+        uses: machulav/ec2-github-runner@v2.4.3
+        with:
+          mode: stop
+          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          label: val-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+          ec2-instance-id: ${{ steps.find-instance.outputs.instance-id }}
 
   fvdb-build-stop-runner:
     name: Stop CPU-only EC2 runner for build
