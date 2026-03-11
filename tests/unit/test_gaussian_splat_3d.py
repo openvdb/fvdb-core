@@ -9,6 +9,12 @@ import numpy as np
 import OpenImageIO as oiio
 import point_cloud_utils as pcu
 import torch
+from fvdb.utils.tests import (
+    create_uniform_grid_points_at_depth,
+    generate_center_frame_point_at_depth,
+    generate_random_4x4_xform,
+    get_fvdb_test_data_path,
+)
 from parameterized import parameterized, parameterized_class
 
 from fvdb import (
@@ -17,12 +23,6 @@ from fvdb import (
     JaggedTensor,
     evaluate_spherical_harmonics,
     gaussian_render_jagged,
-)
-from fvdb.utils.tests import (
-    create_uniform_grid_points_at_depth,
-    generate_center_frame_point_at_depth,
-    generate_random_4x4_xform,
-    get_fvdb_test_data_path,
 )
 
 
@@ -4089,6 +4089,180 @@ class TestGaussianRenderSparseDuplicatePixels(BaseGaussianTestCase):
             self.assertTrue(
                 torch.allclose(sparse_cam_alphas, expected_alphas, atol=1e-5, rtol=1e-8),
                 f"Camera {cam_idx}: sparse alphas with duplicates does not match dense",
+            )
+
+
+class TestProjectionGradsMultiCamera(unittest.TestCase):
+    """Verify that all Gaussian parameter gradients are correctly summed across
+    cameras in the projection backward pass (both dense and jagged).
+
+    The projection backward kernels use warp-level reductions (warpSum) to
+    accumulate per-camera gradient contributions for each Gaussian.  A missing
+    warpSum silently drops all but one camera's contribution when multiple
+    cameras share a warp for the same Gaussian (N < 32 and C >= 2).
+
+    The test strategy: render with all C cameras simultaneously and compare
+    every gradient against the sum of C independent single-camera renders.
+    With C = 1 the warp group has one thread so warpSum is a no-op and the
+    reference is always correct.
+    """
+
+    N = 8
+    C = 4
+    W = 64
+    H = 64
+    DEVICE = "cuda:0"
+
+    DENSE_PARAMS = ("means", "quats", "log_scales", "logit_opacities", "sh0", "shN")
+    JAGGED_PARAMS = ("means", "quats", "scales", "opacities", "sh_coeffs")
+
+    @staticmethod
+    def _look_at(eye, target, up):
+        """Build a 4x4 world-to-camera matrix (+z forward, matching gsplat depth convention)."""
+        forward = target - eye
+        forward = forward / forward.norm()
+        right = torch.linalg.cross(up, forward)
+        right = right / right.norm()
+        up = torch.linalg.cross(forward, right)
+        R = torch.stack([right, up, forward], dim=0)
+        t = -R @ eye
+        mat = torch.eye(4)
+        mat[:3, :3] = R
+        mat[:3, 3] = t
+        return mat
+
+    SH_DEGREE = 3
+    NUM_SH_BASES = (SH_DEGREE + 1) ** 2
+
+    def _make_test_data(self):
+        """Generate a small set of Gaussians and cameras for gradient testing."""
+        import math
+
+        torch.manual_seed(42)
+        device = self.DEVICE
+
+        means = torch.randn(self.N, 3, device=device) * 0.3
+        quats = torch.randn(self.N, 4, device=device)
+        quats = quats / quats.norm(dim=-1, keepdim=True)
+        log_scales = torch.full((self.N, 3), -2.0, device=device) + torch.randn(self.N, 3, device=device) * 0.1
+        logit_opacities = torch.full((self.N,), 2.0, device=device)
+        sh_coeffs = torch.randn(self.N, self.NUM_SH_BASES, 3, device=device) * 0.1
+        sh0 = sh_coeffs[:, :1, :].clone()
+        shN = sh_coeffs[:, 1:, :].clone()
+
+        viewmats = []
+        target = torch.zeros(3)
+        up = torch.tensor([0.0, 1.0, 0.0])
+        for i in range(self.C):
+            angle = 2.0 * math.pi * i / self.C
+            eye = torch.tensor([5.0 * math.cos(angle), 0.0, 5.0 * math.sin(angle)])
+            viewmats.append(self._look_at(eye, target, up))
+        viewmats = torch.stack(viewmats).float().to(device)
+
+        fx, fy = 50.0, 50.0
+        cx, cy = self.W / 2.0, self.H / 2.0
+        K = torch.tensor([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], device=device)
+        Ks = K.unsqueeze(0).expand(self.C, -1, -1).contiguous()
+
+        return means, quats, log_scales, logit_opacities, sh0, shN, sh_coeffs, viewmats, Ks
+
+    def _build_gs3d(self, means, quats, log_scales, logit_opacities, sh0, shN):
+        gs3d = GaussianSplat3d.from_tensors(
+            means=means.clone(),
+            quats=quats.clone(),
+            log_scales=log_scales.clone(),
+            logit_opacities=logit_opacities.clone(),
+            sh0=sh0.clone(),
+            shN=shN.clone(),
+        )
+        gs3d.requires_grad = True
+        return gs3d
+
+    def test_dense_projection_grads_multicamera(self):
+        """Dense path: GaussianProjectionBackward.cu -- all parameter gradients."""
+        means, quats, log_scales, logit_opacities, sh0, shN, _sh_coeffs, viewmats, Ks = self._make_test_data()
+
+        gs3d = self._build_gs3d(means, quats, log_scales, logit_opacities, sh0, shN)
+        images, _ = gs3d.render_images(viewmats, Ks, self.W, self.H, near=0.01, far=1e10)
+        images.sum().backward()
+
+        multi_cam_grads = {name: getattr(gs3d, name).grad.clone() for name in self.DENSE_PARAMS}
+
+        accumulated_grads = {name: torch.zeros_like(multi_cam_grads[name]) for name in self.DENSE_PARAMS}
+        for i in range(self.C):
+            gs3d_i = self._build_gs3d(means, quats, log_scales, logit_opacities, sh0, shN)
+            imgs_i, _ = gs3d_i.render_images(viewmats[i : i + 1], Ks[i : i + 1], self.W, self.H, near=0.01, far=1e10)
+            imgs_i.sum().backward()
+            for name in self.DENSE_PARAMS:
+                accumulated_grads[name] += getattr(gs3d_i, name).grad
+
+        for name in self.DENSE_PARAMS:
+            self.assertTrue(
+                multi_cam_grads[name].abs().sum() > 0,
+                f"Dense multi-camera {name} grad is all zeros; test is vacuous",
+            )
+            torch.testing.assert_close(
+                multi_cam_grads[name],
+                accumulated_grads[name],
+                atol=1e-4,
+                rtol=1e-4,
+                msg=f"Dense multi-camera {name} grad != sum of per-camera grads (warp reduction bug?)",
+            )
+
+    def test_jagged_projection_grads_multicamera(self):
+        """Jagged path: GaussianProjectionJaggedBackward.cu -- all parameter gradients."""
+        means, quats, log_scales, logit_opacities, _sh0, _shN, sh_coeffs, viewmats, Ks = self._make_test_data()
+
+        scales = torch.exp(log_scales)
+        opacities = torch.sigmoid(logit_opacities)
+
+        def _render_jagged(cam_viewmats, cam_Ks):
+            """Render one jagged scene and return {param_name: leaf_tensor} plus render output."""
+            leaves = {
+                "means": means.clone().detach().requires_grad_(True),
+                "quats": quats.clone().detach().requires_grad_(True),
+                "scales": scales.clone().detach().requires_grad_(True),
+                "opacities": opacities.clone().detach().requires_grad_(True),
+                "sh_coeffs": sh_coeffs.clone().detach().requires_grad_(True),
+            }
+            rc, _, _ = gaussian_render_jagged(
+                JaggedTensor([leaves["means"]]),
+                JaggedTensor([leaves["quats"]]),
+                JaggedTensor([leaves["scales"]]),
+                JaggedTensor([leaves["opacities"]]),
+                JaggedTensor([leaves["sh_coeffs"]]),
+                JaggedTensor([cam_viewmats]),
+                JaggedTensor([cam_Ks]),
+                self.W,
+                self.H,
+                0.01,
+                1e10,
+                self.SH_DEGREE,
+            )
+            return rc, leaves
+
+        rc_all, leaves_all = _render_jagged(viewmats, Ks)
+        rc_all.sum().backward()
+        multi_cam_grads = {name: leaves_all[name].grad.clone() for name in self.JAGGED_PARAMS}
+
+        accumulated_grads = {name: torch.zeros_like(multi_cam_grads[name]) for name in self.JAGGED_PARAMS}
+        for i in range(self.C):
+            rc_i, leaves_i = _render_jagged(viewmats[i : i + 1], Ks[i : i + 1])
+            rc_i.sum().backward()
+            for name in self.JAGGED_PARAMS:
+                accumulated_grads[name] += leaves_i[name].grad
+
+        for name in self.JAGGED_PARAMS:
+            self.assertTrue(
+                multi_cam_grads[name].abs().sum() > 0,
+                f"Jagged multi-camera {name} grad is all zeros; test is vacuous",
+            )
+            torch.testing.assert_close(
+                multi_cam_grads[name],
+                accumulated_grads[name],
+                atol=1e-4,
+                rtol=1e-4,
+                msg=f"Jagged multi-camera {name} grad != sum of per-camera grads (warp reduction bug?)",
             )
 
 
