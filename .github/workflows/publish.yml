@@ -182,11 +182,9 @@ jobs:
           version: "0.7.5"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '${{ matrix.python-version }}'
-        env:
-          AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
+        run: |
+          uv python install ${{ matrix.python-version }}
+          uv venv
 
       - name: Install CMake
         run: >
