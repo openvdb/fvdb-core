@@ -10,17 +10,19 @@ development code. Release branches (`release/vX.Y`) are created for stabilizatio
 and are merged back into `main` at release time.
 
 ```
-main:    ──A──B──C─────────────F──G──H── ...
-               \               /
-release/v0.4:   D──E──────────T (tag v0.4.0)
+main:    ──A──B──C──D─────────────G──H──I── ...
+               \                   /
+release/v0.4:   E──F──────────────T (tag v0.4.0)
 ```
 
-- **A, B, C**: normal development on `main`
-- **C**: burndown begins; `release/v0.4` branches off, `main` version bumped
-- **D, E**: bug fixes on the release branch during burndown
+- **A, B**: normal development on `main`
+- **B**: burndown begins; `release/v0.4` branches off
+- **C**: `main` version bumped to next `.dev0`
+- **D**: new feature merged to `main` (not included in the release)
+- **E, F**: bug fixes or pre-burndown PRs merged to the release branch
 - **T**: release tag created on the release branch
-- **F**: merge commit bringing release fixes back into `main`
-- **G, H**: development continues
+- **G**: merge commit bringing release fixes back into `main`
+- **H, I**: development continues
 
 ## Branch Naming
 
