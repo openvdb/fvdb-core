@@ -193,13 +193,17 @@ else
 
 Merge release branch \`${RELEASE_BRANCH}\` into \`main\` at release time.
 
+**Note:** This PR is intentionally a draft. The PR CI will show a version
+conflict because \`${RELEASE_BRANCH}\` has \`${VERSION}\` while \`main\` has the
+next dev version. This is expected. Use \`finish-release.sh\` to merge, which
+resolves the conflict by keeping the \`main\` version.
+
 ### Checklist
 
+- [ ] Publish workflow passing on \`${RELEASE_BRANCH}\` (builds + smoke tests)
 - [ ] All planned fixes merged into \`${RELEASE_BRANCH}\`
 - [ ] Code freeze applied (branch protection tightened)
 - [ ] Release notes drafted
-- [ ] Tag \`v${VERSION}\` created on release branch HEAD
-- [ ] CI passing on release branch
 
 ### Release command
 
