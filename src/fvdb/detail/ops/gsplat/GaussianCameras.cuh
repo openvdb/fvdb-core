@@ -194,28 +194,41 @@ template <typename T> struct PerspectiveCamera {
     T nearPlane         = T(kBackwardProjectionNearPlane);
     T farPlane          = T(kBackwardProjectionFarPlane);
 
-    Mat3 *__restrict__ projectionMatsShared        = nullptr; // [C,3,3], optional
-    Mat3 *__restrict__ worldToCamRotMatsShared     = nullptr; // [C,3,3], optional
-    Vec3 *__restrict__ worldToCamTranslationShared = nullptr; // [C,3], optional
+    Mat3 *__restrict__ projectionMatShared         = nullptr; // [3,3], optional
+    Mat3 *__restrict__ worldToCamRotMatShared      = nullptr; // [3,3], optional
+    Vec3 *__restrict__ worldToCamTranslationShared = nullptr; // [3], optional
 
   public:
     /// @brief Returns dynamic shared-memory bytes required to cache camera matrices.
-    inline __host__ __device__ size_t
+    constexpr __host__ __device__ size_t
     numSharedMemBytes() const {
-        return static_cast<size_t>(2 * numCameras) * sizeof(Mat3) +
-               static_cast<size_t>(numCameras) * sizeof(Vec3);
+        return 2 * sizeof(Mat3) + sizeof(Vec3);
     }
 
     /// @brief Loads per-camera intrinsics/extrinsics into dynamic shared memory.
     inline __device__ void
-    loadSharedMemory(void *sharedMemory) {
-        const int64_t C             = numCameras;
-        projectionMatsShared        = reinterpret_cast<Mat3 *>(sharedMemory);
-        worldToCamRotMatsShared     = projectionMatsShared + C;
-        worldToCamTranslationShared = reinterpret_cast<Vec3 *>(worldToCamRotMatsShared + C);
-        copyMat3Accessor<T>(C, projectionMatsShared, projectionMatricesAcc);
-        copyMat3Accessor<T>(C, worldToCamRotMatsShared, worldToCamMatricesAcc);
-        copyWorldToCamTranslation<T>(C, worldToCamTranslationShared, worldToCamMatricesAcc);
+    loadSharedMemory(const int64_t cid, void *sharedMemory) {
+        projectionMatShared         = reinterpret_cast<Mat3 *>(sharedMemory);
+        worldToCamRotMatShared      = projectionMatShared + 1;
+        worldToCamTranslationShared = reinterpret_cast<Vec3 *>(worldToCamRotMatShared + 1);
+
+        if (threadIdx.x < 9) {
+            const auto i     = threadIdx.x;
+            const auto rowId = i / 3;
+            const auto colId = i % 3;
+
+            (*projectionMatShared)[rowId][colId] = projectionMatricesAcc[cid][rowId][colId];
+        } else if (threadIdx.x < 18) {
+            const auto i     = threadIdx.x - 9;
+            const auto rowId = i / 3;
+            const auto colId = i % 3;
+
+            (*worldToCamRotMatShared)[rowId][colId] = worldToCamMatricesAcc[cid][rowId][colId];
+        } else if (threadIdx.x < 21) {
+            const auto i = threadIdx.x - 18;
+
+            (*worldToCamTranslationShared)[i] = worldToCamMatricesAcc[cid][i][3];
+        }
     }
 
     /// @brief Returns true if camera-space depth is within [nearPlane, farPlane].
@@ -243,8 +256,8 @@ template <typename T> struct PerspectiveCamera {
     /// `p_c = R * p_w + t`.
     inline __device__ std::tuple<Mat3, Vec3>
     worldToCamTransform(const int64_t cid) const {
-        if (worldToCamRotMatsShared != nullptr) {
-            return std::make_tuple(worldToCamRotMatsShared[cid], worldToCamTranslationShared[cid]);
+        if (worldToCamRotMatShared != nullptr) {
+            return std::make_tuple(*worldToCamRotMatShared, *worldToCamTranslationShared);
         }
         const auto W = worldToCamMatricesAcc[cid];
         return std::make_tuple(
@@ -265,8 +278,8 @@ template <typename T> struct PerspectiveCamera {
         using Vec2   = nanovdb::math::Vec2<T>;
 
         T fx, fy, cx, cy;
-        if (projectionMatsShared != nullptr) {
-            const Mat3 &K = projectionMatsShared[cid];
+        if (projectionMatShared != nullptr) {
+            const Mat3 &K = *projectionMatShared;
             fx            = K[0][0];
             fy            = K[1][1];
             cx            = K[0][2];
@@ -320,8 +333,8 @@ template <typename T> struct PerspectiveCamera {
         using Vec3   = nanovdb::math::Vec3<T>;
 
         T fx, fy, cx, cy;
-        if (projectionMatsShared != nullptr) {
-            const Mat3 &K = projectionMatsShared[cid];
+        if (projectionMatShared != nullptr) {
+            const Mat3 &K = *projectionMatShared;
             fx            = K[0][0];
             fy            = K[1][1];
             cx            = K[0][2];
@@ -459,28 +472,41 @@ template <typename T> struct OrthographicCamera {
     T nearPlane         = T(kBackwardProjectionNearPlane);
     T farPlane          = T(kBackwardProjectionFarPlane);
 
-    Mat3 *__restrict__ projectionMatsShared        = nullptr; // [C,3,3], optional
-    Mat3 *__restrict__ worldToCamRotMatsShared     = nullptr; // [C,3,3], optional
-    Vec3 *__restrict__ worldToCamTranslationShared = nullptr; // [C,3], optional
+    Mat3 *__restrict__ projectionMatShared         = nullptr; // [3,3], optional
+    Mat3 *__restrict__ worldToCamRotMatShared      = nullptr; // [3,3], optional
+    Vec3 *__restrict__ worldToCamTranslationShared = nullptr; // [3], optional
 
   public:
     /// @brief Returns dynamic shared-memory bytes required to cache camera matrices.
-    inline __host__ __device__ size_t
+    constexpr __host__ __device__ size_t
     numSharedMemBytes() const {
-        return static_cast<size_t>(2 * numCameras) * sizeof(Mat3) +
-               static_cast<size_t>(numCameras) * sizeof(Vec3);
+        return 2 * sizeof(Mat3) + sizeof(Vec3);
     }
 
     /// @brief Loads per-camera intrinsics/extrinsics into dynamic shared memory.
     inline __device__ void
-    loadSharedMemory(void *sharedMemory) {
-        const int64_t C             = numCameras;
-        projectionMatsShared        = reinterpret_cast<Mat3 *>(sharedMemory);
-        worldToCamRotMatsShared     = projectionMatsShared + C;
-        worldToCamTranslationShared = reinterpret_cast<Vec3 *>(worldToCamRotMatsShared + C);
-        copyMat3Accessor<T>(C, projectionMatsShared, projectionMatricesAcc);
-        copyMat3Accessor<T>(C, worldToCamRotMatsShared, worldToCamMatricesAcc);
-        copyWorldToCamTranslation<T>(C, worldToCamTranslationShared, worldToCamMatricesAcc);
+    loadSharedMemory(int64_t cid, void *sharedMemory) {
+        projectionMatShared         = reinterpret_cast<Mat3 *>(sharedMemory);
+        worldToCamRotMatShared      = projectionMatShared + 1;
+        worldToCamTranslationShared = reinterpret_cast<Vec3 *>(worldToCamRotMatShared + 1);
+
+        if (threadIdx.x < 9) {
+            const auto i     = threadIdx.x;
+            const auto rowId = i / 3;
+            const auto colId = i % 3;
+
+            (*projectionMatShared)[rowId][colId] = projectionMatricesAcc[cid][rowId][colId];
+        } else if (threadIdx.x < 18) {
+            const auto i     = threadIdx.x - 9;
+            const auto rowId = i / 3;
+            const auto colId = i % 3;
+
+            (*worldToCamRotMatShared)[rowId][colId] = worldToCamMatricesAcc[cid][rowId][colId];
+        } else if (threadIdx.x < 21) {
+            const auto i = threadIdx.x - 18;
+
+            (*worldToCamTranslationShared)[i] = worldToCamMatricesAcc[cid][i][3];
+        }
     }
 
     /// @brief Returns true if camera-space depth is within [nearPlane, farPlane].
@@ -508,8 +534,8 @@ template <typename T> struct OrthographicCamera {
     /// `p_c = R * p_w + t`.
     inline __device__ std::tuple<Mat3, Vec3>
     worldToCamTransform(const int64_t cid) const {
-        if (worldToCamRotMatsShared != nullptr) {
-            return std::make_tuple(worldToCamRotMatsShared[cid], worldToCamTranslationShared[cid]);
+        if (worldToCamRotMatShared != nullptr) {
+            return std::make_tuple(*worldToCamRotMatShared, *worldToCamTranslationShared);
         }
         const auto W = worldToCamMatricesAcc[cid];
         return std::make_tuple(
@@ -530,8 +556,8 @@ template <typename T> struct OrthographicCamera {
         using Vec2   = nanovdb::math::Vec2<T>;
 
         T fx, fy, cx, cy;
-        if (projectionMatsShared != nullptr) {
-            const Mat3 &K = projectionMatsShared[cid];
+        if (projectionMatShared != nullptr) {
+            const Mat3 &K = *projectionMatShared;
             fx            = K[0][0];
             fy            = K[1][1];
             cx            = K[0][2];
@@ -571,8 +597,8 @@ template <typename T> struct OrthographicCamera {
         using Vec3   = nanovdb::math::Vec3<T>;
 
         T fx, fy, cx, cy;
-        if (projectionMatsShared != nullptr) {
-            const Mat3 &K = projectionMatsShared[cid];
+        if (projectionMatShared != nullptr) {
+            const Mat3 &K = *projectionMatShared;
             fx            = K[0][0];
             fy            = K[1][1];
             cx            = K[0][2];

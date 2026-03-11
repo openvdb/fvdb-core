@@ -148,9 +148,9 @@ template <typename T, typename Camera> struct ProjectionForward {
 
     /// @brief Stage per-camera projection and pose matrices into shared memory.
     inline __device__ void
-    loadCamerasIntoSharedMemory() {
+    loadCameraIntoSharedMemory(unsigned int cid) {
         alignas(Mat3) extern __shared__ char sharedMemory[];
-        mCamera.loadSharedMemory(sharedMemory);
+        mCamera.loadSharedMemory(cid, sharedMemory);
     }
 };
 
@@ -159,11 +159,11 @@ __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 projectionForwardKernel(int64_t offset,
                         int64_t count,
                         ProjectionForward<T, Camera> projectionForward) {
-    projectionForward.loadCamerasIntoSharedMemory();
+    auto cid = blockIdx.y;
+    projectionForward.loadCameraIntoSharedMemory(cid);
     __syncthreads();
 
-    // parallelize over C * N.
-    auto cid = blockIdx.y;
+    // parallelize over N.
     for (auto gid = blockIdx.x * blockDim.x + threadIdx.x; gid < count;
          gid += blockDim.x * gridDim.x) {
         projectionForward.projectionForward(cid, gid + offset);
@@ -220,8 +220,6 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
     using scalar_t = float;
 
     const dim3 NUM_BLOCKS(GET_BLOCKS(N, DEFAULT_BLOCK_DIM), C);
-    const size_t SHARD_MEM_SIZE =
-        C * (2 * sizeof(nanovdb::math::Mat3<scalar_t>) + sizeof(nanovdb::math::Vec3<scalar_t>));
 
     if (ortho) {
         const auto camera = OrthographicCamera<scalar_t>{projectionMatrices,
@@ -245,7 +243,7 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
             outConics,
             outCompensations);
         projectionForwardKernel<scalar_t, OrthographicCamera<scalar_t>>
-            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
+            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
                 0, N, projectionForward);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     } else {
@@ -270,7 +268,7 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
             outConics,
             outCompensations);
         projectionForwardKernel<scalar_t, PerspectiveCamera<scalar_t>>
-            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
+            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
                 0, N, projectionForward);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
@@ -329,8 +327,6 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
         std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
 
         const dim3 NUM_BLOCKS(GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM), C);
-        const size_t SHARD_MEM_SIZE =
-            C * (2 * sizeof(nanovdb::math::Mat3<scalar_t>) + sizeof(nanovdb::math::Vec3<scalar_t>));
 
         if (ortho) {
             const auto camera = OrthographicCamera<scalar_t>{projectionMatrices,
@@ -354,7 +350,7 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
                 outConics,
                 outCompensations);
             projectionForwardKernel<scalar_t, OrthographicCamera<scalar_t>>
-                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
+                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
                     deviceProblemOffset, deviceProblemSize, projectionForward);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         } else {
@@ -379,7 +375,7 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
                 outConics,
                 outCompensations);
             projectionForwardKernel<scalar_t, PerspectiveCamera<scalar_t>>
-                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
+                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
                     deviceProblemOffset, deviceProblemSize, projectionForward);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
