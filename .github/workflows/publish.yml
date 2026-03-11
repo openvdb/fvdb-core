@@ -43,7 +43,9 @@ jobs:
       s3: ${{ steps.flags.outputs.s3 }}
       release_push: ${{ steps.flags.outputs.release_push }}
       test_python_version: ${{ steps.test-env.outputs.python_version }}
+      test_torch_version: ${{ steps.test-env.outputs.torch_version }}
       test_cuda_version: ${{ steps.test-env.outputs.cuda_version }}
+      test_cuda_image_tag: ${{ steps.test-env.outputs.cuda_image_tag }}
     steps:
       - name: Compute publish routing flags
         id: flags
@@ -74,10 +76,21 @@ jobs:
         id: test-env
         run: |
           PY_VER=$(grep -oP '^\s*-\s*python=\K[0-9]+\.[0-9]+' env/test_environment.yml)
+          TORCH_VER=$(grep -oP '^\s*-\s*pytorch-gpu=\K[0-9]+\.[0-9]+' env/test_environment.yml)
           CUDA_VER=$(grep -oP '^\s*-\s*cuda-version=\K[0-9]+\.[0-9]+' env/test_environment.yml)
+          case "$CUDA_VER" in
+            11.8) CUDA_IMAGE_TAG="11.8.0" ;;
+            12.1) CUDA_IMAGE_TAG="12.1.1" ;;
+            12.4) CUDA_IMAGE_TAG="12.4.1" ;;
+            12.8) CUDA_IMAGE_TAG="12.8.1" ;;
+            13.0) CUDA_IMAGE_TAG="13.0.2" ;;
+            *)    echo "WARNING: Unknown CUDA version $CUDA_VER" >&2; CUDA_IMAGE_TAG="${CUDA_VER}.0" ;;
+          esac
           echo "python_version=$PY_VER" >> $GITHUB_OUTPUT
+          echo "torch_version=$TORCH_VER" >> $GITHUB_OUTPUT
           echo "cuda_version=$CUDA_VER" >> $GITHUB_OUTPUT
-          echo "Test env: python=$PY_VER cuda=$CUDA_VER"
+          echo "cuda_image_tag=$CUDA_IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "Test env: python=$PY_VER torch=$TORCH_VER cuda=$CUDA_VER image=$CUDA_IMAGE_TAG"
   start-build-runner:
     name: Start CPU-only EC2 runner for build
     runs-on: ubuntu-latest
@@ -129,7 +142,7 @@ jobs:
     needs: [start-build-runner, pr-flags] # start when runner is ready and flags computed
     runs-on: ec2-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }} # run the job on the newly created runner
     container:
-      image: nvidia/cuda:${{ matrix.cuda-image-tag }}-cudnn-devel-ubuntu22.04
+      image: nvidia/cuda:${{ matrix.cuda-image-tag }}-cudnn-devel-rockylinux8
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
@@ -140,8 +153,8 @@ jobs:
         shell: bash -el {0}
     strategy: *matrix-strategy
     steps:
-      - name: Apt update and install git and wget
-        run: apt update && apt install -y git wget
+      - name: Install prerequisites
+        run: dnf install -y git wget
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Fetch all history for all branches
@@ -182,8 +195,8 @@ jobs:
           sh cmake-4.0.3-linux-x86_64.sh --prefix=/usr/local --skip-license &&
           cmake --version
 
-      - name: Install apt dependencies
-        run: apt install -y zlib1g-dev libpng-dev pkg-config unzip
+      - name: Install system dependencies
+        run: dnf install -y zlib-devel libpng-devel pkgconfig unzip
 
       - name: Install pip dependencies
         run: |
@@ -436,7 +449,8 @@ jobs:
                   exit 1
                 fi
               fi
-              html_line="<a href=\"${whl}#sha256=${sha}\">${whl}</a><br/>"
+              href_whl="${whl//+/%2B}"
+              html_line="<a href=\"${href_whl}#sha256=${sha}\">${whl}</a><br/>"
               echo "  Adding HTML: $html_line" >&2
               echo "$html_line";
             done;
@@ -519,7 +533,7 @@ jobs:
     if: ${{ !cancelled() && needs.start-validation-runner.result == 'success' }}
     runs-on: val-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
     container:
-      image: nvidia/cuda:${{ matrix.cuda-image-tag }}-cudnn-runtime-ubuntu22.04
+      image: nvidia/cuda:${{ matrix.cuda-image-tag }}-base-rockylinux8
       env:
         PYTHONPATH: ""
       options: --rm
@@ -529,7 +543,7 @@ jobs:
     strategy: *matrix-strategy
     steps:
       - name: Install prerequisites
-        run: apt update && apt install -y git wget
+        run: dnf install -y git wget
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -569,25 +583,21 @@ jobs:
   validate-unit-tests:
     name: Full unit tests on built wheel
     needs: [start-validation-runner, validate-smoke-test, pr-flags]
-    # Only run for the matrix entry matching env/test_environment.yml (python + cuda pinned there)
-    if: >-
-      ${{ !cancelled()
-          && needs.validate-smoke-test.result == 'success'
-          && (needs.pr-flags.outputs.release_push == 'true' || inputs.run_validation == true)
-          && matrix.python-version == needs.pr-flags.outputs.test_python_version
-          && matrix.cuda-version == needs.pr-flags.outputs.test_cuda_version }}
-    runs-on: val-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
+    if: ${{ !cancelled() && needs.validate-smoke-test.result == 'success' && (needs.pr-flags.outputs.release_push == 'true' || inputs.run_validation == true) }}
+    # Run on the validation runner matching env/test_environment.yml (no matrix -- single job)
+    runs-on: val-${{ needs.pr-flags.outputs.test_python_version }}-pt${{ needs.pr-flags.outputs.test_torch_version }}-cu${{ needs.pr-flags.outputs.test_cuda_version }}-${{ github.run_id }}
     container:
-      image: aswf/ci-openvdb:2024-clang17.2
+      image: nvidia/cuda:${{ needs.pr-flags.outputs.test_cuda_image_tag }}-base-rockylinux8
       env:
         PYTHONPATH: ""
-        CPM_SOURCE_CACHE: "/__w/cpm_cache"
       options: --rm
     defaults:
       run:
         shell: bash -el {0}
-    strategy: *matrix-strategy
     steps:
+      - name: Install prerequisites
+        run: dnf install -y git wget
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -604,7 +614,7 @@ jobs:
       - name: Download wheel artifact
         uses: actions/download-artifact@v4
         with:
-          name: fvdb-publish-package-${{ matrix.python-version }}-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
+          name: fvdb-publish-package-${{ needs.pr-flags.outputs.test_python_version }}-torch${{ needs.pr-flags.outputs.test_torch_version }}-cu${{ needs.pr-flags.outputs.test_cuda_version }}
           path: dist
 
       - name: Install wheel
