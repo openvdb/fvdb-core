@@ -45,6 +45,7 @@ jobs:
       test_python_version: ${{ steps.test-env.outputs.python_version }}
       test_torch_version: ${{ steps.test-env.outputs.torch_version }}
       test_cuda_version: ${{ steps.test-env.outputs.cuda_version }}
+      test_cuda_image_tag: ${{ steps.test-env.outputs.cuda_image_tag }}
     steps:
       - name: Compute publish routing flags
         id: flags
@@ -77,10 +78,19 @@ jobs:
           PY_VER=$(grep -oP '^\s*-\s*python=\K[0-9]+\.[0-9]+' env/test_environment.yml)
           TORCH_VER=$(grep -oP '^\s*-\s*pytorch-gpu=\K[0-9]+\.[0-9]+' env/test_environment.yml)
           CUDA_VER=$(grep -oP '^\s*-\s*cuda-version=\K[0-9]+\.[0-9]+' env/test_environment.yml)
+          case "$CUDA_VER" in
+            11.8) CUDA_IMAGE_TAG="11.8.0" ;;
+            12.1) CUDA_IMAGE_TAG="12.1.1" ;;
+            12.4) CUDA_IMAGE_TAG="12.4.1" ;;
+            12.8) CUDA_IMAGE_TAG="12.8.1" ;;
+            13.0) CUDA_IMAGE_TAG="13.0.2" ;;
+            *)    echo "WARNING: Unknown CUDA version $CUDA_VER" >&2; CUDA_IMAGE_TAG="${CUDA_VER}.0" ;;
+          esac
           echo "python_version=$PY_VER" >> $GITHUB_OUTPUT
           echo "torch_version=$TORCH_VER" >> $GITHUB_OUTPUT
           echo "cuda_version=$CUDA_VER" >> $GITHUB_OUTPUT
-          echo "Test env: python=$PY_VER torch=$TORCH_VER cuda=$CUDA_VER"
+          echo "cuda_image_tag=$CUDA_IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "Test env: python=$PY_VER torch=$TORCH_VER cuda=$CUDA_VER image=$CUDA_IMAGE_TAG"
   start-build-runner:
     name: Start CPU-only EC2 runner for build
     runs-on: ubuntu-latest
@@ -576,15 +586,17 @@ jobs:
     # Run on the validation runner matching env/test_environment.yml (no matrix -- single job)
     runs-on: val-${{ needs.pr-flags.outputs.test_python_version }}-pt${{ needs.pr-flags.outputs.test_torch_version }}-cu${{ needs.pr-flags.outputs.test_cuda_version }}-${{ github.run_id }}
     container:
-      image: aswf/ci-openvdb:2024-clang17.2
+      image: nvidia/cuda:${{ needs.pr-flags.outputs.test_cuda_image_tag }}-cudnn-runtime-ubuntu22.04
       env:
         PYTHONPATH: ""
-        CPM_SOURCE_CACHE: "/__w/cpm_cache"
       options: --rm
     defaults:
       run:
         shell: bash -el {0}
     steps:
+      - name: Install prerequisites
+        run: apt update && apt install -y git wget
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
