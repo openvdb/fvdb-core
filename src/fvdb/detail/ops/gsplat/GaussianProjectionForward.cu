@@ -95,26 +95,23 @@ template <typename T, typename Camera> struct ProjectionForward {
 
     /// @brief Project one (camera, gaussian) pair and write packed 2D outputs.
     inline __device__ void
-    projectionForward(int idx) {
-        if (idx >= C * N) {
+    projectionForward(int cid, int gid) {
+        if (gid >= N) {
             return;
         }
-        const auto cid = idx / N; // camera id
-        const auto gid = idx % N; // gaussian id
 
         const Vec3 meanWorldSpace(mMeansAcc[gid][0], mMeansAcc[gid][1], mMeansAcc[gid][2]);
+        if (!mCamera.isVisible(cid, meanWorldSpace)) {
+            return;
+        }
+
         const Mat3 covar = computeCovarianceMatrix(gid);
         auto [covar2d, mean2d, depthCam] =
             mCamera.projectWorldGaussianTo2D(cid, meanWorldSpace, covar);
-        if (!mCamera.isDepthVisible(depthCam)) {
-            mOutRadiiAcc[cid][gid] = 0;
-            return;
-        }
 
         T compensation;
         const T det = addBlur(mEps2d, covar2d, compensation);
         if (det <= 0.f) {
-            mOutRadiiAcc[cid][gid] = 0;
             return;
         }
 
@@ -124,13 +121,11 @@ template <typename T, typename Camera> struct ProjectionForward {
         const T radius = radiusFromCovariance2dDet(covar2d, det, T(3));
 
         if (radius <= mRadiusClip) {
-            mOutRadiiAcc[cid][gid] = 0;
             return;
         }
 
         // Mask out gaussians outside the image region
         if (mCamera.isProjectedFootprintOutsideImage(mean2d, radius, radius)) {
-            mOutRadiiAcc[cid][gid] = 0;
             return;
         }
 
@@ -144,15 +139,15 @@ template <typename T, typename Camera> struct ProjectionForward {
         mOutConicsAcc[cid][gid][1]               = conicPacked[1];
         mOutConicsAcc[cid][gid][2]               = conicPacked[2];
         if (mOutCompensationsAcc != nullptr) {
-            mOutCompensationsAcc[idx] = compensation;
+            mOutCompensationsAcc[cid * N + gid] = compensation;
         }
     }
 
     /// @brief Stage per-camera projection and pose matrices into shared memory.
     inline __device__ void
-    loadCamerasIntoSharedMemory() {
+    loadCameraIntoSharedMemory(unsigned int cid) {
         alignas(Mat3) extern __shared__ char sharedMemory[];
-        mCamera.loadSharedMemory(sharedMemory);
+        mCamera.loadSharedMemory(cid, sharedMemory);
     }
 };
 
@@ -161,13 +156,14 @@ __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 projectionForwardKernel(int64_t offset,
                         int64_t count,
                         ProjectionForward<T, Camera> projectionForward) {
-    projectionForward.loadCamerasIntoSharedMemory();
+    auto cid = blockIdx.y;
+    projectionForward.loadCameraIntoSharedMemory(cid);
     __syncthreads();
 
-    // parallelize over C * N.
-    for (auto idx = blockIdx.x * blockDim.x + threadIdx.x; idx < count;
-         idx += blockDim.x * gridDim.x) {
-        projectionForward.projectionForward(idx + offset);
+    // parallelize over N.
+    for (auto gid = blockIdx.x * blockDim.x + threadIdx.x; gid < count;
+         gid += blockDim.x * gridDim.x) {
+        projectionForward.projectionForward(cid, gid + offset);
     }
 }
 
@@ -203,7 +199,7 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
     const auto C                = worldToCamMatrices.size(0); // number of cameras
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(means.device().index());
 
-    torch::Tensor outRadii   = torch::empty({C, N}, means.options().dtype(torch::kInt32));
+    torch::Tensor outRadii   = torch::zeros({C, N}, means.options().dtype(torch::kInt32));
     torch::Tensor outMeans2d = torch::empty({C, N, 2}, means.options());
     torch::Tensor outDepths  = torch::empty({C, N}, means.options());
     torch::Tensor outConics  = torch::empty({C, N, 3}, means.options());
@@ -220,9 +216,7 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
 
     using scalar_t = float;
 
-    const size_t NUM_BLOCKS = GET_BLOCKS(C * N, DEFAULT_BLOCK_DIM);
-    const size_t SHARD_MEM_SIZE =
-        C * (2 * sizeof(nanovdb::math::Mat3<scalar_t>) + sizeof(nanovdb::math::Vec3<scalar_t>));
+    const dim3 NUM_BLOCKS(GET_BLOCKS(N, DEFAULT_BLOCK_DIM), C);
 
     if (ortho) {
         const auto camera = OrthographicCamera<scalar_t>{projectionMatrices,
@@ -246,8 +240,8 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
             outConics,
             outCompensations);
         projectionForwardKernel<scalar_t, OrthographicCamera<scalar_t>>
-            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
-                0, C * N, projectionForward);
+            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
+                0, N, projectionForward);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     } else {
         const auto camera = PerspectiveCamera<scalar_t>{projectionMatrices,
@@ -271,8 +265,8 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
             outConics,
             outCompensations);
         projectionForwardKernel<scalar_t, PerspectiveCamera<scalar_t>>
-            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
-                0, C * N, projectionForward);
+            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
+                0, N, projectionForward);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
     return std::make_tuple(outRadii, outMeans2d, outDepths, outConics, outCompensations);
@@ -305,7 +299,7 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
     const auto N = means.size(0);              // number of gaussians
     const auto C = worldToCamMatrices.size(0); // number of cameras
 
-    torch::Tensor outRadii   = torch::empty({C, N}, means.options().dtype(torch::kInt32));
+    torch::Tensor outRadii   = torch::zeros({C, N}, means.options().dtype(torch::kInt32));
     torch::Tensor outMeans2d = torch::empty({C, N, 2}, means.options());
     torch::Tensor outDepths  = torch::empty({C, N}, means.options());
     torch::Tensor outConics  = torch::empty({C, N, 3}, means.options());
@@ -327,11 +321,9 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
         int64_t deviceProblemOffset, deviceProblemSize;
-        std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(C * N, deviceId);
+        std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
 
-        const size_t NUM_BLOCKS = GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM);
-        const size_t SHARD_MEM_SIZE =
-            C * (2 * sizeof(nanovdb::math::Mat3<scalar_t>) + sizeof(nanovdb::math::Vec3<scalar_t>));
+        const dim3 NUM_BLOCKS(GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM), C);
 
         if (ortho) {
             const auto camera = OrthographicCamera<scalar_t>{projectionMatrices,
@@ -355,7 +347,7 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
                 outConics,
                 outCompensations);
             projectionForwardKernel<scalar_t, OrthographicCamera<scalar_t>>
-                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
+                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
                     deviceProblemOffset, deviceProblemSize, projectionForward);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         } else {
@@ -380,7 +372,7 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
                 outConics,
                 outCompensations);
             projectionForwardKernel<scalar_t, PerspectiveCamera<scalar_t>>
-                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
+                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
                     deviceProblemOffset, deviceProblemSize, projectionForward);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }

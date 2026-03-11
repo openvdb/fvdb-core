@@ -123,12 +123,6 @@ struct RasterizeBackwardArgs {
                           "Bad size for outDLossDConics");
         TORCH_CHECK_VALUE(NUM_CHANNELS == mOutDLossDFeatures.size(CommonArgs::NUM_OUTER_DIMS),
                           "Bad size for outDLossDFeatures");
-        TORCH_CHECK_VALUE(2 == mOutDLossDMeans2d.size(CommonArgs::NUM_OUTER_DIMS),
-                          "Bad size for outDLossDMeans2d");
-        TORCH_CHECK_VALUE(3 == mOutDLossDConics.size(CommonArgs::NUM_OUTER_DIMS),
-                          "Bad size for outDLossDConics");
-        TORCH_CHECK_VALUE(NUM_CHANNELS == mOutDLossDFeatures.size(CommonArgs::NUM_OUTER_DIMS),
-                          "Bad size for outDLossDFeatures");
 
         if constexpr (IS_PACKED) {
             if (mAbsGrad) {
@@ -713,14 +707,13 @@ struct RasterizeBackwardArgs {
                 // For each Gaussian which contributes to this pixel, compute this pixel's
                 // gradient contribution to that Gaussian
                 const int32_t batchSize = min(blockSize, batchEnd + 1 - firstGaussianIdInBlock);
+                // (row, col) coordinates are relative to the specified image origin which may
+                // be a crop so we need to add the origin to get the absolute pixel coordinates
+                const ScalarType px =
+                    col + ScalarType(commonArgs.renderOriginX()) + ScalarType{0.5};
+                const ScalarType py =
+                    row + ScalarType(commonArgs.renderOriginY()) + ScalarType{0.5};
                 for (uint32_t t = max(0, batchEnd - lastGaussianIdInWarp); t < batchSize; ++t) {
-                    // (row, col) coordinates are relative to the specified image origin which may
-                    // be a crop so we need to add the origin to get the absolute pixel coordinates
-                    const ScalarType px =
-                        col + ScalarType(commonArgs.renderOriginX()) + ScalarType{0.5};
-                    const ScalarType py =
-                        row + ScalarType(commonArgs.renderOriginY()) + ScalarType{0.5};
-
                     bool valid = pixelIsActive && (batchEnd - t <= lastGaussianId);
 
                     const auto [gaussianIsValid, delta, expMinusSigma, alpha] = [&]() {
@@ -1253,6 +1246,19 @@ callRasterizeBackwardPrivateUse1(
         C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
     }
 
+    const size_t numChannels =
+        (NUM_SHARED_CHANNELS == NUM_CHANNELS) ? NUM_CHANNELS : NUM_SHARED_CHANNELS + 1;
+    const size_t sharedMemSize = getSharedMemRequirements<ScalarType>(numChannels, tileSize);
+
+    if (cudaFuncSetAttribute(
+            rasterizeGaussiansBackward<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED>,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            sharedMemSize) != cudaSuccess) {
+        AT_ERROR("Failed to set maximum shared memory size (requested ",
+                 sharedMemSize,
+                 " bytes), try lowering tileSize.");
+    }
+
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
@@ -1288,27 +1294,9 @@ callRasterizeBackwardPrivateUse1(
                 tilePixelCumsum,
                 pixelMap);
 
-            const size_t numChannels =
-                (NUM_SHARED_CHANNELS == NUM_CHANNELS) ? NUM_CHANNELS : NUM_SHARED_CHANNELS + 1;
-            const size_t sharedMemSize =
-                getSharedMemRequirements<ScalarType>(numChannels, tileSize);
-
-            if (cudaFuncSetAttribute(rasterizeGaussiansBackward<ScalarType,
-                                                                NUM_CHANNELS,
-                                                                NUM_SHARED_CHANNELS,
-                                                                IS_PACKED>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     sharedMemSize) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         sharedMemSize,
-                         " bytes), try lowering tileSize.");
-            }
-
-            const dim3 blockDim = {tileSize, tileSize, 1};
-            const dim3 gridDim  = {deviceTileCount, 1, 1};
-
+            const dim3 gridDim = {deviceTileCount, 1, 1};
             rasterizeGaussiansBackward<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED>
-                <<<gridDim, blockDim, sharedMemSize, stream>>>(args);
+                <<<gridDim, args.commonArgs.getBlockDim(), sharedMemSize, stream>>>(args);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
     }

@@ -519,6 +519,20 @@ launchRasterizeForwardKernels(
         C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
     }
 
+    // Thread blocks cooperatively cache a tile of Gaussians in shared memory
+    const uint32_t sharedMem = getSharedMemRequirements<ScalarType>(tileSize);
+
+    // TODO: an optimization can be done by passing the actual number of
+    // channels into the kernel functions and avoid necessary global memory
+    // writes. This requires moving the channel padding from python to C side.
+    if (cudaFuncSetAttribute(rasterizeGaussiansForward<ScalarType, NUM_CHANNELS, IS_PACKED>,
+                             cudaFuncAttributeMaxDynamicSharedMemorySize,
+                             sharedMem) != cudaSuccess) {
+        AT_ERROR("Failed to set maximum shared memory size (requested ",
+                 sharedMem,
+                 " bytes), try lowering tile_size.");
+    }
+
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
@@ -547,24 +561,11 @@ launchRasterizeForwardKernels(
                                                                                   tilePixelCumsum,
                                                                                   pixelMap);
 
-            // Thread blocks cooperatively cache a tile of Gaussians in shared memory
-            const uint32_t sharedMem = getSharedMemRequirements<ScalarType>(tileSize);
-
-            // TODO: an optimization can be done by passing the actual number of
-            // channels into the kernel functions and avoid necessary global memory
-            // writes. This requires moving the channel padding from python to C side.
-            if (cudaFuncSetAttribute(rasterizeGaussiansForward<ScalarType, NUM_CHANNELS, IS_PACKED>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     sharedMem) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         sharedMem,
-                         " bytes), try lowering tile_size.");
-            }
-
-            const dim3 blockDim = {tileSize, tileSize, 1};
-            const dim3 gridDim  = {deviceTileCount, 1, 1};
-
-            rasterizeGaussiansForward<<<gridDim, blockDim, sharedMem, stream>>>(args);
+            const dim3 gridDim = {deviceTileCount, 1, 1};
+            rasterizeGaussiansForward<<<gridDim,
+                                        args.commonArgs.getBlockDim(),
+                                        sharedMem,
+                                        stream>>>(args);
 
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }

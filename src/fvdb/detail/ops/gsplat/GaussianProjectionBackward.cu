@@ -25,7 +25,41 @@ namespace {
 
 namespace cg = cooperative_groups;
 
-template <typename T, bool TRACK_MAX_RADII>
+template <typename T>
+__global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
+computeGradientState(const int32_t offset,
+                     const int32_t count,
+                     const uint32_t C,
+                     const uint32_t N,
+                     const int32_t imageWidth,
+                     const int32_t imageHeight,
+                     const int32_t *__restrict__ radii,
+                     const T *__restrict__ dLossDMeans2d,
+                     T *__restrict__ outDLossDMeans2dNormAccum,
+                     int32_t *__restrict__ outGradientStepCounts) {
+    auto idx = cg::this_grid().thread_rank();
+    if (idx >= count) {
+        return;
+    }
+    idx += offset;
+
+    T normAccum       = T(0);
+    int32_t stepCount = 0;
+    for (auto i = 0; i < C * N; i += N) {
+        const int32_t ri = radii[idx + i];
+        if (ri <= 0) {
+            continue;
+        }
+        const T dldm2x = dLossDMeans2d[(idx + i) * 2] * (T(imageWidth) / T(2) * T(C));
+        const T dldm2y = dLossDMeans2d[(idx + i) * 2 + 1] * (T(imageHeight) / T(2) * T(C));
+        normAccum += nanovdb::math::Sqrt(dldm2x * dldm2x + dldm2y * dldm2y);
+        stepCount += 1;
+    }
+    outDLossDMeans2dNormAccum[idx] += normAccum;
+    outGradientStepCounts[idx] += stepCount;
+}
+
+template <typename T>
 __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 computeGradientState(const int32_t offset,
                      const int32_t count,
@@ -46,6 +80,7 @@ computeGradientState(const int32_t offset,
 
     T normAccum       = T(0);
     int32_t stepCount = 0;
+    int32_t maxRad    = 0;
     for (auto i = 0; i < C * N; i += N) {
         const int32_t ri = radii[idx + i];
         if (ri <= 0) {
@@ -55,18 +90,9 @@ computeGradientState(const int32_t offset,
         const T dldm2y = dLossDMeans2d[(idx + i) * 2 + 1] * (T(imageHeight) / T(2) * T(C));
         normAccum += nanovdb::math::Sqrt(dldm2x * dldm2x + dldm2y * dldm2y);
         stepCount += 1;
+        maxRad = nanovdb::math::Max(maxRad, ri);
     }
-    if constexpr (TRACK_MAX_RADII) {
-        int32_t maxRad = 0;
-        for (auto i = 0; i < C * N; i += N) {
-            const int32_t ri = radii[idx + i];
-            if (ri <= 0) {
-                continue;
-            }
-            maxRad = nanovdb::math::Max(maxRad, ri);
-        }
-        outMaxRadiiAccum[idx] = nanovdb::math::Max(outMaxRadiiAccum[idx], maxRad);
-    }
+    outMaxRadiiAccum[idx] = nanovdb::math::Max(outMaxRadiiAccum[idx], maxRad);
     outDLossDMeans2dNormAccum[idx] += normAccum;
     outGradientStepCounts[idx] += stepCount;
 }
@@ -100,17 +126,21 @@ projectionBackwardKernel(const int32_t offset,
                          T *__restrict__ outDLossDScales,            // [N, 3] optional
                          T *__restrict__ outDLossDWorldToCamMatrices // [C, 4, 4] optional
 ) {
-    // parallelize over C * N.
-    uint32_t idx = cg::this_grid().thread_rank();
-    if (idx >= count) {
+    uint32_t cId = blockIdx.y;
+    alignas(nanovdb::math::Mat3<T>) extern __shared__ char sharedMemory[];
+    camera.loadSharedMemory(cId, sharedMemory);
+    __syncthreads();
+
+    // parallelize over N.
+    uint32_t gId = blockIdx.x * blockDim.x + threadIdx.x;
+    if (gId >= count) {
         return;
     }
-    idx += offset;
+    gId += offset;
+    auto idx = cId * N + gId;
     if (radii[idx] <= 0) {
         return;
     }
-    const uint32_t cId = idx / N; // camera id
-    const uint32_t gId = idx % N; // gaussian id
 
     // shift pointers to the current camera and gaussian
     means += gId * 3;
@@ -300,19 +330,19 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
         dLossDWorldToCamMatrices = torch::zeros_like(worldToCamMatrices);
     }
     if (C && N) {
+        const dim3 NUM_BLOCKS(GET_BLOCKS(N, DEFAULT_BLOCK_DIM), C);
         if (ortho) {
-            const size_t NUM_BLOCKS = GET_BLOCKS(C * N, DEFAULT_BLOCK_DIM);
-            const auto camera       = OrthographicCamera<float>{projectionMatrices,
-                                                                worldToCamMatrices,
-                                                                static_cast<int32_t>(C),
-                                                                static_cast<int32_t>(imageWidth),
-                                                                static_cast<int32_t>(imageHeight),
-                                                                kBackwardProjectionNearPlane,
-                                                                kBackwardProjectionFarPlane};
+            const auto camera = OrthographicCamera<float>{projectionMatrices,
+                                                          worldToCamMatrices,
+                                                          static_cast<int32_t>(C),
+                                                          static_cast<int32_t>(imageWidth),
+                                                          static_cast<int32_t>(imageHeight),
+                                                          kBackwardProjectionNearPlane,
+                                                          kBackwardProjectionFarPlane};
             projectionBackwardKernel<float, OrthographicCamera<float>>
-                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
                     0,
-                    C * N,
+                    N,
                     C,
                     N,
                     means.data_ptr<float>(),
@@ -336,18 +366,17 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
                     worldToCamMatricesRequiresGrad ? dLossDWorldToCamMatrices.data_ptr<float>()
                                                    : nullptr);
         } else {
-            const size_t NUM_BLOCKS = GET_BLOCKS(C * N, DEFAULT_BLOCK_DIM);
-            const auto camera       = PerspectiveCamera<float>{projectionMatrices,
-                                                               worldToCamMatrices,
-                                                               static_cast<int32_t>(C),
-                                                               static_cast<int32_t>(imageWidth),
-                                                               static_cast<int32_t>(imageHeight),
-                                                               kBackwardProjectionNearPlane,
-                                                               kBackwardProjectionFarPlane};
+            const auto camera = PerspectiveCamera<float>{projectionMatrices,
+                                                         worldToCamMatrices,
+                                                         static_cast<int32_t>(C),
+                                                         static_cast<int32_t>(imageWidth),
+                                                         static_cast<int32_t>(imageHeight),
+                                                         kBackwardProjectionNearPlane,
+                                                         kBackwardProjectionFarPlane};
             projectionBackwardKernel<float, PerspectiveCamera<float>>
-                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
                     0,
-                    C * N,
+                    N,
                     C,
                     N,
                     means.data_ptr<float>(),
@@ -383,7 +412,7 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
                     outNormalizedMaxRadiiAccum.value().data_ptr<int32_t>();
 
                 const size_t NUM_BLOCKS = GET_BLOCKS(N, DEFAULT_BLOCK_DIM);
-                computeGradientState<float, true><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                computeGradientState<float><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
                     0,
                     N,
                     C,
@@ -397,7 +426,7 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
                     outGradientStepCountsPtr);
             } else {
                 const size_t NUM_BLOCKS = GET_BLOCKS(N, DEFAULT_BLOCK_DIM);
-                computeGradientState<float, false><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                computeGradientState<float><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
                     0,
                     N,
                     C,
@@ -407,7 +436,6 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
                     radii.data_ptr<int32_t>(),
                     dLossDMeans2d.data_ptr<float>(),
                     outNormalizeddLossdMeans2dNormAccumPtr,
-                    nullptr,
                     outGradientStepCountsPtr);
             }
             C10_CUDA_KERNEL_LAUNCH_CHECK();
@@ -470,8 +498,8 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
             int64_t deviceProblemOffset, deviceProblemSize;
-            std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(C * N, deviceId);
-            const size_t NUM_BLOCKS = GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM);
+            std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
+            const dim3 NUM_BLOCKS(GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM), C);
 
             if (ortho) {
                 const auto camera = OrthographicCamera<float>{projectionMatrices,
@@ -482,7 +510,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                                                               kBackwardProjectionNearPlane,
                                                               kBackwardProjectionFarPlane};
                 projectionBackwardKernel<float, OrthographicCamera<float>>
-                    <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                    <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
                         deviceProblemOffset,
                         deviceProblemSize,
                         C,
@@ -518,7 +546,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                                                              kBackwardProjectionNearPlane,
                                                              kBackwardProjectionFarPlane};
                 projectionBackwardKernel<float, PerspectiveCamera<float>>
-                    <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                    <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
                         deviceProblemOffset,
                         deviceProblemSize,
                         C,
@@ -567,7 +595,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                     std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
                     const size_t NUM_BLOCKS = GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM);
 
-                    computeGradientState<float, true><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                    computeGradientState<float><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
                         deviceProblemOffset,
                         deviceProblemSize,
                         C,
@@ -593,19 +621,17 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                     std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
                     const size_t NUM_BLOCKS = GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM);
 
-                    computeGradientState<float, false>
-                        <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
-                            deviceProblemOffset,
-                            deviceProblemSize,
-                            C,
-                            N,
-                            imageWidth,
-                            imageHeight,
-                            radii.data_ptr<int32_t>(),
-                            dLossDMeans2d.data_ptr<float>(),
-                            outNormalizeddLossdMeans2dNormAccumPtr,
-                            nullptr,
-                            outGradientStepCountsPtr);
+                    computeGradientState<float><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                        deviceProblemOffset,
+                        deviceProblemSize,
+                        C,
+                        N,
+                        imageWidth,
+                        imageHeight,
+                        radii.data_ptr<int32_t>(),
+                        dLossDMeans2d.data_ptr<float>(),
+                        outNormalizeddLossdMeans2dNormAccumPtr,
+                        outGradientStepCountsPtr);
                     C10_CUDA_KERNEL_LAUNCH_CHECK();
                 }
 
