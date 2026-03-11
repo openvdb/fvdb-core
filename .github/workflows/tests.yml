@@ -76,7 +76,7 @@ jobs:
         shell: bash -el {0}
     steps:
       - name: Install system dependencies
-        run: dnf install -y procps-ng findutils
+        run: dnf install -y git procps-ng findutils
 
       - uses: actions/checkout@v4
         with:
@@ -218,7 +218,7 @@ jobs:
         shell: bash -el {0}
     steps:
       - name: Install system dependencies
-        run: dnf install -y procps-ng findutils
+        run: dnf install -y git procps-ng findutils
 
       - uses: actions/checkout@v4
         with:
@@ -295,7 +295,7 @@ jobs:
         shell: bash -el {0}
     steps:
       - name: Install system dependencies
-        run: dnf install -y procps-ng findutils
+        run: dnf install -y git procps-ng findutils
 
       - uses: actions/checkout@v4
         with:
@@ -362,7 +362,7 @@ jobs:
         shell: bash -el {0}
     steps:
       - name: Install system dependencies
-        run: dnf install -y procps-ng findutils
+        run: dnf install -y git procps-ng findutils
 
       - uses: actions/checkout@v4
         with:
