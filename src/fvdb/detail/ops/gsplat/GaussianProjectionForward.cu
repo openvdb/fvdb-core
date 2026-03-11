@@ -219,7 +219,7 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
 
     using scalar_t = float;
 
-    const dim3 NUM_BLOCKS(GET_BLOCKS(N, DEFAULT_BLOCK_DIM), C, 1);
+    const dim3 NUM_BLOCKS(GET_BLOCKS(N, DEFAULT_BLOCK_DIM), C);
     const size_t SHARD_MEM_SIZE =
         C * (2 * sizeof(nanovdb::math::Mat3<scalar_t>) + sizeof(nanovdb::math::Vec3<scalar_t>));
 
@@ -328,7 +328,7 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
         int64_t deviceProblemOffset, deviceProblemSize;
         std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
 
-        const dim3 NUM_BLOCKS(GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM), C, 1);
+        const dim3 NUM_BLOCKS(GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM), C);
         const size_t SHARD_MEM_SIZE =
             C * (2 * sizeof(nanovdb::math::Mat3<scalar_t>) + sizeof(nanovdb::math::Vec3<scalar_t>));
 
