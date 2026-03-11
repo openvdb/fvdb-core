@@ -191,7 +191,8 @@ EOF
         --base main \
         --head "$RELEASE_BRANCH" \
         --title "Release v${VERSION}" \
-        --body "$PR_BODY"
+        --body "$PR_BODY" \
+        --draft
 fi
 
 echo ""

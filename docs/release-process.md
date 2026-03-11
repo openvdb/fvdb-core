@@ -70,7 +70,7 @@ This will:
 2. Set the version to `0.4.0` on the release branch
 3. Bump `main` to `0.5.0.dev0`
 4. Push both branches to `upstream`
-5. Open a PR from `release/v0.4` into `main`
+5. Open a **draft** PR from `release/v0.4` into `main`
 
 Use `--remote origin` to push to a different remote.
 Use `--dry-run` to preview without making changes.

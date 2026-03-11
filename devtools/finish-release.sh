@@ -173,6 +173,9 @@ else
         die "aborted -- get the PR approved first"
     fi
 
+    log "Marking PR #${PR_NUMBER} as ready for review..."
+    gh pr ready "$PR_NUMBER" --repo "$REPO_SLUG"
+
     log "Merging PR #${PR_NUMBER} with merge commit"
     log "NOTE: The merge will conflict on the version line in pyproject.toml."
     log "      Resolve by keeping the main branch version (the .dev0 version)."
