@@ -237,6 +237,15 @@ template <typename T> struct PerspectiveCamera {
         return depth >= nearPlane && depth <= farPlane;
     }
 
+    /// @brief Returns true if camera-space depth computed from the world space mean is within
+    /// [nearPlane, farPlane].
+    inline __device__ bool
+    isVisible(const int64_t cid, const nanovdb::math::Vec3<T> &meansWorldSpace) const {
+        const auto [R, t]                         = worldToCamTransform(cid);
+        const nanovdb::math::Vec3<T> meanCamSpace = transformPointWorldToCam(R, t, meansWorldSpace);
+        return isDepthVisible(meanCamSpace[2]);
+    }
+
     /// @brief Returns true when the footprint AABB has no overlap with the image.
     ///
     /// A 2D Gaussian footprint is an ellipse, but this check uses the axis-aligned bounding box
@@ -513,6 +522,15 @@ template <typename T> struct OrthographicCamera {
     inline __device__ bool
     isDepthVisible(const T depth) const {
         return depth >= nearPlane && depth <= farPlane;
+    }
+
+    /// @brief Returns true if camera-space depth computed from the world space mean is within
+    /// [nearPlane, farPlane].
+    inline __device__ bool
+    isVisible(const int64_t cid, const nanovdb::math::Vec3<T> &meansWorldSpace) const {
+        const auto [R, t]                         = worldToCamTransform(cid);
+        const nanovdb::math::Vec3<T> meanCamSpace = transformPointWorldToCam(R, t, meansWorldSpace);
+        return isDepthVisible(meanCamSpace[2]);
     }
 
     /// @brief Returns true when the footprint AABB has no overlap with the image.

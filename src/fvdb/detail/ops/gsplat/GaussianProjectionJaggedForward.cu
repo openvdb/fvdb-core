@@ -56,6 +56,10 @@ jaggedProjectionForwardKernel(const uint32_t B,
     // shift pointers to the current camera and gaussian
     means += gId * 3;
     const nanovdb::math::Vec3<T> meanWorldSpace(means[0], means[1], means[2]);
+    if (!camera.isVisible(cId, meanWorldSpace)) {
+        return;
+    }
+
     nanovdb::math::Mat3<T> covar;
     if (covars != nullptr) {
         covars += gId * 6;
@@ -70,15 +74,10 @@ jaggedProjectionForwardKernel(const uint32_t B,
         covar = quaternionAndScaleToCovariance<T>(quat, scale);
     }
     auto [covar2d, mean2d, depthCam] = camera.projectWorldGaussianTo2D(cId, meanWorldSpace, covar);
-    if (!camera.isDepthVisible(depthCam)) {
-        radii[idx] = 0;
-        return;
-    }
 
     T compensation;
     const T det = addBlur(eps2d, covar2d, compensation);
     if (det <= 0.f) {
-        radii[idx] = 0;
         return;
     }
 
@@ -91,13 +90,11 @@ jaggedProjectionForwardKernel(const uint32_t B,
     // T radius = ceil(3.f * sqrt(max(v1, v2)));
 
     if (radius <= radiusClip) {
-        radii[idx] = 0;
         return;
     }
 
     // mask out gaussians outside the image region
     if (camera.isProjectedFootprintOutsideImage(mean2d, radius, radius)) {
-        radii[idx] = 0;
         return;
     }
 
@@ -162,7 +159,7 @@ dispatchGaussianProjectionJaggedForward<torch::kCUDA>(
 
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(means.device().index());
 
-    torch::Tensor radii   = torch::empty({N}, means.options().dtype(torch::kInt32));
+    torch::Tensor radii   = torch::zeros({N}, means.options().dtype(torch::kInt32));
     torch::Tensor means2d = torch::empty({N, 2}, means.options());
     torch::Tensor depths  = torch::empty({N}, means.options());
     torch::Tensor conics  = torch::empty({N, 3}, means.options());

@@ -101,18 +101,17 @@ template <typename T, typename Camera> struct ProjectionForward {
         }
 
         const Vec3 meanWorldSpace(mMeansAcc[gid][0], mMeansAcc[gid][1], mMeansAcc[gid][2]);
+        if (!mCamera.isVisible(cid, meanWorldSpace)) {
+            return;
+        }
+
         const Mat3 covar = computeCovarianceMatrix(gid);
         auto [covar2d, mean2d, depthCam] =
             mCamera.projectWorldGaussianTo2D(cid, meanWorldSpace, covar);
-        if (!mCamera.isDepthVisible(depthCam)) {
-            mOutRadiiAcc[cid][gid] = 0;
-            return;
-        }
 
         T compensation;
         const T det = addBlur(mEps2d, covar2d, compensation);
         if (det <= 0.f) {
-            mOutRadiiAcc[cid][gid] = 0;
             return;
         }
 
@@ -122,13 +121,11 @@ template <typename T, typename Camera> struct ProjectionForward {
         const T radius = radiusFromCovariance2dDet(covar2d, det, T(3));
 
         if (radius <= mRadiusClip) {
-            mOutRadiiAcc[cid][gid] = 0;
             return;
         }
 
         // Mask out gaussians outside the image region
         if (mCamera.isProjectedFootprintOutsideImage(mean2d, radius, radius)) {
-            mOutRadiiAcc[cid][gid] = 0;
             return;
         }
 
@@ -202,7 +199,7 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
     const auto C                = worldToCamMatrices.size(0); // number of cameras
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream(means.device().index());
 
-    torch::Tensor outRadii   = torch::empty({C, N}, means.options().dtype(torch::kInt32));
+    torch::Tensor outRadii   = torch::zeros({C, N}, means.options().dtype(torch::kInt32));
     torch::Tensor outMeans2d = torch::empty({C, N, 2}, means.options());
     torch::Tensor outDepths  = torch::empty({C, N}, means.options());
     torch::Tensor outConics  = torch::empty({C, N, 3}, means.options());
@@ -302,7 +299,7 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
     const auto N = means.size(0);              // number of gaussians
     const auto C = worldToCamMatrices.size(0); // number of cameras
 
-    torch::Tensor outRadii   = torch::empty({C, N}, means.options().dtype(torch::kInt32));
+    torch::Tensor outRadii   = torch::zeros({C, N}, means.options().dtype(torch::kInt32));
     torch::Tensor outMeans2d = torch::empty({C, N, 2}, means.options());
     torch::Tensor outDepths  = torch::empty({C, N}, means.options());
     torch::Tensor outConics  = torch::empty({C, N, 3}, means.options());
