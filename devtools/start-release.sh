@@ -204,6 +204,6 @@ if ! $NO_PUSH && ! $DRY_RUN; then
 fi
 echo ""
 log "Next steps:"
-log "  1. Cherry-pick or submit bug fixes to $RELEASE_BRANCH"
+log "  1. Select open PRs to retarget to $RELEASE_BRANCH, or submit bug fix PRs"
 log "  2. Apply code freeze when ready"
 log "  3. Run: ./devtools/finish-release.sh $VERSION"
