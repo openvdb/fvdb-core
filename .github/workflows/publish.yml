@@ -154,7 +154,7 @@ jobs:
     strategy: *matrix-strategy
     steps:
       - name: Install prerequisites
-        run: dnf install -y git wget
+        run: dnf install -y git wget procps-ng findutils
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Fetch all history for all branches
@@ -194,7 +194,7 @@ jobs:
           cmake --version
 
       - name: Install system dependencies
-        run: dnf install -y zlib-devel libpng-devel pkgconfig unzip
+        run: dnf install -y zlib-devel libpng-devel pkgconfig unzip procps-ng findutils
 
       - name: Install pip dependencies
         run: |
@@ -541,14 +541,17 @@ jobs:
     strategy: *matrix-strategy
     steps:
       - name: Install prerequisites
-        run: dnf install -y git wget
+        run: dnf install -y git wget procps-ng findutils
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        with:
+          version: "0.7.5"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '${{ matrix.python-version }}'
-        env:
-          AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
+        run: |
+          uv python install ${{ matrix.python-version }}
+          uv venv
 
       - name: Download wheel artifact
         uses: actions/download-artifact@v4
@@ -594,7 +597,7 @@ jobs:
         shell: bash -el {0}
     steps:
       - name: Install prerequisites
-        run: dnf install -y git wget
+        run: dnf install -y git wget procps-ng findutils
 
       - uses: actions/checkout@v4
         with:
