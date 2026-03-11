@@ -196,6 +196,13 @@ fi
 
 echo ""
 log "Done. Release burndown started for v${VERSION}."
+if ! $NO_PUSH && ! $DRY_RUN; then
+    REPO_SLUG="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "unknown")"
+    log "The push to $RELEASE_BRANCH will trigger the publish workflow."
+    log "Staging wheels will be built and validated automatically."
+    log "Monitor: https://github.com/${REPO_SLUG}/actions/workflows/publish.yml"
+fi
+echo ""
 log "Next steps:"
 log "  1. Cherry-pick or submit bug fixes to $RELEASE_BRANCH"
 log "  2. Apply code freeze when ready"

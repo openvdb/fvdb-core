@@ -101,6 +101,31 @@ if ! $DRY_RUN; then
     fi
 fi
 
+# --- verify publish workflow passed -------------------------------------------
+if ! $DRY_RUN && ! $NO_PR; then
+    REPO_SLUG="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+    log "Checking publish workflow status on $RELEASE_BRANCH..."
+    LATEST_CONCLUSION="$(gh run list \
+        --repo "$REPO_SLUG" \
+        --workflow=publish.yml \
+        --branch="$RELEASE_BRANCH" \
+        --limit=1 \
+        --json conclusion \
+        -q '.[0].conclusion // "none"' 2>/dev/null || echo "none")"
+
+    if [[ "$LATEST_CONCLUSION" == "success" ]]; then
+        log "Publish workflow passed on $RELEASE_BRANCH"
+    elif [[ "$LATEST_CONCLUSION" == "none" ]]; then
+        echo "WARNING: No publish workflow runs found for $RELEASE_BRANCH" >&2
+        read -p "Continue without publish verification? [y/N] " confirm
+        [[ "$confirm" =~ ^[Yy]$ ]] || die "aborted"
+    else
+        echo "WARNING: Latest publish workflow on $RELEASE_BRANCH concluded: $LATEST_CONCLUSION" >&2
+        read -p "Continue despite workflow status? [y/N] " confirm
+        [[ "$confirm" =~ ^[Yy]$ ]] || die "aborted"
+    fi
+fi
+
 # --- tag the release ----------------------------------------------------------
 log "Checking out $RELEASE_BRANCH..."
 run git checkout "$RELEASE_BRANCH"

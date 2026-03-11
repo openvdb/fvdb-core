@@ -6,13 +6,13 @@ branching model with short-lived release branches.
 ## Branching Model
 
 `main` is the single long-lived default branch. It always contains the latest
-development code. Release branches (`release/vX.Y`) are created for stabilization
-and are merged back into `main` at release time.
+development code. Release branches (`release/vX.Y`) are created for
+stabilization and are merged back into `main` at release time.
 
 ```
-main:    ──A──B──C──D─────────────G──H──I── ...
-               \                   /
-release/v0.4:   E──F──────────────T (tag v0.4.0)
+main:           ──A──B──C──D─────────────G──H──I── ...
+                       \                   /
+release/v0.4:           E──F──────────────T (tag v0.4.0)
 ```
 
 - **A, B**: normal development on `main`
@@ -168,3 +168,72 @@ To release fvdb-reality-capture, run the scripts from inside that repo:
 cd /path/to/fvdb-reality-capture
 /path/to/fvdb-core/devtools/start-release.sh 0.4.0
 ```
+
+## Automated Release Validation
+
+Both fvdb-core and fvdb-reality-capture have `publish.yml` workflows that
+auto-trigger on pushes to `release/v*` branches. This provides continuous
+validation during the burndown period.
+
+### What Happens Automatically
+
+When code is pushed to a release branch (e.g. `release/v0.4`):
+
+1. **fvdb-core**: `publish.yml` builds wheels for all Python/Torch/CUDA
+   combinations in the matrix, uploads them to the S3 staging index
+   (`simple-staging`), and runs GPU validation (smoke test + unit tests) on
+   each variant.
+2. **fvdb-reality-capture**: `publish.yml` builds a pure-Python wheel,
+   uploads it to S3 staging, then runs GPU validation that installs
+   fvdb-core from S3 staging to test the two packages together.
+
+### S3 Staging Index
+
+Release candidate wheels are published to the staging index at:
+
+```
+https://fvdb-packages.s3.us-east-2.amazonaws.com/simple-staging/
+```
+
+This allows manual testing before the final release. Staging wheels older
+than 30 days are automatically pruned.
+
+### Cross-Repository Lockstep Releases
+
+fvdb-core and fvdb-reality-capture are released in lockstep. The procedure
+is:
+
+1. **Start burndown in fvdb-core first**:
+   ```bash
+   cd /path/to/fvdb-core
+   ./devtools/start-release.sh 0.4.0
+   ```
+   Wait for the push to trigger the publish workflow and confirm wheels
+   appear in S3 staging.
+
+2. **Start burndown in fvdb-reality-capture**:
+   ```bash
+   cd /path/to/fvdb-reality-capture
+   /path/to/fvdb-core/devtools/start-release.sh 0.4.0
+   ```
+   The fvdb-reality-capture validation will install fvdb-core from S3
+   staging, verifying cross-package compatibility.
+
+3. **Finish fvdb-core first**, then fvdb-reality-capture:
+   ```bash
+   cd /path/to/fvdb-core
+   ./devtools/finish-release.sh 0.4.0
+
+   cd /path/to/fvdb-reality-capture
+   /path/to/fvdb-core/devtools/finish-release.sh 0.4.0
+   ```
+
+`finish-release.sh` checks that the latest `publish.yml` run on the release
+branch succeeded before proceeding. If the workflow failed or hasn't run, it
+prompts for confirmation.
+
+### Workflow Dispatch
+
+Both workflows also support manual triggering via `workflow_dispatch` with
+options to select the publish target (`s3`, `testpypi`, `none`) and whether
+to run GPU validation.
