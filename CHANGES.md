@@ -5,6 +5,42 @@ Version 0.5.0 - In Development
 
 Version 0.4.0 - March 12, 2026
 
+*140 commits, 300+ files changed, 10 contributors.*
+
+This release delivers major advances across the Gaussian splatting
+pipeline, sparse convolution, multi-GPU performance, and build/release
+infrastructure. fVDB now supports PyTorch 2.10 and CUDA 12.8/13.0, and
+ships its first formal release process with automated nightly builds.
+
+**Highlights:**
+- Gaussian splatting gains a new rasterize-from-world path that
+  renders directly from 3D Gaussians, Unscented Transform projection
+  for non-pinhole camera models, full MCMC splatting support, sparse
+  rendering, per-pixel/per-tile masking, and a composable camera model
+  that decouples kernels from camera internals. Numerous gradient
+  correctness fixes harden the backward pass.
+- Sparse convolution has been consolidated into a single
+  GatherScatterDefault backend with full feature support including
+  transposed convolution and arbitrary strides. A new PredGatherIGemm
+  backend using CUTLASS/CuTe implicit-GEMM with TF32 tensor cores
+  delivers significantly faster convolution on dense grids.
+- A new multi-axis dispatch framework provides flexible kernel
+  execution across multiple dimensions with typed views and for_each
+  iteration.
+- SampleGridTrilinear is roughly 2x faster via vectorized float4 loads
+  and a fused stencil-plus-sample optimization. Morton and Hilbert
+  space-filling curve ordering is now available for grid coordinates.
+- Multi-GPU scaling is significantly improved through batched
+  prefetching, device-centric synchronization, and radix sort
+  optimizations. All tensor index accessors are now 64-bit, enabling
+  larger datasets.
+- A fully automated nightly wheel build and publish pipeline, a formal
+  OneFlow release process with automation scripts, and GPU-validated
+  publish workflows are all new in this release.
+
+**Contributors:** @blackencino, @fwilliams, @harrism, @iYuqinL,
+@kmuseth, @matthewdcong, @phapalova, @areidmeyer, @swahtz, @zlalena
+
 ---
 
 ### Gaussian Splatting & Rendering
