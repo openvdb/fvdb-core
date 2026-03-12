@@ -49,7 +49,7 @@ jobs:
     steps:
       - name: Compute publish routing flags
         id: flags
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const isPR = context.eventName === 'pull_request';
@@ -68,7 +68,7 @@ jobs:
             }
             core.setOutput('s3', s3 ? 'true' : 'false');
             core.setOutput('release_push', releasePush ? 'true' : 'false');
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           sparse-checkout: env/test_environment.yml
           sparse-checkout-cone-mode: false
@@ -119,7 +119,7 @@ jobs:
           aws-region: us-east-2
       - name: Start EC2 runner
         id: start-build-runner
-        uses: machulav/ec2-github-runner@v2.4.3
+        uses: machulav/ec2-github-runner@v2
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -157,7 +157,7 @@ jobs:
         run: |
           dnf install -y git wget procps-ng findutils gcc-toolset-14
           echo 'source /opt/rh/gcc-toolset-14/enable' > /etc/profile.d/gcc-toolset-14.sh
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for all branches
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
@@ -282,7 +282,7 @@ jobs:
           unzip -l dist/fvdb_core-*.whl | sort -k1 -n -r | head -30
 
       - name: Upload wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fvdb-publish-package-${{ matrix.python-version }}-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
           path: dist/fvdb_core-*.whl
@@ -305,7 +305,7 @@ jobs:
 
     steps:
       - name: Download all the dists
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: fvdb-publish-package-*
           path: dist
@@ -326,13 +326,13 @@ jobs:
       SIMPLE_PREFIX: ${{ github.event_name == 'release' && 'simple' || 'simple-staging' }}
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
 
       - name: Download all built wheels
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: fvdb-publish-package-*
           path: dist
@@ -502,13 +502,13 @@ jobs:
           echo "Delaying start by ${DELAY} seconds for Python ${{ matrix.python-version }}"
           sleep $DELAY
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
       - name: Start EC2 GPU runner
         id: start-validation-runner
-        uses: machulav/ec2-github-runner@v2.4.3
+        uses: machulav/ec2-github-runner@v2
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -555,7 +555,7 @@ jobs:
           uv venv
 
       - name: Download wheel artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: fvdb-publish-package-${{ matrix.python-version }}-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
           path: dist
@@ -600,7 +600,7 @@ jobs:
       - name: Install prerequisites
         run: dnf install -y git wget procps-ng findutils
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ github.ref }}
@@ -614,7 +614,7 @@ jobs:
           environment-file: env/test_environment.yml
 
       - name: Download wheel artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: fvdb-publish-package-${{ needs.pr-flags.outputs.test_python_version }}-torch${{ needs.pr-flags.outputs.test_torch_version }}-cu${{ needs.pr-flags.outputs.test_cuda_version }}
           path: dist
@@ -641,7 +641,7 @@ jobs:
     strategy: *matrix-strategy
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
@@ -666,7 +666,7 @@ jobs:
           fi
       - name: Stop EC2 runner
         if: steps.find-instance.outputs.instance-id != ''
-        uses: machulav/ec2-github-runner@v2.4.3
+        uses: machulav/ec2-github-runner@v2
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
@@ -683,7 +683,7 @@ jobs:
     strategy: *matrix-strategy
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
@@ -709,7 +709,7 @@ jobs:
           fi
       - name: Stop EC2 runner
         if: steps.find-instance.outputs.instance-id != ''
-        uses: machulav/ec2-github-runner@v2.4.3
+        uses: machulav/ec2-github-runner@v2
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
