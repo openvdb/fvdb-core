@@ -564,12 +564,12 @@ jobs:
       - name: Install wheel
         run: |
           CUDA_TAG="cu$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
-          python3 -m pip install --no-cache-dir torch==${{ matrix.torch-version }}.0 --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
-          python3 -m pip install dist/fvdb_core-*.whl
+          uv pip install --no-cache torch==${{ matrix.torch-version }}.0 --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
+          uv pip install dist/fvdb_core-*.whl
 
       - name: Run smoke test
         run: |
-          python3 -c "
+          uv run python3 -c "
           import fvdb
           import torch
           print(f'fvdb version: {fvdb.__version__}')
