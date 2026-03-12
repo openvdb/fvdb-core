@@ -147,6 +147,8 @@ jobs:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
         FORCE_CUDA: 1
+        CC: /opt/rh/gcc-toolset-14/root/usr/bin/gcc
+        CXX: /opt/rh/gcc-toolset-14/root/usr/bin/g++
       options: --rm
     defaults:
       run:
@@ -154,7 +156,7 @@ jobs:
     strategy: *matrix-strategy
     steps:
       - name: Install prerequisites
-        run: dnf install -y git wget procps-ng findutils
+        run: dnf install -y git wget procps-ng findutils gcc-toolset-14
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Fetch all history for all branches
