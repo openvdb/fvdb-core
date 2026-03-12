@@ -204,9 +204,8 @@ jobs:
           CUDA_TAG="cu$(echo "${{ matrix.cuda-version }}" | tr -d '.')"
           TORCH_VERSION="${{ matrix.torch-version }}"
           echo "Installing PyTorch ${TORCH_VERSION} for ${CUDA_TAG}"
-          uv venv
           # Install build requirements with explicit PyTorch version (explicit version takes precedence)
-          uv pip install --no-cache-dir torch==${TORCH_VERSION}.0 -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
+          uv pip install --no-cache torch==${TORCH_VERSION}.0 -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
 
       - name: Add a post-release to version (used for testing on TestPyPI)
         if: ${{ needs.pr-flags.outputs.s3 == 'false' }}
@@ -239,7 +238,7 @@ jobs:
         if: ${{ needs.pr-flags.outputs.s3 != 'true' || needs.pr-flags.outputs.release_push == 'true' }}
         run: |
           source .venv/bin/activate
-          pip install auditwheel patchelf
+          uv pip install auditwheel patchelf
           # Check glibc version
           ldd --version | head -n1
           CUDA_MAJOR=$(echo "${{ matrix.cuda-version }}" | cut -d. -f1)
