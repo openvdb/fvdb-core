@@ -201,6 +201,7 @@ target_compile_options(fvdb PRIVATE
     "-Wno-class-memaccess"
     "-Wno-array-bounds"
     "-Wno-stringop-overflow"
+    "-Wno-maybe-uninitialized"
     "-fdiagnostics-color=always"
     "-DNANOVDB_USE_BLOSC"
     "-fvisibility=default"
@@ -214,7 +215,7 @@ target_compile_options(fvdb PRIVATE
     "-fvisibility=default"
     "-Werror=all-warnings"
     "--threads=$ENV{NVCC_THREADS}"
-    "-Xcompiler=-Wall,-Werror"
+    "-Xcompiler=-Wall,-Werror,-Wno-maybe-uninitialized"
     ${TORCH_CUDA_COMMON_FLAGS}
     >
     $<$<AND:$<BOOL:${FVDB_LINEINFO}>,$<COMPILE_LANGUAGE:CUDA>>:-lineinfo>)
