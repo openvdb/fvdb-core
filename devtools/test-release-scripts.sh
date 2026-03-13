@@ -238,8 +238,10 @@ echo "============================================="
 echo " Test: adopt branch merges cleanly into main"
 echo "============================================="
 
+set +e
 MERGE_OUTPUT="$(git merge --no-commit --no-ff adopt/v0.4 2>&1)"
 MERGE_EXIT=$?
+set -e
 git reset --hard HEAD >/dev/null 2>&1
 
 if [[ $MERGE_EXIT -eq 0 ]]; then
