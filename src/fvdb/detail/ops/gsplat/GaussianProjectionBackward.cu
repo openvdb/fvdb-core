@@ -102,15 +102,16 @@ projectionBackwardKernel(const int32_t offset,
 ) {
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
-    if (idx >= count) {
+    if (idx >= C * count) {
         return;
     }
-    idx += offset;
+    const uint32_t cId = idx / count;          // camera id
+    const uint32_t gId = idx % count + offset; // gaussian id
+
+    idx = cId * N + gId;
     if (radii[idx] <= 0) {
         return;
     }
-    const uint32_t cId = idx / N; // camera id
-    const uint32_t gId = idx % N; // gaussian id
 
     // shift pointers to the current camera and gaussian
     means += gId * 3;
@@ -167,7 +168,7 @@ projectionBackwardKernel(const int32_t offset,
             outDLossDMeans += gId * 3;
             GSPLAT_PRAGMA_UNROLL
             for (uint32_t i = 0; i < 3; i++) {
-                atomicAdd_system(outDLossDMeans + i, dLossDPoint[i]);
+                gpuAtomicAdd(outDLossDMeans + i, dLossDPoint[i]);
             }
         }
     }
@@ -176,12 +177,12 @@ projectionBackwardKernel(const int32_t offset,
         warpSum(dLossDCovar, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
             outDLossDCovars += gId * 6;
-            atomicAdd_system(outDLossDCovars, dLossDCovar[0][0]);
-            atomicAdd_system(outDLossDCovars + 1, dLossDCovar[0][1] + dLossDCovar[1][0]);
-            atomicAdd_system(outDLossDCovars + 2, dLossDCovar[0][2] + dLossDCovar[2][0]);
-            atomicAdd_system(outDLossDCovars + 3, dLossDCovar[1][1]);
-            atomicAdd_system(outDLossDCovars + 4, dLossDCovar[1][2] + dLossDCovar[2][1]);
-            atomicAdd_system(outDLossDCovars + 5, dLossDCovar[2][2]);
+            gpuAtomicAdd(outDLossDCovars, dLossDCovar[0][0]);
+            gpuAtomicAdd(outDLossDCovars + 1, dLossDCovar[0][1] + dLossDCovar[1][0]);
+            gpuAtomicAdd(outDLossDCovars + 2, dLossDCovar[0][2] + dLossDCovar[2][0]);
+            gpuAtomicAdd(outDLossDCovars + 3, dLossDCovar[1][1]);
+            gpuAtomicAdd(outDLossDCovars + 4, dLossDCovar[1][2] + dLossDCovar[2][1]);
+            gpuAtomicAdd(outDLossDCovars + 5, dLossDCovar[2][2]);
         }
     } else {
         // Directly output gradients w.r.t. the quaternion and log_scale
@@ -198,13 +199,13 @@ projectionBackwardKernel(const int32_t offset,
         if (warp_group_g.thread_rank() == 0) {
             outDLossDQuats += gId * 4;
             outDLossDScales += gId * 3;
-            atomicAdd_system(outDLossDQuats, dLossDQuat[0]);
-            atomicAdd_system(outDLossDQuats + 1, dLossDQuat[1]);
-            atomicAdd_system(outDLossDQuats + 2, dLossDQuat[2]);
-            atomicAdd_system(outDLossDQuats + 3, dLossDQuat[3]);
-            atomicAdd_system(outDLossDScales, dLossDLogScale[0]);
-            atomicAdd_system(outDLossDScales + 1, dLossDLogScale[1]);
-            atomicAdd_system(outDLossDScales + 2, dLossDLogScale[2]);
+            gpuAtomicAdd(outDLossDQuats, dLossDQuat[0]);
+            gpuAtomicAdd(outDLossDQuats + 1, dLossDQuat[1]);
+            gpuAtomicAdd(outDLossDQuats + 2, dLossDQuat[2]);
+            gpuAtomicAdd(outDLossDQuats + 3, dLossDQuat[3]);
+            gpuAtomicAdd(outDLossDScales, dLossDLogScale[0]);
+            gpuAtomicAdd(outDLossDScales + 1, dLossDLogScale[1]);
+            gpuAtomicAdd(outDLossDScales + 2, dLossDLogScale[2]);
         }
     }
     if (outDLossDWorldToCamMatrices != nullptr) {
@@ -300,19 +301,19 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
         dLossDWorldToCamMatrices = torch::zeros_like(worldToCamMatrices);
     }
     if (C && N) {
+        const unsigned int NUM_BLOCKS = GET_BLOCKS(C * N, DEFAULT_BLOCK_DIM);
         if (ortho) {
-            const size_t NUM_BLOCKS = GET_BLOCKS(C * N, DEFAULT_BLOCK_DIM);
-            const auto camera       = OrthographicCamera<float>{projectionMatrices,
-                                                                worldToCamMatrices,
-                                                                static_cast<int32_t>(C),
-                                                                static_cast<int32_t>(imageWidth),
-                                                                static_cast<int32_t>(imageHeight),
-                                                                kBackwardProjectionNearPlane,
-                                                                kBackwardProjectionFarPlane};
+            const auto camera = OrthographicCamera<float>{projectionMatrices,
+                                                          worldToCamMatrices,
+                                                          static_cast<int32_t>(C),
+                                                          static_cast<int32_t>(imageWidth),
+                                                          static_cast<int32_t>(imageHeight),
+                                                          kBackwardProjectionNearPlane,
+                                                          kBackwardProjectionFarPlane};
             projectionBackwardKernel<float, OrthographicCamera<float>>
                 <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
                     0,
-                    C * N,
+                    N,
                     C,
                     N,
                     means.data_ptr<float>(),
@@ -336,18 +337,17 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
                     worldToCamMatricesRequiresGrad ? dLossDWorldToCamMatrices.data_ptr<float>()
                                                    : nullptr);
         } else {
-            const size_t NUM_BLOCKS = GET_BLOCKS(C * N, DEFAULT_BLOCK_DIM);
-            const auto camera       = PerspectiveCamera<float>{projectionMatrices,
-                                                               worldToCamMatrices,
-                                                               static_cast<int32_t>(C),
-                                                               static_cast<int32_t>(imageWidth),
-                                                               static_cast<int32_t>(imageHeight),
-                                                               kBackwardProjectionNearPlane,
-                                                               kBackwardProjectionFarPlane};
+            const auto camera = PerspectiveCamera<float>{projectionMatrices,
+                                                         worldToCamMatrices,
+                                                         static_cast<int32_t>(C),
+                                                         static_cast<int32_t>(imageWidth),
+                                                         static_cast<int32_t>(imageHeight),
+                                                         kBackwardProjectionNearPlane,
+                                                         kBackwardProjectionFarPlane};
             projectionBackwardKernel<float, PerspectiveCamera<float>>
                 <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
                     0,
-                    C * N,
+                    N,
                     C,
                     N,
                     means.data_ptr<float>(),
@@ -470,8 +470,8 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
             int64_t deviceProblemOffset, deviceProblemSize;
-            std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(C * N, deviceId);
-            const size_t NUM_BLOCKS = GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM);
+            std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
+            const unsigned int NUM_BLOCKS = GET_BLOCKS(C * deviceProblemSize, DEFAULT_BLOCK_DIM);
 
             if (ortho) {
                 const auto camera = OrthographicCamera<float>{projectionMatrices,
