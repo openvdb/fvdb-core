@@ -100,6 +100,10 @@ projectionBackwardKernel(const int32_t offset,
                          T *__restrict__ outDLossDScales,            // [N, 3] optional
                          T *__restrict__ outDLossDWorldToCamMatrices // [C, 4, 4] optional
 ) {
+    alignas(nanovdb::math::Mat3<T>) extern __shared__ char sharedMemory[];
+    camera.loadSharedMemory(sharedMemory);
+    __syncthreads();
+
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
     if (idx >= C * count) {
@@ -311,7 +315,7 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
                                                           kBackwardProjectionNearPlane,
                                                           kBackwardProjectionFarPlane};
             projectionBackwardKernel<float, OrthographicCamera<float>>
-                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
                     0,
                     N,
                     C,
@@ -345,7 +349,7 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
                                                          kBackwardProjectionNearPlane,
                                                          kBackwardProjectionFarPlane};
             projectionBackwardKernel<float, PerspectiveCamera<float>>
-                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
                     0,
                     N,
                     C,
@@ -482,7 +486,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                                                               kBackwardProjectionNearPlane,
                                                               kBackwardProjectionFarPlane};
                 projectionBackwardKernel<float, OrthographicCamera<float>>
-                    <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                    <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
                         deviceProblemOffset,
                         deviceProblemSize,
                         C,
@@ -518,7 +522,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
                                                              kBackwardProjectionNearPlane,
                                                              kBackwardProjectionFarPlane};
                 projectionBackwardKernel<float, PerspectiveCamera<float>>
-                    <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                    <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
                         deviceProblemOffset,
                         deviceProblemSize,
                         C,
