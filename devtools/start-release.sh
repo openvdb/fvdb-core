@@ -67,6 +67,20 @@ release_branch_suffix() {
     echo "${major}.${minor}"
 }
 
+assert_branch_current() {
+    local branch="$1"
+    local remote_ref="$REMOTE/$branch"
+    if ! git show-ref --verify --quiet "refs/remotes/$remote_ref"; then
+        die "$branch not found on $REMOTE; push it first"
+    fi
+    local local_rev remote_rev
+    local_rev="$(git rev-parse --short "$branch")"
+    remote_rev="$(git rev-parse --short "$remote_ref")"
+    if [[ "$local_rev" != "$remote_rev" ]]; then
+        die "$branch ($local_rev) differs from $remote_ref ($remote_rev); pull or reset first"
+    fi
+}
+
 # Update the version in pyproject.toml.
 set_version() {
     local new_version="$1"
@@ -121,6 +135,12 @@ if ! $DRY_RUN; then
 
     if ! git diff --quiet || ! git diff --cached --quiet; then
         die "working tree is not clean; commit or stash changes first"
+    fi
+
+    if ! $NO_PUSH; then
+        log "Fetching $REMOTE..."
+        git fetch "$REMOTE"
+        assert_branch_current main
     fi
 
     if [[ "$CURRENT_BRANCH" != "main" ]]; then

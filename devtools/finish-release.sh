@@ -57,6 +57,20 @@ release_branch_suffix() {
     echo "${major}.${minor}"
 }
 
+assert_branch_current() {
+    local branch="$1"
+    local remote_ref="$REMOTE/$branch"
+    if ! git show-ref --verify --quiet "refs/remotes/$remote_ref"; then
+        die "$branch not found on $REMOTE; push it first"
+    fi
+    local local_rev remote_rev
+    local_rev="$(git rev-parse --short "$branch")"
+    remote_rev="$(git rev-parse --short "$remote_ref")"
+    if [[ "$local_rev" != "$remote_rev" ]]; then
+        die "$branch ($local_rev) differs from $remote_ref ($remote_rev); pull or reset first"
+    fi
+}
+
 get_version_from_ref() {
     local ref="$1"
     git show "${ref}:pyproject.toml" | grep '^version = ' | sed 's/^version = "\(.*\)"/\1/'
@@ -109,7 +123,14 @@ if ! $DRY_RUN; then
     fi
 
     if ! git show-ref --verify --quiet "refs/heads/$RELEASE_BRANCH"; then
-        die "branch $RELEASE_BRANCH does not exist"
+        die "branch $RELEASE_BRANCH does not exist locally"
+    fi
+
+    if ! $NO_PUSH; then
+        log "Fetching $REMOTE..."
+        git fetch "$REMOTE"
+        assert_branch_current "$RELEASE_BRANCH"
+        assert_branch_current main
     fi
 
     if git rev-parse "$TAG" >/dev/null 2>&1; then
