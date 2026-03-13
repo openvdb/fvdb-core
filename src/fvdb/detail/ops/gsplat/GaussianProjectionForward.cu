@@ -165,9 +165,12 @@ projectionForwardKernel(int64_t offset,
     __syncthreads();
 
     // parallelize over C * N.
-    for (auto idx = blockIdx.x * blockDim.x + threadIdx.x; idx < count;
+    for (auto idx = blockIdx.x * blockDim.x + threadIdx.x; idx < projectionForward.C * count;
          idx += blockDim.x * gridDim.x) {
-        projectionForward.projectionForward(idx + offset);
+        const uint32_t cId = idx / count;          // camera id
+        const uint32_t gId = idx % count + offset; // gaussian id
+
+        projectionForward.projectionForward(cId * projectionForward.N + gId);
     }
 }
 
@@ -220,9 +223,7 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
 
     using scalar_t = float;
 
-    const size_t NUM_BLOCKS = GET_BLOCKS(C * N, DEFAULT_BLOCK_DIM);
-    const size_t SHARD_MEM_SIZE =
-        C * (2 * sizeof(nanovdb::math::Mat3<scalar_t>) + sizeof(nanovdb::math::Vec3<scalar_t>));
+    const unsigned int NUM_BLOCKS = GET_BLOCKS(C * N, DEFAULT_BLOCK_DIM);
 
     if (ortho) {
         const auto camera = OrthographicCamera<scalar_t>{projectionMatrices,
@@ -246,8 +247,8 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
             outConics,
             outCompensations);
         projectionForwardKernel<scalar_t, OrthographicCamera<scalar_t>>
-            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
-                0, C * N, projectionForward);
+            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
+                0, N, projectionForward);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     } else {
         const auto camera = PerspectiveCamera<scalar_t>{projectionMatrices,
@@ -271,8 +272,8 @@ dispatchGaussianProjectionForward<torch::kCUDA>(
             outConics,
             outCompensations);
         projectionForwardKernel<scalar_t, PerspectiveCamera<scalar_t>>
-            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
-                0, C * N, projectionForward);
+            <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
+                0, N, projectionForward);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
     return std::make_tuple(outRadii, outMeans2d, outDepths, outConics, outCompensations);
@@ -327,11 +328,9 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
         int64_t deviceProblemOffset, deviceProblemSize;
-        std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(C * N, deviceId);
+        std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
 
-        const size_t NUM_BLOCKS = GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM);
-        const size_t SHARD_MEM_SIZE =
-            C * (2 * sizeof(nanovdb::math::Mat3<scalar_t>) + sizeof(nanovdb::math::Vec3<scalar_t>));
+        const unsigned int NUM_BLOCKS = GET_BLOCKS(C * deviceProblemSize, DEFAULT_BLOCK_DIM);
 
         if (ortho) {
             const auto camera = OrthographicCamera<scalar_t>{projectionMatrices,
@@ -355,7 +354,7 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
                 outConics,
                 outCompensations);
             projectionForwardKernel<scalar_t, OrthographicCamera<scalar_t>>
-                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
+                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
                     deviceProblemOffset, deviceProblemSize, projectionForward);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         } else {
@@ -380,7 +379,7 @@ dispatchGaussianProjectionForward<torch::kPrivateUse1>(
                 outConics,
                 outCompensations);
             projectionForwardKernel<scalar_t, PerspectiveCamera<scalar_t>>
-                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, SHARD_MEM_SIZE, stream>>>(
+                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
                     deviceProblemOffset, deviceProblemSize, projectionForward);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
