@@ -136,6 +136,10 @@ if ! $DRY_RUN; then
     if git rev-parse "$TAG" >/dev/null 2>&1; then
         die "tag $TAG already exists"
     fi
+
+    if git show-ref --verify --quiet "refs/heads/$ADOPT_BRANCH"; then
+        die "branch $ADOPT_BRANCH already exists; delete it first if re-running"
+    fi
 fi
 
 # --- verify publish workflow passed -------------------------------------------
