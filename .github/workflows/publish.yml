@@ -13,7 +13,7 @@ on:
         required: true
         default: "main"
       publish_target:
-        description: "Publish target: testpypi | s3 | none"
+        description: "Publish target: testpypi | s3 | release | none"
         required: false
         default: "testpypi"
       run_validation:
@@ -41,6 +41,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       s3: ${{ steps.flags.outputs.s3 }}
+      pypi: ${{ steps.flags.outputs.pypi }}
+      release: ${{ steps.flags.outputs.release }}
       release_push: ${{ steps.flags.outputs.release_push }}
       test_python_version: ${{ steps.test-env.outputs.python_version }}
       test_torch_version: ${{ steps.test-env.outputs.torch_version }}
@@ -54,8 +56,12 @@ jobs:
           script: |
             const isPR = context.eventName === 'pull_request';
             const isPush = context.eventName === 'push';
+            const isRelease = context.eventName === 'release';
+            const isDispatch = context.eventName === 'workflow_dispatch';
             let s3 = '${{ inputs.publish_target }}' == 's3';
+            let pypi = isDispatch && '${{ inputs.publish_target }}' == 'testpypi';
             let releasePush = false;
+            let release = false;
             if (isPR) {
               const {owner, repo} = context.repo;
               const sha = context.payload.pull_request.head.sha;
@@ -65,13 +71,24 @@ jobs:
             } else if (isPush) {
               s3 = true;
               releasePush = true;
+            } else if (isRelease) {
+              s3 = true;
+              pypi = true;
+              release = true;
+            } else if (isDispatch && '${{ inputs.publish_target }}' == 'release') {
+              s3 = true;
+              pypi = true;
+              release = true;
             }
             core.setOutput('s3', s3 ? 'true' : 'false');
+            core.setOutput('pypi', pypi ? 'true' : 'false');
+            core.setOutput('release', release ? 'true' : 'false');
             core.setOutput('release_push', releasePush ? 'true' : 'false');
       - uses: actions/checkout@v6
         with:
           sparse-checkout: env/test_environment.yml
           sparse-checkout-cone-mode: false
+          ref: ${{ inputs.branch || github.ref }}
       - name: Parse test environment versions
         id: test-env
         run: |
@@ -160,7 +177,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for all branches
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.ref }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || inputs.branch || github.ref }}
 
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
@@ -235,7 +252,7 @@ jobs:
           ./build.sh wheel strip_symbols verbose --cuda-arch-list '7.5;8.0;9.0;10.0;12.0+PTX'
 
       - name: Repair wheel for manylinux
-        if: ${{ needs.pr-flags.outputs.s3 != 'true' || needs.pr-flags.outputs.release_push == 'true' }}
+        if: ${{ needs.pr-flags.outputs.s3 != 'true' || needs.pr-flags.outputs.release_push == 'true' || needs.pr-flags.outputs.release == 'true' }}
         run: |
           source .venv/bin/activate
           uv pip install auditwheel patchelf
@@ -289,31 +306,52 @@ jobs:
           retention-days: 2
 
   publish-dist:
-    name: Publish Python distribution to PyPI/TestPyPI
+    name: Publish source distribution to PyPI/TestPyPI
     needs:
       - pr-flags
       - fvdb-build
-    if: ${{ !cancelled() && needs.fvdb-build.result == 'success' && needs.pr-flags.outputs.s3 != 'true' }}
+    if: ${{ !cancelled() && needs.fvdb-build.result == 'success' && needs.pr-flags.outputs.pypi == 'true' }}
     runs-on: ubuntu-latest
 
     environment:
-      name: ${{ (github.event_name == 'release' && 'pypi') || 'testpypi' }}
-      url: ${{ (github.event_name == 'release' && 'https://pypi.org/p/fvdb-core') || 'https://test.pypi.org/p/fvdb-core' }}
+      name: ${{ (needs.pr-flags.outputs.release == 'true' && 'pypi') || 'testpypi' }}
+      url: ${{ (needs.pr-flags.outputs.release == 'true' && 'https://pypi.org/p/fvdb-core') || 'https://test.pypi.org/p/fvdb-core' }}
 
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
 
     steps:
-      - name: Download all the dists
-        uses: actions/download-artifact@v8
+      - uses: actions/checkout@v6
         with:
-          pattern: fvdb-publish-package-*
-          path: dist
-          merge-multiple: true
-      - name: Publish distribution 📦
+          fetch-depth: 0
+          ref: ${{ inputs.branch || github.ref }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Add post-release to version (TestPyPI only)
+        if: ${{ needs.pr-flags.outputs.release != 'true' }}
+        run: |
+          VERSION_LINE=$(grep '^version *= *"' pyproject.toml)
+          VERSION=$(echo "$VERSION_LINE" | sed -E 's/^version *= *"([^"]+)".*/\1/')
+          if [ "${GITHUB_RUN_NUMBER:-${{ github.run_number }}}" -gt 1 ]; then
+            NEW_VERSION="${VERSION}.post${GITHUB_RUN_NUMBER:-${{ github.run_number }}}"
+            sed -i -E "s/^version *= *\"[^\"]+\"/version = \"${NEW_VERSION}\"/" pyproject.toml
+            echo "Updated version to $NEW_VERSION"
+          else
+            echo "Version unchanged: $VERSION"
+          fi
+          grep '^version' pyproject.toml
+      - name: Build sdist
+        run: |
+          pip install build
+          python -m build --sdist
+          echo "Built sdist:"
+          ls -lh dist/
+      - name: Publish distribution
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          repository-url: ${{ (github.event_name == 'release' && 'https://upload.pypi.org/legacy/') || (github.event_name == 'workflow_dispatch' && inputs.publish_target == 'testpypi' && 'https://test.pypi.org/legacy/') || 'https://test.pypi.org/legacy/' }}
+          repository-url: ${{ (needs.pr-flags.outputs.release == 'true' && 'https://upload.pypi.org/legacy/') || 'https://test.pypi.org/legacy/' }}
           verbose: true
 
   publish-to-s3:
@@ -323,7 +361,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       S3_BUCKET: fvdb-packages
-      SIMPLE_PREFIX: ${{ github.event_name == 'release' && 'simple' || 'simple-staging' }}
+      SIMPLE_PREFIX: ${{ needs.pr-flags.outputs.release == 'true' && 'simple' || 'simple-staging' }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
@@ -492,7 +530,7 @@ jobs:
   start-validation-runner:
     name: Start GPU EC2 runner for validation
     needs: [pr-flags, fvdb-build]
-    if: ${{ !cancelled() && needs.fvdb-build.result == 'success' && (needs.pr-flags.outputs.release_push == 'true' || inputs.run_validation == true) }}
+    if: ${{ !cancelled() && needs.fvdb-build.result == 'success' && (needs.pr-flags.outputs.release_push == 'true' || needs.pr-flags.outputs.release == 'true' || inputs.run_validation == true) }}
     runs-on: ubuntu-latest
     strategy: *matrix-strategy
     steps:
@@ -585,7 +623,7 @@ jobs:
   validate-unit-tests:
     name: Full unit tests on built wheel
     needs: [start-validation-runner, validate-smoke-test, pr-flags]
-    if: ${{ !cancelled() && needs.validate-smoke-test.result == 'success' && (needs.pr-flags.outputs.release_push == 'true' || inputs.run_validation == true) }}
+    if: ${{ !cancelled() && needs.validate-smoke-test.result == 'success' && (needs.pr-flags.outputs.release_push == 'true' || needs.pr-flags.outputs.release == 'true' || inputs.run_validation == true) }}
     # Run on the validation runner matching env/test_environment.yml (no matrix -- single job)
     runs-on: val-${{ needs.pr-flags.outputs.test_python_version }}-pt${{ needs.pr-flags.outputs.test_torch_version }}-cu${{ needs.pr-flags.outputs.test_cuda_version }}-${{ github.run_id }}
     container:
@@ -603,7 +641,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: ${{ github.ref }}
+          ref: ${{ inputs.branch || github.ref }}
 
       - name: Set up fvdb_test Conda env
         uses: mamba-org/setup-micromamba@v2
