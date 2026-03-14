@@ -67,6 +67,20 @@ release_branch_suffix() {
     echo "${major}.${minor}"
 }
 
+assert_branch_current() {
+    local branch="$1"
+    local remote_ref="$REMOTE/$branch"
+    if ! git show-ref --verify --quiet "refs/remotes/$remote_ref"; then
+        die "$branch not found on $REMOTE; push it first"
+    fi
+    local local_rev remote_rev
+    local_rev="$(git rev-parse --short "$branch")"
+    remote_rev="$(git rev-parse --short "$remote_ref")"
+    if [[ "$local_rev" != "$remote_rev" ]]; then
+        die "$branch ($local_rev) differs from $remote_ref ($remote_rev); pull or reset first"
+    fi
+}
+
 # Update the version in pyproject.toml.
 set_version() {
     local new_version="$1"
@@ -121,6 +135,12 @@ if ! $DRY_RUN; then
 
     if ! git diff --quiet || ! git diff --cached --quiet; then
         die "working tree is not clean; commit or stash changes first"
+    fi
+
+    if ! $NO_PUSH; then
+        log "Fetching $REMOTE..."
+        git fetch "$REMOTE"
+        assert_branch_current main
     fi
 
     if [[ "$CURRENT_BRANCH" != "main" ]]; then
@@ -191,12 +211,12 @@ else
         PR_BODY="$(cat <<EOF
 ## Release v${VERSION}
 
-Merge release branch \`${RELEASE_BRANCH}\` into \`main\` at release time.
+Track the release burndown for \`${RELEASE_BRANCH}\`.
 
-**Note:** This PR is intentionally a draft. The PR CI will show a version
-conflict because \`${RELEASE_BRANCH}\` has \`${VERSION}\` while \`main\` has the
-next dev version. This is expected. Use \`finish-release.sh\` to merge, which
-resolves the conflict by keeping the \`main\` version.
+**Note:** This PR is intentionally a draft and will **not** be merged directly.
+\`finish-release.sh\` will close this PR and create an \`adopt/v${BRANCH_SUFFIX}\`
+branch that reconciles the version in \`pyproject.toml\` before merging into
+\`main\`.
 
 ### Checklist
 
