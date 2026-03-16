@@ -60,19 +60,18 @@ projectionBackwardKernel(const int32_t offset,
                          int32_t *__restrict__ outMaxRadiiAccum,     // [N]
                          int32_t *__restrict__ outGradientStepCounts // [N]
 ) {
+    uint32_t cId = blockIdx.y;
     alignas(nanovdb::math::Mat3<T>) extern __shared__ char sharedMemory[];
-    camera.loadSharedMemory(sharedMemory);
+    camera.loadSharedMemory(cId, sharedMemory);
     __syncthreads();
 
-    // parallelize over C * N.
-    uint32_t idx = cg::this_grid().thread_rank();
-    if (idx >= C * count) {
+    // parallelize over N.
+    uint32_t gId = blockIdx.x * blockDim.x + threadIdx.x;
+    if (gId >= count) {
         return;
     }
-    const uint32_t cId = idx / count;          // camera id
-    const uint32_t gId = idx % count + offset; // gaussian id
-
-    idx = cId * N + gId;
+    gId += offset;
+    auto idx = cId * N + gId;
     if (radii[idx] <= 0) {
         return;
     }
@@ -276,7 +275,7 @@ dispatchGaussianProjectionBackward<torch::kCUDA>(
         dLossDWorldToCamMatrices = torch::zeros_like(worldToCamMatrices);
     }
     if (C && N) {
-        const unsigned int NUM_BLOCKS = GET_BLOCKS(C * N, DEFAULT_BLOCK_DIM);
+        const dim3 NUM_BLOCKS(GET_BLOCKS(N, DEFAULT_BLOCK_DIM), C);
         if (ortho) {
             const auto camera = OrthographicCamera<float>{projectionMatrices,
                                                           worldToCamMatrices,
@@ -428,7 +427,7 @@ dispatchGaussianProjectionBackward<torch::kPrivateUse1>(
 
             int64_t deviceProblemOffset, deviceProblemSize;
             std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
-            const unsigned int NUM_BLOCKS = GET_BLOCKS(C * deviceProblemSize, DEFAULT_BLOCK_DIM);
+            const dim3 NUM_BLOCKS(GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM), C);
 
             if (ortho) {
                 const auto camera = OrthographicCamera<float>{projectionMatrices,
