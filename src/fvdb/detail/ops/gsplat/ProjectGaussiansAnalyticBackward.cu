@@ -125,31 +125,22 @@ projectionBackwardKernel(const int32_t offset,
             nanovdb::math::Vec2<T>(dLossDMeans2d[0], dLossDMeans2d[1]),
             dLossDDepths[0]);
 
-    // write out results with warp-level reduction
-    auto warp         = cg::tiled_partition<32>(cg::this_thread_block());
-    auto warp_group_g = cg::labeled_partition(warp, gId);
     if (outDLossDMeans != nullptr) {
-        warpSum(dLossDPoint, warp_group_g);
-        if (warp_group_g.thread_rank() == 0) {
-            outDLossDMeans += gId * 3;
+        outDLossDMeans += gId * 3;
 #pragma unroll
-            for (uint32_t i = 0; i < 3; i++) {
-                gpuAtomicAdd(outDLossDMeans + i, dLossDPoint[i]);
-            }
+        for (uint32_t i = 0; i < 3; i++) {
+            gpuAtomicAdd(outDLossDMeans + i, dLossDPoint[i]);
         }
     }
     if (outDLossDCovars != nullptr) {
         // Output gradients w.r.t. the covariance matrix
-        warpSum(dLossDCovar, warp_group_g);
-        if (warp_group_g.thread_rank() == 0) {
-            outDLossDCovars += gId * 6;
-            gpuAtomicAdd(outDLossDCovars, dLossDCovar[0][0]);
-            gpuAtomicAdd(outDLossDCovars + 1, dLossDCovar[0][1] + dLossDCovar[1][0]);
-            gpuAtomicAdd(outDLossDCovars + 2, dLossDCovar[0][2] + dLossDCovar[2][0]);
-            gpuAtomicAdd(outDLossDCovars + 3, dLossDCovar[1][1]);
-            gpuAtomicAdd(outDLossDCovars + 4, dLossDCovar[1][2] + dLossDCovar[2][1]);
-            gpuAtomicAdd(outDLossDCovars + 5, dLossDCovar[2][2]);
-        }
+        outDLossDCovars += gId * 6;
+        gpuAtomicAdd(outDLossDCovars, dLossDCovar[0][0]);
+        gpuAtomicAdd(outDLossDCovars + 1, dLossDCovar[0][1] + dLossDCovar[1][0]);
+        gpuAtomicAdd(outDLossDCovars + 2, dLossDCovar[0][2] + dLossDCovar[2][0]);
+        gpuAtomicAdd(outDLossDCovars + 3, dLossDCovar[1][1]);
+        gpuAtomicAdd(outDLossDCovars + 4, dLossDCovar[1][2] + dLossDCovar[2][1]);
+        gpuAtomicAdd(outDLossDCovars + 5, dLossDCovar[2][2]);
     } else {
         // Directly output gradients w.r.t. the quaternion and log_scale
         const nanovdb::math::Mat3<T> &rotmat = quaternionToRotationMatrix<T>(quat);
@@ -160,21 +151,18 @@ projectionBackwardKernel(const int32_t offset,
             quaternionAndScaleToCovarianceVectorJacobianProduct<T, true>(
                 quat, scale, rotmat, dLossDCovar);
 
-        warpSum(dLossDQuat, warp_group_g);
-        warpSum(dLossDLogScale, warp_group_g);
-        if (warp_group_g.thread_rank() == 0) {
-            outDLossDQuats += gId * 4;
-            outDLossDScales += gId * 3;
-            gpuAtomicAdd(outDLossDQuats, dLossDQuat[0]);
-            gpuAtomicAdd(outDLossDQuats + 1, dLossDQuat[1]);
-            gpuAtomicAdd(outDLossDQuats + 2, dLossDQuat[2]);
-            gpuAtomicAdd(outDLossDQuats + 3, dLossDQuat[3]);
-            gpuAtomicAdd(outDLossDScales, dLossDLogScale[0]);
-            gpuAtomicAdd(outDLossDScales + 1, dLossDLogScale[1]);
-            gpuAtomicAdd(outDLossDScales + 2, dLossDLogScale[2]);
-        }
+        outDLossDQuats += gId * 4;
+        outDLossDScales += gId * 3;
+        gpuAtomicAdd(outDLossDQuats, dLossDQuat[0]);
+        gpuAtomicAdd(outDLossDQuats + 1, dLossDQuat[1]);
+        gpuAtomicAdd(outDLossDQuats + 2, dLossDQuat[2]);
+        gpuAtomicAdd(outDLossDQuats + 3, dLossDQuat[3]);
+        gpuAtomicAdd(outDLossDScales, dLossDLogScale[0]);
+        gpuAtomicAdd(outDLossDScales + 1, dLossDLogScale[1]);
+        gpuAtomicAdd(outDLossDScales + 2, dLossDLogScale[2]);
     }
     if (outDLossDWorldToCamMatrices != nullptr) {
+        auto warp         = cg::tiled_partition<32>(cg::this_thread_block());
         auto warp_group_c = cg::labeled_partition(warp, cId);
         warpSum(dLossDRotation, warp_group_c);
         warpSum(dLossDTranslation, warp_group_c);
@@ -445,22 +433,124 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
     const uint32_t N = means.size(0);                      // number of gaussians
     const uint32_t C = worldToCamMatrices.size(0);         // number of cameras
 
-    torch::Tensor dLossDMeans = torch::zeros_like(means);
+    torch::Tensor dLossDMeans = torch::empty_like(means);
     torch::Tensor dLossDCovars, dLossDQuats, dLossDScales; // optional
     if (covars.has_value()) {
-        dLossDCovars = torch::zeros_like(covars.value());
+        dLossDCovars = torch::empty_like(covars.value());
     } else {
-        dLossDQuats  = torch::zeros_like(quats);
-        dLossDScales = torch::zeros_like(logScales);
+        dLossDQuats  = torch::empty_like(quats);
+        dLossDScales = torch::empty_like(logScales);
     }
     torch::Tensor dLossDWorldToCamMatrices;
     if (worldToCamMatricesRequiresGrad) {
         dLossDWorldToCamMatrices = torch::zeros_like(worldToCamMatrices);
     }
     if (C && N) {
+        std::vector<cudaEvent_t> events(c10::cuda::device_count());
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+            C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
+            C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+        }
+
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            C10_CUDA_CHECK(cudaSetDevice(deviceId));
+            auto stream = c10::cuda::getStreamFromPool(false, deviceId);
+            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+
+            int64_t elementOffset, elementCount;
+            std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
+
+#if (CUDART_VERSION < 13000)
+            nanovdb::util::cuda::memPrefetchAsync(
+                dLossDMeans.data_ptr<float>() + elementOffset * dLossDMeans.stride(0),
+                elementCount * dLossDMeans.stride(0) * sizeof(float),
+                deviceId,
+                stream);
+            if (covars.has_value()) {
+                nanovdb::util::cuda::memPrefetchAsync(
+                    dLossDCovars.data_ptr<float>() + elementOffset * dLossDCovars.stride(0),
+                    elementCount * dLossDCovars.stride(0) * sizeof(float),
+                    deviceId,
+                    stream);
+            } else {
+                nanovdb::util::cuda::memPrefetchAsync(
+                    dLossDQuats.data_ptr<float>() + elementOffset * dLossDQuats.stride(0),
+                    elementCount * dLossDQuats.stride(0) * sizeof(float),
+                    deviceId,
+                    stream);
+                nanovdb::util::cuda::memPrefetchAsync(
+                    dLossDScales.data_ptr<float>() + elementOffset * dLossDScales.stride(0),
+                    elementCount * dLossDScales.stride(0) * sizeof(float),
+                    deviceId,
+                    stream);
+            }
+#else
+            std::vector<void *> prefetchPtrs;
+            std::vector<size_t> prefetchSizes;
+            const cudaMemLocation location                 = {cudaMemLocationTypeDevice, deviceId};
+            std::vector<cudaMemLocation> prefetchLocations = {location};
+            std::vector<size_t> prefetchLocationIndices    = {0};
+
+            prefetchPtrs.emplace_back(dLossDMeans.data_ptr<float>() +
+                                      elementOffset * dLossDMeans.stride(0));
+            prefetchSizes.emplace_back(elementCount * dLossDMeans.stride(0) * sizeof(float));
+            if (covars.has_value()) {
+                prefetchPtrs.emplace_back(dLossDCovars.data_ptr<float>() +
+                                          elementOffset * dLossDCovars.stride(0));
+                prefetchSizes.emplace_back(elementCount * dLossDCovars.stride(0) *
+                                           sizeof(float));
+            } else {
+                prefetchPtrs.emplace_back(dLossDQuats.data_ptr<float>() +
+                                          elementOffset * dLossDQuats.stride(0));
+                prefetchSizes.emplace_back(elementCount * dLossDQuats.stride(0) * sizeof(float));
+                prefetchPtrs.emplace_back(dLossDScales.data_ptr<float>() +
+                                          elementOffset * dLossDScales.stride(0));
+                prefetchSizes.emplace_back(elementCount * dLossDScales.stride(0) *
+                                           sizeof(float));
+            }
+
+            C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(prefetchPtrs.data(),
+                                                     prefetchSizes.data(),
+                                                     prefetchPtrs.size(),
+                                                     prefetchLocations.data(),
+                                                     prefetchLocationIndices.data(),
+                                                     prefetchLocations.size(),
+                                                     0,
+                                                     stream));
+#endif
+            C10_CUDA_CHECK(cudaMemsetAsync(dLossDMeans.data_ptr<float>() +
+                                               elementOffset * dLossDMeans.stride(0),
+                                           0,
+                                           elementCount * dLossDMeans.stride(0) * sizeof(float),
+                                           stream));
+            if (covars.has_value()) {
+                C10_CUDA_CHECK(cudaMemsetAsync(
+                    dLossDCovars.data_ptr<float>() + elementOffset * dLossDCovars.stride(0),
+                    0,
+                    elementCount * dLossDCovars.stride(0) * sizeof(float),
+                    stream));
+            } else {
+                C10_CUDA_CHECK(cudaMemsetAsync(
+                    dLossDQuats.data_ptr<float>() + elementOffset * dLossDQuats.stride(0),
+                    0,
+                    elementCount * dLossDQuats.stride(0) * sizeof(float),
+                    stream));
+                C10_CUDA_CHECK(cudaMemsetAsync(
+                    dLossDScales.data_ptr<float>() + elementOffset * dLossDScales.stride(0),
+                    0,
+                    elementCount * dLossDScales.stride(0) * sizeof(float),
+                    stream));
+            }
+            C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+        }
+
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            C10_CUDA_CHECK(cudaSetDevice(deviceId));
+            auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+            C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
             int64_t deviceProblemOffset, deviceProblemSize;
             std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
