@@ -1172,13 +1172,13 @@ callRasterizeBackwardPrivateUse1(
     const std::optional<torch::Tensor> &pixelMap        = std::nullopt) {
     TORCH_CHECK(tileSize > 0, "Tile size must be greater than 0");
 
-    torch::Tensor outDLossDMeans2d   = torch::zeros_like(means2d);
-    torch::Tensor outDLossDConics    = torch::zeros_like(conics);
-    torch::Tensor outDLossDFeatures  = torch::zeros_like(features);
-    torch::Tensor outDLossDOpacities = torch::zeros_like(opacities);
+    torch::Tensor outDLossDMeans2d   = torch::empty_like(means2d);
+    torch::Tensor outDLossDConics    = torch::empty_like(conics);
+    torch::Tensor outDLossDFeatures  = torch::empty_like(features);
+    torch::Tensor outDLossDOpacities = torch::empty_like(opacities);
     torch::Tensor outDLossDMeans2dAbs;
     if (absGrad) {
-        outDLossDMeans2dAbs = torch::zeros_like(means2d);
+        outDLossDMeans2dAbs = torch::empty_like(means2d);
     }
 
     // Just return empty tensors if there are no gaussians, cameras, or intersections
@@ -1255,6 +1255,13 @@ callRasterizeBackwardPrivateUse1(
                 tensors.emplace_back(outDLossDMeans2dAbs);
             }
             perCameraPrefetchBatchAsync(tensors, cameraOffset, cameraCount, deviceId, stream);
+
+            // Zero the outputs of the operator that need to be accumulated.
+            tensors = {outDLossDMeans2d, outDLossDConics, outDLossDFeatures, outDLossDOpacities};
+            if (absGrad) {
+                tensors.emplace_back(outDLossDMeans2dAbs);
+            }
+            perCameraMemsetAsync(tensors, cameraOffset, cameraCount, 0, stream);
         }
         C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
     }
