@@ -8,7 +8,7 @@
 #include <torch/torch.h>
 
 #include <cuda/std/cmath>
-
+#include <tuple>
 #include <cuda_runtime_api.h>
 
 #include <gtest/gtest.h>
