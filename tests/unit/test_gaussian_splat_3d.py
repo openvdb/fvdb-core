@@ -4729,6 +4729,7 @@ class TestGaussianCameraApi(unittest.TestCase):
             torch.testing.assert_close(batched_features[cam_idx : cam_idx + 1], single_features, atol=1e-5, rtol=1e-5)
             torch.testing.assert_close(batched_alphas[cam_idx : cam_idx + 1], single_alphas, atol=1e-5, rtol=1e-5)
 
+
 class TestProjectionGradsMultiCamera(unittest.TestCase):
     """Verify that all Gaussian parameter gradients are correctly summed across
     cameras in the projection backward pass (both dense and jagged).
