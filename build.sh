@@ -337,6 +337,11 @@ done
 CONFIG_SETTINGS+=" --config-settings=cmake.define.NANOVDB_EDITOR_SKIP=$NANOVDB_EDITOR_SKIP"
 CONFIG_SETTINGS+=" --config-settings=cmake.define.NANOVDB_EDITOR_FORCE=$NANOVDB_EDITOR_FORCE"
 
+NINJA_PATH=$(command -v ninja 2>/dev/null || command -v ninja-build 2>/dev/null)
+if [ -n "$NINJA_PATH" ]; then
+    CONFIG_SETTINGS+=" --config-settings=cmake.define.CMAKE_MAKE_PROGRAM=$NINJA_PATH"
+fi
+
 # Construct PIP_ARGS with potential CMake args and other pass-through args
 export PIP_ARGS="--no-build-isolation$CONFIG_SETTINGS$PASS_THROUGH_ARGS"
 
@@ -382,7 +387,7 @@ elif [ "$BUILD_TYPE" == "ctest" ]; then
 
     echo "Running CMake configure in temporary directory ($TEMP_BUILD_DIR) to trigger data download..."
     pushd "$TEMP_BUILD_DIR" > /dev/null
-    run_with_sanitized_paths cmake "$SOURCE_DIR/src/cmake/download_test_data"
+    run_with_sanitized_paths cmake -G Ninja "$SOURCE_DIR/src/cmake/download_test_data"
     popd > /dev/null # Back to SOURCE_DIR
 
     # Clean up temporary directory

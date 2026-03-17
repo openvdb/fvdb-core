@@ -78,6 +78,11 @@ This role enables the participant to commit code directly to the repository, but
 * Make sure that ongoing PRs are moving forward at the right pace or close them.
 * Remain an active contributor to the project in general and the code base in particular.
 
+# Release Process
+
+See [docs/release-process.md](docs/release-process.md) for the branching model,
+timeline, and automation scripts used for releases.
+
 # Communication
 
 This project, just like all of open source, is a global community. In addition to the [Code of Conduct](CODE_OF_CONDUCT.md), this project will:

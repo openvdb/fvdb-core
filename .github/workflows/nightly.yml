@@ -21,7 +21,7 @@ jobs:
     runs-on:
       - self-hosted
     container:
-      image: aswf/ci-openvdb:2024
+      image: rockylinux/rockylinux:8
       env:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
@@ -99,24 +99,23 @@ jobs:
           miniforge-version: latest
           conda-remove-defaults: "true"
           activate-environment: fvdb_build
-          environment-file: fvdb/env/build_environment.yml
+          environment-file: env/build_environment.yml
 
       - name: Build fvdb
         run: |
-          cd fvdb;
           TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6+PTX" conda run --no-capture-output -n fvdb_build ./build.sh wheel verbose gtests benchmarks
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
             name: fvdb-test-package
-            path: fvdb/dist/*.whl
+            path: dist/*.whl
             retention-days: 2
 
       #NOTE: This tar step is here because directly uploading the build directory
       #      wasn't working due to losing executable permissions on the files.
       - name: Tar build directory
-        run: tar -cvf fvdb-gtest.tar fvdb/build/
+        run: tar -cvf fvdb-gtest.tar build/
 
       - name: Upload gtests
         uses: actions/upload-artifact@v4
@@ -139,7 +138,7 @@ jobs:
     runs-on:
       - self-hosted
     container:
-      image: aswf/ci-openvdb:2024
+      image: rockylinux/rockylinux:8
       env:
         PYTHONPATH: ""
       options: --rm
@@ -216,7 +215,7 @@ jobs:
           miniforge-version: latest
           conda-remove-defaults: "true"
           activate-environment: fvdb_test
-          environment-file: fvdb/env/test_environment.yml
+          environment-file: env/test_environment.yml
 
       - name: Download package
         uses: actions/download-artifact@v4
@@ -235,7 +234,7 @@ jobs:
 
       - name: Run benchmarks
         run: |
-          cd fvdb/tests;
+          cd tests;
           pytest benchmark --benchmark-json benchmark/output.json
 
       - name: Store benchmark result
@@ -243,7 +242,7 @@ jobs:
         with:
             name: Python Benchmark with pytest-benchmark
             tool: 'pytest'
-            output-file-path: fvdb/tests/benchmark/output.json
+            output-file-path: tests/benchmark/output.json
             # Use personal access token instead of GITHUB_TOKEN due to https://github.community/t/github-action-not-triggering-gh-pages-upon-push/16096
             github-token: ${{ secrets.GITHUB_TOKEN }}
             auto-push: true

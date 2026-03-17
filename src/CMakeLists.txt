@@ -92,6 +92,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/BuildPrunedGrid.cu
     fvdb/detail/ops/CoarseIjkForFineGrid.cu
     fvdb/detail/ops/convolution/GatherScatterDefault.cu
+    fvdb/detail/ops/convolution/PredGatherIGemm.cu
     fvdb/detail/ops/CoordsInGrid.cu
     fvdb/detail/ops/CubesInGrid.cu
     fvdb/detail/ops/DownsampleGridAvgPool.cu
@@ -200,6 +201,7 @@ target_compile_options(fvdb PRIVATE
     "-Wno-class-memaccess"
     "-Wno-array-bounds"
     "-Wno-stringop-overflow"
+    "-Wno-maybe-uninitialized"
     "-fdiagnostics-color=always"
     "-DNANOVDB_USE_BLOSC"
     "-fvisibility=default"
@@ -213,7 +215,7 @@ target_compile_options(fvdb PRIVATE
     "-fvisibility=default"
     "-Werror=all-warnings"
     "--threads=$ENV{NVCC_THREADS}"
-    "-Xcompiler=-Wall,-Werror"
+    "-Xcompiler=-Wall,-Werror,-Wno-maybe-uninitialized"
     ${TORCH_CUDA_COMMON_FLAGS}
     >
     $<$<AND:$<BOOL:${FVDB_LINEINFO}>,$<COMPILE_LANGUAGE:CUDA>>:-lineinfo>)
