@@ -950,8 +950,9 @@ class GaussianSplat3d {
     /// geometry gradients through the rasterization step.
     ///
     /// Tile intersections are still computed using a (non-differentiable) projection step:
-    /// - For `cameraModel == CameraModel::PINHOLE` or `CameraModel::ORTHOGRAPHIC`, we
-    ///   reuse the classic projection path.
+    /// - For `cameraModel == CameraModel::PINHOLE` or `CameraModel::ORTHOGRAPHIC`,
+    ///   `ProjectionMethod::AUTO` reuses the classic analytic projection path, while
+    ///   callers may explicitly request `ProjectionMethod::UNSCENTED`.
     /// - For OpenCV camera models, we use the Unscented Transform (UT) projection kernel to
     ///   compute per-Gaussian radii and depths for sorting / tiling, then rasterize with 3DGS.
     std::tuple<torch::Tensor, torch::Tensor>
