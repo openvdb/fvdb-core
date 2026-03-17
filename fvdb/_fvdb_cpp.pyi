@@ -266,6 +266,7 @@ class GaussianSplat3d:
         crop_origin_h: int = ...,
         tile_size: int = ...,
         backgrounds: Optional[torch.Tensor] = ...,
+        masks: Optional[torch.Tensor] = ...,
     ) -> tuple[torch.Tensor, torch.Tensor]: ...
     def render_images(
         self,

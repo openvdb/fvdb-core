@@ -1214,7 +1214,6 @@ GaussianSplat3d::projectGaussiansForImages(const torch::Tensor &worldToCameraMat
     settings.radiusClip    = minRadius2d;
     settings.eps2d         = eps2d;
     settings.antialias     = antialias;
-    settings.shDegreeToUse = shDegreeToUse;
 
     settings.renderMode = RenderMode::RGB;
 
