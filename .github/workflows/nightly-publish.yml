@@ -27,7 +27,7 @@ jobs:
     outputs:
       should_build: ${{ steps.decide.outputs.should_build }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: main
           fetch-depth: 0
@@ -75,18 +75,18 @@ jobs:
           echo "Delaying start by ${DELAY} seconds for Python ${{ matrix.python-version }}"
           sleep $DELAY
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
       - name: Start EC2 runner
         id: start-build-runner
-        uses: machulav/ec2-github-runner@v2.4.3
+        uses: machulav/ec2-github-runner@v2
         with:
           mode: start
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
           ec2-image-id: ami-0e14a711dad782a70
-          ec2-instance-type: m6a.8xlarge
+          ec2-instance-type: t3a.large
           subnet-id: subnet-03f2320d6e6e0005b
           security-group-id: sg-0cd08bd89d6212223
           label: nightly-${{ matrix.python-version }}-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
@@ -120,9 +120,11 @@ jobs:
     strategy: *matrix-strategy
     steps:
       - name: Install prerequisites
-        run: dnf install -y git wget
+        run: |
+          dnf install -y git wget procps-ng findutils gcc-toolset-14
+          echo 'source /opt/rh/gcc-toolset-14/enable' > /etc/profile.d/gcc-toolset-14.sh
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: main
 
@@ -144,7 +146,7 @@ jobs:
           cmake --version
 
       - name: Install system dependencies
-        run: dnf install -y zlib-devel libpng-devel pkgconfig
+        run: dnf install -y zlib-devel libpng-devel pkgconfig unzip procps-ng findutils
 
       - name: Install pip dependencies
         run: |
@@ -152,7 +154,7 @@ jobs:
           TORCH_VERSION="${{ matrix.torch-version }}"
           echo "Installing PyTorch ${TORCH_VERSION} for ${CUDA_TAG}"
           uv venv
-          uv pip install --no-cache-dir torch==${TORCH_VERSION}.0 -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
+          uv pip install --no-cache torch==${TORCH_VERSION}.0 -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG}
 
       - name: Set nightly version
         run: |
@@ -206,7 +208,7 @@ jobs:
           ls -lh dist/
 
       - name: Upload wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fvdb-nightly-${{ matrix.python-version }}-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
           path: dist/fvdb_core-*.whl
@@ -225,13 +227,13 @@ jobs:
       SIMPLE_PREFIX: simple-nightly
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
 
       - name: Download all built wheels
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: fvdb-nightly-*
           path: dist
@@ -381,7 +383,7 @@ jobs:
     strategy: *matrix-strategy
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role
           aws-region: us-east-2
@@ -406,7 +408,7 @@ jobs:
           fi
       - name: Stop EC2 runner
         if: steps.find-instance.outputs.instance-id != ''
-        uses: machulav/ec2-github-runner@v2.4.3
+        uses: machulav/ec2-github-runner@v2
         with:
           mode: stop
           github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
