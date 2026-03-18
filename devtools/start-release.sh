@@ -137,6 +137,8 @@ else
     run git checkout -b "$RELEASE_BRANCH"
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 if ! $DRY_RUN; then
     CURRENT_VER="$(get_version)"
     if [[ "$CURRENT_VER" == "$VERSION" ]]; then
@@ -144,7 +146,8 @@ if ! $DRY_RUN; then
     else
         log "Setting version to $VERSION on $RELEASE_BRANCH..."
         set_version "$VERSION"
-        git add pyproject.toml
+        "$SCRIPT_DIR/update-doc-versions.sh" "$VERSION"
+        git add pyproject.toml docs/conf.py
         git commit -s -S -m "Set version to $VERSION for release"
     fi
 fi
