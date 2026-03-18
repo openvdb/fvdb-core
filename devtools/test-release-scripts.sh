@@ -216,7 +216,7 @@ UDDRY_OUTPUT="$("$UPDATE_DOC_VERSIONS" 0.9.0 --dry-run 2>&1)"
 assert_contains "dry-run mentions docs/conf.py" "$UDDRY_OUTPUT" "docs/conf.py"
 
 CONF_BEFORE_DRY="$(grep '^fvdb_core_stable_version = ' docs/conf.py | sed 's/^fvdb_core_stable_version = "\(.*\)"/\1/')"
-"$UPDATE_DOC_VERSIONS" 0.9.0 --dry-run 2>&1 >/dev/null
+"$UPDATE_DOC_VERSIONS" 0.9.0 --dry-run >/dev/null 2>&1
 CONF_AFTER_DRY="$(grep '^fvdb_core_stable_version = ' docs/conf.py | sed 's/^fvdb_core_stable_version = "\(.*\)"/\1/')"
 assert_eq "docs/conf.py unchanged after dry-run" "$CONF_BEFORE_DRY" "$CONF_AFTER_DRY"
 

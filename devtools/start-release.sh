@@ -147,7 +147,8 @@ if ! $DRY_RUN; then
         log "Setting version to $VERSION on $RELEASE_BRANCH..."
         set_version "$VERSION"
         "$SCRIPT_DIR/update-doc-versions.sh" "$VERSION"
-        git add pyproject.toml docs/conf.py
+        git add pyproject.toml
+        [[ -f docs/conf.py ]] && git add docs/conf.py
         git commit -s -S -m "Set version to $VERSION for release"
     fi
 fi

@@ -77,7 +77,7 @@ PYPROJECT="$REPO_ROOT/pyproject.toml"
 if [[ -f "$PYPROJECT" ]] && grep -q '"fvdb-core>=' "$PYPROJECT"; then
     log "Updating fvdb-core dependency floor in pyproject.toml to >=$VERSION"
     if ! $DRY_RUN; then
-        sed -i "s/\"fvdb-core>=.*\"/\"fvdb-core>=${VERSION}\"/" "$PYPROJECT"
+        sed -i "s/\"fvdb-core>=[0-9][0-9.]*\"/\"fvdb-core>=${VERSION}\"/" "$PYPROJECT"
     fi
 else
     log "No fvdb-core dependency in pyproject.toml (skipping)"
