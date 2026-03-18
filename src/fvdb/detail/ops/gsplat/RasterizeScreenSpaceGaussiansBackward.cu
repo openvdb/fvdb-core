@@ -701,8 +701,14 @@ struct RasterizeBackwardArgs {
                     const int32_t g =
                         commonArgs.mTileGaussianIds[idx]; // Gaussian index in [C * N] or [nnz]
                     sharedGaussians[tidx] = commonArgs.getGaussian(g);
-                    ScalarType *feature   = &sharedGaussianFeatures[tidx * NUM_SHARED_CHANNELS];
-                    fetchGaussianFeatureIntoSharedMemory(g, channelStart, numChannels, feature);
+                    // Only load features if the Gaussian could be valid for any pixel.
+                    // If opacity < 1/255, alpha < 1/255 for all pixels regardless of
+                    // position, so gaussianIsValid will be false and features are never
+                    // read in the rendering loop.
+                    if (sharedGaussians[tidx].opacity >= 1.f / 255.f) {
+                        ScalarType *feature = &sharedGaussianFeatures[tidx * NUM_SHARED_CHANNELS];
+                        fetchGaussianFeatureIntoSharedMemory(g, channelStart, numChannels, feature);
+                    }
                 }
 
                 // Sync threads so all gaussians for this batch are loaded in shared memory
