@@ -64,6 +64,9 @@ if [[ -f "$CONF_PY" ]]; then
         log "Updating fvdb_core_stable_version in docs/conf.py to $VERSION"
         if ! $DRY_RUN; then
             sed -i "s/^fvdb_core_stable_version = \".*\"/fvdb_core_stable_version = \"${VERSION}\"/" "$CONF_PY"
+            if ! grep -q "^fvdb_core_stable_version = \"${VERSION}\"" "$CONF_PY"; then
+                warn "docs/conf.py sed replacement did not match -- check variable format"
+            fi
         fi
     else
         warn "docs/conf.py exists but has no fvdb_core_stable_version variable"
