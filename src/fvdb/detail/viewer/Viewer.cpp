@@ -336,6 +336,17 @@ Viewer::setCameraUpDirection(const std::string &scene_name, float x, float y, fl
 }
 
 float
+Viewer::cameraFov(const std::string &scene_name) {
+    getCamera(scene_name);
+    return mEditor.camera.config.fov_angle_y;
+}
+void
+Viewer::setCameraFov(const std::string &scene_name, float fov_radians) {
+    mEditor.camera.config.fov_angle_y = fov_radians;
+    updateCamera(scene_name);
+}
+
+float
 Viewer::cameraNear(const std::string &scene_name) {
     getCamera(scene_name);
     return mEditor.camera.config.near_plane;
