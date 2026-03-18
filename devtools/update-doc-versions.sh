@@ -34,7 +34,8 @@ EOF
 
 die() { echo "error: $*" >&2; exit 1; }
 
-log() { echo "==> $*"; }
+log()  { echo "==> $*"; }
+warn() { echo "WARNING: $*" >&2; }
 
 # --- argument parsing ---------------------------------------------------------
 VERSION=""
@@ -65,10 +66,10 @@ if [[ -f "$CONF_PY" ]]; then
             sed -i "s/^fvdb_core_stable_version = \".*\"/fvdb_core_stable_version = \"${VERSION}\"/" "$CONF_PY"
         fi
     else
-        log "WARNING: docs/conf.py exists but has no fvdb_core_stable_version variable"
+        warn "docs/conf.py exists but has no fvdb_core_stable_version variable"
     fi
 else
-    log "WARNING: docs/conf.py not found at $CONF_PY"
+    warn "docs/conf.py not found at $CONF_PY"
 fi
 
 # --- update fvdb-core dependency floor in pyproject.toml ----------------------
@@ -77,7 +78,10 @@ PYPROJECT="$REPO_ROOT/pyproject.toml"
 if [[ -f "$PYPROJECT" ]] && grep -q '"fvdb-core>=' "$PYPROJECT"; then
     log "Updating fvdb-core dependency floor in pyproject.toml to >=$VERSION"
     if ! $DRY_RUN; then
-        sed -i "s/\"fvdb-core>=[0-9][0-9.]*\"/\"fvdb-core>=${VERSION}\"/" "$PYPROJECT"
+        sed -i "s/\(\"fvdb-core>=\)[0-9][0-9.]*/\1${VERSION}/" "$PYPROJECT"
+        if ! grep -q "\"fvdb-core>=${VERSION}" "$PYPROJECT"; then
+            warn "pyproject.toml sed replacement did not match -- check dependency format"
+        fi
     fi
 else
     log "No fvdb-core dependency in pyproject.toml (skipping)"
