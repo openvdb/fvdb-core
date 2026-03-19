@@ -86,9 +86,11 @@ git config tag.gpgsign false
 mkdir -p devtools
 cp "$SCRIPT_DIR/start-release.sh" devtools/
 cp "$SCRIPT_DIR/finish-release.sh" devtools/
-chmod +x devtools/start-release.sh devtools/finish-release.sh
+cp "$SCRIPT_DIR/update-doc-versions.sh" devtools/
+chmod +x devtools/start-release.sh devtools/finish-release.sh devtools/update-doc-versions.sh
 START_RELEASE="$WORK_REPO/devtools/start-release.sh"
 FINISH_RELEASE="$WORK_REPO/devtools/finish-release.sh"
+UPDATE_DOC_VERSIONS="$WORK_REPO/devtools/update-doc-versions.sh"
 
 cat > pyproject.toml <<'PYPROJECT'
 [project]
@@ -96,7 +98,17 @@ name = "fvdb-core"
 version = "0.3.1"
 PYPROJECT
 
-git add pyproject.toml
+mkdir -p docs
+cat > docs/conf.py <<'CONFPY'
+project = "fVDB"
+fvdb_core_stable_version = "0.3.0"
+rst_prolog = f"""\
+.. |fvdb_core_version_pt210_cu128| replace:: {fvdb_core_stable_version}+pt210.cu128
+.. |fvdb_core_version_pt210_cu130| replace:: {fvdb_core_stable_version}+pt210.cu130
+"""
+CONFPY
+
+git add pyproject.toml docs/conf.py
 git commit -s -m "Initial commit" >/dev/null 2>&1
 git tag v0.3.0
 git push origin main >/dev/null 2>&1
@@ -146,6 +158,9 @@ git checkout release/v0.4 >/dev/null 2>&1
 RELEASE_VERSION="$(get_version)"
 assert_eq "release branch version is 0.4.0" "0.4.0" "$RELEASE_VERSION"
 
+RELEASE_DOC_VERSION="$(grep '^fvdb_core_stable_version = ' docs/conf.py | sed 's/^fvdb_core_stable_version = "\(.*\)"/\1/')"
+assert_eq "release branch docs/conf.py updated to 0.4.0" "0.4.0" "$RELEASE_DOC_VERSION"
+
 RELEASE_LOG="$(git log -1 --format='%B' release/v0.4)"
 assert_contains "release commit has DCO sign-off" "$RELEASE_LOG" "Signed-off-by:"
 
@@ -181,6 +196,66 @@ if "$START_RELEASE" "bad.version" --no-push --no-pr 2>&1; then
     fail "should reject invalid version format"
 else
     pass "rejects invalid version format"
+fi
+
+echo ""
+echo "============================================="
+echo " Test: update-doc-versions.sh --help"
+echo "============================================="
+
+UDHELP_OUTPUT="$("$UPDATE_DOC_VERSIONS" --help 2>&1)"
+assert_contains "update-doc-versions help mentions version" "$UDHELP_OUTPUT" "MAJOR.MINOR.PATCH"
+assert_contains "update-doc-versions help mentions --dry-run" "$UDHELP_OUTPUT" "--dry-run"
+
+echo ""
+echo "============================================="
+echo " Test: update-doc-versions.sh --dry-run"
+echo "============================================="
+
+UDDRY_OUTPUT="$("$UPDATE_DOC_VERSIONS" 0.9.0 --dry-run 2>&1)"
+assert_contains "dry-run mentions docs/conf.py" "$UDDRY_OUTPUT" "docs/conf.py"
+
+CONF_BEFORE_DRY="$(grep '^fvdb_core_stable_version = ' docs/conf.py | sed 's/^fvdb_core_stable_version = "\(.*\)"/\1/')"
+"$UPDATE_DOC_VERSIONS" 0.9.0 --dry-run >/dev/null 2>&1
+CONF_AFTER_DRY="$(grep '^fvdb_core_stable_version = ' docs/conf.py | sed 's/^fvdb_core_stable_version = "\(.*\)"/\1/')"
+assert_eq "docs/conf.py unchanged after dry-run" "$CONF_BEFORE_DRY" "$CONF_AFTER_DRY"
+
+echo ""
+echo "============================================="
+echo " Test: update-doc-versions.sh with dependency"
+echo "============================================="
+
+# Simulate a repo that depends on fvdb-core (like fvdb-reality-capture)
+cat > pyproject.toml <<'PYPROJECT'
+[project]
+name = "fvdb-reality-capture"
+version = "0.5.0.dev0"
+dependencies = [
+    "fvdb-core>=0.3.0",
+    "numpy",
+]
+PYPROJECT
+
+"$UPDATE_DOC_VERSIONS" 0.7.0 2>&1
+
+UPDATED_DEP="$(grep 'fvdb-core>=' pyproject.toml | sed 's/.*fvdb-core>=\([^"]*\).*/\1/')"
+assert_eq "update-doc-versions bumps fvdb-core dep floor" "0.7.0" "$UPDATED_DEP"
+
+UPDATED_CONF="$(grep '^fvdb_core_stable_version = ' docs/conf.py | sed 's/^fvdb_core_stable_version = "\(.*\)"/\1/')"
+assert_eq "update-doc-versions updates conf.py" "0.7.0" "$UPDATED_CONF"
+
+# Restore state for remaining tests
+git checkout -- pyproject.toml docs/conf.py 2>/dev/null || true
+
+echo ""
+echo "============================================="
+echo " Test: update-doc-versions.sh validates version"
+echo "============================================="
+
+if "$UPDATE_DOC_VERSIONS" "bad" 2>&1; then
+    fail "update-doc-versions should reject invalid version"
+else
+    pass "update-doc-versions rejects invalid version"
 fi
 
 echo ""

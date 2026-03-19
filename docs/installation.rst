@@ -12,7 +12,7 @@ fVDB is currently supported on the matrix of dependencies in the following table
 +------------------+-----------------+-----------------+----------------+------------------------------------------+
 | Operating System | PyTorch Version | Python Version  | CUDA Version   | Vulkan Version (only for visualization)  |
 +------------------+-----------------+-----------------+----------------+------------------------------------------+
-| Linux Only       | 2.8.0           | 3.10 - 3.13     | 12.8           | 1.3.275.0                                |
+| Linux Only       | 2.10.0          | 3.10 - 3.13     | 12.8, 13.0     | 1.3.275.0                                |
 +------------------+-----------------+-----------------+----------------+------------------------------------------+
 
 Driver and Hardware Requirements
@@ -33,12 +33,19 @@ To get started, run the appropriate pip install command for your Pytorch/CUDA ve
 the correct version of ``fvdb-core`` if it is not already installed.
 
 
-PyTorch 2.8.0 + CUDA 12.8
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+PyTorch 2.10.0 + CUDA 13.0
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. code-block:: bash
+.. parsed-literal::
 
-    pip install fvdb-reality-capture fvdb-core==0.3.0+pt28.cu128 --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple" torch==2.8.0 --extra-index-url https://download.pytorch.org/whl/cu128
+    pip install fvdb-core==\ |fvdb_core_version_pt210_cu130| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple" torch==2.10.0 --extra-index-url https://download.pytorch.org/whl/cu130
+
+PyTorch 2.10.0 + CUDA 12.8
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. parsed-literal::
+
+    pip install fvdb-core==\ |fvdb_core_version_pt210_cu128| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple" torch==2.10.0 --extra-index-url https://download.pytorch.org/whl/cu128
 
 
 
@@ -47,14 +54,21 @@ Installation from nightly builds
 
 Nightly wheels are built from the latest ``main`` branch and published daily.
 The nightly version includes a date stamp and PyTorch/CUDA build identifiers
-(e.g. ``0.0.0.dev20260224+pt28.cu128``).
+(e.g. ``0.0.0.dev20260318+pt210.cu130``).
 
-PyTorch 2.8.0 + CUDA 12.8
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+PyTorch 2.10.0 + CUDA 13.0
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: bash
 
-    pip install fvdb-core==0.0.0.dev20260224+pt28.cu128 --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" torch==2.8.0 --extra-index-url https://download.pytorch.org/whl/cu128
+    pip install fvdb-core==0.0.0.dev20260318+pt210.cu130 --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" torch==2.10.0 --extra-index-url https://download.pytorch.org/whl/cu130
+
+PyTorch 2.10.0 + CUDA 12.8
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: bash
+
+    pip install fvdb-core==0.0.0.dev20260318+pt210.cu128 --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple-nightly" torch==2.10.0 --extra-index-url https://download.pytorch.org/whl/cu128
 
 To list all available nightly versions:
 
@@ -64,7 +78,7 @@ To list all available nightly versions:
 
 .. note::
 
-    Replace ``20260224`` with the desired nightly date. Nightly builds are retained for 30 days.
+    Replace ``20260318`` with the desired nightly date. Nightly builds are retained for 30 days.
 
 
 Installation from source
