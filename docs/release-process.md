@@ -12,11 +12,11 @@ the version in `pyproject.toml` and merges the release work back into `main`,
 keeping the release branch pristine for future patch releases.
 
 ```
-main:           ──A──B──C──D──────────────────G──H──I── ...
-                       \                       /
+main:           ──A──B──C──D──────────────────────G──H──I── ...
+                       \                          /
 release/v0.4:           E──F────────T (tag v0.4.0)
-                                     \
-adopt/v0.4:                           V (version fixup)
+                                     \          /
+adopt/v0.4:                           V────────  (version fixup)
 ```
 
 - **A, B**: normal development on `main`
