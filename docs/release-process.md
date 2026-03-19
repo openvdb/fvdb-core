@@ -247,7 +247,8 @@ is:
    ```
 
    After each `finish-release.sh` run, merge the resulting `adopt/v*` PR
-   on GitHub once CI passes.
+   on GitHub, deleting the `adopt/v*` branch, once CI passes.  We will keep
+   the `release/v*` branch around for any future hotfix branches.
 
 `finish-release.sh` checks that the latest `publish.yml` run on the release
 branch succeeded before proceeding. If the workflow failed or hasn't run, it
