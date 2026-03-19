@@ -38,7 +38,7 @@ PyTorch 2.10.0 + CUDA 13.0
 
 .. parsed-literal::
 
-    pip install fvdb-reality-capture fvdb-core==\ |fvdb_core_version_pt210_cu130| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple" torch==2.10.0 --extra-index-url https://download.pytorch.org/whl/cu130
+    pip install fvdb-core==\ |fvdb_core_version_pt210_cu130| --extra-index-url="https://d36m13axqqhiit.cloudfront.net/simple" torch==2.10.0 --extra-index-url https://download.pytorch.org/whl/cu130
 
 PyTorch 2.10.0 + CUDA 12.8
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
