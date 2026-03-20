@@ -275,6 +275,7 @@ echo "============================================="
 FDRY_OUTPUT="$("$FINISH_RELEASE" 0.4.0 --dry-run 2>&1)"
 assert_contains "finish dry-run mentions tag" "$FDRY_OUTPUT" "v0.4.0"
 assert_contains "finish dry-run mentions release branch" "$FDRY_OUTPUT" "release/v0.4"
+assert_contains "finish dry-run mentions adopt branch" "$FDRY_OUTPUT" "adopt/v0.4"
 
 echo ""
 echo "============================================="
@@ -292,26 +293,37 @@ assert_eq "tag points to release branch HEAD" "$RELEASE_HEAD" "$TAG_COMMIT"
 CURRENT_AFTER="$(git rev-parse --abbrev-ref HEAD)"
 assert_eq "on main after finish-release" "main" "$CURRENT_AFTER"
 
+assert_branch_exists "adopt/v0.4 branch exists" "adopt/v0.4"
+
+git checkout adopt/v0.4 >/dev/null 2>&1
+ADOPT_VERSION="$(get_version)"
+assert_eq "adopt branch version is 0.5.0.dev0" "0.5.0.dev0" "$ADOPT_VERSION"
+
+ADOPT_LOG="$(git log -1 --format='%B' adopt/v0.4)"
+assert_contains "adopt commit has DCO sign-off" "$ADOPT_LOG" "Signed-off-by:"
+git checkout main >/dev/null 2>&1
+
+git checkout release/v0.4 >/dev/null 2>&1
+RELEASE_VERSION_AFTER="$(get_version)"
+assert_eq "release branch still at 0.4.0 after finish" "0.4.0" "$RELEASE_VERSION_AFTER"
+git checkout main >/dev/null 2>&1
+
 echo ""
 echo "============================================="
-echo " Test: release branch is mergeable into main"
+echo " Test: adopt branch merges cleanly into main"
 echo "============================================="
 
-MERGE_OUTPUT="$(git merge --no-commit --no-ff release/v0.4 2>&1 || true)"
-if git diff --cached --quiet 2>/dev/null; then
-    pass "release branch merges cleanly (no conflicts)"
+set +e
+MERGE_OUTPUT="$(git merge --no-commit --no-ff adopt/v0.4 2>&1)"
+MERGE_EXIT=$?
+set -e
+git reset --hard HEAD >/dev/null 2>&1
+
+if [[ $MERGE_EXIT -eq 0 ]]; then
+    pass "adopt branch merges cleanly into main"
 else
-    git merge --abort 2>/dev/null || true
-    # Even with conflicts this isn't necessarily a failure of the scripts,
-    # since the version lines intentionally diverge. Check if the only
-    # conflict is pyproject.toml (expected).
-    if [[ "$MERGE_OUTPUT" == *"CONFLICT"* ]] && [[ "$MERGE_OUTPUT" == *"pyproject.toml"* ]]; then
-        pass "release branch merge has expected version conflict only"
-    else
-        fail "unexpected merge conflict: $MERGE_OUTPUT"
-    fi
+    fail "adopt branch has merge conflicts with main: $MERGE_OUTPUT"
 fi
-git merge --abort 2>/dev/null || true
 
 echo ""
 echo "============================================="

@@ -7,12 +7,16 @@ branching model with short-lived release branches.
 
 `main` is the single long-lived default branch. It always contains the latest
 development code. Release branches (`release/vX.Y`) are created for
-stabilization and are merged back into `main` at release time.
+stabilization. At release time, an adopt branch (`adopt/vX.Y`) reconciles
+the version in `pyproject.toml` and merges the release work back into `main`,
+keeping the release branch pristine for future patch releases.
 
 ```
-main:           ──A──B──C──D─────────────G──H──I── ...
-                       \                   /
-release/v0.4:           E──F──────────────T (tag v0.4.0)
+main:           ──A──B──C──D──────────────────────G──H──I── ...
+                       \                          /
+release/v0.4:           E──F────────T (tag v0.4.0)
+                                     \          /
+adopt/v0.4:                           V────────  (version fixup)
 ```
 
 - **A, B**: normal development on `main`
@@ -21,7 +25,8 @@ release/v0.4:           E──F──────────────T (tag
 - **D**: new feature merged to `main` (not included in the release)
 - **E, F**: bug fixes or pre-burndown PRs merged to the release branch
 - **T**: release tag created on the release branch
-- **G**: merge commit bringing release fixes back into `main`
+- **V**: adopt branch created from `T`; version set to match `main`
+- **G**: merge commit bringing release fixes back into `main` via `adopt/v0.4`
 - **H, I**: development continues
 
 ## Branch Naming
@@ -29,6 +34,7 @@ release/v0.4:           E──F──────────────T (tag
 | Purpose | Pattern | Example |
 |---------|---------|---------|
 | Release | `release/vMAJOR.MINOR` | `release/v0.4` |
+| Adopt | `adopt/vMAJOR.MINOR` | `adopt/v0.4` |
 | Hotfix | `hotfix/vMAJOR.MINOR.PATCH` | `hotfix/v0.4.1` |
 
 ## Version Management
@@ -39,6 +45,7 @@ The version in `pyproject.toml` is the single source of truth.
 |--------|---------|---------|
 | `release/vX.Y` | `X.Y.0` | `0.4.0` |
 | `main` (after branching) | `X.Z.0.dev0` | `0.5.0.dev0` |
+| `adopt/vX.Y` | `X.Z.0.dev0` (matches `main`) | `0.5.0.dev0` |
 
 The `.dev0` suffix on `main` is a [PEP 440](https://peps.python.org/pep-0440/)
 pre-release marker that signals unreleased development code. It does not affect
@@ -53,7 +60,7 @@ A typical release takes about one week:
 | **Burndown start** | Day 0 | Create release branch, bump `main` version, open merge PR |
 | **Burndown** | ~4-6 days | Stabilize: fix bugs on the release branch, continue features on `main` |
 | **Code freeze** | 1-3 days | Only critical fixes on the release branch (admin merge only) |
-| **Release day** | Day ~7 | Tag, merge PR, create GitHub Release |
+| **Release day** | Day ~7 | Tag, create adopt branch + PR, create GitHub Release, merge adopt PR |
 
 ## Procedures
 
@@ -70,7 +77,8 @@ This will:
 2. Set the version to `0.4.0` on the release branch
 3. Bump `main` to `0.5.0.dev0`
 4. Push both branches to `upstream`
-5. Open a **draft** PR from `release/v0.4` into `main`
+5. Open a **draft** PR from `release/v0.4` into `main` (tracks burndown;
+   will be closed by `finish-release.sh` and replaced by an adopt PR)
 
 Use `--remote origin` to push to a different remote.
 Use `--dry-run` to preview without making changes.
@@ -91,7 +99,7 @@ Once the release branch exists, PR targeting rules change:
   git checkout main
   git cherry-pick <commit-sha>
   ```
-  This may cause a minor conflict when the release branch is merged back into
+  This may cause a minor conflict when the adopt branch is merged back into
   `main`, but the content will be nearly identical and easy to resolve.
 - **New features** continue targeting `main` as usual.
 
@@ -115,13 +123,17 @@ This will:
 1. Verify the publish workflow passed on the release branch
 2. Tag `v0.4.0` on the HEAD of `release/v0.4`
 3. Push the tag
-4. Merge the release PR into `main` (merge commit, not squash)
-5. Create a GitHub Release (triggers the publish workflow)
+4. Create `adopt/v0.4` from `release/v0.4` with a commit that sets the
+   version in `pyproject.toml` to match `main` (e.g. `0.5.0.dev0`)
+5. Push `adopt/v0.4`
+6. Close the draft release PR
+7. Open a new PR from `adopt/v0.4` into `main`
+8. Create a GitHub Release (triggers the publish workflow)
 
-The merge in step 4 will produce a conflict on the `version` line in
-`pyproject.toml` because the release branch has `0.4.0` while `main` has
-`0.5.0.dev0`. **Resolve the conflict by keeping the `main` version**
-(`0.5.0.dev0`), since development continues from that point forward.
+After the script finishes, **merge the adopt PR** once CI passes. Use a
+merge commit (not squash) to preserve the release branch history on `main`.
+The `release/v0.4` branch is left untouched at version `0.4.0`, available
+as the base for future hotfix branches.
 
 Use `--remote origin` to target a different remote.
 Use `--dry-run` to preview without making changes.
@@ -157,7 +169,7 @@ During code freeze, additionally:
 | Script | Purpose |
 |--------|---------|
 | `devtools/start-release.sh` | Create release branch, bump versions, open PR |
-| `devtools/finish-release.sh` | Tag release, merge PR, create GitHub Release |
+| `devtools/finish-release.sh` | Tag release, create adopt branch + PR, create GitHub Release |
 | `devtools/test-release-scripts.sh` | End-to-end tests for the release scripts |
 
 All scripts support `--help`, `--dry-run`, and `--remote <name>` flags.
@@ -233,6 +245,10 @@ is:
    cd /path/to/fvdb-reality-capture
    /path/to/fvdb-core/devtools/finish-release.sh 0.4.0
    ```
+
+   After each `finish-release.sh` run, merge the resulting `adopt/v*` PR
+   on GitHub, deleting the `adopt/v*` branch, once CI passes.  We will keep
+   the `release/v*` branch around for any future hotfix branches.
 
 `finish-release.sh` checks that the latest `publish.yml` run on the release
 branch succeeded before proceeding. If the workflow failed or hasn't run, it
