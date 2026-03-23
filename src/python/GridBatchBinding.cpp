@@ -489,5 +489,10 @@ bind_grid_batch(py::module &m) {
             [](const fvdb::GridBatch &batchHdl) {
                 return batchHdl.serialize().to(batchHdl.device());
             },
-            [](torch::Tensor t) { return fvdb::GridBatch::deserialize(t.cpu()).to(t.device()); }));
+            [](torch::Tensor t) { return fvdb::GridBatch::deserialize(t.cpu()).to(t.device()); }))
+
+        .def_property_readonly(
+            "_grid_batch_impl",
+            [](const fvdb::GridBatch &self) { return self.impl(); },
+            "Access the underlying GridBatchImpl (bridge accessor for incremental migration).");
 }

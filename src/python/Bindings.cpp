@@ -20,6 +20,7 @@
 #include <cuda_runtime_api.h>
 
 void bind_grid_batch(py::module &m);
+void bind_grid_batch_impl(py::module &m);
 void bind_jagged_tensor(py::module &m);
 void bind_gaussian_splat3d(py::module &m);
 void bind_viewer(py::module &m);
@@ -104,6 +105,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     py::class_<fvdb::Vec3dBatchOrScalar>(m, "Vec3dBatchOrScalar");
     py::class_<fvdb::Vec3iBatch>(m, "Vec3iBatch");
 
+    bind_grid_batch_impl(m);
     bind_grid_batch(m);
     bind_jagged_tensor(m);
     bind_gaussian_splat3d(m);
