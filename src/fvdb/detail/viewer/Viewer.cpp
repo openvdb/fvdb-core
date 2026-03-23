@@ -281,7 +281,7 @@ Viewer::waitForInteerrupt() {
 
 std::tuple<float, float, float>
 Viewer::cameraOrbitCenter(const std::string &scene_name) {
-    (void)scene_name;
+    getCamera(scene_name);
     return std::make_tuple(mEditor.camera.state.position.x,
                            mEditor.camera.state.position.y,
                            mEditor.camera.state.position.z);
@@ -296,7 +296,7 @@ Viewer::setCameraOrbitCenter(const std::string &scene_name, float x, float y, fl
 
 float
 Viewer::cameraOrbitRadius(const std::string &scene_name) {
-    (void)scene_name;
+    getCamera(scene_name);
     return mEditor.camera.state.eye_distance_from_position;
 }
 void
@@ -307,7 +307,7 @@ Viewer::setCameraOrbitRadius(const std::string &scene_name, float radius) {
 
 std::tuple<float, float, float>
 Viewer::cameraViewDirection(const std::string &scene_name) {
-    (void)scene_name;
+    getCamera(scene_name);
     return std::make_tuple(mEditor.camera.state.eye_direction.x,
                            mEditor.camera.state.eye_direction.y,
                            mEditor.camera.state.eye_direction.z);
