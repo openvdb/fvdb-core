@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
-import sys
 
 REPOS = [
     "openvdb/fvdb-core",
@@ -61,7 +60,9 @@ def fetch_team_members(org: str, team_slug: str) -> set[str]:
     if not members:
         raise RuntimeError(
             f"No members returned for {org}/{team_slug}. "
-            "Check that the team exists and the token has read:org scope."
+            "Check that the team exists and the token has read:org scope "
+            "(classic PAT) or Organization > Members > Read permission "
+            "(fine-grained PAT)."
         )
     return {m["login"] for m in members}
 
