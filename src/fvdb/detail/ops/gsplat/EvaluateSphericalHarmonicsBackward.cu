@@ -601,6 +601,15 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                         stream);
                 }
             }
+            for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
+                nanovdb::util::cuda::memPrefetchAsync(
+                    dLossDRenderQuantities.data_ptr<scalar_t>() +
+                        cameraIndex * dLossDRenderQuantities.stride(0) +
+                        elementOffset * dLossDRenderQuantities.stride(1),
+                    elementCount * dLossDRenderQuantities.stride(1) * sizeof(scalar_t),
+                    deviceId,
+                    stream);
+            }
 #else
             std::vector<void *> prefetchPtrs;
             std::vector<size_t> prefetchSizes;
@@ -622,6 +631,13 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                     prefetchSizes.emplace_back(elementCount * dLossDViewDirs.stride(1) *
                                                sizeof(scalar_t));
                 }
+            }
+            for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
+                prefetchPtrs.emplace_back(dLossDRenderQuantities.data_ptr<scalar_t>() +
+                                          cameraIndex * dLossDRenderQuantities.stride(0) +
+                                          elementOffset * dLossDRenderQuantities.stride(1));
+                prefetchSizes.emplace_back(elementCount * dLossDRenderQuantities.stride(1) *
+                                           sizeof(scalar_t));
             }
 
             C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(prefetchPtrs.data(),
@@ -708,6 +724,15 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                 elementCount * dLossDSh0Coeffs.stride(0) * sizeof(scalar_t),
                 deviceId,
                 stream);
+            for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
+                nanovdb::util::cuda::memPrefetchAsync(
+                    dLossDRenderQuantities.data_ptr<scalar_t>() +
+                        cameraIndex * dLossDRenderQuantities.stride(0) +
+                        elementOffset * dLossDRenderQuantities.stride(1),
+                    elementCount * dLossDRenderQuantities.stride(1) * sizeof(scalar_t),
+                    deviceId,
+                    stream);
+            }
             C10_CUDA_CHECK(cudaMemsetAsync(
                 dLossDSh0Coeffs.data_ptr<scalar_t>() + elementOffset * dLossDSh0Coeffs.stride(0),
                 0,
